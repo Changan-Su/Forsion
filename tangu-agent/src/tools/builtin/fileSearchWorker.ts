@@ -11,7 +11,10 @@ const skip = new Set(['.git','node_modules','dist','build','.cache','.venv','ven
 const regex = workerData.pattern ? new RegExp(workerData.pattern, workerData.flags) : null;
 const include = workerData.include ? new RegExp(workerData.include) : null;
 const MAX_FILES = 5000, MAX_BYTES = 1024 * 1024;
-async function walk(base) {
+async function walk(base, exclude) {
+  // Credential paths (relative, posix) are skipped before any open; symlinks are never followed (isFile() is false for them).
+  const ex = Array.isArray(exclude) ? exclude.map(x => String(x).toLowerCase()) : [];
+  const excluded = (name) => { const n = name.toLowerCase(); return ex.some(e => n === e || n.startsWith(e + '/')); };
   const files = [], queue = [''];
   let directories = 0;
   while (queue.length && files.length < MAX_FILES && directories++ < MAX_FILES) {
@@ -20,6 +23,7 @@ async function walk(base) {
     try { dir = await fs.opendir(path.join(base, rel)); } catch { continue; }
     for await (const entry of dir) {
       const name = rel ? rel + '/' + entry.name : entry.name;
+      if (excluded(name)) continue;
       if (entry.isDirectory() && !skip.has(entry.name) && !entry.name.startsWith('.') && queue.length < MAX_FILES) queue.push(name);
       else if (entry.isFile()) files.push(name);
       if (files.length >= MAX_FILES) break;
@@ -38,7 +42,7 @@ function search(file, text, limit) {
 async function run(job) {
   if (job.type === 'select') return job.paths.filter(p => !include || include.test(p)).slice(0, job.limit);
   if (job.type === 'content') return search(job.file, job.text, job.limit);
-  const { files, capped } = await walk(job.base);
+  const { files, capped } = await walk(job.base, job.exclude);
   if (job.type === 'glob') return files.filter(p => !include || include.test(p)).slice(0, 500);
   const hits = [];
   for (const file of files) {

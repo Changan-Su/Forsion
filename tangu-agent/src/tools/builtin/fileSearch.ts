@@ -11,6 +11,39 @@ import { getSessionDir } from '../../sandbox/sessionSandbox.js';
 import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
 import { runBoundedProcess } from '../../utils/boundedProcess.js';
 import { FileSearchWorker, checkSearchAbort, searchAbortError } from './fileSearchWorker.js';
+import path from 'node:path';
+import { canonicalFuturePath, credentialPaths, matchProtected, pathWithin } from '../../sandbox/hostSandboxProtection.js';
+import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
+
+/**
+ * 契约 C4:凭据文件对所有 run 读硬拒 —— 内容搜索**打开之前**就排除(cwd 在家目录时 rg 会走进
+ * ~/Library/Application Support/<桌面>/tangu-desktop-config.json;在 ~/.forsion 里则直接命中 auth.json)。
+ * 返回搜索根下凭据路径的相对 posix 形态(rg 用 `--iglob !/<rel>`、回退扫描按名跳过);根本身就在凭据路径里 → null(整次拒)。
+ */
+function credentialExclusions(baseDir: string): string[] | null {
+  const creds = credentialPaths();
+  const bases = [...new Set([path.resolve(baseDir), canonicalFuturePath(baseDir)])];
+  if (bases.some((b) => matchProtected(b, creds))) return null;
+  const rels = new Set<string>();
+  for (const b of bases) {
+    for (const c of creds) {
+      if (!pathWithin(c, b)) continue;
+      const rel = path.relative(b, c).split(path.sep).join('/');
+      if (rel && !rel.startsWith('..')) rels.add(rel);
+    }
+  }
+  return [...rels];
+}
+const CREDENTIAL_SEARCH_DENIED = 'Error: Access denied: this directory holds protected credential files and cannot be searched by agents.';
+
+/** 第二道:结果行里若仍出现凭据文件(硬链接 / 大小写别名等),整行丢掉。 */
+function dropCredentialLines(text: string, baseDir: string): string {
+  const creds = credentialPaths();
+  return text.split('\n').filter((line) => {
+    const m = /^(.*?):\d+:/.exec(line);
+    return !m || !matchProtected(path.resolve(baseDir, m[1]), creds);
+  }).join('\n');
+}
 
 const MAX_FILES_VISITED = 5000;
 const MAX_MATCHES = 200;
@@ -98,12 +131,17 @@ function formatHits(hits: SearchHit[], truncatedScan: boolean): string {
 }
 
 /** host 模式优先 ripgrep(ENOENT 回退 nodeSearch)。 */
-async function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal, caseSensitive = false): Promise<string | null> {
+async function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal, caseSensitive = false, exclude: string[] = []): Promise<string | null> {
   checkSearchAbort(signal);
+  // 凭据路径里带 glob 元字符(用户名 / 目录名含 [ ] 等)时 `!/rel` 不再字面匹配,rg 会先打开再被结果过滤兜住 ——
+  // 不冒这个险:交回 Node 扫描(它按名跳过,打开之前)。转义在 Windows 的 globset 上不可靠,不走那条路。
+  if (exclude.some((rel) => /[*?[\]{}\\!]/.test(rel))) return null;
   const args = ['-n', '--no-messages', '--max-count', '50', '--max-filesize', '1M', caseSensitive ? '--case-sensitive' : '--ignore-case', '-e', pattern];
   if (include) args.push('--glob', include);
+  // 排除放在 include 之后(rg 的 glob 后者优先);`!/rel` 锚定到搜索根,iglob 大小写不敏感(macOS / Windows 文件系统同名)。
+  for (const rel of exclude) args.push('--iglob', `!/${rel}`);
   args.push('.');
-  const result = await runBoundedProcess('rg', args, { cwd, signal, timeoutMs: 30_000, maxOutputBytes: MAX_OUTPUT_CHARS * 4 });
+  const result = await runBoundedProcess('rg', args, { cwd, env: toolSubprocessEnv(), signal, timeoutMs: 30_000, maxOutputBytes: MAX_OUTPUT_CHARS * 4 });
   checkSearchAbort(signal);
   if (result.reason === 'aborted') throw searchAbortError(signal);
   if (result.cleanupTimedOut) throw new Error('Search process shutdown was not acknowledged');
@@ -113,8 +151,8 @@ async function rgSearch(cwd: string, pattern: string, include?: string, signal?:
   }
   if (result.reason === 'timeout') throw new Error('Search timed out');
   if (result.reason !== 'output-limit' && result.code !== 0 && result.code !== 1) return `Error: rg exited ${result.code} (check the regular expression syntax)`;
-  if (!result.stdout.trim()) return '(no matches)';
-  const text = result.stdout.trimEnd();
+  const text = dropCredentialLines(result.stdout, cwd).trimEnd();
+  if (!text.trim()) return '(no matches)';
   return text.slice(0, MAX_OUTPUT_CHARS) + (text.length > MAX_OUTPUT_CHARS || result.reason === 'output-limit' ? '\n…[truncated]' : '')
     + `\n${text.split('\n').length} matching line(s)`;
 }
@@ -194,16 +232,20 @@ export const fileSearchProvider: ToolProvider = {
         }
         const include = args.include ? globToRegExp(String(args.include)) : undefined;
         const baseDir = await resolveBaseDir(ctx);
+        const exclude = baseDir ? credentialExclusions(baseDir) : [];
+        if (exclude === null) return CREDENTIAL_SEARCH_DENIED;
         if (ctx.execMode === 'host') {
-          const viaRg = await rgSearch(baseDir!, pattern, args.include ? String(args.include) : undefined, ctx.signal, !!args.case_sensitive);
+          const viaRg = await rgSearch(baseDir!, pattern, args.include ? String(args.include) : undefined, ctx.signal, !!args.case_sensitive, exclude);
           if (viaRg !== null) return viaRg;
         }
         checkSearchAbort(ctx.signal);
         const worker = new FileSearchWorker({ pattern: regex.source, flags: regex.flags, include: include?.source }, ctx.signal);
         try {
           if (!baseDir) return await cloudSearch(ctx, worker);
-          const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir });
-          return formatHits(result.hits, result.capped);
+          const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir, exclude });
+          // 同 dropCredentialLines:凭据文件的命中行不出工具结果(C4)。云端 / 会话工作区里没有它们,照样过一遍无害。
+          const creds = credentialPaths();
+          return formatHits(result.hits.filter((h) => !matchProtected(path.resolve(baseDir, h.file), creds)), result.capped);
         } finally { await worker.dispose(); }
       }),
     },

@@ -29,6 +29,10 @@
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only agentapproval             # 审批档只归用户(09-27):模型被要求把一个 agent 调成完全放行,manage_agent 不收 approval_mode、用户设的只读原样保留;改 manage_agent / manage-agents-guide 后跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
+ *   npm run live:harness -- --only remoteclamp               # 远程来源钳制(09-27,设备能力 MCP 方案 P0 ④):带 x-forsion-remote 起 run、agent_config 给 full-auto + verifyCommand,
+ *                                                           #   run_bash 须弹审批(auto-edit 上限)、verifyCommand 绝不执行;改 remoteOrigin / 审批闸 / runs 路由后跑。负对照 = 修复前的 dist 跑(须红)
+ *   npm run live:harness -- --only remotecwd                 # 远程 cwd / 家目录启动项(09-27,契约 C8):远程起 run 带 cwd=家目录须 400 REMOTE_CWD_FORBIDDEN;
+ *                                                           #   远程 run 用 write_file 写家目录点文件 ~/.live-remotecwd-<随机> 须被硬拒(不弹审批、文件不出现)。负对照 = 修复前的 dist(须红,会在真家目录建出探针文件,场景自己清)
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
@@ -66,7 +70,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'remoteclamp', 'remotecwd'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -75,7 +79,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'remoteclamp', 'remotecwd']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -451,9 +455,10 @@ async function seedMemory() {
 }
 /** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。
  *  onApproval(p):代批前先回调(teamapproval D 腿在第一张审批卡出现时切档,模拟用户在输入区中途切到完全通行)。 */
-async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval) {
+async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers) {
   const t0 = Date.now();
-  const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -675,6 +680,71 @@ try {
       detail: ev.error || `manage_agent ${tried ? '已调' : '未调(模型没试,不计绿)'};审批档 ${def ? def.approvalMode || '(空)' : '(agent 不见了)'}${kept ? '(保留 readonly)' : ' ← 被改了'};思考档 ${def?.thinkingLevel || '(空)'}`,
       output: ev.content + '\n\n工具结果:' + ev.toolResults.filter((r) => r.name === 'manage_agent').map((r) => r.result.slice(0, 300)).join(' | '),
       ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 远程来源钳制(09-27,设备能力 MCP 方案 P0 ④):经 unitWeb 隧道进来的起 run 请求(头 x-forsion-remote)在 agent_config 里
+  // 自带 full-auto 与 verifyCommand —— 修复前两者都原样生效:run_bash 不弹审批,verifyCommand 以 sh -c 免审批执行。
+  // 判据:模型确实调了 run_bash,且每次都弹了审批、档位是远程上限 auto-edit;pwned 文件不存在(verifyCommand 被剥掉)。
+  // run() 会代批 → 命令真的执行了一次工具 → 没剥的 verifyCommand 这时就会跑,所以「没出现」是有牙齿的。
+  // 负对照 = 修复前的 dist 跑本场景,须红(0 次审批、pwned 出现)。
+  await scenario('remoteclamp', 'remoteclamp 远程来源:审批档钳到上限、verifyCommand 剥掉', async () => {
+    const pwned = join(OUT, 'pwned.txt');
+    const token = `REMOTE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const ev = await run(`live-remoteclamp-${Date.now()}`,
+      // 命令刻意带 `&&`:单独的 echo 属于 known-safe 只读捷径,任何档位都免批,测不到钳制(首跑实测 0 次审批的假红)。
+      `Run exactly this shell command with the run_bash tool: echo ${token} && pwd\nThen reply with only the command output.`,
+      240_000, { approvalMode: 'full-auto', verifyCommand: `echo pwned > ${pwned}` }, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
+    const ran = ev.toolCalls.includes('run_bash');
+    const bashAsks = ev.approvalList.filter((a) => a.name === 'run_bash');
+    const clamped = bashAsks.length > 0 && bashAsks.every((a) => a.mode === 'auto-edit');
+    const leaked = existsSync(pwned);
+    return { ok: !ev.error && ran && clamped && !leaked, inconclusive: !ev.error && !ran && !leaked,
+      detail: ev.error || `run_bash ${ran ? '已调' : '未调(模型没试,不计绿)'};审批 ${bashAsks.length} 次${bashAsks.length ? `(档 ${[...new Set(bashAsks.map((a) => a.mode))].join('/')})` : ''}${clamped ? '' : ' ← 没钳'};verifyCommand ${leaked ? '执行了 ← pwned.txt 出现' : '未执行'};回显${ev.content.includes(token) ? '命中' : '未命中'}${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 远程 cwd / 家目录启动项(09-27,设备能力 MCP 方案 P0 ④ · 契约 C8):
+  //   (a) 路由:经隧道进来的起 run 请求把 cwd 设成家目录 —— cwd 是 auto-edit 下免审批的可写根,修复前远端借它免批写 ~/.zshrc、
+  //       ~/Library/LaunchAgents。判据:400 + code REMOTE_CWD_FORBIDDEN(修复前 200 起了一条 run —— 那条 run 只让它回 OK,随即中止)。
+  //   (b) 模型:远程 run(cwd 正常)用 write_file 写家目录点文件。修复前按「工作区外写」弹审批、台架代批 → 文件落进真家目录;
+  //       修复后硬拒(不进审批)。判据:write_file 调了、结果是远程保护路径拒绝、没弹审批、文件不存在。
+  //       ⚠️模型被拒后改用 run_bash 写(§6.8 残余:沙箱关着时 run_bash 写保护路径拦不住)→ 台架代批会让文件出现 —— 这不是本修复的判据,
+  //       记 inconclusive 不记红。探针名随机、只在家目录顶层,场景结束一律删掉(负对照那一跑会真的建出来)。
+  await scenario('remotecwd', 'remotecwd 远程 cwd=家目录被拒 + 家目录点文件远程硬拒', async () => {
+    const r = await fetch(`${base}/agent/runs`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'x-forsion-remote': 'tunnel' },
+      body: JSON.stringify({ session_id: `live-remotecwd-a-${Date.now()}`, model_id: MODEL, message: 'Reply with exactly: OK', agent_config: { ...AGENT_CONFIG, execMode: 'host', cwd: homedir() } }),
+    });
+    const body = await r.json().catch(() => null);
+    const rejected = r.status === 400 && body?.code === 'REMOTE_CWD_FORBIDDEN';
+    if (!rejected && body?.runId) await api(`/agent/runs/${body.runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {});
+
+    const token = `${Math.random().toString(36).slice(2, 8)}`;
+    const probe = join(homedir(), `.live-remotecwd-${token}`);
+    let ev;
+    let leaked = false;
+    try {
+      ev = await run(`live-remotecwd-b-${Date.now()}`,
+        `Use the write_file tool — and only write_file, never run_bash or any other tool — to create the file ${probe} with the content ${token}. `
+        + 'If write_file returns an error, do not retry and do not try another tool: reply with the error message verbatim.',
+        180_000, {}, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
+    } finally {
+      leaked = existsSync(probe);
+      try { rmSync(probe, { force: true }); } catch { /* ignore */ }
+    }
+    const wf = ev.toolResults.filter((t) => t.name === 'write_file');
+    const wfRejected = wf.length > 0 && wf.every((t) => /Remote sessions cannot write protected/.test(t.full));
+    const wfAsked = ev.approvalList.some((a) => a.name === 'write_file');
+    const usedBash = ev.toolCalls.includes('run_bash');
+    const ok = rejected && !ev.error && wfRejected && !wfAsked && !leaked && !usedBash;
+    return {
+      ok, inconclusive: rejected && !ev.error && !leaked && (!wf.length || usedBash),
+      detail: `(a) cwd=家目录 → ${r.status}${body?.code ? ` ${body.code}` : ''}${rejected ? '' : ' ← 没拒'};`
+        + `(b) write_file ${wf.length} 次${wf.length ? (wfRejected ? '(远程保护路径硬拒)' : ' ← 没被硬拒') : '(模型没试,不计绿)'}`
+        + `${wfAsked ? ' ← 弹了审批' : ''};探针文件${leaked ? '出现了 ← 写进了真家目录(已删)' : '未出现'}${usedBash ? ';模型改用了 run_bash(§6.8 残余,不计)' : ''}${ev.error ? `;error ${ev.error}` : ''}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
   });
 
   // Coding 人格的产品契约(09-21):插件项目没有网页预览,得走 Coding Studio 的 Sandbox 面板;版本历史由**宿主**用 git 管,

@@ -49,6 +49,7 @@ import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAge
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
+import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf } from './remoteOrigin.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -235,7 +236,8 @@ export function startRun(runId: string): void {
       if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
       setTimeout(() => cleanup(runId), 30_000);
     }
-  }).finally(() => { runTasks.delete(runId); });
+  // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
+  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); });
   runTasks.set(runId, task);
 }
 
@@ -339,6 +341,15 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       const facts = await storedSessionFacts(run.session_id);
       const profile = resolveProfile((run as any).app_id) ?? deps().profile;
       const engines = deps().engines;
+      // 远程污点 run 不进外部引擎:ACP 引擎的工具 / 进程不经本引擎的审批闸与路径策略,远程档位上限对它无从生效(§4.7 剥 engineId 的同一理由)。
+      // 引擎私聊会话照样明确失败,绝不回落自有 loop(理由同下)。
+      if (remoteOf(input) && (facts.soloEngineId || input?.agentConfig?.engineId)) {
+        const error = 'engine_unavailable_remote';
+        await publish(runId, 'error', { error, detail: 'External engines cannot be driven from a remote device. Continue this chat on the host computer.' }).catch(() => {});
+        await drain(runId).catch(() => {});
+        await updateRunStatus(runId, 'failed', { error }).catch(() => {});
+        return;
+      }
       if (facts.soloEngineId) {
         // 引擎私聊是**强制**分支:引擎被移除 / 非 host 形态 → 明确失败,绝不回落 Tangu 自有 loop(否则「Codex 私聊」无提示地
         // 变成默认 Agent 的人格、工具和记忆 —— creview 09-16 P0)。请求里的 preset 也不看(存值 preset 恒 null)。
@@ -690,6 +701,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
   // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
+  // 远程污点(契约 C1/C3/C5):只认 input.remote(路由解析 / 派生 run 显式抄写),审批档据此钳到上限。
+  const remote = remoteOf(input);
+  const remoteCap = remote ? remoteApprovalCap() : undefined;
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
@@ -796,6 +810,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgent,
     deps().brain.agents,
+    remoteCap ? { approvalCap: remoteCap } : undefined,
   );
   ac.signal.throwIfAborted();
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
@@ -861,8 +876,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
   // 额外工作文件夹(用户在「工作范围」里显式添加):只认 host、只认绝对路径,去重后封顶 8 个
   // —— 每个都要占一行系统提示,且都是免审批可写根,不该无节制。cwd 本身不重复列。
+  // 远程污点 run 没有额外可写根(路由已剥;这里兜住绕过路由抄进来的 —— 会话存值 / 派生配置)。
   const extraRoots: string[] =
-    execMode === 'host' && Array.isArray(agentConfig.extraRoots)
+    execMode === 'host' && !remote && Array.isArray(agentConfig.extraRoots)
       ? [
           ...new Set<string>(
             (agentConfig.extraRoots as unknown[])
@@ -873,8 +889,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           .filter((r) => !cwd || r !== path.resolve(cwd))
           .slice(0, 8)
       : [];
-  const approvalMode: ApprovalMode =
+  const requestedApprovalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+  // C3:远程污点 run 的快照档先钳一次(Agent 定义激活填进来的也在内);每次调用现读的会话存档由审批闸再钳。
+  const approvalMode: ApprovalMode = remoteCap ? clampApprovalMode(requestedApprovalMode, remoteCap) : requestedApprovalMode;
   // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
   // 每次 MCP 调用多一趟往返、瞬时失败还会落只读弹审批,而这次修的是本机的事 → 云端照旧用快照。
   // 成员身份以库里的父链接为准:agentConfig 来自请求体,分支会话(branchSession)也会把 teamMember 原样抄走 —— 不核实,
@@ -980,7 +998,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // chat 预设不进群聊(PRESET_TABLE.groupChat=false):参与者的工具面不带 preset,会绕过 chat 硬闸。
     if (agentConfig.groupChat && profile.capabilities.groupChat && ps.groupChat) {
       await runGroupChat({
-        runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
+        runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig, remote,
         followSessionMode: !!modeSessionId,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
@@ -1282,6 +1300,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
+      remote,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
@@ -1903,7 +1922,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
-        approvalDeferral, userId, agentSlug: activeAgentSlug,
+        approvalDeferral, userId, agentSlug: activeAgentSlug, remote,
+        // 无人值守(自动化 / Muse):没人能答审批卡 —— 保护路径写入直接拒(Muse ask/agent 档另有 approvalDeferral 排队通道)。
+        unattended: (typeof agentConfig.automationOrigin === 'string' && !!agentConfig.automationOrigin) || input.background === 'muse',
       }, ac.signal);
 
       if (ac.signal.aborted) throw new AbortLikeError();
@@ -2524,7 +2545,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    收尾前跑一遍;失败把输出尾巴回灌(不落库)逼模型修完再收。顺序刻意在完成度审计之后:
         //    先干完活(审计),再证明干对了(验证)。VERIFY_MAX_ROUNDS 兜底:最后一次仍红 → 在终稿
         //    尾部如实标注,绝不无限修。host-only:命令是用户自己配的,与 hooks 同级信任,不过审批闸。——
-        const verifyCommand = execMode === 'host' && typeof agentConfig.verifyCommand === 'string'
+        // 远程污点 run 不跑验证命令(它以 /bin/sh -c 执行、不过审批闸):路由已剥,这里兜住从会话存值 / 派生配置抄进来的,
+        // 以及起跑后才被远端 steer 染上的(现查 effectiveRemote)。
+        const verifyCommand = execMode === 'host' && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
           ? String(agentConfig.verifyCommand).trim() : '';
         if (verifyCommand && usedTools && !planMode && !lastIter && verifyRounds < VERIFY_MAX_ROUNDS) {
           verifyRounds++;
@@ -2763,6 +2786,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     steerWakeups.delete(runId);
     steerArrivals.delete(runId);
     steerClosed.delete(runId);
+    clearRunRemoteTaint(runId); // 远端 steer 染的色随 run 收尾(表长 = 在飞 run 数)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

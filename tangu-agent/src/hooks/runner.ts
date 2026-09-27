@@ -26,6 +26,7 @@ import {
   type HookRunStatus,
   type HookVerdict,
 } from './types.js';
+import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
 
 const emptyVerdict = (): HookVerdict => ({ additionalContext: [], systemMessages: [], runs: [] });
 
@@ -63,7 +64,8 @@ function runCommand(
   const shell = isWin ? process.env.COMSPEC || 'cmd.exe' : '/bin/sh';
   const command = isWin && handler.commandWindows ? handler.commandWindows : handler.command;
   return runBoundedProcess(shell, isWin ? ['/D', '/C', command] : ['-lc', command], {
-    cwd, env: process.env, input, timeoutMs, signal, maxOutputBytes: 256 * 1024,
+    // 剥引擎凭据(C2):hook 由工具调用触发,拿到 forsion_token / 本机令牌就能绕过引擎直调云端与本机端点。
+    cwd, env: toolSubprocessEnv(), input, timeoutMs, signal, maxOutputBytes: 256 * 1024,
   });
 }
 

@@ -13,6 +13,7 @@ import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
 import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
+import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote, remoteCwdViolation, remoteCwdErrorBody } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -141,6 +142,13 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
+    // 远程来源(契约 C1:unitWeb 盖的 x-forsion-remote):剥 verifyCommand / engineId / extraRoots / 设备能力,审批档钳到上限。
+    // ⚠️ 手机分支的顶层 client_capabilities 握手合进来时,远程请求必须丢弃它:本机引擎给它注册的手机工具,回执打的是云端。
+    const remote = parseRemoteOrigin(req.headers);
+    // 契约 C8:远程 run 的 cwd 不许是根 / 家目录 / 受保护目录(或其祖先)—— cwd 是 auto-edit 下免审批的可写根。
+    const badCwd = remote ? remoteCwdViolation(agent_config?.cwd) : null;
+    if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
+    const agentConfig = remote ? sanitizeRemoteAgentConfig(agent_config || {}) : agent_config || {};
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
     const clientTag = normalizeClientTag(client);
@@ -193,8 +201,10 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       modelId,
       assistantMessageId,
       input: {
-        message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {},
+        message, userMessageId, attachments: attachments || [], agentConfig,
         ...(clientTag ? { client: clientTag } : {}),
+        // 远程污点:只由这里(与派生 run 的显式抄写)落进 input,loop / 审批闸据此钳制;请求体里的同名字段不作数。
+        ...(remote ? { remote } : {}),
         // 直接来自客户端输入区(审批档据此在审批时现读会话设置,见 agentLoop.approvalModeSessionId)。
         // 不能拿 client 标签判:createRun 会把它抄进派生 run(团队成员 / 讨论),那些 run 的档不归自己的会话管。
         origin: 'client',
@@ -369,6 +379,10 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
       attachments: Array.isArray(attachments) ? attachments : [],
     });
     if (!ok) return res.status(409).json({ detail: 'run not active', reason: 'not_active' });
+    // 远端 steer 本机 run:注入的文字从下一迭代起驱动它 → 染色,审批闸 / 路径策略 / 验证命令从此按远程钳制(C3)。
+    // 只在入队成功后登记(失败的 steer 不占表);与 enqueueSteer 同一同步段,loop 在迭代边界消费前必已染上。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.id, remote);
     res.json({ ok: true, userMessageId });
   } catch (err: any) {
     res.status(500).json({ detail: err?.message || 'Failed to steer run' });

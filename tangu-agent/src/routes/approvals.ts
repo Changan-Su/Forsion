@@ -21,6 +21,7 @@ import { resolveInquiry } from '../services/inquiries.js';
 import { parseDeskShotBody, resolveDeskShot } from '../services/deskCapture.js';
 import { resolveUiAction } from '../services/uiAck.js';
 import { normalizeUiValues, sanitizeText } from './runs.js';
+import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -99,12 +100,16 @@ router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (r
     }
     const run = await getRunForUser(req.params.runId, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
+    // 契约 C9:远端(x-forsion-remote)答审批 —— 批准 / 拒绝照收(D1),但「总允许」按单次批准算(记下来 = 远端改了本机会话的
+    // 审批面,本机 run 随后也吃它;与 run 本身带不带远程污点无关,看的是**答复**从哪来),改参数一律 400。
+    if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
+    const remoteAnswer = !!parseRemoteOrigin(req.headers);
 
     const raw = req.body?.argsOverride;
     // 只收普通对象(typeof [] 也是 'object');改写后的参数由 gateToolCall 重新过闸,这里不做语义判定。
     const argsOverride = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : undefined;
     // 必须带上 URL 的 runId:getRunForUser 只证明这条 run 是调用者的,审批条目属于哪条 run 由登记表比对。
-    const ok = resolveApproval(req.params.approvalId, { action, argsOverride }, req.params.runId);
+    const ok = resolveApproval(req.params.approvalId, { action: remoteAnswer && action === 'approve_always' ? 'approve' : action, argsOverride }, req.params.runId);
     if (!ok) return res.status(410).json({ detail: 'approval is no longer pending' });
     res.json({ ok: true });
   } catch (e: any) {
@@ -139,6 +144,8 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
       if (!okUi) return res.status(410).json({ detail: 'ui action is no longer pending' });
       return res.json({ ok: true });
     }
+    // 契约 C9:询问没有「总允许」与改参数的概念;远端夹带 argsOverride 同样 400(与审批一个口径,免得哪天兑现侧开始认它)。
+    if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
     const answer = typeof req.body?.answer === 'string' ? req.body.answer.trim() : '';
     if (!answer) return res.status(400).json({ detail: 'answer required' });
     const run = await getRunForUser(req.params.runId, userId);

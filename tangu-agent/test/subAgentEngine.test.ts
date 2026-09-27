@@ -137,6 +137,15 @@ describe('引擎子代理', () => {
     expect(sub).toEqual(['start', 'token', 'tool', 'done']); // 一次工具调用只一条 tool
   });
 
+  it('远程污点 run 不许委派给外部引擎(C1 剥 engineId 的同一理由),不 spawn;负对照:本机照常交给引擎', async () => {
+    const { runCalls } = setup({ engines: [{ id: 'codex', name: 'Codex', available: true }] });
+    await expect(runSubAgent({ task: 't', parentCtx: hostCtx({ remote: { via: 'tunnel', marked: true } }), modelId: 'm1', engineId: 'codex' }))
+      .rejects.toThrow(/remote session/);
+    expect(runCalls).toHaveLength(0);
+    await runSubAgent({ task: 't', parentCtx: hostCtx(), modelId: 'm1', engineId: 'codex' });
+    expect(runCalls).toHaveLength(1);
+  });
+
   it('引擎失败也收尾 done(否则子聊天区那条永远转圈)', async () => {
     const { events } = setup({
       engines: [{ id: 'codex', name: 'Codex', available: true }],

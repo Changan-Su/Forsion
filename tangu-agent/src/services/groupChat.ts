@@ -33,6 +33,7 @@ import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
 import { activateMember as realActivateMember, type ActivateMember, type MemberOutcome } from './teamRuns.js';
+import { effectiveRemote, type RemoteInfo } from './remoteOrigin.js';
 import { TEAM_OUTPUT_MODE, teamOutputCollector, teamOutputRecord } from './teamOutputs.js';
 
 /** 兜底天花板(周期数;每周期 = 还想聊的成员各说一次)。不是缺省上限:没传 groupMaxRounds 时团队只靠成员自己的 DONE 收场,这里只防失控。 */
@@ -64,6 +65,8 @@ export interface GroupChatParams {
   agentConfig: any;
   /** 本团队 run 的审批档来自团队会话设置(agentLoop 判定):成员子 run 审批时现读团队会话此刻的档。 */
   followSessionMode?: boolean;
+  /** 远程污点(C5):成员子 run 照抄。团队 run 起跑后才被远端 steer 染上的,在激活那一刻经 effectiveRemote 现取。 */
+  remote?: RemoteInfo;
   message: string;
   userMessageId?: string;
   attachments?: any[];
@@ -421,6 +424,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
         member: agent, inlineDef: inlineSlugs.has(slug), delta, cycle, roster, teamDoc: teamDocFor(agent),
         execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, followSessionMode: p.followSessionMode, signal,
+        remote: effectiveRemote({ remote: p.remote, runId }),
         onStarted: (ids) => {
           childId = ids.runId; childRuns.set(slug, ids.runId);
           collectOutput = teamOutputCollector({ ...ids, slug, name: agent.name, modelId: agent.model || modelId });

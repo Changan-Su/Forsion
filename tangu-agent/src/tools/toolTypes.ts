@@ -38,6 +38,10 @@ export interface ToolContext {
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
   /** 审批时现读这个会话存着的档(gateToolCall.modeSessionId;子代理随父 run 走同一个)。缺省 = 只用 approvalMode 快照。 */
   approvalModeSessionId?: string;
+  /** 远程污点(契约 C1/C5:run.input.remote,经 unitWeb 隧道 / P2P / 局域网进来,或由这样的 run 派生)。
+   *  有值 → 审批档钳到 config.json remote.maxApprovalMode(C3)、保护路径写入硬拒(C4);派生 run(团队成员 / 讨论 / 项目会话)照抄。
+   *  子代理随 parentCtx 展开继承。run 中途被远端 steer 染色的见 services/remoteOrigin.effectiveRemote。 */
+  remote?: import('../services/remoteOrigin.js').RemoteInfo;
   /** 本次 run 的 AppProfile(接缝①):工具门禁 isEnabledFor 据此过滤。缺省回退 deps().profile。 */
   profile?: AppProfile;
   /** delegate 子代理深度(0/缺省=主 loop,1=子代理内)。深度 ≥1 时 delegate 工具不可见,防递归裂变。 */
