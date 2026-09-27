@@ -156,7 +156,7 @@ router.post('/agent/runs/:runId/captures/:shotId', authMiddleware, async (req: A
   try {
     const run = await getRunForUser(req.params.runId, req.user!.userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
-    const ok = resolveDeskShot(req.params.shotId, parseDeskShotBody(req.body));
+    const ok = resolveDeskShot(req.params.runId, req.params.shotId, parseDeskShotBody(req.body));
     if (!ok) return res.status(410).json({ detail: 'capture is no longer pending' });
     res.json({ ok: true });
   } catch (e: any) {

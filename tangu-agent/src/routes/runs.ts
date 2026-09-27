@@ -344,7 +344,8 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
   try {
     const userId = req.user!.userId;
     const { message, attachments } = req.body || {};
-    // Reuse the steer route so existing desktop/web/mobile gateways pass it through.
+    // flush 复用 steer 路由(不另开端点)。⚠️ 云端网关不在本进程跑 loop:它必须按 run 亲和把 steer
+    // 代理到 worker(server/microserver/agent-core/fleetDispatch.ts,2026-09-27 前漏了 → 恒 409 not_active)。
     // A flush only wakes already queued input. It never cancels the task or resends text.
     if (req.body?.flush === true) {
       const run = await getRunForUser(req.params.id, userId);
