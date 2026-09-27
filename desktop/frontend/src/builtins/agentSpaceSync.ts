@@ -11,6 +11,8 @@ import type { TanguDesktopConfig } from '../types'
 
 const loadedStamp = new Map<string, number>()
 const reportedStamp = new Map<string, number>()
+/** 回写 POST 失败(引擎一时不可用)的那条加载失败:同戳的后续轮询在「戳没变」处直接返回、不再重查,只能记下来在那儿重发(Codex 09-27) */
+const unsentReport = new Map<string, { stamp: number; text: string }>()
 
 /** 装上了、没抛错,却没注册主槽视图 —— 同样要回写,否则就是静默失败。09-27 实机:Muse 从 09-11 首建起每一版 main.js
  *  都整份包成 `function setup(ctx) { … }` 却从不调用,求值只声明了一个函数,零注册零报错;Space 一直是空白态,
@@ -27,6 +29,11 @@ export const agentPluginId = (slug: string): string => `agent-${slug}`
 export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stamp: number | null | undefined): Promise<void> {
   if (slug === 'muse') hookRuntimeErrors(cfg)
   if (typeof stamp !== 'number') return // 旧引擎没有戳 → 不同步(启动时装的那份就是全部)
+  const unsent = unsentReport.get(slug)
+  if (unsent) {
+    unsentReport.delete(slug)
+    if (unsent.stamp === stamp) void postMuseFeedback(cfg, unsent.text).catch(() => { unsentReport.set(slug, unsent) })
+  }
   if (loadedStamp.get(slug) === stamp) return
   loadedStamp.set(slug, stamp) // 先记后做:并发调用只有一个真跑
   const id = agentPluginId(slug)
@@ -43,7 +50,7 @@ export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stam
   const report = (text: string): void => {
     if (reportedStamp.get(slug) === stamp) return
     reportedStamp.set(slug, stamp) // 同一份内容只报一次
-    void postMuseFeedback(cfg, text).catch(() => {})
+    void postMuseFeedback(cfg, text).catch(() => { unsentReport.set(slug, { stamp, text }) })
   }
   // blocked 不止 invalid:apiVersion / minAppVersion 门禁挡下同样一声不吭地不渲染
   const err = st.lastSetupError[id] || (p.blocked ? p.blockedReason || `manifest.json blocked (${p.blocked}): check apiVersion / minAppVersion` : '')
@@ -78,10 +85,11 @@ export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string
  *  照样有它 await 的那一帧)—— 两种的修法都落在那一行。只认当前这一版(旧版漏清的定时器不算);同一条只报一次、最多 3 条,
  *  POST 失败撤销标记。
  *  ponytail: 去重只在本渲染进程 —— 两个窗口同时开着 Muse Space 撞上同一个错会各报一条,要紧再挪到引擎侧按文本去重;
- *  栈里一帧都没有它的(宿主自己的定时器 reject)归不了。 */
+ *  栈里一帧都没有它的归不了:宿主自己的定时器 reject,以及以非 Error 值 reject 的(`Promise.reject('boom')` 没有栈 ——
+ *  setup 返回这样的 Promise 且 home 已注册时,这份失败无处回写;kickoff 要求顶层同步注册,不值当为它给 setup 的 Promise 打标)。 */
 const RUNTIME_MAX = 3
 let runtimeCfg: TanguDesktopConfig | null = null
-let runtimePending: string[] = [] // 还没拿到 cfg 时认出的(每版至多 3 条),拿到就补发
+let runtimePending: Array<{ url: string; text: string }> = [] // 还没拿到 cfg 时认出的(每版至多 3 条),拿到就补发 —— 只补仍在运行的那一版的
 let runtimeKey = ''
 let runtimeSeen = new Set<string>()
 let runtimeHooked = false
@@ -109,12 +117,8 @@ export function noteAgentSpaceRuntimeError(err: unknown): void {
   const seen = runtimeSeen
   if (seen.has(text) || seen.size >= RUNTIME_MAX) return
   seen.add(text)
-  sendRuntime(text, seen)
-}
-
-function sendRuntime(text: string, seen: Set<string>): void {
   const cfg = runtimeCfg
-  if (!cfg) { runtimePending.push(text); return }
+  if (!cfg) { runtimePending.push({ url, text }); return }
   void postMuseFeedback(cfg, text).catch(() => { seen.delete(text) })
 }
 
@@ -129,7 +133,12 @@ function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
   runtimeCfg = cfg
   const queued = runtimePending
   runtimePending = []
-  for (const t of queued) sendRuntime(t, runtimeSeen)
+  const live = agentSpaceSourceUrl(agentPluginId('muse'))
+  const seen = runtimeSeen
+  for (const q of queued) {
+    // 排队期间换了版 / 拆掉了:旧版的错不补(Codex 09-27)
+    if (q.url === live) void postMuseFeedback(cfg, q.text).catch(() => { seen.delete(q.text) })
+  }
   listenRuntimeErrors()
 }
 
@@ -138,4 +147,4 @@ function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
 listenRuntimeErrors()
 
 /** 测试用:清掉戳记忆。 */
-export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeKey = ''; runtimeSeen = new Set(); runtimeCfg = null; runtimePending = [] }
+export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeKey = ''; runtimeSeen = new Set(); runtimeCfg = null; runtimePending = []; unsentReport.clear() }

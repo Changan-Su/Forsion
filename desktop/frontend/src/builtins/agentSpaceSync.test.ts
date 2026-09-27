@@ -81,6 +81,18 @@ describe('syncAgentSpace 回写', () => {
     ])
   })
 
+  it('加载失败的回写 POST 失败(引擎一时不可用)→ 同戳的下次同步重发,不必等内容变;发成功了就不再发', async () => {
+    afterReload({ plugins: [muse], activeIds: [], views: [], lastSetupError: { 'agent-muse': 'boom' } })
+    posted.mockRejectedValueOnce(new Error('engine down'))
+    await run(20)
+    expect(posted).toHaveBeenCalledTimes(1)
+    await run(20) // 同戳:不重载,但重发那条
+    expect(posted).toHaveBeenCalledTimes(2)
+    expect(posted.mock.calls[1][1]).toBe('Space plugin failed to load: boom')
+    await run(20)
+    expect(posted).toHaveBeenCalledTimes(2)
+  })
+
   it('挂载失败的回写 POST 失败 → 撤销标记,下次挂载再报', async () => {
     const home = { id: 'home' }
     posted.mockRejectedValueOnce(new Error('engine down'))

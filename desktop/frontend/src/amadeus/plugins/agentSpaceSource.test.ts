@@ -103,6 +103,17 @@ describe('agent Space 的 sourceURL', () => {
     expect(posted).toHaveBeenCalledTimes(5)
   })
 
+  it('拿到 cfg 之前排队的错,排队期间换了版 → 旧版的不补发(只补仍在运行的那一版的)', async () => {
+    env.sources = [source({ id: 'agent-muse', agent: 'muse', code: agentCode })]
+    await usePluginStore.getState().loadExternal()
+    noteAgentSpaceRuntimeError(errorOf('v1')) // 还没 cfg:排队
+    env.sources = [source({ id: 'agent-muse', agent: 'muse', code: `${agentCode}\n// v2` })]
+    await usePluginStore.getState().reloadOne('agent-muse') // 修好了的 v2 顶上
+    noteAgentSpaceRuntimeError(errorOf('v2')) // v2 自己的也排队
+    void syncAgentSpace({} as never, 'muse', undefined)
+    expect(posted.mock.calls.map((c) => String(c[1]).match(/setting '(\w+)'/)?.[1])).toEqual(['v2'])
+  })
+
   it('setup 同步抛错的那一版不算「正在运行」:它先留下的函数(如已起的定时器)之后再抛也不报(加载失败另有回写)', async () => {
     env.sources = [source({ id: 'agent-muse', agent: 'muse', code: `${agentCode}\nthrow new Error('setup boom')` })]
     await usePluginStore.getState().loadExternal()
