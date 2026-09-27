@@ -1,7 +1,7 @@
 // Small modal dialogs for file-management flows: confirm (delete), prompt (folder name),
 // and folder picker (move a page). They share the .dialog-* styles.
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
@@ -42,10 +42,11 @@ export function ConfirmDialog({
 }) {
   useEscape(onClose)
   const { t } = useI18n()
+  const titleId = useId()
   return (
     <div className="dialog-overlay" onMouseDown={onClose}>
-      <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="dialog-title">{title}</div>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="dialog-title" id={titleId}>{title}</div>
         {message && <div className="dialog-msg">{message}</div>}
         {children}
         <div className="dialog-actions">

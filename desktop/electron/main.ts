@@ -378,6 +378,8 @@ interface TanguStoredConfig {
   lastThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   /** chat 模式的思考档记忆(按 preset 分槽,与 lastThinkingLevel 互不污染)。 */
   lastChatThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
+  /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;纯渲染层 UI 记忆)。 */
+  lastUltra: boolean
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
   hostSandbox?: HostSandboxConfig
@@ -462,6 +464,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   lastApprovalMode: 'auto-edit',
   lastThinkingLevel: '',
   lastChatThinkingLevel: '',
+  lastUltra: false,
   cloudUrl: '',
   sandbox: 'auto',
   hostSandbox: { mode: 'off', network: 'deny' },
@@ -526,7 +529,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'keepAwakeWhileRunning', // 桌面专属(powerSaveBlocker 由 main 持有)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
-  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
+  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
 const configPath = (): string => join(app.getPath('userData'), 'tangu-desktop-config.json')
 

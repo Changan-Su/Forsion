@@ -21,6 +21,7 @@ import { THINKING_LEVELS } from '../../types'
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
+import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
@@ -253,7 +254,10 @@ export const Composer2: React.FC<{
   onEngineModelChange?: (id: string) => void
   engineCommands?: Array<{ name: string; description: string; hint?: string }>
   thinkingLevel?: AgentConfig['thinkingLevel']
-  onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>) => void
+  /** 第二参 = Ultra 开关(只在本机 work 会话的入口会给;true 时档位恒为 max)。 */
+  onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>, ultra?: boolean) => void
+  /** 会话的 Ultra 开关(对标 Codex Ultra:max + 主动并行派子代理)。 */
+  ultra?: boolean
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
@@ -331,7 +335,7 @@ export const Composer2: React.FC<{
   sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
-  thinkingLevel: sessionThinkingLevel, onThinkingChange,
+  thinkingLevel: sessionThinkingLevel, onThinkingChange, ultra,
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
@@ -564,6 +568,19 @@ export const Composer2: React.FC<{
   const agentDef = engineId ? undefined : agents?.find((a) => a.slug === currentAgentSlug)
   const approval = execConfig.approvalMode || agentDef?.approvalMode || 'auto-edit'
   const thinkingLevel = sessionThinkingLevel || (groupChat ? undefined : agentDef?.thinkingLevel) || undefined
+  // Ultra 入口只给真拿得到 delegate 的会话:本机(host)、非 chat、非外部引擎、非团队模式(团队成员各跑各的档)。
+  const allowUltra = isHost && !isChat && !engineId && !groupChat
+  // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
+  const ultraOn = allowUltra && !!ultra && thinkingLevel === 'max'
+  // 开 Ultra 的所有入口(滑杆第 8 格 / `/think ultra` / 斜杠菜单)都过这里:没勾过「以后不再显示」就先弹确认(09-27 用户要求)。
+  // 返回是否已当场生效(弹了确认就是 false,由确认框收尾)。
+  const [ultraAsk, setUltraAsk] = useState(false)
+  const applyThinking = (lv: NonNullable<AgentConfig['thinkingLevel']>, u?: boolean): boolean => {
+    if (!onThinkingChange) return false
+    if (u === true && !ultraOn && !ultraConfirmSkipped()) { setUltraAsk(true); return false }
+    onThinkingChange(lv, u)
+    return true
+  }
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
@@ -573,10 +590,12 @@ export const Composer2: React.FC<{
   useEffect(() => {
     if (!openMenu) return
     const onDown = (e: MouseEvent) => {
-      if ((e.target as HTMLElement)?.closest?.('[data-cmenu]')) return
+      // data-keep-menus:从菜单里弹出的确认框(如开 Ultra)—— 点它、在它里面按 Esc 都不算离开菜单
+      if ((e.target as HTMLElement)?.closest?.('[data-cmenu], [data-keep-menus]')) return
       setOpenMenu(null)
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null) }
+    // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[data-keep-menus]')) setOpenMenu(null) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
@@ -671,7 +690,8 @@ export const Composer2: React.FC<{
     const caret = start + text.length
     requestAnimationFrame(() => {
       const ta = taRef.current
-      if (ta) { if (!useApp.getState().feedbackOpen) ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
+      // 斜杠菜单里点的项弹了确认框(开 Ultra):别在下一帧把焦点从确认框抢回输入框(creview 09-27 P1)
+      if (ta) { if (!useApp.getState().feedbackOpen && !document.querySelector('[data-keep-menus]')) ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
       autoGrow()
     })
     return start
@@ -789,8 +809,16 @@ export const Composer2: React.FC<{
         const unsupported = !!supported && !supported.includes(lv)
         items.push({
           cmd: `/think ${lv}`,
-          desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
-          run: () => { onThinkingChange(lv); close() },
+          desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${!ultraOn && thinkingLevel === lv ? t('input.slash.current') : ''}`,
+          // 显式点一档 = 关掉 Ultra(Ultra 开着时引擎只认 max,不关的话这一下静默无效)。
+          run: () => { applyThinking(lv, allowUltra ? false : undefined); close() },
+        })
+      }
+      if (allowUltra) {
+        items.push({
+          cmd: '/think ultra',
+          desc: `${t('pill.ultraTitle')}${ultraOn ? t('input.slash.current') : ''}`,
+          run: () => { applyThinking('max', true); close() },
         })
       }
     }
@@ -820,7 +848,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw, allowUltra, ultraOn])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
@@ -1107,11 +1135,14 @@ export const Composer2: React.FC<{
     const thinkMatch = /^\/(?:think|effort)(?:\s+(\S+))?$/i.exec(cmd)
     if (thinkMatch && onThinkingChange) {
       const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
-      if (THINKING_LEVELS.includes(lv)) {
-        onThinkingChange(lv)
+      if (allowUltra && (lv as string) === 'ultra') {
+        // 弹了确认框就不报「已设为」:还没生效,确认框本身就是反馈
+        if (applyThinking('max', true)) setHint(t('input.slash.thinkSet', { level: t('pill.ultra') }))
+      } else if (THINKING_LEVELS.includes(lv)) {
+        applyThinking(lv, allowUltra ? false : undefined)
         setHint(t('input.slash.thinkSet', { level: thinkingLabel(lv, t) }))
       } else {
-        setHint(t('input.slash.thinkUsage', { levels: THINKING_LEVELS.join('|') }))
+        setHint(t('input.slash.thinkUsage', { levels: [...THINKING_LEVELS, ...(allowUltra ? ['ultra'] : [])].join('|') }))
       }
       setDraft('')
       requestAnimationFrame(autoGrow)
@@ -1705,7 +1736,9 @@ export const Composer2: React.FC<{
                 groups={modelPillGroups}
                 onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
                 thinkingLevel={isEngine ? undefined : thinkingLevel}
-                onThinkingChange={isEngine ? undefined : onThinkingChange}
+                onThinkingChange={isEngine || !onThinkingChange ? undefined : (lv, u) => { applyThinking(lv, u) }}
+                allowUltra={allowUltra}
+                ultra={ultraOn}
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
@@ -1759,6 +1792,17 @@ export const Composer2: React.FC<{
         </ChatBoxSurface>
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
+      {ultraAsk && (
+        <UltraConfirmDialog
+          offerFullAccess={isHost && !teamApproval && approval !== 'full-auto'}
+          onConfirm={({ fullAccess }) => {
+            // 不走 setApproval:它会顺手关掉模型菜单,确认后就看不到滑杆原地切进 Ultra
+            if (fullAccess) onExecConfigChange({ execMode: 'host', approvalMode: 'full-auto', cwd: execConfig.cwd })
+            onThinkingChange?.('max', true)
+          }}
+          onClose={() => setUltraAsk(false)}
+        />
+      )}
     </div>
   )
 }

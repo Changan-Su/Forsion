@@ -31,21 +31,22 @@ export interface BackgroundUsageInput {
  * 发一条带 phase 的 usage 事件。runId 缺省取当前 run 上下文(ALS);仍拿不到就静默跳过
  * (Dream / 云端 historian 这类没有 run 的后台任务没有落点,不为它们编一个 run)。
  * 绝不抛、绝不阻断调用方 —— 记账失败不该让压缩/判官/子代理失败。
+ * 返回本次计价点数(没发事件 / 计价失败 = 0):delegate 子代理据此把自己的花销记进父 run 的成本闸。
  */
 export async function publishBackgroundUsage(
   phase: UsagePhase,
   modelId: string,
   usage: BackgroundUsageInput | undefined,
   opts?: { runId?: string; model?: any; iteration?: number },
-): Promise<void> {
+): Promise<number> {
+  let cost = 0;
   try {
     const runId = opts?.runId || currentRunId();
-    if (!runId) return;
+    if (!runId) return 0;
     const prompt = Number(usage?.prompt_tokens) || 0;
     const completion = Number(usage?.completion_tokens) || 0;
     const reported = usage?.cached_tokens;
     const cached = Number(reported) || 0;
-    let cost = 0;
     try {
       cost = (await deps().billing.calculateCost(modelId, prompt, completion, opts?.model, cached)) || 0;
     } catch { /* 计价失败按 0 上报,事件本身不能丢 */ }
@@ -65,4 +66,5 @@ export async function publishBackgroundUsage(
       ...(opts?.iteration != null ? { iteration: opts.iteration } : {}),
     });
   } catch { /* 台账绝不阻断后台任务 */ }
+  return cost;
 }

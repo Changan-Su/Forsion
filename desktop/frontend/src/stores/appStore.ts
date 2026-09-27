@@ -15,7 +15,7 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession } from './projectSettings'
+import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleUltra } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -358,13 +358,15 @@ export const DEFAULT_THINKING = 'medium' as const
  *  只吐 AgentConfig 的键,好让调用方直接展开进 init;模型不在此(走 cfg.modelId 老路)。
  *  **云沙箱会话不带审批档**:引擎那边 approvalMode 缺席才等于 full-auto,写死 auto-edit 会让
  *  云会话的 MCP 调用开始逐个弹审批(gateToolCall 对 mcp__ 工具非 host 也过闸)。 */
-export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> {
-  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> = {}
+export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> {
+  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> = {}
   if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
   // 思考档按 preset **分槽**(D36):chat 只读 chat 槽、缺省 DEFAULT_THINKING(dc 为 null 的 web/mobile 同);work 沿用 lastThinkingLevel,
   // 没记过就不指定 —— 交给 Agent 自己的档位,再回落引擎的会话缺省(都是中)。
   if (preset === 'chat') out.thinkingLevel = dc?.lastChatThinkingLevel || DEFAULT_THINKING
   else if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
+  // Ultra 只延续到本机 work 会话(delegate 只在本机引擎有;云端 / chat 会话带上它药丸也显示不出来),且只跟 max 同在。
+  if (host && preset !== 'chat' && dc?.lastUltra && out.thinkingLevel === 'max') out.ultra = true
   return out
 }
 
@@ -378,7 +380,7 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, pr
  *  草稿里 work 下改出的 execMode:'host' 也压不过它(F6)。work 原样返回。 */
 export function applyPreset(cfg: AgentConfig, preset: 'chat' | undefined): AgentConfig {
   if (preset !== 'chat') return cfg
-  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined, groupAgents: undefined }
+  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined, groupAgents: undefined, ultra: undefined }
 }
 
 /** 「不在项目中工作」无根工作区描述符(项目列表底部常驻项、选 chat 时的落点、web 端 /new 的落点)。 */
@@ -763,7 +765,7 @@ export interface AppState {
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
-  setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean): void
+  setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean, ultra?: boolean): void
   /** 本机某模型的上下文窗口覆盖(tokens;null = 交还自动识别,即缺省上限 272k)。模型菜单「上下文上限」写这里,与设置页
    *  输入框是同一份 modelOverrides;只在本机引擎可用(云端 worker 404)。写完重拉模型列表并作废该模型的 context_info,
    *  进度环当场换分母。失败只 toast。 */
@@ -2213,9 +2215,9 @@ export const useApp = create<AppState>((set, get) => ({
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
-      const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
+      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
-        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
+        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
       if (preset === 'chat' && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
@@ -2519,9 +2521,9 @@ export const useApp = create<AppState>((set, get) => ({
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
       const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
-      const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
+      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
+        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!init.agentSlug && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
@@ -2576,6 +2578,8 @@ export const useApp = create<AppState>((set, get) => ({
     if (mentions?.priorityAgent) agentConfig.priorityAgent = mentions.priorityAgent
     if (mentions?.mentionAgents?.length) agentConfig.mentionedAgentSlugs = mentions.mentionAgents
     if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
+    // Ultra 的资格按本条 run 的实际配置结算(换过引擎 / 进了团队模式 / 档位不是 max 的会话不带它),与药丸显示同一口径。
+    agentConfig = settleUltra(agentConfig)
     if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
     if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
@@ -2923,13 +2927,17 @@ export const useApp = create<AppState>((set, get) => ({
     void api.updateSession(get().cfg, sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 
-  setSessionThinking: (level, targetSessionId, remember = true) => {
+  setSessionThinking: (level, targetSessionId, remember = true, ultra) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。
+    // Ultra 只跟 max 同在:显式换成别的档 = 关掉 Ultra;调用方没表态(ultra 缺省,如换 Agent 带来的档)且仍是 max 时不动它。
+    const nextUltra = level === 'max' ? ultra : false
+    // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。chat 槽没有 Ultra。
     const preset = sid ? get().configBySession[sid]?.preset : newSessionPreset(get().sessionMode, get().newChatWs, currentPlatform())
-    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level })
-    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level } })); return }
-    get().patchSessionConfig({ thinkingLevel: level }, sid)
+    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
+    // 草稿里显式记 false(而不是删键):建会话时 sticky 只补缺席的键,删掉的话上次的 Ultra 会被补回来。
+    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra } : {}) } })); return }
+    // 已有会话:关 = 删键(PATCH 里 undefined 上线为 null)。
+    get().patchSessionConfig({ thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra || undefined } : {}) }, sid)
   },
 
   setModelContextWindow: async (modelId, tokens) => {
@@ -3101,7 +3109,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   selectNewChatAgent: (slug) => {
     const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
-    set((s) => ({ newChatCfg: { ...s.newChatCfg, agentSlug: slug || undefined, ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel } : {}) } }))
+    set((s) => ({ newChatCfg: { ...s.newChatCfg, agentSlug: slug || undefined, ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel, ...(def.thinkingLevel !== 'max' ? { ultra: false } : {}) } : {}) } }))
     if (def?.model) set({ newChatModel: def.model })
   },
 
@@ -3112,7 +3120,8 @@ export const useApp = create<AppState>((set, get) => ({
     // chat 无项目 → 空态的工作区选择清空(选择器随之隐藏);work 从无根退回端默认工作区。
     // 思考档按 preset 分槽(D36):切模式就丢掉草稿里的档位,让目标槽的缺省生效(不能写 undefined,展开会把 sticky 压掉)。
     saveSessionMode(p)
-    const { thinkingLevel: _drop, ...rest } = s.newChatCfg
+    // Ultra 跟着档位一起丢:留着的 ultra:false 会挡住目标槽的 lastUltra(creview 09-27)。
+    const { thinkingLevel: _drop, ultra: _dropUltra, ...rest } = s.newChatCfg
     return {
       sessionMode: p,
       newChatWs: p === 'chat' || s.newChatWs?.kind === 'rootless' ? null : s.newChatWs,

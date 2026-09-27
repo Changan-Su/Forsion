@@ -418,9 +418,13 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   let lastTool: { name: string; isError: boolean; preview: string } | null = null;
   let pendingCall: string | null = null;
   let hitCap = false;
+  let overBudget = false;
   try {
   for (let iteration = 0; iteration < SUB_MAX_ITERATIONS; iteration++) {
     if (parentCtx.signal?.aborted) throw new Error('aborted');
+    // 父 run 的成本闸(含并行兄弟子代理记进去的那份):每次调模型**之前**查 —— 只在记账后查的话,
+    // 越限那一刻已经在飞的兄弟们还会各自再烧一整轮。
+    if (parentCtx.runCostExceeded?.()) { overBudget = true; break; }
     if (subDefsDirty) { toolDefs = getToolDefinitions(subCtx); subDefsDirty = false; } // load_tools 解锁生效
     const lastIter = iteration === SUB_MAX_ITERATIONS - 1;
 
@@ -441,6 +445,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       cacheKey: `${parentCtx.sessionId}:sub:${subId}`,
     });
 
+    // 组 payload 是异步的,这段时间并行的兄弟子代理可能已把 run 推过上限:真发请求前再查一次(已在飞的请求只能让它跑完,
+    // 所以这是防失控的软上限,不是逐点预留的硬额度)。
+    if (parentCtx.runCostExceeded?.()) { overBudget = true; break; }
     const res = await llm.streamProviderCompletion({
       apiKey,
       baseUrl,
@@ -466,7 +473,10 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       // 子代理走 noopBilling 不扣点,但 token 是真烧的:上父 run 的台账(A5),否则「本 run 花了多少」缺这一块。
       // 必须 await:函数内部还要先异步算一次费才 publish,fire-and-forget 会在父 run 收尾/失败后才落地,
       // 事件被清空的缓冲丢掉 —— 台账永久缺项(Codex 评审三轮 #3)。它自己吞掉记账错误,不会传播失败。
-      await publishBackgroundUsage('delegate', effModelId, res.usage, { runId, model, iteration });
+      // 先 await 再记账,别写成 `chargeRunCost?.(await publish…)`:没挂闸(Muse 判官 / 测试替身)时可选调用连参数都不求值,
+      // 台账事件会整条消失(subAgentTurns.test 当场抓到)。
+      const cost = await publishBackgroundUsage('delegate', effModelId, res.usage, { runId, model, iteration });
+      parentCtx.chargeRunCost?.(cost);
     }
 
     if (!res.toolCalls?.length || lastIter) {
@@ -567,7 +577,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     }
   }
 
-  const result = (finalContent || exhaustedReport(lastTool, pendingCall, hitCap)).slice(0, SUB_RESULT_CAP);
+  const result = (finalContent || exhaustedReport(lastTool, pendingCall, hitCap, overBudget)).slice(0, SUB_RESULT_CAP);
   await transcript.finish(finalContent || result);
   if (runId) void publish(runId, 'subagent', { phase: 'done', subId, resultChars: result.length });
   return result;
@@ -583,11 +593,15 @@ export function exhaustedReport(
   lastTool: { name: string; isError: boolean; preview: string } | null,
   pendingCall: string | null,
   hitCap = false,
+  overBudget = false,
 ): string {
-  if (!lastTool && !pendingCall) return '(the sub-agent produced no conclusion)';
-  // 触顶与「模型这轮什么都没回」是两种收尾,别对父代理谎报原因。
+  if (!overBudget && !lastTool && !pendingCall) return '(the sub-agent produced no conclusion)';
+  // 触顶与「模型这轮什么都没回」是两种收尾,别对父代理谎报原因。成本闸停下的另说:父代理别再接手、也别再派新的 ——
+  // 父 run 下一轮就会按 run_cost_exceeded 收尾。
   const why = hitCap ? `hit the ${SUB_MAX_ITERATIONS}-iteration cap` : 'stopped';
-  const lines = [`(the sub-agent ${why} without a final report — take over from here)`];
+  const lines = [overBudget
+    ? '(the sub-agent was stopped without a final report: this run reached its cost ceiling — do not start more subagents)'
+    : `(the sub-agent ${why} without a final report — take over from here)`];
   if (lastTool) {
     lines.push(`- last tool: ${lastTool.name}${lastTool.isError ? ' (failed)' : ''} → ${lastTool.preview.replace(/\s+/g, ' ').slice(0, 400)}`);
   }

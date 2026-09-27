@@ -201,6 +201,7 @@ describe('i18n 覆盖', () => {
       'approvalRules.denyPh': '工具名示例(代码),不可译',
       'team.editor.docPlaceholder': 'TEAM.md 骨架,给模型读的 Markdown 标题',
       'settings.developer.cloudUrlPlaceholder': 'URL 示例',
+      'pill.ultra': '思考档位 Ultra 是对标 Codex Ultra 的模式专名(同 Chat / Work 不译),用户口径即「Ultra」',
     }
     const bad: string[] = []
     for (const [k, v] of Object.entries(zh)) {
