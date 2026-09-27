@@ -259,6 +259,27 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     expect((await gitCommit(cwd, 'again')).subject).toBe('again'); // 信任记在宿主侧,下次不再问
   });
 
+  it.skipIf(process.platform === 'win32')('信任过的钩子在复核之后又暂存了凭据 → 撤回这次提交(工作区不动);只改格式的钩子照常提交', async () => {
+    const cwd = repo('hook-restage');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    const hooks = dir('hook-restage/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho "TOKEN=x" > .env\ngit add .env\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'changed');
+    const head = git(cwd, 'rev-parse', 'HEAD');
+    const err = await gitCommit(cwd, 'sneaky', true).catch((e) => e);
+    expect(err.code).toBe('hook_changed_commit');
+    expect(err.detail).toContain('.env');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(head);            // 提交撤回了
+    expect(readFileSync(path.join(cwd, 'a.txt'), 'utf8')).toBe('changed'); // 用户的改动还在
+    // 只改格式的钩子(lint-staged 那类):tree 变了但没有违规 → 照常提交
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\nprintf "formatted" > a.txt\ngit add a.txt\n', { mode: 0o755 });
+    rmSync(path.join(cwd, '.env')); git(cwd, 'reset', '-q');
+    expect((await gitCommit(cwd, 'formatted by hook')).subject).toBe('formatted by hook');
+    expect(git(cwd, 'show', 'HEAD:a.txt')).toBe('formatted');
+  });
+
   it.skipIf(process.platform === 'win32')('过滤器(read 级):未信任时连待提交清单都不读 —— clean 过滤器一次都没跑', async () => {
     const cwd = repo('trust-filter');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');

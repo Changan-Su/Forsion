@@ -174,22 +174,24 @@ export interface PendingFile { code: string; path: string }
 interface StagedEntry { status: string; path: string; mode: string; blob: string }
 
 /** 全量改动(未跟踪文件逐个列出)。输出爆了上限 = 文件多到离谱,直接按「太多」拒。 */
-async function pendingChanges(cwd: string): Promise<{ entries: PendingFile[]; untracked: string[] }> {
+async function pendingChanges(cwd: string): Promise<{ entries: PendingFile[]; untracked: string[]; paths: Set<string> }> {
   const r = await readGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { maxOutputBytes: 2 * 1024 * 1024 });
   if (r.reason === 'output-limit') throw new GitActionError('too_many_files', 'Too many files to commit; add the generated folders to .gitignore first');
   must(r, 'status');
   const entries: PendingFile[] = [];
   const untracked: string[] = [];
+  const paths = new Set<string>(); // 这些改动会碰到的全部路径(改名的原路径也算:暂存后它以删除出现)
   const fields = r.stdout.split('\0');
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
     if (field.length < 4) continue;
     const code = field.slice(0, 2);
     entries.push({ code, path: field.slice(3) });
+    paths.add(field.slice(3));
     if (code === '??') untracked.push(field.slice(3));
-    if (/[RC]/.test(code)) i++; // 改名 / 复制后面跟一个原路径字段
+    if (/[RC]/.test(code)) { i++; if (fields[i]) paths.add(fields[i]); } // 改名 / 复制后面跟一个原路径字段
   }
-  return { entries, untracked };
+  return { entries, untracked, paths };
 }
 
 /** 比较基准:有 HEAD 用 HEAD;还没有提交的新仓用空树 —— 空树 id 按仓库的对象格式现算(SHA-256 仓不是那串 SHA-1)。 */
@@ -202,8 +204,13 @@ async function diffBase(cwd: string): Promise<string> {
 async function stagedEntries(cwd: string): Promise<StagedEntry[]> {
   const base = await diffBase(cwd);
   const r = must(await readGit(cwd, ['diff', '--cached', '--raw', '-z', '--no-renames', '--no-abbrev', ...(base === 'HEAD' ? [] : [base])], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff --cached');
+  return parseRaw(r.stdout);
+}
+
+/** `--raw -z --no-renames` 的输出 → 条目(目标侧的 mode / blob)。 */
+function parseRaw(stdout: string): StagedEntry[] {
   const out: StagedEntry[] = [];
-  const fields = r.stdout.split('\0');
+  const fields = stdout.split('\0');
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const meta = fields[i];
     if (!meta.startsWith(':')) break;
@@ -272,11 +279,11 @@ function topDirs(files: string[]): string[] {
 }
 
 /** 这次提交会带上的东西:有已暂存的 → 只有已暂存的(提交也只提交它们);没有 → 全部改动(提交时 add -A)。 */
-async function commitScope(cwd: string): Promise<{ files: PendingFile[]; staged: StagedEntry[]; changes: { entries: PendingFile[]; untracked: string[] } | null }> {
+async function commitScope(cwd: string): Promise<{ files: PendingFile[]; paths: Set<string>; staged: StagedEntry[]; changes: { entries: PendingFile[]; untracked: string[]; paths: Set<string> } | null }> {
   const staged = await stagedEntries(cwd);
-  if (staged.length) return { files: staged.map((e) => ({ code: e.status, path: e.path })), staged, changes: null };
+  if (staged.length) return { files: staged.map((e) => ({ code: e.status, path: e.path })), paths: new Set(staged.map((e) => e.path)), staged, changes: null };
   const changes = await pendingChanges(cwd);
-  return { files: changes.entries, staged, changes };
+  return { files: changes.entries, paths: changes.paths, staged, changes };
 }
 
 /** 清单指纹:用户在提交框里看到的那份清单。提交时重算,对不上 = 看完之后又变了(changes_changed),让他重新过目。 */
@@ -285,18 +292,21 @@ export function changesToken(files: PendingFile[]): string {
 }
 
 /** 面板的待提交清单(完整;超过上限时提交本来也会被拒)+ 指纹。 */
-export async function gitPending(cwd: string, trust?: boolean): Promise<{ files: PendingFile[]; total: number; stagedOnly: boolean; token: string }> {
+export async function gitPending(cwd: string, trust?: boolean): Promise<{ files: PendingFile[]; total: number; stagedOnly: boolean; token: string; tooMany: boolean }> {
   await requireRepoRoot(cwd);
   await requireTrust(cwd, 'read', trust);
   const scope = await commitScope(cwd);
-  return { files: scope.files.slice(0, PENDING_LIST_MAX), total: scope.files.length, stagedOnly: scope.staged.length > 0, token: changesToken(scope.files) };
+  // tooMany:清单列不全 → 这次不能在面板上提交(提交时也会拒);让面板直接说清楚,别给一个注定失败的确认按钮
+  return { files: scope.files.slice(0, PENDING_LIST_MAX), total: scope.files.length, stagedOnly: scope.staged.length > 0, token: changesToken(scope.files), tooMany: scope.files.length > PENDING_LIST_MAX };
 }
 
 // ── 提交 ──────────────────────────────────────────────────────────────────
 
 /** 提交。有已暂存的只提交它们;没有才 `add -A`(面板列出的全部改动)。信息走 stdin,不经命令行参数。
- *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)—— 用户看完之后冒出来的文件不许悄悄进提交。
- *  ⚠️index 复核只保证到钩子运行之前:走到 commit 这一步时仓库的钩子已经是用户信任过的代码,pre-commit 再暂存什么由它负责。 */
+ *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)—— 用户看完之后冒出来的文件不许悄悄进提交;
+ *  `add -A` 之后再核一遍暂存进来的路径都在那份清单里(指纹核完到 add 之间新冒的文件也挡住)。
+ *  提交后再核实际进提交的 tree:钩子(pre-commit 常见的 lint-staged 会改格式)改过内容时,对多出来的那部分重跑安全检查,
+ *  不过关就撤回这次提交(工作区不动),而不是信「钩子信任过了」。 */
 export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
@@ -309,6 +319,7 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
   if (typeof expect === 'string' && expect !== changesToken(scope.files)) {
     throw new GitActionError('changes_changed', 'The changes are different from the list you reviewed');
   }
+  if (scope.files.length > PENDING_LIST_MAX) throw new GitActionError('too_many_files', `${scope.files.length} changes would be committed; the list can only show ${PENDING_LIST_MAX}`, topDirs(scope.files.map((f) => f.path)).join('\n'));
   const before = scope.staged;
   let addedByUs = false;
   if (!before.length) {
@@ -317,19 +328,33 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     must(await runAction(cwd, ['add', '-A']), 'add');
     addedByUs = true;
   }
+  let checkedTree = '';
   try {
     const staged = addedByUs ? await stagedEntries(cwd) : before;
     if (!staged.length) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
+    if (addedByUs && staged.some((e) => !scope.paths.has(e.path))) throw new GitActionError('changes_changed', 'New changes appeared while committing');
     await assertStagedSafe(cwd, staged);
+    checkedTree = must(await readGit(cwd, ['write-tree']), 'write-tree').stdout.trim();
   } catch (e) {
     if (addedByUs) await unstageAll(cwd); // 是我们暂存的就退回去:用户看到的仓库状态与点提交之前一致
     throw e;
   }
+  const hadHead = (await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 })).code === 0;
   const committed = await runAction(cwd, ['commit', '-F', '-'], { input: `${text}\n` });
   if (committed.code !== 0 && /tell me who you are|unable to auto-detect email address|auto-detection is disabled/i.test(committed.stderr)) {
     throw new GitActionError('no_identity', 'git does not know your name and email yet', tail(committed.stderr));
   }
   must(committed, 'commit');
+  const committedTree = must(await readGit(cwd, ['rev-parse', 'HEAD^{tree}']), 'rev-parse').stdout.trim();
+  if (committedTree !== checkedTree) {
+    const extra = parseRaw(must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', checkedTree, committedTree], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff-tree').stdout);
+    try { await assertStagedSafe(cwd, extra); } catch (e) {
+      // 钩子往这次提交里塞进了不该进的东西:撤回提交(soft,工作区与 index 保留原样),把原因交给用户
+      await runAction(cwd, hadHead ? ['reset', '-q', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD']).catch(() => {});
+      const inner = e instanceof GitActionError ? e : null;
+      throw new GitActionError('hook_changed_commit', 'A git hook added changes that cannot be committed from here; the commit was undone', inner?.detail || String((e as Error)?.message || e));
+    }
+  }
   const head = must(await readGit(cwd, ['log', '-1', '--format=%H%x1f%s']), 'log');
   const [sha, subject = ''] = head.stdout.trim().split('\x1f');
   return { sha, subject, stagedOnly: !addedByUs };

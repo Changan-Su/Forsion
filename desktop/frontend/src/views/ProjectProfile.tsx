@@ -70,7 +70,7 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
 const GIT_ERROR_CODES = new Set([
   'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
   'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
-  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed',
+  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed', 'hook_changed_commit',
 ])
 type GitErr = { message: string; info?: string; retry?: () => void }
 
@@ -109,7 +109,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [commitDraft, setCommitDraft] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [gitErr, setGitErr] = useState<GitErr | null>(null)
-  const [pending, setPending] = useState<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean; token: string } | null>(null)
+  const [pending, setPending] = useState<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean } | null>(null)
   const genSeq = useRef(0)
   // 写动作的两处禁区(只读摘要照常):① 默认工作区 —— 所有不在项目里的对话共用、常在笔记库里,建仓 / 整目录提交 = 把整片笔记收进仓
   //   (引擎 gitActions 也拒,这里是第一道);② 编码工作室托管的项目(~/Forsion/Project/<项目>)—— 版本由宿主在「版本」面板里管,
@@ -241,8 +241,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
    *  ③ 其余 4xx → 引擎原话;④ 超时 / 断连 / 5xx → 动作可能已经做完:如实说「结果未确认」并重读状态,别让用户照「失败」去重试
    *  (重试 = 重复提交、再跑一遍钩子)。 */
   const gitErrorOf = (e: any, retry?: () => void): GitErr => {
-    // git 进程超时:提交 / 推送可能已经做完了 —— 与断连同样按「结果未确认」处理并重读
-    if (typeof e?.code === 'string' && e.code !== 'git_timeout') return {
+    // git 进程超时(引擎回的是 400 + git_timeout):提交 / 推送可能已经做完了 —— 与断连同样按「结果未确认」处理并重读
+    if (e?.code === 'git_timeout') { setReloadAt((n) => n + 1); return { message: t('projectProfile.git.unconfirmed'), info: typeof e?.info === 'string' ? e.info : undefined } }
+    if (typeof e?.code === 'string') return {
       message: GIT_ERROR_CODES.has(e.code) ? t(`projectProfile.git.err.${e.code}`) : String(e?.message || e),
       info: typeof e?.info === 'string' && e.info ? e.info : undefined,
       ...(e.code === 'untrusted_config' && retry ? { retry } : {}),
@@ -555,6 +556,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <small>{t(pending.stagedOnly ? 'projectProfile.git.filesStaged' : 'projectProfile.git.filesAll', { count: pending.total })}</small>
               <ul>{pending.files.map((f) => <li key={`${f.code}${f.path}`} title={f.path}><code>{f.code.trim() || '·'}</code><span>{f.path}</span></li>)}</ul>
               {pending.total > pending.files.length && <small>{t('projectProfile.git.more', { count: pending.total - pending.files.length })}</small>}
+              {pending.tooMany && <p className="project-git-error" data-project-git-toomany>{t('projectProfile.git.tooManyToList')}</p>}
             </div>}
             <textarea className="project-git-message" rows={4} value={commitDraft} disabled={generating || busy === 'git-commit'} aria-label={t('projectProfile.git.messageLabel')}
               placeholder={t(generating ? 'projectProfile.git.generating' : 'projectProfile.git.messagePlaceholder')} onChange={(e) => setCommitDraft(e.target.value)} />
@@ -563,7 +565,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               {/* 取消与提交成组靠右:窄栏里折行时整组一起下去,不会把「提交」单独甩到下一行最左边 */}
               <div className="project-git-commit-confirm">
                 <button className="btn sm" disabled={busy === 'git-commit'} onClick={closeCommit}>{t('common.cancel')}</button>
-                <button className="btn primary sm" data-git-action="commit-confirm" disabled={!commitDraft.trim() || generating || !!busy} onClick={commit}>{busy === 'git-commit' && <Loader2 size={13} className="spin" />}{t('projectProfile.git.commitConfirm')}</button>
+                <button className="btn primary sm" data-git-action="commit-confirm" disabled={!commitDraft.trim() || generating || !!busy || !pending?.token || !!pending.tooMany} onClick={commit}>{busy === 'git-commit' && <Loader2 size={13} className="spin" />}{t('projectProfile.git.commitConfirm')}</button>
               </div>
             </div>
           </section>}

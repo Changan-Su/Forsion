@@ -318,6 +318,15 @@ async function run(app, win, stub, seen, home, ctx) {
   await until(async () => (await gitCard.locator('[data-project-git-readonly="nested"]').count()) === 1)
   check('6j4 项目在更大的仓库里 → 只读说明,没有提交 / 分支 / 推送', await writeRow.count() === 0 && await gitCard.locator('[data-project-git-readonly="nested"]').count() === 1, await gitCard.textContent())
   ctx.git = { ...ctx.git, nested: false }
+  // 6j5 推送超时(引擎回 400 + git_timeout):推送可能已经做完 → 说「结果未确认」并自己重读状态,不能当成确定的失败
+  await gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  await writeRow.locator('[data-git-action="push"]').waitFor()
+  seen.pushTimeoutOnce = true
+  const getsBeforeTimeout = seen.ctxGets.length
+  await writeRow.locator('[data-git-action="push"]').click()
+  await gitError.waitFor()
+  await until(async () => seen.ctxGets.length > getsBeforeTimeout)
+  check('6j5 推送超时 → 「结果未确认」+ 自动重读项目状态', /没能确认/.test(await gitError.textContent()) && seen.ctxGets.length > getsBeforeTimeout, await gitError.textContent())
 
   ctx.git = { available: true, repo: false }
   await gitCard.locator('[data-project-git-actions] button').nth(3).click()
@@ -603,6 +612,7 @@ async function main() {
       const b = await body(); seen.gitPushes.push(b)
       // 信任闸(引擎 gitTrust):没带 trust 的那一次回 untrusted_config,桌面要给「信任并继续」并带 trust 重发
       if (seen.pushGate && !b.trust) return { __code: 400, body: { detail: 'untrusted', error: 'untrusted_config', info: 'core.hookspath\nhooks/pre-push' } }
+      if (seen.pushTimeoutOnce) { seen.pushTimeoutOnce = false; return { __code: 400, body: { detail: 'git push timed out', error: 'git_timeout', info: 'timed out' } } }
       ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }
       return { remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '', context: ctx }
     }

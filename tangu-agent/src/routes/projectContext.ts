@@ -189,7 +189,11 @@ function gitWrite(pathName: string, action: (cwd: string, body: any) => Promise<
 const trusted = (body: any): boolean => body?.trust === true;
 gitWrite('init', (cwd) => gitInit(cwd));
 gitWrite('trust', (cwd) => gitTrustRepo(cwd));
-gitWrite('commit', async (cwd, body) => ({ commit: await gitCommit(cwd, body.message, trusted(body), body.expect) }));
+// 面板提交必须带上它刚给用户看过的清单指纹:没有清单 = 用户没过目,不许提交
+gitWrite('commit', async (cwd, body) => {
+  if (typeof body.expect !== 'string' || !body.expect) throw new GitActionError('changes_changed', 'Review the list of changes before committing');
+  return { commit: await gitCommit(cwd, body.message, trusted(body), body.expect) };
+});
 gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body)));
 gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body)));
 
