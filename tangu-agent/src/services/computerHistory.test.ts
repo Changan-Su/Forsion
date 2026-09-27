@@ -292,6 +292,14 @@ describe('foldComputerHistory(段落、离开、10s 规则、片段)', () => {
       { t: at(12, 30), kind: 'app', app: SLACK, title: 'y' },
     ], range);
     expect(items.map(formatItem)[1]).toMatch(/^09-27 12:10–12:20 \(10m\) 1Password/);
+    // 同 App 内的断点(排除站点 → 同浏览器无痕 → 普通页)结束时刻不明:排除段不延长,无痕时段不算进去(creview4 P2)
+    const EXSITE = { ...CHROME, excluded: true as const };
+    const same = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: EXSITE },
+      { t: at(12, 20), kind: 'window', app: CHROME, title: 'News', url: 'https://news.example/', resumed: true },
+      { t: at(12, 30), kind: 'app', app: VSCODE, title: 'x' },
+    ], range);
+    expect(same.map(formatItem).some((l) => /12:00–12:20/.test(l))).toBe(false);
   });
 
   it('displayUrl 剥 userinfo(URL 里内嵌的账号密码不进模型)', () => {

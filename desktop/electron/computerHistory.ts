@@ -292,8 +292,14 @@ export function foldSessions(events: readonly ComputerHistoryEvent[], opts: { mi
   let cur: Span | null = null
   let lastCtx: string | null = null
   const close = (at: number): void => { if (cur) { cur.end = Math.max(cur.start, at); cur = null } }
+  // 排除段遇断点:只有断点属于别的 App 才延到断点那一刻 —— App 切换一定被观察到(切进无痕也会发一条无标题切换),
+  // 那是确切的结束边界;同 App 内的断点(排除站点 → 同浏览器无痕 → 普通页)结束时刻不明,收在最后一条已知事件。
+  // 这一判断先于 30 分钟空档规则,否则在排除 App 里待久了会被空档规则收在起点(creview4 P2)。
+  const endsExcludedAt = (ev: ComputerHistoryEvent): boolean =>
+    !!cur && cur.excluded && ev.resumed === true && (ev.kind === 'app' || ev.kind === 'window') &&
+    !!ev.app && (ev.app.bundleId || ev.app.name) !== cur.appKey
   for (const ev of events) {
-    if (cur && ev.t - cur.last > gapMs) close(cur.last)
+    if (cur && ev.t - cur.last > gapMs && !endsExcludedAt(ev)) close(cur.last)
     if (ev.kind === 'system') {
       if (ev.state === 'locked' || ev.state === 'sleep') close(ev.t)
       if (ev.state !== 'dropped') lastCtx = null
@@ -306,8 +312,8 @@ export function foldSessions(events: readonly ComputerHistoryEvent[], opts: { mi
       // helper 的断点标(resumed)与「重复的相同情境」同待:之前有一段没被记录的时长,不归前后任何一段
       if (ctx === lastCtx || ev.resumed) {
         gapBefore = true
-        // 收在它自己最后一条事件,中间那段不归它;排除段例外 —— 排除标记本身就是起点,那段时间确实在被排除处,收到断点那一刻
-        if (cur) close(cur.excluded ? ev.t : cur.last)
+        // 收在它自己最后一条事件,中间那段不归它;排除段遇别的 App 的断点例外(见 endsExcludedAt)
+        if (cur) close(endsExcludedAt(ev) ? ev.t : cur.last)
       }
       lastCtx = ctx
     }
@@ -418,10 +424,8 @@ export class ComputerHistoryStore {
         removed.push(f)
       } else if (DAY_FILE_RE.test(f) && f.slice(0, 10) === cutoff) {
         const file = path.join(this.eventsDir, f)
-        // 每小时一次:上一轮已经剪过、这一小时里截止日那段没有新过期的 → 首行就 >= 截止,只读首行,不整读重写。
-        // 首行读不出 / 解析不了(空文件、残行)照常走重写(它会把残行清掉)。日文件按追加顺序 ≈ 按 t 升序。
-        const first = eventT(await readFirstLine(file).catch(() => null))
-        if (first !== null && first >= cutoffT) continue
+        // 每小时都逐行过一遍(流式 + 前缀正则,便宜;一行没丢就不动文件)。⚠️不能凭首行跳过:文本事件带的是最后一次编辑的
+        // 时间,却在去抖之后才写入,日文件里的 t 不严格递增 —— 首行在期内不代表后面没有过期行(creview4 P1)。
         if (await this.rewriteKeeping(file, (t) => t >= cutoffT)) removed.push(f)
       }
     }
@@ -593,27 +597,6 @@ export function eventT(line: string | null): number | null {
   return typeof t === 'number' ? t : null
 }
 
-/** 只读文件的第一行(按块读到换行为止,封顶 maxBytes;没有换行 = 整个文件就这一行)。空文件 / 超长没读到换行 → null。 */
-async function readFirstLine(file: string, maxBytes = 64 * 1024): Promise<string | null> {
-  const fh = await open(file, 'r')
-  try {
-    const bufs: Buffer[] = []
-    let len = 0
-    while (len < maxBytes) {
-      const buf = Buffer.alloc(Math.min(4096, maxBytes - len))
-      const { bytesRead } = await fh.read(buf, 0, buf.length, len)
-      if (!bytesRead) break
-      const chunk = buf.subarray(0, bytesRead)
-      const nl = chunk.indexOf(0x0a)
-      if (nl >= 0) { bufs.push(chunk.subarray(0, nl)); len += nl; return Buffer.concat(bufs).toString('utf8') }
-      bufs.push(chunk)
-      len += bytesRead
-    }
-    return len && len < maxBytes ? Buffer.concat(bufs).toString('utf8') : null
-  } finally {
-    await fh.close()
-  }
-}
 
 // ── 订阅连接 ─────────────────────────────────────────────────────────────────
 

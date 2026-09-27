@@ -95,29 +95,26 @@ describe('ComputerHistoryStore', () => {
     expect(existsSync(file)).toBe(false)
   })
 
-  it('保留期每小时(creview3 #3):截止日已剪过(首行 >= 截止)→ 只读首行、不整读不重写;需要重写时不逐行 JSON.parse', async () => {
+  it('保留期每小时(creview4 P1):日文件 t 不严格递增 —— 首行在期内也要逐行剪掉乱序的过期行;不逐行 JSON.parse', async () => {
     const root = tmpRoot()
     const store = new ComputerHistoryStore(root)
     await store.ensureRoot()
     const now = at(2026, 9, 27, 12)
     const cutoffT = now - 7 * DAY
     const file = path.join(store.eventsDir, `${localDay(cutoffT)}.jsonl`)
-    // 首行已在期内;后面故意放一条更早的(乱序)和一行残行:只要整读重写过,文件就会变
+    // 首行已在期内;后面一条更早的(去抖后才写入的文本事件就是这样乱序的)+ 一行残行
     const body = evLine(cutoffT + 60_000) + evLine(cutoffT + 120_000) + evLine(cutoffT - 1) + '{"t":17\n'
     writeFileSync(file, body, { mode: 0o600 })
-    const rewrite = vi.spyOn(store as unknown as { rewriteKeeping: (...a: unknown[]) => Promise<boolean> }, 'rewriteKeeping')
     const parse = vi.spyOn(JSON, 'parse')
     cleanups.push(() => parse.mockRestore())
     const parsedLines = (): number => parse.mock.calls.filter(([s]) => typeof s === 'string' && s.startsWith('{"t":')).length
     expect(await store.prune(now)).toEqual([])
-    expect(rewrite).not.toHaveBeenCalled()
-    expect(readFileSync(file, 'utf8')).toBe(body)
-    expect(parsedLines()).toBe(0) // 首行也走前缀正则
-    // 截止挪过首行:这回要重写 —— 结果与完整解析同口径,但不逐行 JSON.parse(只剩残行那一次退回)
-    expect(await store.prune(now + 90_000)).toEqual([])
-    expect(parsedLines()).toBe(1)
-    expect(rewrite).toHaveBeenCalledTimes(1)
-    expect(lines(file).map((e) => e.t)).toEqual([cutoffT + 120_000])
+    expect(parsedLines()).toBe(1) // 只有残行那一次退回完整解析(先断言:下面的 lines() 自己也要 JSON.parse)
+    expect(lines(file).map((e) => e.t)).toEqual([cutoffT + 60_000, cutoffT + 120_000]) // 乱序的过期行与残行都没了
+    // 已剪干净:再跑一遍一行没丢 → 文件原样不动
+    const after = readFileSync(file, 'utf8')
+    expect(await store.prune(now)).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe(after)
   })
 
   it('保留期流式重写(creview3 #3):> 64KB、行跨块、多字节字符跨块、键序不同的行、残行 —— 留下的与逐行完整解析的结果逐字节一致', async () => {
@@ -360,6 +357,9 @@ describe('foldSessions', () => {
     const pw = { name: '1Password', bundleId: 'com.1password.1password', excluded: true as const }
     const s = foldSessions([e(0, { app: code, title: 'x' }), e(600, { app: pw }), e(1200, { app: code, title: 'x', resumed: true }), e(1800, { app: chrome, title: 'y' })])
     expect(s.map((x) => [x.app, (x.start - base) / 1000, (x.end - base) / 1000])).toEqual([['Code', 0, 600], ['1Password', 600, 1200], ['Code', 1200, 1800]])
+    // 在排除 App 里待了 45 分钟(超过 30 分钟空档规则)再回来:仍报真实时长,不被空档规则收在起点(creview4 P2)
+    const long = foldSessions([e(0, { app: code, title: 'x' }), e(600, { app: pw }), e(600 + 45 * 60, { app: code, title: 'x', resumed: true }), e(600 + 50 * 60, { app: chrome, title: 'y' })])
+    expect(long.map((x) => [x.app, (x.start - base) / 1000, (x.end - base) / 1000])[1]).toEqual(['1Password', 600, 600 + 45 * 60])
   })
 
   it('长时间没事件(Forsion 没开)不把空白算给上一个窗口', () => {
@@ -484,8 +484,8 @@ describe('foldSessions', () => {
       e(200, { kind: 'app', app: code, title: 'main.ts' }),
     ])
     expect(cols(short)).toEqual([['Chrome', 'Docs', 0, 30], ['Chrome', 'Docs', 50, 100], ['Finder', 'Downloads', 100, 200]])
-    // 排除站点 → 无痕 → 同一排除站点(标记带断点标)→ 普通页面:排除段收到断点那一刻(排除与无痕分不清,都不记内容,
-    // 时长归排除段;常见的「排除 App → 普通 App」因此报真实时长而不是 0),断点那条另起一段、不并回
+    // 排除站点 → 无痕 → 同一排除站点(标记带断点标)→ 普通页面:同 App 内的断点结束时刻不明,排除段不延长,
+    // 无痕时段不算进排除段(creview4 P2);延长只给「别的 App 的断点」,见下一条
     const marker = { ...chrome, excluded: true as const }
     const ex = foldSessions([
       e(0, { kind: 'app', ...pageA }),
@@ -494,7 +494,7 @@ describe('foldSessions', () => {
       e(450, { kind: 'window', app: chrome, title: 'News', url: 'https://news.example.com/' }),
       e(600, { kind: 'app', app: code, title: 'main.ts' }),
     ])
-    expect(cols(ex)).toEqual([['Chrome', 'Docs', 0, 60], ['Chrome', undefined, 60, 400], ['Chrome', undefined, 400, 450], ['Chrome', 'News', 450, 600]])
+    expect(cols(ex)).toEqual([['Chrome', 'Docs', 0, 60], ['Chrome', undefined, 400, 450], ['Chrome', 'News', 450, 600]])
   })
 })
 

@@ -493,9 +493,10 @@ export function foldComputerHistory(events: ChEvent[], range: { from: number; to
       if (cut) {
         // 必须先于下面的「同键 → 续段」:否则断点那条只会把当前段拉长(或把 URL 换成它的),中间的空白照样算给当前段
         const open: ChSpan | null = cur;
-        // 排除段例外:排除 App / 站点的标记本身就是起点,那段时间确实在被排除处(只是不记内容),收到断点那一刻;
-        // 只有无痕那种连起点都没有的空白才收在自己最后一条事件。
-        if (open) closeSpan(open.excluded ? e.t : open.last);
+        // 排除段遇别的 App 的断点:延到断点那一刻(App 切换一定被观察到,切进无痕也会发无标题切换,那是确切的结束边界);
+        // 同 App 内的断点(排除站点 → 同浏览器无痕 → 普通页)结束时刻不明,与无痕空白一样收在自己最后一条事件(creview4 P2)。
+        const otherApp = !!open && appKeyOf(e) !== open.appKey;
+        if (open) closeSpan(open.excluded && e.resumed === true && otherApp ? e.t : open.last);
         const s = newSpan(e);
         s.gapBefore = true;
         cur = s;
