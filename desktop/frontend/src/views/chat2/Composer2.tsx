@@ -253,7 +253,10 @@ export const Composer2: React.FC<{
   onEngineModelChange?: (id: string) => void
   engineCommands?: Array<{ name: string; description: string; hint?: string }>
   thinkingLevel?: AgentConfig['thinkingLevel']
-  onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>) => void
+  /** 第二参 = Ultra 开关(只在本机 work 会话的入口会给;true 时档位恒为 max)。 */
+  onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>, ultra?: boolean) => void
+  /** 会话的 Ultra 开关(对标 Codex Ultra:max + 主动并行派子代理)。 */
+  ultra?: boolean
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
@@ -331,7 +334,7 @@ export const Composer2: React.FC<{
   sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
-  thinkingLevel: sessionThinkingLevel, onThinkingChange,
+  thinkingLevel: sessionThinkingLevel, onThinkingChange, ultra,
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
@@ -564,6 +567,9 @@ export const Composer2: React.FC<{
   const agentDef = engineId ? undefined : agents?.find((a) => a.slug === currentAgentSlug)
   const approval = execConfig.approvalMode || agentDef?.approvalMode || 'auto-edit'
   const thinkingLevel = sessionThinkingLevel || (groupChat ? undefined : agentDef?.thinkingLevel) || undefined
+  // Ultra 入口只给真拿得到 delegate 的会话:本机(host)、非 chat、非外部引擎、非团队模式(团队成员各跑各的档)。
+  const allowUltra = isHost && !isChat && !engineId && !groupChat
+  const ultraOn = allowUltra && !!ultra
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
@@ -789,8 +795,16 @@ export const Composer2: React.FC<{
         const unsupported = !!supported && !supported.includes(lv)
         items.push({
           cmd: `/think ${lv}`,
-          desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
-          run: () => { onThinkingChange(lv); close() },
+          desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${!ultraOn && thinkingLevel === lv ? t('input.slash.current') : ''}`,
+          // 显式点一档 = 关掉 Ultra(Ultra 开着时引擎只认 max,不关的话这一下静默无效)。
+          run: () => { if (allowUltra) onThinkingChange(lv, false); else onThinkingChange(lv); close() },
+        })
+      }
+      if (allowUltra) {
+        items.push({
+          cmd: '/think ultra',
+          desc: `${t('pill.ultraTitle')}${ultraOn ? t('input.slash.current') : ''}`,
+          run: () => { onThinkingChange('max', true); close() },
         })
       }
     }
@@ -820,7 +834,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw, allowUltra, ultraOn])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
@@ -1107,11 +1121,15 @@ export const Composer2: React.FC<{
     const thinkMatch = /^\/(?:think|effort)(?:\s+(\S+))?$/i.exec(cmd)
     if (thinkMatch && onThinkingChange) {
       const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
-      if (THINKING_LEVELS.includes(lv)) {
-        onThinkingChange(lv)
+      if (allowUltra && (lv as string) === 'ultra') {
+        onThinkingChange('max', true)
+        setHint(t('input.slash.thinkSet', { level: t('pill.ultra') }))
+      } else if (THINKING_LEVELS.includes(lv)) {
+        if (allowUltra) onThinkingChange(lv, false)
+        else onThinkingChange(lv)
         setHint(t('input.slash.thinkSet', { level: thinkingLabel(lv, t) }))
       } else {
-        setHint(t('input.slash.thinkUsage', { levels: THINKING_LEVELS.join('|') }))
+        setHint(t('input.slash.thinkUsage', { levels: [...THINKING_LEVELS, ...(allowUltra ? ['ultra'] : [])].join('|') }))
       }
       setDraft('')
       requestAnimationFrame(autoGrow)
@@ -1706,10 +1724,13 @@ export const Composer2: React.FC<{
                 onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
                 thinkingLevel={isEngine ? undefined : thinkingLevel}
                 onThinkingChange={isEngine ? undefined : onThinkingChange}
+                allowUltra={allowUltra}
+                ultra={ultraOn}
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
-                  isEngine ? undefined : (ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
+                  // Ultra 开着时引擎请求档恒 max(存值是什么都不看),比对口径跟着走
+                  isEngine ? undefined : (ctxInfo?.thinkingRequested === (ultra ? 'max' : thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
                 }
                 modelsResponse={isEngine ? undefined : modelsResponse}
                 defaultModelIds={isEngine ? undefined : defaultModelIds}

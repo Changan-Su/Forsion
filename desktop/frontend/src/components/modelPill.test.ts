@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { catalogForDefaultSlot, contextLimitOptions, effortAt } from './ModelPill'
+import { catalogForDefaultSlot, contextLimitOptions, effortAt, effortStopAt } from './ModelPill'
 import type { ModelInfo } from '../types'
 
 describe('Effort slider', () => {
@@ -9,6 +9,14 @@ describe('Effort slider', () => {
     expect(effortAt(6)).toBe('max')
     expect(effortAt(99)).toBe('max')
     expect(effortAt(-4)).toBe('off')
+  })
+
+  it('Ultra 格:只在 allowUltra 时存在(第 8 格 = max + ultra),其余格显式关 Ultra;不给入口时行为与七档完全一致', () => {
+    expect(effortStopAt(7, true)).toEqual({ level: 'max', ultra: true })
+    expect(effortStopAt(6, true)).toEqual({ level: 'max', ultra: false }) // 停在 Max ≠ Ultra
+    expect(effortStopAt(3, true)).toEqual({ level: 'medium', ultra: false })
+    expect(effortStopAt(6, false)).toEqual({ level: 'max' }) // 没有 ultra 键:不碰会话里的开关
+    expect(effortStopAt(7, false)).toEqual({ level: 'max' }) // 越界仍夹回七档
   })
 })
 

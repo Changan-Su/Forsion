@@ -212,7 +212,8 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         onEngineModelChange={(id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
         engineCommands={config.engineId ? (s.engineCaps[config.engineId]?.commands ?? []) : undefined}
         thinkingLevel={config.thinkingLevel}
-        onThinkingChange={(level) => s.setSessionThinking(level, null)}
+        ultra={config.ultra}
+        onThinkingChange={(level, ultra) => s.setSessionThinking(level, null, undefined, ultra)}
         defaultModelIds={{
           backgroundModelId: s.desktopConfig?.backgroundModelId || '',
           imageModelId: s.cfg.imageModelId || '',

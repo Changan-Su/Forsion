@@ -684,7 +684,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           onEngineModelChange={activeId ? (id) => s.setSessionEngineModel(id, activeId) : (id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
           engineCommands={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.commands ?? []) : undefined}
           thinkingLevel={mvCfg.thinkingLevel}
-          onThinkingChange={(lv) => s.setSessionThinking(lv, activeId, !params.childSurface)}
+          ultra={mvCfg.ultra}
+          onThinkingChange={(lv, ultra) => s.setSessionThinking(lv, activeId, !params.childSurface, ultra)}
           defaultModelIds={{
             backgroundModelId: s.desktopConfig?.backgroundModelId || '',
             imageModelId: s.cfg.imageModelId || '',

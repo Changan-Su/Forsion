@@ -37,6 +37,20 @@ describe('会话配置 setter 只发自己的键', () => {
     expect(putMock).not.toHaveBeenCalled()
   })
 
+  it('Ultra:开 = thinkingLevel max + ultra true 一起发;显式换别的档 = 连带删 ultra 键;调用方没表态的 max 不碰 ultra', () => {
+    const st = useApp.getState()
+    st.setSessionThinking('max', 's1', false, true)
+    expect(useApp.getState().configBySession.s1).toMatchObject({ thinkingLevel: 'max', ultra: true })
+    st.setSessionThinking('high', 's1', false)
+    st.setSessionThinking('max', 's1', false)
+    const calls = patchMock.mock.calls.map((c) => c[2])
+    expect(calls[0]).toStrictEqual({ thinkingLevel: 'max', ultra: true })
+    expect(calls[1]).toHaveProperty('ultra', undefined) // 上线为 null:引擎那边 ultra 会压过 thinkingLevel,不删就等于没换档
+    expect(calls[1]).toMatchObject({ thinkingLevel: 'high' })
+    expect(calls[2]).toStrictEqual({ thinkingLevel: 'max' }) // 换 Agent 带来的同档:不许顺手关掉用户开的 Ultra
+    expect(useApp.getState().configBySession.s1.ultra).toBeUndefined()
+  })
+
   it('切外部引擎:连带清掉的键以 undefined 送去(上线为 null = 删键),本地同步清掉', () => {
     useApp.getState().setSessionEngine('codex', 's1')
     expect(sent()).toEqual([['s1', { engineId: 'codex', engineModelId: undefined, groupChat: false, groupAgents: undefined, agentSlug: undefined }]])

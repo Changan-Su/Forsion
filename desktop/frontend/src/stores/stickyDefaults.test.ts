@@ -5,6 +5,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { stickyDefaults, DEFAULT_APPROVAL } from './appStore'
+import { newSessionConfig } from './projectSettings'
 import type { StoredDesktopConfig } from '../types'
 
 const cfg = (p: Partial<StoredDesktopConfig>): StoredDesktopConfig => p as StoredDesktopConfig
@@ -28,5 +29,21 @@ describe('stickyDefaults', () => {
     expect(stickyDefaults(cfg({}), true).thinkingLevel).toBeUndefined()
     expect(stickyDefaults(cfg({ lastThinkingLevel: 'high' }), true).thinkingLevel).toBe('high')
     expect(stickyDefaults(cfg({ lastThinkingLevel: 'high' }), false).thinkingLevel).toBe('high')
+  })
+
+  it('Ultra 只延续到本机 work 会话,且只跟 max 同在', () => {
+    const dc = cfg({ lastThinkingLevel: 'max', lastUltra: true })
+    expect(stickyDefaults(dc, true)).toMatchObject({ thinkingLevel: 'max', ultra: true })
+    expect(stickyDefaults(dc, false).ultra).toBeUndefined() // 云端会话:没有 delegate,药丸也显示不出来
+    expect(stickyDefaults(dc, true, 'chat').ultra).toBeUndefined() // chat 槽没有 Ultra
+    expect(stickyDefaults(cfg({ lastThinkingLevel: 'high', lastUltra: true }), true).ultra).toBeUndefined()
+  })
+
+  it('建会话三层次序下 Ultra 只跟 max 同在:项目默认 / 草稿显式改过档就不带上次的 Ultra', () => {
+    const sticky = { thinkingLevel: 'max' as const, ultra: true }
+    expect(newSessionConfig(sticky, {}).ultra).toBe(true)
+    expect(newSessionConfig(sticky, { thinkingLevel: 'high' }).ultra).toBeUndefined() // 项目默认的档压过 sticky
+    expect(newSessionConfig(sticky, {}, { thinkingLevel: 'max', ultra: false })).not.toHaveProperty('ultra') // 草稿里点了 Max:false 挡住回填,落库前去掉
+    expect(newSessionConfig(sticky, {}, { thinkingLevel: 'low' })).not.toHaveProperty('ultra')
   })
 })

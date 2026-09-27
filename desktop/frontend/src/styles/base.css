@@ -1979,6 +1979,125 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .cm-effort-value { animation: none; }
   .cm-effort-sparkles i { animation: none; opacity: 0.75; }
 }
+
+/* Ultra(Max 之后的第八格,Max + 主动并行派子代理)。Max 是星空,Ultra 是跃迁:星点换成四路并行光流(几路子代理同时在跑),
+   轨道换成向暖色延伸的渐变并有一道高光持续流过,滑块外一圈缓转的渐变环,切进 Ultra 的那一下放一圈冲击波(一次性,由
+   ModelPill 按「刚切进来」挂载)。常驻输入框的胶囊只给静态渐变描边、不动 —— 它挨着流式输出,不许抢眼。
+   动画只动 transform / opacity;辉光全是静态的,逐条登记在 shadow-contract 例外里。选择器都带 .is-max.is-ultra,压过上面的 Max 块。 */
+.composer-chip.model-pill-btn.is-max.is-ultra {
+  position: relative;
+  color: color-mix(in srgb, #e0409a 72%, var(--text));
+  background: color-mix(in srgb, #d946ef 11%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
+}
+.composer-chip.model-pill-btn.is-max.is-ultra::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6d5dfc, #c04ce8 45%, #f0508f 72%, #ff9a4d);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.cm-row-v.is-max.is-ultra,
+.cm-effort.is-max.is-ultra .cm-effort-value {
+  background: linear-gradient(90deg, #8b6cf6, #d946ef 50%, #ff8a4c);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-shadow: none;
+  /* shadow-contract: effect — Ultra 档文字辉光是语义提示，不表达空间高程。 */
+  filter: drop-shadow(0 0 6px rgba(217, 70, 239, 0.45));
+}
+.cm-effort.is-max.is-ultra .cm-effort-range {
+  overflow: hidden;
+  /* 暖端提前到 70% 起:最右一截压在滑块底下,放在 100% 的话看起来还是 Max 的蓝紫。 */
+  background: linear-gradient(90deg, #4f7dff 0%, #8b6cf6 24%, #d946ef 48%, #ff5f8f 70%, #ff9a4d 88%);
+  /* shadow-contract: effect — Ultra 档轨道的暖色辉光，扁平模式只清空间投影。 */
+  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.22), 0 0 18px rgba(236, 72, 153, 0.42);
+}
+/* 能量流:宽一倍的高光带整段平移(图案每 50% 重复一次,平移半个自身宽度正好无缝)。 */
+.cm-effort.is-max.is-ultra .cm-effort-range::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 200%;
+  background: linear-gradient(90deg,
+    transparent 0%, rgba(255, 255, 255, 0.3) 12%, transparent 25%, transparent 50%,
+    rgba(255, 255, 255, 0.3) 62%, transparent 75%, transparent 100%);
+  animation: effort-ultra-flow 2.2s linear infinite;
+}
+@keyframes effort-ultra-flow { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+/* 四路光流:每条 i 与轨道同宽,彗星头画在它自身 50% 处,整条平移过去,轨道的 overflow 把两端裁掉。 */
+.cm-effort-streaks { position: absolute; inset: 0 12px; overflow: hidden; pointer-events: none; }
+.cm-effort-streaks i {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 1.5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent 0 34%, rgba(255, 255, 255, 0.95) 50%, transparent 50.6%);
+  opacity: 0;
+  animation: effort-ultra-streak 1.6s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+}
+.cm-effort-streaks i:nth-child(1) { top: 28%; animation-duration: 1.5s; animation-delay: -0.2s; }
+.cm-effort-streaks i:nth-child(2) { top: 44%; animation-duration: 1.8s; animation-delay: -0.95s; }
+.cm-effort-streaks i:nth-child(3) { top: 58%; animation-duration: 1.35s; animation-delay: -0.55s; }
+.cm-effort-streaks i:nth-child(4) { top: 72%; animation-duration: 1.7s; animation-delay: -1.25s; }
+@keyframes effort-ultra-streak {
+  0% { transform: translateX(-60%); opacity: 0; }
+  18%, 82% { opacity: 1; }
+  100% { transform: translateX(60%); opacity: 0; }
+}
+.cm-effort-ticks i.is-ultra-stop { width: 4px; height: 4px; }
+.cm-effort.is-max.is-ultra .cm-effort-thumb {
+  /* shadow-contract: effect — 白内圈与暖色辉光标识 Ultra，不承担卡片高程。 */
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3), 0 0 16px rgba(236, 72, 153, 0.65);
+}
+/* 滑块外一圈缓转的渐变环(遮罩只留外沿 2px,和白色滑块之间空出 2px)。 */
+.cm-effort.is-max.is-ultra .cm-effort-thumb::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, #4f7dff, #8b6cf6, #d946ef, #ff7a59, #ffc46b, #4f7dff);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  animation: effort-ultra-spin 2.4s linear infinite;
+}
+@keyframes effort-ultra-spin { to { transform: rotate(1turn); } }
+/* 冲击波:只在「刚切进 Ultra」时由 ModelPill 挂一次,动画结束即卸载(重开菜单不会再放)。 */
+.cm-effort-burst {
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(255, 138, 76, 0.9);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  animation: effort-ultra-burst 0.7s var(--ease-out) 1;
+}
+@keyframes effort-ultra-burst {
+  from { transform: scale(1); opacity: 0.95; }
+  to { transform: scale(2.8); opacity: 0; }
+}
+.cm-effort-note {
+  margin-top: 3px;
+  color: color-mix(in srgb, #e0409a 55%, var(--text-faint));
+  font-size: var(--t2c-font-meta, 11px);
+  line-height: 1.35;
+  animation: effort-value-in 0.2s var(--ease-spring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-effort.is-max.is-ultra .cm-effort-range::after,
+  .cm-effort.is-max.is-ultra .cm-effort-thumb::before,
+  .cm-effort-note { animation: none; }
+  .cm-effort-streaks, .cm-effort-burst { display: none; }
+}
 .cm-foot { white-space: normal; letter-spacing: 0; margin-top: 4px; border-top: var(--border-width) solid var(--border); }
 .composer-menu--model .menu-item { font-size: var(--t2c-font-control, 12px); }
 /* 所有模型类二级面板(主模型 / 辅助 / 生图 / 识图)共用一套 View 感知落位:

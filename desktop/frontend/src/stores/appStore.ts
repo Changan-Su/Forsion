@@ -358,13 +358,15 @@ export const DEFAULT_THINKING = 'medium' as const
  *  只吐 AgentConfig 的键,好让调用方直接展开进 init;模型不在此(走 cfg.modelId 老路)。
  *  **云沙箱会话不带审批档**:引擎那边 approvalMode 缺席才等于 full-auto,写死 auto-edit 会让
  *  云会话的 MCP 调用开始逐个弹审批(gateToolCall 对 mcp__ 工具非 host 也过闸)。 */
-export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> {
-  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> = {}
+export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> {
+  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> = {}
   if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
   // 思考档按 preset **分槽**(D36):chat 只读 chat 槽、缺省 DEFAULT_THINKING(dc 为 null 的 web/mobile 同);work 沿用 lastThinkingLevel,
   // 没记过就不指定 —— 交给 Agent 自己的档位,再回落引擎的会话缺省(都是中)。
   if (preset === 'chat') out.thinkingLevel = dc?.lastChatThinkingLevel || DEFAULT_THINKING
   else if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
+  // Ultra 只延续到本机 work 会话(delegate 只在本机引擎有;云端 / chat 会话带上它药丸也显示不出来),且只跟 max 同在。
+  if (host && preset !== 'chat' && dc?.lastUltra && out.thinkingLevel === 'max') out.ultra = true
   return out
 }
 
@@ -378,7 +380,7 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, pr
  *  草稿里 work 下改出的 execMode:'host' 也压不过它(F6)。work 原样返回。 */
 export function applyPreset(cfg: AgentConfig, preset: 'chat' | undefined): AgentConfig {
   if (preset !== 'chat') return cfg
-  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined, groupAgents: undefined }
+  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined, groupAgents: undefined, ultra: undefined }
 }
 
 /** 「不在项目中工作」无根工作区描述符(项目列表底部常驻项、选 chat 时的落点、web 端 /new 的落点)。 */
@@ -763,7 +765,7 @@ export interface AppState {
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
-  setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean): void
+  setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean, ultra?: boolean): void
   /** 本机某模型的上下文窗口覆盖(tokens;null = 交还自动识别,即缺省上限 272k)。模型菜单「上下文上限」写这里,与设置页
    *  输入框是同一份 modelOverrides;只在本机引擎可用(云端 worker 404)。写完重拉模型列表并作废该模型的 context_info,
    *  进度环当场换分母。失败只 toast。 */
@@ -2923,13 +2925,17 @@ export const useApp = create<AppState>((set, get) => ({
     void api.updateSession(get().cfg, sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 
-  setSessionThinking: (level, targetSessionId, remember = true) => {
+  setSessionThinking: (level, targetSessionId, remember = true, ultra) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。
+    // Ultra 只跟 max 同在:显式换成别的档 = 关掉 Ultra;调用方没表态(ultra 缺省,如换 Agent 带来的档)且仍是 max 时不动它。
+    const nextUltra = level === 'max' ? ultra : false
+    // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。chat 槽没有 Ultra。
     const preset = sid ? get().configBySession[sid]?.preset : newSessionPreset(get().sessionMode, get().newChatWs, currentPlatform())
-    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level })
-    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level } })); return }
-    get().patchSessionConfig({ thinkingLevel: level }, sid)
+    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
+    // 草稿里显式记 false(而不是删键):建会话时 sticky 只补缺席的键,删掉的话上次的 Ultra 会被补回来。
+    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra } : {}) } })); return }
+    // 已有会话:关 = 删键(PATCH 里 undefined 上线为 null)。
+    get().patchSessionConfig({ thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra || undefined } : {}) }, sid)
   },
 
   setModelContextWindow: async (modelId, tokens) => {
