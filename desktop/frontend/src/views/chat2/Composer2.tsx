@@ -1749,6 +1749,7 @@ export const Composer2: React.FC<{
                 onThinkingChange={isEngine || !onThinkingChange ? undefined : (lv, u) => { applyThinking(lv, u) }}
                 allowUltra={allowUltra}
                 ultra={ultraOn}
+                running={running}
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
