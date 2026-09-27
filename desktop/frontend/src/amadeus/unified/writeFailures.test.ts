@@ -25,6 +25,7 @@ function harness() {
     preserveExternal: vi.fn<(content: string) => Promise<void>>(async () => {}),
     noteWriteFailed: vi.fn<(error: unknown) => void>(),
     noteWriteOk: vi.fn<() => void>(),
+    settleUnsaved: vi.fn<() => void>(),
     isPristine: vi.fn<() => boolean>(() => false),
     reconcileNow: vi.fn<() => void>(),
   }
@@ -122,6 +123,19 @@ describe('unified editor write safety (review 2026-09-27 D-03 / D-04 / G1-01)', 
     expect(h.writeTextFile).toHaveBeenCalledTimes(1)
     expect(h.preserveExternal).not.toHaveBeenCalled()
     expect(h.reconcileNow).toHaveBeenCalledTimes(1)
+    expect(h.pipe.pending).toBe(false)
+  })
+
+  it('a failed save the user undid back to the disk version settles the unsaved state (bar / stale draft) without writing', async () => {
+    const h = harness()
+    h.writeTextFile.mockRejectedValueOnce(new Error('Offline'))
+    await h.writeNow()
+    expect(h.noteWriteFailed).toHaveBeenCalledTimes(1)
+    h.pipe.body = h.pipe.lastSaved // backspaced the unsaved words away: local == disk again
+    await h.writeNow() // retry timer / online / focus kick
+    expect(h.writeTextFile).toHaveBeenCalledTimes(1)
+    expect(h.settleUnsaved).toHaveBeenCalledTimes(1)
+    expect(h.noteWriteOk).not.toHaveBeenCalled() // nothing was written: no peer announcement
     expect(h.pipe.pending).toBe(false)
   })
 

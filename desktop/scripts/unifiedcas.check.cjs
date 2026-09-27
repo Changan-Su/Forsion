@@ -17,6 +17,7 @@
 //  F 组(D-04 写失败):F1 首次失败即提示 + 页面「未保存」条 · F2 退避自动重试 · F3 online 信号立刻补写、条消失
 //   F4 失败中切走 → 草稿进本机、盘上不被覆盖 → 切回出「恢复草稿」条,点了才写 · F5 草稿 = 盘上内容时静默删掉
 //   F6 离开确认只在非 Electron 宿主、且真有写不进去的内容时拦 · F7 失败存草稿后又打字、重试成功 → 旧草稿删掉
+//   F8/F9 失败中把改动撤回到盘上那版(恢复信号到达 / 没等重试就切走)→ 条收掉、旧草稿删掉、切回不提示恢复
 //
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -387,6 +388,35 @@ async function groupF(browser) {
     const d = await disk(p)
     const k2 = await draftKeys(p)
     record('F7 失败存草稿后又打字、重试成功:旧草稿删掉(不留下次打开的假提示)', k1.length === 1 && d.includes('X1 X2') && k2.length === 0, JSON.stringify({ k1, d, k2 }))
+    await p.close()
+  }
+  // F8/F9:写失败期间用户把改动**撤回到盘上那版** —— 已经没有「未保存」可言(评审 edge E1):
+  //  F8 恢复信号到了 → 条收掉、失败时存的旧草稿删掉、盘上不动;F9 还没等到重试就切走 → 草稿同样删掉,切回不提示恢复
+  for (const k of [{ label: 'F8 撤回后恢复信号到达', recover: true }, { label: 'F9 撤回后没等重试就切走', recover: false }]) {
+    const p = await open(browser, '# T\n\npara1 AAA\n')
+    await p.evaluate(() => { localStorage.clear(); window.__upage.failWrites = 1000 })
+    await typeIn(p, 0, 'AAA', ' XY')
+    await wait(1400)
+    const failedBar = await p.evaluate(() => !!document.querySelector('.unified-page [data-save="failed"]'))
+    const k1 = await draftKeys(p)
+    for (let i = 0; i < 3; i++) await p.keyboard.press('Backspace')
+    await wait(600)
+    if (k.recover) {
+      await p.evaluate(() => { window.__upage.failWrites = 0; window.dispatchEvent(new Event('online')) })
+      await wait(1500)
+    }
+    const barGone = await p.evaluate(() => !document.querySelector('.unified-page [data-save]'))
+    await p.evaluate(() => window.__upage.switchFile('Other.md', '# Other\n\nx\n'))
+    await wait(800)
+    const k2 = await draftKeys(p)
+    await p.evaluate(() => { window.__upage.failWrites = 0 })
+    await p.evaluate(() => window.__upage.switchFile('Unified.md'))
+    await wait(1200)
+    const barsBack = await p.evaluate(() => [...document.querySelectorAll('.unified-page [data-save]')].map((e) => e.dataset.save))
+    const d = await disk(p)
+    record(`${k.label} → 「未保存」条收掉、旧草稿删掉、切回不提示恢复、盘上不动`,
+      failedBar && k1.length === 1 && (!k.recover || barGone) && k2.length === 0 && barsBack.length === 0 && d === '# T\n\npara1 AAA\n',
+      JSON.stringify({ failedBar, k1, barGone, k2, barsBack, d }))
     await p.close()
   }
   // F6:离开确认(beforeunload)只在非 Electron 宿主、且有写不进去的内容时拦

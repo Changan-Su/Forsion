@@ -1370,8 +1370,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }, delay)
   }
 
-  /** 写成功:清失败态与本次会话存下的草稿;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
-  const noteWriteOk = (): void => {
+  /** 本地与盘上重新一致:清失败态、退避计时与本实例存下的草稿。不只写成功才会一致 —— 写失败期间用户把改动
+   *  撤回到盘上那版,也就没有「未保存」可言了;不收的话条一直挂着,切走再回来还提示恢复用户亲手删掉的字。 */
+  const settleUnsaved = (): void => {
     if (pipe.retryTimer) {
       clearTimeout(pipe.retryTimer)
       pipe.retryTimer = null
@@ -1386,6 +1387,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       clearDraft(vaultRoot, path, pipe.stashed)
       pipe.stashed = null
     }
+  }
+
+  /** 写成功:收掉「未保存」;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
+  const noteWriteOk = (): void => {
+    settleUnsaved()
     announceUnifiedWrite(path, pipe)
   }
 
@@ -1397,6 +1403,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
         if (text === pipe.lastSaved) {
           pipe.pending = false
+          settleUnsaved() // 撤回到了盘上那版 / 别人写的正是这份:没有待写的了
           return
         }
         let res: void | TextWriteResult
@@ -1649,7 +1656,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       pipe.timer = null
       if (pipe.readOnly) return
       const text = composeFm(pipe.fm, pipe.body)
-      if (text === pipe.lastSaved) return
+      if (text === pipe.lastSaved) {
+        settleUnsaved() // 写失败后又撤回到盘上那版就关:失败时存下的旧草稿不许留到下次提示恢复
+        return
+      }
       // G1-01:没有用户改动的实例(正文只是编辑器对基线的规范化)卸载时不写 —— 它若是同篇多开里的陈旧那个,
       // 写下去就是拿旧全文盖掉别的实例 / 窗口刚写的新版。
       if (isPristine()) {
