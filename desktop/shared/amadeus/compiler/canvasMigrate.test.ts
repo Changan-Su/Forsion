@@ -19,6 +19,8 @@ describe('migratePluginCanvas', () => {
     expect(isPluginCanvasSource(PLUGIN)).toBe(true)
     expect(isPluginCanvasSource(src([LAYOUT_1COL], ['<!-- a 1 -->', '', '正文。']))).toBe(false)
     expect(isPluginCanvasSource('# 素文件\n')).toBe(false)
+    // D-01:文件头 BOM 不改变判定(与 split.ts / remark 同口径)
+    expect(isPluginCanvasSource(`\uFEFF${PLUGIN}`)).toBe(true)
   })
 
   // ⚠️codex 2026-08-17 P2:判定原来用 `/m` 正则扫**整份原文**,正文里一行顶格的

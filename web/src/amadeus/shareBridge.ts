@@ -72,7 +72,7 @@ export function parseEmbedTarget(target: string): { noteKey: string | null; id: 
 
 /** 有 amadeus_ 前缀 fm 键 = v3/结构化家族(锚辖域至下一锚);无 = v4 素文件(锚是惰性的,只命名紧随的一个单元)。 */
 function hasAmadeusFm(raw: string): boolean {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1]
+  const fm = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1] // 容文件头 BOM(口径同 split.ts)
   return !!fm && fm.split('\n').some((l) => /^["']?amadeus_/.test(l))
 }
 

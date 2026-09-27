@@ -3,7 +3,7 @@
  *  这里把源文拆成「fm 块原文(逐字,含 amadeus_* 行)+ 正文」,保存时原样拼回;
  *  chrome(icon/cover/属性)只改 fm 侧,与正文共用同一条整文件写盘管线(单写者,不与防抖竞态)。 */
 import { parse as parseYaml } from 'yaml'
-import { AMADEUS_FM_KEY, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
+import { AMADEUS_FM_KEY, BOM, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { structureKeysFor } from '@amadeus-shared/compiler/v4'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 
@@ -14,9 +14,13 @@ export interface FmSplit {
   body: string
 }
 
-/** 拆分与 stripFrontmatter 同一正则口径:compose(split(raw)) === raw 恒成立。 */
+/** 拆分与 stripFrontmatter 同一正则口径:compose(split(raw)) === raw 恒成立。
+ *  文件头 BOM(D-01)一律归 fm 侧:有 fm 块时它随块被 stripFrontmatter 认走;没有块时单独一个
+ *  BOM 也当 fmText —— 编辑器吃不下 U+FEFF(首存即丢),留在拼接侧才能逐字往返。
+ *  所以 fmText 只有三种形态:''、BOM 独苗、[BOM]+`---…---` 块;下面所有行级改写都先 fmInner 摘 BOM。 */
 export function splitFm(raw: string): FmSplit {
   const body = stripFrontmatter(raw)
+  if (body.length === raw.length && raw.startsWith(BOM)) return { fmText: BOM, body: raw.slice(1) }
   return { fmText: raw.slice(0, raw.length - body.length), body }
 }
 
@@ -45,20 +49,29 @@ function foreignParseable(foreign: string): boolean {
 
 /** 整体替换外来键区(属性面板提交 YAML 文本);amadeus_* 行原样保留。 */
 export function setForeignFm(fmText: string, foreignYaml: string): string {
-  const amadeusLines = fmText
-    ? extractAmadeusLines(fmText)
-    : []
+  const { bom } = fmInner(fmText)
+  const amadeusLines = extractAmadeusLines(fmText)
   const y = foreignYaml.replace(/\n+$/, '')
-  if (!amadeusLines.length && !y.trim()) return ''
-  return ['---', ...amadeusLines, ...(y.trim() ? [y] : []), '---', ''].join('\n')
+  if (!amadeusLines.length && !y.trim()) return bom
+  return bom + ['---', ...amadeusLines, ...(y.trim() ? [y] : []), '---', ''].join('\n')
+}
+
+const FM_BLOCK = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/
+
+/** fmText → 文件头 BOM + fm 块内文(不含栅栏;不是块 = null)。行级改写一律先摘 BOM、产物再原样
+ *  放回字节 0(D-01:不摘则块认不出 → 当成「无 fm」从零重建 = 第一击就删光用户的 fm)。 */
+function fmInner(fmText: string): { bom: string; inner: string | null } {
+  const bom = fmText.startsWith(BOM) ? BOM : ''
+  const m = FM_BLOCK.exec(fmText.slice(bom.length))
+  return { bom, inner: m ? (m[1] ?? '') : null }
 }
 
 function extractAmadeusLines(fmText: string): string[] {
   // 与 setFmExtraOnSource 同一口径:只有四个精确保留键算「我们的行」;
   // 用户自己的 amadeus_created 之类前缀键属外来数据,走 YAML 区(属性面板可见可编辑)。
-  const m = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/.exec(fmText)
-  if (!m) return []
-  return (m[1] ?? '').split('\n').filter((l) => AMADEUS_FM_KEY.test(l))
+  const { inner } = fmInner(fmText)
+  if (inner == null) return []
+  return inner.split(/\r?\n/).filter((l) => AMADEUS_FM_KEY.test(l))
 }
 
 const STRUCT_KEY = /^["']?amadeus_(schema|layout|canvas)["']?\s*:/
@@ -69,12 +82,12 @@ const STRUCT_KEY = /^["']?amadeus_(schema|layout|canvas)["']?\s*:/
  *  ⚠️ canvasJson 是**必填**:它与 layout 同属被本函数整片重写的区域,漏传 = 保存一次画布几何蒸发
  *  (且 schema 判据也跟着错)。要保持原状就传 `canvasLineOf(fmText)` —— 编译期强制每个写点表态。 */
 export function setAmadeusStructure(fmText: string, layoutJson: string | null, canvasJson: string | null): string {
-  const m = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/.exec(fmText)
-  const inner = m ? (m[1] ?? '') : ''
-  const kept = (inner ? inner.replace(/\r?\n$/, '').split('\n') : []).filter((l) => !STRUCT_KEY.test(l))
+  const { bom, inner } = fmInner(fmText)
+  // 按 /\r?\n/ 切:整块按 LF 重组,CRLF 源文不再落成 CRLF/LF 混杂(D-19)。
+  const kept = (inner ? inner.replace(/\r?\n$/, '').split(/\r?\n/) : []).filter((l) => !STRUCT_KEY.test(l))
   const lines = [...structureKeysFor(layoutJson, canvasJson), ...kept]
-  if (!lines.length) return ''
-  return ['---', ...lines, '---', ''].join('\n')
+  if (!lines.length) return bom
+  return bom + ['---', ...lines, '---', ''].join('\n')
 }
 
 /** 结构键自愈:layout/canvas 任一在场却没有 `amadeus_schema` 时补发结构区(顺序也归位)。
@@ -100,13 +113,13 @@ export function canvasLineOf(fmText: string): string | null {
 }
 
 function structLineOf(fmText: string, key: 'layout' | 'canvas'): string | null {
-  const m = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/.exec(fmText)
-  if (!m) return null
+  const { inner } = fmInner(fmText)
+  if (inner == null) return null
   const re = new RegExp(`^["']?amadeus_${key}["']?\\s*:\\s*(.+)$`)
   // ⚠️ 重复键取**最后一条** —— 与 parseSimpleYaml 同口径(它逐行覆盖同名键,后者胜)。取第一条
   //    会与解析侧打架:读到的是后一份、写回去的是前一份,一次保存把有效几何换成旧值(Codex P1)。
   let hit: string | null = null
-  for (const line of (m[1] ?? '').split('\n')) {
+  for (const line of inner.split('\n')) {
     const lm = re.exec(line)
     if (lm) hit = lm[1].trim()
   }

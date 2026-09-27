@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { classifyPageSource } from '@amadeus-shared/compiler/v4'
+import { parseFrontmatter } from '@amadeus-shared/compiler/split'
 
 const FM = '---\nicon: "📘"\ncover: assets/x.png\ntags:\n  - a\n---\n'
 const BODY = '# Hi\n\n正文段落。\n'
@@ -190,5 +191,105 @@ describe('foreignFmText', () => {
   it('外来键 YAML 原文逐字(注释/顺序保留)', () => {
     const fm = '---\n# note\nicon: "📘"\n---\n'
     expect(foreignFmText(fm)).toBe('# note\nicon: "📘"')
+  })
+})
+
+/** D-01(2026-09-27 评审 P0):旧版记事本等工具写出的文件头 BOM。remark 解析前先剥 BOM(parseFrontmatter
+ *  照认 fm),正则口径却不认 → fm 整块喂进编辑器,第一次保存写成 `***` + setext 标题,tags/aliases 全废。
+ *  契约:BOM 恒归 fm 侧、逐字往返;所有行级改写摘 BOM 再放回字节 0。 */
+describe('文件头 BOM(D-01)', () => {
+  const B = '\uFEFF'
+  const LAYOUT = '{"v":4,"rows":[{"columns":[{"refs":["a1"],"width":0.5},{"refs":["a2"],"width":0.5}],"tail":"t1"}]}'
+  const CANVAS = '{"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":800},"cards":[{"ref":"c1","x":900,"y":40,"w":480}]}'
+
+  it('BOM + fm:BOM 并进 fmText,正文干净,拼回逐字', () => {
+    const raw = `${B}---\ntags: [a]\naliases: [x]\n---\n正文\n`
+    const { fmText, body } = splitFm(raw)
+    expect(fmText).toBe(`${B}---\ntags: [a]\naliases: [x]\n---\n`)
+    expect(body).toBe('正文\n')
+    expect(composeFm(fmText, body)).toBe(raw)
+    expect(foreignFmObject(fmText)).toEqual({ tags: ['a'], aliases: ['x'] })
+  })
+
+  it('BOM + CRLF fm 同样认,拼回逐字', () => {
+    const raw = `${B}---\r\ntags: [a]\r\naliases: [x]\r\n---\r\n正文\r\n`
+    const { fmText, body } = splitFm(raw)
+    expect(fmText.startsWith(`${B}---`)).toBe(true)
+    expect(body).toBe('正文\r\n')
+    expect(composeFm(fmText, body)).toBe(raw)
+  })
+
+  it('BOM 无 fm:BOM 独苗当 fmText(编辑器吃不下它),拼回逐字', () => {
+    const raw = `${B}# T\n\n正文\n`
+    const { fmText, body } = splitFm(raw)
+    expect(fmText).toBe(B)
+    expect(body).toBe('# T\n\n正文\n')
+    expect(composeFm(fmText, body)).toBe(raw)
+    expect(foreignFmObject(fmText)).toEqual({})
+    expect(foreignFmText(fmText)).toBe('')
+  })
+
+  it('两套判据一致:splitFm 认到 fm ⟺ remark(parseFrontmatter)认到 fm', () => {
+    for (const raw of [
+      `${B}---\ntags: [a]\n---\nx\n`, `${B}---\r\ntags: [a]\r\n---\r\nx\r\n`, `${B}---\n---\nx\n`,
+      `${B}# T\n`, '---\ntags: [a]\n---\nx\n', '# T\n',
+    ]) {
+      const sawFm = splitFm(raw).fmText.includes('---')
+      expect([raw, sawFm]).toEqual([raw, Object.keys(parseFrontmatter(raw)).length > 0 || /^\uFEFF?---\r?\n---/.test(raw)])
+    }
+  })
+
+  it('首击派生(null,null)不动 BOM fm —— 修前这里返回 "",第一击删光整块 fm', () => {
+    const fm = `${B}---\ntags: [a]\naliases: [x]\n---\n`
+    expect(setAmadeusStructure(fm, null, null)).toBe(fm)
+    expect(setAmadeusStructure(B, null, null)).toBe(B)
+  })
+
+  it('setAmadeusStructure:BOM 留在字节 0,外来行逐字,结构键读得回', () => {
+    const next = setAmadeusStructure(`${B}---\nicon: "📘"\n---\n`, LAYOUT, CANVAS)
+    expect(next.startsWith(`${B}---\namadeus_schema: amadeus.page/4\n`)).toBe(true)
+    expect(next).toContain('icon: "📘"')
+    expect(layoutLineOf(next)).toBe(LAYOUT)
+    expect(canvasLineOf(next)).toBe(CANVAS)
+    expect(classifyPageSource(composeFm(next, 'x\n'))).toBe('v4-structured')
+    // 剥空:整块消失但 BOM 仍在字节 0
+    expect(setAmadeusStructure(setAmadeusStructure(B, LAYOUT, null), null, null)).toBe(B)
+    // 无块 + BOM 独苗 → 生出块,BOM 在前
+    expect(setAmadeusStructure(B, null, CANVAS)).toBe(`${B}---\namadeus_schema: amadeus.page/4\namadeus_canvas: ${CANVAS}\n---\n`)
+  })
+
+  it('BOM + CRLF 多键 fm:结构区重写后不混杂 CRLF/LF(D-19 同批),外来键全在', () => {
+    const fm = `${B}---\r\ntags: [a]\r\naliases: [x]\r\nstatus: draft\r\n---\r\n`
+    const next = setAmadeusStructure(fm, LAYOUT, null)
+    expect(next.startsWith(B)).toBe(true)
+    expect(next).not.toContain('\r')
+    expect(foreignFmObject(next)).toEqual({ tags: ['a'], aliases: ['x'], status: 'draft' })
+    expect(layoutLineOf(next)).toBe(LAYOUT)
+  })
+
+  it('patchFm(点图标):BOM 在字节 0、只有一个 fm 块、原有键不丢', () => {
+    const next = patchFm(`${B}---\ntags: [a]\n---\n`, { icon: '📘' })
+    expect(next.startsWith(`${B}---\n`)).toBe(true)
+    expect(next.slice(1).match(/^---$/gm)?.length).toBe(2) // 恰好一个 fm 块(修前会在 BOM 前再叠一个)
+    expect(foreignFmObject(next)).toMatchObject({ tags: ['a'], icon: '📘' })
+    // BOM 独苗上加键 → 生出块;再删掉 → 退回 BOM 独苗
+    const one = patchFm(B, { icon: '📘' })
+    expect(one.startsWith(`${B}---\n`)).toBe(true)
+    expect(foreignFmObject(one).icon).toBe('📘')
+    expect(patchFm(one, { icon: undefined })).toBe(B)
+  })
+
+  it('setForeignFm(属性面板提交):BOM 留住;清空外来区 → BOM 独苗', () => {
+    const fm = `${B}---\namadeus_schema: amadeus.page/4\nold: 1\n---\n`
+    const next = setForeignFm(fm, 'title: hello')
+    expect(next.startsWith(`${B}---\namadeus_schema: amadeus.page/4\n`)).toBe(true)
+    expect(foreignFmObject(next)).toEqual({ title: 'hello' })
+    expect(setForeignFm(`${B}---\nold: 1\n---\n`, '')).toBe(B)
+  })
+
+  it('BOM fm 上的结构键读取', () => {
+    const fm = `${B}---\namadeus_schema: amadeus.page/4\namadeus_canvas: ${CANVAS}\n---\n`
+    expect(canvasLineOf(fm)).toBe(CANVAS)
+    expect(fixStructKeys(fm)).toBe(fm)
   })
 })

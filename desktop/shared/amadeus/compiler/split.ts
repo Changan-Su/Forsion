@@ -49,13 +49,20 @@ function parseSimpleYaml(s: string): Record<string, string> {
   return out
 }
 
+/** 文件头 UTF-8 BOM(U+FEFF)。旧版记事本等工具会写出它;micromark 解析前先剥掉它,所以
+ *  remark(parseFrontmatter)照认 fm —— 正则口径不认就是两套判据结论相反(D-01)。 */
+export const BOM = '\uFEFF'
+
 /** Strip a leading YAML frontmatter block, returning just the body.
  *  正则口径(Codex P0 两条,2026-08-13):①空 frontmatter `---\n---\n` 是合法块,必须认
  *  (认不出 → 整块喂进编辑器,首存被序列化成水平线=毁档);②收尾栅栏必须**独占一行**
- *  (`---broken` 不是栅栏 —— 老写法把行中 `---` 当收尾,拆分口径偏离 remark,错拆重写)。
- *  改此正则须同步:db/pageFrontmatter FM_BLOCK_RE、links.ts、server indexing.ts、tangu-agent amadeus.ts。 */
+ *  (`---broken` 不是栅栏 —— 老写法把行中 `---` 当收尾,拆分口径偏离 remark,错拆重写);
+ *  ③容许文件头 BOM(D-01,2026-09-27):BOM 随 fm 块一起剥走 —— 调用方(UnifiedPage 的 splitFm)
+ *  把它并进 fm 原文,拼回时逐字还原,磁盘字节不变。
+ *  改此正则须同步:db/pageFrontmatter FM_BLOCK_RE、unified/fm.ts、links.ts stripForIndex(与
+ *  mdMarks.findMarkLine 成对)、services/fileKinds.ts、server indexing.ts、tangu-agent amadeus.ts。 */
 export function stripFrontmatter(markdown: string): string {
-  return markdown.replace(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '')
+  return markdown.replace(/^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '')
 }
 
 /** Read a note's frontmatter (amadeus_page / amadeus_schema / amadeus_layout / foreign keys). */

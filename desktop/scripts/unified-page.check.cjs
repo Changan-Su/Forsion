@@ -140,6 +140,41 @@ async function main() {
       JSON.stringify(p5w.slice(0, 90)),
     )
 
+    // P5c(D-01,2026-09-27 评审 P0):文件头 BOM(旧版记事本等会写出)。修前 fm 正则不认 U+FEFF 而 remark 认
+    // → fm 整块喂进编辑器:打开显示「属性 0」,打一个字落盘成 `***` + `tags: \[a]…-----`。要求:只读打开零写、
+    // fm 不进正文且属性认得到、编辑后除新字外逐字不变(BOM 仍在字节 0;无 fm 的 BOM 也不许丢)。
+    for (const [name, seed] of [
+      ['bom-fm', '\uFEFF---\ntags: [a]\naliases: [x]\n---\nEDITHERE\n\npara\n'],
+      ['bom-nofm', '\uFEFFEDITHERE\n\npara\n'],
+    ]) {
+      const pg = await browser.newPage({ locale: 'zh-CN' })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM, { timeout: 20000 })
+      await pg.waitForTimeout(1300) // 越过 800ms 防抖窗:只读打开必须零写
+      const o = await pg.evaluate((s) => ({
+        writes: window.__upage.writes.length,
+        hr: document.querySelectorAll(`${s} > hr`).length,
+        text: document.querySelector(s)?.textContent ?? '',
+        fm: window.__upage.probe.fmState?.().fm ?? null,
+      }), PM)
+      await pg.evaluate((s) => {
+        const r = document.createRange()
+        r.selectNodeContents(document.querySelector(s).querySelector(':scope > p'))
+        const b = r.getBoundingClientRect()
+        return { x: b.right - 2, y: b.top + b.height / 2 }
+      }, PM).then((c) => pg.mouse.click(c.x, c.y))
+      await pg.keyboard.type('Z')
+      await pg.waitForTimeout(1400)
+      const out = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? null)
+      const want = seed.replace('EDITHERE', 'EDITHEREZ')
+      const fmOk = name === 'bom-fm' ? /^\uFEFF---\ntags: \[a\]/.test(o.fm ?? '') : o.fm === '\uFEFF'
+      record(`P5c 文件头 BOM(${name}):打开零写 + fm 不进正文 + 编辑后逐字(D-01)`,
+        o.writes === 0 && o.hr === 0 && !o.text.includes('tags') && fmOk && out === want,
+        JSON.stringify({ writes: o.writes, hr: o.hr, fmOk, same: out === want, out: (out ?? '').slice(0, 60) }))
+      await pg.close()
+    }
+
     // P6:chrome 写 fm(设图标)→ 立即落盘,fm 增 icon 键、正文原样。
     const p6p = await browser.newPage({ locale: 'zh-CN' })
     await p6p.goto(`${URL}?upage&useed=${encodeURIComponent('# 素文件\n\n正文。\n')}`, { waitUntil: 'domcontentloaded' })

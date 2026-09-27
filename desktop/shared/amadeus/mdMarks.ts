@@ -122,7 +122,7 @@ export function withChecked(raw: string, checked: boolean): string | null {
 export function findMarkLine(fileText: string, raw: string, occ: number): number {
   const lines = fileText.split(/\r?\n/)
   let i = 0
-  if (lines[0] === '---') { // 开头 YAML frontmatter,口径同 stripForIndex 的正则
+  if (lines[0].replace(/^\uFEFF/, '') === '---') { // 开头 YAML frontmatter(含文件头 BOM),口径同 stripForIndex 的正则
     let j = 1
     while (j < lines.length && !/^---[ \t]*$/.test(lines[j])) j++
     if (j < lines.length) i = j + 1

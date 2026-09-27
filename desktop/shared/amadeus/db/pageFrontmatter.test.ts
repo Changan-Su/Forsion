@@ -54,6 +54,24 @@ describe('setFmExtraOnSource', () => {
     expect(out).toMatch(/due:\s*"?2026-07-05"?/)
     expect(parseFmObject(parseFmObjectFixture(out))['due']).toBe('2026-07-05')
   })
+
+  // D-01:文件头 BOM。修前 FM_BLOCK_RE 认不出 → 在 `BOM---…` 前面再叠一个新 fm 块,旧块沦为正文。
+  it('BOM + fm:改的是原来那一块,BOM 留在字节 0,不叠第二个块', () => {
+    const src = '\uFEFF---\ntags: [a]\n---\n\nbody\n'
+    const out = setFmExtraOnSource(src, { status: 'todo' })
+    expect(out.startsWith('\uFEFF---\n')).toBe(true)
+    expect(out.slice(1).match(/^---$/gm)).toHaveLength(2)
+    expect(out).toContain('tags:')
+    expect(out).toContain('status: todo')
+    expect(out.endsWith('\n\nbody\n')).toBe(true)
+    // 删空 → 块消失、BOM 仍在字节 0
+    expect(setFmExtraOnSource('\uFEFF---\nx: 1\n---\nbody\n', { x: undefined })).toBe('\uFEFFbody\n')
+  })
+
+  it('BOM 无 fm:新块生在 BOM 之后', () => {
+    const out = setFmExtraOnSource('\uFEFF# T\n', { status: 'todo' })
+    expect(out).toBe('\uFEFF---\nstatus: todo\n---\n\n# T\n')
+  })
 })
 
 describe('patchFmExtraText(内存 fmExtra 路径)', () => {

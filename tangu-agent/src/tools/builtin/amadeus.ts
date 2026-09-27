@@ -58,7 +58,7 @@ function inVault(rel: string): string {
 }
 
 // ── 笔记格式助手 ──────────────────────────────────────────────────────────
-const FM_RE = /^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/; // 口径=desktop split.ts(空 fm 合法+收尾栅栏独占一行)
+const FM_RE = /^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/; // 口径=desktop split.ts(空 fm 合法+收尾栅栏独占一行+容文件头 BOM)
 const BLOCK_MARKER_RE = /^<!--\s*a\s+[A-Za-z0-9_-]+\s*-->\s*$/;
 function toCleanMarkdown(md: string): string {
   const body = md.replace(FM_RE, '');
@@ -201,7 +201,8 @@ const STRUCTURED_RE = /\.(mindmap\.md|excalidraw\.md|db)$/i;
  *  ⚠️不能用一条正则一路扫(codex 2026-08-17 P3):`[\s\S]*?` 再懒也**不受 `---` 约束**,
  *  正文里一行顶格的 `amadeus_canvas:`(比如文档示例)会让整篇笔记被误判成画布 → 云端写入被永久拒绝。
  *  改成先切出 frontmatter 块,再只在块内匹配键。 */
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
+// ⚠️ 容文件头 BOM(D-01):不认的话带 BOM 的画布笔记直接绕过这道 fail-closed 闸被整篇覆盖。
+const FRONTMATTER_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const CANVAS_KEY_RE = /^[ \t]*["']?amadeus_canvas["']?[ \t]*:/m;
 const hasCanvasFrontmatter = (raw: string): boolean => {
   const fm = FRONTMATTER_RE.exec(raw ?? '');
