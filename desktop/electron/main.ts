@@ -1,4 +1,5 @@
 import { UNIT_PREFERENCE_KEYS } from '../shared/unitPreferences'
+import { buildUnitScopeGuard, resolveUnitHostPath } from './unitHostScope'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
@@ -932,23 +933,23 @@ async function unitSessionRoots(): Promise<string[]> {
 }
 
 /** /unit/host{file,dir,stat} 三端点共用的路径钳制:realpath 后判 roots(工作区∪vault∪host 会话根)内,
- *  default-deny。allowRoot:目录类操作(list/stat)可指根本身;文件读不可(根是目录)。
- *  relative 判定跨平台(win 反斜杠 realpath 下 '+/' 前缀恒 false 的坑,Codex P1)。 */
+ *  default-deny。会话根是远端经允许清单可写的 project_path —— 过滤掉 `/`、家目录、受保护目录的祖先;
+ *  受保护路径(Forsion 家目录 / 引擎 home / userData / 通用凭据库)无条件拒(契约 C4,评审 A-desktop#1)。
+ *  规则真身在 unitHostScope.ts(vitest 直测);allowRoot:目录类操作(list/stat)可指根本身,文件读不可。 */
 async function unitResolveInScope(p: string, allowRoot: boolean): Promise<string | null> {
   if (!p || typeof p !== 'string') return null
-  let real: string
-  try { real = realpathSync(p) } catch { return null }
   const stored = await loadConfig()
-  const roots: string[] = []
-  try { roots.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
-  try { const vr = amadeusVaultFace?.root(); if (vr) roots.push(realpathSync(vr)) } catch { /* 无库 */ }
-  for (const sp of await unitSessionRoots()) roots.push(sp)
-  const inRoot = (r: string): boolean => {
-    if (real === r) return allowRoot
-    const rel = relative(r, real)
-    return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
-  }
-  return roots.some(inRoot) ? real : null
+  const base: string[] = []
+  try { base.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
+  try { const vr = amadeusVaultFace?.root(); if (vr) base.push(realpathSync(vr)) } catch { /* 无库 */ }
+  const guard = buildUnitScopeGuard({
+    home: homedir(),
+    forsionHome: forsionHomeDir(),
+    tanguHome: process.env.TANGU_HOME || tanguDataDir(),
+    userData: app.getPath('userData'),
+    appData: app.getPath('appData'),
+  })
+  return resolveUnitHostPath(p, { base, session: await unitSessionRoots() }, { home: homedir() }, guard, allowRoot)
 }
 
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。

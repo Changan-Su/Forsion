@@ -1,0 +1,82 @@
+/**
+ * /unit/host* 路径钳制(评审 A-desktop#1 / 契约 C4):远端能把某会话的 project_path 写成家目录,
+ * 旧实现就把整个家目录当成可读根 —— ~/.forsion/auth.json 直接读走。这里在临时「家目录」里真建文件 / 软链,
+ * 走 main.ts 同一个入口 resolveUnitHostPath(realpath → 钳制)。
+ * 跑法:npx vitest run electron/unitHostScope.test.ts
+ */
+import { describe, it, expect, beforeAll } from 'vitest'
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { buildUnitScopeGuard, filterSessionRoots, isUnitProtected, resolveUnitHostPath, type UnitScopeGuard } from './unitHostScope'
+
+let home = ''
+let guard: UnitScopeGuard
+let env: { home: string }
+const ws = (): string => join(home, 'Forsion')
+
+beforeAll(async () => {
+  home = realpathSync(await mkdtemp(join(tmpdir(), 'unit-scope-')))
+  env = { home }
+  const files: Record<string, string> = {
+    '.forsion/auth.json': '{"forsion_token":"SECRET"}',
+    '.forsion/provider-auth.json': '{}',
+    '.forsion/config.json': '{}',
+    '.forsion/tangu/agents/writer/Library/draft.md': 'ok',
+    '.forsion/tangu/agents/writer/Library/.tangu/state.json': '{}',
+    '.forsion/tangu/agents/writer/HARNESS.md': 'x',
+    '.ssh/id_ed25519': 'KEY',
+    '.zshrc': 'export X=1',
+    'Forsion/doc.md': 'ws',
+    'proj/a.md': 'proj',
+    'AppData/Forsion/tangu-desktop-config.json': '{"unitHostSecret":"S"}',
+  }
+  for (const [rel, body] of Object.entries(files)) {
+    await mkdir(join(home, rel, '..'), { recursive: true })
+    await writeFile(join(home, rel), body)
+  }
+  await symlink(join(home, '.forsion'), join(home, '.tangu')) // 兼容软链(forsionHome.ts 迁移留下的)
+  await symlink(join(home, '.forsion', 'auth.json'), join(home, 'Forsion', 'auth-link.json'))
+  guard = buildUnitScopeGuard({ home, forsionHome: join(home, '.forsion'), userData: join(home, 'AppData', 'Forsion'), appData: join(home, 'AppData') })
+})
+
+const read = (p: string, session: string[], allowRoot = false): string | null =>
+  resolveUnitHostPath(p, { base: [ws()], session }, env, guard, allowRoot)
+
+describe('unitHostScope:会话根 = 家目录也读不到凭据', () => {
+  it('会话根 = 家目录:auth.json / provider-auth / config.json / ~/.ssh / 家目录 dotfile 全部 null', () => {
+    for (const rel of ['.forsion/auth.json', '.forsion/provider-auth.json', '.forsion/config.json', '.tangu/auth.json', '.ssh/id_ed25519', '.zshrc']) {
+      expect(read(join(home, rel), [home]), rel).toBeNull()
+    }
+    expect(read(home, [home], true)).toBeNull() // 目录类也不许把家目录当根列出来
+  })
+
+  it('会话根 = `/`、受保护目录的祖先(userData 的父目录)、受保护目录本身:都不算根', () => {
+    expect(filterSessionRoots(['/', home, join(home, 'AppData'), join(home, '.forsion'), join(home, 'proj')], env, guard)).toEqual([join(home, 'proj')])
+    expect(read(join(home, 'AppData', 'Forsion', 'tangu-desktop-config.json'), [join(home, 'AppData')])).toBeNull()
+    expect(read(join(home, 'proj', 'a.md'), ['/'])).toBeNull()
+  })
+
+  it('凭据从正常根里经软链 / 直接点名进来也拒(realpath 之后判)', () => {
+    expect(read(join(ws(), 'auth-link.json'), [])).toBeNull()
+    expect(read(join(home, '.forsion', 'auth.json'), [join(home, '.forsion')])).toBeNull()
+    expect(read(join(home, '.ssh', 'id_ed25519'), [join(home, '.ssh')])).toBeNull() // .ssh 不是祖先,但在拒读名单里
+  })
+
+  it('darwin / win32 不分大小写:大小写变体的受保护路径同样拒', () => {
+    expect(isUnitProtected(join(home, '.FORSION', 'Auth.json'), guard, 'darwin')).toBe(true)
+    expect(isUnitProtected(join(home, '.FORSION', 'Auth.json'), guard, 'linux')).toBe(false) // linux 是另一个文件
+  })
+
+  it('正常面不受影响:工作区 / 普通项目会话根 / Agent 私聊 Library(控制目录除外)', () => {
+    expect(read(join(ws(), 'doc.md'), [])).toBe(join(ws(), 'doc.md'))
+    expect(read(join(home, 'proj', 'a.md'), [join(home, 'proj')])).toBe(join(home, 'proj', 'a.md'))
+    expect(read(join(home, 'proj'), [join(home, 'proj')], true)).toBe(join(home, 'proj'))
+    expect(read(join(home, 'proj'), [join(home, 'proj')], false)).toBeNull() // 文件读不能指根本身
+    const lib = join(home, '.forsion', 'tangu', 'agents', 'writer', 'Library')
+    expect(read(join(lib, 'draft.md'), [lib])).toBe(join(lib, 'draft.md'))
+    expect(read(join(lib, '.tangu', 'state.json'), [lib])).toBeNull()
+    expect(read(join(home, '.forsion', 'tangu', 'agents', 'writer', 'HARNESS.md'), [lib])).toBeNull() // Library 之外不在根内
+  })
+})
