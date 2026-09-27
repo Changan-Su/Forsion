@@ -69,7 +69,7 @@ describe('BackendManager engine credentials (C1 / C2)', () => {
     } finally { await m.stop() }
   }, 30_000)
 
-  it('未登录:不传 TANGU_TOKEN(连 shell 里继承来的同名变量一起删),本机令牌照样有 → 引擎能独立启动', async () => {
+  it('未登录:TANGU_TOKEN 显式为空串(压住 shell 继承的同名变量与 config.json 的 cloud.token 回退),本机令牌照样有 → 引擎能独立启动', async () => {
     rmSync(join(H.dir, 'auth.json'), { force: true })
     const eng = envDumpEngine()
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(eng.entry)
@@ -79,7 +79,7 @@ describe('BackendManager engine credentials (C1 / C2)', () => {
     try {
       await m.start({ cloudUrl: '', sandbox: 'none' })
       const env = eng.dump()
-      expect(env.cloud).toBeNull()
+      expect(env.cloud).toBe('') // 不是 undefined:引擎 config.ts 是 `TANGU_TOKEN ?? cloud.token`,缺席会回退到 config.json 残留的云端票
       expect(env.local).toBe(m.getToken())
     } finally {
       delete process.env.TANGU_TOKEN

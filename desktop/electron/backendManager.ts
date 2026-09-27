@@ -271,14 +271,13 @@ export class BackendManager {
       if (!useSystemNode) env.ELECTRON_RUN_AS_NODE = '1'
       else delete env.ELECTRON_RUN_AS_NODE
       // 凭证走 env,不出现在 ps 输出(契约 C1 / C2)。本机令牌恒非空 → 引擎 validate 通过、未登录也能独立启动
-      // (BYOK / 订阅可用)。TANGU_TOKEN 只给云端调用:未登录就不传 —— 连同 dev shell 里可能继承来的同名变量一起删,
-      // 引擎自己回退读 auth.json(同样为空)。
+      // (BYOK / 订阅可用)。TANGU_TOKEN 只给云端调用:未登录就显式传空串 —— 既压住 dev shell 继承来的同名变量,
+      // 也压住引擎 config.ts 对 config.json 残留 cloud.token 的回退(`env ?? cloud.token`,空串不回退;Codex 评审 P2)。
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
       env.TANGU_LOCAL_TOKEN = this.localEngineToken
       env.TANGU_REMOTE_MARK_SECRET = this.remoteMark
       const cloudToken = this.cloudToken()
-      if (cloudToken) env.TANGU_TOKEN = cloudToken
-      else delete env.TANGU_TOKEN
+      env.TANGU_TOKEN = cloudToken ?? ''
       // 渲染层直接起的 run 会在请求体自报 desktop/<版本>;微信/TG/QQ 则由引擎后台起 run,
       // 没有这个请求方。宿主在 spawn 时把同一个真实 App 版本交给引擎,供通道 run 写入 input.client;
       // 源通道仍单独保留在 input.source.channel,不拿 wechat/telegram/qq 污染「端×版本」维度。

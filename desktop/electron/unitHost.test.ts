@@ -20,10 +20,11 @@ async function until(fn: () => boolean, ms = 3000): Promise<boolean> {
   return true
 }
 
-type ChannelMode = 'silent' | 'heartbeat'
+type ChannelMode = 'silent' | 'heartbeat' | 'noheaders'
 interface Hub {
   url: string
   channels: http.ServerResponse[]
+  registers: http.ServerResponse[]
   streamed: string[]
   mode: ChannelMode
   dispatch: (env: { id: string; method: string; path: string; accept?: string }) => void
@@ -34,12 +35,15 @@ interface Hub {
 /** 假网关:/channel 按 mode 保持静默或每 50ms 写 `: hb`;/stream 与 /resp 收下并记账。 */
 function fakeHub(): Promise<Hub> {
   const channels: http.ServerResponse[] = []
+  const registers: http.ServerResponse[] = []
   const streamed: string[] = []
   const timers = new Set<ReturnType<typeof setInterval>>()
-  const hub: Partial<Hub> = { channels, streamed, mode: 'silent' }
+  const hub: Partial<Hub> = { channels, registers, streamed, mode: 'silent' }
   const server = http.createServer((req, res) => {
     const url = req.url || ''
+    if (url.endsWith('/units/register')) { registers.push(res); return } // 挂住:由测试决定何时回
     if (url.endsWith('/channel')) {
+      if (hub.mode === 'noheaders') { channels.push(res); return } // TCP 接了,响应头永远不来
       res.writeHead(200, { 'Content-Type': 'text/event-stream' })
       res.write(': connected\n\n')
       channels.push(res)
@@ -68,7 +72,7 @@ function fakeHub(): Promise<Hub> {
           channels.at(-1)!.write(`event: dispatch\ndata: ${JSON.stringify({ body: null, ...env })}\n\n`)
         },
         endChannel: () => channels.at(-1)!.end(),
-        close: () => { for (const t of timers) clearInterval(t); for (const c of channels) c.destroy(); server.close() },
+        close: () => { for (const t of timers) clearInterval(t); for (const c of [...channels, ...registers]) c.destroy(); server.close() },
       })
       resolve(hub as Hub)
     })
@@ -93,19 +97,20 @@ function fakeUnitWeb(): Promise<{ url: string; hits: string[]; cut: string[]; cl
   })
 }
 
-function host(hub: Hub, web: { url: string } | null, readIdleMs: number): { h: UnitHost; logs: string[] } {
+function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean }): { h: UnitHost; logs: string[]; saved: unknown[] } {
   const logs: string[] = []
+  const saved: unknown[] = []
   const h = new UnitHost({
     getCreds: () => ({ cloudUrl: hub.url, token: 'tok' }),
     getUnitWeb: () => ({ url: web?.url ?? null, internalSecret: 'INTERNAL' }),
     getLanUrl: () => null,
-    getPairing: () => ({ unitId: 'u1', secret: 's1' }),
-    savePairing: async () => {},
+    getPairing: () => (opts?.unpaired ? null : { unitId: 'u1', secret: 's1' }),
+    savePairing: async (p) => { saved.push(p) },
     clearPairing: async () => {},
     log: (m) => logs.push(m),
     readIdleMs,
   })
-  return { h, logs }
+  return { h, logs, saved }
 }
 
 describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
@@ -118,6 +123,35 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
       // 300ms 看门狗 + 1s 退避 → 第二条连接
       expect(await until(() => hub.channels.length >= 2, 4000)).toBe(true)
       expect(logs.some((l) => l.includes('判定已断'))).toBe(true)
+    } finally { h.stop(); hub.close() }
+  })
+
+  it('看门狗从发起连接就计时:TCP 接了但网关迟迟不回响应头,同样断开重拨', async () => {
+    const hub = await fakeHub()
+    hub.mode = 'noheaders'
+    const { h, logs } = host(hub, null, 300)
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      expect(await until(() => hub.channels.length >= 2, 4000)).toBe(true)
+      expect(logs.some((l) => l.includes('未收到响应头'))).toBe(true)
+    } finally { h.stop(); hub.close() }
+  })
+
+  it('入册在途时 stop()(停用 / 换账号):入册请求被中止,旧那一轮的配对绝不写回', async () => {
+    const hub = await fakeHub()
+    const { h, saved } = host(hub, null, 0, { unpaired: true })
+    try {
+      h.start()
+      expect(await until(() => hub.registers.length === 1)).toBe(true)
+      h.stop()
+      await sleep(50)
+      // 网关这时才回(旧写法:fetch 不带信号,照样拿到并 savePairing 写回旧账号的配对)
+      const res = hub.registers[0]
+      if (!res.destroyed && !res.writableEnded) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ unitId: 'u-old', secret: 's-old' })) }
+      await sleep(200)
+      expect(saved).toEqual([])
+      expect(hub.channels.length).toBe(0)
     } finally { h.stop(); hub.close() }
   })
 

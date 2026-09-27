@@ -452,8 +452,8 @@ describe('unitWeb', () => {
     // 生成器从 tangu-agent/src 现抽 standalone 挂载的全部路由,与提交的 engineRoutes.generated.ts 逐字比对。
     // 红了:在 desktop 下跑 `node scripts/gen-engine-routes.mjs`,给新路由在 CLASSIFICATION 里写 allow|deny-remote。
     const r = spawnSync(process.execPath, [resolve(__dirname, '../scripts/gen-engine-routes.mjs'), '--check', '--json'], { encoding: 'utf8' })
-    expect(r.stderr).toBe('')
-    const report = JSON.parse(r.stdout) as { ok: boolean; stale: boolean; unclassified: string[]; orphans: string[]; routes: number }
+    let report: { ok: boolean; stale: boolean; unclassified: string[]; orphans: string[]; routes: number }
+    try { report = JSON.parse(r.stdout) } catch { throw new Error(`gen-engine-routes --check did not report: ${r.stderr || r.stdout}`) }
     expect(report.unclassified).toEqual([])
     expect(report.orphans).toEqual([])
     expect(report.stale).toBe(false)

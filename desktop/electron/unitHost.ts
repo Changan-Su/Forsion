@@ -175,20 +175,33 @@ export class UnitHost {
         if (!token) throw new Error('未登录 Forsion 账号')
         let pairing = this.deps.getPairing()
         if (!pairing) {
-          pairing = await this.register(cloudUrl, token)
+          pairing = await this.register(cloudUrl, token, conn.signal)
+          // 入册在途时被 stop()(停用 / 换账号):这份配对属于旧的那一轮,绝不写回(Codex 评审 P1)
+          if (conn.signal.aborted) throw new Error('入册期间通道已被停用')
           await this.deps.savePairing(pairing)
           this.deps.log(`[unit-host] 已入册为设备 ${pairing.unitId}`)
         }
         const lanUrl = this.deps.getLanUrl()
         this.hubCaps = new Set() // 每条通道各自协商:重连可能换成回滚后的老网关
-        const resp = await fetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/channel`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'X-Unit-Secret': pairing.secret,
-            ...(lanUrl ? { 'X-Unit-Lan-Url': lanUrl } : {}),
-          },
-          signal: conn.signal,
-        })
+        // 看门狗从发起连接就开始计:TCP 连上而网关迟迟不回响应头,同样算死连接(Codex 评审 P1)。
+        const idleMs = this.deps.readIdleMs ?? CHANNEL_READ_IDLE_MS
+        const headerWatchdog = idleMs ? setTimeout(() => {
+          this.deps.log(`[unit-host] 通道 ${Math.round(idleMs / 1000)}s 未收到响应头,判定已断,重连`)
+          conn.abort()
+        }, idleMs) : null
+        let resp: Response
+        try {
+          resp = await fetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/channel`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'X-Unit-Secret': pairing.secret,
+              ...(lanUrl ? { 'X-Unit-Lan-Url': lanUrl } : {}),
+            },
+            signal: conn.signal,
+          })
+        } finally {
+          if (headerWatchdog) clearTimeout(headerWatchdog)
+        }
         if (resp.status === 403 || resp.status === 404) {
           // 设备行已被注销/密钥失配 → 清配对,下一轮重新入册(自愈)。
           await this.deps.clearPairing()
@@ -225,11 +238,12 @@ export class UnitHost {
     }
   }
 
-  private async register(cloudUrl: string, token: string): Promise<UnitPairing> {
+  private async register(cloudUrl: string, token: string, signal: AbortSignal): Promise<UnitPairing> {
     const r = await fetch(`${apiBase(cloudUrl)}/units/register`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: hostname(), platform: process.platform }),
+      signal,
     })
     if (!r.ok) throw new Error(`设备入册失败 HTTP ${r.status}`)
     const j = (await r.json()) as { unitId?: string; secret?: string }
