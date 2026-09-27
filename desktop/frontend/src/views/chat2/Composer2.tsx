@@ -594,7 +594,8 @@ export const Composer2: React.FC<{
       if ((e.target as HTMLElement)?.closest?.('[data-cmenu], [data-keep-menus]')) return
       setOpenMenu(null)
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !(e.target as HTMLElement)?.closest?.('[data-keep-menus]')) setOpenMenu(null) }
+    // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[data-keep-menus]')) setOpenMenu(null) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
@@ -689,7 +690,8 @@ export const Composer2: React.FC<{
     const caret = start + text.length
     requestAnimationFrame(() => {
       const ta = taRef.current
-      if (ta) { if (!useApp.getState().feedbackOpen) ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
+      // 斜杠菜单里点的项弹了确认框(开 Ultra):别在下一帧把焦点从确认框抢回输入框(creview 09-27 P1)
+      if (ta) { if (!useApp.getState().feedbackOpen && !document.querySelector('[data-keep-menus]')) ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
       autoGrow()
     })
     return start

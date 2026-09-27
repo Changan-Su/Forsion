@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
 import { registerMessages, useI18n } from '../../i18n'
@@ -40,8 +40,25 @@ export function UltraConfirmDialog({ offerFullAccess, onConfirm, onClose }: {
   const { t } = useI18n()
   const [fullAccess, setFullAccess] = useState(false)
   const [skip, setSkip] = useState(false)
+  // 关掉(取消 / 确认 / Esc / 点遮罩)后把焦点还给打开它的那个元素(滑杆 / 输入框),键盘用户接着操作(creview 09-27)
+  const opener = useRef<Element | null>(typeof document !== 'undefined' ? document.activeElement : null)
+  useEffect(() => () => {
+    const el = opener.current as HTMLElement | null
+    if (el?.isConnected && typeof el.focus === 'function') el.focus({ preventScroll: true })
+  }, [])
+  // 焦点圈在确认框里:Tab 出去再按 Esc 会连带关掉背后的菜单,和在框里按 Esc 的结果不一致
+  const trapTab = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'Tab') return
+    const box = e.currentTarget.querySelector('.dialog')
+    const items = box ? [...box.querySelectorAll<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])')].filter((el) => !(el as HTMLButtonElement).disabled) : []
+    if (!items.length) return
+    const first = items[0]
+    const last = items[items.length - 1]
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+  }
   return createPortal(
-    <div className="am-app tangu-lovable" style={{ display: 'contents' }} data-ultra-confirm data-keep-menus>
+    <div className="am-app tangu-lovable" style={{ display: 'contents' }} data-ultra-confirm data-keep-menus onKeyDown={trapTab}>
       <ConfirmDialog
         title={t('ultraConfirm.title')}
         message={t('ultraConfirm.msg')}

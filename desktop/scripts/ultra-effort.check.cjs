@@ -8,7 +8,8 @@
  *   U4 关掉菜单再开:冲击波不再放(只在「刚切进来」那一下);U4b 切进来 0.1s 内就关菜单(动画没放完)再开也不重播
  *   U5 发一句 → run 的 agent_config 带 ultra:true + max + full-auto(引擎就靠这几个键)
  *   U6 显式改回「深」→ PATCH 把 ultra 删掉(null),药丸回普通皮
- *   U7 `/think ultra` 键盘路径同样先弹确认;勾「以后不再显示」确认 → 切回 Ultra;U8 之后再开不弹、直接生效
+ *   U7 斜杠菜单点 `/think ultra` 同样先弹确认(U10 焦点留在确认框里,不被下一帧的输入框回焦抢走);
+ *      勾「以后不再显示」确认 → 切回 Ultra;U8 之后再开不弹、直接生效
  *   U9 审批档已是「完全放行」时确认框不再推荐 / 不给那个勾选项(借 U7 那一轮验)
  * 截图落 ULTRA_SHOT_DIR(缺省 /tmp/ultra-effort-shots):药丸 + 展开的滑杆,自己看。
  *
@@ -122,9 +123,11 @@ async function main() {
       menuOpen: await win.locator('.cm-effort').count().catch(() => 0),
       patches: stub.seen.configs.filter((c) => c.sessionId === 'local').length - patchesBefore,
       value: await win.locator('.cm-effort-input').first().inputValue().catch(() => null),
+      // 焦点还给打开它的滑杆(键盘用户接着用方向键)
+      focusBack: await win.evaluate(() => !!document.activeElement?.classList.contains('cm-effort-input')),
     }
     check('U3e 拖到 Ultra 先弹确认框(带「推荐完全放行」勾选项);Esc 取消 → 不发 PATCH、滑杆没动、模型菜单还开着',
-      askShown === 1 && offer === 1 && afterEsc.dialog === 0 && afterEsc.menuOpen === 1 && afterEsc.patches === 0 && afterEsc.value !== '7',
+      askShown === 1 && offer === 1 && afterEsc.dialog === 0 && afterEsc.menuOpen === 1 && afterEsc.patches === 0 && afterEsc.value !== '7' && afterEsc.focusBack,
       JSON.stringify({ askShown, offer, ...afterEsc }))
     await win.locator('.cm-effort-input').first().focus()
     await win.keyboard.press('End')
@@ -206,11 +209,21 @@ async function main() {
     await closePill(win)
 
     // ── U7:键盘路径 /think ultra —— 同样先弹确认;这次勾「以后不再显示」
+    // 走斜杠**菜单项**(不是「/think ultra」连参数回车的键盘路径):选中项会在下一帧回焦输入框,正是要钉的那条
     await ta.click()
-    await ta.fill('/think ultra')
-    await win.keyboard.press('Enter')
-    await win.waitForTimeout(500)
+    await ta.fill('/think')
+    await win.waitForTimeout(400)
+    await win.locator('.t2c-menu-cmd', { hasText: /^\/think ultra$/ }).first().click()
+    await win.waitForTimeout(300)
     const slashAsk = await dialog.count().catch(() => 0)
+    // 斜杠菜单选中项会在下一帧回焦输入框 —— 弹了确认框时不许把焦点抢走(键盘输入会落到遮罩后的草稿)
+    await win.waitForTimeout(200)
+    const focusInDialog = await win.evaluate(() => !!document.activeElement?.closest('[data-ultra-confirm]'))
+    const dialogSemantics = await win.evaluate(() => {
+      const d = document.querySelector('[data-ultra-confirm] .dialog')
+      const id = d?.getAttribute('aria-labelledby')
+      return d?.getAttribute('role') === 'dialog' && d?.getAttribute('aria-modal') === 'true' && !!id && !!document.getElementById(id)?.textContent
+    })
     const offerAgain = await win.locator('[data-ultra-full-access]').count().catch(() => 0)
     const preConfirm = lastPatch(stub, 'local')
     if (slashAsk) {
@@ -222,6 +235,8 @@ async function main() {
     check('U7 `/think ultra` 先弹确认,确认后切回 Ultra', slashAsk === 1 && preConfirm?.ultra !== true && viaSlash?.ultra === true && viaSlash?.thinkingLevel === 'max',
       JSON.stringify({ slashAsk, preConfirm, viaSlash }))
     check('U9 审批档已是「完全放行」:确认框不再推荐、不给切换勾选项', offerAgain === 0, `offer=${offerAgain}`)
+    check('U10 斜杠路径弹框后焦点留在确认框里;确认框带 role=dialog / aria-modal / 标题关联', focusInDialog && dialogSemantics,
+      JSON.stringify({ focusInDialog, dialogSemantics }))
 
     // ── U8:勾过「以后不再显示」,再开 Ultra 不弹、直接生效
     await openPill(win)
