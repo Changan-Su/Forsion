@@ -33,11 +33,18 @@ async function launch(home, stubUrl) {
   const app = await electron.launch({
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl },
+    // ELECTRON_ENABLE_LOGGING:主进程 console 实时走 stderr;不开的话 stdout 是管道时要到进程退出才冲出来,起不来窗口就什么也看不到。
+    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, ELECTRON_ENABLE_LOGGING: '1' },
     timeout: 90_000,
   })
   for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (d) => logs.push(String(d)))
-  const win = await app.firstWindow()
+  // 机器满载时(别的会话在打包)冷启动可能超过 Playwright 默认的 30s;超时把主进程日志尾巴带出来,别只报「没窗口」。
+  // 卡住的主进程连 SIGTERM 都不理,app.close() 会一起挂死 —— 直接 SIGKILL。
+  const win = await app.firstWindow({ timeout: 120_000 }).catch(async (e) => {
+    try { app.process().kill('SIGKILL') } catch { /* already gone */ }
+    await new Promise((r) => setTimeout(r, 500))
+    throw new Error(`${e.message}\n--- main log tail ---\n${logs.join('').split('\n').filter((l) => !/AppleShowScrollBars|^\s*$/.test(l)).slice(-15).join('\n')}`)
+  })
   await win.waitForSelector('#root', { timeout: 30_000 })
   await win.waitForTimeout(1500)
   const bridge = await win.evaluate(async () => {
