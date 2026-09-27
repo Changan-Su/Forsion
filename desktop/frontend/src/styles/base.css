@@ -2011,8 +2011,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   animation: ultra-pill-glow-in 0.6s ease-out 1;
 }
 :root[data-mode='dark'] .composer-chip.model-pill-btn.is-max.is-ultra::before { opacity: 0.26; }
-.composer-chip.model-pill-btn.is-max.is-ultra:hover::before,
-.composer-chip.model-pill-btn.is-max.is-ultra.is-open::before { opacity: 0.32; }
+/* :root 前缀把特异性抬到与上面暗色那条相同、靠源码顺序压过它,否则暗色下悬停 / 展开不提亮 */
+:root .composer-chip.model-pill-btn.is-max.is-ultra:hover::before,
+:root .composer-chip.model-pill-btn.is-max.is-ultra.is-open::before { opacity: 0.32; }
 .composer-chip.model-pill-btn.is-max.is-ultra::after {
   content: '';
   position: absolute;
