@@ -15,8 +15,16 @@ import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { chromium } from 'playwright-core'
 import { IPC } from '../shared/amadeus/ipc'
+import { createRequire } from 'node:module'
 import { startUnitWeb, type PairedDevice } from '../electron/unitWeb'
 import type { VaultFace } from '../electron/amadeus/ipc'
+
+// 可编剧假引擎(聊天面 e2e 共用):第 10 步的审批卡要一条真 run 的事件流(approval_request + 挂住)。
+const { startStubEngine } = createRequire(import.meta.url)('./lib/stub-engine.cjs') as {
+  startStubEngine: (data?: Record<string, unknown>) => Promise<{
+    url: string; seen: { approvals: Array<Record<string, unknown>>; runs: unknown[] }; script: (events: unknown[]) => void; close: () => void
+  }>
+}
 
 const DIST = path.resolve(import.meta.dirname, '../unit-web-dist')
 const SHOT_DIR = process.env.UNITSW_SHOT_DIR || '/tmp'
@@ -279,6 +287,83 @@ async function main(): Promise<void> {
     await mpage.waitForTimeout(400)
     await mpage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-mobile.png') })
     await mpage.close()
+
+    // 10 设备页审批卡(Codex 终审 F#2):引擎对远端拒收改参数(400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)、「总允许」降成单次。
+    //    卡上命令只读、不给「总允许」、说明原因;批准不带 argsOverride;引擎拒了要上屏(不再静默吞掉)。
+    //    另起一个 unitWeb 接可编剧假引擎(1-9 步的假引擎只回 404,起不了 run);页面钉 zh-CN(浏览器台架的语言只认 newPage locale)。
+    let refuse = true
+    const stub = await startStubEngine({
+      sessions: [{ id: 's1', title: '远程审批会话', summary: '', model_id: 'm1', archived: false, emoji: null, agent_config: null,
+        project_path: '/tmp/e2e-home/Tangu/demo', project_name: 'demo', created_at: '2026-09-27 09:00:00', updated_at: '2026-09-27 09:00:00' }],
+      override: ({ path: p, method }: { path: string; method: string }) => (refuse && method === 'POST' && /^\/agent\/runs\/[^/]+\/approvals\/[^/]+$/.test(p)
+        ? { __code: 400, body: { code: 'REMOTE_ARGS_OVERRIDE_FORBIDDEN', detail: 'Editing the arguments of an approval is only available on the host computer.' } }
+        : undefined),
+    })
+    const paired2: PairedDevice[] = []
+    const handle2 = await startUnitWeb({
+      getEngine: () => ({ url: stub.url, token: 'ENGINE_TOKEN', remoteMark: 'E2E_REMOTE_MARK' }),
+      confirmPair: async () => true,
+      pairedDevices: { list: () => paired2, add: async (d) => { paired2.push(d) } },
+      readPlugins: async () => [], readSpaces: async () => [],
+      readConfig: async () => ({ homeDir: '/tmp/e2e-home', defaultWorkspaceDir: '/tmp/e2e-home/Tangu' }),
+      writeConfig: async (patch: Record<string, unknown>) => patch,
+      readProviders: async () => [], readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
+      meta: { instanceId: 'e2e-inst-approval', name: 'E2E 审批机', version: '9.9.9' },
+      webDistDir: () => DIST, vault: () => vaultFace, log: () => {},
+    }, { port: 0, bindHost: '127.0.0.1' })
+    try {
+      const apage = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'zh-CN' })
+      await skipOnboarding(apage)
+      await apage.goto(`http://unit-e2e.test:${handle2.port}`, { waitUntil: 'domcontentloaded' })
+      await apage.waitForSelector('.rb', { timeout: 45000 })
+      check('设备页注入 remoteCaller(远端身份)', await apage.evaluate(() => (window as any).tangu?.remoteCaller === true))
+      // 进 Tangu Space → 打开那条会话 → 发一句,假引擎回放 run_bash 审批请求并挂住(= 真引擎在等审批)
+      await apage.locator('.rb [title="Tangu"], .rb [aria-label="Tangu"]').first().click()
+      await apage.waitForTimeout(1200)
+      if (!(await apage.locator('.t2s-srow').count())) { await apage.click('.dv-edge-left').catch(() => {}); await apage.waitForTimeout(700) }
+      await apage.locator('.t2s-srow', { hasText: '远程审批会话' }).first().click()
+      const ta = apage.locator('.t2c-ta').first()
+      for (let i = 0; i < 40 && !(await ta.isEnabled().catch(() => false)); i++) await apage.waitForTimeout(500)
+      stub.script([
+        { type: 'approval_request', payload: { approvalId: 'ra1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }), preview: '$ make build', reason: { kind: 'mode', mode: 'auto-edit' } } },
+        { type: '__hold' },
+      ])
+      await ta.click()
+      await ta.fill('跑一下构建')
+      await apage.keyboard.press('Enter')
+      await apage.waitForSelector('.approval-card', { timeout: 20000 })
+      const card = await apage.evaluate(() => {
+        const c = document.querySelector('.approval-card')!
+        return {
+          editable: !!c.querySelector('textarea.approval-edit'),
+          preview: (c.querySelector('.approval-preview')?.textContent || '').trim(),
+          buttons: [...c.querySelectorAll('.approval-actions button')].map((b) => (b.textContent || '').trim()),
+          hint: (c.querySelector('[data-remote-readonly]')?.textContent || '').trim(),
+        }
+      })
+      check('设备页审批卡:run_bash 命令只读(无编辑框),原样展示', !card.editable && card.preview === '$ make build', JSON.stringify(card))
+      check('设备页审批卡:不给「本会话总是允许」,只剩批准 / 拒绝', card.buttons.length === 2 && !card.buttons.some((b) => b.includes('总是允许')), JSON.stringify(card.buttons))
+      check('设备页审批卡:写明只能原样批 / 拒', card.hint.includes('只能原样批准或拒绝'), card.hint)
+      // 引擎拒了(假引擎扮 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)→ 本地化原因上屏,卡片仍待批
+      await apage.locator('.approval-card .approval-actions .btn.primary').click()
+      let toast = ''
+      for (let i = 0; i < 20 && !toast.includes('远程连接下不能修改审批的参数'); i++) {
+        await apage.waitForTimeout(250)
+        toast = await apage.evaluate(() => [...document.querySelectorAll('.ntf')].map((n) => n.textContent || '').join(' | '))
+      }
+      check('审批被引擎拒绝 → 本地化原因上屏(不再静默吞掉)', toast.includes('远程连接下不能修改审批的参数'), toast.slice(0, 200))
+      await apage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-approval.png') })
+      // 放行后再点:发出去的是原样批准,不带 argsOverride
+      refuse = false
+      await apage.locator('.approval-card .approval-actions .btn.primary').click()
+      for (let i = 0; i < 20 && !stub.seen.approvals.length; i++) await apage.waitForTimeout(250)
+      const sent = stub.seen.approvals[0] || {}
+      check('批准原样发出:action=approve、不带 argsOverride', sent.action === 'approve' && sent.argsOverride === undefined, JSON.stringify(sent))
+      await apage.close()
+    } finally {
+      await handle2.close()
+      stub.close()
+    }
 
     if (pageErrors.length) console.log(`[pageerror ×${pageErrors.length}] 首条: ${pageErrors[0]}`)
   } finally {
