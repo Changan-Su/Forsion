@@ -126,6 +126,10 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
   })
 
   // ── Codex 终审 out1 #4:换过去、列 / stat、再换回来 —— 对象身份前后一致,旧实现照样吐出受保护目录的条目名 ──
+  // tick():时间戳粒度粗的文件系统(Linux 多数 fs 按 jiffy 取时间,约 1–10ms)上,同一个时钟刻内的改动 mtime / ctime 不变 ——
+  // 那是写明的残余(unitHostScope.ts withVerifiedUnitPath 注释)。这里测的是「跨了时钟刻的换回一定被识破」,
+  // 所以每次改目录前先让时钟走过一刻;macOS APFS 是纳秒时间戳,不等也识破(改前逻辑照样红,见负对照)。
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 25))
   /** ws/<name> 是个普通目录;swap() 换成指向 ~/.forsion 的软链,back() 换回原目录(每次调用都换,重试也照换)。 */
   async function dirRacer(name: string, target = join(home, '.forsion')): Promise<{ dir: string; swap: () => Promise<void>; back: () => Promise<void> }> {
     const dir = join(ws(), name)
@@ -133,7 +137,7 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
     await writeFile(join(dir, 'a.md'), 'x')
     return {
       dir,
-      swap: async () => { await rename(dir, dir + '.real'); await symlink(target, dir) },
+      swap: async () => { await tick(); await rename(dir, dir + '.real'); await symlink(target, dir) },
       back: async () => { await rename(dir, dir + '.link'); await rename(dir + '.real', dir) },
     }
   }
@@ -161,7 +165,7 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
     await writeFile(join(outer, 'inner', 'a.md'), 'x')
     await mkdir(join(home, '.forsion', 'inner'), { recursive: true })
     await writeFile(join(home, '.forsion', 'inner', 'secret.json'), '{}')
-    const swap = async (): Promise<void> => { await rename(outer, outer + '.real'); await symlink(join(home, '.forsion'), outer) }
+    const swap = async (): Promise<void> => { await tick(); await rename(outer, outer + '.real'); await symlink(join(home, '.forsion'), outer) }
     const back = async (): Promise<void> => { await rename(outer, outer + '.link'); await rename(outer + '.real', outer) }
     let listed: string[] | null = null
     const got = await withVerifiedUnitPath(join(outer, 'inner'), roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: swap, afterOpen: back })
@@ -186,7 +190,7 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, 'a.md'), 'x')
     let n = 0
-    const sibling = async (): Promise<void> => { if (n++ === 0) await writeFile(join(ws(), `busy-sibling-${Date.now()}.md`), 'y') }
+    const sibling = async (): Promise<void> => { if (n++ === 0) { await tick(); await writeFile(join(ws(), `busy-sibling-${Date.now()}.md`), 'y') } }
     expect(await withVerifiedUnitPath(dir, roots(), env, guard, true, (real) => readdir(real), { afterOpen: sibling })).toEqual(['a.md'])
     expect(n).toBe(2) // 第一次指纹不等(父目录 mtime 变了)→ 重试一次
   })
