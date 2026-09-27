@@ -11,8 +11,10 @@
  * 否则 main.js;整个文件当 setup(ctx) 的函数体跑(内层函数只有 ctx 一个形参,与宿主逐字同形);home 必须带 mount 函数
  * (ViewContribution.mount 必填,缺了宿主渲染「视图加载失败」);宿主给 async 注册 3 秒宽限(desktop builtins/agentSpaceSync),
  * 这里同样等到见着 home 或满 3 秒。ctx 只给 PluginContext 真有的顶层成员(读 desktop types.ts,读不到就宽松);agent Space
- * 不带 capabilities → 没有 ctx.system。浏览器全局(document/window/fetch…)经外层 with 作用域给深代理 —— 不能当形参注入,
- * 插件顶层 `const self = …` 在宿主合法、撞形参就成了 SyntaxError(Codex 09-27);定时器用真的(判完本进程就退,不留尾巴)。
+ * 不带 capabilities → 没有 ctx.system。浏览器全局(document/fetch…给深代理,window/self 就是 globalThis)**直接装在本进程的
+ * globalThis 上**,再用与宿主逐字相同的 new Function('ctx', code)(ctx) 求值 —— 于是顶层 `const self = …` 是合法遮蔽、
+ * strict 文件的 this 是 undefined、sloppy 的 this 是全局(=window),都与宿主一致(Codex 09-27 两轮:当形参注入会撞名,
+ * 套壳 .call(this) 会把 strict 的 this 弄错)。本进程一次性、判完即退,污染全局无妨;定时器用真的,不留尾巴。
  * ponytail: 嵌套一层仍宽松(`ctx.app.不存在的东西` 会被判真);mount 只查在不在、不调用(要调就得在 Node 里仿一整套 DOM)——
  * 这两类真撞上,由桌面的「没注册 home」回写 / 视图挂载失败兜住。
  */
@@ -75,14 +77,14 @@ const deep = () => new Proxy(function () {}, {
 });
 const ctx = new Proxy({}, { get: (_, k) => (k === 'registerView' ? (v) => { views.push(v); return deep(); } : !known || known.has(k) ? deep() : undefined) });
 const homeOf = () => views.find((v) => v?.id === 'home');
-const timers = { setTimeout, setInterval, clearTimeout, clearInterval, queueMicrotask, requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout };
-const g = new Proxy({}, { get: (_, k) => (k in timers ? timers[k] : deep()) }); // window.setTimeout 之类也得是真的
-const dom = { document: deep(), window: g, self: g, globalThis: g, location: deep(), navigator: deep(), localStorage: deep(), sessionStorage: deep(), fetch: deep(), getComputedStyle: deep(), matchMedia: deep(), CSS: deep(), HTMLElement: deep(), customElements: deep() };
-const scope = new Proxy(dom, { has: (t, k) => k in t, get: (t, k) => (k === Symbol.unscopables ? undefined : t[k]) });
+const browser = {
+  window: globalThis, self: globalThis, document: deep(), location: deep(), navigator: deep(), localStorage: deep(), sessionStorage: deep(),
+  fetch: deep(), getComputedStyle: deep(), matchMedia: deep(), CSS: deep(), HTMLElement: deep(), customElements: deep(),
+  requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout,
+};
+for (const [k, v] of Object.entries(browser)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
 let r;
-try {
-  r = new Function('ctx', '__scope', `with (__scope) { return (function (ctx) {\n${code}\n}).call(this, ctx) }`)(ctx, scope);
-} catch (e) { done({ built: true, ok: false, text: `求值抛错:${msg(e)}` }); }
+try { r = new Function('ctx', code)(ctx); } catch (e) { done({ built: true, ok: false, text: `求值抛错:${msg(e)}` }); }
 Promise.resolve(r).catch((e) => errors.push(e));
 const t0 = Date.now();
 while (!homeOf() && Date.now() - t0 < GRACE_MS) await new Promise((res) => setTimeout(res, 50));

@@ -55,6 +55,10 @@ describe('muse-space-verdict', { timeout: 30_000 }, () => {
   it('顶层声明与浏览器全局同名的变量是合法写法(注入不许撞形参)', () => {
     expect(verdict('shadow', "const fetch = 1\nconst self = this\nconst t = 'Muse ' + ctx.getLocale()\nctx.registerView({ id: 'home', title: t, mount() {} })").ok).toBe(true);
   });
+  it('this 与宿主同形:strict 是 undefined、sloppy 是全局(=window)', () => {
+    expect(verdict('strictthis', '"use strict"; const root = this || window; if (root.document) ctx.registerView({ id: "home", mount() {} })').ok).toBe(true);
+    expect(verdict('sloppythis', 'if (this.document && window === self) ctx.registerView({ id: "home", mount() {} })').ok).toBe(true);
+  });
   it('特性探测不存在的 ctx 成员不会被编成真的', () => {
     expect(verdict('featdet', "if (ctx.system || ctx.noSuchThing) ctx.registerView({ id: 'home', mount() {} })").ok).toBe(false);
     expect(verdict('featreal', "if (ctx.registerCommand) ctx.registerView({ id: 'home', mount() {} })").ok).toBe(true); // 真有的照常
