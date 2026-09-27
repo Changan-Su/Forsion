@@ -2756,7 +2756,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('mcp:read', async () => ({ mcpServers: await readMcpServers() }))
   ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any> }) => {
     if (!cfg || typeof cfg.mcpServers !== 'object') throw new Error('非法 MCP 配置')
-    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎改名兜底)
+    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎加载时跳过、状态报错)
     const reserved = newReservedMcpNames(cfg.mcpServers, await readMcpServers())
     if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
     await saveHomeSection('mcp', { mcpServers: cfg.mcpServers }) // 唯一真源:config.json mcp 段(chmod 600)
