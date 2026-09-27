@@ -62,6 +62,20 @@ describe('unitLocalRoots', () => {
     expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ v: 1, seeded: true })
   })
 
+  it('没先 ready() 就登记(互联没开时选择框照样登记):不拿空表盖掉已有的登记与种子标记;并发登记不互相覆盖', async () => {
+    const home = await tmpHome()
+    const file = join(home, 'reg.json')
+    for (const d of ['a', 'b', 'c']) await mkdir(join(home, d))
+    const first = createFileProjectRegistry(file)
+    await first.markSeeded([join(home, 'a')])
+    const fresh = createFileProjectRegistry(file) // 新进程:没调过 ready()
+    await Promise.all([fresh.add([join(home, 'b')]), fresh.add([join(home, 'c')])])
+    const again = createFileProjectRegistry(file)
+    await again.ready()
+    expect(again.seeded()).toBe(true)
+    expect([...again.roots()].sort()).toEqual([join(home, 'a'), join(home, 'b'), join(home, 'c')])
+  })
+
   it('种子:引擎没起 = 未完成(闸继续 503);连败到上限按空表完成,失败间隔内不重试', async () => {
     const home = await tmpHome()
     const reg = createFileProjectRegistry(join(home, 'reg.json'))

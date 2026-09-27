@@ -62,29 +62,33 @@ export interface LocalProjectRegistry {
 
 interface RegistryFile { v: 1; seeded: boolean; roots: string[] }
 
-/** 登记表落 userData 下的独立 JSON(0600,原子写)。 */
+/** 登记表落 userData 下的独立 JSON(0600,原子写)。add / markSeeded 自己先读盘、在串行队列里「读当前值 → 合并 → 写」:
+ *  没先 ready() 就登记(unit 互联没开时选择框照样会登记)不会拿空表盖掉已有的登记与种子标记,并发登记也不互相覆盖。 */
 export function createFileProjectRegistry(file: string): LocalProjectRegistry {
   let state: RegistryFile = { v: 1, seeded: false, roots: [] }
   let loaded: Promise<void> | null = null
   const queue = createSerialQueue()
-  const persist = (next: RegistryFile): Promise<void> => queue(async () => {
+  const ready = (): Promise<void> => (loaded ??= readFile(file, 'utf8').then((raw) => {
+    const j = JSON.parse(raw) as Partial<RegistryFile>
+    state = { v: 1, seeded: j.seeded === true, roots: Array.isArray(j.roots) ? j.roots.filter((x): x is string => typeof x === 'string') : [] }
+  }).catch(() => { /* 没有 / 坏了 = 空表、未种子(种子会补上) */ }))
+  const update = (fn: (cur: RegistryFile) => RegistryFile): Promise<void> => queue(async () => {
+    await ready()
+    const next = fn(state)
     await writePrivateJson(file, next)
     state = next
   })
-  const merge = (extra: string[]): string[] => {
-    const set = new Set(state.roots)
+  const merge = (cur: string[], extra: string[]): string[] => {
+    const set = new Set(cur)
     for (const p of extra) { const real = realOrNull(p); if (real) set.add(real) }
     return [...set]
   }
   return {
-    ready: () => (loaded ??= readFile(file, 'utf8').then((raw) => {
-      const j = JSON.parse(raw) as Partial<RegistryFile>
-      state = { v: 1, seeded: j.seeded === true, roots: Array.isArray(j.roots) ? j.roots.filter((x): x is string => typeof x === 'string') : [] }
-    }).catch(() => { /* 没有 / 坏了 = 空表、未种子(种子会补上) */ })),
+    ready,
     roots: () => state.roots,
     seeded: () => state.seeded,
-    add: async (paths) => { await loaded; await persist({ ...state, roots: merge(paths) }) },
-    markSeeded: async (paths) => { await loaded; await persist({ v: 1, seeded: true, roots: merge(paths) }) },
+    add: (paths) => update((cur) => ({ ...cur, roots: merge(cur.roots, paths) })),
+    markSeeded: (paths) => update((cur) => ({ v: 1, seeded: true, roots: merge(cur.roots, paths) })),
   }
 }
 
