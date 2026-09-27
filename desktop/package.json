@@ -215,6 +215,7 @@
     "check:shadowcontract": "node scripts/shadow-contract.check.cjs",
     "check:shadowsurface": "node scripts/shadow-surface.check.cjs",
     "check:calendarui": "node scripts/calendar-ui.check.cjs",
+    "check:astryxscope": "node scripts/astryx-scope.check.cjs",
     "check:todo": "node scripts/todo-view.check.cjs",
     "check:chattabs": "node scripts/chat-multitab.check.cjs",
     "check:newtab": "node scripts/newtab-open.check.cjs",
