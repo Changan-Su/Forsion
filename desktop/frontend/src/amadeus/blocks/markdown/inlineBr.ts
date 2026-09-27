@@ -15,6 +15,7 @@
 //
 // ⚠️ 只动**行内**:父节点是 root / blockquote / listItem 的 html 是块级 HTML,整行 `<br>` 在那里是「空段落」的
 //    编码(附录 A 既定的空行编码,softBreak.ts 的 stripEmptyLineBr / blankLineRemark 那套),原样交给 preset。
+//    段落里独占一行的 `<br>`(`a⏎<br />⏎b`)同理 —— 那是旧版(v3)空段落的落盘形,见 ownLine。
 // ⚠️ preserve-empty-line 插件本身**不能拆**:preset 段落序列化器按它的 id 判断要不要把空段落写成 `<br />`。
 // 仪器:npm run check:rtcorpus(d06.*)、inlineBr.test.ts。
 import { $prose, $remark } from '@milkdown/kit/utils'
@@ -32,6 +33,17 @@ const INLINE_BR_RE = /^<br\b[^<>]*>$/i
 /** 这些父节点下的 html 是块级 HTML,不归本插件管(整行 `<br>` = 空行编码)。 */
 const BLOCK_PARENTS = new Set(['root', 'blockquote', 'listItem', 'footnoteDefinition'])
 
+/** 段落里**独占一行**的 `<br>`(前后都是换行 / 段首段尾):旧版空段落的落盘记号(`a⏎<br />⏎b` = a、空段、b),
+ *  与写侧 stripEmptyLineBr「整行 `<br>` = 空行」同一口径 —— 照旧交给 preserve-empty-line,不当成换行(否则多出一个空段)。 */
+function ownLine(kids: MdNode[], i: number): boolean {
+  const prev = kids[i - 1], next = kids[i + 1]
+  // 真换行才算行界:硬换行(`\` / 两空格)是 break 节点;已被本插件转成 break 的 `<br>` 不算(`a<br><br>⏎b` 的第二个不是独占一行)。
+  const lineBreak = (n: MdNode): boolean => n.type === 'break' && !n.data?.amadeusBr
+  const endsLine = (n: MdNode): boolean => !n || lineBreak(n) || (n.type === 'text' && /\n[ \t]*$/.test(n.value ?? ''))
+  const startsLine = (n: MdNode): boolean => !n || lineBreak(n) || (n.type === 'text' && /^[ \t]*\n/.test(n.value ?? ''))
+  return endsLine(prev) && startsLine(next)
+}
+
 /** 就地把树里所有**行内** `<br…>` 换成带原文的 break 节点(导出供单测)。 */
 export function inlineBrToBreak(tree: MdNode): void {
   const walk = (node: MdNode): void => {
@@ -40,7 +52,7 @@ export function inlineBrToBreak(tree: MdNode): void {
     const inline = !BLOCK_PARENTS.has(node.type)
     for (let i = 0; i < kids.length; i++) {
       const k = kids[i]
-      if (inline && k?.type === 'html' && typeof k.value === 'string' && INLINE_BR_RE.test(k.value)) {
+      if (inline && k?.type === 'html' && typeof k.value === 'string' && INLINE_BR_RE.test(k.value) && !ownLine(kids, i)) {
         kids[i] = { type: 'break', data: { amadeusBr: k.value }, position: k.position }
         continue
       }

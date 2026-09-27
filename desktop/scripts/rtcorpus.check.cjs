@@ -80,6 +80,8 @@ const CASES = [
   { id: 'd06.table_cell_trailing', bucket: V, md: `${M}\n\n| k | v         |\n| - | --------- |\n| a | Alice<br> |\n` },
   { id: 'd06.heading', bucket: V, md: `${M}\n\n## 上<br>下\n\ntext\n` },
   { id: 'd06.soft_then_br', bucket: V, md: `${M}\n\nline<br>\nnext\n` },
+  // 段落里独占一行的 `<br>`:旧版(v3)空段落的落盘形,与写侧 stripEmptyLineBr 同口径 = 空行(不当换行,见 inlineBr.ts ownLine)。
+  { id: 'd06.own_line_in_para', bucket: W, why: '附录 A D-18:空行编码', md: `${M}\n\ntext\n<br />\nmore\n`, golden: `${M}Z\n\ntext\n\nmore\n` },
   { id: 'd06.block_br_line', bucket: W, why: '附录 A D-18:空行编码(整行 `<br>` = 空段落 = 真空行)', md: `${M}\n\n甲\n\n<br>\n\n乙\n`, golden: `${M}Z\n\n甲\n\n\n\n乙\n` },
 
   // ── R-01:公式里的「反斜杠 + 标点」(verify-rich-1/math*.cjs、verify-integrity-1/d02_math*.cjs)──

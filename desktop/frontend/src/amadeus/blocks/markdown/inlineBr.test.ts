@@ -17,6 +17,7 @@ describe('行内 <br> 逐字往返', () => {
     ['列表项', '* 项<br>续行\n'],
     ['标题', '## 上<br>下\n'],
     ['段末 <br>(preset 会掐尾随 hardbreak)', 'line<br>\nnext\n'],
+    ['连续两个,后一个贴着行尾', 'a<br><br>\nb\n'],
     ['单元格(规范宽度种子,只考 <br>)', '| k | v         |\n| - | --------- |\n| a | Alice<br> |\n'],
     ['单元格中间', '| 名称 | 说明         |\n| -- | ---------- |\n| a  | 第一行<br>第二行 |\n'],
   ])('%s', async (_label, md) => {
@@ -41,6 +42,14 @@ describe('行内 <br> 逐字往返', () => {
       const slice = DOMParser.fromSchema(schema).parseSlice(dom)
       b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
       expect(b.md()).toBe('a<br/>b\n')
+    } finally { await b.destroy() }
+  })
+
+  it('段落里独占一行的 <br />:仍是旧版空段落记号(v3 按行拆段 = a、空段、b;不多出空段)', async () => {
+    const b = await bootEditor('a\n<br />\nb\n', { v3: true })
+    try {
+      expect(b.view.state.doc.childCount).toBe(3)
+      expect(b.view.state.doc.child(1).content.size).toBe(0)
     } finally { await b.destroy() }
   })
 
