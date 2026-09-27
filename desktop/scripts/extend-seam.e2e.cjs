@@ -81,6 +81,9 @@ async function launch(home, stubUrl) {
       check('④ 主进程日志:随包来源缺失被记下(不是静默)', logs().includes('随包来源缺失'), logs().split('\n').filter((l) => l.includes('builtin')).join(' / ').slice(0, 200))
     } else {
       const bundledVersion = JSON.parse(fs.readFileSync(path.join(BUNDLED, 'manifest.json'), 'utf8')).version
+      // 本机 node_modules 里的那份必须就是 package.json 钉的版本:「声明 0.1、实装 0.2」会让这份台架假绿而干净安装红(Codex)
+      const pinned = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).dependencies['@forsion/extend']
+      check(`⓪ node_modules 里的 @forsion/extend@${bundledVersion} = package.json 钉的 ${pinned}`, bundledVersion === pinned)
       const run1 = await launch(home, stub.url)
       await run1.app.close().catch(() => {})
       const seeded = fs.existsSync(path.join(installed, 'SIGNATURE')) && JSON.parse(fs.readFileSync(path.join(installed, 'manifest.json'), 'utf8')).version === bundledVersion

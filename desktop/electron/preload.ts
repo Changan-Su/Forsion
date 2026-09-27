@@ -486,7 +486,8 @@ const CLOUD_KEYS: Record<string, string> = {
   connectMeta: 'connect:meta', connectList: 'connect:list', connectPublish: 'connect:publish', connectUnpublish: 'connect:unpublish',
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
 }
-const cloudPresent = new Set<string>(Array.isArray(ipcRenderer.sendSync('cloud:present')) ? ipcRenderer.sendSync('cloud:present') as string[] : [])
+const cloudPresentRaw: unknown = ipcRenderer.sendSync('cloud:present')
+const cloudPresent = new Set<string>(Array.isArray(cloudPresentRaw) ? (cloudPresentRaw as string[]) : [])
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent.has(channel)) delete (api as Record<string, unknown>)[k]
 
 contextBridge.exposeInMainWorld('tangu', api)

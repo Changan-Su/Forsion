@@ -45,6 +45,9 @@ export interface BuiltinBundle {
   platforms: readonly string[]
   /** 主进程半身:entry 相对包根;signingKey = 核 SIGNATURE 的 ed25519 公钥(SPKI PEM)。有 desktop 就必须验签。 */
   desktop?: { entry: string; signingKey: string }
+  /** 宿主要求的最低随包版本:宿主每删掉一块原生实现(账号面 / Connect …)就抬到提供那块的包版本,
+   *  release-content 与 builtinBundles.test 核「钉的版本 ≥ 它」—— 否则钉着旧版的干净构建会静默丢功能。 */
+  minVersion?: string
 }
 
 /** 随 App 内置的捆绑包清单(builtinBundles.json)。 */

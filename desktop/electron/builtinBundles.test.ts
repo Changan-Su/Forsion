@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { cmpVersion } from '@amadeus-shared/ipc'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 
 const desktop = resolve(__dirname, '..')
@@ -16,6 +17,8 @@ describe('builtinBundles.json 单一来源', () => {
   it('每个内置包:desktop/package.json 钉精确正式版;id 合法;platforms 非空;带主进程半身的钉了公钥与入口', () => {
     for (const b of BUILTIN_BUNDLES) {
       expect(pkg.dependencies?.[b.pkg], `${b.pkg} 不在 desktop/package.json dependencies`).toMatch(/^\d+\.\d+\.\d+$/)
+      // 宿主删掉了某块原生实现 → 钉的版本必须 ≥ 提供那块的包版本,否则干净构建静默丢功能(Codex:钉 0.1 配删了 Connect 的 main.ts)
+      if (b.minVersion) expect(cmpVersion(pkg.dependencies![b.pkg], b.minVersion), `${b.pkg} 钉的 ${pkg.dependencies![b.pkg]} 低于宿主要求的 ${b.minVersion}`).toBeGreaterThanOrEqual(0)
       expect(b.id).toMatch(/^[a-z0-9][a-z0-9-]{0,63}$/)
       expect(b.platforms.length).toBeGreaterThan(0)
       for (const p of b.platforms) expect(['darwin', 'win32', 'linux']).toContain(p)

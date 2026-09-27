@@ -88,6 +88,11 @@ for (const dir of resources) {
   for (const bundle of builtinBundles) {
     const pinned = pkg.dependencies?.[bundle.pkg] ?? ''
     check(/^\d+\.\d+\.\d+$/.test(pinned), `${bundle.pkg} dependency must be an exact release version, got "${pinned}"`)
+    // 宿主删掉某块原生实现后要求的最低包版本(builtinBundles.json minVersion):钉着旧版 = 安装包静默少功能
+    if (bundle.minVersion) {
+      const cmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0 }
+      check(cmp(pinned, bundle.minVersion) >= 0, `${bundle.pkg} pinned ${pinned} is below the ${bundle.minVersion} this desktop requires`)
+    }
     const bundleDir = path.join(dir, 'bundled-plugins', bundle.pkg.replace(/^@[^/]+\//, ''))
     const manifest = readJson(path.join(bundleDir, 'manifest.json'))
     const bundlePkg = readJson(path.join(bundleDir, 'package.json'))
