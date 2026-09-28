@@ -407,7 +407,14 @@ export function focusName(): string | null {
   return s.ref.kind === 'home' ? null : (s.name || translate('engine.target.defaultName'))
 }
 
-/** S2(R-19):整端切换,会话一律在焦点上。S4 起改为「绑定 ?? home」,永不回焦点。 */
+/** 会话所在的位置(纯数据,不铸目标、不要求宿主已装好 —— 审批卡等组件在单测里也要能判)。
+ *  S2(R-19):整端切换,会话一律在焦点上。S4 起改为「绑定 ?? home」,永不回焦点。 */
+export function refForSession(sid?: string): TargetRef {
+  void sid
+  return focusRef()
+}
+
+/** 会话所在的目标(S2 = 焦点目标,见 refForSession)。 */
 export function targetForSession(sid?: string): EngineTarget {
   void sid
   return focusTarget()

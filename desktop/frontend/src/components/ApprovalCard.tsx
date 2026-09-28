@@ -2,7 +2,7 @@
  * host-exec 审批卡片(approval_request 事件 → 内嵌聊天流;run_bash 命令可编辑后批准)。
  * 文件修改类工具批准前渲染 diff 预览(B4:破坏发生前可见)。已兑现(approval_result/410)置灰。
  *
- * 设备页(远端来路,window.tangu.remoteCaller):引擎拒收远端改参数(C9 → 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)、把「总允许」
+ * 远端来路(设备页 window.tangu.remoteCaller;P1-K6 起还有手机把整端切到「我的电脑」):引擎拒收远端改参数(C9 → 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)、把「总允许」
  * 降成单次批准,所以这里命令只读、不给「总允许」—— 否则改了命令点批准什么都不发生,点「总允许」实际只批一次(Codex 终审 F#2)。
  *
  * 来源行(P1 · K1):远程会话发起的审批在标题下写「来自远程会话 · 设备名」(调用方经 hub → 本机 unitWeb 验过)或按来路写
@@ -15,6 +15,8 @@ import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import { alwaysAllowWorks, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
+import { capsForRef } from '../services/engine/targetCaps'
+import { refForSession } from '../services/engine/targets'
 
 export { MODE_KEY }
 
@@ -32,15 +34,20 @@ registerMessages({
   'approval.remote.unknown': { zh: '来自远程会话', en: 'From a remote session' },
 })
 
-/** 本页驱动的是别的设备的引擎、且以远端身份(x-forsion-remote)调用:审批改参数 / 总允许都不兑现。 */
-export const isRemoteApprover = (): boolean => typeof window !== 'undefined' && !!window.tangu?.remoteCaller
+/** 这张审批卡所属会话的引擎是以远端身份被驱动的(设备页 x-forsion-remote / 手机经 hub 打「我的电脑」):
+ *  审批改参数 / 总允许都不兑现(C9)。P1-K6(INTEGRATION R-31):按会话所在的目标求值 ——
+ *  `targetCaps(targetForSession(sid)).remoteApprover`;设备页里 home 目标的 remoteApprover 仍按 window.tangu.remoteCaller。
+ *  不铸目标(refForSession + capsForRef),没装引擎宿主的单测里也能判。 */
+export const isRemoteApprover = (sessionId?: string): boolean => capsForRef(refForSession(sessionId)).remoteApprover
 
 export const ApprovalCard: React.FC<{
   req: ApprovalRequest
   onDecide: (action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>) => void
-}> = ({ req, onDecide }) => {
+  /** P1-K6:这张卡属于哪个会话(远端判定按会话所在的目标);缺省 = 焦点(S2 整端切换下两者相同)。 */
+  sessionId?: string
+}> = ({ req, onDecide, sessionId }) => {
   const { t } = useI18n()
-  const remote = isRemoteApprover()
+  const remote = isRemoteApprover(sessionId)
   const isBash = req.name === 'run_bash'
   const initialCmd = (() => {
     if (!isBash || !req.arguments) return ''

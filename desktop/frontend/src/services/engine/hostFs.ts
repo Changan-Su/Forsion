@@ -7,7 +7,7 @@
  * 错误语义同桌面:readHostFile 失败抛;listDir 失败 = [];statPath 失败 = null。
  */
 import type { EngineTarget } from './target'
-import { unitFetch } from './targets'
+import { focusRef, homeVia, targetForSession, unitFetch } from './targets'
 
 type Tangu = NonNullable<Window['tangu']>
 export interface HostFs {
@@ -74,4 +74,14 @@ export async function unitHostProfile(t: EngineTarget, signal?: AbortSignal): Pr
     const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null)
     return { homeDir: str(c.homeDir), defaultWorkspaceDir: str(c.defaultWorkspaceDir) }
   } catch { return null }
+}
+
+/** 会话作用域的 host 文件面(S2:会话所在 = 焦点)。焦点在 home 时不铸目标、不要求宿主已装好(组件单测也能渲染):
+ *  按端现算的来路 → 本机 / 设备页用 window.tangu 那三件,云端没有。 */
+export function hostFsForSession(sessionId?: string): HostFs | null {
+  if (focusRef().kind === 'home') {
+    const via = homeVia()
+    return via === 'local' || via === 'unitPage' ? windowHostFs() : null
+  }
+  return hostFs(targetForSession(sessionId))
 }

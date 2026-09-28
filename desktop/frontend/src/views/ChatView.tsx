@@ -666,6 +666,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             <ApprovalTray
               // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
               key={activeId ?? ''}
+              sessionId={activeId ?? undefined}
               items={pendingApprovals}
               onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
               onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}

@@ -95,19 +95,20 @@ export function ensureCatalog(key: TargetKey, opts: { force?: boolean } = {}): P
   const p = (async (): Promise<TargetCatalog | null> => {
     const [models, agents, meta, skills] = await Promise.allSettled([listModels(t), listAgents(t), getAgentsMeta(t), listSkills(t)])
     const base = catalogFor(key) ?? EMPTY()
-    const agentList = agents.status === 'fulfilled' ? agents.value : base.agents
-    const avatarPairs = await Promise.all(agentList.filter((a) => a.avatar).map(async (a) => [a.slug, await fetchAgentAvatar(t, a.slug).catch(() => null)] as const))
+    // 老引擎 / 异常回包可能缺字段:形状不对的单项按「没拉到」保留旧值
+    const agentList = agents.status === 'fulfilled' && Array.isArray(agents.value) ? agents.value : base.agents
+    const avatarPairs = await Promise.all(agentList.filter((a) => a?.avatar).map(async (a) => [a.slug, await fetchAgentAvatar(t, a.slug).catch(() => null)] as const))
     const next: TargetCatalog = {
-      models: models.status === 'fulfilled' ? models.value : base.models,
+      models: models.status === 'fulfilled' && models.value ? models.value : base.models,
       agents: agentList,
-      defaultAgentSlug: meta.status === 'fulfilled' ? (meta.value.defaultSlug || 'xyra') : base.defaultAgentSlug,
-      skills: skills.status === 'fulfilled' ? skills.value : base.skills,
+      defaultAgentSlug: meta.status === 'fulfilled' ? (meta.value?.defaultSlug || 'xyra') : base.defaultAgentSlug,
+      skills: skills.status === 'fulfilled' && Array.isArray(skills.value) ? skills.value : base.skills,
       avatars: Object.fromEntries(avatarPairs.filter(([, u]) => !!u) as Array<[string, string]>),
       at: Date.now(),
     }
     put(key, next)
     return next
-  })().finally(() => { inflight.delete(key) })
+  })().catch(() => catalogFor(key)).finally(() => { inflight.delete(key) })
   inflight.set(key, p)
   return p
 }

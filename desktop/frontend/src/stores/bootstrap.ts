@@ -9,7 +9,8 @@ import { openChangelogTab } from '../views/ChangelogView'
 import { setUnauthorizedHandler } from '../services/http'
 
 // 任意请求(含轮询/SSE)返回 401 → 集中触发登录过期处理(在 React 外注册一次)。
-setUnauthorizedHandler(() => useApp.getState().handleAuthExpired())
+// P1-K6 S2:带上是哪台引擎回的 —— 经 hub 的「我的电脑」回 401 绝不重启本机引擎 / 误登出(appStore.handleAuthExpired)。
+setUnauthorizedHandler((target) => useApp.getState().handleAuthExpired(target))
 
 export function useBootstrap(): void {
   const { t } = useI18n()

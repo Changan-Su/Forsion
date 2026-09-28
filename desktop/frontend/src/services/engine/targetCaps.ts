@@ -8,7 +8,7 @@
  *   cloud    —— web / 手机的 home(云网关):维持今天行为,没有 host FS / 外部引擎。
  *   unitPage —— 设备页的 home:今天的 window.tangu.remoteCaller / hostFiles 原样搬进来,其余维持今天行为。
  *   unit     —— 经 hub 的「我的电脑」:远端审批、有 host FS(那台电脑的真文件系统;名册 caps 接进来之前按乐观 true,
- *               读失败由调用方降级);硬删 / 回退 / 检查点恢复 / 整对象 PUT 配置 / 外部引擎都不可用;不能直链资源
+ *               读失败由调用方降级);硬删 / 回退 / 检查点恢复 / 整对象 PUT 配置 / 工作区删除 / 外部引擎都不可用;不能直链资源
  *               (隧道 cookie 对 https://localhost 是跨站,<img src> 不带凭据)。
  */
 import type { EngineTarget, TargetRef, TargetVia } from './target'
@@ -27,6 +27,8 @@ export interface TargetCaps {
   checkpointRestore: boolean
   /** PUT /agent/sessions/:id/config;false → 一律 PATCH */
   putSessionConfig: boolean
+  /** POST /agent/workspace/delete */
+  workspaceDelete: boolean
   /** /agent/engines*(外部引擎 ACP) */
   externalEngines: boolean
   /** workspaceDownloadUrl 可直接当 <img src>;false → 缩略图 / 预览一律 blob 拉取 */
@@ -34,7 +36,7 @@ export interface TargetCaps {
 }
 
 const ALL: Omit<TargetCaps, 'remoteApprover' | 'hostFs'> = {
-  hardDeleteSession: true, rewind: true, checkpointRestore: true, putSessionConfig: true, externalEngines: true, directAssetUrl: true,
+  hardDeleteSession: true, rewind: true, checkpointRestore: true, putSessionConfig: true, workspaceDelete: true, externalEngines: true, directAssetUrl: true,
 }
 
 export function capsForVia(via: TargetVia): TargetCaps {
@@ -50,7 +52,7 @@ export function capsForVia(via: TargetVia): TargetCaps {
     case 'unit':
       return {
         remoteApprover: true, hostFs: true,
-        hardDeleteSession: false, rewind: false, checkpointRestore: false, putSessionConfig: false, externalEngines: false, directAssetUrl: false,
+        hardDeleteSession: false, rewind: false, checkpointRestore: false, putSessionConfig: false, workspaceDelete: false, externalEngines: false, directAssetUrl: false,
       }
   }
 }
