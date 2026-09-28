@@ -20,6 +20,8 @@ import { VaultIndex } from './vaultIndex'
 import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
+import { translate } from '@/i18n'
+import '@webamadeus/bridgeMessages' // amxbridge.* 文案与 web 桥共用一份(G2-14)
 
 const ROOT = '/vault' // 虚拟绝对根;实际落 Capacitor Data/vault/
 const LAST_PAGE_KEY = 'amadeus_last_page'
@@ -144,13 +146,13 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       const dir = path.dirname(oldPath)
       let base = newName.trim().replace(/[\\/]/g, '')
-      if (!base) throw new Error('页面名不能为空')
+      if (!base) throw new Error(translate('amxbridge.pageNameEmpty'))
       if (base.toLowerCase().endsWith('.md')) base = base.slice(0, -3)
       const newPath = dir === '.' ? `${base}.md` : `${dir}/${base}.md`
       if (newPath === oldPath) {
         return { newPath: oldPath, page: await loadPage(vault.pageIO(oldPath), oldPath, nowIso()) }
       }
-      if (await vault.pathExists(newPath)) throw new Error('目标页面已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.pageExists'))
       const pagesBefore = await vault.listPages() // 引用重写要的「操作前」快照,须在移动前取
       await savePage(vault.pageIO(oldPath), oldPath, manifest, { contents })
       await vault.moveEntry(oldPath, newPath)
@@ -177,7 +179,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
       if (newPath === pagePath) return pagePath
-      if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.fileExistsAtTarget'))
       const pagesBefore = newPath.endsWith('.md') ? await vault.listPages() : []
       await vault.moveEntry(pagePath, newPath)
       if (newPath.endsWith('.md')) {
@@ -191,22 +193,22 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     createFolder: async (parentFolder, name) => {
       await ensureVault()
       const clean = name.trim().replace(/[\\/]/g, '')
-      if (!clean) throw new Error('文件夹名不能为空')
+      if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parent = parentFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const rel = parent ? `${parent}/${clean}` : clean
-      if (await vault.pathExists(rel)) throw new Error('同名文件夹已存在')
+      if (await vault.pathExists(rel)) throw new Error(translate('amxbridge.folderExists'))
       await vault.makeDir(rel)
       return rel
     },
     renameFolder: async (folderPath, newName) => {
       await ensureVault()
       const clean = newName.trim().replace(/[\\/]/g, '')
-      if (!clean) throw new Error('文件夹名不能为空')
+      if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parentDir = path.dirname(folderPath)
       const parentRel = parentDir === '.' ? '' : parentDir
       const newPath = parentRel ? `${parentRel}/${clean}` : clean
       if (newPath === folderPath) return folderPath
-      if (await vault.pathExists(newPath)) throw new Error('同名文件夹已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.folderExists'))
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(folderPath, newPath)
       await index.build()
@@ -218,12 +220,12 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       const src = folderPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const name = src.split('/').pop()
-      if (!name) throw new Error('文件夹路径不能为空')
+      if (!name) throw new Error(translate('amxbridge.folderPathEmpty'))
       const dst = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
-      if (dst === src || dst.startsWith(`${src}/`)) throw new Error('不能移动到自身内部')
-      if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件夹')
+      if (dst === src || dst.startsWith(`${src}/`)) throw new Error(translate('amxbridge.moveIntoSelf'))
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.folderExistsAtTarget'))
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(src, newPath)
       await index.build()
@@ -341,11 +343,11 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       const dir = path.dirname(oldPath)
       let base = newBaseName.trim().replace(/[\\/]/g, '')
-      if (!base) throw new Error('笔记名不能为空')
+      if (!base) throw new Error(translate('amxbridge.noteNameEmpty'))
       if (base.toLowerCase().endsWith('.md')) base = base.slice(0, -3)
       const newPath = dir === '.' ? `${base}.md` : `${dir}/${base}.md`
       if (newPath === oldPath) return oldPath
-      if (await vault.pathExists(newPath)) throw new Error('目标笔记已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.noteExists'))
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
       index.remove(oldPath)
@@ -359,11 +361,11 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       const oldRel = norm(oldPath)
       let base = newBaseName.trim().replace(/[\\/]/g, '')
       if (base.toLowerCase().endsWith('.db')) base = base.slice(0, -3)
-      if (!base) throw new Error('名称不能为空')
+      if (!base) throw new Error(translate('amxbridge.nameEmpty'))
       const dir = path.dirname(oldRel)
       const newPath = dir === '.' ? `${base}.db` : `${dir}/${base}.db`
       if (newPath === oldRel) return { newPath, rewrittenPages: [] }
-      if (await vault.pathExists(newPath)) throw new Error('目标文件已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.fileExists'))
       await vault.moveEntry(oldRel, newPath)
       // title 同步:name = 新 basename。parseDb 失败(损坏文件)只移动不动内容。
       try {

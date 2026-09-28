@@ -24,6 +24,8 @@ import { IPC } from '@amadeus-shared/ipc'
 import type { AmadeusApi } from '@amadeus-shared/ipc'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import { LOCAL_ONLY_CODE, localOnlyMessage } from '@/services/localOnly'
+import { translate } from '@/i18n'
+import './bridgeMessages' // amxbridge.* 文案(G2-14)
 
 export interface UnitBridgeCfg {
   /** 设备页基址(尾斜杠;局域网根或隧道子路径 —— 相对 base 两用)。 */
@@ -89,16 +91,16 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
         signal: ctrl.signal,
       })
     } catch (e) {
-      throw new Error(ctrl.signal.aborted ? '设备请求超时,请检查与对方设备的连接' : `设备不可达:${e instanceof Error ? e.message : e}`)
+      throw new Error(ctrl.signal.aborted ? translate('amxbridge.deviceTimeout') : translate('amxbridge.deviceUnreachable', { msg: e instanceof Error ? e.message : String(e) }))
     } finally {
       clearTimeout(timer)
     }
-    if (res.status === 401) { cfg.onAuthError(); throw new Error('连接权限已被对方移除') }
-    if (res.status === 413) throw new Error('内容过大:server 中转通道上限 10MB,同一局域网内直连不受限')
+    if (res.status === 401) { cfg.onAuthError(); throw new Error(translate('amxbridge.deviceRevoked')) }
+    if (res.status === 413) throw new Error(translate('amxbridge.deviceTooLarge'))
     const body = (await res.json().catch(() => null)) as { ok?: boolean; result?: unknown; error?: string; code?: string } | null
     if (res.status === 403 && body?.code === LOCAL_ONLY_CODE) throw new Error(localOnlyMessage()) // 不可逆删除只许本机
-    if (!res.ok || !body) throw new Error(`设备端错误(HTTP ${res.status})`)
-    if (!body.ok) throw new Error(body.error || '设备端调用失败')
+    if (!res.ok || !body) throw new Error(translate('amxbridge.deviceHttpError', { status: res.status }))
+    if (!body.ok) throw new Error(body.error || translate('amxbridge.deviceCallFailed'))
     return dec(body.result) as T
   }
 
@@ -188,7 +190,8 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   if (!cfg.browserStorage) await refreshAssetToken() // Published shells have no shared vault or event stream.
   setAssetUrlBuilder((ref) => assetUrl(ref))
 
-  const notSupported = (what: string) => (): never => { throw new Error(`${what}:请在对方设备上操作`) }
+  // what 是 thunk:抛出那一刻才按当前界面语言取词(模块装配时求值会定格在装配那一刻的语言)。
+  const notSupported = (what: () => string) => (): never => { throw new Error(translate('amxbridge.remoteOnly', { what: what() })) }
 
   return {
     openVault: async () => null, // 换库是 B 自己的事,远程页不弹对方的目录选择框
@@ -250,10 +253,10 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     readPluginData: (pluginId) => rpc(IPC.pluginDataRead, [pluginId]),
     writePluginData: (pluginId, text) => rpc(IPC.pluginDataWrite, [pluginId, text]),
     listPlugins: async () => [], // 设备页插件清单走 /unit/plugins(pluginStore.resolveExternalSources)
-    openPluginsFolder: notSupported('打开插件文件夹'),
-    scaffoldSamplePlugin: notSupported('创建示例插件'),
-    uninstallPlugin: notSupported('卸载插件'),
-    revealInFileManager: notSupported('在文件管理器中显示'),
+    openPluginsFolder: notSupported(() => translate('amxbridge.op.openPluginsFolder')),
+    scaffoldSamplePlugin: notSupported(() => translate('amxbridge.op.scaffoldSamplePlugin')),
+    uninstallPlugin: notSupported(() => translate('amxbridge.op.uninstallPlugin')),
+    revealInFileManager: notSupported(() => translate('amxbridge.op.reveal')),
     readDatabase: (pagePath, ref) => rpc(IPC.dbRead, [pagePath, ref]),
     writeDatabase: (dbPath, data) => rpc(IPC.dbWrite, [dbPath, data]),
     writeDatabaseCas: (dbPath, data, baseVersion) => rpc(IPC.dbWriteCas, [dbPath, data, baseVersion]),
