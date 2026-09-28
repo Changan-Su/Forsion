@@ -7,6 +7,9 @@
  * 判据:
  *   1 默认开:ribbon 有造物图标,点进去主区是造物栅格
  *   2 托管根里的项目会成为一件作品:卡片在场、id 是 `p_<12hex>`、名字 = 文件夹名、落在「网页应用」组
+ *   2b 原地加入托管根外的文件夹(真 IPC products:register):身份写进它自己的 sidecar、出现在栅格;
+ *      只带 sidecar 没在本机登记的文件夹**不出现**(sidecar 只说明它是谁,授权住宿主家目录)
+ *   2c 外部造物的菜单是「从造物移除」;移除 = 只取消登记,文件夹与 sidecar 原样留着
  *   3 点「打开」开出 product 视图,guest 的源是令牌根 `http://<32hex>.localhost:<port>/`
  *     —— 作品跑在**不可猜的真 http 源**上,不是 file://(fetch 在不透明源里一律被拦)
  *   4 关掉:ribbon 图标没了、栅格不再可见、活动 Space 已切走
@@ -32,6 +35,9 @@ const path = require('path')
 const { _electron: electron } = require('playwright-core')
 
 const ROOT = path.join(__dirname, '..')
+// macOS:一个 Electron 实例被强杀后,系统会在下一次启动时先弹「是否恢复窗口」的模态框(崩溃历史,所有未打包的 Electron 共用 com.github.Electron),
+// ready 永远等不到、firstWindow 超时。按进程关掉窗口恢复(Cocoa 的参数域,只作用于这个进程),台架不受上一次被杀的实例连累。
+const NO_RESTORE = process.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : []
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-artificial-'))
 const UD = path.join(home, 'userdata') // 同一份 user-data-dir = 同一份 localStorage(开关要跨断言存活)
 const PROJECTS = path.join(home, 'Forsion-Dev', 'Project') // = defaultWorkspaceDir()/Project(dev)
@@ -52,6 +58,15 @@ const PLUGIN = path.join(PROJECTS, 'word-counter-plugin')
 fs.mkdirSync(PLUGIN, { recursive: true })
 fs.writeFileSync(path.join(PLUGIN, 'manifest.json'), JSON.stringify({ id: 'word-counter', name: 'Word counter', version: '0.1.0', apiVersion: 1, main: 'main.js' }))
 fs.writeFileSync(path.join(PLUGIN, 'main.js'), 'return () => {}\n')
+
+// 托管根之外的两个文件夹:一个原地加入造物;另一个自带一份 sidecar(像克隆 / 解压来的,放在老版本的根目录位置)但没在本机登记 —— 不该出现。
+const EXTERNAL = path.join(home, 'code', 'Weather board')
+fs.mkdirSync(EXTERNAL, { recursive: true })
+fs.writeFileSync(path.join(EXTERNAL, 'index.html'), '<!doctype html><meta charset="UTF-8"><title>Weather board</title><h1>Weather board</h1>')
+const NOT_ADDED = path.join(home, 'code', 'Not added')
+fs.mkdirSync(NOT_ADDED, { recursive: true })
+fs.writeFileSync(path.join(NOT_ADDED, 'index.html'), '<!doctype html><meta charset="UTF-8"><title>Not added</title>')
+fs.writeFileSync(path.join(NOT_ADDED, '.forsion-product.json'), JSON.stringify({ version: 1, id: 'p_0123456789ab', createdAt: 1, name: 'Not added' }))
 
 const SHOT_DIR = process.env.SHOT_DIR ? path.resolve(process.env.SHOT_DIR) : null
 /** 真实截图走原生合成器(CDP 截图在 Retina 上会把 webview 表面画偏,同 coding-studio.e2e 的 shoot)。 */
@@ -138,7 +153,7 @@ const SNAP = `(() => {
 
 async function boot() {
   const app = await electron.launch({
-    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
+    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT, ...NO_RESTORE],
     cwd: ROOT,
     // HOME 覆写见文件头的⚠️;TANGU_BACKEND_URL 指向死端口 = 不连任何引擎(本题不需要模型)。
     env: { ...process.env, HOME: home, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
@@ -186,6 +201,39 @@ async function main() {
 
     // 夹具卡没出来就直接抛:否则下面的点击要等满选择器超时,最后报成一句没有诊断价值的「流程失败」。
     if (!card) throw new Error(`栅格里没有夹具作品「${FIXTURE_NAME}」:${JSON.stringify(s1.cards)} state=${s1.state}`)
+
+    // ── 2b / 2c 原地加入的外部造物(真 IPC,真登记表 —— HOME 已覆写到夹具目录)──
+    const EXT = fs.realpathSync(EXTERNAL)
+    const reg = await win.evaluate((dir) => window.tangu.productsRegister(dir, dir, false), EXT)
+    const isExt = await win.evaluate((dir) => window.tangu.productsIsCreation(dir), EXT)
+    const isFake = await win.evaluate((dir) => window.tangu.productsIsCreation(dir), fs.realpathSync(NOT_ADDED))
+    await win.click('[data-action="refresh"]').catch(() => {})
+    await win.waitForSelector(`[data-artificial-card][data-product-id="${reg && reg.product && reg.product.id}"]`, { timeout: 10_000 }).catch(() => {})
+    const s1b = await win.evaluate(SNAP)
+    const extCard = s1b.cards.find((c) => reg && reg.product && c.id === reg.product.id)
+    check(
+      '2b 原地加入外部文件夹:登记成功、身份写进它自己的 .tangu/.forsion-product.json(根目录不留)、出现在栅格(网页组);只带 sidecar 没登记的不出现',
+      !!reg && reg.ok && reg.dir === EXT && fs.existsSync(path.join(EXT, '.tangu', '.forsion-product.json')) && !fs.existsSync(path.join(EXT, '.forsion-product.json')) && isExt === true && isFake === false
+        && !!extCard && extCard.group === 'web' && !s1b.cards.some((c) => c.name === 'Not added'),
+      JSON.stringify({ reg, isExt, isFake, cards: s1b.cards.map((c) => c.name) }),
+    )
+    await shoot(app, win, 'grid-external-zh-light')
+    let items = []
+    if (extCard) {
+      await win.click(`[data-artificial-card][data-product-id="${extCard.id}"] .art-card-more`)
+      items = await win.locator('[role="menu"] [role="menuitem"]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')))
+      await win.evaluate(() => { window.confirm = () => true }) // Electron 的 confirm 是原生弹框,台架替它点「好」
+      await win.locator('[role="menu"] [role="menuitem"][aria-label="从造物移除"]').click({ timeout: 3000 }).catch(() => {})
+      await win.waitForTimeout(1500)
+    }
+    const s1c = await win.evaluate(SNAP)
+    const stillCreation = await win.evaluate((dir) => window.tangu.productsIsCreation(dir), EXT)
+    check(
+      '2c 外部造物的菜单是「从造物移除」(不是移到废纸篓);移除 = 只取消登记:文件夹与 sidecar 都在,栅格里没了',
+      items.includes('从造物移除') && !items.includes('移到废纸篓') && fs.existsSync(path.join(EXT, 'index.html')) && fs.existsSync(path.join(EXT, '.tangu', '.forsion-product.json'))
+        && !s1c.cards.some((c) => extCard && c.id === extCard.id) && stillCreation === false,
+      JSON.stringify({ items, cards: s1c.cards.map((c) => c.name), stillCreation }),
+    )
     await win.click(`[data-artificial-card][data-product-id="${card.id}"] [data-action="open"]`)
     await win.waitForSelector('webview[data-product-id]', { timeout: 20_000 }).catch(() => {})
     await win.waitForTimeout(2500) // guest attach + 首帧

@@ -1,6 +1,7 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
+import { GitSettingsSection } from './GitSettingsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
 /**
@@ -1108,6 +1109,8 @@ export const SettingsModal: React.FC<{
       ['g-conn', t('settings.sub.connection')],
       // 本机运行环境单列(原先埋在「连接」页最底部,2.11.4 用户找不到);条件与下方正文块一致。
       ...(isDesktop && stored ? [['g-runtime', t('settings.runtime.title')] as [string, string]] : []),
+      // Git 设置写的是引擎 config.json;连着云端 / 别人的引擎时组件自己显示只读说明,不会是白板。
+      ...(isDesktop && stored ? [['g-git', 'Git'] as [string, string]] : []),
       ...(isDesktop && cloudAccount ? [['g-forsion', 'Forsion'] as [string, string]] : []),
       ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
     ],
@@ -1824,6 +1827,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
+                {tab === 'general' && activeSub === 'g-git' && isDesktop && stored && <GitSettingsSection cfg={p.cfg} />}
                 {tab === 'general' && isDesktop && cloudAccount && activeSub === 'g-forsion' && (
                   <>
                     {/* 账号 */}

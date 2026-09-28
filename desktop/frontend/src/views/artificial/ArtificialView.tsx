@@ -99,11 +99,11 @@ export function ArtificialView() {
 
   const trash = async (p: ProductSummary): Promise<void> => {
     const remove = window.tangu?.productsTrash
-    // 不可逆动作先确认:整个项目文件夹都会走(文案里说清去了系统废纸篓)。
-    if (!remove || !window.confirm(t('artificial.trash.confirm', { name: p.name }))) return
+    // 先确认:托管的整个项目文件夹都会走(文案里说清去了系统废纸篓);原地加入的外部造物只取消登记,文件夹不动(文案同样说清)。
+    if (!remove || !window.confirm(t(p.external ? 'artificial.remove.confirm' : 'artificial.trash.confirm', { name: p.name }))) return
     setBusy(p.id)
     try {
-      await remove(p.id)
+      await remove(p.id, { action: p.external ? 'unregister' : 'trash', dirId: p.dirId })
       await load()
     } catch (e) {
       toast('artificial.toast.trashFailed', { detail: detail(e) }, true)
@@ -122,7 +122,7 @@ export function ArtificialView() {
       ...(row.canShortcut && window.tangu?.productsShortcut ? [{ id: 'shortcut', label: t('artificial.action.shortcut'), icon: <MonitorDown size={14} />, onSelect: () => { void addShortcut(p) } }] : []),
       ...(window.tangu?.revealHostPath ? [{ id: 'reveal', label: t('artificial.action.reveal'), icon: <FolderOpen size={14} />, onSelect: () => { void window.tangu?.revealHostPath?.(p.root) } }] : []),
       ...(window.tangu?.productsUpdate ? [{ id: 'rename', label: t('artificial.action.rename'), icon: <Pencil size={14} />, onSelect: () => { void rename(p) } }] : []),
-      ...(window.tangu?.productsTrash ? [{ id: 'trash', label: t('artificial.action.trash'), icon: <Trash2 size={14} />, danger: true, onSelect: () => { void trash(p) } }] : []),
+      ...(window.tangu?.productsTrash ? [{ id: 'trash', label: t(p.external ? 'artificial.action.remove' : 'artificial.action.trash'), icon: <Trash2 size={14} />, danger: true, onSelect: () => { void trash(p) } }] : []),
     ]
     const mainDisabled = disabled || (!row.canLaunch && !canEdit)
     return (

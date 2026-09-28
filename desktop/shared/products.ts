@@ -5,6 +5,12 @@ export type ProductKind = 'web' | 'plugin' | 'unknown'
 
 /** 项目目录里的身份文件名。id 在文件里不在路径里 → 改文件夹名 / 挪位置,快捷方式与稳定源都不死。 */
 export const PRODUCT_SIDECAR = '.forsion-product.json'
+/** 新铸的身份写这里 —— 项目里 Forsion 的东西都在 `.tangu/`(AGENTS.md、项目技能、计划、图标)。 */
+export const PRODUCT_SIDECAR_NEW = `.tangu/${PRODUCT_SIDECAR}`
+/** 身份文件的位置(相对项目根,正斜杠),也是**读序**:老版本放在根目录的那份在就以它为准 —— 老版本只认它,新旧版本对同一个文件夹
+ *  必须说同一个 id;`.tangu/` 又是用户 / agent 常在项目之间整个拷来拷去的目录(模板、技能),拷进来的身份不能盖过项目自己的。
+ *  其次 `.tangu/`,再兼容 `.forsion/`。已有的几份一律收敛成同一个身份,**不搬不删**。 */
+export const PRODUCT_SIDECAR_PATHS = [PRODUCT_SIDECAR, PRODUCT_SIDECAR_NEW, `.forsion/${PRODUCT_SIDECAR}`] as const
 
 /** 插件的**生效 id**:清单里的 id 合法(kebab-case)就用它,否则退回目录名,两者都不合法 → null。
  *  产物注册表与插件装载器(electron/amadeus/ipc.ts 的 pluginIdOf)**必须是同一条规则** —— 两边各判各的时,
@@ -30,6 +36,10 @@ export interface ProductSummary {
   updatedAt: number
   /** 存在 `.forsion-connect.json` = 经 Forsion Connect 发布过。 */
   published: boolean
+  /** 原地加入造物的外部文件夹(不在托管根里):从造物移除 = 取消登记,文件夹不动。 */
+  external?: boolean
+  /** 列出这一刻产物目录的身份(`dev:ino`)。删除时连同用户确认的动作一起交回宿主:期间目录被换过(同一个 id 落到了别的文件夹)就拒绝。 */
+  dirId?: string
   /** kind==='plugin':manifest.json 里的插件 id。 */
   pluginId?: string
   /** kind==='plugin':已选择「在 Forsion 中加载」(开发态加载,非隔离)。 */
@@ -56,10 +66,13 @@ export interface GitHistoryStatus {
   dirty: boolean
 }
 
-/** History 面板用:writable = 本机有 git、项目在托管根(~/Forsion/Project)下、且仓是我方的或尚未建仓。
- *  根外导入的项目一律只读 —— 宿主绝不在用户随手导入的目录里 `git init` / `add -A`。 */
+/** History 面板用:writable = 本机有 git、项目是造物(托管根下 / 原地加入的外部文件夹)、且仓是我方的或尚未建仓。
+ *  不是造物的目录一律只读 —— 宿主绝不在用户随手打开的目录里 `git init` / `add -A`。 */
 export interface GitPanelStatus extends GitHistoryStatus {
   writable: boolean
+  /** 一轮 agent 跑完宿主会不会自动存一版。托管根里的 = writable;外部造物只在我方建的仓里自动存
+   *  (还没仓时要用户手动保存第一个版本,宿主绝不替用户在他的文件夹里自动 git init)。缺省按 writable。 */
+  auto?: boolean
 }
 
 export interface GitVersion {

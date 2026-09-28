@@ -128,9 +128,10 @@ registerMessages({
   'studio.history.showInstall': { zh: '查看安装方式', en: 'Show how to install' },
   'studio.history.gitWhy': { zh: '编码工作室用 Git 记录项目版本：装好之后，每轮 AI 改动都会自动存一版，你也可以随时保存命名版本。编码工作室的其他功能都不需要它。', en: 'Coding Studio uses git to keep project versions: once it is installed, every agent run is saved automatically and you can save named versions yourself. Nothing else in Coding Studio needs it.' },
   'studio.history.firstVersionNote': { zh: '保存第一个版本会在项目文件夹里创建 Git 仓库（.git）。', en: 'Saving the first version creates a git repository (.git) in the project folder.' },
+  'studio.history.enableNote': { zh: '这个文件夹还没有版本历史。保存第一个版本会在里面创建 Git 仓库（.git），之后每轮 AI 改动都会自动存一版。', en: 'This folder has no version history yet. Saving the first version creates a git repository (.git) in it; after that, every AI turn is saved as a version automatically.' },
   'studio.history.readonlyForeign': { zh: '这个项目用的是它自己的 Git 仓库；Forsion 只展示历史，不做任何改动。', en: 'This project uses its own git repository; Forsion shows its history but does not change it.' },
   'studio.history.readonlyNested': { zh: '这个项目位于另一个 Git 仓库内部。', en: 'This project lives inside another git repository.' },
-  'studio.history.readonlyOutside': { zh: '只有放在 Forsion 项目文件夹里的项目，版本才由 Forsion 管理。', en: 'Version history is only managed for projects inside the Forsion projects folder.' },
+  'studio.history.readonlyOutside': { zh: '只有加入造物的项目，版本才由 Forsion 管理。', en: 'Version history is only managed for projects in Creations.' },
   'studio.history.readonlyBridge': { zh: '当前版本的应用只能查看版本历史；保存与恢复需要更新到新版本。', en: 'This app version can only show version history; saving and restoring need a newer version.' },
   // —— 下面三条是**落盘产物命名**:它们会变成永久的 git 提交标题,所以在写入那一刻按当前界面语言求值。——
   'studio.history.untitled': { zh: '未命名版本', en: 'Untitled version' },

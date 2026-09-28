@@ -513,6 +513,22 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
  *  只有服务端按键合并才管得住,另开。 */
 const approvalWrites = new Map<string, { issued: number; pending: number; mode: AgentConfig['approvalMode']; stored: AgentConfig['approvalMode']; err: Error | null }>()
 /** 会话配置落库一律按键合并:只发这次改的键(api.patchSessionConfig);老引擎没有 PATCH → 回落整对象 PUT(本地最新整对象)。 */
+/** 「进造物」挪会话与发送互斥:挪的一方(作品卡从点下到挪完,含复制那几秒)与发送的一方(从进入 send 到 run 起来 / 失败,
+ *  中间可能在传附件)谁先占住谁先做,另一方不动手 —— 否则这一轮带着旧目录的配置起跑,会话却已经指到新目录。 */
+const movingSessions = new Set<string>()
+const sendingSessions = new Map<string, number>()
+/** 占住这条会话来挪;它正在发送,或已有一张作品卡在挪 → false(调用方什么都别做)。 */
+export const lockSessionMove = (sid: string): boolean => {
+  if (movingSessions.has(sid) || sendingSessions.has(sid)) return false
+  movingSessions.add(sid)
+  return true
+}
+export const unlockSessionMove = (sid: string): void => { movingSessions.delete(sid) }
+const markSending = (sid: string, delta: 1 | -1): void => {
+  const n = (sendingSessions.get(sid) ?? 0) + delta
+  if (n > 0) sendingSessions.set(sid, n); else sendingSessions.delete(sid)
+}
+
 function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
   return api.patchSessionConfig(useApp.getState().cfg, sid, patch, () => useApp.getState().configBySession[sid] || {})
 }
@@ -728,11 +744,17 @@ export interface AppState {
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
+  /** 把一条会话挪进另一个本地项目文件夹(「进造物」):改 project_path / name + 这条会话的工作目录,两处都落盘才算挪过去。
+   *  locked = 私聊 / 独立团队(工作目录被身份锁住)与 Chat 预设(没有本机文件工具);running = 还在跑(agent 正往原目录写);
+   *  failed = 保存失败(已回滚并提示)。非 moved 时调用方改为在那个文件夹开新对话。 */
+  moveSessionToProject(sessionId: string, dir: string, name: string): Promise<'moved' | 'locked' | 'running' | 'failed'>
   /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
   /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
   removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
+  /** send 的本体;只给 send 用(send 在外面套了「作品卡挪会话」互斥,直接调它会绕过)。 */
+  sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
@@ -1480,7 +1502,7 @@ export const useApp = create<AppState>((set, get) => ({
             const msg = (st.messagesBySession[sessionId] || []).find((m) => m.id === assistantId)
             // 摘掉自动化建议围栏再念:手动朗读走的是 EditorialMessage 传来的 body,这里不摘就会
             // 把「forsion-suggest」和反引号念出来 —— 同一条消息两个入口读出两样东西。
-            const spoken = msg?.content ? splitSuggestions(msg.content).text : ''
+            const spoken = msg?.content ? splitSuggestions(msg.content, { kinds: ['suggest', 'task', 'creation'] }).text : ''
             if (spoken.trim()) {
               speakMessage(st.cfg, dc, assistantId, spoken).catch((e: any) => {
                 if (e?.message !== 'EMPTY') get().toast(get().tr('tts.failed', { e: e?.message || e }), true)
@@ -2333,6 +2355,45 @@ export const useApp = create<AppState>((set, get) => ({
     catch (e: any) { get().toast(t('app.wsRenameFail', { e: e?.message || e }), true) }
   },
 
+  moveSessionToProject: async (sessionId, dir, name) => {
+    const cur = get().sessions.find((x) => x.id === sessionId)
+    if (!cur) return 'failed'
+    const cfg = get().configBySession[sessionId] || cur.agent_config || {}
+    if (cfg.soloAgentSlug || cfg.teamSlug || cfg.preset === 'chat') return 'locked'
+    if (get().runningBySession[sessionId]) return 'running'
+    const prev = { project_path: cur.project_path, project_name: cur.project_name, projectless: cur.projectless }
+    const prevCfg = get().configBySession[sessionId]
+    const restore = () => set((s) => {
+      const configBySession = { ...s.configBySession }
+      if (prevCfg) configBySession[sessionId] = prevCfg; else delete configBySession[sessionId]
+      return { sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, ...prev } : x)), configBySession }
+    })
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, project_path: dir, project_name: name, projectless: false } : x)),
+      configBySession: { ...s.configBySession, [sessionId]: { ...(prevCfg || {}), cwd: dir, execMode: 'host' } },
+    }))
+    // 两处都落盘才算挪过去:会话的 project_path(侧栏分组 / 详情)与会话配置的 cwd(引擎按它定工作目录)。
+    // 配置没存上就把已改的会话改回去(尽力),不留「分组在新目录、重载后 cwd 还是旧目录」的半截状态。
+    let sessionSaved = false
+    try {
+      await api.updateSession(get().cfg, sessionId, { project_path: dir, project_name: name, projectless: false })
+      sessionSaved = true
+      await saveSessionConfig(sessionId, { cwd: dir, execMode: 'host' })
+      return 'moved'
+    } catch (e: any) {
+      // 会话已改、配置没存上:把会话改回去;改不回去就如实说「挪了一半」,本地留服务端的真实状态(会话在新项目、工作目录还是旧的)
+      const reverted = !sessionSaved || await api.updateSession(get().cfg, sessionId, prev).then(() => true, () => false)
+      if (reverted) restore()
+      else set((s) => {
+        const configBySession = { ...s.configBySession }
+        if (prevCfg) configBySession[sessionId] = prevCfg; else delete configBySession[sessionId]
+        return { configBySession }
+      })
+      get().toast(get().tr(reverted ? 'app.moveToProjectFail' : 'app.moveToProjectHalf', { e: e?.message || e, name }), true)
+      return 'failed'
+    }
+  },
+
   removeWorkspace: async (ws, opts) => {
     const t = get().tr
     if (ws.system || ws.kind !== 'local') return
@@ -2504,6 +2565,13 @@ export const useApp = create<AppState>((set, get) => ({
     persistDeskSoon()
   },
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (sid && movingSessions.has(sid)) { get().toast(get().tr('app.sessionMoving'), true); return false }
+    if (sid) markSending(sid, 1)
+    try { return await get().sendNow(text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) } finally { if (sid) markSending(sid, -1) }
+  },
+
+  sendNow: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId

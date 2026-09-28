@@ -307,7 +307,8 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     void (async () => {
       try {
         const status = await window.tangu?.codeStudioGitStatus?.(root)
-        if (!status?.writable || !window.tangu?.codeStudioGitCommit) return
+        // auto:外部造物还没开版本历史(没有我方的仓)时宿主不自动存;缺省(老宿主)按 writable
+        if (!(status?.auto ?? status?.writable) || !window.tangu?.codeStudioGitCommit) return
         const version = await window.tangu.codeStudioGitCommit(root, { name: label, auto: true, untitled })
         if (!version || !mounted.current || !sameProject(root, useCodeStudio.getState().activeProject)) return
         setHistoryNonce(value => value + 1) // 开着的版本面板顺手刷新一下
