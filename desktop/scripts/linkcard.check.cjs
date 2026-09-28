@@ -12,6 +12,7 @@
 //   LC4 改地址按 Enter 即保存(form 提交)→ 落盘带新地址;Esc 关闭面板且不写盘
 //   LC5 页面滚动 → 卡片收起(fixed 坐标是悬停那一刻的,滚走了不能钉在原处)
 //   L1~L5 链接末尾接着输入不并进链接(I-04):键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴
+//   M1~M3 本地 md 链接(L-07):点击走库内打开(不补 https)、悬停卡「打开」同路、键入落盘逐字
 //
 // 用法:node scripts/e2e-editor.cjs --check=linkcard(或 npm run check:linkcard)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
@@ -212,6 +213,72 @@ async function typingAfterLink(browser) {
   await p.close()
 }
 
+// ── M 组(L-07):本地 md 链接 `[t](笔记.md)` —— 不补成 `https://笔记.md`,点击走与 `[[ ]]` 同一条打开路径 ──
+// 药在 linkHref.ts(normalizeHref 认单段文件名 + hrefKind / noteLinkTarget)与 MarkdownBlock.handleLinkClick 的分流。
+// 附件(report.pdf)归容器 amadeusViews 的 openAttachment 开,台架没有那层容器 —— 这里只证编辑器**不再**把它当外链开。
+/** 拿 app 自己那份 pageStore 模块:vite HMR 后 app 用的是带 `?t=` 的 URL,裸路径 import 会得到另一个实例(spy 装不上)。 */
+const spyWiki = (p) => p.evaluate(async () => {
+  const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/store\/pageStore\.ts/.test(n)) || '/src/amadeus/store/pageStore.ts'
+  const m = await import(url)
+  m.usePageStore.setState({ pages: ['Note.md', 'sub/Other.md', 'My Note.md', 'Unified.md'] })
+  window.__opened = []
+  m.usePageStore.setState({ openWikiLink: (n, src) => { window.__opened.push({ n, src }) } })
+  window.__wopen = []
+  window.open = (u) => { window.__wopen.push(u); return null }
+})
+async function mdLinks(browser) {
+  const md = '# T\n\n见 [读我](Note.md) 和 [子](./sub/Other.md) 和 [外](https://example.com) 和 [空格](My%20Note.md) 和 [附](report.pdf)\n'
+  let p = await open(browser, md, '')
+  await spyWiki(p)
+  const anchors = await p.evaluate((s) => [...document.querySelectorAll(s + ' a[href]')].map((a) => {
+    const r = a.getBoundingClientRect()
+    return { href: a.getAttribute('href'), x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  }), PM)
+  const got = {}
+  for (const a of anchors) {
+    const [o0, w0] = await p.evaluate(() => [window.__opened.length, window.__wopen.length])
+    await p.mouse.click(a.x, a.y)
+    await p.waitForTimeout(250)
+    got[a.href] = await p.evaluate(([o0, w0]) => ({ wiki: window.__opened.slice(o0).map((x) => x.n), open: window.__wopen.slice(w0) }), [o0, w0])
+  }
+  const want = {
+    'Note.md': { wiki: ['Note.md'], open: [] },
+    './sub/Other.md': { wiki: ['sub/Other.md'], open: [] },
+    'https://example.com': { wiki: [], open: ['https://example.com'] },
+    'My%20Note.md': { wiki: ['My Note.md'], open: [] },
+    'report.pdf': { wiki: [], open: [] },
+  }
+  for (const [href, w] of Object.entries(want))
+    check(`M1 点击 [..](${href}) → ${w.wiki.length ? '库内打开 ' + w.wiki[0] : w.open.length ? '外链 ' + w.open[0] : '编辑器不开(附件归容器)'}`, JSON.stringify(got[href]) === JSON.stringify(w), JSON.stringify(got[href]))
+  check('M1 点击本地链接零写盘', (await writeCount(p)) === 0)
+  // 悬停卡的「打开」(host 按钮)同路
+  await p.mouse.move(5, 5)
+  await p.waitForTimeout(300)
+  const a0 = anchors[0]
+  await p.mouse.move(a0.x, a0.y, { steps: 4 })
+  await p.waitForTimeout(900)
+  const hostBtn = await p.evaluate(() => { const b = document.querySelector('.amx-linkcard .amx-linkcard-host'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (hostBtn) {
+    const [o0, w0] = await p.evaluate(() => [window.__opened.length, window.__wopen.length])
+    await p.mouse.move(hostBtn.x, hostBtn.y, { steps: 8 })
+    await p.mouse.click(hostBtn.x, hostBtn.y)
+    await p.waitForTimeout(250)
+    const r = await p.evaluate(([o0, w0]) => ({ wiki: window.__opened.slice(o0).map((x) => x.n), open: window.__wopen.slice(w0) }), [o0, w0])
+    check('M2 悬停卡「打开」库内笔记链接 → 库内打开,不当外链', JSON.stringify(r) === JSON.stringify({ wiki: ['Note.md'], open: [] }), JSON.stringify(r))
+  } else check('M2 悬停卡「打开」库内笔记链接 → 库内打开,不当外链', false, '没出卡')
+  await p.close()
+  // M3 键入即落盘:地址逐字保留,不补 https://
+  p = await open(browser, '# T\n\nx\n', '')
+  const b = await (await p.$(`${PM} > p`)).boundingBox()
+  await p.mouse.click(b.x + b.width - 2, b.y + b.height / 2)
+  await p.keyboard.press('Meta+ArrowRight')
+  await p.keyboard.type(' [读我](Note.md) 与 [附](report.pdf) ', { delay: 20 })
+  await p.waitForTimeout(1400)
+  const saved = (await lastWrite(p)) || ''
+  check('M3 键入 `[读我](Note.md)` / `[附](report.pdf)`:落盘逐字,不补 https://', saved.includes('[读我](Note.md)') && saved.includes('[附](report.pdf)') && !saved.includes('https://'), JSON.stringify(saved))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
@@ -220,6 +287,7 @@ async function main() {
   await shell(browser, '&upane 长文', long, '&upane')
   await scrollCloses(browser)
   await typingAfterLink(browser)
+  await mdLinks(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

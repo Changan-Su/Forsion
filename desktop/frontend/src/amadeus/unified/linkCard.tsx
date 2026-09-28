@@ -9,7 +9,7 @@ import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { normalizeHref } from '../blocks/markdown/linkHref'
+import { hrefKind, normalizeHref } from '../blocks/markdown/linkHref'
 
 const OPEN_DELAY = 500
 const CLOSE_DELAY = 250
@@ -51,7 +51,11 @@ function rangeOfLink(view: EditorView, el: HTMLElement): { from: number; to: num
   return from === to ? null : { from, to }
 }
 
-export function LinkHoverCard({ getView }: { getView: () => EditorView | null }): ReactElement | null {
+export function LinkHoverCard({ getView, onOpenNote }: {
+  getView: () => EditorView | null
+  /** 库内笔记链接 `[t](笔记.md)` 的打开(与编辑器点击同路,L-07);不给就退回 window.open。 */
+  onOpenNote?: (href: string) => void
+}): ReactElement | null {
   const [hover, setHover] = useState<Hover | null>(null)
   const [edit, setEdit] = useState<{ from: number; to: number; text: string; href: string } | null>(null)
   const openT = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -221,7 +225,16 @@ export function LinkHoverCard({ getView }: { getView: () => EditorView | null })
           closeT.current = setTimeout(() => setHover(null), CLOSE_DELAY)
         }}
       >
-        <button className="amx-linkcard-host" title={hover.href} onClick={() => window.open(hover.href, '_blank', 'noopener')}>
+        <button
+          className="amx-linkcard-host"
+          title={hover.href}
+          onClick={() => {
+            if (onOpenNote && hrefKind(hover.href) === 'note') {
+              setHover(null)
+              onOpenNote(hover.href)
+            } else window.open(hover.href, '_blank', 'noopener')
+          }}
+        >
           {host}
         </button>
         <span className="amx-linkcard-sep" />

@@ -65,6 +65,7 @@ import { createEmbedLayer } from './embedLayer'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
+import { noteLinkTarget } from '../blocks/markdown/linkHref'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
@@ -2143,7 +2144,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
         </div>
       )}
-      <LinkHoverCard getView={() => layer.getView()} />
+      <LinkHoverCard
+        getView={() => layer.getView()}
+        onOpenNote={(href) => void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)}
+      />
       {lightbox && (
         <OverlayPortal>
           <div className="amx-lightbox" onClick={() => setLightbox(null)} role="presentation">
