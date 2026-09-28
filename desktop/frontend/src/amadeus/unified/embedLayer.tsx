@@ -292,7 +292,7 @@ function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePa
           focusPlace={null}
           onFocused={noop}
           requestSelfFocus={noop}
-          onOpenWiki={(name) => openWikiLink(name, embed.owner)}
+          onOpenWiki={(name, o) => openWikiLink(name, embed.owner, o)}
           getPageNames={() => pages}
         />
       ) : (

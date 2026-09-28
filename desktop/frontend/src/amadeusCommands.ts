@@ -16,6 +16,7 @@ import { createDashboard, createDrawing } from './amadeusNav'
 import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { translate } from './i18n'
 import { FOLD_COMMANDS } from '@amadeus/unified/foldCommands'
+import { LINK_COMMANDS } from '@amadeus/unified/linkCommands'
 
 const ps = () => usePageStore.getState()
 const ws = () => useWorkspace.getState()
@@ -48,6 +49,8 @@ const CMDS: Command[] = [
   },
   // 标题 / 列表折叠:切换(mod+alt+enter)/ 全部折叠 / 全部展开(B-13;动作懒取,本模块不连 Milkdown)。
   ...FOLD_COMMANDS,
+  // 打开光标处链接(alt+enter)/ 在新标签页打开(alt+shift+enter)(L-20;动作懒取,本模块不连 Milkdown)。
+  ...LINK_COMMANDS,
 ]
 
 /** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。 */

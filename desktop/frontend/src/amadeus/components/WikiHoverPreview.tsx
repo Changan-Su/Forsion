@@ -58,7 +58,10 @@ export function WikiHoverPreview() {
       const name = el.getAttribute('data-wiki') ?? ''
       if (!name || isFileRef(name)) return
       const st = usePageStore.getState()
-      const path = resolvePageName(name, st.pages, st.activePage ?? undefined)
+      // 源笔记 = 链接所在那个编辑器钉的 data-amx-src(v4 下 activePage 恒为 null,同名笔记会预览 A、点开 B —— L-10);
+      // 没钉的宿主(聊天引用条等,data-wiki 本就是路径)退回 activePage。
+      const src = (el.closest('[data-amx-src]') as HTMLElement | null)?.dataset.amxSrc || st.activePage || undefined
+      const path = resolvePageName(name, st.pages, src)
       if (!path) return
       clearTimer()
       const r = el.getBoundingClientRect()

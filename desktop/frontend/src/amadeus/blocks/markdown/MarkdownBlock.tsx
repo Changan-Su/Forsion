@@ -86,7 +86,9 @@ import {
   NewPageIcon, NumberedListIcon, PenIcon, QuoteIcon, SelectIcon, TableIcon, TemplateIcon, TeXIcon, TextIcon,
   resolveIcon,
 } from '../../components/icons'
-import { wikilinkPlugin } from './wikilink'
+import { IS_MAC_PLATFORM, wikilinkPlugin } from './wikilink'
+import { codeExitPlugin } from './codeExit'
+import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } from './linkFollow'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, posAtTextAnchor, slashRange, splitTail, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
@@ -499,7 +501,8 @@ export function MilkdownInner({
   keys: BlockKeys
   saveImage: (file: File) => Promise<string | null>
   saveFiles: (files: File[]) => Promise<void>
-  onOpenWiki: (name: string) => void
+  /** opts.newTab:⌘/Ctrl+点击、中键(L-11)或「在新标签页打开光标处链接」;宿主转给 openWikiLink 的第三参。 */
+  onOpenWiki: (name: string, opts?: { newTab?: boolean }) => void
   getPageNames: () => string[]
   /** vault 非笔记文件([[补全的文件候选);缺 = 只补全页面。 */
   getFiles?: () => string[]
@@ -559,6 +562,8 @@ export function MilkdownInner({
   // Esc 闩锁:记住被关掉的那个 '@' / '/' 锚点,同锚点不再弹(否则下一击键 plugin 又 report → 关不掉)。
   const mentionDismissedFrom = useRef<number | null>(null)
   const slashDismissedFrom = useRef<number | null>(null)
+  // `[[` 同款(L-21):此前唯独它没闩 —— Esc 关掉后下一击键 / 光标一动面板又弹,紧跟的回车把正文改写成 `[[候选]]`。
+  const wikiDismissedFrom = useRef<number | null>(null)
   // handleKeyDown 闭包只建一次读不到 state → 用 ref 镜像弹窗开启态,供 '/' 分支避让。
   const wikiOpenRef = useRef(false)
   const mentionOpenRef = useRef(false)
@@ -612,6 +617,17 @@ export function MilkdownInner({
       if (handleFoldKeyDown(view, event)) {
         event.preventDefault()
         return true
+      }
+      // 打开光标处链接(L-20):Alt+Enter / Alt+Shift+Enter(与引擎命令同一份生效热键,可改键)。
+      // 光标不在链接上就不接 —— 照旧交给后面(v3 的 Shift+Enter 切块等)。
+      const linkKind = linkKindOfEvent(event)
+      if (linkKind) {
+        const target = linkAtCursor(state)
+        if (target) {
+          event.preventDefault()
+          openLinkTarget(target, linkKind === 'followNewTab')
+          return true
+        }
       }
       if (event.key === 'Enter') {
         if (event.shiftKey) {
@@ -884,14 +900,33 @@ export function MilkdownInner({
     // ⚠️ 按 hrefKind 分流(L-07):库内笔记 `[t](笔记.md)` 走与 `[[ ]]` 同一条打开路径,不许补成 `https://笔记.md`;
     //    附件路径不在这儿开 —— 容器(amadeusViews 的 onClick)用 openAttachment 开。handleClick 是 PM 在 mouseup 里调的,
     //    这里 preventDefault 标不到随后的 click 事件,两边只能靠同一份判据各开各的,否则一次点击开两回。
+    /** 打开「光标处链接」(L-20,键盘 / 命令面板):双链走 onOpenWiki(与点击同一条路);md 链接按 hrefKind 分流 ——
+     *  库内笔记同 handleLinkClick,附件交 openAttachment(同容器的点击),外链开新窗。 */
+    const openLinkTarget = (t: LinkAtCursor, newTab: boolean): void => {
+      const o = newTab ? { newTab: true } : undefined
+      if (t.kind === 'wiki') return wikiRef.current(t.arg, o)
+      const kind = hrefKind(t.href)
+      if (kind === 'note') return wikiRef.current(noteLinkTarget(t.href, pagePathRef.current, pageNamesRef.current()), o)
+      if (kind === 'file') {
+        if (pagePathRef.current) void amadeus.openAttachment(pagePathRef.current, t.href)
+        return
+      }
+      const href = normalizeHref(t.href)
+      if (href) window.open(href, '_blank', 'noopener')
+    }
+
+    // ⚠️ PM 的 handleClick 不分鼠标键(右键的 mouseup 也会进来):右键 / mac Ctrl+点击 = 系统菜单,不开(L-11);
+    //    中键或 ⌘/Ctrl+点击库内笔记链接 → 新标签页(外链本来就开新窗)。
     const handleLinkClick = (_view: EditorView, _pos: number, event: MouseEvent): boolean => {
+      if (event.button === 2 || (IS_MAC_PLATFORM && event.ctrlKey)) return false
       const a = (event.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null
       if (!a || !a.getAttribute('href')) return false
       const kind = hrefKind(a.getAttribute('href') as string)
       if (kind === 'file') return false
       if (kind === 'note') {
         event.preventDefault()
-        wikiRef.current(noteLinkTarget(a.getAttribute('href') as string, pagePathRef.current, pageNamesRef.current()))
+        const newTab = event.button === 1 || (IS_MAC_PLATFORM ? event.metaKey : event.ctrlKey)
+        wikiRef.current(noteLinkTarget(a.getAttribute('href') as string, pagePathRef.current, pageNamesRef.current()), newTab ? { newTab: true } : undefined)
         return true
       }
       const href = normalizeHref(a.getAttribute('href') as string)
@@ -971,10 +1006,24 @@ export function MilkdownInner({
       .use(listener)
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
-      .use(wikilinkPlugin((name) => wikiRef.current(name), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
+      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
+      .use(linkFollowPlugin(openLinkTarget)) // 「打开光标处链接」的记账(命令面板 / 焦点不在正文时用,L-20)
+      // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
+      // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
+      .use($prose(() => new Plugin({ props: { attributes: (): Record<string, string> => (pagePathRef.current ? { 'data-amx-src': pagePathRef.current } : {}) } })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
-      .use(wikiSuggestPlugin((q) => { wikiOpenRef.current = !!q; setWiki(q) }))
+      .use(wikiSuggestPlugin((q, blurred) => {
+        if (!q) {
+          if (!blurred) wikiDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(同 @,L-04)
+          wikiOpenRef.current = false
+          setWiki(null)
+          return
+        }
+        if (wikiDismissedFrom.current === q.from) { wikiOpenRef.current = false; setWiki(null); return } // Esc 关掉的同一个 `[[` 不再弹
+        wikiOpenRef.current = true
+        setWiki(q)
+      }))
       .use(mentionSuggestPlugin((q, blurred) => {
         if (!q) {
           if (!blurred) mentionDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(L-04)
@@ -1014,6 +1063,7 @@ export function MilkdownInner({
       .use(calloutPlugin())
       .use(codeBlockPlugin()) // 语法高亮 + 语言/复制/折行工具条(lowlight,base.css .hljs-* 配色)
       .use(spellcheckPlugin) // 拼写检查开关 + 行内代码 / 公式不查(G4-07,见 ./spellcheck)
+      .use(codeExitPlugin) // 行内代码右边界按 → 跳出(I-11,见 ./codeExit)
       // 行内格式键位补齐(AFFiNE 六件套):预设只给了 Mod-B / Mod-I / Mod-E 与 Mod-Alt-X,
       // 下划线(自有 mark)、Mod-Shift-S 删除线、Mod-K 链接三个一直没有键位。
       // Mod-K 走与工具栏 🔗 完全同一条 editLink(选区已是链接=直接摘掉,空选区不弹框)。
@@ -1468,7 +1518,11 @@ export function MilkdownInner({
           getPageNames={mentionPageNames}
           getFiles={getFiles}
           onPick={pickWiki}
-          onClose={() => setWiki(null)}
+          onClose={() => {
+            wikiDismissedFrom.current = wiki.from // Esc:同一个 `[[` 不再弹(L-21);wikiOpenRef 一并复位,slash 不再被它压着
+            wikiOpenRef.current = false
+            setWiki(null)
+          }}
           editorFocused={editorFocused}
           sourcePath={attachmentPagePath}
         />

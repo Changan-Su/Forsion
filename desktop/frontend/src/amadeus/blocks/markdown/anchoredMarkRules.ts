@@ -11,7 +11,7 @@
 //     内容能含定界符的话 `a _b_ c _d_` 会从第一个 `_` 一路吃到行尾)。
 //  ② 所有 mark 输入规则(`*` / `**` / `_` / `` ` `` / `~`)外面再包一层:匹配终点不贴着光标就放弃(返回 null,
 //     run 接着试下一条)—— run 的起点公式只在这个前提下成立,以后谁再加一条无锚规则也不会删远处的字。
-// `*` / `**` / 行内代码的正则与 preset 逐字相同(本来就有 `$`),只多包一层。
+// `*` / 行内代码的正则与 preset 逐字相同(本来就有 `$`),只多包一层;`**` / `__` 的后顾分开收(I-18,见 STRONG_RE)。
 // 仪器:anchoredMarkRules.test.ts(真 Milkdown + 真 customInputRules);npm run check:attention 的 I1~I4(键盘 + CDP 输入法)。
 import { markRule } from '@milkdown/kit/prose'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
@@ -51,7 +51,13 @@ const emphasisUnderscore = $inputRule((ctx) => endsAtCursor(markRule(UNDERSCORE_
   updateCaptured: ({ fullMatch, start }) => (!fullMatch.startsWith('_') ? { fullMatch: fullMatch.slice(1), start: start + 1 } : {}),
 })))
 const inlineCode = $inputRule((ctx) => endsAtCursor(markRule(/(?:`)([^`]+)(?:`)$/, inlineCodeSchema.type(ctx))))
-const strong = $inputRule((ctx) => endsAtCursor(markRule(/(?<![\w:/])(?:\*\*|__)([^*_]+?)(?:\*\*|__)(?![\w/])$/, strongSchema.type(ctx), {
+/** 加粗(I-18):preset 那条 `(?<![\w:/])` 对 `**` 与 `__` 一视同仁 → `API**注意**`、`v2**重要**` 不触发,落盘成 `\*\*`。
+ *  按 CommonMark / Obsidian:词内的 `**` 本来就成立,只排除 `:` `/`(`https://**` 这类);词内的 `__` 按规范是字面,保持原样。
+ *  两种开定界符各带各的后顾,再用前瞻钉住「收尾定界符与开头同种」(preset 那条 `**x__` 也认,顺手堵上);
+ *  仍是**一条**规则、一个捕获组 —— markRule 取最后一个捕获组当正文,commonmark 的原位替换表也保持一换一。
+ *  落盘两侧的开合由 attentionFlanking 的边界编码兜(check:cjk;`API**「注意」**后` 这类见 anchoredMarkRules.test)。 */
+export const STRONG_RE = /(?:(?<![:/])\*\*(?=[^*_]+?\*\*$)|(?<![\w:/])__(?=[^*_]+?__$))([^*_]+?)(?:\*\*|__)$/
+const strong = $inputRule((ctx) => endsAtCursor(markRule(STRONG_RE, strongSchema.type(ctx), {
   getAttr: (match) => ({ marker: match[0].startsWith('*') ? '*' : '_' }),
 })))
 
