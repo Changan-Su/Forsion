@@ -6,7 +6,8 @@
  * S0(本步)只有 home 一个目标,且**行为逐字不变**:
  *   - 服务函数的参数改为 `EngineArg = EngineTarget | LegacyCfg`;传整份 cfg 的老调用点由 asTarget 折成
  *     home 目标,base = cfg.backendUrl 原样(不削尾斜杠)、鉴权头与以前同形同序、token 现取。
- *   - knownTargets() = [home];engineFetch 是给 K3 等消费方的通用出口。
+ *   - knownTargets() = [home];engineFetch 是给 K3 等消费方的通用出口。homeTarget() 是**活目标**(同一个对象,
+ *     base / via / 鉴权头每次访问现读宿主配置),可以跨重连长期持有;asTarget(cfg) 是按调用的快照。
  *   - 会话绑定表只在内存(S4 起持久化);bindSession 先到先得、永不改绑(R-16),withLocation 是往
  *     appStore.sessions 插记录时唯一的打标入口(R-15)。
  * S1:cloudApiBase()(云端 API 基址,含 /api)与引擎基址分家 —— 凡是打 Forsion 云端 API 的读者(登录态、额度、
@@ -33,7 +34,7 @@ export type EngineArg = EngineTarget | LegacyCfg
 
 // ── 宿主接缝:本端连接配置由 appStore 在模块求值时装一次(避免 targets ↔ appStore 循环依赖)──
 export interface EngineHost {
-  /** 本端引擎的连接配置(appStore.cfg,每次现读)。 */
+  /** 本端引擎的连接配置(appStore.cfg,每次现读;home 活目标的 base / token 都从这里取)。 */
   cfg(): TanguDesktopConfig
   /** 宿主配置快照(appStore.desktopConfig);S1 起用来算 cloudApiBase。启动早期可能为 null。 */
   desktopConfig(): Partial<StoredDesktopConfig> | null
@@ -54,7 +55,14 @@ function homeVia(): TargetVia {
   return currentPlatform() === 'desktop' ? 'local' : 'cloud'
 }
 
-/** 整份 cfg → home 目标。与改造前的 `headers(cfg.token)` 逐字同形(键序也一样);token 在发请求那一刻现读。 */
+/** 与改造前的 `headers(cfg.token)` 逐字同形(键序也一样)。 */
+function bearerHeaders(token: string, json: boolean): Record<string, string> {
+  return json
+    ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+    : { Authorization: `Bearer ${token}` }
+}
+
+/** 整份 cfg → home 目标(按调用的快照:读的是传进来那份 cfg)。token 在发请求那一刻从这份 cfg 读。 */
 function fromLegacy(cfg: LegacyCfg): EngineTarget {
   return mintTarget({
     key: 'home',
@@ -62,9 +70,7 @@ function fromLegacy(cfg: LegacyCfg): EngineTarget {
     via: homeVia(),
     base: cfg.backendUrl,
     unitBase: null,
-    headers: async (json = true): Promise<Record<string, string>> => (json
-      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.token}` }
-      : { Authorization: `Bearer ${cfg.token}` }),
+    headers: async (json = true): Promise<Record<string, string>> => bearerHeaders(cfg.token, json),
   })
 }
 
@@ -73,13 +79,36 @@ export function asTarget(arg: EngineArg): EngineTarget {
   return isEngineTarget(arg) ? arg : fromLegacy(arg)
 }
 
-/** 本端引擎:桌面 = 本机引擎,web / 手机 = 云网关,设备页 = 被投射的那台。 */
-export function homeTarget(): EngineTarget {
+function requireHost(): EngineHost {
   if (!host) throw new Error('Engine host is not installed (appStore installs it at module load)')
-  return fromLegacy(host.cfg())
+  return host
 }
 
-/** 当前已知的全部目标(INTEGRATION R-20)。S0 = [home];S2 = home + 焦点;S4 = home + 焦点 + 有绑定会话的 unit。 */
+let liveHome: EngineTarget | null = null
+
+/**
+ * 本端引擎:桌面 = 本机引擎,web / 手机 = 云网关,设备页 = 被投射的那台。
+ * **活目标**:恒为同一个对象,base / via / 鉴权头每次访问都现读宿主(模块级 host,重装宿主也跟上)——
+ * 消费方(K3 的待批轮询等)可以拿一次、跨引擎重启 / 重连长期持有,不会打死端口、带旧 token
+ * (旧 token 撞 401 会触发 handleAuthExpired → backendRestart,又换一次 token = 重启回环)。
+ */
+export function homeTarget(): EngineTarget {
+  requireHost()
+  return liveHome ??= mintTarget({
+    key: 'home',
+    ref: HOME_REF,
+    get via(): TargetVia { return homeVia() },
+    get base(): string { return requireHost().cfg().backendUrl },
+    unitBase: null,
+    // 函数体在第一个 await 之前同步读完 token:engineFetch 先读 base 再调它,两者出自同一份 cfg。
+    headers: async (json = true): Promise<Record<string, string>> => bearerHeaders(requireHost().cfg().token, json),
+  })
+}
+
+/**
+ * 当前已知的全部目标(INTEGRATION R-20)。S0 = [home];S2 = home + 焦点;S4 = home + 焦点 + 有绑定会话的 unit。
+ * 数组是按调用现算的(集合会变),里面的 home 是活目标可以长期持有;集合变化(新绑了 unit)要重新调本函数。
+ */
 export function knownTargets(): EngineTarget[] {
   return [homeTarget()]
 }

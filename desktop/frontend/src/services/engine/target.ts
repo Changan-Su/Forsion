@@ -31,11 +31,14 @@ export interface EngineTarget {
   readonly key: TargetKey
   readonly ref: TargetRef
   readonly via: TargetVia
-  /** 引擎基址(请求 = base + '/agent/…')。legacy 配置折算来的目标逐字沿用 cfg.backendUrl。 */
+  /** 引擎基址(请求 = base + '/agent/…')。legacy 配置折算来的目标逐字沿用 cfg.backendUrl。
+   *  homeTarget() 的 home 是**活目标**:base 是访问器,每次读都现取宿主配置(引擎重启换端口立即跟上)。 */
   readonly base: string
   /** via==='unit' 时 = {cloudApiBase}/units/<id>/proxy(设备辅助面 /unit/hostfile 等);其余 null。 */
   readonly unitBase: string | null
-  /** 每个请求现取(unit 目标的调用方头会轮换)。只可能含 Authorization / Content-Type / Accept / X-Forsion-Caller。 */
+  /** 每个请求现取:home 活目标现读宿主 token(引擎重启换 token 立即跟上),unit 目标的调用方头会轮换。
+   *  例外:asTarget(cfg) 折出来的 legacy 目标读的是传进来那份 cfg(按调用的快照 —— 老调用点每次都现传 get().cfg)。
+   *  只可能含 Authorization / Content-Type / Accept / X-Forsion-Caller。 */
   headers(json?: boolean): Promise<Record<string, string>>
 }
 
@@ -67,7 +70,10 @@ export function isTargetKey(x: unknown): x is TargetKey {
 export function mintTarget(p: EngineTargetInit): EngineTarget {
   assertTargetRef(p.ref, 'mintTarget')
   const ref: TargetRef = p.ref.kind === 'home' ? HOME_REF : Object.freeze({ kind: 'unit', unitId: p.ref.unitId })
-  const t = Object.freeze({ ...p, ref }) as unknown as EngineTarget
+  // 按描述符拷贝、保留访问器:home 活目标的 base / via 是 getter。写成 `{ ...p }` 会在铸造那一刻把 getter
+  // 求值成快照 —— 持有目标的消费方(K3 的轮询)跨引擎重启就一直打死端口、带旧 token。
+  const t = Object.defineProperties({}, { ...Object.getOwnPropertyDescriptors(p), ref: { value: ref, enumerable: true } }) as unknown as EngineTarget
+  Object.freeze(t)
   minted.add(t)
   return t
 }

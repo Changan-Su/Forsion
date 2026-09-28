@@ -82,6 +82,31 @@ describe('homeTarget / knownTargets', () => {
     expect((await t.headers()).Authorization).toBe('Bearer b')
   })
 
+  it('活目标:持有的 knownTargets()[0] 跨引擎重启(换端口 / 换 token)照样打新地址、带新 token', async () => {
+    let current = { backendUrl: 'http://127.0.0.1:1', token: 'old', modelId: '' }
+    T.installEngineHost({ cfg: () => current, desktopConfig: () => null })
+    const held = T.knownTargets()[0]
+    await T.engineFetch(held, '/agent/approvals/pending')
+    current = { backendUrl: 'http://127.0.0.1:2', token: 'new', modelId: '' } // managed 引擎重启:新端口 + 新 token
+    await T.engineFetch(held, '/agent/approvals/pending')
+    expect(authFetch.mock.calls.map((c) => [c[0], (c[1] as RequestInit).headers])).toEqual([
+      ['http://127.0.0.1:1/agent/approvals/pending', { Authorization: 'Bearer old' }],
+      ['http://127.0.0.1:2/agent/approvals/pending', { Authorization: 'Bearer new' }],
+    ])
+    expect(T.homeTarget()).toBe(held) // 恒为同一个对象(消费方可以按对象身份做键)
+    // 重装宿主(测试 / 未来的宿主热换)也跟上;来路同样现算
+    T.installEngineHost({ cfg: () => ({ backendUrl: 'https://forsion.test/api', token: 'c', modelId: '' }), desktopConfig: () => null })
+    expect(held.base).toBe('https://forsion.test/api')
+    expect((await held.headers(false))).toEqual({ Authorization: 'Bearer c' })
+    vi.stubGlobal('window', { tangu: { cloudWeb: true } })
+    expect(held.via).toBe('cloud')
+    // 活目标照样冻结、照样是登记过的真目标;展开出来的快照不是
+    expect(Object.isFrozen(held)).toBe(true)
+    expect(() => { (held as { base: string }).base = 'http://evil.test' }).toThrow(TypeError)
+    expect(T.isEngineTarget(held)).toBe(true)
+    expect(T.isEngineTarget({ ...held })).toBe(false)
+  })
+
   it('S0 只有 home 一个已知目标', () => {
     T.installEngineHost({ cfg: () => cfg, desktopConfig: () => null })
     const all = T.knownTargets()
