@@ -20,6 +20,7 @@ import { authFetch } from '../services/http'
 import { resolveApproval } from '../services/agentRunService'
 import { syncNow } from '../services/backendService'
 import { useApp } from '../stores/appStore'
+import { resetFocusForTests, useEngineFocus } from '../services/engine/targets'
 
 const req: ApprovalRequest = {
   approvalId: 'a1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }),
@@ -184,6 +185,12 @@ describe('P1-K3 ApprovalCard × localOnly / answeredBy', () => {
     setRemote(true)
     await renderReq(done({ via: 'local' }, 's7'))
     expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byHost')}`)
+    // M1B:手机把整端切到那台电脑(焦点 = unit,带名册名)→ 写上电脑名
+    await act(async () => { useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name: 'K9 Studio Mac' }) })
+    try {
+      await renderReq(done({ via: 'local' }, 's8'))
+      expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byHostNamed', { device: 'K9 Studio Mac' })}`)
+    } finally { await act(async () => { resetFocusForTests() }) }
   })
 
   it('本页就是答复方 → 不写后缀(自己点的不用告诉自己)', async () => {
@@ -196,7 +203,7 @@ describe('P1-K3 ApprovalCard × localOnly / answeredBy', () => {
   })
 
   it('新文案 zh / en 成对,英文不含汉字', () => {
-    for (const k of ['approval.localOnly', 'approval.localOnlyToast', 'approval.byHost', 'approval.byDevice', 'approval.byRegisteredDevice', 'approval.byOther', 'approval.byChannel']) {
+    for (const k of ['approval.localOnly', 'approval.localOnlyToast', 'approval.byHost', 'approval.byHostNamed', 'approval.byDevice', 'approval.byRegisteredDevice', 'approval.byOther', 'approval.byChannel']) {
       expect(translateFor('zh', k), k).not.toBe(k)
       const en = translateFor('en', k)
       expect(en, k).not.toBe(k)

@@ -22,17 +22,21 @@ import { useApp } from '@/stores/appStore'
 import type { UnitInfo } from '@/types'
 import { cloudApiBase, focusRef, onFocusChange, setFocusTarget } from '@/services/engine/targets'
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
-import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunRow } from './unitsSheetModel'
+import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rosterNameOf, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunRow } from './unitsSheetModel'
 import './unitsSheet.css'
 
 /**
  * 「在哪运行」生效 —— 整个弹层只有这一个出口(单测钉住:scripts/units-sheet-model.test.cjs)。
  * = K6-S2 的整端切换 setFocusTarget;返回它的 Promise —— 「移除本机」要等切回云端真正生效(旧目标的轮询 / SSE 收掉)
  * 后才删身份,见 unitsSheetModel.removeThisPhone。K7 之后改 setDraftLocation(ref, { explicit: true })(INTEGRATION R-21)。
+ * 焦点展示名 = 最近一次拉到的名册里那台的名字(M1B:审批结局行写「在执行的电脑上(名字)」;之前一直没带名字 → 只剩兜底「你的电脑」)。
  */
 export function selectRunLocation(ref: TargetRef): Promise<void> {
-  return setFocusTarget(ref)
+  return setFocusTarget(ref, { name: rosterNameOf(lastRoster, ref) })
 }
+
+/** 最近一次拉到的名册(只给 selectRunLocation 取展示名;弹层关掉后仍留着 —— 「移除本机」切回云端不需要它)。 */
+let lastRoster: UnitInfo[] = []
 
 /** 当前运行位置 = 整端焦点(K6-S2)。 */
 function currentRunLocation(): TargetRef {
@@ -179,7 +183,11 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     setIssue(null)
     setConfirmForget(false)
     void window.tangu?.unitsList?.()
-      .then((r) => setUnits(r?.status === 200 ? ((r.json as { units?: UnitInfo[] } | null)?.units ?? []) : r?.status === 401 ? null : []))
+      .then((r) => {
+        const list = r?.status === 200 ? ((r.json as { units?: UnitInfo[] } | null)?.units ?? []) : r?.status === 401 ? null : []
+        if (list) lastRoster = list
+        setUnits(list)
+      })
       .catch(() => setUnits([]))
     loadSelf()
     return () => { flight.current?.abort(); flight.current = null; setBusy(null); setMarks(endAttempts) } // 没人轮询了:不留「请允许」
@@ -216,7 +224,13 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       setMarks((m) => noteAttempt(m, row.id, p))
     }
     void runOn(cloudApiBase(), row.id, {
-      ensureSelf: () => window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }),
+      // 懒登记一完成就刷新「本机」一行(M1B):runOn 接下来可能在「请在那台电脑上允许」里等上几十秒,
+      // 等它整个结束才刷新 = 这段时间一直写着「尚未登记」,而本机其实已经登记好了
+      ensureSelf: async () => {
+        const r = await (window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }))
+        if (r.ok && !ac.signal.aborted) loadSelf()
+        return r
+      },
       fetchJson: async (url, init) => {
         const r = await fetch(url, init)
         let json: unknown = null

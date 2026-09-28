@@ -86,6 +86,13 @@
 - When you use this computer remotely from the device page or your phone, the agent list you get no longer includes each agent's persona and developer instructions (both fields are empty when you open an agent's profile on the device page; agents could already only be changed on that computer), and the approval mode shown is the one that actually applies to remote tasks. The Muse status you get no longer includes local folder paths, the run budget or error details.
 <!-- /P1-M1 -->
 
+<!-- P1-M1 -->
+- **See and download a remote session's files on your phone**. After you switch Tangu on your phone to one of your computers, the Workspace panel on the right starts with a "Session files" group that lists the attachments and outputs this session has on that computer, including attachments you sent from the phone, each with a download button. That computer's project folders are still listed below it. Files here can't be deleted while you run on another computer.
+- **Your phone now shows where an approval was answered**. When a task started from your phone is approved or rejected directly on the computer, the outcome line in the phone's chat reads "Approved on the host computer (computer name)" or "Rejected …"; approvals answered on another device show that device's name, and the ones you answered on this phone aren't labeled. Collapsed approval cards also show the computer name, and connection notices use the computer's name instead of "your computer".
+- While your phone waits for a computer to allow it, the "This phone" row already shows its registered name instead of "Not registered yet".
+- After the connection to a computer drops and reconnects, replies that were already shown are no longer occasionally shown a second time.
+<!-- /P1-M1 -->
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.

@@ -16,7 +16,7 @@ import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import { alwaysAllowWorks, answeredByText, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
 import { capsForRef } from '../services/engine/targetCaps'
-import { refForSession } from '../services/engine/targets'
+import { refForSession, useEngineFocus } from '../services/engine/targets'
 
 export { MODE_KEY }
 
@@ -38,6 +38,7 @@ registerMessages({
     en: 'This touches protected configuration and can only be approved on the computer running it',
   },
   'approval.byHost': { zh: '在执行的电脑上', en: 'on the host computer' },
+  'approval.byHostNamed': { zh: '在执行的电脑上（{device}）', en: 'on the host computer ({device})' },
   'approval.byDevice': { zh: '在 {device} 上', en: 'on {device}' },
   'approval.byRegisteredDevice': { zh: '在已登记设备上', en: 'on a registered device' },
   'approval.byOther': { zh: '在另一台设备上', en: 'on another device' },
@@ -46,6 +47,8 @@ registerMessages({
 
 /** P1-K3:本页点过决定的审批 id(托盘与内嵌两处渲染同一张卡,状态放模块级)。收起后「在哪答的」对答复方自己不写。 */
 const decidedHere = new Set<string>()
+/** 这张审批是不是本页点的决定(聊天流的 <approval_update> 结局行据此不给答复方自己写「在哪答的」,M1B)。 */
+export const wasDecidedHere = (approvalId: string): boolean => decidedHere.has(approvalId)
 
 /** 这张审批卡所属会话的引擎是以远端身份被驱动的(设备页 x-forsion-remote / 手机经 hub 打「我的电脑」):
  *  审批改参数 / 总允许都不兑现(C9)。P1-K6(INTEGRATION R-31):按会话所在的目标求值 ——
@@ -61,6 +64,7 @@ export const ApprovalCard: React.FC<{
 }> = ({ req, onDecide, sessionId }) => {
   const { t } = useI18n()
   const remote = isRemoteApprover(sessionId)
+  const hostName = useEngineFocus((s) => s.name) // M1B:「在执行的电脑上(名字)」;只取名册给的名字,不取兜底称呼
   const isBash = req.name === 'run_bash'
   const initialCmd = (() => {
     if (!isBash || !req.arguments) return ''
@@ -78,7 +82,7 @@ export const ApprovalCard: React.FC<{
   // P1-K3:受保护路径的审批只能在执行它的电脑上批准 —— 远端页不给「批准 / 总允许」(引擎也会 403),「拒绝」照留。
   const approveHere = !(req.localOnly && remote)
   const answeredWhere = resolved
-    ? answeredByText(req.answeredBy, { remotePage: remote, answeredHere: decidedHere.has(req.approvalId) }, t as (k: string, v?: Record<string, unknown>) => string)
+    ? answeredByText(req.answeredBy, { remotePage: remote, answeredHere: decidedHere.has(req.approvalId), hostName }, t as (k: string, v?: Record<string, unknown>) => string)
     : ''
 
   const decide = (action: 'approve' | 'approve_always' | 'reject') => {

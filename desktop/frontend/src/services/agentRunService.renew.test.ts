@@ -4,6 +4,7 @@
 //   ① 连续 8 次半截断开(越过 subscribeRunEvents 的 6 次失败上限)照样续订到终态,不抛;
 //   ② 每次续订都带上已见到的最大 seq 作 fromSeq,单调前进;
 //   ③ 回调收到的事件 seq 恰好 1..N 各一次(不丢、不重)。
+//   ④(M1B)续订时引擎 / hub 从更早处回放(fromSeq 被改回 0):已见过的 seq 丢掉,回调仍是 1..N 各一次。
 // 负对照(K9 交付时实跑、未入库):把 subscribeRunEvents 读流中断那条路改成「计一次失败、续订成功也不清零」→ ① 两条都红(第 7 次断开就抛)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -55,6 +56,17 @@ function engineWithCuts(total: number, perConn: number) {
   }
 }
 
+/** 回放不认 fromSeq 的「引擎」(hub 把 fromSeq 改回 0 / 设备重连后从头重放):每条连接从 seq 1 吐到 fromSeq + perConn 就被掐。 */
+function engineReplayingFromZero(total: number, perConn: number) {
+  return (url: string): Reply => {
+    if (!url.includes('/events')) return { status: 200, body: '{}' }
+    const from = Number(/fromSeq=(\d+)/.exec(url)?.[1] || 0)
+    const upto = Math.min(total, from + perConn)
+    const frames = Array.from({ length: upto }, (_, i) => frame(i + 1, i + 1 === total ? 'done' : 'token'))
+    return { status: 200, body: stream(frames, upto < total), headers: { 'Content-Type': 'text/event-stream' } }
+  }
+}
+
 beforeEach(() => {
   calls.length = 0
   vi.useFakeTimers()
@@ -66,8 +78,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function drive(cfg: Parameters<typeof run.subscribeRunEvents>[0], total: number, perConn: number) {
-  router = engineWithCuts(total, perConn)
+async function drive(cfg: Parameters<typeof run.subscribeRunEvents>[0], total: number, perConn: number, engine = engineWithCuts) {
+  router = engine(total, perConn)
   const seqs: number[] = []
   let settled: unknown = 'pending'
   const ac = new AbortController()
@@ -96,5 +108,12 @@ describe('subscribeRunEvents × hub 半截断流(P1-K9)', () => {
     expect(r.fromSeqs).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32])
     expect(r.seqs).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))
     expect(H.healthOf(t.key).state).toBe('ready')
+  })
+
+  it('M1B:续订时从更早处回放(fromSeq 被改回 0)→ 按 seq 丢掉已见过的事件,回调 1..N 各一次', async () => {
+    const r = await drive(home, 36, 4, engineReplayingFromZero)
+    expect(r.settled).toBe('ok')
+    expect(r.fromSeqs).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32])
+    expect(r.seqs).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))
   })
 })
