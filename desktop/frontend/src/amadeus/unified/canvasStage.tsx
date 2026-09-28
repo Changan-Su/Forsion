@@ -1029,6 +1029,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     commitGeo(view, view.state.tr.insert(at, made))
     cbRef.current.onCommit(anchor) // ⚠️ 必须报锚:不进归属集合的话派生会把这张卡当「代表不了全貌」
     setSel([cardKey(anchor)])
+    // **刚建的空卡直接进编辑**(V-04,v3 导图 07-25「新节点直接进编辑」的对标):只选中的话,接着打的字
+    // 落在舞台上被吞掉、盘上留一枚空锚。带内容的(上传占位 / 粘贴卡)不进 —— 那是搬东西,不是要写字。
+    // ⚠️ 调用方在这之后别再 focusStage(),那会把焦点从 PM 抢回舞台(卡片工具那两支已按返回值跳过)。
+    if (!text && !content?.childCount) actRef.current.enterNodeEdit(cardKey(anchor))
     return anchor
   }, [boxesNow])
 
@@ -1533,7 +1537,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       if (p && inNode?.(p.pos)) at = p.pos
     }
     // 空格进编辑后把光标落在节点尾部：用户可直接续写；落在开头会让 Backspace 看似失效。
-    try { view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(at), -1))) } catch { /* 只聚焦 */ }
+    // closeHistory = 进编辑是撤销组的边界:新建空卡后 500ms 内打的字不再并进建卡那一组(V-04),
+    // Cmd+Z 先退字、再退卡。
+    try { view.dispatch(closeHistory(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(at), -1)))) } catch { /* 只聚焦 */ }
     setEditing(key === MAIN_KEY ? MAIN_KEY : keyId(key))
     view.focus()
   }, [])
@@ -2270,9 +2276,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       }
       if (t === 'card') {
         e.preventDefault()
-        actRef.current.addCardAt(at.x - CARD_W / 2, at.y - 24)
+        const made = actRef.current.addCardAt(at.x - CARD_W / 2, at.y - 24)
         setTool('select')
-        focusStage()
+        if (!made) focusStage() // 建成了 = 新空卡已进编辑、焦点在 PM(V-04),别抢回舞台
         return
       }
 
@@ -2437,7 +2443,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       const addEl = target.closest<HTMLElement>('[data-add]')
       if (addEl?.dataset.add && addEl.dataset.node) {
         e.preventDefault()
-        focusStage() // 建完焦点留在舞台:接着按 Tab/回车能继续长下一枚
+        focusStage() // 建卡失败时焦点留在舞台;建成了新空卡会进编辑、焦点转给 PM(V-04,与 Tab/回车同一条)
         actRef.current.addRelated(addEl.dataset.node, addEl.dataset.add === 'child' ? 'child' : 'sibling')
         return
       }
@@ -2727,16 +2733,17 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         // 尺寸只归 DRAW_TOOLS:触屏的 card/text 也走这条通道(见 onDown 的告警),但它们本来就
         // 只有「一击建默认大小」这一种形态,拖出来的框不该变成它们的尺寸。
         const box = DRAW_TOOLS.has(d.tool) && w >= MIN_EL && h >= MIN_EL ? { x: Math.min(d.x0, d.x1), y: Math.min(d.y0, d.y1), w, h } : null
+        let made: string | null = null
         if (d.tool === 'frame') {
           if (box) actRef.current.addFrame(box.x, box.y, box.w, box.h)
           else actRef.current.addFrame(d.x0 - FRAME_SIZE.w / 2, d.y0 - FRAME_SIZE.h / 2)
         } else if (d.tool === 'card') {
-          actRef.current.addCardAt(d.x0 - CARD_W / 2, d.y0 - 24)
+          made = actRef.current.addCardAt(d.x0 - CARD_W / 2, d.y0 - 24)
         } else if (SHAPE_TOOLS[d.tool]) {
           actRef.current.addShapeAt(SHAPE_TOOLS[d.tool], d.x0, d.y0, box ?? undefined)
         }
         setTool('select')
-        focusStage()
+        if (!made) focusStage() // 新空卡已进编辑(V-04),焦点留在 PM
         clearVisuals(d)
         return
       }
@@ -3278,6 +3285,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // **主卡同样吃这一条**(2026-08-19 用户实报;主卡自 08-18 起完全等同卡片)。
     // ⚠️ 只在**焦点在舞台上**时生效 —— 卡内打字的 Tab/回车早在本函数第一句就让位给 PM 了
     //    (那边 Tab=缩进档、回车=新段落,是 08-19 上午刚落地的两条,不能被这里抢走)。
+    // 新卡建成即进编辑(V-04,XMind 同款):写完 Esc 退回选中,再 Tab/回车接着长下一枚。
     if ((e.key === 'Tab' || e.key === 'Enter') && sel.length === 1 && (sel[0].startsWith('c:') || sel[0] === MAIN_KEY)) {
       e.preventDefault()
       addRelated(sel[0] === MAIN_KEY ? MAIN_KEY : keyId(sel[0]), e.key === 'Tab' ? 'child' : 'sibling')

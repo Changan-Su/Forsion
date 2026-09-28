@@ -1284,11 +1284,27 @@ async function main() {
   await p28.close()
 
   // ── C29 Tab/回车 = 子/兄弟节点,层级存 tree 且**不进正文**,层级线画得出来 ──────────────
+  // V-04(2026-09-28):新建的空卡**直接进编辑**(v3 导图 07-25「新节点直接进编辑」/ XMind 同款)。
+  // 修前只选中:Tab 之后接着打的字落在舞台上被吞,盘上留一枚空锚。所以这里钉三件事:
+  // Tab 后新卡在编辑态且焦点在 PM、打的字进了新卡;Esc 退回选中后回车照样建兄弟(同样进编辑);
+  // 层级照旧两条都指向 k1、正文除了打进去的字零污染。
   const ONE = [
     '---', 'amadeus_schema: amadeus.page/4',
     'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":40,"y":40,"w":300}]}',
     '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一。', '',
   ].join('\n')
+  const edit29 = (p) => p.evaluate(() => {
+    const box = document.querySelector('.amx-el-selbox.is-editing')
+    const a = box?.dataset.anchor ?? null
+    const card = a ? [...document.querySelectorAll('.amx-ucard')].find((c) => c.dataset.anchor === a) : null
+    const ae = document.activeElement
+    return {
+      editing: a,
+      pmFocus: !!ae?.closest?.('.ProseMirror'),
+      caretIn: !!card && !!window.getSelection()?.anchorNode && card.contains(window.getSelection().anchorNode),
+      text: card?.textContent ?? null,
+    }
+  })
   const p29 = await open(browser, ONE)
   await p29.waitForTimeout(500)
   const body29before = (await p29.evaluate(() => window.__upage.probe.fmState?.().body ?? ''))
@@ -1301,8 +1317,15 @@ async function main() {
   await p29.waitForTimeout(200)
   await p29.keyboard.press('Tab')
   await p29.waitForTimeout(900)
+  const tab29 = await edit29(p29)
+  await p29.keyboard.type('abc')
+  await p29.waitForTimeout(300)
+  const typed29 = await edit29(p29)
+  await p29.keyboard.press('Escape') // 退回选中(新卡),回车才归舞台
+  await p29.waitForTimeout(250)
   await p29.keyboard.press('Enter')
   await p29.waitForTimeout(1500)
+  const enter29 = await edit29(p29)
   const c29 = await p29.evaluate(() => {
     window.__upage.probe.flush?.()
     const st = window.__upage.probe.fmState?.() ?? {}
@@ -1318,15 +1341,57 @@ async function main() {
   // ⚠️「层级不进正文」不能只搜 `tree|parent` —— 写侧完全可以往正文追加 `{"k2":"k1"}` 或 `k2→k1`
   //    而这个断言照绿(Codex 评审 P2-5)。改成**逐行白名单**:相对建两个节点之前,正文里新增的行
   //    只允许是锚行或空行,任何别的新增都算把层级漏进了正文。
+  //    (V-04 起多一行:Tab 后打进新卡的 `abc`,它是用户的字,白名单单独放行这一行。)
   const before29 = new Set(body29before.split('\n'))
   const added29 = c29.body.split('\n').filter((l) => !before29.has(l))
   // 闭合锚(2026-08-19):新增行白名单 = 开锚 / 闭合符 / 空行(保存迁移会给既有卡补闭合符)。
-  const bodyClean29 = added29.every((l) => l.trim() === '' || /^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->$/.test(l.trim()))
+  const bodyClean29 = added29.every((l) => l.trim() === '' || l.trim() === 'abc' || /^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->$/.test(l.trim()))
   const kids = c29.tree ? Object.entries(c29.tree) : []
-  record('C29 Tab=子节点 / 回车=兄弟节点:两条层级都记在 tree 且指向 k1,画出两条层级线,正文零污染',
-    c29.cards === 3 && kids.length === 2 && kids.every(([, p]) => p === 'k1') && c29.treeLines === 2 && bodyClean29,
-    JSON.stringify({ ...c29, body: undefined, added29 }))
+  const kid1 = tab29.editing
+  record('C29 Tab=子节点(新空卡直接进编辑、字进新卡)/ Esc 后回车=兄弟节点(同样进编辑):两条层级都记在 tree 且指向 k1,画出两条层级线,正文零污染',
+    !!kid1 && kid1 !== 'k1' && tab29.pmFocus && tab29.caretIn
+      && typed29.editing === kid1 && (typed29.text ?? '').trim() === 'abc'
+      && !!enter29.editing && enter29.editing !== kid1 && enter29.editing !== 'k1' && enter29.pmFocus && enter29.caretIn
+      && c29.cards === 3 && kids.length === 2 && kids.every(([, p]) => p === 'k1') && c29.treeLines === 2 && bodyClean29,
+    JSON.stringify({ tab29, typed29, enter29, ...c29, body: undefined, added29 }))
   await p29.close()
+
+  // C29b 进编辑 = 撤销组边界:双击空白建卡后 500ms 内接着打字,Cmd+Z 先只退字(卡还在),再按一次才
+  //   退掉卡。建卡事务只在**前沿**封口,字落在刚插入的范围里 → isAdjacentTo 判相邻、并进建卡那一组,
+  //   一次 Cmd+Z 连卡带字全没。⚠️ 故意走双击空白而不是 Tab:Tab 那条中间还有一笔 fm(层级)写入,
+  //   writeFm 自带断组,拿它测这道边界恒绿(负对照实跑过)。
+  const p29b = await open(browser, ONE)
+  await p29b.waitForTimeout(500)
+  const blank29b = await p29b.evaluate(() => {
+    const r = document.querySelector('.amx-stage').getBoundingClientRect()
+    const at = { x: r.left + r.width - 160, y: r.top + 120 }
+    const hit = document.elementFromPoint(at.x, at.y)
+    return { ...at, blank: !!hit && (hit.classList.contains('amx-stage') || hit.classList.contains('amx-stage-inner') || hit.classList.contains('amx-el-layer')) }
+  })
+  await p29b.mouse.dblclick(blank29b.x, blank29b.y)
+  await p29b.waitForTimeout(120)
+  await p29b.keyboard.type('xy')
+  await p29b.waitForTimeout(700)
+  const cv29b = () => p29b.evaluate(() => {
+    window.__upage.probe.flush?.()
+    let doc = null
+    try { doc = JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { /* null */ }
+    const cards = [...document.querySelectorAll('.amx-ucard')]
+    return { cards: cards.length, texts: cards.map((c) => (c.textContent ?? '').trim()), tree: Object.keys(doc?.tree ?? {}).length }
+  })
+  const b29b0 = await cv29b()
+  await p29b.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p29b.waitForTimeout(700)
+  const b29b1 = await cv29b()
+  await p29b.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p29b.waitForTimeout(700)
+  const b29b2 = await cv29b()
+  await p29b.close()
+  record('C29b 新卡进编辑是撤销边界:双击空白建卡后立刻打字,第一次 Cmd+Z 只退字,第二次才退卡',
+    blank29b.blank && b29b0.cards === 2 && b29b0.texts.includes('xy')
+      && b29b1.cards === 2 && !b29b1.texts.includes('xy')
+      && b29b2.cards === 1,
+    JSON.stringify({ blank: blank29b.blank, typed: b29b0, undo1: b29b1, undo2: b29b2 }))
 
   // ── C30 Frame:拖标题条 = 连辖域一起搬(完全落在框内的才算) ──────────────────────────
   // 顺带钉住「框体不吃指针」:框盖住了主卡,能不能在主卡里正常点出光标就是那条纪律的体检。
