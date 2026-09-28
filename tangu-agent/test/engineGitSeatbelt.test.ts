@@ -93,6 +93,9 @@ describe('① 分类器:仓库配置了 git 会替人跑的程序 → known-safe
       ['gpg.program', 'evil', false], ['gpg.ssh.program', 'evil', false], ['core.sshCommand', 'evil', false], ['credential.helper', 'evil', false],
       ['alias.st', '!sh evil', false], ['core.editor', 'evil', false], ['include.path', '/tmp/x.inc', true], ['includeIf.onbranch:main.path', '/tmp/x.inc', true],
       ['uploadpack.packObjectsHook', 'evil', false], ['hook.pre.command', 'evil', true],
+      // git-lfs 的程序键:调起它的 filter.lfs.* 在全局配置,git-lfs 再从仓库配置读这些(子节大小写不论,git-lfs 整键转小写)
+      ['lfs.extension.evil.clean', 'sh evil', true], ['lfs.extension.evil.smudge', 'sh evil', true], ['lfs.Extension.Evil.clean', 'sh evil', true],
+      ['lfs.customtransfer.x.path', 'evil', true], ['lfs.customtransfer.x.args', 'evil', true], ['lfs.standalonetransferagent', 'x', true],
     ];
     for (const [key, value, engine] of cases) {
       git(dir, 'config', key, value);
@@ -106,6 +109,8 @@ describe('① 分类器:仓库配置了 git 会替人跑的程序 → known-safe
       expect(isKnownSafeBash('git status', dir), `${key} unset`).toBe(true);
     }
     git(dir, 'config', 'alias.lg', 'log --oneline'); // 非 ! 别名不执行程序
+    git(dir, 'config', 'lfs.url', 'https://example.invalid/lfs'); // 不是程序
+    git(dir, 'config', 'lfs.extension.evil.priority', '0');
     git(dir, 'config', 'core.fsmonitor', 'false');
     expect(isKnownSafeBash('git status', dir)).toBe(true);
   });

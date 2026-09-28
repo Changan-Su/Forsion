@@ -10,6 +10,7 @@
  * 任何读不懂的情形(git 报错、index 版本 / 扩展不认、层数或个数超界、`.git` 是软链)一律 'unknown',调用方按「配置了」处理(失败即关)。
  * 只看仓库级配置,不看全局 / 系统配置:git-lfs 的 `filter.lfs.*` 就在 ~/.gitconfig 里,算进来等于人人 `git status` 都要批;
  * 而那两处远程 shell 写不进(家目录顶层点文件与 ~/.config 在拒写名单里),本机 run 写它们也要审批。
+ * 但全局那个 filter 调起的 git-lfs 会从**仓库**配置读它自己的程序键(`lfs.extension.*.clean` 等)—— 那几条照样算(见 classify 的 lfs)。
  */
 import { existsSync, lstatSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -123,6 +124,17 @@ function classify(key: string, value: string | null): { engine: boolean } | null
     case 'sequence': return name === 'editor' ? { engine: false } : null;
     case 'merge': return sub && name === 'driver' ? { engine: false } : null;
     case 'interactive': return name === 'difffilter' ? { engine: false } : null;
+    // git-lfs:调起它的 filter.lfs.* 在全局配置里(上面不看),它自己再从仓库配置读这几条程序键 —— clean 时跑 extension 的 clean,
+    // 传输时跑 customtransfer。读它们的是 git-lfs 不是 git,runGit 的 -c 前缀也写不出未知的扩展名 → engine。
+    // 子节里可以有点;git-lfs 解析 `git config -l` 时整键转小写,git 的 --list 保留子节大小写 → 这里比小写的前缀。
+    // .lfsconfig 不是路子:git-lfs 只从它读 url / fetchinclude 一类白名单键(git-lfs-config 手册)。
+    case 'lfs': {
+      if (!sub) return name === 'standalonetransferagent' ? { engine: true } : null;
+      const subsection = key.slice(first + 1, last).toLowerCase();
+      if (subsection.startsWith('extension.') && ['clean', 'smudge'].includes(name)) return { engine: true };
+      if (subsection.startsWith('customtransfer.') && ['path', 'args'].includes(name)) return { engine: true };
+      return null;
+    }
     default: return null;
   }
 }
@@ -289,7 +301,7 @@ export function repoGitPrograms(top: string): RepoProgramsResult {
 }
 
 /** 引擎自己的 git(runGit)在**没有** Seatbelt 的平台上该不该跑:仓库配了前缀中和不了的程序(filter / include / 配置式钩子 /
- *  core.worktree)、发现落在不受保护的 git 目录、或读不懂 → 不跑(失败即关:这一轮不注入 git 现场,面板显示不可用)。 */
+ *  core.worktree / git-lfs 的程序键)、发现落在不受保护的 git 目录、或读不懂 → 不跑(失败即关:这一轮不注入 git 现场,面板显示不可用)。 */
 export function engineGitBlocked(cwd: string): boolean {
   const found = gitDiscovery(cwd, { honourEnv: false });
   if (found === 'none') return false;

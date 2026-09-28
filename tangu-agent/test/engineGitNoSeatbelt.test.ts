@@ -3,7 +3,8 @@
  * 固定前缀中和不了的程序(filter / include / …)时**不跑**(失败即关),前缀中和得了的(fsmonitor、hooksPath、sshCommand …)照跑。
  * 在 macOS 上把 process.platform 打桩成 'linux' 跑真 git:runGit / prepareHostCommand / engineGitBlocked 都在调用时读 platform,
  * 走的就是非 darwin 那条路(不包 sandbox-exec)。
- * 负对照(实跑见方案 B 交付报告):去掉 runGit 开头的 engineGitBlocked → filter 那条红(config.json 被清空)。
+ * 负对照(实跑见方案 B 交付报告):去掉 runGit 开头的 engineGitBlocked → filter 那条红(config.json 被清空);
+ *   去掉 gitRepoPrograms classify 的 lfs 分支 → git-lfs 形状那条红。
  * 跑:cd tangu-agent && npx vitest run test/engineGitNoSeatbelt.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
@@ -90,6 +91,30 @@ describe.skipIf(realPlatform === 'win32')('非 darwin(没有 Seatbelt):引擎的
     touch();
     execFileSync('git', ['status', '--porcelain'], { cwd: dir });
     expect(readFileSync(cfgPath, 'utf8')).toBe('');
+  });
+
+  it('git-lfs 形状:filter.lfs 在全局配置、仓库配置只有 lfs.extension.*.clean → 同样不跑;裸跑时这条链是真的', async () => {
+    // 本机没装 git-lfs:用一个照 git-lfs 行为写的替身 —— 全局 filter.lfs.clean 调起它,它从仓库配置读 lfs.extension.<名>.clean 并执行
+    // (真 git-lfs 的 clean 对每个扩展都这么做,见 git-lfs-config 手册)。仓库配置里没有任何 filter.* 键,挡住它的只有 lfs 那一类。
+    const fakeLfs = join(base, 'fake-git-lfs.sh');
+    writeFileSync(fakeLfs, `cmd=$(git config --get-regexp '^lfs\\.extension\\..*\\.clean$' | head -n1 | cut -d' ' -f2-)\n[ -n "$cmd" ] && exec sh -c "$cmd"\nexec cat\n`);
+    const globalCfg = join(base, 'global-lfs.gitconfig');
+    writeFileSync(globalCfg, `[filter "lfs"]\n\tclean = sh ${q(fakeLfs)} %f\n\trequired = true\n`);
+    const { dir, touch } = repoAt('lfs');
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    try {
+      git(dir, 'config', 'lfs.extension.evil.clean', `sh ${payload}`);
+      writeFileSync(join(dir, '.gitattributes'), '* filter=lfs\n');
+      touch();
+      expect(engineGitBlocked(dir)).toBe(true);
+      expect(await collectGitState(dir, host(dir))).toBeNull();
+      expect(await gitSummary(dir).catch(() => 'rejected')).toBe('rejected');
+      expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+      expect(isKnownSafeBash('git status', dir)).toBe(false);
+      touch();
+      execFileSync('git', ['status', '--porcelain'], { cwd: dir });
+      expect(readFileSync(cfgPath, 'utf8')).toBe('');
+    } finally { process.env.GIT_CONFIG_GLOBAL = '/dev/null'; }
   });
 
   it('子模块 / 嵌套仓里的 filter 同样挡住(git status 会递归进去)', async () => {
