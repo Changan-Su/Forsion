@@ -12,8 +12,9 @@ import type { TextWriteResult } from './ipc'
 export interface RenamePropagationIO {
   /** 读一篇的原文;不存在 → null(跳过,不算失败)。 */
   read(path: string): Promise<string | null>
-  /** 比对交换写:base = 读到那版的 textFingerprint。`{ ok:false, current }` = 盘上已变、本次没写;void / ok:true = 写成。 */
-  write(path: string, text: string, base: string): Promise<void | TextWriteResult>
+  /** 比对交换写:base = 读到那版的 textFingerprint。`{ ok:false, current }` = 盘上已变、本次没写;void / ok:true = 写成。
+   *  'gone' = 目标已不在(读完之后被删 / 挪走):**只更新已存在的文件**,绝不按旧路径重建 —— 记入 failed(路径已变)。 */
+  write(path: string, text: string, base: string): Promise<void | TextWriteResult | 'gone'>
 }
 
 export interface RenamePropagationResult {
@@ -47,6 +48,10 @@ export async function propagateNoteRenames(
         const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, plan)
         if (next === raw) return
         const r = await io.write(p, next, textFingerprint(raw))
+        if (r === 'gone') {
+          out.failed.push({ path: p, error: 'gone' })
+          return
+        }
         if (!r || r.ok) {
           out.rewritten.push(p)
           return

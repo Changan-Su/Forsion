@@ -14,7 +14,7 @@ import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { dbFileSchema, parseDb, serializeDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import type { DbFile } from '@amadeus-shared/db/schema'
-import type { AmadeusApi, DbReadResult, LinkMeta, PageProps, VaultInfo } from '@amadeus-shared/ipc'
+import type { AmadeusApi, DbReadResult, LinkMeta, PageProps, TextWriteResult, VaultInfo } from '@amadeus-shared/ipc'
 import { VaultManager } from './vaultManager'
 import { VaultIndex } from './vaultIndex'
 import { propagateNoteRenames } from '@amadeus-shared/propagateNoteRenames'
@@ -40,9 +40,39 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     await index.build()
     built = true
   }
+  // ---- 同一路径的文本写串行化 + 比对交换写(评审 G2-04 复核 P0)----
+  // 改名重写原先「读盘比对 → 写」之间隔着 await,编辑器恰在其间存盘 → 新正文被旧快照整篇盖掉、还报成功;
+  // writeTextFile 也不认 base。单进程够用:按路径的 promise 链;编辑器保存(writeTextFile / savePage / 外科写 fm)
+  // 与链接重写都经过它,锁内 读 → 比对 → 写(契约同桌面 / web:盘上不是基线 → 不写,交回 { ok:false, current })。
+  // 不可重入:只包最底层那段读改写,锁里别再调会拿锁的东西。
+  const pathChains = new Map<string, Promise<unknown>>()
+  const withPathLock = <T>(p: string, fn: () => Promise<T>): Promise<T> => {
+    const key = p.replace(/\\/g, '/')
+    const prev = pathChains.get(key) ?? Promise.resolve()
+    const run = prev.then(fn, fn)
+    const tail = run.catch(() => {})
+    pathChains.set(key, tail)
+    void tail.then(() => { if (pathChains.get(key) === tail) pathChains.delete(key) })
+    return run
+  }
+  /** base 缺省 = 老语义(无条件写,返回 void)。文件不在 = 无冲突(同桌面)—— 除非 existingOnly(改名重写专用):
+   *  目标已不在 → 'gone',绝不把别处刚删 / 挪走的笔记按旧路径重建。 */
+  const writeText = (p: string, text: string, opts?: { base?: string; existingOnly?: boolean }): Promise<void | TextWriteResult | 'gone'> =>
+    withPathLock(p, async () => {
+      await ensureVault()
+      const base = typeof opts?.base === 'string' ? opts.base : null
+      if (base != null || opts?.existingOnly) {
+        const exists = await vault.pathExists(p)
+        if (!exists && opts?.existingOnly) return 'gone' as const
+        const cur = exists ? await vault.readTextAbs(vault.absPath(p)) : null
+        if (base != null && cur != null && textFingerprint(cur) !== base) return { ok: false as const, current: cur }
+      }
+      await vault.writeTextFile(p, text)
+      return base != null ? { ok: true as const } : undefined
+    })
+
   // ---- 改名 / 移动之后的全库 [[链接]] 重写(评审 G2-04;桌面 = 主进程 vaultHandlers.propagateRenames)----
-  // 此前移动端只做纯移动 → 所有引用断链,点进去新建一篇空笔记。本地库没有写锁、writeTextFile 也不认 base(契约里
-  // 登记的非 CAS 宿主),所以写口自己「写前紧贴着再读一次比对」,把竞态窗口压到一个 await;对不上就交回现文重算。
+  // 此前移动端只做纯移动 → 所有引用断链,点进去新建一篇空笔记。写走上面带锁的比对交换写(existingOnly)。
   // 本地库没有 watcher:改写过的笔记由这里通知开着它们的编辑器回灌(onExternalChange 原本是空实现)。
   // 没能改写的 → 提示,绝不静默吞。
   const extCbs = new Set<(p: string) => void>()
@@ -51,11 +81,9 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       {
         read: async (p) => ((await vault.pathExists(p)) ? vault.readTextAbs(vault.absPath(p)) : null),
         write: async (p, text, base) => {
-          const cur = await vault.readTextAbs(vault.absPath(p))
-          if (textFingerprint(cur) !== base) return { ok: false, current: cur }
-          await vault.writeTextFile(p, text)
-          await index.update(p)
-          return { ok: true }
+          const r = await writeText(p, text, { base, existingOnly: true })
+          if (r && r !== 'gone' && r.ok) await index.update(p)
+          return r
         },
       },
       pairs,
@@ -105,11 +133,12 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await index.update(pagePath)
       return page
     },
-    savePage: async (pagePath, manifest: PageManifest, contents: Record<string, string>) => {
-      await ensureVault()
-      await savePage(vault.pageIO(pagePath), pagePath, manifest, { contents })
-      await index.update(pagePath)
-    },
+    savePage: (pagePath, manifest: PageManifest, contents: Record<string, string>) =>
+      withPathLock(pagePath, async () => {
+        await ensureVault()
+        await savePage(vault.pageIO(pagePath), pagePath, manifest, { contents })
+        await index.update(pagePath)
+      }),
     renamePage: async (oldPath, newName, manifest: PageManifest, contents: Record<string, string>) => {
       await ensureVault()
       const dir = path.dirname(oldPath)
@@ -202,15 +231,16 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
 
     // 外科式 frontmatter 写(镜像 electron ipc.ts 的 setPageFrontmatter;.fd children 同步依赖)。
-    setPageFrontmatter: async (pagePath, patch) => {
-      await ensureVault()
-      const io = vault.pageIO(pagePath)
-      const name = pageFileName(pagePath)
-      if (!(await io.exists(name))) return // 笔记不在(已被删)→ 静默跳过
-      const raw = await io.readFile(name)
-      await vault.writeTextFile(pagePath, setFmExtraOnSource(raw, patch))
-      await index.update(pagePath)
-    },
+    setPageFrontmatter: (pagePath, patch) =>
+      withPathLock(pagePath, async () => {
+        await ensureVault()
+        const io = vault.pageIO(pagePath)
+        const name = pageFileName(pagePath)
+        if (!(await io.exists(name))) return // 笔记不在(已被删)→ 静默跳过
+        const raw = await io.readFile(name)
+        await vault.writeTextFile(pagePath, setFmExtraOnSource(raw, patch))
+        await index.update(pagePath)
+      }),
 
     // 派生索引
     search: async (query) => { await ensureVault(); return index.search(query) },
@@ -269,7 +299,8 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       try { return await vault.readTextAbs(vault.absPath(p)) } catch { return null }
     },
-    writeTextFile: async (p, text) => { await ensureVault(); await vault.writeTextFile(p, text) },
+    // 带 base = 比对交换写(与桌面 / web 同契约);编辑器保存与改名重写同走一把按路径的锁(见 writeText)。
+    writeTextFile: (p, text, opts) => writeText(p, text, { base: opts?.base }) as Promise<void | TextWriteResult>,
 
     // ---- 回收站(.trash 语义在 vaultManager;desktop 同款 trash 后全量重建索引) ----
     trashEntry: async (rel) => { await ensureVault(); await vault.trashEntry(rel); await index.build() },

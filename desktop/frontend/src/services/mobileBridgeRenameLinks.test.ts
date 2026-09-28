@@ -4,13 +4,17 @@
  * path-browserify 用 node:path 的 posix 版顶替;索引(VaultIndex)与桥本体是真的。
  *  - renamePageFile / movePage / renameFolder:引用跟到新名 / 新路径,改写过的笔记经 onExternalChange 通知(原来是空实现)
  *  - 写前盘上已不是读到的那版 → 按现文重算,不盲盖
+ *  - (复核 P0)重写正写着时编辑器存盘:同一把按路径的锁,编辑器那发排在后面、基线不符拿回 ok:false,
+ *    不会「报成功、字却被重写的旧快照盖掉」。负对照(实跑过):withPathLock 改成直接调用 → 这条红。
  * 负对照(实跑过):摘掉 renamePageFile 里的 propagateRenames → 第 1 条红。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AmadeusApi } from '@amadeus-shared/ipc'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 
 const disk = new Map<string, string>()
 let afterRead: (rel: string) => void = () => {}
+let writeGate: ((rel: string) => Promise<void>) | null = null
 
 vi.mock('path-browserify', async () => {
   const p = await import('node:path')
@@ -33,7 +37,7 @@ vi.mock('../../../../mobile/src/amadeus/vaultManager', () => {
       afterRead(rel(abs))
       return t
     }
-    async writeTextFile(p: string, text: string): Promise<void> { disk.set(p, text) }
+    async writeTextFile(p: string, text: string): Promise<void> { if (writeGate) await writeGate(p); disk.set(p, text) }
     async pathExists(p: string): Promise<boolean> { return disk.has(p) || [...disk.keys()].some((k) => k.startsWith(`${p}/`)) }
     async moveEntry(src: string, dst: string): Promise<void> {
       for (const [k, v] of [...disk]) {
@@ -53,6 +57,7 @@ const { createMobileAmadeusBridge } = (await import(/* @vite-ignore */ MOBILE_BR
 beforeEach(() => {
   disk.clear()
   afterRead = () => {}
+  writeGate = null
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
   vi.stubGlobal('window', { dispatchEvent: () => true })
 })
@@ -89,5 +94,24 @@ describe('mobile bridge: rename / move rewrites [[links]] (G2-04)', () => {
     await bridge.renamePageFile('B.md', 'C')
     expect(bumped).toBe(true)
     expect(disk.get('A.md')).toBe('x [[C]]\n编辑器刚存的一行\n')
+  })
+  it('复核 P0:重写正写着时编辑器存盘 → 排在同一把路径锁后面,基线不符拿回 ok:false,绝不报成功却被盖掉', async () => {
+    const orig = 'x [[B]]\n'
+    const { bridge } = await boot({ 'A.md': orig, 'B.md': 'b\n' })
+    let release: () => void = () => {}
+    let parked = false
+    writeGate = async (p) => {
+      if (p !== 'A.md' || parked) return
+      parked = true // 重写已比对完、正卡在落盘这一步
+      await new Promise<void>((r) => { release = r })
+    }
+    const renaming = bridge.renamePageFile('B.md', 'C')
+    await vi.waitFor(() => expect(parked).toBe(true))
+    const saving = bridge.writeTextFile('A.md', `${orig}编辑器新打的一行\n`, { base: textFingerprint(orig) })
+    await new Promise((r) => setTimeout(r, 20))
+    release()
+    await renaming
+    expect(await saving).toEqual({ ok: false, current: 'x [[C]]\n' })
+    expect(disk.get('A.md')).toBe('x [[C]]\n')
   })
 })
