@@ -900,6 +900,10 @@ async function main() {
         await page.waitForTimeout(200)
         const s = (await shape(page)).replace(/ \/ +/g, ' / ')
         check(`K22 ${name}`, s === expect && (selWant ? sel.node === selWant : sel.json === 'text'), `${s} | sel=${JSON.stringify(sel)}`)
+        await page.close()
+      }
+    }
+
     if (want('K19')) {
       // K19(评审 K-19):标题里 Shift+Enter 同回车 —— ATX 标题容不下换行,放行硬换行时 H3 及以下落盘成 `### 甲 乙`
       //   (所见非所存),H1/H2 落 setext。现在:行中 = 从光标切出正文;行首 = 上方插空正文、标题整条保留;正文里仍是硬换行。
