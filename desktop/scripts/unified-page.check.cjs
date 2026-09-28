@@ -1505,6 +1505,8 @@ async function main() {
   // P20b:页内查找替换(C-18)。UnifiedPage 注册 replace provider(所见即所得 → PM 事务;源码模式 → textarea 镜像 +
   //  execCommand)。钉:单行选区预填查找词;大小写 / 正则开关改计数;替换当前后跳到下一条;全部替换 = 一步撤销;
   //  嵌入卡里的命中查得到但不可替换;源码模式也能查能换、落盘带新文、原生撤销能撤回。
+  //  源码模式命中只算镜像里那一条、且真画在 textarea 上(C-05「幻影命中」:扫到 textarea 子文字节点 → 1/1 无高亮;
+  //  负对照:findInPage 的 TEXTAREA 排除摘掉 → hits=2 红,已实跑)。
   {
     const seed = '# 替换页\n\napple 一号,Apple 二号。\n\n苹**果**三号,苹果四号,苹果五号。\n\n![[Embedded]]\n'
     const pg = await browser.newPage({ locale: 'zh-CN' })
@@ -1584,6 +1586,13 @@ async function main() {
     await pg.waitForTimeout(400)
     await q('二号')
     const f1 = await st()
+    // C-05「幻影命中」:源码模式曾显示 1/1 却无高亮不滚动(扫到了 textarea 的子文字节点,零尺寸)。命中必须真画在 textarea 上。
+    f1.visible = await pg.evaluate(() => {
+      const r = [...(CSS.highlights.get('amx-find') ?? [])][0]
+      if (!r) return false
+      const b = r.getBoundingClientRect(), ta = document.querySelector('.amx-source').getBoundingClientRect()
+      return b.width > 0 && b.height > 0 && b.top >= ta.top - 1 && b.bottom <= ta.bottom + 1 && b.left >= ta.left - 1 && b.right <= ta.right + 1
+    })
     await r('贰号')
     await act(1)
     await pg.waitForTimeout(1300)
@@ -1603,7 +1612,7 @@ async function main() {
         c3.md.includes('梨果四号,梨果五号') && !c3.md.includes('苹果') &&
         c4.includes('苹果四号,苹果五号') && !c4.includes('梨果四号') &&
         e1.hits === 2 && !e1.canReplace &&
-        f1.hits === 1 && f1.inMirror === 1 && f1.canReplace &&
+        f1.hits === 1 && f1.inMirror === 1 && f1.visible && f1.canReplace &&
         f2.ta.includes('Apple 贰号') && f2.md.includes('Apple 贰号') && f2.hits === 0 &&
         f3.ta.includes('Apple 二号') && f3.md.includes('Apple 二号'),
       JSON.stringify({ a, b1: b1.count, b2: b2.count, c1: c1.count, c2: c2.count, c3: { count: c3.count, hits: c3.hits, md: c3.md.slice(0, 80) }, c4: c4.slice(0, 80), e1, f1, f2: { ...f2, ta: f2.ta.slice(0, 60), md: f2.md.slice(0, 60) }, f3: { ta: f3.ta.slice(0, 60), md: f3.md.slice(0, 60) } }))
