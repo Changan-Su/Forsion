@@ -14,6 +14,15 @@
 - Shortcuts (symlinks) in an agent's private Library folder that point outside it can no longer be read.
 - The local engine now uses its own local token instead of your Forsion account token.
 - MCP: the server names `dev` and anything starting with `dev_` are reserved for built-in developer tools. Existing servers with those names stop loading and show an error in their status; renaming them brings them back. Error and text results from MCP tools are marked as external data before they reach the model, and images they return are treated as untrusted content.
+<!-- P1-K5 -->
+- **This computer's device credentials are now encrypted**. The pairing credentials behind "Allow other devices to connect" and the token for an external engine are now kept in the system keychain (macOS Keychain, Windows DPAPI, or GNOME Keyring or KWallet on Linux) instead of in plain text in a configuration file, and they no longer appear in the configuration the app's interface can read. They move over automatically the first time you start the new version.
+- On macOS, after an update the system may ask for keychain access the first time Forsion reads these credentials. Choose "Always Allow". If you deny it, this computer won't switch to a new device identity and won't fall back to storing them in plain text; it only stops connecting to your other devices for now (direct LAN connections keep working). The system won't ask again while Forsion is running, so the notice offers "Restart Forsion": restart and choose "Always Allow" to recover. If the saved credentials can no longer be decrypted (for example, the keychain was reset), click "Retry", or confirm "Re-register this device" in the system dialog (your other devices will need to trust it again).
+- If the token for an external engine can't be read, the external connection panel in Settings › Connection shows a notice. You can retry, restart, or enter the token again.
+- On Linux without a usable system keyring (for example, no GNOME Keyring or KWallet installed), these credentials are stored as before and the device switcher shows a notice. Remote sessions can't be turned on in this state.
+- What encryption covers: the Windows and Linux keychains aren't isolated per app, so other programs running as the same user may still read them. It protects against the credentials being read straight from a configuration file or carried off in a backup or sync copy.
+- If you go back to an older version of Forsion, this computer registers again as a new device and your other devices need to confirm it again. You'll also need to re-enter the token for an external engine.
+- The LAN pairing prompt, the repeated-crash dialog, the download-complete notification and the titles of system file pickers now follow the interface language. They used to always be in Chinese.
+<!-- /P1-K5 -->
 
 ## 2.11.4 (2026-09-23)
 

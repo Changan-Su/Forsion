@@ -28,6 +28,7 @@ import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, useI18n } from '../i18n'
 import { ipcErrorText } from '../ipcError'
+import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import type { UnitInfo, UnitPairedDevice } from '../types'
 import '../styles/unitSwitcher.css'
 
@@ -364,6 +365,8 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 <span className="unitsw-foot-label">{t('unit.hostToggle')}</span>
                 <span className="unitsw-switch" aria-hidden />
               </button>
+              {/* P1-K5:设备凭据降级 / 锁定提示(只在互联开着时才问状态 —— 问状态会判定钥匙串等级) */}
+              {hostEnabled && <SecretStorageNotice onChange={() => { void refresh() }} />}
               {hostEnabled && (
                 <div className="unitsw-foot-hint">
                   {host?.lanUrl ? t('unit.lanAddr', { addr: host.lanUrl }) : host?.connected ? t('unit.hostConnected') : t('unit.hostStarting')}
