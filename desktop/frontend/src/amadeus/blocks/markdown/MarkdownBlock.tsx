@@ -101,6 +101,7 @@ import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutTo
 import { codeBlockPlugin } from './codeBlock'
 import { askString } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
+import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠
@@ -822,6 +823,19 @@ export function MilkdownInner({
         view.dispatch(view.state.tr.insertText(raw, from, sel.to))
         if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
+      }
+      // 纯文本多行(D-10,拍板 #12):只有 text/plain、不像 markdown → 一行一段,再交回同一条 markdown 粘贴管线
+      // (Milkdown clipboard 从 clipboardData 取 text/plain → parserCtx)。转换后已无单个 `\n`,重入本函数不会再进这一支。
+      // 代码块内不动(那里 `\n` 就是代码的换行)。见 ./plainPaste。
+      const plain = event.clipboardData?.getData('text/plain') ?? ''
+      if (
+        unified && plain && !event.clipboardData?.getData('text/html') &&
+        !sel.$from.parent.type.spec.code && isPlainMultiline(plain)
+      ) {
+        const dt = new DataTransfer()
+        dt.setData('text/plain', plainLinesToParagraphs(plain))
+        event.preventDefault()
+        return view.pasteText(dt.getData('text/plain'), new ClipboardEvent('paste', { clipboardData: dt }))
       }
       return false
     }
