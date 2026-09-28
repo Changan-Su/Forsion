@@ -16,7 +16,7 @@ registerMessages({
   'remoteSafety.source.hotkey': { zh: '快捷键', en: 'shortcut' },
   'remoteSafety.source.tray': { zh: '菜单栏', en: 'menu bar' },
   'remoteSafety.source.settings': { zh: '设置', en: 'Settings' },
-  'remoteSafety.lockedDesc': { zh: '其他设备现在只能查看和停止任务，不能新建、继续、批准或修改任何东西。', en: 'Other devices can only view and stop tasks now. They can’t start, continue, approve or change anything.' },
+  'remoteSafety.lockedDesc': { zh: '其他设备现在只能查看和停止任务。', en: 'Other devices can only view and stop tasks now.' },
   'remoteSafety.persistFailed': { zh: '锁定状态没能写入磁盘，退出 Forsion 前请保持它运行，或再急停一次。', en: 'The lock couldn’t be saved to disk. Keep Forsion running, or press emergency stop again.' },
   'remoteSafety.pendingEstop': { zh: '引擎暂不可达，急停会在它恢复后自动补发。', en: 'The engine is unreachable right now. The stop will be sent again once it’s back.' },
   'remoteSafety.estopNow': { zh: '立即急停', en: 'Emergency stop' },
@@ -38,7 +38,7 @@ registerMessages({
   'remoteSafety.reset': { zh: '恢复默认', en: 'Reset' },
   'remoteSafety.running': { zh: '运行中的远程任务', en: 'Remote tasks running' },
   'remoteSafety.runningEmpty': { zh: '现在没有远程任务在运行。', en: 'No remote tasks are running.' },
-  'remoteSafety.startedAt': { zh: '开始于 {time}', en: 'Started {time}' },
+  'remoteSafety.startedAt': { zh: '{time}开始', en: 'Started {time}' },
   'remoteSafety.waiting': { zh: '等你处理', en: 'Waiting for you' },
   'remoteSafety.stop': { zh: '停止', en: 'Stop' },
   'remoteSafety.keepAwake': {

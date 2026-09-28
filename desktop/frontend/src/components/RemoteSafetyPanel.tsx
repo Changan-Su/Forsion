@@ -137,13 +137,12 @@ export function RemoteSafetyPanel(): React.ReactNode {
           description={<>
             <span data-rsf-lock-state={st.locked ? 'locked' : 'unlocked'}>{lockedDesc}</span>
             {st.locked && <span className="rsf-meta">{t('remoteSafety.lockedDesc')}</span>}
-            {st.locked && <span className="rsf-meta">{t('remoteSafety.unlockHint')}</span>}
             {st.lockPersistFailed && <span className="rsf-meta rsf-danger" data-rsf-persist-failed="">{t('remoteSafety.persistFailed')}</span>}
             {st.pendingEstop && <span className="rsf-meta rsf-danger" data-rsf-pending-estop="">{t('remoteSafety.pendingEstop')}</span>}
           </>}
           control={<div className="rsf-actions">
             {st.locked && (
-              <button type="button" className="btn ghost sm" data-rsf="unlock" disabled={!!busy} onClick={unlock}>
+              <button type="button" className="btn ghost sm" data-rsf="unlock" title={t('remoteSafety.unlockHint')} disabled={!!busy} onClick={unlock}>
                 {busy === 'unlock' && <Loader2 size={12} className="spin" aria-hidden="true" />}{t('remoteSafety.unlock')}
               </button>
             )}
