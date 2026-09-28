@@ -51,7 +51,7 @@ import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
-import { TargetHealthNotice, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
+import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -64,7 +64,6 @@ const isHiddenInList = (m: UiMessage): boolean =>
 
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
-  const targetPlaceholder = useTargetComposerPlaceholder() // P1-K6:焦点在我的电脑且没连上 → 「等待那台连上」
   const showWaitDetails = useChatWaitDetailsEnabled()
   const childSelections = useChildChat((state) => state.selected)
   const [raiseTeam, setRaiseTeam] = useState(false)
@@ -81,6 +80,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   const studioRoot = useCodeStudio(state => state.activeProject)
   const pinnedSessionId = typeof params.sessionId === 'string' ? params.sessionId : null
   const activeId = followActive ? globalActiveId : pinnedSessionId
+  // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
+  const targetPlaceholder = useTargetComposerPlaceholder(activeId)
+  const composerTargetReady = useComposerReady(activeId)
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
   const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
@@ -680,7 +682,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
             //    接管这一格 —— 要么收编 TargetHealthNotice(读同一张 useTargetHealth、同一个 retryFocusTarget),要么换成自己的条并把
             //    这里还原成裸 QuotaAdvisoryBanner;下面 disabledPlaceholder 的 targetPlaceholder 随 K7 的 remoteBlocked 一起并过去。
-            <TargetHealthNotice fallback={
+            <TargetHealthNotice sessionId={activeId} fallback={
               <QuotaAdvisoryBanner
                 loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
                 onToast={s.toast}
@@ -690,7 +692,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
           liveOwner={followActive && leaf.loc === 'main'}
           liveSessionKey={activeId}
-          disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
+          disabled={!!params.readOnly || !composerTargetReady || (studioChat && !studioRoot)}
           disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : targetPlaceholder}
           running={running}
           execConfig={teamCfg ? { ...mvCfg, approvalMode: teamCfg.approvalMode || mvCfg.approvalMode } : mvCfg}

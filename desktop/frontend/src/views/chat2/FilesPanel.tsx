@@ -25,7 +25,7 @@ import { listWorkspace, readWorkspaceFile, downloadWorkspaceFile, deleteWorkspac
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { useApp } from '../../stores/appStore'
 import { hostTargetFor } from '../wsFileNav'
-import { refForSession, useEngineFocus, targetForSession } from '../../services/engine/targets'
+import { refForSession, targetForSession, useComposerRef } from '../../services/engine/targets'
 import { capsForRef } from '../../services/engine/targetCaps'
 import { tipProps, fsTipLines } from '../../hoverTip'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
@@ -368,10 +368,9 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   const toggleOpenWorkspace = useApp((s) => s.toggleOpenWorkspace)
   const locals = workspaces.filter((w) => w.kind === 'local' && !!w.path)
   const clouds = workspaces.filter((w) => w.kind === 'cloud' && !!w.project)
-  // M1B:当前会话在别的电脑上 → 顶上一组「本会话的文件」(那台电脑上的会话沙箱)。订阅焦点:切到 / 切离那台电脑时重算
+  // M1B:当前会话在别的电脑上 → 顶上一组「本会话的文件」(那台电脑上的会话沙箱)。S4 起按会话的绑定判(订阅绑定表:绑上 / 忘掉时重算)
   const activeId = useApp((s) => s.activeId)
-  useEngineFocus((s) => s.ref)
-  const remoteSid = activeId && refForSession(activeId).kind === 'unit' ? activeId : null
+  const remoteSid = useComposerRef(activeId).kind === 'unit' ? activeId : null
   const [sessionOpen, setSessionOpen] = useState(true)
   const [rootsByKey, setRootsByKey] = useState<Record<string, Entry[] | null>>({})
   const scrollRef = useRef<HTMLDivElement>(null)

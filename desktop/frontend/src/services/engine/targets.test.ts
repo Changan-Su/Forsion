@@ -378,7 +378,7 @@ describe('S2 · unit 目标与焦点', () => {
     await expect(T.unitFetch(T.homeTarget(), '/unit/hostfile?path=a')).rejects.toThrow(TypeError)
   })
 
-  it('setFocusTarget:校验 → 焦点 / 已知目标 / 会话目标都跟着变;按账号落盘,restoreFocus 读回', async () => {
+  it('setFocusTarget:校验 → 焦点 / 已知目标跟着变(会话目标不跟:S4 = 绑定 ?? home);按账号落盘,restoreFocus 读回', async () => {
     phone()
     const refocus = vi.fn(async () => {})
     T.installEngineHost({ cfg: () => ({ backendUrl: API, token: JWT, modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }), refocus })
@@ -388,7 +388,7 @@ describe('S2 · unit 目标与焦点', () => {
     expect(T.focusRef()).toEqual({ kind: 'unit', unitId: U })
     expect(T.focusName()).toBe('Mac mini')
     expect(T.focusTarget().key).toBe(`unit:${U}`)
-    expect(T.targetForSession('any-session').key).toBe(`unit:${U}`) // S2 = 焦点(R-19)
+    expect(T.targetForSession('any-session').key).toBe('home') // S4(R-19):没绑过的会话永不回落焦点
     expect(T.knownTargets().map((t) => t.key)).toEqual(['home', `unit:${U}`])
     expect(refocus).toHaveBeenCalledTimes(1)
     await T.setFocusTarget({ kind: 'unit', unitId: U }) // 同一处幂等:不再 refocus
@@ -432,6 +432,104 @@ describe('S2 · unit 目标与焦点', () => {
     phone()
     vi.stubGlobal('window', { tangu: {} })
     expect(T.restoreFocus()).toEqual({ kind: 'home' })
+  })
+
+  // ═══ S4:按会话绑定 ═══
+  const U2 = '7f0e8a52-0000-4000-8000-00000000000b'
+  const bindingsKey = `forsion_session_targets:${new URL(API).origin}/api::u-42`
+
+  it('S4 · targetForSession = 绑定 ?? home,永不回落焦点(R-19);knownTargets = home + 焦点 + 有绑定会话的 unit(R-20)', async () => {
+    phone()
+    T.clearSessionBindings()
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    expect(T.targetForSession('unbound').key).toBe('home')
+    expect(T.refForSession('unbound')).toEqual({ kind: 'home' })
+    expect(T.bindSession('on-a', { kind: 'unit', unitId: U })).toBe('bound')
+    expect(T.targetForSession('on-a')).toBe(T.targetForRef({ kind: 'unit', unitId: U }))
+    // 焦点换到另一台:绑在 A 上的会话仍打 A;焦点是 B,B 也进已知目标
+    await T.setFocusTarget({ kind: 'unit', unitId: U2 })
+    expect(T.targetForSession('on-a').key).toBe(`unit:${U}`)
+    expect(T.knownTargets().map((t) => t.key)).toEqual(['home', `unit:${U2}`, `unit:${U}`])
+    // 焦点回本端:A 仍因有绑定会话而是已知目标;忘掉那条会话之后才不是
+    await T.setFocusTarget({ kind: 'home' })
+    expect(T.targetForSession('on-a').key).toBe(`unit:${U}`)
+    expect(T.knownTargets().map((t) => t.key)).toEqual(['home', `unit:${U}`])
+    T.forgetSession('on-a')
+    expect(T.knownTargets().map((t) => t.key)).toEqual(['home'])
+    expect(T.targetForSession('on-a').key).toBe('home')
+  })
+
+  it('S4 · inheritBinding:子会话跟父会话走;父在本端 → 子不必绑;子已绑到别处 → conflict', () => {
+    phone()
+    T.clearSessionBindings()
+    T.bindSession('parent', { kind: 'unit', unitId: U })
+    expect(T.inheritBinding('child', 'parent')).toBe('bound')
+    expect(T.locationOf('child')).toEqual({ kind: 'unit', unitId: U })
+    expect(T.inheritBinding('home-child', 'home-parent')).toBe('bound')
+    expect(T.locationOf('home-child')).toEqual({ kind: 'home' })
+    T.bindSession('squatter', { kind: 'unit', unitId: U2 })
+    expect(T.inheritBinding('squatter', 'parent')).toBe('conflict')
+    expect(T.inheritBinding('squatter', 'home-parent')).toBe('conflict')
+    expect(T.locationOf('squatter')).toEqual({ kind: 'unit', unitId: U2 })
+  })
+
+  it('S4 · 绑定按账号落盘:只存 unit 条;读回逐条过 isTargetKey + 设备 id 形状;别的账号读不到', () => {
+    phone()
+    T.clearSessionBindings()
+    T.bindSession('m1', { kind: 'unit', unitId: U })
+    T.bindSession('h1', { kind: 'home' })
+    expect(JSON.parse(store.get(bindingsKey)!)).toEqual({ m1: `unit:${U}` })
+    // 盘上被篡改 / 旧形状混进来:坏条逐条丢,好条留下
+    store.set(bindingsKey, JSON.stringify({ m1: `unit:${U}`, m2: 'cloud', m3: 'unit:', m4: 'unit:not-a-uuid', m5: 'home', m6: 42, '': `unit:${U}` }))
+    T.clearSessionBindings()
+    expect(T.restoreSessionBindings()).toBe(1)
+    expect(T.locationOf('m1')).toEqual({ kind: 'unit', unitId: U })
+    for (const sid of ['m2', 'm3', 'm4', 'm5', 'm6']) expect(T.locationOf(sid), sid).toEqual({ kind: 'home' })
+    // 坏 JSON / 不是对象 → 空
+    for (const bad of ['{', 'null', '[]', '"x"']) {
+      store.set(bindingsKey, bad)
+      T.clearSessionBindings()
+      expect(T.restoreSessionBindings(), bad).toBe(0)
+    }
+    // 别的账号:读不到这份
+    store.set(bindingsKey, JSON.stringify({ m1: `unit:${U}` }))
+    phone({}, `${b64({ alg: 'none' })}.${b64({ userId: 'someone-else' })}.sig`)
+    T.clearSessionBindings()
+    expect(T.restoreSessionBindings()).toBe(0)
+    expect(T.locationOf('m1')).toEqual({ kind: 'home' })
+  })
+
+  it('S4 · 读盘之前的第一条新绑定不会盖掉盘上那些(先读后写);上限 500 条,淘汰最久没绑的,重绑刷新次序', () => {
+    phone()
+    store.set(bindingsKey, JSON.stringify({ old1: `unit:${U}`, old2: `unit:${U2}` }))
+    T.clearSessionBindings() // 内存空、还没读盘
+    T.bindSession('new1', { kind: 'unit', unitId: U })
+    expect(Object.keys(JSON.parse(store.get(bindingsKey)!))).toEqual(['old1', 'old2', 'new1'])
+    expect(T.locationOf('old2')).toEqual({ kind: 'unit', unitId: U2 })
+    T.clearSessionBindings()
+    store.delete(bindingsKey)
+    for (let i = 0; i < T.MAX_SESSION_BINDINGS; i++) T.bindSession(`s${i}`, { kind: 'unit', unitId: U })
+    T.bindSession('s0', { kind: 'unit', unitId: U }) // 重绑:s0 挪到最新,淘汰的变成 s1
+    T.bindSession('overflow', { kind: 'unit', unitId: U2 })
+    const saved = Object.keys(JSON.parse(store.get(bindingsKey)!))
+    expect(saved.length).toBe(T.MAX_SESSION_BINDINGS)
+    expect(saved.includes('s1')).toBe(false)
+    expect(saved.slice(-2)).toEqual(['s0', 'overflow'])
+    expect(T.locationOf('s1')).toEqual({ kind: 'home' })
+  })
+
+  it('S4 · 绑在那台电脑上、此刻解析不出目标(换到不支持远端的宿主 / 登出)→ 失败关闭:键照旧,不发任何请求,绝不改道 home', async () => {
+    phone()
+    T.clearSessionBindings()
+    T.bindSession('on-a', { kind: 'unit', unitId: U })
+    vi.stubGlobal('window', { tangu: {} }) // 桌面:不支持远端目标
+    const t = T.targetForSession('on-a')
+    expect(t.key).toBe(`unit:${U}`)
+    expect(t.via).toBe('unit')
+    await expect(t.headers()).rejects.toMatchObject({ code: 'TARGET_UNSUPPORTED' })
+    authFetch.mockClear()
+    await expect(T.engineFetch(t, '/agent/sessions/on-a/messages')).rejects.toMatchObject({ code: 'TARGET_UNSUPPORTED' })
+    expect(authFetch).not.toHaveBeenCalled()
   })
 
   it('token 不是 JWT(认不出账号)→ 焦点不落盘,只活在内存', async () => {

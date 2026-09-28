@@ -1,5 +1,6 @@
-// P1-K6 S2 · 服务层按会话路由 + 远端能力预判(§3.3 / §3.7):焦点在「我的电脑」时,老调用点(传整份 cfg)的会话类请求
-// 打那台电脑;deny-remote 的五个不发请求直接给本地化 LOCAL_ONLY;缩略图不给直链;上传按 9MB 分批;hub 的失败给人话。
+// P1-K6 · 服务层按会话路由 + 远端能力预判(§3.3 / §3.7):会话类请求打会话所在的那台(S4:绑定 ?? home,永不回落焦点);
+// deny-remote 的五个不发请求直接给本地化 LOCAL_ONLY;缩略图不给直链;上传按 9MB 分批;hub 的失败给人话。
+// 夹具:焦点在「我的电脑」U,会话 s1 绑在 U 上(在那台上建的),h1 没绑(= 本端的会话)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { translateFor } from '../i18n'
 import { homeTarget, targetForSession } from './engine/targets'
@@ -33,10 +34,12 @@ beforeEach(async () => {
   vi.stubGlobal('window', { tangu: { mobile: true } })
   T.installEngineHost({ cfg: () => home, desktopConfig: () => ({ cloudApiBase: API }) })
   await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+  T.clearSessionBindings()
+  T.bindSession('s1', { kind: 'unit', unitId: U })
 })
 afterEach(() => { vi.unstubAllGlobals() })
 
-describe('会话类老调用点跟着会话走', () => {
+describe('会话类跟着会话走(S4:绑定 ?? home)', () => {
   it('listMessages / getSessionConfig / readWorkspaceFile / updateSession 打那台电脑,带目标键', async () => {
     await api.listMessages(targetForSession('s1'), 's1')
     await api.getSessionConfig(targetForSession('s1'), 's1')
@@ -44,6 +47,15 @@ describe('会话类老调用点跟着会话走', () => {
     await api.updateSession(targetForSession('s1'), 's1', { title: 'x' }).catch(() => {})
     expect(calls.map((c) => c.url.startsWith(`${UNIT}/agent/`))).toEqual([true, true, true, true])
     expect(calls.every((c) => (c.opts as { target?: string })?.target === `unit:${U}`)).toBe(true)
+  })
+
+  it('R-19:没绑过的会话即便焦点在那台电脑,也打本端(永不回落焦点);焦点换走了,绑在那台上的会话照样打那台', async () => {
+    await api.listMessages(targetForSession('h1'), 'h1')
+    expect(calls.map((c) => c.url)).toEqual([`${API}/agent/sessions/h1/messages?limit=200`])
+    calls.length = 0
+    await T.setFocusTarget({ kind: 'home' })
+    await api.listMessages(targetForSession('s1'), 's1')
+    expect(calls.map((c) => [c.url, (c.opts as { target?: string })?.target])).toEqual([[`${UNIT}/agent/sessions/s1/messages?limit=200`, `unit:${U}`]])
   })
 
   it('目录类(listAgents)与 home 类(收件箱 / 设置)仍打 home —— 管理面板自己传 cfg 调它们', async () => {
@@ -67,10 +79,11 @@ describe('deny-remote 的五个:服务层预判,不发请求', () => {
     expect(calls).toEqual([])
   })
 
-  it('焦点回 home 后照常发(本端没有这条限制)', async () => {
+  it('本端的会话照常发(本端没有这条限制);焦点换回 home 也不改变 s1 在那台上的事实', async () => {
+    await api.deleteSession(targetForSession('h1'), 'h1')
+    expect(calls.map((c) => [c.method, c.url])).toEqual([['DELETE', `${API}/agent/sessions/h1`]])
     await T.setFocusTarget({ kind: 'home' })
-    await api.deleteSession(targetForSession('s1'), 's1')
-    expect(calls.map((c) => [c.method, c.url])).toEqual([['DELETE', `${API}/agent/sessions/s1`]])
+    await expect(api.deleteSession(targetForSession('s1'), 's1')).rejects.toMatchObject({ code: 'LOCAL_ONLY' })
   })
 
   it('patchSessionConfig 遇老引擎 404:远端不回落整对象 PUT(那条 deny-remote),原错交出去', async () => {
@@ -83,8 +96,7 @@ describe('deny-remote 的五个:服务层预判,不发请求', () => {
 describe('缩略图 / 下载 / 上传', () => {
   it('workspaceDownloadUrl:unit → null(缩略图改走读字节做 blob,凭据永不进 URL);home → 直链', async () => {
     expect(api.workspaceDownloadUrl(targetForSession('s1'), 's1', 'a.png')).toBeNull()
-    await T.setFocusTarget({ kind: 'home' })
-    expect(api.workspaceDownloadUrl(targetForSession('s1'), 's1', 'a.png')).toBe(`${API}/agent/workspace/download?sessionId=s1&appId=tangu&path=a.png`)
+    expect(api.workspaceDownloadUrl(targetForSession('h1'), 'h1', 'a.png')).toBe(`${API}/agent/workspace/download?sessionId=h1&appId=tangu&path=a.png`)
   })
 
   it('uploadWorkspaceFiles:unit 按单次 ≤ 9MB 分批,结果合并;单个文件超限前端就拒(不白传一趟)', async () => {

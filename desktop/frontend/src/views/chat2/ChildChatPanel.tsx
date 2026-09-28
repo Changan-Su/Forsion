@@ -5,7 +5,7 @@ import { listActiveRuns } from '../../services/agentRunService'
 import { recordToUi, useApp } from '../../stores/appStore'
 import { useChildChat } from '../../stores/childChatStore'
 import { getBackgroundSessions, getSessionDetail, listMessages, openTeamMemberSession, type BackgroundSessionInfo } from '../../services/backendService'
-import { focusRef, targetForSession } from '../../services/engine/targets'
+import { inheritBinding, refForSession, targetForSession } from '../../services/engine/targets'
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
@@ -32,11 +32,12 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
     let disposed = false
     setSaved([])
     const load = () => void getBackgroundSessions(targetForSession(sessionId), sessionId).then((rows) => {
+      for (const r of rows) if (r.sessionId) inheritBinding(r.sessionId, sessionId) // S4:子会话跟父会话在同一台上
       if (!disposed) setSaved(rows)
     }).catch(() => {})
     load()
-    // P1-K6 S2:焦点在「我的电脑」时这条轮询走 hub 隧道(吃全局限流),放慢到与 pollSession 同档的 12s
-    const timer = setInterval(load, focusRef().kind === 'unit' ? 12_000 : 4000)
+    // P1-K6:父会话在「我的电脑」上时这条轮询走 hub 隧道(吃全局限流),放慢到与 pollSession 同档的 12s(S4 起按会话所在的那台判)
+    const timer = setInterval(load, refForSession(sessionId).kind === 'unit' ? 12_000 : 4000)
     return () => { disposed = true; clearInterval(timer) }
   }, [cfg, sessionId])
   const rows = subChatRows(saved, live, historianOn)
@@ -70,6 +71,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     let disposed = false
     setError('')
     void openTeamMemberSession(targetForSession(parentId), parentId, target.slug).then((session) => {
+      inheritBinding(session.id, parentId) // S4:成员会话在父会话那台上建
       if (!disposed) { useChildChat.getState().open(parentId, { ...target, sessionId: session.id }); void useApp.getState().hydrateTeamWork(parentId) }
     }).catch((e) => { if (!disposed) setError(String(e.message || e)) })
     return () => { disposed = true }

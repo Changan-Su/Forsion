@@ -12,7 +12,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { LocaleProvider, translateFor } from '../i18n'
 import { ApprovalCard, isRemoteApprover } from './ApprovalCard'
-import { resetFocusForTests, useEngineFocus } from '../services/engine/targets'
+import { bindSession, clearSessionBindings, resetFocusForTests, useEngineFocus } from '../services/engine/targets'
 import type { ApprovalRequest } from '../types'
 
 const U = '7f0e8a52-0000-4000-8000-00000000000a'
@@ -33,12 +33,16 @@ beforeEach(() => {
   resetFocusForTests()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); delete (window as any).tangu; resetFocusForTests() })
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); delete (window as any).tangu; resetFocusForTests(); clearSessionBindings() })
 
 describe('ApprovalCard × 会话所在的目标', () => {
-  it('焦点在「我的电脑」(手机,无 remoteCaller)→ 命令只读、没有「总允许」', async () => {
+  it('会话在「我的电脑」上(手机,无 remoteCaller)→ 命令只读、没有「总允许」', async () => {
     ;(window as any).tangu = { mobile: true }
     useEngineFocus.setState({ ref: { kind: 'unit', unitId: U }, name: 'Mac' })
+    bindSession('mac-1', { kind: 'unit', unitId: U }) // S4:判据是会话的绑定,不是焦点
+    expect(isRemoteApprover('mac-1')).toBe(true)
+    // 焦点换回本端,那台上的会话仍是远端只读
+    useEngineFocus.setState({ ref: { kind: 'home' }, name: null })
     expect(isRemoteApprover('mac-1')).toBe(true)
     await render('mac-1')
     expect(host.querySelector('textarea.approval-edit')).toBeNull()
@@ -46,8 +50,9 @@ describe('ApprovalCard × 会话所在的目标', () => {
     expect(host.querySelector('[data-remote-readonly]')).not.toBeNull()
   })
 
-  it('焦点在 home(手机本端)→ 命令可编辑、「总允许」照旧', async () => {
+  it('本端的会话(没绑)→ 命令可编辑、「总允许」照旧 —— 焦点在「我的电脑」也一样(R-19:不回落焦点)', async () => {
     ;(window as any).tangu = { mobile: true }
+    useEngineFocus.setState({ ref: { kind: 'unit', unitId: U }, name: 'Mac' })
     expect(isRemoteApprover('home-1')).toBe(false)
     await render('home-1')
     expect(host.querySelector('textarea.approval-edit')).not.toBeNull()

@@ -53,7 +53,7 @@ import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
-import { useEngineFocus, targetForSession } from '../../services/engine/targets'
+import { targetForSession, useSessionHostName } from '../../services/engine/targets'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -273,7 +273,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
 function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; callId: string; status: ApprovalOutcome['status'] }) {
   const { t } = useI18n()
   const req = useApp((s) => (sessionId ? approvalForCall(s.messagesBySession[sessionId], callId) : undefined))
-  const hostName = useEngineFocus((s) => s.name)
+  const hostName = useSessionHostName(sessionId) // S4:本会话所在的那台(焦点可能已换走)
   if (!req?.answeredBy) return null
   const where = answeredByText(req.answeredBy, { remotePage: isRemoteApprover(sessionId), answeredHere: wasDecidedHere(req.approvalId), hostName }, t as (k: string, v?: Record<string, unknown>) => string)
   if (!where) return null

@@ -1,18 +1,19 @@
-// P1-K6 S2 · store 层的整端切换(§3.8 S2、§3.5、§3.7)。手机形态(window.tangu.mobile + 云端 home),authFetch 桩按 URL 路由。
+// P1-K6 · store 层的焦点与按会话绑定(§3.8 S2 / S4、§3.5、§3.7)。手机形态(window.tangu.mobile + 云端 home),authFetch 桩按 URL 路由。
 //   ① 负对照:unit 目标回 401、账号仍有效 → 改造前 handleAuthExpired 不看是谁回的,照样重启本机引擎(backendRestart);
 //   ② 负对照:焦点在 unit、引擎没回 agent_config → 改造前建会话打 home、补写走整对象 PUT(远端 deny-remote);
-//   ③ setFocusTarget:代数先行(旧焦点慢到的 listSessions 不得覆盖新列表)、中止 SSE、清引擎作用域状态、按新焦点重连;
-//   ④ 目录随焦点、设置 / 收件箱类仍打 home;审批兑现打会话所在的目标。
+//   ③ setFocusTarget(S4):焦点只管「新会话建在哪」与它的目录 —— 不掐别的会话的 SSE、不清会话 / 消息;旧焦点慢到的目录不盖新焦点;
+//   ④ 会话按绑定走(R-15 / R-19):建会话绑到当时的焦点;焦点换走后,那条会话的审批 / 转向 / 中止 / 轮询仍打它那台;
+//      没绑过的会话即便焦点在远端也打本端;列表只拉本端并保留已注入的那几条(R-17)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Reply = { status: number; body?: unknown }
-type Call = { url: string; method: string; body: string | undefined; opts: unknown }
+type Call = { url: string; method: string; body: string | undefined; opts: unknown; signal?: AbortSignal | null }
 const calls: Call[] = []
 let router: (url: string, method: string) => Reply | Promise<Reply> = () => ({ status: 200, body: {} })
 vi.mock('../services/http', () => ({
   authFetch: async (url: string, init?: RequestInit, opts?: unknown) => {
     const method = (init?.method || 'GET').toUpperCase()
-    calls.push({ url: String(url), method, body: typeof init?.body === 'string' ? init.body : undefined, opts })
+    calls.push({ url: String(url), method, body: typeof init?.body === 'string' ? init.body : undefined, opts, signal: init?.signal })
     const r = await router(String(url), method)
     return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {}), { status: r.status })
   },
@@ -72,6 +73,7 @@ beforeEach(() => {
     removeItem: (k: string) => { store.delete(k) },
   })
   T.resetFocusForTests()
+  T.clearSessionBindings()
   H.resetHealth()
   C.forgetCatalog()
   armMobile()
@@ -138,10 +140,11 @@ describe('§3.7 焦点在 unit 时建会话(负对照:改造前打 home + 补整
   })
 })
 
-describe('setFocusTarget(S2 整端切换)', () => {
-  it('切到 unit:目录 + 会话类走那台,收件箱 / 设置类仍打 home;家目录与默认工作区取那台的', async () => {
+describe('setFocusTarget(S4:焦点 = 新会话建在哪)', () => {
+  it('切到 unit:目录 / 家目录走那台,列表只拉本端(R-17),收件箱 / 设置类仍打 home;会话按绑定走', async () => {
     router = (url) => {
       if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-1')] } }
       if (url.startsWith(UNIT) && url.includes('/agent/sessions?archived=false')) return { status: 200, body: { sessions: [sessionRec('mac-1')] } }
       if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
       if (url.includes('/agent/models')) return { status: 200, body: { models: [{ id: 'mac-model', name: 'Mac' }], defaultModelId: 'mac-model' } }
@@ -152,7 +155,8 @@ describe('setFocusTarget(S2 整端切换)', () => {
       return { status: 200, body: {} }
     }
     await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
-    await vi.waitFor(() => expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1']))
+    await vi.waitFor(() => expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['home-1']))
+    expect(calls.some((c) => c.url.startsWith(UNIT) && c.url.includes('/agent/sessions?archived'))).toBe(false) // 不把那台的整张列表并进来
     await vi.waitFor(() => expect(calls.some((c) => c.url === `${UNIT}/agent/agents/ava/avatar`)).toBe(true))
     await vi.waitFor(() => expect(calls.some((c) => c.url === `${UNIT}/agent/teams/crew/avatar`)).toBe(true))
     expect(useApp.getState().connState).toBe('ok')
@@ -168,39 +172,42 @@ describe('setFocusTarget(S2 整端切换)', () => {
     const api = await import('../services/backendService')
     await api.listInbox(T.homeTarget()).catch(() => {})
     expect(calls.filter((c) => c.url.includes('/agent/inbox')).every((c) => !c.url.startsWith(`${API}/units/`))).toBe(true)
-    // 会话类按会话所在的目标发(S3:调用点传 targetForSession(sid))
+    // 会话按绑定走:没绑的(本端列出来的)打本端 —— 焦点在远端也一样(R-19);绑在那台上的打那台
+    calls.length = 0
+    await api.listMessages(T.targetForSession('home-1'), 'home-1').catch(() => {})
+    T.bindSession('mac-1', { kind: 'unit', unitId: U })
     await api.listMessages(T.targetForSession('mac-1'), 'mac-1').catch(() => {})
-    expect(calls.some((c) => c.url.startsWith(`${UNIT}/agent/sessions/mac-1/messages`))).toBe(true)
+    expect(calls.map((c) => c.url)).toEqual([`${API}/agent/sessions/home-1/messages?limit=200`, `${UNIT}/agent/sessions/mac-1/messages?limit=200`])
     // unit 的请求带目标键(401 分流)
     expect(calls.filter((c) => c.url.startsWith(UNIT)).every((c) => (c.opts as { target?: string })?.target === `unit:${U}`)).toBe(true)
     // 持久化(按账号分键)
     expect([...store.keys()].some((k) => k.startsWith('forsion_engine_focus:') && k.includes('u-42'))).toBe(true)
+    expect([...store.keys()].some((k) => k.startsWith('forsion_session_targets:') && k.includes('u-42'))).toBe(true)
   })
 
-  it('竞态:旧焦点慢到的 listSessions 不得覆盖新目标的列表(代数先行)', async () => {
+  it('竞态:旧焦点慢到的目录(Agent 表)不得覆盖新焦点的目录(焦点代先行)', async () => {
     let releaseHome!: () => void
     const homeGate = new Promise<void>((r) => { releaseHome = r })
     router = async (url) => {
       if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
-      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) { await homeGate; return { status: 200, body: { sessions: [sessionRec('home-stale')] } } }
-      if (url.startsWith(UNIT) && url.includes('/agent/sessions?archived=false')) return { status: 200, body: { sessions: [sessionRec('mac-1')] } }
+      if (url === `${API}/agent/agents`) { await homeGate; return { status: 200, body: { agents: [{ slug: 'home-stale', name: 'Stale' }] } } }
+      if (url === `${UNIT}/agent/agents`) return { status: 200, body: { agents: [{ slug: 'mac-agent', name: 'Mac' }] } }
       if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
       return { status: 200, body: {} }
     }
-    const stale = useApp.getState().refreshSessions(useApp.getState().cfg) // home 的请求挂着
+    useApp.getState().refreshAgents() // home 的请求挂着
     await T.setFocusTarget({ kind: 'unit', unitId: U })
-    await vi.waitFor(() => expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1']))
+    await vi.waitFor(() => expect(useApp.getState().agentDefs.map((a) => a.slug)).toEqual(['mac-agent']))
     releaseHome()
-    await stale
-    await new Promise((r) => setTimeout(r, 10))
-    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1'])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(useApp.getState().agentDefs.map((a) => a.slug)).toEqual(['mac-agent'])
   })
 
-  it('换焦点中止全部 SSE 订阅、清会话 / 消息 / 配置 / 目录', async () => {
-    const aborted: string[] = []
+  it('换焦点不掐别的会话:在跑的 SSE 不中止、会话 / 消息 / 配置留着;只换焦点作用域的目录,回到空白新对话', async () => {
     router = (url) => {
       if (url.includes('/events')) return new Promise<Reply>(() => {}) // 挂住的事件流
       if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-1')] } }
       if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
       return { status: 200, body: {} }
     }
@@ -211,28 +218,93 @@ describe('setFocusTarget(S2 整端切换)', () => {
       agentDefs: [{ slug: 'x', name: 'X' } as any], modelsResp: { models: [{ id: 'home-model', name: 'H' }], defaultModelId: 'home-model' } as any,
     })
     useApp.getState().subscribeRun('home-1', 'run-1', 'a1')
-    const origAbort = AbortController.prototype.abort
-    vi.spyOn(AbortController.prototype, 'abort').mockImplementation(function (this: AbortController, r?: unknown) { aborted.push('x'); return origAbort.call(this, r) })
+    await vi.waitFor(() => expect(calls.some((c) => c.url.includes('/runs/run-1/events'))).toBe(true))
+    const events = calls.find((c) => c.url.includes('/runs/run-1/events'))!
     await T.setFocusTarget({ kind: 'unit', unitId: U })
-    expect(aborted.length).toBeGreaterThan(0)
     const st = useApp.getState()
-    expect(st.runningBySession).toEqual({})
-    expect(st.messagesBySession['home-1']).toBeUndefined()
-    expect(st.configBySession).toEqual({})
-    expect(st.agentDefs).toEqual([])
-    expect(st.activeId).toBeNull()
+    expect(st.runningBySession).toEqual({ 'home-1': 'run-1' }) // SSE 没被掐,run 仍在跑
+    expect(st.messagesBySession['home-1']?.[0]?.status).toBe('streaming')
+    expect(st.configBySession['home-1']).toEqual({ execMode: 'sandbox' })
+    expect(st.sessions.map((s) => s.id)).toEqual(['home-1'])
+    expect(st.agentDefs.some((a) => a.slug === 'x')).toBe(false) // 目录换成焦点那台的
+    expect(st.activeId).toBeNull() // 回到空白新对话:接下来打的字建在那台上
+    // 那条 run 的事件流仍打本端(它的会话没绑 = home),订阅没被中止(S2 这里会 abort 全部 SSE —— 负对照)
+    expect(events.url.startsWith(`${API}/agent/`)).toBe(true)
+    expect(events.signal?.aborted).toBe(false)
   })
 
-  it('审批兑现 / 询问打会话所在的目标(= 焦点)', async () => {
+  it('建会话绑到当时的焦点;焦点换回本端后,那条会话留在列表里(已注入)、仍打那台;本端列表刷新不把它挤掉', async () => {
+    router = (url, method) => {
+      if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (method === 'POST' && url === `${UNIT}/agent/sessions`) return { status: 200, body: { session: { ...sessionRec('s-mac'), agent_config: { execMode: 'host' } } } }
+      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-1')] } }
+      if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
+      return { status: 200, body: {} }
+    }
+    await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+    await useApp.getState().createInWorkspace({ key: '/Users/mac/proj', name: 'proj', kind: 'local', path: '/Users/mac/proj' })
+    expect(T.locationOf('s-mac')).toEqual({ kind: 'unit', unitId: U })
+    expect(useApp.getState().sessions.find((s) => s.id === 's-mac')?.location).toEqual({ kind: 'unit', unitId: U })
+    await T.setFocusTarget({ kind: 'home' })
+    await useApp.getState().refreshSessions(useApp.getState().cfg)
+    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['home-1', 's-mac'])
+    calls.length = 0
+    await useApp.getState().renameSession('s-mac', 'renamed')
+    expect(calls.map((c) => [c.method, c.url])).toEqual([['PATCH', `${UNIT}/agent/sessions/s-mac`]])
+  })
+
+  it('两台并存:会话绑在 A、焦点换到 B → 批准 / 询问 / 转向 / 撤回 / 中止仍打 A,B 一条都收不到', async () => {
+    const U2 = '7f0e8a52-0000-4000-8000-00000000000b'
+    const UNIT_B = `${API}/units/${U2}/proxy/engine`
     await T.setFocusTarget({ kind: 'unit', unitId: U })
+    T.bindSession('mac-1', { kind: 'unit', unitId: U })
+    await T.setFocusTarget({ kind: 'unit', unitId: U2 })
     useApp.setState({
       activeId: 'mac-1',
-      messagesBySession: { 'mac-1': [{ id: 'm1', role: 'assistant', content: '', status: 'streaming', timestamp: 1, approvals: [{ approvalId: 'ap1', runId: 'r1', name: 'run_bash', preview: '$ ls', status: 'pending' } as any] }] },
+      runningBySession: { 'mac-1': 'r1' },
+      steerPendingBySession: { 'mac-1': [{ id: 'q1', text: 'later' }] },
+      messagesBySession: { 'mac-1': [{ id: 'm1', role: 'assistant', content: '', status: 'streaming', timestamp: 1,
+        approvals: [{ approvalId: 'ap1', runId: 'r1', name: 'run_bash', preview: '$ ls', status: 'pending' } as any],
+        inquiries: [{ inquiryId: 'iq1', runId: 'r1', question: 'ok?', status: 'pending' } as any] }] },
+    })
+    router = (url) => (url.endsWith('/abort') ? { status: 200, body: { settled: true, status: 'aborted' } } : { status: 200, body: { ok: true } })
+    calls.length = 0
+    await useApp.getState().decideApproval('m1', 'ap1', 'approve', undefined, 'mac-1')
+    await useApp.getState().answerInquiry('m1', 'iq1', 'yes', 'mac-1')
+    await useApp.getState().steerNow('mac-1')
+    await useApp.getState().withdrawSteer('mac-1', 'q1')
+    await useApp.getState().stop('mac-1')
+    const sent = calls.map((c) => c.url)
+    expect(sent.map((u) => u.replace(`${UNIT}/agent/runs/r1/`, ''))).toEqual(['approvals/ap1', 'inquiries/iq1', 'steer', 'steer/q1', 'abort'])
+    expect(sent.every((u) => u.startsWith(`${UNIT}/agent/runs/r1/`)), sent.join('\n')).toBe(true)
+    expect(sent.some((u) => u.startsWith(UNIT_B))).toBe(false)
+  })
+
+  it('R-19:没绑过的会话即便焦点在远端,审批也打本端(永不回落焦点)', async () => {
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    useApp.setState({
+      activeId: 'home-1',
+      messagesBySession: { 'home-1': [{ id: 'm1', role: 'assistant', content: '', status: 'streaming', timestamp: 1, approvals: [{ approvalId: 'ap1', runId: 'r1', name: 'run_bash', preview: '$ ls', status: 'pending' } as any] }] },
     })
     router = () => ({ status: 200, body: { ok: true } })
     calls.length = 0
-    await useApp.getState().decideApproval('m1', 'ap1', 'approve', undefined, 'mac-1')
-    expect(calls.map((c) => c.url)).toEqual([`${UNIT}/agent/runs/r1/approvals/ap1`])
+    await useApp.getState().decideApproval('m1', 'ap1', 'approve', undefined, 'home-1')
+    expect(calls.map((c) => c.url)).toEqual([`${API}/agent/runs/r1/approvals/ap1`])
+  })
+
+  it('分支 / 团队成员子会话继承父会话的位置(远程污点同向传播,C5)', async () => {
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    T.bindSession('mac-1', { kind: 'unit', unitId: U })
+    router = (url, method) => (method === 'POST' && url === `${UNIT}/agent/sessions/mac-1/branch`
+      ? { status: 200, body: { session: sessionRec('mac-branch') } }
+      : { status: 200, body: {} })
+    useApp.setState({ activeId: 'mac-1', messagesBySession: { 'mac-1': [{ id: 'a1', role: 'assistant', content: 'x', status: 'done', timestamp: 1 }] } })
+    await useApp.getState().branchFromMessage('a1', 'mac-1')
+    expect(T.locationOf('mac-branch')).toEqual({ kind: 'unit', unitId: U })
+    expect(useApp.getState().sessions.find((s) => s.id === 'mac-branch')?.location).toEqual({ kind: 'unit', unitId: U })
+    const { useChildChat } = await import('./childChatStore')
+    useChildChat.getState().open('mac-1', { id: 'c1', title: 'member', sessionId: 'mac-member' })
+    expect(T.locationOf('mac-member')).toEqual({ kind: 'unit', unitId: U })
   })
 
   it('桌面(非手机 / 网页版)不能把焦点切到远端:抛 TARGET_UNSUPPORTED,焦点不动', async () => {
@@ -242,21 +314,21 @@ describe('setFocusTarget(S2 整端切换)', () => {
     expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull()
   })
 
-  it('切过去时那台不在线(可恢复)→ 不点重试,探针转好后自动重连(提示说的「恢复后会自动继续」得是真的)', async () => {
+  it('切过去时那台不在线(可恢复)→ 不点重试,探针转好后自动重连;期间本端列表照样拉得到', async () => {
     let online = false
     router = (url) => {
       if (url.startsWith(`${API}/units/`) && !online) return { status: 503, body: { code: 'UNIT_OFFLINE', detail: 'Unit offline' } }
       if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
-      if (url.startsWith(UNIT) && url.includes('/agent/sessions?archived=false')) return { status: 200, body: { sessions: [sessionRec('mac-1')] } }
+      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-1')] } }
       if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
       return { status: 200, body: {} }
     }
     await T.setFocusTarget({ kind: 'unit', unitId: U })
     expect(useApp.getState().connState).toBe('err')
     expect(H.healthOf(`unit:${U}`).state).toBe('offline')
+    await vi.waitFor(() => expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['home-1']))
     online = true
     await vi.waitFor(() => expect(useApp.getState().connState).toBe('ok'), { timeout: 8000, interval: 100 })
-    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1'])
   }, 15_000)
 
   it('设备不在账号下(404 UNIT_NOT_FOUND)→ 提示并切回本端', async () => {
@@ -291,6 +363,7 @@ describe('焦点那台的健康态自愈(评审 F1 / F2 / F3)', () => {
     router = macRouter(state)
     await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
     expect(useApp.getState().connState).toBe('ok')
+    T.bindSession('mac-1', { kind: 'unit', unitId: U }) // S4:这条会话在那台上
     useApp.setState({ activeId: 'mac-1' })
     state.down = true
     await useApp.getState().pollSession('mac-1') // listMessages 吃到 502 UNIT_DISCONNECTED
@@ -334,6 +407,7 @@ describe('焦点那台的健康态自愈(评审 F1 / F2 / F3)', () => {
       ? { status: 403, body: { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'pending', detail: 'Waiting for confirmation' } }
       : base(url))
     await T.setFocusTarget({ kind: 'unit', unitId: U })
+    T.bindSession('mac-1', { kind: 'unit', unitId: U })
     useApp.setState({ activeId: 'mac-1' })
     const api = await import('../services/backendService')
     await expect(api.createSession(T.focusTarget(), { title: 'x' })).rejects.toMatchObject({ status: 403, code: 'REMOTE_CALLER_UNCONFIRMED' })
@@ -357,6 +431,5 @@ describe('焦点那台的健康态自愈(评审 F1 / F2 / F3)', () => {
     await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
     await vi.waitFor(() => expect(useApp.getState().connState).toBe('ok'))
     expect(H.healthOf(KEY).state).toBe('ready')
-    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1'])
   }, 10_000)
 })

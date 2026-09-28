@@ -15,7 +15,7 @@ import { EditorialMessage } from './EditorialMessage'
 import { approvalForCall } from './approvalQueue'
 import { ApprovalCard } from '../../components/ApprovalCard'
 import { useApp } from '../../stores/appStore'
-import { resetFocusForTests, useEngineFocus } from '../../services/engine/targets'
+import { bindSession, clearSessionBindings, resetFocusForTests, useEngineFocus } from '../../services/engine/targets'
 import type { ApprovalRequest, UiMessage } from '../../types'
 
 const SID = 's-m1b'
@@ -46,7 +46,11 @@ const captions = (): Array<{ after: string; by: string }> => [...host.querySelec
   const n = r.nextElementSibling
   return { after: r.getAttribute('data-status') || '', by: n?.matches('[data-answered-by]') ? (n.textContent || '') : '' }
 })
-const onUnit = (name: string | null): void => { useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name }) }
+/** 手机把焦点切到那台电脑、这条会话建在那台上(S4:会话的位置来自绑定表,名字来自焦点那台的名册名)。 */
+const onUnit = (name: string | null): void => {
+  useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name })
+  bindSession(SID, { kind: 'unit', unitId: UNIT })
+}
 
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -56,6 +60,7 @@ afterEach(async () => {
   await act(async () => root.unmount()); host.remove()
   useApp.setState(initial, true)
   resetFocusForTests()
+  clearSessionBindings()
 })
 
 describe('approvalForCall', () => {

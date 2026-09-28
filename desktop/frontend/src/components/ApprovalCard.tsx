@@ -16,7 +16,7 @@ import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import { alwaysAllowWorks, answeredByText, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
 import { capsForRef } from '../services/engine/targetCaps'
-import { refForSession, useEngineFocus } from '../services/engine/targets'
+import { refForSession, useSessionHostName } from '../services/engine/targets'
 
 export { MODE_KEY }
 
@@ -64,7 +64,7 @@ export const ApprovalCard: React.FC<{
 }> = ({ req, onDecide, sessionId }) => {
   const { t } = useI18n()
   const remote = isRemoteApprover(sessionId)
-  const hostName = useEngineFocus((s) => s.name) // M1B:「在执行的电脑上(名字)」;只取名册给的名字,不取兜底称呼
+  const hostName = useSessionHostName(sessionId) // M1B:「在执行的电脑上(名字)」;只取名册给的名字,不取兜底称呼(S4:本会话所在的那台)
   const isBash = req.name === 'run_bash'
   const initialCmd = (() => {
     if (!isBash || !req.arguments) return ''

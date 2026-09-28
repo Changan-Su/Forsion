@@ -18,6 +18,11 @@
  *     desktop/scripts/engine-target-codemod.cjs 机械改成 homeTarget() / targetForSession(sid) / focusTarget() /
  *     connectionTarget(conn),`api.fn(get().cfg)` 编译失败(brand.typecheck.ts);源码棘轮(engineTargetGuard.test.ts)
  *     钉住 `.backendUrl` 读、自拼 `/agent/` URL、铸造与 connectionTarget 只许出现在白名单里。
+ * S4(按会话绑定):**绑定表 sessionTargets 是路由真源**(R-15,只有 bindSession 写):targetForSession(sid) = 绑定 ?? home,
+ *     **永不回落焦点**(R-19;焦点在远端时把没绑过的会话静默发到那台电脑是错的)。建会话时绑到当时的焦点(焦点 = 手机上
+ *     「新会话建在哪」的缺省),分支 / 旁聊 / 团队成员子会话 inheritBinding 跟父会话走。绑定按账号落盘
+ *     (`forsion_session_targets:<账号>`,只存 unit 条、≤ 500 条、读回逐条 isTargetKey + 设备 id 形状过滤)——只是路由提示,
+ *     不是信任依据(hub 逐请求校验属主)。knownTargets() = home + 焦点 + 有绑定会话的 unit(R-20)。
  */
 import type { SessionRecord, StoredDesktopConfig, TanguDesktopConfig } from '../../types'
 import { create } from 'zustand'
@@ -142,10 +147,19 @@ export function homeTarget(): EngineTarget {
  */
 export function knownTargets(): EngineTarget[] {
   requireHost() // 宿主还没装 → 抛(K3 的待批轮询据此跳过这一拍,不对一个读不出基址的目标发请求)
-  const home = homeTarget()
+  const out: EngineTarget[] = [homeTarget()]
+  const seen = new Set<TargetKey>(['home'])
+  const add = (ref: TargetRef): void => {
+    const key = targetKeyOf(ref)
+    if (seen.has(key)) return
+    seen.add(key)
+    const t = targetForRef(ref)
+    if (t) out.push(t)
+  }
   const f = focusRef()
-  const focus = f.kind === 'unit' ? targetForRef(f) : null
-  return focus ? [home, focus] : [home]
+  if (f.kind === 'unit') add(f)
+  for (const key of new Set(sessionTargets.values())) if (key !== 'home') add(refOfKey(key)) // S4:有绑定会话的 unit
+  return out
 }
 
 // ── 通用出口 ──
@@ -243,36 +257,113 @@ export async function unitFetch(t: EngineTarget, path: string, opts: { timeoutMs
   return scopedFetch(t, t.unitBase, path, opts.signal ? { signal: opts.signal } : {}, opts, async (json) => bare(json))
 }
 
-// ── 会话 → 目标绑定表(路由真源,INTEGRATION R-15 / R-16)──
-// 只是路由提示,不是信任依据:属主由 hub 逐请求校验(篡改最坏得 404)。S0 只在内存;S4 起按 userId 持久化。
+// ── 会话 → 目标绑定表(路由真源,INTEGRATION R-15 / R-16;S4 起按账号落盘)──
+// 只是路由提示,不是信任依据:属主由 hub 逐请求校验(篡改最坏得 404)。Map 的插入序即「最近绑定」序(LRU 淘汰最旧的)。
 const sessionTargets = new Map<string, TargetKey>()
 
+/** 绑定表变了(绑定 / 忘掉 / 读回 / 清空)→ version 递增。组件用它订阅「这个会话在哪台」(表本身不是响应式的)。 */
+export const useSessionBindings = create<{ version: number }>(() => ({ version: 0 }))
+const bumpBindings = (): void => useSessionBindings.setState((s) => ({ version: s.version + 1 }))
+
+const BINDINGS_KEY_PREFIX = 'forsion_session_targets:'
+/** 落盘的 unit 绑定条数上限(超出淘汰最久没绑 / 没重绑的)。 */
+export const MAX_SESSION_BINDINGS = 500
+/** 已把哪个账号的落盘绑定读进内存(null = 还没读)。没读之前绝不写盘:否则一条新绑定会把盘上那 500 条整个盖掉。 */
+let bindingsLoadedFor: string | null = null
+
 function refOfKey(key: TargetKey): TargetRef {
-  // 表里的键只由 targetKeyOf 写入(已校验);S4 从持久化读回时也逐条过 isTargetKey。这里再兜一道,别让坏键变成 unit。
+  // 表里的键只由 targetKeyOf 写入(已校验);从持久化读回时也逐条过 isTargetKey。这里再兜一道,别让坏键变成 unit。
   if (!isTargetKey(key)) throw new TypeError(`locationOf: malformed target key ${JSON.stringify(key)}`)
   return key === 'home' ? HOME_REF : Object.freeze({ kind: 'unit' as const, unitId: key.slice('unit:'.length) })
 }
 
+function bindingsStorageKey(): string | null {
+  if (!host) return null
+  const id = forsionAccountId(cloudApiBase(), host.cfg().token || '')
+  return id ? `${BINDINGS_KEY_PREFIX}${id}` : null
+}
+
+/** 读盘上这个账号的绑定(不可信:逐条过 isTargetKey + 设备 id 形状;home 条不存,读到也丢)。 */
+function readPersistedBindings(key: string): Array<[string, TargetKey]> {
+  let raw: unknown
+  try { raw = JSON.parse(localStorage.getItem(key) || 'null') } catch { return [] }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+  const out: Array<[string, TargetKey]> = []
+  for (const [sid, k] of Object.entries(raw as Record<string, unknown>)) {
+    if (!sid || sid.length > 200 || !isTargetKey(k) || k === 'home' || !isUnitIdShape(k.slice('unit:'.length))) continue
+    out.push([sid, k])
+  }
+  return out.slice(-MAX_SESSION_BINDINGS)
+}
+
+/** 确保当前账号的落盘绑定已读进内存:内存里已有的条目优先(先到先得),盘上的补在它们**之前**(更旧)。 */
+function ensureBindingsLoaded(): string | null {
+  const key = bindingsStorageKey()
+  if (!key || bindingsLoadedFor === key) return key
+  const persisted = readPersistedBindings(key)
+  if (persisted.length) {
+    const current = [...sessionTargets]
+    sessionTargets.clear()
+    for (const [sid, k] of persisted) sessionTargets.set(sid, k)
+    for (const [sid, k] of current) { sessionTargets.delete(sid); sessionTargets.set(sid, k) }
+  }
+  bindingsLoadedFor = key
+  return key
+}
+
+/** 只落 unit 条(home = 缺省,不必存),超过上限淘汰最旧的。拿不到账号身份 → 只活在内存。 */
+function persistBindings(): void {
+  const key = ensureBindingsLoaded()
+  const units = [...sessionTargets].filter(([, k]) => k !== 'home')
+  for (let i = 0; i < units.length - MAX_SESSION_BINDINGS; i++) sessionTargets.delete(units[i][0])
+  if (!key) return
+  try {
+    localStorage.setItem(key, JSON.stringify(Object.fromEntries(units.slice(-MAX_SESSION_BINDINGS))))
+  } catch { /* 隐私模式:只活在内存 */ }
+}
+
 /**
- * 把会话绑到一个位置。**先到先得、永不改绑**:已绑到别处 → 'conflict'(设备自报的会话 id 可能故意撞 id,
- * 不能被它劫持路由);绑到同一处是幂等的 'bound'。
+ * 把会话绑到一个位置。**先到先得、永不改绑**(R-16):已绑到别处 → 'conflict'(设备自报的会话 id 可能故意撞 id,
+ * 不能被它劫持路由);绑到同一处是幂等的 'bound'(顺带刷新「最近」序)。unit 绑定落盘。
  */
 export function bindSession(sid: string, ref: TargetRef): 'bound' | 'conflict' {
   if (typeof sid !== 'string' || !sid) throw new TypeError('bindSession: session id is required')
   assertTargetRef(ref, 'bindSession') // 未知 kind(旧形状 {kind:'cloud'}、坏掉的持久化提示)抛,绝不落成 unit:undefined
   const key = targetKeyOf(ref)
+  ensureBindingsLoaded()
   const current = sessionTargets.get(sid)
-  if (current !== undefined) return current === key ? 'bound' : 'conflict'
+  if (current !== undefined && current !== key) return 'conflict'
+  sessionTargets.delete(sid)
   sessionTargets.set(sid, key)
+  if (key !== 'home') persistBindings()
+  if (current === undefined) bumpBindings()
   return 'bound'
 }
 
-export function forgetSession(sid: string): void {
-  sessionTargets.delete(sid)
+/**
+ * 子会话跟父会话走(分支 / 旁聊 / 团队成员会话 / 后台子会话 / 图片工作室……):远程污点在引擎侧同向传播(C5),
+ * 渲染层的路由也必须同向。父会话没绑(= home)→ 子会话不必绑(缺省就是 home);子会话已绑到别处 → 'conflict'。
+ */
+export function inheritBinding(childSid: string, parentSid: string): 'bound' | 'conflict' {
+  const loc = locationOf(parentSid)
+  if (loc.kind === 'home') {
+    const cur = sessionTargets.get(childSid)
+    return cur && cur !== 'home' ? 'conflict' : 'bound'
+  }
+  return bindSession(childSid, loc)
 }
 
-/** 会话所在位置;未绑 = home。 */
+/** 会话删掉了(硬删成功)→ 忘掉它的绑定。归档不忘(还会被打开)。 */
+export function forgetSession(sid: string): void {
+  ensureBindingsLoaded()
+  if (!sessionTargets.delete(sid)) return
+  persistBindings()
+  bumpBindings()
+}
+
+/** 会话所在位置;未绑 = home(R-19:永不回落焦点)。 */
 export function locationOf(sid: string): TargetRef {
+  ensureBindingsLoaded()
   const key = sessionTargets.get(sid)
   return key ? refOfKey(key) : HOME_REF
 }
@@ -282,9 +373,18 @@ export function withLocation<T extends Pick<SessionRecord, 'id'>>(rec: T): T & {
   return { ...rec, location: locationOf(rec.id) }
 }
 
-/** @internal 账号切换 / 测试用:清空内存绑定表(S2 的 resetEngineScopedState 接上)。 */
+/** 账号切换 / 测试用:清空内存绑定表(不动盘;下次用到时按新账号读盘)。 */
 export function clearSessionBindings(): void {
   sessionTargets.clear()
+  bindingsLoadedFor = null
+  bumpBindings()
+}
+
+/** 启动 / 换号后读回这个账号落盘的绑定(宿主在 boot 里与 restoreFocus 一起调)。返回读回后的条数。 */
+export function restoreSessionBindings(): number {
+  ensureBindingsLoaded()
+  bumpBindings()
+  return sessionTargets.size
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -379,6 +479,20 @@ function unitTarget(unitId: string): EngineTarget | null {
   return t
 }
 
+/** 绑定到了某台电脑、此刻却解析不出目标时的占位(targetForSession 用):不缓存,base 空、没有设备辅助面,
+ *  鉴权头一取就抛 TARGET_UNSUPPORTED —— 所有服务函数都先取头再发请求,所以一条请求都发不出去(失败关闭)。 */
+function unresolvedUnitTarget(unitId: string): EngineTarget {
+  const id = String(unitId).toLowerCase()
+  return mintTarget({
+    key: `unit:${id}`,
+    ref: { kind: 'unit', unitId: id },
+    via: 'unit',
+    base: '',
+    unitBase: null,
+    headers: async (): Promise<Record<string, string>> => { throw targetUnsupportedError() },
+  })
+}
+
 /**
  * 位置 → 目标。home 恒可解析;unit 在 `!remoteTargetsSupported()`(桌面 / 设备页 / 未登录)或 id 形状不对时 → null。
  * 调用方拿到 null 必须当「这里不能在别的电脑上运行」处理,绝不回落 home 静默发出去。
@@ -414,16 +528,20 @@ export function focusName(): string | null {
 }
 
 /** 会话所在的位置(纯数据,不铸目标、不要求宿主已装好 —— 审批卡等组件在单测里也要能判)。
- *  S2(R-19):整端切换,会话一律在焦点上。S4 起改为「绑定 ?? home」,永不回焦点。 */
+ *  S4(R-19):绑定 ?? home,**永不回落焦点**。没给会话 id = home。 */
 export function refForSession(sid?: string): TargetRef {
-  void sid
-  return focusRef()
+  return sid ? locationOf(sid) : HOME_REF
 }
 
-/** 会话所在的目标(S2 = 焦点目标,见 refForSession)。 */
+/**
+ * 会话所在的目标(S4:绑定 ?? home,见 refForSession)。绑到了 unit 但此刻解析不出来(桌面 / 设备页、登出、启动早期云端基址
+ * 还没到)→ 给一个**解析不了的 unit 目标**:键 / 来路照旧(能力按 unit 判、健康按那台记),但发请求那一刻失败关闭
+ * (TARGET_UNSUPPORTED,不发任何请求)—— 绝不改道到 home 或焦点。
+ */
 export function targetForSession(sid?: string): EngineTarget {
-  void sid
-  return focusTarget()
+  const ref = refForSession(sid)
+  if (ref.kind === 'home') return homeTarget()
+  return targetForRef(ref) ?? unresolvedUnitTarget(ref.unitId)
 }
 
 type FocusListener = (next: TargetRef, prev: TargetRef) => void
@@ -472,6 +590,7 @@ function readPersistedFocus(): FocusState | null {
 export function restoreFocus(): TargetRef {
   const s = readPersistedFocus()
   useEngineFocus.setState(s ?? { ref: HOME_REF, name: null })
+  if (s) rememberUnitName(s.ref, s.name)
   return focusRef()
 }
 
@@ -483,12 +602,13 @@ export function targetUnsupportedError(): Error {
 let focusSeq = 0
 
 /**
- * 把整端切到某个位置(S2 = 设计文档「最小切片」;K8 的 UnitsSheet「在哪运行」、K7 之前的唯一入口)。
+ * 切「在哪运行」(S2 = 设计文档「最小切片」;K8 的 UnitsSheet「在哪运行」、K7 之前的唯一入口)。
+ * S4 起焦点只决定**新会话建在哪**(与那一侧的目录 / 连接态);已有会话按绑定走,换焦点不动它们(SSE、审批、转向照旧打原来那台)。
  * - 校验:位置形状(未知 kind 抛 TypeError);unit 须 `targetForRef` 能解析(否则抛 TARGET_UNSUPPORTED,焦点不动);
  * - 同一个位置不清任何状态(只更新展示名);是 unit 时再交给宿主 reconnect —— 那台没连上 / 健康不是 ready 就重连或探一次
  *   (终局态不自动重试,「再选一次同一台」就是用户的手动重试;已连上且健康时 reconnect 什么都不做);
- * - 先改焦点、落盘、通知订阅者,再交给宿主 refocus(清引擎作用域状态 → 按新焦点重连),等它做完才 resolve。
- *   连续切换时只有最后一次的 refocus 有意义,宿主按 authGeneration 丢弃过期结果。
+ * - 先改焦点、落盘、通知订阅者,再交给宿主 refocus(换焦点作用域的目录态、回空白新对话 → 按新焦点重连),等它做完才 resolve。
+ *   连续切换时只有最后一次的 refocus 有意义,宿主按焦点代丢弃过期结果。
  */
 export async function setFocusTarget(ref: TargetRef, opts: { name?: string | null } = {}): Promise<void> {
   assertTargetRef(ref, 'setFocusTarget')
@@ -497,6 +617,7 @@ export async function setFocusTarget(ref: TargetRef, opts: { name?: string | nul
   const name = next.kind === 'unit' && typeof opts.name === 'string' && opts.name.trim() ? opts.name.trim().slice(0, 120) : null
   const prevState = useEngineFocus.getState()
   const prev = prevState.ref
+  rememberUnitName(next, name)
   if (sameRef(prev, next)) {
     if (next.kind === 'unit' && name && name !== prevState.name) {
       useEngineFocus.setState({ ref: prev, name })
@@ -528,11 +649,40 @@ export async function retryFocusTarget(): Promise<void> {
 export function resetFocusForTests(): void {
   useEngineFocus.setState({ ref: HOME_REF, name: null })
   unitTargets.clear()
+  unitNames.clear()
 }
 
-/** 提示文案里的 {name}:焦点那台用名册给的名字,别的 unit 用兜底称呼;home 没有名字(调用方别拿它拼远端文案)。 */
-export function targetLabel(t: EngineTarget): string {
+/** 本页见过的设备名(焦点切过去时名册给的名字;S4 起会话可能留在一台已经不是焦点的电脑上,提示里仍叫它的名字)。
+ *  不可信串,只进文本节点;不落盘(焦点那份另有落盘)。 */
+const unitNames = new Map<string, string>()
+function rememberUnitName(ref: TargetRef, name: string | null): void {
+  if (ref.kind === 'unit' && name) unitNames.set(ref.unitId, name)
+}
+
+/** 某个位置的展示名:home = null;unit = 焦点名 / 见过的名字 ?? null(调用方自己决定兜底称呼)。 */
+export function nameOfRef(ref: TargetRef): string | null {
+  if (ref.kind !== 'unit') return null
   const f = useEngineFocus.getState()
-  if (f.ref.kind === 'unit' && t.key === targetKeyOf(f.ref) && f.name) return f.name
-  return translate('engine.target.defaultName')
+  if (f.ref.kind === 'unit' && f.ref.unitId === ref.unitId && f.name) return f.name
+  return unitNames.get(ref.unitId) ?? null
+}
+
+/** 组件用:输入框 / 提示条对着的位置 —— 有会话 = 它绑定的位置(S4,绑定 ?? home),空白新对话 = 焦点(新会话建在那)。
+ *  绑定表或焦点变了会重渲染。 */
+export function useComposerRef(sessionId?: string | null): TargetRef {
+  useSessionBindings((s) => s.version)
+  const focus = useEngineFocus((s) => s.ref)
+  return sessionId ? refForSession(sessionId) : focus
+}
+
+/** 组件用:这个会话所在那台电脑的名字(审批结局行「在执行的电脑上(名字)」等);没给会话 = 焦点那台;home / 认不出 → null。 */
+export function useSessionHostName(sessionId?: string | null): string | null {
+  useSessionBindings((s) => s.version)
+  useEngineFocus((s) => s.name)
+  return nameOfRef(sessionId ? refForSession(sessionId) : focusRef())
+}
+
+/** 提示文案里的 {name}:那台的名字(焦点名 / 见过的名字),认不出用兜底称呼;home 没有名字(调用方别拿它拼远端文案)。 */
+export function targetLabel(t: EngineTarget): string {
+  return nameOfRef(t.ref) || translate('engine.target.defaultName')
 }
