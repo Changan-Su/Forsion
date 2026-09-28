@@ -31,19 +31,35 @@ export interface Booted {
 export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): Promise<Booted> {
   const root = document.createElement('div')
   document.body.appendChild(root)
-  const ed = await Editor.make()
-    .config((ctx) => {
-      ctx.set(rootCtx, root)
-      ctx.set(defaultValueCtx, initial)
-    })
-    .use(commonmarkWithIndent)
-    .use(gfmWithAnchoredRules)
-    .use(structuralIndentRemark)
-    .use(cjkFriendlyRemark)
-    .use(attentionSerializer)
-    .use(opts.v3 ? softBreakRemark : blankLineRemark)
-    .use(calloutTitleRemark)
-    .create()
+  // ponytail: milkdown 的 Timer(@milkdown/ctx timer.ts)每个起 3s setTimeout 后从不 clearTimeout,到点还裸调 removeEventListener;
+  // 测试文件跑完、happy-dom 拆掉全局后才响就是「unhandled error: removeEventListener is not defined」→ 全量绿仍退出码 1。
+  // create() 期间起的定时器全记下来,destroy 时一并清(见 parseFidelity.testkit.test)。上游修了就删这段。
+  const timers: unknown[] = [] // DOM 与 node 的 setTimeout 声明返回类型不同(number / Timeout),运行时 clearTimeout 两种都认
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  globalThis.setTimeout = ((fn: () => void, ms?: number, ...args: unknown[]) => {
+    const id = realSetTimeout(fn, ms, ...args)
+    timers.push(id)
+    return id
+  }) as typeof setTimeout
+  let ed: Editor
+  try {
+    ed = await Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, root)
+        ctx.set(defaultValueCtx, initial)
+      })
+      .use(commonmarkWithIndent)
+      .use(gfmWithAnchoredRules)
+      .use(structuralIndentRemark)
+      .use(cjkFriendlyRemark)
+      .use(attentionSerializer)
+      .use(opts.v3 ? softBreakRemark : blankLineRemark)
+      .use(calloutTitleRemark)
+      .create()
+  } finally {
+    globalThis.setTimeout = realSetTimeout
+  }
   const view = ed.action((ctx) => ctx.get(editorViewCtx))
   return {
     view,
@@ -51,7 +67,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): 
     saved: () => ed.action((ctx) => serializeUnified(ctx, ctx.get(editorViewCtx).state.doc)),
     parse: (md) => ed.action((ctx) => ctx.get(parserCtx)(md)) as PMNode,
     serialize: (node) => ed.action((ctx) => ctx.get(serializerCtx)(node)),
-    destroy: async () => { await ed.destroy(); root.remove() },
+    destroy: async () => { await ed.destroy(); for (const t of timers) realClearTimeout(t as number); root.remove() },
   }
 }
 
