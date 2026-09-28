@@ -15,6 +15,7 @@ const schema = new Schema({
     list_item: { content: 'paragraph block*' },
     text: { group: 'inline' },
   },
+  marks: { link: { attrs: { href: {} } }, strong: {} },
 })
 const p = (s: string) => schema.node('paragraph', null, s ? [schema.text(s)] : [])
 const doc = (...b: PMNode[]) => schema.node('doc', null, b)
@@ -54,6 +55,17 @@ describe('inlineAi', () => {
     expect(applyAiResult(v, aiTargetOf(v)!, Fragment.from(p('新')), 'replace')).toBe('below')
     expect(texts(v.state.doc)).toEqual(['甲乙X丙丁', '新', '尾'])
     expect(t.text).toBe('乙丙')
+  })
+
+  it('目标文字没变但链接地址 / marks 被改了(Codex 复核 P1)→ 同样不盖掉,改为插入下方', () => {
+    const d = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('看'), schema.text('这个链接', [schema.mark('link', { href: 'https://a.example' })]), schema.text('吧')])])
+    const v = view(d)
+    const [a, b] = rangeOf(v.state.doc, '这个链接')
+    setAiTarget(v, a, b)
+    const t = aiTargetOf(v)!
+    v.dispatch(v.state.tr.removeMark(t.from, t.to, schema.marks.link).addMark(t.from, t.to, schema.marks.link.create({ href: 'https://b.example' })))
+    expect(applyAiResult(v, aiTargetOf(v)!, Fragment.from(p('新')), 'replace')).toBe('below')
+    expect(v.state.doc.rangeHasMark(a, b, schema.marks.link)).toBe(true)
   })
 
   it('插入下方 / 光标模式插入(空行被替换、非空行插在后面)', () => {
