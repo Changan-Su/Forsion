@@ -126,9 +126,11 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
  * @param {string} [o.homeEngineUrl]     手机「本端(云端)」引擎:/api/agent/* 与 /api/health 转过去;缺省回空列表
  * @param {(call: object) => Array<object>} [o.llm]  可编剧模型:给一次 build-and-stream 的请求体,回 SSE 帧数组(见 brainFrames)
  * @param {{ totalMs?: number, idleMs?: number }} [o.streamCut]  流式回包的总时长 / 空闲上限(缺省 1h / 15min,同生产)
- * @param {{ omitProxyCaller?: boolean, dropReplayFrame?: number, rewriteFromSeq0?: boolean }} [o.negctl]  负对照开关:
+ * @param {{ omitProxyCaller?: boolean, dropReplayFrame?: number, rewriteFromSeq0?: boolean, noRegisteredSnapshot?: boolean }} [o.negctl]  负对照开关:
  *        omitProxyCaller = 信封不写 proxyCaller(断 hub → 设备那一跳);dropReplayFrame = N → 第 N 次带 fromSeq>0 的事件流续订丢掉头一帧(丢事件);
- *        rewriteFromSeq0 = 续订时把 fromSeq 改回 0(引擎从头回放,客户端会收到重复事件)
+ *        rewriteFromSeq0 = 续订时把 fromSeq 改回 0(引擎从头回放,客户端会收到重复事件);
+ *        noRegisteredSnapshot = 不留登记名快照(名册的 registeredName 与信封 proxyCaller.name 都取**当前**名 —— R-25 失守的样子)
+ * @param {(row: object) => void} [o.onRegister]  POST /units/register 建完行之后调(台架在这里模拟「用户随后在名册里改了名」)
  */
 async function startFakeUnitHub(o) {
   const jwtSecret = o.jwtSecret
@@ -136,13 +138,15 @@ async function startFakeUnitHub(o) {
   const channels = new Map() // unitId → res
   const pending = new Map() // did → { unitId, res, path, timer, at }
   const streams = new Set() // 在途流式回包 { did, path, client, up, startedAt, cut(reason) }
-  const ledger = { proxy: [], brain: [], cuts: [], requests: [], memoryWrites: [], unknown: [], attention: [] }
+  const ledger = { proxy: [], brain: [], cuts: [], requests: [], memoryWrites: [], unknown: [], attention: [], unitLists: [] }
   const cfg = {
     streamCut: { totalMs: 60 * 60_000, idleMs: 15 * 60_000, ...(o.streamCut || {}) },
     negctl: { ...(o.negctl || {}) },
     llm: o.llm || null,
     /** 名册里额外的行(台架可以塞「不属于本账号」的设备做反例) */
     extraUnits: [],
+    /** GET /units 里这些行不带 kind(server 2.3.23 之前的名册形状;K8 的 isRunnableUnit 对缺席 kind 按 desktop) */
+    listOmitKindFor: new Set(),
   }
 
   const json = (res, code, body, extra = {}) => {
@@ -212,8 +216,10 @@ async function startFakeUnitHub(o) {
     if (!v.ok) return reject(v.code)
     const c = units.get(v.claims.unit)
     if (!c || c.user !== v.claims.uid || v.claims.uid !== user || !c.callerHash || !c.callerHash.startsWith(v.claims.ch) || !KINDS.has(c.kind)) return reject('UNIT_CALLER_INVALID')
+    // server hub.ts:信封里的名字 = registered_name ?? name(R-25:登记时的快照,名册里改名不改它)
+    const shownName = cfg.negctl.noRegisteredSnapshot ? c.name : (c.registeredName ?? c.name)
     return {
-      caller: { unit: c.id, kind: c.kind, name: String(c.registeredName ?? c.name ?? '').slice(0, 120), platform: c.platform ? String(c.platform).slice(0, 40) : null, registeredAt: new Date(c.createdAt).toISOString() },
+      caller: { unit: c.id, kind: c.kind, name: String(shownName ?? '').slice(0, 120), platform: c.platform ? String(c.platform).slice(0, 40) : null, registeredAt: new Date(c.createdAt).toISOString() },
       claims: v.claims,
     }
   }
@@ -313,15 +319,23 @@ async function startFakeUnitHub(o) {
         if (!KINDS.has(kind)) return json(res, 400, { code: 'UNIT_KIND_INVALID' })
         const id = crypto.randomUUID()
         const secret = crypto.randomBytes(32).toString('hex')
-        units.set(id, { id, user, name, registeredName: name, platform: String(b.platform || '').slice(0, 40) || null, kind, secretHash: sha256(secret), callerHash: null, createdAt: Date.now(), caps: null, capsAt: null, alias: null })
+        const row = { id, user, name, registeredName: name, platform: String(b.platform || '').slice(0, 40) || null, kind, secretHash: sha256(secret), callerHash: null, createdAt: Date.now(), caps: null, capsAt: null, alias: null }
+        units.set(id, row)
+        if (o.onRegister) o.onRegister(row)
         return json(res, 200, { unitId: id, secret })
       }
       if (p === '/api/units' && req.method === 'GET') {
         const rows = [...units.values(), ...cfg.extraUnits].filter((r) => r.user === user)
-        return json(res, 200, { units: rows.map((r) => ({
-          id: r.id, name: r.name, platform: r.platform, icon: null, online: channels.has(r.id), createdAt: new Date(r.createdAt).toISOString(), lastSeenAt: null, lanUrl: null,
-          kind: r.kind || 'desktop', registeredName: r.registeredName ?? r.name, alias: r.alias ?? null, caps: r.caps ?? null, capsAt: r.capsAt ?? null, capsLive: !!(r.caps && channels.has(r.id)),
-        })) })
+        const out = rows.map((r) => {
+          const row = {
+            id: r.id, name: r.name, platform: r.platform, icon: null, online: channels.has(r.id), createdAt: new Date(r.createdAt).toISOString(), lastSeenAt: null, lanUrl: null,
+            kind: r.kind || 'desktop', registeredName: cfg.negctl.noRegisteredSnapshot ? r.name : (r.registeredName ?? r.name), alias: r.alias ?? null, caps: r.caps ?? null, capsAt: r.capsAt ?? null, capsLive: !!(r.caps && channels.has(r.id)),
+          }
+          if (cfg.listOmitKindFor.has(r.id)) delete row.kind
+          return row
+        })
+        ledger.unitLists.push({ at: Date.now(), rows: out.map((r) => ({ id: r.id, kind: r.kind ?? null })) })
+        return json(res, 200, { units: out })
       }
       let m
       if ((m = /^\/api\/units\/([^/]+)\/caller-secret$/.exec(p)) && req.method === 'POST') {

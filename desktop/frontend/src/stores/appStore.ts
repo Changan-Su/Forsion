@@ -3693,5 +3693,8 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
     setFocusTarget, focusRef,
     health: () => useTargetHealth.getState().byKey,
     probe: () => probeTarget(focusTarget()),
+    // P1-K9:check:remotechain 的「下载产物」一步 —— 手机上没有列出远端会话沙箱的 UI 入口,台架经这里调**同一个**服务层函数
+    // (按会话路由目标 → 头 → 中继 → blob 保存),与上传(uploadWorkspaceFiles(get().cfg, …))同一份 cfg。
+    downloadWorkspaceFile: (sessionId: string, path: string) => api.downloadWorkspaceFile(useApp.getState().cfg, sessionId, path),
   }
 }

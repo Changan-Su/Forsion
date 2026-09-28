@@ -33,6 +33,7 @@ const freePort = () => new Promise((r) => { const s = net.createServer(); s.list
  * @param {string} [o.homeEngineUrl]
  * @param {{totalMs?: number, idleMs?: number}} [o.streamCut]
  * @param {object} [o.hubNegctl]
+ * @param {(row: object) => void} [o.hubOnRegister]  假 hub 建完名册行之后调(模拟用户随后在名册里改名,R-25)
  * @param {(opts: object) => Promise<boolean|null>} [o.confirm]  K4 首次确认框的应答(缺省:允许)
  * @param {string} [o.desktopName]
  * @param {boolean} [o.approvalDelivery]  起真 K3 approvalDelivery(订阅引擎 /agent/approvals/stream,假通知,收件箱提醒打假 hub)。
@@ -57,7 +58,7 @@ async function startRemoteWorld(o) {
   // 手机与桌面同一账号(hub 属主闸),token 串不同:一枚是手机登录的,一枚是电脑登录的
   const PHONE_TOKEN = DESKTOP_TOKEN.replace('.k9sig', '.k9phone')
 
-  const hub = await startFakeUnitHub({ jwtSecret: JWT_SECRET, staticDir: o.staticDir, homeEngineUrl: o.homeEngineUrl, llm: o.llm, streamCut: o.streamCut, negctl: o.hubNegctl })
+  const hub = await startFakeUnitHub({ jwtSecret: JWT_SECRET, staticDir: o.staticDir, homeEngineUrl: o.homeEngineUrl, llm: o.llm, streamCut: o.streamCut, negctl: o.hubNegctl, onRegister: o.hubOnRegister })
 
   // ── 真 standalone 引擎(隔离 home)──
   const LOCAL_TOKEN = crypto.randomUUID()
@@ -202,7 +203,8 @@ async function startRemoteWorld(o) {
     get pairing() { return pairing },
     db,
     engineAlive: () => !engineExit,
-    async close() {
+    /** 收摊。产物目录(引擎 state.db / 日志 / 工作区 / userData)缺省删掉;keep(台架判红时)或 REMOTECHAIN_KEEP=1 时留下并打出路径。 */
+    async close({ keep = false } = {}) {
       try { delivery?.stop() } catch { /* ignore */ }
       try { unitHost.stop() } catch { /* ignore */ }
       try { await unitWeb.close() } catch { /* ignore */ }
@@ -210,6 +212,8 @@ async function startRemoteWorld(o) {
       try { child.kill('SIGTERM') } catch { /* ignore */ }
       for (let i = 0; i < 30 && !engineExit; i++) await sleep(100)
       if (!engineExit) try { child.kill('SIGKILL') } catch { /* ignore */ }
+      if (keep || process.env.REMOTECHAIN_KEEP === '1') console.log(`  产物目录留着:${out}`)
+      else try { fs.rmSync(out, { recursive: true, force: true }) } catch { /* ignore */ }
     },
   }
 }
