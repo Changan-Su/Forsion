@@ -219,12 +219,13 @@ export interface MuseTodo {
 }
 export interface MuseStatusInfo {
   enabled: boolean
-  hasModel: boolean
+  /** 这四个远程来源拿不到(引擎 routes/special.ts remoteMuseStatusView:设备页 / 手机整端切过去时缺席),读端自己兜底。 */
+  hasModel?: boolean
   running: boolean
-  restartsThisWindow: number
-  maxRestartsPerWindow: number
+  restartsThisWindow?: number
+  maxRestartsPerWindow?: number
   lastCycleAt: number | null
-  lastError: string | null
+  lastError?: string | null
   sessionId: string | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
