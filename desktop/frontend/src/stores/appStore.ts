@@ -13,6 +13,7 @@ import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot, TeamDef } from '../types'
+import { clearDeviceSticky, noteDeviceRefusal } from '../services/deviceMarks' // P1-K7a
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { bindSession, clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, installEngineHost, knownTargets, nameOfRef, refForSession, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../services/engine/targets'
@@ -628,6 +629,15 @@ export function withAmadeusWorkspace(config: AgentConfig, vaultRoot: string | nu
 }
 
 const activeAmadeusRoot = (): string | null => usePageStore.getState().vaultRoot || null
+
+/** P1-K7a(K7 §3.6 / S6):建在「我的电脑」上的会话,手机本地的这些键一律不带 —— 手机的 Amadeus 根(extraRoots)、云端项目名、
+ *  外部引擎、验证命令、轨道身份。引擎侧(C7 / C8)也会剥 / 拒,这里不依赖它;cwd 只可能是在那台上选的项目(调用方给的 path)。 */
+const REMOTE_DROP_INIT_KEYS = ['extraRoots', 'workspaceProject', 'engineId', 'engineModelId', 'verifyCommand', 'soloAgentSlug', 'teamSlug'] as const
+export function remoteSafeInit(c: AgentConfig): AgentConfig {
+  const out = { ...c } as Record<string, unknown>
+  for (const k of REMOTE_DROP_INIT_KEYS) delete out[k]
+  return out as AgentConfig
+}
 /** 新会话「这条消息实际会用哪个模型」的**唯一**回退链:本次空态显式选的 → 全局记忆
  *  (cfg.modelId 就是「新会话用哪个模型」的真源,在会话里换模型也会写它)→ 后端默认。
  *  ⚠️ 输入栏药丸(ChatView)、建会话时落库、startRun 三处必须同源。三份各写各的时出过的 bug:
@@ -2388,7 +2398,8 @@ export const useApp = create<AppState>((set, get) => ({
     // 从旧默认目录建好会话后才就位，下次 config:get 会把默认目录切到 Vault/Sessions。
     // 保留会话的真实 project_path，但把各语言下以「默认工作区」创建过的路径都收为同组别名。
     const defaultNames = new Set([defaultName, ...translationValues('app.defaultWorkspace')])
-    const allSessions = [...sessions, ...archivedSessions]
+    // P1-K7a(K7 §3.4):只看本端会话 —— 已注入的「我的电脑」上的会话带着 Mac 的路径,并进来就是手机上的「幽灵本地项目」
+    const allSessions = [...sessions, ...archivedSessions].filter(isHomeSession)
     const defaultSessionKeys = new Set<string>(defPath ? [defPath] : [])
     for (const s of allSessions) {
       if (s.project_path && s.project_name && defaultNames.has(s.project_name)) defaultSessionKeys.add(s.project_path)
@@ -2454,14 +2465,16 @@ export const useApp = create<AppState>((set, get) => ({
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
-      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
+      // S4:新会话建在焦点上 —— 位置在发请求**之前**定下(回来时焦点可能已换),回来即绑定(路由真源),插列表前经 withLocation 打标
+      const loc = focusRef()
+      const base = applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
-        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
+        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
+      // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根等(remoteSafeInit)
+      const init: AgentConfig = settleUltra(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
       if (preset === 'chat' && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
-      // S4:新会话建在焦点上 —— 位置在发请求**之前**定下(回来时焦点可能已换),回来即绑定(路由真源),插列表前经 withLocation 打标
-      const loc = focusRef()
       const created = await api.createSession(targetForRef(loc) ?? focusTarget(), {
         ...(path
           ? { project_path: path, project_name: ws.name }
@@ -2471,6 +2484,7 @@ export const useApp = create<AppState>((set, get) => ({
         agent_config: init,
       })
       if (bindSession(created.id, loc) === 'conflict') throw new Error(t('app.cannotCreateSession'))
+      if (loc.kind === 'unit') clearDeviceSticky(loc.unitId) // P1-K7a:建成了 = 那台先前的拒绝已不成立
       const s = withLocation(created)
       act('chat.new', { s: s.id.slice(0, 6) })
       set((st) => ({ sessions: [s, ...st.sessions] }))
@@ -2479,6 +2493,9 @@ export const useApp = create<AppState>((set, get) => ({
       set((st) => ({ messagesBySession: { ...st.messagesBySession, [s.id]: [] }, configBySession: { ...st.configBySession, [s.id]: init } }))
       if (!s.agent_config) void backfillSessionConfig(s.id, init)
     } catch (e: any) {
+      // P1-K7a:在那台电脑上建会话被拒(开关关 / 没被允许)→ 记成粘滞拒绝,设备分组与「在哪运行」据此显示那台的状态
+      const where = focusRef()
+      if (where.kind === 'unit') noteDeviceRefusal(where.unitId, e)
       get().toast(t('app.createSessionFail', { e: e?.message || e }), true)
     }
   },
@@ -2778,14 +2795,17 @@ export const useApp = create<AppState>((set, get) => ({
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
       const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
-      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
+      // S4:位置在发请求之前定下,回来即绑定(见 createInWorkspace)
+      const loc = focusRef()
+      const base = applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
+        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
+      // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根 / 云端项目名 / 外部引擎等(remoteSafeInit)
+      const init: AgentConfig = settleUltra(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!init.agentSlug && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
-      // S4:位置在发请求之前定下,回来即绑定(见 createInWorkspace)
-      const loc = focusRef()
+      let createErr: unknown = null
       const created = await api.createSession(targetForRef(loc) ?? focusTarget(), {
         ...(path
           ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
@@ -2793,8 +2813,16 @@ export const useApp = create<AppState>((set, get) => ({
           : { project_name: cloudProject! }),
         ...(model_id ? { model_id } : {}),
         agent_config: init,
-      }).catch(() => null)
-      if (!created || bindSession(created.id, loc) === 'conflict') { get().toast(t('app.cannotCreateSession'), true); return false }
+      }).catch((e) => { createErr = e; return null })
+      if (!created || bindSession(created.id, loc) === 'conflict') {
+        // P1-K7a:在那台电脑上被拒 → 粘滞拒绝(设备状态)+ 那句本地化的拒绝原因(开关关着 / 等那台允许 …),而不是笼统的「建不了」
+        if (loc.kind === 'unit' && createErr) {
+          noteDeviceRefusal(loc.unitId, createErr)
+          get().toast((createErr as Error)?.message || t('app.cannotCreateSession'), true)
+        } else get().toast(t('app.cannotCreateSession'), true)
+        return false
+      }
+      if (loc.kind === 'unit') clearDeviceSticky(loc.unitId)
       const s = withLocation(created)
       set((st) => ({ sessions: [s, ...st.sessions] }))
       // 必须先标记再 setActiveId:setActiveId 内部会 void loadSessionHistory,新会话此刻服务端
@@ -2812,7 +2840,9 @@ export const useApp = create<AppState>((set, get) => ({
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
     // Agent Desk:新一条用户消息解除「用户关过面板」的静音。
     const storedAgentConfig = implicitInit || get().configBySession[sessionId] || {}
-    const scopedAgentConfig = withAmadeusWorkspace(storedAgentConfig, activeAmadeusRoot())
+    // P1-K7a(K7 §4.1 run 路径字段):会话在「我的电脑」上 → 不并手机的 Amadeus 根、不带手机设置里的生图 / 视觉模型(那台有它自己的)
+    const onUnit = refForSession(sessionId).kind === 'unit'
+    const scopedAgentConfig = onUnit ? storedAgentConfig : withAmadeusWorkspace(storedAgentConfig, activeAmadeusRoot())
     let agentConfig = { ...scopedAgentConfig }
     // 09-16 起团队模式没有轮数上限 / 强度(成员各自以 DONE 表态收场):老会话存下来的这两个键不再随 run 发出,
     // 否则引擎会把 groupMaxRounds 当成显式硬上限(那是留给讨论 / Historian 辅助等内部调用方的)。存值不动,只是不带。
@@ -2840,11 +2870,11 @@ export const useApp = create<AppState>((set, get) => ({
     if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
     // Ultra 的资格按本条 run 的实际配置结算(换过引擎 / 进了团队模式 / 档位不是 max 的会话不带它),与药丸显示同一口径。
     agentConfig = settleUltra(agentConfig)
-    if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
+    if (!onUnit && !agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
-    if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
+    if (!onUnit && !agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
     // 同理带上「何时转写」档:云端会话的引擎读不到本机 config.json,不带就永远按 auto 跑。
-    if (!agentConfig.visionMode && get().cfg.visionMode) agentConfig.visionMode = get().cfg.visionMode
+    if (!onUnit && !agentConfig.visionMode && get().cfg.visionMode) agentConfig.visionMode = get().cfg.visionMode
     try { if (localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1') agentConfig.debugSystemPrompt = true } catch { /* ignore */ }
     if (workspaceFiles?.length) {
       try {
