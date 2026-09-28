@@ -651,19 +651,28 @@ router.get('/agent/special/approvals/:id', authMiddleware, async (req: AuthReque
   }
 });
 
+/** 远端(x-forsion-remote)答异步审批时带的 note 一律丢掉(M1A 复审 P1):拒绝时 note 原样进该 Agent 的每日日志
+ *  (`[approval] rejected by user: … — note`),随后叫醒 Muse —— Muse 每周期先 read_log、专看 [approval] 行,普通 Agent 的 LOG
+ *  还经活动摘要进 Muse 周期提示词。等于远端写一条日志,而 log_event 与 POST /agent/log 对远端本就硬拒。批准时 note 只落行里,
+ *  同样不收(远端的决定照常生效,只是不带附言)。 */
+function remoteSafeNote(remote: boolean, note: unknown): string | undefined {
+  return remote ? undefined : (note as string | undefined); // 本机照旧原样传(decideApproval 自己 displayText 截断)
+}
+
 router.post('/agent/special/approvals/:id/approve', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   // 契约 C9:异步审批只有 approve / reject 两个动作(没有「总允许」);远端夹带 argsOverride → 400。
   if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
     // P1 · K3(方案 §6.3):排队的受保护路径写入(凭据 / ~/.forsion 配置)只在执行设备本机批准;远端只能拒绝(reject 不拦)。
-    if (parseRemoteOrigin(req.headers)) {
+    const remote = !!parseRemoteOrigin(req.headers);
+    if (remote) {
       const row = await getApproval(req.user!.userId, String(req.params.id || ''));
       let kind: unknown;
       try { kind = row?.reason ? JSON.parse(String(row.reason))?.kind : undefined; } catch { kind = undefined; }
       if (kind === 'protected') return res.status(403).json(APPROVAL_LOCAL_ONLY_BODY);
     }
-    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', req.body?.note);
+    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', remoteSafeNote(remote, req.body?.note));
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
     res.json({ ok: true, status: r.status, result: r.result });
   } catch (e: any) {
@@ -675,7 +684,7 @@ router.post('/agent/special/approvals/:id/reject', authMiddleware, async (req: A
   if (!ensureLocal(res)) return;
   if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
-    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'reject', 'user', req.body?.note);
+    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'reject', 'user', remoteSafeNote(!!parseRemoteOrigin(req.headers), req.body?.note));
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
     res.json({ ok: true, status: r.status });
   } catch (e: any) {
