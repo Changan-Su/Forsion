@@ -104,6 +104,8 @@ async function main() {
       JSON.stringify(rows.map((r) => r.title)))
     check('当前项带勾选态(本地)', !!rows[0]?.on)
     check('离线设备只剩中转行且灰显(无直连/P2P 行)', rows[5].off && !rows.some((r) => r.title === '书房 PC直连' || r.title === '书房 PCP2P'))
+    // P1-K1:名册里的手机(kind=phone)是调用方、不开设备通道 → 一行都不列(否则永远多一台「离线」的手机)
+    check('手机(kind=phone)不出现在设备行里', !rows.some((r) => r.title.includes('口袋 Pixel')), JSON.stringify(rows.map((r) => r.title)))
     check('设备自定义 emoji 生效', rows.some((r) => r.emoji === '🦊'))
 
     const geo = await page.evaluate(() => {

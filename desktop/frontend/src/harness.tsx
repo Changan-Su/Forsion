@@ -700,6 +700,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     const units = [
       { id: 'u-mba', name: 'MacBook Air', platform: 'darwin', icon: '🦊', online: true, lanUrl: 'http://192.168.1.20:8791' },
       { id: 'u-pc', name: '书房 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
+      // P1-K1:手机是调用方、不开设备通道 → 切换器不列它(unit-switcher.check 判据)
+      { id: 'u-phone', name: '口袋 Pixel', platform: 'android', icon: null, online: false, lanUrl: null, kind: 'phone' },
     ]
     const opened: string[] = []
     ;(window as unknown as { __unitOpened: string[] }).__unitOpened = opened

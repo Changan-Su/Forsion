@@ -4,6 +4,9 @@
  *
  * 设备页(远端来路,window.tangu.remoteCaller):引擎拒收远端改参数(C9 → 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)、把「总允许」
  * 降成单次批准,所以这里命令只读、不给「总允许」—— 否则改了命令点批准什么都不发生,点「总允许」实际只批一次(Codex 终审 F#2)。
+ *
+ * 来源行(P1 · K1):远程会话发起的审批在标题下写「来自远程会话 · 设备名」(调用方经 hub → 本机 unitWeb 验过)或按来路写
+ * 「账号下未识别的客户端 / 局域网配对设备 / 点对点直连」。本机 run 不带 remote,不显示。设备名是不可信串,只进文本节点。
  */
 import React, { useMemo, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
@@ -11,7 +14,7 @@ import type { ApprovalRequest } from '../types'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
-import { alwaysAllowWorks, approvalReasonText, MODE_KEY } from '../approvalReason'
+import { alwaysAllowWorks, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
 
 export { MODE_KEY }
 
@@ -20,6 +23,12 @@ registerMessages({
     zh: '远程连接下只能原样批准或拒绝，要改命令请在那台设备本机上操作',
     en: 'Over a remote connection you can only approve or reject as is. To change the command, use that device itself',
   },
+  // P1-K1:审批卡来源行
+  'approval.remote.caller': { zh: '来自远程会话 · {name}', en: 'From a remote session · {name}' },
+  'approval.remote.account': { zh: '来自远程会话 · 账号下未识别的客户端', en: 'From a remote session · an unidentified client on your account' },
+  'approval.remote.lan': { zh: '来自远程会话 · 局域网配对设备', en: 'From a remote session · a LAN-paired device' },
+  'approval.remote.p2p': { zh: '来自远程会话 · 点对点直连', en: 'From a remote session · a peer-to-peer connection' },
+  'approval.remote.unknown': { zh: '来自远程会话', en: 'From a remote session' },
 })
 
 /** 本页驱动的是别的设备的引擎、且以远端身份(x-forsion-remote)调用:审批改参数 / 总允许都不兑现。 */
@@ -43,6 +52,7 @@ export const ApprovalCard: React.FC<{
   // 「总允许」对 escalate / custom-ask / protected 无效(引擎不落),按钮不给 —— 规则见 approvalReason.ts。
   const alwaysWorks = alwaysAllowWorks(req.reason) && !remote
   const why = approvalReasonText(req.reason, t as (k: string, v?: Record<string, unknown>) => string)
+  const source = approvalRemoteText(req.remote, t as (k: string, v?: Record<string, unknown>) => string)
 
   const decide = (action: 'approve' | 'approve_always' | 'reject') => {
     if (resolved) return
@@ -63,6 +73,7 @@ export const ApprovalCard: React.FC<{
       </div>
       {/* B3「为什么问你」:判定分支在引擎里已经算过,不带出来客户端只能猜(尤其猜不到生效档)。
           注意这是**规则判定理由**,不是 Claude Code 那种模型生成的安全性论证 —— 便宜、且糊弄不了。 */}
+      {source && <div className="approval-why" data-approval-remote>{source}</div>}
       {why && <div className="approval-why">{why}</div>}
       {isBash && !resolved && !remote ? (
         <textarea

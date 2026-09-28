@@ -325,7 +325,9 @@ async function main(): Promise<void> {
       const ta = apage.locator('.t2c-ta').first()
       for (let i = 0; i < 40 && !(await ta.isEnabled().catch(() => false)); i++) await apage.waitForTimeout(500)
       stub.script([
-        { type: 'approval_request', payload: { approvalId: 'ra1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }), preview: '$ make build', reason: { kind: 'mode', mode: 'auto-edit' } } },
+        // P1-K1:远程污点 run 的审批事件带 remote(调用方经 hub → 本机 unitWeb 验过),卡上多一行来源
+        { type: 'approval_request', payload: { approvalId: 'ra1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }), preview: '$ make build', reason: { kind: 'mode', mode: 'auto-edit' },
+          remote: { via: 'tunnel', callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone', callerName: 'E2E 手机' } } },
         { type: '__hold' },
       ])
       await ta.click()
@@ -339,11 +341,13 @@ async function main(): Promise<void> {
           preview: (c.querySelector('.approval-preview')?.textContent || '').trim(),
           buttons: [...c.querySelectorAll('.approval-actions button')].map((b) => (b.textContent || '').trim()),
           hint: (c.querySelector('[data-remote-readonly]')?.textContent || '').trim(),
+          source: (c.querySelector('[data-approval-remote]')?.textContent || '').trim(),
         }
       })
       check('设备页审批卡:run_bash 命令只读(无编辑框),原样展示', !card.editable && card.preview === '$ make build', JSON.stringify(card))
       check('设备页审批卡:不给「本会话总是允许」,只剩批准 / 拒绝', card.buttons.length === 2 && !card.buttons.some((b) => b.includes('总是允许')), JSON.stringify(card.buttons))
       check('设备页审批卡:写明只能原样批 / 拒', card.hint.includes('只能原样批准或拒绝'), card.hint)
+      check('审批卡来源行(P1-K1):来自远程会话 · 调用方设备名', card.source === '来自远程会话 · E2E 手机', card.source)
       // 引擎拒了(假引擎扮 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)→ 本地化原因上屏,卡片仍待批
       await apage.locator('.approval-card .approval-actions .btn.primary').click()
       let toast = ''

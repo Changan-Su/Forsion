@@ -315,7 +315,8 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               {units === null && <button className="unitsw-row" onClick={() => { setOpen(false); useApp.getState().openSettings('forsion') }}>
                 <span className="unitsw-col"><span className="unitsw-desc">{t('unit.notLoggedIn')} ›</span></span>
               </button>}
-              {units?.filter((u) => u.id !== host?.unitId).flatMap((u) => {
+              {/* 手机在 P1 不开设备通道(它是调用方,不是执行设备):不滤掉的话名册里永远多一台「离线」的手机(P1-K1)。老 server 不回 kind → 照旧列出 */}
+              {units?.filter((u) => u.id !== host?.unitId && u.kind !== 'phone').flatMap((u) => {
                 // 一台设备 = 每条通路各一行。此前是一行 + 自动择路:LAN 探通就把「中转」那条路
                 // 悄悄顶掉,界面上等于不存在(用户找了两轮没找到)。拆开显式列,想走哪条点哪条。
                 // 直连行只在探通时出现(探不通的地址点了也是白点);中转行恒在,离线灰显 + 就地提示。
