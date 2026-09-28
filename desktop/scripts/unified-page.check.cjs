@@ -195,7 +195,8 @@ async function main() {
   // ── PR 系列:属性面板受控草稿(评审 2026-09-27 C-01 P0)────────────────────────────
   // 旧病:值框/键名框/坏 YAML 原文框都是 defaultValue,失焦拿挂载时的旧 DOM 值比新 prop → 外部改写
   // (或源码模式自改)之后「白点一下」就把旧值写回盘。三种来源各一组,每组断言两件事:
-  // 聚焦→失焦前后写盘次数不变 **且** 框里显示的是新值。PR1b/PR4 是对照:真改了照常提交、冲突可 Esc 放弃。
+  // 聚焦→失焦前后写盘次数不变 **且** 框里显示的是新值。PR1b/PR4 是对照:真改了照常提交、冲突可 Esc 放弃;
+  // PR5 输入法组合中的 Esc、PR6 无冲突/原文框的 Esc 都不放弃草稿(N-3)。
   {
     const openProps = async (seed) => {
       const pg = await browser.newPage({ locale: 'zh-CN' })
@@ -334,6 +335,51 @@ async function main() {
       record('PR5 输入法组合中 Esc 不丢草稿:已上屏「项目」保住,失焦落盘 status: todo项目(keyCode 27/229)',
         Object.values(out).every((r) => r.afterEsc === 'todo项目' && r.dw === 1 && r.line === 'status: todo项目'),
         JSON.stringify(out))
+    }
+
+    // PR6 收口 N-3:放弃草稿不进撤销栈,所以 Esc 只在单行框**标着冲突**时放弃。
+    //  a 值框没冲突:Esc 不清草稿、原样冒泡到 document(不吞),失焦照常落盘;
+    //  b 坏 YAML 原文框冲突中:Esc 不清多行草稿;真 Cmd+Z 撤回到原样再失焦 → 零写入、显示别处的版本(提示文案承诺的路径)。
+    // 负对照(实跑):onEscape 判据改回 `draft === null` → a 红;原文框接回 onEscape → b 红。
+    {
+      const pa = await openProps(SEED)
+      await pa.evaluate(() => { window.__escSeen = []; document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.__escSeen.push(e.defaultPrevented) }) })
+      await (await pa.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pa.keyboard.press('End')
+      await pa.keyboard.type('ABC')
+      await pa.keyboard.press('Escape')
+      await pa.waitForTimeout(100)
+      const afterEsc = (await vals(pa))[0]
+      const w0 = await nWrites(pa)
+      await pa.evaluate(() => document.activeElement.blur())
+      await pa.waitForTimeout(1200)
+      const a = { afterEsc, escSeen: await pa.evaluate(() => window.__escSeen), dw: (await nWrites(pa)) - w0, line: (await disk(pa)).split('\n')[1] }
+      await pa.close()
+
+      const RAW0 = '---\nstatus: [未闭合\nnote: 旧A\n---\n# 标题\n\n正文。\n'
+      const pb = await openProps(RAW0)
+      await pb.click('.amx-props-raw')
+      await pb.keyboard.press('Meta+ArrowDown')
+      await pb.keyboard.type('\nextra: 修复中的一大段')
+      await pb.evaluate(() => window.__upage.fire('Unified.md', '---\nstatus: [未闭合\nnote: 外部B\n---\n# 标题\n\n正文。\n'))
+      await pb.waitForTimeout(1200)
+      const raw = () => pb.evaluate(() => { const t = document.querySelector('.amx-props-raw'); return { v: t.value, conflict: t.classList.contains('amx-prop-conflict'), title: t.title } })
+      const during = await raw()
+      await pb.keyboard.press('Escape')
+      await pb.waitForTimeout(100)
+      const esc = await raw()
+      for (let i = 0; i < 40 && (await raw()).v !== 'status: [未闭合\nnote: 旧A'; i++) { await pb.keyboard.press('Meta+z'); await pb.waitForTimeout(40) } // 撤销按输入分组,逐次按到回原样
+      const undone = await raw()
+      const w1 = await nWrites(pb)
+      await pb.evaluate(() => document.activeElement.blur())
+      await pb.waitForTimeout(1200)
+      const b = { during, esc: esc.v, undone, dw: (await nWrites(pb)) - w1, shown: (await raw()).v, disk: await disk(pb) }
+      await pb.close()
+      record('PR6 Esc 只在单行框冲突时放弃:无冲突值框 Esc 留草稿+冒泡+失焦落盘;原文框冲突中 Esc 留多行草稿,Cmd+Z 撤回后失焦零写入、采用别处版本(N-3)',
+        a.afterEsc === 'todoABC' && JSON.stringify(a.escSeen) === '[false]' && a.dw === 1 && a.line === 'status: todoABC' &&
+          b.during.conflict && b.esc.includes('extra: 修复中的一大段') && b.undone.v === 'status: [未闭合\nnote: 旧A' &&
+          b.dw === 0 && b.shown === 'status: [未闭合\nnote: 外部B' && b.disk.includes('note: 外部B'),
+        JSON.stringify({ a, b }))
     }
   }
 

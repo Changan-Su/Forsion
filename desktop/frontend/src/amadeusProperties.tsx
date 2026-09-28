@@ -13,8 +13,11 @@
  *  没打过字 = 草稿为空 = 显示当前 prop —— 外部改写 / 源码模式自改 / 回灌即时可见;失焦只在「真改了」
  *  时提交(判据 draftToCommit)。⚠️ 别改回 `defaultValue` + 失焦比较 DOM 值:DOM 里是挂载时的旧值,
  *  外部改动后「白点一下」就把旧值写回盘(外部改动静默回滚,源码模式刚改的也被撤回)。
- *  聚焦打字中同一字段被外部改了:草稿本地胜(不吞正在打的字,同 D-03 拍板 #6),但标 conflict 讲明,
- *  Esc 放弃草稿 = 接受外部值(输入法组合中的 Esc 只取消候选,不动草稿)。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
+ *  聚焦打字中同一字段被外部改了:草稿本地胜(不吞正在打的字,同 D-03 拍板 #6),但标 conflict 讲明。
+ *  **Esc 只在单行框(值框/键名框)标着 conflict 时放弃草稿 = 接受外部值**(收口 N-3):放弃不进撤销栈,没有冲突
+ *  时按 Esc 就清掉一行草稿 = 用户一按手滑、Cmd+Z 也找不回;坏 YAML 原文框**从不**以 Esc 放弃(一段多行修复
+ *  一键全没),冲突时撤销回原样再失焦即采用外部版本。不放弃的 Esc 原样冒泡(不吞)。输入法组合中的 Esc 只取消
+ *  候选,不动草稿。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
  *  (DOM)、unified-page.check 的 PR 组(真浏览器三变体)。 */
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
@@ -37,7 +40,7 @@ registerMessages({
   'amprops.nestedHint': { zh: '嵌套结构请在源码模式编辑', en: 'Edit nested values in source mode' },
   'amprops.chipsPlaceholder': { zh: '回车添加…', en: 'Press Enter to add…' },
   'amprops.conflict': { zh: '此处已在别处改为「{v}」。失焦后以你的输入为准，按 Esc 放弃你的输入。', en: 'Changed elsewhere to "{v}". Leaving the field keeps your input; press Esc to discard it.' },
-  'amprops.conflictRaw': { zh: '这段已在别处被改动。失焦后以你的输入为准，按 Esc 放弃你的输入。', en: 'Changed elsewhere. Leaving the field keeps your input; press Esc to discard it.' },
+  'amprops.conflictRaw': { zh: '这段已在别处被改动。失焦后以你的输入为准；撤销你的改动再失焦则采用别处的版本。', en: 'Changed elsewhere. Leaving the field keeps your input; undo your edits first to take the other version.' },
 })
 
 export interface FmEntry { key: string; value: unknown }
@@ -82,13 +85,15 @@ export function draftToCommit(draft: string | null, base: string, current: strin
 }
 
 /** 受控草稿:draft=null → 显示 current(外部改动即时可见);第一击键记下 base。
- *  conflict = 有草稿且同一字段在编辑期间被别处改了(current 已离开 base)。 */
-function useFieldDraft(current: string) {
+ *  conflict = 有草稿且同一字段在编辑期间被别处改了(current 已离开 base)。
+ *  escDiscards:'conflict' = 只有冲突时 Esc 才放弃草稿(单行框);'never' = Esc 从不放弃(原文框,见文件头 N-3)。 */
+function useFieldDraft(current: string, escDiscards: 'conflict' | 'never' = 'conflict') {
   const [draft, setDraft] = useState<string | null>(null)
   const [base, setBase] = useState(current)
+  const conflict = draft !== null && current !== base && draft !== current
   return {
     shown: draft ?? current,
-    conflict: draft !== null && current !== base && draft !== current,
+    conflict,
     change: (v: string): void => {
       if (draft === null) setBase(current)
       setDraft(v)
@@ -98,12 +103,13 @@ function useFieldDraft(current: string) {
       setDraft(null)
       return draftToCommit(draft, base, current, norm)
     },
-    /** Esc:有草稿才吞键 —— 放弃草稿 = 接受当前值(不 blur:blur 会拿旧闭包里的草稿去提交)。
+    /** Esc:**标着冲突**才吞键 —— 放弃草稿 = 接受外部值(不 blur:blur 会拿旧闭包里的草稿去提交)。
+     *  没冲突 / 原文框:不处理、照常冒泡,草稿留着(放弃不进撤销栈,无冲突时清草稿 = 不可恢复地丢字,收口 N-3)。
      *  ⚠️ 输入法组合中的 Esc 是「取消候选」,不是放弃草稿:不判组合态会把已上屏的字连同草稿一起清掉、
      *  失焦零写入(静默吞字)。keyCode 229 兜 Safari 类「compositionend 先于 keydown」的时序。
      *  仪器:amadeusProperties.draft.test.ts、unified-page.check PR5(真 CDP 组合)。 */
     onEscape: (e: KeyboardEvent<HTMLElement>): void => {
-      if (e.key !== 'Escape' || e.nativeEvent.isComposing || e.keyCode === 229 || draft === null) return
+      if (e.key !== 'Escape' || e.nativeEvent.isComposing || e.keyCode === 229 || escDiscards === 'never' || !conflict) return
       e.preventDefault()
       e.stopPropagation()
       setDraft(null)
@@ -218,7 +224,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
 /** 坏 YAML 原文框:受控草稿(C-01 变体 C —— 原 defaultValue 版外部改写后白点一下整段写回旧文)。 */
 function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boolean; onCommit: (yaml: string) => void }) {
   const { t } = useI18n()
-  const f = useFieldDraft(text)
+  const f = useFieldDraft(text, 'never') // 多行草稿:Esc 从不放弃(收口 N-3,见文件头)
   return (
     <textarea
       className={`amx-props-raw${f.conflict ? ' amx-prop-conflict' : ''}`}
@@ -227,7 +233,6 @@ function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boo
       readOnly={readOnly}
       title={f.conflict ? t('amprops.conflictRaw') : undefined}
       onChange={(e) => { if (!readOnly) f.change(e.target.value) }}
-      onKeyDown={f.onEscape}
       onBlur={() => {
         const next = f.settle()
         if (!readOnly && next !== null) onCommit(next)

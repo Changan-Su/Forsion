@@ -5,7 +5,8 @@
  *  「白点一下」就把旧值写回(外部改动被静默回滚)。这里钉:
  *  ① 外部 prop 变了 → 框里即时显示新值,聚焦再失焦 onCommit 零次(值框、数字框、键名框、原文框);
  *  ② 真打字 → 失焦照常提交一次(修法不能是「一律不写」);
- *  ③ 打字中同字段被外部改了 → 草稿保留 + 冲突标记;Esc 放弃草稿 → 显示外部值,失焦零提交;输入法组合中的 Esc(取消候选)不算放弃,草稿保留。
+ *  ③ 打字中同字段被外部改了 → 草稿保留 + 冲突标记;Esc 放弃草稿 → 显示外部值,失焦零提交;输入法组合中的 Esc(取消候选)不算放弃,草稿保留;
+ *  ④ 没冲突的 Esc、原文框的 Esc 一律不放弃草稿(放弃不进撤销栈,收口 N-3)。
  *  **负对照**:把任一框改回 `defaultValue` + 失焦比 DOM 值 → ① 红。
  *  ponytail: createElement 而非 JSX,免为一个用例把 vitest include 扩到 .tsx。 */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -121,6 +122,54 @@ describe('属性面板受控草稿(C-01)', () => {
     expect(valueInputs()[0].classList.contains('amx-prop-conflict')).toBe(false)
     act(() => { el.blur() })
     expect(commits).toEqual([])
+  })
+
+  // 收口 N-3:放弃草稿不进撤销栈 —— 没有冲突时 Esc 清草稿 = 手滑一下、Cmd+Z 也找不回。只在单行框标着冲突时才放弃;
+  // 其余情况 Esc 不处理、原样冒泡(不吞)。负对照:onEscape 的 `!conflict` 改回 `draft === null` → 本例红。
+  it('没有冲突时 Esc 不放弃草稿、原样冒泡;失焦照常提交(值框/键名框)', () => {
+    const seen: Array<{ prevented: boolean }> = []
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') seen.push({ prevented: e.defaultPrevented }) }
+    document.addEventListener('keydown', onKey)
+    try {
+      render('status: todo\ncount: 3')
+      openPanel()
+      const val = valueInputs()[0]
+      act(() => { val.focus() })
+      typeInto(val, 'todoABC')
+      act(() => { val.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+      expect(valueInputs()[0].value).toBe('todoABC')
+      act(() => { val.blur() })
+      expect(commits).toEqual(['status: todoABC\ncount: 3'])
+
+      commits = []
+      render('status: todo\ncount: 3')
+      const key = keyInputs()[1]
+      act(() => { key.focus() })
+      typeInto(key, 'countX')
+      act(() => { key.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+      expect(keyInputs()[1].value).toBe('countX')
+      act(() => { key.blur() })
+      expect(commits).toEqual(['status: todo\ncountX: 3'])
+      expect(seen).toEqual([{ prevented: false }, { prevented: false }]) // 两次都冒泡到 document,没被吞
+    } finally {
+      document.removeEventListener('keydown', onKey)
+    }
+  })
+
+  it('坏 YAML 原文框:冲突时 Esc 也不放弃多行草稿;撤销回原样再失焦 → 零提交、采用别处的版本', () => {
+    render('status: [未闭合\nnote: 旧A')
+    openPanel()
+    const ta = host.querySelector<HTMLTextAreaElement>('.amx-props-raw')!
+    act(() => { ta.focus() })
+    typeInto(ta, 'status: [未闭合\nnote: 旧A\nextra: 修复中的一大段\nmore: 1')
+    render('status: [未闭合\nnote: 外部B')
+    expect(ta.classList.contains('amx-prop-conflict')).toBe(true)
+    act(() => { ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+    expect(ta.value).toBe('status: [未闭合\nnote: 旧A\nextra: 修复中的一大段\nmore: 1') // 一段修复没被一键清掉
+    typeInto(ta, 'status: [未闭合\nnote: 旧A') // = Cmd+Z 撤回到开始编辑时的原样
+    act(() => { ta.blur() })
+    expect(commits).toEqual([])
+    expect(host.querySelector<HTMLTextAreaElement>('.amx-props-raw')!.value).toBe('status: [未闭合\nnote: 外部B')
   })
 
   // 输入法组合中按 Esc = 取消候选,不是放弃草稿(评审返修 C-01-ime-esc)。三框共用 useFieldDraft,逐个钉。
