@@ -216,6 +216,7 @@ async function main() {
       const b1 = await pg.evaluate(back)
       await pg.waitForTimeout(200)
       const sheetAfter = await pg.evaluate(() => !!document.querySelector('.mb-sheet'))
+      if (sheetAfter) { await pg.mouse.click(195, 40); await pg.waitForTimeout(200) } // 没关掉(回归):点遮罩收掉,别让下一步卡死
       // 「+」块面板
       await pg.locator('#mob-host .amx-mbar button[title="插入块"]').click()
       await pg.waitForTimeout(300)
