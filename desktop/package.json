@@ -198,7 +198,7 @@
     "test:ics-tz": "for tz in Europe/London America/New_York Asia/Shanghai Australia/Lord_Howe UTC; do echo \"== $tz\"; TZ=$tz vitest run frontend/src/views/calendar/ics.test.ts || exit 1; done",
     "check:arrowtrap": "node scripts/arrow-trap.check.cjs",
     "check:wikisuggest": "node scripts/e2e-editor.cjs --check=wiki-suggest",
-    "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-entry",
+    "check:qfentry": "node scripts/e2e-editor.cjs --check=quickfind-entry",
     "check:bsfocus": "node scripts/backspace-focus.check.cjs",
     "check:docs": "node scripts/docs-links.check.cjs",
     "check:menuclamp": "node scripts/menu-clamp.check.cjs",

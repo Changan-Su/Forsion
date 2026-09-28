@@ -1,4 +1,4 @@
-// 「从编辑器外进入」的几个输入框(npm run check:quickfind;真 Chromium × `?qf` 台架)。
+// 「从编辑器外进入」的几个输入框(npm run check:qfentry;真 Chromium × `?qf` 台架)。
 // 由来:2026-09-27 编辑器评审 G4 组。
 //   G4-11 ⌘P 曾被 quick-find 与 Amadeus 快速切换两条命令同时绑定,分发取先注册的那条,能新建笔记的切换器
 //         永远按不出来 —— 合成一个:全局快速查找吸收「新建笔记」行(走 G4-12 素文件出生)+ ⌘/Ctrl+Enter 新标签打开;
@@ -7,7 +7,7 @@
 //         Esc 连面板一起关掉。合成 KeyboardEvent 的 isComposing 到不了 React,必须走 CDP Input.imeSetComposition。
 //   G4-06 从快速查找 / 日记进入**已有**笔记后焦点不在编辑器上,直接打字无效 —— openNote(focus:'body')经
 //         UnifiedPipeHandle.focusBody 把焦点给正文(不动选区);`?upage` 台架直调生产 openNote。
-// 用法:npm run check:quickfind(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/quickfind-entry.check.cjs
+// 用法:npm run check:qfentry(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/quickfind-entry.check.cjs
 //       ONLY=G4-02 只跑某一节。
 const fs = require('fs')
 const os = require('os')
