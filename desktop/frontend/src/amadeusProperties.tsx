@@ -7,7 +7,15 @@
  *  不可能被抹掉。⚠️ 千万别改成「先 filter 再 commit」:那会让任意一次属性编辑静默删掉
  *  插件数据(毁档级,2026-08-14 评审 P0)。契约仪器:amadeusProperties.model.test.ts。
  *  该不变式只覆盖 entries 模式;坏 YAML 的原文模式刻意全透明(行级剥离在坏 YAML 上不可靠),
- *  插件文件在原文模式顶部给警示行。 */
+ *  插件文件在原文模式顶部给警示行。
+ *
+ *  **文本类输入一律受控 + 本地草稿**(键名、字符串/数字/日期值、坏 YAML 原文框;评审 2026-09-27 C-01 P0):
+ *  没打过字 = 草稿为空 = 显示当前 prop —— 外部改写 / 源码模式自改 / 回灌即时可见;失焦只在「真改了」
+ *  时提交(判据 draftToCommit)。⚠️ 别改回 `defaultValue` + 失焦比较 DOM 值:DOM 里是挂载时的旧值,
+ *  外部改动后「白点一下」就把旧值写回盘(外部改动静默回滚,源码模式刚改的也被撤回)。
+ *  聚焦打字中同一字段被外部改了:草稿本地胜(不吞正在打的字,同 D-03 拍板 #6),但标 conflict 讲明,
+ *  Esc 放弃草稿 = 接受外部值(输入法组合中的 Esc 只取消候选,不动草稿)。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
+ *  (DOM)、unified-page.check 的 PR 组(真浏览器三变体)。 */
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { Plus, X } from 'lucide-react'
@@ -28,6 +36,8 @@ registerMessages({
   'amprops.pluginKeysWarn': { zh: '⚠️ 本文件含插件数据键（{keys}），修复 YAML 时请勿改动那几行。', en: '⚠️ This file contains plugin data keys ({keys}) — leave those lines untouched while fixing the YAML.' },
   'amprops.nestedHint': { zh: '嵌套结构请在源码模式编辑', en: 'Edit nested values in source mode' },
   'amprops.chipsPlaceholder': { zh: '回车添加…', en: 'Press Enter to add…' },
+  'amprops.conflict': { zh: '此处已在别处改为「{v}」。失焦后以你的输入为准，按 Esc 放弃你的输入。', en: 'Changed elsewhere to "{v}". Leaving the field keeps your input; press Esc to discard it.' },
+  'amprops.conflictRaw': { zh: '这段已在别处被改动。失焦后以你的输入为准，按 Esc 放弃你的输入。', en: 'Changed elsewhere. Leaving the field keeps your input; press Esc to discard it.' },
 })
 
 export interface FmEntry { key: string; value: unknown }
@@ -59,6 +69,47 @@ export function fmEntriesToYaml(entries: FmEntry[]): string {
 }
 
 const isScalarArray = (v: unknown): v is unknown[] => Array.isArray(v) && v.every((x) => x === null || typeof x !== 'object')
+
+/** 失焦提交判据(C-01):返回要提交的(归一后)文本,不该写就返回 null。
+ *  - draft=null = 没打过字(白点一下)→ 不写;
+ *  - 归一后等于 base(开始编辑那一刻的值)= 打了又改回 → 不写;
+ *  - 等于 current(当前 prop)= 无差别 → 不写。
+ *  ⚠️ 只比 current 不够:打字又删回原值、期间外部改了同一字段 → 拿原值比新 prop 恒不等,旧值就被写回。 */
+export function draftToCommit(draft: string | null, base: string, current: string, norm: (s: string) => string = (s) => s): string | null {
+  if (draft === null) return null
+  const d = norm(draft)
+  return d === norm(base) || d === norm(current) ? null : d
+}
+
+/** 受控草稿:draft=null → 显示 current(外部改动即时可见);第一击键记下 base。
+ *  conflict = 有草稿且同一字段在编辑期间被别处改了(current 已离开 base)。 */
+function useFieldDraft(current: string) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [base, setBase] = useState(current)
+  return {
+    shown: draft ?? current,
+    conflict: draft !== null && current !== base && draft !== current,
+    change: (v: string): void => {
+      if (draft === null) setBase(current)
+      setDraft(v)
+    },
+    /** 失焦收口:草稿一律清掉(之后显示回到 prop),返回需要提交的文本或 null。 */
+    settle: (norm?: (s: string) => string): string | null => {
+      setDraft(null)
+      return draftToCommit(draft, base, current, norm)
+    },
+    /** Esc:有草稿才吞键 —— 放弃草稿 = 接受当前值(不 blur:blur 会拿旧闭包里的草稿去提交)。
+     *  ⚠️ 输入法组合中的 Esc 是「取消候选」,不是放弃草稿:不判组合态会把已上屏的字连同草稿一起清掉、
+     *  失焦零写入(静默吞字)。keyCode 229 兜 Safari 类「compositionend 先于 keydown」的时序。
+     *  仪器:amadeusProperties.draft.test.ts、unified-page.check PR5(真 CDP 组合)。 */
+    onEscape: (e: KeyboardEvent<HTMLElement>): void => {
+      if (e.key !== 'Escape' || e.nativeEvent.isComposing || e.keyCode === 229 || draft === null) return
+      e.preventDefault()
+      e.stopPropagation()
+      setDraft(null)
+    },
+  }
+}
 
 export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = false }: {
   /** 缺省 = pageStore.manifest.fmExtra(v3 老路径);unified 传显式 fm 文本 + onCommit 走自己的管线。 */
@@ -130,17 +181,17 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
               <ValueStatic value={e.value} />
             </div>
           ) : (
-            <div className="amx-prop-row" key={`${activePage}:${e.idx}:${e.key}`}>
-              <input
-                className="amx-prop-key"
-                defaultValue={e.key}
-                onBlur={(ev) => {
-                  const k = ev.target.value.trim()
+            // 行身份 = 键名(YAML 映射里唯一;重复键解析失败走原文模式)。不带 idx:别处插/删一个键
+            // 会让下方各行 idx 平移,带 idx 就整片重挂、正在打的草稿被静默丢掉。提交仍按当期 e.idx 写全量。
+            <div className="amx-prop-row" key={`${activePage}:${e.key}`}>
+              <KeyNameInput
+                name={e.key}
+                onRename={(k) => {
                   // 改成保留键/插件键或撞已有键(含隐藏键)→ 拒绝并回显原名(否则 commit 会静默删值/合并覆盖)。
                   const invalid = /^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_canvas|amadeus_next_id)$/.test(k)
                     || hiddenKeys.has(k)
                     || parsed.entries.some((x, j) => j !== e.idx && x.key === k)
-                  if (!k || k === e.key || invalid) { ev.target.value = e.key; return }
+                  if (!k || invalid) return
                   commit(parsed.entries.map((x, j) => (j === e.idx ? { ...x, key: k } : x)))
                 }}
               />
@@ -157,16 +208,48 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
           {hiddenKeys.size > 0 && (
             <div className="amx-props-empty">{t('amprops.pluginKeysWarn', { keys: [...hiddenKeys].join(', ') })}</div>
           )}
-          <textarea
-            className="amx-props-raw"
-            defaultValue={fmExtra}
-            spellCheck={false}
-            readOnly={readOnly}
-            onBlur={(e) => { if (!readOnly && e.target.value !== fmExtra) commitYaml(e.target.value) }}
-          />
+          <RawFmEditor text={fmExtra} readOnly={readOnly} onCommit={commitYaml} />
         </>
       ))}
     </div>
+  )
+}
+
+/** 坏 YAML 原文框:受控草稿(C-01 变体 C —— 原 defaultValue 版外部改写后白点一下整段写回旧文)。 */
+function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boolean; onCommit: (yaml: string) => void }) {
+  const { t } = useI18n()
+  const f = useFieldDraft(text)
+  return (
+    <textarea
+      className={`amx-props-raw${f.conflict ? ' amx-prop-conflict' : ''}`}
+      value={f.shown}
+      spellCheck={false}
+      readOnly={readOnly}
+      title={f.conflict ? t('amprops.conflictRaw') : undefined}
+      onChange={(e) => { if (!readOnly) f.change(e.target.value) }}
+      onKeyDown={f.onEscape}
+      onBlur={() => {
+        const next = f.settle()
+        if (!readOnly && next !== null) onCommit(next)
+      }}
+    />
+  )
+}
+
+/** 键名框:受控草稿;失焦只在真改了时交给 onRename(校验不过 = 草稿已清,自然回显原名)。 */
+function KeyNameInput({ name, onRename }: { name: string; onRename: (k: string) => void }) {
+  const f = useFieldDraft(name)
+  return (
+    <input
+      className="amx-prop-key"
+      value={f.shown}
+      onChange={(e) => f.change(e.target.value)}
+      onKeyDown={f.onEscape}
+      onBlur={() => {
+        const k = f.settle((s) => s.trim())
+        if (k !== null) onRename(k)
+      }}
+    />
   )
 }
 
@@ -195,12 +278,10 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
   }
   if (typeof value === 'number') {
     return (
-      <input
-        className="amx-prop-input"
-        defaultValue={String(value)}
-        onBlur={(e) => {
-          const raw = e.target.value.trim()
-          if (raw === String(value)) return // 未改不提交
+      <TextValueInput
+        current={String(value)}
+        norm={(s) => s.trim()}
+        onCommit={(raw) => {
           const n = Number(raw)
           onCommit(raw !== '' && !Number.isNaN(n) ? n : raw)
         }}
@@ -208,12 +289,50 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
     )
   }
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return <input type="date" className="amx-prop-input" defaultValue={value} onChange={(e) => { if (e.target.value && e.target.value !== value) onCommit(e.target.value) }} />
+    return <DateValueInput value={value} onCommit={onCommit} />
   }
   if (typeof value === 'string' || value == null) {
-    return <input className="amx-prop-input" defaultValue={value ?? ''} onBlur={(e) => { if (e.target.value !== (value ?? '')) onCommit(e.target.value) }} />
+    return <TextValueInput current={value ?? ''} onCommit={onCommit} />
   }
   return <span className="amx-prop-nested" title={t('amprops.nestedHint')}>{stringifyYaml(value).trimEnd()}</span>
+}
+
+/** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。 */
+function TextValueInput({ current, norm, onCommit }: { current: string; norm?: (s: string) => string; onCommit: (v: string) => void }) {
+  const { t } = useI18n()
+  const f = useFieldDraft(current)
+  return (
+    <input
+      className={`amx-prop-input${f.conflict ? ' amx-prop-conflict' : ''}`}
+      value={f.shown}
+      title={f.conflict ? t('amprops.conflict', { v: current }) : undefined}
+      onChange={(e) => f.change(e.target.value)}
+      onKeyDown={f.onEscape}
+      onBlur={() => {
+        const next = f.settle(norm)
+        if (next !== null) onCommit(next)
+      }}
+    />
+  )
+}
+
+/** 日期框:选中即提交(原语义)。受控显示 prop;只在键盘分段输入的「半成品」态(value 为 '')持草稿 ——
+ *  否则 React 会把受控 value 回写进去,清掉用户正在敲的那一段。外部改动在未持草稿时即时可见。 */
+function DateValueInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [partial, setPartial] = useState(false)
+  return (
+    <input
+      type="date"
+      className="amx-prop-input"
+      value={partial ? '' : value}
+      onChange={(e) => {
+        const v = e.target.value
+        setPartial(!v)
+        if (v && v !== value) onCommit(v)
+      }}
+      onBlur={() => setPartial(false)}
+    />
+  )
 }
 
 /** 字符串数组(tags 等):chips + 回车追加、× 移除。 */

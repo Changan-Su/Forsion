@@ -192,6 +192,151 @@ async function main() {
     await p6p.close()
   }
 
+  // ── PR 系列:属性面板受控草稿(评审 2026-09-27 C-01 P0)────────────────────────────
+  // 旧病:值框/键名框/坏 YAML 原文框都是 defaultValue,失焦拿挂载时的旧 DOM 值比新 prop → 外部改写
+  // (或源码模式自改)之后「白点一下」就把旧值写回盘。三种来源各一组,每组断言两件事:
+  // 聚焦→失焦前后写盘次数不变 **且** 框里显示的是新值。PR1b/PR4 是对照:真改了照常提交、冲突可 Esc 放弃。
+  {
+    const openProps = async (seed) => {
+      const pg = await browser.newPage({ locale: 'zh-CN' })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM, { timeout: 20000 })
+      await pg.waitForTimeout(400)
+      await pg.click('.amx-props-chip')
+      await pg.waitForTimeout(200)
+      return pg
+    }
+    const vals = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-prop-row .amx-prop-input')].map((i) => i.value))
+    const nWrites = (pg) => pg.evaluate(() => window.__upage.writes.length)
+    const disk = (pg) => pg.evaluate(() => window.__upage.vault.get('Unified.md'))
+    // 点进框(不打字)再点正文段落 = 真鼠标白点一下
+    const whiteClick = async (pg, sel, idx = 0) => {
+      await (await pg.$$(sel))[idx].click()
+      await pg.waitForTimeout(100)
+      const c = await pg.evaluate((s) => { const r = document.querySelector(`${s} p`).getBoundingClientRect(); return { x: r.left + 5, y: r.top + r.height / 2 } }, PM)
+      await pg.mouse.click(c.x, c.y)
+      await pg.waitForTimeout(1300)
+    }
+    const SEED = '---\nstatus: todo\ncount: 3\n---\n# T\n\n正文。\n'
+
+    // PR1 外部改写(fire)后:显示新值;状态框、数字框各白点一下 → 零写入
+    {
+      const pg = await openProps(SEED)
+      await pg.evaluate(() => window.__upage.fire('Unified.md', '---\nstatus: done\ncount: 7\n---\n# T\n\n正文。\n'))
+      await pg.waitForTimeout(1200)
+      const shown = await vals(pg)
+      const w0 = await nWrites(pg)
+      await whiteClick(pg, '.amx-prop-row .amx-prop-input', 0)
+      await whiteClick(pg, '.amx-prop-row .amx-prop-input', 1)
+      const after = { shown, vals: await vals(pg), dw: (await nWrites(pg)) - w0, disk: await disk(pg) }
+      record('PR1 外部改写后属性框显示新值 + 聚焦再失焦零写入(状态/数字两框)',
+        JSON.stringify(after.shown) === '["done","7"]' && JSON.stringify(after.vals) === '["done","7"]' && after.dw === 0 && /status: done\ncount: 7\n/.test(after.disk),
+        JSON.stringify(after))
+      // PR1b 对照:真打字照常提交(修法不能是「一律不写」)
+      await (await pg.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('X')
+      await pg.evaluate(() => document.activeElement.blur())
+      await pg.waitForTimeout(800)
+      const d1 = await disk(pg)
+      record('PR1b 对照:打字后失焦照常落盘(且只动这一键)', /status: doneX\ncount: 7\n/.test(d1), JSON.stringify(d1))
+      await pg.close()
+    }
+
+    // PR2 源码模式自改 fm 后点面板同一字段再点走 → 零写入、自己刚改的不被撤回
+    {
+      const pg = await openProps(SEED)
+      await pg.evaluate(() => window.__upage.setEditorMode('source'))
+      await pg.waitForSelector('textarea.amx-source')
+      await pg.waitForTimeout(300)
+      await pg.evaluate(() => { const t = document.querySelector('textarea.amx-source'); const i = t.value.indexOf('todo'); t.focus(); t.setSelectionRange(i, i + 4) })
+      await pg.keyboard.type('源码改')
+      await pg.waitForTimeout(1300) // 源码草稿走 800ms 防抖,基数取它落盘之后
+      const w0 = await nWrites(pg)
+      const shown = await vals(pg)
+      await (await pg.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pg.waitForTimeout(100)
+      await pg.click('textarea.amx-source', { position: { x: 50, y: 200 } })
+      await pg.waitForTimeout(1300)
+      const r = { shown, vals: await vals(pg), dw: (await nWrites(pg)) - w0, line: (await disk(pg)).split('\n')[1], ta: await pg.evaluate(() => document.querySelector('textarea.amx-source').value.split('\n')[1]) }
+      record('PR2 源码模式自改 fm → 属性框显示新值,白点一下零写入、不撤回',
+        r.shown[0] === '源码改' && r.vals[0] === '源码改' && r.dw === 0 && r.line === 'status: 源码改' && r.ta === 'status: 源码改',
+        JSON.stringify(r))
+      await pg.close()
+    }
+
+    // PR3 坏 YAML 原文框:外部改写后显示新原文,白点一下零写入(旧版整段写回)
+    {
+      const pg = await openProps('---\nstatus: [未闭合\nnote: 旧A\n---\n# 标题\n\n正文。\n')
+      await pg.evaluate(() => window.__upage.fire('Unified.md', '---\nstatus: [未闭合\nnote: 外部B\n---\n# 标题\n\n正文。\n'))
+      await pg.waitForTimeout(1200)
+      const shown = await pg.evaluate(() => document.querySelector('.amx-props-raw')?.value ?? null)
+      const w0 = await nWrites(pg)
+      await whiteClick(pg, '.amx-props-raw')
+      const r = { shown, dw: (await nWrites(pg)) - w0, disk: await disk(pg) }
+      record('PR3 坏 YAML 原文框:外部改写后显示新原文 + 白点一下零写入',
+        r.shown === 'status: [未闭合\nnote: 外部B' && r.dw === 0 && r.disk.includes('note: 外部B'),
+        JSON.stringify(r))
+      await pg.close()
+    }
+
+    // PR4 打字中同一字段被外部改了:草稿不被吞(本地胜)+ 冲突标记;Esc 放弃草稿 = 接受外部值,失焦零写入
+    {
+      const pg = await openProps(SEED)
+      await (await pg.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('Y')
+      await pg.evaluate(() => window.__upage.fire('Unified.md', '---\nstatus: 外部改\ncount: 3\n---\n# T\n\n正文。\n'))
+      await pg.waitForTimeout(1200)
+      const during = await pg.evaluate(() => { const i = document.querySelector('.amx-prop-row .amx-prop-input'); return { v: i.value, conflict: i.classList.contains('amx-prop-conflict'), title: i.title } })
+      const w0 = await nWrites(pg)
+      await pg.keyboard.press('Escape')
+      await pg.waitForTimeout(100)
+      const esc = await vals(pg)
+      await pg.evaluate(() => document.activeElement.blur())
+      await pg.waitForTimeout(1000)
+      const r = { during, esc, dw: (await nWrites(pg)) - w0, disk: await disk(pg) }
+      record('PR4 打字中外部改同字段:草稿保留+冲突标记;Esc 放弃 → 显示外部值、零写入',
+        during.v === 'todoY' && during.conflict && during.title.includes('外部改') && esc[0] === '外部改' && r.dw === 0 && r.disk.includes('status: 外部改'),
+        JSON.stringify(r))
+      await pg.close()
+    }
+
+    // PR5 输入法组合中按 Esc(取消候选)≠ 放弃草稿(评审返修 C-01-ime-esc):已上屏的字保住,失焦照常落盘。
+    // ⚠️ 合成 KeyboardEvent 的 isComposing 到不了 React,必须 CDP 真组合(同 P28)。keyCode 27/229 两种时序都跑。
+    // 负对照(实跑):useFieldDraft.onEscape 摘掉组合态判断 → afterEsc 回到 'todo'、零写入,本例红。
+    // 台架噪声(别追):组合中**不拦**的 CDP Esc 之后 headless 会持续派 Unidentified keydown(kc189/0),
+    // about:blank 上无监听的裸 <input> 同样复现,页面关掉才停 —— CDP 产物,与本组件无关,也不影响断言。
+    {
+      const out = {}
+      for (const kc of [27, 229]) {
+        const pg = await openProps(SEED)
+        const cdp = await pg.context().newCDPSession(pg)
+        await (await pg.$$('.amx-prop-row .amx-prop-input'))[0].click()
+        await pg.keyboard.press('End')
+        await cdp.send('Input.imeSetComposition', { text: 'xiang', selectionStart: 5, selectionEnd: 5 })
+        await cdp.send('Input.insertText', { text: '项目' }) // 上屏 → 草稿 todo项目
+        await pg.waitForTimeout(100)
+        await cdp.send('Input.imeSetComposition', { text: 'jin', selectionStart: 3, selectionEnd: 3 }) // 新一段候选未上屏
+        await pg.waitForTimeout(50)
+        await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: kc, nativeVirtualKeyCode: kc })
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: kc })
+        await cdp.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 }) // 取消候选 = 组合置空
+        await pg.waitForTimeout(100)
+        const afterEsc = (await vals(pg))[0]
+        const w0 = await nWrites(pg)
+        await pg.evaluate(() => document.activeElement.blur())
+        await pg.waitForTimeout(1200)
+        out[`kc${kc}`] = { afterEsc, dw: (await nWrites(pg)) - w0, line: (await disk(pg)).split('\n')[1] }
+        await pg.close()
+      }
+      record('PR5 输入法组合中 Esc 不丢草稿:已上屏「项目」保住,失焦落盘 status: todo项目(keyCode 27/229)',
+        Object.values(out).every((r) => r.afterEsc === 'todo项目' && r.dw === 1 && r.line === 'status: todo项目'),
+        JSON.stringify(out))
+    }
+  }
+
   // ── P7-P11:块交互层(blockLayer.ts:⠿/＋/菜单/块选中/拖拽)────────────────────
   {
     const seed = '# 标题\n\n段一。\n\n- 列表甲\n- 列表乙\n\n段二。\n'

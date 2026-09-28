@@ -1694,8 +1694,19 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         return {
           // 锚点块被删/被整节点替换 → 把手立刻失效(否则它还指着一个已经不在的 pos,
           // 接下来的拖拽/菜单会作用到错的地方)。
+          // ⚠️ activeRef.pos 是**事务前**的旧位置:跨块删除让文档变短时它会越界,`nodeAt` 越界抛
+          //    RangeError —— 异常从 updatePluginViews 逃出 keydown 处理链,PM 来不及 preventDefault,
+          //    浏览器在已更新的 DOM 上再跑一次原生退格/Delete:段落被原生合并并写出
+          //    `<span style="color:">`、或多吃一个字(评审 2026-09-27 B-16b,P0)。所以越界/解析失败
+          //    一律按「锚点块已不在」处理 = hide(),本函数绝不许抛。仪器:check:dragdel。
           update: (v) => {
-            if (activeRef && v.state.doc.nodeAt(activeRef.pos) !== activeRef.node) hide()
+            const a = activeRef
+            if (!a) return
+            let same = false
+            try {
+              same = a.pos <= v.state.doc.content.size && v.state.doc.nodeAt(a.pos) === a.node
+            } catch { /* 位置已失效 → 视同锚点块不在 */ }
+            if (!same) hide()
           },
           destroy: () => {
             window.removeEventListener('mouseup', hideHoverRect)
