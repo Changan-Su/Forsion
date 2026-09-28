@@ -141,6 +141,19 @@ describe('per-device lists and status (D6)', () => {
     expect(statusOf(MAC)).toBe('unreachable')
   })
 
+  it('a transient failure keeps the last rows (still openable); offline clears them (D6)', async () => {
+    roster = [unit(MAC)]
+    handler = () => Response.json({ sessions: [sess('r1')] })
+    await S.useDeviceSessions.getState().refresh()
+    handler = () => { throw new TypeError('Failed to fetch') }
+    await S.useDeviceSessions.getState().refresh({ force: true })
+    expect(statusOf(MAC)).toBe('unreachable')
+    expect(S.useDeviceSessions.getState().byUnit[MAC].sessions.map((x) => x.id)).toEqual(['r1'])
+    handler = () => Response.json({ code: 'UNIT_OFFLINE' }, { status: 503 })
+    await S.useDeviceSessions.getState().refresh({ force: true })
+    expect(S.useDeviceSessions.getState().byUnit[MAC].sessions).toEqual([])
+  })
+
   it('8s timeout → unreachable', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     roster = [unit(MAC)]

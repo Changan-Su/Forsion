@@ -19,7 +19,7 @@ import { useApp } from './appStore'
 import { openSession } from '../sessionNav'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { bindSession, bindingConflict, engineFetch, isUnitIdShape, locationOf, noteUnitName, sameRef, targetForRef, withLocation } from '../services/engine/targets'
-import { describeDevice, type DeviceStatus, type RefusalDetail } from '../services/deviceStatus'
+import { describeDevice, statusFromError, type DeviceStatus, type ProbeResult, type RefusalDetail } from '../services/deviceStatus'
 import { noteDeviceProbe, probeOfError, resetDeviceMarks, useDeviceMarks } from '../services/deviceMarks'
 import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { getSessionDetail, updateSession } from '../services/backendService'
@@ -159,8 +159,9 @@ async function fetchDevice(u: UnitInfo, gen: number, force: boolean): Promise<vo
     if (gen !== useDeviceSessions.getState().gen) return
     if (!r.ok) {
       const j = (body ?? {}) as { code?: unknown; state?: unknown; reason?: unknown }
-      noteDeviceProbe(id, probeOfError({ status: r.status, code: j.code, state: j.state, reason: j.reason }))
-      patchEntry(id, { sessions: [], fetchedAt: Date.now(), loading: false })
+      const probe = probeOfError({ status: r.status, code: j.code, state: j.state, reason: j.reason })
+      noteDeviceProbe(id, probe)
+      patchEntry(id, { sessions: keepOnTransient(id, probe), fetchedAt: Date.now(), loading: false })
       return
     }
     const loc = unitRef(id)
@@ -173,9 +174,16 @@ async function fetchDevice(u: UnitInfo, gen: number, force: boolean): Promise<vo
     patchEntry(id, { sessions: rows, fetchedAt: Date.now(), loading: false })
   } catch (e) {
     if (gen !== useDeviceSessions.getState().gen) return
-    noteDeviceProbe(id, probeOfError(e))
-    patchEntry(id, { sessions: [], fetchedAt: Date.now(), loading: false })
+    const probe = probeOfError(e)
+    noteDeviceProbe(id, probe)
+    patchEntry(id, { sessions: keepOnTransient(id, probe), fetchedAt: Date.now(), loading: false })
   }
+}
+
+/** 拉失败时这台的行怎么办:只是暂时连不上(网络 / 超时 / 隧道 5xx)→ 留着上一份(状态照样显示「暂时连不上」,点开照常按绑定路由);
+ *  离线 / 引擎没起 / 被拒 → 清空(D6:离线电脑的会话不可见;引擎没起时列表本来就拿不到)。 */
+function keepOnTransient(unitId: string, probe: ProbeResult): SessionRecord[] {
+  return statusFromError(probe) === 'unreachable' ? (useDeviceSessions.getState().byUnit[unitId]?.sessions ?? []) : []
 }
 
 /** 已注入 appStore 的远端会话:用最新列表回填标题 / 更新时间 / 摘要(那台上改了名、跑了新一轮)。 */
