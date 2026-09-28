@@ -6,6 +6,7 @@
 // 打字零写盘、外部改动照常回灌;解锁 → 按盘上现文重挂成可编辑,接着打的字与外部那段一起落盘、零冲突副本;
 // 锁定态是本机记忆,重开仍锁着;K5/K6(Codex 复核 P1)换实例前的落盘 / 重读失败 → 不切锁定态、保留当前实例
 // (没落盘的字还在、还会重试)、出带「重试」的 error 提示,重试成功才锁上。负对照不跑 K 组(它量的是锁定切换,不是 &uro)。
+// S 组(评审 V-16):只读画布里双击 = 选词、三击 = 选段、Cmd+C 复制出来;单击按住拖仍是平移(上面那格不动)。负对照同样不跑。
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -197,6 +198,7 @@ async function main() {
   const writes = await page.evaluate(() => window.__upage.writes.length)
   check('画布一轮交互后零写盘', writes === 0, `writes=${writes}`)
 
+  if (!NC) await groupSelect(browser)
   if (!NC) await groupLock(browser)
 
   await browser.close()
@@ -209,6 +211,55 @@ async function main() {
   }
   console.log(`\n${ok}/${results.length} 通过`)
   process.exit(ok === results.length ? 0 : 1)
+}
+
+/** S 组(V-16):只读画布能选中、复制卡片里的字。修前舞台的只读分支对一切按下无条件 preventDefault(= 平移),
+ *  浏览器不再派发 mousedown,双击 / 三击 / 拖选全部落空;切到文档模式才能选。现在连击(计数 ≥ 2)落在正文上放行给原生选字。 */
+async function groupSelect(browser) {
+  const SEED = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}',
+    '---', '', '# 只读画布', '', '主卡一段。', '', '<!-- a k1 -->', '', 'Alpha beta gamma delta epsilon', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] })
+  const page = await ctx.newPage()
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  await page.goto(`${URL}?upage&upane&uro&useed=${encodeURIComponent(SEED)}`, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('.amx-ucard[data-anchor="k1"] p', { timeout: 20000 })
+  await page.waitForTimeout(700)
+  const at = await page.evaluate(() => {
+    const r = document.createRange(); r.selectNodeContents(document.querySelector('.amx-ucard[data-anchor="k1"] p'))
+    const b = r.getBoundingClientRect()
+    return { x: b.left + 12, y: b.top + b.height / 2, x2: b.right - 4 }
+  })
+  const sel = () => page.evaluate(() => getSelection().toString().trim())
+  const tf = () => page.evaluate(() => document.querySelector('.amx-stage-inner')?.style.transform ?? '')
+  const tf0 = await tf()
+  await page.mouse.dblclick(at.x, at.y)
+  await page.waitForTimeout(250)
+  const word = await sel()
+  await page.waitForTimeout(700) // 越过连击间隔,下面是一次独立的三击
+  await page.mouse.click(at.x, at.y, { clickCount: 3 })
+  await page.waitForTimeout(250)
+  const para = await sel()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+c' : 'Control+c')
+  await page.waitForTimeout(200)
+  const clip = await page.evaluate(() => navigator.clipboard.readText().catch((e) => `ERR ${e.message}`))
+  const tf1 = await tf()
+  await page.waitForTimeout(700)
+  // 单击按住拖(文字上)仍是平移,卡片几何不动
+  const x0 = await page.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k1"]').dataset.x)
+  await page.mouse.move(at.x, at.y); await page.mouse.down()
+  for (let i = 1; i <= 8; i++) await page.mouse.move(at.x + (at.x2 - at.x) * i / 8, at.y + 5 * i)
+  await page.mouse.up()
+  await page.waitForTimeout(300)
+  const tf2 = await tf()
+  const x1 = await page.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k1"]').dataset.x)
+  const writes = await page.evaluate(() => window.__upage.writes.length)
+  await ctx.close()
+  check('S1 只读画布双击卡内一个词 = 选中该词(视口不动)', word === 'Alpha' && tf1 === tf0, JSON.stringify({ word, tf0, tf1 }))
+  check('S2 三击 = 选中整段,Cmd+C 复制出来', para.startsWith('Alpha beta gamma delta epsilon') && clip.includes('Alpha beta gamma delta epsilon'), JSON.stringify({ para, clip }))
+  check('S3 单击按住拖仍 = 平移(视口变、卡片几何不动)、零写盘', tf2 !== tf1 && x0 === x1 && writes === 0, JSON.stringify({ tf1, tf2, x0, x1, writes }))
 }
 
 async function groupLock(browser) {

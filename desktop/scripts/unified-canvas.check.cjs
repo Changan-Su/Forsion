@@ -85,6 +85,15 @@
 //   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
 //   C91 按住空格 = 临时抓手:重复 keydown 不写进卡、松开(没拖)才进编辑、拖 = 平移(V-05)
 //   C92 画布键盘缩放 Cmd+=/-/0 + Shift+1 适应,舞台焦点才接管;HUD 百分比 = 重置 100% 按钮(V-06)
+//   —— 波次 2(评审 2026-09-27 画布打磨)在 wave2();`UCANVAS_ONLY=w2` 只跑这一段(调试 / 负对照用)——
+//   C93 Frame 里用卡片工具 / 双击建卡:留在框内,只避让卡片不避让 Frame(V-02)
+//   C94 开卷自动适应与「适应内容」把 Frame(连同框外上沿的标题条)框进视野(V-03)
+//   C95 画布视口的会话记忆按「库 + 路径」作键、只在画布态记(V-15)
+//   C96 拖动中的卡压在文档序靠后的卡上面(V-10)
+//   C97 拖卡途中 ⠿/+ 把手隐藏(不悬在原位的空白画布上),松手后悬停照常出现(V-12)
+//   C98 方向键微移:选中 Frame 连辖域一起走;步长与仪表盘同一个 nudgeStep(吸附开 = 一格,关 = 8 / Shift 32)(V-11)
+//   C99 Mod+Y = 重做,舞台焦点与卡内编辑都走统一时间线(V-18)
+//   C100 「切换文档 / 画布」命令:落到本篇、与胶囊同一个 toggle(记忆模式、不写盘);源码模式空操作(V-20)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -116,6 +125,8 @@ const record = (name, ok, detail) => {
 async function open(browser, seed, keepSurfaceMemory = false) {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  // 资源计时缓冲默认 250 条,dev 下几百个模块早溢出 —— modUrl 要靠它找「应用实际加载的那个模块 URL」。
+  await p.addInitScript(() => performance.setResourceTimingBufferSize(10000))
   if (!keepSurfaceMemory) {
     await p.addInitScript(() => {
       for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -210,8 +221,369 @@ async function dragBlockOnto(p, text, targetText, frac) {
   }, { targetText, frac })
 }
 
+/** 画布 fm 键(解析后;读不出 → null)。 */
+const cvOf = (pg) => pg.evaluate(() => {
+  window.__upage.probe.flush?.()
+  try { return JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { return null }
+})
+/** 卡片的舞台几何(dataset 为准;高按视口高 ÷ z)。 */
+const cardBox = (pg, a) => pg.evaluate((a) => {
+  const c = document.querySelector(`.amx-ucard[data-anchor="${a}"]`)
+  if (!c) return null
+  const z = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a
+  return { x: +c.dataset.x, y: +c.dataset.y, w: +c.dataset.w, h: Math.round(c.getBoundingClientRect().height / z) }
+}, a)
+/** 舞台坐标 → 视口坐标。 */
+const stageToClient = (pg, x, y) => pg.evaluate(([x, y]) => {
+  const inner = document.querySelector('.amx-stage-inner')
+  const m = new DOMMatrixReadOnly(getComputedStyle(inner).transform)
+  const r = inner.getBoundingClientRect()
+  return { x: r.left + x * m.a, y: r.top + y * m.d }
+}, [x, y])
+const anchorsOf = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-ucard')].map((c) => c.dataset.anchor))
+/** 页面里 import 应用**实际加载的那个**模块(vite 给热更过的模块带 `?t=`,裸路径拿到的是另一个实例,
+ *  改它的 store 应用根本看不见)。src = `/src/...` 源码路径。 */
+const importLive = (pg, src, fn) => pg.evaluate(async ({ src, fn }) => {
+  const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => new URL(n).pathname === src) ?? src
+  const m = await import(url)
+  return new Function('m', `return (${fn})(m)`)(m)
+}, { src, fn: fn.toString() })
+
+/** 波次 2(评审 2026-09-27 画布打磨)的格子。默认跟在全套后面跑;`UCANVAS_ONLY=w2` 只跑这里。 */
+async function wave2(browser) {
+  // ── C93 Frame 里建卡不被弹出框(V-02)──────────────────────────────────────────────
+  //  修前:addCardAt 的障碍集含 Frame(Frame 是容器),框里任何一处建卡都被当碰撞推到框外;
+  //  拖进框却不弹(拖放口径只避卡片 / 主卡),两条路不一致。现在 Frame 不算障碍,卡片照避。
+  const F93 = { x: 500, y: 0, w: 600, h: 420 }
+  const SEED93 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    `amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k2","x":540,"y":40,"w":200}],"elements":[{"id":"f1","type":"frame","x":${F93.x},"y":${F93.y},"w":${F93.w},"h":${F93.h},"title":"区域"}]}`,
+    '---', '', '# 画布页', '', '主卡一段。', '', '<!-- a k2 -->', '', '框内卡', '', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const p93 = await open(browser, SEED93)
+  await p93.waitForTimeout(700)
+  const in93 = (c) => !!c && c.x >= F93.x && c.y >= F93.y && c.x + c.w <= F93.x + F93.w && c.y + c.h <= F93.y + F93.h
+  const newest93 = async (known) => (await anchorsOf(p93)).find((a) => !known.has(a))
+  const known93 = new Set(await anchorsOf(p93))
+  // ① 卡片工具点在 k2 右下的空白:种子盒与 k2 相撞 → 必须被推开(卡片仍是障碍),但留在框内
+  await pickTool(p93, '新建卡片')
+  let pt93 = await stageToClient(p93, 800, 140)
+  await p93.mouse.click(pt93.x, pt93.y)
+  await p93.waitForTimeout(500)
+  const a93 = await newest93(known93)
+  if (a93) known93.add(a93)
+  const b93a = a93 ? await cardBox(p93, a93) : null
+  const k293 = await cardBox(p93, 'k2')
+  const clear93 = !!b93a && !!k293 && (b93a.x >= k293.x + k293.w + 18 || b93a.y >= k293.y + k293.h + 18 || b93a.x + b93a.w <= k293.x - 18 || b93a.y + b93a.h <= k293.y - 18)
+  await p93.keyboard.press('Escape'); await p93.keyboard.press('Escape'); await p93.waitForTimeout(200)
+  // ② 双击框内空白:落在指针处(左上 = 指针 - (200, 24)),不被推出框
+  pt93 = await stageToClient(p93, 900, 330)
+  await p93.mouse.dblclick(pt93.x, pt93.y)
+  await p93.waitForTimeout(500)
+  const a93b = await newest93(known93)
+  const b93b = a93b ? await cardBox(p93, a93b) : null
+  await p93.close()
+  record('C93a Frame 里用卡片工具建卡:与框内卡相撞时照常被推开,但留在框内(Frame 不是障碍)',
+    in93(b93a) && clear93, JSON.stringify({ card: b93a, k2: k293, frame: F93 }))
+  record('C93b Frame 里双击空白建卡:落在指针处、留在框内',
+    in93(b93b) && b93b.x === 700 && b93b.y === 306, JSON.stringify({ card: b93b, want: { x: 700, y: 306 } }))
+
+  // ── C94 适应视图把 Frame 算作内容(V-03)──────────────────────────────────────────
+  //  修前:fit 只量卡片 / 形状 / 连线的 DOM,漏了 `.amx-el-frame` —— 只有 Frame 的远处区域开卷与点「适应内容」
+  //  都落在视野外(缩略图却一直算它)。对照组:同位置的小矩形本来就能框进来。
+  const mk94 = (els) => [
+    '---', 'amadeus_schema: amadeus.page/4',
+    `amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[],"elements":${JSON.stringify(els)}}`,
+    '---', '', '# 画布页', '', '主卡一段。', '',
+  ].join('\n')
+  const FRAME94 = { id: 'f1', type: 'frame', x: 2400, y: 1600, w: 600, h: 420, title: '远处的区域' }
+  const RECT94 = { id: 's1', type: 'shape', shape: 'rect', x: 2450, y: 1700, w: 100, h: 80 }
+  const vis94 = (pg) => pg.evaluate(() => {
+    const s = document.querySelector('.amx-stage').getBoundingClientRect()
+    const inV = (r) => !!r && r.left >= s.left - 1 && r.top >= s.top - 1 && r.right <= s.right + 1 && r.bottom <= s.bottom + 1
+    return { frame: inV(document.querySelector('.amx-el-frame')?.getBoundingClientRect()), bar: inV(document.querySelector('.amx-el-frame-bar')?.getBoundingClientRect()) }
+  })
+  const out94 = {}
+  for (const [name, els] of [['frame', [FRAME94]], ['frame+rect', [FRAME94, RECT94]]]) {
+    const pg = await open(browser, mk94(els))
+    await pg.waitForTimeout(900)
+    const opened = await vis94(pg)
+    // 先平移走,再点「适应内容」:确认按钮本身在重算
+    await pg.keyboard.down('Alt')
+    const c94 = await pg.evaluate(() => { const r = document.querySelector('.amx-stage').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+    await pg.mouse.move(c94.x, c94.y); await pg.mouse.down(); await pg.mouse.move(c94.x + 300, c94.y + 200, { steps: 6 }); await pg.mouse.up()
+    await pg.keyboard.up('Alt')
+    await pg.waitForTimeout(200)
+    const panned = await vis94(pg)
+    await pg.click('.amx-stage-hud button[title="适应内容"]')
+    await pg.waitForTimeout(400)
+    out94[name] = { opened, panned, fitted: await vis94(pg) }
+    await pg.close()
+  }
+  const all94 = (v) => v.frame && v.bar
+  record('C94 开卷自动适应与「适应内容」都把 Frame 连同标题条框进视野(只有 Frame / Frame 里有小矩形两种)',
+    Object.values(out94).every((r) => all94(r.opened) && all94(r.fitted) && !all94(r.panned)), JSON.stringify(out94))
+
+  // ── C95 画布视口记忆:库 + 路径作键,文档模式挂载不写(V-15)─────────────────────────
+  //  修前:rememberViewport(path, vp) 按相对路径作键且不看 active —— ① 以文档模式打开一篇,舞台常驻也存下
+  //  {0,0,1},切走再回来点「画布」停在原点、不再自动适应;② 库 A 平移过的 Unified.md,换到库 B 打开同名笔记,
+  //  沿用 A 的视口,B 的内容全在视野外。「重启就丢」是会话态设计,不测。
+  const mk95 = (cards, mode) => [
+    '---', 'amadeus_schema: amadeus.page/4',
+    `amadeus_canvas: ${JSON.stringify({ v: 1, ...(mode ? { mode } : {}), main: { x: 0, y: 0, w: 400 }, cards })}`,
+    '---', '', '# 视口', '', '主卡。', '',
+    ...cards.flatMap((c) => [`<!-- a ${c.ref} -->`, '', `卡 ${c.ref}`, '', `<!-- /a ${c.ref} -->`, '']),
+  ].join('\n')
+  const SEED95A = mk95([{ ref: 'k1', x: 480, y: 0, w: 260 }], 'canvas')
+  const SEED95B = mk95([{ ref: 'b1', x: 2600, y: 1800, w: 260 }, { ref: 'b2', x: 3000, y: 2200, w: 260 }], 'canvas')
+  const SEED95C = mk95([{ ref: 'c1', x: 2600, y: 1800, w: 260 }], null) // 无 mode → 文档模式打开
+  const vis95 = (pg, a) => pg.evaluate((a) => {
+    const c = document.querySelector(`.amx-ucard[data-anchor="${a}"]`); const st = document.querySelector('.amx-stage')
+    if (!c || !st) return false
+    const r = c.getBoundingClientRect(), q = st.getBoundingClientRect()
+    return r.right > q.left && r.left < q.right && r.bottom > q.top && r.top < q.bottom
+  }, a)
+  const vp95 = (pg) => pg.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f), z: +m.a.toFixed(3) } })
+  const setVault95 = (pg, root) => importLive(pg, '/src/amadeus/store/pageStore.ts',
+    `(m) => { m.usePageStore.setState({ vaultRoot: ${JSON.stringify(root)} }); return m.usePageStore.getState().vaultRoot }`)
+  const inCanvas95 = (pg) => pg.evaluate(() => { const st = document.querySelector('.amx-stage'); return !!st && !st.classList.contains('amx-stage-off') })
+  // ① 同库:文档模式首开 → 切走 → 切回 → 点「画布」= 自动适应(c1 在远处,不适应就看不见)
+  const p95 = await open(browser, SEED95C)
+  await p95.waitForTimeout(800)
+  const docFirst95 = !(await inCanvas95(p95))
+  await p95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await p95.waitForTimeout(700)
+  await p95.evaluate(() => window.__upage.switchFile('Unified.md')); await p95.waitForTimeout(900)
+  await p95.click('.amx-modeseg button:nth-child(3)'); await p95.waitForTimeout(900)
+  const t1 = { docFirst: docFirst95, inCanvas: await inCanvas95(p95), vp: await vp95(p95), c1: await vis95(p95, 'c1') }
+  await p95.close()
+  // ② 跨库:库 A 平移 → 库 B 同名笔记开卷适应;③ 回库 A:A 的视口还在(记忆本身没坏)
+  const q95 = await open(browser, SEED95A)
+  await q95.waitForTimeout(900)
+  const vaultA = await setVault95(q95, '/vault-A')
+  await q95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await q95.waitForTimeout(600)
+  await q95.evaluate((t) => window.__upage.switchFile('Unified.md', t), SEED95A); await q95.waitForTimeout(1100)
+  await q95.keyboard.down('Alt'); await q95.mouse.move(700, 800); await q95.mouse.down()
+  for (let i = 1; i <= 10; i++) await q95.mouse.move(700 - 40 * i, 800 - 30 * i)
+  await q95.mouse.up(); await q95.keyboard.up('Alt'); await q95.waitForTimeout(300)
+  const vA95 = await vp95(q95)
+  await q95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await q95.waitForTimeout(600)
+  await setVault95(q95, '/vault-B')
+  await q95.evaluate((t) => window.__upage.switchFile('Unified.md', t), SEED95B); await q95.waitForTimeout(1200)
+  const t2 = { vaultA, vA: vA95, vB: await vp95(q95), b1: await vis95(q95, 'b1'), b2: await vis95(q95, 'b2') }
+  await q95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await q95.waitForTimeout(600)
+  await setVault95(q95, '/vault-A')
+  await q95.evaluate((t) => window.__upage.switchFile('Unified.md', t), SEED95A); await q95.waitForTimeout(1100)
+  t2.backA = await vp95(q95)
+  await q95.close()
+  record('C95a 文档模式先开过的笔记,回来再切画布照样开卷适应(文档态不写视口记忆)',
+    t1.docFirst && t1.inCanvas && t1.c1 && JSON.stringify(t1.vp) !== JSON.stringify({ x: 0, y: 0, z: 1 }), JSON.stringify(t1))
+  record('C95b 视口记忆按库隔离:库 B 同名笔记开卷适应(不沿用库 A 的平移);回库 A 平移还在',
+    t2.vaultA === '/vault-A' && JSON.stringify(t2.vB) !== JSON.stringify(t2.vA) && t2.b1 && t2.b2 && JSON.stringify(t2.backA) === JSON.stringify(t2.vA),
+    JSON.stringify(t2))
+
+  // ── C96 拖动中的卡浮在最上层(V-10)─────────────────────────────────────────────
+  //  修前:卡片同为 absolute、按文档序叠放,拖动态的 LIFT 样式没有 z-index —— 把文档序靠前的 k1 拖到 k2 上,
+  //  k1 被画在 k2 **底下**。反方向(k2 拖到 k1 上)本来就在上面,作对照。判据取重叠区命中栈的最上层。
+  const SEED96 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":0,"y":300,"w":300},{"ref":"k2","x":500,"y":300,"w":300}]}',
+    '---', '', '# 画布页', '', '主卡一段。', '',
+    '<!-- a k1 -->', '', '卡 K1 第一行', '', '第二行', '', '<!-- /a k1 -->', '',
+    '<!-- a k2 -->', '', '卡 K2 第一行', '', '第二行', '', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const top96 = async (from, to) => {
+    const pg = await open(browser, SEED96)
+    await pg.waitForTimeout(700)
+    const a = await pg.evaluate((a) => { const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } }, from)
+    const t = await pg.evaluate((a) => { const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect(); return { l: r.left, t: r.top } }, to)
+    await pg.mouse.move(a.x, a.y); await pg.mouse.down()
+    const dx = t.l + 40 - (a.x - 6), dy = t.t + 20 - (a.y - 6) // 停在目标卡心中立区,避开边缘认亲带
+    for (let i = 1; i <= 15; i++) await pg.mouse.move(a.x + dx * i / 15, a.y + dy * i / 15)
+    await pg.waitForTimeout(150)
+    const top = await pg.evaluate(({ from, to }) => {
+      const f = document.querySelector(`.amx-ucard[data-anchor="${from}"]`).getBoundingClientRect()
+      const g = document.querySelector(`.amx-ucard[data-anchor="${to}"]`).getBoundingClientRect()
+      const x = (Math.max(f.left, g.left) + Math.min(f.right, g.right)) / 2, y = (Math.max(f.top, g.top) + Math.min(f.bottom, g.bottom)) / 2
+      return document.elementsFromPoint(x, y).map((e) => e.closest('.amx-ucard')?.dataset.anchor).find(Boolean) ?? null
+    }, { from, to })
+    await pg.mouse.up()
+    await pg.close()
+    return top
+  }
+  const up96 = await top96('k1', 'k2')
+  const ctl96 = await top96('k2', 'k1')
+  record('C96 拖动中的卡浮在最上层:文档序靠前的 k1 拖到 k2 上 = k1 在上(对照:k2 拖到 k1 上 = k2 在上)',
+    up96 === 'k1' && ctl96 === 'k2', JSON.stringify({ k1OverK2: up96, k2OverK1: ctl96 }))
+
+  // ── C97 拖卡途中藏起 ⠿/+ 把手(V-12)──────────────────────────────────────────────
+  //  修前:悬停卡内文字 → 把手出现;按住卡拖走,pointerdown 的 preventDefault 抑制了兼容 mouse 事件,
+  //  blockLayer 的悬停追踪整段收不到事件 → 把手停在原位,悬在空白画布上。现在 live 期间由同一张拖拽样式表藏起。
+  const p97 = await open(browser, SEED96)
+  await p97.waitForTimeout(700)
+  const gut97 = () => p97.evaluate(() => {
+    const el = document.querySelector('.unified-gutter')
+    if (!el) return null
+    const cs = getComputedStyle(el)
+    return { show: el.dataset.show, visible: el.dataset.show === 'true' && cs.visibility === 'visible' && +cs.opacity > 0 }
+  })
+  const t97 = await p97.evaluate(() => { const e = document.querySelector('.amx-ucard[data-anchor="k1"] p').getBoundingClientRect(); return { x: e.left + 20, y: e.top + e.height / 2 } })
+  await p97.mouse.move(t97.x - 5, t97.y); await p97.mouse.move(t97.x, t97.y)
+  await p97.waitForTimeout(400)
+  const hover97 = await gut97()
+  await p97.mouse.down()
+  for (let i = 1; i <= 12; i++) await p97.mouse.move(t97.x + 20 * i, t97.y + 25 * i)
+  await p97.waitForTimeout(250)
+  const mid97 = await gut97()
+  await p97.mouse.up()
+  await p97.waitForTimeout(400)
+  // 松手后悬停另一张卡的文字:把手照常出现(隐藏规则随拖拽样式表一起清掉了)
+  const t97b = await p97.evaluate(() => { const e = document.querySelector('.amx-ucard[data-anchor="k2"] p').getBoundingClientRect(); return { x: e.left + 20, y: e.top + e.height / 2 } })
+  await p97.mouse.move(t97b.x - 5, t97b.y); await p97.mouse.move(t97b.x, t97b.y)
+  await p97.waitForTimeout(400)
+  const after97 = await gut97()
+  await p97.close()
+  record('C97 拖卡途中 ⠿/+ 把手隐藏;松手后悬停别的块照常出现',
+    hover97?.visible === true && mid97?.visible === false && after97?.visible === true, JSON.stringify({ hover97, mid97, after97 }))
+
+  // ── C98 方向键微移(V-11)──────────────────────────────────────────────────────────
+  //  修前:① 选中 Frame 按方向键只挪框,框里的卡 / 形状留在原地(拖标题条却会带走,两条路分叉);
+  //  ② 步长 8 / Shift=1、不看点阵吸附,仪表盘共用的 canvasKit 是「吸附开 = 一格 24,关 = 8 / Shift 32」。
+  const SEED98 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":540,"y":60,"w":260}],"elements":[{"id":"f1","type":"frame","x":504,"y":0,"w":408,"h":312,"title":"区域"},{"id":"s1","type":"shape","shape":"rect","x":528,"y":192,"w":96,"h":72}]}',
+    '---', '', '# 画布页', '', '主卡。', '', '<!-- a k1 -->', '', '框里的卡', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p98 = await open(browser, SEED98)
+  await p98.waitForTimeout(800)
+  const st98 = async () => {
+    const cv = await cvOf(p98)
+    const f = (cv?.elements ?? []).find((e) => e.id === 'f1'), sh = (cv?.elements ?? []).find((e) => e.id === 's1'), k = (cv?.cards ?? []).find((c) => c.ref === 'k1')
+    return { f1: [f?.x, f?.y], s1: [sh?.x, sh?.y], k1: [k?.x, k?.y] }
+  }
+  const bar98 = await p98.evaluate(() => { const r = document.querySelector('.amx-el-frame-bar').getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 } })
+  await p98.mouse.click(bar98.x, bar98.y); await p98.waitForTimeout(200)
+  const a98 = await st98()
+  await p98.keyboard.press('ArrowDown'); await p98.waitForTimeout(500)
+  const b98 = await st98()
+  const frameOk = b98.f1[1] - a98.f1[1] === 24 && b98.s1[1] - a98.s1[1] === 24 && b98.k1[1] - a98.k1[1] === 24
+    && b98.f1[0] === a98.f1[0] && b98.s1[0] === a98.s1[0] && b98.k1[0] === a98.k1[0]
+  // 单张卡:吸附开 → 24;Shift 也是 24(吸附优先,同 canvasKit);关吸附 → 8 / Shift 32
+  await p98.keyboard.press('Escape'); await p98.waitForTimeout(150)
+  const kp98 = async () => p98.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  let kp = await kp98()
+  await p98.mouse.click(kp.x, kp.y); await p98.waitForTimeout(150)
+  const steps98 = []
+  const stepOf = async (key) => { const x0 = (await st98()).k1[0]; await p98.keyboard.press(key); await p98.waitForTimeout(300); const x1 = (await st98()).k1[0]; steps98.push(`${key}:${x1 - x0}`); return x1 - x0 }
+  const on1 = await stepOf('ArrowRight')
+  const on2 = await stepOf('Shift+ArrowRight')
+  await p98.click('.amx-stage-hud button[title="关闭点阵吸附"]'); await p98.waitForTimeout(150)
+  kp = await kp98()
+  await p98.mouse.click(kp.x, kp.y); await p98.waitForTimeout(150)
+  const off1 = await stepOf('ArrowRight')
+  const off2 = await stepOf('Shift+ArrowRight')
+  await p98.close()
+  record('C98a 选中 Frame 按方向键:框里的卡与形状一起走(与拖标题条同一个辖域)',
+    frameOk, JSON.stringify({ before: a98, after: b98 }))
+  record('C98b 方向键步长与仪表盘同一个 nudgeStep:吸附开 24(Shift 同),关 8 / Shift 32',
+    on1 === 24 && on2 === 24 && off1 === 8 && off2 === 32, steps98.join(' '))
+
+  // ── C99 Mod+Y 重做走统一时间线(V-18)────────────────────────────────────────────────
+  //  修前:捕获期只拦 z —— ① 舞台焦点下 Mod+Y 什么都不做;② 卡内编辑时 Mod+Y 被 PM 的 history keymap 直接吃掉,
+  //  重做了、时间线却不知道,之后在舞台按 Cmd+Z 退的是更早的形状挪动,不是刚重做回来的字。
+  const SEED99 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}],"elements":[{"id":"s1","type":"shape","shape":"rect","x":0,"y":300,"w":200,"h":120}]}',
+    '---', '', '# 重做', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const MOD99 = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const p99 = await open(browser, SEED99)
+  await p99.waitForTimeout(800)
+  const st99 = async () => {
+    const cv = await cvOf(p99)
+    return {
+      k1: (cv?.cards ?? []).find((c) => c.ref === 'k1')?.x,
+      s1: (cv?.elements ?? []).find((e) => e.id === 's1')?.x,
+      sy: (cv?.elements ?? []).find((e) => e.id === 's1')?.y,
+      text: await p99.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k1"]').textContent.trim()),
+    }
+  }
+  const k99 = await p99.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  const s99 = await p99.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s1"]').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 20 } })
+  // ① 舞台焦点:卡 → 形状各挪一下,两次撤销,Mod+Y 按时序重放(先卡)
+  await p99.mouse.click(k99.x, k99.y); await p99.keyboard.press('ArrowRight'); await p99.waitForTimeout(200)
+  await p99.mouse.click(s99.x, s99.y); await p99.keyboard.press('ArrowRight'); await p99.waitForTimeout(200)
+  const moved99 = await st99()
+  await p99.keyboard.press(`${MOD99}+z`); await p99.keyboard.press(`${MOD99}+z`); await p99.waitForTimeout(300)
+  const undone99 = await st99()
+  await p99.keyboard.press(`${MOD99}+y`); await p99.waitForTimeout(300)
+  const redo1 = await st99()
+  await p99.keyboard.press(`${MOD99}+y`); await p99.waitForTimeout(300)
+  const redo2 = await st99()
+  // ② 卡内编辑(与 ① 的结果无关:先挪一下形状,让时间线顶上恒有一格 'fm'):打字 → Esc → 舞台 Cmd+Z 退掉字 →
+  //    再进卡 Mod+Y 重做回来 → Esc → 舞台 Cmd+Z 必须退的是这段字,不是那一下形状挪动
+  const s99b = await p99.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s1"]').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 20 } })
+  await p99.mouse.click(s99b.x, s99b.y); await p99.keyboard.press('ArrowDown'); await p99.waitForTimeout(250)
+  const b0 = await st99()
+  const k99b = await p99.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  await p99.mouse.click(k99b.x, k99b.y); await p99.waitForTimeout(150)
+  await p99.keyboard.press('Space'); await p99.waitForTimeout(300)
+  const inPm99a = await p99.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+  await p99.keyboard.type('XY'); await p99.waitForTimeout(300)
+  await p99.keyboard.press('Escape'); await p99.waitForTimeout(200)
+  await p99.keyboard.press(`${MOD99}+z`); await p99.waitForTimeout(300)
+  const b1 = await st99()
+  await p99.keyboard.press('Space'); await p99.waitForTimeout(300)
+  const inPm99 = await p99.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+  await p99.keyboard.press(`${MOD99}+y`); await p99.waitForTimeout(300)
+  const b2 = await st99()
+  await p99.keyboard.press('Escape'); await p99.waitForTimeout(200)
+  await p99.keyboard.press(`${MOD99}+z`); await p99.waitForTimeout(300)
+  const b3 = await st99()
+  await p99.close()
+  record('C99a 舞台焦点 Mod+Y = 重做,按时序重放(先卡后形状)',
+    moved99.k1 > 480 && moved99.s1 > 0 && undone99.k1 === 480 && undone99.s1 === 0
+      && redo1.k1 === moved99.k1 && redo1.s1 === 0 && redo2.k1 === moved99.k1 && redo2.s1 === moved99.s1,
+    JSON.stringify({ moved99, undone99, redo1, redo2 }))
+  record('C99b 卡内编辑 Mod+Y 也走时间线:重做回来的字,回舞台 Cmd+Z 退的正是它(形状不动)',
+    inPm99a && inPm99 && b1.text === '卡 K1' && b2.text === '卡 K1XY' && b3.text === '卡 K1' && JSON.stringify(b3.sy) === JSON.stringify(b0.sy),
+    JSON.stringify({ b0, b1, b2, b3, inPm99a, inPm99 }))
+
+  // ── C100 文档 / 画布切换命令(V-20)─────────────────────────────────────────────────
+  //  修前只有顶栏胶囊一个入口。命令模块(canvasToggleCommand)开机进 Amadeus 命令集;这里直接跑它的 run,
+  //  量「落点 = 本篇 + 与胶囊同一个 toggle」:切到画布、再切回文档,模式记忆跟着写、盘上零写入(未物化的笔记);
+  //  源码模式下没有胶囊,命令同口径空操作。
+  const p100 = await open(browser, '# 命令切换\n\n正文一段。\n')
+  await p100.waitForTimeout(600)
+  const runCmd = () => importLive(p100, '/src/amadeus/unified/canvasToggleCommand.ts', '(m) => { m.CANVAS_COMMANDS[0].run(); return m.CANVAS_COMMANDS[0].id }')
+  const inC100 = () => p100.evaluate(() => { const st = document.querySelector('.amx-stage'); return !!st && !st.classList.contains('amx-stage-off') })
+  const mode100 = () => p100.evaluate(() => { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k?.startsWith('amx.noteSurfaceMode:') && k.includes('Unified.md')) return localStorage.getItem(k) } return null })
+  const c0 = await inC100()
+  const id100 = await runCmd(); await p100.waitForTimeout(500)
+  const c1 = await inC100()
+  const m1 = await mode100()
+  await runCmd(); await p100.waitForTimeout(500)
+  const c2 = await inC100()
+  const m2 = await mode100()
+  await p100.evaluate(() => window.__upage.setEditorMode('source')); await p100.waitForTimeout(500)
+  await runCmd(); await p100.waitForTimeout(400)
+  await p100.evaluate(() => window.__upage.setEditorMode('wysiwyg')); await p100.waitForTimeout(500)
+  const c3 = await inC100() // 切回可视后仍是文档模式 = 源码模式里那一下没有翻面
+  const w100 = await p100.evaluate(() => window.__upage.writes.length)
+  await p100.close()
+  record('C100 「切换文档 / 画布」命令落到本篇:文档 → 画布 → 文档,模式记忆跟着写、零写盘;源码模式空操作',
+    id100 === 'amadeus-toggle-canvas' && !c0 && c1 && m1 === 'canvas' && !c2 && m2 === 'doc' && !c3 && w100 === 0,
+    JSON.stringify({ id100, c0, c1, m1, c2, m2, c3, w100 }))
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
+  if (process.env.UCANVAS_ONLY === 'w2') {
+    await wave2(browser)
+    await browser.close()
+    const ok = results.filter(Boolean).length
+    console.log(`\n${ok}/${results.length} 通过(仅波次 2 段)`)
+    process.exit(ok === results.length ? 0 : 1)
+  }
   const SEED = '# 画布页\n\n主卡一段。\n\n要拖出去的段。\n'
 
   // ── C1 默认文档模式 + 切画布不写盘 ────────────────────────────────────────────
@@ -1727,19 +2099,19 @@ async function main() {
   let pt36 = await k136()
   await p36.mouse.click(pt36.x, pt36.y)
   await p36.waitForTimeout(200)
-  await p36.keyboard.press('ArrowRight') // 卡 +8(NUDGE)
+  await p36.keyboard.press('ArrowRight') // 卡 +24(点阵吸附默认开 = 一格,与仪表盘同一个 nudgeStep,V-11)
   await p36.waitForTimeout(600)
   pt36 = await s136()
   await p36.mouse.click(pt36.x, pt36.y)
   await p36.waitForTimeout(200)
-  await p36.keyboard.press('ArrowDown') // 形状 +8
+  await p36.keyboard.press('ArrowDown') // 形状 +24
   await p36.waitForTimeout(600)
-  const g36a = await geo36() // k1.x=48, s1.y=308
+  const g36a = await geo36() // k1.x=64, s1.y=324
   // ③④ Cmd+Z ×2:先退**形状**(最近),再退卡 —— 修前这里恒是先元素栈打光才轮到 PM,次序错乱
   await p36.evaluate(() => document.querySelector('.amx-stage').focus())
   await p36.keyboard.press(Z)
   await p36.waitForTimeout(700)
-  const g36b = await geo36() // s1 回 300,卡仍 48
+  const g36b = await geo36() // s1 回 300,卡仍 64
   await p36.keyboard.press(Z)
   await p36.waitForTimeout(700)
   const g36c = await geo36() // 卡回 40
@@ -1748,12 +2120,12 @@ async function main() {
   await p36.waitForTimeout(700)
   await p36.keyboard.press(SZ)
   await p36.waitForTimeout(700)
-  const g36d = await geo36() // 48 / 308
+  const g36d = await geo36() // 64 / 324
   record('C36a 统一时间线:卡→形状交替操作,Cmd+Z 先退形状再退卡;重做按原时序重放',
-    g36a.k1?.x === 48 && g36a.s1?.y === 308
-      && g36b.k1?.x === 48 && g36b.s1?.y === 300
+    g36a.k1?.x === 64 && g36a.s1?.y === 324
+      && g36b.k1?.x === 64 && g36b.s1?.y === 300
       && g36c.k1?.x === 40 && g36c.s1?.y === 300
-      && g36d.k1?.x === 48 && g36d.s1?.y === 308,
+      && g36d.k1?.x === 64 && g36d.s1?.y === 324,
     JSON.stringify({ a: g36a, b: g36b, c: g36c, d: g36d }))
   // ⑥ Tab 建子节点 = 'pair':一次 Cmd+Z 卡与层级一起退(修前要按两次,评审点名)
   pt36 = await k136()
@@ -1784,7 +2156,7 @@ async function main() {
   pt36 = await s136()
   await p36.mouse.click(pt36.x, pt36.y)
   await p36.waitForTimeout(200)
-  await p36.keyboard.press('ArrowDown') // s1: 308 → 316
+  await p36.keyboard.press('ArrowDown') // s1: 324 → 348
   await p36.waitForTimeout(600)
   pt36 = await k136()
   await p36.mouse.click(pt36.x, pt36.y)
@@ -1799,7 +2171,7 @@ async function main() {
     return el?.textContent ?? ''
   })
   record('C36c 卡内 Cmd+Z 同样按时序:退的是刚动过的形状,不动刚打的字',
-    g36g.s1?.y === 308 && text36.includes('xyz'),
+    g36g.s1?.y === 324 && text36.includes('xyz'),
     JSON.stringify({ s1: g36g.s1, text: text36.slice(0, 40) }))
   await p36.close()
 
@@ -5669,6 +6041,7 @@ async function main() {
       && inCard92.prevented.length === 2 && inCard92.prevented[1] === false,
     JSON.stringify({ vEdit0, vEdit1, inCard92 }))
 
+  await wave2(browser)
   await browser.close()
   const ok = results.filter(Boolean).length
   console.log(`\n${ok}/${results.length} 通过`)

@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { zoomOf } from '@lcl/engine'
 import { resolveCardRepulsion } from '../canvasGeometry'
 import {
-  CLICK_SLOP, LONG_PRESS_MS, NUDGE, PRESS_SLOP, TOUCH_SLOP, boxFromPoints,
+  CLICK_SLOP, LONG_PRESS_MS, PRESS_SLOP, TOUCH_SLOP, boxFromPoints, nudgeStep,
   marqueeHit, resizeBox, snapGrid, type Box, type ResizeEdge,
 } from './geometry'
 import type { CanvasViewportApi } from './viewport'
@@ -475,7 +475,7 @@ export function useCanvasGestures(
       const dy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
       if (!dx && !dy) return
       e.preventDefault()
-      const step = snapRef.current ? 24 : e.shiftKey ? NUDGE * 4 : NUDGE
+      const step = nudgeStep(snapRef.current, e.shiftKey)
       const boxes = A().boxes()
       const next = new Map<string, Box>()
       for (const k of keys) { const b = boxes.get(k); if (b) next.set(k, { ...b, x: b.x + dx * step, y: b.y + dy * step }) }

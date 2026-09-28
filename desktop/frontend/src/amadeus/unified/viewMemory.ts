@@ -5,6 +5,8 @@
  * 同为会话态，存在模块 Map；模式要跨重启恢复，才落 localStorage。
  */
 
+import { recallViewport, rememberViewport } from './canvasKit/viewport'
+
 export type NoteSurfaceMode = 'doc' | 'canvas'
 
 const MODE_PREFIX = 'amx.noteSurfaceMode:'
@@ -46,6 +48,8 @@ export function remapNoteViewMemory(vaultRoot: string | null | undefined, oldPat
   if (mode) writeNoteSurfaceMode(vaultRoot, newPath, mode)
   const oldId = noteMemoryId(vaultRoot, oldPath)
   if (docScroll.has(oldId)) docScroll.set(noteMemoryId(vaultRoot, newPath), docScroll.get(oldId)!)
+  const vp = recallViewport(oldId) // 画布视口(会话级,键同口径;V-15)
+  if (vp) rememberViewport(noteMemoryId(vaultRoot, newPath), vp)
   if (readNoteLocked(vaultRoot, oldPath)) {
     writeNoteLocked(vaultRoot, newPath, true)
     writeNoteLocked(vaultRoot, oldPath, false)

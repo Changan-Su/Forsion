@@ -133,19 +133,25 @@ function buildDecorations(
       // 普通双链仍是「光标进入即源码」;图片是难源码编辑块,只有 `</>` 显式开门。
       if ((!img && onActiveLine) || (img && onActiveLine && sourceFrom === from)) continue
       if (img) {
+        const len = spTo - spFrom
         decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
         decos.push(
           Decoration.widget(
             from,
-            (view) => {
+            (view, getPos) => {
               // 包一层 span:`<img>` 是空元素,挂不了「查看源码」按钮(按钮须是子节点才好定位)。
               const wrap = document.createElement('span')
               wrap.className = 'wiki-inline-img-wrap'
               wrap.contentEditable = 'false'
               // ⚠️ 位置戳在 DOM 上:选中态由插件的 view.update 就地同步(见 syncPicked),
               // **绝不能**把 picked 写进装饰 key —— 那样一点击就换一份 DOM,后果见下面 key 处的注释。
-              wrap.dataset.srcFrom = String(from)
-              wrap.dataset.srcTo = String(to)
+              // key 也不带位置(P-04):同一份 DOM 会跨位置复用,戳记由 syncPicked 按 getPos 每次事务刷新。
+              stampSrc(wrap, getPos, len)
+              /** 本 widget 此刻的源码区间(复用后 from/to 已过期,一律现算)。 */
+              const span = (): { from: number; to: number } | null => {
+                const at = getPos()
+                return at == null ? null : { from: at, to: at + len }
+              }
               const el = document.createElement('img')
               el.className = 'wiki-inline-img'
               el.src = img.url
@@ -159,9 +165,11 @@ function buildDecorations(
               // 例外:独占一段的图片在统一编辑器里可以按住直接拖走整块,那次按下不能 preventDefault
               // (否则原生拖拽起不来),选中也挪到 click(见 imageDrag.ts)。
               const select = (): void => {
+                const at = span()
+                if (!at) return
                 const tr = standalone
-                  ? view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
-                  : view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to))
+                  ? view.state.tr.setSelection(NodeSelection.create(view.state.doc, at.from - 1)) // 独占一段:widget 在段首,段落 = at-1
+                  : view.state.tr.setSelection(TextSelection.create(view.state.doc, at.from, at.to))
                 view.dispatch(tr)
                 view.focus()
               }
@@ -173,8 +181,10 @@ function buildDecorations(
                 select()
               })
               attachSourceButton(wrap, view, () => {
-                const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(from + 1, view.state.doc.content.size)))
-                tr.setMeta(wikiKey, { sourceFrom: from })
+                const at = span()
+                if (!at) return
+                const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(at.from + 1, view.state.doc.content.size)))
+                tr.setMeta(wikiKey, { sourceFrom: at.from })
                 view.dispatch(tr)
                 view.focus()
               }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
@@ -185,7 +195,9 @@ function buildDecorations(
             // 公共祖先 `<p>`(实测 elementFromPoint 同样返回 P)—— 于是 wrap 上的 preventDefault
             // 轮不到执行,原生「选词」把选区撑过块边界、图片当场让位给源码,双击看大图一起落空。
             // 选中态改由 syncPicked 在 view.update 里就地打/摘属性,DOM 全程同一个节点。
-            { side: -1, ignoreSelection: true, key: `i${from}:${m![0]}` },
+            // key 也不带位置(P-04):带 from 的话上方打一个字,下游每张图都换 DOM、重新加载;standalone 进 key ——
+            // 它决定点击选段落还是选源码,闭包里捕获的是构建那一刻的值。
+            { side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}` },
           ),
         )
         continue
@@ -205,13 +217,12 @@ function buildDecorations(
       decos.push(
         Decoration.widget(
           from,
-          () => {
+          (_view, getPos) => {
             const el = document.createElement('span')
             el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡虚线,点击询问创建
             el.setAttribute('role', 'link') // 读屏认得是链接(L-20;键盘跟随走 Alt+Enter,不给 tabindex —— 焦点留在正文里)
             el.setAttribute('data-wiki', target)
-            el.dataset.srcFrom = String(from)
-            el.dataset.srcTo = String(to)
+            stampSrc(el, getPos, spTo - spFrom)
             if (emoji) {
               const ic = document.createElement('span')
               ic.className = 'wikilink-emoji' // inline-block 逃逸下划线传播(text-decoration 子元素关不掉)
@@ -235,7 +246,9 @@ function buildDecorations(
             return el
           },
           // key 带解析态与 emoji:同 key 的 widget DOM 会被 ProseMirror 复用,状态翻转必须换 key 才会重建。
-          { side: -1, ignoreSelection: true, key: `w${from}:${m[0]}:${ok ? 1 : 0}:${emoji ?? ''}` },
+          // ⚠️ key **不带位置**(评审 P-04):带 from 的话在上方打一个字,下游 240 条双链每键整批重建。
+          //    闭包里只留与位置无关的东西(openArg / label);位置戳由 stampSrc + syncPicked 现算。
+          { side: -1, ignoreSelection: true, key: `w:${m[0]}:${ok ? 1 : 0}:${emoji ?? ''}` },
         ),
       )
     }
@@ -249,9 +262,23 @@ function buildDecorations(
  *  双击就此失灵(长注释见 buildDecorations 里 key 那一处)。 */
 const handles = new WeakMap<HTMLElement, () => void>()
 const marked = new WeakMap<EditorView, HTMLElement>()
+/** widget DOM → 取自己当前位置的函数 + 源码长度。key 不带位置,DOM 会跨位置复用(P-04),
+ *  所以 data-src-from/to 不能在构建时定死:syncPicked 每次事务先按它刷新,再拿来比选区。 */
+const srcOf = new WeakMap<HTMLElement, { getPos: () => number | undefined; len: number }>()
+function stampSrc(el: HTMLElement, getPos: () => number | undefined, len: number): void {
+  srcOf.set(el, { getPos, len })
+  const at = getPos()
+  if (at == null) return
+  el.dataset.srcFrom = String(at)
+  el.dataset.srcTo = String(at + len)
+}
 function syncPicked(view: EditorView): void {
   const { from, to } = view.state.selection
   const focus = wikiKey.getState(view.state)?.focus ?? false
+  for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
+    const s = srcOf.get(el)
+    if (s) stampSrc(el, s.getPos, s.len)
+  }
   // widget 的源码段被 display:none 藏住,浏览器原生 ::selection 涂不到渲染后的链接/图片。
   // 就地标记相交的 widget,只给它本身反馈,不把所在段落整块染色。
   for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
@@ -335,7 +362,7 @@ export function wikilinkPlugin(
       new Plugin<WikiState>({
         key: wikiKey,
         // 选中态就地同步:widget 的 DOM 全程不换(见 key 处的注释),所以「选中环 + 缩放把手」
-        // 只能在这里按当前选区打/摘。位置从 dataset 读 —— 位置一变 key 就变、DOM 本来就会重建。
+        // 只能在这里按当前选区打/摘。位置从 dataset 读 —— key 不带位置,DOM 跨位置复用,dataset 由 syncPicked 先刷新。
         view: () => ({ update: syncPicked }),
         state: {
           init: () => ({ focus: false, sourceFrom: null }),
