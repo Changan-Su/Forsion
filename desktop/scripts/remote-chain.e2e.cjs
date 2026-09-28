@@ -26,7 +26,11 @@
  *   K4  首次确认框按名册 registeredName 显示手机;确认前会话档 403 REMOTE_CALLER_UNCONFIRMED、确认后放行;
  *   G7  远程 run 的每次 LLM 调用:账号 = 两台设备所属账号、client = 手机的 mobile/<版本>(api_usage_logs「端」列的来源);
  *       Historian 对远程轮次不写长期记忆(引擎日志 + 记忆仓不变)、hub 零云端记忆写入;run 行归属本机引擎用户、agent = 默认 agent。
- *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):手机附件落在引擎会话沙箱目录,host 模式的模型请求里找不到它的路径。
+ *   K3  执行设备的 approvalDelivery(真模块)收到远程待批 → 系统通知(不含命令)→ 60s(快进)没人批投收件箱提醒(只带 sessionId/count/kinds)
+ *       → 手机批完撤条目、关通知;反方向:电脑本机批 → approval_result.by = {via:local}。
+ *   K8  本机登记后「在哪运行」不出现手机自己。
+ *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):① 手机附件落在引擎会话沙箱目录,host 模式的模型请求里找不到它的路径;
+ *       ② 电脑本机批了之后,手机界面上看不到「在执行的电脑上」(托盘模式下卡答完即撤,结局行不带 by)。
  *
  * 负对照(NEGCTL=…,须红):
  *   relay     模拟层照发但不带 X-Forsion-Caller(中继漏拦 / 头路径断)→ G1 那条红,且执行设备按「账号级未识别调用方」弹框;
@@ -54,6 +58,7 @@ const SHOT_DIR = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), '
 const SERVER_DIR = process.env.FORSION_SERVER_DIR || [path.resolve(GENESIS, '../p0-server-roster'), path.resolve(GENESIS, '../server')]
   .find((d) => fs.existsSync(path.join(d, 'microserver/unit-hub/services/callerToken.ts'))) || ''
 const MARK = `K9-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
+const MARK2 = `K9B-${crypto.randomBytes(3).toString('hex').toUpperCase()}` // 第二轮:电脑本机批(反方向)
 const ATTACH_NAME = `k9-attach-${MARK.toLowerCase()}.txt`
 const ATTACH_TEXT = `hello from the phone ${MARK}\nsecond line\n`
 const RESULT_NAME = 'k9-result.txt'
@@ -66,31 +71,37 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ── 可编剧假模型:主 run 先要 run_bash 处理附件,工具结果回来后收尾;其余(标题 / Historian 等后台调用)回一句 ok ──
 function makeLlm(world) {
+  const text = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x?.text || '').join('') : '')
   return (call) => {
     const msgs = call.messages || []
     const last = msgs[msgs.length - 1] || {}
-    const text = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x?.text || '').join('') : '')
     const usage = { prompt_tokens: 100, completion_tokens: 10 }
     const isMain = call.tools.includes('run_bash')
     if (!isMain) return [{ t: 'token', d: 'ok' }, { t: 'done', content: 'ok', toolCalls: [], usage }]
+    // 这一轮是哪句话起的(<approval_update> 是引擎回灌的用户消息,不算)
+    const asked = text([...msgs].reverse().find((m) => m.role === 'user' && !text(m.content).includes('<approval_update>'))?.content)
+    const mark = asked.includes(MARK2) ? MARK2 : asked.includes(MARK) ? MARK : null
     // 审批托盘(approval_tray):要批的调用先挂起,工具结果是「⏸ 等批准」—— 模型先收尾;批完引擎以 <approval_update> 回灌真结果再续一轮
     if (last.role === 'tool' && /^\s*⏸/.test(text(last.content))) {
       const reply = '命令在等你批准。'
       return [{ t: 'token', d: reply }, { t: 'done', content: reply, toolCalls: [], usage }]
     }
-    if (last.role === 'tool' || (last.role === 'user' && text(last.content).includes('<approval_update>'))) {
-      const reply = `已处理附件,产物 ${RESULT_NAME}(${MARK})。`
+    if (mark && (last.role === 'tool' || (last.role === 'user' && text(last.content).includes('<approval_update>')))) {
+      const reply = mark === MARK ? `已处理附件,产物 ${RESULT_NAME}(${MARK})。` : `已核对产物(${MARK2})。`
       return [{ t: 'token', d: reply }, { t: 'done', content: reply, toolCalls: [], usage }]
     }
-    if (last.role === 'user' && text(last.content).includes(MARK)) {
-      // 模型要把附件转成大写写到它旁边。附件在引擎会话沙箱目录里 —— host 模式的模型本不知道这个路径(见 KNOWN-GAP),
-      // 这里由台架扮的模型直接知道(= 台架只证管道,不证模型能找到附件)。
-      const cmd = `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
+    if (last.role === 'user' && mark) {
+      // 第一轮:把附件转成大写写到它旁边。附件在引擎会话沙箱目录里 —— host 模式的模型本不知道这个路径(见 KNOWN-GAP),
+      // 这里由台架扮的模型直接知道(= 台架只证管道,不证模型能找到附件)。第二轮:随便一条要批的复合命令。
+      const cmd = mark === MARK
+        ? `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
+        : `ls '${world.sandboxDir}' && echo ${MARK2}`
       const args = JSON.stringify({ command: cmd })
+      const id = mark === MARK ? 'call_k9_bash' : 'call_k9_bash2'
       return [
-        { t: 'token', d: '我来处理这个附件。' },
-        { t: 'tool', id: 'call_k9_bash', name: 'run_bash', args, argsLen: args.length },
-        { t: 'done', content: '我来处理这个附件。', toolCalls: [{ id: 'call_k9_bash', type: 'function', function: { name: 'run_bash', arguments: args } }], usage },
+        { t: 'token', d: '我来处理。' },
+        { t: 'tool', id, name: 'run_bash', args, argsLen: args.length },
+        { t: 'done', content: '我来处理。', toolCalls: [{ id, type: 'function', function: { name: 'run_bash', arguments: args } }], usage },
       ]
     }
     return [{ t: 'token', d: 'ok' }, { t: 'done', content: 'ok', toolCalls: [], usage }]
@@ -114,6 +125,8 @@ async function main() {
     llm: (call) => makeLlm(world)(call),
     hubNegctl: { omitProxyCaller: NEGCTL === 'envelope' },
     confirm: async () => { if (confirmGate) await confirmGate; return true },
+    approvalDelivery: true, // K3 真 approvalDelivery:远程待批的系统通知 + 60s 收件箱提醒(快进)
+    mainLocale: 'zh',
     log: process.env.REMOTECHAIN_DEBUG ? (m) => console.log(`  ${m}`) : undefined,
   })
   console.log(`  产物目录 ${world.out}`)
@@ -142,6 +155,8 @@ async function main() {
     await page.waitForSelector(`[data-run-row="${world.DESKTOP_UNIT}"][data-status="awaitingConfirm"]`, { timeout: 8000 }).catch(() => {})
     const waiting = await page.evaluate((u) => { const r = document.querySelector(`[data-run-row="${u}"]`); return r ? { status: r.getAttribute('data-status'), sub: r.querySelector('.us-row-sub')?.textContent || '' } : null }, world.DESKTOP_UNIT)
     check('K4 首次确认:执行设备弹框,名字取名册登记名(手机)', world.confirms.length === 1 && world.confirms[0].message.includes(PHONE_NAME) && /Phone|手机/.test(world.confirms[0].detail), JSON.stringify(world.confirms.map((c) => c.message)))
+    const sheetRows = await page.evaluate(() => [...document.querySelectorAll('[data-units-sheet] [data-run-row]')].map((r) => r.getAttribute('data-run-row')))
+    check('K8 S10:本机登记后,「在哪运行」里不出现这台手机自己(只有云端 + 电脑)', !!native.identity && !sheetRows.includes(native.identity.unitId) && sheetRows.includes(world.DESKTOP_UNIT), JSON.stringify(sheetRows))
     check('确认前手机显示「请在那台电脑上允许」(awaitingConfirm)', waiting?.status === 'awaitingConfirm', JSON.stringify(waiting))
     await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-awaiting-confirm.png') })
     const beforeConfirm = world.hub.ledger.proxy.filter((x) => x.path.startsWith('/engine/agent/runs') && x.method === 'POST').length
@@ -176,6 +191,16 @@ async function main() {
     check('审批卡来源行 = 远程会话 · 本机登记名(K1:hub → unitHost → unitWeb → 引擎一路带到)', !!card && card.source.includes(PHONE_NAME), card?.source)
     await page.addStyleTag({ content: '.ach-toast{display:none!important}' })
     await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-approval.png') })
+    // K3 执行设备侧:approvalDelivery 从引擎 /agent/approvals/stream 收到这条远程待批 → 系统通知(不含命令);60s(快进)没人批 → 投收件箱提醒
+    const sid0 = await page.evaluate(() => window.__forsionStore.getState().activeId)
+    for (let i = 0; i < 40 && !world.delivery.pending().some((x) => x.sessionId === sid0); i++) await sleep(150)
+    const pend = world.delivery.pending().find((x) => x.sessionId === sid0)
+    check('K3:电脑的 approvalDelivery 收到这条远程待批(调用方 = 手机)', !!pend && pend.kind === 'approval' && pend.tool === 'run_bash' && pend.remote?.callerUnit === native.identity?.unitId, JSON.stringify(pend && { tool: pend.tool, remote: pend.remote }))
+    const note = world.notes.find((n) => n.title.includes(PHONE_NAME))
+    check('K3:电脑弹系统通知「K9 Pixel 上的远程会话等你批准」,正文不含命令', !!note && !note.body.includes('find') && !note.body.includes('tr '), JSON.stringify(note && { title: note.title, body: note.body }))
+    for (let i = 0; i < 60 && !world.hub.ledger.attention.length; i++) await sleep(150)
+    const att = world.hub.ledger.attention[0]
+    check('K3:没人批 → 投收件箱提醒:只带 {sessionId, count, kinds}(无标题 / 工具 / 命令),设备密钥双闸', !!att && JSON.stringify(Object.keys(att.body || {}).sort()) === '["count","kinds","sessionId"]' && att.body.sessionId === sid0 && att.body.count === 1 && JSON.stringify(att.body.kinds) === '["approval"]' && att.unit === world.DESKTOP_UNIT, att?.raw)
     await sleep(600) // 托盘换卡冷却(ARM_MS 350ms)
     const approveBtn = page.locator('.approval-card .approval-actions .btn.primary').first()
     if (await approveBtn.count()) await tap(approveBtn)
@@ -183,6 +208,7 @@ async function main() {
     // ── E. run 跑完 ──
     await page.waitForFunction((mark) => { const s = window.__forsionStore.getState(); return (s.messagesBySession[s.activeId] || []).some((m) => m.role === 'assistant' && m.status === 'done' && m.content.includes(mark)) }, MARK, { timeout: 60_000 }).catch(() => {})
     const st = await page.evaluate(() => { const s = window.__forsionStore.getState(); return { sid: s.activeId, msgs: (s.messagesBySession[s.activeId] || []).map((m) => ({ role: m.role, st: m.status, c: String(m.content).slice(0, 80) })) } })
+    check('K3:手机批完 → 电脑的待批条目撤掉、系统通知关掉', !world.delivery.pending().some((x) => x.sessionId === st.sid) && !!note?.closed, JSON.stringify({ left: world.delivery.pending().length, closed: note?.closed }))
     check('run 在那台电脑上跑完、结果回到手机', st.msgs.some((m) => m.role === 'assistant' && m.st === 'done' && m.c.includes(MARK)), JSON.stringify(st.msgs))
     await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-done.png') })
 
@@ -206,6 +232,37 @@ async function main() {
     check('approval_result.by = {via:tunnel, callerUnit: 手机}(K3:谁批的)', resp?.action === 'approve' && resp?.by?.via === 'tunnel' && resp.by.callerUnit === phoneUnit, JSON.stringify(resp))
     const tr = events.find((e) => e.type === 'tool_result')
     info('run_bash 结果', tr ? JSON.parse(tr.payload).result?.slice(0, 120) : '(无)')
+
+    // ── E2. 反方向(K3):同一会话再来一轮,这次在执行设备本机批 → 手机的卡写「在执行的电脑上」──
+    await compose(page, `再核对一下产物 ${MARK2}`)
+    await page.keyboard.press('Enter')
+    let pend2 = null
+    for (let i = 0; i < 100 && !pend2; i++) { pend2 = world.delivery.pending().find((x) => x.sessionId === st.sid) || null; if (!pend2) await sleep(200) }
+    await page.waitForFunction(() => document.querySelectorAll('.approval-card').length > 0 && [...document.querySelectorAll('.approval-card')].some((c) => !c.classList.contains('resolved')), null, { timeout: 20_000 }).catch(() => {})
+    const localAns = pend2 ? await world.engineApi(`/agent/runs/${pend2.runId}/approvals/${pend2.id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }) : null
+    check('电脑本机批准(无远程头,本机令牌)被引擎接受', localAns?.status === 200, JSON.stringify(localAns))
+    await page.waitForFunction((m) => { const s = window.__forsionStore.getState(); return (s.messagesBySession[s.activeId] || []).some((x) => x.role === 'assistant' && x.status === 'done' && x.content.includes(m)) }, MARK2, { timeout: 45_000 }).catch(() => {})
+    await page.waitForSelector('.approval-card.resolved [data-answered-by], .t2-apv-update', { timeout: 10_000 }).catch(() => {})
+    // K3 规格:手机上的卡写「在执行的电脑上」。托盘模式(approval_tray,各端恒开)下卡只在待批时挂在托盘里,答完即撤;聊天流里留下的是
+    // <approval_update> 结局行 —— 两处都找,哪处写了谁批的都算。都没有 = 「谁批的」在手机界面上不可见(KNOWN-GAP,STRICT 判红)
+    const answered = await page.evaluate(() => ({
+      cards: [...document.querySelectorAll('.approval-card.resolved [data-answered-by]')].map((e) => (e.textContent || '').trim()),
+      updates: [...document.querySelectorAll('.t2-apv-update')].map((e) => (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90)),
+    }))
+    const shown = [...answered.cards, ...answered.updates].some((x) => x.includes('在执行的电脑上'))
+    const aLine = `结局可见处:resolved 卡 ${answered.cards.length} 张 ${JSON.stringify(answered.cards)};聊天流结局行 ${JSON.stringify(answered.updates)}`
+    if (shown || STRICT) check('K3 反方向:手机上写明「在执行的电脑上」批的', shown, aLine)
+    else console.log(`KNOWN-GAP  K3 反方向:手机上写明「在执行的电脑上」批的  | ${aLine}`)
+    const upd = page.locator('.t2-apv-update').last()
+    if (await upd.count()) { await upd.scrollIntoViewIfNeeded().catch(() => {}); await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-answered-on-host.png') }) }
+    const dbh2 = world.db()
+    let byLocal = null
+    try {
+      const r2 = dbh2.prepare('SELECT id FROM agent_runs WHERE session_id = ? ORDER BY created_at DESC LIMIT 1').get(st.sid)
+      const e2 = r2 && dbh2.prepare("SELECT payload FROM agent_run_events WHERE run_id = ? AND type = 'approval_result' ORDER BY seq DESC LIMIT 1").get(r2.id)
+      byLocal = e2 ? JSON.parse(e2.payload).by : null
+    } finally { dbh2.close() }
+    check('K3 反方向:approval_result.by = {via:local}', byLocal?.via === 'local' && !byLocal.callerUnit, JSON.stringify(byLocal))
 
     // ── F. 下载产物(真 UI:右侧栏工作区 → 列出 → 下载;下载经 window.fetch → 中继)──
     const want = ATTACH_TEXT.toUpperCase()

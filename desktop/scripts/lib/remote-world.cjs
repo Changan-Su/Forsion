@@ -35,6 +35,9 @@ const freePort = () => new Promise((r) => { const s = net.createServer(); s.list
  * @param {object} [o.hubNegctl]
  * @param {(opts: object) => Promise<boolean|null>} [o.confirm]  K4 首次确认框的应答(缺省:允许)
  * @param {string} [o.desktopName]
+ * @param {boolean} [o.approvalDelivery]  起真 K3 approvalDelivery(订阅引擎 /agent/approvals/stream,假通知,收件箱提醒打假 hub)。
+ *        60s 升级提醒按「快进」跑:≥45s 的定时器 1.5s 就触发,同时把它的 now() 往前拨同样的量(引擎 idle 45s 的看门狗不受影响)。
+ * @param {'zh'|'en'} [o.mainLocale]  主进程语言(确认框 / 系统通知的文案);缺省按 mainI18n 自己的回落
  * @param {(m: string) => void} [o.log]
  */
 async function startRemoteWorld(o) {
@@ -95,10 +98,10 @@ async function startRemoteWorld(o) {
   }
 
   // ── 真 unitWeb + 真 K4 远程会话闸 + 真 unitHost ──
-  const { startUnitWeb } = loadTs(path.join(DESKTOP, 'electron/unitWeb.ts'))
-  const { UnitHost } = loadTs(path.join(DESKTOP, 'electron/unitHost.ts'))
-  const rsMod = loadTs(path.join(DESKTOP, 'electron/remoteSessions.ts'))
-  const { forsionAccountId } = loadTs(path.join(DESKTOP, 'shared/forsionAccount.ts'))
+  const M = loadTs(path.join(__dirname, 'remote-world.entry.ts'))
+  const { startUnitWeb, UnitHost, forsionAccountId } = M
+  const rsMod = M
+  if (o.mainLocale) M.setMainLocale(o.mainLocale)
   const confirms = []
   const remoteSessions = rsMod.createRemoteSessions({
     file: () => path.join(userData, rsMod.REMOTE_SESSIONS_FILE || 'remote-sessions.json'),
@@ -165,6 +168,27 @@ async function startRemoteWorld(o) {
   // K7 的 caps 上报器(本分支未合入)在通道接上后会报一次;这里替它报,UnitsSheet 才显示「可用」
   await fetch(`${hub.url}/api/units/${DESKTOP_UNIT}/caps`, { method: 'POST', headers: { Authorization: `Bearer ${DESKTOP_TOKEN}`, 'X-Unit-Secret': pairing.secret, 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: 'ready', tools: [] }) })
 
+  // ── K3 待批送达(真 approvalDelivery,假通知)──
+  let delivery = null
+  const notes = []
+  if (o.approvalDelivery) {
+    const { createApprovalDelivery, mt } = M
+    let skew = 0
+    delivery = createApprovalDelivery({
+      getEngine: () => ({ url: engineExit ? null : engineUrl, token: LOCAL_TOKEN }),
+      onEngineStatus: (cb) => { cb(true); return () => {} },
+      unitCreds: () => (pairing && hub.online(pairing.unitId) ? { cloudUrl: hub.url, token: DESKTOP_TOKEN, unitId: pairing.unitId, secret: pairing.secret } : null),
+      t: mt,
+      notify: (n) => { const rec = { ...n, at: Date.now(), closed: false }; notes.push(rec); return { close() { rec.closed = true }, onClick() {} } },
+      openSession: () => {},
+      log: (m) => log(m),
+      now: () => Date.now() + skew,
+      setTimeout: (fn, ms) => (ms > 45_000 ? setTimeout(() => { skew += ms - 1500; fn() }, 1500) : setTimeout(fn, ms)),
+      clearTimeout: (h) => clearTimeout(h),
+    })
+    delivery.start()
+  }
+
   /** 只读打开引擎 state.db(better-sqlite3 借 tangu-agent 的依赖)。 */
   function db() {
     const Database = require(path.join(GENESIS, 'tangu-agent/node_modules/better-sqlite3'))
@@ -173,12 +197,13 @@ async function startRemoteWorld(o) {
 
   return {
     out, home, workspace, sandboxDir, userData, engineLog, engineUrl, engineApi,
-    hub, unitWeb, unitHost, remoteSessions, confirms,
+    hub, unitWeb, unitHost, remoteSessions, confirms, delivery, notes,
     USER, JWT_SECRET, DESKTOP_TOKEN, PHONE_TOKEN, LOCAL_TOKEN, REMOTE_MARK, DESKTOP_UNIT,
     get pairing() { return pairing },
     db,
     engineAlive: () => !engineExit,
     async close() {
+      try { delivery?.stop() } catch { /* ignore */ }
       try { unitHost.stop() } catch { /* ignore */ }
       try { await unitWeb.close() } catch { /* ignore */ }
       try { hub.close() } catch { /* ignore */ }

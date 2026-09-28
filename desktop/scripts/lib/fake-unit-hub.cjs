@@ -136,7 +136,7 @@ async function startFakeUnitHub(o) {
   const channels = new Map() // unitId → res
   const pending = new Map() // did → { unitId, res, path, timer, at }
   const streams = new Set() // 在途流式回包 { did, path, client, up, startedAt, cut(reason) }
-  const ledger = { proxy: [], brain: [], cuts: [], requests: [], memoryWrites: [], unknown: [] }
+  const ledger = { proxy: [], brain: [], cuts: [], requests: [], memoryWrites: [], unknown: [], attention: [] }
   const cfg = {
     streamCut: { totalMs: 60 * 60_000, idleMs: 15 * 60_000, ...(o.streamCut || {}) },
     negctl: { ...(o.negctl || {}) },
@@ -343,6 +343,16 @@ async function startFakeUnitHub(o) {
         u2.caps = { engine: b.engine ?? null, tools: Array.isArray(b.tools) ? b.tools : [] }
         u2.capsAt = new Date().toISOString()
         return json(res, 200, { ok: true, caps: u2.caps, capsAt: u2.capsAt, capsLive: channels.has(u2.id) })
+      }
+      // 待批提醒(K3,server routes/user.ts 末段):双闸 + 仅 desktop;这里只记账(原样请求体键),不投收件箱
+      if ((m = /^\/api\/units\/([^/]+)\/attention$/.exec(p)) && req.method === 'POST') {
+        const u2 = ownUnitWithSecret(req, res, m[1], user); if (!u2) return
+        if ((u2.kind || 'desktop') !== 'desktop') return json(res, 403, { code: 'UNIT_KIND_NOT_ALLOWED' })
+        const raw = (await readRaw(req)).toString('utf8')
+        let b = null
+        try { b = JSON.parse(raw) } catch { /* 记坏体 */ }
+        ledger.attention.push({ at: Date.now(), unit: u2.id, raw, body: b })
+        return json(res, 200, { ok: true })
       }
       if ((m = /^\/api\/units\/([^/]+)$/.exec(p)) && req.method === 'DELETE') {
         const u2 = ownUnit(req, res, m[1], user); if (!u2) return
