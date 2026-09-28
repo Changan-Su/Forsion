@@ -634,8 +634,11 @@ export interface AppState {
    *  要把 token 再解析回来,拖到「工作区根目录下的裸文件名」这类无分隔符路径就认不出了)。
    *  seq 让连拖同一条也能触发。 */
   draftRefs: { refs: ChatRef[]; seq: number } | null
-  /** steer 等待区:run 跑动中发出的消息先等在这里,引擎 turn_boundary 注入后才进对话(id=引擎 userMessageId)。 */
-  steerPendingBySession: Record<string, Array<{ id: string; text: string; attachments?: Attachment[]; localOnly?: boolean }>>
+  /** steer 等待区:run 跑动中发出的消息先等在这里,引擎 turn_boundary 注入后才进对话(id=引擎 userMessageId)。
+   *  localOnly = 排队项(Codex 同款):/compact、/refine 这类只能在 run 之间执行的命令,以及排在它们后面发的消息。
+   *  不进引擎,本轮结束(或压缩完成)后按先后逐条执行 —— 见 queueAfterRun / drainQueued。
+   *  compact = 这条是压缩命令(显式存,不从正文反推:正文恰好是「/compact」的普通消息照样当消息发)。 */
+  steerPendingBySession: Record<string, Array<QueueItem>>
   /** ↑ 历史召回的补充池:steer 消息**入队即记**(类 pi addToHistory-on-enqueue),被删/被撤回后仍能从 ↑ 找回。 */
   steerSentBySession: Record<string, string[]>
   /** run 终结时未送达的插话回填输入框(per-session,防串会话;ChatView 并进 seedText 通道)。 */
@@ -731,7 +734,7 @@ export interface AppState {
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
   /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
   removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
-  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
+  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
@@ -745,7 +748,7 @@ export interface AppState {
    *  'conversation'=只截断该消息及之后的对话(原文回填输入框,不自动重发),'both'=两者。 */
   rewindTo(messageId: string, mode: 'code' | 'conversation' | 'both', sessionId?: string | null): Promise<void>
   /** instructions = `/compact <focus>`:本次摘要的一次性关注点(引擎 Additional focus),不落配置。 */
-  compact(sessionId?: string | null, instructions?: string): Promise<void>
+  compact(sessionId?: string | null, instructions?: string, fromQueue?: boolean): Promise<void>
   /** 记下「打开该会话后滚到这条消息」(内容级搜索的命中项);打开会话本身由调用方走既有 onSelect/openSession。
    *  ⚠️ 不在 store 里直接调 openSession:sessionNav 依赖 store,反向 import 会成环。 */
   setJumpTarget(sessionId: string, messageId?: string): void
@@ -1488,10 +1491,11 @@ export const useApp = create<AppState>((set, get) => ({
         {
           // 计划「批准并自动开始」:**先**消费本 run 的标记(endRun 会兜底清掉一切终结 run 的标记),
           // 再 endRun 清 running,最后发 kickoff(此刻无活跃 run → 正常起新 run 而非误走 steer)。
+          // kickoff 也走排队:endRun 按先后执行排队项,排在用户先前排的 /compact 等之后,不与它们抢跑。
           const autoKick = planAutoStart.delete(runId)
           expireRunPrompts(set, sessionId, runId)
+          if (autoKick) queueAfterRun(set, sessionId, { text: t('plan.autoKickoff') })
           endRun(set, get, sessionId, runId)
-          if (autoKick) void get().send(t('plan.autoKickoff'), [], undefined, undefined, undefined, sessionId)
         }
         checkQuotaExhausted(get().toast, get().tr)
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
@@ -2495,7 +2499,7 @@ export const useApp = create<AppState>((set, get) => ({
     })
     persistDeskSoon()
   },
-  send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
+  send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue) => {
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
@@ -2604,6 +2608,15 @@ export const useApp = create<AppState>((set, get) => ({
       } catch (e: any) { get().toast(t('app.workspaceUploadFail', { e: e?.message || e }), true) }
     }
     const activeRunId = get().runningBySession[sessionId]
+    // 排队(先于 steer 判):队里已有东西 / 压缩或排队消息在途 / 运行中的 /refine(引擎只在 run 开头认它)→ 排到队尾,保住先后。
+    // 空闲时队里还有(上一条排队消息没发出去)也走队:入队即试着取,顺带重试卡住的队首。
+    // ponytail: 排队消息只带正文 + 附件(同 steer),@ 提及 / 技能钉选不随队。
+    if (!fromQueue && (queueBusy(get(), sessionId) || (activeRunId && /^\/refine(\s|$)/i.test(text)))) {
+      queueAfterRun(set, sessionId, { text, attachments })
+      set((s) => ({ steerSentBySession: { ...s.steerSentBySession, [sessionId]: [...(s.steerSentBySession[sessionId] || []), text] } }))
+      drainQueued(get, set, sessionId)
+      return true
+    }
     if (activeRunId) {
       try {
         const sr = await steerRun(get().cfg, activeRunId, { message: text, attachments })
@@ -2666,7 +2679,7 @@ export const useApp = create<AppState>((set, get) => ({
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     const runId = get().runningBySession[sid]
-    if (!runId || !(get().steerPendingBySession[sid] || []).length || get().stoppingBySession[sid]) return
+    if (!runId || !(get().steerPendingBySession[sid] || []).some((p) => !p.localOnly) || get().stoppingBySession[sid]) return
     try {
       const result = await expediteSteer(get().cfg, runId)
       if (result.ok && get().runningBySession[sid] === runId) get().toast(translate('appstore.steerQueued'))
@@ -2826,11 +2839,19 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e: any) { get().toast(t('app.branchFail', { e: e?.message || e }), true) }
   },
 
-  compact: async (targetSessionId, instructions) => {
+  compact: async (targetSessionId, instructions, fromQueue) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     if (get().compactingBySession[sid] !== undefined) return // 压缩中,别叠第二次
+    // 运行中 / 队里有东西 / 排队消息在途:排进等待区,轮到再压(引擎不许与在途 run 并发,直发只会 409)
+    if (get().runningBySession[sid] || (!fromQueue && queueBusy(get(), sid))) {
+      const text = instructions ? `/compact ${instructions}` : '/compact'
+      const last = (get().steerPendingBySession[sid] || []).at(-1)
+      if (!(last?.compact && last.text === text)) queueAfterRun(set, sid, { text, compact: true, focus: instructions }) // 只去相邻的重复点击
+      drainQueued(get, set, sid)
+      return
+    }
     const modelId = get().sessions.find((s) => s.id === sid)?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || ''
     const setPct = (pct: number | undefined) =>
       set((st) => ({ compactingBySession: { ...st.compactingBySession, [sid]: pct } }))
@@ -2848,9 +2869,12 @@ export const useApp = create<AppState>((set, get) => ({
     finally {
       clearInterval(timer)
       setPct(100) // 满格停一拍再撤,别让进度条在半途消失
-      setTimeout(() => set((st) => (st.compactingBySession[sid] === 100
-        ? { compactingBySession: { ...st.compactingBySession, [sid]: undefined } }
-        : {})), 700)
+      setTimeout(() => {
+        set((st) => (st.compactingBySession[sid] === 100
+          ? { compactingBySession: { ...st.compactingBySession, [sid]: undefined } }
+          : {}))
+        drainQueued(get, set, sid)
+      }, 700)
     }
   },
 
@@ -3359,9 +3383,11 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   uiActionOwnedRuns.delete(runId) // G2 归属标记随 run 终结释放(同 planAutoStart,统一在此清理)
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
+  let ended = false
   set((s) => {
     // 迟到的旧 run 终结事件不碰任何状态(尤其不许动等待区——新 run 的插话还排着队)。
     if (s.runningBySession[sessionId] !== runId) return {}
+    ended = true
     const next = { ...s.runningBySession }
     delete next[sessionId]
     // run 终结时还没被注入的插话:引擎侧队列已丢,回填该会话的输入框(类 pi「Esc=先取回队列再中止」)。
@@ -3386,6 +3412,51 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     saveUnread(next)
     set(() => ({ unread: next }))
   }
+  // 排队项不看本轮怎么结束的(完成 / 出错 / 用户停止)都照跑:它们是用户显式排的、在等待区可见可删;
+  // 停下当前 run 往往正是为了让排着的 /compact 早点跑。只在本次真的收了这条 run 时取:重复 / 迟到的终结
+  // 不取,否则上一条排队消息的 startRun 还在途(running 未置),会再弹出一条并发起跑。
+  if (ended) drainQueued(get, set, sessionId)
+}
+
+type SetFn = (fn: (s: AppState) => Partial<AppState>) => void
+export type QueueItem = { id: string; text: string; attachments?: Attachment[]; localOnly?: boolean; compact?: boolean; focus?: string }
+
+/** drainQueued 发出的 send 还在途(startRun 未回,running 还没置上)的会话:这段时间新来的也得排队,不许抢跑。 */
+const queueDispatching = new Set<string>()
+
+/** 新来的消息 / 命令是否必须排队:队里已有排队项、压缩中、或排队消息正在发出。 */
+function queueBusy(st: AppState, sessionId: string): boolean {
+  return queueDispatching.has(sessionId) || st.compactingBySession[sessionId] !== undefined
+    || (st.steerPendingBySession[sessionId] || []).some((p) => p.localOnly)
+}
+
+/** 进排队(localOnly):不进引擎,等本轮结束 / 压缩完成后由 drainQueued 逐条执行。 */
+function queueAfterRun(set: SetFn, sessionId: string, item: Omit<QueueItem, 'id' | 'localOnly'>, front = false): void {
+  const q: QueueItem = { ...item, id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, localOnly: true }
+  set((s) => {
+    const list = s.steerPendingBySession[sessionId] || []
+    return { steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: front ? [q, ...list] : [...list, q] } }
+  })
+}
+
+/** 空闲(无 run、不在压缩、没有在途的排队消息)时取队首一条执行;下一条等这条的 run 收尾(endRun)或压缩完成再取。 */
+function drainQueued(get: () => AppState, set: SetFn, sessionId: string): void {
+  const st = get()
+  if (st.runningBySession[sessionId] || st.compactingBySession[sessionId] !== undefined || queueDispatching.has(sessionId)) return
+  const item = (st.steerPendingBySession[sessionId] || []).find((p) => p.localOnly)
+  if (!item) return
+  set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== item.id) } }))
+  if (item.compact) { void get().compact(sessionId, item.focus, true); return }
+  queueDispatching.add(sessionId)
+  void get().send(item.text, item.attachments || [], undefined, undefined, undefined, sessionId, true)
+    .catch(() => false)
+    .then((ok) => {
+      queueDispatching.delete(sessionId)
+      // 没发出去(网络 / 额度;send 已 toast):放回队首,后面的不越过它。下一次发送 / 压缩会连它一起重试,也可 × 掉。
+      if (!ok) queueAfterRun(set, sessionId, { text: item.text, attachments: item.attachments }, true)
+      // 发出去了:run 已起,endRun 再取下一条;这里再 drain 一次只为兜住「在途期间 run 已经结束」
+      else drainQueued(get, set, sessionId)
+    })
 }
 
 // dev-only 驱动入口:真机 live 台架(scripts/plan-live.e2e.cjs)靠它连上**你手里已经跑着的**
