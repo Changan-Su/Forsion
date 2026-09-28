@@ -104,7 +104,7 @@ import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
-import { taskCheckboxPlugin } from './taskList'
+import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
@@ -940,6 +940,7 @@ export function MilkdownInner({
       .use(commonmarkWithIndent)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
+      .use(emptyTaskRemark) // Obsidian 的空待办 `- [ ]`:GFM 读成字面 `[ ]`,这里补认成空待办(R-10b,见 ./taskList)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。
