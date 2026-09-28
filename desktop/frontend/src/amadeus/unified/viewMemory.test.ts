@@ -9,6 +9,7 @@ import {
   writeNoteLocked,
   writeNoteSurfaceMode,
 } from './viewMemory'
+import { recallViewport, rememberViewport } from './canvasKit/viewport'
 
 describe('Amadeus note view memory', () => {
   beforeEach(() => {
@@ -33,6 +34,14 @@ describe('Amadeus note view memory', () => {
     remapNoteViewMemory('/vault', 'old.md', 'new.md')
     expect(readNoteSurfaceMode('/vault', 'new.md')).toBe('canvas')
     expect(readDocumentScroll('/vault', 'new.md')).toBe(712)
+  })
+
+  // V-15:画布视口的会话记忆与模式 / 滚动同一个键(库 + 路径),改名跟着走。
+  it('keys the canvas viewport by vault and carries it across rename', () => {
+    rememberViewport(noteMemoryId('/a', 'cv.md'), { x: -50, y: 98, z: 1 })
+    expect(recallViewport(noteMemoryId('/b', 'cv.md'))).toBeUndefined()
+    remapNoteViewMemory('/a', 'cv.md', 'cv2.md')
+    expect(recallViewport(noteMemoryId('/a', 'cv2.md'))).toEqual({ x: -50, y: 98, z: 1 })
   })
 
   // C-07 锁定页面:本机视图状态(不写笔记),按库根隔离、改名跟着走、解锁即删键。

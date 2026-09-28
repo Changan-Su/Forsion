@@ -49,6 +49,7 @@ import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnab
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
+import { noteMemoryId } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
 
 registerMessages({
@@ -364,6 +365,8 @@ function CanvasMiniMap({
 
 export interface CanvasStageProps {
   path: string
+  /** 所在智库根:视口记忆的键 = noteMemoryId(库, path)(V-15;只按相对 path 作键,两个库的同名笔记会串)。 */
+  vaultRoot?: string | null
   active: boolean
   getView: () => EditorView | null
   /** 主卡几何(舞台坐标)。 */
@@ -407,12 +410,14 @@ export interface CanvasStageProps {
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
   const { t } = useI18n()
-  const [vp, setVp] = useState<Viewport>(() => recallViewport(path) ?? { x: 0, y: 0, z: 1 })
+  /** 会话级视口记忆的键(V-15):库 + 路径,与文档滚动 / 模式记忆同一个口径(viewMemory 顶注)。 */
+  const vpKey = noteMemoryId(vaultRoot, path)
+  const [vp, setVp] = useState<Viewport>(() => recallViewport(vpKey) ?? { x: 0, y: 0, z: 1 })
   const vpRef = useRef(vp)
   vpRef.current = vp
   /** 本机画布 chrome 偏好：默认显示，HUD 开关即时生效并跨页面/重启记忆，不写进笔记。 */
@@ -638,10 +643,12 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   // ⚠️「这次要不要自动 fit」必须在**渲染期**定,不能留到 effect 里查 viewports ——
   //   下面那个存视口的 effect 声明在前、也就先跑,查的时候 viewports 里早就有本页了,
   //   自动 fit 于是永远不触发:实测现象是打开画布只看得见主卡,卡片全在视野外(截图才发现的)。
-  const shouldFit = useRef(!recallViewport(path))
+  const shouldFit = useRef(!recallViewport(vpKey))
+  // ⚠️ 只在**画布态**记(V-15):舞台在文档模式也常驻挂着,不 gate 的话以文档模式打开一篇就先存下
+  //    初始的 {0,0,1},下次再挂载时 recall 命中 → shouldFit=false → 进画布停在原点、再也不自动适应。
   useEffect(() => {
-    rememberViewport(path, vp)
-  }, [path, vp])
+    if (active) rememberViewport(vpKey, vp)
+  }, [vpKey, vp, active])
   /** Canvas 的 viewport 走 transform，不会触发 selectionchange / scroll。编辑态下必须在 DOM 提交后、
    *  浏览器绘制前把 body 下的丝滑 caret 硬同步到新 Range；否则它只能靠 100ms 轮询追手。 */
   useLayoutEffect(() => {

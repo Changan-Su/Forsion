@@ -2504,6 +2504,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               可用的能力,不是某种文件类型的特权;点进去只是换视角,不写盘(见 toggleCanvas)。 */}
           <CanvasStage
             path={path}
+            vaultRoot={vaultRoot}
             active={canvasOn}
             readOnly={readOnly}
             revealSelection={canvasReveal}

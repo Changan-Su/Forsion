@@ -88,6 +88,7 @@
 //   —— 波次 2(评审 2026-09-27 画布打磨)在 wave2();`UCANVAS_ONLY=w2` 只跑这一段(调试 / 负对照用)——
 //   C93 Frame 里用卡片工具 / 双击建卡:留在框内,只避让卡片不避让 Frame(V-02)
 //   C94 开卷自动适应与「适应内容」把 Frame(连同框外上沿的标题条)框进视野(V-03)
+//   C95 画布视口的会话记忆按「库 + 路径」作键、只在画布态记(V-15)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -119,6 +120,8 @@ const record = (name, ok, detail) => {
 async function open(browser, seed, keepSurfaceMemory = false) {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  // 资源计时缓冲默认 250 条,dev 下几百个模块早溢出 —— modUrl 要靠它找「应用实际加载的那个模块 URL」。
+  await p.addInitScript(() => performance.setResourceTimingBufferSize(10000))
   if (!keepSurfaceMemory) {
     await p.addInitScript(() => {
       for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -233,6 +236,13 @@ const stageToClient = (pg, x, y) => pg.evaluate(([x, y]) => {
   return { x: r.left + x * m.a, y: r.top + y * m.d }
 }, [x, y])
 const anchorsOf = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-ucard')].map((c) => c.dataset.anchor))
+/** 页面里 import 应用**实际加载的那个**模块(vite 给热更过的模块带 `?t=`,裸路径拿到的是另一个实例,
+ *  改它的 store 应用根本看不见)。src = `/src/...` 源码路径。 */
+const importLive = (pg, src, fn) => pg.evaluate(async ({ src, fn }) => {
+  const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => new URL(n).pathname === src) ?? src
+  const m = await import(url)
+  return new Function('m', `return (${fn})(m)`)(m)
+}, { src, fn: fn.toString() })
 
 /** 波次 2(评审 2026-09-27 画布打磨)的格子。默认跟在全套后面跑;`UCANVAS_ONLY=w2` 只跑这里。 */
 async function wave2(browser) {
@@ -308,6 +318,63 @@ async function wave2(browser) {
   const all94 = (v) => v.frame && v.bar
   record('C94 开卷自动适应与「适应内容」都把 Frame 连同标题条框进视野(只有 Frame / Frame 里有小矩形两种)',
     Object.values(out94).every((r) => all94(r.opened) && all94(r.fitted) && !all94(r.panned)), JSON.stringify(out94))
+
+  // ── C95 画布视口记忆:库 + 路径作键,文档模式挂载不写(V-15)─────────────────────────
+  //  修前:rememberViewport(path, vp) 按相对路径作键且不看 active —— ① 以文档模式打开一篇,舞台常驻也存下
+  //  {0,0,1},切走再回来点「画布」停在原点、不再自动适应;② 库 A 平移过的 Unified.md,换到库 B 打开同名笔记,
+  //  沿用 A 的视口,B 的内容全在视野外。「重启就丢」是会话态设计,不测。
+  const mk95 = (cards, mode) => [
+    '---', 'amadeus_schema: amadeus.page/4',
+    `amadeus_canvas: ${JSON.stringify({ v: 1, ...(mode ? { mode } : {}), main: { x: 0, y: 0, w: 400 }, cards })}`,
+    '---', '', '# 视口', '', '主卡。', '',
+    ...cards.flatMap((c) => [`<!-- a ${c.ref} -->`, '', `卡 ${c.ref}`, '', `<!-- /a ${c.ref} -->`, '']),
+  ].join('\n')
+  const SEED95A = mk95([{ ref: 'k1', x: 480, y: 0, w: 260 }], 'canvas')
+  const SEED95B = mk95([{ ref: 'b1', x: 2600, y: 1800, w: 260 }, { ref: 'b2', x: 3000, y: 2200, w: 260 }], 'canvas')
+  const SEED95C = mk95([{ ref: 'c1', x: 2600, y: 1800, w: 260 }], null) // 无 mode → 文档模式打开
+  const vis95 = (pg, a) => pg.evaluate((a) => {
+    const c = document.querySelector(`.amx-ucard[data-anchor="${a}"]`); const st = document.querySelector('.amx-stage')
+    if (!c || !st) return false
+    const r = c.getBoundingClientRect(), q = st.getBoundingClientRect()
+    return r.right > q.left && r.left < q.right && r.bottom > q.top && r.top < q.bottom
+  }, a)
+  const vp95 = (pg) => pg.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f), z: +m.a.toFixed(3) } })
+  const setVault95 = (pg, root) => importLive(pg, '/src/amadeus/store/pageStore.ts',
+    `(m) => { m.usePageStore.setState({ vaultRoot: ${JSON.stringify(root)} }); return m.usePageStore.getState().vaultRoot }`)
+  const inCanvas95 = (pg) => pg.evaluate(() => { const st = document.querySelector('.amx-stage'); return !!st && !st.classList.contains('amx-stage-off') })
+  // ① 同库:文档模式首开 → 切走 → 切回 → 点「画布」= 自动适应(c1 在远处,不适应就看不见)
+  const p95 = await open(browser, SEED95C)
+  await p95.waitForTimeout(800)
+  const docFirst95 = !(await inCanvas95(p95))
+  await p95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await p95.waitForTimeout(700)
+  await p95.evaluate(() => window.__upage.switchFile('Unified.md')); await p95.waitForTimeout(900)
+  await p95.click('.amx-modeseg button:nth-child(3)'); await p95.waitForTimeout(900)
+  const t1 = { docFirst: docFirst95, inCanvas: await inCanvas95(p95), vp: await vp95(p95), c1: await vis95(p95, 'c1') }
+  await p95.close()
+  // ② 跨库:库 A 平移 → 库 B 同名笔记开卷适应;③ 回库 A:A 的视口还在(记忆本身没坏)
+  const q95 = await open(browser, SEED95A)
+  await q95.waitForTimeout(900)
+  const vaultA = await setVault95(q95, '/vault-A')
+  await q95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await q95.waitForTimeout(600)
+  await q95.evaluate((t) => window.__upage.switchFile('Unified.md', t), SEED95A); await q95.waitForTimeout(1100)
+  await q95.keyboard.down('Alt'); await q95.mouse.move(700, 800); await q95.mouse.down()
+  for (let i = 1; i <= 10; i++) await q95.mouse.move(700 - 40 * i, 800 - 30 * i)
+  await q95.mouse.up(); await q95.keyboard.up('Alt'); await q95.waitForTimeout(300)
+  const vA95 = await vp95(q95)
+  await q95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await q95.waitForTimeout(600)
+  await setVault95(q95, '/vault-B')
+  await q95.evaluate((t) => window.__upage.switchFile('Unified.md', t), SEED95B); await q95.waitForTimeout(1200)
+  const t2 = { vaultA, vA: vA95, vB: await vp95(q95), b1: await vis95(q95, 'b1'), b2: await vis95(q95, 'b2') }
+  await q95.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n\n正文。\n')); await q95.waitForTimeout(600)
+  await setVault95(q95, '/vault-A')
+  await q95.evaluate((t) => window.__upage.switchFile('Unified.md', t), SEED95A); await q95.waitForTimeout(1100)
+  t2.backA = await vp95(q95)
+  await q95.close()
+  record('C95a 文档模式先开过的笔记,回来再切画布照样开卷适应(文档态不写视口记忆)',
+    t1.docFirst && t1.inCanvas && t1.c1 && JSON.stringify(t1.vp) !== JSON.stringify({ x: 0, y: 0, z: 1 }), JSON.stringify(t1))
+  record('C95b 视口记忆按库隔离:库 B 同名笔记开卷适应(不沿用库 A 的平移);回库 A 平移还在',
+    t2.vaultA === '/vault-A' && JSON.stringify(t2.vB) !== JSON.stringify(t2.vA) && t2.b1 && t2.b2 && JSON.stringify(t2.backA) === JSON.stringify(t2.vA),
+    JSON.stringify(t2))
 }
 
 async function main() {
