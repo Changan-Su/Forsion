@@ -53,9 +53,20 @@ export function textBeforeCursor($from: ResolvedPos): string {
   return $from.parent.textBetween(0, $from.parentOffset, undefined, '￼')
 }
 
+/** 中文输入法直接出的全角标点 → 半角触发符(K-14):`【】`/`》`/`｜`/`···`/`￥￥`/`＃`。
+ *  `、`(顿号,中文键盘上反斜杠那颗键)故意不映射。逐字一对一换算,长度不变 —— 消费区间照旧按原文算。 */
+const FULLWIDTH_TRIGGER: Record<string, string> = { '【': '[', '】': ']', '》': '>', '｜': '|', '·': '`', '￥': '$', '＃': '#' }
+
+/** 只有**整行恰好就是触发符**时才换算(matchTrigger 的正则全是整串锚定,换完不命中就等于没换);
+ *  `1。` 单独限定成「纯数字 + 句号」,正文里的句号一概不碰。 */
+function halfWidthTrigger(b: string): string {
+  if (/^\d{1,9}。$/.test(b)) return `${b.slice(0, -1)}.`
+  return b.replace(/[【】》｜·￥＃]/g, (c) => FULLWIDTH_TRIGGER[c] ?? c)
+}
+
 /** 识别「光标前文本恰好是行首触发符」(空格尚未落字时调用;消费长度 = before.length)。 */
 export function matchTrigger(before: string): Trigger | null {
-  const b = before.replace(/\u00A0/g, ' ') // 行尾空格在 contenteditable 中是 nbsp("[ ]" 的空格即是)
+  const b = halfWidthTrigger(before.replace(/\u00A0/g, ' ')) // 行尾空格在 contenteditable 中是 nbsp("[ ]" 的空格即是)
   let m: RegExpExecArray | null
   if ((m = /^(#{1,6})$/.exec(b))) return { kind: 'heading', level: m[1].length }
   if (/^[-*+]$/.test(b)) return { kind: 'bullet' }

@@ -737,6 +737,30 @@ async function main() {
         await page.close()
       }
     }
+
+    // K-14:中文输入法直出的全角标点(逐字 insertText,不经组字)整行恰好是触发符时,空格 / 回车照样触发。
+    if (want('K14')) {
+      for (const [chars, key, expect] of [
+        [['【', '】'], ' ', /^paragraph:"前段。" \/ bullet_list \/ +list_item\[ \] \/ +paragraph:"X"$/],
+        [['＃', '＃'], ' ', /^paragraph:"前段。" \/ heading2:"X"$/],
+        [['1', '。'], ' ', /^paragraph:"前段。" \/ ordered_list \/ +list_item \/ +paragraph:"X"$/],
+        [['·', '·', '·'], 'Enter', /^paragraph:"前段。" \/ code_block:"X"$/],
+        [['、'], ' ', /^paragraph:"前段。" \/ paragraph:"、 X"$/], // 顿号不映射(对照)
+      ]) {
+        const page = await open(browser, '前段。\n')
+        const cdp = await page.context().newCDPSession(page)
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        for (const ch of chars) await cdp.send('Input.insertText', { text: ch })
+        await page.waitForTimeout(60)
+        await page.keyboard.press(key === ' ' ? 'Space' : key)
+        await page.keyboard.type('X')
+        await page.waitForTimeout(200)
+        const s = await shape(page)
+        check(`K14 全角 ${JSON.stringify(chars.join(''))} + ${key === ' ' ? '空格' : '回车'}`, expect.test(s), s)
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }

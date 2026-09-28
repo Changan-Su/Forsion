@@ -26,6 +26,26 @@ describe('matchTrigger(光标前文本 → 块触发)', () => {
   it('nbsp 空格("[ ]" 在 contenteditable 里的真实形态)也识别', () => {
     expect(matchTrigger('[ ]')).toEqual({ kind: 'task', checked: false })
   })
+  it('全角标点(中文输入法直出)整行恰好是触发符时照样触发(K-14)', () => {
+    expect(matchTrigger('【】')).toEqual({ kind: 'task', checked: false })
+    expect(matchTrigger('【x】')).toEqual({ kind: 'task', checked: true })
+    expect(matchTrigger('》')).toEqual({ kind: 'fold' })
+    expect(matchTrigger('｜')).toEqual({ kind: 'quote' })
+    expect(matchTrigger('···')).toEqual({ kind: 'code', lang: '' })
+    expect(matchTrigger('···py')).toEqual({ kind: 'code', lang: 'py' })
+    expect(matchTrigger('￥￥')).toEqual({ kind: 'math' })
+    expect(matchTrigger('＃')).toEqual({ kind: 'heading', level: 1 })
+    expect(matchTrigger('＃＃＃')).toEqual({ kind: 'heading', level: 3 })
+    expect(matchTrigger('1。')).toEqual({ kind: 'ordered', order: 1 })
+    expect(matchTrigger('12。')).toEqual({ kind: 'ordered', order: 12 })
+  })
+  it('全角只在整行恰好是触发符时换算;顿号不映射', () => {
+    expect(matchTrigger('、')).toBeNull()
+    expect(matchTrigger('见【】')).toBeNull()
+    expect(matchTrigger('好。')).toBeNull()
+    expect(matchTrigger('1。2')).toBeNull()
+    expect(matchTrigger('＃标题')).toBeNull()
+  })
   it('非行首触发符/夹杂内容一律不触发', () => {
     expect(matchTrigger('a#')).toBeNull()
     expect(matchTrigger('# x')).toBeNull()
