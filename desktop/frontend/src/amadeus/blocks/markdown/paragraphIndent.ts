@@ -20,6 +20,7 @@ import { hardbreakClearMarkKeepAttrs, hardbreakWithHtmlSchema, inlineBrRemark, k
 import { mathEscapeRemark } from './mathLivePreview'
 import { linkWithRefSchema, literalRawFromDom, pristineRaw, refDefinitionsRemark } from './refDefinitions'
 import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
+import { listFormatPlugins } from './listFormat'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -198,8 +199,11 @@ const presetWithReplacements = commonmark.map((p) =>
   : (p as unknown) === (linkSchema.ctx as unknown) ? linkWithRefSchema.ctx
   : commonmarkMarkRuleReplacements.has(p) ? commonmarkMarkRuleReplacements.get(p) as typeof p // I-01:带锚 + 终点贴光标
   : p)
-export const commonmarkWithIndent = presetWithReplacements.flatMap((p) =>
-  (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p])
+export const commonmarkWithIndent = [
+  ...presetWithReplacements.flatMap((p) =>
+    (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p]),
+  ...listFormatPlugins, // D-05:列表 spread 收布尔 + 原列表符写回沿用(./listFormat)
+]
 
 /** 缩进档的适用面:列表项/引用块的**任意深度祖先**内一律不适用 —— 列表是 sink/lift 的地盘;
  *  引用块里的段落缩进 md 表示不了(序列化成 `> &#9;` 垃圾前缀,评审 P2),不给设。

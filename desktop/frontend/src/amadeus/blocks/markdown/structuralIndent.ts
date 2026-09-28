@@ -7,10 +7,11 @@ import { $remark } from '@milkdown/kit/utils'
 import { NodeSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
+import { listBullet } from './listFormat'
 
 const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
-type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number }; ordered?: boolean; spread?: boolean; start?: number }
+type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number; amadeusBullet?: string }; ordered?: boolean; spread?: boolean; start?: number }
 const MARKER = /^<!-- amadeus-indent:([1-8]) -->$/
 const MARKED_TYPES = new Set(['heading', 'blockquote', 'list'])
 
@@ -68,17 +69,19 @@ export const indentedBulletListSchema = bulletListSchema.extendSchema((prev) => 
   const base = prev(ctx)
   return {
     ...base,
-    attrs: { ...(base.attrs ?? {}), indent: { default: 0 } },
-    parseDOM: [{ tag: 'ul', getAttrs: (dom) => ({ spread: (dom as HTMLElement).dataset.spread === 'true', indent: clampIndent(Number((dom as HTMLElement).dataset.indent)) }) }],
+    // bullet:源文里的原列表符(D-05 / 拍板 #17「记住原标记、写回沿用」,见 ./listFormat);null = 缺省 `*`。
+    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, bullet: { default: null } },
+    parseDOM: [{ tag: 'ul', getAttrs: (dom) => ({ spread: (dom as HTMLElement).dataset.spread === 'true', indent: clampIndent(Number((dom as HTMLElement).dataset.indent)), bullet: listBullet((dom as HTMLElement).dataset.bullet) }) }],
     toDOM: (node) => {
       const indent = clampIndent(node.attrs.indent as number)
-      return ['ul', { ...ctx.get(bulletListAttr.key)(node), 'data-spread': node.attrs.spread, ...(indent ? { 'data-indent': indent } : {}) }, 0]
+      const bullet = listBullet(node.attrs.bullet)
+      return ['ul', { ...ctx.get(bulletListAttr.key)(node), 'data-spread': node.attrs.spread, ...(indent ? { 'data-indent': indent } : {}), ...(bullet ? { 'data-bullet': bullet } : {}) }, 0]
     },
     parseMarkdown: {
       match: base.parseMarkdown.match,
       runner: (state, node, type) => {
         const spread = node.spread != null ? `${node.spread}` : 'false'
-        state.openNode(type, { spread, indent: markdownBlockIndent(node as MdNode) }).next(node.children).closeNode()
+        state.openNode(type, { spread, indent: markdownBlockIndent(node as MdNode), bullet: listBullet((node as MdNode).data?.amadeusBullet) }).next(node.children).closeNode()
       },
     },
     toMarkdown: {
@@ -86,7 +89,9 @@ export const indentedBulletListSchema = bulletListSchema.extendSchema((prev) => 
       runner: (state, node) => {
         const indent = clampIndent(node.attrs.indent as number)
         if (indent) state.addNode('html', undefined, indentMarker(indent))
-        base.toMarkdown.runner(state, node)
+        // 不走 preset 的 runner:它只交 ordered/spread,原列表符带不过去(spread 收布尔在 listFormat 的 handler 里)。
+        const bullet = listBullet(node.attrs.bullet)
+        state.openNode('list', undefined, { ordered: false, spread: node.attrs.spread, ...(bullet ? { amadeusBullet: bullet } : {}) }).next(node.content).closeNode()
       },
     },
   }

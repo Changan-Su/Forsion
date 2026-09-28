@@ -51,8 +51,8 @@ const V = 'verbatim', W = 'whitelist', S = 'stable', P = 'pending'
 const CASES = [
   // ── d18-rt 的 21 份(verify-integrity-3/d18-rt.cjs)────────────────────────────────
   { id: 'd18.ordered_tight', bucket: V, md: `${M}\n\n1. a\n2. b\n` },
-  { id: 'd18.list_dash_tight', bucket: P, why: 'D-05(0b):`-`→`*` 是既定,但紧凑变松散是 bug', md: `${M}\n\n- a\n- b\n  - c\n` },
-  { id: 'd18.tasks_dash', bucket: P, why: 'D-05(0b)', md: `${M}\n\n- [ ] todo\n- [x] done\n` },
+  { id: 'd18.list_dash_tight', bucket: V, md: `${M}\n\n- a\n- b\n  - c\n` },
+  { id: 'd18.tasks_dash', bucket: V, md: `${M}\n\n- [ ] todo\n- [x] done\n` },
   { id: 'd18.ordered_all1', bucket: P, why: 'D-18(0b):`1. 1. 1.` 被重编号', md: `${M}\n\n1. a\n1. b\n1. c\n` },
   { id: 'd18.table', bucket: P, why: 'D-18(0b):表格对齐重排(tablePipeAlign)', md: `${M}\n\n| A | B |\n|---|---|\n| 1 | 2 |\n` },
   { id: 'd18.setext', bucket: P, why: 'D-18(0b):setext→ATX', md: `${M}\n\nTitle\n=====\n\ntext\n` },
@@ -70,7 +70,15 @@ const CASES = [
   { id: 'd18.mark_html', bucket: P, why: 'D-18(0b):`<mark>` 被补 style', md: `${M}\n\nsome <mark>hi</mark> text\n` },
   { id: 'd18.no_trailing_nl', bucket: P, why: 'D-18(0b):自动补文末换行', md: `${M}\n\nlast` },
   { id: 'd18.bom', bucket: P, why: 'D-01(0a 另一包:BOM)', md: `\uFEFF${M}\n\npara\n` },
-  { id: 'd18.task_upper_X', bucket: W, why: '附录 A D-05:`[X]`→`[x]` 是规范化;`-`→`*` 列表符(拍板 #17 未改缺省)', md: `${M}\n\n- [X] Done\n`, golden: `${M}Z\n\n* [x] Done\n` },
+  { id: 'd18.task_upper_X', bucket: W, why: '附录 A D-05:`[X]`→`[x]` 是规范化;列表符沿用原文(拍板 #17)', md: `${M}\n\n- [X] Done\n`, golden: `${M}Z\n\n- [x] Done\n` },
+
+  // ── D-05:编辑**列表里**的字 —— 整只列表重新序列化,列表符与紧凑度必须沿用原文(拍板 #17:记住原标记、写回沿用)──
+  { id: 'd05.edit_in_list', bucket: V, md: `- ${M}\n- b\n  - c\n\ntail\n` },
+  { id: 'd05.edit_in_tasks', bucket: V, md: `- [ ] ${M}\n- [x] done\n` },
+  { id: 'd05.edit_plus_nested_star', bucket: V, md: `+ ${M}\n  * b\n+ c\n` },
+  { id: 'd05.edit_loose', bucket: V, md: `- ${M}\n\n- b\n` },
+  { id: 'd05.edit_nested_ordered', bucket: V, md: `1. ${M}\n   1. y\n2. z\n` },
+  { id: 'd05.edit_upper_X', bucket: W, why: '附录 A D-05:被编辑的列表里 `[X]`→`[x]` 仍是规范化', md: `- [X] ${M}\n- [ ] b\n`, golden: `- [x] ${M}Z\n- [ ] b\n` },
 
   // ── D-06:行内 / 单元格 / 列表项里的 `<br>`(verify-rich-1/br.cjs、verify-keyboard-1/v01-br.cjs、d06_br.cjs)──
   { id: 'd06.para', bucket: V, md: `${M}\n\nhello<br>world\n\nOther.\n`, visible: 'hello\nworld' },
