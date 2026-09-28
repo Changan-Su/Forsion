@@ -1006,9 +1006,11 @@ try {
       report = await api('/agent/remote/estop', { method: 'POST', body: JSON.stringify({ source: 'hotkey' }) });
     };
     const ev = await run(session,
-      'Do these two steps in order, using the run_bash tool each time.\n'
-      + '1. Start a long-running background process: call run_bash with background set to true and the command `sleep 600`.\n'
-      + `2. After it has started, call run_bash (not in the background) with exactly: echo ${token} && pwd\n`
+      // 点名 run_background:run_bash 没有 background 参数,旧措辞「run_bash + background:true」让模型改写成 `sleep 600 &`,
+      // 进程不进后台进程注册表、run 在急停前就跑完了(09-28 实测一次)。
+      'Do these two steps in order.\n'
+      + '1. Start a long-running background process: call the run_background tool with the command `sleep 600` (do not use run_bash for this step).\n'
+      + `2. After it has started, call the run_bash tool with exactly: echo ${token} && pwd\n`
       + 'Then reply with only the output of step 2.',
       240_000, {}, 'mobile/live-harness',
       async (p) => {
