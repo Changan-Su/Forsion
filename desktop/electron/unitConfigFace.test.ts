@@ -79,3 +79,11 @@ describe('unitConfigFace:审批档远端只读', () => {
     }
   })
 })
+
+// P1-K2 S1:远端写不了锁状态 —— 急停锁 / 热键不在任何配置面里(真源是主进程独占的 remote-lock.json)。
+describe('配置面 × 远程锁定(P1-K2)', () => {
+  it('UNIT_CONFIG_RW / RO 与偏好键表都不含 remote* / lock / hotkey / estop 类键', () => {
+    const bad = (k: string): boolean => /^remote|lock|hotkey|estop/i.test(k)
+    expect([...UNIT_CONFIG_RW, ...UNIT_CONFIG_RO, ...UNIT_PREFERENCE_KEYS].filter(bad)).toEqual([])
+  })
+})

@@ -31,6 +31,7 @@ import { PRODUCT, type ProductProfile } from './product'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { callerOf, encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
 import { baseTierOnly } from './remoteSessionGate' // P1-K4
+import { lockedEngineAllowed, lockedRequestAllowed, REMOTE_LOCKED_BODY, VAULT_RPC_READ } from './remoteLockGate' // P1-K2
 import type { GateResult, RemoteAccessStatus } from '../shared/remoteSessions' // P1-K4
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
@@ -196,6 +197,9 @@ export interface UnitWebDeps {
     status: (caller: UnitCaller) => RemoteAccessStatus
     request: (caller: UnitCaller) => Promise<RemoteAccessStatus>
   }
+  // P1-K2 ── 急停后的远程锁定(remoteSafety.isLocked,同步内存镜像;每请求现查)。缺省 = 未锁(便携 Unit 不传)。
+  //   锁定时非本机入口只剩读 + 中止(remoteLockGate.ts);工作区主人(projection local)不受影响。
+  remoteLock?: () => boolean
 }
 
 export interface UnitWebHandle {
@@ -446,7 +450,30 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
   }
 
+  /** 请求路径(剥掉 projection 前缀、去 query)—— 顶层锁定闸用;不做 308 之类的副作用,那些仍在下面原位。 */
+  const plainPath = (req: http.IncomingMessage): string => {
+    let u = req.url || '/'
+    if (deps.projection) {
+      const prefix = deps.projection.basePath.replace(/\/$/, '')
+      if (u.startsWith(prefix + '/')) u = u.slice(prefix.length)
+    }
+    return u.split('?')[0]
+  }
+  /** P1-K2:锁状态读不出按锁定(fail closed)。 */
+  const lockedNow = (): boolean => {
+    if (!deps.remoteLock) return false
+    try { return deps.remoteLock() } catch { return true }
+  }
+
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
+    if (!ownerProjection && lockedNow()) {
+      const p = plainPath(req)
+      if (!(p === '/engine' || p.startsWith('/engine/')) && p !== '/vault/rpc' && !lockedRequestAllowed(req.method || 'GET', p)) {
+        json(res, 423, REMOTE_LOCKED_BODY)
+        return
+      }
+    }
     if (await deps.routeRequest?.(req, res)) return
     gc()
     let url = req.url || '/'
@@ -623,7 +650,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (engineRouteAccess(method, target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
       const rc = resolveCaller(req, info) // K1:每请求只调一次(重放表一次性消费)
       if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
-      // K2 插在这里:if (deps.remoteLock?.() && !lockedEngineAllowed(method, target.path)) { json(res, 423, REMOTE_LOCKED_BODY); return }
+      if (lockedNow() && !lockedEngineAllowed(method, target.path)) { json(res, 423, REMOTE_LOCKED_BODY); return } // K2:锁定只剩读 + 中止(先于 K4 闸,R-26)
       const caller = callerOf(info.via, pairInfo(info), rc.caller) // K4:会话档闸(同步;缺省只放基础档)
       const g = deps.remoteAccess ? deps.remoteAccess.gateEngine({ method, path: target.path, via: info.via, caller }) : baseTierOnly(method, target.path)
       if (!g.ok) { json(res, g.status, g.body); return }
@@ -647,6 +674,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
         if (!ownerProjection && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
+        if (!ownerProjection && lockedNow() && !VAULT_RPC_READ.has(ch)) { json(res, 423, REMOTE_LOCKED_BODY); return } // P1-K2:锁定只剩只读通道
         // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);走 body 因为隧道信封不带自定义头;限长防注水。
         const origin = String(body.client || '').slice(0, 64) || null
         try {
