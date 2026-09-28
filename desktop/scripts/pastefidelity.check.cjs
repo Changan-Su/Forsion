@@ -4,6 +4,9 @@
 // 像 markdown 的照旧走 CommonMark(紧凑列表不许变 loose、硬折行的 markdown 段落不许拆行);代码块内粘贴不变;
 // 带 text/html 的走 HTML 那条(不归本分支)。修前:三行地址粘进来显示成一行(磁盘上 `\n` 还在)。
 //
+// G4-04:外部拖入的 text/plain 与粘贴同口径 —— 修前 markdown 被转义成字面 `\-` `\*\*`(粘贴却解析成结构);
+// 单条裸 URL 拖到空段照旧是裸 URL(书签卡);内部附件引用粘贴(走 pasteText)不受拖入解析器影响。
+//
 // 真浏览器台架(?upage = 生产 UnifiedPage 全链)。粘贴用合成 ClipboardEvent + DataTransfer(PM 只读 clipboardData,
 // 不看 isTrusted;真 Meta+V 需要剪贴板权限,headless 下不稳)。断言看**落盘**与**段落数**两样。
 //
@@ -87,6 +90,31 @@ async function pasteCase(browser, data, seed = 'ANCHOR\n\ntail\n', anchor = 'ANC
   return { out, blocks, errs }
 }
 
+/** 外部拖入:ANCHOR 后回车出空段,把 data 拖到这个空段上(合成 DragEvent,PM 的 drop 只读 dataTransfer)。 */
+async function dropCase(browser, data) {
+  const errs = []
+  const page = await open(browser, 'ANCHOR\n\ntail\n', errs)
+  await caretAfter(page, 'ANCHOR')
+  await page.keyboard.press('Enter')
+  const w0 = await writeCount(page)
+  await page.evaluate(({ data }) => {
+    const v = window.__upage.probe.view()
+    const el = v.domAtPos(v.state.selection.from).node
+    const blk = el.nodeType === 1 ? el : el.parentElement
+    const r = blk.getBoundingClientRect()
+    const x = r.left + 4
+    const y = r.top + r.height / 2
+    const dt = new DataTransfer()
+    for (const [k, val] of Object.entries(data)) dt.setData(k, val)
+    const at = document.elementFromPoint(x, y)
+    for (const t of ['dragenter', 'dragover', 'drop']) at.dispatchEvent(new DragEvent(t, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }))
+  }, { data })
+  const out = await settle(page, w0)
+  const blocks = await shape(page)
+  await page.close()
+  return { out, blocks, errs }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
@@ -136,6 +164,28 @@ async function main() {
     {
       const r = await pasteCase(browser, { 'text/plain': '%%\n注释内容\n%%' })
       check('PF9 跨行 %% 注释不拆段', r.out === 'ANCHOR\n\n%%\n注释内容\n%%\n\ntail\n' && !r.errs.length, JSON.stringify(r))
+    }
+    // PF10 外部拖入 markdown 纯文本 → 解析成结构(与粘贴同口径;修前落盘 `\- 项一` `\*\*粗\*\*体`)
+    {
+      const md = '# 拖入标题\n\n- 项一\n- 项二\n\n**粗**体'
+      const d = await dropCase(browser, { 'text/plain': md })
+      const p = await pasteCase(browser, { 'text/plain': md })
+      check('PF10 外部拖入 markdown → 与粘贴同样解析成结构', d.out === p.out && /\n- 项一\n- 项二\n/.test(d.out || '') && !/\\[-*]/.test(d.out || '') && !d.errs.length, JSON.stringify({ drop: d.out, paste: p.out }))
+    }
+    // PF11 外部拖入不像 markdown 的多行 → 一行一段(D-10 同一条)
+    {
+      const r = await dropCase(browser, { 'text/plain': 'Alice Zhang\nRoom 1203' })
+      check('PF11 外部拖入纯文本多行 → 一行一段', /Alice Zhang\n\nRoom 1203/.test(r.out || '') && !r.errs.length, JSON.stringify(r))
+    }
+    // PF12 单条裸 URL 拖到空段 → 照旧裸 URL(不被 autolink 包成链接 → 书签卡形态不变)
+    {
+      const r = await dropCase(browser, { 'text/uri-list': 'https://example.com/article', 'text/plain': 'https://example.com/article' })
+      check('PF12 裸 URL 拖入空段照旧是裸 URL', r.out === 'ANCHOR\n\nhttps://example.com/article\n\ntail\n' && !r.errs.length, JSON.stringify(r))
+    }
+    // PF13 对照:内部附件引用粘贴(走 pasteText,拖入解析器不插手)照旧落成引用
+    {
+      const r = await pasteCase(browser, { 'application/x-forsion-attachment-reference': '![[a.png]]' })
+      check('PF13 对照:内部附件引用粘贴照旧', /ANCHOR\n\n!\[\[a\.png\]\]\n\ntail/.test(r.out || '') && !r.errs.length, JSON.stringify(r))
     }
   } finally {
     await browser.close()

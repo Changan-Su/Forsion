@@ -61,7 +61,7 @@ import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
+import { DOMParser as PmDOMParser, DOMSerializer, type Node as ProseNode, type Slice } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -110,7 +110,7 @@ import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { askString } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
-import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
+import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
@@ -878,6 +878,17 @@ export function MilkdownInner({
     }
     // 文件拖入(含图片)统一交给编辑器级附件处理(AmadeusEditorView.onDrop),按笔记设置存放 → 不在块内内联,
     // 故此处不设 handleDrop(ProseMirror 默认对文件拖放不作插入,事件冒泡到编辑器容器被 preventDefault)。
+    //
+    // 外部拖入的**文字**(评审 G4-04):PM 的 drop 走 parseFromClipboard,text/plain 默认按字面插入 —— markdown 被
+    // 转义成 `\-` `\*\*` 落盘;同一段文字粘贴却被 Milkdown clipboard 解析成结构。补 clipboardTextParser,解析口径与
+    // Milkdown 的粘贴逐字一致(parser → DOM → parseSlice)。只在 drop 这一拍生效(handleDOMEvents.drop 先于 PM
+    // 自己的 drop 同步置位):粘贴那条已由 clipboard 插件处理,别让每次粘贴白白多解析一遍。
+    let textDropping = false
+    const onDropMark = (): boolean => {
+      textDropping = true
+      queueMicrotask(() => { textDropping = false })
+      return false
+    }
 
     // 点链接就打开(同 Obsidian 实时预览)。contenteditable 里 Chromium **不会**自己导航,
     // 不接这一手 `[文字](url)` 就只是个蓝字。window.open 会被主进程 setWindowOpenHandler 截住、
@@ -914,6 +925,17 @@ export function MilkdownInner({
           handleDOMEvents: readOnly ? prev.handleDOMEvents : {
             ...prev.handleDOMEvents,
             copy: handleAttachmentCopy,
+            drop: onDropMark,
+          },
+          clipboardTextParser: readOnly ? undefined : (text, _ctx, plain, view) => {
+            if (!textDropping) return null as unknown as Slice // 粘贴 / pasteText:PM 默认(见 onDropMark 注释)
+            textDropping = false
+            const md = droppedTextMarkdown(text, plain)
+            if (md == null) return null as unknown as Slice
+            const parsed = ctx.get(parserCtx)(md) as ProseNode | string | undefined
+            if (!parsed || typeof parsed === 'string') return null as unknown as Slice
+            const dom = DOMSerializer.fromSchema(view.state.schema).serializeFragment(parsed.content)
+            return PmDOMParser.fromSchema(view.state.schema).parseSlice(dom)
           },
           handleClick: handleLinkClick,
           clipboardTextSerializer,

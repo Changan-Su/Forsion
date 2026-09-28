@@ -1,6 +1,6 @@
 // D-10(拍板 #12)纯文本多行粘贴的判定与转换。接线(真 paste 事件 → 一行一段 → 落盘)在台架:npm run check:pastefidelity。
 import { describe, expect, it } from 'vitest'
-import { isPlainMultiline, looksLikeMarkdown, plainLinesToParagraphs } from './plainPaste'
+import { droppedTextMarkdown, isPlainMultiline, looksLikeMarkdown, plainLinesToParagraphs } from './plainPaste'
 
 describe('plainPaste', () => {
   it('地址 / 终端输出 / 纯文本邮件 = 纯文本多行', () => {
@@ -21,5 +21,13 @@ describe('plainPaste', () => {
   it('单个 \\n → 段落分隔;已有空行与 CRLF', () => {
     expect(plainLinesToParagraphs('a\nb\n\nc')).toBe('a\n\nb\n\nc')
     expect(plainLinesToParagraphs('a\r\nb\rc')).toBe('a\n\nb\n\nc')
+  })
+
+  it('外部拖入(G4-04):markdown 原样交解析;纯文本多行一行一段;裸 URL / plain / 空 → 字面', () => {
+    expect(droppedTextMarkdown('# 标题\n- 项', false)).toBe('# 标题\n- 项')
+    expect(droppedTextMarkdown('Alice\nRoom 1203', false)).toBe('Alice\n\nRoom 1203')
+    expect(droppedTextMarkdown('https://example.com/a', false)).toBeNull()
+    expect(droppedTextMarkdown('**粗**', true)).toBeNull()
+    expect(droppedTextMarkdown('  ', false)).toBeNull()
   })
 })
