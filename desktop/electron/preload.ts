@@ -116,6 +116,10 @@ const api = {
   /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
   clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('app:clearData', opts),
+  /** 走正常退出链后重新拉起(插件页「重启以生效」)。 */
+  relaunchApp: (): Promise<void> => ipcRenderer.invoke('app:relaunch'),
+  /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。 */
+  setBundleEnabled: (id: string, on: boolean): Promise<{ restartPending: boolean }> => ipcRenderer.invoke('plugins:setBundleEnabled', id, on),
   onUpdaterStatus: (cb: (st: any) => void): (() => void) => {
     const listener = (_e: unknown, st: any): void => cb(st)
     ipcRenderer.on('updater:status', listener)

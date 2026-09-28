@@ -91,8 +91,24 @@ const builtinIds = new Set<string>()
 /** 本进程播种/确认过的内置插件 id(manifest id)。设置页据此标「内置」+ 隐藏卸载。 */
 export const builtinPluginIds = (): ReadonlySet<string> => builtinIds
 const lockedIds = new Set<string>()
-/** 其中带主进程半身(清单 desktop)的:启停开关对主进程半身是空操作(cloudHost 每次启动都装),设置页不给开关。 */
+/** 其中带主进程半身(清单 desktop)的:主进程半身开机前装载、没有卸载路径,启停要**重启才生效**(见下面的停用名单)。 */
 export const lockedPluginIds = (): ReadonlySet<string> => lockedIds
+
+// 停用的主进程半身(桌面配置 disabledBundles,main.ts 装载前读):开机那一刻的名单 vs 现在的名单,两者不同 = 待重启生效。
+// ⚠️ 别拿「装上了没有」判待重启:验签 / 版本闸挡下的包重启也装不上,提示会永远挂着。
+let offAtStart: ReadonlySet<string> = new Set()
+const offNow = new Set<string>()
+export function initBundleSwitches(ids: readonly string[]): void {
+  offAtStart = new Set(ids)
+  offNow.clear()
+  for (const id of ids) offNow.add(id)
+}
+export const bundleOff = (id: string): boolean => offNow.has(id)
+export const bundleRestartPending = (id: string): boolean => offAtStart.has(id) !== offNow.has(id)
+export function setBundleOff(id: string, off: boolean): void {
+  if (off) offNow.add(id)
+  else offNow.delete(id)
+}
 
 export interface SeedBundlesReport {
   installed: string[]
@@ -249,4 +265,5 @@ export async function seedBuiltinBundles(
 export function _resetBuiltinIdsForTest(): void {
   builtinIds.clear()
   lockedIds.clear()
+  initBundleSwitches([])
 }

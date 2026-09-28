@@ -6,7 +6,9 @@ describe('resolveSettingsTarget', () => {
   it.each([
     [undefined, { tab: 'general' }],
     ['', { tab: 'general' }],
-    ['forsion', { tab: 'general', sub: 'g-forsion' }], // appStore handleAuthExpired、/login
+    ['forsion', { tab: 'forsion', sub: 'f-account' }], // appStore handleAuthExpired、/login
+    ['general/g-forsion', { tab: 'forsion', sub: 'f-account' }], // 2026-09-28 前的二级落点
+    ['sync/s-cloud', { tab: 'forsion', sub: 'f-notes' }],
     ['connection', { tab: 'general', sub: 'g-conn' }],
     ['agent-clis', { tab: 'agents', sub: 'ag-clis' }],
     ['wechat', { tab: 'channels' }],
@@ -21,7 +23,7 @@ describe('resolveSettingsTarget', () => {
   })
 
   it('别名里的一级页都是真实存在的 StaticTab', () => {
-    const known = new Set(['general', 'model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'amadeus-plugins', 'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'advanced', 'developer', 'about'])
+    const known = new Set(['forsion', 'general', 'model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'amadeus-plugins', 'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'advanced', 'developer', 'about'])
     for (const [alias, [tab]] of Object.entries(LEGACY_TARGETS)) expect(known.has(tab), alias).toBe(true)
   })
 })

@@ -1248,6 +1248,10 @@ declare global {
       onUpdaterStatus?(cb: (st: UpdaterStatusInfo) => void): () => void
       /** 应用内清空数据(卸载/重置);清完主进程 relaunch。 */
       clearAppData?(opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }>
+      /** 走正常退出链后重新拉起(插件页「重启以生效」)。 */
+      relaunchApp?(): Promise<void>
+      /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。设备页没有这座桥。 */
+      setBundleEnabled?(id: string, on: boolean): Promise<{ restartPending: boolean }>
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
       setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void

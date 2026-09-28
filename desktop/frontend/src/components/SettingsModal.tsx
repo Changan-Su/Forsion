@@ -8,7 +8,7 @@ import { ErrorBoundary } from './ErrorBoundary'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, Cloud } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
@@ -102,6 +102,14 @@ import './settingsModal.css'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  // 「Forsion 云端」一级页:账号 + 云端地址 + 记忆同步 + 笔记在线同步,整页随内置插件 Forsion Extend 出现 / 消失
+  'settings.tab.forsionCloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
+  'settings.page.forsionCloudDescription': {
+    zh: '登录 Forsion 账号，管理云端地址、记忆同步与笔记在线同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
+    en: 'Sign in to your Forsion account and manage the cloud address, memory sync and online note sync. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
+  },
+  'settings.forsionCloud.account': { zh: '账号', en: 'Account' },
+  'settings.forsionCloud.notes': { zh: '笔记同步', en: 'Note sync' },
   'settings.tools.title': { zh: '开发工具', en: 'Developer tools' },
   'settings.tools.description': { zh: '检测编码任务需要的本机工具，缺少时可一键安装。', en: 'Check the local tools coding tasks need, and install missing ones in one step.' },
   'settings.runtime.backendTitle': { zh: '内置后端', en: 'Built-in backend' },
@@ -221,6 +229,7 @@ const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 
 // 侧栏项图标(固定 tab 全配;外置 agent 插件的动态 plugin:<id> 项刻意无图标)。
 const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
+  forsion: <Cloud size={14} />,
   general: <Settings2 size={14} />,
   spaces: <LayoutGrid size={14} />,
   theme: <Palette size={14} />,
@@ -412,7 +421,10 @@ export const SettingsModal: React.FC<{
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(isDesktop || unitPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')], ['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
+    // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
+    ...(isDesktop && cloudAccount ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
     ['shortcuts', t('settings.tab.shortcuts')],
@@ -1064,6 +1076,7 @@ export const SettingsModal: React.FC<{
     ? ([...forsionNavItems, ...pluginNavItems].find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
     : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
   const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
+    forsion: 'settings.page.forsionCloudDescription',
     general: 'settings.page.generalDescription',
     spaces: 'settings.page.spacesDescription',
     notes: 'settings.page.notesDescription',
@@ -1108,7 +1121,6 @@ export const SettingsModal: React.FC<{
       ['g-conn', t('settings.sub.connection')],
       // 本机运行环境单列(原先埋在「连接」页最底部,2.11.4 用户找不到);条件与下方正文块一致。
       ...(isDesktop && stored ? [['g-runtime', t('settings.runtime.title')] as [string, string]] : []),
-      ...(isDesktop && cloudAccount ? [['g-forsion', 'Forsion'] as [string, string]] : []),
       ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
     ],
     model: [
@@ -1143,10 +1155,13 @@ export const SettingsModal: React.FC<{
       ['k-library', t('globalSkills.title')],
       ...(isDesktop && !!window.tangu?.discoveryScan ? [['k-discovery', t('settings.discovery.label')] as [string, string]] : []),
     ],
+    forsion: [
+      ['f-account', t('settings.forsionCloud.account')],
+      // 笔记在线同步整块都在 window.amadeusSync 后面:没这个能力就别挂栏目,否则点进去是白板。
+      ...(window.amadeusSync ? [['f-notes', t('settings.forsionCloud.notes')] as [string, string]] : []),
+    ],
     sync: [
-      // 「在线同步」整块都在 window.amadeusSync 后面:没这个能力就别挂栏目,否则点进去是白板。
-      ...(window.amadeusSync ? [['s-cloud', t('settings.sync.cloudSec')] as [string, string]] : []),
-      // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走。
+      // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走(一级页也按它门控)。
       ...(window.remoteSync ? [['s-remote', t('settings.sync.remoteSec')] as [string, string]] : []),
     ],
   } as Record<string, Array<[string, string]>>)
@@ -1182,7 +1197,7 @@ export const SettingsModal: React.FC<{
   // Forsion 品牌独立放在导航顶部,不再用一个额外的大类标题重复占据滚动区。
   const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[] }> }> = [
     { key: 'settings', label: '', groups: [
-      { key: 'workspace', label: t('settings.group.workspace'), tabs: ['general', 'spaces', 'notes', 'sync'] },
+      { key: 'workspace', label: t('settings.group.workspace'), tabs: ['forsion', 'general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
@@ -1234,7 +1249,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
-      : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(g-forsion)
+      : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
       : need === 'managed' ? isDesktop && mode === 'managed' // 托管参数只在已落盘为托管时渲染(g-runtime)
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
   }
@@ -1570,7 +1585,7 @@ export const SettingsModal: React.FC<{
                         {cloudAccount && <span>{t('settingsmodal.status.account', { state: authSt?.loggedIn && authSt.tokenValid !== false ? t('settings.overview.signedIn') : t('settings.overview.signedOut') })}</span>}
                       </span>
                       {isDesktop && cloudAccount && !(authSt?.loggedIn && authSt.tokenValid !== false) && (
-                        <button type="button" className="btn ghost sm" disabled={loggingIn} onClick={() => { openSubPage('general', 'g-forsion'); void doForsionLogin() }}>
+                        <button type="button" className="btn ghost sm" disabled={loggingIn} onClick={() => { openSubPage('forsion', 'f-account'); void doForsionLogin() }}>
                           <LogIn size={12} /> {t('settings.forsion.login')}
                         </button>
                       )}
@@ -1824,7 +1839,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'general' && isDesktop && cloudAccount && activeSub === 'g-forsion' && (
+                {tab === 'forsion' && isDesktop && cloudAccount && activeSub === 'f-account' && (
                   <>
                     {/* 账号 */}
                     <div className="field" data-setting-anchor="forsion-account">
@@ -2036,7 +2051,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'sync' && activeSub === 's-cloud' && (
+                {tab === 'forsion' && activeSub === 'f-notes' && (
                   <>
                     {window.amadeusSync && noteSync && (
                       <div className="field">

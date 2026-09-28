@@ -28,6 +28,13 @@ import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } fro
 import { PluginLogo } from './PluginLogo'
 
 registerMessages({
+  // 带主进程半身的内置包(Forsion Extend):开关改的是下次开机装不装那一半
+  'settings.amadeusPlugins.lockedHint': {
+    zh: '关闭后，从下次启动起不再加载 Forsion 云端功能（账号、云同步、Connect 等），本机数据不受影响。',
+    en: 'When turned off, Forsion cloud features (account, cloud sync, Connect, and more) stop loading from the next launch. Local data is not affected.',
+  },
+  'settings.amadeusPlugins.restartPending': { zh: '重启 Forsion 后生效。', en: 'Takes effect after Forsion restarts.' },
+  'settings.amadeusPlugins.restartNow': { zh: '立即重启', en: 'Restart now' },
   'settings.amadeusPlugins.unitIntro': { zh: '查看已安装的功能和编辑器扩展。', en: 'View installed features and editor extensions.' },
   'settings.amadeusPlugins.unitBuiltinTitle': { zh: '编辑器扩展', en: 'Editor extensions' },
   'settings.amadeusPlugins.unitBuiltinHint': { zh: '此处开关仅控制编辑器扩展。Unit 已安装功能由部署配置管理。', en: 'These toggles control editor extensions. Installed Unit features are managed through deployment configuration.' },
@@ -323,6 +330,51 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
   )
 }
 
+/** 带主进程半身的内置包(Forsion Extend)的开关:那一半开窗前就装好、没法热卸,开关改的是**下次开机**装不装。
+ *  读主进程的状态,不看渲染半身的 activeIds —— 本机 localStorage 里可能留着旧开关拨下的「关」,主进程半身其实在跑。 */
+const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const [busy, setBusy] = useState(false)
+  const flip = async (on: boolean): Promise<void> => {
+    setBusy(true)
+    try {
+      const { restartPending } = await window.tangu!.setBundleEnabled!(p.id, on)
+      usePluginStore.setState((s) => ({ plugins: s.plugins.map((x) => (x.id === p.id ? { ...x, bundleOff: !on, restartPending } : x)) }))
+      // 渲染半身跟着走:朝目标拨,别用 toggle(localStorage 里旧的「关」会让它反着来)
+      if (on) usePluginStore.getState().enable(p.id)
+      else usePluginStore.getState().disable(p.id)
+    } catch (e) {
+      panelToast(ipcErrorText(e), true)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <input
+      type="checkbox"
+      data-bundle-switch
+      checked={!p.bundleOff}
+      disabled={busy || !!p.blocked}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => void flip(e.target.checked)}
+      style={{ cursor: busy || p.blocked ? 'not-allowed' : 'pointer' }}
+    />
+  )
+}
+
+/** 拨过 locked 包的开关、还没重启:就地给「立即重启」。 */
+const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  if (!p.restartPending) return null
+  return (
+    <div className="hint" data-restart-pending style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+      <span>{t('settings.amadeusPlugins.restartPending')}</span>
+      {window.tangu?.relaunchApp && (
+        <button type="button" className="btn sm" onClick={() => void window.tangu!.relaunchApp!()}>{t('settings.amadeusPlugins.restartNow')}</button>
+      )}
+    </div>
+  )
+}
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -441,9 +493,17 @@ const PluginDetail: React.FC<{
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
-        {/* 带主进程半身的内置包(Forsion Extend):开关对主进程半身是空操作(每次启动都装),不给开关免得像能关 */}
-        {!p.locked && <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />}
+        {/* 带主进程半身的内置包(Forsion Extend):开关管下次开机装不装那一半;没有这座桥(设备页 / 旧壳)就不给开关 */}
+        {p.locked
+          ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
+          : <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />}
       </div>
+      {p.locked && !!window.tangu?.setBundleEnabled && (
+        <div className="hint">
+          {t('settings.amadeusPlugins.lockedHint')}
+          <RestartPending p={p} />
+        </div>
+      )}
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
       {p.dev && (
         <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' }}>
@@ -580,15 +640,19 @@ export const AmadeusPluginsTab: React.FC<{
               <BundleChips p={p} />
             </div>
             {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{pluginDisplayDescription(p, locale)}</div>}
+            {p.locked && <RestartPending p={p} />}
           </div>
-          <input
-            type="checkbox"
-            checked={on}
-            disabled={!!p.blocked}
-            onClick={(e) => e.stopPropagation()}
-            onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) void promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
-            style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
-          />
+          {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
+          {p.locked ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} /> : (
+            <input
+              type="checkbox"
+              checked={on}
+              disabled={!!p.blocked}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) void promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
+              style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
+            />
+          )}
         </div>
       </div>
     )

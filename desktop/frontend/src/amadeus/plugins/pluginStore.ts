@@ -466,6 +466,8 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     builtin: false,
     preinstalled: !!src.preinstalled,
     locked: !!src.locked,
+    bundleOff: !!src.bundleOff,
+    restartPending: !!src.restartPending,
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,

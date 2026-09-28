@@ -1194,9 +1194,13 @@ export interface AmadeusPlugin {
   /** External source that the app seeds itself (electron/builtinPlugins.ts): shown as 「内置」, no uninstall,
    *  but still an external source for load/reload purposes (never set `builtin` for these). */
   preinstalled?: boolean
-  /** Preinstalled bundle whose main-process half is loaded on every launch (Forsion Extend): the enable toggle would be a
-   *  no-op for that half, so the settings card shows no toggle. */
+  /** Preinstalled bundle with a main-process half (Forsion Extend): that half loads before any window and can't be unloaded,
+   *  so its settings toggle decides whether it loads on the next launch (`bundleOff`), and flipping it needs a restart. */
   locked?: boolean
+  /** Locked bundle: the main-process half is off for the next launch. */
+  bundleOff?: boolean
+  /** Locked bundle: the toggle changed since this launch, so a restart is needed. */
+  restartPending?: boolean
   /** Manifest apiVersion (missing → 1). */
   apiVersion?: number
   minAppVersion?: string
