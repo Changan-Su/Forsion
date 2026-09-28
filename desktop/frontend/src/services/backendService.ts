@@ -785,7 +785,7 @@ export const deletePluginFile = (cfg: EngineArg, id: string, scope: string, name
 
 // ── Special Agents（Historian / Muse;本地后端）──
 export const getSpecialConfig = (cfg: EngineArg) =>
-  request<{ config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean }>(cfg, '/agent/special/config')
+  request<import('../types').SpecialConfigResponse>(cfg, '/agent/special/config') // 远程来源只回摘要 + remote:true(P1-K10b)
 
 export const saveSpecialConfig = (cfg: EngineArg, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)

@@ -19,7 +19,7 @@ import type {
   AutomationSessionInfo,
   MuseStatusInfo,
   MuseTriggerInfo,
-  SpecialAgentsConfig,
+  SpecialAgentsSummary,
   TanguDesktopConfig,
 } from '../types'
 
@@ -32,7 +32,8 @@ export type AutomationSel =
 
 interface AutomationState {
   loaded: boolean
-  specialCfg: SpecialAgentsConfig | null
+  /** 只读开关与两个节奏值:设备页的 home 是那台电脑的引擎,远程来源只拿到这份摘要(P1-K10b);本机拿到的整份结构上同样满足。 */
+  specialCfg: SpecialAgentsSummary | null
   museStatus: MuseStatusInfo | null
   triggers: MuseTriggerInfo[]
   /** agent 自动化的常驻会话(triggerId → sessionId 映射来源;日程条目 triggerKey=`sched:<slug>:<rowId>`)。 */

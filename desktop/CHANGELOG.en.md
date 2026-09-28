@@ -61,6 +61,10 @@
 - The phone's device identity is kept in storage encrypted by the Android Keystore. It never passes through the web layer, is never logged, and is left out of system backups and device transfers. Each Forsion account gets its own identity. After reinstalling the app or clearing its data, the phone registers again with a new identity and has to be allowed on your computers again.
 - Requests to your computer get this phone's identity attached by the app at the system level, so the computer knows which phone is acting. If the identity can't be obtained, the request is not sent. A lost connection or a temporary server error is treated as offline and picks up again once it recovers, an expired sign-in asks you to sign in again, and an outright refusal shows "This phone couldn't verify its identity". With an older server the app shows "The server is too old to run from a phone" and doesn't add this phone to your device list. Reloading the app also closes any open connections to your computers.
 
+<!-- P1-K10b -->
+- When you use this computer remotely from the device page or your phone, you now only see whether Historian and Muse are on and how often they run. The prompts, the folders Muse may read, the permission level, active hours and budgets set on this computer stay on it. On the device page, Settings › Agents › Background agents is now read-only and says these can only be set up on this computer (it used to show every setting, but changes could not be saved).
+<!-- /P1-K10b -->
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.
