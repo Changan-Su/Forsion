@@ -1643,6 +1643,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         pipe.lastSaved = raw
         pipe.pending = false
+        // 采纳了盘上版本 = 本地与盘上重新一致(收口 N-4):写失败后撤回、外部改动随后被采纳时,退避重试 / 恢复信号
+        // 都因 !pending 直接返回,不在这里收,「未保存」条就一直挂着,失败时存的旧草稿留到下次提示恢复。
+        settleUnsaved()
         syncSrcDraft() // 源码模式下回灌:textarea 草稿必须跟上,否则下一击键用旧草稿盖掉刚回灌的内容(Codex 终审 P0)
       } finally {
         pipe.reconcileBusy--

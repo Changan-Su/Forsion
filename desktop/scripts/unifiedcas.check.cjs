@@ -18,6 +18,7 @@
 //   F4 失败中切走 → 草稿进本机、盘上不被覆盖 → 切回出「恢复草稿」条,点了才写 · F5 草稿 = 盘上内容时静默删掉
 //   F6 离开确认只在非 Electron 宿主、且真有写不进去的内容时拦 · F7 失败存草稿后又打字、重试成功 → 旧草稿删掉
 //   F8/F9 失败中把改动撤回到盘上那版(恢复信号到达 / 没等重试就切走)→ 条收掉、旧草稿删掉、切回不提示恢复
+//   F10 同上、随后外部改动被回灌采纳(收口 N-4)→ 条收掉、旧草稿删掉
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -420,6 +421,43 @@ async function groupF(browser) {
     record(`${k.label} → 「未保存」条收掉、旧草稿删掉、切回不提示恢复、盘上不动`,
       failedBar && k1.length === 1 && (!k.recover || barGone) && k2.length === 0 && barsBack.length === 0 && d === '# T\n\npara1 AAA\n',
       JSON.stringify({ failedBar, k1, barGone, k2, barsBack, d }))
+    await p.close()
+  }
+  // F10(收口 N-4):写失败期间撤回到盘上那版,**随后外部改动到达、被回灌采纳**(本地无改动 → 照常回灌)。本地 = 盘上,
+  //  没有「未保存」可言 —— 但采纳分支只换基线不收失败态:退避重试与恢复信号都因 !pending 直接返回,条永远挂着、
+  //  失败时存的 XY 草稿留到下次提示恢复。时序钉死:条一出现就撤回并 fire,采纳(≈静默 700ms)远早于首档退避 2s,
+  //  不给「重试先到、走 writeNow 无事出口顺手收掉」蒙混过关的机会。负对照:采纳分支摘掉 settleUnsaved() → 红。
+  {
+    const p = await open(browser, '# T\n\npara1 AAA\n')
+    await p.evaluate(() => { localStorage.clear(); window.__upage.failWrites = 1000 })
+    await typeIn(p, 0, 'AAA', ' XY')
+    await p.waitForSelector('.unified-page [data-save="failed"]', { timeout: 5000 })
+    const k1 = await draftKeys(p)
+    for (let i = 0; i < 3; i++) await p.keyboard.press('Backspace')
+    await wait(300) // markdownUpdated 防抖 200ms:pipe.body 已回到盘上那版
+    await p.evaluate(() => { window.__upage.failWrites = 0 })
+    const EXT = '# T\n\npara1 AAA EXTERNAL\n'
+    const w0 = await writeCount(p)
+    await p.evaluate((t) => window.__upage.fire('Unified.md', t), EXT)
+    await p.waitForFunction(() => document.querySelector('.unified-body .ProseMirror')?.innerText.includes('EXTERNAL'), null, { timeout: 5000 }).catch(() => {})
+    await wait(400)
+    const r = {
+      k1,
+      bars: await p.evaluate(() => [...document.querySelectorAll('.unified-page [data-save]')].map((e) => e.dataset.save)),
+      k2: await draftKeys(p),
+      shown: (await domText(p, 0)).includes('EXTERNAL'),
+      d: await disk(p),
+      dw: (await writeCount(p)) - w0,
+      copies: (await copies(p)).length,
+    }
+    await p.evaluate(() => window.__upage.switchFile('Other.md', '# Other\n\nx\n'))
+    await wait(800)
+    await p.evaluate(() => window.__upage.switchFile('Unified.md'))
+    await wait(1200)
+    r.barsBack = await p.evaluate(() => [...document.querySelectorAll('.unified-page [data-save]')].map((e) => e.dataset.save))
+    record('F10 写失败后撤回、外部改动随后被回灌采纳 → 条收掉、旧草稿删掉、切回不提示恢复;盘上是外部那版、零写入零副本',
+      r.k1.length === 1 && r.bars.length === 0 && r.k2.length === 0 && r.shown && r.d === EXT && r.dw === 0 && r.copies === 0 && r.barsBack.length === 0,
+      JSON.stringify(r))
     await p.close()
   }
   // F6:离开确认(beforeunload)只在非 Electron 宿主、且有写不进去的内容时拦
