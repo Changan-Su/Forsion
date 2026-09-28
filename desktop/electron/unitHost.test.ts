@@ -31,6 +31,8 @@ interface Hub {
   holdResp: boolean
   respClosed: string[]
   mode: ChannelMode
+  /** 非空 = /channel 直接以这个状态码 + 响应体拒绝(网关重启窗口 / hub 判决)。 */
+  channelReject: { status: number; body: string } | null
   dispatch: (env: { id: string; method: string; path: string; accept?: string; proxyCaller?: unknown }) => void
   endChannel: () => void
   close: () => void
@@ -43,11 +45,12 @@ function fakeHub(): Promise<Hub> {
   const streamed: string[] = []
   const timers = new Set<ReturnType<typeof setInterval>>()
   const respClosed: string[] = []
-  const hub: Partial<Hub> = { channels, registers, streamed, respClosed, holdResp: false, mode: 'silent' }
+  const hub: Partial<Hub> = { channels, registers, streamed, respClosed, holdResp: false, mode: 'silent', channelReject: null }
   const server = http.createServer((req, res) => {
     const url = req.url || ''
     if (url.endsWith('/units/register')) { registers.push(res); return } // 挂住:由测试决定何时回
     if (url.endsWith('/channel')) {
+      if (hub.channelReject) { channels.push(res); res.writeHead(hub.channelReject.status); res.end(hub.channelReject.body); return }
       if (hub.mode === 'noheaders') { channels.push(res); return } // TCP 接了,响应头永远不来
       res.writeHead(200, { 'Content-Type': 'text/event-stream' })
       res.write(': connected\n\n')
@@ -113,22 +116,23 @@ function fakeUnitWeb(): Promise<{ url: string; hits: string[]; cut: string[]; cl
   })
 }
 
-function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean; requestTimeoutMs?: number; hubFetch?: typeof fetch; proxyCallerKey?: string }): { h: UnitHost; logs: string[]; saved: unknown[] } {
+function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean; requestTimeoutMs?: number; hubFetch?: typeof fetch; proxyCallerKey?: string }): { h: UnitHost; logs: string[]; saved: unknown[]; cleared: number[] } {
   const logs: string[] = []
   const saved: unknown[] = []
+  const cleared: number[] = []
   const h = new UnitHost({
     getCreds: () => ({ cloudUrl: hub.url, token: 'tok' }),
     getUnitWeb: () => ({ url: web?.url ?? null, internalSecret: 'INTERNAL', proxyCallerKey: opts?.proxyCallerKey ?? '' }),
     getLanUrl: () => null,
     getPairing: () => (opts?.unpaired ? null : { unitId: 'u1', secret: 's1' }),
     savePairing: async (p) => { saved.push(p) },
-    clearPairing: async () => {},
+    clearPairing: async () => { cleared.push(Date.now()) },
     log: (m) => logs.push(m),
     readIdleMs,
     ...(opts?.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
     ...(opts?.hubFetch ? { hubFetch: opts.hubFetch } : {}),
   })
-  return { h, logs, saved }
+  return { h, logs, saved, cleared }
 }
 
 describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
@@ -202,6 +206,34 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
       h.reconnect('resume')
       expect(await until(() => hub.channels.length === 3, 800)).toBe(true)
     } finally { h.stop(); hub.close() }
+  })
+
+  it('网关重启窗口:/channel 回不带 hub 判决码的 404(路由未挂载)→ 保留配对重试,不清配对、不重新入册', async () => {
+    const hub = await fakeHub()
+    hub.channelReject = { status: 404, body: '{"detail":"Not Found"}' }
+    const { h, cleared, logs } = host(hub, null, 0)
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length >= 2, 4000)).toBe(true) // 1s 退避后又拨了一次
+      expect(cleared).toEqual([])
+      expect(hub.registers.length).toBe(0)
+      expect(logs.some((l) => l.includes('保留配对重试'))).toBe(true)
+      hub.channelReject = null // 网关起好了 → 同一配对直接连上
+      expect(await until(() => h.status().connected, 5000)).toBe(true)
+      expect(cleared).toEqual([])
+    } finally { h.stop(); hub.close() }
+  })
+
+  it('hub 判决 404 UNIT_NOT_FOUND / 403 UNIT_SECRET_MISMATCH → 清配对(下一轮重新入册)', async () => {
+    for (const [status, code] of [[404, 'UNIT_NOT_FOUND'], [403, 'UNIT_SECRET_MISMATCH']] as const) {
+      const hub = await fakeHub()
+      hub.channelReject = { status, body: JSON.stringify({ detail: 'x', code }) }
+      const { h, cleared } = host(hub, null, 0)
+      try {
+        h.start()
+        expect(await until(() => cleared.length >= 1)).toBe(true)
+      } finally { h.stop(); hub.close() }
+    }
   })
 
   it('abortEnvelope(id):按信封 id 中止在飞的本机请求;未知 id 返回 false', async () => {

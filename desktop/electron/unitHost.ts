@@ -239,9 +239,14 @@ export class UnitHost {
           if (headerWatchdog) clearTimeout(headerWatchdog)
         }
         if (resp.status === 403 || resp.status === 404) {
-          // 设备行已被注销/密钥失配 → 清配对,下一轮重新入册(自愈)。
-          await this.deps.clearPairing()
-          throw new Error(`通道被拒(${resp.status}),已清除配对待重新入册`)
+          // 只认 hub 自己的判决码才清配对(设备行已被注销 / 密钥失配 → 下一轮重新入册)。网关重启那几秒路由还没挂上,
+          // 同样回 404(不带 code):旧写法据此清配对重新入册,每次 server 重启每台电脑多一行离线设备(09-28 生产实证)。
+          const code = await resp.json().then((b: { code?: unknown }) => b?.code, () => null)
+          if (code === 'UNIT_NOT_FOUND' || code === 'UNIT_SECRET_MISMATCH') {
+            await this.deps.clearPairing()
+            throw new Error(`通道被拒(${resp.status} ${code}),已清除配对待重新入册`)
+          }
+          throw new Error(`channel HTTP ${resp.status}(非 hub 判决,保留配对重试)`)
         }
         if (!resp.ok || !resp.body) throw new Error(`channel HTTP ${resp.status}`)
         this.connected = true
