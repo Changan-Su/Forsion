@@ -230,6 +230,47 @@ async function main() {
         JSON.stringify(dy.tags) === '["x"]',
       JSON.stringify({ ...d0, yamlOk: !!dy, cols, tags: dy?.tags }))
     await blk.close()
+
+    // C5e N-1(2026-09-28):CRLF(Windows / git autocrlf)的 v3 分栏笔记。走生产路由(`&uroute` = routeNote,升级开关开)。
+    // 修前 parseSimpleYaml 按 '\n' 切行、越不过行尾 \r,只认得最后一个 fm 键 → 判 v4-plain 不升级,打开不成列(锚字面/
+    // 自然流),首击把 v3 的 amadeus_page/layout 当外来键或非法 v4 布局写回 —— 分栏就此读不回来。
+    // 要求:打开即成列;打一个字后落盘是 v4 结构化(schema 4 + 合法 v4 layout 两列 + tags 在)、不再带 v3 键。BOM+CRLF 同样跑
+    // (升级 = 按 v4 规范重写整篇:与 LF 的 BOM v3 一样不保 BOM、行尾归 LF —— 既有口径,bom 字段只作记录)。
+    const v3Layout = { type: 'stack', children: [
+      { type: 'row', id: 'row_a', columns: [{ id: 'col_a', width: 0.5, children: [{ ref: '1' }] }, { id: 'col_b', width: 0.5, children: [{ ref: '2' }] }] },
+      { type: 'row', id: 'row_b', columns: [{ id: 'col_c', width: 1, children: [{ ref: '3' }] }] },
+    ] }
+    const v3Lf = ['---', 'amadeus_page: pg_r1', 'amadeus_schema: amadeus.page/3', `amadeus_layout: ${JSON.stringify(v3Layout)}`, 'tags: [t3]', '---', '',
+      '<!-- a 1 -->', '', '左栏。', '', '<!-- a 2 -->', '', '右栏。', '', '<!-- a 3 -->', '', '整宽段落。', ''].join('\n')
+    const out5e = {}
+    for (const [k, raw] of [['crlf', v3Lf.replace(/\n/g, '\r\n')], ['bomcrlf', '\uFEFF' + v3Lf.replace(/\n/g, '\r\n')]]) {
+      const pg = await browser.newPage({ locale: 'zh-CN' })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&uroute&useed=${encodeURIComponent(raw)}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM, { timeout: 20000 })
+      await pg.waitForTimeout(500)
+      const open = await pg.evaluate((s) => {
+        const el = document.querySelector(s)
+        return { domRows: el.querySelectorAll('.amx-ucolrow').length, cells: [...el.querySelectorAll('.amx-ucolcell')].map((c) => c.textContent).join('|'), literal: (el.innerText ?? '').includes('<!--') }
+      }, PM)
+      await pg.evaluate((s) => {
+        const el = [...document.querySelectorAll(`${s} p`)].find((x) => x.textContent.includes('整宽段落'))
+        const r = document.createRange(); r.selectNodeContents(el); const b = r.getBoundingClientRect()
+        return { x: b.right - 1, y: b.top + b.height / 2 }
+      }, PM).then((c) => pg.mouse.click(c.x, c.y))
+      await pg.keyboard.type('改')
+      await pg.waitForFunction(() => window.__upage.writes.length > 0, null, { timeout: 5000 }).catch(() => {})
+      const dw = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+      let fmY = null
+      try { fmY = YAML.parse(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(dw)[1]) } catch { /* 下面按 null 断言 */ }
+      out5e[k] = { ...open, bom: dw.startsWith('\uFEFF'), schema: fmY?.amadeus_schema ?? null, rows: fmY?.amadeus_layout?.rows ?? null, tags: fmY?.tags ?? null,
+        v3keys: /amadeus_page|amadeus\.page\/3/.test(dw), typed: dw.includes('整宽段落。改') }
+      await pg.close()
+    }
+    record('C5e CRLF / BOM+CRLF 的 v3 分栏笔记:经生产路由升级、打开即成列;打一个字后落盘为 v4 结构化且分栏仍可读(N-1)',
+      Object.values(out5e).every((r) => r.domRows === 1 && r.cells === '左栏。|右栏。' && !r.literal && r.typed && !r.v3keys && r.schema === 'amadeus.page/4' &&
+        JSON.stringify(r.rows) === '[{"columns":[{"refs":["1"],"width":0.5},{"refs":["2"],"width":0.5}],"tail":"t1"}]' && JSON.stringify(r.tags) === '["t3"]'),
+      JSON.stringify(out5e))
   }
 
   // C6:拖到块左缘 → 竖直指示线 + 成两列;落盘生出 fm layout。

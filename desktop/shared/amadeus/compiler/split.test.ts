@@ -17,6 +17,22 @@ describe('fmEntries(顶层 YAML 条目分组,V-01)', () => {
     expect(fmEntries(['  orphan: 1', 'k:\r', '  v: 1\r', '\r', 'j: 2\r'])).toEqual([
       ['  orphan: 1'], ['k:\r', '  v: 1\r'], ['\r'], ['j: 2\r'],
     ])
+    // 空序列项 `-`(CRLF 下是 `-\r`)同样是续行,不是新键(N-1)
+    expect(fmEntries(['tags:\r', '-\r', '- a\r', 'j: 2\r'])).toEqual([['tags:\r', '-\r', '- a\r'], ['j: 2\r']])
+  })
+})
+
+describe('parseFrontmatter:CRLF 行尾(N-1,Windows / git autocrlf 的 v3 笔记)', () => {
+  // 旧病:parseSimpleYaml 按 '\n' 切行,`(.*)$` 越不过行尾 \r → 只认得最后一行(收尾栅栏前那行没有 \r)。
+  // v3 的 amadeus_schema / amadeus_layout 全丢 → classifyPageSource 判成 v4-plain,跳过升级,首击把 v3 布局写坏。
+  const lines = ['---', 'amadeus_page: pg_r1', 'amadeus_schema: amadeus.page/3', 'amadeus_layout: {"type":"stack","children":[]}', 'tags: [t3]', '---', '', '正文。', '']
+  it.each([
+    ['CRLF', lines.join('\r\n')],
+    ['BOM + CRLF', '\uFEFF' + lines.join('\r\n')],
+  ])('%s:每个键都读得到,值不带 \\r', (_k, raw) => {
+    expect(parseFrontmatter(raw)).toEqual({
+      amadeus_page: 'pg_r1', amadeus_schema: 'amadeus.page/3', amadeus_layout: '{"type":"stack","children":[]}', tags: '[t3]',
+    })
   })
 })
 

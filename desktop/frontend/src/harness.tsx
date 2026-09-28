@@ -58,6 +58,7 @@ import { parseLayout } from '@amadeus-shared/compiler/manifest'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
 import { UnifiedSpikeHarness } from './amadeus/unified/UnifiedSpike'
+import { routeNote } from './amadeus/unified/router'
 import { SEG_SLOT } from './amadeus/unified/CanvasModeSeg'
 import { useUiOverlay } from './amadeusOverlayStore'
 
@@ -1751,8 +1752,16 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ⚠️ 顶栏胶囊必须拿**宿主自己的笔记路径**喂 CanvasModeSeg —— 生产传的是 `barPath`,组件内
     //    要拿它跟 store 自报的 path 比对。第一版图省事把 store 的 path 又喂回去,那道闸就恒真:
     //    「切到另一篇却显示上一篇的模式」「路径对不上导致胶囊不显示」两类真 bug 一个都测不到。
+    // `&uroute` = 走生产的路由判定(routeNote,升级开关开)再挂载:initial = 升级后的 v4 源、diskRaw = 盘上原字节
+    //    (N-1 CRLF v3 仪器,见 scripts/unified-page.check.cjs 的 P-CRLF)。判 block → 只渲一个 data-uroute 标记。
+    const uroute = new URLSearchParams(location.search).has('uroute')
+    const routeOf = (path: string, raw: string): { path: string; initial: string; diskRaw?: string; block?: true } => {
+      if (!uroute) return { path, initial: raw }
+      const d = routeNote(path, raw, true, new Date().toISOString())
+      return d.editor === 'unified' ? { path, initial: d.initial, diskRaw: d.diskRaw } : { path, initial: raw, block: true }
+    }
     function UPageHost({ file, probe = upageProbe }: { file?: string; probe?: Record<string, unknown> }): React.ReactElement {
-      const [st, setSt] = useState({ path: file ?? 'Unified.md', initial: vault.get(file ?? 'Unified.md') ?? seedMd })
+      const [st, setSt] = useState<{ path: string; initial: string; diskRaw?: string; block?: true }>(() => routeOf(file ?? 'Unified.md', vault.get(file ?? 'Unified.md') ?? seedMd))
       useEffect(() => {
         if (probe !== upageProbe) return // `&udual` 的第二实例不接 switchFile(那条只驱动主实例)
         switchUPage = (next) => {
@@ -1779,15 +1788,16 @@ if (new URLSearchParams(location.search).has('dock')) {
               <button className="amx-mode-btn" type="button">⋯</button>
             </div>
           )}
-          <UnifiedPage
+          {st.block ? <div data-uroute="block" /> : <UnifiedPage
             key={st.path}
             path={st.path}
             initial={st.initial}
+            diskRaw={st.diskRaw}
             probe={probe}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
             readOnly={new URLSearchParams(location.search).has('uro')}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
-          />
+          />}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
           <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
         </>

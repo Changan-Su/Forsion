@@ -2,6 +2,9 @@
 // v3 只在开关开启且升级器放行时走 unified,其余一律 block。
 import { describe, expect, it } from 'vitest'
 import { routeNote } from './router'
+import { canvasLineOf, composeFm, layoutLineOf, setAmadeusStructure, splitFm } from './fm'
+import { classifyPageSource, parseV4Layout } from '@amadeus-shared/compiler/v4'
+import { parseFrontmatter } from '@amadeus-shared/compiler/split'
 
 const NOW = '2026-08-13T00:00:00.000Z'
 const V3 = ['---', 'amadeus_page: pg_r1', 'amadeus_schema: amadeus.page/3', 'amadeus_layout: {"type":"stack","children":[]}', '---', '', '<!-- a 1 -->', '', '正文。', ''].join('\n')
@@ -56,6 +59,45 @@ describe('routeNote', () => {
     expect(r.diskRaw).toBe(plugin) // 回灌基线必须是盘上原字节,否则挂载补读会把 v3 原文灌回来冲掉迁移
     // 开关关掉时不迁移(用户显式选择留在块编辑器)。
     expect(routeNote('板.canvas.md', plugin, false, NOW)).toEqual({ editor: 'block' })
+  })
+
+  // N-1(2026-09-28):Windows / git autocrlf 的 v3 笔记是 CRLF。parseSimpleYaml 过去按 '\n' 切行、`(.*)$` 越不过
+  // 行尾 \r,只认得最后一个 fm 键 → 判成 v4-plain,不升级直接进 unified,首击按 v4 规则重写 fm:v3 的
+  // amadeus_layout 被当 v4 布局保留(读不懂)/ 剥掉,分栏布局就此坏掉。
+  describe('CRLF v3(N-1):照常升级,首击落盘后布局仍可读', () => {
+    const layout = {
+      type: 'stack',
+      children: [
+        { type: 'row', id: 'row_a', columns: [
+          { id: 'col_a', width: 0.5, children: [{ ref: '1' }] },
+          { id: 'col_b', width: 0.5, children: [{ ref: '2' }] },
+        ] },
+        { type: 'row', id: 'row_b', columns: [{ id: 'col_c', width: 1, children: [{ ref: '3' }] }] },
+      ],
+    }
+    const lf = ['---', 'amadeus_page: pg_r1', 'amadeus_schema: amadeus.page/3', `amadeus_layout: ${JSON.stringify(layout)}`, 'tags: [t3]', '---', '',
+      '<!-- a 1 -->', '', '左栏。', '', '<!-- a 2 -->', '', '右栏。', '', '<!-- a 3 -->', '', '整宽段落。', ''].join('\n')
+    it.each([
+      ['LF(对照)', lf],
+      ['CRLF', lf.replace(/\n/g, '\r\n')],
+      ['BOM + CRLF', '\uFEFF' + lf.replace(/\n/g, '\r\n')],
+    ])('%s', (_k, raw) => {
+      expect(classifyPageSource(raw)).toBe('v3')
+      const r = routeNote('note.md', raw, true, NOW)
+      expect(r.editor).toBe('unified')
+      if (r.editor !== 'unified') return
+      expect(r.upgradedFromV3).toBe(true)
+      expect(r.diskRaw).toBe(raw)
+      // 首击:UnifiedPage 的保存链先按 fm 里现有的结构键重写结构区(setAmadeusStructure),再与正文拼回落盘。
+      const { fmText, body } = splitFm(r.initial)
+      const file = composeFm(setAmadeusStructure(fmText, layoutLineOf(fmText), canvasLineOf(fmText)), body + '多打一个字')
+      expect(classifyPageSource(file)).toBe('v4-structured')
+      const fm = parseFrontmatter(file)
+      expect(parseV4Layout(fm.amadeus_layout)?.rows).toEqual([{ columns: [{ refs: ['1'], width: 0.5 }, { refs: ['2'], width: 0.5 }], tail: 't1' }])
+      expect(fm.tags).toBe('[t3]')
+      expect(file).not.toMatch(/amadeus_page|amadeus\.page\/3/)
+      for (const text of ['左栏。', '右栏。', '整宽段落。']) expect(file).toContain(text)
+    })
   })
 
   it('future schema → block(futureSchemaPage 原样只读在那边)', () => {

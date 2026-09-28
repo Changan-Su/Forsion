@@ -39,10 +39,12 @@ export function normalizeMarkdown(markdown: string): string {
 
 /** Parse a YAML frontmatter block into flat key→(rest-of-line) values. The `amadeus_layout`
  *  value is a single-line JSON string (decoded by parseLayout), so the rest-of-line is kept verbatim.
- *  键容忍 YAML 引号("amadeus_schema": 是合法写法):否则版本闸/升级拒绝全被引号绕过(Codex)。 */
+ *  键容忍 YAML 引号("amadeus_schema": 是合法写法):否则版本闸/升级拒绝全被引号绕过(Codex)。
+ *  按 /\r?\n/ 切行(N-1,2026-09-28):remark 的 yaml 节点保留 CRLF 行尾,而 `(.*)$` 越不过 `\r` ——
+ *  按 '\n' 切时 CRLF 笔记只认得最后一个键,v3 被判成 v4-plain、跳过升级,首击把分栏布局写坏。 */
 function parseSimpleYaml(s: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const line of s.split('\n')) {
+  for (const line of s.split(/\r?\n/)) {
     const m = /^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+)):\s*(.*)$/.exec(line)
     if (m) out[m[1] ?? m[2] ?? m[3]] = m[4].trim()
   }
@@ -103,7 +105,7 @@ export function fmEntries(lines: readonly string[]): string[][] {
   for (const l of lines) {
     if (!l.trim() || l.startsWith('#')) {
       gap.push(l) // 空行 / 顶格注释:归属看后面还有没有续行
-    } else if (/^[ \t]/.test(l) || /^-(?:[ \t]|$)/.test(l)) {
+    } else if (/^[ \t]/.test(l) || /^-(?:[ \t]|\r?$)/.test(l)) {
       if (cur) {
         cur.push(...gap, l) // 续行(连同夹在中间的空行/注释)归当前条目
         gap = []
