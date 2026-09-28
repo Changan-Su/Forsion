@@ -136,6 +136,8 @@ registerMessages({
   'mdblock.default.drawing': { zh: '画板', en: 'Drawing' },
   'mdblock.default.noteViewFolder': { zh: '笔记视图', en: 'Note view' },
   'mdblock.default.noteView': { zh: '未命名视图', en: 'Untitled view' },
+  // `/表格` 骨架的表头(R-16):写进磁盘的「列 1 | 列 2」跟当前界面语言走,英文界面不再落中文表头。
+  'amadeus.default.tableColumn': { zh: '列 {n}', en: 'Column {n}' },
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
   'mdblock.group.basic': { zh: '基础', en: 'Basic' },
@@ -2212,7 +2214,18 @@ export interface SlashItem {
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
  *  ⚠️ 模块作用域调不了 hook —— 表里直接写文案 = 冻在模块加载那一刻,切语言纹丝不动。
  *  对外(菜单 / 移动端块面板)露出的仍是 SlashItem,label/group 已是当前语言的成品文案。 */
-type SlashSeed = Omit<SlashItem, 'label' | 'group'> & { labelKey: string; groupKey: string }
+type SlashSeed = Omit<SlashItem, 'label' | 'group' | 'scaffold'> & {
+  labelKey: string; groupKey: string
+  /** 函数形态 = 落盘内容里带界面语言的文案(如表格表头),同样在渲染期取词。 */
+  scaffold: string | ((tr: (key: string, vars?: Record<string, unknown>) => string) => string)
+}
+
+/** `/表格` 的骨架(R-16)。表头是**落盘产物命名**,跟当前界面语言 —— 以前表里写死 `| 列 1 | 列 2 |`,
+ *  英文界面插出来的表头也是中文并照样写进磁盘。它不是 sentinel / 前缀触发符,现算的串不会撞 applySlash 的分流。 */
+function tableScaffold(tr: (key: string, vars?: Record<string, unknown>) => string): string {
+  const h = (n: number): string => tr('amadeus.default.tableColumn', { n })
+  return `| ${h(1)} | ${h(2)} |\n| --- | --- |\n|  |  |`
+}
 
 /** 触发型 scaffold 的对外名册:v4 统一实例(unified/UnifiedPage 的 applySlash)按同一套判定分流。
  *  ⚠️ 这些常量的字面量含 NUL 字符 —— 一律从这里引用,**绝不在别的文件里重打一遍**。 */
@@ -2267,7 +2280,7 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'quote', labelKey: 'mdblock.slash.quote', hint: '|', icon: <QuoteIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| ', kw: 'quote 引用 yinyong blockquote' },
   { key: 'fold', labelKey: 'mdblock.slash.fold', hint: '>', icon: <FoldIcon />, groupKey: 'mdblock.group.advanced', scaffold: '> ', kw: 'fold toggle 折叠 zhedie collapse 展开 详情 details' },
   { key: 'code', labelKey: 'mdblock.slash.code', hint: '```', icon: <CodeBlockIcon />, groupKey: 'mdblock.group.advanced', scaffold: '```\n\n```', kw: 'code 代码 daima codeblock' },
-  { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |', kw: 'table 表格 biaoge grid 网格' },
+  { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: tableScaffold, kw: 'table 表格 biaoge grid 网格' },
   { key: 'divider', labelKey: 'mdblock.slash.divider', hint: '---', icon: <DividerIcon />, groupKey: 'mdblock.group.advanced', scaffold: '---\n\n', kw: 'divider hr 分割线 分隔 fenge' },
   // 单行 $$  $$(两 delimiter 同处一个 textblock,填内容即渲染为居中块公式)。旧的 '$$\n\n$$' 会被 commonmark
   // 拆成两个段落、每段只剩一个 $$ → 实况预览永远扫不到成对公式(见 mathLivePreview.scanMath)。
@@ -2306,7 +2319,9 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
   const pluginSlash = usePluginStore((s) => s.slashItems)
   const all: SlashItem[] = [
     // 内置项在**这里**取词(表里只有键):切语言时 useI18n 让消费方重渲染,菜单当场跟上。
-    ...SLASH_ITEMS.map(({ labelKey, groupKey, ...rest }) => ({ ...rest, label: t(labelKey), group: t(groupKey) })),
+    ...SLASH_ITEMS.map(({ labelKey, groupKey, scaffold, ...rest }) => ({
+      ...rest, label: t(labelKey), group: t(groupKey), scaffold: typeof scaffold === 'function' ? scaffold(t) : scaffold,
+    })),
     ...pluginSlash.map(({ item }) => ({
       key: item.id,
       label: textOf(item.label), // 函数形态每次渲染求值(B-20)
