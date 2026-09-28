@@ -363,6 +363,43 @@ async function main(): Promise<void> {
       for (let i = 0; i < 20 && !stub.seen.approvals.length; i++) await apage.waitForTimeout(250)
       const sent = stub.seen.approvals[0] || {}
       check('批准原样发出:action=approve、不带 argsOverride', sent.action === 'approve' && sent.argsOverride === undefined, JSON.stringify(sent))
+
+      // P1-K3:受保护路径的审批(approval_request.localOnly)只能在执行它的电脑上批准 —— 设备页的卡只给「拒绝」,写明原因。
+      await apage.locator('.t2c-stop').first().click({ timeout: 3000 }).catch(() => {}) // 先收掉上一条挂着的 run
+      await apage.waitForTimeout(1500)
+      stub.script([
+        { type: 'approval_request', payload: { approvalId: 'ra-lo', name: 'write_file', arguments: JSON.stringify({ path: '/tmp/e2e-home/.forsion/config.json', content: '{}' }),
+          preview: '⚠ 受保护的配置 / 凭据 · Protected config or credentials · write /tmp/e2e-home/.forsion/config.json (2 chars)', reason: { kind: 'protected', mode: 'auto-edit' }, localOnly: true,
+          remote: { via: 'tunnel', callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone', callerName: 'E2E 手机' } } },
+        { type: '__hold' },
+      ])
+      for (let i = 0; i < 40 && !(await ta.isEnabled().catch(() => false)); i++) await apage.waitForTimeout(500)
+      await ta.click()
+      await ta.fill('改一下本机配置')
+      await apage.keyboard.press('Enter')
+      await apage.waitForSelector('.approval-card [data-local-only]', { timeout: 20000 }).catch(() => {})
+      const lo = await apage.evaluate(() => {
+        const c = document.querySelector('.approval-card')
+        return c && {
+          buttons: [...c.querySelectorAll('.approval-actions button')].map((b) => (b.textContent || '').trim()),
+          localOnly: (c.querySelector('[data-local-only]')?.textContent || '').trim(),
+        }
+      })
+      check('P1-K3 受保护审批:设备页只给「拒绝」并写明只能在执行它的电脑上批准',
+        !!lo && lo.buttons.length === 1 && lo.buttons[0].includes('拒绝') && lo.localOnly.includes('只能在执行它的电脑上批准'), JSON.stringify(lo))
+      await apage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-approval-localonly.png') })
+      await apage.evaluate(() => {
+        const r = document.documentElement
+        r.classList.add('dark'); r.setAttribute('data-mode', 'dark')
+      })
+      await apage.waitForTimeout(400)
+      await apage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-approval-localonly-dark.png') })
+      await apage.evaluate(() => { const r = document.documentElement; r.classList.remove('dark'); r.setAttribute('data-mode', 'light') })
+      const before = stub.seen.approvals.length
+      await apage.locator('.approval-card .approval-actions .btn.danger').click()
+      for (let i = 0; i < 20 && stub.seen.approvals.length === before; i++) await apage.waitForTimeout(250)
+      const rej = stub.seen.approvals[stub.seen.approvals.length - 1] || {}
+      check('P1-K3 受保护审批:设备页的「拒绝」照常送达', rej.approvalId === 'ra-lo' && rej.action === 'reject', JSON.stringify(rej))
       await apage.close()
     } finally {
       await handle2.close()

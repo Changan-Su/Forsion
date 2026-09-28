@@ -50,6 +50,9 @@ async function startStubEngine(data = {}) {
     failSearch: false,
     /** 置 true = 扮没有 PATCH /agent/sessions/:id/config 的老引擎(回 404),测客户端回落整对象 PUT。 */
     noConfigPatch: false,
+    // P1-K3:GET /agent/approvals/pending 的会话计数(会话列表「等你处理」点);改完调 setPending() 换 rev。
+    pendingSessions: data.pendingSessions || [],
+    pendingRev: 'stub:0',
   };
   const runs = new Map(); // runId -> events
   const open = new Map(); // runId -> 挂住的 SSE 响应(等审批/询问)
@@ -153,6 +156,12 @@ async function startStubEngine(data = {}) {
       }
       return json(state.approvalRules);
     }
+    // P1-K3:待批索引的计数面(?rev= 未变 → unchanged,与真引擎同形)
+    if (p === '/agent/approvals/pending' && req.method === 'GET') {
+      seen.pending = (seen.pending || 0) + 1;
+      if (u.searchParams.get('rev') === state.pendingRev) return json({ rev: state.pendingRev, unchanged: true });
+      return json({ rev: state.pendingRev, sessions: state.pendingSessions });
+    }
     if (/^\/agent\/runs\/[^/]+\/approvals\/[^/]+$/.test(p)) {
       const b = await body();
       seen.approvals.push({ approvalId: p.split('/').pop(), runId: p.split('/')[3], ...b });
@@ -232,6 +241,8 @@ async function startStubEngine(data = {}) {
     state,
     /** 给下一次 run 排剧本。 */
     script: (events) => queue.push(events),
+    /** P1-K3:换一份待批计数(rev 随之前进,客户端下一轮拉到整份)。 */
+    setPending: (sessions) => { state.pendingSessions = sessions; state.pendingRev = `stub:${Number(state.pendingRev.split(':')[1]) + 1}`; },
     close: () => { for (const o of open.values()) { try { o.res.end() } catch { /* ignore */ } } server.close(); },
   };
 }

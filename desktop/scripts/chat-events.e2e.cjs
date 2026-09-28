@@ -28,6 +28,10 @@ const SESSION = {
   created_at: '2026-08-18 09:00:00', updated_at: '2026-08-18 09:00:00',
 }
 
+// P1-K3:第二个会话 —— 没订阅(没开过),只能靠引擎待批索引 GET /agent/approvals/pending 画「等你处理」点
+const SESSION2 = { ...SESSION, id: 's2', title: '手机发起的远程会话', updated_at: '2026-08-18 08:00:00' }
+const K3_UNIT = '6c1d7a4e-2b3f-4a5c-8d9e-0f1a2b3c4d5e'
+
 const PLAN_APPROVE_AUTO = '批准,自动开始执行'
 const PLAN_REVISION_MARK = '\n<<<REVISED_PLAN>>>\n'
 const PLAN_OPTIONS = [PLAN_APPROVE_AUTO, '批准,退出计划模式(手动开始)', '需要修改(在输入框写反馈)', '拒绝,保持计划模式']
@@ -66,7 +70,7 @@ async function main() {
     process.exit(1)
   }
   const stub = await startStubEngine({
-    sessions: [SESSION],
+    sessions: [SESSION, SESSION2],
     // 预置一条带 sketch 调用的历史消息:开场水合即走 recordToUi back-fill(F5 断言历史卡不丢)。
     messages: [{
       id: 'hm1', role: 'model', content: '历史前言。\n\n历史后记。', timestamp: 1755500000000,
@@ -77,7 +81,8 @@ async function main() {
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatev-'))
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
+    // -ApplePersistenceIgnoreState:强杀过的 Electron 下次启动先弹「重新打开窗口」模态框,firstWindow 等不到(台架纪律)
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
   })
@@ -721,6 +726,75 @@ async function main() {
     const recalled = await inputTa.inputValue().catch(() => '')
     check('P5 ↑ 召回拿到的是上一句真话,不是 <approval_update>', recalled === '先改 CHANGELOG 再发布', JSON.stringify(recalled))
     await win.screenshot({ path: process.env.PARKED_SHOT || '/tmp/approval-parked.png' }).catch(() => {})
+
+    // ── 场景 K3(P1 · K3 审批送达):① 会话列表「等你处理」点来自引擎待批索引(没订阅的会话也亮);
+    //    ② 远程会话的审批卡写明来源设备,另一端(这里由剧本扮演)先答 → 卡离开托盘。
+    //    「在 Pixel 9 上」这句收起后缀只在渲染已收起卡片的地方可见(托盘在兑现那一刻就撤卡),由 ApprovalCard.remote.test 钉。
+    const toggleDark = () => win.evaluate(() => {
+      const r = document.documentElement
+      const wasDark = r.classList.contains('dark')
+      r.classList.toggle('dark', !wasDark)
+      r.setAttribute('data-mode', wasDark ? 'light' : 'dark')
+      return wasDark
+    })
+    stub.setPending([{ sessionId: 's2', approvals: 1, inquiries: 1, localOnly: 0, oldestAt: '2026-09-28T03:12:05.000Z', remote: true }])
+    await win.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))) // 回前台立即拉(不等 20s 那一轮)
+    let dot = null
+    for (let i = 0; i < 20 && !dot; i++) {
+      await win.waitForTimeout(300)
+      dot = await win.evaluate(() => {
+        const row = [...document.querySelectorAll('.t2s-srow')].find((r) => (r.textContent || '').includes('手机发起的远程会话'))
+        const d = row?.querySelector('.t2s-dot')
+        return d ? { cls: d.className, title: d.getAttribute('title'), n: d.getAttribute('data-attention') } : null
+      })
+    }
+    check('K3a 没订阅的会话按引擎待批索引亮「等你处理」点(1 审批 + 1 询问 = 2)',
+      !!dot && /attention/.test(dot.cls) && dot.n === '2' && /2 项等你处理/.test(dot.title || ''), JSON.stringify(dot) + ` pendingPulls=${stub.seen.pending || 0}`)
+    const sidebarBox = await win.locator('.t2s-srow', { hasText: '手机发起的远程会话' }).first().boundingBox().catch(() => null)
+    const clip = sidebarBox ? { x: 0, y: Math.max(0, sidebarBox.y - 90), width: Math.min(420, sidebarBox.x + sidebarBox.width + 40), height: 200 } : undefined
+    await win.screenshot({ path: process.env.K3_SIDEBAR_SHOT || '/tmp/k3-sidebar-attention.png', ...(clip ? { clip } : {}) }).catch(() => {})
+    await toggleDark()
+    await win.waitForTimeout(400)
+    await win.screenshot({ path: process.env.K3_SIDEBAR_SHOT_DARK || '/tmp/k3-sidebar-attention-dark.png', ...(clip ? { clip } : {}) }).catch(() => {})
+    await toggleDark()
+    stub.setPending([])
+    await win.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    let cleared = false
+    for (let i = 0; i < 20 && !cleared; i++) {
+      await win.waitForTimeout(300)
+      cleared = await win.evaluate(() => {
+        const row = [...document.querySelectorAll('.t2s-srow')].find((r) => (r.textContent || '').includes('手机发起的远程会话'))
+        return !!row && !row.querySelector('.t2s-dot.attention')
+      })
+    }
+    check('K3b 索引清空(对方答掉)→ 点灭', cleared, '')
+
+    stub.script([
+      { type: 'approval_request', payload: {
+        approvalId: 'k3a', name: 'run_bash', arguments: JSON.stringify({ command: 'npm run deploy' }), preview: '$ npm run deploy',
+        reason: { kind: 'mode', mode: 'auto-edit' }, remote: { via: 'tunnel', callerUnit: K3_UNIT, callerKind: 'phone', callerName: 'Pixel 9' },
+      } },
+      // 另一端(执行设备本机 / 别的设备)先答:4s 后引擎广播 approval_result,by = 谁答的
+      { type: 'approval_result', payload: { approvalId: 'k3a', action: 'approve', by: { via: 'tunnel', callerUnit: K3_UNIT, callerName: 'Pixel 9' } }, delay: 4000 },
+      { type: 'token', payload: { delta: '部署完成。' } },
+      { type: 'done', payload: { content: '部署完成。' } },
+    ])
+    await send(win, '远程会话里要批准的部署')
+    const pend = await win.evaluate(() => ({
+      tray: document.querySelector('[data-approval-tray]')?.getAttribute('data-approval-tray') || null,
+      source: document.querySelector('.t2c-apv [data-approval-remote]')?.textContent || '',
+      btns: [...document.querySelectorAll('.t2c-apv .approval-actions button')].map((b) => (b.textContent || '').trim()),
+    }))
+    check('K3c 远程会话的审批卡写明来源设备(K1 来源行),托盘里一张', pend.tray === '1' && pend.source.includes('Pixel 9'), JSON.stringify(pend))
+    await win.screenshot({ path: process.env.K3_CARD_SHOT || '/tmp/k3-remote-card.png' }).catch(() => {})
+    await toggleDark()
+    await win.waitForTimeout(400)
+    await win.screenshot({ path: process.env.K3_CARD_SHOT_DARK || '/tmp/k3-remote-card-dark.png' }).catch(() => {})
+    await toggleDark()
+    await win.waitForTimeout(3600)
+    const gone = await win.evaluate(() => ({ trays: document.querySelectorAll('[data-approval-tray]').length, text: document.body.innerText.includes('部署完成') }))
+    check('K3d 另一端先答(approval_result.by)→ 卡离开托盘、run 接着跑完;本端没发任何兑现请求',
+      gone.trays === 0 && gone.text && !stub.seen.approvals.some((a) => a.approvalId === 'k3a'), JSON.stringify(gone))
 
     // ── 场景 E:custom 规则编辑器(H2)。此前这套规则只能手写 config.json。
     // 钉三件:入口只在选了 custom 时出现 / 打开时把服务端已有规则读进来 / 保存发出的 PUT 是编辑后的内容。
