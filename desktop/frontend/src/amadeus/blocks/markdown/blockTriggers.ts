@@ -37,8 +37,12 @@ export interface Trigger {
  * 标题正文允许以编号开头（例如 `1. 背景`）。若标题已经由 `### ` 等前缀设好，随后输入
  * `1. `，应保留为标题文字，而不是悄悄把整行降级成有序列表。只收窄这一种自动触发；
  * 普通段落的编号列表、标题里的其他前缀，以及斜杠菜单/工具栏的显式转换仍走 applyTrigger。
+ *
+ * 代码块里一律不触发(K-03):`# comment`、`> x`、`$$` 在代码里就是代码字面。空格入口
+ * (MarkdownBlock handleKeyDown)与回车入口(unified/keyboard enterRunsTrigger)都经过这里。
  */
 export function canAutoTriggerFromBlock(blockType: string, trig: Trigger): boolean {
+  if (blockType === 'code_block') return false
   return blockType !== 'heading' || trig.kind !== 'ordered'
 }
 
