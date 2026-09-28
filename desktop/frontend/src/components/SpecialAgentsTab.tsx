@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
-import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
+import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAgentsConfig, SpecialAgentsSummary, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
 import { CapabilityMenu } from './CapabilityMenu'
@@ -20,6 +20,9 @@ registerMessages({
   'specialUi.saveHint': { zh: '修改后保存，新的设置才会生效。', en: 'Save your changes to apply the new settings.' },
   'specialUi.retry': { zh: '重新加载', en: 'Try again' },
   'specialUi.loadFailed': { zh: '暂时无法读取后台 Agent 设置。', en: 'Background agent settings could not be loaded.' },
+  // P1-K10b:设备页的引擎是那台电脑,GET /agent/special/config 对远程来源只回开关与两个节奏值(提示词、授权文件夹、模型、时段、预算不回)。
+  // Muse 的权限档 / 心跳经 muse/status、人格经 /agent/agents 仍对远端可读 —— 这句文案只说「这页显示什么」,不宣称别处也藏了
+  'specialUi.remoteOnly': { zh: '后台 Agent 只能在运行它们的那台电脑上设置。这里只显示它们是否开启。', en: 'Background agents can only be set up on the computer they run on. This page only shows whether they are on.' },
   'specialUi.advanced': { zh: '高级设置', en: 'Advanced settings' },
   'specialUi.memory': { zh: '记忆与进化', en: 'Memory and growth' },
   'specialUi.resetPrompt': { zh: '恢复默认提示词', en: 'Restore default prompt' },
@@ -181,6 +184,8 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   const [active, setActive] = useState<'historian' | 'muse'>('historian')
   // 云端(web/安卓):引擎只有按轮 Historian 的四项(开关 / 模型 / 轮数 / 首轮),Muse、模式、提示词都是本地特性。
   const [cloud, setCloud] = useState(false)
+  // 远程来源(设备页)只拿到开关摘要:不渲染编辑器(远端本就写不进去),只读显示开关状态(P1-K10b)
+  const [remoteView, setRemoteView] = useState<SpecialAgentsSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -189,7 +194,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   useEffect(() => {
     let alive = true
     setLoading(true); setError('')
-    getSpecialConfig(cfg).then((r) => { if (!alive) return; setCloud(!!r.cloud); const cached = specialDrafts.get(draftKey); setConf(cached?.conf || r.config); setBaseline(cached?.baseline || r.config); setPromptDefault(r.defaults?.historianPrompt || ''); setPrompt(cached?.prompt ?? (r.config.historian.prompt || r.defaults?.historianPrompt || '')); setFolders(cached?.folders ?? r.config.muse.allowedFolders.join('\n')) }).catch(() => { if (alive) setError(t('specialUi.loadFailed')) }).finally(() => { if (alive) setLoading(false) })
+    getSpecialConfig(cfg).then((r) => { if (!alive) return; if (r.remote) { setRemoteView(r.config); return } setRemoteView(null); setCloud(!!r.cloud); const cached = specialDrafts.get(draftKey); setConf(cached?.conf || r.config); setBaseline(cached?.baseline || r.config); setPromptDefault(r.defaults?.historianPrompt || ''); setPrompt(cached?.prompt ?? (r.config.historian.prompt || r.defaults?.historianPrompt || '')); setFolders(cached?.folders ?? r.config.muse.allowedFolders.join('\n')) }).catch(() => { if (alive) setError(t('specialUi.loadFailed')) }).finally(() => { if (alive) setLoading(false) })
     listModels(cfg).then((r) => { if (alive) { setModels(r.models); setSlotDefault(r.backgroundModelId || r.defaultModelId || '') } }).catch(() => {})
     listAgents(cfg).then((r) => { if (alive) setAgents(r) }).catch(() => {})
     return () => { alive = false }
@@ -215,6 +220,12 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
     } catch (e: any) { setError(t('settings.special.saveFail', { e: e?.message || e })) } finally { setBusy(false) }
   }
   if (loading) return <div className="special-loading" role="status"><Loader2 size={15} className="spin" />{t('common.loading')}</div>
+  if (remoteView) return <div className="special-agents">
+    <p className="special-intro">{t('specialUi.remoteOnly')}</p>
+    <div className="special-agent-nav">
+      {(['historian', 'muse'] as const).map((role) => { const Icon = role === 'historian' ? History : Sparkles; const on = !!remoteView[role]?.enabled; return <div key={role} className="special-agent-status"><Icon size={18} /><span><strong>{t(`settings.special.${role}`)}</strong><small>{t(role === 'historian' ? 'specialUi.historianSummary' : 'specialUi.museSummary')}</small></span><i className={on ? 'on' : ''}>{t(on ? 'settings.special.on' : 'settings.special.off')}</i></div> })}
+    </div>
+  </div>
   if (!conf || !baseline) return <div className="special-loading" role="alert">{error}<button className="btn" onClick={() => setRetry((n) => n + 1)}>{t('specialUi.retry')}</button></div>
   const h = conf.historian, m = conf.muse
   const hMode = h.mode || 'independent', museMode = m.mode || 'ask'
