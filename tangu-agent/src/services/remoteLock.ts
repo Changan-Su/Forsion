@@ -34,6 +34,8 @@ export interface RemoteLockState {
 type FileVerdict = { kind: 'none' } | { kind: 'unlocked' } | { kind: 'locked'; at?: number } | { kind: 'broken' };
 
 let latchedAt: number | null = null;
+/** 每次从「未上闩」到「上闩」+1:急停路由据此把同一段锁定期里的重发 estop 报告累计起来(见 routes/remote.ts)。 */
+let latchSeq = 0;
 
 /** 读锁文件 → 判定(纯读,不抛)。 */
 function readLockFile(): FileVerdict {
@@ -71,7 +73,12 @@ export function remoteLockState(): RemoteLockState {
 
 /** 上闩(只由 estop 路由调;幂等,保留第一次的时刻)。 */
 export function latchRemoteLock(): void {
-  if (latchedAt === null) latchedAt = Date.now();
+  if (latchedAt === null) { latchedAt = Date.now(); latchSeq++; }
+}
+
+/** 当前这段闩的编号(未上闩 = null)。 */
+export function remoteLatchId(): number | null {
+  return latchedAt === null ? null : latchSeq;
 }
 
 /**

@@ -14,7 +14,7 @@ import { deps } from '../seams/runtime.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { abortRun, abortUnregisteredNonLocalRuns, waitForRunSettlement } from '../services/agentLoop.js';
 import { activitySnapshot, notifyActivity, onActivityChange, type RunCategory } from '../services/remoteActivity.js';
-import { clearRemoteLatch, latchRemoteLock, remoteLocked, remoteLockState } from '../services/remoteLock.js';
+import { clearRemoteLatch, latchRemoteLock, remoteLatchId, remoteLocked, remoteLockState } from '../services/remoteLock.js';
 import { killProcessesWhere } from '../tools/processRegistry.js';
 import { revertRemoteMuseEntries } from '../services/remoteCreated.js';
 
@@ -23,6 +23,10 @@ const router = Router();
 const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This is only available on the computer running the engine.' };
 const SOURCES = new Set(['hotkey', 'tray', 'settings']);
 
+/**
+ * 急停报告。计数是**这段锁定期**(上闩 → 解锁清闩)累计的:主进程超时后补发、或反向对账重发的 estop 回的是整段结果,
+ * 而不是「这一发」的 0(第一发其实已经停掉了那些 run —— 独立评审 P2)。解锁后的下一次急停从零算起。
+ */
 export interface EstopReport {
   ok: true;
   aborted: Array<{ runId: string; sessionId: string; category: RunCategory }>;
@@ -31,6 +35,8 @@ export interface EstopReport {
   /** estop 之后 remoteLocked()(闩已上 → 恒 true)。 */
   locked: boolean;
 }
+
+let episode: { latchId: number | null; aborted: Map<string, EstopReport['aborted'][number]>; killedProcesses: number; revertedEntries: number } | null = null;
 
 /** hostExec 否 → 404;带远程来源头 → 403。两道都过了返回 true。 */
 function localOnly(req: any, res: any): boolean {
@@ -91,7 +97,15 @@ router.post('/agent/remote/estop', authMiddleware, async (req, res) => {
     await Promise.all([...ids].map((id) => waitForRunSettlement(id, 3000).catch(() => false)));
     notifyActivity();
     console.log(`[remote] estop(${source}):中止 ${targets.length} 个非本机 run、结束 ${killedProcesses} 个后台进程、撤回 ${revertedEntries} 个远端批准的条目`);
-    const report: EstopReport = { ok: true, aborted: targets, killedProcesses, revertedEntries, locked: remoteLocked() };
+    // 同一段闩内累计(闩编号变了 = 解锁过 / 引擎重启过 → 从零算)
+    const latchId = remoteLatchId();
+    if (!episode || episode.latchId !== latchId) episode = { latchId, aborted: new Map(), killedProcesses: 0, revertedEntries: 0 };
+    for (const r of targets) episode.aborted.set(r.runId, r);
+    episode.killedProcesses += killedProcesses;
+    episode.revertedEntries += revertedEntries;
+    const report: EstopReport = {
+      ok: true, aborted: [...episode.aborted.values()], killedProcesses: episode.killedProcesses, revertedEntries: episode.revertedEntries, locked: remoteLocked(),
+    };
     res.json(report);
   } catch (e: any) {
     // 闩已上;这里只可能是快照 / 中止本身出错 —— 如实回 500,主进程会在引擎下次 ready 时补发

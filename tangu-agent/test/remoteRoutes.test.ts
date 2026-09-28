@@ -274,6 +274,19 @@ describe('急停 + 解锁(S5 / S2)', () => {
     await settled(qLocal.runId);
   }, 30_000);
 
+  it('同一段锁定期里重发的急停回累计报告(主进程超时补发看得到第一发停掉的);解锁后下一次从零算', async () => {
+    const r1 = await start('SR', REMOTE);
+    await vi.waitFor(async () => expect((await get('/agent/remote/activity')).body.runs.map((x: any) => x.runId)).toContain(r1.runId), { timeout: 5000 });
+    const first = await post('/agent/remote/estop', { source: 'hotkey' });
+    expect(first.body.aborted.map((x: any) => x.runId)).toEqual([r1.runId]);
+    await settled(r1.runId);
+    const again = await post('/agent/remote/estop', { source: 'hotkey' });
+    expect(again.body).toMatchObject({ ok: true, locked: true, aborted: [expect.objectContaining({ runId: r1.runId, category: 'remote' })] });
+    writeFileSync(lockFile, JSON.stringify({ v: 1, lock: null, hotkey: '' }));
+    expect((await post('/agent/remote/unlock')).status).toBe(200);
+    expect((await post('/agent/remote/estop', { source: 'tray' })).body).toMatchObject({ aborted: [], killedProcesses: 0, revertedEntries: 0 });
+  }, 20_000);
+
   it('急停幂等:没有在飞 run 也成功并上闩;source 非法按 settings', async () => {
     const r = await post('/agent/remote/estop', { source: 'evil' });
     expect(r.body).toEqual({ ok: true, aborted: [], killedProcesses: 0, revertedEntries: 0, locked: true });
