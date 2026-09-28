@@ -1373,7 +1373,9 @@ body.amx-marquee-active * {
   transform: rotate(45deg);
   pointer-events: none;
 }
-.am-app .milkdown .ProseMirror li[data-item-type='task'][data-checked='true'] {
+/* 完成样式只落在本项自己的段落上(R-22):写在整个 li 上时,删除线沿行内盒传播、颜色向下继承 ——
+   父项一勾,没勾的子项也跟着划线变灰。 */
+.am-app .milkdown .ProseMirror li[data-item-type='task'][data-checked='true'] > p {
   color: var(--text-muted);
   text-decoration: line-through;
   text-decoration-color: var(--text-muted);

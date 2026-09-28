@@ -4,6 +4,7 @@
 // 块矩形之外的留白(块间缝/两侧余白)维持立即起框。「从行尾留白拉框选」(selection-display.check
 // 钉住的设计)照旧成立,这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
 // K8b(K-11):待办上 Mod+Enter 翻转勾选,普通列表仍拆项。
+// R22(R-22):父待办勾选后完成样式不传染给没勾的子项。
 // 用法:npm run check:taskbox(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
 const os = require('os')
@@ -218,6 +219,25 @@ async function main() {
       await pg.waitForTimeout(200)
       const d = await items(pg)
       check('K8b 待办下的普通子项:只拆子项,外层待办勾选态不动', d.endsWith(' :父待办 | -:子项 | -:'), d)
+      await pg.close()
+    }
+    // R-22:父待办勾选后,完成样式(删除线 / 变灰)只落在它自己的那段上,不传染给没勾的子项。
+    {
+      const pg = await open(browser, '- [x] 父任务已完成\n  - [ ] 子任务未完成\n  - [x] 子任务已完成\n- [ ] 对照未完成\n', '')
+      const st = await pg.evaluate((PM) => {
+        const out = {}
+        for (const li of document.querySelectorAll(PM + ' li[data-item-type=task]')) {
+          const p = li.querySelector(':scope > p')
+          let struck = false
+          for (let a = p; a && a !== document.body; a = a.parentElement) if (getComputedStyle(a).textDecorationLine.includes('line-through')) struck = true
+          out[p.textContent] = { struck, color: getComputedStyle(p).color }
+        }
+        return out
+      }, PM)
+      const plain = st['对照未完成']?.color
+      check('R22 父待办勾选:自己划线变灰,没勾的子项不划线不变灰,勾了的子项照常',
+        st['父任务已完成']?.struck && st['父任务已完成'].color !== plain && !st['子任务未完成']?.struck && st['子任务未完成']?.color === plain && st['子任务已完成']?.struck,
+        JSON.stringify(st))
       await pg.close()
     }
   } finally {
