@@ -49,7 +49,7 @@ import { docHeadings } from './outline'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
-import { AmadeusPropertiesPanel } from '../../amadeusProperties'
+import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
@@ -913,6 +913,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
+  // 属性面板里还没失焦的草稿(C-02):落盘冲洗(卸载 / beforeunload / 换库 / 退出握手)先把它们提交进 pipe.fm。
+  const [propDrafts] = useState(() => new Set<() => void>())
+  const flushPropDrafts = (): void => { for (const f of [...propDrafts]) f() }
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
   const [editorKey, setEditorKey] = useState(0) // 源码 → 可视切回时重建编辑器(正文可能被改)
 
@@ -1674,6 +1677,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 卸载/刷新:立刻冲洗待写(同步启动写,不等防抖;先拉平编辑器最后几击)。
   useEffect(() => {
     const flush = (): void => {
+      flushPropDrafts()
       syncFromEditor()
       if (pipe.timer) clearTimeout(pipe.timer)
       pipe.timer = null
@@ -1761,6 +1765,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       peerWrote: () => reconcileNow(), // 同窗另一实例刚写盘:与外部改动同一条回灌路径
       flush: (strict = false) => {
         if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
+        flushPropDrafts()
         syncFromEditor()
         if (pipe.timer) {
           clearTimeout(pipe.timer)
@@ -2021,7 +2026,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           onEnterBody={(kind) => setBodyFocus(kind === 'enter' ? 'body-enter' : 'start')}
           focusSignal={titleFocus}
         />
-        {!compact && <AmadeusPropertiesPanel
+        {!compact && <PropsDraftFlushContext.Provider value={propDrafts}><AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
           readOnly={readOnly}
           onCommit={(yaml) => {
@@ -2031,7 +2036,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             pipe.pending = true
             void writeNow()
           }}
-        />}
+        /></PropsDraftFlushContext.Provider>}
         {/* 写盘状态条(D-04):写失败 → 常驻「未保存」+ 立即重试;上次没写成的草稿 → 恢复 / 丢弃。
             样式复用全局 `.mk-notice` 提示条(base.css),本处只在 amadeus-host.css 里改宽度与外距。 */}
         {!readOnly && saveFailed && (

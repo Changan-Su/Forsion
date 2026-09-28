@@ -5,9 +5,9 @@
  *  换行不被单行框压扁。嵌套结构只读展示,请去源码模式编辑。
  *
  *  插件文件类型的 fm 键(如画布的 `canvas` 几何键,FileTypeContribution.fmKeys 声明):
- *  **只在展示层隐藏**,模型(entries)永远持全量 —— 行级提交根本不碰没改的键;退回整块重建时(文本解析不了,
- *  entries 模式下不会发生)也走全量列表,隐藏键就结构性地不可能被抹掉。⚠️ 千万别改成「先 filter 再 commit」:那会让
- *  任意一次属性编辑静默删掉插件数据(毁档级,2026-08-14 评审 P0)。契约仪器:amadeusProperties.model.test.ts。
+ *  **只在展示层隐藏**,模型(entries)永远持全量 —— 行级提交根本不碰没改的键,隐藏键就结构性地不可能被抹掉;
+ *  此刻的 fm 解析不了就不提交(绝不拿空列表重建)。⚠️ 千万别改成「先 filter 再整块重建」:那会让任意一次属性编辑
+ *  静默删掉插件数据(毁档级,2026-08-14 评审 P0)。契约仪器:amadeusProperties.model.test.ts。
  *  该不变式只覆盖 entries 模式;坏 YAML 的原文模式刻意全透明(行级剥离在坏 YAML 上不可靠),
  *  插件文件在原文模式顶部给警示行。
  *
@@ -22,7 +22,7 @@
  *  一键全没),冲突时撤销回原样再失焦即采用外部版本。不放弃的 Esc 原样冒泡(不吞)。输入法组合中的 Esc 只取消
  *  候选,不动草稿。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
  *  (DOM)、unified-page.check 的 PR 组(真浏览器三变体)。 */
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { Plus, X } from 'lucide-react'
 import { usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
@@ -48,7 +48,6 @@ registerMessages({
 })
 
 export interface FmEntry { key: string; value: unknown }
-type Entry = FmEntry
 
 /** fmExtra 文本 → 全量键值列表(顺序保留);解析不了 → ok:false 走原文模式。 */
 export function parseFmEntries(fmExtra: string): { ok: boolean; entries: FmEntry[] } {
@@ -88,39 +87,89 @@ export function draftToCommit(draft: string | null, base: string, current: strin
   return d === norm(base) || d === norm(current) ? null : d
 }
 
+/** 草稿冲洗登记处(评审 2026-09-27 C-02):宿主提供 = 草稿可以在失焦之外被冲洗 ——
+ *  ① 卸载:键盘导航换篇(Cmd+Alt+←、Cmd+Shift+[)/ 关标签时框还聚焦着,React 不给已脱离的节点派 onBlur,正在打的字就丢了;
+ *  ② 宿主落盘冲洗:beforeunload、换库 / 切号 / 退出握手(registerUnifiedPipe.flush)。
+ *  只有 UnifiedPage 提供:它按路径建实例(key 含路径),卸载冲洗必然落回本篇。v3 PageView 刻意不提供 —— 那里的 store 换页时
+ *  先换篇、后卸载行,卸载冲洗会把上一篇的草稿写进下一篇。 */
+export const PropsDraftFlushContext = createContext<Set<() => void> | null>(null)
+
 /** 受控草稿:draft=null → 显示 current(外部改动即时可见);第一击键记下 base。
  *  conflict = 有草稿、同一字段在编辑期间被别处改了(current 已离开 base),**且失焦真会拿草稿盖掉它** ——
  *  与 draftToCommit 同一判据:草稿(归一后)等于 base 或 current 时失焦零写入、外部值胜出,这时再标冲突、
  *  提示「失焦后以你的输入为准」就和结果相反(收口 N-6 / E5)。
  *  escDiscards:'conflict' = 只有冲突时 Esc 才放弃草稿(单行框);'never' = Esc 从不放弃(原文框,见文件头 N-3)。
- *  norm:比较前的归一(数字框 / 键名框去首尾空白),冲突判据与失焦提交共用。 */
-function useFieldDraft(current: string, escDiscards: 'conflict' | 'never' = 'conflict', norm: (s: string) => string = (s) => s) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const [base, setBase] = useState(current)
+ *  norm:比较前的归一(数字框 / 键名框去首尾空白),冲突判据与失焦提交共用。
+ *  enterCommits:单行框回车 = 失焦提交(键盘离开,C-02);多行框 / 原文框回车照常换行。
+ *  commit:失焦之外的冲洗(见 PropsDraftFlushContext)用它提交;失焦仍由调用方拿 settle() 的返回值提交。 */
+function useFieldDraft(current: string, commit: (v: string) => void, { escDiscards = 'conflict', norm = (s: string) => s, enterCommits = false }: {
+  escDiscards?: 'conflict' | 'never'
+  norm?: (s: string) => string
+  enterCommits?: boolean
+} = {}) {
+  const [draft, setDraftState] = useState<string | null>(null)
+  const [base, setBaseState] = useState(current)
+  // 最新值镜像:冲洗(卸载 cleanup / 宿主调用)不在渲染里,读它;draft/base 随 setter **同步**更新 ——
+  // 失焦提交后紧跟着卸载(同一 tick),卸载冲洗读到的已经是 null,不会再提交一次。
+  const live = useRef({ draft, base, current, norm, commit })
+  live.current.current = current
+  live.current.norm = norm
+  live.current.commit = commit
+  const setDraft = (v: string | null): void => { live.current.draft = v; setDraftState(v) }
+  const setBase = (v: string): void => { live.current.base = v; setBaseState(v) }
+  const flushers = useContext(PropsDraftFlushContext)
+  useLayoutEffect(() => {
+    if (!flushers) return
+    // 冲洗 = 提交 + 把基线挪到已提交的值,草稿留在框里继续打(宿主冲洗不该把人踢出输入框);之后改回原值也能再提交,
+    // prop 跟上后 current === base,不误标冲突。卸载时同一个函数最后跑一次(useLayoutEffect 的 cleanup 在节点
+    // 脱离之前、父级卸载冲洗之前执行)。
+    const flush = (): void => {
+      const L = live.current
+      const n = draftToCommit(L.draft, L.base, L.current, L.norm)
+      if (n === null) return
+      setBase(n)
+      L.commit(n)
+    }
+    flushers.add(flush)
+    return () => {
+      flushers.delete(flush)
+      flush()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flushers])
   const conflict = draft !== null && current !== base && draftToCommit(draft, base, current, norm) !== null
+  /** Esc:**标着冲突**才吞键 —— 放弃草稿 = 接受外部值(不 blur:blur 会拿旧闭包里的草稿去提交)。
+   *  没冲突 / 原文框:不处理、照常冒泡,草稿留着(放弃不进撤销栈,无冲突时清草稿 = 不可恢复地丢字,收口 N-3)。
+   *  ⚠️ 输入法组合中的 Esc 是「取消候选」,不是放弃草稿:不判组合态会把已上屏的字连同草稿一起清掉、
+   *  失焦零写入(静默吞字)。keyCode 229 兜 Safari 类「compositionend 先于 keydown」的时序。回车同一道组合闸(选词回车)。
+   *  仪器:amadeusProperties.draft.test.ts、unified-page.check PR5(真 CDP 组合)。 */
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>): void => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Enter' && enterCommits) {
+      e.preventDefault()
+      e.currentTarget.blur() // → onBlur → settle → 提交
+      return
+    }
+    if (e.key !== 'Escape' || escDiscards === 'never' || !conflict) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDraft(null)
+  }
   return {
     shown: draft ?? current,
     conflict,
     change: (v: string): void => {
-      if (draft === null) setBase(current)
+      if (live.current.draft === null) setBase(live.current.current)
       setDraft(v)
     },
     /** 失焦收口:草稿一律清掉(之后显示回到 prop),返回需要提交的文本或 null。 */
     settle: (): string | null => {
+      const L = live.current
+      const n = draftToCommit(L.draft, L.base, L.current, L.norm)
       setDraft(null)
-      return draftToCommit(draft, base, current, norm)
+      return n
     },
-    /** Esc:**标着冲突**才吞键 —— 放弃草稿 = 接受外部值(不 blur:blur 会拿旧闭包里的草稿去提交)。
-     *  没冲突 / 原文框:不处理、照常冒泡,草稿留着(放弃不进撤销栈,无冲突时清草稿 = 不可恢复地丢字,收口 N-3)。
-     *  ⚠️ 输入法组合中的 Esc 是「取消候选」,不是放弃草稿:不判组合态会把已上屏的字连同草稿一起清掉、
-     *  失焦零写入(静默吞字)。keyCode 229 兜 Safari 类「compositionend 先于 keydown」的时序。
-     *  仪器:amadeusProperties.draft.test.ts、unified-page.check PR5(真 CDP 组合)。 */
-    onEscape: (e: KeyboardEvent<HTMLElement>): void => {
-      if (e.key !== 'Escape' || e.nativeEvent.isComposing || e.keyCode === 229 || escDiscards === 'never' || !conflict) return
-      e.preventDefault()
-      e.stopPropagation()
-      setDraft(null)
-    },
+    onKeyDown,
   }
 }
 
@@ -139,12 +188,17 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
   const scoped = useScopedPageStore()
   const external = fmProp !== undefined
   const fmExtra = external ? fmProp : storeFm
+  // 提交一律基于**此刻**的 fm 文本(C-02):行的卸载冲洗跑在本轮 commit 的 mutation 阶段,行里的闭包还是上一轮的,
+  // 拿旧快照提交会把这期间别处改的键改回去(addProp 的 askString 等待期同理)。渲染期同步 —— layout effect 更新
+  // 要等到 mutation 之后,来不及。
+  const fmNow = useRef(fmExtra)
+  fmNow.current = fmExtra
   const [open, setOpen] = useState(false)
   useEffect(() => { setOpen(false) }, [activePage])
 
   const parsed = useMemo(() => parseFmEntries(fmExtra), [fmExtra])
   // 插件文件类型声明的 fm 键只做**展示隐藏**(用户手改会弄坏插件数据,普通笔记也没这些键);
-  // 模型仍持全量,行编辑按 idx 回写全量列表。unified(external)不会是插件页,恒不隐藏。
+  // 模型仍持全量;行编辑是行级提交,只动被编辑的键(D-20)。unified(external)不会是插件页,恒不隐藏。
   const hiddenKeys = useMemo(() => {
     const ft = !external && activePage ? matchFileType(activePage) : undefined
     return new Set(ft?.fmKeys ?? [])
@@ -160,19 +214,20 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
     if (onCommit) onCommit(yaml)
     else scoped.getState().setFmExtra(yaml)
   }
-  /** 行级提交(D-20):text = 只改了被编辑那个键的新全文;null(解析不了,entries 模式下不会)→ 退回整块重建。
-   *  ⚠️ fallback 只许喂**全量** entries(含隐藏的插件键)—— 见文件头 P0 注。 */
-  const commit = (text: string | null, fallback: Entry[]): void => {
-    commitYaml(text ?? fmEntriesToYaml(fallback))
+  /** 行级提交(D-20):text = 只改了被编辑那个键的新全文(隐藏的插件键结构性地不被碰到)。null = 此刻的 fm 已经
+   *  解析不了(编辑期间被别处改坏)→ 不提交:面板随即切原文模式,绝不拿空列表重建去抹掉整块。 */
+  const commit = (text: string | null): void => {
+    if (text !== null) commitYaml(text)
   }
+  const setKey = (key: string, v: unknown): void => commit(patchYamlText(fmNow.current, { [key]: v }))
 
   const addProp = async (): Promise<void> => {
     const name = (await askString(t('amprops.add'), '', { label: t('amprops.addLabel') }))?.trim()
     if (!name) return
     if (/^amadeus_/.test(name)) { window.alert(t('amprops.reservedKey')); return }
     if (hiddenKeys.has(name)) { window.alert(t('amprops.pluginManaged')); return }
-    if (parsed.entries.some((e) => e.key === name)) return
-    commit(patchYamlText(fmExtra, { [name]: '' }), [...parsed.entries, { key: name, value: '' }])
+    if (parseFmEntries(fmNow.current).entries.some((e) => e.key === name)) return
+    setKey(name, '')
     setOpen(true)
   }
 
@@ -196,7 +251,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
             </div>
           ) : (
             // 行身份 = 键名(YAML 映射里唯一;重复键解析失败走原文模式)。不带 idx:别处插/删一个键
-            // 会让下方各行 idx 平移,带 idx 就整片重挂、正在打的草稿被静默丢掉。提交仍按当期 e.idx 写全量。
+            // 会让下方各行 idx 平移,带 idx 就整片重挂、正在打的草稿被静默丢掉。提交按键名、基于此刻的 fm(fmNow)。
             <div className="amx-prop-row" key={`${activePage}:${e.key}`}>
               <KeyNameInput
                 name={e.key}
@@ -204,13 +259,13 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
                   // 改成保留键/插件键或撞已有键(含隐藏键)→ 拒绝并回显原名(否则 commit 会静默删值/合并覆盖)。
                   const invalid = /^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_canvas|amadeus_next_id)$/.test(k)
                     || hiddenKeys.has(k)
-                    || parsed.entries.some((x, j) => j !== e.idx && x.key === k)
+                    || parseFmEntries(fmNow.current).entries.some((x) => x.key !== e.key && x.key === k)
                   if (!k || invalid) return
-                  commit(renameYamlKey(fmExtra, e.key, k), parsed.entries.map((x, j) => (j === e.idx ? { ...x, key: k } : x)))
+                  commit(renameYamlKey(fmNow.current, e.key, k))
                 }}
               />
-              <ValueEditor value={e.value} onCommit={(v) => commit(patchYamlText(fmExtra, { [e.key]: v }), parsed.entries.map((x, j) => (j === e.idx ? { ...x, value: v } : x)))} />
-              <button className="amx-prop-del" title={t('amprops.delete')} onClick={() => commit(patchYamlText(fmExtra, { [e.key]: undefined }), parsed.entries.filter((_, j) => j !== e.idx))}><X size={12} /></button>
+              <ValueEditor value={e.value} onCommit={(v) => setKey(e.key, v)} />
+              <button className="amx-prop-del" title={t('amprops.delete')} onClick={() => setKey(e.key, undefined)}><X size={12} /></button>
             </div>
           ))}
         </div>
@@ -232,7 +287,8 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
 /** 坏 YAML 原文框:受控草稿(C-01 变体 C —— 原 defaultValue 版外部改写后白点一下整段写回旧文)。 */
 function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boolean; onCommit: (yaml: string) => void }) {
   const { t } = useI18n()
-  const f = useFieldDraft(text, 'never') // 多行草稿:Esc 从不放弃(收口 N-3,见文件头)
+  const commit = (v: string): void => { if (!readOnly) onCommit(v) }
+  const f = useFieldDraft(text, commit, { escDiscards: 'never' }) // 多行草稿:Esc 从不放弃(收口 N-3,见文件头)
   return (
     <textarea
       className={`amx-props-raw${f.conflict ? ' amx-prop-conflict' : ''}`}
@@ -243,7 +299,7 @@ function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boo
       onChange={(e) => { if (!readOnly) f.change(e.target.value) }}
       onBlur={() => {
         const next = f.settle()
-        if (!readOnly && next !== null) onCommit(next)
+        if (next !== null) commit(next)
       }}
     />
   )
@@ -251,13 +307,13 @@ function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boo
 
 /** 键名框:受控草稿;失焦只在真改了时交给 onRename(校验不过 = 草稿已清,自然回显原名)。 */
 function KeyNameInput({ name, onRename }: { name: string; onRename: (k: string) => void }) {
-  const f = useFieldDraft(name, 'conflict', (s) => s.trim())
+  const f = useFieldDraft(name, onRename, { norm: (s) => s.trim(), enterCommits: true })
   return (
     <input
       className="amx-prop-key"
       value={f.shown}
       onChange={(e) => f.change(e.target.value)}
-      onKeyDown={f.onEscape}
+      onKeyDown={f.onKeyDown}
       onBlur={() => {
         const k = f.settle()
         if (k !== null) onRename(k)
@@ -314,12 +370,12 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
 /** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。multiline = 多行字符串,换成多行框(D-20)。 */
 function TextValueInput({ current, norm, multiline = false, onCommit }: { current: string; norm?: (s: string) => string; multiline?: boolean; onCommit: (v: string) => void }) {
   const { t } = useI18n()
-  const f = useFieldDraft(current, 'conflict', norm)
+  const f = useFieldDraft(current, onCommit, { norm, enterCommits: !multiline })
   const props = {
     className: `amx-prop-input${multiline ? ' amx-prop-multiline' : ''}${f.conflict ? ' amx-prop-conflict' : ''}`,
     value: f.shown,
     title: f.conflict ? t('amprops.conflict', { v: current }) : undefined,
-    onKeyDown: f.onEscape,
+    onKeyDown: f.onKeyDown,
     onBlur: () => {
       const next = f.settle()
       if (next !== null) onCommit(next)

@@ -382,6 +382,67 @@ async function main() {
           b.dw === 0 && b.shown === 'status: [未闭合\nnote: 外部B' && b.disk.includes('note: 外部B'),
         JSON.stringify({ a, b }))
     }
+
+    // PR7 草稿冲洗(评审 2026-09-27 C-02):值框还聚焦着就被卸载(键盘导航换篇 = switchFile)/ 窗口 beforeunload /
+    //  回车离开 —— 正在打的字都要落盘。React 不给已脱离的节点派 onBlur,旧版三种都丢字。
+    // 负对照:useFieldDraft 的 useLayoutEffect 冲洗摘掉 → a、b 应红;enterCommits 置 false → c 应红(同款负对照已在 amadeusProperties.draft.test 实跑)。
+    {
+      const pa = await openProps(SEED)
+      await (await pa.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pa.keyboard.press('End')
+      await pa.keyboard.type('卸载前')
+      await pa.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n'))
+      await pa.waitForTimeout(1200)
+      const a = { disk: await disk(pa), other: await pa.evaluate(() => window.__upage.vault.get('Other.md')) }
+      await pa.close()
+
+      const pb = await openProps(SEED)
+      await (await pb.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pb.keyboard.press('End')
+      await pb.keyboard.type('退出前')
+      await pb.evaluate(() => window.dispatchEvent(new Event('beforeunload')))
+      await pb.waitForTimeout(800)
+      const b = { disk: await disk(pb), focused: await pb.evaluate(() => document.activeElement?.className ?? ''), shown: (await vals(pb))[0] }
+      const w1 = await nWrites(pb)
+      await pb.evaluate(() => document.activeElement.blur()) // 冲洗过的草稿再失焦:不重复写
+      await pb.waitForTimeout(1200)
+      b.dwAfterBlur = (await nWrites(pb)) - w1
+      await pb.close()
+
+      const pc = await openProps(SEED)
+      await (await pc.$$('.amx-prop-row .amx-prop-input'))[0].click()
+      await pc.keyboard.press('End')
+      await pc.keyboard.type('回车')
+      await pc.keyboard.press('Enter')
+      await pc.waitForTimeout(1200)
+      const c = { disk: await disk(pc), focused: await pc.evaluate(() => document.activeElement?.className ?? '') }
+      await pc.close()
+      record('PR7 草稿冲洗:值框聚焦中卸载(换篇)/ beforeunload / 回车离开都落盘;冲洗不踢出输入框、再失焦不重复写(C-02)',
+        /^---\nstatus: todo卸载前\ncount: 3\n---\n/.test(a.disk) && a.other === '# 另一篇\n' &&
+          /status: todo退出前\n/.test(b.disk) && b.focused.includes('amx-prop-input') && b.shown === 'todo退出前' && b.dwAfterBlur === 0 &&
+          /status: todo回车\n/.test(c.disk) && !c.focused.includes('amx-prop-input'),
+        JSON.stringify({ a, b, c }))
+    }
+
+    // PR8 行级提交(评审 2026-09-27 D-20):改一个值 → 只有那一行变,注释 / 007 / 1.10 / flow / 多行块逐字;
+    //  多行值是多行框,白点零写。负对照:pageFrontmatter 行级核对恒判失败(退回整块重排)→ 应红(同款已在 pageFrontmatter.test 实跑)。
+    {
+      const FM8 = '---\ntitle: "Hello: world"\n# 注释\ntags: [alpha, beta]\ndesc: |\n  multi\n  line\nzip: 007\nversion: 1.10\nstatus: todo\n---\n# T\n\n正文。\n'
+      const pg = await openProps(FM8)
+      const w0 = await nWrites(pg)
+      await whiteClick(pg, '.amx-prop-row textarea.amx-prop-input', 0)
+      const dwWhite = (await nWrites(pg)) - w0
+      const input = await pg.evaluateHandle(() => [...document.querySelectorAll('.amx-prop-row input.amx-prop-input')].find((i) => i.value === 'todo'))
+      await input.asElement().click()
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('X')
+      await pg.evaluate(() => document.activeElement.blur())
+      await pg.waitForTimeout(1200)
+      const out = await disk(pg)
+      await pg.close()
+      record('PR8 属性面板行级提交:改 status 只动那一行(注释/007/1.10/flow/多行块逐字),多行值白点零写(D-20)',
+        dwWhite === 0 && out === FM8.replace('status: todo', 'status: todoX'), JSON.stringify({ dwWhite, out }))
+    }
   }
 
   // ── P7-P11:块交互层(blockLayer.ts:⠿/＋/菜单/块选中/拖拽)────────────────────
