@@ -1,8 +1,9 @@
-// v4 统一编辑器的标题小节折叠(AFFiNE 对齐,2026-08-14 用户拍板:**会话内状态,不落盘**)。
+// v4 统一编辑器的标题小节折叠(AFFiNE 对齐,2026-08-14 用户拍板:**不落盘**;09-28 拍板 #4 起跨重开记在本机,见下)。
 // 折叠 = 纯装饰:标题后的小节(到下一个 level ≤ 本级的标题,或文末)整段 display:none;
 // 锚 = 标题节点的文档 pos(**任意深度**:顶层、卡内、分栏格内都算),随事务 mapping 存活,
-// 标题被删/降不成标题即丢。小节边界在标题**自己那个容器**里算,不跨出去。序列化零影响,
-// md 原样;编辑器重建(切源码/重开笔记)后全展开 —— 这是拍板的取舍,不是缺陷。
+// 标题被删/降不成标题即丢。小节边界在标题**自己那个容器**里算,不跨出去。序列化零影响,md 原样。
+// 跨重开保留(B-13,拍板 #4):foldActions 按「智库 + 路径」把折叠记在本机 localStorage,编辑器重建
+// (切源码 / 切走再回 / 重开)时经 meta `set` 复原 —— 仍然不写进 md。
 // 交互两个入口:hover 把手的折叠钮(blockLayer 渲染,调这里的 API)+ 折叠标题行首的常驻
 // 展开钮(widget 装饰,不折叠时不出现,不占别的行的版面)。
 import { $prose } from '@milkdown/kit/utils'
@@ -118,6 +119,18 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
   return DecorationSet.create(doc, decos)
 }
 
+/** 文档里所有「可折叠」的标题前位(任意容器、小节非空),文档序。全部折叠 / 本机记忆复原用。 */
+export function foldableHeadings(doc: ProseNode): number[] {
+  const out: number[] = []
+  doc.descendants((n, pos) => {
+    if (n.type.name !== 'heading') return true
+    const site = headingSiteAt(doc, pos)
+    if (site && sectionEndIndex(site.parent, site.index) != null) out.push(pos)
+    return false
+  })
+  return out
+}
+
 export function toggleFoldAt(view: EditorView, headingPos: number): void {
   view.dispatch(view.state.tr.setMeta(headingFoldKey, { toggle: headingPos }))
 }
@@ -205,7 +218,8 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
               const head = tr.selection.from
               if (!wasHidden) pulledIn = folded.filter((p) => hiddenRanges(tr.doc, [p]).some((rg) => head > rg.start && head < rg.after))
             }
-            const meta = tr.getMeta(headingFoldKey) as { toggle?: number } | undefined
+            const meta = tr.getMeta(headingFoldKey) as { toggle?: number; set?: number[] } | undefined
+            if (meta?.set) folded = meta.set.slice() // 整组定死(全部折叠 / 全部展开 / 本机记忆复原)
             if (meta?.toggle != null) {
               const p = meta.toggle
               folded = folded.includes(p) ? folded.filter((x) => x !== p) : [...folded, p]

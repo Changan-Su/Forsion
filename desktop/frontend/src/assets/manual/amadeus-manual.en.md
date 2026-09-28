@@ -604,7 +604,7 @@ Hover any block and a ⠿ handle plus a ＋ button appear in the left margin.
 - Click ⠿ (tooltip "Click for menu, hold to drag") or right-click the block — this selects the block and opens its menu.
 - Press and hold ⠿ to drag: drop between two rows to reorder, drop on a row's left or right edge to split into columns, drop out on the canvas stage (in canvas mode) to turn the block into a card. A drop-indicator line shows where it will land.
 - Click ＋ (tooltip "Add block below") to insert an empty paragraph below the current block, with the caret in it. It inserts a plain empty paragraph; it does not open the slash menu.
-- Headings and list items with children get a fold chevron in the margin, with tooltips "Collapse section" / "Expand section" and "Collapse children" / "Expand children". This kind of fold is view state and is not written to the file; a Toggle block's open state is written into the Markdown and survives in other editors.
+- Headings and list items with children get a fold chevron in the margin, with tooltips "Collapse section" / "Expand section" and "Collapse children" / "Expand children". This kind of fold is view state remembered on this device and is not written to the file; a Toggle block's open state is written into the Markdown and survives in other editors.
 - `Esc` selects the whole block the caret is in, so copy, cut and delete act on the block; press `Esc` again to get back into the text. If a popup is open, `Esc` closes that first.
 - `⌘/Ctrl + A` selects in tiers: first the current text block, then its top-level block (the whole list, the whole quote, or the block within its column), and only on the third press the whole note.
 - `⌘/Ctrl + ⇧ + ↑` / `⌘/Ctrl + ⇧ + ↓` move the current block up or down among its siblings.
@@ -795,7 +795,7 @@ What happens to the caret:
 - The caret is carried across; it no longer jumps back to the top of the file.
 - When the position cannot be recognised (the text around the caret is all Markdown syntax — `**bold**` is just "bold" on the visual side), the caret falls back to **the start of that block**. It will never land in a different block.
 - In a split view each panel remembers its own caret.
-- Switching to source and back expands every folded heading section.
+- Switching to source and back keeps heading and list folds as they were (they are remembered on this device — see "Folding" below).
 
 To see the source of just one element, you do not have to switch the whole note:
 
@@ -807,7 +807,7 @@ Line-start markers can be edited character by character too: put the caret at th
 
 ### Folding: heading sections and callouts
 
-There are two kinds of folding and they behave very differently — one is a temporary view state, the other is written into the file.
+There are two kinds of folding and they behave very differently — one is view state remembered on this device, the other is written into the file.
 
 Heading section folding:
 
@@ -816,8 +816,9 @@ Heading section folding:
 - An empty section (a heading immediately followed by a heading of the same level) gets no fold button.
 - The same gutter button on a list item reads "Collapse children" / "Expand children".
 - Folding is purely visual — not one character of the Markdown on disk changes.
-- The fold state **lives only for this session**: switching to source mode or reopening the note expands everything again.
-- There is no hotkey and no command for it.
+- The fold state **is remembered on this device** (per vault and note path): switching to source and back, going to another note and returning, reopening the note or the app all keep it folded. If a heading's text changes (even from somewhere else), that fold is forgotten and shows expanded. On another device, or in another editor, everything is expanded.
+- Keyboard: `⌘/Ctrl + ⌥/Alt + Enter` "Toggle fold" — with the caret on a heading or on a list item that has children, it folds or expands that one; with the caret in body text, it folds the section the caret is in and puts the caret at the end of its heading.
+- The command palette also has "Fold all" and "Unfold all". They have no default shortcut; bind one under Settings → Appearance → Shortcuts.
 
 Callout folding:
 

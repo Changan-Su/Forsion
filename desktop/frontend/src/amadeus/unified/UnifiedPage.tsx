@@ -72,6 +72,7 @@ import { LinkHoverCard } from './linkCard'
 import { noteLinkTarget } from '../blocks/markdown/linkHref'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
+import { createFoldMemory, remapFoldMemory } from './foldActions'
 import { registerMessages, translate, useI18n } from '../../i18n'
 
 registerMessages({
@@ -1217,6 +1218,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 「stored ⊆ owned」判据 fail-closed,画布派生冻结到重开)。与 makeCard 的 ownedCards.add 同源。
     minted: (anchors) => { for (const a of anchors) pipe.ownedCards.add(a) },
   }
+  /** 折叠本机记忆的键(B-13):插件是稳定引用,智库 / 路径经 ref 现读。 */
+  const foldWhere = useRef({ vaultRoot, path })
+  foldWhere.current = { vaultRoot, path }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -1249,6 +1253,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
       ...headingFoldPlugins,
       ...listFoldPlugins,
+      ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -2006,6 +2011,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const newPath = await amadeus.renamePageFile(path, next)
       if (newPath !== path) {
         remapNoteViewMemory(vaultRoot, path, newPath)
+        remapFoldMemory(vaultRoot, path, newPath)
         pipe.retired = true // 本实例退休:再写旧路径 = 复活幽灵文件
         // 改名 IPC 窗口里刚打的字不该丢(Codex P0):按新路径补一发,随 key 重建被读回。
         // IPC await 期间可能又打了字(200ms 监听窗)→ 补写前再拉平一次(Codex 终审 P0)。
