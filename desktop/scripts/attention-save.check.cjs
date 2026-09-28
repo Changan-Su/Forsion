@@ -349,6 +349,54 @@ async function main() {
     await page.close()
   }
 
+  // ── I-03(评审 2026-09-27,用户拍板 #1):单个 `~` 不算删除线 —— 打开不划线、编辑别处不改写成 `~~`、键入不转义成 `\~` ──
+  // 药在 anchoredMarkRules.ts(输入规则只认 `~~` + remark-gfm singleTilde:false + `~` 落盘转义收窄)与 cjkFriendly.ts。
+  {
+    const PMU = '.unified-body .ProseMirror'
+    const RANGE = '范围: 每天3~5小时，持续2~3周'
+    const openU = async (md) => {
+      const page = await browser.newPage({ locale: 'zh-CN' })
+      page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await page.goto(`${BASE}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector(PMU, { timeout: 20000 })
+      await page.waitForTimeout(500)
+      return page
+    }
+    const caretEnd = (page, i) => page.evaluate(([s, i]) => {
+      const p = document.querySelectorAll(s + ' > p')[i]
+      const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT)
+      let last = null
+      while (w.nextNode()) last = w.currentNode
+      document.querySelector(s).focus()
+      const r = document.createRange()
+      r.setStart(last, last.data.length)
+      r.collapse(true)
+      getSelection().removeAllRanges()
+      getSelection().addRange(r)
+    }, [PMU, i])
+    const lastMd = (page) => page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : '' })
+    let page = await openU(`# T\n\n编辑这里\n\n${RANGE}\n`)
+    const dels = await page.evaluate((s) => document.querySelectorAll(s + ' del, ' + s + ' s').length, PMU)
+    check('T1 打开 `3~5…2~3`:不显示删除线', dels === 0, `del=${dels}`)
+    await caretEnd(page, 0)
+    await page.waitForTimeout(150)
+    await page.keyboard.type('X', { delay: 40 })
+    await page.waitForTimeout(1400)
+    let md = await lastMd(page)
+    check('T2 编辑别处后落盘:`3~5` 逐字不变(不改写成 `3~~5`)', md.includes(`\n${RANGE}\n`) && md.includes('编辑这里X'), JSON.stringify(md))
+    await page.close()
+    page = await openU('# T\n\n起始\n')
+    await caretEnd(page, 0)
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Enter')
+    await page.keyboard.type(`${RANGE} 好的~ 谢谢~`, { delay: 40 })
+    await page.waitForTimeout(1400)
+    md = await lastMd(page)
+    const dels2 = await page.evaluate((s) => document.querySelectorAll(s + ' del, ' + s + ' s').length, PMU)
+    check('T3 键入单个 `~`:不转删除线、落盘不转义成 `\\~`', dels2 === 0 && md.includes(`\n${RANGE} 好的~ 谢谢~\n`), JSON.stringify(md))
+    await page.close()
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

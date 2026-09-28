@@ -67,7 +67,6 @@ describe('远处的字面定界符不再被行末键入触发', () => {
 describe('正常的 markdown 快捷输入照旧触发', () => {
   it.each([
     ['`~~x~~`', ' ~~删~~', 'strike_through:删'],
-    ['`~x~`', ' ~删~', 'strike_through:删'],
     ['`*x*`', ' *斜*', 'emphasis:斜'],
     ['`**x**`', ' **粗**', 'strong:粗'],
     ['`_x_`', ' _斜_', 'emphasis:斜'],
@@ -82,6 +81,12 @@ describe('正常的 markdown 快捷输入照旧触发', () => {
     const r = await typed('a \\_b\\_ c\n', ' _d_') // 前面那对是字面(转义)
     expect(r.marked).toEqual(['emphasis:d'])
     expect(r.text).toBe('a _b_ c d')
+  })
+
+  it('I-03(拍板 #1):单个 `~` 不是删除线 —— 键入 `~删~` 不转换,落盘也不转义成 `\\~`', async () => {
+    const r = await typed('a\n', ' ~删~')
+    expect(r.marked).toEqual([])
+    expect(r.md).toBe('a ~删~\n')
   })
 
   it('`~~a~` 敲到第一个闭合 `~` 不提前触发单波浪线', async () => {
@@ -110,6 +115,8 @@ describe('正则本身', () => {
     expect(STRIKETHROUGH_RE.test('今天好累~ 明天继续~')).toBe(false) // 内容以空格开头
     expect(STRIKETHROUGH_RE.test('3~5小时，持续2~')).toBe(false) // 开定界符前是数字
     expect(STRIKETHROUGH_RE.exec('a ~~b~~')?.[2]).toBe('b')
+    expect(STRIKETHROUGH_RE.test('a ~b~')).toBe(false) // I-03:只认 `~~`
+    expect(STRIKETHROUGH_RE.test('a ~~b~')).toBe(false)
   })
   it('下划线:带锚、内容不含 `_`', () => {
     expect(UNDERSCORE_EMPHASIS_RE.test('变量_tmp_的值')).toBe(false)

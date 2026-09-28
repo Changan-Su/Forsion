@@ -16,12 +16,13 @@
 import { markRule } from '@milkdown/kit/prose'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
-import { $inputRule } from '@milkdown/kit/utils'
+import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import { $inputRule, $remark } from '@milkdown/kit/utils'
 import {
   emphasisSchema, emphasisStarInputRule, emphasisUnderscoreInputRule, inlineCodeInputRule, inlineCodeSchema,
   strongInputRule, strongSchema,
 } from '@milkdown/kit/preset/commonmark'
-import { gfm, strikethroughInputRule, strikethroughSchema } from '@milkdown/kit/preset/gfm'
+import { gfm, remarkGFMPlugin, strikethroughInputRule, strikethroughSchema } from '@milkdown/kit/preset/gfm'
 
 type Handler = (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null
 
@@ -55,9 +56,41 @@ const strong = $inputRule((ctx) => endsAtCursor(markRule(/(?<![\w:/])(?:\*\*|__)
 })))
 
 // ── gfm:删除线 ──
-/** 删除线:加 `$` 锚;开定界符前不是字母数字 / `:` `/` / `~`;内容首尾非空白、不含 `~`。 */
-export const STRIKETHROUGH_RE = /(?<![\w:/~])(~{1,2})([^\s~](?:[^~]*[^\s~])?)\1$/
+/** 删除线:加 `$` 锚;开定界符前不是字母数字 / `:` `/` / `~`;内容首尾非空白、不含 `~`。
+ *  **只认 `~~`**(I-03,用户拍板 #1):单个 `~` 不是删除线,同 Obsidian —— 与下面解析 / 落盘两侧同口径。 */
+export const STRIKETHROUGH_RE = /(?<![\w:/~])(~~)([^\s~](?:[^~]*[^\s~])?)~~$/
 const strikethrough = $inputRule((ctx) => endsAtCursor(markRule(STRIKETHROUGH_RE, strikethroughSchema.type(ctx))))
+
+// ── I-03:单个 `~` 不算删除线(`3~5小时，持续2~3周` 打开就被划线,编辑一处落盘成 `3~~5`)──
+// 三层同口径,缺一层都不成立:① 输入规则只认 `~~`(上面);② 解析:remark-gfm 与 CJK 友好删除线扩展(cjkFriendly.ts)
+// 都设 singleTilde:false —— micromark 里后者返回 nok 会落到前者,两个都得关;③ 落盘:mdast-util-gfm-strikethrough 的
+// unsafe 对 phrasing 里**每个** `~` 都转义(不然 `3~5` 存成 `3\~5`),收窄成「紧挨另一个 `~` 才转义」——
+// 单个 `~` 不再能开删除线,只有凑成 `~~` 才危险(`a\~\~b`、贴着 `~~删~~` 的 `a\~` 照旧转义)。
+// ⚠️ 收窄写成**一条**非吞字的 after 条件 `(?=~)|(?<=~~)`(后面是 `~`,或自己与前一个都是 `~`):拆成 before/after
+//    两条的话,连串中间那个会被两条同时命中、升格成「无条件转义」,safe() 随即把它两边的条件转义省掉 —— `\~\~\~`
+//    落成 `~\~~`(语义等价但改写了存量字面)。一条就是「连串里每个都转义」,与修前逐字相同。
+/** remark-gfm 的选项:原位替换 preset 里 remarkGFMPlugin 的选项 ctx(同一把 key,插件读到的就是它)。 */
+const gfmOptionsNoSingleTilde: MilkdownPlugin = (ctx) => {
+  ctx.inject(remarkGFMPlugin.options.key, { singleTilde: false })
+  return () => () => {
+    ctx.remove(remarkGFMPlugin.options.key)
+  }
+}
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/** 收窄 gfm 删除线扩展的 `~` unsafe。mdast-util-to-markdown 把各处 unsafe **拼接**,经 remarkStringifyOptionsCtx 删不掉,
+ *  只能在 remark-gfm 挂上之后原地改它推进 toMarkdownExtensions 的那份(每个 processor 各自一份新对象)。 */
+export function remarkStrictTildeUnsafe(this: any): void {
+  const walk = (ext: any): void => {
+    if (!ext || typeof ext !== 'object') return
+    if (Array.isArray(ext.extensions)) ext.extensions.forEach(walk)
+    if (!ext.handlers?.delete || !Array.isArray(ext.unsafe)) return
+    ext.unsafe = ext.unsafe.map((u: any) =>
+      u.character === '~' && !('before' in u) && !('after' in u) && !u.atBreak ? { ...u, after: '(?=~)|(?<=~~)' } : u)
+  }
+  for (const ext of (this.data().toMarkdownExtensions ?? []) as unknown[]) walk(ext)
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+const strictTildeUnsafe = $remark('amadeusStrictTildeUnsafe', () => remarkStrictTildeUnsafe)
 
 /** commonmark preset 数组里的原位替换表(paragraphIndent 的 commonmarkWithIndent 用)。 */
 export const commonmarkMarkRuleReplacements = new Map<unknown, unknown>([
@@ -67,5 +100,10 @@ export const commonmarkMarkRuleReplacements = new Map<unknown, unknown>([
   [strongInputRule, strong],
 ])
 
-/** gfm preset 的原位替换版:删除线输入规则换成带锚的。MarkdownBlock 里 `.use(gfmWithAnchoredRules)` 代替 `.use(gfm)`。 */
-export const gfmWithAnchoredRules = gfm.map((p) => ((p as unknown) === (strikethroughInputRule as unknown) ? strikethrough : p))
+/** gfm preset 的原位替换版:删除线输入规则换成带锚的;remark-gfm 关掉单波浪线、紧跟着收窄 `~` 的落盘转义(I-03)。
+ *  MarkdownBlock 里 `.use(gfmWithAnchoredRules)` 代替 `.use(gfm)`。 */
+export const gfmWithAnchoredRules = gfm.flatMap((p): MilkdownPlugin[] =>
+  (p as unknown) === (strikethroughInputRule as unknown) ? [strikethrough as unknown as MilkdownPlugin]
+  : (p as unknown) === (remarkGFMPlugin.options as unknown) ? [gfmOptionsNoSingleTilde]
+  : (p as unknown) === (remarkGFMPlugin.plugin as unknown) ? [p, ...strictTildeUnsafe]
+  : [p])
