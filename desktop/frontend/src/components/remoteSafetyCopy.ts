@@ -21,7 +21,7 @@ registerMessages({
   'remoteSafety.pendingEstop': { zh: '引擎暂不可达，急停会在它恢复后自动补发。', en: 'The engine is unreachable right now. The stop will be sent again once it’s back.' },
   'remoteSafety.estopNow': { zh: '立即急停', en: 'Emergency stop' },
   'remoteSafety.unlock': { zh: '解锁…', en: 'Unlock…' },
-  'remoteSafety.unlockHint': { zh: '解锁需要在这台电脑上验证身份（Touch ID 或登录密码）。', en: 'Unlocking asks you to verify on this computer (Touch ID or your login password).' },
+  'remoteSafety.unlockHint': { zh: '解锁需要在这台电脑上验证身份（Touch ID、管理员密码或确认框，视这台电脑而定）。', en: 'Unlocking asks you to verify it’s you on this computer (Touch ID, an administrator password or a confirmation, depending on this computer).' },
   'remoteSafety.unlock.cancelled': { zh: '已取消，远程访问仍锁定。', en: 'Cancelled. Remote access is still locked.' },
   'remoteSafety.unlock.unavailable': { zh: '这台电脑没法完成身份验证，远程访问仍锁定。', en: 'This computer couldn’t verify you. Remote access is still locked.' },
   'remoteSafety.unlock.failed': { zh: '验证没有通过或没能保存，远程访问仍锁定。', en: 'Verification failed or couldn’t be saved. Remote access is still locked.' },
