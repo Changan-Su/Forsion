@@ -227,8 +227,13 @@ interface Pipe {
   retryTimer: ReturnType<typeof setTimeout> | null
   retryN: number
   /** 本实例最近一次存进本机的草稿内容(D-04)。写成功时凭它删草稿:成功写下的是此刻的全文,是那份草稿的超集;
-   *  按「此刻写的内容」比对会漏删 —— 失败后又打了字,存着的那份旧草稿就成了下次打开时的假提示。 */
+   *  按「此刻写的内容」比对会漏删 —— 失败后又打了字,存着的那份旧草稿就成了下次打开时的假提示。
+   *  例外:写的**不是**此刻的全文(在途那发 ack 前本地又变了,例如撤回后卸载冲洗存的草稿)→ 草稿比盘上新,留着。 */
   stashed: string | null
+  /** 正在跑的写盘轮数(writeNow 的 run 从 compose 到收尾;计数不是布尔,与 reconcileBusy 同理)。
+   *  非零 = lastSaved 马上会被这一轮改掉(ack 后 = 它写的那份 / CAS 拒写后 = 盘上现文):此刻拿本地和 lastSaved
+   *  比出的「没有待写」不作数 —— 用户在 ack 前撤回到旧基线再切走,同步判定就会把撤回丢掉(返修 R1)。 */
+  writing: number
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
@@ -905,7 +910,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
@@ -1371,8 +1376,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }
 
   /** 本地与盘上重新一致:清失败态、退避计时与本实例存下的草稿。不只写成功才会一致 —— 写失败期间用户把改动
-   *  撤回到盘上那版,也就没有「未保存」可言了;不收的话条一直挂着,切走再回来还提示恢复用户亲手删掉的字。 */
-  const settleUnsaved = (): void => {
+   *  撤回到盘上那版,也就没有「未保存」可言了;不收的话条一直挂着,切走再回来还提示恢复用户亲手删掉的字。
+   *  `written` = 写成功时这次落盘的内容:草稿只在盘上已覆盖它时删(草稿就是这份,或这份就是此刻的全文)。
+   *  在途那发 ack 时本地已走到后面(返修 R1:撤回后卸载冲洗存的草稿)→ 草稿比盘上新,留给排在后面的那发写。 */
+  const settleUnsaved = (written?: string): void => {
     if (pipe.retryTimer) {
       clearTimeout(pipe.retryTimer)
       pipe.retryTimer = null
@@ -1383,21 +1390,21 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       setSaveFailed(false)
     }
     // 只删**本实例存的**那份(别的会话留下、恢复条还在等用户决定的草稿不碰)。
-    if (pipe.stashed != null) {
+    if (pipe.stashed != null && (written == null || pipe.stashed === written || composeFm(pipe.fm, pipe.body) === written)) {
       clearDraft(vaultRoot, path, pipe.stashed)
       pipe.stashed = null
     }
   }
 
   /** 写成功:收掉「未保存」;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
-  const noteWriteOk = (): void => {
-    settleUnsaved()
+  const noteWriteOk = (written: string): void => {
+    settleUnsaved(written)
     announceUnifiedWrite(path, pipe)
   }
 
   const writeNow = (strict = false): Promise<void> => {
     if (pipe.readOnly) return Promise.resolve() // 只读实例:唯一的写盘出口在此封死(见 readOnly prop 注)
-    const run = async (): Promise<void> => {
+    const step = async (): Promise<void> => {
       let conflicts = 0
       while (!pipe.retired) {
         const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
@@ -1450,9 +1457,18 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
         // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
         if (composeFm(pipe.fm, pipe.body) === text) pipe.pending = false
-        noteWriteOk()
+        noteWriteOk(text)
         // 严格落盘同时排尽在途 I/O 期间新增的编辑;否则 pending=true 也会被成功 ack 后退休。
         if (!strict) return
+      }
+    }
+    // 这一轮在跑的全程(含 compose 之后、写之前的保全副本那一段)计入 pipe.writing,卸载冲洗据此不做同步的「没有待写」判定。
+    const run = async (): Promise<void> => {
+      pipe.writing++
+      try {
+        await step()
+      } finally {
+        pipe.writing--
       }
     }
     const task = pipe.chain.then(run, run)
@@ -1507,7 +1523,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   const schedule = (): void => {
     if (pipe.dead || pipe.retired || readOnly) return
-    if (composeFm(pipe.fm, pipe.body) === pipe.lastSaved) return
+    // 有写盘在跑时 lastSaved 马上会变(见 Pipe.writing):撤回到旧基线的这一击照样排上,ack 后链上再判。
+    if (!pipe.writing && composeFm(pipe.fm, pipe.body) === pipe.lastSaved) return
     pipe.pending = true
     if (pipe.timer) clearTimeout(pipe.timer)
     pipe.timer = setTimeout(() => {
@@ -1656,13 +1673,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       pipe.timer = null
       if (pipe.readOnly) return
       const text = composeFm(pipe.fm, pipe.body)
-      if (text === pipe.lastSaved) {
+      // ⚠️ 下面两个同步出口都拿 lastSaved 比,只在**本实例没有写盘在跑**时作数(返修 R1):在途那发 ack 回来会把
+      //    lastSaved 改成它写的那份。ack 前用户撤回到旧基线再切走 → 此刻「本地 = lastSaved / 没改动」,直接 return
+      //    就再没人把撤回写下去,盘上留着用户亲手删掉的字。有写在跑就照常存草稿 + 排一发 writeNow:链上那轮在 ack
+      //    之后按新的 lastSaved 判「还有没有待写」(isPristine 不能挪进链里:卸载后编辑器已不在,canonical 恒为 null)。
+      if (!pipe.writing && text === pipe.lastSaved) {
         settleUnsaved() // 写失败后又撤回到盘上那版就关:失败时存下的旧草稿不许留到下次提示恢复
         return
       }
       // G1-01:没有用户改动的实例(正文只是编辑器对基线的规范化)卸载时不写 —— 它若是同篇多开里的陈旧那个,
       // 写下去就是拿旧全文盖掉别的实例 / 窗口刚写的新版。
-      if (isPristine()) {
+      if (!pipe.writing && isPristine()) {
         pipe.pending = false
         return
       }

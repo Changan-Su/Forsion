@@ -18,7 +18,7 @@ afterEach(() => { while (disposers.length) disposers.pop()!() })
 
 type WriteResult = void | { ok: true } | { ok: false; current: string }
 function harness() {
-  const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', pending: true, timer: null, chain: Promise.resolve(), unpreserved: null as string | null }
+  const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', pending: true, timer: null, chain: Promise.resolve(), unpreserved: null as string | null, writing: 0 }
   const writeTextFile = vi.fn<(path: string, content: string, opts?: { base?: string }) => Promise<WriteResult>>()
   // 写盘安全件(评审 G1-01 / D-03 / D-04)在组件里住在 writeNow 前面,这里注入桩:只验 writeNow 的控制流。
   const safety = {
@@ -146,5 +146,46 @@ describe('unified editor write safety (review 2026-09-27 D-03 / D-04 / G1-01)', 
     await expect(flushUnifiedScopes(true)).rejects.toThrow(/kept changing/)
     expect(h.writeTextFile).toHaveBeenCalledTimes(4)
     expect(h.pipe.pending).toBe(true)
+    expect(h.pipe.writing).toBe(0)
+  })
+
+  // 返修 R1:卸载冲洗 / schedule 的「本地 = lastSaved」同步出口只在 pipe.writing === 0 时作数 —— 计数必须覆盖
+  // 一轮写的全程(compose 之后、保全副本那段 await 也算),且每条出口(成功 / 失败 / CAS 让位 / 严格抛错)都归零。
+  it('pipe.writing covers the whole write round and returns to zero on every exit', async () => {
+    const h = harness()
+    let finish!: (v: WriteResult) => void
+    h.writeTextFile.mockImplementationOnce(() => new Promise<WriteResult>((resolve) => { finish = resolve }))
+    const writing = h.writeNow()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(h.pipe.writing).toBe(1) // ack 还没回:lastSaved 仍是旧基线,但马上会变
+    expect(h.pipe.lastSaved).toBe('Old note')
+    finish(undefined)
+    await writing
+    expect(h.pipe.writing).toBe(0)
+    expect(h.noteWriteOk).toHaveBeenCalledWith(composeFm('', 'Unsaved note')) // 写下的内容交给草稿覆盖判定
+
+    let release!: () => void
+    h.pipe.body = 'Second edit'
+    h.writeTextFile.mockResolvedValueOnce({ ok: false, current: 'Theirs' }).mockResolvedValueOnce({ ok: true })
+    h.preserveExternal.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
+    const preserving = h.writeNow()
+    await vi.waitFor(() => expect(h.preserveExternal).toHaveBeenCalled())
+    expect(h.pipe.writing).toBe(1) // 保全副本那段 await:lastSaved 已换成盘上现文,本轮写完又会换
+    release()
+    await preserving
+    expect(h.pipe.writing).toBe(0)
+
+    h.pipe.body = 'Third edit'
+    h.writeTextFile.mockRejectedValueOnce(new Error('Offline'))
+    await h.writeNow()
+    expect(h.pipe.writing).toBe(0)
+    h.writeTextFile.mockRejectedValueOnce(new Error('ENOSPC'))
+    await expect(h.writeNow(true)).rejects.toThrow('ENOSPC')
+    expect(h.pipe.writing).toBe(0)
+    h.isPristine.mockReturnValueOnce(true)
+    h.writeTextFile.mockResolvedValueOnce({ ok: false, current: 'Newer on disk' })
+    await h.writeNow()
+    expect(h.pipe.writing).toBe(0)
   })
 })

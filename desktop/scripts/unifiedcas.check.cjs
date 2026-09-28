@@ -18,6 +18,9 @@
 //   F4 失败中切走 → 草稿进本机、盘上不被覆盖 → 切回出「恢复草稿」条,点了才写 · F5 草稿 = 盘上内容时静默删掉
 //   F6 离开确认只在非 Electron 宿主、且真有写不进去的内容时拦 · F7 失败存草稿后又打字、重试成功 → 旧草稿删掉
 //   F8/F9 失败中把改动撤回到盘上那版(恢复信号到达 / 没等重试就切走)→ 条收掉、旧草稿删掉、切回不提示恢复
+//  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
+//   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
+//   L2 停在原页(schedule)→ 撤回同样落盘
 //
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -455,10 +458,39 @@ async function groupF(browser) {
   }
 }
 
+async function groupL(browser) {
+  const MD = '# T\n\npara1 AAA\n\npara2 BBB\n\npara3 CCC\n'
+  for (const k of [{ label: 'L1 在途自写 ack 前撤回到旧基线再切走(卸载冲洗)', leave: true }, { label: 'L2 在途自写 ack 前撤回到旧基线、停在原页(schedule)', leave: false }]) {
+    const p = await open(browser, MD)
+    await p.evaluate(() => { localStorage.clear(); window.__upage.writeLagMs = 2500 })
+    await typeIn(p, 0, 'CCC', ' XY')
+    await p.waitForFunction(() => (window.__upage.vault.get('Unified.md') || '').includes('CCC XY'), null, { timeout: 5000 })
+    for (let i = 0; i < 3; i++) await p.keyboard.press('Backspace')
+    await wait(250) // markdownUpdated 防抖 200ms:pipe.body 已是撤回后的版本,在途那发的 ack 还没回
+    if (k.leave) await p.evaluate(() => window.__upage.switchFile('Other.md', '# Other\n\nx\n'))
+    // 第二发写(撤回)落盘那一刻(它的 ack 还在路上):卸载冲洗存的草稿必须还在 —— 第一发 ack 不许把它删掉。
+    let midDrafts = null
+    try {
+      await p.waitForFunction(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').length >= 2, null, { timeout: 6000 })
+      midDrafts = await p.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith('amadeus.unsavedDraft:')).map(([, v]) => JSON.parse(v).text))
+    } catch { /* 第二发根本没来:下面 disk 断言会红 */ }
+    await wait(3500)
+    await p.evaluate(() => { window.__upage.writeLagMs = 0 })
+    const d = await disk(p)
+    const keys = await draftKeys(p)
+    const t = await toasts(p)
+    const midOk = !k.leave || (Array.isArray(midDrafts) && midDrafts.length === 1 && midDrafts[0] === MD)
+    record(`${k.label} → 撤回落盘${k.leave ? '、两发写之间草稿一直在' : ''}、收尾零草稿零提示`,
+      d === MD && midOk && keys.length === 0 && t.length === 0,
+      JSON.stringify({ d, midDrafts, keys, toasts: t.map((x) => x.text), writes: await p.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').map((w) => w.text)) }))
+    await p.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, C: groupC, D: groupD, F: groupF }
+    const groups = { G: groupG, C: groupC, D: groupD, F: groupF, L: groupL }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()
