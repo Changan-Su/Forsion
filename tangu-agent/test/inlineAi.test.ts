@@ -135,6 +135,41 @@ describe('completeInline', () => {
   });
 });
 
+describe('中途断开照样结算(Codex 复核 P0)', () => {
+  it('流到一半被中止:按已发生的用量扣费记账(provider 没给 usage → 提示词估算 + 已输出字数估算)', async () => {
+    billing.consumeTokenPoints.mockClear()
+    billing.calculateCost.mockClear()
+    billing.logApiUsage.mockClear()
+    const ac = new AbortController()
+    const llm = (await import('../src/seams/runtime.js')).deps().brain.llm as any
+    const orig = llm.streamProviderCompletion
+    llm.streamProviderCompletion = async (o: any) => {
+      o.onToken?.('Partial answer that the client already received ')
+      ac.abort()
+      throw new DOMException('aborted', 'AbortError')
+    }
+    try {
+      await expect(completeInline({ userId: 'u1', modelId: 'm1', appId: 'tangu', input: normalizeInlineInput({ action: 'improve', selection: 'some text to improve' })!, signal: ac.signal, onToken: () => {} })).rejects.toThrow()
+    } finally {
+      llm.streamProviderCompletion = orig
+    }
+    expect(billing.consumeTokenPoints).toHaveBeenCalledTimes(1)
+    const [, promptTokens, completionTokens] = billing.calculateCost.mock.calls.at(-1) as unknown as [string, number, number]
+    expect(promptTokens).toBeGreaterThan(0)
+    expect(completionTokens).toBeGreaterThan(0)
+    const usage = billing.logApiUsage.mock.calls.at(-1) as unknown as unknown[]
+    expect(usage[6]).toBe(false) // success=false,错误原因记下
+    expect(String(usage[7])).toMatch(/abort/i)
+  })
+
+  it('还没发出请求就失败(解析模型 / 额度预检)不扣费', async () => {
+    billing.consumeTokenPoints.mockClear()
+    billing.canConsumeTokenPoints.mockResolvedValueOnce({ ok: false } as any)
+    await expect(completeInline({ userId: 'u1', modelId: 'm1', appId: 'tangu', input: normalizeInlineInput({ action: 'fix', selection: 'x' })!, signal: new AbortController().signal, onToken: () => {} })).rejects.toThrow('token_quota_exceeded')
+    expect(billing.consumeTokenPoints).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /agent/inline', () => {
   it('SSE:delta* → done(content / modelId),会话与消息表一行不多', async () => {
     reply = 'Continued paragraph.';

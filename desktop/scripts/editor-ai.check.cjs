@@ -2,7 +2,8 @@
 //   A = G3-04「问 Tangu」:选区工具栏 / ⠿ 块菜单 → 选区文字 + 标题锚点交给侧栏对话;笔记零写入、不铸 ^id;
 //       宿主没有侧栏对话(探针缺 askInChat)时两处入口都不出现。
 //   B = G3-03 Agent 改了打开着的笔记:归属账本认出是 Tangu 写的 → 装饰 + 胶囊「修改了 N 处 · 逐处查看 · 全部撤回 · 保留」;
-//       别人改的照旧静默回灌;装饰不落盘;「全部撤回」= 一次用户写入(走 CAS 保存、可 Cmd+Z)、跳过用户改过的那处;「保留」零写入。
+//       别人改的照旧静默回灌;装饰不落盘;「全部撤回」= 一次用户写入(走 CAS 保存、可 Cmd+Z)、跳过用户改过的那处;「保留」零写入;
+//       一次工具写入只认领一次(之后同路径的别的改动不算 Tangu 的)。
 //   C = G3-07 正文生成式 AI:工具栏「AI ▾」/ `/ai` / 空行空格(缺省关、IME 守卫)→ 预览面板 → 替换 / 插入下方 / 插入 / 丢弃;
 //       确认前零写入、确认后一个事务写纯 md(可 Cmd+Z);插件 registerSelectionAction 的结果同样只进预览;ctx.tangu.complete 可用。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
@@ -281,6 +282,21 @@ async function groupB(browser) {
     await page.waitForTimeout(1300)
     const st = await page.evaluate((PM) => ({ writes: window.__upage.writes.length, cap: !!document.querySelector('[data-testid="agent-change-capsule"]'), marks: document.querySelectorAll(PM + ' .am-agent-change').length, disk: window.__upage.vault.get('Unified.md') }), PM)
     check('B5 保留:标记全清、零写入、盘上仍是 Agent 版本', had != null && !st.cap && st.marks === 0 && st.writes === 0 && st.disk === agentMd, JSON.stringify(st))
+    await page.close()
+  }
+  // B7 一次写入只认领一次(Codex 复核 P0):同一次工具写入的宽限期里,别处再改这篇(外部编辑器 / 云同步)不再算 Tangu 的
+  {
+    const page = await open(browser, base)
+    await noteAgentWrite(page)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd)
+    await page.waitForTimeout(900)
+    const had = await capsule(page)
+    await clickCapsule(page, 'keep')
+    await page.waitForTimeout(300)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd.replace('第二段原文。', '第二段被外部编辑器改了。'))
+    await page.waitForTimeout(900)
+    const st = { cap: await capsule(page), marks: await marks(page), text: await page.evaluate((PM) => document.querySelector(PM).innerText, PM) }
+    check('B7 同一次写入认领过之后,宽限期内别处的改动照旧静默回灌、不画成 Tangu 的', had != null && st.cap == null && !st.marks && st.text.includes('外部编辑器改了'), JSON.stringify(st))
     await page.close()
   }
   // B6 用户改过其中一处 → 全部撤回跳过它(不拿旧片段盖掉用户的字),另一处照撤,并提示跳过了几处

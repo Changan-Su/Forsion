@@ -9,7 +9,7 @@
  */
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
-import { estimateMessagesTokens, modelContextWindow } from './contextBudget.js';
+import { estimateMessagesTokens, estimateTokensRough, modelContextWindow } from './contextBudget.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 
 export const INLINE_ACTIONS = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom'] as const;
@@ -144,15 +144,33 @@ export async function completeInline(opts: {
     maxTokens, stream: true, signal: opts.signal,
   });
   opts.signal.throwIfAborted();
-  const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: opts.signal, onToken: opts.onToken });
+  /** 按用量结算(扣额度 + 记用量)。正常结束用 provider 的 usage;**中止 / 出错也结算**(Codex 复核 P0):请求发出去之后
+   *  上游已经在计费、客户端也可能已经拿到了部分正文 —— 只在正常结束时扣费,断开连接就能白拿。provider 没给 usage →
+   *  提示词按 estimateMessagesTokens、输出按已流出的字数 estimateTokensRough 估(与额度预检同一套估算函数)。 */
+  const settle = async (promptTokens: number, completionTokens: number, cached: number, error?: string): Promise<void> => {
+    const cost = await billing.calculateCost(opts.modelId, promptTokens, completionTokens, model, cached);
+    await billing.consumeTokenPoints(user.id, cost).catch(() => {});
+    await (billing.logApiUsage as any)(
+      (user as any).username || 'local', opts.modelId, (model as any)?.name, (model as any)?.provider,
+      promptTokens, completionTokens, !error, error, opts.appId, cost, cached, opts.client,
+    ).catch(() => {});
+  };
+  let streamed = '';
+  let res: any;
+  try {
+    res = await llm.streamProviderCompletion({
+      apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: opts.signal,
+      onToken: (d: string) => { streamed += d; opts.onToken(d); },
+    });
+  } catch (e: any) {
+    const reason = opts.signal.aborted ? 'aborted' : String(e?.message || e || 'error').slice(0, 200);
+    await settle(estimateMessagesTokens(messages), estimateTokensRough(streamed), 0, reason).catch(() => {});
+    throw e;
+  }
   const usage: any = res?.usage || {};
-  const cached = Number(usage.cached_tokens) || 0;
-  const cost = await billing.calculateCost(opts.modelId, Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, model, cached);
-  await billing.consumeTokenPoints(user.id, cost).catch(() => {});
-  await (billing.logApiUsage as any)(
-    (user as any).username || 'local', opts.modelId, (model as any)?.name, (model as any)?.provider,
-    Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, true, undefined, opts.appId, cost, cached, opts.client,
-  ).catch(() => {});
+  const prompt = Number(usage.prompt_tokens) || estimateMessagesTokens(messages);
+  const completion = Number(usage.completion_tokens) || estimateTokensRough(String(res?.content || streamed));
+  await settle(prompt, completion, Number(usage.cached_tokens) || 0);
   const content = stripOuterFence(String(res?.content || ''), opts.input.selection);
   return { content, toolCallText: looksLikeToolCallText(content) };
 }

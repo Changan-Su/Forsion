@@ -1,29 +1,65 @@
-// 归属账本(评审 G3-03):写类工具在途 / 刚结束才算「Tangu 写的」;路径口径统一;中止的调用有上限。
+// 归属账本(评审 G3-03 + Codex 复核 P0):写类工具在途 / 刚成功才算「Tangu 写的」;失败立即撤销;每次写入只认领一次;
+// 带完整内容 / new_string 的写入要核得上盘上正文;路径口径统一;中止的调用有上限。
 import { beforeEach, describe, expect, it } from 'vitest'
-import { AGENT_WRITE_GRACE_MS, AGENT_WRITE_OPEN_MAX_MS, agentWroteRecently, noteAgentWriteEnd, noteAgentWriteStart, resetAgentWriteLedger } from './agentWriteLedger'
-import { agentWriteTargets } from './deskPlan'
+import { AGENT_WRITE_GRACE_MS, AGENT_WRITE_OPEN_MAX_MS, claimAgentWrite, noteAgentWriteEnd, noteAgentWriteStart, resetAgentWriteLedger } from './agentWriteLedger'
+import { agentWriteChecks, agentWriteTargets } from './deskPlan'
 
 describe('agentWriteLedger', () => {
   beforeEach(() => resetAgentWriteLedger())
 
-  it('在途即算;结束后宽限期内仍算,过了不算', () => {
+  it('在途即算;成功结束后宽限期内仍算,过了不算', () => {
     noteAgentWriteStart('c1', ['/v/a.md'], 1000)
-    expect(agentWroteRecently('/v/a.md', 1500)).toBe(true)
-    expect(agentWroteRecently('/v/b.md', 1500)).toBe(false)
-    noteAgentWriteEnd('c1', 2000)
-    expect(agentWroteRecently('/v/a.md', 2000 + AGENT_WRITE_GRACE_MS - 1)).toBe(true)
-    expect(agentWroteRecently('/v/a.md', 2000 + AGENT_WRITE_GRACE_MS + 1)).toBe(false)
+    expect(claimAgentWrite('/v/b.md', 'x', 1500)).toBe(false)
+    noteAgentWriteEnd('c1', true, 2000)
+    expect(claimAgentWrite('/v/a.md', 'x', 2000 + AGENT_WRITE_GRACE_MS + 1)).toBe(false)
+    noteAgentWriteStart('c1b', ['/v/a.md'], 3000)
+    noteAgentWriteEnd('c1b', true, 3000)
+    expect(claimAgentWrite('/v/a.md', 'x', 3000 + AGENT_WRITE_GRACE_MS - 1)).toBe(true)
+  })
+
+  it('① 工具调用失败 → 立即撤销,不留宽限', () => {
+    noteAgentWriteStart('c2', ['/v/a.md'], 0)
+    noteAgentWriteEnd('c2', false, 10)
+    expect(claimAgentWrite('/v/a.md', 'someone else', 11)).toBe(false)
+  })
+
+  it('② 每次写入只认领一次:之后同路径、内容不同的回灌不再归属;同一份正文再来一遍(重复通知 / 双标签)仍算', () => {
+    noteAgentWriteStart('c3', ['/v/a.md'], 0)
+    noteAgentWriteEnd('c3', true, 5)
+    expect(claimAgentWrite('/v/a.md', 'agent text', 10)).toBe(true)
+    expect(claimAgentWrite('/v/a.md', 'agent text', 12)).toBe(true)
+    expect(claimAgentWrite('/v/a.md', 'user edit in another editor', 20)).toBe(false)
+  })
+
+  it('③ write_file 带完整内容:盘上正文对不上就不归属、也不消费(真正那次写入还能认领)', () => {
+    noteAgentWriteStart('c4', [{ path: '/v/a.md', full: '# T\r\n\nbody\n' }], 0)
+    expect(claimAgentWrite('/v/a.md', '# T\n\nsomething else\n', 5)).toBe(false)
+    expect(claimAgentWrite('/v/a.md', '# T\n\nbody', 6)).toBe(true) // 换行统一、尾部空白不计
+  })
+
+  it('③ edit_file 带 new_string:盘上正文得包含它', () => {
+    noteAgentWriteStart('c5', [{ path: '/v/a.md', includes: ['AGENT 改过'] }], 0)
+    expect(claimAgentWrite('/v/a.md', '第一段原文', 5)).toBe(false)
+    expect(claimAgentWrite('/v/a.md', '第一段 AGENT 改过。', 6)).toBe(true)
   })
 
   it('收不到结果的调用(run 中止)过了上限就作废', () => {
-    noteAgentWriteStart('c2', ['/v/a.md'], 0)
-    expect(agentWroteRecently('/v/a.md', AGENT_WRITE_OPEN_MAX_MS - 1)).toBe(true)
-    expect(agentWroteRecently('/v/a.md', AGENT_WRITE_OPEN_MAX_MS + 1)).toBe(false)
+    noteAgentWriteStart('c6', ['/v/a.md'], 0)
+    expect(claimAgentWrite('/v/a.md', 'x', AGENT_WRITE_OPEN_MAX_MS + 1)).toBe(false)
   })
 
   it('路径口径:反斜杠 / 叠斜杠 / 尾斜杠都认', () => {
-    noteAgentWriteStart('c3', ['C:\\vault\\\\notes\\a.md'], 0)
-    expect(agentWroteRecently('C:/vault/notes/a.md', 1)).toBe(true)
+    noteAgentWriteStart('c7', ['C:\\vault\\\\notes\\a.md'], 0)
+    expect(claimAgentWrite('C:/vault/notes/a.md', 'x', 1)).toBe(true)
+  })
+})
+
+describe('agentWriteChecks', () => {
+  it('write_file 带完整内容;edit_file / multi_edit 带 new_string;apply_patch 只给路径', () => {
+    expect(agentWriteChecks('write_file', JSON.stringify({ path: 'a.md', content: 'hi' }), '/v')).toEqual([{ path: '/v/a.md', full: 'hi' }])
+    expect(agentWriteChecks('edit_file', JSON.stringify({ path: 'a.md', old_string: 'x', new_string: 'y' }), '/v')).toEqual([{ path: '/v/a.md', includes: ['y'] }])
+    expect(agentWriteChecks('multi_edit', JSON.stringify({ path: 'a.md', edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: 'd' }] }), '/v')).toEqual([{ path: '/v/a.md', includes: ['b', 'd'] }])
+    expect(agentWriteChecks('apply_patch', JSON.stringify({ patch: '*** Update File: a.md\n' }), '/v')).toEqual([{ path: '/v/a.md' }])
   })
 })
 

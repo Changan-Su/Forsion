@@ -17,8 +17,23 @@ import { Slice, type Fragment, type Node as ProseNode } from '@milkdown/kit/pros
 export interface AiTarget {
   from: number
   to: number
-  /** 请求那一刻目标里的文字:替换前比对,用户在生成期间改过就不整段盖掉(改为插入下方)。 */
+  /** 请求那一刻目标里的文字(给插件 run / 翻译方向判断用)。 */
   text: string
+  /** 请求那一刻目标的**结构指纹**(节点、属性、marks、文字;Codex 复核 P1):替换前比对,生成期间用户改了
+   *  链接地址 / 图片 / 加粗之类(可见文字没变)也算改过,不整段盖掉,改为插入下方。 */
+  sig: string
+}
+
+/** 目标片段的结构指纹:Slice 内容的 JSON(类型 / attrs / marks / text),去掉由插件回填、会自己变的标题 id
+ *  (与 reconcileDiff 的 DERIVED_ATTRS 同口径)。 */
+export function targetSig(doc: ProseNode, from: number, to: number): string {
+  return JSON.stringify(doc.slice(from, to).content.toJSON() ?? [], (k, v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v) && (v as { type?: unknown }).type === 'heading' && (v as { attrs?: Record<string, unknown> }).attrs) {
+      const { id: _id, ...attrs } = (v as { attrs: Record<string, unknown> }).attrs
+      return { ...(v as object), attrs }
+    }
+    return v
+  })
 }
 type Meta = { set: AiTarget } | { clear: true }
 export const inlineAiKey = new PluginKey<AiTarget | null>('amInlineAi')
@@ -76,7 +91,7 @@ export function createInlineAi(opts: { spaceTrigger: () => boolean; onSpace: { c
 /** 记下目标区间(selection 模式 = 选区;cursor 模式 = 光标处的一个点)。选区同时收成目标末尾的光标:
  *  否则选区工具栏会随下一次视图更新又浮出来压在面板上,原生选区底色也盖住 `am-ai-target` 淡底。 */
 export function setAiTarget(view: EditorView, from: number, to: number): AiTarget {
-  const target = { from, to, text: view.state.doc.textBetween(from, to, '\n', '') }
+  const target = { from, to, text: view.state.doc.textBetween(from, to, '\n', ''), sig: targetSig(view.state.doc, from, to) }
   const tr = view.state.tr.setMeta(inlineAiKey, { set: target } satisfies Meta)
   if (to > from) tr.setSelection(TextSelection.create(tr.doc, to))
   view.dispatch(tr)
@@ -125,7 +140,7 @@ function blockAt(doc: ProseNode, pos: number): { from: number; to: number; blank
 
 /** 把预览确认后的结果写进文档:一个事务,普通用户编辑(进撤销栈)。返回实际用的写法;写不进去 = null。
  *  - replace:换掉目标区间。单个文本块的结果按行内内容并进原段落(不劈段);多块走 replaceRange 自己补结构。
- *    目标在生成期间被用户改过(文字对不上)→ 不盖掉,改为插入下方。
+ *    目标在生成期间被用户改过(结构指纹对不上:文字、链接地址、图片、marks 任一变了)→ 不盖掉,改为插入下方。
  *  - below:插在目标所在块之后。
  *  - insert(光标模式):光标所在块是空行 → 替换这个空行;否则插在它之后。 */
 export function applyAiResult(view: EditorView, target: AiTarget, content: Fragment, how: AiApply): AiApply | null {
@@ -135,7 +150,7 @@ export function applyAiResult(view: EditorView, target: AiTarget, content: Fragm
   const from = Math.min(target.from, size)
   const to = Math.min(Math.max(target.to, from), size)
   let mode: AiApply = how
-  if (mode === 'replace' && doc.textBetween(from, to, '\n', '') !== target.text) mode = 'below'
+  if (mode === 'replace' && targetSig(doc, from, to) !== target.sig) mode = 'below'
   let tr = view.state.tr
   let end: number
   if (mode === 'replace') {

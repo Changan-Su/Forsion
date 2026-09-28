@@ -25,6 +25,21 @@ export const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([...DESK_EDIT_TOOL
 // 补丁里的目标路径:File: / Move to: 行(照抄引擎 tools/writeTargets.ts 的 PATCH_PATH_RE,含改名的新路径)。
 const PATCH_PATH_RE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm
 
+/** 同 agentWriteTargets,但带上可核对盘上正文的特征(Codex 复核 P0 ③,归属账本用):write_file 带完整内容,
+ *  edit_file / multi_edit 带各处 new_string;apply_patch 只给路径(补丁的上下文行对不出整段正文,不硬凑)。 */
+export function agentWriteChecks(tool: string, argsJson: string | undefined, cwd?: string): Array<{ path: string; full?: string; includes?: string[] }> {
+  const paths = agentWriteTargets(tool, argsJson, cwd)
+  if (!paths.length || tool === 'apply_patch') return paths.map((path) => ({ path }))
+  let args: Record<string, unknown> = {}
+  try { args = argsJson ? JSON.parse(argsJson) : {} } catch { return [] }
+  const str = (v: unknown): v is string => typeof v === 'string'
+  if (tool === 'write_file') return paths.map((path) => (str(args.content) ? { path, full: args.content } : { path }))
+  const news = tool === 'multi_edit'
+    ? (Array.isArray(args.edits) ? args.edits : []).map((e) => (e as Record<string, unknown>)?.new_string).filter(str)
+    : [args.new_string].filter(str)
+  return paths.map((path) => ({ path, includes: news }))
+}
+
 /** 一次写类工具调用的全部目标路径(已按 cwd 解析成绝对路径;定位不了的丢掉)。参数必须是**完整** JSON。 */
 export function agentWriteTargets(tool: string, argsJson: string | undefined, cwd?: string): string[] {
   if (!AGENT_WRITE_TOOLS.has(tool)) return []
