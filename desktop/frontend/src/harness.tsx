@@ -30,7 +30,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { setLocaleGlobal } from './i18n'
+import { LocaleProvider, setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -715,6 +715,21 @@ if (new URLSearchParams(location.search).has('dock')) {
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
       unitsPairedList: async () => (cfg.unitHostEnabled ? [{ id: 'p1', name: '客厅 iPad', createdAt: 1 }] : []),
       unitsPairedRemove: async () => ({ ok: true }),
+      // P1-K5 &secrets=plaintext|locked:设备凭据降级 / 锁定态(SecretStorageNotice 截图用);缺省 = 正常(不渲染)。重试 → 恢复正常。
+      ...(() => {
+        const mode = new URLSearchParams(location.search).get('secrets')
+        let st = mode === 'plaintext'
+          ? { level: 'plaintext', backend: 'basic_text', locked: [], lastError: null }
+          : mode === 'locked'
+            ? { level: 'os', backend: 'keychain', locked: ['unitPairing'], lastError: 'decrypt-failed' }
+            : { level: 'os', backend: 'keychain', locked: [], lastError: null }
+        const ok = { level: 'os', backend: 'keychain', locked: [], lastError: null }
+        return {
+          secretStorageStatus: async () => st,
+          secretStorageRetry: async () => (st = ok),
+          secretStorageResetUnitPairing: async () => (st = ok),
+        }
+      })(),
       // LAN 探针桩:MacBook Air 的直连地址可达,别的一律探不通。
       unitsProbeLan: async (lanUrl: string) =>
         lanUrl === 'http://192.168.1.20:8791' ? { instanceId: 'inst-mba', name: 'MacBook Air' } : null,
@@ -742,7 +757,10 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 快捷键提示的符号按 data-platform 走(宿主启动时写);仪器钉死 mac 一路,断言才不看 CI 跑在什么系统上。
   document.documentElement.dataset.platform = 'mac'
   ;(window as unknown as { __rb: typeof useRibbonStore }).__rb = useRibbonStore
-  createRoot(document.getElementById('root')!).render(<RibbonHarness />)
+  // &unit 挂真 LocaleProvider(P1-K5:SecretStorageNotice 要拍 zh / en 两种真实截图;没有 Provider 时 useI18n 恒回中文)。
+  // 只包 &unit:别的 ribbon 台架按中文文案选元素,换成跟随页面语言会假红。
+  const unitLocale = new URLSearchParams(location.search).has('unit')
+  createRoot(document.getElementById('root')!).render(unitLocale ? <LocaleProvider><RibbonHarness /></LocaleProvider> : <RibbonHarness />)
 } else if (new URLSearchParams(location.search).has('modelpill')) {
   // 模型 / Effort 菜单:真组件裸挂,肉眼/截图核对三行结构与 Max 特效(几何契约由 scripts/model-menu.check.cjs 钉)。
   const modelPillParams = new URLSearchParams(location.search)

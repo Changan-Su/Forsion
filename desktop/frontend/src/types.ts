@@ -1213,6 +1213,10 @@ declare global {
       unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
+      // P1-K5 ── 设备凭据存储状态(SecretStorageNotice;远程会话开关按它置灰)──
+      secretStorageStatus?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      secretStorageRetry?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      secretStorageResetUnitPairing?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>
