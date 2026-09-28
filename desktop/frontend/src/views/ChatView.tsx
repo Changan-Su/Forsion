@@ -7,6 +7,7 @@ import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
+import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
@@ -83,6 +84,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
   const targetPlaceholder = useTargetComposerPlaceholder(activeId)
   const composerTargetReady = useComposerReady(activeId)
+  const runPickerOn = useRunPickerVisible() // P1-K7a:手机上的「在哪运行」
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
   const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
@@ -645,17 +647,19 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
   
-        {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。 */}
-        {!activeId && mvCfg.preset !== 'chat' && (!studioChat || studioRoot) && (
+        {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。
+            P1-K7a:手机上另有「在哪运行」药丸(Chat 模式也要有 —— 聊天会话同样可以建在电脑上),排在项目药丸之前。 */}
+        {!activeId && (!studioChat || studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat)) && (
           <div className="newchat-projectbar">
             <div className="newchat-projectbar-inner">
-              {studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
+              {runPickerOn && !studioChat && <RunLocationPicker />}
+              {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
                 workspaces={s.workspaces()}
                 value={s.newChatWs?.key ?? null}
                 onChange={(w) => s.setNewChatWs(w)}
                 onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
                 onAddCloudProject={(name) => void s.addCloudProject(name)}
-              />}
+              />)}
             </div>
           </div>
         )}

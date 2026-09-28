@@ -5,7 +5,7 @@
  * 自上而下三段:
  *   1. 在哪运行:Forsion 云端(缺省)+ 每台电脑一行、带状态(services/deviceStatus.ts 的口径,R-22)。
  *      点一台电脑 = unitsSheetModel.runOn:懒登记本机 → 问那台电脑认不认这台手机(需要就发起确认、轮询)→ 探一次引擎 → 生效。
- *      **生效只走本文件唯一的 selectRunLocation** = K6-S2 的 setFocusTarget(R-21)。
+ *      **生效只走本文件唯一的 selectRunLocation** = K7 的 setDraftLocation(loc, {explicit:true})(R-21:K6-S4 起焦点 = 新会话建在哪)。
  *   2. 打开设备界面(折叠,次要):P0 起的直连 / 中转行与手输地址,行为不变 —— 设备页开在 app 内 WebView(mobileShim.openUnitPage)。
  *   3. 本机:登记状态与「移除本机登记」。P1 起手机登记为 Unit(调用方,kind='phone');P2a 起可作被调用方。
  * 手机(kind='phone')与本机不出现在 1、2 两段:手机没有引擎也没有设备页。kind 缺席的老名册按电脑处理。
@@ -20,19 +20,22 @@ import { addRibbonIcon } from '@lcl/engine'
 import { registerMessages, useI18n } from '@/i18n'
 import { useApp } from '@/stores/appStore'
 import type { UnitInfo } from '@/types'
-import { cloudApiBase, focusRef, onFocusChange, setFocusTarget } from '@/services/engine/targets'
+import { cloudApiBase, focusRef, onFocusChange } from '@/services/engine/targets'
+import { installRunLocationChooser, setDraftLocation } from '@/stores/runLocationStore' // P1-K7a
+import { clearDeviceSticky, noteDeviceProbe, noteDeviceSticky } from '@/services/deviceMarks' // P1-K7a
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
 import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rosterNameOf, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunRow } from './unitsSheetModel'
 import './unitsSheet.css'
 
 /**
  * 「在哪运行」生效 —— 整个弹层只有这一个出口(单测钉住:scripts/units-sheet-model.test.cjs)。
- * = K6-S2 的整端切换 setFocusTarget;返回它的 Promise —— 「移除本机」要等切回云端真正生效(旧目标的轮询 / SSE 收掉)
- * 后才删身份,见 unitsSheetModel.removeThisPhone。K7 之后改 setDraftLocation(ref, { explicit: true })(INTEGRATION R-21)。
+ * = K7 的 setDraftLocation(ref, { explicit: true })(INTEGRATION R-21):K6-S4 起焦点 = 新会话建在哪,它走 setFocusTarget 并记住
+ * 这是用户亲手选的(下次新对话只在那台 ready 时默认回到它,K7 U3)。返回它的 Promise —— 「移除本机」要等切回云端真正生效
+ * (旧目标的轮询 / SSE 收掉)后才删身份,见 unitsSheetModel.removeThisPhone。
  * 焦点展示名 = 最近一次拉到的名册里那台的名字(M1B:审批结局行写「在执行的电脑上(名字)」;之前一直没带名字 → 只剩兜底「你的电脑」)。
  */
 export function selectRunLocation(ref: TargetRef): Promise<void> {
-  return setFocusTarget(ref, { name: rosterNameOf(lastRoster, ref) })
+  return setDraftLocation(ref, { explicit: true, name: rosterNameOf(lastRoster, ref) })
 }
 
 /** 最近一次拉到的名册(只给 selectRunLocation 取展示名;弹层关掉后仍留着 —— 「移除本机」切回云端不需要它)。 */
@@ -104,6 +107,8 @@ export const useUnitsSheet = create<{ open: boolean; setOpen: (v: boolean) => vo
  *  数据桥在才上架:App=mobileShim.unitsList;设备页(unitShim)/Tangu Web(webShim)无此桥 → 自然隐藏。 */
 export function installUnitsEntry(): void {
   if (!window.tangu?.unitsList) return
+  // P1-K7a:新对话的「在哪运行」药丸点开的就是本弹层(同一套状态与首次确认流程)
+  installRunLocationChooser(() => useUnitsSheet.getState().setOpen(true))
   addRibbonIcon({
     id: 'rb-units-mobile',
     side: 'bottom',
@@ -243,6 +248,9 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       progress: note,
     }, ac.signal).then((out) => {
       if (ac.signal.aborted || out.kind === 'cancelled') return
+      // P1-K7a:结果同步进共享的设备状态表(侧栏「我的电脑」分组与「在哪运行」药丸读它)
+      if (out.kind === 'selected') { noteDeviceProbe(row.id, { ok: true }); clearDeviceSticky(row.id) }
+      else if (out.kind === 'device') { if (out.probe) noteDeviceProbe(row.id, out.probe); if (out.sticky) noteDeviceSticky(row.id, out.sticky) }
       if (out.kind === 'phone') setIssue(out.issue)
       else if (out.kind === 'device') note(out)
       loadSelf() // 首次选电脑会顺带登记本机:「本机」段跟着刷新
