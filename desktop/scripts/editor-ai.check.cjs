@@ -9,6 +9,7 @@
 //   D = G3-06 插件异步 slash 命令:唤起处钉锚 +「进行中… · 取消」占位 → 结果插到锚所在的块(空行原地替换、不留空段);
 //       期间挪去别段打字 / 去别的输入框打字 → 光标与焦点都不被拽走;焦点还在锚所在的行 → 光标跟到结果末尾;
 //       取消 → 结果丢弃;那一行被删 → 不插并提示;一步 Cmd+Z 撤掉整段结果。
+//       D6(Codex 复核 inst P1-3)结果回来时在源码模式 → 不写进隐藏的编辑器、盘上 / textarea 都没有,提示;切回可视也没有。
 //   E = G3-05 Tangu 正在改这篇:写类工具参数流式生成 / 已发出未回结果时挂「正在修改」胶囊(不拦打字),结果回来即撤;
 //       打字中撞上 Tangu 的写入 → 本地胜 + Tangu 那版进冲突副本 + 提示点名 Tangu;别人的外部改动仍是「被别处改过」。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
@@ -677,6 +678,28 @@ async function groupD(browser) {
     const d = await vault(page)
     const t = await page.evaluate(() => window.__lostToasts)
     check('D5 唤起那行被删 → 结果不插,提示一声', !(d ?? '').includes('GEN_OUT') && t.some((x) => x.includes('Slow Gen')), JSON.stringify({ d, t }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate((code) => window.__ep.loadPlugin(code, { id: 'slow-gen' }), SLOWGEN)
+    await page.evaluate(() => { window.__srcToasts = []; window.addEventListener('amadeus:toast', (e) => window.__srcToasts.push(e.detail.text)) })
+    await page.waitForTimeout(300)
+    await pickSlow(page)
+    await page.evaluate(() => window.__upage.setEditorMode('source')) // 生成期间切到源码模式
+    await page.waitForSelector('textarea.amx-source')
+    await page.waitForTimeout(1900) // 结果在源码模式里回来
+    const hiddenDoc = await page.evaluate(() => window.__upage.probe.view()?.state.doc.textContent ?? '')
+    const ta = await page.evaluate(() => document.querySelector('textarea.amx-source').value)
+    const t = await page.evaluate(() => window.__srcToasts)
+    await page.evaluate(() => window.__upage.setEditorMode('wysiwyg'))
+    await page.waitForSelector('.unified-body .ProseMirror')
+    await page.waitForTimeout(1300)
+    const back = await page.evaluate((s) => document.querySelector(s).innerText, PM)
+    const d = await vault(page)
+    check('D6 结果回来时在源码模式 → 不写进隐藏编辑器(textarea / 盘上 / 切回可视都没有),提示一声',
+      !hiddenDoc.includes('GEN_OUT') && !ta.includes('GEN_OUT') && !back.includes('GEN_OUT') && !(d ?? '').includes('GEN_OUT') && t.some((x) => x.includes('Slow Gen') && x.includes('源码')),
+      JSON.stringify({ hiddenDoc: hiddenDoc.slice(0, 60), t, d }))
     await page.close()
   }
 }

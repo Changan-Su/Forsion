@@ -20,6 +20,10 @@ registerMessages({
   'pendins.busy': { zh: '「{label}」进行中…', en: '"{label}" in progress…' },
   'pendins.cancel': { zh: '取消', en: 'Cancel' },
   'pendins.lost': { zh: '「{label}」的结果没有插入：原来的位置已被删除。', en: '"{label}" wasn’t inserted: its original position was deleted.' },
+  'pendins.sourceMode': {
+    zh: '「{label}」的结果没有插入：你正在源码模式里编辑。切回可视模式后可以重新执行。',
+    en: '"{label}" wasn’t inserted because you’re editing in source mode. Switch back to visual mode and run it again.',
+  },
 })
 
 export const pendingInsertKey = new PluginKey<DecorationSet>('UNIFIED_PENDING_INSERT')
@@ -145,6 +149,11 @@ export function insertAtPending(view: EditorView, id: string, content: Fragment 
   if (focusHere) tr = tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size)), -1)).scrollIntoView()
   view.dispatch(tr)
   return true
+}
+
+/** 结果回来时编辑器在源码模式里藏着(Codex 复核 inst P1-3):不写隐藏的 doc,说一声。 */
+export function toastPendingSourceMode(label: string): void {
+  window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { level: 'warning', text: translate('pendins.sourceMode', { label }) } }))
 }
 
 export function toastPendingLost(label: string): void {

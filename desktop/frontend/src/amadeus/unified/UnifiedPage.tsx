@@ -76,7 +76,7 @@ import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange
 import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
 import { alignByAnchor, hostTop, registerModeCapture, scrollHostOf, textareaCaretY } from './modeRelay'
-import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, type PendingAnchor } from './pendingInsert'
+import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, toastPendingSourceMode, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
@@ -347,7 +347,7 @@ interface HostApi {
   posAfterPrefix: (md: string) => number | null
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, hidden, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
   path: string
   pageDir: string
   body: string
@@ -357,6 +357,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onFinalFlush: (storedMd: string) => void
   /** 回灌触发的重建要跳过终末快照(旧 doc 会盖掉刚回灌进 pipe 的新内容)。 */
   skipFinalFlush: () => boolean
+  /** 编辑器此刻被藏着(源码模式,C-06):textarea 才是真源,异步回来的结果不许写进隐藏的 doc(Codex 复核 inst P1-3)。 */
+  hidden?: () => boolean
   apiRef: { current: HostApi | null }
   probe?: Record<string, unknown>
   extraPlugins?: MilkdownPlugin[]
@@ -642,6 +644,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  fileMade:文件已经建好了(多维表 / 画板 / 子页面 / 图片)—— 落点没了要说清「文件在,只是没插进来」。 */
   const insertAsync = (md: string, a: PendingAnchor | null, fileMade = true): void => {
     if (a?.cancelled()) return
+    if (hidden?.()) {
+      // 结果回来时用户在源码模式(Codex 复核 inst P1-3):编辑器藏着,textarea 才是真源 —— 写进隐藏的 doc 要么随回可视被
+      // 源码那份盖掉(静默丢),要么回可视时凭空多一段。不插,撤锚,说一声(文件类的文件已建好,只是没插引用)。
+      dropPending(a)
+      toastPendingSourceMode(a?.label ?? '')
+      return
+    }
     const lost = (): void => {
       if (fileMade || !a) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
       else toastPendingLost(a.label)
@@ -888,7 +897,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           onClose={() => setDbPick(false)}
           onPick={(inner) => {
             setDbPick(false)
-            insertMd(`![[${inner}]]`)
+            if (hidden?.()) toastPendingSourceMode(translate('mdblock.slash.linkdb'))
+            else insertMd(`![[${inner}]]`)
           }}
         /></OverlayPortal>
       )}
@@ -2922,6 +2932,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                   setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
                 }}
                 skipFinalFlush={() => pipe.reconcileBusy > 0 || srcRef.current}
+                hidden={() => srcRef.current}
                 apiRef={hostRaw}
                 probe={probe}
                 extraPlugins={editorPlugins}
