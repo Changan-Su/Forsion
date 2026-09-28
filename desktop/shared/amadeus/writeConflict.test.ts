@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { conflictCopyPath, conflictCopyVariant, textFingerprint } from './writeConflict'
-import { conflictCopyPath as syncConflictCopyPath } from '../../electron/amadeus/sync/reconcile'
-import { stripConflictSuffix } from '../../electron/amadeus/sync/entryRegistry'
+// 云同步引擎住在 @forsion/extend(0.4 起):读 node_modules 里钉住的那份 dist,钉「编辑器与云同步的冲突副本命名同口径」
+// @ts-expect-error 私有包不带类型;这里只用运行时导出
+import { conflictCopyPath as syncConflictCopyPath, conflictCopyVariant as syncVariant, stripConflictSuffix } from '@forsion/extend/dist/desktop.mjs'
 
 describe('writeConflict 共享口径', () => {
   it('编辑器与云同步是同一个 conflictCopyPath(entryRegistry 靠这个尾缀归一)', () => {
     const now = new Date(2026, 8, 27, 9, 5)
-    expect(syncConflictCopyPath).toBe(conflictCopyPath)
     const copy = conflictCopyPath('Notes/Plan.md', now)
+    expect(syncConflictCopyPath('Notes/Plan.md', now)).toBe(copy) // 两份拷贝逐字同构
     expect(copy).toBe('Notes/Plan (conflict 2026-09-27 0905).md')
     expect(stripConflictSuffix(copy)).toBe('Notes/Plan.md')
   })
@@ -16,6 +17,7 @@ describe('writeConflict 共享口径', () => {
     const first = conflictCopyPath('a.b/Note.md', new Date(2026, 0, 2, 3, 4))
     expect(conflictCopyVariant(first, 1)).toBe(first)
     expect(conflictCopyVariant(first, 2)).toBe('a.b/Note (conflict 2026-01-02 0304)-2.md')
+    expect(syncVariant(first, 2)).toBe(conflictCopyVariant(first, 2))
     expect(conflictCopyVariant('a.b/README (conflict 2026-01-02 0304)', 3)).toBe('a.b/README (conflict 2026-01-02 0304)-3')
   })
 

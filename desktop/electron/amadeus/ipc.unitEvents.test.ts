@@ -29,7 +29,6 @@ vi.mock('../forsionHome', () => ({
 vi.mock('../forsionAuth', () => ({ loadTanguCreds: () => ({}) }))
 vi.mock('../activityLog', () => ({ logActivity: vi.fn(), logNoteEdit: vi.fn() }))
 vi.mock('chokidar', () => ({ default: { watch: () => ({ on: vi.fn().mockReturnThis(), close: async () => {} }) } }))
-vi.mock('./sync/sseClient', () => ({ startSse: () => ({ stop: vi.fn() }) }))
 
 // 渲染层 invoke 的 sender 是窗口 1 的 webContents(D 包的 notifyPeers 按对象身份排除发起窗口)。
 const invoke = (channel: string, ...args: unknown[]) => env.handlers.get(channel)!({ sender: env.wins[0].webContents }, ...args)

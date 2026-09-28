@@ -55,6 +55,7 @@ import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComp
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
+import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import { UnitHost } from './unitHost'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
@@ -796,6 +797,8 @@ let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;
 // auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
 let restartAmadeusSync: (() => Promise<void>) | null = null
 let stopAmadeusSync: (() => Promise<void>) | null = null
+// Amadeus 云同步引擎住在 Forsion Extend(0.4 起):Extend 装载时登记工厂,registerAmadeusIpc 里 vault 建好后再调(amadeus/cloudSeam.ts)
+let amadeusSyncFactory: AmadeusSyncFactory | null = null
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
@@ -2027,6 +2030,8 @@ app.whenReady().then(async () => {
       writeCreds: (patch) => accountCore.writeCreds(patch),
       onExternalCredsChange: (cb) => accountCore.onExternalChange(cb),
       setTokenRefresher: (fn) => accountCore.setRefresher(fn),
+      // ── 0.4 起:Amadeus 云同步工厂(引擎与 11 个通道住在 Extend;宿主 registerAmadeusIpc 里 vault 建好后调)──
+      setAmadeusSyncFactory: (factory) => { amadeusSyncFactory = factory },
     }
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) cloudChannels.clear()
@@ -3408,7 +3413,7 @@ app.whenReady().then(async () => {
     } : undefined,
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow)
+  const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
   amadeusReadPlugins = readExternalPlugins
   amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道

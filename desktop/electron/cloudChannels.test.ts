@@ -8,7 +8,6 @@
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { SYNC_IPC } from './amadeus/sync/ipcKeys'
 // @ts-expect-error 私有包不带类型;这里只用运行时导出
 import { registerCloud } from '@forsion/extend/dist/desktop.mjs'
 
@@ -24,13 +23,12 @@ function* walk(dir: string): Generator<string> {
 
 function hostChannels(): Set<string> {
   const out = new Set<string>()
-  // 单双引号字面量都认;计算出来的通道名(amadeus/ipc.ts 的 handle() 包装、SYNC_IPC 常量)靠下面显式补入 —— 新加一种包装注册就来这里登记
+  // 单双引号字面量都认;amadeus/ipc.ts 的 handle() 包装只注册 @amadeus-shared/ipc 的 IPC.* 常量(vault 面,Extend 不碰);SYNC_IPC 0.4 起归 Extend
   const re = /ipcMain\.(?:handle|on)\(\s*(['"])([^'"]+)\1/g
   for (const file of walk(ROOT)) {
     const src = readFileSync(file, 'utf8')
     for (const m of src.matchAll(re)) out.add(m[2])
   }
-  for (const v of Object.values(SYNC_IPC)) out.add(String(v))
   return out
 }
 
@@ -59,6 +57,7 @@ async function extendChannels(): Promise<string[]> {
     writeCreds: () => {},
     onExternalCredsChange: () => {},
     setTokenRefresher: () => {},
+    setAmadeusSyncFactory: () => {},
   }
   await registerCloud(host)
   return channels

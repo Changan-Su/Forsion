@@ -12,8 +12,8 @@ import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace 
 export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
-import { adoptLegacyCloudState, cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
-import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHome'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
+import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { effectivePluginId } from '../../shared/products'
 import { isDevLoaded, readDevLoads } from '../devLoadStore'
@@ -21,22 +21,8 @@ import { builtinPluginIds, lockedPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
-import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir, createSyncEngine } from './sync/engine'
-import { createCollabMain, planOf, type SharedBindingPlan } from './sync/collabMain'
-import { mirrorVaultNames } from './sync/mirrorVaults'
-import { SYNC_IPC } from './sync/ipcKeys'
-import {
-  applyRemoteOpToEntries,
-  buildScope,
-  hash8,
-  rewriteEntriesForMove,
-  scopeMatches,
-  validateCloudName,
-  type ScopeSet,
-} from './sync/entryRegistry'
-import { cloudVaultMarkerPath, coversPath, rewritePathList } from '@amadeus-shared/entrySync'
-import { deleteShadowFile } from './sync/shadow'
-import type { CloudChange } from './sync/cloudClient'
+import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
+import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 
 const runFile = promisify(execFile)
@@ -165,7 +151,7 @@ const offTangu = ctx.tangu?.subscribe(() => { /* 重画你的 UI */ })
 return () => { offTangu?.() }
 `
 
-export function registerIpc(getWindow: () => BrowserWindow | null): {
+export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null): {
   getVaultRoot: () => string | null
   restartSync: () => Promise<void>
   stopSync: () => Promise<void>
@@ -247,328 +233,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 云镜像迁移到隐藏目录:必须早于任何引擎创建/启动(整目录 rename,保 shadow 一致)。
   migrateCloudMirrorDir()
 
-  // 云同步引擎:云 vault = 固定本地镜像目录(cloudVaultDir),独立于用户自选 vault,自带 watcher。
-  // 引擎自己的写盘绕开 VaultManager 台账 → 活动 vault 是镜像时主 watcher 照常广播 →
-  // 渲染端刷新/索引全部走既有通道;对账按 hash 幂等消回推环。
-  // 多绑定:own 引擎(自己的云库,排除「与我共享/」)+ 每个已接受的页面共享一个引擎
-  // (镜像到 与我共享/<title>-<hash8>/,离线可读、双向同步;写权限由服务端按角色判)。
-  let syncEpoch = 0
-  let syncReady = false
-  let collabMain = createCollabMain()
-  const presenceRoster = new Map<string, { userId: string; username: string; page: string | null; at: number }>()
-  const pushRoster = (): void => {
-    const now = Date.now()
-    for (const [k, p] of presenceRoster) if (now - p.at > 70_000) presenceRoster.delete(k)
-    notifyAll(SYNC_IPC.presence, [...presenceRoster.values()])
-  }
-  const engineDeps = {
-    loadCreds: () => loadTanguCreds(),
-    // pendingDeletions 恒发全引擎合计:设置页整包替换状态,若只带本引擎计数,别的引擎持有的
-    // 待确认删除会被一条无关事件顶掉 → 确认按钮消失、删除卡死。
-    onStatus: (s: unknown) =>
-      notifyAll(SYNC_IPC.status, {
-        ...(s as object),
-        pendingDeletions: totalPendingDeletions(),
-        side: onCloudSide() ? 'cloud' : 'local',
-      }),
-    onPresence: (_vaultId: string, d: unknown) => {
-      const p = d as { userId?: string; username?: string; page?: string | null; at?: number } | null
-      if (!p?.userId) return
-      presenceRoster.set(p.userId, { userId: p.userId, username: String(p.username ?? 'user'), page: p.page ?? null, at: Number(p.at) || Date.now() })
-      pushRoster()
-    },
-    onPresenceRoster: (_vaultId: string, d: unknown) => {
-      if (!Array.isArray(d)) return
-      for (const raw of d) {
-        const p = raw as { userId?: string; username?: string; page?: string | null; at?: number }
-        if (p?.userId) presenceRoster.set(p.userId, { userId: p.userId, username: String(p.username ?? 'user'), page: p.page ?? null, at: Number(p.at) || Date.now() })
-      }
-      pushRoster()
-    },
-  }
-  const scopedEngineDeps = (): typeof engineDeps => {
-    const epoch = syncEpoch
-    return {
-      ...engineDeps,
-      onStatus: (status) => { if (epoch === syncEpoch) engineDeps.onStatus(status) },
-      onPresence: (vaultId, data) => { if (epoch === syncEpoch) engineDeps.onPresence(vaultId, data) },
-      onPresenceRoster: (vaultId, data) => { if (epoch === syncEpoch) engineDeps.onPresenceRoster(vaultId, data) },
-    }
-  }
-  let sync = createSyncEngine(scopedEngineDeps())
-  /** 与我共享的绑定引擎(key=planOf hash8)。 */
-  const sharedEngines = new Map<string, { engine: ReturnType<typeof createSyncEngine>; plan: SharedBindingPlan }>()
-  let sharedPlans: SharedBindingPlan[] = []
-
-  const refreshSharedBindings = async (): Promise<void> => {
-    if (!syncReady || !currentCloudAccountId()) return
-    const epoch = syncEpoch
-    const session = collabMain
-    let items: Awaited<ReturnType<typeof collabMain.sharedWithMe>>
-    try {
-      items = await session.sharedWithMe()
-    } catch {
-      return // 未登录/离线:保持现状,下次再刷
-    }
-    if (epoch !== syncEpoch || !syncReady) return
-    const plans = items.map((it) => planOf(it))
-    sharedPlans = plans
-    const want = new Set(plans.map((p) => p.key))
-    for (const [key, entry] of sharedEngines) {
-      if (!want.has(key)) {
-        await entry.engine.stop()
-        if (epoch !== syncEpoch) return
-        sharedEngines.delete(key) // 共享被撤/自退:停同步;本地镜像文件保留(用户数据不擅删)
-      }
-    }
-    for (const plan of plans) {
-      if (sharedEngines.has(plan.key)) continue
-      const engine = createSyncEngine(scopedEngineDeps(), {
-        localRoot: path.join(cloudVaultDir(), ...plan.localRelDir.split('/')),
-        shadowName: `amadeus-sync-${cloudAccountNamespace()}-share-${plan.key}`,
-        vaultId: plan.vaultId,
-        serverDir: plan.serverDir,
-        inScope: plan.inScope,
-      })
-      sharedEngines.set(plan.key, { engine, plan })
-      engine.start()
-    }
-  }
-
-  /** 活动 vault 是否就是云镜像(胶囊滑块的 Cloud 侧)。 */
-  const onCloudSide = (): boolean => vault.getRoot() === cloudVaultDir()
-
-  // ── 按条目云同步:每个开过同步的本地 vault 一个绑定(localRoot=vault 根,serverDir=<云名>)。
-  // own 镜像引擎不排除 <云名>/ 前缀 → 条目绑定推上去的内容被它当「另一台设备」拉进镜像,
-  // 云端侧 UI 白得;两引擎靠 clientIdSuffix 区分回声。注册表在 AmadeusConfig.entrySync。
-  type EntryEngineRec = {
-    engine: ReturnType<typeof createSyncEngine>; scope: { current: ScopeSet }; cloudName: string
-    base: ScopeSet; pendingMoves: Set<ScopeSet>
-  }
-  const setEntryScope = (rec: EntryEngineRec, base = rec.base): void => {
-    rec.base = base
-    const scopes = [base, ...rec.pendingMoves]
-    rec.scope.current = buildScope(scopes.flatMap((s) => s.entries), scopes.flatMap((s) => s.exclude))
-  }
-  const entryEngines = new Map<string, EntryEngineRec>()
-  const entryMarkersEnsured = new Set<string>()
-  const emitEntryChange = (): void => {
-    notifyAll(SYNC_IPC.entryChange)
-  }
-  /** 远端结构事件(move/delete…)应用后跟进注册表,否则远端改名后 scope 失配静默停同步。 */
-  const onEntryRemote = async (vaultRoot: string, ev: CloudChange): Promise<void> => {
-    const rec = entryEngines.get(vaultRoot)
-    if (!rec) return
-    const strip = (p: string | null | undefined): string | null =>
-      p && p.startsWith(`${rec.cloudName}/`) ? p.slice(rec.cloudName.length + 1) : null
-    const rel = strip(ev.path)
-    if (!rel) return
-    let changed = false
-    await updateConfig((cfg) => {
-      if (entryEngines.get(vaultRoot) !== rec) return false
-      const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === vaultRoot)
-      if (!v) return false
-      const op = ev.op as 'move' | 'rename-folder' | 'move-folder' | 'delete' | 'delete-folder'
-      const newRel = strip(ev.newPath)
-      const r = applyRemoteOpToEntries(v.entries, op, rel, newRel)
-      const x = newRel ? rewritePathList(v.exclude ?? [], rel, newRel) : { changed: false, next: v.exclude ?? [] }
-      if (!r.changed && !x.changed) return false
-      changed = true
-      v.entries = r.next
-      if (x.changed) v.exclude = x.next
-      setEntryScope(rec, buildScope(v.entries, v.exclude ?? []))
-    })
-    if (changed && entryEngines.get(vaultRoot) === rec) emitEntryChange()
-  }
-  const entryEngineDeps = (vaultRoot: string) => {
-    const epoch = syncEpoch
-    return {
-      ...scopedEngineDeps(),
-      onStatus: (status: unknown) => {
-        if (epoch !== syncEpoch) return
-        notifyAll(SYNC_IPC.status, {
-          ...(status as object), pendingDeletions: totalPendingDeletions(), side: 'local', binding: vaultRoot,
-        })
-      },
-      onRemoteApplied: async (ev: CloudChange) => { if (epoch === syncEpoch) await onEntryRemote(vaultRoot, ev) },
-    }
-  }
-  const refreshEntryBindings = async (): Promise<void> => {
-    // One account for the whole refresh: the awaits below must not let a credential
-    // change (before the account watcher restarts sync) mix A's engines with B's registry.
-    const accountId = currentCloudAccountId()
-    if (!syncReady || !accountId) return
-    const epoch = syncEpoch
-    const session = collabMain
-    const ns = cloudAccountNamespace(accountId)
-    await adoptLegacyCloudState(accountId) // pre-2.9.9 bindings of this same account resume here (moves their shadow too)
-    const accountConfig = await readConfig(accountId)
-    const list = accountConfig.entrySync ?? []
-    if (epoch !== syncEpoch || !syncReady || accountId !== currentCloudAccountId()) return
-    const want = new Map(list.map((v) => [v.vaultRoot, v]))
-    for (const [root, rec] of entryEngines) {
-      const v = want.get(root)
-      if (v && v.cloudName === rec.cloudName) continue
-      await rec.engine.stop()
-      if (epoch !== syncEpoch) return
-      entryEngines.delete(root)
-      // 云名变更:serverDir 变了,旧 shadow 的服务端路径键全部失效,必须清掉重来。
-      if (v) await deleteShadowFile(`amadeus-sync-${ns}-entry-${hash8(root)}`)
-      if (epoch !== syncEpoch) return
-    }
-    for (const v of list) {
-      const existing = entryEngines.get(v.vaultRoot)
-      if (existing) {
-        setEntryScope(existing, buildScope(v.entries, v.exclude ?? []))
-        continue
-      }
-      const scope = { current: buildScope(v.entries, v.exclude ?? []) }
-      const cloudName = v.cloudName
-      const engine = createSyncEngine(entryEngineDeps(v.vaultRoot), {
-        accountId,
-        localRoot: v.vaultRoot,
-        shadowName: `amadeus-sync-${ns}-entry-${hash8(v.vaultRoot)}`,
-        vaultId: 'first',
-        serverDir: cloudName,
-        clientIdSuffix: `entry-${hash8(v.vaultRoot)}`,
-        requireRootExists: true,
-        ignoreNames: ['.git', 'node_modules', '.trash'],
-        inScope: (sp) => {
-          if (sp === cloudName) return true // 根文件夹本身(mkdir 等结构事件)
-          if (!sp.startsWith(`${cloudName}/`)) return false
-          return scopeMatches(scope.current, sp.slice(cloudName.length + 1))
-        },
-      })
-      entryEngines.set(v.vaultRoot, { engine, scope, cloudName, base: scope.current, pendingMoves: new Set() })
-      engine.start()
-    }
-    if (accountConfig.cloudSync?.enabled === false) return
-    // 旧库标记补写:<云名>/.forsion-vault.md 是 web/移动端识别「同步 Vault 分区」的标记,标记机制
-    // 之前开启的库没有。幂等(已存在=409 吞),每进程每云名只试一次;失败(离线)下次进程再试。
-    for (const v of list) {
-      if (entryMarkersEnsured.has(v.cloudName)) continue
-      void (async () => {
-        try {
-          const vid = await session.ensureOwnVault()
-          await session.call('PUT', `/vaults/${encodeURIComponent(vid)}/file`, { path: cloudVaultMarkerPath(v.cloudName), content: '', baseSeq: 0 })
-          epoch === syncEpoch && entryMarkersEnsured.add(v.cloudName)
-        } catch (e) {
-          // 409=已存在,同样算就位;其余(离线/500)不落标记,下次 refresh 再试(别在发请求前就置位)。
-          if ((e as { status?: number })?.status === 409) epoch === syncEpoch && entryMarkersEnsured.add(v.cloudName)
-        }
-      })()
-    }
-  }
-  /** Keep enrollment with the file; retain only the moving source scope until
-   * its actual cloud operation completes (a timer cannot bound an offline job). */
-  const onLocalEntryMove = async (root: string, fromRel: string, toRel: string, rec: EntryEngineRec, physicalKind?: 'file' | 'folder'): Promise<void> => {
-    const from = fromRel.replace(/\\/g, '/').normalize('NFC')
-    const to = toRel.replace(/\\/g, '/').normalize('NFC')
-    let changed = false
-    let lease: ScopeSet | undefined
-    let previous: ScopeSet | undefined
-    let next: ScopeSet | undefined
-    let movedKind: 'file' | 'folder' = physicalKind ?? 'file'
-    try {
-      await updateConfig(async (cfg) => {
-        if (entryEngines.get(root) !== rec) return false
-        const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === root)
-        if (!v) return false
-        const r = rewriteEntriesForMove(v.entries, from, to)
-        const x = rewritePathList(v.exclude ?? [], from, to)
-        const wasSynced = coversPath(v.entries, v.exclude, from)
-        if (!physicalKind && await fs.stat(path.join(root, ...to.split('/'))).then((st) => st.isDirectory(), () => false)) movedKind = 'folder'
-        const kind = movedKind === 'folder' ? 'folder' : /\.md$/i.test(to) ? 'page' : 'asset'
-        if (wasSynced && !coversPath(r.next, x.next, to)) {
-          r.next.push({ path: to, kind })
-          r.changed = true
-        }
-        changed = r.changed || x.changed
-        const moving = v.entries.filter((e) => rewriteEntriesForMove([e], from, to).changed)
-        if (wasSynced && !moving.some((e) => e.path === from)) moving.push({ path: from, kind })
-        // Unrelated exclusions are never leased; toggles outside this move must
-        // take effect immediately even when this operation remains offline.
-        lease = buildScope(moving, (v.exclude ?? []).filter((p) => rewritePathList([p], from, to).changed))
-        previous = rec.base
-        rec.pendingMoves.add(lease)
-        v.entries = r.next
-        v.exclude = x.next
-        next = buildScope(v.entries, v.exclude)
-        setEntryScope(rec, next)
-        return changed
-      })
-    } catch (error) {
-      if (lease) rec.pendingMoves.delete(lease)
-      setEntryScope(rec, rec.base === next && previous ? previous : rec.base)
-      throw error
-    }
-    // Never send a cloud move before the enrollment transaction commits: the
-    // filesystem caller can still roll back a failed local configuration write.
-    try {
-    if (lease) await rec.engine.notifyLocalMove(from, to, () => {
-      rec.pendingMoves.delete(lease!)
-      setEntryScope(rec)
-    }, movedKind)
-    } catch (error) {
-      if (lease) rec.pendingMoves.delete(lease)
-      await updateConfig((cfg) => {
-        const v = cfg.entrySync?.find((v) => v.vaultRoot === root)
-        if (!v) return false
-        v.entries = rewriteEntriesForMove(v.entries, to, from).next
-        v.exclude = rewritePathList(v.exclude ?? [], to, from).next
-        setEntryScope(rec, buildScope(v.entries, v.exclude))
-      })
-      throw error
-    }
-    if (changed && entryEngines.get(root) === rec) emitEntryChange()
-  }
-  /** 按路径把应用内写事件路由到对应引擎(与我共享/<slug>/** → 该共享绑定;其余 → own)。 */
-  const routeNotify = (rel: string): { engine: ReturnType<typeof createSyncEngine>; rel: string } => {
-    const posix = rel.replace(/\\/g, '/')
-    for (const { engine, plan } of sharedEngines.values()) {
-      if (posix.startsWith(`${plan.localRelDir}/`)) return { engine, rel: posix.slice(plan.localRelDir.length + 1) }
-    }
-    return { engine: sync, rel: posix }
-  }
-  // 应用内写钩子:活动 vault=镜像 → 按前缀路由到 own/共享引擎;活动 vault=本地且开了按条目
-  // 同步 → 转发该 vault 的条目绑定(move 必须走这里:光靠 chokidar 是 unlink+add,新路径若
-  // 尚未跟进注册表就不在 scope,重命名会变成云端删除)。其余场景引擎自带 watcher 兜底。
-  vault.setMutationHooks(
-    (rel, kind) => {
-      if (onCloudSide()) {
-        const r = routeNotify(rel)
-        r.engine.notifyLocal(r.rel, kind)
-        return
-      }
-      entryEngines.get(vault.getRoot() ?? '')?.engine.notifyLocal(rel, kind)
-    },
-    (from, to, kind) => {
-      if (onCloudSide()) {
-        const f = routeNotify(from)
-        const t = routeNotify(to)
-        if (f.engine === t.engine) return f.engine.notifyLocalMove(f.rel, t.rel, undefined, kind)
-        else {
-          f.engine.notifyLocal(f.rel, 'remove')
-          t.engine.notifyLocal(t.rel, 'write')
-        }
-        return
-      }
-      const root = vault.getRoot() ?? ''
-      const rec = entryEngines.get(root)
-      if (rec) return onLocalEntryMove(root, from, to, rec, kind)
-    },
-    (from, to) => {
-      if (onCloudSide()) {
-        const f = routeNotify(from)
-        const t = routeNotify(to)
-        const releases = [f.engine.holdLocalMove(f.rel, t.rel)]
-        if (f.engine !== t.engine) releases.push(t.engine.holdLocalMove(f.rel, t.rel))
-        return () => { for (const release of releases) release() }
-      }
-      return entryEngines.get(vault.getRoot() ?? '')?.engine.holdLocalMove(from, to)
-    },
-  )
-
   const watcher = new VaultWatcher(
     vault,
     (pagePath) => {
@@ -613,348 +277,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     }
   }
 
-  /** 全部引擎(主镜像+共享+按条目)待确认删除合计:设置页据此显示删除保护提示。 */
-  const totalPendingDeletions = (): number => {
-    let n = sync.getStatus().pendingDeletions
-    for (const { engine } of sharedEngines.values()) n += engine.getStatus().pendingDeletions
-    for (const { engine } of entryEngines.values()) n += engine.getStatus().pendingDeletions
-    return n
-  }
-  ipcMain.handle(SYNC_IPC.get, () => ({
-    ...sync.getStatus(),
-    pendingDeletions: totalPendingDeletions(),
-    side: onCloudSide() ? 'cloud' : 'local',
-  }))
-  ipcMain.handle(SYNC_IPC.setEnabled, async (_e, on: boolean) => {
-    if (!syncReady) throw new Error('Cloud account is changing')
-    const epoch = syncEpoch
-    await sync.setEnabled(on)
-    if (epoch !== syncEpoch) return sync.getStatus()
-    await Promise.all([...sharedEngines.values(), ...entryEngines.values()].map(({ engine }) => engine.restart()))
-    return { ...sync.getStatus(), pendingDeletions: totalPendingDeletions(), side: onCloudSide() ? 'cloud' : 'local' }
-  })
-  // 踢一遍所有同步引擎(主镜像 + 共享 + 按条目):auth-required/停摆的引擎会经 syncNow 内部转 restart
-  // 重读凭据并拉起双向同步。手动「立即同步」用它。
-  const kickAllSync = (): ReturnType<typeof sync.syncNow> => {
-    if (!syncReady) return Promise.resolve(sync.getStatus())
-    void refreshSharedBindings() // 顺带发现新接受的共享
-    for (const { engine } of sharedEngines.values()) void engine.syncNow()
-    for (const { engine } of entryEngines.values()) void engine.syncNow()
-    return sync.syncNow()
-  }
-  /** Invalidate every old session before credentials can change. Old mirrors and
-   * local notes stay on disk; only account-owned jobs/caches are retired. */
-  const stopAllSync = async (): Promise<void> => {
-    ++syncEpoch
-    syncReady = false
-    collabMain.stop()
-    const stopping = [sync.stop(), ...[...sharedEngines.values()].map(({ engine }) => engine.stop()),
-      ...[...entryEngines.values()].map(({ engine }) => engine.stop())]
-    sharedEngines.clear()
-    entryEngines.clear()
-    sharedPlans = []
-    entryMarkersEnsured.clear()
-    presenceRoster.clear()
-    pushRoster()
-    await Promise.all(stopping)
-    // Each existing write must finish against its original root.
-    while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
-    if (vault.getRoot() && isManagedCloudVault(vault.getRoot()!)) {
-      const cfg = await readConfig()
-      const root = cfg.localVault && !isManagedCloudVault(cfg.localVault) ? cfg.localVault : path.join(defaultWorkspaceDir(), 'Amadeus')
-      await fs.mkdir(root, { recursive: true })
-      await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
-      await activateRoot(root, false)
-    }
-    emitEntryChange()
-  }
-  const restartAllSync = async (): Promise<void> => {
-    await stopAllSync()
-    collabMain = createCollabMain()
-    sync = createSyncEngine(scopedEngineDeps())
-    syncReady = true
-    await Promise.all([sync.restart(), refreshSharedBindings(), refreshEntryBindings()])
-    emitEntryChange()
-    notifyAll(SYNC_IPC.status, { ...sync.getStatus(), pendingDeletions: totalPendingDeletions(), side: onCloudSide() ? 'cloud' : 'local' })
-  }
-  ipcMain.handle(SYNC_IPC.syncNow, () => kickAllSync())
-  // 删除保护放行:对所有引擎生效(有待确认删除的才会真正动作)。
-  ipcMain.handle(SYNC_IPC.confirmDeletions, () => {
-    for (const { engine } of sharedEngines.values()) engine.confirmMassDeletions()
-    for (const { engine } of entryEngines.values()) engine.confirmMassDeletions()
-    const st = sync.confirmMassDeletions()
-    return { ...st, pendingDeletions: totalPendingDeletions(), side: onCloudSide() ? 'cloud' : 'local' }
-  })
-
-  // ── 按条目云同步 IPC 面 ────────────────────────────────────────────────────
-  ipcMain.handle(SYNC_IPC.entryGet, async () => {
-    const cfg = await readConfig()
-    const cloudRoot = cloudVaultDir()
-    // mirrorVaults:注册表是每机本地配置,换台设备恒为空 → 分区名还得从镜像里的标记文件推(与 web 同判据)。
-    return { vaults: cfg.entrySync ?? [], activeRoot: vault.getRoot(), cloudRoot, mirrorVaults: await mirrorVaultNames(cloudRoot) }
-  })
-  // 非活动侧(Local↔Cloud 另一侧)的日历只读快照:递归读该侧根下所有 .db 源文本,供 Calendar 汇总两侧。
-  // 只读(不建 watcher/不写回);另一侧的编辑仍须切到那一侧。两侧物理是分开的两个磁盘根。
-  ipcMain.handle(SYNC_IPC.otherSideDbs, async () => {
-    const active = vault.getRoot()
-    if (!active) return null
-    const cloud = cloudVaultDir()
-    const cfg = await readConfig()
-    // 活动侧是云 → 另一侧是本地(localVault);活动侧是本地 → 另一侧是云镜像目录。
-    const otherRoot = active === cloud ? (cfg.localVault && cfg.localVault !== cloud ? cfg.localVault : null) : cloud
-    if (!otherRoot) return null
-    const dbs: Array<{ rel: string; source: string }> = []
-    const CAP = 500 // ponytail: 上限防病态目录;超了截断(日历库量级远低于此)
-    const walk = async (dir: string, rel: string): Promise<void> => {
-      if (dbs.length >= CAP) return
-      let ents: import('node:fs').Dirent[]
-      try {
-        ents = await fs.readdir(dir, { withFileTypes: true })
-      } catch {
-        return // 另一侧根不存在(未登录云 / 无本地库)→ 空
-      }
-      for (const e of ents) {
-        if (dbs.length >= CAP) break
-        if (e.name.startsWith('.') || e.isSymbolicLink()) continue // 隐藏目录/软链不追
-        const childRel = rel ? `${rel}/${e.name}` : e.name
-        if (e.isDirectory()) await walk(path.join(dir, e.name), childRel)
-        else if (e.isFile() && /\.db$/i.test(e.name)) {
-          try {
-            dbs.push({ rel: childRel, source: await fs.readFile(path.join(dir, e.name), 'utf8') })
-          } catch {
-            /* 单文件读失败跳过 */
-          }
-        }
-      }
-    }
-    await walk(otherRoot, '')
-    return { root: otherRoot, vaultName: otherRoot === cloud ? '云端' : path.basename(otherRoot), dbs }
-  })
-  ipcMain.handle(
-    SYNC_IPC.entryEnable,
-    async (
-      _e,
-      payload: {
-        entries: Array<{ path: string; kind: 'page' | 'folder' | 'asset' }>
-        /** 弹窗里取消勾选的子页面(被条目覆盖但不要同步)。 */
-        exclude?: string[]
-        /** 弹窗里勾上的子页面:显式解除历史排除(不送的话上次剔除的会一直排除着)。 */
-        include?: string[]
-        cloudName?: string
-        merge?: boolean
-      },
-    ) => {
-      const epoch = syncEpoch
-      const session = collabMain
-      if (!syncReady || !currentCloudAccountId()) return { error: 'Sign in to enable cloud sync' }
-      const root = vault.getRoot()
-      if (!root || onCloudSide()) return { error: '仅本地 vault 可开启云同步' }
-      const cfg = await readConfig()
-      const list = cfg.entrySync ?? []
-      let v = list.find((x) => x.vaultRoot === root)
-      if (!v) {
-        const name = (payload.cloudName ?? path.basename(root)).normalize('NFC').trim()
-        const err = validateCloudName(name, list.map((x) => x.cloudName))
-        if (err) return { error: err }
-        if (!payload.merge) {
-          // 云端根占用检测(同名文件夹或文件都算);merge=true 显式合并进现有云文件夹(换机重开)。
-          try {
-            const vid = await session.ensureOwnVault()
-            const tree = await session.call<{ folders?: string[]; entries?: Array<{ path: string }> }>(
-              'GET',
-              `/vaults/${encodeURIComponent(vid)}/tree`,
-            )
-            const occupied =
-              (tree.folders ?? []).some((f) => f === name || f.startsWith(`${name}/`)) ||
-              (tree.entries ?? []).some((en) => en.path === name || en.path.startsWith(`${name}/`))
-            if (occupied) return { conflict: name }
-          } catch (err2) {
-            return { error: (err2 as Error)?.message || '无法连接云端(首次开启需要在线)' }
-          }
-        }
-        v = { vaultRoot: root, cloudName: name, entries: [] }
-        list.push(v)
-        // 云端 vault 分区标记(web 端借此识别「同步 Vault 文件夹」;点开头文件对桌面树/本地回流全隐身)。
-        // 失败不阻断开启(web 少一个分区而已);已存在(merge/换机)409 同样吞掉。
-        void (async () => {
-          try {
-            const vid = await session.ensureOwnVault()
-            await session.call('PUT', `/vaults/${encodeURIComponent(vid)}/file`, { path: cloudVaultMarkerPath(v!.cloudName), content: '', baseSeq: 0 })
-          } catch { /* ignore */ }
-        })()
-      }
-      if (epoch !== syncEpoch || !syncReady) return { error: 'Cloud account changed; retry from the current account' }
-      await updateConfig((latest) => {
-        if (epoch !== syncEpoch || !syncReady) return false
-        const currentList = latest.entrySync ?? []
-        let current = currentList.find((x) => x.vaultRoot === root)
-        if (!current) {
-          const error = validateCloudName(v!.cloudName, currentList.map((x) => x.cloudName))
-          if (error) throw new Error(error)
-          current = { vaultRoot: root, cloudName: v!.cloudName, entries: [] }
-          currentList.push(current)
-        }
-        const norm = (p: unknown): string => String(p ?? '').replace(/\\/g, '/').normalize('NFC')
-        const added = new Set<string>()
-        for (const en of payload.entries ?? []) {
-          const p = norm(en.path)
-          if (!p) continue
-          added.add(p)
-          if (current.entries.some((x) => x.path === p)) continue
-          current.entries.push({ path: p, kind: en.kind === 'folder' || en.kind === 'asset' ? en.kind : 'page' })
-        }
-        // 本次显式开启的路径 + 勾上的子页面退出排除名单;取消勾选的子页面进名单。
-        const excl = (payload.exclude ?? []).map(norm).filter(Boolean)
-        const inc = new Set([...added, ...(payload.include ?? []).map(norm).filter(Boolean)])
-        current.exclude = [...new Set([...(current.exclude ?? []).filter((p) => !inc.has(p)), ...excl])]
-        // 取消勾选的若本身还是显式条目,必须一并摘掉 —— coversPath 里精确条目压过 exclude,
-        // 留着它 = 用户取消了勾选却照传不误。
-        const exclSet = new Set(excl)
-        current.entries = current.entries.filter((e) => !exclSet.has(e.path))
-        latest.entrySync = currentList
-        v = current
-      }, cfg.cloudAccountId)
-      if (epoch !== syncEpoch) return { error: 'Cloud account changed; retry from the current account' }
-      await refreshEntryBindings()
-      void entryEngines.get(root)?.engine.syncNow()
-      emitEntryChange()
-      return { ok: true, cloudName: v.cloudName }
-    },
-  )
-  ipcMain.handle(SYNC_IPC.entryDisable, async (_e, p: string) => {
-    const root = vault.getRoot()
-    let changed = false
-    const epoch = syncEpoch
-    await updateConfig((cfg) => {
-      if (epoch !== syncEpoch || !syncReady) return false
-      const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === root)
-      if (!root || !v) return false
-      const norm = String(p ?? '').replace(/\\/g, '/').normalize('NFC')
-      const before = v.entries.length
-      v.entries = v.entries.filter((x) => x.path !== norm)
-      // An inherited child is explicitly excluded when its toggle is turned off.
-      if (coversPath(v.entries, v.exclude, norm)) v.exclude = [...new Set([...(v.exclude ?? []), norm])]
-      else if (v.entries.length === before) return false
-      changed = true
-    })
-    if (!changed || epoch !== syncEpoch) return { ok: false }
-    await refreshEntryBindings() // scope 缩小=dropShadow 干净解绑;云端/镜像副本保留(撤共享同款纪律)
-    emitEntryChange()
-    return { ok: true }
-  })
-  ipcMain.handle(SYNC_IPC.entryClosure, (_e, rootRel: string, kind: 'page' | 'folder') =>
-    index.relatedClosure(String(rootRel ?? ''), kind === 'folder' ? 'folder' : 'page'),
-  )
-
-  // ── collab(页面级共享/发布/presence):token 留主进程,渲染端经 window.amadeusCollab ──
-  ipcMain.handle(SYNC_IPC.collabCall, async (_e, fn: string, args: unknown[]) => {
-    const session = collabMain
-    const v = async (): Promise<string> => session.ensureOwnVault()
-    const a = (i: number): string => String((args ?? [])[i] ?? '')
-    const obj = (i: number): any => (args ?? [])[i] ?? {}
-    switch (fn) {
-      case 'listVaults':
-        return (await session.call<{ vaults: unknown[] }>('GET', '/vaults')).vaults
-      case 'activeVaultId':
-        return v()
-      case 'pageShare':
-        return session.call('GET', `/vaults/${encodeURIComponent(await v())}/page-shares?path=${encodeURIComponent(a(0))}`)
-      case 'createPageShare':
-        return session.call('POST', `/vaults/${encodeURIComponent(await v())}/page-shares`, { path: a(0), ...obj(1) })
-      case 'updatePageShare':
-        return session.call('PATCH', `/vaults/${encodeURIComponent(await v())}/page-shares/${encodeURIComponent(a(0))}`, obj(1))
-      case 'revokePageShare':
-        return session.call('DELETE', `/vaults/${encodeURIComponent(await v())}/page-shares/${encodeURIComponent(a(0))}`)
-      case 'setParticipantRole':
-        return session.call('PATCH', `/vaults/${encodeURIComponent(await v())}/page-shares/${encodeURIComponent(a(0))}/members/${encodeURIComponent(a(1))}`, { role: a(2) })
-      case 'removeParticipant':
-        return session.call('DELETE', `/vaults/${encodeURIComponent(await v())}/page-shares/${encodeURIComponent(a(0))}/members/${encodeURIComponent(a(1))}`)
-      case 'sharedWithMe': {
-        const items = await session.sharedWithMe()
-        void refreshSharedBindings()
-        return items
-      }
-      case 'leaveShare': {
-        const me = session.myUserId()
-        if (!me) throw new Error('未登录')
-        return session.call('DELETE', `/vaults/${encodeURIComponent(await v())}/page-shares/${encodeURIComponent(a(0))}/members/${encodeURIComponent(me)}`)
-      }
-      case 'publishes':
-        return session.call('GET', `/vaults/${encodeURIComponent(await v())}/shares`)
-      case 'listAllShares': {
-        // Public View：跨全部 vault 汇总「我发布的公开链接 + 我创建的页面协作共享」。
-        // 现有 publishes/pageShare 都只覆盖 own vault；这里显式遍历 listVaults 做跨库聚合。
-        const vaults = (await session.call<{ vaults: Array<{ id: string; name?: string }> }>('GET', '/vaults')).vaults || []
-        const myId = session.myUserId()
-        const publishes: any[] = []
-        const pageShares: any[] = []
-        for (const vt of vaults) {
-          try {
-            const pr = await session.call<{ shares?: any[] }>('GET', `/vaults/${encodeURIComponent(vt.id)}/shares`)
-            for (const s of pr.shares || []) publishes.push({ ...s, vaultId: vt.id, vaultName: vt.name || '' })
-          } catch (e) { console.warn('[connect] listAllShares publishes vault', vt.id, 'failed:', (e as Error)?.message) /* 某库不可达则跳过 */ }
-          try {
-            const ps = await session.call<any>('GET', `/vaults/${encodeURIComponent(vt.id)}/page-shares`)
-            const list = ps?.shares || ps?.pageShares || (Array.isArray(ps) ? ps : [])
-            for (const s of list) {
-              const owner = s.created_by ?? s.createdBy
-              // 该端点已要求调用者是 vault owner → 缺 owner 字段时视为「我的」，别误丢（否则协作区恒空）。
-              if (!myId || !owner || owner === myId) pageShares.push({ ...s, vaultId: vt.id, vaultName: vt.name || '' })
-            }
-          } catch (e) { console.warn('[connect] listAllShares pageShares vault', vt.id, 'failed:', (e as Error)?.message) /* 某库不可达则跳过 */ }
-        }
-        return { publishes, pageShares, linkBase: await session.linkBase() }
-      }
-      case 'createPublish': {
-        const r = await session.call<{ token: string; mode: string; path: string }>('POST', `/vaults/${encodeURIComponent(await v())}/shares`, { mode: a(0), path: a(1) })
-        return { ...r, url: `${await session.linkBase()}/share/${r.token}` }
-      }
-      case 'revokePublish':
-        return session.call('DELETE', `/vaults/${encodeURIComponent(await v())}/shares/${encodeURIComponent(a(0))}`)
-      // Public View 跨库撤销：显式带 vaultId（默认 own-vault 变体会撤错库、零行更新还假成功）。
-      case 'revokePublishIn':
-        return session.call('DELETE', `/vaults/${encodeURIComponent(a(0))}/shares/${encodeURIComponent(a(1))}`)
-      case 'revokePageShareIn':
-        return session.call('DELETE', `/vaults/${encodeURIComponent(a(0))}/page-shares/${encodeURIComponent(a(1))}`)
-      case 'myUserId':
-        return session.myUserId()
-      case 'linkBase':
-        return session.linkBase()
-      case 'heartbeat':
-        return session.heartbeat(((args ?? [])[0] as string | null) ?? null, sharedPlans)
-      default:
-        throw new Error(`unknown collab fn: ${fn}`)
-    }
-  })
-
-  // 胶囊滑块:Local ↔ Cloud 全局切活动 vault。lastVault 恒 = 活动根(agent 工具实时跟随),
-  // localVault 记住本地侧根以便切回;云镜像根固定,不污染 localVault。
-  ipcMain.handle(SYNC_IPC.switchSide, async (event, side: 'local' | 'cloud') => {
-    const cfg = await readConfig()
-    if (side === 'cloud') {
-      if (!syncReady || !currentCloudAccountId()) throw new Error('Sign in to open cloud notes')
-      const dir = cloudVaultDir()
-      await fs.mkdir(dir, { recursive: true })
-      if (cfg.lastVault && !isManagedCloudVault(cfg.lastVault)) await writeConfig({ localVault: cfg.lastVault })
-      await writeConfig({ lastVault: dir })
-      const info = await activateRoot(dir, false)
-      rendererRoots.set(event.sender.id, dir)
-      return { ...info, side: 'cloud' }
-    }
-    const target = cfg.localVault && (await fs.stat(cfg.localVault).then((s) => s.isDirectory()).catch(() => false))
-      ? cfg.localVault
-      : null
-    if (!target) {
-      const info = await ensureDefaultVault()
-      rendererRoots.set(event.sender.id, info.root)
-      return { ...info, side: 'local' }
-    }
-    await writeConfig({ lastVault: target })
-    const info = await activateRoot(target, false)
-    rendererRoots.set(event.sender.id, target)
-    return { ...info, side: 'local' }
-  })
-
   /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)+ 种子 Calendar.db。
    *  幂等:目录已存在不动,Calendar.db 已存在不覆盖(用户后来选过别的 vault 则走不到这里)。 */
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
@@ -982,7 +304,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区 + 种子多维表(不再落欢迎页)
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
-    if (isManagedCloudVault(lastVault) && (!currentCloudAccountId() || lastVault !== cloudVaultDir())) {
+    if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
       const cfg = await readConfig()
       if (!cfg.localVault || isManagedCloudVault(cfg.localVault)) return ensureDefaultVault()
       lastVault = cfg.localVault
@@ -1598,16 +920,35 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 启动即同步预扫插件扩展名 → 早于渲染端 restoreVault→listPages,关掉「.mindmap.md 被当页面加载」的启动竞态(Codex #2)。
   vault.setPluginFileExtensions(collectPluginExts())
 
-  syncReady = true
-  sync.start() // 云镜像同步独立于活动 vault,应用启动即拉起(未登录/显式停用时安静待命)
-  void refreshSharedBindings() // 与我共享的绑定引擎(未登录时静默,syncNow/共享列表访问时再刷)
-  void refreshEntryBindings() // 按条目同步绑定(注册表为空时零动作;vault 根不在时该绑定停在 error 态)
+  // 云同步 + collab(Forsion Extend 0.4 起,cloudSeam.ts):vault / watcher / index 都建好了才递接缝、拿回引擎面并启动。
+  // 没装 Extend(缺包 / 验签失败 / 老版本)= 本机没有云同步:11 个通道没人接,preload 不暴露 amadeusSync / amadeusCollab,渲染层自动隐藏。
+  const cloud = cloudFactory?.({
+    readCreds: () => { const c = loadTanguCreds(); return { cloudUrl: c.cloudUrl || '', token: c.token || '' } },
+    accountId: currentCloudAccountId,
+    homeDir: forsionHomeDir,
+    workspaceDir: defaultWorkspaceDir,
+    userDataDir: () => app.getPath('userData'),
+    isDevMode,
+    readConfig, writeConfig, updateConfig, adoptLegacyCloudState,
+    cloudVaultDir, isManagedCloudVault,
+    vaultRoot: () => vault.getRoot(),
+    setMutationHooks: (onMutate, onMove, onBeforeMove) => vault.setMutationHooks(onMutate, onMove, onBeforeMove),
+    activateRoot,
+    ensureDefaultVault,
+    bindRenderer: (senderId, root) => { rendererRoots.set(senderId, root) },
+    awaitPendingVaultWrites: async () => { while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites]) },
+    relatedClosure: (rootRel, kind) => index.relatedClosure(rootRel, kind),
+    notifyAll,
+    onBeforeQuit: (cb) => { app.once('before-quit', cb); return () => { app.removeListener('before-quit', cb) } },
+    log: (m) => console.warn(m),
+  }) ?? null
+  cloud?.start() // 云镜像同步独立于活动 vault,应用启动即拉起(未登录/显式停用时安静待命)
 
   return {
     getVaultRoot: () => vault.getRoot(),
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
-    restartSync: restartAllSync,
-    stopSync: stopAllSync,
+    restartSync: () => cloud?.restartAllSync() ?? Promise.resolve(),
+    stopSync: () => cloud?.stopAllSync() ?? Promise.resolve(),
     readExternalPlugins,
     // Unit 设备页的本地 vault 面(unitWeb /vault/*):白名单在 unitWeb.ts(default-deny),这里只管派发。
     vaultFace: {

@@ -46,6 +46,7 @@ const host: CloudHost = {
   writeCreds: () => {},
   onExternalCredsChange: () => {},
   setTokenRefresher: () => {},
+  setAmadeusSyncFactory: () => {},
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({

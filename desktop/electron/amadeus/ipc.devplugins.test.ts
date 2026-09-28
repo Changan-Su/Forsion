@@ -31,7 +31,6 @@ vi.mock('../forsionHome', () => ({
 vi.mock('../forsionAuth', () => ({ loadTanguCreds: () => ({}) }))
 vi.mock('../activityLog', () => ({ logActivity: vi.fn(), logNoteEdit: vi.fn() }))
 vi.mock('chokidar', () => ({ default: { watch: () => ({ on: vi.fn().mockReturnThis(), close: async () => {} }) } }))
-vi.mock('./sync/sseClient', () => ({ startSse: () => ({ stop: vi.fn() }) }))
 
 const invoke = (channel: string, ...args: unknown[]) => env.handlers.get(channel)!({ sender: { id: 1 } }, ...args)
 let stop: (() => Promise<void>) | undefined
