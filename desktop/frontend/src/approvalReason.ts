@@ -104,15 +104,16 @@ export function sanitizeAnswerBy(raw: unknown): AnswerBy | undefined {
  * 已收起的卡「在哪答的」后缀(先答先得的另一端据此看明白)。answeredHere = 本页就是答复方 → 不加(自己点的不用告诉自己);
  * remotePage = 本页以远端身份驱动别的电脑(设备页 / 手机)。
  *   已验证设备(callerUnit)→ 名字 ?「在 {device} 上」:「在已登记设备上」—— 先看 callerUnit 再看名字;
- *   本机答 + 本页是远端 →「在执行的电脑上」;通道 →「经消息通道」;其余远端来路 →「在另一台设备上」;本机答 + 本页就是本机 → 不加。
+ *   本机答 + 本页是远端 →「在执行的电脑上(电脑名)」(M1B:名字取焦点展示名,缺席只写「在执行的电脑上」);通道 →「经消息通道」;其余远端来路 →「在另一台设备上」;本机答 + 本页就是本机 → 不加。
  */
 export function answeredByText(
-  by: AnswerBy | undefined, o: { remotePage: boolean; answeredHere: boolean },
+  by: AnswerBy | undefined, o: { remotePage: boolean; answeredHere: boolean; hostName?: string | null },
   t: (k: string, v?: Record<string, unknown>) => string,
 ): string {
   if (!by || o.answeredHere) return ''
   if (by.callerUnit) return by.callerName ? t('approval.byDevice', { device: by.callerName }) : t('approval.byRegisteredDevice')
-  if (by.via === 'local') return o.remotePage ? t('approval.byHost') : ''
+  // hostName = 本页驱动的那台电脑在名册里的名字(焦点展示名;没有就不带括号,不拿「你的电脑」兜底凑数)
+  if (by.via === 'local') return o.remotePage ? (o.hostName ? t('approval.byHostNamed', { device: o.hostName }) : t('approval.byHost')) : ''
   if (by.via === 'channel') return t('approval.byChannel')
   return t('approval.byOther')
 }

@@ -1003,6 +1003,8 @@
 .t2-apv-update-row:not([data-status='approved']) svg { color: var(--danger); }
 .t2-apv-update-what { flex-shrink: 0; color: var(--text-muted); }
 .t2-apv-update-preview { min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 别处答的(执行的电脑本机 / 另一台设备 / 通道):结局行下一行说明「在哪批的」(M1B)。字号随 .t2-sys,只降一级颜色 */
+.t2-apv-update-by { max-width: 100%; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ====== P1-K6 焦点目标连接态提示(components/TargetHealthNotice)======
  * 完全派生额度提示条 .t2-quota-advisory(同一段 Chatbox 延伸、同材质);只在图标色上分态:
