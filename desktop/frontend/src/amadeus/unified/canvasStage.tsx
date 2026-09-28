@@ -3280,10 +3280,22 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   /** 画布态键盘(冒泡期)。⚠️ 第一句就得放行卡内打字 —— keydown 从 PM 冒泡到舞台,不挡的话在
    *  卡里按 Backspace 会把「选中的形状」删掉。(Cmd+Z 已在捕获期由统一时间线接管,这里没有它。) */
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!active || readOnly) return // 只读:没有选中集合,删除/搬动/建子卡/进编辑一律不接
+    if (!active) return
     const t = e.target as HTMLElement
     if (t.closest('.ProseMirror') || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
     const mod = e.metaKey || e.ctrlKey
+    // 视口键(V-06,Figma 同款):Cmd/Ctrl + = / - / 0 = 放大 / 缩小 / 回 100%,Shift+1 = 适应内容。
+    // 只看视口,只读画布同样要能缩放,所以排在只读闸之前;卡内打字早在上一句让路(Shift+1 照常是「!」,
+    // Cmd+= 仍归整窗缩放)。⚠️ preventDefault 就是接管的全部手段:uiZoom 与命令系统的 Cmd+=/-/0
+    // 都挂在 window 冒泡期、第一句先看 defaultPrevented —— 不拦,缩的是整窗 UI 而不是画布。
+    if (!e.altKey && (mod ? e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0' : e.shiftKey && e.code === 'Digit1')) {
+      e.preventDefault()
+      if (!mod) fit()
+      else if (e.key === '0') zoomBy(1 / vpRef.current.z)
+      else zoomBy(e.key === '-' ? 1 / 1.2 : 1.2)
+      return
+    }
+    if (readOnly) return // 只读:没有选中集合,删除/搬动/建子卡/进编辑一律不接
     if (mod && (e.key === 'a' || e.key === 'A')) {
       e.preventDefault()
       setSel([...measureCards(hostRef.current).keys()].map(cardKey).concat(els.filter((x) => x.kind !== 'connector').map((x) => elKey(x.id)), [MAIN_KEY]))

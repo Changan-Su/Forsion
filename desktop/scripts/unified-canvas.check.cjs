@@ -84,6 +84,7 @@
 //   C86 Shift+点/拖卡 = 连整支(选中它与全部子卡;Cmd/Ctrl 仍是单张加选)
 //   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
 //   C91 按住空格 = 临时抓手:重复 keydown 不写进卡、松开(没拖)才进编辑、拖 = 平移(V-05)
+//   C92 画布键盘缩放 Cmd+=/-/0 + Shift+1 适应,舞台焦点才接管;HUD 百分比 = 重置 100% 按钮(V-06)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -5583,6 +5584,80 @@ async function main() {
   record('C91c 无选中时空格+空白拖 = 平移(不再是框选),松开后抓手态收起',
     v91c.x - v1.x >= 200 && v1.y - v91c.y >= 100 && !marq91c && end91.sel.length === 0 && !end91.spaceCls && end91.editing === null,
     JSON.stringify({ v1, v91c, marq91c, end91 }))
+
+  // ── C92 画布键盘缩放与适应(V-06,Figma 同款)──────────────────────────────────────────
+  //  修前:Cmd+=/-/0 冒泡到 window,被 uiZoom / 命令系统当成「整窗 UI 缩放」吃掉,画布纹丝不动;
+  //  Shift+1 什么都不做;HUD 的百分比是个 span。现在舞台(冒泡期、React 根上)先接管并 preventDefault
+  //  —— window 那两个监听都先看 defaultPrevented。卡内编辑时一律让路:Shift+1 照常打出「!」,
+  //  Cmd+= 仍归整窗缩放(不 preventDefault)。
+  const p92 = await open(browser, SEED91)
+  await p92.waitForTimeout(700)
+  await p92.evaluate(() => { window.__kd92 = []; window.addEventListener('keydown', (e) => { if (!['Meta', 'Control', 'Shift'].includes(e.key)) window.__kd92.push(e.defaultPrevented) }) })
+  const blank92 = await p92.evaluate(() => { const s = document.querySelector('.amx-stage').getBoundingClientRect(); return { x: s.left + 150, y: s.top + 200 } })
+  await p92.mouse.click(blank92.x, blank92.y) // 焦点落舞台、清选中
+  await p92.waitForTimeout(200)
+  const MOD92 = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const key92 = async (k) => { await p92.keyboard.press(k); await p92.waitForTimeout(200); return vp91(p92) }
+  const z0 = await vp91(p92)
+  const zIn = await key92(`${MOD92}+Equal`)
+  const zOut = await key92(`${MOD92}+Minus`)
+  const zOut2 = await key92(`${MOD92}+Minus`)
+  const zReset = await key92(`${MOD92}+Digit0`)
+  await key92(`${MOD92}+Equal`)
+  const zBig = await key92(`${MOD92}+Equal`)
+  const fitKey = await key92('Shift+Digit1')
+  const prevented92 = await p92.evaluate(() => window.__kd92.slice())
+  // 对照:HUD 的「适应内容」按钮给出的视口必须与 Shift+1 一致(同一个 fit)
+  await key92(`${MOD92}+Equal`)
+  await p92.click('.amx-stage-hud button[title="适应内容"]')
+  await p92.waitForTimeout(250)
+  const fitBtn = await vp91(p92)
+  // HUD 百分比 = 可点按钮:放大后点它回 100%
+  await key92(`${MOD92}+Equal`)
+  const pct92 = await p92.evaluate(() => {
+    const b = [...document.querySelectorAll('.amx-stage-hud > *')].find((e) => /%$/.test((e.textContent ?? '').trim()))
+    return b ? { tag: b.tagName, title: b.getAttribute('title'), text: b.textContent.trim() } : null
+  })
+  // 按钮不在(回退成 span)时别让 locator 超时把整套带崩 —— 记一格 FAIL 就够了
+  const pctBtn92 = await p92.evaluate(() => { const b = document.querySelector('.amx-stage-hud button[title="重置为 100%"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (pctBtn92) await p92.mouse.click(pctBtn92.x, pctBtn92.y)
+  await p92.waitForTimeout(250)
+  const pctAfter = await vp91(p92)
+  const pctText = await p92.evaluate(() => [...document.querySelectorAll('.amx-stage-hud > *')].find((e) => /%$/.test((e.textContent ?? '').trim()))?.textContent.trim() ?? null)
+  // 卡内编辑:Shift+1 打字、Cmd+= 不被舞台吃(视口不动、不 preventDefault)
+  const k192 = await p92.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"] p').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  await p92.mouse.click(k192.x, k192.y)
+  await p92.waitForTimeout(200)
+  await p92.keyboard.press('Space')
+  await p92.waitForTimeout(300)
+  await p92.evaluate(() => { window.__kd92 = [] })
+  const vEdit0 = await vp91(p92)
+  await p92.keyboard.press('Shift+Digit1')
+  await p92.waitForTimeout(200)
+  await p92.keyboard.press(`${MOD92}+Equal`)
+  await p92.waitForTimeout(250)
+  const vEdit1 = await vp91(p92)
+  const inCard92 = await p92.evaluate(() => ({
+    text: document.querySelector('.amx-ucard[data-anchor="k1"]')?.textContent ?? null,
+    prevented: window.__kd92.slice(),
+    pmFocus: !!document.activeElement?.closest?.('.ProseMirror'),
+  }))
+  await p92.close()
+  const r3 = (v) => Math.round(v * 1000) / 1000
+  record('C92a 舞台焦点下 Cmd+= / Cmd+- / Cmd+0 缩放画布(1.2 倍步进,0 = 回 100%)且全部 preventDefault(不再缩整窗)',
+    z0.z === 1 && r3(zIn.z) === 1.2 && r3(zOut.z) === 1 && r3(zOut2.z) === r3(1 / 1.2) && zReset.z === 1 && r3(zBig.z) === 1.44
+      && prevented92.length === 7 && prevented92.every(Boolean),
+    JSON.stringify({ z0, zIn, zOut, zOut2, zReset, zBig, prevented92 }))
+  record('C92b Shift+1 = 适应内容(与 HUD 的适应按钮同一个视口)',
+    fitKey.z !== zBig.z && JSON.stringify(fitKey) === JSON.stringify(fitBtn),
+    JSON.stringify({ zBig, fitKey, fitBtn }))
+  record('C92c HUD 百分比是可点按钮(title=重置为 100%),点击回到 100%',
+    pct92?.tag === 'BUTTON' && pct92.title === '重置为 100%' && pct92.text !== '100%' && pctAfter.z === 1 && pctText === '100%',
+    JSON.stringify({ pct92, pctAfter, pctText }))
+  record('C92d 卡内编辑时让路:Shift+1 打出「!」、Cmd+= 视口不动且不 preventDefault(交还整窗缩放)',
+    inCard92.pmFocus && (inCard92.text ?? '').includes('!') && JSON.stringify(vEdit0) === JSON.stringify(vEdit1)
+      && inCard92.prevented.length === 2 && inCard92.prevented[1] === false,
+    JSON.stringify({ vEdit0, vEdit1, inCard92 }))
 
   await browser.close()
   const ok = results.filter(Boolean).length

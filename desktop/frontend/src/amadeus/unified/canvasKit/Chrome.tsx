@@ -8,6 +8,7 @@ import { registerMessages, useI18n } from '../../../i18n'
 registerMessages({
   'ckchrome.zoomOut': { zh: '缩小', en: 'Zoom out' },
   'ckchrome.zoomIn': { zh: '放大', en: 'Zoom in' },
+  'ckchrome.zoomReset': { zh: '重置为 100%', en: 'Reset to 100%' },
   'ckchrome.fit': { zh: '适应内容', en: 'Fit to content' },
   'ckchrome.snap': { zh: '点阵吸附', en: 'Snap to grid' },
   'ckchrome.snapOff': { zh: '关闭点阵吸附', en: 'Turn off snap to grid' },
@@ -31,7 +32,9 @@ export function CanvasChrome({ zoom, onZoomBy, onFit, snap, onSnap, mini, onMini
   return (
     <div className="amx-stage-hud">
       <button type="button" onClick={() => onZoomBy(1 / 1.2)} title={t('ckchrome.zoomOut')}><Minus size={12} /></button>
-      <span>{Math.round(zoom * 100)}%</span>
+      {/* 百分比 = 回 100% 的按钮(V-06)。四家的 onZoomBy 都是乘法缩放,1/zoom 恰好回到 1 倍,不必各接一个新回调。
+          里面留一层 span:仪表盘的 D12 按 `.amx-stage-hud span` 读百分比。 */}
+      <button type="button" className="amx-hud-zoom" onClick={() => onZoomBy(1 / zoom)} title={t('ckchrome.zoomReset')}><span>{Math.round(zoom * 100)}%</span></button>
       <button type="button" onClick={() => onZoomBy(1.2)} title={t('ckchrome.zoomIn')}><Plus size={12} /></button>
       <button type="button" onClick={onFit} title={t('ckchrome.fit')}><Maximize2 size={12} /></button>
       {extra}

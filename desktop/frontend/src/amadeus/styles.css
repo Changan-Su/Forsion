@@ -3798,6 +3798,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm, 6px);
 }
 .am-app .amx-stage-hud button:hover { background: var(--surface-2); color: var(--text); }
+/* 百分比按钮(V-06):按钮的 UA 字体是 13.33px,不继承就比两侧的 caption 字大一号;等宽数字防跳宽。 */
+.am-app .amx-stage-hud button.amx-hud-zoom { font: inherit; font-variant-numeric: tabular-nums; padding: 2px 4px; }
 .am-app .amx-stage-hud button.is-on {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
