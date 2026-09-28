@@ -1226,7 +1226,8 @@ declare global {
       /** 头像菜单额度视图(GET /api/token-quota/my 透传,含 resetCards)。 */
       accountQuota?(): Promise<{ status: number; json: any }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
-      accountUseResetCard?(type?: 'both' | 'weekly'): Promise<{ status: number; json: any }>
+      /** 周卡 2026-08-05 下线,只收缺省或 'both'。 */
+      accountUseResetCard?(type?: 'both'): Promise<{ status: number; json: any }>
       /** 后台额度:从主额度等额转入 limit×percent%(本周期有效;POST /api/token-quota/background/convert)。 */
       accountBgConvert?(percent: number): Promise<{ status: number; json: any }>
       /** 后台额度用尽后改用主额度继续(开关;POST /api/token-quota/background/auto-main)。 */

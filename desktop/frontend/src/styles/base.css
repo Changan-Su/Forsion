@@ -2973,6 +2973,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-control-copy strong { display: block; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 620; }
 .settings-control-copy small { display: block; max-width: 45ch; margin-top: 2px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.4; }
 .settings-control-row .seg { flex: 0 0 auto; }
+/* 行下面的提示块(错误 / 同步结果):行本身不换行,提示另起一块,左右与行内容对齐 */
+.settings-row-notes { display: grid; gap: 4px; padding: 0 15px 12px; }
 .settings-control-row .seg button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 .settings-font-row > span { min-width: 120px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .settings-font-row > input { flex: 1; max-width: 390px; }

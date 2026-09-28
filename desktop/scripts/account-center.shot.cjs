@@ -31,7 +31,10 @@ function check(name, ok, detail) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-account-center-'))
   const stub = await startStubEngine({ models: [{ id: 'm1', name: 'Stub', provider: 'stub', contextWindow: 128_000, thinkingLevels: ['off'] }] })
   const cloud = await startFakeForsionCloud({ scenario: 'both' })
-  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud.url, token: 'e2e-token' }))
+  // JWT 形状:账号 id 取 payload 的 userId(shared/forsionAccount.ts)。给个不透明串的话账号 id 为空,云同步会把人当成没登录。
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+  const token = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ userId: 'u1', username: 'demo_user' })}.e2e`
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud.url, token }))
   const logs = []
   const pageErrors = []
   const app = await electron.launch({
@@ -72,7 +75,9 @@ function check(name, ok, detail) {
       await sp.screenshot({ path: path.join(OUT, `${LANG}-${String(i + 1).padStart(2, '0')}-${label.replace(/[^\p{L}\p{N}]+/gu, '_')}.png`) })
     }
     const hits = cloud.requests.filter((r) => r.path.startsWith('/api/')).map((r) => `${r.method} ${r.path}${r.authed ? '' : ' (no token)'}`)
-    check('云端请求都带着 token(token 留主进程,经 cloud:fetch 盖上)', cloud.requests.every((r) => r.authed || ['/api/features'].includes(r.path)), [...new Set(hits)].join(', ').slice(0, 600))
+    // 公开端点本就不带 token:/features(功能开关)、/auth/region(首屏语言的 IP 区域探测,非中文系统才会打)
+    const unauthed = cloud.requests.filter((r) => !r.authed && !['/api/features', '/api/auth/region'].includes(r.path)).map((r) => `${r.method} ${r.path}`)
+    check('云端请求都带着 token(token 留主进程,经 cloud:fetch 盖上)', unauthed.length === 0, unauthed.length ? `没带 token:${[...new Set(unauthed)].join(', ')}` : [...new Set(hits)].join(', ').slice(0, 400))
     check('没有页面报错', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '))
   } catch (e) {
     check('台架本身没炸', false, String(e?.stack || e).slice(0, 400))

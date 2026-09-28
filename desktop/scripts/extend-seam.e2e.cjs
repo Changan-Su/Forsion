@@ -157,11 +157,13 @@ async function extendCard(sp) {
       {
         const sp = await openSettingsAt(run1.app, run1.win, 'general/g-forsion')
         const tops = await navTops(sp)
-        const account = await sp.locator('[data-setting-anchor="forsion-account"]').count()
+        // 账号页由 Extend 渲染半身画(registerSettingsView category 'forsion'),异步注册:等它挂上
+        await sp.waitForSelector('[data-plugin-settings="forsion-extend:account"] .fx-acct', { timeout: 20_000 }).catch(() => {})
+        const account = await sp.locator('[data-plugin-settings="forsion-extend:account"] .fx-acct').count()
         const forsionSubs = await navSubs(sp, 'Forsion 云端', 'forsion')
         const generalSubs = await navSubs(sp, '常规', 'general')
         const syncSubs = await navSubs(sp, '同步', 'sync')
-        check('⑥ 「Forsion 云端」自成一级页(账号 + 笔记同步),旧深链落到账号页;常规里没有 Forsion、同步里没有在线同步', tops.includes('Forsion 云端') && account === 1 && forsionSubs?.join() === '账号,笔记同步' && Array.isArray(generalSubs) && !generalSubs.includes('Forsion') && Array.isArray(syncSubs) && !syncSubs.includes('在线同步'), JSON.stringify({ tops, account, forsionSubs, generalSubs, syncSubs }))
+        check('⑥ 「Forsion 云端」一级页 = Extend 画的五页 + 宿主的同步 / 连接,旧深链落到 Extend 的账号页;常规里没有 Forsion、同步里没有在线同步', tops.includes('Forsion 云端') && account === 1 && forsionSubs?.join() === '账号,额度与积分,安全,用量记录,反馈,同步,连接' && Array.isArray(generalSubs) && !generalSubs.includes('Forsion') && Array.isArray(syncSubs) && !syncSubs.includes('在线同步'), JSON.stringify({ tops, account, forsionSubs, generalSubs, syncSubs }))
 
         // ⑥b 插件卡上 Extend 的开关:读主进程状态(开),拨下 → 落盘 + 待重启;拨回 → 名单清空、提示消失
         const before = await extendCard(sp)
