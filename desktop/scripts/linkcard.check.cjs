@@ -11,6 +11,7 @@
 //   LC3 真鼠标点「编辑」→ 面板 fixed;链接输入框中心 elementFromPoint 命中输入框本身(不是遮罩);真点击后面板还在
 //   LC4 改地址按 Enter 即保存(form 提交)→ 落盘带新地址;Esc 关闭面板且不写盘
 //   LC5 页面滚动 → 卡片收起(fixed 坐标是悬停那一刻的,滚走了不能钉在原处)
+//   L1~L5 链接末尾接着输入不并进链接(I-04):键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴
 //
 // 用法:node scripts/e2e-editor.cjs --check=linkcard(或 npm run check:linkcard)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
@@ -153,6 +154,64 @@ async function scrollCloses(browser) {
   await p.close()
 }
 
+// ── L 组(I-04):链接末尾接着输入,新字不许并进链接 —— 键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴 ──
+// 药在 refDefinitions.ts 的 linkWithRefSchema `inclusive: false`(+ linkInputRule 清 stored mark)。
+async function typingAfterLink(browser) {
+  const clickEndOfPara = async (p) => {
+    const b = await (await p.$(`${PM} > p`)).boundingBox()
+    await p.mouse.click(b.x + 3, b.y + b.height / 2)
+    await p.keyboard.press('Meta+ArrowRight')
+  }
+  const firstPara = (p) => p.evaluate((s) => document.querySelector(s + ' > p').innerHTML, PM)
+  const saved = async (p) => { await p.waitForTimeout(1400); return (await lastWrite(p)) || '' }
+  // L1 已有链接在行末,End 后打字
+  let p = await open(browser, '# T\n\nx [文字](https://example.com)\n', '')
+  await clickEndOfPara(p)
+  await p.keyboard.type(' 后', { delay: 40 })
+  let md = await saved(p)
+  check('L1 行末链接后键入:新字不进链接', md.includes('x [文字](https://example.com) 后\n'), JSON.stringify(md))
+  await p.close()
+  // L2 输入规则现场生成链接后继续打字
+  p = await open(browser, '# T\n\n起始\n', '')
+  await clickEndOfPara(p)
+  await p.keyboard.press('Enter')
+  await p.keyboard.type('x [文字](example.com) y', { delay: 40 })
+  md = await saved(p)
+  check('L2 `[文字](地址)` 现场成链后接着打字:不进链接', md.includes('x [文字](https://example.com) y\n'), JSON.stringify(md))
+  await p.close()
+  // L3「链接|后文」交界处打字
+  p = await open(browser, '# T\n\n[文字](https://example.com)尾\n', '')
+  await clickEndOfPara(p)
+  await p.keyboard.press('ArrowLeft')
+  await p.keyboard.type('X', { delay: 40 })
+  md = await saved(p)
+  check('L3 链接与后文交界处打字:不进链接', md.includes('[文字](https://example.com)X尾\n'), JSON.stringify(md))
+  await p.close()
+  // L4 输入法(CDP 真组合;合成键的 isComposing 到不了 React)
+  p = await open(browser, '# T\n\nx [文字](https://example.com)\n', '')
+  await clickEndOfPara(p)
+  await p.waitForTimeout(150)
+  const cdp = await p.context().newCDPSession(p)
+  await cdp.send('Input.imeSetComposition', { text: 'hou', selectionStart: 3, selectionEnd: 3 })
+  await p.waitForTimeout(120)
+  await cdp.send('Input.insertText', { text: '后面' })
+  md = await saved(p)
+  check('L4 链接末尾用输入法上屏:不进链接', md.includes('x [文字](https://example.com)后面\n'), JSON.stringify(md) + ' dom=' + (await firstPara(p)))
+  await p.close()
+  // L5 粘贴纯文本到链接末尾
+  p = await open(browser, '# T\n\nx [文字](https://example.com)\n', '')
+  await clickEndOfPara(p)
+  await p.waitForTimeout(150)
+  await p.evaluate((s) => {
+    const dt = new DataTransfer()
+    dt.setData('text/plain', '粘贴')
+    document.querySelector(s).dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+  }, PM)
+  md = await saved(p)
+  check('L5 链接末尾粘贴纯文本:不进链接', md.includes('x [文字](https://example.com)粘贴\n'), JSON.stringify(md))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
@@ -160,6 +219,7 @@ async function main() {
   await shell(browser, '?upage 短文', short, '')
   await shell(browser, '&upane 长文', long, '&upane')
   await scrollCloses(browser)
+  await typingAfterLink(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

@@ -43,6 +43,7 @@ export const linkInputRule = $inputRule(
       if (!linkMark) return null
       const href = normalizeHref(match[2])
       if (!href) return null
-      return state.tr.replaceWith(start, end, state.schema.text(match[1], [linkMark.create({ href })]))
+      // removeStoredMark:光标停在新链接末尾,接着打的字不许带链接(link 已是 inclusive:false,这里再兜一层 stored mark)。
+      return state.tr.replaceWith(start, end, state.schema.text(match[1], [linkMark.create({ href })])).removeStoredMark(linkMark)
     }),
 )
