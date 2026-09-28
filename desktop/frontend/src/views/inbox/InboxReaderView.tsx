@@ -10,6 +10,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { formatDate, formatDateTime } from '../../format/time'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
+import { useHomeAgentAvatars, useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace, setActiveSpace } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
@@ -65,8 +66,8 @@ function InboxReaderEmpty() {
 export function InboxReaderView() {
   const { t, locale } = useI18n()
   const { messages, archived, selectedId, markRead, markArchived, remove } = useInbox()
-  const agentDefs = useApp((s) => s.agentDefs)
-  const avatars = useApp((s) => s.agentAvatars)
+  const agentDefs = useHomeAgentDefs() // 收件箱是本端的(P1-K6:焦点在我的电脑时也按本端的 Agent)
+  const avatars = useHomeAgentAvatars()
   // 工作区里点开的可能是「已归档」文件夹里的一封 —— 两份都找。
   const msg = selectedId ? (messages.find((m) => m.id === selectedId) ?? archived.find((m) => m.id === selectedId)) : null
 

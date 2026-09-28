@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
+import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useAutomation } from '../../stores/automationStore'
 import { saveMuseTrigger } from '../../services/backendService'
 import { useI18n } from '../../i18n'
@@ -58,7 +59,7 @@ function defaultDatetime(): string {
 export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel, extendView }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
-  const agentDefs = useApp((s) => s.agentDefs)
+  const agentDefs = useHomeAgentDefs() // 自动化是本端的(P1-K6)
   const st = useAutomation()
   const catalog = st.actionsCatalog
 

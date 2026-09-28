@@ -50,6 +50,7 @@ import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
+import { TargetHealthNotice } from '../components/TargetHealthNotice'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -673,10 +674,13 @@ export function ChatView({ leaf, params }: ViewProps) {
             />
           ) : undefined}
           advisory={!params.childSurface ? (
-            <QuotaAdvisoryBanner
-              loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
-              onToast={s.toast}
-            />
+            // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)
+            <TargetHealthNotice fallback={
+              <QuotaAdvisoryBanner
+                loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
+                onToast={s.toast}
+              />
+            } />
           ) : undefined}
           // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
           liveOwner={followActive && leaf.loc === 'main'}

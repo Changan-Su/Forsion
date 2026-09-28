@@ -9,7 +9,7 @@ const { isHomeSession } = await import('../../types')
 
 const cfg = { backendUrl: 'http://127.0.0.1:4100/', token: 'engine-token', modelId: 'm' }
 
-beforeEach(() => { authFetch.mockClear(); T.clearSessionBindings() })
+beforeEach(() => { authFetch.mockClear(); T.clearSessionBindings(); T.resetFocusForTests() })
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('legacy cfg → home 目标(Phase A,行为逐字不变)', () => {
@@ -107,7 +107,7 @@ describe('homeTarget / knownTargets', () => {
     expect(T.isEngineTarget({ ...held })).toBe(false)
   })
 
-  it('S0 只有 home 一个已知目标', () => {
+  it('焦点在 home 时只有 home 一个已知目标(S2 起焦点在 unit 时再加上它,见下)', () => {
     T.installEngineHost({ cfg: () => cfg, desktopConfig: () => null })
     const all = T.knownTargets()
     expect(all.map((t) => t.key)).toEqual(['home'])
@@ -264,5 +264,183 @@ describe('会话绑定表(R-15 / R-16)', () => {
     expect(isHomeSession({ location: { kind: 'home' } })).toBe(true)
     expect(isHomeSession({ location: unitA })).toBe(false)
     expect(T.isHomeSession).toBe(isHomeSession)
+  })
+})
+
+// ═══ S2:unit 目标 + 焦点 ═══
+describe('S2 · unit 目标与焦点', () => {
+  const U = '7f0e8a52-0000-4000-8000-00000000000a'
+  const API = 'https://api.forsion.test/api'
+  const b64 = (o: object): string => Buffer.from(JSON.stringify(o)).toString('base64').replace(/=+$/, '')
+  const JWT = `${b64({ alg: 'none' })}.${b64({ userId: 'u-42' })}.sig`
+  const store = new Map<string, string>()
+  const phone = (tangu: Record<string, unknown> = {}, token = JWT): void => {
+    vi.stubGlobal('window', { tangu: { mobile: true, ...tangu } })
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)) },
+      removeItem: (k: string) => { store.delete(k) },
+    })
+    T.installEngineHost({ cfg: () => ({ backendUrl: API, token, modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }) })
+  }
+  beforeEach(() => { store.clear() })
+
+  it('unit 目标 = {cloudApiBase}/units/<id>/proxy/engine;辅助面基址 …/proxy;同一台恒为同一个对象', async () => {
+    phone()
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    expect(t.key).toBe(`unit:${U}`)
+    expect(t.via).toBe('unit')
+    expect(t.base).toBe(`${API}/units/${U}/proxy/engine`)
+    expect(t.unitBase).toBe(`${API}/units/${U}/proxy`)
+    expect(T.targetForRef({ kind: 'unit', unitId: U.toUpperCase() })).toBe(t) // 大小写归一
+    expect(await t.headers(true)).toEqual({ 'Content-Type': 'application/json', Authorization: `Bearer ${JWT}` })
+    expect(await t.headers(false)).toEqual({ Authorization: `Bearer ${JWT}` })
+  })
+
+  it.each([
+    ['桌面主窗口(K6 U1:渲染层不持 forsion_token)', {}],
+    ['设备页(§4.7:不得经 A 再驱动 B)', { unitPage: true, cloudWeb: true }],
+  ])('%s → targetForRef(unit) === null', (_label, tangu) => {
+    vi.stubGlobal('window', { tangu })
+    T.installEngineHost({ cfg: () => ({ backendUrl: API, token: JWT, modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }) })
+    expect(T.remoteTargetsSupported()).toBe(false)
+    expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull()
+  })
+
+  it('没登录 / 没云端基址 / id 不是 uuid → null(绝不回落 home 静默发出去)', () => {
+    phone({}, '')
+    expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull()
+    phone()
+    T.installEngineHost({ cfg: () => ({ backendUrl: API, token: JWT, modelId: '' }), desktopConfig: () => null })
+    expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull()
+    phone()
+    for (const bad of ['u1', '../x', `${U}/../x`, 'a'.repeat(36)]) expect(T.targetForRef({ kind: 'unit', unitId: bad }), bad).toBeNull()
+    expect(() => T.targetForRef({ kind: 'cloud' } as never)).toThrow(TypeError)
+  })
+
+  it('网页版(cloudWeb)同样支持远端目标', () => {
+    vi.stubGlobal('window', { tangu: { cloudWeb: true } })
+    T.installEngineHost({ cfg: () => ({ backendUrl: API, token: JWT, modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }) })
+    expect(T.targetForRef({ kind: 'unit', unitId: U })?.base).toBe(`${API}/units/${U}/proxy/engine`)
+  })
+
+  it('C1:unit 目标的头只可能含 Authorization / Content-Type / X-Forsion-Caller;调用方头每请求现取', async () => {
+    let n = 0
+    phone({ unitCallerHeaders: async (id: string) => ({ 'X-Forsion-Caller': `fuc1.${id}.${++n}`, 'x-forsion-remote': '1', Authorization: 'Bearer evil', 'X-Other': 'y' }) })
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    const a = await t.headers(true)
+    const b = await t.headers(true)
+    expect(Object.keys(a).sort()).toEqual(['Authorization', 'Content-Type', 'X-Forsion-Caller'])
+    expect(a.Authorization).toBe(`Bearer ${JWT}`)
+    expect(a['X-Forsion-Caller']).toBe(`fuc1.${U}.1`)
+    expect(b['X-Forsion-Caller']).toBe(`fuc1.${U}.2`) // 轮换的 caller token 不缓存
+  })
+
+  it('调用方头带换行(头注入)一律丢;桥抛错 → 失败关闭(CALLER_UNAVAILABLE),不带头也不发', async () => {
+    phone({ unitCallerHeaders: async () => ({ 'X-Forsion-Caller': 'a\r\nX-Evil: 1' }) })
+    expect(await T.targetForRef({ kind: 'unit', unitId: U })!.headers()).not.toHaveProperty('X-Forsion-Caller')
+    T.resetFocusForTests()
+    phone({ unitCallerHeaders: async () => { throw new Error('keystore locked') } })
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    await expect(t.headers()).rejects.toMatchObject({ code: 'CALLER_UNAVAILABLE', status: 503 })
+    await expect(T.engineFetch(t, '/agent/sessions')).rejects.toMatchObject({ code: 'CALLER_UNAVAILABLE' })
+    expect(authFetch).not.toHaveBeenCalled()
+  })
+
+  it('engineFetch 对 unit 目标带目标键(401 分流),home 的第三参与改造前一致', async () => {
+    phone()
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    await T.engineFetch(t, '/agent/sessions')
+    await T.engineFetch(t, '/agent/sessions', {}, { timeoutMs: 5000 })
+    await T.engineFetch(T.homeTarget(), '/agent/sessions')
+    expect(authFetch.mock.calls.map((c) => c[2])).toEqual([{ target: `unit:${U}` }, { timeoutMs: 5000, target: `unit:${U}` }, undefined])
+  })
+
+  it('unitFetch:只许设备辅助面的四条只读路径、只带 Bearer(不带调用方头);/unit/mcp 永不经它发', async () => {
+    phone({ unitCallerHeaders: async () => ({ 'X-Forsion-Caller': 'fuc1.x.y' }) })
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    await T.unitFetch(t, '/unit/hostfile?path=%2Ftmp%2Fa.png')
+    const [url, init] = authFetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(`${API}/units/${U}/proxy/unit/hostfile?path=%2Ftmp%2Fa.png`)
+    expect(init.headers).toEqual({ Authorization: `Bearer ${JWT}` })
+    for (const bad of ['/unit/mcp', '/unit/mcp/x', '/unit/remote-access', '/unit/hostfile/../mcp', '/engine/agent/x', '/unit/config/../../engine']) {
+      await expect(T.unitFetch(t, bad), bad).rejects.toThrow(TypeError)
+    }
+    await expect(T.unitFetch(T.homeTarget(), '/unit/hostfile?path=a')).rejects.toThrow(TypeError)
+  })
+
+  it('setFocusTarget:校验 → 焦点 / 已知目标 / 会话目标都跟着变;按账号落盘,restoreFocus 读回', async () => {
+    phone()
+    const refocus = vi.fn(async () => {})
+    T.installEngineHost({ cfg: () => ({ backendUrl: API, token: JWT, modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }), refocus })
+    const seen: string[] = []
+    const off = T.onFocusChange((next, prev) => seen.push(`${prev.kind}->${next.kind}`))
+    await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: '  Mac mini  ' })
+    expect(T.focusRef()).toEqual({ kind: 'unit', unitId: U })
+    expect(T.focusName()).toBe('Mac mini')
+    expect(T.focusTarget().key).toBe(`unit:${U}`)
+    expect(T.targetForSession('any-session').key).toBe(`unit:${U}`) // S2 = 焦点(R-19)
+    expect(T.knownTargets().map((t) => t.key)).toEqual(['home', `unit:${U}`])
+    expect(refocus).toHaveBeenCalledTimes(1)
+    await T.setFocusTarget({ kind: 'unit', unitId: U }) // 同一处幂等:不再 refocus
+    expect(refocus).toHaveBeenCalledTimes(1)
+    const key = [...store.keys()].find((k) => k.startsWith('forsion_engine_focus:'))!
+    expect(key).toContain('u-42')
+    expect(JSON.parse(store.get(key)!)).toEqual({ kind: 'unit', unitId: U, name: 'Mac mini' })
+    // 模拟重启:内存态丢了,从落盘恢复
+    T.resetFocusForTests()
+    expect(T.restoreFocus()).toEqual({ kind: 'unit', unitId: U })
+    expect(T.focusName()).toBe('Mac mini')
+    await T.setFocusTarget({ kind: 'home' })
+    expect(store.has(key)).toBe(false)
+    expect(T.knownTargets().map((t) => t.key)).toEqual(['home'])
+    expect(seen).toEqual(['home->unit', 'unit->home'])
+    off()
+  })
+
+  it('setFocusTarget 拒绝:未知 kind 抛 TypeError;这端不支持 / id 形状不对 → TARGET_UNSUPPORTED,焦点不动', async () => {
+    phone()
+    await expect(T.setFocusTarget({ kind: 'cloud' } as never)).rejects.toThrow(TypeError)
+    await expect(T.setFocusTarget({ kind: 'unit', unitId: 'u1' })).rejects.toMatchObject({ code: 'TARGET_UNSUPPORTED' })
+    vi.stubGlobal('window', { tangu: {} })
+    await expect(T.setFocusTarget({ kind: 'unit', unitId: U })).rejects.toMatchObject({ code: 'TARGET_UNSUPPORTED' })
+    expect(T.focusRef()).toEqual({ kind: 'home' })
+  })
+
+  it('持久化的焦点只是提示:坏形状 / 换到桌面 / 别的账号 → 一律 home', () => {
+    phone()
+    const key = `forsion_engine_focus:${new URL(API).origin}/api::u-42`
+    for (const bad of ['{', 'null', '{"kind":"cloud"}', '{"kind":"unit"}', '{"kind":"unit","unitId":"u1"}', '{"kind":"unit","unitId":42}']) {
+      store.set(key, bad)
+      expect(T.restoreFocus(), bad).toEqual({ kind: 'home' })
+    }
+    store.set(key, JSON.stringify({ kind: 'unit', unitId: U }))
+    expect(T.restoreFocus()).toEqual({ kind: 'unit', unitId: U })
+    // 同一份落盘,换一个账号读 → 读不到
+    phone({}, `${b64({ alg: 'none' })}.${b64({ userId: 'someone-else' })}.sig`)
+    expect(T.restoreFocus()).toEqual({ kind: 'home' })
+    // 桌面读同一个键也不认(不支持远端目标)
+    phone()
+    vi.stubGlobal('window', { tangu: {} })
+    expect(T.restoreFocus()).toEqual({ kind: 'home' })
+  })
+
+  it('token 不是 JWT(认不出账号)→ 焦点不落盘,只活在内存', async () => {
+    phone({}, 'opaque-token')
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    expect(T.focusRef().kind).toBe('unit')
+    expect([...store.keys()].filter((k) => k.startsWith('forsion_engine_focus:'))).toEqual([])
+  })
+
+  it('routeSession:焦点在 home / 传来的不是本端 cfg → 与改造前一样折成 home;否则走会话所在的目标', async () => {
+    phone()
+    const home = { backendUrl: API, token: JWT, modelId: '' }
+    expect(T.routeSession(home, 's').key).toBe('home')
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    expect(T.routeSession(home, 's').key).toBe(`unit:${U}`)
+    // 设置页外部连接表单现拼的地址:不是本端 cfg,不被改道
+    expect(T.routeSession({ backendUrl: 'http://10.0.0.2:4100', token: 't', modelId: '' }, 's').base).toBe('http://10.0.0.2:4100')
+    const explicit = T.homeTarget()
+    expect(T.routeSession(explicit, 's')).toBe(explicit) // 已是目标:原样
   })
 })
