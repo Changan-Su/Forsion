@@ -11,7 +11,7 @@
 import { Suspense, useEffect, useRef, useState, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { $prose } from '@milkdown/kit/utils'
-import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -364,6 +364,20 @@ const widgetIdentity = (kind: EmbedKind, text: string): string =>
 interface EmbedLayerState {
   decos: DecorationSet
   sourcePos: number | null
+  /** 正在键入的「整段一个 URL」段落(I-13):光标还在里面时不交给书签卡,离开(或失焦)才落成卡片。 */
+  pendingPos: number | null
+}
+
+/** 这次事务的全部改动都落在 [from, to](新文档坐标)之内 —— 即「就地键入」,不是回灌 / 整块替换 / 插入新段。 */
+function changedOnlyWithin(tr: Transaction, from: number, to: number): boolean {
+  let ok = true
+  tr.mapping.maps.forEach((map, i) => {
+    const rest = tr.mapping.slice(i + 1)
+    map.forEach((_os, _oe, ns, ne) => {
+      if (rest.map(ns, -1) < from || rest.map(ne, 1) > to) ok = false
+    })
+  })
+  return ok
 }
 
 export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): MilkdownPlugin[] {
@@ -371,7 +385,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
 
-    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null): DecorationSet => {
+    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null, pendingPos: number | null = null): DecorationSet => {
       const decos: Decoration[] = []
       const seen = new Map<string, number>() // 同文嵌入按出现序号区分身份(Codex 终审 P1:同 key 共享 DOM 会互相拆台)
       const visit = (node: ProseNode, pos: number): void => {
@@ -383,6 +397,8 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         // 只有 `</>` 写下的显式 sourcePos 才让位;方向键/普通点击即使把选区落进隐藏文本,
         // 也继续呈现附件整体(难源码编辑块契约)。
         if (sourcePos === pos && selTo > pos && selFrom < pos + node.nodeSize) return
+        // 正在键入的裸 URL 段(I-13):还没写完(`https://f` 就已经匹配 URL_RE),此刻变卡 = 源码被藏、光标被弹走。
+        if (pendingPos === pos) return
         const dkey = `${baseKey}#${nth}`
         const entry = roots.get(dkey)
         if (entry && entry.text !== node.textContent) {
@@ -564,9 +580,9 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         }
       },
       state: {
-        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null }),
+        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null, pendingPos: null }),
         apply: (tr, old, _oldState, newState) => {
-          const meta = tr.getMeta(key) as { sourcePos?: number } | undefined
+          const meta = tr.getMeta(key) as { sourcePos?: number; commit?: boolean } | undefined
           let sourcePos = old.sourcePos
           if (sourcePos != null && tr.docChanged) sourcePos = tr.mapping.map(sourcePos)
           if (meta && typeof meta.sourcePos === 'number') sourcePos = meta.sourcePos
@@ -574,16 +590,41 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
             const node = newState.doc.nodeAt(sourcePos)
             if (!node || newState.selection.to <= sourcePos || newState.selection.from >= sourcePos + node.nodeSize) sourcePos = null
           }
-          if (!tr.docChanged && !tr.selectionSet && !meta) return { sourcePos, decos: old.decos.map(tr.mapping, tr.doc) }
+          // 键入中的裸 URL 段(I-13):就地键入(改动全落在光标所在段内,粘贴 / 拖放除外)把一段变成「整段一个 URL」
+          // → 记下,光标离开该段 / 失焦(commit)才交给书签卡。回灌、整块替换、插入新段的改动范围不在单段内,不进这里;
+          // 粘贴走 uiEvent=paste(「粘贴为」菜单要的正是当场成卡)。
+          let pendingPos = old.pendingPos
+          if (pendingPos != null && tr.docChanged) pendingPos = tr.mapping.map(pendingPos, -1)
+          if (meta?.commit) pendingPos = null
+          else if (tr.docChanged && newState.selection.empty && !/^(paste|drop)$/.test(String(tr.getMeta('uiEvent') ?? ''))) {
+            const $h = newState.selection.$head
+            const at = $h.depth > 0 ? $h.before() : -1
+            if (at >= 0 && $h.parent.type.name === 'paragraph' && classifyEmbed($h.parent)?.k === 'bookmark' &&
+                changedOnlyWithin(tr, at + 1, at + $h.parent.nodeSize - 1)) pendingPos = at
+          }
+          if (pendingPos != null) {
+            const node = newState.doc.nodeAt(pendingPos)
+            const { from, to } = newState.selection
+            if (!node || node.type.name !== 'paragraph' || to < pendingPos + 1 || from > pendingPos + node.nodeSize - 1) pendingPos = null
+          }
+          if (!tr.docChanged && !tr.selectionSet && !meta && pendingPos === old.pendingPos) return { sourcePos, pendingPos, decos: old.decos.map(tr.mapping, tr.doc) }
           return {
             sourcePos,
-            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos),
+            pendingPos,
+            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos, pendingPos),
           }
         },
       },
       props: {
         decorations(state) {
           return key.getState(state)?.decos ?? null
+        },
+        // 键入中的裸 URL 段在失焦时落成书签卡(点到编辑器外 = 写完了)。
+        handleDOMEvents: {
+          blur: (view) => {
+            if (key.getState(view.state)?.pendingPos != null) view.dispatch(view.state.tr.setMeta(key, { commit: true }))
+            return false
+          },
         },
       },
     })

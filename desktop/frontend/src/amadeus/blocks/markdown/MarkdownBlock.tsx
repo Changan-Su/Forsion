@@ -102,6 +102,7 @@ import { codeBlockPlugin } from './codeBlock'
 import { askString } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
+import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠
@@ -820,7 +821,8 @@ export function MilkdownInner({
           // 量不到就只是没菜单。⚠️ 不许在这里 return：preventDefault 已经调过,
           // 提前返回 = 默认粘贴被拦下、URL 也没插进去,用户那一下粘贴直接蒸发了。
         }
-        view.dispatch(view.state.tr.insertText(raw, from, sel.to))
+        // uiEvent=paste:embedLayer 据此当场成卡(键入中的裸 URL 段才等光标离开,I-13)。
+        view.dispatch(view.state.tr.insertText(raw, from, sel.to).setMeta('uiEvent', 'paste'))
         if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
       }
@@ -926,6 +928,8 @@ export function MilkdownInner({
       // ⚠️ 这是**唯一**的生产编辑器,漏这行 = 09-18 复发(08-25 只挂到了 UnifiedSpike 台架)。
       // 仪器:npm run check:attention;attentionWiring.test.ts 钉住这一行在不在。
       .use(attentionSerializer)
+      // 句中「文字 === 地址」的链接:裸写后重解析等价就落裸 URL,不再写 `<url>`(I-13,见 ./autolink)。
+      .use(autolinkSerializer)
       // 块内换行 = 单个 '\n'(Obsidian 语义),不再「空行分段」。必须晚于 inlineHtmlMarksRemark:
       // 折叠先跑完,跨行的 <u>…</u> 才不会被拆段撕成开合分家的两半(见 softBreak.ts 注释)。
       // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
@@ -1002,6 +1006,7 @@ export function MilkdownInner({
         }),
       ))
       .use(linkInputRule) // 打完 `[文字](地址)` 当场成链接(commonmark 预设没这条行内规则)
+      .use(autolinkInputRule) // 手打裸 URL 在空格 / 全角标点收尾时成链接(I-13,见 ./autolink)
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
