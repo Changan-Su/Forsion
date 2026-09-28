@@ -149,14 +149,18 @@ function applyLiveHeadingPrefix(view: EditorView, input: HTMLInputElement, info:
 
 function insertLiteralPrefix(view: EditorView, source: string): boolean {
   // 先用既有转换引擎脱掉标题/列表/引用外壳，再把“删剩的源码”写回普通文本行。
-  if (!applyTrigger(view, { kind: 'text' }, null)) return false
-  const { $from } = view.state.selection
-  if (!$from.parent.isTextblock) return false
-  const at = $from.start()
-  const tr = view.state.tr.insertText(source, at)
-  tr.setSelection(TextSelection.create(tr.doc, at + source.length))
-  view.dispatch(tr.scrollIntoView())
-  return true
+  // ⚠️ 同一事务、按映射后的位置写(K-04):脱壳后若这一行落进上一节的折叠区，dispatch 完再读
+  //    selection 读到的是被弹回上一个标题的光标 —— `##` 就写进了别的标题，撤销还要两下。
+  let wrote = false
+  const ok = applyTrigger(view, { kind: 'text' }, null, (tr, pos) => {
+    const $pos = tr.doc.resolve(pos)
+    if (!$pos.parent.isTextblock) return
+    const at = $pos.start()
+    tr.insertText(source, at)
+    tr.setSelection(TextSelection.create(tr.doc, at + source.length))
+    wrote = true
+  })
+  return ok && wrote
 }
 
 function commitPrefix(view: EditorView, input: HTMLInputElement, refocus: boolean): void {

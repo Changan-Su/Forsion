@@ -386,6 +386,19 @@ const modBackspaceCmd: Command = (state, dispatch, view) => {
 
 // ── Delete(前向删除)──────────────────────────────────────────────────────────
 
+/** 折叠标题行尾按 Delete = 先展开这一节,不合并(K-04)。紧跟标题的块藏在折叠区里,直接交给 base 的
+ *  joinForward 等于把**看不见的**内容拉进标题(实测 `A标题隐藏一。`)。展开后再按一次才是通常的合并
+ *  —— 与 bsSelectPrevAtom / deleteSelectNextAtom「先现形、再动手」同一口径。 */
+const deleteUnfoldHeading: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.parent.type.name !== 'heading') return false
+  if ($from.parentOffset !== $from.parent.content.size) return false
+  const headingPos = $from.before($from.depth)
+  if (foldedSectionAfter(state, headingPos) == null) return false
+  dispatch?.(state.tr.setMeta(headingFoldKey, { toggle: headingPos }))
+  return true
+}
+
 /** 块尾按 Delete:下一个顶层块是整块型 → 只把它变成块选中(不吞不合并);其余交回 base。 */
 const deleteSelectNextAtom: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
@@ -458,8 +471,8 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
-      Delete: deleteSelectNextAtom,
-      'Ctrl-d': deleteSelectNextAtom, // mac 习惯键,与 Delete 同一支
+      Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom),
+      'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom), // mac 习惯键,与 Delete 同一支
       ArrowUp: arrowToAtom('up'),
       ArrowDown: arrowToAtom('down'),
     }),

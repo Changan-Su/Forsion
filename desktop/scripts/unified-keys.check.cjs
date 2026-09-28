@@ -107,6 +107,79 @@ async function main() {
       check('K03 落盘是围栏代码', /```py\n# comment\n```/.test(await lastWrite(page) || ''), JSON.stringify(await lastWrite(page)))
       await page.close()
     }
+
+    // ── K-04:上一节折叠时,在下一个标题行首退格 / `### ` 降级;折叠标题行尾 Delete。──
+    if (want('K04')) {
+      /** 顶层块可见性:text(HIDDEN) 标出 display:none 的块。 */
+      const visible = (page) => page.evaluate((PM) => [...document.querySelectorAll(PM + ' > *')]
+        .filter((e) => !e.classList.contains('ProseMirror-trailingBreak'))
+        .map((e) => `${e.textContent.replace('▸', '')}${getComputedStyle(e).display === 'none' ? '(HIDDEN)' : ''}`).join(' | '), PM)
+      // 走真 UI(悬停标题 → 把手折叠钮):动态 import 模块在 HMR 后可能拿到另一份实例(PluginKey 不同)。
+      const fold = async (page, name) => {
+        const h = await page.evaluate(({ PM, name }) => {
+          const el = [...document.querySelectorAll(PM + ' > h1, ' + PM + ' > h2, ' + PM + ' > h3')].find((e) => e.textContent.includes(name))
+          const r = el.getBoundingClientRect()
+          return { x: r.left + 15, y: r.top + r.height / 2 }
+        }, { PM, name })
+        await page.mouse.move(h.x, h.y, { steps: 3 })
+        await page.waitForTimeout(300)
+        const ok = await page.evaluate(() => {
+          const f = document.querySelector('.unified-gutter .block-fold')
+          if (!f || f.style.display === 'none') return false
+          f.click()
+          return true
+        })
+        await page.waitForTimeout(150)
+        if (!ok) throw new Error('折叠钮没出现:' + name)
+        // 前置条件:确实折起来了(否则下面的断言会在不折叠的对照态下空转成绿)。
+        const v = await visible(page)
+        if (!v.includes('(HIDDEN)')) throw new Error('折叠没生效:' + v)
+      }
+      const SEED = '## 第一章\n\n正文一。\n\n## 第二章\n\n正文二。\n'
+      {
+        const page = await open(browser, SEED)
+        await fold(page, '第一章')
+        await page.waitForTimeout(120)
+        await caretIn(page, 'heading', { nth: 1, atStart: true })
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(1300)
+        const s = await shape(page), v = await visible(page), w = await lastWrite(page)
+        check('K04 折叠节后的标题行首退格:`##` 字面还原在本行,不写进上一个标题', s === 'heading2:"第一章" / paragraph:"正文一。" / paragraph:"##第二章" / paragraph:"正文二。"', s)
+        check('K04 同上:本行没有被藏进折叠区(上一节随之展开)', !v.includes('HIDDEN'), v)
+        check('K04 同上:落盘与不折叠时的字面还原一致', w === '## 第一章\n\n正文一。\n\n\\##第二章\n\n正文二。\n', JSON.stringify(w))
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(200)
+        const u = await shape(page)
+        check('K04 同上:撤销一次即恢复', u === 'heading2:"第一章" / paragraph:"正文一。" / heading2:"第二章" / paragraph:"正文二。"', u)
+        await page.close()
+      }
+      {
+        const page = await open(browser, SEED)
+        await fold(page, '第一章')
+        await page.waitForTimeout(120)
+        await caretIn(page, 'heading', { nth: 1, atStart: true })
+        await page.keyboard.type('### ')
+        await page.waitForTimeout(200)
+        const s = await shape(page), v = await visible(page), sl = await selInfo(page)
+        check('K04 折叠节后的标题敲 `### ` 降成子级:光标留在本行,本行可见', s.includes('heading3:"第二章"') && !v.includes('HIDDEN') && sl.parent === 'heading' && s.split(' / ')[0] === 'heading2:"第一章"', `${s} | ${v} | ${JSON.stringify(sl)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '## A标题\n\n隐藏一。\n\n隐藏二。\n\n## B\n\n乙内容。\n')
+        await fold(page, 'A标题')
+        await page.waitForTimeout(120)
+        await caretIn(page, 'heading', { nth: 0 })
+        await page.keyboard.press('Delete')
+        await page.waitForTimeout(200)
+        const s1 = await shape(page), v1 = await visible(page)
+        check('K04 折叠标题行尾 Delete 第一下:只展开,不把隐藏内容拉进标题', s1.startsWith('heading2:"A标题" / paragraph:"隐藏一。"') && !v1.includes('HIDDEN'), `${s1} | ${v1}`)
+        await page.keyboard.press('Delete')
+        await page.waitForTimeout(200)
+        const s2 = await shape(page)
+        check('K04 同上第二下:展开后走通常的合并', s2.startsWith('heading2:"A标题隐藏一。"'), s2)
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }
