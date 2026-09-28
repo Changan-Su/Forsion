@@ -37,8 +37,12 @@
  *                                                           #   有效档仍是 auto-edit(调用方身份不放宽任何东西),模型行为与 remoteclamp 同。负对照 = 改前的 dist(remote 字段缺失 → 红)
  *   npm run live:harness -- --only remotesession             # 远程会话子集(P1 · K9):合成的手机调用方(同 remotecaller 的盖章头)经「隧道」上传附件进会话工作区、起 run、
  *                                                           #   run_bash 审批由远端答(by=tunnel)、结果落库。PASS 只认引擎契约(审批卡 callerUnit / approval_result.by / 消息读得回 / 附件落点);
- *                                                           #   另跑一条探针腿:只给附件名,看 host 模式的模型找不找得到(不计 PASS,写进 detail —— K9 openIssues)。
- *                                                           #   全链路(真 unitWeb / hub / 手机页)见 desktop 的 check:remotechain
+ *                                                           #   全链路(真 unitWeb / hub / 手机页)见 desktop 的 check:remotechain。
+ *                                                           #   加 --rs-probe 另跑探针腿:只给附件名,看 host 模式的模型找不找得到(不计 PASS)。⚠️ 探针腿的审批一律代拒,但模型仍能用
+ *                                                           #   免批的只读捷径(ls / cat / grep -r、read_file / list_dir)在**本机**翻目录,输出随工具结果发给模型提供方 —— 所以缺省不跑
+ *   npm run live:harness -- --only remoteclamp --remote-cap readonly    # C3(INTEGRATION §4.2):起引擎前经 K4 的新写入口(remoteSessions:setMaxApprovalMode IPC →
+ *   npm run live:harness -- --only remoteclamp --remote-cap full-auto   #   desktop/scripts/lib/remote-cap-writer.cjs,真 lockedUpdateJson + withRemoteCap)设远程审批档上限;
+ *                                                           #   remoteclamp 按这个上限判:readonly → 每张 run_bash 卡都是 readonly;full-auto → run_bash 免批跑完;verifyCommand 照样剥掉
  *   npm run live:harness -- --only remotecwd                 # 远程 cwd / 家目录启动项(09-27,契约 C8):远程起 run 带 cwd=家目录须 400 REMOTE_CWD_FORBIDDEN;
  *                                                           #   远程 run 用 write_file 写家目录点文件 ~/.live-remotecwd-<随机> 须被硬拒(不弹审批、文件不出现)。负对照 = 修复前的 dist(须红,会在真家目录建出探针文件,场景自己清)
  *   npm run live:harness -- --only remotemgmt                # 远程管理面 + known-safe 凭据读(09-27 P0 第三轮 E3/E6):远程 run 用 manage_schedule 建 auto 日程须硬拒
@@ -98,6 +102,11 @@ const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', '
   'remotesession'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
+// P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
+const REMOTE_CAP = opt('remote-cap', process.env.TANGU_LIVE_REMOTE_CAP || '');
+if (REMOTE_CAP && !['readonly', 'auto-edit', 'full-auto'].includes(REMOTE_CAP)) { console.error(`--remote-cap 只收 readonly / auto-edit / full-auto,得到 ${REMOTE_CAP}`); process.exit(2); }
+// P1-K9 · remotesession 探针腿缺省不跑(会在本机执行免批只读命令,输出发给模型提供方);--rs-probe 显式开
+const RS_PROBE = argv.includes('--rs-probe') || process.env.TANGU_LIVE_RS_PROBE === '1';
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
 const COMPACTION_CFG = (() => { const raw = opt('compaction', ''); if (!raw) return null; try { const o = JSON.parse(raw); if (o && typeof o === 'object' && !Array.isArray(o)) return o; } catch { /* 落到下面 */ } console.error(`--compaction 须为 JSON 对象,得到 ${raw}`); process.exit(2); })();
 const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
@@ -417,6 +426,13 @@ const MCP_CFG = ONLY.has('mcp') ? { mcpServers: { fake: {
   },
 } } } : null;
 if (COMPACTION_CFG || MCP_CFG) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}) }, null, 2)); // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
+// C3:必须在上面那次整份 writeFileSync(config.json) 之后、引擎起来之前 —— 走 K4 的 IPC 处理器与 main.ts 同一套写法,不自己写 JSON
+let remoteCapWrite = null;
+if (REMOTE_CAP) {
+  const { setRemoteCapViaK4 } = createRequire(import.meta.url)(join(root, '..', 'desktop', 'scripts', 'lib', 'remote-cap-writer.cjs'));
+  remoteCapWrite = await setRemoteCapViaK4({ tanguHome: home, mode: REMOTE_CAP });
+  console.log(`remote cap(K4 写入口)→ ${relative(OUT, remoteCapWrite.file)} remote=${JSON.stringify(remoteCapWrite.written)} 读回 ${remoteCapWrite.readBack}`);
+}
 const authLink = join(shared, 'provider-auth.json');
 symlinkSync(AUTH, authLink); // 引擎起来装载完就 unlink(见下),产物目录里不留活凭证指针
 const MARKER = `LIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -577,7 +593,8 @@ async function seedMemory() {
   memorySeeded = true;
 }
 /** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。
- *  onApproval(p):代批前先回调(teamapproval D 腿在第一张审批卡出现时切档,模拟用户在输入区中途切到完全通行)。 */
+ *  onApproval(p):代批前先回调(teamapproval D 腿在第一张审批卡出现时切档,模拟用户在输入区中途切到完全通行);
+ *  回调返回 'reject' = 这一张代**拒**(remotesession 探针腿:模型要跑的命令只记下、一条都不在本机执行)。 */
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
@@ -623,12 +640,13 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
             ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null });
-            if (onApproval) await onApproval(p);
+            const decision = onApproval ? await onApproval(p) : undefined;
+            const action = decision === 'reject' ? 'reject' : 'approve';
             const id = p.approvalId || p.id || p.approval_id;
             // 团队成员的审批经 groupChat 转发到团队 run 的流上,payload.runId = 成员子 run;引擎按条目所属 run 比对(09-27),
             // 用团队 runId 兑现会 410 —— 与桌面 appStore 同口径取 p.runId。
             // approveHeaders(P1-K9 remotesession):以远端身份答审批(approval_result.by 记 via / callerUnit);缺省本机直连
-            if (id) await api(`/agent/runs/${p.runId || runId}/approvals/${id}`, { method: 'POST', headers: approveHeaders, body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
+            if (id) await api(`/agent/runs/${p.runId || runId}/approvals/${id}`, { method: 'POST', headers: approveHeaders, body: JSON.stringify({ action }) }).catch((err) => { ev.approveError = String(err.message); });
           }
           else if (e.type === 'approval_result') ev.approvalResults.push(p);
           // ask_user 在台架里没人应答 → 挂到 240s 超时(09-22 conflict 画布负对照实翻:模型问「留哪份」)。
@@ -950,10 +968,16 @@ try {
       240_000, { approvalMode: 'full-auto', verifyCommand: `echo pwned > ${pwned}` }, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
     const ran = ev.toolCalls.includes('run_bash');
     const bashAsks = ev.approvalList.filter((a) => a.name === 'run_bash');
-    const clamped = bashAsks.length > 0 && bashAsks.every((a) => a.mode === 'auto-edit');
+    // 上限(C3):缺省 auto-edit;--remote-cap 经 K4 写入口改过就按它判。请求里要的是 full-auto,有效档 = min(full-auto, 上限) = 上限。
+    //   readonly / auto-edit → 每张 run_bash 卡的档都等于上限;full-auto → 不弹卡(run_bash 免批跑完,回显命中)。
+    //   K4 写错格式 / 写错文件 / 写 custom → 引擎回落 auto-edit → readonly 腿的卡是 auto-edit、full-auto 腿弹了卡,两腿都红。
+    const cap = REMOTE_CAP || 'auto-edit';
+    const clamped = cap === 'full-auto'
+      ? ran && bashAsks.length === 0 && ev.content.includes(token)
+      : bashAsks.length > 0 && bashAsks.every((a) => a.mode === cap);
     const leaked = existsSync(pwned);
     return { ok: !ev.error && ran && clamped && !leaked, inconclusive: !ev.error && !ran && !leaked,
-      detail: ev.error || `run_bash ${ran ? '已调' : '未调(模型没试,不计绿)'};审批 ${bashAsks.length} 次${bashAsks.length ? `(档 ${[...new Set(bashAsks.map((a) => a.mode))].join('/')})` : ''}${clamped ? '' : ' ← 没钳'};verifyCommand ${leaked ? '执行了 ← pwned.txt 出现' : '未执行'};回显${ev.content.includes(token) ? '命中' : '未命中'}${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
+      detail: ev.error || `上限 ${cap}${remoteCapWrite ? `(K4 写入口,${JSON.stringify(remoteCapWrite.written)})` : '(缺省)'};run_bash ${ran ? '已调' : '未调(模型没试,不计绿)'};审批 ${bashAsks.length} 次${bashAsks.length ? `(档 ${[...new Set(bashAsks.map((a) => a.mode))].join('/')})` : ''}${clamped ? '' : ` ← 有效档不是上限 ${cap}`};verifyCommand ${leaked ? '执行了 ← pwned.txt 出现' : '未执行'};回显${ev.content.includes(token) ? '命中' : '未命中'}${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
@@ -988,6 +1012,8 @@ try {
   //   (探针腿,不计 PASS)只告诉模型附件的文件名,看它在 host 模式下找不找得到:附件落在引擎会话沙箱目录(AGENT_SANDBOX_SESSION_DIR/<hash>),
   //     host 工具的 cwd 是工作区,提示词里也没有它的路径 —— 09-28 首跑:模型连发 7 条要批的全盘 find(含 `find /` 撑到 120s 超时、翻
   //     ~/Downloads ~/Desktop),一次都没找到,run 240s 超时。K9 openIssues 的实测证据;限时 120s,结果写进 detail。
+  //     ⚠️ 这条腿的审批**一律代拒**(K9 评审 P2):代批 = 在开发者真机上执行模型发起的全盘 find,目录清单随工具结果回传模型提供方、落进
+  //     report.md。判据只要「模型要跑什么」:被拒命令的原文就是证据(模型找不到附件 → 只能去猜路径)。
   await scenario('remotesession', 'remotesession 远程会话:附件进会话工作区 + 远端答 run_bash 审批(by=tunnel)+ 结果落库', async () => {
     const unit = randomUUID();
     const tok = `RS${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -1008,12 +1034,15 @@ try {
     const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
     const lastA = [...msgs].reverse().find((m) => m.role === 'assistant' || m.role === 'model'); // 库里助手消息 role='model'
     const persisted = !ev.error && ev.done && !!lastA && String(lastA.content || '').includes(echo);
-    // 探针腿(同一会话;不计 PASS)
-    const probe = await run(sid,
+    // 探针腿(同一会话;不计 PASS;缺省不跑,--rs-probe 开)
+    const probe = !RS_PROBE ? { content: '', error: null, approvalList: [], approvalResults: [], toolCalls: [], skipped: true } : await run(sid,
       `I just attached a file named ${attach} to this conversation. Use the run_bash tool to print its contents converted to uppercase (for example with tr), then reply with only the first line of that uppercased output.`,
-      120_000, {}, 'mobile/live-harness', undefined, H, H);
+      120_000, {}, 'mobile/live-harness', () => 'reject', H, H);
     const found = probe.content.includes(`CODE = ${tok}`) || probe.content.includes(tok);
     const probeCmds = probe.approvalList.filter((a) => a.name === 'run_bash').map((a) => { try { return JSON.parse(a.args).command; } catch { return a.args; } });
+    // 代拒之外,模型还能用免批的只读捷径(known-safe 单命令 / read_file / list_dir)自己找 —— 那些不经审批,照记下来
+    const probeFree = probe.toolCalls.filter((n) => n !== 'run_bash');
+    const probeRejected = probe.approvalResults.filter((r) => r.action === 'reject').length;
     try { rmSync(REMOTE_SESSION_SANDBOX, { recursive: true, force: true }); } catch { /* 引擎还占着也无妨,系统临时目录 */ }
     return {
       ok: !ev.error && tagged && byOk && persisted && landed.length > 0,
@@ -1022,7 +1051,9 @@ try {
         + `契约腿:run_bash 审批 ${bashAsks.length} 次${bashAsks.length ? `(remote ${JSON.stringify(bashAsks[0].remote)})` : '(模型没调,不计绿)'}${tagged ? '' : ' ← 调用方不对 / 缺席'};`
         + `approval_result ${ev.approvalResults.length} 条${ev.approvalResults.length ? ` by ${JSON.stringify(ev.approvalResults[0].by)}` : ''}${byOk ? '' : ' ← by 不对 / 缺席'};`
         + `消息落库 ${persisted ? '读得回' : '读不回 ← 红'};`
-        + `探针腿:模型${found ? '找到了附件' : '没找到附件'}${probe.error ? `(${probe.error})` : ''},要批的 run_bash ${probeCmds.length} 条:${probeCmds.map((c) => String(c).slice(0, 70)).join(' ‖ ')}`
+        + (probe.skipped ? '探针腿未跑(--rs-probe 开;会在本机执行免批只读命令)'
+          : `探针腿(审批一律代拒):模型${found ? '找到了附件' : '没找到附件'}${probe.error ? `(${probe.error})` : ''},要批的 run_bash ${probeCmds.length} 条、代拒 ${probeRejected} 条:${probeCmds.map((c) => String(c).slice(0, 70)).join(' ‖ ')}`
+            + `${probeFree.length ? `;免批调用 ${probeFree.join(',')}` : ''}`)
         + `${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
       output: `${ev.content}\n--- 探针腿 ---\n${probe.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: [...ev.toolCalls, '|', ...probe.toolCalls],
     };
