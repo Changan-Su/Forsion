@@ -59,6 +59,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '..
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
+import { turnBlocksInto } from './blockTurn'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -130,6 +131,7 @@ registerMessages({
   'unipage.menu.fold': { zh: '折叠', en: 'Toggle' },
   'unipage.menu.card': { zh: '卡片', en: 'Card' },
   'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
+  'unipage.menu.toNewColumnMulti': { zh: '选中多块时不能移到新列，请只选一块', en: 'Select a single block to move it to a new column' },
   'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
   'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
   'unipage.menu.delete': { zh: '删除', en: 'Delete' },
@@ -1516,11 +1518,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('agentchg.skipped', { n: String(skipped) }) } }))
     }
   }
-  const turnInto = (trig: Trigger): void => withSelectedNode((view, sel) => {
-    // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
-    view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(sel.from + 1))))
-    applyTrigger(view, trig, null)
-  })
+  /** 「转换为」:跨块选区逐块转换(B-05:此前只认 NodeSelection,多选时静默无效),单块走 applyTrigger。
+   *  做不成(结构不允许)给一句提示,不再静默。 */
+  const turnInto = (trig: Trigger, label: string): void => {
+    let ok = true
+    withBlocks(
+      (view, r) => { ok = turnBlocksInto(view, r.from, r.to, trig) },
+      (view, sel) => {
+        // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
+        view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(sel.from + 1))))
+        ok = applyTrigger(view, trig, null)
+      },
+    )
+    if (!ok) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
+  }
 
   /** 当前块 → Canvas 卡片。slash 落点是 TextSelection，块菜单落点是 NodeSelection；两条入口先
    *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。
@@ -2626,15 +2637,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
             {!isTableSelected(layer.getView()) && (
               <>
-                <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
-                <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
-                <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
-                <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
-                <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> {t('unipage.menu.bullet')}</button>
-                <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
-                <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
-                <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
-                <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+                <button onClick={() => turnInto({ kind: 'text' }, t('unipage.menu.text'))}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 1 }, t('unipage.menu.h1'))}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 2 }, t('unipage.menu.h2'))}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 3 }, t('unipage.menu.h3'))}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
+                <button onClick={() => turnInto({ kind: 'bullet' }, t('unipage.menu.bullet'))}><List size={13} /> {t('unipage.menu.bullet')}</button>
+                <button onClick={() => turnInto({ kind: 'ordered' }, t('unipage.menu.ordered'))}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
+                <button onClick={() => turnInto({ kind: 'task' }, t('unipage.menu.task'))}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
+                <button onClick={() => turnInto({ kind: 'quote' }, t('unipage.menu.quote'))}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
+                <button onClick={() => turnInto({ kind: 'fold' }, t('unipage.menu.fold'))}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
               </>
             )}
             {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
@@ -2657,11 +2668,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
             <div className="ubm-sep" />
-            <button onClick={() => withSelectedNode((view, sel) => {
-              splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
-            })}>
-              <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
-            </button>
+            {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}
+            {layer.getView() && layer.topRangeOf(layer.getView()!) ? (
+              <button aria-disabled="true" title={t('unipage.menu.toNewColumnMulti')} data-act="toNewColumn" onClick={() => {
+                window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.menu.toNewColumnMulti') } }))
+              }}>
+                <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
+              </button>
+            ) : (
+              <button data-act="toNewColumn" onClick={() => withSelectedNode((view, sel) => {
+                splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
+              })}>
+                <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
+              </button>
+            )}
             {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。
                 条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
             {layer.getView()?.state.selection instanceof NodeSelection

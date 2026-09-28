@@ -3017,6 +3017,9 @@ body.amx-marquee-active * {
   background: var(--border);
   margin: 3px 4px;
 }
+/* 块菜单里置灰但仍可悬停看原因的项(aria-disabled,B-05:多选时的「移到新列」)。 */
+.am-app .unified-block-menu button[aria-disabled='true'] { opacity: 0.4; cursor: default; }
+.am-app .unified-block-menu button[aria-disabled='true']:hover { background: transparent; }
 /* 块菜单里的当前态(表格区的列对齐,K-10):勾放末列(DESIGN §3 菜单几何:状态置于末列)。 */
 .ubm-check {
   margin-left: auto;

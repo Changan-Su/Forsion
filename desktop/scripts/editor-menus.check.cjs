@@ -7,6 +7,7 @@
 //        转换做不成要么真转了、要么给提示,不许静默(I-19)
 //   I20  选区工具栏键盘可达 + ARIA:Alt+F10 进工具栏(焦点进去工具栏不被卸载)、←→ 移动、Enter 触发、子面板键盘开 +
 //        ↓ 选项、Esc 退回编辑器;格式钮有 aria-pressed / aria-label(I-20)
+//   B5   块菜单作用于多块选区:「转换为」逐块生效(列表并成一只,一次撤销全回)、「移到新列」置灰并说明(B-05)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -113,6 +114,51 @@ const toolbar = (page) => page.evaluate(() => {
     color: !!tb.querySelector('.itb-color'),
     fg: tb.querySelector('.itb-color')?.dataset.fg ?? null,
   }
+})
+/** 顶层块里文字以 prefix 开头的那一块的矩形。 */
+const rectOf = (page, prefix, sel = ':scope > *') => page.evaluate(({ PM, prefix, sel }) => {
+  const el = [...document.querySelector(PM).querySelectorAll(sel)].find((x) => x.textContent.trim().startsWith(prefix))
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { x: r.x, y: r.y, w: r.width, h: r.height }
+}, { PM, prefix, sel })
+/** 真鼠标拖选:从 a 块开头拖到 b 块末尾之外。 */
+async function dragSelect(page, a, b) {
+  const ra = await rectOf(page, a)
+  const rb = await rectOf(page, b)
+  await page.mouse.move(ra.x + 1, ra.y + ra.h / 2)
+  await page.mouse.down()
+  await page.mouse.move(rb.x + rb.w - 2, rb.y + rb.h / 2, { steps: 8 })
+  await page.mouse.move(rb.x + rb.w + 60, rb.y + rb.h / 2, { steps: 4 })
+  await page.mouse.up()
+  await page.waitForTimeout(200)
+}
+/** 悬停 prefix 那一块 → 点它的 ⠿,等块菜单出来。 */
+async function openHandleMenu(page, prefix) {
+  const r = await rectOf(page, prefix)
+  if (!r) return false
+  await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+  await page.waitForTimeout(260)
+  const h = await page.evaluate(() => {
+    const g = document.querySelector('.unified-gutter')
+    const el = g?.querySelector('.drag-handle')
+    if (!el || g.dataset.show !== 'true') return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + Math.min(10, r.height / 2) }
+  })
+  if (!h) return false
+  await page.mouse.click(h.x, h.y)
+  return waitSel(page, '.unified-block-menu')
+}
+/** 块菜单里文字以 label 结尾的那一项。 */
+const menuItem = (page, label) => page.locator('.unified-block-menu button').filter({ hasText: label }).first()
+const shape = (page) => page.evaluate(() => {
+  const o = []
+  window.__upage.probe.view().state.doc.forEach((n) => {
+    if (/_list$/.test(n.type.name)) { const it = []; n.forEach((li) => it.push(li.textContent)); o.push(`${n.type.name}[${it.join('|')}]`) }
+    else o.push(`${n.type.name === 'paragraph' ? '' : n.type.name + (n.attrs.level ? n.attrs.level : '') + ':'}${n.textContent}`)
+  })
+  return o
 })
 /** 收集 amadeus:toast(台架不挂宿主的 toast 浮层,直接听事件)。 */
 const listenToasts = (page) => page.evaluate(() => {
@@ -324,6 +370,49 @@ async function main() {
         await page.waitForTimeout(200)
         const f = await focusIn()
         check('I20d 工具栏里 Esc → 关工具栏、焦点回编辑器', !f.mounted && f.editor, JSON.stringify(f))
+      }
+    }
+
+    if (want('B5')) {
+      await listenToasts(page)
+      const SEED = '段甲。\n\n段乙。\n\n段丙。\n'
+      // B5a 多块 → 标题 2:两块都变。
+      {
+        await load(page, SEED)
+        await dragSelect(page, '段甲', '段乙')
+        const open = await openHandleMenu(page, '段甲')
+        if (open) await menuItem(page, '标题 2').click()
+        await page.waitForTimeout(250)
+        const sh = await shape(page)
+        check('B5a 多块选中 → 转换为标题 2:每块都转', open && sh.join(' / ') === 'heading2:段甲。 / heading2:段乙。 / 段丙。', JSON.stringify(sh))
+      }
+      // B5b 多块 → 无序列表:并成一只列表;一次撤销全部回来。
+      {
+        await load(page, SEED)
+        await dragSelect(page, '段甲', '段乙')
+        const open = await openHandleMenu(page, '段甲')
+        if (open) await menuItem(page, '无序列表').click()
+        await page.waitForTimeout(250)
+        const sh = await shape(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(250)
+        const undone = await shape(page)
+        check('B5b 多块 → 无序列表 = 一只列表;一次 ⌘Z 全回', open && sh.join(' / ') === 'bullet_list[段甲。|段乙。] / 段丙。' && undone.join(' / ') === '段甲。 / 段乙。 / 段丙。', JSON.stringify({ sh, undone }))
+      }
+      // B5c 多块时「移到新列」置灰(aria-disabled + 说明),点了给提示、文档不动。
+      {
+        await load(page, SEED)
+        await dragSelect(page, '段甲', '段乙')
+        const open = await openHandleMenu(page, '段甲')
+        const dis = open ? await menuItem(page, '移到新列').getAttribute('aria-disabled') : null
+        const title = open ? await menuItem(page, '移到新列').getAttribute('title') : null
+        await toasts(page)
+        if (open) await menuItem(page, '移到新列').click({ force: true })
+        await page.waitForTimeout(200)
+        const ts = await toasts(page)
+        const sh = await shape(page)
+        check('B5c 多块时「移到新列」置灰 + 说明 + 点了有提示', dis === 'true' && !!title && ts.length === 1 && sh.join(' / ') === '段甲。 / 段乙。 / 段丙。', JSON.stringify({ dis, title, ts, sh }))
+        await page.keyboard.press('Escape')
       }
     }
 
