@@ -28,6 +28,8 @@ export interface AgentChange {
   old: Slice
   /** Agent 写下的内容(判「用户改过没有」:区间里现在的内容还等不等于它)。 */
   after: Fragment
+  /** 并进来的、用户已改过的旧标记处数(Codex 复核 P0):那几处保留用户内容、不可撤回,撤回时计入「跳过」。 */
+  locked?: number
 }
 export interface AgentChangesState {
   changes: AgentChange[]
@@ -83,13 +85,18 @@ function addChanges(prev: AgentChange[], add: ReconcileChange[], before: ProseNo
     }
     const ua = Math.min(...cl.map((x) => x.a))
     const ub = Math.max(...cl.map((x) => x.b))
+    // ⚠️ 只有**用户没动过**的旧标记才换回它的旧片段(Codex 复核 P0)。用户在标记里打过字的那处,回灌前文档里的
+    //    内容就是用户的版本:照原样留在「旧片段」里 —— 否则合并会用首次改稿前的片段盖掉用户这段时间的输入,
+    //    「全部撤回」随后把这些字删掉。那几处记进 locked:不可撤回,撤回时计入「跳过」。
+    const clean = olds.filter((e) => fragLooseEq(before.slice(e.from, e.to).content, e.after))
+    const locked = olds.reduce((n, e) => n + (e.locked ?? 0) + (clean.includes(e) ? 0 : 1), 0)
     const scratch = new Transform(before)
-    for (const e of [...olds].sort((x, y) => y.from - x.from)) scratch.replace(e.from, e.to, e.old)
+    for (const e of [...clean].sort((x, y) => y.from - x.from)) scratch.replace(e.from, e.to, e.old)
     const sa = scratch.mapping.map(ua, -1)
     const sb = scratch.mapping.map(ub, 1)
     const from = tr.mapping.map(ua, -1)
     const to = tr.mapping.map(ub, 1)
-    out.push({ id: ++seq, from, to, old: scratch.doc.slice(sa, sb), after: tr.doc.slice(from, to).content })
+    out.push({ id: ++seq, from, to, old: scratch.doc.slice(sa, sb), after: tr.doc.slice(from, to).content, ...(locked ? { locked } : {}) })
   }
   return out.sort((a, b) => a.from - b.from)
 }
@@ -183,7 +190,7 @@ export function markAgentChanges(tr: Transaction, before: ProseNode, changes: Re
 }
 
 /** 「全部撤回」:用户没动过的每一处换回旧片段,一次普通用户编辑(进撤销栈,走防抖 + CAS 保存)。
- *  返回 { reverted, skipped };skipped = 用户改过、没撤的处数。 */
+ *  返回 { reverted, skipped };skipped = 用户改过、没撤的处数(含合并时并进来的 locked 处)。 */
 export function revertAgentChanges(view: EditorView): { reverted: number; skipped: number } {
   const st = agentChangesKey.getState(view.state)
   if (!st?.changes.length) return { reverted: 0, skipped: 0 }
@@ -192,9 +199,10 @@ export function revertAgentChanges(view: EditorView): { reverted: number; skippe
   let skipped = 0
   // 区间两两不相交:自后向前换,前面的坐标不受影响。
   for (const c of [...st.changes].sort((a, b) => b.from - a.from)) {
-    if (!fragLooseEq(view.state.doc.slice(c.from, c.to).content, c.after)) { skipped++; continue }
+    if (!fragLooseEq(view.state.doc.slice(c.from, c.to).content, c.after)) { skipped += 1 + (c.locked ?? 0); continue }
     tr.replace(c.from, c.to, c.old)
     reverted++
+    skipped += c.locked ?? 0 // 并进来的、用户改过的那几处保留原样(旧片段里就是用户的版本)
   }
   view.dispatch(tr.setMeta(agentChangesKey, { clear: true } satisfies Meta).scrollIntoView())
   return { reverted, skipped }

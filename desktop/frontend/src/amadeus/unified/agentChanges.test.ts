@@ -85,6 +85,15 @@ describe('agentChanges', () => {
     expect(text(v.state.doc)).toBe('甲乙丙')
   })
 
+  it('用户改过首处后 Agent 再改到相接处(Codex 复核 P0)→ 合并不丢用户的字,撤回保留用户那处并计入跳过', () => {
+    const v = fakeView(doc(p('开头'), p('甲乙丙'), p('结尾')))
+    agentWrite(v, doc(p('开头'), p('甲AAA乙丙'), p('结尾')))
+    typeAt(v, '甲A', 'X') // 用户改了 Agent 写的那段(并已落盘,Agent 的第二次写基于它)
+    agentWrite(v, doc(p('开头'), p('甲AXAABBB乙丙'), p('结尾')))
+    expect(revertAgentChanges(v)).toEqual({ reverted: 1, skipped: 1 })
+    expect(text(v.state.doc)).toBe('开头 / 甲AXAA乙丙 / 结尾')
+  })
+
   it('第二次回灌与第一次不相交 → 各记各的,互不干扰', () => {
     const v = fakeView(doc(p('一'), p('二'), p('三')))
     agentWrite(v, doc(p('一 A'), p('二'), p('三')))
