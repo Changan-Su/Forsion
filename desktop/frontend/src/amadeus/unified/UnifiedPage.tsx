@@ -2677,7 +2677,6 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         </OverlayPortal>
       )}
       {movePick && !readOnly && (
-        <OverlayPortal>
           <NotePicker
             pages={scoped.getState().pages}
             exclude={path}
@@ -2697,7 +2696,6 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               view.focus()
             }}
           />
-        </OverlayPortal>
       )}
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (

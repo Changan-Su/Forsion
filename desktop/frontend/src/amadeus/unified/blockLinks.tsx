@@ -3,6 +3,7 @@
 //  · 块链接只给**已有** `^id` 的块 —— 不为了复制链接去给用户的文件铸块 ID(评审 §3);
 //  · 移动到 = 先把这几块追加到目标笔记末尾,成功了再从本篇删掉(反过来会在写失败时丢内容)。
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
@@ -111,7 +112,9 @@ export async function moveBlocksTo(opts: {
   return true
 }
 
-/** 「移动到…」的目标笔记选择器(QuickSwitcher 同款外观与键位:↑↓ 选、↵ 定、Esc 关)。 */
+/** 「移动到…」的目标笔记选择器(QuickSwitcher 同款外观与键位:↑↓ 选、↵ 定、Esc 关)。
+ *  ⚠️ 传送到 body、不进 .am-app:QuickSwitcher 的双行 cmd-* 外观是 engine.css + amadeus-host.css 那一套,
+ *     进了 .am-app 会被 `.am-app .cmd-item`(列向 flex)叠上去,标题和路径挤成居中的两行(截图自查发现)。 */
 export function NotePicker({ pages, exclude, onPick, onClose }: {
   pages: string[]
   exclude: string
@@ -123,7 +126,7 @@ export function NotePicker({ pages, exclude, onPick, onClose }: {
   const [active, setActive] = useState(0)
   const results = fuzzyRank(query, pages.filter((p) => p !== exclude && /\.md$/i.test(p)), pageKey).slice(0, 30)
   useEffect(() => { setActive(0) }, [query])
-  return (
+  return createPortal(
     <div className="cmd-overlay" onMouseDown={onClose}>
       <div className="cmd-panel" role="dialog" aria-label={t('blocklinks.pickTitle')} data-testid="note-picker" onMouseDown={(e) => e.stopPropagation()}>
         <input
@@ -152,6 +155,7 @@ export function NotePicker({ pages, exclude, onPick, onClose }: {
           {!results.length && <div className="cmd-empty">{t('blocklinks.noMatch')}</div>}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
