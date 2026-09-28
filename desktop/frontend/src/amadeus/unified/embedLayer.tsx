@@ -41,7 +41,7 @@ import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
 import { attachSourceButton } from '../blocks/markdown/sourceToggle'
 import { getAttachmentPrefs } from '../lib/attachments'
-import { registerMessages, subscribeLocale, translate } from '../../i18n'
+import { HostLocaleProvider, registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'uembed.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
@@ -512,7 +512,10 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 }
               }
               const root = createRoot(host)
+              // 独立根跨不过 LocaleProvider:子组件(书签卡/媒体/网页/按钮/多维表/画板/跨笔记编辑器)全走 useI18n,
+              // 不包就恒回落中文(评审 R-15)。HostLocaleProvider 只订 currentLocale,切语言整棵树跟着重渲。
               const render = (nextKind: EmbedKind): void => root.render(
+                <HostLocaleProvider>
                 <EmbedBody
                   kind={nextKind}
                   pagePath={opts.path}
@@ -530,7 +533,8 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                     v.dispatch(v.state.tr.insert(hit.at + hit.size, blocks))
                   }}
                   replaceText={replaceText}
-                />,
+                />
+                </HostLocaleProvider>,
               )
               render(kind)
               attachSourceButton(dom, view, () => {
