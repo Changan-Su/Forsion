@@ -83,6 +83,7 @@
     "check:amadeusinteractions": "node scripts/e2e-editor.cjs --check=amadeus-interactions",
     "check:dashboard": "node scripts/e2e-editor.cjs --check=dashboard",
     "check:embedinputs": "node scripts/e2e-editor.cjs --check=embed-inputs",
+    "check:embedkeep": "node scripts/e2e-editor.cjs --check=embed-keep",
     "check:dbinteractions": "node scripts/e2e-editor.cjs --check=db-interactions",
     "e2e:dbrecords": "node scripts/db-records.e2e.cjs",
     "e2e:dbvisual": "node scripts/db-records.e2e.cjs --visual",
