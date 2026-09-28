@@ -158,10 +158,25 @@ async function scrollCloses(browser) {
 // ── L 组(I-04):链接末尾接着输入,新字不许并进链接 —— 键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴 ──
 // 药在 refDefinitions.ts 的 linkWithRefSchema `inclusive: false`(+ linkInputRule 清 stored mark)。
 async function typingAfterLink(browser) {
+  // 「光标到首段末尾」要等 **PM 自己**认了再往下走(驱动竞态,不是产品病):点击与 Cmd+→ 都是浏览器原生移光标,
+  // PM 要等 Chrome 派发 selectionchange 才读到新选区(headless 下常晚一帧);紧跟着的 Enter 走 PM keymap、
+  // 用的是 state.selection —— 没等这一拍,Enter 就在旧位置劈段:Cmd+→ 丢失 → 新字挤到「起始」前面
+  // (`# T\n\n\n\nx … y起始`),点击也没同步时甚至劈在标题前。L2 在引入它的包里就有 2~4 成红率,
+  // 合包 bisect 单跑撞上才像「fidelity 包弄坏的」;与 e2e:editor 的 T42(Home 紧跟 Tab)同一机理。
+  // 只等不改断言;等不到 = 光标真没到位,记一条 FAIL 讲清楚,不让它落成一条莫名其妙的落盘断言。
+  const pmCaretInFirstPara = (p, atEnd) => p.waitForFunction(([s, atEnd]) => {
+    const v = window.__upage?.probe?.view?.()
+    if (!v) return false
+    const $h = v.state.selection.$head
+    if ($h.depth < 1 || v.nodeDOM($h.before()) !== document.querySelector(s + ' > p')) return false
+    return !atEnd || $h.parentOffset === $h.parent.content.size
+  }, [PM, atEnd], { timeout: 3000 }).then(() => true, () => false)
   const clickEndOfPara = async (p) => {
     const b = await (await p.$(`${PM} > p`)).boundingBox()
     await p.mouse.click(b.x + 3, b.y + b.height / 2)
+    if (!(await pmCaretInFirstPara(p, false))) check('L 前置 点击后 PM 选区进了首段', false)
     await p.keyboard.press('Meta+ArrowRight')
+    if (!(await pmCaretInFirstPara(p, true))) check('L 前置 Cmd+→ 后 PM 选区在首段末尾', false)
   }
   const firstPara = (p) => p.evaluate((s) => document.querySelector(s + ' > p').innerHTML, PM)
   const saved = async (p) => { await p.waitForTimeout(1400); return (await lastWrite(p)) || '' }
