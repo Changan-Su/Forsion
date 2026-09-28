@@ -7,7 +7,7 @@
  * root 的目录名里故意带双引号、反斜杠、空格和正则元字符 —— profile 的转义要扛得住。
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, realpathSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -203,10 +203,11 @@ describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)',
     expect(out).toMatch(/--disable-sandbox/);
   });
 
-  // ⚠️ 残余钉(不是期望行为,修了就该翻过来):方案 A 刻意不拒 `.git`(远程 run 要能 commit / init / clone),于是被批准的远程命令能在
-  // 工作区仓库里摆 clean filter;引擎自己在每个 host run 开头收集 git 现场(runtimeContext.collectGitState → runGit)时不带远程污点、
-  // 不套这层,`git status` 会执行它 —— runGit 的固定前缀关了 fsmonitor / hooks / 外部 diff / gpg,没关 filter。
-  it('残余:远程命令摆进仓库的 clean filter,被引擎下一次收集 git 现场(不套写保护)执行', async () => {
+  // 方案 A 刻意不拒 `.git`(远程 run 要能 commit / init / clone),于是被批准的远程命令能在工作区仓库里摆 clean filter;
+  // 引擎自己在每个 host run 开头收集 git 现场(runtimeContext.collectGitState → runGit),runGit 的固定前缀关了 fsmonitor / hooks /
+  // 外部 diff / gpg,没关 filter。远程污点 run(input.remote 或中途 steer 染色的 runId)的这一跑经 prepareHostCommand 套同一层写保护
+  // (agentLoop 把 remote / runId 带进 ctx,真 loop 那条见 remoteGitStateSeatbelt.test.ts);本机 run 与项目详情面板不套 —— 残余钉。
+  it('远程命令摆进仓库的 clean filter:远程污点(含 steer 染色)的 git 现场收集执行它也改不动 config.json;本机收集照旧执行(残余钉)', async () => {
     const repo = join(base, 'filter-repo');
     mkdirSync(repo, { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: repo });
@@ -215,11 +216,23 @@ describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)',
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'i'], { cwd: repo });
     writeFileSync(cfgPath, CFG0);
     writeFileSync(join(repo, 'payload.sh'), `cp /dev/null ${q(cfgPath)}; cat\n`); // 远程 run 用 write_file 在工作区里就能写
-    const plant = await bash(remoteCtx({ cwd: repo }), `git config filter.x.clean ${q(`sh ${join(repo, 'payload.sh')}`)} && printf '* filter=x\\n' > .gitattributes && sleep 1 && printf b > f.txt`);
+    const plant = await bash(remoteCtx({ cwd: repo }), `git config filter.x.clean ${q(`sh ${join(repo, 'payload.sh')}`)} && printf '* filter=x\\n' > .gitattributes && printf b > f.txt`);
     expect(plant).toMatch(/exit_code: 0/); // 写保护之内:.git/config 与工作区都可写
     expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+    // 同尺寸改内容 + 挪开 mtime:每次 git status 都必须重新 hash f.txt → 必走 clean filter
+    const touch = () => { const t = new Date(Date.now() - 60_000 - Math.floor(Math.random() * 60_000)); utimesSync(join(repo, 'f.txt'), t, t); };
+    touch();
+    expect(await collectGitState(repo, { cwd: repo, execMode: 'host', remote: REMOTE })).toContain('f.txt');
+    expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+    taintRunRemote('R-G5-GIT', REMOTE);
+    try {
+      touch();
+      expect(await collectGitState(repo, { cwd: repo, execMode: 'host', runId: 'R-G5-GIT' })).toContain('f.txt');
+      expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+    } finally { clearRunRemoteTaint('R-G5-GIT'); }
+    touch();
     await collectGitState(repo, { cwd: repo, execMode: 'host' });
-    expect(readFileSync(cfgPath, 'utf8')).toBe(''); // 被执行了:config.json 被清空
+    expect(readFileSync(cfgPath, 'utf8')).toBe(''); // 残余:本机收集(与项目详情面板)不套,filter 以用户身份执行
   });
 
   it('git fsmonitor 的子进程继承同一个 profile(R5 执行面的最小复现)', async () => {

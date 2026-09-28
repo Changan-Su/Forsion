@@ -1816,11 +1816,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 运行时现场注入(Codex/PI 式 grounding):todo 清单现状(有未完项才注) + git 状态(仅 host)。
     // 拼进尾部 user 消息(与 /skill 指令同通道):不动 system 前缀字节,前缀缓存只失效最短尾巴;
     // 不落库不上屏。配合 <turn_interrupted> 标记与 Persistence 段,「继续」类消息不再靠翻记录猜进度。
+    // git 现场带上 remote / runId(P1-G5):远程污点 run 的 `git status` 同样套写保护 —— 被批准的远程命令在仓库里摆的
+    // clean filter 由引擎这一跑执行,不带污点就是以用户身份裸跑,能改写 config.json 的远程上限档。
     {
       const rcTodos = await loadSessionTodos(sessionId).catch(() => [] as TodoItem[]);
       const rc = formatRuntimeContext([
         renderTodoState(rcTodos),
-        execMode === 'host' && ps.hostWorkspace ? await collectGitState(cwd, { cwd, execMode, hostSandbox: runHostSandbox, signal: ac.signal }) : null,
+        execMode === 'host' && ps.hostWorkspace ? await collectGitState(cwd, { cwd, execMode, hostSandbox: runHostSandbox, signal: ac.signal, remote, runId }) : null,
       ]);
       if (rc) {
         for (let i = workingMessages.length - 1; i >= 0; i--) {

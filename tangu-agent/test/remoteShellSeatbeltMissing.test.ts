@@ -10,13 +10,15 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, existsSync, default: { ...actual, existsSync } };
 });
 
-import { mkdtempSync, rmSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HOST_TOOLS } from '../src/tools/hostExec.js';
 import { startBackgroundProcess, disposeAllProcesses } from '../src/tools/processRegistry.js';
 import { prepareHostCommand } from '../src/sandbox/hostSandbox.js';
 import { RemoteShellProtectionError } from '../src/sandbox/remoteShellSeatbelt.js';
+import { collectGitState } from '../src/services/runtimeContext.js';
+import { execFileSync } from 'node:child_process';
 import type { ToolContext } from '../src/tools/toolTypes.js';
 
 let ws: string;
@@ -43,6 +45,15 @@ describe.skipIf(process.platform !== 'darwin')('sandbox-exec 缺失(仅 macOS �
     expect(bg).toMatch(/^Error: This command comes from a remote session/);
     await new Promise((r) => setTimeout(r, 200));
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it('远程污点 run 的 git 现场收集同样失败即关:不注入(null),绝不裸跑 git;本机照常收集', async () => {
+    const repo = join(ws, 'repo');
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo });
+    git('init', '-q'); writeFileSync(join(repo, 'f.txt'), 'a'); git('add', 'f.txt'); git('commit', '-qm', 'i');
+    expect(await collectGitState(repo, { cwd: repo, execMode: 'host', remote: { via: 'tunnel', marked: true } })).toBeNull();
+    expect(await collectGitState(repo, { cwd: repo, execMode: 'host' })).toContain('[Git state]');
   });
 
   it('本机 run 不受影响', async () => {
