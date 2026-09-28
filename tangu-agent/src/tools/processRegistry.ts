@@ -9,6 +9,11 @@
 import type { ChildProcess } from 'node:child_process';
 import type { ToolContext } from './toolTypes.js';
 import { spawnHostShell, hostSandboxEnabled, hostSandboxScopeKey } from '../sandbox/hostSandbox.js';
+import { effectiveRemote } from '../services/remoteOrigin.js';
+
+/** P1 · K2:后台进程的来源(= 起它的 run 的分类,见 services/remoteActivity.ts runCategory)。急停按它杀:
+ *  run 结束后仍在跑的进程(dev server 之类)靠这个标签命中;本机起、后被远端染色的 run 起的进程靠 runId 命中。 */
+export type ProcessOrigin = 'remote' | 'channel' | 'unattended' | 'local';
 
 const OUTPUT_CAP = 200_000;
 const FINISHED_TTL_MS = 30 * 60 * 1000;
@@ -28,6 +33,31 @@ export interface BackgroundProcess {
   child: ChildProcess | null;
   sandboxScope: string;
   lastDataAt: number; // 最近一次产出输出的时刻（write_process_input 的 yield 模型据此判「空闲」）
+  /** P1 · K2:起它的 run(ToolContext.runId);没有 run 上下文 = undefined。 */
+  runId?: string;
+  /** P1 · K2:起它那一刻的来源标签(之后不变)。 */
+  origin: ProcessOrigin;
+}
+
+/** 起进程那一刻的来源:远程污点(起跑时的 input.remote 或中途染色)> 通道 > 无人值守(Muse / 自动化)> 本机。 */
+export function processOriginOf(ctx: ToolContext | undefined): ProcessOrigin {
+  if (!ctx) return 'local';
+  if (effectiveRemote(ctx)) return 'remote';
+  if (ctx.channelSession) return 'channel';
+  if (ctx.muse || ctx.automationOrigin) return 'unattended';
+  return 'local';
+}
+
+const changeListeners = new Set<() => void>();
+/** P1 · K2:进程起落(活动登记表据此刷新快照)。返回退订。 */
+export function onProcessChange(cb: () => void): () => void {
+  changeListeners.add(cb);
+  return () => { changeListeners.delete(cb); };
+}
+function emitChange(): void {
+  for (const cb of [...changeListeners]) {
+    try { cb(); } catch { /* 订阅者的错误不影响注册表 */ }
+  }
 }
 
 const procs = new Map<string, BackgroundProcess>(); // id -> proc
@@ -98,6 +128,8 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     startedAt: Date.now(), endedAt: null,
     output: '', truncated: false, child, lastDataAt: Date.now(),
     sandboxScope: hostSandboxScopeKey(ctx || { cwd }),
+    ...(ctx?.runId ? { runId: ctx.runId } : {}),
+    origin: processOriginOf(ctx),
   };
   child.stdout?.on('data', (d) => append(p, d.toString()));
   child.stderr?.on('data', (d) => append(p, d.toString()));
@@ -109,15 +141,18 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     p.status = 'error';
     p.endedAt = Date.now();
     p.child = null;
+    emitChange();
   });
   child.on('close', (code) => {
     if (p.status === 'running') p.status = code === null ? 'killed' : 'exited';
     p.exitCode = code;
     p.endedAt = Date.now();
     p.child = null;
+    emitChange();
   });
   procs.set(id, p);
   ensureReaper();
+  emitChange();
   return p;
 }
 
@@ -130,10 +165,9 @@ export function getProcess(sessionId: string, id: string): BackgroundProcess | n
   return p && p.sessionId === sessionId ? p : null;
 }
 
-export function killProcess(sessionId: string, id: string): string {
-  const p = getProcess(sessionId, id);
-  if (!p) return `Error: 进程 ${id} 不存在`;
-  if (p.status !== 'running' || !p.child) return `进程 ${id} 已结束(status=${p.status})`;
+/** SIGTERM 整组 → 3s 后 SIGKILL(不等它退出;close 事件照常收尾)。 */
+function terminate(p: BackgroundProcess): void {
+  if (!p.child) return;
   p.status = 'killed';
   p.endedAt = Date.now();
   try {
@@ -143,7 +177,40 @@ export function killProcess(sessionId: string, id: string): string {
   } catch {
     /* 已退出 */
   }
+}
+
+export function killProcess(sessionId: string, id: string): string {
+  const p = getProcess(sessionId, id);
+  if (!p) return `Error: 进程 ${id} 不存在`;
+  if (p.status !== 'running' || !p.child) return `进程 ${id} 已结束(status=${p.status})`;
+  terminate(p);
+  emitChange();
   return `killed ${id} (pid ${p.pid})`;
+}
+
+/** P1 · K2 急停:杀掉所有**在跑**且命中谓词的后台进程(整组 SIGTERM → 3s → SIGKILL)。返回杀了几个。 */
+export function killProcessesWhere(pred: (p: BackgroundProcess) => boolean): number {
+  let n = 0;
+  for (const p of procs.values()) {
+    if (p.status !== 'running' || !p.child) continue;
+    let hit = false;
+    try { hit = pred(p); } catch { hit = false; }
+    if (!hit) continue;
+    terminate(p);
+    n++;
+  }
+  if (n) emitChange();
+  return n;
+}
+
+/** P1 · K2 活动快照:只列**在跑**且不是本机来源的进程(命令截 80)。 */
+export function listTaggedProcesses(): Array<{ id: string; sessionId: string; runId?: string; origin: Exclude<ProcessOrigin, 'local'>; pid: number | null; command: string; startedAt: number }> {
+  const out: Array<{ id: string; sessionId: string; runId?: string; origin: Exclude<ProcessOrigin, 'local'>; pid: number | null; command: string; startedAt: number }> = [];
+  for (const p of procs.values()) {
+    if (p.status !== 'running' || p.origin === 'local') continue;
+    out.push({ id: p.id, sessionId: p.sessionId, ...(p.runId ? { runId: p.runId } : {}), origin: p.origin, pid: p.pid, command: p.command.slice(0, 80), startedAt: p.startedAt });
+  }
+  return out.sort((a, b) => a.startedAt - b.startedAt);
 }
 
 const CTRL_C = '\x03'; // ETX (Ctrl-C):管道无真 TTY,转成 SIGINT 发给进程

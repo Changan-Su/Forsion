@@ -20,6 +20,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { getRawSection } from '../core/config.js';
 import { remoteCwdForbidden } from '../sandbox/hostSandboxProtection.js';
+import { noteRunTainted } from './remoteActivity.js'; // P1-K2:中途染色 → 活动登记表立刻按远程列出(函数级互引,模块求值期不互调)
 
 export type RemoteVia = 'tunnel' | 'p2p' | 'lan';
 export type RemoteCallerKind = 'phone' | 'desktop';
@@ -265,7 +266,9 @@ export function remoteManagementDenied(tool: string, action: unknown): string | 
 // 按 FIFO 挤掉的若是仍在跑的 run,它就悄悄回到本机档位(Codex 评审)。
 const steeredRemote = new Map<string, RemoteInfo>();
 export function taintRunRemote(runId: string, info: RemoteInfo): void {
-  if (!steeredRemote.has(runId)) steeredRemote.set(runId, info);
+  if (steeredRemote.has(runId)) return;
+  steeredRemote.set(runId, info);
+  noteRunTainted(runId); // P1-K2
 }
 export function clearRunRemoteTaint(runId: string): void {
   steeredRemote.delete(runId);

@@ -51,6 +51,8 @@ import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
+import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
+import { registerRun, runCategory, unregisterRun } from './remoteActivity.js'; // P1-K2
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -200,6 +202,13 @@ const sessionQueue = new Map<string, string[]>(); // sessionId -> 排队 runId�
 const runSession = new Map<string, string>(); // runId -> sessionId（abort/清理反查）
 // 终态事件早于 finally 清理;停止确认必须等待整个任务退出,不能只看 DB 的 status。
 const runTasks = new Map<string, Promise<void>>();
+// P1-K2:中止原因(急停 remote_estop / 锁定 remote_locked)。abortRun 记、四个终态 publish 点在 aborted 时展开、任务收尾清。
+const abortReasons = new Map<string, string>();
+/** 终态 error 事件上的原因字段:只在中止且记过原因时带(旧客户端忽略未知字段)。 */
+const reasonOf = (runId: string): { reason?: string } => {
+  const r = abortReasons.get(runId);
+  return r ? { reason: r } : {};
+};
 
 export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Promise<boolean> {
   const task = runTasks.get(runId);
@@ -240,7 +249,7 @@ export function startRun(runId: string): void {
     const message = aborted ? 'aborted' : err?.message || String(err);
     console.error(`[agent-core] run preparation ${status} run=${runId}:`, message);
     try {
-      await publish(runId, 'error', { error: message, aborted, content: '' }).catch(() => {});
+      await publish(runId, 'error', { error: message, aborted, content: '', ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
       await drain(runId).catch(() => {});
       await updateRunStatus(runId, status, { error: message }).catch(() => {});
     } finally {
@@ -253,7 +262,8 @@ export function startRun(runId: string): void {
       setTimeout(() => cleanup(runId), 30_000);
     }
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
-  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); });
+  // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
+  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); });
   runTasks.set(runId, task);
 }
 
@@ -348,11 +358,44 @@ function safeRealpath(p: string): string {
   try { return realpathSync(p); } catch { return ''; }
 }
 
+/**
+ * P1-K2 锁定扼流点的判定:本机交互 run 永远放行(不读锁);其余分类读锁,读不出一律按锁定(不许 fail open ——
+ * dispatchRun 的外层 catch 会把这里抛出的任何东西吞掉并照常 runLoop)。
+ */
+function lockedOut(input: any, runId: string): boolean {
+  if (runCategory(input, runId) === 'local') return false;
+  try { return remoteLocked(); } catch { return true; }
+}
+
+/**
+ * dispatchRun 里「不起跑、直接终态化」的分支的收尾:与 runLoop / externalEngineLoop 的 finally 同口径释放会话队列。
+ * 这些分支是正常 return(不抛)→ startRun 的 catch 兜不到;不释放的话 sessionActive 一直占着,同会话之后的 run 永远排队
+ * (P1-K2 实测:锁定拒跑的 run 之后同会话的本机 run 卡死;P0 的两条外部引擎拒跑分支同样漏了这一步)。
+ */
+function releaseRefusedRun(runId: string, sessionId: string): void {
+  abortControllers.delete(runId);
+  steerQueue.delete(runId);
+  runSession.delete(runId);
+  if (sessionActive.get(sessionId) === runId) advanceQueue(sessionId);
+  setTimeout(() => cleanup(runId), 30_000);
+}
+
 async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
   try {
     const run = await getRun(runId);
     if (run) {
       const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
+      // P1-K2 单一扼流点(方案 §6.5):锁定时非本机 run 一律不起 —— 覆盖新起的远程 / 通道 / 无人值守 run、锁定前已排队的、
+      // 引擎重启后 recoverQueuedRuns 捡回的,以及以后新加的任何生产者。先登记(活动快照 / 急停看得见),收尾在 startRun 的 finally。
+      registerRun(runId, run.session_id, input);
+      if (lockedOut(input, runId)) {
+        abortReasons.set(runId, 'remote_locked');
+        await publish(runId, 'error', { error: 'remote_locked', aborted: true, reason: 'remote_locked', detail: remoteLockedBody.detail }).catch(() => {});
+        await drain(runId).catch(() => {});
+        await updateRunStatus(runId, 'aborted', { error: 'remote_locked' }).catch(() => {});
+        releaseRefusedRun(runId, run.session_id);
+        return;
+      }
       // 存值为准:私聊外部引擎会话恒走该引擎;私聊 Agent / 独立团队会话恒不走外部引擎(run 带 engineId 也不算)。
       const facts = await storedSessionFacts(run.session_id);
       const profile = resolveProfile((run as any).app_id) ?? deps().profile;
@@ -364,6 +407,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
         await publish(runId, 'error', { error, detail: 'External engines cannot be driven from a remote device. Continue this chat on the host computer.' }).catch(() => {});
         await drain(runId).catch(() => {});
         await updateRunStatus(runId, 'failed', { error }).catch(() => {});
+        releaseRefusedRun(runId, run.session_id);
         return;
       }
       if (facts.soloEngineId) {
@@ -374,6 +418,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
           await publish(runId, 'error', { error, detail: 'This direct chat is bound to an external engine that is not available on this host.' }).catch(() => {});
           await drain(runId).catch(() => {});
           await updateRunStatus(runId, 'failed', { error }).catch(() => {});
+          releaseRefusedRun(runId, run.session_id);
           return;
         }
         return await externalEngineLoop(runId, ac, run, facts.soloEngineId);
@@ -461,7 +506,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (finalContent.trim()) {
       await finalizeAssistantMessage(assistantId, sessionId, modelId, finalContent, '', [], []).catch(() => {});
     }
-    await publish(runId, 'error', { error: msg, aborted, content: finalContent }).catch(() => {});
+    await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {
@@ -472,8 +517,10 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   }
 }
 
-/** 请求中止某个 run。活跃 run 走 AbortController（finally 会推进队列）；排队中的 run 直接移出队列并标终态。 */
-export function abortRun(runId: string): void {
+/** 请求中止某个 run。活跃 run 走 AbortController（finally 会推进队列）；排队中的 run 直接移出队列并标终态。
+ *  opts.reason(P1-K2):写进终态 error 事件的 reason 字段('remote_estop' = 被那台电脑急停)。先到先得,不覆盖已记的原因。 */
+export function abortRun(runId: string, opts?: { reason?: string }): void {
+  if (opts?.reason && !abortReasons.has(runId) && (abortControllers.has(runId) || runSession.has(runId))) abortReasons.set(runId, opts.reason);
   const ac = abortControllers.get(runId);
   if (ac) {
     ac.abort();
@@ -488,7 +535,7 @@ export function abortRun(runId: string): void {
     if (i >= 0) q.splice(i, 1);
     if (!q.length) sessionQueue.delete(sid);
   }
-  const task = terminalizeQueuedAbort(runId).finally(() => { runTasks.delete(runId); });
+  const task = terminalizeQueuedAbort(runId).finally(() => { runTasks.delete(runId); abortReasons.delete(runId); });
   runTasks.set(runId, task);
 }
 
@@ -497,7 +544,7 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   runSession.delete(runId);
   try {
     await updateRunStatus(runId, 'aborted', { error: 'aborted' });
-    await publish(runId, 'error', { error: 'aborted', aborted: true });
+    await publish(runId, 'error', { error: 'aborted', aborted: true, ...reasonOf(runId) });
     await drain(runId);
   } catch (e) {
     console.warn('[agent-core] terminalizeQueuedAbort failed:', e);
@@ -2935,7 +2982,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
     }
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
-    await publish(runId, 'error', { error: msg, aborted, content: finalContent }).catch(() => {});
+    // P1-K2:中止且记过原因(急停)→ 带 reason,手机 / 设备页据此显示「已被那台电脑急停」。
+    await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     // —— Stop hook：失败/中止路径也触发（host-only；纯 side-effect 通知，不影响错误处理，无续跑）。——
     void runHooks('Stop', {
       session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: aborted ? 'aborted' : 'error',
