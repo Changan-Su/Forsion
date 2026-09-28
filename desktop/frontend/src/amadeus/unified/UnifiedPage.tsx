@@ -51,7 +51,7 @@ import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
-import { useUiOverlay } from '../../amadeusOverlayStore'
+import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
@@ -1023,10 +1023,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 所属 leaf(不在面板里 = null):同篇多开时的实例身份 —— 草稿槽位、改名聚焦的认领、openNote 落点都认它(G1-02)。 */
   const scope = useContext(PageScopeCtx)
   const activeScope = useActivePageScope()
-  // 源码模式是全局开关(`</>`):只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
+  // 源码模式按 leaf 记(`</>`,评审 C-08:分屏另一侧不再被动切走、重建);不在面板里的实例跟随活动面板。
+  // 只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
   // 什么也不会落盘,切走即丢,等于假编辑(Codex 09-11 P1)。
-  const globalMode = useUiOverlay((s) => s.editorMode)
-  const mode = readOnly ? 'wysiwyg' : globalMode
+  const modeKey = scope ?? activeScope
+  const leafMode = useUiOverlay((s) => editorModeOf(s, modeKey))
+  const mode = readOnly ? 'wysiwyg' : leafMode
   const { t } = useI18n()
   // 源码模式与可视模式同一个拼写检查开关(G4-07:此前源码恒关、可视恒开,两种模式口径相反)。
   const spellcheck = useNotesSpellcheck()

@@ -27,6 +27,9 @@
 //   X7-X9(评审 G1-07,扩展异常隔离):X7 笔记开着时启用一个 state.init 抛错的扩展 → 正文照常、提示点名插件、打字照常落盘;
 //   X8 spec.view 抛错 → 宿主插件视图不被打断(⠿ 把手、大纲、insertMarkdown 照常)、提示点名;
 //   X9 init 只对某篇抛错(建编辑器那一刻才炸)→ 切到那篇正文照常渲染、提示点名
+//  M 组(评审 C-08,源码 / 可视按 leaf 记):`&udual` 同窗两个标签 A / B ——
+//   M1 A 切源码 → B 不跟着切、B 的编辑器不被动重建(DOM 还是同一个)、B 切换前打的字仍可 Cmd+Z 撤掉
+//   M2 本机记忆:刷新后 A 仍是源码、B 仍是可视;M3 B 自己切源码只动 B
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -519,6 +522,48 @@ async function groupXFault(browser) {
   }
 }
 
+// ─────────────────────────────── C-08 ───────────────────────────────
+const taIn = (p, idx) => p.evaluate((idx) => !!document.querySelectorAll('.amadeus-root, #root')[0] && !!(idx ? document.querySelector('[data-instance="B"] textarea.amx-source') : document.querySelector('#root textarea.amx-source')), idx)
+async function groupM(browser) {
+  const seed = '# 标题\n\n第一段。\n\n第二段。\n'
+  const p = await open(browser, seed, '&udual')
+  await p.waitForFunction((s) => document.querySelectorAll(s).length === 2, PM, { timeout: 60000 })
+  const tagB = await p.evaluate(() => { const el = document.querySelector('[data-instance="B"] .ProseMirror'); el.__mtag = 'B0'; return true })
+  // 在 B 里打字(直驱 B 的选区)
+  await p.evaluate(() => {
+    const v = window.__upage.probe2.view()
+    let at = -1
+    v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('第二段。')) at = pos + n.text.indexOf('第二段。') + 4; return at < 0 })
+    let proto = Object.getPrototypeOf(v.state.selection)
+    while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+    v.focus()
+    v.dispatch(v.state.tr.setSelection(proto.constructor.near(v.state.doc.resolve(at))))
+  })
+  await p.keyboard.type('BB')
+  await wait(1600)
+  await p.evaluate(() => window.__upage.setEditorMode('source')) // 切 A(主实例)
+  await wait(700)
+  const m1 = {
+    aSrc: await taIn(p, 0),
+    bSrc: await taIn(p, 1),
+    bSame: await p.evaluate(() => document.querySelector('[data-instance="B"] .ProseMirror')?.__mtag === 'B0'),
+  }
+  await p.evaluate(() => window.__upage.probe2.view()?.focus()) // B 被跟着切走(回退)时没有 view
+  await p.keyboard.press('Meta+z')
+  await wait(300)
+  m1.bUndo = await p.evaluate(() => { const v = window.__upage.probe2.view(); return !!v && !v.state.doc.textContent.includes('BB') })
+  record('M1 A 切源码 → B 不跟着切、不被动重建,B 之前打的字仍可 Cmd+Z', m1.aSrc && !m1.bSrc && m1.bSame && m1.bUndo, JSON.stringify(m1))
+  await p.reload({ waitUntil: 'domcontentloaded' })
+  await p.waitForFunction(() => !!document.querySelector('#root textarea.amx-source') && !!document.querySelector('[data-instance="B"] .ProseMirror'), null, { timeout: 60000 })
+  const m2 = { aSrc: await taIn(p, 0), bSrc: await taIn(p, 1) }
+  record('M2 本机记忆:刷新后 A 仍是源码、B 仍是可视', m2.aSrc && !m2.bSrc, JSON.stringify(m2))
+  await p.evaluate(() => { window.__upage.setEditorMode('wysiwyg'); window.__upage.setEditorMode('source', 'harness-B') })
+  await wait(700)
+  const m3 = { aSrc: await taIn(p, 0), bSrc: await taIn(p, 1) }
+  record('M3 B 自己切源码只动 B(A 切回可视)', !m3.aSrc && m3.bSrc, JSON.stringify(m3))
+  await p.close()
+}
+
 // ─────────────────────────────── D-17 ───────────────────────────────
 /** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
 async function titleEnter(p, delay) {
@@ -569,7 +614,7 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) } }
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) }, M: groupM }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
