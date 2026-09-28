@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parsePatch, applyHunksToContent } from '../applyPatch.js';
 import { resolvePath, withWriteLock } from '../hostExec.js';
+import { forgetRead, noteAgentWrite } from '../readState.js';
 import { checkWritePath } from '../fsPolicy.js';
 import { getSessionDir, markSessionDirty } from '../../sandbox/sessionSandbox.js';
 import { readFileRawLocal, writeFileLocal, writeFile, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
@@ -96,6 +97,7 @@ export const applyPatchProvider: ToolProvider = {
         const writes = new Map<string, string>();
         const deletes = new Set<string>();
         const summary: string[] = [];
+        const diskBefore = new Map<string, string>(); // host:Update 目标改前的盘上内容(刷新读后指纹用,G3-02)
 
         for (const op of ops) {
           if (op.kind === 'add') {
@@ -114,6 +116,7 @@ export const applyPatchProvider: ToolProvider = {
             if (op.movePath && !host) return `Error: 云端工作区暂不支持 Move(*** Move to):${op.path}`;
             const cur = writes.has(op.path) ? writes.get(op.path)! : await backendRead(ctx, op.path);
             if (cur === null || cur === undefined) return `Error: Update File 目标不存在(新建用 Add File):${op.path}`;
+            if (!writes.has(op.path) && !diskBefore.has(op.path)) diskBefore.set(op.path, cur);
             let next: string;
             try {
               next = applyHunksToContent(cur, op.hunks);
@@ -146,6 +149,11 @@ export const applyPatchProvider: ToolProvider = {
           for (const p of deletes) await backendDelete(ctx, p);
         } catch (e: any) {
           return `Error: 写入失败:${e?.message || e}`;
+        }
+        // 读后指纹跟上自己的改动,否则「read_file → apply_patch → write_file」会被自己的补丁误拒(见 readState.ts)
+        if (host) {
+          for (const [p, content] of writes) noteAgentWrite(ctx, resolvePath(ctx, p), content, diskBefore.get(p));
+          for (const p of deletes) forgetRead(ctx, resolvePath(ctx, p));
         }
         return `applied patch: ${writes.size + deletes.size} file(s) [${summary.join('; ')}]`;
       }),
