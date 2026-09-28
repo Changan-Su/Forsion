@@ -398,14 +398,15 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               {hostEnabled && <SecretStorageNotice onChange={() => { void refresh() }} />}
               {/* P1-K4:父开关 → K5 提示 → 远程会话子开关(INTEGRATION §2.2 脚部顺序);设备凭据没加密时置灰(K5 提示在上面说明原因) */}
               {hostEnabled && remoteView && (
-                <div className="unitsw-subrow">
-                  <button className="unitsw-hosttoggle unitsw-subtoggle" onClick={toggleRemoteSessions} data-on={remoteOn || undefined}
-                    disabled={!remoteView.permitted} role="switch" aria-checked={remoteOn} data-unitsw-remote="">
-                    <span className="unitsw-foot-label">{t('remoteSessions.switch')}</span>
-                    <span className="unitsw-switch" aria-hidden />
-                  </button>
-                  <button className="unitsw-sublink" onClick={() => { setOpen(false); useApp.getState().openSettings('remote-sessions') }} data-unitsw-remote-settings="">
+                // 整行可点(同父开关);键盘 / 读屏走行尾那个 role=switch 按钮。开关与父开关右缘对齐,「设置 ›」在两者之间
+                <div className={`unitsw-subrow${remoteView.permitted ? '' : ' is-locked'}`} onClick={remoteView.permitted ? toggleRemoteSessions : undefined}>
+                  <span className="unitsw-foot-label">{t('remoteSessions.switch')}</span>
+                  <button className="unitsw-sublink" onClick={(e) => { e.stopPropagation(); setOpen(false); useApp.getState().openSettings('remote-sessions') }} data-unitsw-remote-settings="">
                     {t('remoteSessions.openSettings')} ›
+                  </button>
+                  <button className="unitsw-subswitch" role="switch" aria-checked={remoteOn} aria-label={t('remoteSessions.switch')} data-on={remoteOn || undefined}
+                    disabled={!remoteView.permitted} onClick={(e) => { e.stopPropagation(); toggleRemoteSessions() }} data-unitsw-remote="">
+                    <span className="unitsw-switch" aria-hidden />
                   </button>
                 </div>
               )}
