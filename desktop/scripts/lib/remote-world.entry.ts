@@ -3,8 +3,9 @@
  * (defineMainMessages 的登记表与 mt 必须是同一个实例 —— 分开打包,approvalDelivery 的文案登记进 A 包,mt 却查 B 包,只会回键名)。
  */
 export { startUnitWeb } from '../../electron/unitWeb'
-export { UnitHost } from '../../electron/unitHost'
-export { UnitCapsReporter } from '../../electron/unitCaps' // P1-K7a
+// 隧道客户端与 caps 上报器自 2026-09-28 住在 Forsion Extend(0.5):取已钉的内置包产物(esbuild 一并打进这个包);签名策略仍是宿主的
+export { UnitHost, UnitCapsReporter } from '@forsion/extend/dist/desktop.mjs'
+export { makeCallerHeaders } from '../../electron/unitCaller'
 export { createRemoteSessions, lookupRosterUnit, REMOTE_SESSIONS_FILE } from '../../electron/remoteSessions'
 export { createApprovalDelivery } from '../../electron/approvalDelivery'
 export { mt, setMainLocale } from '../../electron/mainI18n'

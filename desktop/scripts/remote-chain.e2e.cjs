@@ -7,7 +7,7 @@
  *     → [模拟层] 原生 ForsionUnit 插件(scripts/lib/fake-phone-native.cjs,经 exposeBinding;契约照 UnitPlugin/UnitRegistrar/UnitRelay.java)
  *     → 假 unit-hub(scripts/lib/fake-unit-hub.cjs:caller token 与 server 同格式同派生、验票、信封 proxyCaller、SSE 通道、流式回包;
  *        兼「云端大脑」= 可编剧假模型,记下每次 LLM 调用的账号与 client)
- *     → 真 unitHost(electron/unitHost.ts:签 x-unit-caller)→ 真 unitWeb(electron/unitWeb.ts:验签、K4 远程会话闸 createRemoteSessions)
+ *     → 真 unitHost(@forsion/extend 的 UnitHost;x-unit-caller 由宿主 electron/unitCaller.ts 的 makeCallerHeaders 签)→ 真 unitWeb(electron/unitWeb.ts:验签、K4 远程会话闸 createRemoteSessions)
  *     → 真 standalone 引擎(tangu-agent/dist,隔离 home、会话沙箱目录;审批、工作区上传 / 下载、run_bash、Historian、remember 都是真的)。
  *   **唯一模拟的一层**:安卓原生插件(Kotlin 的 Keystore 身份 + HttpURLConnection 中继)。浏览器里跑不了它;这里用 Node 按同一契约
  *   代发(登记 kind=phone → caller-secret → 换票 → 头从零重建注 X-Forsion-Caller),凭据只在 Node 进程。原生那半(含「凭据不进页面 JS」)

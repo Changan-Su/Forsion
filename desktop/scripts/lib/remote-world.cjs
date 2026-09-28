@@ -6,8 +6,9 @@
  *   引擎    backendManager 的 spawn:TANGU_LOCAL_TOKEN(本机令牌)/ TANGU_TOKEN(云端账号)/ TANGU_REMOTE_MARK_SECRET / TANGU_HOST_CLIENT /
  *           --cloud-url(= 假 hub,所以 LLM 走「云端大脑」,api_usage 的 client 在 hub 这侧可观测)/ --sandbox none;隔离 TANGU_HOME、会话沙箱目录;
  *   unitWeb webDeps:getEngine / remoteAccess = createRemoteSessions(...).gate / readConfig(家目录 + 默认工作区)/ 主机文件面钳在工作区;
- *   unitHost getCreds(hub + 账号 token)/ getUnitWeb(url + internalSecret + proxyCallerKey)/ 配对只在内存。
- *   caps    真 K7a UnitCapsReporter(electron/unitCaps.ts)挂在 unitHost 的 onChannelReady / onChannelDown 上,引擎活着报 ready、退出报 stopped。
+ *   unitHost 真 UnitHost(@forsion/extend dist):getCreds(hub + 账号 token)/ getUnitWeb(url + internalSecret)/
+ *            callerHeaders = 宿主的 makeCallerHeaders(unitWeb 的 proxyCallerKey)/ 配对只在内存。
+ *   caps    真 K7a UnitCapsReporter(同在 @forsion/extend)挂在 unitHost 的 onChannelReady / onChannelDown 上,引擎活着报 ready、退出报 stopped。
  * 不在内:K2 急停 / 锁定(本分支未合入)、seedGatedEngine(本机项目根种子)。
  */
 'use strict'
@@ -110,7 +111,7 @@ async function startRemoteWorld(o) {
 
   // ── 真 unitWeb + 真 K4 远程会话闸 + 真 unitHost ──
   const M = loadTs(path.join(__dirname, 'remote-world.entry.ts'))
-  const { startUnitWeb, UnitHost, UnitCapsReporter, forsionAccountId } = M
+  const { startUnitWeb, UnitHost, UnitCapsReporter, makeCallerHeaders, forsionAccountId } = M
   const rsMod = M
   if (o.mainLocale) M.setMainLocale(o.mainLocale)
   const confirms = []
@@ -173,7 +174,8 @@ async function startRemoteWorld(o) {
     onChannelReady: () => caps.channelReady(),
     onChannelDown: () => caps.channelDown(),
     getCreds: () => ({ cloudUrl: hub.url, token: DESKTOP_TOKEN }),
-    getUnitWeb: () => ({ url: `http://127.0.0.1:${unitWeb.port}`, internalSecret: unitWeb.internalSecret, proxyCallerKey: unitWeb.proxyCallerKey }),
+    getUnitWeb: () => ({ url: `http://127.0.0.1:${unitWeb.port}`, internalSecret: unitWeb.internalSecret }),
+    callerHeaders: makeCallerHeaders(() => unitWeb.proxyCallerKey, (m) => log(m)),
     getLanUrl: () => null,
     getPairing: () => pairing,
     savePairing: async (p) => { pairing = p },

@@ -1,5 +1,6 @@
 /**
- * 调用方断言整链(P1 · K1 §6):假 hub(SSE 通道 + resp/stream 回包)→ **真** UnitHost → **真** unitWeb → 假引擎。
+ * 调用方断言整链(P1 · K1 §6):假 hub(SSE 通道 + resp/stream 回包)→ **真** UnitHost(@forsion/extend dist,2026-09-28 起住在 Extend)
+ * × 宿主的 makeCallerHeaders(签)→ **真** unitWeb(验)→ 假引擎。
  * 钉住:信封里的 proxyCaller 端到端变成引擎收到的 x-forsion-remote-caller;没有 proxyCaller = 不盖(账号级);
  * 同一个信封 id 重投 → 第二次 403 BAD_CALLER_ASSERTION(断言一次性);unitHost 与 unitWeb 用的是同一把 per-boot 钥。
  * 跑法:npx vitest run electron/unitCallerChain.test.ts(另跑 unitHostChain.test.ts 回归)
@@ -8,8 +9,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { startUnitWeb, type UnitWebHandle } from './unitWeb'
-import { UnitHost } from './unitHost'
-import type { ProxyCaller } from './unitCaller'
+// @ts-expect-error 私有包不带类型;这里只用运行时导出
+import { UnitHost } from '@forsion/extend/dist/desktop.mjs'
+import { makeCallerHeaders, type ProxyCaller } from './unitCaller'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 async function until(fn: () => boolean, ms = 3000): Promise<boolean> {
@@ -27,7 +29,7 @@ let hub: http.Server
 let hubUrl = ''
 let channel: http.ServerResponse | null = null
 const replies = new Map<string, { status: number; body: string }>()
-let unitHost: UnitHost
+let unitHost: { start(): void; stop(): void }
 
 beforeAll(async () => {
   engine = http.createServer((req, res) => {
@@ -75,8 +77,9 @@ beforeAll(async () => {
   hubUrl = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`
   unitHost = new UnitHost({
     getCreds: () => ({ cloudUrl: hubUrl, token: 'tok' }),
-    // 与 main.ts 同一种装配:url + 两把 per-boot 钥都取自这个 unitWeb 实例
-    getUnitWeb: () => ({ url: `http://127.0.0.1:${web.port}`, internalSecret: web.internalSecret, proxyCallerKey: web.proxyCallerKey }),
+    // 与 main.ts 同一种装配:url + 两把 per-boot 钥都取自这个 unitWeb 实例(调用方断言由宿主的 makeCallerHeaders 签)
+    getUnitWeb: () => ({ url: `http://127.0.0.1:${web.port}`, internalSecret: web.internalSecret }),
+    callerHeaders: makeCallerHeaders(() => web.proxyCallerKey, () => {}),
     getLanUrl: () => null,
     getPairing: () => ({ unitId: 'target', secret: 's' }),
     savePairing: async () => {}, clearPairing: async () => {},

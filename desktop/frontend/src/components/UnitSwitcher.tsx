@@ -166,6 +166,8 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   useEffect(() => { if (window.amadeusSync) void initSide() }, [initSide])
 
   const say = (text: string): void => { notifyApp({ text, event: 'system.unit' }) }
+  /** 有云端中转(名册与设备通道都随 Forsion Extend 出现):没有时开关只起局域网面 —— 局域网面起来即「在线」,不挂「需登录」的连接中提示。 */
+  const relay = !!window.tangu?.unitsList
 
   const refresh = async (): Promise<void> => {
     const [list, hs, pd] = await Promise.all([
@@ -394,7 +396,7 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
             </div>
             <div className="unitsw-foot">
               <button className="unitsw-hosttoggle" onClick={toggleHost} data-on={hostEnabled || undefined}>
-                <span className={`unitsw-dot${host?.connected ? ' live' : hostEnabled ? ' wait' : ''}`} />
+                <span className={`unitsw-dot${host?.connected || (!relay && host?.lanUrl) ? ' live' : hostEnabled ? ' wait' : ''}`} />
                 <span className="unitsw-foot-label">{t('unit.hostToggle')}</span>
                 <span className="unitsw-switch" aria-hidden />
               </button>
@@ -416,7 +418,7 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               )}
               {hostEnabled && (
                 <div className="unitsw-foot-hint">
-                  {host?.lanUrl ? t('unit.lanAddr', { addr: host.lanUrl }) : host?.connected ? t('unit.hostConnected') : t('unit.hostStarting')}
+                  {host?.lanUrl ? t('unit.lanAddr', { addr: host.lanUrl }) : host?.connected ? t('unit.hostConnected') : relay ? t('unit.hostStarting') : null}
                 </div>
               )}
               {hostEnabled && paired.length > 0 && (

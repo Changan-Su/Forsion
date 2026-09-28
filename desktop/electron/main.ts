@@ -62,8 +62,8 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { UnitHost } from './unitHost'
-import { UnitCapsReporter, engineCapsState } from './unitCaps' // P1-K7a
+import { engineCapsState, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.5 起)
+import { makeCallerHeaders } from './unitCaller'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
@@ -359,7 +359,7 @@ interface TanguStoredConfig {
   backendUrl: string // external 模式
   /** external 模式的 bearer。P1-K5 起落盘在 device-secrets.json(safeStorage),不在 shell 文件里;loadConfig 解密回填。 */
   token: string
-  /** 「允许其他设备连接本机」:开=起 unitWeb(局域网面)+ unitHost(云通道,需登录)。
+  /** 「允许其他设备连接本机」:开=起 unitWeb(局域网面)+ 云端设备通道(需登录;住在 Forsion Extend)。
    *  本机在名册里的设备配对凭据(unitHostId + unitHostSecret)P1-K5 起只在 device-secrets.json 的 unitPairing 槽里,
    *  不进这份配置 —— 渲染层读不到、写不进。 */
   unitHostEnabled: boolean
@@ -880,10 +880,10 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 
 // ── 设备互联(方案 §11,B 端渲染):「允许其他设备连接本机」开关起停两件东西 ──────────────
 //   unitWeb(unitWeb.ts):局域网 web 面(0.0.0.0,无需登录;配对令牌鉴权)——把本机曝成网页。
-//   unitHost(unitHost.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb。
-let unitHost: UnitHost | null = null
-/** P1-K7a:caps 上报器(通道 ready 之后报本机引擎态,手机据此分「在线但引擎没起」);随 unitHost 一起换。 */
-let unitCaps: UnitCapsReporter | null = null
+//   unitHub(Forsion Extend 0.5 起,见 unitHubSeam.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb;
+//     带着 P1-K7a 的 caps 上报器(通道 ready 之后报本机引擎态,手机据此分「在线但引擎没起」)。没有 Extend = 只起局域网面。
+let unitHub: UnitHubInstance | null = null
+let unitHubFactory: UnitHubFactory | null = null // Extend 装载时登记(setUnitHubFactory),doRefreshUnitHost 每次重建时调
 let unitWeb: UnitWebHandle | null = null
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
@@ -905,7 +905,7 @@ const approvalE2E = !app.isPackaged && process.env.FORSION_E2E_APPROVAL_DELIVERY
   ? { engineUrl: process.env.TANGU_BACKEND_URL, notifications: [] as Array<{ n: Notification; closed: boolean }> } : null
 const approvalDelivery = createApprovalDelivery({
   ...(approvalE2E ? { getEngine: () => ({ url: approvalE2E.engineUrl, token: '' }), onEngineStatus: () => () => {} } : engineFromBackend(backend)),
-  unitCreds: () => (unitHost?.status().connected && unitHostPairing
+  unitCreds: () => (unitHub?.status().connected && unitHostPairing
     ? { cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '', unitId: unitHostPairing.unitId, secret: unitHostPairing.secret } : null),
   t: mt,
   notify: (o) => {
@@ -1071,7 +1071,7 @@ async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: strin
   return { roots, env, guard }
 }
 
-/** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
+/** 按当前配置起停/重建 unitWeb + 云端设备通道(开关/cloudUrl/账号变化后调;幂等)。
  *  串行化(同 ensureChain 的病):四个身份变化点 + config:set 可能连发,并发重建会让第二次
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
 let unitRefreshChain: Promise<void> = Promise.resolve()
@@ -1090,8 +1090,7 @@ async function doRefreshUnitHost(): Promise<void> {
   // P1-K5:配对从 device-secrets.json 读,只在互联开着时读(读 = 可能解密 = macOS 可能弹钥匙串)。
   const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
-  if (unitHost) { unitHost.stop(); unitHost = null }
-  unitCaps = null // stop() 已让它停报(onChannelDown)
+  if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
   if (!stored.unitHostEnabled) return
@@ -1102,7 +1101,7 @@ async function doRefreshUnitHost(): Promise<void> {
     await saveConfig({ unitInstanceId: instanceId })
   }
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
-  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitCaps?.engineChanged()) // P1-K7a:种子做完 = starting → ready
+  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
     getEngine: seedGatedEngine(() => {
       const st = backend.getStatus()
@@ -1207,7 +1206,7 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     vault: () => amadeusVaultFace,
     // P2P 应答(B 侧,方案 §12):acceptOffer 出 answer;DataChannel 开门后把信道接到本机 unitWeb
-    // (attachHostChannel 与 unitHost.handle 同构,但盖的是 P2P 专用密钥 x-unit-p2p,响应全流式)。
+    // (attachHostChannel 与 Forsion Extend 里 UnitHost.handle 同构,但盖的是 P2P 专用密钥 x-unit-p2p,响应全流式)。
     // 打洞不成(waitOpen 超时)只收对端,不影响别的通路。
     p2pAnswer: async (offerSdp: string) => {
       const mgr = getP2p()
@@ -1256,29 +1255,28 @@ async function doRefreshUnitHost(): Promise<void> {
     console.warn('[unit] 设备凭据读不出来:只起局域网面,不建设备通道')
     return
   }
-  // P1-K7a(R-30):caps 上报器 —— 通道 ready 之后报一次,backend.onStatus / 种子做完再报变化(unitCaps.ts)
-  const caps = new UnitCapsReporter({
+  // 云端设备通道(隧道 + P1-K7a caps 上报器)住在 Forsion Extend(0.5 起,unitHubSeam.ts):没装载 = 只起局域网面。
+  if (!unitHubFactory) {
+    console.log('[unit] 没有 Forsion Extend 的设备通道:只起局域网面,不经云端中转')
+    return
+  }
+  const hub: UnitHubInstance = unitHubFactory({
     getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
-    getPairing: () => unitHostPairing,
-    current: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
-    log: (m) => console.log(m),
-  })
-  unitCaps = caps
-  const host: UnitHost = new UnitHost({
-    onChannelReady: () => caps.channelReady(),
-    onChannelDown: () => caps.channelDown(),
-    getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
-    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '', proxyCallerKey: unitWeb?.proxyCallerKey ?? '' }),
+    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+    // 调用方断言(P1 · K1)宿主签:钥是这个 unitWeb 实例的 per-boot proxyCallerKey,签哪些路径与验签都在 unitCaller.ts
+    callerHeaders: makeCallerHeaders(() => unitWeb?.proxyCallerKey ?? '', (m) => console.log(m)),
     getLanUrl: () => unitLanUrl(),
     getPairing: () => unitHostPairing,
-    // 入册回包到达时这个 host 已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
+    // 入册回包到达时这个通道已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
     // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
-    savePairing: async (p) => { if (unitHost !== host) return; unitHostPairing = p; await deviceSecrets.setUnitPairing(p) },
-    clearPairing: async () => { if (unitHost !== host) return; unitHostPairing = null; await deviceSecrets.setUnitPairing(null) },
+    savePairing: async (p) => { if (unitHub !== hub) return; unitHostPairing = p; await deviceSecrets.setUnitPairing(p) },
+    clearPairing: async () => { if (unitHub !== hub) return; unitHostPairing = null; await deviceSecrets.setUnitPairing(null) },
+    // caps 上报器每次现算(通道 ready 之后报一次,backend.onStatus / 种子做完再报变化)
+    engineCaps: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
     log: (m) => console.log(m),
   })
-  unitHost = host
-  host.start()
+  unitHub = hub
+  hub.start()
 }
 let unitPairedCache: PairedDevice[] = []
 
@@ -1316,7 +1314,7 @@ function ensureBackend(): Promise<void> {
   ensureChain = ensureChain.then(async () => {
     const stored = await loadConfig()
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
-    // 也不能停 —— 停了 = 别的设备那头断服(unitHost 的转发目标就是这个引擎)。
+    // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
       await backend.stop()
       return
@@ -2176,6 +2174,8 @@ app.whenReady().then(async () => {
       setTokenRefresher: (fn) => accountCore.setRefresher(fn),
       // ── 0.4 起:Amadeus 云同步工厂(引擎与 11 个通道住在 Extend;宿主 registerAmadeusIpc 里 vault 建好后调)──
       setAmadeusSyncFactory: (factory) => { amadeusSyncFactory = factory },
+      // ── 0.5 起:设备互联的云端通道工厂(隧道 + caps 上报器;units:* 名册四通道也由 Extend 注册)。doRefreshUnitHost 每次重建时调 ──
+      setUnitHubFactory: (factory) => { unitHubFactory = factory },
     }
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) cloudChannels.clear()
@@ -2270,7 +2270,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('resume', () => {
     keepAwake.rearm()
     computerHistory?.recheck()
-    unitHost?.reconnect('resume')
+    unitHub?.reconnect('resume')
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -2318,38 +2318,12 @@ app.whenReady().then(async () => {
     return effectiveConfig()
   })
 
-  // ── 设备互联(Forsion Unit):名册 CRUD 由 main 代打(凭 auth.json 的 forsion_token,不下发渲染层)。 ──
-  const unitsApi = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> => {
-    const token = loadTanguCreds().token
-    if (!token) return { status: 401, json: { detail: '未登录 Forsion 账号' } }
-    const stored = await loadConfig()
-    try {
-      const r = await fetch(`${stored.cloudUrl.replace(/\/+$/, '')}/api${path}`, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      })
-      return { status: r.status, json: await r.json().catch(() => null) }
-    } catch (e: any) {
-      return { status: 0, json: { detail: String(e?.message || e) } }
-    }
-  }
-  ipcMain.handle('units:list', () => unitsApi('GET', '/units'))
+  // ── 设备互联(Forsion Unit):名册 CRUD(units:list / update / remove)与「在浏览器中打开」(units:openInBrowser,代拼 #token=)
+  // 自 2026-09-28 起住在内置包 Forsion Extend 的主进程半身里(0.5,unit/index.ts);没有 Extend = preload 删掉这四个桥键,渲染层不列名册。
+  // 下面留在宿主的是不经云端名册也成立的那几条:P2P 直连、本机通道状态、局域网探针与已配对设备。
 
   // `cloud:fetch`(插件以当前用户身份调 Forsion 云端 API 的通用接缝)、个人中心 / 会员页、额度与重置卡、反馈提交
   // 这一组云端账号 IPC 自 2026-09-27 起住在内置包 Forsion Extend 的主进程半身里(cloudHost.ts 装载,registerCloud(host) 注册)。
-
-  /** 系统浏览器开中转引导页,main 代拼 `#token=`(auth.json 的 forsion_token 不下发渲染层)。
-   *  fragment 不出网络/不进 server 日志(≠ query),引导页用完即 replaceState 剥掉;没有这一手,
-   *  系统浏览器多半没登录过网页版 → /open 只能提示「请先登录」(移动端同病同轮修)。 */
-  ipcMain.handle('units:openInBrowser', async (_e, unitId: string) => {
-    if (typeof unitId !== 'string' || !/^[0-9a-zA-Z-]{8,64}$/.test(unitId)) throw new Error('参数不完整')
-    const token = loadTanguCreds().token
-    const stored = await loadConfig()
-    await shell.openExternal(
-      `${stored.cloudUrl.replace(/\/+$/, '')}/api/units/${unitId}/open${token ? `#token=${encodeURIComponent(token)}` : ''}`,
-    )
-  })
 
   /** P2P 直连打开设备(A 侧,方案 §12):offer 经**现有隧道**送达对端(零 server 改动——信令即
    *  一次普通 proxy 请求,owner 校验白得),answer 回来打洞;成了起本机代理(127.0.0.1)供
@@ -2405,11 +2379,8 @@ app.whenReady().then(async () => {
     }
     return { url: proxy.url }
   })
-  ipcMain.handle('units:update', (_e, id: string, patch: { name?: string; icon?: string }) =>
-    unitsApi('PATCH', `/units/${encodeURIComponent(String(id))}`, { name: patch?.name, icon: patch?.icon }))
-  ipcMain.handle('units:remove', (_e, id: string) => unitsApi('DELETE', `/units/${encodeURIComponent(String(id))}`))
   ipcMain.handle('units:hostStatus', () => ({
-    ...(unitHost ? unitHost.status() : { running: false, connected: false, unitId: null, lastError: null }),
+    ...(unitHub ? unitHub.status() : { running: false, connected: false, unitId: null, lastError: null }),
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))
@@ -3286,7 +3257,7 @@ app.whenReady().then(async () => {
       w.webContents.send('backend:status', st)
     }
     remoteSafety.engineStatusChanged() // P1-K2:重连活动流;有没送到的急停 / 解锁就补
-    unitCaps?.engineChanged() // P1-K7a:引擎起停 / 崩溃 → 名册的 caps.engine
+    unitHub?.engineChanged() // P1-K7a:引擎起停 / 崩溃 → 名册的 caps.engine
   })
 
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证

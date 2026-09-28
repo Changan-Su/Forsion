@@ -66,7 +66,8 @@ export function VaultSideSwitch(): React.ReactElement | null {
   // 全量桌面:胶囊已迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx,2026-08-23),
   // 此处只保留云端侧登录引导。⚠️ FORSION_PRODUCT=amadeus 单品无 agent 后端 → preload 删了
   // unitsList → 切换器不上架,这里必须保留原胶囊,否则库切换整个消失(Codex P1)。
-  if (window.tangu?.unitsList) return loginHint || null
+  // 上架条件与 bootstrapEngine 的 rb-unit 同一个(名册随 Forsion Extend 出现,unitHostStatus 在宿主)。
+  if (window.tangu?.unitsList || window.tangu?.unitHostStatus) return loginHint || null
 
   const pick = (next: 'local' | 'cloud'): void => {
     if (busy || next === side) return
