@@ -85,6 +85,7 @@ import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { noteLinkTarget } from '../blocks/markdown/linkHref'
+import { fromDisk, toDisk, type Eol } from './eol'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
 import { createFoldMemory, remapFoldMemory } from './foldActions'
@@ -241,6 +242,8 @@ interface Pipe {
   fm: string
   body: string
   lastSaved: string
+  /** 该文件在磁盘上的行尾(D-19,见 ./eol):内存一律 LF,只在 readTextFile / writeTextFile 边界换。 */
+  eol: Eol
   pending: boolean
   timer: ReturnType<typeof setTimeout> | null
   /** 进行中的回灌**层数**(不是布尔):押后回灌期间冻结防抖保存。两次回灌重叠时(外部改动 + 同窗实例写盘通知),
@@ -988,8 +991,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
-    const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerPatch: null }
+    // D-19:纯 CRLF 的笔记进门归一成 LF、记下行尾,写盘时还原(见 ./eol;打开即升场景行尾以 diskRaw 为准)。
+    const disk = fromDisk(diskRaw ?? initial)
+    const { fmText, body } = splitFm(diskRaw == null ? disk.text : fromDisk(initial).text)
+    pipeRef.current = { fm: fmText, body, lastSaved: disk.text, eol: disk.eol, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerPatch: null }
   }
   const pipe = pipeRef.current
   /** 最近一次被用户用到的时刻(评审 G1-02):焦点 / 指针进入本实例、或所属 leaf 成为活动面板时记一笔。
@@ -1604,7 +1609,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const preserveExternal = async (content: string): Promise<void> => {
     const fp = textFingerprint(content)
     if (pipe.preserved.has(fp)) return
-    const copy = await writeConflictCopy(path, content)
+    const copy = await writeConflictCopy(path, toDisk(content, pipe.eol))
     pipe.preserved.add(fp)
     toastConflictCopy(path, copy)
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
@@ -1679,7 +1684,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           pipe.unpreserved = null
           // 比对交换写(G1-01):带上「我以为盘上是什么」的指纹。支持的宿主盘上不符就拒写、回现文;
           // 不支持的宿主忽略它照旧写、回 void(= 写成了)。
-          res = await amadeus.writeTextFile(path, text, { base: textFingerprint(pipe.lastSaved) })
+          // D-19:正文与 CAS 基线都按磁盘行尾(基线必须是盘上字节的指纹,否则 CRLF 笔记每次写都被拒)。
+          res = await amadeus.writeTextFile(path, toDisk(text, pipe.eol), { base: textFingerprint(toDisk(pipe.lastSaved, pipe.eol)) })
         } catch (error) {
           pipe.pending = true // 写失败保留草稿;严格切号屏障必须拒绝,不能随后 retire 丢掉待写内容。
           noteWriteFailed(error)
@@ -1688,6 +1694,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         if (res && res.ok === false) {
           // CAS 拒写:盘上已不是本实例的基线 —— 同篇的另一个实例 / 窗口,或外部写者刚写过。
+          const cur = fromDisk(res.current)
+          pipe.eol = cur.eol
+          res = { ...res, current: cur.text }
           if (res.current === text) {
             pipe.lastSaved = text // 殊途同归:别人写的正是这份
             continue
@@ -1863,8 +1872,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // **自己**刚写出去的那版,而 lastSaved 还停在上一版 → 下面会把它当外部改动保全成冲突副本。
         // chain 恒不 reject;写链从不等回灌(CAS 让位那条是 fire-and-forget),这里等不出死锁。
         await pipe.chain
-        const raw = await amadeus.readTextFile(path)
-        if (raw == null || pipe.dead || pipe.retired) return // 读失败/已卸载:保持现状,绝不清空
+        const rawDisk = await amadeus.readTextFile(path)
+        if (rawDisk == null || pipe.dead || pipe.retired) return // 读失败/已卸载:保持现状,绝不清空
+        const read = fromDisk(rawDisk) // D-19:内存一律 LF,行尾跟盘上走
+        pipe.eol = read.eol
+        const raw = read.text
         if (raw === pipe.lastSaved && !pipe.pending) return // 自写回声兜底
         if (pipe.pending) syncFromEditor() // 判「是不是真有用户改动」前先拉平防抖窗里的最后几击
         if (pipe.pending && !isPristine()) {
@@ -1890,7 +1902,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           // 归属(G3-03):写类工具在途或刚结束、目标就是这篇、且盘上正文核得上这次写入 → 按 Tangu 的改动画出来。
           // 每次写入只认领一次(Codex 复核 P0):之后同路径的别的改动不再算 Tangu 的。
           // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
-          const agent = !pipe.readOnly && claimAgentWrite(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path, raw)
+          const agent = !pipe.readOnly && claimAgentWrite(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path, rawDisk)
           if (hostApi.current?.applyBody(body, agent)) {
             pipe.body = body
           } else {
@@ -2198,7 +2210,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const slotLive = (s: string | null): boolean => (s == null ? unifiedScopeLive(path, null) : hasPageScope(s) || unifiedScopeLive(path, s))
     const d = readDraft(vaultRoot, path, pipe.slot, slotLive)
     if (!d) return null
-    if (d.text === (diskRaw ?? initial)) {
+    if (d.text === pipe.lastSaved || d.text === (diskRaw ?? initial)) {
       clearDraft(vaultRoot, path, undefined, d.slot)
       return null
     }
@@ -2300,7 +2312,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
         if (text !== pipe.lastSaved) {
           // 补写失败不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。
-          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot); toastSaveFailed(newPath, e) })
+          await amadeus.writeTextFile(newPath, toDisk(text, pipe.eol)).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot); toastSaveFailed(newPath, e) })
         }
         // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
         // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;

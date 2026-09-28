@@ -101,6 +101,11 @@ const CASES = [
   { id: 'i17.highlight_list_quote_edited', bucket: V, md: `- ==项== ${M}\n\n> ==引用== 行\n` },
   { id: 'i13.explicit_autolink_edited', bucket: W, why: 'I-13:句中显式 `<url>` 与裸 URL 解析成同一个链接,编辑该块时统一落裸 URL(与整行 `<url>` 同一取舍,links.ts)', md: `${M} see <https://x.com/a> ok\n`, golden: `${M}Z see https://x.com/a ok\n` },
 
+  // ── D-19:纯 CRLF 的笔记按原行尾写回(修前第一次编辑整篇转 LF;多键 fm 的 CRLF/LF 混杂已由 V-01 修掉)──
+  { id: 'd19.crlf_body', bucket: V, md: `${M}\r\n\r\npara one\r\n\r\n- a\r\n- b\r\n` },
+  { id: 'd19.crlf_fm_multi', bucket: V, md: `---\r\ntitle: Hello\r\ntags: [a, b]\r\nstatus: draft\r\n---\r\n${M}\r\n\r\npara one\r\n` },
+  { id: 'd19.crlf_edit_in_list', bucket: V, md: `intro\r\n\r\n- ${M}\r\n- b\r\n\r\n| A | B |\r\n|---|---|\r\n| 1 | 2 |\r\n` },
+
   // ── D-05:编辑**列表里**的字 —— 整只列表重新序列化,列表符与紧凑度必须沿用原文(拍板 #17:记住原标记、写回沿用)──
   { id: 'd05.edit_in_list', bucket: V, md: `- ${M}\n- b\n  - c\n\ntail\n` },
   { id: 'd05.edit_in_tasks', bucket: V, md: `- [ ] ${M}\n- [x] done\n` },
