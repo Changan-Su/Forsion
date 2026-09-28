@@ -69,6 +69,14 @@ export function RemoteSafetyPanel(): React.ReactNode {
   }, [api, load])
 
   useEffect(() => { if (recording) recorder.current?.focus() }, [recording])
+  // 录制期间请主进程挂起全局热键:macOS 上已注册的 globalShortcut 先于窗口拿到按键,不挂起的话在这里按当前组合键会直接急停、
+  // 录制框什么也收不到。保存 / Esc / 失焦 / 卸载都会在这里恢复(保存时主进程的 setHotkey 自己也会先恢复;另有 60s 兜底)。
+  useEffect(() => {
+    if (!recording || !api) return
+    const set = (on: boolean): void => { try { void api.setHotkeyRecording(on).catch(() => {}) } catch { /* 旧 preload */ } }
+    set(true)
+    return () => set(false)
+  }, [recording, api])
 
   const run = async <T,>(key: string, fn: () => Promise<T>): Promise<T | null> => {
     if (busy) return null

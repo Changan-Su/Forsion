@@ -121,6 +121,7 @@ const api = {
     estop: () => ipcRenderer.invoke('remoteSafety:estop'),
     unlock: () => ipcRenderer.invoke('remoteSafety:unlock'),
     setHotkey: (accelerator) => ipcRenderer.invoke('remoteSafety:setHotkey', accelerator),
+    setHotkeyRecording: (on) => ipcRenderer.invoke('remoteSafety:setHotkeyRecording', on === true),
     onChanged: (cb) => {
       const listener = (_e: unknown, s: RemoteSafetyState): void => cb(s)
       ipcRenderer.on('remoteSafety:changed', listener)

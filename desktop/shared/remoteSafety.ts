@@ -64,6 +64,8 @@ export interface RemoteSafetyApi {
   unlock(): Promise<UnlockResult>
   /** '' = 关掉热键;失败时保留旧键,回最新热键子状态。 */
   setHotkey(accelerator: string): Promise<RemoteSafetyHotkey>
+  /** 设置页开始 / 结束录制新快捷键:录制期间主进程挂起全局热键(否则 macOS 上按当前组合键会直接急停,录制框收不到)。 */
+  setHotkeyRecording(on: boolean): Promise<void>
   onChanged(cb: (s: RemoteSafetyState) => void): () => void
 }
 

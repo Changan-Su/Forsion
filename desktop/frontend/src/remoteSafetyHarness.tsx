@@ -52,6 +52,7 @@ const remoteSafety: RemoteSafetyApi = {
   get: async () => st,
   estop: async () => { st = { ...st, locked: true, lockedAt: Date.now(), lockSource: 'settings', remoteRuns: [] }; return push() },
   unlock: async () => { st = { ...st, locked: false, lockedAt: null, lockSource: null, lockPersistFailed: false, pendingEstop: false }; push(); return { ok: true } },
+  setHotkeyRecording: async () => {},
   setHotkey: async (acc) => { st = { ...st, hotkey: acc ? { accelerator: acc, registered: true, error: null } : { accelerator: '', registered: false, error: 'disabled' } }; push(); return st.hotkey },
   onChanged: (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } },
 }

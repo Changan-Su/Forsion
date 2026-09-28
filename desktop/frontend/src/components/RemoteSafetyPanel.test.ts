@@ -26,6 +26,7 @@ const api = {
   estop: vi.fn<RemoteSafetyApi['estop']>(),
   unlock: vi.fn<RemoteSafetyApi['unlock']>(),
   setHotkey: vi.fn<RemoteSafetyApi['setHotkey']>(),
+  setHotkeyRecording: vi.fn<RemoteSafetyApi['setHotkeyRecording']>(),
   onChanged: vi.fn<RemoteSafetyApi['onChanged']>(),
 }
 
@@ -38,6 +39,7 @@ beforeEach(() => {
   api.estop.mockReset().mockImplementation(async () => (st = { ...st, locked: true, lockedAt: Date.now(), lockSource: 'settings' }))
   api.unlock.mockReset().mockImplementation(async () => ({ ok: false, reason: 'cancelled' }))
   api.setHotkey.mockReset().mockImplementation(async (acc) => (st = { ...st, hotkey: { accelerator: acc, registered: acc !== '', error: acc === '' ? 'disabled' : null } }).hotkey)
+  api.setHotkeyRecording.mockReset().mockImplementation(async () => {})
   api.onChanged.mockReset().mockImplementation((cb) => { push = cb; return () => { push = null } })
   window.tangu = { platform: 'darwin', remoteSafety: api } as unknown as Window['tangu']
   host = document.createElement('div')
@@ -108,15 +110,25 @@ describe('RemoteSafetyPanel', () => {
     expect(q('[data-rsf-hotkey-state="in_use"]')!.className).toContain('rsf-danger')
     expect(q('[data-rsf="hotkey"]')!.className).toContain('rsf-kbd--off')
     await click(q('[data-rsf="hotkey-change"]'))
+    // 录制期间主进程挂起全局热键(否则 macOS 上按当前组合键直接急停,录制框收不到 —— 独立评审 P2)
+    expect(api.setHotkeyRecording.mock.calls).toEqual([[true]])
     const rec = q<HTMLButtonElement>('[data-rsf="hotkey-recorder"]')!
     await act(async () => { rec.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', bubbles: true })) }) // 没修饰键:继续录
     expect(api.setHotkey).not.toHaveBeenCalled()
     await act(async () => { rec.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true, shiftKey: true, bubbles: true })) })
     expect(api.setHotkey).toHaveBeenCalledWith('Control+Alt+Shift+K')
+    expect(api.setHotkeyRecording.mock.calls).toEqual([[true], [false]])
     expect(q('[data-rsf="hotkey"]')!.textContent).toBe('⌃⌥⇧K')
     await click(q('[data-rsf="hotkey-change"]'))
     await act(async () => { q('[data-rsf="hotkey-recorder"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })) })
     expect(q('[data-rsf="hotkey-recorder"]')).toBeNull()
+    expect(api.setHotkeyRecording.mock.calls.slice(2)).toEqual([[true], [false]])
+    // 录制中卸载(关掉设置)→ 也恢复
+    await click(q('[data-rsf="hotkey-change"]'))
+    await act(async () => root.unmount())
+    expect(api.setHotkeyRecording.mock.calls.at(-1)).toEqual([false])
+    root = createRoot(host)
+    await mount()
     await click(q('[data-rsf="hotkey-off"]'))
     expect(api.setHotkey).toHaveBeenLastCalledWith('')
     expect(q('[data-rsf-hotkey-state="disabled"]')).not.toBeNull()

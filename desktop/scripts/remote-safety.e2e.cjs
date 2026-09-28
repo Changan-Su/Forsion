@@ -6,7 +6,9 @@
  *   ② 急停热键 ⌃⌥⇧. 真注册进 globalShortcut(被别的实例占着时状态如实报 in_use);
  *   ③ 设置里「立即急停」→ userData/remote-lock.json 落盘 lock.locked=true、状态锁定(外部模式桩引擎没有 /agent/remote/* → 待补发);
  *   ④ **重启同一 userData → 仍锁定**(锁跨重启,S7 的真 Electron 半边);改键落盘、重启后照旧;
- *   ⑤ 设置浮窗 › 远程会话 页末尾真渲染出「急停与远程锁定」(经 K4 扩展槽),截图。
+ *   ⑤ 设置浮窗 › 远程会话 页末尾真渲染出「急停与远程锁定」(经 K4 扩展槽),截图;
+ *   ⑥ 点「更改」录制快捷键期间真 globalShortcut 被挂起(macOS 上已注册的全局热键先于窗口拿到按键 —— 不挂起就在录制框里急停),
+ *      Esc 结束录制后注册回来(独立评审 P2)。
  * ⚠️ 覆盖不到:解锁(会弹真的 Touch ID / 管理员密码框,属人工);托盘菜单与菜单栏标题(系统托盘无法自动化,属人工截图);
  *   托管模式下引擎收到 FORSION_REMOTE_LOCK_FILE(由 live 台架 estop 场景与 backendManager 代码覆盖)。
  *
@@ -130,6 +132,18 @@ async function main() {
       await panel.scrollIntoViewIfNeeded().catch(() => {})
       await sleep(400)
       await panel.screenshot({ path: path.join(SHOT_DIR, 'electron-settings-unlocked.png') }).catch(() => {})
+      // ⑥ 录制期间挂起全局热键
+      if (s0?.hotkey?.registered) {
+        await settings.locator('[data-rsf="hotkey-change"]').click()
+        await settings.locator('[data-rsf="hotkey-recorder"]').waitFor({ timeout: 5_000 }).catch(() => {})
+        let during = true
+        for (let i = 0; i < 20 && during; i++) { during = await run.app.evaluate(({ globalShortcut }, acc) => globalShortcut.isRegistered(acc), HOTKEY); if (during) await sleep(150) }
+        await settings.keyboard.press('Escape')
+        let after = false
+        for (let i = 0; i < 20 && !after; i++) { after = await run.app.evaluate(({ globalShortcut }, acc) => globalShortcut.isRegistered(acc), HOTKEY); if (!after) await sleep(150) }
+        const sRec = await run.win.evaluate(() => window.tangu.remoteSafety.get())
+        check('⑥ 录制快捷键期间 ⌃⌥⇧. 从 globalShortcut 挂起、Esc 后注册回来、热键状态始终是已注册', during === false && after === true && sRec?.hotkey?.registered === true, { during, after, hotkey: sRec?.hotkey })
+      }
       // ③ 立即急停(设置里点真按钮)
       await settings.locator('[data-rsf="estop"]').click()
       await settings.locator('[data-rsf="unlock"]').waitFor({ timeout: 15_000 }).catch(() => {})

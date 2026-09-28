@@ -11,7 +11,13 @@
  * 断网照样生效:① ② 不碰网络;引擎是本机进程。跨重启:启动读到 lock.locked → 直接锁定;文件读错 → 锁定(fail closed)。
  *
  * 解锁:systemAuth ≠ ok → 保持锁定;ok → 先写文件 lock:null(写失败 → 保持锁定,不做半解锁)→ 内存解锁 → POST /agent/remote/unlock
- * 清引擎的进程内闩。闩对账:本模块认为未锁、快照却报 lock.source==='latch'(清闩那次没送到)→ 下一份快照 / 引擎状态变化时重发。
+ * 清引擎的进程内闩。
+ * 对账(每份快照;引擎重连 / 重启后连上的第一帧也是快照):
+ *   - 待补发的急停:活动流一直健康时也补(POST 超时而引擎其实活着,不能只等下一次重连);
+ *   - 本机锁着、引擎说没锁(锁文件没写成 / 被本机进程删改,引擎重启后闩随之丢失)→ 重写锁文件 + 静默补发 estop;
+ *     本机锁着但上次写盘失败 → 重试写盘;
+ *   - 本机没锁、引擎报锁:锁早于本机最近一次解锁 = 解锁没送到 → 先写回 lock:null 再重发解锁(节流,409 不刷屏);
+ *     否则 = 本机不知道的急停(持本机令牌者直接打了引擎)→ 本机接过这把锁(fail closed,解锁照样要系统认证)。
  *
  * 活动流:订引擎 GET /agent/remote/activity/events(SSE 全量快照),算托盘「远程会话运行中 · 设备名」、keepAwake 强制通道
  * (远程 run 在跑就阻止闲置休眠,不看「有会话运行时不休眠」开关 —— 远端没法把电脑唤醒,K2 U2)、新调用方开始远程会话的通知。
@@ -139,6 +145,8 @@ export interface RemoteSafetyDeps {
   trustedCallerLabel?: (unitId: string) => string | null
   /** 平台(mac 上热键显示成 ⌃⌥⇧.)。 */
   mac?: boolean
+  /** 录制快捷键时挂起全局热键的兜底时长(渲染层没来得及说「录完了」—— 崩溃 / 关窗)。缺省 60s。 */
+  hotkeyRecordingTimeoutMs?: number
   log: (m: string) => void
   now?: () => number
   fetch?: typeof fetch
@@ -169,6 +177,11 @@ export interface RemoteSafety {
   estop(source: EstopSource): Promise<RemoteSafetyState>
   unlock(): Promise<UnlockResult>
   setHotkey(acc: unknown): Promise<RemoteSafetyHotkey>
+  /**
+   * 设置页录制新快捷键期间挂起全局热键:macOS 上已注册的 globalShortcut 先于窗口拿到按键,不挂起的话在录制框里按当前组合键
+   * 会直接触发急停,录制框什么也收不到(独立评审 P2)。只动注册,不动热键状态(托盘不闪「不可用」);setHotkey / false / 超时都会恢复。
+   */
+  setHotkeyRecording(on: boolean): void
   onChange(cb: (s: RemoteSafetyState) => void): () => void
   /** 引擎活动快照(给别的包:审批送达等)。 */
   onActivity(cb: (snap: ActivitySnapshot) => void): () => void
@@ -176,7 +189,11 @@ export interface RemoteSafety {
   trayHandlers(openSettings: () => void): { view: () => RemoteTrayView; stopAll: () => void; unlock: () => void; openSettings: () => void }
 }
 
-const ESTOP_TIMEOUT_MS = 5_000
+/** 急停路由要等被中止 run 落定(≤3s)+ 撤回台账 IO,负载高时 5s 不够(POST 超时而引擎其实做完了);锁在发 POST 之前已生效,这里只拖通知。 */
+const ESTOP_TIMEOUT_MS = 15_000
+const POST_TIMEOUT_MS = 5_000
+/** 对账重发(补锁 / 重发解锁)在同一次引擎启动内的最小间隔。 */
+const RECONCILE_MIN_INTERVAL_MS = 10_000
 const STREAM_IDLE_MS = 45_000
 const BACKOFF_MAX_MS = 10_000
 const CALLER_NOTIFY_EVERY_MS = 10 * 60_000
@@ -209,6 +226,19 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
   let lastEstop: RemoteSafetyState['lastEstop'] = null
   let unlocking: Promise<UnlockResult> | null = null
   let unlockResendInFlight = false
+  /** 本机最近一次认证解锁写好 lock:null 的时刻:引擎报的锁早于它 = 旧闩(解锁没送到),晚于它 = 本机不知道的急停。 */
+  let lastUnlockAt: number | null = null
+  /** 正在飞的 estop POST(estop() / 补发 / 补锁);解锁前等它落地,免得它在解锁之后才把引擎闩上。 */
+  let estopFlight: Promise<unknown> | null = null
+  let estopsInFlight = 0
+  /** estop() 整段在途(含它自己的写盘):对账不插手,免得在「内存已锁、引擎还没收到」的窗口里重复补发。 */
+  let estopBusy = 0
+  let relockInFlight = false
+  let lastRelock = { boot: '', at: -Infinity }
+  let lastUnlockResend = { boot: '', at: -Infinity }
+  let unlock409Logged = false
+  let hotkeyRecording = false
+  let recordingTimer: unknown = null
   const listeners = new Set<(s: RemoteSafetyState) => void>()
   const activityListeners = new Set<(s: ActivitySnapshot) => void>()
   /** 调用方 key → 上次提示时刻。 */
@@ -276,11 +306,11 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
   const persist = (): Promise<void> => queue(() => write(d.file(), { v: 1, lock, hotkey: hotkey.error === 'disabled' ? '' : hotkey.accelerator }))
 
   // ── 引擎 HTTP ──
-  const post = async (path: string, body: unknown): Promise<{ status: number; json: any } | null> => {
+  const post = async (path: string, body: unknown, timeoutMs = POST_TIMEOUT_MS): Promise<{ status: number; json: any } | null> => {
     const { url, token } = d.engine()
     if (!url) return null
     const ac = new AbortController()
-    const timer = setT(() => ac.abort(), ESTOP_TIMEOUT_MS)
+    const timer = setT(() => ac.abort(), timeoutMs)
     try {
       const r = await doFetch(`${url}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal })
       return { status: r.status, json: await r.json().catch(() => null) }
@@ -289,28 +319,82 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
       return null
     } finally { clearT(timer) }
   }
-  const sendEstop = async (source: EstopSource): Promise<EstopReport | null> => {
-    const r = await post('/agent/remote/estop', { source })
-    return r && r.status === 200 && r.json?.ok ? (r.json as EstopReport) : null
+  const sendEstop = (source: EstopSource): Promise<EstopReport | null> => {
+    estopsInFlight++
+    const p = post('/agent/remote/estop', { source }, ESTOP_TIMEOUT_MS)
+      .then((r) => (r && r.status === 200 && r.json?.ok ? (r.json as EstopReport) : null))
+      .finally(() => { estopsInFlight-- })
+    estopFlight = p
+    void p.finally(() => { if (estopFlight === p) estopFlight = null })
+    return p
   }
-  const sendUnlock = async (): Promise<boolean> => {
+  const sendUnlock = async (): Promise<{ ok: boolean; status: number | null }> => {
     const r = await post('/agent/remote/unlock', {})
-    return !!r && r.status === 200
+    return { ok: !!r && r.status === 200, status: r ? r.status : null }
   }
-  /** 闩对账:本机已解锁、引擎仍报闩 → 重发解锁(一次一发)。 */
-  const reconcileLatch = (): void => {
-    if (lock || unlockResendInFlight || snapshot?.lock?.source !== 'latch') return
-    unlockResendInFlight = true
-    void sendUnlock().finally(() => { unlockResendInFlight = false })
+  const reportOf = (rep: EstopReport): NonNullable<RemoteSafetyState['lastEstop']> =>
+    ({ at: now(), aborted: rep.aborted.length, killedProcesses: rep.killedProcesses, revertedEntries: rep.revertedEntries, engineReached: true })
+  /**
+   * 本机没锁、引擎报锁(闩或锁文件)。
+   *   旧锁(at ≤ 本机最近一次解锁)= 解锁没送到 / 文件被删改:经串行队列写回 lock:null,再重发解锁;同一 boot 10s 一发,409 只记一次日志。
+   *   新锁 = 本机不知道的急停(持本机令牌者直接打了引擎 estop、或锁文件被写成锁定):本机接过这把锁并落盘 —— 否则面板显示未锁、
+   *   没有解锁按钮,unitWeb 放行而引擎一直 423 到重启(独立评审 P2)。接过来之后照常只能本机认证解锁。
+   */
+  const reconcileEngineLock = (snap: ActivitySnapshot): void => {
+    if (lock || !loaded || unlocking || !snap.lock?.locked) return
+    const at = typeof snap.lock.at === 'number' && Number.isFinite(snap.lock.at) ? snap.lock.at : 0
+    if (lastUnlockAt !== null && at <= lastUnlockAt) {
+      if (unlockResendInFlight) return
+      if (lastUnlockResend.boot === snap.bootId && now() - lastUnlockResend.at < RECONCILE_MIN_INTERVAL_MS) return
+      lastUnlockResend = { boot: snap.bootId, at: now() }
+      unlockResendInFlight = true
+      void (async () => {
+        try { await persist() } catch (e) { d.log(`[remote-safety] rewriting the unlocked lock file failed: ${(e as Error)?.message || e}`); return }
+        const r = await sendUnlock()
+        if (r.ok) { unlock409Logged = false; return }
+        if (r.status === 409 && unlock409Logged) return
+        if (r.status === 409) unlock409Logged = true
+        d.log(`[remote-safety] engine unlock not confirmed (${r.status ?? 'unreachable'}); will retry on a later snapshot`)
+      })().finally(() => { unlockResendInFlight = false })
+      return
+    }
+    lock = { locked: true, at: at || now(), source: 'settings' }
+    d.log(`[remote-safety] engine reports a lock (${snap.lock.source}) this computer didn't set; adopting it (unlock needs local authentication)`)
+    void persist().then(() => { lockPersistFailed = false }, (e) => {
+      lockPersistFailed = true
+      d.log(`[remote-safety] adopted lock write failed: ${(e as Error)?.message || e}`)
+    }).finally(emit)
   }
-  /** 引擎 ready 时补发没送到的急停。 */
+  /**
+   * 本机锁着:引擎说没锁(锁文件没写成 / 被删改后引擎重启,闩没了)→ 重写锁文件 + 静默补发 estop(恒上闩,并停掉锁定期间溜进来的非本机 run);
+   * 引擎锁着但上次写盘失败 → 只重试写盘。同一 boot 10s 一发;本机的急停 / 解锁在途时不插手。
+   */
+  const reconcileLocalLock = (snap: ActivitySnapshot): void => {
+    if (!lock || relockInFlight || unlocking || estopBusy > 0 || estopsInFlight > 0) return
+    const engineUnlocked = snap.lock?.locked === false
+    if (!engineUnlocked && !lockPersistFailed) return
+    if (lastRelock.boot === snap.bootId && now() - lastRelock.at < RECONCILE_MIN_INTERVAL_MS) return
+    lastRelock = { boot: snap.bootId, at: now() }
+    relockInFlight = true
+    if (engineUnlocked) d.log('[remote-safety] engine reports unlocked while this computer is locked; rewriting the lock file and re-sending emergency stop')
+    void (async () => {
+      try { await persist(); lockPersistFailed = false } catch (e) {
+        lockPersistFailed = true
+        d.log(`[remote-safety] lock file write retry failed: ${(e as Error)?.message || e}`)
+      }
+      if (!engineUnlocked || !lock) return
+      // 静默:不通知、不改 lastEstop(那是用户那次急停的结果;引擎重启后的累计从零算,覆盖上去反而失真)
+      if (!(await sendEstop(lock.source))) d.log('[remote-safety] re-sent emergency stop not confirmed; will retry on a later snapshot')
+    })().finally(() => { relockInFlight = false; emit() })
+  }
+  /** 补发没送到的急停:引擎 ready(重连)时,以及活动流一直健康时的每份快照(POST 超时而引擎其实活着)。同一时刻至多一发。 */
   const flushPendingEstop = (): void => {
     const src = pendingEstop
-    if (!src || !d.engine().url) return
+    if (!src || estopsInFlight > 0 || estopBusy > 0 || unlocking || !d.engine().url) return
     void sendEstop(src).then((rep) => {
-      if (!rep || pendingEstop !== src) return
+      if (!rep || pendingEstop !== src || !lock) return
       pendingEstop = null
-      lastEstop = { at: now(), aborted: rep.aborted.length, killedProcesses: rep.killedProcesses, revertedEntries: rep.revertedEntries, engineReached: true }
+      lastEstop = reportOf(rep) // 引擎按锁定期累计,补发回的是整段结果(含第一发其实已经停掉的)
       emit()
     })
   }
@@ -325,6 +409,7 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
     snapshot = snap
     engineReachable = true
     attempt = 0
+    reconcileEngineLock(snap)
     // 新调用方开始远程会话 → 提示一次(按调用方 10 分钟限一次)
     for (const r of snap.runs) {
       if (r.category !== 'remote' || seenRuns.has(r.runId)) continue
@@ -341,8 +426,9 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
         : t('main.remoteSafety.notify.sessionStartedBody', { name }))
     }
     for (const r of [...seenRuns]) if (!snap.runs.some((x) => x.runId === r)) seenRuns.delete(r)
+    flushPendingEstop()
+    reconcileLocalLock(snap)
     syncKeepAwake()
-    reconcileLatch()
     emit()
     for (const cb of [...activityListeners]) { try { cb(snap) } catch { /* 订阅者的错误不影响控制器 */ } }
   }
@@ -414,6 +500,52 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
     try { return d.shortcuts.register(acc, onHotkey) ? null : 'in_use' } catch { return 'invalid' }
   }
   const safeUnregister = (acc: string): void => { try { d.shortcuts.unregister(acc) } catch { /* 早已注销 */ } }
+  /** 结束录制:把挂起的热键注册回去(重新注册失败 = 如实报进热键状态)。 */
+  const endRecording = (): void => {
+    if (!hotkeyRecording) return
+    hotkeyRecording = false
+    if (recordingTimer) { clearT(recordingTimer); recordingTimer = null }
+    if (disposed || !hotkey.registered) return
+    const err = tryRegister(hotkey.accelerator)
+    if (err) {
+      hotkey = { ...hotkey, registered: false, error: err }
+      d.log(`[remote-safety] emergency stop shortcut ${hotkey.accelerator} could not be re-registered after recording: ${err}`)
+      emit()
+    }
+  }
+
+  const doEstop = async (source: EstopSource): Promise<RemoteSafetyState> => {
+    const src: EstopSource = SOURCES.has(source) ? source : 'settings'
+    // ① 内存锁 + 刷托盘:unitWeb 此刻起 423(不等盘、不等引擎)
+    if (!loaded) estopBeforeLoad = true
+    lock = { locked: true, at: now(), source: src }
+    syncKeepAwake()
+    emit()
+    // ② 落盘(失败可见;引擎那边还有进程内闩兜底)
+    try { await persist(); lockPersistFailed = false } catch (e) {
+      lockPersistFailed = true
+      d.log(`[remote-safety] lock file write failed: ${(e as Error)?.message || e}`)
+    }
+    // ③ 引擎:中止 + 杀进程 + 撤回条目 + 上闩
+    const rep = await sendEstop(src)
+    if (rep) {
+      pendingEstop = null
+      lastEstop = reportOf(rep)
+    } else {
+      pendingEstop = src
+      lastEstop = { at: now(), aborted: 0, killedProcesses: 0, revertedEntries: 0, engineReached: false }
+    }
+    // ④ keepAwake 放掉(锁定时不再强制)
+    syncKeepAwake()
+    // ⑤ 通知
+    const body = rep
+      ? t('main.remoteSafety.notify.estopBody', { runs: rep.aborted.length, procs: rep.killedProcesses, entries: rep.revertedEntries })
+      : t('main.remoteSafety.notify.estopOffline')
+    notify(t('main.remoteSafety.notify.estopTitle'), lockPersistFailed ? `${body}\n${t('main.remoteSafety.notify.persistFailed')}` : body)
+    d.log(`[remote-safety] estop(${src}) engine=${rep ? 'ok' : 'unreachable'} persisted=${!lockPersistFailed}`)
+    emit()
+    return state()
+  }
 
   const api: RemoteSafety = {
     async start() {
@@ -440,7 +572,8 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
       if (disposed) return
       disposed = true
       disconnect()
-      if (hotkey.registered) safeUnregister(hotkey.accelerator)
+      if (recordingTimer) { clearT(recordingTimer); recordingTimer = null }
+      if (hotkey.registered && !hotkeyRecording) safeUnregister(hotkey.accelerator)
       try { d.keepAwake.force('remote', false) } catch { /* ignore */ }
     },
     engineStatusChanged() {
@@ -453,45 +586,19 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
     state,
     isLocked: () => !loaded || !!lock,
     async estop(source) {
-      const src: EstopSource = SOURCES.has(source) ? source : 'settings'
-      // ① 内存锁 + 刷托盘:unitWeb 此刻起 423(不等盘、不等引擎)
-      if (!loaded) estopBeforeLoad = true
-      lock = { locked: true, at: now(), source: src }
-      syncKeepAwake()
-      emit()
-      // ② 落盘(失败可见;引擎那边还有进程内闩兜底)
-      try { await persist(); lockPersistFailed = false } catch (e) {
-        lockPersistFailed = true
-        d.log(`[remote-safety] lock file write failed: ${(e as Error)?.message || e}`)
-      }
-      // ③ 引擎:中止 + 杀进程 + 撤回条目 + 上闩
-      const rep = await sendEstop(src)
-      if (rep) {
-        pendingEstop = null
-        lastEstop = { at: now(), aborted: rep.aborted.length, killedProcesses: rep.killedProcesses, revertedEntries: rep.revertedEntries, engineReached: true }
-      } else {
-        pendingEstop = src
-        lastEstop = { at: now(), aborted: 0, killedProcesses: 0, revertedEntries: 0, engineReached: false }
-      }
-      // ④ keepAwake 放掉(锁定时不再强制)
-      syncKeepAwake()
-      // ⑤ 通知
-      const body = rep
-        ? t('main.remoteSafety.notify.estopBody', { runs: rep.aborted.length, procs: rep.killedProcesses, entries: rep.revertedEntries })
-        : t('main.remoteSafety.notify.estopOffline')
-      notify(t('main.remoteSafety.notify.estopTitle'), lockPersistFailed ? `${body}\n${t('main.remoteSafety.notify.persistFailed')}` : body)
-      d.log(`[remote-safety] estop(${src}) engine=${rep ? 'ok' : 'unreachable'} persisted=${!lockPersistFailed}`)
-      emit()
-      return state()
+      estopBusy++
+      try { return await doEstop(source) } finally { estopBusy-- }
     },
     unlock() {
       if (unlocking) return unlocking
       unlocking = (async (): Promise<UnlockResult> => {
         if (!loaded) return { ok: false, reason: 'failed' }
-        if (!lock) { reconcileLatch(); return { ok: true } }
+        if (!lock) return { ok: true }
         let auth: Awaited<ReturnType<RemoteSafetyDeps['systemAuth']>>
         try { auth = await d.systemAuth(t('main.remoteSafety.auth.reason')) } catch { auth = 'failed' }
         if (auth !== 'ok') return { ok: false, reason: auth }
+        // 在飞的 estop(补发 / 补锁)先落地:否则它可能在解锁之后才到引擎、把刚清的闩又上上
+        if (estopFlight) await estopFlight.catch(() => {})
         const prev = lock
         lock = null
         try { await persist() } catch (e) {
@@ -502,15 +609,17 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
         }
         lockPersistFailed = false
         pendingEstop = null
+        lastUnlockAt = now()
         syncKeepAwake()
         emit()
-        if (!(await sendUnlock())) d.log('[remote-safety] engine unlock not confirmed; will retry on next snapshot')
+        if (!(await sendUnlock()).ok) d.log('[remote-safety] engine unlock not confirmed; will retry on next snapshot')
         notify(t('main.remoteSafety.notify.unlocked'), '')
         return { ok: true }
       })().finally(() => { unlocking = null })
       return unlocking
     },
     async setHotkey(raw) {
+      endRecording() // 录完了:先把旧键挂回去,下面照常「先注册新键、成功再注销旧键」
       const acc = typeof raw === 'string' ? raw.trim() : null
       if (acc === null || acc.length > HOTKEY_MAX) return { ...hotkey, error: 'invalid' }
       if (acc === '') {
@@ -532,6 +641,13 @@ export function createRemoteSafety(d: RemoteSafetyDeps): RemoteSafety {
       try { await persist() } catch (e) { d.log(`[remote-safety] hotkey write failed: ${(e as Error)?.message || e}`) }
       emit()
       return { ...hotkey }
+    },
+    setHotkeyRecording(on) {
+      if (!on) { endRecording(); return }
+      if (hotkeyRecording || disposed) return
+      hotkeyRecording = true
+      if (hotkey.registered) safeUnregister(hotkey.accelerator)
+      recordingTimer = setT(() => { recordingTimer = null; d.log('[remote-safety] shortcut recording timed out; restoring the emergency stop shortcut'); endRecording() }, d.hotkeyRecordingTimeoutMs ?? 60_000)
     },
     onChange(cb) { listeners.add(cb); return () => { listeners.delete(cb) } },
     onActivity(cb) { activityListeners.add(cb); return () => { activityListeners.delete(cb) } },

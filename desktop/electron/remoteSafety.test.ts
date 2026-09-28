@@ -4,10 +4,16 @@
  *   S2 解锁要系统认证:cancelled / unavailable / failed 都保持锁定;写盘失败保持锁定(不做半解锁)。
  *   S12 失败可见:热键注册失败 / 写盘失败 / 引擎不可达都进状态。
  *   以及:急停顺序(内存锁先于写盘先于引擎)、闩对账、keepAwake 强制通道、新调用方提示限频、设备名净化。
+ *   独立评审(K2 二轮)补的四条,修前都实跑为红:
+ *     - 急停 POST 失败而活动流一直健康 → 下一份快照就补发(原先只在重连时补,待补发一直挂着);
+ *     - 反向对账:本机锁着、引擎说没锁(写盘失败 + 引擎重启丢了闩)→ 重写锁文件 + 静默补发 estop;
+ *     - 引擎带着本机不知道的闩(锁文件不存在)→ 本机接过这把锁,不再对 409 每份快照死循环;旧闩重发解锁前先写回 lock:null、节流;
+ *     - 录制快捷键期间挂起全局热键(macOS 上按当前组合键会被 globalShortcut 截走直接急停)。
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -27,6 +33,7 @@ async function fakeEngine() {
   const calls: Array<{ path: string; body: any; auth: string }> = []
   const streams = new Set<http.ServerResponse>()
   let unlockStatus = 200
+  let estopStatus = 200
   let bootId = 'boot0001'
   let seq = 0
   const server = http.createServer((req, res) => {
@@ -42,6 +49,7 @@ async function fakeEngine() {
       }
       calls.push({ path: req.url || '', body: body ? JSON.parse(body) : null, auth: String(req.headers.authorization || '') })
       if (req.url === '/agent/remote/estop') {
+        if (estopStatus !== 200) { res.writeHead(estopStatus); res.end(); return }
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: true, aborted: [{ runId: 'r1', sessionId: 's1', category: 'remote' }], killedProcesses: 2, revertedEntries: 1, locked: true }))
         return
@@ -60,6 +68,7 @@ async function fakeEngine() {
     url, calls,
     streams: () => streams.size,
     setUnlockStatus: (s: number) => { unlockStatus = s },
+    setEstopStatus: (s: number) => { estopStatus = s },
     setBoot: (b: string) => { bootId = b },
     push: (p: Partial<ActivitySnapshot>) => {
       const snap: ActivitySnapshot = { v: 1, bootId, seq: ++seq, lock: { locked: false, source: null }, runs: [], processes: [], ...p }
@@ -72,7 +81,7 @@ async function fakeEngine() {
 const opened: Array<{ close(): void; dir: string }> = []
 async function harness(o: {
   engineUp?: boolean; register?: (acc: string) => boolean; auth?: Awaited<ReturnType<RemoteSafetyDeps['systemAuth']>>;
-  writeFails?: () => boolean; dir?: string; trusted?: Record<string, string>; capable?: boolean
+  writeFails?: () => boolean; dir?: string; trusted?: Record<string, string>; capable?: boolean; recordingTimeoutMs?: number
 } = {}) {
   const dir = o.dir ?? await mkdtemp(join(tmpdir(), 'k2-safety-'))
   const file = join(dir, 'remote-lock.json')
@@ -100,6 +109,7 @@ async function harness(o: {
     remoteCapable: () => o.capable ?? true,
     trustedCallerLabel: (id) => o.trusted?.[id] ?? null,
     mac: true,
+    hotkeyRecordingTimeoutMs: o.recordingTimeoutMs,
     log: (m) => { logs.push(m) },
     readFile: async (f) => { try { return await readFile(f, 'utf8') } catch (e: any) { if (e?.code === 'ENOENT') return null; throw e } },
     writeFile: async (f, data) => { order.push('write'); if (o.writeFails?.()) throw new Error('EACCES'); await writeFile(f, JSON.stringify(data)) },
@@ -279,6 +289,121 @@ describe('createRemoteSafety', () => {
     await until(() => h.engine.streams() > 0)
     h.engine.push({ lock: { locked: true, source: 'latch', at: 1 } })
     await until(() => h.engine.calls.filter((c) => c.path === '/agent/remote/unlock').length > before)
+  })
+
+  const count = (h: { engine: { calls: Array<{ path: string }> } }, path: string): number => h.engine.calls.filter((c) => c.path === path).length
+  const tick = (ms = 120): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  it('急停 POST 失败而活动流一直健康:下一份快照就补发;补发回的(引擎按锁定期累计的)报告写进 lastEstop,待补发清掉', async () => {
+    const h = await harness()
+    await h.rs.start()
+    await until(() => h.engine.streams() > 0)
+    h.engine.setEstopStatus(500)
+    expect(await h.rs.estop('hotkey')).toMatchObject({ locked: true, pendingEstop: true, lastEstop: { engineReached: false } })
+    h.engine.setEstopStatus(200)
+    const before = count(h, '/agent/remote/estop')
+    h.engine.push({ lock: { locked: true, source: 'latch', at: Date.now() } }) // 流没断:不会有重连来触发补发
+    await until(() => !h.rs.state().pendingEstop)
+    expect(count(h, '/agent/remote/estop')).toBe(before + 1)
+    expect(h.engine.calls.at(-1)!.body).toEqual({ source: 'hotkey' })
+    expect(h.rs.state().lastEstop).toMatchObject({ aborted: 1, killedProcesses: 2, revertedEntries: 1, engineReached: true })
+  })
+
+  it('反向对账:本机锁着、引擎说没锁(写盘失败后引擎重启,闩丢了)→ 重写锁文件 + 静默补发 estop;同一 boot 10s 内不重复;引擎锁着只差写盘 → 只重试写盘', async () => {
+    let fail = true
+    const h = await harness({ writeFails: () => fail })
+    await h.rs.start()
+    await until(() => h.engine.streams() > 0)
+    await h.rs.estop('hotkey')
+    expect(h.rs.state().lockPersistFailed).toBe(true)
+    // 引擎还锁着(闩):只重试写盘,不补发
+    fail = false
+    const e0 = count(h, '/agent/remote/estop')
+    h.engine.push({ lock: { locked: true, source: 'latch', at: Date.now() } })
+    await until(() => !h.rs.state().lockPersistFailed)
+    expect(JSON.parse(await readFile(h.file, 'utf8')).lock).toMatchObject({ locked: true, source: 'hotkey' })
+    expect(count(h, '/agent/remote/estop')).toBe(e0)
+    // 锁文件被本机进程删掉 + 引擎重启(新 boot,无闩)→ 快照说没锁
+    await rm(h.file)
+    const notes = h.notifications.length
+    h.engine.setBoot('boot0002')
+    h.engine.push({ lock: { locked: false, source: null } })
+    await until(() => count(h, '/agent/remote/estop') === e0 + 1)
+    expect(h.engine.calls.at(-1)!.body).toEqual({ source: 'hotkey' })
+    await until(() => { return existsSync(h.file) })
+    expect(JSON.parse(await readFile(h.file, 'utf8')).lock).toMatchObject({ locked: true, source: 'hotkey' })
+    expect(h.notifications.length).toBe(notes) // 静默
+    expect(h.rs.isLocked()).toBe(true)
+    h.engine.push({ lock: { locked: false, source: null } })
+    await tick()
+    expect(count(h, '/agent/remote/estop')).toBe(e0 + 1) // 同一 boot 10s 内不重复
+  })
+
+  it('引擎带着本机不知道的闩(绕过主进程直接打了引擎 estop,锁文件不存在):本机接过这把锁(落盘、显示已锁定、可认证解锁),不对 409 死循环', async () => {
+    const h = await harness()
+    await h.rs.start()
+    await until(() => h.engine.streams() > 0)
+    h.engine.setUnlockStatus(409)
+    expect(h.rs.isLocked()).toBe(false)
+    h.engine.push({ lock: { locked: true, source: 'latch', at: Date.now() } })
+    await until(() => h.rs.isLocked())
+    expect(h.rs.state()).toMatchObject({ locked: true, lockSource: 'settings' })
+    await until(() => { return existsSync(h.file) })
+    expect(JSON.parse(await readFile(h.file, 'utf8')).lock).toMatchObject({ locked: true })
+    h.engine.push({ lock: { locked: true, source: 'latch', at: Date.now() } })
+    await tick()
+    expect(count(h, '/agent/remote/unlock')).toBe(0)
+    expect(h.trays.at(-1)).toEqual({ title: ' Locked', tooltip: 'Forsion · Remote access locked' })
+    // 解锁照常要本机认证,写好 lock:null 后引擎清闩
+    h.engine.setUnlockStatus(200)
+    expect(await h.rs.unlock()).toEqual({ ok: true })
+    expect(h.authCalls()).toBe(1)
+    expect(JSON.parse(await readFile(h.file, 'utf8')).lock).toBeNull()
+    expect(count(h, '/agent/remote/unlock')).toBe(1)
+  })
+
+  it('旧闩(早于本机解锁,清闩没送到;锁文件又被删了):先写回 lock:null 再重发解锁;409 节流 + 只记一次日志,不接成新锁', async () => {
+    const h = await harness()
+    await h.rs.start()
+    await until(() => h.engine.streams() > 0)
+    await h.rs.estop('hotkey')
+    h.engine.setUnlockStatus(409)
+    expect(await h.rs.unlock()).toEqual({ ok: true })
+    await rm(h.file)
+    const u0 = count(h, '/agent/remote/unlock')
+    h.engine.push({ lock: { locked: true, source: 'latch', at: 1 } })
+    await until(() => count(h, '/agent/remote/unlock') === u0 + 1)
+    expect(JSON.parse(await readFile(h.file, 'utf8')).lock).toBeNull() // 先写回再发
+    for (let i = 0; i < 3; i++) h.engine.push({ lock: { locked: true, source: 'latch', at: 1 } })
+    await tick()
+    expect(count(h, '/agent/remote/unlock')).toBe(u0 + 1)
+    expect(h.rs.isLocked()).toBe(false)
+    expect(h.logs.filter((l) => l.includes('engine unlock not confirmed (409)')).length).toBe(1)
+  })
+
+  it('录制快捷键期间挂起全局热键(不再被截走触发急停),热键状态不变;结束 / 保存 / 超时都恢复', async () => {
+    const h = await harness({ recordingTimeoutMs: 150 })
+    await h.rs.start()
+    expect([...h.registered]).toEqual([DEFAULT_ESTOP_HOTKEY])
+    h.rs.setHotkeyRecording(true)
+    expect([...h.registered]).toEqual([])
+    expect(h.rs.state().hotkey).toMatchObject({ accelerator: DEFAULT_ESTOP_HOTKEY, registered: true, error: null })
+    h.rs.setHotkeyRecording(false)
+    expect([...h.registered]).toEqual([DEFAULT_ESTOP_HOTKEY])
+    // 录制中直接保存新键:新键注册、旧键注销,之后的 false 是空操作
+    h.rs.setHotkeyRecording(true)
+    await h.rs.setHotkey('Control+Alt+Shift+K')
+    expect([...h.registered]).toEqual(['Control+Alt+Shift+K'])
+    h.rs.setHotkeyRecording(false)
+    expect([...h.registered]).toEqual(['Control+Alt+Shift+K'])
+    // 录同一个键(按下的正是当前组合键)→ 挂回去
+    h.rs.setHotkeyRecording(true)
+    expect(await h.rs.setHotkey('Control+Alt+Shift+K')).toMatchObject({ registered: true, error: null })
+    expect([...h.registered]).toEqual(['Control+Alt+Shift+K'])
+    // 渲染层没说「录完了」(崩溃 / 关窗)→ 超时兜底恢复
+    h.rs.setHotkeyRecording(true)
+    expect([...h.registered]).toEqual([])
+    await until(() => h.registered.has('Control+Alt+Shift+K'), 2000)
   })
 
   it('活动快照 → 托盘「远程会话运行中 · 设备名」、keepAwake 强制;新调用方提示一次(10 分钟限频);引擎重启整份替换', async () => {
