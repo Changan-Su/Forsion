@@ -675,6 +675,61 @@ async function main() {
     await pb.close()
   }
 
+  // P12c:长标题折行(评审 C-12:单行 input 把长标题直接截断,390px 手机上十几个字就截,导出 PDF 同样)。
+  //  a 长标题(390 宽)整段可见:textarea 按内容撑高到多行,没有横向溢出;
+  //  b ↓ 按**视觉行**判:首行按 ↓ 仍在标题里(落到下一行),最后一行按 ↓ 才进正文;回车不在标题里插换行;
+  //  c 导出 PDF 的克隆(生产 printClone)里标题是静态 h1、文字 = 此刻的值、同样折行不截断。
+  //  负对照:标题换回单行 input → a、c 红(已实跑)。
+  {
+    const long = '移动端二十个字左右的普通笔记标题会怎样'
+    const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 390, height: 800 } })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('正文首段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(300)
+    await pg.evaluate((n) => window.__upage.switchFile(n + '.md', '正文首段。\n'), long)
+    await pg.waitForTimeout(700)
+    const geo = () => pg.evaluate(() => {
+      const t = document.querySelector('.amx-title-input')
+      const lh = parseFloat(getComputedStyle(t).lineHeight)
+      return { tag: t.tagName, len: (t.value ?? t.textContent).length, overflow: t.scrollWidth - t.clientWidth, lines: Math.round((t.clientHeight - parseFloat(getComputedStyle(t).paddingTop) - parseFloat(getComputedStyle(t).paddingBottom)) / lh), clipY: t.scrollHeight - t.clientHeight }
+    })
+    const a = await geo()
+    // b:点到标题首字前 → ↓(仍在标题,落第二行)→ ↓(最后一行 → 进正文)
+    const r = await pg.evaluate(() => { const b = document.querySelector('.amx-title-input').getBoundingClientRect(); return { x: b.left + 8, y: b.top + 18 } })
+    await pg.mouse.click(r.x, r.y)
+    await pg.waitForTimeout(100)
+    await pg.keyboard.press('ArrowDown')
+    await pg.waitForTimeout(100)
+    const b1 = await pg.evaluate(() => { const t = document.querySelector('.amx-title-input'); return { inTitle: document.activeElement === t, pos: t.selectionStart } })
+    await pg.keyboard.press('ArrowDown')
+    await pg.waitForTimeout(300)
+    const b2 = await pg.evaluate((s) => ({ inPm: document.activeElement === document.querySelector(s), title: document.querySelector('.amx-title-input').value }), PM)
+    await pg.click('.amx-title-input')
+    await pg.keyboard.press('Shift+Enter')
+    await pg.waitForTimeout(300)
+    const b3 = await pg.evaluate((s) => ({ inPm: document.activeElement === document.querySelector(s), nl: /\n/.test(document.querySelector('.amx-title-input').value) }), PM)
+    // c:生产 printClone 的克隆
+    const c = await pg.evaluate(async () => {
+      const { printClone } = await import('/src/amadeus/lib/printClone.ts')
+      const host = document.querySelector('.amx-pane')
+      const wrap = document.createElement('div'); wrap.id = 'amx-print-root'
+      wrap.appendChild(printClone(host)); document.body.appendChild(wrap)
+      const t = wrap.querySelector('.amx-title-input')
+      return { tag: t.tagName, text: t.textContent, controls: wrap.querySelectorAll('input.amx-title-input, textarea.amx-title-input').length }
+    })
+    await pg.emulateMedia({ media: 'print' })
+    await pg.waitForTimeout(150)
+    c.overflow = await pg.evaluate(() => { const t = document.querySelector('#amx-print-root .amx-title-input'); return t.scrollWidth - t.clientWidth })
+    await pg.emulateMedia({ media: 'screen' })
+    record('P12c 长标题折行不截断;↓ 按视觉行进正文、回车不插换行;导出 PDF 克隆里是折行的静态 h1(C-12)',
+      a.tag === 'TEXTAREA' && a.len === long.length && a.overflow <= 0 && a.lines >= 2 && a.clipY <= 1 &&
+        b1.inTitle && b1.pos > 0 && b2.inPm && b3.inPm && !b3.nl &&
+        c.tag === 'H1' && c.text === long && c.controls === 0 && c.overflow <= 0,
+      JSON.stringify({ a, b1, b2, b3, c }))
+    await pg.close()
+  }
+
   // P13:Tab 缩进层(AFFiNE 对齐,md 可表示子集)。
   //  a 列表第二项 Tab=嵌套 / Shift-Tab=还原  b 列表后段落 Tab=收进最后一项
   //  c code_block 内 Tab=插两空格  d 无处可缩 Tab=吞掉(焦点绝不放走)

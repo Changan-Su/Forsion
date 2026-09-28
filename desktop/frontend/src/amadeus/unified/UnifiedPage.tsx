@@ -814,6 +814,34 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   )
 }
 
+/** 标题框按内容撑高(rows=1 起步)。 */
+function growTitle(el: HTMLTextAreaElement | null): void {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+/** 光标是否在 textarea 的**最后一个视觉行**(折行后按行算)。等宽镜像里量「光标后那个字」与文末标记的行顶 ——
+ *  量光标后的字而不是在光标处插标记:软折行边界上的光标(↓ 落到第二行行首)画在下一行,插在边界的标记却会留在上一行尾。 */
+function caretOnLastLine(ta: HTMLTextAreaElement): boolean {
+  const pos = ta.selectionEnd
+  if (pos >= ta.value.length) return true
+  const cs = getComputedStyle(ta)
+  const m = document.createElement('div')
+  for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'wordSpacing', 'lineHeight', 'textTransform', 'textIndent', 'tabSize', 'paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth', 'boxSizing', 'wordBreak', 'overflowWrap'] as const) m.style[k] = cs[k]
+  Object.assign(m.style, { position: 'absolute', visibility: 'hidden', left: '-99999px', top: '0', width: `${ta.offsetWidth}px`, whiteSpace: 'pre-wrap', borderStyle: 'solid', borderColor: 'transparent' })
+  const at = document.createElement('span')
+  const end = document.createElement('span')
+  const next = String.fromCodePoint(ta.value.codePointAt(pos) ?? 32)
+  at.textContent = next
+  end.textContent = '\u200b'
+  m.append(ta.value.slice(0, pos), at, ta.value.slice(pos + next.length), end)
+  document.body.appendChild(m)
+  const last = at.offsetTop >= end.offsetTop
+  m.remove()
+  return last
+}
+
 /** 行内标题 + emoji 图标 + 添加图标/封面动作(与 v3 NoteTitle 同 DOM/同 CSS,数据走 fm 管线)。 */
 function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal, compact = false, readOnly = false }: {
   compact?: boolean
@@ -840,8 +868,19 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   const [val, setVal] = useState(shown)
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const [coverPick, setCoverPick] = useState<{ x: number; y: number } | null>(null)
-  const ref = useRef<HTMLInputElement>(null)
+  const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => { setVal(shown) }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 长标题折行(评审 C-12):单行 input 把十几个字以上的标题直接截掉(手机上更甚)。textarea rows=1 按内容撑高;
+  // 宽度变了(窗口 / 分屏 / 侧栏)重排后行数会变,跟着再撑一次。
+  useLayoutEffect(() => { growTitle(ref.current) }, [val])
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let w = el.clientWidth
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; growTitle(el) } })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   useEffect(() => {
     if (!focusSignal) return
     const el = ref.current
@@ -895,25 +934,32 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
         </div>
       )}
       <div className="amx-title-row">
-        <input
+        <textarea
           ref={ref}
           className="amx-title-input"
+          rows={1}
           spellCheck={spell}
           value={val}
           placeholder="New Page"
-          onChange={(e) => setVal(e.target.value)}
+          // 标题是文件名:没有换行这回事。粘贴进来的换行折成空格(回车本身在下面拦掉,不会走到这里)。
+          onChange={(e) => setVal(e.target.value.replace(/[\r\n]+/g, ' '))}
           onBlur={commit}
           onKeyDown={(e) => {
             // 输入法组合中一律放行(AFFiNE doc-title 同款守卫):中文用拼音打标题、按 Enter 选词,
             // 没有这道闸就会当场跳进正文、候选词也丢了。正文侧由 PM 自己挡(inOrNearComposition),
-            // 标题是原生 input,得自己挡。
-            if (e.nativeEvent.isComposing) return
+            // 标题是原生输入框,得自己挡。keyCode 229 兜「compositionend 先于 keydown」的时序。
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return
             const el = e.currentTarget
             // Tab 吞掉:与 blockLayer tabKeymap 的「编辑器内按 Tab 绝不把焦点放走」同口径 ——
             // 标题栏此前漏了这条,一按 Tab 焦点就跑到侧栏/工具条上去了。
             if (e.key === 'Tab') { e.preventDefault(); return }
-            const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length
-            if (e.key === 'Enter' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && atEnd)) {
+            const collapsed = el.selectionStart === el.selectionEnd
+            const atEnd = collapsed && el.selectionEnd === el.value.length
+            const bare = !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey
+            // 回车(任何修饰)= 确定标题进正文,textarea 里绝不换行;→ 在末尾、↓ 在**最后一个视觉行**(折行后按行判,
+            // 不是按「在不在末尾」)= 滑进正文。
+            const down = e.key === 'ArrowDown' && bare && collapsed && caretOnLastLine(el)
+            if (e.key === 'Enter' || (e.key === 'ArrowRight' && bare && atEnd) || down) {
               e.preventDefault()
               blurKind.current = e.key === 'Enter' ? 'enter' : 'move'
               el.blur() // blur → commit(改名);统一实例正文恒存在,先后顺序无 v3 的首块竞态

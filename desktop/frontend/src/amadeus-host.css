@@ -92,6 +92,10 @@
 }
 /* 未命名笔记标题占位(Notion 式虚化 New Page):比正文更淡。 */
 .amx-title-input::placeholder { color: var(--text-faint, var(--text-muted)); opacity: 0.45; font-weight: 700; }
+/* v4 标题是 textarea(评审 C-12:单行 input 把长标题截断):按内容撑高(组件设 height),长串无空格也折;
+   只读页的静态 h1 同样折。 */
+textarea.amx-title-input { display: block; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.amx-title-static { overflow-wrap: anywhere; }
 
 /* 编辑器正文排版:两边留白 + Obsidian 式贴左对齐。Amadeus 块默认左侧有 edge-zone(14)+列内距(2)+
  * 拖拽槽(22)+块体(4)≈42px 缩进,把正文文字推得很靠右。这里将其归零 → 正文文字贴到内容最左边(与标题齐),

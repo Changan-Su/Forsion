@@ -40,6 +40,7 @@ import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { openTutorial } from './amadeusTutorial'
 import { canUploadToNote } from './amadeusNoteBar'
+import { printClone } from '@amadeus/lib/printClone'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
@@ -2156,7 +2157,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (!page || !host) return
     const wrap = document.createElement('div')
     wrap.id = 'amx-print-root'
-    const clone = host.cloneNode(true) as HTMLElement
+    const clone = printClone(host) // 标题框换成静态 h1(长标题折行、取此刻的值;C-12)
     clone.setAttribute('data-mode', 'light')
     wrap.appendChild(clone)
     document.body.appendChild(wrap)
