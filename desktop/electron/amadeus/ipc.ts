@@ -38,6 +38,8 @@ import { cloudVaultMarkerPath, coversPath, rewritePathList } from '@amadeus-shar
 import { deleteShadowFile } from './sync/shadow'
 import type { CloudChange } from './sync/cloudClient'
 import { readPluginIconDataUrl } from '../pluginIcon'
+import { mt } from '../mainI18n'
+import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
 
 const runFile = promisify(execFile)
 
@@ -174,7 +176,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 } {
   const vault = new VaultManager({
     openDirectory: async () => {
-      const res = await dialog.showOpenDialog({ title: '打开智库文件夹', properties: ['openDirectory', 'createDirectory'] })
+      const res = await dialog.showOpenDialog({ title: mt('main.dialog.openVault'), properties: ['openDirectory', 'createDirectory'] })
       return res.canceled ? null : res.filePaths[0] ?? null
     },
     logActivity,

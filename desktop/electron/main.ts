@@ -45,7 +45,9 @@ import type { WhoamiResult } from './forsionAuth'
 import { waitForAccountRenderers } from './accountTransition'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
-import { createTray, refreshTrayMenu, setTrayLocale, UI_LOCALE_PREF_KEY } from './tray'
+import { createTray, refreshTrayMenu } from './tray'
+import { initMainLocale, mt, setMainLocale, UI_LOCALE_PREF_KEY } from './mainI18n'
+import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, seedBuiltinBundles } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
@@ -90,6 +92,8 @@ if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
 // productName 改名(Tangu Agent 2.0 → Forsion)→ userData 目录随名走:一次性迁移壳层配置(打包态才有产品名目录)。
 if (app.isPackaged) migratePair(join(app.getPath('appData'), 'Tangu Agent 2.0'), join(app.getPath('appData'), 'Forsion'))
 const tanguHomeDir = forsionHomeDir // 品牌迁移后真身在 ~/.forsion(名字保留,少动 20+ 调用点)
+// 主进程文案(mt)的系统语言来源:惰性取,模块装载即注入(界面覆盖值之后由 did-finish-load / ui:sync 转进来)。
+initMainLocale({ systemLanguages: () => app.getPreferredSystemLanguages() })
 /** ~/.tangu/themes:拖入式主题目录(每主题一子目录:theme.json + theme.css)。 */
 const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
@@ -1001,10 +1005,10 @@ async function doRefreshUnitHost(): Promise<void> {
       // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
       const opts = {
         type: 'question' as const,
-        title: '设备连接请求',
-        message: `「${info.name}」(${info.ip})请求连接本机 Forsion`,
-        detail: `对方屏幕上显示同一组配对码,核对一致再允许:\n\n配对码:${info.code}\n\n允许后对方可远程使用这台设备的 Forsion(含执行任务、读写本机笔记库)。`,
-        buttons: ['允许', '拒绝'],
+        title: mt('main.pair.title'),
+        message: mt('main.pair.message', { name: info.name, ip: info.ip }),
+        detail: mt('main.pair.detail', { code: info.code }),
+        buttons: [mt('main.pair.allow'), mt('main.pair.deny')],
         defaultId: 1,
         cancelId: 1,
       }
@@ -1350,12 +1354,12 @@ function createWindow(): void {
     deepLinkReady = false; mainPanelReady = false
     miniSession = { sessionId: null, runId: null }; miniAutoPanel?.refresh()
   })
-  // 托盘文案跟随界面语言:渲染层把结论落在 localStorage 这一个键(① 手选 / ③ IP 校正都写它;没写 = 跟随系统,
-  // 托盘的回落同口径)。只读不判,不在主进程另写一份语言判定;之后的切换经 ui:sync 转进来。
+  // 主进程文案(托盘 / 对话框 / 通知,mainI18n)跟随界面语言:渲染层把结论落在 localStorage 这一个键(① 手选 / ③ IP 校正都写它;
+  // 没写 = 跟随系统,mainI18n 的回落同口径)。只读不判,不在主进程另写一份语言判定;之后的切换经 ui:sync 转进来。
   const localeWc = mainWindow.webContents
   localeWc.on('did-finish-load', () => {
     const read = `(() => { try { return localStorage.getItem(${JSON.stringify(UI_LOCALE_PREF_KEY)}) } catch { return null } })()`
-    localeWc.executeJavaScript(read, false).then(setTrayLocale, () => {})
+    localeWc.executeJavaScript(read, false).then(setMainLocale, () => {})
   })
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
@@ -1776,10 +1780,10 @@ function recoverRenderer(reason: string): void {
     dialog
       .showMessageBox(mainWindow, {
         type: 'error',
-        buttons: ['重新加载', '退出'],
+        buttons: [mt('main.crash.reload'), mt('main.crash.quit')],
         defaultId: 0,
-        message: '界面多次崩溃',
-        detail: `原因:${reason}\n可重新加载,或退出后重开 Tangu。`,
+        message: mt('main.crash.message'),
+        detail: mt('main.crash.detail', { reason }),
       })
       .then((r) => {
         if (r.response === 0 && mainWindow && !mainWindow.isDestroyed()) { reloadTimestamps = []; loadRenderer(mainWindow) }
@@ -1916,7 +1920,7 @@ app.whenReady().then(async () => {
       item.setSaveDialogOptions({ defaultPath: join(app.getPath('downloads'), item.getFilename()) })
       item.once('done', (_ev, state) => {
         if (state !== 'completed') return
-        try { new Notification({ title: item.getFilename(), body: '下载完成' }).show() } catch { /* 通知不可用 */ }
+        try { new Notification({ title: item.getFilename(), body: mt('main.download.done') }).show() } catch { /* 通知不可用 */ }
       })
     })
     // 设备互联 T2(方案 §11.2):内置浏览器打开「经 server 隧道的设备页」时,webview 的文档与子资源
@@ -2309,8 +2313,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('dialog:pickDirectory', async (_e, opts?: unknown) => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const r = win
-      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
-      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
+      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: mt('main.dialog.pickWorkdir') })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: mt('main.dialog.pickWorkdir') })
     if (r.canceled || !r.filePaths.length) return null
     // 「添加 / 导入项目」里本机原生选择框选的目录 = 本机确认过的项目根(设备页没有这个桥):/unit/host* 才认开在这里的会话
     // (unitLocalRoots.ts)。技能导入 / 同步目录 / 额外可写根等别的用途不登记 —— 选了个目录不等于同意设备页浏览它(Codex r3 #2)。
@@ -2321,7 +2325,7 @@ app.whenReady().then(async () => {
   // Chat Box「添加文件或文件夹」：一个系统面板允许多选文件 / 目录，并把类型一并回给 renderer。
   ipcMain.handle('dialog:pickPaths', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
-    const opts = { properties: ['openFile' as const, 'openDirectory' as const, 'multiSelections' as const], title: '添加文件或文件夹' }
+    const opts = { properties: ['openFile' as const, 'openDirectory' as const, 'multiSelections' as const], title: mt('main.dialog.pickPaths') }
     const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (r.canceled || !r.filePaths.length) return []
     return Promise.all(r.filePaths.map(async (path) => ({
@@ -2335,7 +2339,7 @@ app.whenReady().then(async () => {
     if (typeof content !== 'string') return { ok: false, path: null }
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const opts = {
-      title: '导出',
+      title: mt('main.dialog.export'),
       defaultPath: typeof defaultName === 'string' && defaultName ? defaultName : 'export.json',
       filters: [{ name: 'JSON', extensions: ['json'] }, { name: 'All Files', extensions: ['*'] }],
     }
@@ -3439,7 +3443,7 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return
     const state = normalizeUiSync(raw)
     if (!state) return
-    if (state.prefs && UI_LOCALE_PREF_KEY in state.prefs) setTrayLocale(state.prefs[UI_LOCALE_PREF_KEY]) // 托盘文案跟着切语言
+    if (state.prefs && UI_LOCALE_PREF_KEY in state.prefs) setMainLocale(state.prefs[UI_LOCALE_PREF_KEY]) // 主进程文案(托盘 / 对话框 / 通知)跟着切语言
     for (const w of BrowserWindow.getAllWindows()) {
       if (w.webContents !== e.sender && !w.webContents.isDestroyed()) w.webContents.send('ui:sync', state)
     }

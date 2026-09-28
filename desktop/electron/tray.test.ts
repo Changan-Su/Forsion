@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
+const menus = vi.hoisted(() => [] as unknown[])
 vi.mock('electron', () => ({
   app: { getPreferredSystemLanguages: () => ['zh-Hans-CN'], isPackaged: false },
-  Tray: class {}, Menu: { buildFromTemplate: (t: unknown) => t }, nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
+  // 托盘桩:只记下每次 setContextMenu 收到的模板(Menu.buildFromTemplate 原样回传),供「切语言重建菜单」断言
+  Tray: class { setToolTip(): void {} setContextMenu(m: unknown): void { menus.push(m) } on(): void {} },
+  Menu: { buildFromTemplate: (t: unknown) => t }, nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }))
 
-import { setTrayLocale, trayLang, trayMenuTemplate, type TrayHandlers } from './tray'
+import { createTray, setTrayLocale, trayLang, trayMenuTemplate, type TrayHandlers } from './tray'
+import { initMainLocale, setMainLocale } from './mainI18n'
 import type { ComputerHistoryState } from '../shared/computerHistory'
 
 const base: TrayHandlers = { show: vi.fn(), checkUpdates: vi.fn(), quit: vi.fn() }
@@ -63,5 +67,25 @@ describe('tray', () => {
     expect(resume).toHaveBeenCalled()
     state = st({ status: 'paused', pausedUntil: new Date(2026, 8, 28, 0, 0).getTime() })
     expect(labels(trayMenuTemplate(h, 'en', now))).toContain('Computer history: paused until 9/28 00:00')
+  })
+
+  it('语言来源是 mainI18n:setMainLocale 切语言 → 托盘菜单自动重建为对应语言(P1-K5)', () => {
+    initMainLocale({ systemLanguages: () => ['zh-Hans-CN'] }) // 同 main.ts:注入系统首选语言
+    try {
+      createTray(base)
+      const last = () => labels(menus[menus.length - 1] as Electron.MenuItemConstructorOptions[])
+      expect(last()).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+      setMainLocale('en')
+      expect(trayLang()).toBe('en')
+      expect(last()).toEqual(['Show Forsion', 'Check for updates', 'Quit Forsion'])
+      const n = menus.length
+      setMainLocale('en') // 同值不重建
+      expect(menus.length).toBe(n)
+      setTrayLocale(null) // 旧名仍可用(= setMainLocale),回到跟随系统
+      expect(last()).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+    } finally {
+      setMainLocale(null)
+      initMainLocale({ systemLanguages: () => [] })
+    }
   })
 })

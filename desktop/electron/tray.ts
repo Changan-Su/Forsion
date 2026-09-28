@@ -3,14 +3,17 @@
  * 由此处菜单「退出」或 before-quit 才真正退出。
  * 图标复用打包用的 build/icon.png(彩色品牌图);缩到 18px 适配托盘/菜单栏。
  * ponytail: 用彩色 App 图标而非 mac 模板图(不随明暗反色),要更贴 HIG 再画一张单色模板图换上。
- * 文案双语,跟随界面语言:渲染层把结论存在 localStorage `tangu_locale`(① 手选 / ③ IP 校正都写它),
- * main 在主窗载入后读一次、之后从 ui:sync 转进来(setTrayLocale);没有这个键 = 界面跟随系统,这里同样回落系统首选语言。
+ * 文案双语,跟随界面语言:语言来源统一在 mainI18n.ts(P1-K5)—— 渲染层把结论存在 localStorage `tangu_locale`
+ * (① 手选 / ③ IP 校正都写它),main 在主窗载入后读一次、之后从 ui:sync 转进来(setMainLocale);没有这个键 = 界面跟随系统,
+ * 这里同样回落系统首选语言。语言一变(onMainLocaleChange)就重建菜单。COPY 表留在这里(i18nCoverage M4 核对 zh/en 键集);
+ * 别的包往托盘加的段(远程活动等)文案走各自的 defineMainMessages 片段,不往 COPY 里加键。
  * 电脑历史开着时多一行状态 + 「暂停 1 小时 / 恢复」(全机采集开着,关闭入口不能只藏在设置页里);
  * 状态变化由 main 调 refreshTrayMenu() 重建菜单。
  */
 import { app, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import type { ComputerHistoryState } from '../shared/computerHistory'
+import { mainLocaleOverride, onMainLocaleChange, setMainLocale, UI_LOCALE_PREF_KEY as MAIN_UI_LOCALE_PREF_KEY } from './mainI18n'
 
 export type TrayLang = 'zh' | 'en'
 
@@ -46,22 +49,14 @@ const COPY = {
   },
 } as const
 
-/** 渲染层界面语言的 localStorage 键(= frontend/src/types.ts 的 LOCALE_KEY;主进程不 import 渲染层)。 */
-export const UI_LOCALE_PREF_KEY = 'tangu_locale'
+/** 渲染层界面语言的 localStorage 键:真身在 mainI18n.ts,这里再导出一份保兼容。 */
+export const UI_LOCALE_PREF_KEY = MAIN_UI_LOCALE_PREF_KEY
 
-/** 渲染层报来的界面语言;null = 渲染层没存(跟随系统)或还没读到。 */
-let uiLocale: TrayLang | null = null
+/** 旧名:= mainI18n.setMainLocale(非 zh/en 一律当「没设」)。菜单重建由下面的 onMainLocaleChange 订阅负责。 */
+export const setTrayLocale: (value: unknown) => void = setMainLocale
 
-/** main 转进来的界面语言(主窗载入时读 localStorage、ui:sync 的 prefs);非 zh/en 一律当「没设」。变了就重建菜单。 */
-export function setTrayLocale(value: unknown): void {
-  const next = value === 'zh' || value === 'en' ? value : null
-  if (next === uiLocale) return
-  uiLocale = next
-  refreshTrayMenu()
-}
-
-/** 界面语言优先;没有则系统首选语言 zh* → 中文,其余英文。 */
-export function trayLang(preferred: readonly string[] = safePreferredLanguages(), ui: TrayLang | null = uiLocale): TrayLang {
+/** 界面语言优先(缺省取 mainI18n 的覆盖值);没有则系统首选语言 zh* → 中文,其余英文。 */
+export function trayLang(preferred: readonly string[] = safePreferredLanguages(), ui: TrayLang | null = mainLocaleOverride()): TrayLang {
   if (ui) return ui
   return /^zh\b/i.test(preferred[0] ?? '') ? 'zh' : 'en'
 }
@@ -123,6 +118,9 @@ export function createTray(h: TrayHandlers): void {
   // win/linux:左键单击直接召回主窗(mac 单击默认弹菜单,遵循平台习惯不额外绑定)。
   if (process.platform !== 'darwin') tray.on('click', () => h.show())
 }
+
+// 界面语言变了 → 重建菜单(托盘还没建时 refreshTrayMenu 自己是空操作)。
+onMainLocaleChange(() => refreshTrayMenu())
 
 /** 电脑历史状态变了 → 重建菜单(托盘还没建就什么都不做)。 */
 export function refreshTrayMenu(): void {
