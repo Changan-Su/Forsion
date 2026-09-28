@@ -893,7 +893,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           content.style.setProperty('--amx-block-grow-y', `${growY}px`)
           const w = content.offsetWidth || 52
           content.style.top = `${(r.top - o.y) / z + lineOffset}px`
-          content.style.left = `${(anchorLeft - o.x) / z - w - 8}px`
+          let left = (anchorLeft - o.x) / z - w - 8
+          // 窄屏触屏(评审 P-14):手机内距只有 24px(用户拍板,不动),把手栏整个落在屏幕左外 —— ⠿ 可见宽度 0,
+          // 手指点到的是「＋」,转换 / 复制 / 删除 / 移动块全都做不到。触屏上「＋」让位给胶囊(CSS 藏掉)、
+          // 折叠钮排到 ⠿ 前面,这里再把 ⠿ 自己夹进屏内(视口 x ≥ 2);宁可折叠钮出屏,也不藏 ⠿。
+          if (isCoarsePointer()) left = Math.max(left, (2 - o.x) / z - drag.offsetLeft)
+          content.style.left = `${left}px`
         }
 
         const drag = document.createElement('button')

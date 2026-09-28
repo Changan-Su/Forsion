@@ -4152,3 +4152,15 @@ body.amx-marquee-active * {
   .am-app .inline-toolbar .itb-row { overflow-x: auto; overscroll-behavior-x: contain; }
   .am-app .inline-toolbar .itb-row > * { flex-shrink: 0; }
 }
+
+/* ── 窄屏触屏的 ⠿ 把手(评审 P-14)─────────────────────────────────────────────────
+   手机上把手栏整个在屏外(24px 内距是用户拍板,不动),文档模式也没有别的块菜单入口。触屏上:
+   「＋」让位给胶囊的「插入块」、不再占把手栏;折叠钮排到 ⠿ 前面(屏内放不下时宁可它出屏);
+   ⠿ 由 blockLayer 夹进屏内;命中面用透明 ::after 上下各扩 8px(视觉不变,手指好按)。
+   放文件末尾、只写长属性(DESIGN §7)。 */
+@media (pointer: coarse) {
+  .am-app .unified-gutter .block-add:not(.block-fold) { display: none; }
+  .am-app .unified-gutter .block-fold { order: -1; }
+  .am-app .unified-gutter .drag-handle { position: relative; }
+  .am-app .unified-gutter .drag-handle::after { content: ''; position: absolute; inset: -8px -3px; }
+}

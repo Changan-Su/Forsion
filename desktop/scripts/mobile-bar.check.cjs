@@ -19,6 +19,8 @@
 //     完整露在视口里、点得中(修前约 465px 宽,右侧 2–4 颗键越界够不着)。环境变量 SHOT_DIR 给了就存一张 390 截图。
 //  M8 软键盘弹起(APK adjustResize ≈ 390×430)时在文中连续回车打字:光标所在行始终在悬浮胶囊之上(G2-11:
 //     修前第 3 行起被胶囊盖住 —— PM 的 scrollMargin 只留 5px)。
+//  M9 窄屏触屏的 ⠿(P-14):390 / 360 宽下点一段(与一个可折叠的标题),⠿ 整颗在屏内、中心点得中,点它开块菜单
+//     (修前 ⠿ 可见宽度 0、那一点命中的是「＋」,文档模式没有别的块菜单入口);桌面鼠标对照:「＋」照旧在。
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -346,6 +348,53 @@ async function main() {
       }
       record('M8 键盘弹起时文中连续回车打字:光标行始终在胶囊之上', rows.every((r) => !r.under), JSON.stringify(rows))
       await kctx.close()
+    }
+    // ── M9:窄屏触屏的 ⠿ 把手(P-14)──
+    for (const vw of [390, 360]) {
+      const tctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: vw, height: 800 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+      const pg = await tctx.newPage()
+      await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# 手机标题\n\n第一段正文。\n\n## 小节\n\n小节正文。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(500)
+      const out = {}
+      for (const [key, sel] of [['p', '.unified-body .ProseMirror > p'], ['h2', '.unified-body .ProseMirror > h2']]) {
+        const at = await pg.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } }, sel)
+        await pg.touchscreen.tap(at.x, at.y)
+        await pg.waitForTimeout(400)
+        out[key] = await pg.evaluate(() => {
+          const d = [...document.querySelectorAll('.unified-gutter .drag-handle')].find((e) => e.getBoundingClientRect().width > 0)
+          if (!d) return null
+          const r = d.getBoundingClientRect()
+          const vis = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0))
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+          return { l: +r.left.toFixed(1), r: +r.right.toFixed(1), vis: +vis.toFixed(1), hit: hit === d || d.contains(hit), c: { x: r.left + r.width / 2, y: r.top + r.height / 2 } }
+        })
+      }
+      let menu = false
+      if (out.p?.hit) {
+        const at = await pg.evaluate(() => { const r = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } })
+        await pg.touchscreen.tap(at.x, at.y)
+        await pg.waitForTimeout(400)
+        const c = await pg.evaluate(() => { const d = [...document.querySelectorAll('.unified-gutter .drag-handle')].find((e) => e.getBoundingClientRect().width > 0); const r = d.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+        await pg.touchscreen.tap(c.x, c.y)
+        await pg.waitForTimeout(400)
+        menu = await pg.evaluate(() => !!document.querySelector('.unified-block-menu'))
+      }
+      const whole = (m) => !!m && m.l >= 0 && m.r <= vw && m.vis >= 20 && m.hit
+      if (vw === 390 && process.env.SHOT_DIR) await pg.screenshot({ path: path.join(process.env.SHOT_DIR, 'p14-handle-390.png'), clip: { x: 0, y: 0, width: 390, height: 520 } })
+      record(`M9 ${vw} 宽触屏:⠿ 整颗在屏内且点得中(段落 / 可折叠标题),点它开块菜单`, whole(out.p) && whole(out.h2) && menu, JSON.stringify({ ...out, menu }))
+      await tctx.close()
+    }
+    {
+      const dp = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+      await dp.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# T\n\n第一段正文。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await dp.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await dp.waitForTimeout(400)
+      const at = await dp.evaluate(() => { const r = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } })
+      await dp.mouse.move(at.x, at.y); await dp.waitForTimeout(150); await dp.mouse.move(at.x + 3, at.y); await dp.waitForTimeout(300)
+      const kids = await dp.evaluate(() => [...document.querySelectorAll('.unified-gutter > *')].filter((e) => getComputedStyle(e).display !== 'none').map((e) => e.className))
+      record('M9 对照:桌面鼠标把手栏照旧 ⠿ + ＋', kids.includes('drag-handle') && kids.includes('block-add'), JSON.stringify(kids))
+      await dp.close()
     }
   } finally {
     await browser.close()
