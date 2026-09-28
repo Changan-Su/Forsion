@@ -4140,3 +4140,15 @@ body.amx-marquee-active * {
 .am-ai-panel .am-ai-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 /* 「AI ▾」菜单:内置八项 + 插件组,比「转换为」长,放宽一档免得插件组总要滚出来。 */
 .am-app .itb-panel.itb-ai-menu { max-height: 440px; }
+
+/* ── 选区格式条 × 窄屏触屏(评审 G2-10)──────────────────────────────────────────
+   12 颗键约 465px,390 / 360 宽度下右侧的对齐键越出视口、够不着。格式条夹在视口内,键这一行横向可滑
+   (手指横扫露出余下的键);键的尺寸与顺序不动,「转换为 / 颜色 / AI」下拉面板在行下方,不受这行滚动影响。
+   ⚠️ 不写 ::-webkit-scrollbar(DESIGN §7:一写就把 overlay 滚动条退化成经典滚动条)。
+   放文件末尾 = 与 base 同特异性时靠顺序取胜(DESIGN §7)。只写长属性,不碰 base 的定位 / 动画。 */
+@media (pointer: coarse) {
+  /* 100vw 在 body zoom(触屏 1.15)里也被放大,按 --uiz 反补偿(同 .floating-native-root 的口径)。 */
+  .am-app .inline-toolbar { max-width: calc((100vw - 16px) / var(--uiz, 1)); }
+  .am-app .inline-toolbar .itb-row { overflow-x: auto; overscroll-behavior-x: contain; }
+  .am-app .inline-toolbar .itb-row > * { flex-shrink: 0; }
+}

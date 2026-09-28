@@ -15,6 +15,8 @@
 //     视频卡没有「打开」、其他文件卡不是按钮(点了没反应的死键);PDF 卡照旧能开。对照:不声明(桌面桥)时它们都在。
 //  M6 Android 返回(G2-12):MobileRoot 派发的可取消 forsion:mobile-back 先关编辑器最上层的浮层 —— 胶囊「⋯」弹层、
 //     「+」块面板、⠿ 块菜单、图片大图、askString 对话框;一次只关一层(后开的先关),关完了才轮到壳(不再被拦)。
+//  M7 选区格式条 × 窄屏触屏(G2-10):390 / 360 宽下格式条整条在视口内,键那一行可横滑,滑到头最后一颗(右对齐)
+//     完整露在视口里、点得中(修前约 465px 宽,右侧 2–4 颗键越界够不着)。环境变量 SHOT_DIR 给了就存一张 390 截图。
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -265,6 +267,45 @@ async function main() {
       const lbAfter = await dp.evaluate(() => !!document.querySelector('.amx-lightbox'))
       record('M6c 图片大图:返回关大图', lbOpen && r3 && !lbAfter, JSON.stringify({ lbOpen, r3, lbAfter }))
       await dp.close()
+    }
+    // ── M7:选区格式条 × 窄屏触屏(G2-10)──
+    for (const vw of [390, 360]) {
+      const tctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: vw, height: 800 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+      const pg = await tctx.newPage()
+      await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# 标题\n\n段落 hello world 文本。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(500)
+      const p0 = await pg.evaluate(() => { const b = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: b.left + 10, y: b.top + 8 } })
+      await pg.touchscreen.tap(p0.x, p0.y)
+      await pg.waitForTimeout(250)
+      await pg.evaluate(() => {
+        const el = document.querySelector('.unified-body .ProseMirror > p')
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+        let n, t
+        while ((n = w.nextNode())) if (n.data.includes('hello')) { t = n; break }
+        const i = t.data.indexOf('hello')
+        const r = document.createRange(); r.setStart(t, i); r.setEnd(t, i + 5)
+        const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r)
+      })
+      await pg.waitForTimeout(700)
+      const m = await pg.evaluate(() => {
+        const tb = document.querySelector('.inline-toolbar')
+        if (!tb) return null
+        const row = tb.querySelector('.itb-row')
+        const r = tb.getBoundingClientRect()
+        const inView = r.left >= -0.5 && r.right <= innerWidth + 0.5
+        const scrollable = row.scrollWidth > row.clientWidth + 1
+        row.scrollLeft = row.scrollWidth
+        const last = [...row.querySelectorAll('button')].pop()
+        const lr = last.getBoundingClientRect()
+        const cx = (lr.left + lr.right) / 2, cy = (lr.top + lr.bottom) / 2
+        const hit = document.elementFromPoint(cx, cy)
+        return { vw: innerWidth, tb: [Math.round(r.left), Math.round(r.right)], inView, scrollable, last: last.getAttribute('aria-label'), lastRect: [Math.round(lr.left), Math.round(lr.right)], lastIn: lr.left >= -0.5 && lr.right <= innerWidth + 0.5, lastHit: !!hit && (hit === last || last.contains(hit)) }
+      })
+      if (vw === 390 && process.env.SHOT_DIR) await pg.screenshot({ path: path.join(process.env.SHOT_DIR, 'g210-toolbar-390.png'), clip: { x: 0, y: 0, width: 390, height: 360 } })
+      record(`M7 ${vw} 宽触屏:格式条整条在视口内,键行可横滑,滑到头「右对齐」露全且点得中`,
+        !!m && m.inView && m.scrollable && m.last === '右对齐' && m.lastIn && m.lastHit, JSON.stringify(m))
+      await tctx.close()
     }
   } finally {
     await browser.close()
