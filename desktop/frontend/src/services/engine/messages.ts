@@ -16,6 +16,7 @@ registerMessages({
   'engine.target.refused': { zh: '「{name}」拒绝了这次远程请求', en: '"{name}" refused this remote request' },
   'engine.target.connecting': { zh: '正在连接「{name}」…', en: 'Connecting to "{name}"…' },
   'engine.target.fallbackHome': { zh: '已切回本端', en: 'Switched back to this device' },
+  'engine.target.composerWaiting': { zh: '等待「{name}」连上…', en: 'Waiting for "{name}" to connect…' },
   /** 名册里没有名字时的兜底称呼(持久化的焦点只带 id)。 */
   'engine.target.defaultName': { zh: '你的电脑', en: 'your computer' },
 })

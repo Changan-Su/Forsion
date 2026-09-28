@@ -17,7 +17,7 @@ import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_
 import * as api from '../services/backendService'
 import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
-import { healthOf, noteHealth, resetHealth } from '../services/engine/health'
+import { healthOf, noteHealth, probeTarget, resetHealth, useTargetHealth } from '../services/engine/health'
 import { ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
 import { unitHostProfile } from '../services/engine/hostFs'
 import '../services/engine/messages'
@@ -3612,4 +3612,11 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
 // typeof window 守卫不能省:一部分单测跑在 node 环境(非 happy-dom),少了它 14 个测试文件当场 ReferenceError。
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__forsionStore = useApp
+  // P1-K6 S2:整端切换台架(desktop/scripts/engine-target.check.cjs)的驱动口 —— 选「在哪运行」的 UI 归 K8,
+  // 台架在它之前经这里切焦点、看健康表;生产构建同样没有这行。
+  ;(window as unknown as Record<string, unknown>).__forsionEngineTargets = {
+    setFocusTarget, focusRef,
+    health: () => useTargetHealth.getState().byKey,
+    probe: () => probeTarget(focusTarget()),
+  }
 }

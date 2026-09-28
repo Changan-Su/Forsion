@@ -50,7 +50,7 @@ import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
-import { TargetHealthNotice } from '../components/TargetHealthNotice'
+import { TargetHealthNotice, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -63,6 +63,7 @@ const isHiddenInList = (m: UiMessage): boolean =>
 
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
+  const targetPlaceholder = useTargetComposerPlaceholder() // P1-K6:焦点在我的电脑且没连上 → 「等待那台连上」
   const showWaitDetails = useChatWaitDetailsEnabled()
   const childSelections = useChildChat((state) => state.selected)
   const [raiseTeam, setRaiseTeam] = useState(false)
@@ -686,7 +687,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           liveOwner={followActive && leaf.loc === 'main'}
           liveSessionKey={activeId}
           disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
-          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
+          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : targetPlaceholder}
           running={running}
           execConfig={teamCfg ? { ...mvCfg, approvalMode: teamCfg.approvalMode || mvCfg.approvalMode } : mvCfg}
           teamApproval={!!teamCfg}

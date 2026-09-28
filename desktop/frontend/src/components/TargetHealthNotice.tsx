@@ -44,6 +44,17 @@ const MESSAGE_KEYS: Partial<Record<TargetHealthState, string>> = {
 /** 可恢复的态给「重试」(立即探一次);终局态(设备被移除 / 身份 / 拒绝)重试也没用,不给。 */
 const RETRYABLE = new Set<string>(['offline', 'engine-unavailable', 'rate-limited', 'failed'])
 
+/** 焦点在「我的电脑」且还没连上时,输入框的禁用占位换成「等待那台连上」(缺省那句「先在设置里连接后端」
+ *  说的是本端的外部连接,放在这里是误导)。焦点在本端 / 已连上 → undefined(调用方用它自己的占位)。 */
+export function useTargetComposerPlaceholder(): string | undefined {
+  const { t } = useI18n()
+  const unit = useEngineFocus((s) => s.ref.kind === 'unit')
+  const name = useEngineFocus((s) => s.name)
+  const connState = useApp((s) => s.connState)
+  if (!unit || connState === 'ok') return undefined
+  return t('engine.target.composerWaiting', { name: name || t('engine.target.defaultName') })
+}
+
 export function TargetHealthNotice({ fallback }: { fallback?: ReactNode }) {
   const { t } = useI18n()
   const focus = useEngineFocus((s) => s.ref)
