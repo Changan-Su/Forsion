@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseCalDate } from './db/calDate'
 import { findMarkLine, parseMdMarks, withChecked, withDue } from './mdMarks'
+import { stripForIndex } from './links'
 
 const P = 'note.md'
 const T = 'note'
@@ -145,6 +146,20 @@ describe('findMarkLine（清洗坐标 → 磁盘坐标）', () => {
   it('多行注释体里的同文行不占名额', () => {
     const f = ['<!--', '- [ ] 交周报 @2026-09-01', '-->', '- [ ] 交周报 @2026-09-01'].join('\n')
     expect(findMarkLine(f, '- [ ] 交周报 @2026-09-01', 0)).toBe(3)
+  })
+
+  // D-01:findMarkLine 与 stripForIndex 必须同口径跳 fm —— 带 BOM 时一边跳一边不跳,
+  // fm 里一行与标记行逐字相同就会占掉 occ=0 的名额 → 回写落到 fm 里(静默改错行)。
+  it('文件头 BOM 的 fm 同样跳过,且与 stripForIndex 同口径', () => {
+    const line = '- [ ] 交周报 @2026-09-01'
+    for (const nl of ['\n', '\r\n']) {
+      const f = ['\uFEFF---', `note: "${line}"`, line, '---', line].join(nl)
+      const cleaned = stripForIndex(f)
+      expect(cleaned).toBe(line)
+      const marks = parseMdMarks(cleaned, P, T)
+      expect(marks).toHaveLength(1)
+      expect(findMarkLine(f, marks[0].raw, marks[0].occ)).toBe(4)
+    }
   })
 
   it('与解析器的 occ 端到端对齐(同一篇里两行逐字相同)', () => {

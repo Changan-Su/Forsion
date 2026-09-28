@@ -19,7 +19,7 @@ const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 export function preprocess(raw: string, opts: { assetUrl: (ref: string) => string; pageHref: (name: string) => string | null }): string {
   // 口径与 compiler/split.ts 对齐:空 fm 合法、收尾栅栏独占一行、认 CRLF。只认 LF 的老写法在
   // CRLF 源文上整块剥不掉 —— 分享页会把 frontmatter 当正文公开(画布笔记连坐标/连线一起露)。
-  let s = raw.replace(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '')
+  let s = raw.replace(/^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '') // 文件头 BOM 同认(D-01)
   // Amadeus 块锚点标记(<!-- a <id> -->,见 compiler/markers.ts BLOCK_MARKER_RE):仅用于存储切块,
   // 读者不该看到。react-markdown 无 rehype-raw 会把这些 HTML 注释漏成可见文本,故在此整行剥除。
   s = s.replace(/^[ \t]*<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->[ \t]*(?:\r?\n|$)/gm, '')

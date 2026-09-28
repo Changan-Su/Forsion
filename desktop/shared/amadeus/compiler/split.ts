@@ -49,13 +49,20 @@ function parseSimpleYaml(s: string): Record<string, string> {
   return out
 }
 
+/** 文件头 UTF-8 BOM(U+FEFF)。旧版记事本等工具会写出它;micromark 解析前先剥掉它,所以
+ *  remark(parseFrontmatter)照认 fm —— 正则口径不认就是两套判据结论相反(D-01)。 */
+export const BOM = '\uFEFF'
+
 /** Strip a leading YAML frontmatter block, returning just the body.
  *  正则口径(Codex P0 两条,2026-08-13):①空 frontmatter `---\n---\n` 是合法块,必须认
  *  (认不出 → 整块喂进编辑器,首存被序列化成水平线=毁档);②收尾栅栏必须**独占一行**
- *  (`---broken` 不是栅栏 —— 老写法把行中 `---` 当收尾,拆分口径偏离 remark,错拆重写)。
- *  改此正则须同步:db/pageFrontmatter FM_BLOCK_RE、links.ts、server indexing.ts、tangu-agent amadeus.ts。 */
+ *  (`---broken` 不是栅栏 —— 老写法把行中 `---` 当收尾,拆分口径偏离 remark,错拆重写);
+ *  ③容许文件头 BOM(D-01,2026-09-27):BOM 随 fm 块一起剥走 —— 调用方(UnifiedPage 的 splitFm)
+ *  把它并进 fm 原文,拼回时逐字还原,磁盘字节不变。
+ *  改此正则须同步:db/pageFrontmatter FM_BLOCK_RE、unified/fm.ts、links.ts stripForIndex(与
+ *  mdMarks.findMarkLine 成对)、services/fileKinds.ts、server indexing.ts、tangu-agent amadeus.ts。 */
 export function stripFrontmatter(markdown: string): string {
-  return markdown.replace(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '')
+  return markdown.replace(/^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '')
 }
 
 /** Read a note's frontmatter (amadeus_page / amadeus_schema / amadeus_layout / foreign keys). */
@@ -78,15 +85,52 @@ export function schemaMajorOf(fm: Record<string, string>): number | null {
   return m ? Number.parseInt(m[1], 10) : null
 }
 
+/** frontmatter 内文按**顶层 YAML 条目**分组(V-01,2026-09-27 评审 P0)。一组 = 一个顶格行(键行)+ 它的
+ *  续行:缩进行、顶格 `- ` 序列项,以及夹在它们中间的空行/顶格注释;后面不再接续行的空行/顶格注释
+ *  各自单独成组(不属于任何键)。行尾 `\r`(CRLF 源文按 '\n' 切)不影响判定。
+ *  为什么要有它:外部 YAML 工具(项目自己的 yaml 包按缺省配置往返一次就会)把单行 JSON 的
+ *  amadeus_canvas / amadeus_layout 重排成块状多行。「逐行过滤 amadeus_* 键」只摘走键行、把缩进续行
+ *  留成孤儿 → 整块 fm 解析不了,tags 等全部属性失效,画布/分栏几何永久丢失。所以凡是要把
+ *  amadeus_* 与外来键分开的地方,一律按组搬,别再逐行过滤。 */
+export function fmEntries(lines: readonly string[]): string[][] {
+  const out: string[][] = []
+  let cur: string[] | null = null
+  let gap: string[] = []
+  const flushGap = (): void => {
+    for (const g of gap) out.push([g])
+    gap = []
+  }
+  for (const l of lines) {
+    if (!l.trim() || l.startsWith('#')) {
+      gap.push(l) // 空行 / 顶格注释:归属看后面还有没有续行
+    } else if (/^[ \t]/.test(l) || /^-(?:[ \t]|$)/.test(l)) {
+      if (cur) {
+        cur.push(...gap, l) // 续行(连同夹在中间的空行/注释)归当前条目
+        gap = []
+      } else {
+        flushGap()
+        out.push([l]) // 开头就是续行(没有键可归):单独成组,原样留着
+      }
+    } else {
+      flushGap()
+      cur = [l]
+      out.push(cur)
+    }
+  }
+  flushGap()
+  return out
+}
+
 /** Foreign frontmatter lines (everything except the amadeus_* keys), verbatim — multi-line
- *  values, comments and ordering preserved. '' when the note has no foreign frontmatter. */
+ *  values, comments and ordering preserved. '' when the note has no foreign frontmatter.
+ *  按条目(fmEntries)剔 amadeus_*:块状写法的续行跟着键一起走,不留孤儿(V-01)。 */
 export function extractFrontmatterExtra(markdown: string): string {
   const tree = parser.parse(markdown) as unknown as MdRoot
   for (const node of tree.children ?? []) {
     if (node.type === 'yaml') {
-      return (node.value ?? '')
-        .split('\n')
-        .filter((l) => !AMADEUS_FM_KEY.test(l))
+      return fmEntries((node.value ?? '').split('\n'))
+        .filter((e) => !AMADEUS_FM_KEY.test(e[0]))
+        .flat()
         .join('\n')
         .replace(/^\n+|\n+$/g, '')
     }

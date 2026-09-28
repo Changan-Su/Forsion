@@ -206,6 +206,18 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     expect(store.get('Board.md')!.content).toContain('amadeus_canvas'); // 一个字节都没动
   });
 
+  // D-01:带文件头 BOM 的画布笔记。修前 FRONTMATTER_RE 认不出 fm → 闸放行 → 整篇覆盖抹掉画布几何。
+  it('read_note:带 BOM 的 fm 同样剥掉(口径=desktop split.ts)', async () => {
+    store.set('BomNote.md', { content: '\uFEFF---\ntags: [a]\n---\n正文一段', seq: 1 });
+    expect(await runCloud('amadeus_read_note', { path: 'BomNote.md' })).toBe('正文一段');
+  });
+
+  it('带 BOM 的画布笔记同样拒绝整篇覆盖', async () => {
+    store.set('BomBoard.md', { content: "\uFEFF---\namadeus_canvas: '{\"v\":1}'\n---\n正文", seq: 1 });
+    await expect(runCloud('amadeus_write_note', { path: 'BomBoard.md', content: '覆盖' })).rejects.toThrow(/canvas note/);
+    expect(store.get('BomBoard.md')!.content).toContain('amadeus_canvas');
+  });
+
   it('⚠️读失败**不是**「文件不存在」时必须抬错,不许放行覆盖(fail-closed)', async () => {
     store.set('Flaky.md', { content: "---\namadeus_canvas: '{\"v\":1}'\n---\n正文", seq: 1 });
     const orig = facet.read;

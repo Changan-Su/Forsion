@@ -112,6 +112,13 @@ describe('shareBridge 嵌入解析', () => {
     expect(await b.resolveEmbed('Elsewhere#k1')).toBeNull()
     expect(await b.resolveEmbed('Note#zz')).toBeNull()
   })
+  // D-01:文件头 BOM 不改变「有 amadeus_ fm = 锚辖域至下一锚」的判定(口径同 split.ts / remark)。
+  it('带文件头 BOM 的结构化笔记:锚辖域照旧到下一锚', () => {
+    const v4s = '---\namadeus_schema: amadeus.page/4\n---\n<!-- a k1 -->\n\n段一。\n\n段二。\n\n<!-- a k2 -->\n\n段三。\n'
+    const whole = findEmbedBlock(v4s, 'k1')
+    expect(whole).toContain('段二。')
+    expect(findEmbedBlock('\uFEFF' + v4s, 'k1')).toBe(whole)
+  })
 })
 
 describe('installShareBridge', () => {

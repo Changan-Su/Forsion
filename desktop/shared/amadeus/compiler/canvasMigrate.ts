@@ -23,8 +23,8 @@ const CARD_W = 400
 
 /** fmExtra 里的裸 `canvas:` 行(插件键)。值是 YAML 单引号标量。 */
 const PLUGIN_CANVAS_LINE = /^["']?canvas["']?[ \t]*:[ \t]*(.*)$/m
-/** frontmatter 块(收尾栅栏独占一行,口径同 split.ts)。 */
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
+/** frontmatter 块(收尾栅栏独占一行、容文件头 BOM,口径同 split.ts)。 */
+const FRONTMATTER_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
 
 /**
  * 只在 **frontmatter 块内**找那一行 `canvas:`。

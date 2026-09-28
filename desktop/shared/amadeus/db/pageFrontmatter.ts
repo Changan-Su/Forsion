@@ -3,10 +3,11 @@
  *  (尤其 amadeus_layout 的单行 JSON 绝不过 YAML 往返,否则重排即损坏布局),正文字节级不动;
  *  仅合并/删除外来键。 */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import { AMADEUS_FM_KEY } from '../compiler/split'
+import { AMADEUS_FM_KEY, BOM, fmEntries } from '../compiler/split'
 import { PAGE_NAME_KEY, type CellValue, type ColumnType, type DbColumn } from './schema'
 
-// 口径与 compiler/split.ts stripFrontmatter 恒一致(空 fm 合法 + 收尾栅栏独占一行,Codex P0)。
+// 口径与 compiler/split.ts stripFrontmatter 恒一致(空 fm 合法 + 收尾栅栏独占一行,Codex P0);
+// 文件头 BOM 由 setFmExtraOnSource 先摘掉再匹配(D-01),所以这里不写 `\uFEFF?`。
 const FM_BLOCK_RE = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/
 
 const isReserved = (key: string): boolean => AMADEUS_FM_KEY.test(`${key}:`)
@@ -29,15 +30,24 @@ export function parseFmObject(fmExtra: string): Record<string, unknown> {
 /** 外科式合并:在 raw(一个 .md 源)的 frontmatter 里写入 patch 的键(值 = undefined 即删该键),
  *  保留 amadeus_* 行与正文原样,返回新的 .md 源。无 frontmatter 时按需前置一个块。 */
 export function setFmExtraOnSource(raw: string, patch: Record<string, unknown>): string {
+  // 文件头 BOM(D-01)先摘下、结果里原样放回字节 0:不摘则 fm 块认不出,会在 `\uFEFF---…` 前面
+  // 再叠一个新 fm 块,旧那块沦为正文(编辑器里显示成水平线 + setext 标题,下一次保存即毁)。
+  const bom = raw.startsWith(BOM) ? BOM : ''
+  return bom + setFmExtraOnBomless(raw.slice(bom.length), patch)
+}
+
+function setFmExtraOnBomless(raw: string, patch: Record<string, unknown>): string {
   const m = FM_BLOCK_RE.exec(raw)
   const inner = m?.[1] ?? '' // 空 fm 块时捕获组缺席
   const body = m ? raw.slice(m[0].length) : raw
 
   const amadeusLines: string[] = []
   const foreignLines: string[] = []
-  for (const line of inner.split('\n')) {
-    if (AMADEUS_FM_KEY.test(line)) amadeusLines.push(line)
-    else foreignLines.push(line)
+  // 按条目分(V-01):块状写法的 amadeus_* 值连同缩进续行整组留在保留区。逐行分会把续行塞进外来区 →
+  // 外来 YAML 解析失败被折算成 {} → 改一个单元格就同时抹掉画布/分栏几何与全部外来键。
+  for (const entry of fmEntries(inner.split('\n'))) {
+    if (AMADEUS_FM_KEY.test(entry[0])) amadeusLines.push(...entry)
+    else foreignLines.push(...entry)
   }
 
   const foreign = safeParseObj(foreignLines.join('\n'))

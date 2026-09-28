@@ -40,4 +40,13 @@ describe('splitFrontmatter', () => {
     expect(r.fm + r.body).toBe(t)
     expect(r.body).toBe('body')
   })
+  // D-01:文件头 BOM 随 fm 认走 —— 认不出 = 整块 fm 喂进 Milkdown,首存成水平线+setext 标题。
+  it('文件头 BOM(含 CRLF)也认,BOM 归 fm 侧、往返恒等', () => {
+    for (const t of ['\uFEFF---\na: 1\n---\nbody', '\uFEFF---\r\na: 1\r\n---\r\nbody']) {
+      const r = splitFrontmatter(t)
+      expect(r.body).toBe('body')
+      expect(r.fm.startsWith('\uFEFF---')).toBe(true)
+      expect(r.fm + r.body).toBe(t)
+    }
+  })
 })

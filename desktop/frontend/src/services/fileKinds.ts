@@ -145,7 +145,8 @@ export function parseDelimited(text: string, delim: string): string[][] {
  *  仅匹配文件头部的 `---\n…\n---\n`;无 frontmatter 时 fm=''。往返恒等:fm + body === 原文。 */
 export function splitFrontmatter(text: string): { fm: string; body: string } {
   // 闭合 --- 必须独占一行(否则 `---xyz` 会被从中劈开);内容组可选(空 frontmatter `---\n---\n` 也识别)。
-  const m = text.match(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*\r?(?:\n|$)/)
+  // 文件头 BOM 随 fm 一起认走(D-01,口径同 split.ts):认不出 = 整块 fm 喂进 Milkdown,首存成水平线+标题。
+  const m = text.match(/^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*\r?(?:\n|$)/)
   const fm = m?.[0] ?? ''
   return { fm, body: text.slice(fm.length) }
 }

@@ -412,6 +412,73 @@ async function main() {
     JSON.stringify({ same: after === before, before: (before ?? '').slice(0, 40) }))
   await p5.close()
 
+  // ── C5d/C5e V-01(2026-09-27 评审 P0):外部 YAML 工具把单行 JSON 重排成块状多行 ────────────────
+  // 修前 structLineOf 只认「值与键同行」→ 判成没有画布键,绕过 C5 那道「读不懂就逐字保留」;删键又只摘
+  // 键行 → 缩进续行成孤儿:敲一个字,整块 fm 解析不了,画布几何与 tags 全丢。只断言「YAML 能解析」挡不住
+  // 「干净地把键剥掉」的错修,所以几何(k1 / x 480)与外来键必须逐项在场。
+  {
+    const YAML = require('yaml')
+    const fmYaml = (t) => { const m = /^---\n([\s\S]*?)\n---\n/.exec(t ?? ''); try { return m ? YAML.parse(m[1]) : null } catch { return null } }
+    const typeInMainDoc = async (pg) => {
+      if (await pg.evaluate(() => { const s = document.querySelector('.amx-stage'); return !!s && !s.classList.contains('amx-stage-off') })) {
+        await pg.click('.amx-modeseg button:nth-child(2)') // 回文档模式再打字(与评审探针同路径)
+        await pg.waitForTimeout(500)
+      }
+      const pt = await pg.evaluate(() => {
+        const e = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent.includes('主卡一段'))
+        if (!e) return null
+        const r = document.createRange(); r.selectNodeContents(e); const b = r.getBoundingClientRect()
+        return { x: b.right - 1, y: b.top + b.height / 2 }
+      })
+      if (!pt) return false
+      await pg.mouse.click(pt.x, pt.y)
+      await pg.keyboard.type('改')
+      await pg.waitForTimeout(1500)
+      return true
+    }
+    const BODY = ['', '主卡一段。', '', '<!-- a k1 -->', '', '卡片正文', '', '<!-- /a k1 -->', ''].join('\n')
+    const BLOCK = ['---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas:', '  v: 1', '  mode: canvas', '  main:', '    x: 0', '    y: 0', '    w: 400',
+      '  cards:', '    - ref: k1', '      x: 480', '      y: 0', '      w: 300',
+      'tags:', '  - a', '  - b', '---', BODY].join('\n')
+    const pd = await open(browser, BLOCK)
+    await pd.waitForTimeout(500)
+    const d0 = await pd.evaluate(() => {
+      const s = document.querySelector('.amx-stage')
+      return { inCanvas: !!s && !s.classList.contains('amx-stage-off'), cards: document.querySelectorAll('.amx-ucard').length,
+        literal: (document.querySelector('.unified-body .ProseMirror')?.innerText ?? '').includes('<!--'), writes: window.__upage.writes.length }
+    })
+    const typedD = await typeInMainDoc(pd)
+    const dw = await pd.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    const dy = fmYaml(dw)
+    const k1 = dy?.amadeus_canvas?.cards?.find?.((c) => c.ref === 'k1')
+    record('C5d 块状 canvas:打开照常成画布(卡折叠、锚不露),打一个字后 fm 仍是合法 YAML 且几何/tags 全在(V-01)',
+      d0.inCanvas && d0.cards === 1 && !d0.literal && d0.writes === 0 && typedD && dw.includes('主卡一段。改') &&
+        !!dy && dy.amadeus_schema === 'amadeus.page/4' && k1?.x === 480 && k1?.w === 300 && JSON.stringify(dy.tags) === '["a","b"]',
+      JSON.stringify({ ...d0, typed: typedD, yamlOk: !!dy, k1, tags: dy?.tags }))
+    await pd.close()
+
+    // 读不懂的块状值:写入侧 fail-closed —— 那组行逐字留在盘上,整块仍合法。两种读不懂:块标量里不是
+    // JSON;块状映射读得出但画布校验不过(外部工具把坐标写成字符串 "480")。条目故意放在 tags 之后:
+    // 结构区重写会把结构键提到顶上,只摘键行的旧实现在这里必把续行留成 tags 底下的孤儿。
+    for (const [tag, ENTRY, check] of [
+      ['scalar', 'amadeus_canvas: >-\n  {"v":1,"cards":[\n  broken', (y) => typeof y.amadeus_canvas === 'string'],
+      ['strcoord', 'amadeus_canvas:\n  v: 1\n  cards:\n    - ref: k1\n      x: "480"\n      y: 0\n      w: 300', (y) => y.amadeus_canvas?.cards?.[0]?.x === '480'],
+    ]) {
+      const UNREAD = ['---', 'tags:', '  - a', 'amadeus_schema: amadeus.page/4', ENTRY, '---', BODY].join('\n')
+      const pe = await open(browser, UNREAD)
+      await pe.waitForTimeout(500)
+      const typedE = await typeInMainDoc(pe)
+      const ew = await pe.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+      const ey = fmYaml(ew)
+      record(`C5e 读不懂的块状 canvas(${tag}):编辑后该组逐字保留、fm 仍合法、tags 在(V-01 fail-closed)`,
+        typedE && ew.includes('主卡一段。改') && ew.includes(`\n${ENTRY}\n`) && !!ey && JSON.stringify(ey.tags) === '["a"]' &&
+          ey.amadeus_schema === 'amadeus.page/4' && check(ey),
+        JSON.stringify({ typed: typedE, verbatim: ew.includes(`\n${ENTRY}\n`), yamlOk: !!ey, fm: ew.slice(0, 140) }))
+      await pe.close()
+    }
+  }
+
   // ── C9 三张卡:收回中间那张,前面的卡**一张都不许被连带拆掉** ────────────────────────
   // 第一版就地拆壳时必现:c2 一收回,「尾部连续卡区」只剩 c3,normalizer 立刻判 c1 是游离卡也拆了。
   // C6 只测「重开后的一张卡」,这一格永远绿(Codex 点名的假绿面)。

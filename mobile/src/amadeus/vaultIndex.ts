@@ -22,7 +22,7 @@ interface Entry {
 }
 
 function parseFmIcon(raw: string): string | undefined {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1]
+  const fm = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1] // 容文件头 BOM(口径同 split.ts)
   if (!fm) return undefined
   const m = /^icon:[ \t]*["']?([^"'\r\n]+?)["']?[ \t]*$/m.exec(fm)
   const v = m?.[1]?.trim()

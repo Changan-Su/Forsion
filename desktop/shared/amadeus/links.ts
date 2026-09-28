@@ -291,6 +291,6 @@ export function decodeCharRefs(md: string): string {
  */
 export function stripForIndex(md: string): string {
   return md
-    .replace(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '') // leading YAML frontmatter(口径=split.ts:空 fm 合法+收尾栅栏独占一行)
+    .replace(/^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '') // leading YAML frontmatter(口径=split.ts:空 fm 合法+收尾栅栏独占一行+容文件头 BOM;与 mdMarks.findMarkLine 成对改)
     .replace(/<!--[\s\S]*?-->/g, '') // HTML comments (amadeus:block / amadeus:layout)
 }
