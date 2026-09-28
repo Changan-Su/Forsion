@@ -13,32 +13,42 @@
  *
  * 进程内表:上传与起 run 是同一个客户端紧挨着的两次请求(appStore.send 先 upload 再 startRun / steer)。引擎重启丢了也只是退回
  * 旧行为(模型看不到附件)。sandbox 模式的 run 也会取走(提示词已让它 list_files),免得会话日后切到 host 时把旧上传当新附件报。
+ *
+ * 来源必须一致(M1A 复审 P1):每条登记记下上传请求是不是远端来的(x-forsion-remote),取走时只给同来源的 run —— 远端上传只给
+ * 带远程污点的 run(effectiveRemote),本机上传只给本机 run;不匹配的留在表里等同来源的下一条。否则远端上传的文件会被当成
+ * 「用户刚附的文件」拼进同会话下一条**本机无污点** run 的正文第一行(手机 upload 成功、startRun 因 C8 / 409 / 断网失败时,
+ * 登记就一直挂着),本机模型按本机档位去读远端写的内容,而这条 run 与会话都不带污点。
  */
 
 const MAX_SESSIONS = 256;
 /** 一条消息最多列多少个路径 token;超出的只报个数(一次拖进几十个文件时,第一行不该长成一屏)。 */
 export const MAX_UPLOAD_REFS = 20;
 
-const pending = new Map<string, string[]>();
+interface PendingUpload { path: string; remote: boolean }
+const pending = new Map<string, PendingUpload[]>();
 
-/** 上传路由:本地会话目录里写成功的一个文件(绝对路径,按根的真实路径)。 */
-export function noteWorkspaceUpload(sessionId: string, absPath: string): void {
+/** 上传路由:本地会话目录里写成功的一个文件(绝对路径,按根的真实路径);remote = 上传请求带 x-forsion-remote。 */
+export function noteWorkspaceUpload(sessionId: string, absPath: string, opts: { remote: boolean }): void {
   if (!sessionId || !absPath) return;
-  const list = pending.get(sessionId) ?? [];
-  const i = list.indexOf(absPath);
-  if (i >= 0) list.splice(i, 1); // 同名重传:挪到末尾,不重复列
-  list.push(absPath);
+  const remote = !!opts.remote;
+  const list = (pending.get(sessionId) ?? []).filter((u) => !(u.path === absPath && u.remote === remote)); // 同名重传:挪到末尾,不重复列
+  list.push({ path: absPath, remote });
   pending.delete(sessionId);
   pending.set(sessionId, list); // Map 按插入序:最近上传的会话在末尾
   while (pending.size > MAX_SESSIONS) pending.delete(pending.keys().next().value as string);
 }
 
-/** 取走某会话尚未报给模型的上传(取完即清)。 */
-export function takeWorkspaceUploads(sessionId: string): string[] {
+/** 取走某会话尚未报给模型、且与本 run 同来源的上传(取完即清;别的来源的留着)。 */
+export function takeWorkspaceUploads(sessionId: string, opts: { remote: boolean }): string[] {
   const list = pending.get(sessionId);
   if (!list) return [];
-  pending.delete(sessionId);
-  return list;
+  const remote = !!opts.remote;
+  const mine = list.filter((u) => u.remote === remote);
+  if (!mine.length) return [];
+  const rest = list.filter((u) => u.remote !== remote);
+  if (rest.length) pending.set(sessionId, rest);
+  else pending.delete(sessionId);
+  return mine.map((u) => u.path);
 }
 
 /** 只给测试:清空进程内表。 */

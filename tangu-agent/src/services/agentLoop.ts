@@ -1103,8 +1103,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
     // 只认输入区起的 run(派生 / 后台 run 不吃别人的上传);sandbox 会话也取走(它们有 list_files),只是不拼。
+    // 只取同来源的:远端上传只给带远程污点的 run,本机上传只给本机 run —— 远端写的文件绝不当成「用户附件」拼进本机无污点 run。
     // input.message 本身不动:标题、/refine 判定、入站预算仍按用户原话。
-    const uploadRefs = input.origin === 'client' ? takeWorkspaceUploads(sessionId) : [];
+    const uploadRefs = input.origin === 'client' ? takeWorkspaceUploads(sessionId, { remote: !!effectiveRemote({ remote, runId }) }) : [];
     const turnMessage = execMode === 'host' ? withUploadRefs(String(input.message || ''), uploadRefs) : String(input.message || '');
 
     // 群聊模式(Group Chat):≥2 个 Normal Agent 轮流发言 —— 走独立编排,不进下方单 agent 装载。
@@ -1867,7 +1868,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
       }
       // 运行中追加的一句同样带上它之前刚上传的附件(appStore.send:先 upload 再 steer),拼在这一批的第一条上。
-      const steerUploads = execMode === 'host' ? takeWorkspaceUploads(sessionId) : [];
+      // 同来源才拼:远端 steer 在入队成功后已给本 run 染色(effectiveRemote 为真),本机 steer 进本机 run。
+      const steerUploads = execMode === 'host' ? takeWorkspaceUploads(sessionId, { remote: !!effectiveRemote({ remote, runId }) }) : [];
       if (steerUploads.length && msgs[0]) msgs[0] = { ...msgs[0], content: withUploadRefs(msgs[0].content, steerUploads) };
       for (const m of msgs) {
         await deps().state.insertUserMessage({
