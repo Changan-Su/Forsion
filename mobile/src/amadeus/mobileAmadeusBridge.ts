@@ -17,7 +17,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import type { AmadeusApi, DbReadResult, LinkMeta, PageProps, TextWriteResult, VaultInfo } from '@amadeus-shared/ipc'
 import { VaultManager } from './vaultManager'
 import { VaultIndex } from './vaultIndex'
-import { propagateNoteRenames } from '@amadeus-shared/propagateNoteRenames'
+import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
 
@@ -106,7 +106,8 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     return { root: ROOT, pages, folders: await vault.listFolders(), lastPage: lp && pages.includes(lp) ? lp : undefined }
   }
 
-  return {
+  // 结构操作(改名 / 移动 / 删除 / 回收站)连同其链接重写走库级有序队列(G2-04 复核 P1,见 queueStructureOps)。
+  return queueStructureOps<AmadeusApi>({
     openVault: async () => { await ensureVault(); return vaultInfo() },
     restoreVault: async () => { await ensureVault(); return vaultInfo() },
 
@@ -428,5 +429,5 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
     onDbExternalChange: () => () => { /* 无 watcher */ },
     onStructureChange: () => () => { /* 无 watcher */ },
-  }
+  })
 }

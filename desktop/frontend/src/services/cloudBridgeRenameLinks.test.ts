@@ -5,6 +5,7 @@
  *  - 改写过的笔记 fireExternal(自己写的 SSE 被回声抑制吃掉,开着它的编辑器只能靠这一声回灌)
  *  - 写不进去 → 提示(amadeus:toast,error 级),不静默吞
  *  - (复核 P1)读完之后那篇被别处删了 / 挪进 .trash → 不重建原路径、不另存 recovered,记入失败提示(路径已变)
+ *  - (复核 P1)连续改名 B→C→D 不等前一次:结构变更 + 其重写走库级有序队列,引用最终指向 D,不留 [[C]] 断链
  * 假服务端按 server/microserver/amadeus 的契约建模:文件 seq 逐文件自增、baseSeq 不符 409 带现文;move 保 seq。
  * 负对照(实跑过):摘掉 renamePageFile 的 `.then(propagateRenames)` → 第 1 条红(A.md 原样、零重写 PUT)。
  */
@@ -24,6 +25,7 @@ const toasts: Array<{ text: string; level?: string }> = []
 let beforePut: (path: string) => void = () => {}
 let failPut: (path: string) => boolean = () => false
 let afterGet: (path: string) => void = () => {}
+let getDelay: (path: string) => number = () => 0
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status })
 const folders = (): string[] => {
@@ -47,6 +49,7 @@ beforeEach(() => {
   beforePut = () => {}
   failPut = () => false
   afterGet = () => {}
+  getDelay = () => 0
   const data = new Map<string, string>()
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => data.get(k) ?? null,
@@ -81,6 +84,8 @@ beforeEach(() => {
     }
     if (p.endsWith('/file')) {
       const path = url.searchParams.get('path') ?? ''
+      const d = getDelay(path)
+      if (d) await new Promise((r) => setTimeout(r, d))
       const f = files.get(path)
       afterGet(path)
       return f ? json({ path, kind: 'page', content: f.content, seq: f.seq, hash: 'h', updatedAt: '' }) : json({ detail: 'not found' }, 404)
@@ -183,6 +188,19 @@ describe('cloud bridge: rename / move rewrites [[links]] vault-wide (G2-04)', ()
     expect(puts).toEqual([])
     expect(toasts).toHaveLength(1)
     expect(toasts[0].text).toContain('A')
+  })
+
+  it('复核 P1:连续改名 B→C→D(不等前一次跑完)→ 引用最终指向 D,不留 [[C]] 断链', async () => {
+    seed({ 'A.md': 'x [[B]]\n', 'B.md': 'b\n' })
+    const { bridge } = await boot()
+    // 第一次重写读 A.md 慢一拍:没有库级队列时,第二次改名恰在这期间扫完页表(那时 A 还写着 [[B]],它不管),
+    // 第一次随后把 A 写成 [[C]] —— 而 C 已经改名成 D。
+    let slowed = false
+    getDelay = (p) => (p === 'A.md' && !slowed ? ((slowed = true), 30) : 0)
+    await Promise.all([bridge.renamePageFile('B.md', 'C'), bridge.renamePageFile('C.md', 'D')])
+    expect(files.has('D.md')).toBe(true)
+    expect(files.get('A.md')!.content).toBe('x [[D]]\n')
+    expect(toasts).toEqual([])
   })
 
   it('写不进去 → error 级提示点名那篇,不静默吞;改名本身照常生效', async () => {

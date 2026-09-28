@@ -10,7 +10,7 @@ import { textFingerprint } from './writeConflict'
 import type { TextWriteResult } from './ipc'
 
 export interface RenamePropagationIO {
-  /** 读一篇的原文;不存在 → null(跳过,不算失败)。 */
+  /** 读一篇的原文;不存在 → null(快照之后被删 / 挪走:它里面的链接没改成,记入 failed,不静默跳过)。 */
   read(path: string): Promise<string | null>
   /** 比对交换写:base = 读到那版的 textFingerprint。`{ ok:false, current }` = 盘上已变、本次没写;void / ok:true = 写成。
    *  'gone' = 目标已不在(读完之后被删 / 挪走):**只更新已存在的文件**,绝不按旧路径重建 —— 记入 failed(路径已变)。 */
@@ -43,8 +43,11 @@ export async function propagateNoteRenames(
   const one = async (p: string): Promise<void> => {
     try {
       let raw = await io.read(p)
+      if (raw == null) {
+        out.failed.push({ path: p, error: 'gone' })
+        return
+      }
       for (let i = 0; i < attempts; i++) {
-        if (raw == null) return
         const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, plan)
         if (next === raw) return
         const r = await io.write(p, next, textFingerprint(raw))
@@ -72,4 +75,26 @@ export async function propagateNoteRenames(
   await Promise.all(workers)
   out.rewritten.sort()
   return out
+}
+
+/** 会改路径 / 删东西的结构操作(改名 / 移动 / 删除 / 回收站)。 */
+export const STRUCTURE_OPS = ['renamePage', 'renamePageFile', 'movePage', 'renameFolder', 'moveFolder', 'deletePage', 'deleteFolder', 'trashEntry', 'restoreTrash'] as const
+
+/** 把桥上的结构操作排进一条**库级有序队列**(G2-04 复核 P1):一次结构变更连同它的全库链接重写跑完,下一次才开始。
+ *  否则 B→C 的重写还在跑,C→D 已按「页表里没有 B」扫完 → 前一次随后写入的 [[C]] 指向已不存在的 C,静默断链。
+ *  与各桥按路径的写队列分开(结构操作内部还要占路径写锁,混成一条会自锁);重写本身不经这条队列。
+ *  只管本端:别的设备上的连续改名要服务端按路径身份组合,不在这里。 */
+export function queueStructureOps<T extends object>(api: T): T {
+  const rec = api as unknown as Record<string, unknown>
+  let tail: Promise<unknown> = Promise.resolve()
+  for (const k of STRUCTURE_OPS) {
+    const fn = rec[k]
+    if (typeof fn !== 'function') continue
+    rec[k] = (...args: unknown[]): Promise<unknown> => {
+      const run = tail.then(() => (fn as (...a: unknown[]) => Promise<unknown>)(...args))
+      tail = run.catch(() => {})
+      return run
+    }
+  }
+  return api
 }

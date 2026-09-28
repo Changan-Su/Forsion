@@ -6,6 +6,7 @@
  *  - 写前盘上已不是读到的那版 → 按现文重算,不盲盖
  *  - (复核 P0)重写正写着时编辑器存盘:同一把按路径的锁,编辑器那发排在后面、基线不符拿回 ok:false,
  *    不会「报成功、字却被重写的旧快照盖掉」。负对照(实跑过):withPathLock 改成直接调用 → 这条红。
+ *  - (复核 P1)连续改名 B→C→D 不等前一次:库级有序队列,引用最终指向 D。负对照(实跑过):去掉 queueStructureOps → 红。
  * 负对照(实跑过):摘掉 renamePageFile 里的 propagateRenames → 第 1 条红。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +16,7 @@ import { textFingerprint } from '@amadeus-shared/writeConflict'
 const disk = new Map<string, string>()
 let afterRead: (rel: string) => void = () => {}
 let writeGate: ((rel: string) => Promise<void>) | null = null
+let readDelay: (rel: string) => number = () => 0
 
 vi.mock('path-browserify', async () => {
   const p = await import('node:path')
@@ -32,6 +34,8 @@ vi.mock('../../../../mobile/src/amadeus/vaultManager', () => {
     async listFolders(): Promise<string[]> { return [] }
     absPath(p: string): string { return ROOT + p }
     async readTextAbs(abs: string): Promise<string> {
+      const d = readDelay(rel(abs))
+      if (d) await new Promise((r) => setTimeout(r, d))
       const t = disk.get(rel(abs))
       if (t == null) throw new Error(`ENOENT ${abs}`)
       afterRead(rel(abs))
@@ -58,6 +62,7 @@ beforeEach(() => {
   disk.clear()
   afterRead = () => {}
   writeGate = null
+  readDelay = () => 0
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
   vi.stubGlobal('window', { dispatchEvent: () => true })
 })
@@ -113,5 +118,13 @@ describe('mobile bridge: rename / move rewrites [[links]] (G2-04)', () => {
     await renaming
     expect(await saving).toEqual({ ok: false, current: 'x [[C]]\n' })
     expect(disk.get('A.md')).toBe('x [[C]]\n')
+  })
+  it('复核 P1:连续改名 B→C→D(不等前一次跑完)→ 引用最终指向 D,不留 [[C]] 断链', async () => {
+    const { bridge } = await boot({ 'A.md': 'x [[B]]\n', 'B.md': 'b\n' })
+    let slowed = false
+    readDelay = (p) => (p === 'A.md' && !slowed ? ((slowed = true), 30) : 0)
+    await Promise.all([bridge.renamePageFile('B.md', 'C'), bridge.renamePageFile('C.md', 'D')])
+    expect(disk.has('D.md')).toBe(true)
+    expect(disk.get('A.md')).toBe('x [[D]]\n')
   })
 })

@@ -50,7 +50,7 @@ import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { findEmbedBlock } from './shareBridge'
-import { propagateNoteRenames } from '@amadeus-shared/propagateNoteRenames'
+import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
 import { createCloudHttp, is404, is409, HttpError } from './cloudHttp'
 import { startCloudEvents } from './cloudEvents'
@@ -748,7 +748,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // ===========================================================================
   // AmadeusApi 实现
   // ===========================================================================
-  return {
+  // 结构操作(改名 / 移动 / 删除 / 回收站)连同其链接重写走库级有序队列(G2-04 复核 P1,见 queueStructureOps):
+  // 前一次的重写没跑完,下一次改名就按旧页表扫,留下指向已不存在路径的 [[链接]]。
+  return queueStructureOps<AmadeusApi>({
     openVault: () => openCloud(),
     restoreVault: () => openCloud(),
 
@@ -1549,7 +1551,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         invalidateTree()
         return { newPath, rewrittenPages: [] }
       }),
-  }
+  })
 }
 
 /** 同目录改名的路径清洗(镜像 electron ipc.ts:剥路径分隔符、去 .md 后缀、空名报错)。 */

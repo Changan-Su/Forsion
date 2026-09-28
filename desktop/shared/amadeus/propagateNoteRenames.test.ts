@@ -1,6 +1,6 @@
 // 评审 G2-04:web / 移动端改名 / 移动之后重写全库 [[链接]] 的宿主无关半边(读 → 重写 → 比对交换写 → 冲突重算)。
 import { describe, expect, it } from 'vitest'
-import { propagateNoteRenames, type RenamePropagationIO } from './propagateNoteRenames'
+import { propagateNoteRenames, queueStructureOps, type RenamePropagationIO } from './propagateNoteRenames'
 import { textFingerprint } from './writeConflict'
 
 function memIO(files: Map<string, string>, hooks: { beforeWrite?: (p: string) => void; failWrite?: (p: string) => boolean } = {}): RenamePropagationIO & { writes: string[] } {
@@ -63,5 +63,29 @@ describe('propagateNoteRenames', () => {
     expect(r.rewritten).toEqual([])
     expect(r.failed.map((f) => f.path).sort()).toEqual(['A.md', 'K.md'])
     expect(r.failed.find((f) => f.path === 'K.md')?.error).toBe('boom')
+  })
+  it('(复核 P1)快照之后被删 / 挪走的待重写页 → 记入 failed(gone),不静默跳过', async () => {
+    const files = new Map([['C.md', ''], ['A.md', 'x [[B]]\n']])
+    const io = memIO(files)
+    const r = await propagateNoteRenames(io, { 'B.md': 'C.md' }, ['A.md', 'B.md', 'Gone.md'])
+    expect(r.rewritten).toEqual(['A.md'])
+    expect(r.failed).toEqual([{ path: 'Gone.md', error: 'gone' }])
+  })
+})
+
+describe('queueStructureOps', () => {
+  it('结构操作按调用顺序一个跑完才开始下一个(前一个失败不堵后面);别的方法不受影响', async () => {
+    const log: string[] = []
+    const api = queueStructureOps({
+      renamePageFile: async (a: string) => { log.push(`start ${a}`); await new Promise((r) => setTimeout(r, a === 'x' ? 20 : 0)); log.push(`end ${a}`); if (a === 'x') throw new Error('x failed'); return a },
+      movePage: async (a: string) => { log.push(`start ${a}`); log.push(`end ${a}`); return a },
+      readTextFile: async () => 'untouched',
+    })
+    const p1 = api.renamePageFile('x')
+    const p2 = api.movePage('y')
+    await expect(p1).rejects.toThrow('x failed')
+    await expect(p2).resolves.toBe('y')
+    expect(log).toEqual(['start x', 'end x', 'start y', 'end y'])
+    expect(await api.readTextFile()).toBe('untouched')
   })
 })
