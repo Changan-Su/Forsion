@@ -3957,3 +3957,8 @@ body.amx-marquee-active * {
   cursor: default;
   overflow: visible;
 }
+/* 按住空格 = 临时抓手(V-05,canvasStage 的 spacePan)。整片连卡带正文一律抓手光标 —— 卡片自己的
+   grab、正文的 I 型光标、形状/把手的光标都得压住,否则「按着空格却显示成可打字」。放文件末尾:
+   同特异性的覆盖靠源码顺序(DESIGN §7.2)。 */
+.am-app .amx-stage.amx-space-pan,
+.am-app .amx-stage.amx-space-pan * { cursor: grab; }

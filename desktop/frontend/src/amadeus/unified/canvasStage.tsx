@@ -60,7 +60,7 @@ registerMessages({
   'canvasstage.toast.needEdit': { zh: '双击卡片（或选中后按空格）进入编辑模式，才能勾选待办、点开双链', en: 'Double-click a card (or select it and press Space) to edit — then you can tick to-dos and open backlinks' },
   'canvasstage.toolbar.label': { zh: '画布工具', en: 'Canvas tools' },
   'canvasstage.tool.select': { zh: '选择 (Esc)', en: 'Select (Esc)' },
-  'canvasstage.tool.pan': { zh: '抓手（或按住 Alt 拖）', en: 'Pan (or hold Alt and drag)' },
+  'canvasstage.tool.pan': { zh: '抓手（或按住空格 / Alt 拖）', en: 'Pan (or hold Space or Alt and drag)' },
   'canvasstage.tool.card': { zh: '新建卡片（双击空白同）', en: 'New card (or double-click empty space)' },
   'canvasstage.tool.frame': { zh: 'Frame：拖出范围（或点一下取默认大小）', en: 'Frame: drag to size (or click for the default size)' },
   'canvasstage.tool.conn': { zh: '箭头：依次点父节点、子节点（Shift 或形状=自由连线）', en: 'Arrow: click the parent, then the child (Shift or a shape = free connector)' },
@@ -453,6 +453,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   const [editing, setEditingState] = useState<string | null>(null)
   const editingRef = useRef<string | null>(null)
   const setEditing = useCallback((v: string | null): void => { editingRef.current = v; setEditingState(v) }, [])
+  /** 按住空格 = 临时抓手(V-05,Figma/Obsidian 同款)。`held` = 空格正按着;`used` = 按住期间按过指针
+   *  (拖了就是平移,松开空格不再进编辑)。ref 给只依赖 [active] 的手势 effect 现读,state 只管光标 class。 */
+  const spaceRef = useRef({ held: false, used: false })
+  const [spacePan, setSpacePan] = useState(false)
 
   /** 编辑态光标(2026-08-19 用户实报:双击进编辑后鼠标还是抓手)。与 dragCss 同一条纪律:
    *  PM 的 DOM 一个属性都不碰,走按 data-anchor 命中的独立样式表;只写单元素规则(不写通配),
@@ -2232,7 +2236,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         return
       }
       const cur = editingRef.current
-      const panIntent = t === 'pan' || e.altKey || middle
+      // 按住空格时按下 = 平移(V-05),并记下「这次按住拖过」—— 松开空格就不再进编辑。
+      const spaceHeld = spaceRef.current.held
+      if (spaceHeld) spaceRef.current.used = true
+      const panIntent = t === 'pan' || e.altKey || middle || spaceHeld
       const otherIntent = t !== 'select' && !panIntent
       // 「还在原地」判据分身份:卡=还在那张卡里;主卡=还在正文里(在 .ProseMirror 内**且不在任何
       // 卡里** —— 卡片的 DOM 就住在 PM 根之内,少了后半句,编辑主卡时点卡片会被当成「还在主卡」)。
@@ -3218,6 +3225,34 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
   }, [active, toStage])
 
+  // 空格松开 = 「按下、没拖、松开」才进编辑(V-05)。挂 window 捕获期:按住期间焦点可能被别的东西带走,
+  // keyup 不一定回到舞台;窗口失焦(Cmd+Tab)时 keyup 根本不来,不收尾就会卡在抓手态。
+  useEffect(() => {
+    if (!active) return
+    const end = (): void => {
+      spaceRef.current = { held: false, used: false }
+      setSpacePan(false)
+    }
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (e.code !== 'Space' || !spaceRef.current.held) return
+      const { used } = spaceRef.current
+      end()
+      e.preventDefault()
+      const host = hostRef.current
+      const t = e.target as HTMLElement | null
+      if (used || readOnlyRef.current || !host || !t || !host.contains(t) || t.closest('.ProseMirror')) return
+      const s = selRef.current
+      if (s.length === 1 && (s[0].startsWith('c:') || s[0] === MAIN_KEY) && !editingRef.current) actRef.current.enterNodeEdit(s[0])
+    }
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', end)
+    return () => {
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', end)
+      end()
+    }
+  }, [active])
+
   /** 捕获期键盘:统一撤销 + 编辑中的 Esc。
    *  ⚠️ 必须挂**捕获期**的两个理由:Esc 那条是 PM 的 escKeymap 会抢(冒泡期拦不到);Cmd+Z 那条
    *  是**卡内打字时**焦点在 PM 里,冒泡期第一句就让路了 —— 而统一时间线的意义恰恰是「卡内卡外
@@ -3264,9 +3299,15 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       else setSel([])
       return
     }
-    if (e.code === 'Space' && !mod && sel.length === 1 && (sel[0].startsWith('c:') || sel[0] === MAIN_KEY)) {
+    // 按住空格 = 临时抓手(V-05)。「选中卡按空格进编辑」挪到**松开**时判(见上面 keyup 那个 effect):
+    // 修前在第一下 keydown 就进编辑、焦点落进 PM,之后自动重复的 keydown 全被写成空格落盘。
+    // 重复 keydown 一律吞掉;无选中时也吞(舞台外层的滚动容器不许被空格翻页)。
+    if (e.code === 'Space' && !mod) {
       e.preventDefault()
-      enterNodeEdit(sel[0])
+      if (!e.repeat && !spaceRef.current.held) {
+        spaceRef.current = { held: true, used: false }
+        setSpacePan(true)
+      }
       return
     }
     if (!sel.length) return
@@ -3344,7 +3385,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   //    往上找包含块的 —— 留着 relative 就会挑中这个没有盒子的祖先,浮层整体偏一个容器位。
   return (
     <div
-      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${readOnly ? 'pan' : tool}` : ''}${readOnly ? ' amx-stage-ro' : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
+      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${readOnly ? 'pan' : tool}` : ''}${readOnly ? ' amx-stage-ro' : ''}${active && spacePan ? ' amx-space-pan' : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
       ref={hostRef}
       tabIndex={-1}
       onKeyDownCapture={onKeyDownCapture}

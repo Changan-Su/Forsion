@@ -83,6 +83,7 @@
 //      新卡插在父卡那一段之后 + tree 记上父子 + 文档模式当场缩进,父卡内容一个字不动
 //   C86 Shift+点/拖卡 = 连整支(选中它与全部子卡;Cmd/Ctrl 仍是单张加选)
 //   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
+//   C91 按住空格 = 临时抓手:重复 keydown 不写进卡、松开(没拖)才进编辑、拖 = 平移(V-05)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -5502,6 +5503,86 @@ async function main() {
     offFind === true && aFind.hits === 1 && aFind.transform !== tFind0 && aFind.inView,
     JSON.stringify({ wasOffscreen: offFind, ...aFind, tFind0 }))
   await pFind.close()
+
+  // ── C91 按住空格 = 临时抓手(V-05,Figma/Obsidian 同款)────────────────────────────────
+  //  修前:没有空格平移;选中卡时按住空格,第一下 keydown 就进了编辑、焦点落进 PM,后面自动重复的
+  //  keydown 全被写成空格落盘(`卡 K1     `)。现在:按住 = 平移态(整片抓手光标、拖哪儿都是平移,
+  //  压在卡上也不搬卡),重复 keydown 一律吞;「空格进编辑」挪到**松开**时判 —— 按下、没拖、松开才进。
+  const SEED91 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}',
+    '---', '', '# 画布页', '', '主卡一段。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const vp91 = (p) => p.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f), z: +m.a.toFixed(3) } })
+  const st91 = (p) => p.evaluate(() => {
+    const card = document.querySelector('.amx-ucard[data-anchor="k1"]')
+    return {
+      text: card?.textContent ?? null,
+      x: card?.dataset.x ?? null,
+      editing: document.querySelector('.amx-el-selbox.is-editing')?.dataset.anchor ?? null,
+      pmFocus: !!document.activeElement?.closest?.('.ProseMirror'),
+      sel: [...document.querySelectorAll('.amx-el-selbox')].map((b) => b.dataset.anchor || (b.dataset.mainSel != null ? 'main' : b.dataset.el || '?')),
+      spaceCls: document.querySelector('.amx-stage')?.classList.contains('amx-space-pan') ?? false,
+      cursorCard: card ? getComputedStyle(card.querySelector('p') ?? card).cursor : null,
+    }
+  })
+  const p91 = await open(browser, SEED91)
+  await p91.waitForTimeout(700)
+  const k191 = await p91.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  const blank91 = await p91.evaluate(() => { const s = document.querySelector('.amx-stage').getBoundingClientRect(); return { x: s.left + 150, y: s.top + 200 } })
+  const writes91 = () => p91.evaluate(() => window.__upage.writes.length)
+  // a) 选中 k1 后按住空格(自动重复 ×6)再松开、没拖:一个空格都不进卡,松开才进编辑
+  await p91.mouse.click(k191.x, k191.y)
+  await p91.waitForTimeout(250)
+  const w91a = await writes91()
+  for (let i = 0; i < 6; i++) { await p91.keyboard.down('Space'); await p91.waitForTimeout(40) } // 第 2 次起 repeat=true
+  const hold91 = await st91(p91)
+  await p91.keyboard.up('Space')
+  await p91.waitForTimeout(1200)
+  const up91 = await st91(p91)
+  const w91b = await writes91()
+  // b) Esc 退回选中 → 按住空格、**从 k1 身上**拖:平移视口,k1 不动、不框选、松开不进编辑
+  await p91.keyboard.press('Escape')
+  await p91.waitForTimeout(250)
+  const pre91b = await st91(p91)
+  let v0 = await vp91(p91)
+  await p91.keyboard.down('Space')
+  await p91.mouse.move(k191.x, k191.y)
+  await p91.mouse.down()
+  let marq91 = false
+  for (let i = 1; i <= 12; i++) { await p91.mouse.move(k191.x - 15 * i, k191.y + 8 * i); if (!marq91) marq91 = await p91.evaluate(() => !!document.querySelector('.amx-el-marquee')) }
+  await p91.mouse.up()
+  await p91.keyboard.up('Space')
+  await p91.waitForTimeout(400)
+  const v91b = await vp91(p91)
+  const drag91 = await st91(p91)
+  // c) 空白点一下清选中 → 按住空格在空白拖 = 平移(修前是框选)
+  await p91.mouse.click(blank91.x, blank91.y)
+  await p91.waitForTimeout(200)
+  const v1 = await vp91(p91)
+  await p91.keyboard.down('Space')
+  await p91.mouse.move(blank91.x, blank91.y)
+  await p91.mouse.down()
+  let marq91c = false
+  for (let i = 1; i <= 12; i++) { await p91.mouse.move(blank91.x + 20 * i, blank91.y - 10 * i); if (!marq91c) marq91c = await p91.evaluate(() => !!document.querySelector('.amx-el-marquee')) }
+  await p91.mouse.up()
+  await p91.keyboard.up('Space')
+  await p91.waitForTimeout(300)
+  const v91c = await vp91(p91)
+  const end91 = await st91(p91)
+  await p91.close()
+  record('C91a 选中卡按住空格(自动重复)再松开:卡里一个空格都没进、零写盘;按住期间是抓手态(卡上也是 grab)且不进编辑,松开才进编辑',
+    hold91.text === '卡 K1' && hold91.editing === null && !hold91.pmFocus && hold91.spaceCls && hold91.cursorCard === 'grab'
+      && up91.text === '卡 K1' && up91.editing === 'k1' && up91.pmFocus && !up91.spaceCls && w91b === w91a,
+    JSON.stringify({ hold91, up91, writes: [w91a, w91b] }))
+  record('C91b 空格+从卡上拖 = 平移视口(k1 坐标不动、零框选),松开空格不进编辑、选中还在',
+    pre91b.editing === null && JSON.stringify(pre91b.sel) === '["k1"]'
+      && v91b.x - v0.x <= -150 && v91b.y - v0.y >= 80 && v91b.z === v0.z && !marq91
+      && drag91.x === pre91b.x && drag91.editing === null && !drag91.pmFocus && JSON.stringify(drag91.sel) === '["k1"]' && drag91.text === '卡 K1',
+    JSON.stringify({ pre91b, v0, v91b, marq91, drag91 }))
+  record('C91c 无选中时空格+空白拖 = 平移(不再是框选),松开后抓手态收起',
+    v91c.x - v1.x >= 200 && v1.y - v91c.y >= 100 && !marq91c && end91.sel.length === 0 && !end91.spaceCls && end91.editing === null,
+    JSON.stringify({ v1, v91c, marq91c, end91 }))
 
   await browser.close()
   const ok = results.filter(Boolean).length
