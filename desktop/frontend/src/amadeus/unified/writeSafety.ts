@@ -128,20 +128,31 @@ function parseDraft(raw: string | null, slot: string | null): UnsavedDraft | nul
   return typeof d.text === 'string' && typeof d.base === 'string' ? { text: d.text, base: d.base, at: Number(d.at) || 0, slot } : null
 }
 
-/** 读这篇的草稿:先认自己槽位的;没有就退到不分槽的那格,再退到别的槽位里最新的一份(那个标签已经关了 / 重启后
- *  换了 leaf —— 草稿不能因为认不出主人就再也不提示)。 */
-export function readDraft(vaultRoot: string | null | undefined, path: string, slot?: string | null): UnsavedDraft | null {
+/** 读这篇的草稿:先认自己槽位的;没有就退到**已失去归属**的槽位里最新的一份(那个标签已经关了 / 重启后换了 leaf ——
+ *  草稿不能因为认不出主人就再也不提示)。不分槽的那格(slot = null)对不分槽的实例就是自己那格。
+ *  `isLive(slot)`:那个槽位的主人还在不在(leaf 还开着 / 有活实例)。**活槽不给别人**(Codex 复核 P1):
+ *  否则没有本槽草稿的 A 会读到仍属于 B 的草稿,点「丢弃」删掉 B 的、点「恢复」把 B 的正文放进 A。
+ *  不给 isLive = 一律当活着(只认自己那格)。 */
+export function readDraft(vaultRoot: string | null | undefined, path: string, slot?: string | null, isLive: (slot: string | null) => boolean = () => true): UnsavedDraft | null {
   try {
-    const own = slot ? parseDraft(localStorage.getItem(draftKey(vaultRoot, path, slot)), slot) : null
-    if (own) return own
-    const plain = parseDraft(localStorage.getItem(draftKey(vaultRoot, path)), null)
-    if (plain) return plain
+    const plainKey = draftKey(vaultRoot, path)
+    if (!slot) {
+      const own = parseDraft(localStorage.getItem(plainKey), null)
+      if (own) return own
+    } else {
+      const own = parseDraft(localStorage.getItem(draftKey(vaultRoot, path, slot)), slot)
+      if (own) return own
+      const plain = isLive(null) ? null : parseDraft(localStorage.getItem(plainKey), null)
+      if (plain) return plain
+    }
     const prefix = draftBase(vaultRoot, path) + '\u0000'
     let best: UnsavedDraft | null = null
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
       if (!k || !k.startsWith(prefix)) continue
-      const d = parseDraft(localStorage.getItem(k), k.slice(prefix.length))
+      const owner = k.slice(prefix.length)
+      if (owner === slot || isLive(owner)) continue
+      const d = parseDraft(localStorage.getItem(k), owner)
       if (d && (!best || d.at > best.at)) best = d
     }
     return best

@@ -35,12 +35,12 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
-import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedScopeLive } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
 import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
@@ -1986,10 +1986,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // D-04 草稿恢复:上次卸载冲洗没写成(磁盘满 / 无权限 / 离线 / 窗口先关了)时存在本机的那份。
   // 只提示,**绝不自动覆盖**盘上内容;草稿 = 盘上内容(其实写成了)时静默删掉。
-  // 同篇多开时草稿按实例分槽(G1-02 返修):先认本 leaf 的那份,见 writeSafety.readDraft。
+  // 同篇多开时草稿按实例分槽(G1-02 返修):先认本 leaf 的那份,见 writeSafety.readDraft。别的槽位只认领主人已不在的
+  // (leaf 已关 / 没有活实例)—— 活槽归它自己的标签,这里绝不拿来丢弃或恢复(Codex 复核 P1)。
   const [draft, setDraft] = useState<UnsavedDraft | null>(() => {
     if (readOnly) return null
-    const d = readDraft(vaultRoot, path, pipe.slot)
+    const slotLive = (s: string | null): boolean => (s == null ? unifiedScopeLive(path, null) : hasPageScope(s) || unifiedScopeLive(path, s))
+    const d = readDraft(vaultRoot, path, pipe.slot, slotLive)
     if (!d) return null
     if (d.text === (diskRaw ?? initial)) {
       clearDraft(vaultRoot, path, undefined, d.slot)

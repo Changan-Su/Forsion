@@ -1786,6 +1786,10 @@ export function pageStoreFor(scope: string, opts?: PageStoreOptions): PageStoreA
   s.subscribe((n, p) => { if (VAULT_KEYS.some((k) => n[k] !== p[k])) mirrorVault(s!) })
   return s
 }
+/** 这个作用域(面板 leaf)在本窗是否还在(建过店、还没回收)。草稿分槽认领孤槽用:leaf 还开着 = 那一格有主(G1-02 返修)。 */
+export function hasPageScope(scope: string): boolean {
+  return stores.has(scope)
+}
 /** 面板关掉时回收(先落盘,别把没写完的改动带走)。'main' 是默认作用域,永不回收。 */
 export function disposePageStoreScope(scope: string): void {
   if (scope === MAIN_SCOPE) return

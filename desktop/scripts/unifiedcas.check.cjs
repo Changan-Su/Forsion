@@ -28,6 +28,8 @@
 //   H5 两边都有未落盘的字时被别处改名:新路径上两份草稿分槽保存,A / B 各自恢复出自己的那份
 //   H6 fm 补丁 × 跟随者**自己也有未落盘的 fm 改动**(Codex 复核 P0):它那笔 fm 不许被当成外来补丁豁免 ——
 //      要么落盘、要么进冲突副本,绝不静默消失;新属性与写者的字同理
+//   H7 草稿槽位的归属(Codex 复核 P1):B 还开着时它槽里的草稿不许被 A 读到(A 重挂不出恢复条);
+//      主人已不在的孤槽照旧提示给 A,A 丢弃只删那一格,B 的草稿原样留着
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -731,10 +733,39 @@ async function groupH(browser) {
   }
 }
 
+async function groupH7(browser) {
+  const p = await open(browser, '# 标题\n\n第一段。\n\n## 小节\n\n第二段。\n', '&udual')
+  await p.evaluate(() => { localStorage.clear(); window.__upage.failWrites = Infinity })
+  await typeIn(p, 1, '第二段。', 'BBB') // B 写不进去 → 草稿进 B 自己的槽(harness-B),B 还开着
+  await wait(1500)
+  const bKeys = await p.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:') && k.endsWith('\u0000harness-B')))
+  const remountA = async () => {
+    await p.evaluate(() => window.__upage.switchFile('Other.md', '# 别的\n\nx\n'))
+    await wait(300)
+    await p.evaluate(() => window.__upage.switchFile('Unified.md'))
+    await p.waitForFunction(() => document.querySelector('#root .unified-page')?.getAttribute('data-unified-path') === 'Unified.md', null, { timeout: 8000 })
+    await wait(400)
+  }
+  await remountA()
+  const aBar1 = await p.evaluate(() => !!document.querySelector('#root [data-save="draft"]'))
+  // 孤槽:主人(gone-leaf)已不在
+  await p.evaluate(() => localStorage.setItem('amadeus.unsavedDraft::Unified.md\u0000gone-leaf', JSON.stringify({ text: '# 标题\n\n孤儿草稿。\n', base: 'x', at: Date.now() })))
+  await remountA()
+  const aBar2 = await p.evaluate(() => !!document.querySelector('#root [data-save="draft"]'))
+  if (aBar2) await p.locator('#root [data-save="draft"] .btn:not(.primary)').click()
+  await wait(200)
+  const left = await p.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')).map((k) => k.split('\u0000')[1] ?? '(plain)'))
+  await p.evaluate(() => { window.__upage.failWrites = 0 })
+  record('H7 活槽不给别人:B 还开着时 A 重挂不出 B 的草稿;孤槽照旧提示给 A,丢弃只删孤槽、B 的留着',
+    bKeys.length === 1 && !aBar1 && aBar2 && left.length === 1 && left[0] === 'harness-B',
+    JSON.stringify({ bKeys: bKeys.length, aBar1, aBar2, left }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, H: groupH, C: groupC, D: groupD, F: groupF, L: groupL }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()

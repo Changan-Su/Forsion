@@ -167,6 +167,12 @@ export function unifiedPaths(): string[] {
   return [...new Set([...handles].map((h) => h.path))]
 }
 
+/** path 上是否有属于 scope 这个 leaf(null = 不在面板里)的活实例。草稿分槽认领孤槽时判「那一格的主人还在」(G1-02 返修)。 */
+export function unifiedScopeLive(path: string, scope: string | null): boolean {
+  for (const h of handles) if (h.path === path && (h.scope ?? null) === scope) return true
+  return false
+}
+
 /** path 上是否有活着的 unified 实例(= 这篇按 v4 渲染且已挂载)。
  *  v3 的「装载完成」信号是 pageStore.activePage,v4 没有对应物,导航等待用它当就绪判据。 */
 export function hasUnifiedInstance(path: string): boolean {
