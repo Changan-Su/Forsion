@@ -71,13 +71,46 @@ function closeTag(n: MdNode): string | null {
 //  · 未闭合的 real 帧 → 撤销折叠,还原成 [原始<open> 字面, …已收 children] —— 不丢开标签、不吞内容(L1)。
 const FOLD_DEPTH_CAP = 16
 type Frame = { tgt: MdNode[]; type: string | null; kind: 'real' | 'phantom' | 'literal'; raw: MdNode; node: MdNode }
-function foldTags(children: MdNode[]): MdNode[] {
+const PLAIN_TYPES = new Set(PLAIN_TAGS.values())
+/** 行内内容的根(一段的 phrasing 从这里起):同型嵌套按这一层整段判。 */
+const PHRASING_ROOTS = new Set(['paragraph', 'heading', 'tableCell'])
+/**
+ * 这段里(含加粗 / 链接等子层)出现**同型嵌套**的 kbd/sub/sup 类型。上面的幽灵帧对 u/span/mark 是既定降级(内层并入外层),
+ * 但 `<kbd>a<kbd>b</kbd>c</kbd>` 一旦折成 mark,编辑该段别处就整段写成 `<kbd>abc</kbd>`,内层标签丢了(Codex 复核)。
+ * 这三种是 I-17 新接的,不背那条既定降级:同型嵌套的类型在这一段里**不折叠**,开合标签照旧是原子 —— 与接入前逐字一致。
+ */
+function nestedPlainTypes(nodes: MdNode[]): Set<string> {
+  const depth = new Map<string, number>()
+  const out = new Set<string>()
+  const walk = (list: MdNode[]): void => {
+    for (const n of list) {
+      const open = openTag(n)?.type
+      if (open && PLAIN_TYPES.has(open)) {
+        const d = (depth.get(open) ?? 0) + 1
+        depth.set(open, d)
+        if (d > 1) out.add(open)
+        continue
+      }
+      const close = closeTag(n)
+      if (close && PLAIN_TYPES.has(close)) {
+        depth.set(close, Math.max(0, (depth.get(close) ?? 0) - 1))
+        continue
+      }
+      if (Array.isArray(n?.children)) walk(n.children)
+    }
+  }
+  walk(nodes)
+  return out
+}
+function foldTags(children: MdNode[], literalTypes: Set<string> = new Set()): MdNode[] {
   const rootTgt: MdNode[] = []
   const stack: Frame[] = [{ tgt: rootTgt, type: null, kind: 'real', raw: null, node: null }]
   const top = (): Frame => stack[stack.length - 1]
   for (const n of children) {
-    const open = openTag(n)
-    const close = closeTag(n)
+    const open0 = openTag(n)
+    const open = open0 && !literalTypes.has(open0.type) ? open0 : null
+    const close0 = closeTag(n)
+    const close = close0 && !literalTypes.has(close0) ? close0 : null
     if (open) {
       const depth = stack.length - 1
       const sameTypeOpen = stack.some((f) => f.kind === 'real' && f.type === open.type)
@@ -95,7 +128,10 @@ function foldTags(children: MdNode[]): MdNode[] {
       const f = stack.pop() as Frame
       if (f.kind === 'literal') top().tgt.push(n) // 字面 close 配字面 open
     } else {
-      if (Array.isArray(n?.children)) n.children = foldTags(n.children)
+      if (Array.isArray(n?.children)) {
+        const lit = PHRASING_ROOTS.has(n.type) ? new Set([...literalTypes, ...nestedPlainTypes(n.children)]) : literalTypes
+        n.children = foldTags(n.children, lit)
+      }
       top().tgt.push(n)
     }
   }
