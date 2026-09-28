@@ -8,20 +8,26 @@
  * 隔离(⚠️ 这支台架绝不许碰真账号 / 真设备名册 / 真钥匙串):
  *   - TANGU_HOME=临时目录 → 没有 auth.json → UnitHost 停在「未登录」,永不入册(不会往你的真名册里多塞一台设备);
  *     TANGU_CLOUD_URL 另指向本机一个不监听的端口,双保险。
- *   - macOS 加 --use-mock-keychain:safeStorage 用 Chromium 的 MockKeychain(固定口令 mock_password),**不读写真钥匙串**;
- *     台架据此在 Node 侧独立解密 device-secrets.json,核对里面存的就是那份配对(2026-09-28 实测 Electron 40 认这个开关)。
- *   - Linux 加 --password-store=basic 走降级路径(level=plaintext,远程会话 fail closed);其余平台只跑到能跑的断言。
+ *   - macOS 用 Chromium 的 MockKeychain(固定口令 mock_password),**不读写真钥匙串**;Linux 用 basic 后端走降级路径
+ *     (level=plaintext,远程会话 fail closed)。真正起作用的是 Playwright 的 Electron loader:每次 `_electron.launch` 都在
+ *     ready 之前 appendSwitch('use-mock-keychain') + ('password-store','basic')(playwright-core 1.61.1
+ *     lib/server/electron/loader.js:69-70)—— 所以别的预置 external token 的台架同样不碰真钥匙串。下面 launch 参数里再写一遍,
+ *     是让 Node 侧 mockDecrypt 的前提在本文件里看得见。⚠️ 绕过 loader 直接 spawn Electron 的台架(如 live-voice.e2e)要自己带这两个开关。
  *   - userData = --user-data-dir + '-dev'(dev 态),后端 = 桩引擎(external 模式 + TANGU_BACKEND_URL)。
  *
  * 三段:
  *   A 迁移:预置一份带 unitHostId / unitHostSecret / token 的旧 shell 配置 → 启动 → 两份文件的字节里都没有明文;
  *     getConfig() 不带设备密钥、external token 解密回填;setConfig({unitHostSecret}) 写不进去;状态 level 符合平台。
- *   B 锁定:把配对密文写坏、打开「允许其他设备连接本机」→ 重启 → 文件字节不变、unitHost 不运行(lastError=secret-store-locked)、
+ *   B 锁定:把配对密文写坏、打开「允许其他设备连接本机」→ 重启 → 文件字节不变、unitHost 不运行(局域网面照起)、
  *     切换器脚部出锁定提示;把好的密文放回盘上、点「重试」→ 恢复、unitHost 起来、配对仍是原 unit id(没有重新登记)。
- *   C 截图:锁定提示 zh(真 Electron 主窗,DESIGN §8)。en 与降级态的截图走 web harness(?ribbon&unit&secrets=…)。
+ *   C 截图:锁定提示 zh(真 Electron 主窗,DESIGN §8)。en、降级态与「要重启」态的截图走 web harness(?ribbon&unit&secrets=…)。
+ *   D 迁移卡住(device-secrets.json 是个目录:读 EISDIR、写 rename 失败)→ shell 里的三键原样保留 → getConfig() 仍不许带
+ *     unitHostId / unitHostSecret(loadConfig 的 `...shell` 剥离;迁移成功时 shell 已空,A3 证不到这条)、token 回落 shell、
+ *     配对按锁定(unitHost 不运行)、存储「文件」没被写成别的东西。
  *
  * 负对照(断言必须能红):在 K5 之前的 main.ts 上跑(git checkout 297408ab -- electron/main.ts && npm run build)→
- *   A1(shell 字节里有明文)、A3(getConfig 带 unitHostSecret)必须红。
+ *   A1(shell 字节里有明文)、A3(getConfig 带 unitHostSecret)必须红;删掉 loadConfig 里两行 `delete merged.unitHost*` → D2 红
+ *   (2026-09-28 实测)。
  *
  * 用法:npm run build && npm run check:secrets   [--keep] [--no-lock]
  */
@@ -213,7 +219,7 @@ async function main() {
     await skipOnboarding(win)
     await win.waitForTimeout(1500) // doRefreshUnitHost 起 unitWeb
     const hs = await bridge(win, () => window.tangu.unitHostStatus())
-    check('B1 配对读不出来 → unitHost 不运行,lastError=secret-store-locked(局域网面照起)', hs && hs.running === false && hs.lastError === 'secret-store-locked' && typeof hs.webPort === 'number', hs)
+    check('B1 配对读不出来 → unitHost 不运行(局域网面照起)', hs && hs.running === false && hs.unitId === null && typeof hs.webPort === 'number', hs)
     const stL = await bridge(win, () => window.tangu.secretStorageStatus())
     check('B2 secretStorageStatus().locked 含 unitPairing', stL && stL.locked.includes('unitPairing'), stL)
     check('B3 锁定时文件字节不变(不删、不覆盖、没有重新登记)', readText(storePath) === badText)
@@ -224,7 +230,7 @@ async function main() {
       await pill.click()
       const notice = win.locator('.secnotice[data-secrets="locked"]').first()
       const shown = await notice.waitFor({ timeout: 5_000 }).then(() => true, () => false)
-      check('B4 切换器脚部出现锁定提示(重试 + 重新登记本机)', shown && (await notice.locator('button').count()) === 2, shown ? await notice.innerText() : null)
+      check('B4 切换器脚部出现锁定提示(解密失败 = 重试 + 重新登记本机;不是「要重启」态)', shown && (await notice.locator('button').count()) === 2 && (await win.locator('.secnotice[data-secrets="restart"]').count()) === 0, shown ? await notice.innerText() : null)
       if (shown) {
         await win.waitForTimeout(700) // 菜单呼出带淡入展开:等动画走完再拍,否则截到半透明的中间帧
         const menu = win.locator('.unitsw-menu').first()
@@ -254,6 +260,36 @@ async function main() {
     if (process.platform === 'darwin') {
       check('B8 盘上配对仍是原 unit id(MockKeychain 解密)', after && mockDecrypt(after.entries.unitPairing.data) === JSON.stringify({ unitId: UNIT_ID, secret: UNIT_SECRET }))
     } else skip('B8 盘上配对解密核对', `平台 ${process.platform}`)
+    await closeApp(app); app = null
+
+    // ── D 迁移卡住:存储文件读不了、写不进 → shell 原样保留,渲染层照样拿不到设备密钥 ─────────────────────
+    const homeD = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-secrets-d-'))
+    try {
+      const udD = path.join(homeD, 'userdata-dev')
+      const shellD = path.join(udD, 'tangu-desktop-config.json')
+      const storeD = path.join(udD, 'device-secrets.json')
+      fs.mkdirSync(storeD, { recursive: true }) // 目录:readFile → EISDIR(读不懂),rename(tmp, 目录) → 失败(写不进)
+      fs.writeFileSync(shellD, JSON.stringify({ mode: 'external', token: EXT_TOKEN, unitHostEnabled: true, unitHostId: UNIT_ID, unitHostSecret: UNIT_SECRET, mcpEnabled: false }, null, 2))
+      ;({ app, mainLog } = await launchApp(homeD, stub.url))
+      win = await mainWindow(app)
+      await skipOnboarding(win)
+      await win.waitForTimeout(1500)
+      const shD = readJson(shellD)
+      check('D1 前提:迁移没做成,shell 里配对密钥与 token 原样留着(这正是 `...shell` 会把密钥带进 config:get 的状态)',
+        shD && shD.unitHostSecret === UNIT_SECRET && shD.unitHostId === UNIT_ID && shD.token === EXT_TOKEN, shD && Object.keys(shD))
+      const cfgD = await bridge(win, () => window.tangu.getConfig())
+      check('D2 getConfig() 仍不带 unitHostId / unitHostSecret(loadConfig 剥掉 shell 残留)', !('unitHostId' in cfgD) && !('unitHostSecret' in cfgD) && !JSON.stringify(cfgD).includes(UNIT_SECRET),
+        Object.keys(cfgD).filter((k) => /unitHost/.test(k)))
+      check('D3 external token 回落 shell 里那份(瞬时故障不断外部连接)', cfgD.token === EXT_TOKEN, cfgD.token)
+      const stD = await bridge(win, () => window.tangu.secretStorageStatus())
+      const hsD = await bridge(win, () => window.tangu.unitHostStatus())
+      check('D4 配对按锁定:status.locked 含 unitPairing、unitHost 不运行(不会当成「空」去重新登记)', stD && stD.locked.includes('unitPairing') && hsD && hsD.running === false, { stD, hsD })
+      check('D5 存储路径仍是那个目录(没被迁移 / 重新登记写成别的文件)', fs.statSync(storeD).isDirectory() && fs.readdirSync(storeD).length === 0)
+    } finally {
+      await closeApp(app); app = null
+      if (!KEEP) fs.rmSync(homeD, { recursive: true, force: true })
+      else note('保留临时目录(D)', homeD)
+    }
   } catch (e) {
     check('台架未抛错', false, String(e && e.stack || e).slice(0, 800))
     console.error('主进程日志尾:\n' + mainLog.join('').split('\n').filter(Boolean).slice(-40).join('\n'))

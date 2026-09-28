@@ -272,26 +272,6 @@ export function createDeviceSecrets(o: { store: SecretStore; warn?: (m: string) 
   return api
 }
 
-// ── 隔离 dev 实例不碰真钥匙串 ───────────────────────────────────────────────────────────────────
-/** 未打包 + 显式 --user-data-dir(= 台架的隔离实例;`npm run dev` 不带它)→ macOS 用 Chromium 的 MockKeychain、Linux 用
- *  basic 后端,不读写开发者真钥匙串里的「forsion-desktop Safe Storage」(与 dev 实例同名共用;钥匙串锁着 / ACL 失配时的
- *  模态框会把主线程挂住,台架 firstWindow 超时)。OSCrypt 在第一次用钥匙串时才查 use-mock-keychain(os_crypt_mac.mm),
- *  所以本模块被 main.ts 顶部 import 时(ready 之前)追加开关即可。FORSION_REAL_KEYCHAIN=1 关掉(要在隔离实例里测真钥匙串时)。
- *  打包版永不生效。 */
-function isolateDevKeychain(): void {
-  try {
-    if (app.isPackaged || process.env.FORSION_REAL_KEYCHAIN === '1' || !app.commandLine.hasSwitch('user-data-dir')) return
-    if (process.platform === 'darwin') {
-      if (!app.commandLine.hasSwitch('use-mock-keychain')) app.commandLine.appendSwitch('use-mock-keychain')
-      console.log('[device-secrets] 隔离的 dev 实例(--user-data-dir):safeStorage 用 MockKeychain,不碰真钥匙串')
-    } else if (process.platform === 'linux') {
-      if (!app.commandLine.hasSwitch('password-store')) app.commandLine.appendSwitch('password-store', 'basic')
-      console.log('[device-secrets] 隔离的 dev 实例(--user-data-dir):safeStorage 用 basic 后端,不碰真钥匙串')
-    }
-  } catch { /* 单测里的 electron 桩没有 commandLine */ }
-}
-isolateDevKeychain()
-
 // ── 主进程原生确认框(重新登记本机)─────────────────────────────────────────────────────────────
 defineMainMessages({
   'main.secrets.resetTitle': { zh: '重新登记本机？', en: 'Re-register this device?' },
