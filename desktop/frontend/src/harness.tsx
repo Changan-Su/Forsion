@@ -1765,6 +1765,15 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   }
   void import('./amadeus/unified/lifecycle').then((m) => { (window as unknown as { __upage: { lifecycle: unknown } }).__upage.lifecycle = m })
+  // `&ucmds`:折叠三条命令(B-13)按生产装进引擎命令集并挂全局热键分发(amadeusCommands 在台架里不跑);
+  // 命令对象同时放到 `__upage.foldCommands`,仪器直调 run() 走「命令面板」那条路。见 unified-keys.check 的 B13。
+  if (new URLSearchParams(location.search).has('ucmds')) {
+    void import('./amadeus/unified/foldCommands').then(({ FOLD_COMMANDS }) => {
+      for (const c of FOLD_COMMANDS) addCommand(c)
+      installHotkeys()
+      ;(window as unknown as { __upage: { foldCommands: unknown } }).__upage.foldCommands = FOLD_COMMANDS
+    })
+  }
   void import('./amadeus/unified/UnifiedPage').then(({ UnifiedPage }) => {
     // 改名重挂载宿主壳:镜像 amadeusViews 的 leaf 行为(onRenamed → 换参数,实例随 key 重建)。
     // ⚠️ 顶栏胶囊必须拿**宿主自己的笔记路径**喂 CanvasModeSeg —— 生产传的是 `barPath`,组件内

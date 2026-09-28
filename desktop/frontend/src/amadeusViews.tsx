@@ -9,7 +9,7 @@ import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen, BookMarked,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
-  Undo2, Redo2, ChevronsDown, Frame,
+  Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -168,6 +168,8 @@ registerMessages({
   'amxv.mbar.toCanvas': { zh: '切换到画布', en: 'Switch to canvas' },
   'amxv.mbar.undo': { zh: '撤销', en: 'Undo' },
   'amxv.mbar.redo': { zh: '重做', en: 'Redo' },
+  'amxv.mbar.outdent': { zh: '减少缩进', en: 'Outdent' },
+  'amxv.mbar.indent': { zh: '增加缩进', en: 'Indent' },
   'amxv.moreActions': { zh: '更多操作', en: 'More actions' },
   'amxv.mbar.hideKeyboard': { zh: '收起键盘', en: 'Hide keyboard' },
 
@@ -1761,11 +1763,13 @@ function AmxBlockPicker({ height, onClose }: { height: number; onClose: () => vo
  *    故用差值 translateY 顶上去。差值是视口 px,元素在 body zoom 里 → 除以 zoomOf 反补偿(老坑)。
  *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
  *  - 「+」:先记下键盘高度再收键盘,块面板正好补上键盘让出的那块地。 */
-function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, canvas }: {
+function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNeedFocus, canvas }: {
   actions: AmxAction[]
   onUpload: () => void
   undo: () => void
   redo: () => void
+  /** 缩进 / 提升(= Tab / Shift-Tab;软键盘没有 Tab,G2-06)。只有 v4 统一页交得出来;v3 笔记为 null 不出键。 */
+  indent: ((dir: 1 | -1) => void) | null
   sourceMode: boolean
   onNeedFocus: () => void
   /** v4 统一页交出来的画布模式(用户 2026-08-20 拍板:常驻在胶囊里、排上传后面,不进「⋯」)。 */
@@ -1800,6 +1804,13 @@ function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, 
         {!sourceMode && canvas && (
           <button onPointerDown={keep} onClick={canvas.toggle} className={canvas.on ? 'on' : undefined}
             title={canvas.on ? t('amxv.mbar.toDocument') : t('amxv.mbar.toCanvas')}><Frame size={19} /></button>
+        )}
+        {/* 缩进一对排在画布键之后(画布键紧跟上传是 08-20 拍板的顺序,editor-capsule e2e 的 4a 钉着)。 */}
+        {!sourceMode && indent && (
+          <button onPointerDown={keep} onClick={() => indent(-1)} title={t('amxv.mbar.outdent')}><ListIndentDecrease size={19} /></button>
+        )}
+        {!sourceMode && indent && (
+          <button onPointerDown={keep} onClick={() => indent(1)} title={t('amxv.mbar.indent')}><ListIndentIncrease size={19} /></button>
         )}
         {!sourceMode && <button onPointerDown={keep} onClick={undo} title={t('amxv.mbar.undo')}><Undo2 size={19} /></button>}
         {!sourceMode && <button onPointerDown={keep} onClick={redo} title={t('amxv.mbar.redo')}><Redo2 size={19} /></button>}
@@ -2645,6 +2656,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         // 先问本 leaf 的 v4 实例(挂着才有);v3 笔记退回 pageStore 的块级历史。
         undo={() => { if (unifiedHistRef.current) unifiedHistRef.current.undo(); else if (activePage) myPs().undo() }}
         redo={() => { if (unifiedHistRef.current) unifiedHistRef.current.redo(); else if (activePage) myPs().redo() }}
+        // canvasSeg 非空 = 本 leaf 挂着 v4 统一页(它经 onCanvasMode 交上来),缩进句柄同在 unifiedHistRef 上。
+        indent={canvasSeg ? (dir) => { unifiedHistRef.current?.indent?.(dir) } : null}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },

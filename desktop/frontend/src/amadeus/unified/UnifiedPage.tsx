@@ -60,7 +60,7 @@ import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn } from './columns'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
@@ -73,6 +73,7 @@ import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu
 import { noteLinkTarget } from '../blocks/markdown/linkHref'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
+import { createFoldMemory, remapFoldMemory } from './foldActions'
 import { registerMessages, translate, useI18n } from '../../i18n'
 
 registerMessages({
@@ -883,6 +884,8 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
 export interface UnifiedHistory {
   undo: () => boolean
   redo: () => boolean
+  /** 缩进 / 提升一档(= Tab / Shift-Tab)。挂在同一只句柄上,是因为宿主的移动端胶囊只握这一只(G2-06)。 */
+  indent?: (dir: 1 | -1) => boolean
 }
 
 export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, compact = false, readOnly = false, hardBreaks = false }: {
@@ -1041,7 +1044,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const v = layer.getView()
       return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
     }
-    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo') }
+    const indent = (dir: 1 | -1): boolean => {
+      const v = layer.getView()
+      return !pipe.readOnly && !!v && layer.indent(v, dir)
+    }
+    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo'), indent }
     historyRef.current = h
     return () => { if (historyRef.current === h) historyRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1219,6 +1226,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 「stored ⊆ owned」判据 fail-closed,画布派生冻结到重开)。与 makeCard 的 ownedCards.add 同源。
     minted: (anchors) => { for (const a of anchors) pipe.ownedCards.add(a) },
   }
+  /** 折叠本机记忆的键(B-13):插件是稳定引用,智库 / 路径经 ref 现读。 */
+  const foldWhere = useRef({ vaultRoot, path })
+  foldWhere.current = { vaultRoot, path }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -1251,6 +1261,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
       ...headingFoldPlugins,
       ...listFoldPlugins,
+      ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -2008,6 +2019,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const newPath = await amadeus.renamePageFile(path, next)
       if (newPath !== path) {
         remapNoteViewMemory(vaultRoot, path, newPath)
+        remapFoldMemory(vaultRoot, path, newPath)
         pipe.retired = true // 本实例退休:再写旧路径 = 复活幽灵文件
         // 改名 IPC 窗口里刚打的字不该丢(Codex P0):按新路径补一发,随 key 重建被读回。
         // IPC await 期间可能又打了字(200ms 监听窗)→ 补写前再拉平一次(Codex 终审 P0)。
@@ -2324,30 +2336,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <Undo2 size={13} /> {t('unipage.menu.backToDoc')}
               </button>
             )}
-            <button onClick={() => withBlocks(
-              // 跨块选区:整批复制(AFFiNE 的 Duplicate 也是「只选半行也复制整块」)。范围可能盖到
-              // 整卡(topRangeOf 对卡内选区爬升到卡边界)—— 与单卡支同款:铸新锚 + 进归属集合
-              // (漏登记 = 首次派生落盘后归属判据 fail-closed,派生冻结;C89b 修前红)。
-              (view, r) => {
-                const { content, minted } = mintCardCopies(view.state.doc, view.state.doc.slice(r.from, r.to).content)
-                view.dispatch(view.state.tr.insert(r.to, content).scrollIntoView())
-                for (const a of minted) pipe.ownedCards.add(a)
-              },
-              (view, sel) => {
-                // ⚠️ 画布卡片必须换新锚再复制(Codex P0-6):原样插入会得到两个 anchor=c1,派生写出
-                // 重复 ref,下次打开 parseCanvasJson 判歧义**整键作废** —— 全部画布卡一起失效。
-                if (sel.node.type.name === 'amadeusCanvasCard') {
-                  const anchor = freshAnchorId(view.state.doc)
-                  const copy = sel.node.type.create({ ...sel.node.attrs, anchor, x: Number(sel.node.attrs.x) + 40, y: Number(sel.node.attrs.y) + 40 }, sel.node.content)
-                  view.dispatch(view.state.tr.insert(sel.to, copy).setMeta('amxCanvas', true))
-                  pipe.ownedCards.add(anchor)
-                  syncFromEditor()
-                  schedule()
-                  return
-                }
-                view.dispatch(view.state.tr.insert(sel.to, sel.node))
-              },
-            )}>
+            {/* 与 Mod-D 同一份(blockLayer.duplicate,B-12):跨块选区整批(AFFiNE 的 Duplicate 也是「只选半行
+                也复制整块」)、块选中复制该节点。画布卡(含跨块选区盖到的整卡)一律当场铸新锚并经 onCardsMinted
+                进归属集合 —— 原样插入 = 两个同锚卡、整个 canvas 键作废(Codex P0-6);漏登记 = 派生冻结(C89b)。
+                菜单这条再立刻拉平一次派生 + 排保存(原单卡支的做法),键盘那条走编辑器 onChange 的常规链。 */}
+            <button onClick={() => {
+              setBlockMenu(null)
+              const view = layer.getView()
+              if (!view) return
+              if (layer.duplicate(view)) {
+                syncFromEditor()
+                schedule()
+              }
+              view.focus()
+            }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
             <button className="danger" onClick={() => withBlocks(

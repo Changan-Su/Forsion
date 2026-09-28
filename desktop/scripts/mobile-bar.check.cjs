@@ -9,6 +9,8 @@
 //  M1 打字后点胶囊「撤销」→ 字没了,且落盘的是撤销后的内容
 //  M2 再点胶囊「重做」→ 字回来;M2b 键盘撤销后点胶囊「重做」→ 字回来(重做键单独验)
 //  M3 连点两次撤销不越界、不报错(历史到底 = no-op)
+//  M4 缩进 / 提升两颗键(G2-06,软键盘没有 Tab):排在画布键之后;点「增加缩进」= Tab(乙成为甲的子项并落盘)、
+//     「减少缩进」= Shift-Tab(提回同级);点键不抢编辑器焦点;加了两颗键后 390 / 窄机 360 下最后一颗仍在药丸内
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -35,8 +37,8 @@ const record = (name, ok, detail) => {
 
 /** 用台架页已加载的同一份 React / react-dom / amadeusViews(按 harness.tsx 的已转换源码里的 import URL 取,
  *  保证模块实例一致 —— 另起一份 React 会让 hooks 直接炸)挂一个生产 AmadeusEditorView。 */
-async function mount(page) {
-  return page.evaluate(async () => {
+async function mount(page, md = '# 移动标题\n\n第一段。\n\n第二段。\n') {
+  return page.evaluate(async (md) => {
     const hsrc = await (await fetch('/src/harness.tsx')).text()
     const find = (re) => { const m = hsrc.match(re); return m ? m[1] : null }
     const Rm = await import(find(/["']([^"']*\/deps\/react\.js[^"']*)["']/))
@@ -44,7 +46,7 @@ async function mount(page) {
     const rdc = await import(find(/["']([^"']*\/deps\/react-dom_client\.js[^"']*)["']/))
     const createRoot = rdc.createRoot ?? rdc.default.createRoot
     const av = await import(find(/["'](\/src\/amadeusViews\.tsx[^"']*)["']/))
-    window.__upage.vault.set('Mob.md', '# 移动标题\n\n第一段。\n\n第二段。\n')
+    window.__upage.vault.set('Mob.md', md)
     document.getElementById('root').style.display = 'none' // 台架自己那份 UnifiedPage 别抢焦点 / 几何
     const host = document.createElement('div')
     host.id = 'mob-host'
@@ -54,7 +56,7 @@ async function mount(page) {
     const leaf = { id: 'mob-leaf-1', type: 'amadeus-editor', loc: 'main', params: { notePath: 'Mob.md' }, setParams(p) { leaf.params = p }, setTitle() {} }
     createRoot(host).render(React.createElement(av.AmadeusEditorView, { leaf }))
     return matchMedia('(pointer: coarse)').matches
-  })
+  }, md)
 }
 const bodyText = (p) => p.evaluate((s) => document.querySelector(s)?.innerText ?? '', MOB)
 const lastWrite = (p) => p.evaluate(() => { const w = window.__upage.writes.filter((x) => x.path === 'Mob.md'); return w.length ? w[w.length - 1].text : null })
@@ -115,6 +117,57 @@ async function main() {
     await undoBtn.click(); await page.waitForTimeout(400)
     const t3 = await bodyText(page)
     record('M3 撤到底再点 → no-op,正文完好、零运行时报错', !t3.includes('XYZ') && t3.includes('第二段。') && errs.length === 0, JSON.stringify({ text: t3.replace(/\n+/g, '|'), errs }))
+    await page.close()
+
+    // ── M4:缩进 / 提升(G2-06)──
+    {
+      const pg = await ctx.newPage()
+      pg.on('pageerror', (e) => { errs.push(e.message); console.log('[pageerror]', e.message) })
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      await mount(pg, '# 移动标题\n\n- 甲\n- 乙\n')
+      await pg.waitForSelector(MOB + ' li', { timeout: 60000 })
+      await pg.waitForTimeout(800)
+      const titles = await pg.evaluate(() => [...document.querySelectorAll('#mob-host .amx-mbar button')].map((b) => b.title))
+      const ci = titles.indexOf('切换到画布')
+      record('M4a 缩进 / 提升两颗键在胶囊里、紧跟画布键', ci >= 0 && titles[ci + 1] === '减少缩进' && titles[ci + 2] === '增加缩进', titles.join(' | '))
+      const c = await pg.evaluate((s) => {
+        const li = [...document.querySelectorAll(s + ' li')].find((e) => e.textContent.trim() === '乙')
+        const r = document.createRange(); r.selectNodeContents(li.querySelector('p') || li); const b = r.getBoundingClientRect(); return { x: b.right - 1, y: b.top + b.height / 2 }
+      }, MOB)
+      await pg.mouse.click(c.x, c.y)
+      await pg.waitForTimeout(250)
+      const nested = (p) => p.evaluate((s) => {
+        const inner = [...document.querySelectorAll(s + ' li li')].map((e) => e.textContent.trim())
+        return { inner, active: document.activeElement?.classList?.contains('ProseMirror') ?? false }
+      }, MOB)
+      await pg.locator('#mob-host .amx-mbar button[title="增加缩进"]').click()
+      await pg.waitForTimeout(1400)
+      const a = await nested(pg)
+      const wa = await pg.evaluate(() => { const w = window.__upage.writes.filter((x) => x.path === 'Mob.md'); return w.length ? w[w.length - 1].text : null })
+      record('M4b 点「增加缩进」= Tab:乙成为甲的子项并落盘,焦点仍在正文', a.inner.join('|') === '乙' && a.active && /[-*] 甲\n\s+[-*] 乙/.test(wa || ''), JSON.stringify({ ...a, lastWrite: wa }))
+      await pg.locator('#mob-host .amx-mbar button[title="减少缩进"]').click()
+      await pg.waitForTimeout(300)
+      const b = await nested(pg)
+      const items = await pg.evaluate((s) => [...document.querySelectorAll(s + ' li')].map((e) => e.textContent.trim()).join('|'), MOB)
+      record('M4c 点「减少缩进」= Shift-Tab:乙提回同级', b.inner.length === 0 && items === '甲|乙', JSON.stringify({ ...b, items }))
+      // 九颗键的宽度账(同 editor-capsule e2e 的 4a2 口径:量最后一颗键越没越出药丸,390 与窄机 360 各一次)。
+      const fitsAt = async (w) => {
+        await pg.setViewportSize({ width: w, height: 844 })
+        await pg.waitForTimeout(400)
+        return pg.evaluate(() => {
+          const bar = document.querySelector('#mob-host .amx-mbar')
+          const r = bar.getBoundingClientRect()
+          const last = [...bar.querySelectorAll('button')].pop()
+          return { n: bar.querySelectorAll('button').length, inScreen: r.left >= -1 && r.right <= window.innerWidth + 1, spill: Math.round(last.getBoundingClientRect().right - r.right) }
+        })
+      }
+      const f390 = await fitsAt(390)
+      const f360 = await fitsAt(360)
+      record('M4d 加两颗键后 390 / 360 下药丸不破(最后一颗键仍在药丸内)', f390.n === 9 && f390.inScreen && f390.spill <= 1 && f360.inScreen && f360.spill <= 1, JSON.stringify({ f390, f360 }))
+      await pg.close()
+    }
   } finally {
     await browser.close()
   }
