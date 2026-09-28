@@ -6,7 +6,7 @@
  * 每条用例都反向断言 token,而不只断言名字。
  */
 import { describe, expect, it } from 'vitest'
-import { refChipOf, fileChip, folderChip, viewChip } from './Composer2'
+import { refChipOf, fileChip, folderChip, viewChip, composeOutgoing } from './Composer2'
 import { refToText, type ChatRef } from './chatDragRef'
 import { splitLeadingRefs } from './RefChipView'
 
@@ -124,5 +124,18 @@ describe('splitLeadingRefs', () => {
       '/Users/x/a.txt',                    // 单独一个裸路径、无换行:多半是用户自己打的
       '',
     ]) expect(splitLeadingRefs(text), text).toBeNull()
+  })
+})
+
+describe('composeOutgoing', () => {
+  it('引用与引文在正文前(上下文在前)', () => {
+    expect(composeOutgoing('[[a.md]]\n', '> q\n\n', 'hi')).toBe('[[a.md]]\n> q\n\nhi')
+  })
+  it('/refine 留在最前,引用挪到后面 —— 引擎只认开头的 /refine', () => {
+    expect(composeOutgoing('[[a.md]]\n', '', '/refine tone')).toBe('/refine tone\n\n[[a.md]]')
+    expect(composeOutgoing('', '> q\n\n', '/refine')).toBe('/refine\n\n> q')
+    expect(composeOutgoing('', '', '/refine x')).toBe('/refine x')
+    expect(composeOutgoing('[[a.md]]\n', '', '/refinery')).toBe('[[a.md]]\n/refinery')
+    expect(composeOutgoing('', '', '/Refine x')).toBe('/refine x')
   })
 })

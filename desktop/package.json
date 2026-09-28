@@ -42,6 +42,7 @@
     "e2e:ctxwindow": "node scripts/ctxwindow-settings.e2e.cjs",
     "e2e:ctxlimit": "node scripts/ctxlimit-menu.e2e.cjs",
     "e2e:livewait": "node scripts/chat-livewait.e2e.cjs",
+    "e2e:queue": "node scripts/queued-commands.e2e.cjs",
     "e2e:musespace": "node scripts/muse-space.e2e.cjs",
     "e2e:extend": "node scripts/extend-seam.e2e.cjs",
     "e2e:musesettings": "node scripts/muse-settings.e2e.cjs",

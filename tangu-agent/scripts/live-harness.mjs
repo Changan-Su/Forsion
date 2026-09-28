@@ -1805,7 +1805,9 @@ Then reply with only the command output.`,
     const inboxText = existsSync(inbox) ? readFileSync(inbox, 'utf8') : '';
     const nominated = inboxText.split('\n').filter(Boolean).length;
     const before = await api(`/agent/agents/${slug}/harness`);
-    const ev2 = await run(sess, '/refine', 300_000, cfg);
+    // run② 用桌面端真实发出的形状(09-28):/refine 留在最前、引用行挪到后面 —— 开着「自动引用当前文件」时每条都带一行引用,
+    // 以前引用行前置会让引擎的 isRefineInvocation 认不出。这里的文件路径即桌面文件芯片的 token。
+    const ev2 = await run(sess, `/refine\n\n${markerFile}`, 300_000, cfg);
     const harnessText = existsSync(harnessMd) ? readFileSync(harnessMd, 'utf8') : '';
     const after = await api(`/agent/agents/${slug}/harness`);
     const entries = after.entries || [];
