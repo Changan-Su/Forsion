@@ -59,3 +59,35 @@ export async function httpErrorMessage(r: Response): Promise<{ message: string; 
   if (typeof j?.detail === 'string' && j.detail) return { message: j.detail, ...(code ? { code } : {}) }
   return { message: text || `HTTP ${r.status}`, ...(code ? { code } : {}) }
 }
+
+// P1-K6 ── 调用方身份相关的拒绝(INTEGRATION R-32 / R-04 / R-08)──
+// 手机经 hub 打「我的电脑」:原生层取不到 / 不支持调用方凭据时,K8 中继合成 503 CALLER_UNAVAILABLE / CALLER_UNSUPPORTED
+// (失败关闭,请求没发出);hub 验票失败回 403 UNIT_CALLER_INVALID / UNIT_CALLER_EXPIRED;unitWeb 验断言失败回
+// 403 BAD_CALLER_ASSERTION。都是终局:services/engine/health.ts 的 classify 判 caller-unavailable,不重试。
+// 用 Object.assign 追加(不改上面的对象字面量),与别的包的分块互不相撞。
+registerMessages({
+  'engine.refusal.callerUnavailable': {
+    zh: '这台设备暂时拿不到自己的设备身份，请求没有发出。请稍后重试',
+    en: "This device couldn't get its device identity right now, so the request wasn't sent. Try again in a moment",
+  },
+  'engine.refusal.callerUnsupported': {
+    zh: '当前版本的 App 不能以已登记设备的身份连接你的电脑，请更新 App',
+    en: "This version of the app can't connect to your computer as a registered device. Update the app",
+  },
+  'engine.refusal.callerExpired': {
+    zh: '设备身份凭据已失效，请重试；仍不行请在互联设备里重新登记这台设备',
+    en: "This device's identity has expired. Try again, or register this device again under connected devices",
+  },
+  'engine.refusal.badCallerAssertion': {
+    zh: '那台电脑没能验证这次请求的来源，已拒绝。请重试',
+    en: "That computer couldn't verify where this request came from and refused it. Try again",
+  },
+})
+
+Object.assign(REFUSAL_KEYS, {
+  CALLER_UNAVAILABLE: 'engine.refusal.callerUnavailable',
+  CALLER_UNSUPPORTED: 'engine.refusal.callerUnsupported',
+  UNIT_CALLER_INVALID: 'engine.refusal.callerExpired',
+  UNIT_CALLER_EXPIRED: 'engine.refusal.callerExpired',
+  BAD_CALLER_ASSERTION: 'engine.refusal.badCallerAssertion',
+})
