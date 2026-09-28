@@ -24,6 +24,9 @@
 //   X3 撤销栈跨启停保留:停用后 Cmd+Z 撤掉的是启停之前打的字 · X4 输入法组字中启停 → 推迟到上屏后,盘上是汉字不是拼音
 //   X5 画布卡归属不随启停清零:启停后删掉一张卡,amadeus_canvas 照常跟着更新(清了归属 = 派生冻结)
 //   X6 嵌入不随启停变空壳:重配会重建全部插件视图,嵌入层的 React 根不许被卸(widget DOM 还在用)
+//   X7-X9(评审 G1-07,扩展异常隔离):X7 笔记开着时启用一个 state.init 抛错的扩展 → 正文照常、提示点名插件、打字照常落盘;
+//   X8 spec.view 抛错 → 宿主插件视图不被打断(⠿ 把手、大纲、insertMarkdown 照常)、提示点名;
+//   X9 init 只对某篇抛错(建编辑器那一刻才炸)→ 切到那篇正文照常渲染、提示点名
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -468,6 +471,54 @@ async function groupX(browser) {
   }
 }
 
+const badToasts = (p) => p.evaluate(() => window.__toasts.filter((t) => t.level === 'error').map((t) => t.text))
+async function groupXFault(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await p.evaluate(() => window.__ep.loadPlugin(`ctx.registerEditorExtension((pm) => [new pm.Plugin({ state: { init: () => { throw new Error('init boom') }, apply: (t, v) => v } })])`, { id: 'badinit', name: '坏初始化' }))
+    await wait(600)
+    const body = await p.evaluate((s) => document.querySelector(s)?.innerText ?? null, PM)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('照打')
+    await wait(1600)
+    const t = await badToasts(p)
+    record('X7 启用 state.init 抛错的扩展 → 正文照常、提示点名插件、打字照常落盘',
+      !!body && body.includes('第一段。') && t.some((x) => x.includes('坏初始化')) && (await disk(p)).includes('第一段。照打'), JSON.stringify({ body, t }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n## 小节\n')
+    await p.evaluate(() => window.__ep.loadPlugin(`ctx.registerEditorExtension((pm) => [new pm.Plugin({ view: () => { throw new Error('view boom') } })])`, { id: 'badview', name: '坏视图', }))
+    await wait(600)
+    const r = await p.evaluate(() => {
+      const box = document.querySelector('.unified-body .ProseMirror p').getBoundingClientRect()
+      return { heads: window.__upage.lifecycle.unifiedHeadings('Unified.md')?.length ?? -1, box: { x: box.left + 10, y: box.top + box.height / 2 } }
+    })
+    await p.mouse.move(r.box.x, r.box.y)
+    await wait(300)
+    const handle = await p.evaluate(() => [...document.querySelectorAll('.unified-body *')].some((el) => el.textContent === '⠿' && el.getBoundingClientRect().width > 0))
+    const ins = await p.evaluate(() => window.__upage.lifecycle.unifiedInsertMarkdown('Unified.md', '插入的段。', 'end'))
+    await wait(1600)
+    const t = await badToasts(p)
+    record('X8 spec.view 抛错的扩展 → 宿主插件视图照常(⠿ 把手、大纲、insertMarkdown),提示点名插件',
+      handle && r.heads === 2 && ins && (await disk(p)).includes('插入的段。') && t.some((x) => x.includes('坏视图')), JSON.stringify({ handle, heads: r.heads, ins, t }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await p.evaluate(() => window.__ep.loadPlugin(`ctx.registerEditorExtension((pm) => [new pm.Plugin({ state: { init: (c, st) => { if (st.doc.textContent.includes('BOOM')) throw new Error('doc boom'); return 0 }, apply: (t, v) => v } })])`, { id: 'baddoc', name: '挑文档' }))
+    await wait(500)
+    const t0 = await badToasts(p)
+    await p.evaluate(() => window.__upage.switchFile('Boom.md', '# 炸\n\nBOOM 在这里。\n'))
+    await wait(1200)
+    const body = await p.evaluate((s) => document.querySelector(s)?.innerText ?? null, PM)
+    const t = await badToasts(p)
+    record('X9 init 只对某篇抛错 → 切到那篇正文照常渲染、提示点名插件(之前那篇不受影响、不提示)',
+      t0.length === 0 && !!body && body.includes('BOOM 在这里') && t.some((x) => x.includes('挑文档')), JSON.stringify({ t0, body, t }))
+    await p.close()
+  }
+}
+
 // ─────────────────────────────── D-17 ───────────────────────────────
 /** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
 async function titleEnter(p, delay) {
@@ -518,7 +569,7 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: groupX }
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) } }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

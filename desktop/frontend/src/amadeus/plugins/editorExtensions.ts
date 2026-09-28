@@ -16,6 +16,14 @@ import { keymap } from '@milkdown/kit/prose/keymap'
 import { InputRule, inputRules } from '@milkdown/kit/prose/inputrules'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { EditorExtensionContext, EditorExtensionFactory, EditorExtensionOptions, PmToolkit } from './types'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'edext.failed': {
+    zh: '插件「{name}」的编辑器扩展出错，已停用这部分功能。笔记内容不受影响。',
+    en: 'The editor extension from plugin "{name}" failed and was turned off. Your notes are unaffected.',
+  },
+})
 
 const PM: PmToolkit = {
   Plugin,
@@ -33,7 +41,14 @@ const PM: PmToolkit = {
 }
 
 type Bucket = 'high' | 'normal'
-interface Entry { pluginId: string; factory: EditorExtensionFactory }
+interface Entry {
+  pluginId: string
+  factory: EditorExtensionFactory
+  /** 插件展示名(提示用;宿主给,缺省用 id)。 */
+  name?: () => string
+  /** 已隔离(评审 G1-07):它的 state.init / 插件视图抛过错 —— 本次注册从此不再装进任何编辑器,直到插件重载(新注册)。 */
+  faulted?: boolean
+}
 
 /** 两个桶:high 排在宿主全部插件之前(能抢 Tab 这类已被占用的键),normal 排在之后。
  *  各自一个注入点(见 MarkdownBlock 的 `.use()` 链首尾),顺序才是确定的 —— 靠「谁先 push 进
@@ -49,13 +64,82 @@ function bump(): void {
   }
 }
 
-export function addEditorExtension(pluginId: string, factory: EditorExtensionFactory, opts?: EditorExtensionOptions): void {
+export function addEditorExtension(pluginId: string, factory: EditorExtensionFactory, opts?: EditorExtensionOptions, name?: () => string): void {
   if (typeof factory !== 'function') {
     console.warn(`[plugin:${pluginId}] registerEditorExtension 需要一个函数`)
     return
   }
-  registry[opts?.priority === 'high' ? 'high' : 'normal'].push({ pluginId, factory })
+  registry[opts?.priority === 'high' ? 'high' : 'normal'].push({ pluginId, factory, name })
   bump()
+}
+
+/** 活着的注册(隔离掉的不算)。 */
+const liveEntries = (bucket: Bucket): Entry[] => registry[bucket].filter((e) => !e.faulted)
+
+/** 隔离一条注册(评审 G1-07):一次提示点名是哪个插件,然后让所有编辑器原地重配把它摘掉。
+ *  重配推到微任务:这里可能正跑在某次 EditorState.create / reconfigure 的 init 里,当场重入会在旧状态上再配一遍。 */
+function quarantine(e: Entry, err: unknown): void {
+  if (e.faulted) return
+  e.faulted = true
+  console.error(`[amadeus] 插件 ${e.pluginId} 的编辑器扩展抛错,已停用这份扩展`, err)
+  const name = (() => { try { return e.name?.() || e.pluginId } catch { return e.pluginId } })()
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('amadeus:toast', {
+      detail: { level: 'error', dedupeKey: `amx-edext:${e.pluginId}`, text: translate('edext.failed', { name }) },
+    }))
+  }
+  queueMicrotask(bump)
+}
+
+/** 隔离 state.init 与插件视图(评审 G1-07)。
+ *  - init 抛错:此前 EditorState.create 整个失败 → **所有笔记正文空白**、零提示。现在这份扩展的这个插件拿 undefined 当状态
+ *    建起来,随即隔离、重配摘掉;在被摘掉之前它的 apply 原样传值(它已经废了,不再跑它的代码)。
+ *    ⚠️ 这**不是**给 apply 做隔离:健康插件的 apply 照旧不包(吞掉状态迁移的异常 = 放任状态损坏,既定决策)。
+ *  - spec.view 抛错:此前 PM 建插件视图的循环当场中断,排在它后面的宿主插件视图(块把手、大纲、insertMarkdown 依赖的
+ *    视图登记)全都没建 → 编辑器「半死」。现在给它一个空视图、隔离;视图的 update / destroy 抛错同样隔离。 */
+function guardLifecycle(p: Plugin, e: Entry): Plugin {
+  const spec = p.spec as { state?: { init: (...a: unknown[]) => unknown; apply: (...a: unknown[]) => unknown }; view?: (view: EditorView) => { update?: (...a: unknown[]) => void; destroy?: () => void } }
+  const field = spec.state
+  if (field && typeof field.init === 'function' && typeof field.apply === 'function') {
+    const init = field.init
+    const apply = field.apply
+    let dead = false
+    field.init = function (this: unknown, ...a: unknown[]) {
+      try {
+        return init.apply(this, a)
+      } catch (err) {
+        dead = true
+        quarantine(e, err)
+        return undefined
+      }
+    }
+    field.apply = function (this: unknown, ...a: unknown[]) {
+      return dead ? a[1] : apply.apply(this, a)
+    }
+  }
+  const view = spec.view
+  if (typeof view === 'function') {
+    spec.view = function (this: unknown, ev: EditorView) {
+      let pv: { update?: (...a: unknown[]) => void; destroy?: () => void } | undefined
+      try {
+        pv = view.call(this, ev)
+      } catch (err) {
+        quarantine(e, err)
+        return {}
+      }
+      if (!pv) return {}
+      const inner = pv
+      return {
+        update: inner.update ? (...a: unknown[]) => {
+          try { inner.update!.apply(inner, a) } catch (err) { quarantine(e, err) }
+        } : undefined,
+        destroy: inner.destroy ? () => {
+          try { inner.destroy!.call(inner) } catch (err) { console.error(`[amadeus] 插件 ${e.pluginId} 的编辑器扩展视图 destroy 抛错(已隔离)`, err) }
+        } : undefined,
+      }
+    }
+  }
+  return p
 }
 
 /** 插件停用/重载时整体摘除(与其余 contribution 切片同一条 teardown 纪律)。 */
@@ -110,7 +194,7 @@ function buildEntry(e: Entry, context: EditorExtensionContext): Plugin[] {
   try {
     const out = e.factory(PM, context)
     if (Array.isArray(out)) {
-      for (const p of out) if (p instanceof Plugin) made.push(guardProps(p, `插件 ${e.pluginId}`))
+      for (const p of out) if (p instanceof Plugin) made.push(guardLifecycle(guardProps(p, `插件 ${e.pluginId}`), e))
     }
   } catch (err) {
     // 工厂本身抛错只废掉这一份扩展,编辑器照常建起来。
@@ -137,7 +221,7 @@ export function pluginEditorExtensions(bucket: Bucket = 'normal', context: Edito
   const plugin = (ctx: Ctx) => async () => {
     await ctx.wait(SchemaReady)
     let built = new Map<Entry, Plugin[]>()
-    for (const e of registry[bucket]) built.set(e, buildEntry(e, context))
+    for (const e of liveEntries(bucket)) built.set(e, buildEntry(e, context))
     const flat = (m: Map<Entry, Plugin[]>): Plugin[] => [...m.values()].flat()
     const anchor = new Plugin({})
     // high 桶插到最前(它的注入点在 `.use()` 链首,此刻 ps 基本是空的,但前插语义保证
@@ -165,7 +249,7 @@ export function pluginEditorExtensions(bucket: Bucket = 'normal', context: Edito
         v.dom.addEventListener('compositionend', done)
         return
       }
-      const entries = registry[bucket]
+      const entries = liveEntries(bucket)
       const same = entries.length === built.size && entries.every((e) => built.has(e))
       if (same) return
       const next = new Map<Entry, Plugin[]>()

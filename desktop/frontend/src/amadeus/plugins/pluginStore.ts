@@ -1075,7 +1075,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }))
     },
     // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
-    registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts),
+    // 名字给扩展隔离的提示用(评审 G1-07:哪个插件的扩展坏了要点名)。
+    registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId),
     // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
     // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
     loadData: async () => {
