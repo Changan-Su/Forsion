@@ -1452,6 +1452,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
   }
 
   const applyPref = (id: string): void => {
+    // 带主进程半身的首方内置包(Forsion Extend):渲染半身跟着主进程那一半的开关走(桌面配置 disabledBundles),不看 localStorage ——
+    // 旧开关拨下的「关」会一直留在那儿,而主进程半身其实在跑,它挂进「Forsion 云端」的设置页就永远出不来。enable 顺手把旧的「关」擦掉。
+    const plugin = get().plugins.find((p) => p.id === id)
+    if (plugin?.locked) {
+      if (!plugin.bundleOff) get().enable(id)
+      return
+    }
     if (!get().disabledIds.includes(id)) get().enable(id)
   }
 
@@ -1562,7 +1569,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const disabledIds = readDisabled()
       set({ disabledIds })
       for (const id of [...get().activeIds]) if (disabledIds.includes(id)) teardown(id)
-      for (const plugin of get().plugins) if (!disabledIds.includes(plugin.id)) applyPref(plugin.id)
+      for (const plugin of get().plugins) if (plugin.locked || !disabledIds.includes(plugin.id)) applyPref(plugin.id)
     },
 
     toggle(id) {
