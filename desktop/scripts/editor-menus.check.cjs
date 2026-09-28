@@ -7,6 +7,7 @@
 //        转换做不成要么真转了、要么给提示,不许静默(I-19)
 //   I20  选区工具栏键盘可达 + ARIA:Alt+F10 进工具栏(焦点进去工具栏不被卸载)、←→ 移动、Enter 触发、子面板键盘开 +
 //        ↓ 选项、Esc 退回编辑器;格式钮有 aria-pressed / aria-label(I-20)
+//   B4   块菜单对折起的标题:「复制块」「移动到…」以整节为单位(B-04)
 //   B5   块菜单作用于多块选区:「转换为」逐块生效(列表并成一只,一次撤销全回)、「移到新列」置灰并说明(B-05)
 //   B10  块菜单开着时:方向键不挪编辑器选区(在菜单项间移动)、Enter 执行聚焦项、动作落在打开时的那一块;
 //        role=menu / menuitem;键盘打开把焦点送进菜单(B-10)
@@ -557,6 +558,49 @@ async function main() {
         const msg = await page.evaluate(() => document.querySelector('.dialog-msg')?.textContent ?? '')
         await page.keyboard.press('Escape')
         check('B15d /embed 说明指向「复制标题链接 / 复制块链接」,不再提「复制嵌入引用」', /复制标题链接/.test(msg) && !/复制嵌入引用/.test(msg), JSON.stringify(msg))
+      }
+    }
+
+    if (want('B4')) {
+      // B-04:块菜单对折起的标题 = 标题 + 藏着的小节一个整体。「复制块」复制整节(副本同样折着);
+      //       「移动到…」把整节搬去目标笔记,本篇删干净,下一枚标题不「继承」折叠。
+      const foldVia = async (page, name) => {
+        const r = await rectOf(page, name)
+        await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+        await page.waitForTimeout(260)
+        await page.evaluate(() => document.querySelector('.unified-gutter .block-fold')?.click())
+        await page.waitForTimeout(200)
+        await page.mouse.move(5, 5)
+        await page.waitForTimeout(150)
+      }
+      const foldedNames = (page) => page.evaluate(() => [...document.querySelectorAll('.amx-heading-folded')].map((e) => e.textContent.replace('▸', '')))
+      const SEED = '前段。\n\n## 小节\n\n节内一。\n\n节内二。\n\n## 下节\n\n下节正文。\n'
+      {
+        await load(page, SEED)
+        await foldVia(page, '小节')
+        const open = await openHandleMenu(page, '▸小节') // 折起的标题行首挂着展开钮 ▸
+        const ok = open && await clickItem(page, '复制块')
+        await page.waitForTimeout(200)
+        const s = await shape(page)
+        check('B4a 「复制块」折起的标题:复制整节,副本同样折着', ok && JSON.stringify(s) === JSON.stringify(['前段。', 'heading2:小节', '节内一。', '节内二。', 'heading2:小节', '节内一。', '节内二。', 'heading2:下节', '下节正文。']) && JSON.stringify(await foldedNames(page)) === JSON.stringify(['小节', '小节']), JSON.stringify({ s, f: await foldedNames(page) }))
+      }
+      {
+        await page.evaluate(() => {
+          window.__upage.vault.set('小节去处.md', '# 去处\n')
+          const st = window.__upage.pageStore.getState()
+          window.__upage.pageStore.setState({ pages: [...new Set([...(st.pages || []), '小节去处.md'])] })
+        })
+        const nm = await load(page, SEED)
+        await foldVia(page, '小节')
+        const open = await openHandleMenu(page, '▸小节') // 折起的标题行首挂着展开钮 ▸
+        const ok = open && await clickItem(page, '移动到')
+        const picker = await waitSel(page, '[data-testid=note-picker]')
+        await page.keyboard.type('小节去处')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        const target = await page.evaluate(() => window.__upage.vault.get('小节去处.md'))
+        const f = await foldedNames(page)
+        check('B4b 「移动到…」折起的标题:整节搬走,本篇删干净,下节不继承折叠', ok && picker && target === '# 去处\n\n## 小节\n\n节内一。\n\n节内二。\n' && md === '前段。\n\n## 下节\n\n下节正文。\n' && f.length === 0, JSON.stringify({ target, md, f }))
       }
     }
 

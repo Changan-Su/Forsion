@@ -63,6 +63,7 @@ import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
 import { columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
+import { withFoldedSections } from './foldCarry'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -1467,6 +1468,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     else if (view.state.selection instanceof NodeSelection) single(view, view.state.selection)
     view.focus()
   }
+  /** 「移动到…」搬走的范围:跨块选区或块选中;折起的标题连同藏着的小节一起走(B-04)。 */
+  const moveRangeOf = (view: EditorView): { from: number; to: number } | null => {
+    const sel = view.state.selection
+    const r = layer.topRangeOf(view) ?? (sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : null)
+    return r && { from: r.from, to: withFoldedSections(view.state, r.from, r.to) }
+  }
   /** 「问 Tangu」(评审 G3-04):选区 / 块的文字 + 最近标题的锚点交给侧栏对话(挂成引用,不发送)。
    *  笔记一个字不动 —— 不铸 `^id`,锚点只到标题(askTangu.ts)。入口只在宿主给了 askInChat(= 注册了侧栏
    *  对话)时出现:纯 Amadeus 壳、automation-only 档案、台架都不给,不画一个点了没反应的按钮。 */
@@ -2817,7 +2824,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               const view = layer.getView()
               if (!view) return null
               const sel = view.state.selection
-              const range = layer.topRangeOf(view) ?? (sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : null)
+              const range = moveRangeOf(view)
               const link = sel instanceof NodeSelection ? blockLinkOf(sel.node, path, scoped.getState().pages) : null
               const movable = !!range && canMove(view.state.doc.slice(range.from, range.to).content)
               return (
@@ -2832,8 +2839,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                       setBlockMenu(null)
                       const v = layer.getView()
                       if (!v || !restoreMenuTarget(v)) return
-                      const s2 = v.state.selection
-                      const r = layer.topRangeOf(v) ?? (s2 instanceof NodeSelection ? { from: s2.from, to: s2.to } : null)
+                      const r = moveRangeOf(v)
                       if (r) setMovePick({ doc: v.state.doc, ...r })
                     }}>
                       <FileInput size={13} /> {t('blocklinks.moveTo')}

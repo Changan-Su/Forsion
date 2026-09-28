@@ -1,6 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
-// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路)。
+// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -996,6 +996,66 @@ async function main() {
         await page.waitForTimeout(150)
         const o = await order(page)
         check('B03 跨列表项选区 Mod-Alt-↓:两项一起在列表内下移', o === '上段。 | bullet_list[项一,项四,项二,项三]', o)
+        await page.close()
+      }
+    }
+
+    // B-04:折起的标题 = 标题 + 藏着的小节一个整体 —— 键盘搬按小节对小节换位且保持折着;邻居标题不「继承」折叠;
+    //       Mod+D 复制出一份同样折着的整节;无标题前言被并进小节时展开而不是把块藏起来(md 小节是结构)。
+    if (want('B04')) {
+      /** 顶层块速写:标题带 #级,藏着的块前缀 ~,折起的标题后缀 ▸。 */
+      const view = (page) => page.evaluate((PM) => {
+        const v = window.__upage.probe.view()
+        const out = []
+        v.state.doc.forEach((n, off) => {
+          const el = v.nodeDOM(off)
+          const hidden = !(el instanceof HTMLElement) || getComputedStyle(el).display === 'none'
+          const folded = el instanceof HTMLElement && el.classList.contains('amx-heading-folded')
+          out.push((hidden ? '~' : '') + (n.type.name === 'heading' ? '#'.repeat(n.attrs.level) + ' ' : '') + n.textContent + (folded ? '▸' : ''))
+        })
+        return out.join(' | ')
+      }, PM)
+      const foldH = async (page, name) => {
+        const h = await page.evaluate(({ PM, name }) => {
+          const el = [...document.querySelectorAll(PM + ' > h1, ' + PM + ' > h2, ' + PM + ' > h3')].find((e) => e.textContent.includes(name))
+          const r = el.getBoundingClientRect()
+          return { x: r.left + 15, y: r.top + r.height / 2 }
+        }, { PM, name })
+        await page.mouse.move(h.x, h.y, { steps: 3 })
+        await page.waitForTimeout(300)
+        const ok = await page.evaluate(() => {
+          const f = document.querySelector('.unified-gutter .block-fold')
+          if (!f || f.style.display === 'none') return false
+          f.click()
+          return true
+        })
+        await page.waitForTimeout(150)
+        if (!ok) throw new Error('折叠钮没出现:' + name)
+      }
+      const SEED = '前段。\n\n## 小节\n\n节内一。\n\n节内二。\n\n## 下节\n\n下节正文。\n'
+      for (const [name, fold, at, how, key, want] of [
+        ['光标在折起的标题 Mod-Shift-↓:整节越过下一节,仍折着;下节不继承折叠', '小节', '小节', 'caret', 'Meta+Shift+ArrowDown',
+          '前段。 | ## 下节 | 下节正文。 | ## 小节▸ | ~节内一。 | ~节内二。'],
+        ['Esc 块选中折起的标题 Mod-Alt-↓:同上,仍块选中', '小节', '小节', 'esc', 'Meta+Alt+ArrowDown',
+          '前段。 | ## 下节 | 下节正文。 | ## 小节▸ | ~节内一。 | ~节内二。'],
+        ['折起的下节 Mod-Shift-↑:整节越过上一节,仍折着;小节不继承折叠', '下节', '下节', 'caret', 'Meta+Shift+ArrowUp',
+          '前段。 | ## 下节▸ | ~下节正文。 | ## 小节 | 节内一。 | 节内二。'],
+        ['折起的小节 Mod-Shift-↑ 越过无标题前言:前言并进小节 → 展开,不藏块', '小节', '小节', 'caret', 'Meta+Shift+ArrowUp',
+          '## 小节 | 节内一。 | 节内二。 | 前段。 | ## 下节 | 下节正文。'],
+        ['普通段 Mod-Shift-↓ 撞折起的标题:落进那一节 → 那一节展开,段落看得见', '小节', '前段。', 'caret', 'Meta+Shift+ArrowDown',
+          '## 小节 | 前段。 | 节内一。 | 节内二。 | ## 下节 | 下节正文。'],
+        ['光标在折起的标题 Mod+D:复制出同样折着的整节', '小节', '小节', 'caret', 'Meta+d',
+          '前段。 | ## 小节▸ | ~节内一。 | ~节内二。 | ## 小节▸ | ~节内一。 | ~节内二。 | ## 下节 | 下节正文。'],
+      ]) {
+        const page = await open(browser, SEED)
+        await foldH(page, fold)
+        await caretAtText(page, at)
+        if (how === 'esc') { await page.keyboard.press('Escape'); await page.waitForTimeout(120) }
+        await page.keyboard.press(key)
+        await page.waitForTimeout(200)
+        const v = await view(page), s = await selInfo(page)
+        const selOk = how === 'esc' ? s.json === 'node' && s.node === 'heading' : s.json === 'text'
+        check(`B04 ${name}`, v === want && selOk, `${v} | sel=${JSON.stringify(s)}`)
         await page.close()
       }
     }

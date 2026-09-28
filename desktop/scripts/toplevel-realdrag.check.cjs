@@ -17,6 +17,9 @@
 //  T8 多块选区拖到折叠标题下半(executeMoveBlocks 那条路)→ 展开,块看得见
 //  T8b 多块选区拖到嵌套折叠之后的下一节标题上缘 → 逐层展开(只展开外层,块仍在内层小节里看不见)
 //  T9 OS 文件拖到折叠标题上 → 文件落在标题之后且看得见
+//  ③ 折起的标题整节拖(B-04)
+//  T10 折着拖:拖动中不展开、整节落下仍折着、邻居标题不继承折叠
+//  T10b 整节拖到无标题前言之前:前言成了它的正文 → 展开,不把前言藏起来
 // 用法:node scripts/e2e-editor.cjs --check=toplevel-realdrag(或 npm run check:topdrag)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -374,6 +377,43 @@ async function main() {
     await p.waitForTimeout(400)
     const doc = await shape(p)
     check('T9 文件拖到折叠标题上 → 落在标题之后且看得见', folded && r.handed && JSON.stringify(doc.slice(2, 4)) === JSON.stringify(['#末节', '![[dro']), JSON.stringify({ folded, doc, line: r.line }))
+    await p.close()
+  }
+
+  // ── T10 折起的标题整节拖(B-04):折着拖、整节落下、落下后仍折着;拖动中正文不展开跳动;邻居标题不继承折叠 ──
+  const SEED_SECT = '前段。\n\n## 小节\n\n节内一。\n\n节内二。\n\n## 下节\n\n下节正文。\n'
+  {
+    const p = await openPage(browser, SEED_SECT, 'Sect.md', READY_H)
+    const folded = await foldHeading(p, '小节')
+    const head = await elRect(p, 'h2', '小节')
+    const h = head ? await handleAt(p, head.x + 30, head.y + head.h / 2) : null
+    const tgt0 = await elRect(p, 'p', '下节正文')
+    let during = null
+    if (h && tgt0) {
+      await p.mouse.move(h.x, h.y)
+      await p.mouse.down()
+      await p.mouse.move(h.x + 5, h.y + 5, { steps: 2 })
+      await p.mouse.move(tgt0.x + 40, tgt0.b - 3, { steps: 10 })
+      await idle(p, tgt0.x + 40, tgt0.b - 3)
+      during = { y: (await elRect(p, 'p', '下节正文'))?.y, doc: await shape(p) }
+      await p.mouse.up()
+      await p.waitForTimeout(450)
+    }
+    const doc = await shape(p)
+    check('T10 拖动中折起的小节不展开(正文不在指针下方跳动)', folded && !!during && Math.abs(during.y - tgt0.y) < 2 && during.doc.includes('~节内一。'), JSON.stringify({ y0: tgt0?.y, during }))
+    check('T10 折起的标题整节落下,仍折着;下节不继承折叠', JSON.stringify(doc) === JSON.stringify(['前段。', '#下节', '下节正文。', '#小节', '~节内一。', '~节内二。']) && JSON.stringify(await foldedSet(p)) === JSON.stringify(['小节']), JSON.stringify({ doc, folded: await foldedSet(p) }))
+    await p.close()
+  }
+  // ── T10b 折起的小节拖到无标题前言之前:前言成了它的正文 → 展开,绝不把前言藏起来 ──
+  {
+    const p = await openPage(browser, SEED_SECT, 'Sect2.md', READY_H)
+    await foldHeading(p, '小节')
+    const head = await elRect(p, 'h2', '小节')
+    const h = head ? await handleAt(p, head.x + 30, head.y + head.h / 2) : null
+    const top = await elRect(p, 'p', '前段')
+    if (h && top) await drag(p, h, { x: top.x + 40, y: top.y + 3 })
+    const doc = await shape(p)
+    check('T10b 折起的小节拖到前言之前 → 整节落下、展开,前言看得见', JSON.stringify(doc) === JSON.stringify(['#小节', '节内一。', '节内二。', '前段。', '#下节', '下节正文。']), JSON.stringify(doc))
     await p.close()
   }
 
