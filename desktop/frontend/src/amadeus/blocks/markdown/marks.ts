@@ -182,13 +182,65 @@ const HL_BG_NAMES: Record<string, string> = {
   '#c5f6fa': 'teal', '#d0ebff': 'blue', '#f3d9fa': 'purple', '#e9ecef': 'grey',
 }
 
+// ── 粘贴 / 拖入的 HTML → 颜色 mark(D-09,评审 2026-09-27)────────────────────────────────────────────
+// 旧版 parseDOM 照单全收:Google Docs 的 `color:#000000`、暗色网站的浅灰字被固化进笔记(另一种明暗下看不见),
+// 只带背景色的 span 被 `style*="color"` 误中写成 `<span style="color:">`;应用内复制的红字 / 黄底被浏览器
+// 归一成 `rgb()`,查色板只认 hex → data-hl/data-hlc 丢了,暗色补偿永久失效。
+// 现口径(同 Notion「不在色板里的颜色一律丢弃」):
+//  1. 本应用自己写出的元素带 data-amx-fg / data-amx-bg(toDOM 写入的原值)→ 原样收(应用内复制跨篇、跨窗口不丢
+//     手写的自定义色),仍过 isSafeColor;
+//  2. 语义名 data-hlc / data-hl → 色板值(样式 hex 与语义名一致时保留样式那一档,兼容旧色板别名);
+//  3. 样式色归一成 hex(浏览器给的是 `rgb(r, g, b)`)命中色板 → 收;
+//  4. 其余一律不建 mark:文字色返回 false(规则不匹配,正文照常解析),`<mark>` 降为无色高亮。
+// 只管 DOM 这一侧;磁盘 md 里用户手写的 `<span style="color:…">` 走 openTag,照旧认。仪器 marks.test.ts。
+/** CSS 颜色串 → 小写 `#rrggbb`;认 `#rgb` / `#rrggbb` / `rgb(r, g, b)` / 不透明的 `rgba(…)`。其余(命名色、半透明、hsl…)→ null。 */
+export function cssColorToHex(v: string): string | null {
+  const s = v.trim().toLowerCase()
+  const h = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(s)
+  if (h) return '#' + (h[1].length === 3 ? [...h[1]].map((c) => c + c).join('') : h[1])
+  const m = /^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*(?:[,/]\s*([\d.]+)(%?)\s*)?\)$/.exec(s)
+  if (!m) return null
+  if (m[4] !== undefined && Number(m[4]) !== (m[5] ? 100 : 1)) return null
+  const n = [m[1], m[2], m[3]].map(Number)
+  return n.some((x) => x > 255) ? null : '#' + n.map((x) => x.toString(16).padStart(2, '0')).join('')
+}
+/** 语义名 → 该色当前色板值(表里每个名字第一次出现的那条 = 现行色板,后面是旧版别名)。 */
+const canonicalOf = (table: Record<string, string>): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const [hex, name] of Object.entries(table)) if (!(name in out)) out[name] = hex
+  return out
+}
+const HL_FG_CANON = canonicalOf(HL_FG_NAMES)
+const HL_BG_CANON = canonicalOf(HL_BG_NAMES)
+const paletteHit = (table: Record<string, string>, canon: Record<string, string>, name: string | null, styleColor: string): string | null => {
+  const hex = cssColorToHex(styleColor)
+  if (hex && table[hex] && (!name || table[hex] === name)) return hex
+  return name && canon[name] ? canon[name] : null
+}
+/** 粘贴 HTML 里的 span → 文字色 mark attrs;不是本应用的色 → false(不建 mark)。 */
+export function pastedFgAttrs(dom: HTMLElement): { color: string } | false {
+  const own = dom.getAttribute('data-amx-fg')
+  if (own && isSafeColor(own)) return { color: own }
+  if (!dom.style.color) return false // 只有 background-color 之类:不是文字色
+  const c = paletteHit(HL_FG_NAMES, HL_FG_CANON, dom.getAttribute('data-hlc'), dom.style.color)
+  return c ? { color: c } : false
+}
+/** 粘贴 HTML 里的 `<mark>` → 背景色 attrs;色板外的背景 → 无色高亮(保留「高亮」语义,丢外来颜色)。 */
+export function pastedBgAttrs(dom: HTMLElement): { bg: string } {
+  const own = dom.getAttribute('data-amx-bg')
+  if (own !== null && (own === '' || isSafeColor(own))) return { bg: own }
+  return { bg: paletteHit(HL_BG_NAMES, HL_BG_CANON, dom.getAttribute('data-hl'), dom.style.backgroundColor) ?? '' }
+}
+/** toDOM 查语义名:存量里被旧版粘贴写成 `rgb()` 的也认回来(只影响显示,不改盘上字节)。 */
+const semanticOf = (table: Record<string, string>, v: string): string | undefined => table[cssColorToHex(v) ?? v.toLowerCase()]
+
 export const colorSchema = $markSchema('amadeusColor', () => ({
   attrs: { color: { default: '' } },
-  parseDOM: [{ tag: 'span[style*="color"]', getAttrs: (dom) => ({ color: (dom as HTMLElement).style.color }) }],
+  parseDOM: [{ tag: 'span[style*="color"]', getAttrs: (dom) => pastedFgAttrs(dom as HTMLElement) }],
   toDOM: (mark) => {
     const c = String(mark.attrs.color)
-    const name = HL_FG_NAMES[c.toLowerCase()]
-    return ['span', { style: `color:${c}`, ...(name ? { 'data-hlc': name } : {}) }, 0]
+    const name = semanticOf(HL_FG_NAMES, c)
+    return ['span', { style: `color:${c}`, 'data-amx-fg': c, ...(name ? { 'data-hlc': name } : {}) }, 0]
   },
   parseMarkdown: {
     match: (node) => node.type === FG,
@@ -208,12 +260,12 @@ export const colorSchema = $markSchema('amadeusColor', () => ({
 
 export const bgSchema = $markSchema('amadeusBg', () => ({
   attrs: { bg: { default: '' } },
-  parseDOM: [{ tag: 'mark', getAttrs: (dom) => ({ bg: (dom as HTMLElement).style.backgroundColor || '' }) }],
+  parseDOM: [{ tag: 'mark', getAttrs: (dom) => pastedBgAttrs(dom as HTMLElement) }],
   toDOM: (mark) => {
     const bg = String(mark.attrs.bg)
-    if (!bg) return ['mark', {}, 0]
-    const name = HL_BG_NAMES[bg.toLowerCase()]
-    return ['mark', { style: `background:${bg}`, ...(name ? { 'data-hl': name } : {}) }, 0]
+    if (!bg) return ['mark', { 'data-amx-bg': '' }, 0]
+    const name = semanticOf(HL_BG_NAMES, bg)
+    return ['mark', { style: `background:${bg}`, 'data-amx-bg': bg, ...(name ? { 'data-hl': name } : {}) }, 0]
   },
   parseMarkdown: {
     match: (node) => node.type === BG,
