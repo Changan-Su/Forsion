@@ -1069,6 +1069,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 /* 「调整位置」模式:图片解锁可上下拖(否则默认锁定不可拖);激活时工具常显 + 内描边提示激活态。 */
 .amx-cover-repo { cursor: ns-resize; box-shadow: inset 0 0 0 2px var(--accent); }
 .amx-cover-repo .amx-cover-tools { opacity: 1; }
+.amx-cover-repo img { touch-action: none; } /* 调位模式:触屏拖动交给 pointer 事件,不让页面滚走(C-11) */
 .amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: var(--ui-font-caption, 11px); color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
 /* 底部柔和渐变:从中下部起逐渐融入页面背景色(--bg),与正文自然过渡;克制、不纯色底、无硬分界 */
