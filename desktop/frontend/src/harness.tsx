@@ -1785,6 +1785,16 @@ if (new URLSearchParams(location.search).has('dock')) {
       vault.set(path, text)
       for (const cb of listeners) cb(path)
     },
+    /** 把一个侧栏视图挂在页面右侧(台架没有 dockview 侧栏;反链面板等观感自查用)。mod = '/src/…' 模块路径。 */
+    async mountSide(mod: string, name: string) {
+      const m = (await import(/* @vite-ignore */ mod)) as Record<string, () => React.ReactElement>
+      const el = document.createElement('div')
+      el.className = 'harness-side'
+      el.style.cssText = 'position:fixed;right:0;top:0;bottom:0;width:320px;border-left:1px solid var(--border,#ddd);background:var(--sidebar-bg,var(--bg,#fff));z-index:40'
+      document.body.appendChild(el)
+      const C = m[name]
+      createRoot(el).render(<C />)
+    },
     /** 「最近打开」注入(生产由 amadeusPrefs 提供;`[[` / `@` 空查询按它排序,评审 L-13)。 */
     setRecents(paths: string[]) {
       setRecentsProvider(() => paths)

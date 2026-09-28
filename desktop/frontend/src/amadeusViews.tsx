@@ -2714,36 +2714,5 @@ function ScopedPageOutlineInner({ path, scope }: { path: string; scope: string }
   return <AmadeusOutlineView />
 }
 
-export function AmadeusBacklinksView() {
-  const { t } = useI18n()
-  // v4 笔记不设 activePage → 回落到 activeNotePath,否则本视图对 v4 恒显示「未打开笔记」。
-  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath)
-  const version = usePageStore((s) => s.linkGraphVersion)
-  const [refs, setRefs] = useState<Array<{ path: string; title: string; snippet: string }>>([])
-  useEffect(() => {
-    let live = true
-    if (!activePage) { setRefs([]); return }
-    void amadeus.backlinks(activePage).then((r) => { if (live) setRefs(r) })
-    return () => { live = false }
-  }, [activePage, version])
-
-  return (
-    <div className="amx-panel">
-      <div className="amx-panel-head">{t('amadeus.backlinks')} · {refs.length}</div>
-      {!activePage ? (
-        <div className="amx-panel-empty">{t('amxv.backlinks.noNote')}</div>
-      ) : refs.length === 0 ? (
-        <div className="amx-panel-empty">{t('amxv.backlinks.empty')}</div>
-      ) : (
-        <div className="amx-list">
-          {refs.map((r) => (
-            <button key={r.path} className="amx-list-item" onClick={() => void openNote(r.path)} title={r.path}>
-              {r.title}
-              {r.snippet && <span className="amx-backlink-snippet">{r.snippet}</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
+// 反链面板(逐处上下文 + 未链接提及,L-16)在 ./amadeusBacklinks;此处保留导出名,注册处不动。
+export { AmadeusBacklinksView } from './amadeusBacklinks'
