@@ -13,7 +13,8 @@ import java.util.Map;
 
 /**
  * 身份面(登记 / 轮换 / 换票 / 删除)的小请求口(P1-K8)。接口化是为了 JVM 单测注入假 hub(RegistrarFlowTest / CallerTokensTest)。
- * 实现 {@link UrlConnection}:连接 10s / 读 15s、不跟随重定向(带 token 的请求不跟跳转,同 PhoneClaim 口径)、响应体封顶 64KB。
+ * 实现 {@link UrlConnection}:连接 10s / 读 15s、不跟随重定向(带 token 的请求不跟跳转,同 PhoneClaim 口径)、响应体封顶 64KB、
+ * 不碰进程全局 cookie 罐(NoCookieJar:Capacitor 把 WebView 的罐装成了全局 CookieHandler)。
  */
 interface UnitHttp {
     /** 一次请求的结果。status = 0 不会出现:网络错直接抛 IOException。 */
@@ -57,6 +58,15 @@ interface UnitHttp {
 
         @Override
         public Resp send(String method, String url, Map<String, String> headers, String body) throws IOException {
+            boolean prevNoCookies = NoCookieJar.enter();
+            try {
+                return sendNoCookies(method, url, headers, body);
+            } finally {
+                NoCookieJar.exit(prevNoCookies);
+            }
+        }
+
+        private Resp sendNoCookies(String method, String url, Map<String, String> headers, String body) throws IOException {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             try {
                 c.setConnectTimeout(CONNECT_MS);

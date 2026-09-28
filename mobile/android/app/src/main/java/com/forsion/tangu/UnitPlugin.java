@@ -5,11 +5,13 @@ import android.os.Build;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
+import android.webkit.WebView;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.WebViewListener;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import org.json.JSONObject;
@@ -21,6 +23,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 手机作为 Unit 的原生半身(P1-K8,规格 K8 §3.3):身份(登记 / 换票 / 自愈)+ 远端引擎请求的 HTTP 中继。
@@ -28,14 +31,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * | 方法               | 返回                                                  |
  * |--------------------|-------------------------------------------------------|
- * | config()           | {apiBase}(构建期烤死的地址,非机密;mobileShim 启动断言用)   |
- * | status()           | {registered, unitId?, name?}(只读本地,无网络)           |
+ * | config()           | {apiBase}(构建期烤死的地址,非机密;只读)                    |
+ * | attach()           | {apiBase} + 取消全部在途中继(新页面的握手;启动断言用这个)     |
+ * | status()           | {registered, unitId?, name?}(只读本地,无网络、不排在登记后面) |
  * | ensureRegistered() | {unitId, name, created};reject code 见 UnitError       |
  * | forget({remote})   | {ok}                                                  |
  * | request(opts, cb)  | RETURN_CALLBACK + keepAlive:多次回调 head / chunk / end / error |
  * | cancel({id})       | {ok}                                                  |
  *
  * ⚠️ 设备密钥、调用方凭据、调用方票**永不**出现在任何 resolve / reject / 日志里(S1)。
+ *
+ * 页面生命周期(评审 P1):WebView 重载 / 跳走时(深链重登、切界面模式、ErrorBoundary 都会 reload)旧页面的 keepAlive
+ * 回调已经没人接了,在途的中继(尤其长连 SSE)必须收掉,否则一直读、一直占着 16 个名额,几次重载后手机再也连不上任何电脑。
+ * 三道:① onPageStarted(Bridge.reset 同一时刻)→ relay.cancelAll();② 新页面握手 attach() 再取消一遍(兜住「旧页面
+ * 在重载前发出、却在 onPageStarted 之后才轮到执行」的那条 request);③ 每条回调按页面代数判活,代数变了就取消自己、不再发。
  */
 @CapacitorPlugin(name = "ForsionUnit")
 public class UnitPlugin extends Plugin {
@@ -44,6 +53,8 @@ public class UnitPlugin extends Plugin {
     private UnitRegistrar registrar;
     private CallerTokens tokens;
     private UnitRelay relay;
+    /** 页面代数:每次 onPageStarted +1。CallSink 记下出生时的代数,不等就说明它属于已经不在的页面。 */
+    private final AtomicInteger pageGen = new AtomicInteger();
     private final ExecutorService identityPool = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "forsion-unit-identity");
         t.setDaemon(true);
@@ -102,6 +113,15 @@ public class UnitPlugin extends Plugin {
                 tokens.invalidate();
             }
         }, log);
+        // Bridge 在 Plugin.load() 之前就绪;onPageStarted 在 UI 线程,cancelAll 只翻标记、断开交给后台线程。
+        getBridge().addWebViewListener(new WebViewListener() {
+            @Override
+            public void onPageStarted(WebView webView) {
+                pageGen.incrementAndGet();
+                int n = relay.cancelAll();
+                if (n > 0) Log.i(TAG, "[relay] page (re)load: cancelled " + n + " in-flight relayed request(s)");
+            }
+        });
     }
 
     @PluginMethod
@@ -112,6 +132,18 @@ public class UnitPlugin extends Plugin {
         call.resolve(o);
     }
 
+    /**
+     * 新页面的握手(unitBridge.ts 启动时调一次,首个中继请求等它):回 apiBase 供启动断言,并取消此刻全部在途中继 ——
+     * 本页面的请求都要等这个握手返回才发得出去,所以此刻在途的一定属于之前的页面。
+     */
+    @PluginMethod
+    public void attach(PluginCall call) {
+        int n = relay.cancelAll();
+        if (n > 0) Log.i(TAG, "[relay] attach: cancelled " + n + " orphaned relayed request(s)");
+        config(call);
+    }
+
+    /** 只读本地;registrar.current() 不拿登记用的监视器(评审 P2:这里跑在所有插件共用的线程上)。 */
     @PluginMethod
     public void status(PluginCall call) {
         UnitIdentity id = registrar.current();
@@ -165,7 +197,7 @@ public class UnitPlugin extends Plugin {
         }
         String body = call.getData().has("body") && !call.getData().isNull("body") ? call.getString("body") : null;
         UnitRelay.Req req = new UnitRelay.Req(call.getString("id"), call.getString("unitId"), call.getString("path"), call.getString("method"), headers, body);
-        relay.start(req, new CallSink(call));
+        relay.start(req, new CallSink(call, req.id, pageGen.get()));
     }
 
     @PluginMethod
@@ -183,13 +215,23 @@ public class UnitPlugin extends Plugin {
      */
     private final class CallSink implements UnitRelay.Sink {
         private final PluginCall call;
+        private final String id;
+        private final int gen;
         private final AtomicBoolean done = new AtomicBoolean(false);
 
-        CallSink(PluginCall call) {
+        CallSink(PluginCall call, String id, int gen) {
             this.call = call;
+            this.id = id;
+            this.gen = gen;
         }
 
         private void send(JSObject o, boolean last) {
+            if (gen != pageGen.get()) {
+                // 出生的页面已经不在了:别往新页面投递旧回调,顺手把自己取消(cancelAll 漏掉的那条也收得住)
+                if (id != null && !done.get()) relay.cancel(id);
+                done.set(true);
+                return;
+            }
             if (last) {
                 if (!done.compareAndSet(false, true)) return;
                 call.setKeepAlive(false);

@@ -51,14 +51,23 @@ final class FakeHub implements UnitHttp {
     /** 服务器时钟(毫秒);Date 头与 expiresAt 都按它算。 */
     long serverNowMs = 1_790_000_000_000L;
     boolean sendDate = true;
-    /** 老 server:没有 caller-token 路由,Express 回 HTML 404。 */
+    /** 老 server:没有 caller-token 路由,Express 回 HTML 404(探测与换票都撞上)。 */
     boolean oldServer;
     /** 下一次 caller-secret 回这个状态(0 = 正常)。 */
     int failCallerSecret;
     /** 每次换票都回这个状态(0 = 正常)。 */
     int mintStatus;
+    /** 每次 register 都回这个状态(0 = 正常)。 */
+    int registerStatus;
     int minted;
     IOException networkDown;
+    /** true:任何请求都 401(forsion_token 过期 / 被吊销)。 */
+    boolean rejectAuth;
+    /** 只对 path 匹配这个正则的请求断网(null = 不限)。 */
+    String networkDownPath;
+    /** 非 null:register 进来先 countDown registerEntered,再等这个闸(模拟慢网上的登记)。 */
+    volatile java.util.concurrent.CountDownLatch registerGate;
+    final java.util.concurrent.CountDownLatch registerEntered = new java.util.concurrent.CountDownLatch(1);
 
     private static final Pattern P_SECRET = Pattern.compile("^/units/([^/]+)/caller-secret$");
     private static final Pattern P_TOKEN = Pattern.compile("^/units/([^/]+)/caller-token$");
@@ -95,15 +104,41 @@ final class FakeHub implements UnitHttp {
         return UnitIdentity.userIdFromJwt(a.substring(7));
     }
 
+    /** 探测:POST /units/00000000-…/caller-token(登记前确认 server 有调用方凭据路由)。 */
+    int probes() {
+        return count("POST", "/units/" + UnitRegistrar.PROBE_UNIT_ID + "/caller-token");
+    }
+
+    /** 真换票(不含探测)。 */
+    int mints() {
+        return count("POST", "/units/(?!" + UnitRegistrar.PROBE_UNIT_ID + ")[^/]+/caller-token");
+    }
+
+    Call last(String method, String pathRegex) {
+        Call hit = null;
+        for (Call c : calls) if (c.method.equals(method) && c.path().matches(pathRegex)) hit = c;
+        return hit;
+    }
+
     @Override
-    public Resp send(String method, String url, Map<String, String> headers, String body) throws IOException {
+    public synchronized Resp send(String method, String url, Map<String, String> headers, String body) throws IOException {
         calls.add(new Call(method, url, headers, body));
-        if (networkDown != null) throw networkDown;
         if (!url.startsWith(API)) throw new AssertionError("请求发到了 apiBase 之外: " + url);
         String path = url.substring(API.length());
-        String user = userOf(headers);
-        if (user == null) return json(401, "{\"detail\":\"no token\"}");
+        if (networkDown != null && (networkDownPath == null || path.matches(networkDownPath))) throw networkDown;
+        String user = rejectAuth ? null : userOf(headers);
+        if (user == null) return json(401, "{\"detail\":\"Invalid or expired token\"}");
         if (method.equals("POST") && path.equals("/units/register")) {
+            java.util.concurrent.CountDownLatch gate = registerGate;
+            if (gate != null) {
+                registerEntered.countDown();
+                try {
+                    gate.await(20, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (registerStatus != 0) return json(registerStatus, "{\"detail\":\"boom\"}");
             JSONObject b;
             try {
                 b = new JSONObject(body);

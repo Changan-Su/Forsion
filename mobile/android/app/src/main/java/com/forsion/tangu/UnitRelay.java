@@ -10,6 +10,7 @@ import java.net.HttpURLConnection;
 import java.net.ProtocolException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -28,13 +29,18 @@ import java.util.concurrent.Semaphore;
  * 执行规则:
  *  1. 目的地只由原生拼:`apiBase + "/units/" + unitId + "/proxy" + path`;RelayPaths.check 不过 → bad_path,一个请求都不发。
  *  2. 头从零重建:Authorization = forsion_token(原生现读,JS 递来的丢弃)、X-Forsion-Caller = 调用方票、
- *     外加 JS 的 content-type / accept 两个;其余一律丢(C1:来源 / 身份头不许自报)。
- *  3. 发请求前先换到票;换不到 → caller_unavailable / caller_unsupported,**不发匿名请求**(失败关闭,S4)。
+ *     外加 JS 的 content-type / accept 两个;其余一律丢(C1:来源 / 身份头不许自报)。进程全局的 cookie 罐也不碰
+ *     (NoCookieJar:Capacitor 把 WebView 的罐装成了全局 CookieHandler,不挡就会带上 / 存下 apiBase 主机的 cookie)。
+ *  3. 发请求前先换到票;换不到就**不发匿名请求**(失败关闭,S4),按原因交给 JS(UnitError.relayCode):
+ *     断网 / 5xx / 429 → network(JS 抛 TypeError,渲染层当离线暂停重试);401 → auth_expired(JS 合成 401,走复检账号);
+ *     server 不支持 → caller_unsupported;明确拒绝 → caller_unavailable(JS 合成 503,终局)。
  *  4. body 只收字符串,UTF-8 ≤ 10MB(hub 隧道上限)→ 否则 too_large。
  *  5. 403 且 code ∈ {UNIT_CALLER_INVALID, UNIT_CALLER_EXPIRED}、且还没向 JS 交过 head → 强制换票重发**一次**;再失败原样交给 JS(R-04)。
  *  6. 连接 15s;accept 含 text/event-stream 时读超时 0(取消由 JS 驱动),否则 120s。不跟随重定向。
  *  7. 并发 ≤ 16(超出 → relay_busy);响应累计 > 256MB → too_large 并断开。每次 read 到的字节立即交出去(SSE 不攒包)。
  *  8. 日志只记 id、方法、状态码、时长;不记 path / query / body / 任何头。
+ *  9. 页面重载 / 跳走 → {@link #cancelAll()}(UnitPlugin 挂在 onPageStarted 与新页面的握手上):在途请求全属于已经不在的页面,
+ *     不取消的话长连 SSE 会一直读、一直占着 16 个名额,几次重载之后所有中继请求都 relay_busy(评审 P1)。
  */
 final class UnitRelay {
     /** 逐条交给 JS 的出口(UnitPlugin 把它接到 keepAlive 回调上)。close() 恰好调一次,在一切结束之后(含被取消)。 */
@@ -152,13 +158,36 @@ final class UnitRelay {
         Active a = active.get(id);
         if (a == null) return;
         a.cancelled = true;
+        disconnect(a);
+    }
+
+    /**
+     * 取消全部在途请求(页面重载 / 跳走:它们的 JS 回调已经没人接了)。返回取消的条数。
+     * 只在调用线程上翻标记;断开交给后台线程 —— onPageStarted 在 UI 线程,关 HTTPS 连接要写 close_notify,会触 StrictMode。
+     * 还卡在换票里的请求(没有连接可断)出来后看到标记就不再发(run 里连之前 / 连之后各查一次)。
+     */
+    int cancelAll() {
+        final List<Active> all = new ArrayList<>(active.values());
+        for (Active a : all) a.cancelled = true;
+        if (all.isEmpty()) return 0;
+        Runnable drop = () -> {
+            for (Active a : all) disconnect(a);
+        };
+        try {
+            pool.execute(drop);
+        } catch (RuntimeException e) {
+            drop.run();
+        }
+        return all.size();
+    }
+
+    private static void disconnect(Active a) {
         HttpURLConnection c = a.conn;
-        if (c != null) {
-            try {
-                c.disconnect();
-            } catch (RuntimeException ignored) {
-                // 断开时的竞态异常无所谓
-            }
+        if (c == null) return;
+        try {
+            c.disconnect();
+        } catch (RuntimeException ignored) {
+            // 断开时的竞态异常无所谓
         }
     }
 
@@ -167,6 +196,15 @@ final class UnitRelay {
     }
 
     private void run(Req r, Sink sink, Active a) {
+        boolean prevNoCookies = NoCookieJar.enter();
+        try {
+            runNoCookies(r, sink, a);
+        } finally {
+            NoCookieJar.exit(prevNoCookies);
+        }
+    }
+
+    private void runNoCookies(Req r, Sink sink, Active a) {
         long t0 = System.nanoTime();
         int status = -1;
         try {
@@ -196,12 +234,13 @@ final class UnitRelay {
                 try {
                     ticket = tokens.get(attempt > 0);
                 } catch (UnitError e) {
-                    sink.error("caller_unsupported".equals(e.code) ? "caller_unsupported" : "caller_unavailable", e.getMessage());
+                    if (a.cancelled) return;
+                    sink.error(e.relayCode(), e.getMessage());
                     return;
                 }
                 String bearer = auth.forsionToken();
                 if (bearer == null) {
-                    sink.error("caller_unavailable", "not signed in");
+                    sink.error(UnitError.CALLER_UNAVAILABLE, "not signed in");
                     return;
                 }
                 HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();

@@ -14,7 +14,10 @@ import java.util.Map;
  * - 到期前 60s 视为过期、单飞刷新。剩余有效期按**服务器时钟**算(expiresAt − 响应 Date 头),锚在 elapsedRealtime 上:
  *   手机时钟快了十几分钟也不会每个请求都重新换票(那会撞 /caller-token 的 IP 限流)。
  * - 自愈:403 UNIT_CALLER_SECRET_MISMATCH → 轮换 caller secret 一次再换;404 UNIT_NOT_FOUND → 重新登记(10 分钟一次)再换;
- *   404 且**无 code**(老 server 没这条路由,回的可能是 HTML)→ caller_unsupported;其余 → caller_unavailable。
+ *   404 且**无 code**(老 server 没这条路由,回的可能是 HTML)→ caller_unsupported。
+ * - 失败归类(UnitError.relayCode,评审 P1):断网 / 5xx / 429 → network(渲染层当离线,恢复后重试);401 → auth_expired
+ *   (forsion_token 失效,渲染层复检账号 / 重新登录);只有明确的拒绝(自愈后仍 403/404、重登节流、没登录、存不下、本机刚被移除)
+ *   才是 caller_unavailable —— K6 的健康状态机把它当终局,一次断网不能落到这里。
  * - 票与 secret 永不出这个类以外的原生边界:UnitRelay 拿去写头,不回 JS、不进日志。
  */
 final class CallerTokens {
@@ -45,9 +48,9 @@ final class CallerTokens {
         UnitRegistrar.Ensured e;
         try {
             a = registrar.account();
-            e = registrar.ensure();
+            e = registrar.ensureLazy();
         } catch (UnitError err) {
-            throw new UnitError("caller_unavailable", err.getMessage());
+            throw err.forRelay();
         }
         String key = a.entryKey + "|" + e.identity.unitId + "|" + CACHE_KEY;
         if (!force && token != null && key.equals(cachedFor) && clock.elapsedMs() < refreshAt) return token;
@@ -70,14 +73,14 @@ final class CallerTokens {
             r = http.send("POST", a.apiBase + "/units/" + UnitRegistrar.enc(id.unitId) + "/caller-token", h, null);
         } catch (IOException err) {
             log.w("[unit] caller-token network error: " + err.getClass().getSimpleName());
-            throw new UnitError("caller_unavailable", "caller-token: network error");
+            throw new UnitError(UnitError.NETWORK, "caller-token: network error");
         }
         String code = r.code();
         if (r.status == 200) {
             JSONObject o = r.json();
             String t = o == null ? "" : o.optString("token", "");
             long expSec = o == null ? 0 : o.optLong("expiresAt", 0);
-            if (t.isEmpty() || expSec <= 0) throw new UnitError("caller_unavailable", "caller-token: bad response");
+            if (t.isEmpty() || expSec <= 0) throw new UnitError(UnitError.CALLER_UNAVAILABLE, "caller-token: bad response");
             long serverNow = r.dateMs > 0 ? r.dateMs : clock.wallMs();
             long ttl = Math.max(0, Math.min(MAX_TTL_MS, expSec * 1000L - serverNow));
             // 锚在发出时刻(保守):响应在路上耗的时间从有效期里扣掉。
@@ -93,20 +96,24 @@ final class CallerTokens {
         if (!healed && r.status == 404 && "UNIT_NOT_FOUND".equals(code)) {
             return mint(a, heal(() -> registrar.reRegister(a, id, false)), true);
         }
-        if (r.status == 404 && code == null) throw new UnitError("caller_unsupported", "caller-token route missing");
-        throw new UnitError("caller_unavailable", "caller-token → " + r.status);
+        if (r.status == 404 && code == null) throw new UnitError(UnitError.CALLER_UNSUPPORTED, "caller-token route missing");
+        // 401 → auth_expired;5xx / 429 → network;其余(自愈后仍 403 / 404、400 UNIT_KIND_INVALID…)→ caller_unavailable。
+        throw UnitError.server("caller-token", r.status).forRelay();
     }
 
     private interface Heal {
         UnitIdentity run() throws UnitError;
     }
 
-    /** 自愈失败(轮换 / 重新登记挂了、被 10 分钟节流)一律折成 caller_unavailable:中继据此失败关闭。 */
+    /**
+     * 自愈失败按同一口径归类:轮换 / 重新登记途中断网或 5xx 仍是 network(等网络回来再试,不是终局);
+     * 被 10 分钟节流、本机刚被移除、再 403 → caller_unavailable。不管哪种,中继都失败关闭(不发匿名请求)。
+     */
     private static UnitIdentity heal(Heal h) throws UnitError {
         try {
             return h.run();
         } catch (UnitError e) {
-            throw "caller_unsupported".equals(e.code) ? e : new UnitError("caller_unavailable", e.getMessage());
+            throw e.forRelay();
         }
     }
 }

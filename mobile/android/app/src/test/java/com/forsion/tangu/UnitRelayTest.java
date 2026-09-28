@@ -221,6 +221,24 @@ public class UnitRelayTest {
         assertTrue("S4:取不到身份就不发匿名请求", seen.isEmpty());
     }
 
+    /** 评审 P1:换不到票的原因原样分类交给 JS —— 短暂失败是 network(不是终局),401 是 auth_expired;照样一个请求都不发。 */
+    @Test
+    public void ticketFailureReasonsPassThrough() throws Exception {
+        String[][] table = {
+            {"network", "network"}, {"server_503", "network"}, {"server_429", "network"},
+            {"auth_expired", "auth_expired"}, {"server_401", "auth_expired"},
+            {"caller_unsupported", "caller_unsupported"}, {"caller_unavailable", "caller_unavailable"}, {"storage", "caller_unavailable"},
+        };
+        int i = 0;
+        for (String[] row : table) {
+            tokens.fail = new UnitError(row[0], "x");
+            RecSink s = new RecSink();
+            relay.start(new UnitRelay.Req("tf" + (i++), U, "/engine/agent/sessions", "GET", Collections.emptyMap(), null), s);
+            assertEquals(row[0], "[error:" + row[1] + "]", s.drain().toString());
+        }
+        assertTrue("S4:取不到身份就不发匿名请求", seen.isEmpty());
+    }
+
     @Test
     public void signedOutIsUnavailable() throws Exception {
         bearer = null;
@@ -295,6 +313,80 @@ public class UnitRelayTest {
         assertTrue("取消后不再交任何东西", s.events.isEmpty());
         streamGate.countDown();
         assertEquals(0, relay.inFlight());
+    }
+
+    /**
+     * 评审 P1:WebView 重载时旧页面的 keepAlive 回调没人接了 —— cancelAll 把在途请求(含长连 SSE)全部断开、名额全还回来。
+     * 不收的话 16 个名额被泄漏的流占满,之后每个中继请求都是 relay_busy,直到杀进程。
+     */
+    @Test
+    public void cancelAllDropsEveryInFlightRequestAndFreesTheSlots() throws Exception {
+        streamGate = new CountDownLatch(1);
+        List<RecSink> sinks = new ArrayList<>();
+        for (int i = 0; i < UnitRelay.MAX_CONCURRENT; i++) {
+            RecSink s = new RecSink();
+            sinks.add(s);
+            relay.start(new UnitRelay.Req("ca" + i, U, "/engine/agent/events", "GET", Collections.singletonMap("accept", "text/event-stream"), null), s);
+        }
+        for (RecSink s : sinks) {
+            s.events.poll(10, TimeUnit.SECONDS);
+            s.events.poll(10, TimeUnit.SECONDS);
+        }
+        assertEquals(UnitRelay.MAX_CONCURRENT, relay.inFlight());
+        assertEquals(UnitRelay.MAX_CONCURRENT, relay.cancelAll());
+        for (RecSink s : sinks) assertTrue("被取消的请求都 close 了", s.closed.await(5, TimeUnit.SECONDS));
+        for (RecSink s : sinks) assertTrue("取消后一条都不再交", s.events.isEmpty());
+        assertEquals(0, relay.inFlight());
+        RecSink fresh = new RecSink();
+        relay.start(new UnitRelay.Req("after", U, "/engine/agent/sessions", "GET", Collections.emptyMap(), null), fresh);
+        fresh.drain();
+        assertEquals("名额还回来了:新请求不是 relay_busy", 200, fresh.status);
+        streamGate.countDown();
+        assertEquals("没有请求的时候 cancelAll 什么都不做", 0, relay.cancelAll());
+    }
+
+    /**
+     * 评审 P2:Capacitor 的 CapacitorCookies 在 load() 里无条件把 WebView 的 cookie 罐装成全局 CookieHandler,
+     * 于是中继 / 身份面的 HttpURLConnection 会带上 apiBase 主机的 cookie(比如设备页种下的 forsion_unit_session,
+     * 可能是上一个账号的 token)、还把响应的 Set-Cookie 存回罐里。「头从零重建」在真机上对 Cookie 不成立。
+     * 这里照 CapacitorCookies 装一个全局罐:中继与身份面都不带、不存;同一线程外的普通连接照旧带(仪器自检)。
+     */
+    @Test
+    public void neverTouchesTheProcessWideCookieJar() throws Exception {
+        java.net.CookieHandler saved = java.net.CookieHandler.getDefault();
+        java.net.CookieManager jar = new java.net.CookieManager(null, java.net.CookiePolicy.ACCEPT_ALL);
+        java.net.HttpCookie planted = new java.net.HttpCookie("forsion_unit_session", "stale-token");
+        planted.setPath("/");
+        planted.setVersion(0);
+        jar.getCookieStore().add(new java.net.URI("http://127.0.0.1:" + server.port() + "/"), planted);
+        java.net.CookieHandler.setDefault(jar); // 同 CapacitorCookies.load()
+        try {
+            RecSink s = new RecSink();
+            relay.start(new UnitRelay.Req("ck", U, "/engine/agent/sessions", "GET", Collections.emptyMap(), null), s);
+            s.drain();
+            assertEquals(200, s.status);
+            assertNull("中继请求带上了全局罐里的 cookie", seen.get(0).get("cookie"));
+            assertFalse("中继响应的 Set-Cookie 被存进了全局罐", hasCookie(jar, "x"));
+
+            new UnitHttp.UrlConnection().send("GET", apiBase + "/units/" + U + "/proxy/engine/agent/id", new HashMap<>(), null);
+            assertNull("身份面请求带上了全局罐里的 cookie", seen.get(1).get("cookie"));
+            assertFalse("身份面响应的 Set-Cookie 被存进了全局罐", hasCookie(jar, "x"));
+
+            // 仪器自检:没被标记的普通连接(= WebView / CapacitorHttp 那些)照旧带、照旧存 —— 证明罐真的装上了、测法读得到
+            java.net.HttpURLConnection plain = (java.net.HttpURLConnection) new java.net.URL(apiBase + "/units/" + U + "/proxy/unit/hostfile").openConnection();
+            assertEquals(200, plain.getResponseCode());
+            plain.getInputStream().close();
+            plain.disconnect();
+            assertEquals("forsion_unit_session=stale-token", seen.get(2).get("cookie"));
+            assertTrue("普通连接的 Set-Cookie 照旧进罐", hasCookie(jar, "x"));
+        } finally {
+            java.net.CookieHandler.setDefault(saved);
+        }
+    }
+
+    private static boolean hasCookie(java.net.CookieManager jar, String name) {
+        for (java.net.HttpCookie c : jar.getCookieStore().getCookies()) if (c.getName().equals(name)) return true;
+        return false;
     }
 
     @Test

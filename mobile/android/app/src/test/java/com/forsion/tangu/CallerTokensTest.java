@@ -8,7 +8,7 @@ import static org.junit.Assert.fail;
 import org.junit.Before;
 import org.junit.Test;
 
-/** 调用方票缓存与自愈(P1-K8;INTEGRATION R-02 / R-03)。时钟注入。 */
+/** 调用方票缓存与自愈(P1-K8;INTEGRATION R-02 / R-03)、失败归类(评审 P1)、移除后的闩(评审 P2)。时钟注入。 */
 public class CallerTokensTest {
     FakeHub hub;
     FakeHub.MemStore store;
@@ -28,7 +28,23 @@ public class CallerTokensTest {
     }
 
     private int mints() {
-        return hub.count("POST", "/units/[^/]+/caller-token");
+        return hub.mints();
+    }
+
+    private String codeOf(ThrowingRunnable r) {
+        try {
+            r.run();
+        } catch (UnitError e) {
+            return e.code;
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+        fail("应当抛 UnitError");
+        return null;
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     @Test
@@ -133,32 +149,114 @@ public class CallerTokensTest {
     @Test
     public void oldServerWithoutRouteIsUnsupported() throws Exception {
         hub.oldServer = true;
-        try {
-            tokens.get(false);
-            fail();
-        } catch (UnitError e) {
-            assertEquals("caller_unsupported", e.code);
-        }
+        assertEquals("caller_unsupported", codeOf(() -> tokens.get(false)));
+        assertEquals("探测先挡住:名册里一行都没建", 0, hub.count("POST", "/units/register"));
+        // 已登记过、server 回滚成老版本:换票撞无 code 的 404 同样 unsupported
+        hub.oldServer = false;
+        reg.ensure();
+        hub.oldServer = true;
+        assertEquals("caller_unsupported", codeOf(() -> tokens.get(false)));
     }
 
+    /**
+     * 评审 P1:短暂失败(断网、网关 5xx、限流)不是终局 —— 归 network,渲染层当离线暂停、网络回来就续;
+     * 原先一律 caller_unavailable,K6 的健康状态机把它当终局,一次断网就永久杀掉目标与 run 流。
+     */
     @Test
-    public void serverErrorsAndNetworkAreUnavailable() throws Exception {
+    public void transientMintFailuresAreNetworkNotTerminal() throws Exception {
         reg.ensure();
-        hub.mintStatus = 500;
-        try {
-            tokens.get(false);
-            fail();
-        } catch (UnitError e) {
-            assertEquals("caller_unavailable", e.code);
+        for (int st : new int[]{500, 502, 503, 504, 429}) {
+            hub.mintStatus = st;
+            assertEquals("换票 " + st, "network", codeOf(() -> tokens.get(false)));
         }
         hub.mintStatus = 0;
         hub.networkDown = new java.io.IOException("offline");
-        try {
-            tokens.get(false);
-            fail();
-        } catch (UnitError e) {
-            assertEquals("caller_unavailable", e.code);
-        }
+        assertEquals("换票断网", "network", codeOf(() -> tokens.get(false)));
+        hub.networkDown = null;
+        assertTrue("网络回来就好", tokens.get(false).startsWith("fuc1."));
+    }
+
+    @Test
+    public void transientFailuresDuringLazyRegistrationAreNetwork() throws Exception {
+        hub.registerStatus = 503;
+        assertEquals("登记 503", "network", codeOf(() -> tokens.get(false)));
+        hub.registerStatus = 0;
+        hub.networkDown = new java.io.IOException("offline");
+        assertEquals("登记断网", "network", codeOf(() -> tokens.get(false)));
+        hub.networkDown = null;
+        hub.failCallerSecret = 502;
+        assertEquals("caller-secret 502", "network", codeOf(() -> tokens.get(false)));
+        assertTrue("半截行回收了", hub.rows.isEmpty());
+    }
+
+    @Test
+    public void transientFailuresWhileHealingAreNetwork() throws Exception {
+        String id = reg.ensure().identity.unitId;
+        hub.rows.get(id).callerHash = FakeHub.sha("elsewhere"); // 换票 → 403 MISMATCH → 轮换
+        hub.networkDown = new java.io.IOException("offline");
+        hub.networkDownPath = "/units/[^/]+/caller-secret"; // 轮换那一步断网
+        assertEquals("轮换途中断网", "network", codeOf(() -> tokens.get(false)));
+        hub.networkDown = null;
+        hub.networkDownPath = null;
+        hub.failCallerSecret = 500;
+        assertEquals("轮换 500", "network", codeOf(() -> tokens.get(false)));
+        tokens.get(false);
+        assertEquals("恢复后照常轮换,id 不变", id, reg.current().unitId);
+    }
+
+    /** forsion_token 被 server 拒了(过期 / 吊销):交 auth_expired,JS 合成 401 让渲染层复检账号,不是「身份取不到」。 */
+    @Test
+    public void unauthorizedIsAuthExpired() throws Exception {
+        reg.ensure();
+        hub.mintStatus = 401;
+        assertEquals("换票 401", "auth_expired", codeOf(() -> tokens.get(false)));
+        hub.mintStatus = 0;
+        FakeHub h2 = new FakeHub();
+        h2.registerStatus = 401;
+        UnitRegistrar r2 = new UnitRegistrar(env, h2, new FakeHub.MemStore(), clock, FakeHub.LOG);
+        CallerTokens t2 = new CallerTokens(r2, h2, clock, FakeHub.LOG);
+        assertEquals("登记 401", "auth_expired", codeOf(() -> t2.get(false)));
+    }
+
+    /** 明确的拒绝才是终局 caller_unavailable:自愈后仍被拒、设备类型无效。 */
+    @Test
+    public void definitiveRefusalsStayUnavailable() throws Exception {
+        reg.ensure();
+        hub.mintStatus = 400; // K1:UNIT_KIND_INVALID
+        assertEquals("caller_unavailable", codeOf(() -> tokens.get(false)));
+        hub.mintStatus = 403;
+        assertEquals("caller_unavailable", codeOf(() -> tokens.get(false)));
+    }
+
+    /**
+     * 评审 P2:「移除本机」之后,还在飞的中继请求撞 403 / 404 → 自愈 → 悄悄登记出新身份、电脑上又弹确认。
+     * 移除后懒登记与自愈一律拒绝,直到用户显式 ensure()。
+     */
+    @Test
+    public void afterForgetLazyRegistrationAndHealingAreRefused() throws Exception {
+        UnitRegistrar.Account a = reg.account();
+        UnitIdentity stale = reg.ensure().identity;
+        tokens.get(false);
+        reg.forget(true);
+        tokens.invalidate();
+        assertEquals("懒登记被拒", "caller_unavailable", codeOf(() -> tokens.get(false)));
+        assertEquals("在途请求:移除前取到的身份撞 404 → 重新登记被拒", "caller_unavailable", codeOf(() -> reg.reRegister(a, stale, false)));
+        assertEquals("在途请求:轮换也被拒(不把旧条目轮换回来)", "caller_unavailable", codeOf(() -> reg.rotateCallerSecret(a, stale)));
+        assertEquals("一次都没重新登记", 1, hub.count("POST", "/units/register"));
+        assertTrue("名册里没有行", hub.rows.isEmpty());
+        assertEquals(null, reg.current());
+        // 用户在弹层里点电脑 = 显式 ensure():解闩、登记新身份
+        String fresh = reg.ensure().identity.unitId;
+        assertNotEquals(stale.unitId, fresh);
+        assertTrue(tokens.get(false).startsWith("fuc1."));
+    }
+
+    @Test
+    public void forgetLatchIsPerAccount() throws Exception {
+        reg.ensure();
+        reg.forget(true);
+        env.token = UnitIdentityTest.jwt("{\"userId\":\"u2\"}");
+        assertTrue("B 账号不受 A 的移除影响", tokens.get(false).startsWith("fuc1."));
     }
 
     @Test
