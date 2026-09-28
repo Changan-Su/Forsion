@@ -50,6 +50,16 @@ export function isAtomBlock(node: ProseNode | null | undefined): boolean {
   return classifyEmbed(node) != null
 }
 
+/** 竖直方向键要**整块选中**而不是钻进去的块:分割线与嵌入段(K-09)。代码块、表格不在此列 ——
+ *  它们有可编辑的行/格,↑/↓ 交给浏览器原生纵向移动直接进首行/首格并保持列位置(Notion 同)。
+ *  退格/Delete 的「撞上只选中、不合并」仍按 isAtomBlock(含代码块/表格),两个谓词故意不同。 */
+function isArrowAtomBlock(node: ProseNode | null | undefined): boolean {
+  if (!node) return false
+  const n = node.type.name
+  if (n === 'hr' || n === 'horizontal_rule') return true
+  return classifyEmbed(node) != null
+}
+
 /** 光标所在最内层 list_item 的深度;不在列表里返回 null。 */
 function listItemDepth($from: ResolvedPos): number | null {
   for (let d = $from.depth; d >= 1; d--) if ($from.node(d).type.name === 'list_item') return d
@@ -471,7 +481,7 @@ const deleteSelectNextAtom: Command = (state, dispatch) => {
 
 // ── 方向键 ───────────────────────────────────────────────────────────────────
 
-/** 竖直方向键撞上整块型 → 变成块选中,而不是钻进它的隐藏源码(嵌入段)或停在没有行盒的地方。 */
+/** 竖直方向键撞上分割线/嵌入 → 变成块选中,而不是钻进它的隐藏源码(嵌入段)或停在没有行盒的地方。 */
 function arrowToAtom(dir: 'up' | 'down'): Command {
   return (state, dispatch, view) => {
     const sel = state.selection
@@ -482,7 +492,7 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
     if (d < 1) return false
     const at = dir === 'down' ? $from.after(d) : $from.before(d)
     const target = dir === 'down' ? state.doc.resolve(at).nodeAfter : state.doc.resolve(at).nodeBefore
-    if (!isAtomBlock(target) || !target) return false
+    if (!isArrowAtomBlock(target) || !target) return false
     const pos = dir === 'down' ? at : at - target.nodeSize
     const atomNode = state.doc.nodeAt(pos)
     if (!atomNode || !NodeSelection.isSelectable(atomNode)) return false
@@ -521,7 +531,7 @@ const wrapSelectionPlugin = $prose(
 
 // ── 整块选中时打字(K-02)────────────────────────────────────────────────────────
 
-/** 块选中(NodeSelection:↓/↑ 撞上代码块/表格/嵌入、Esc 选块、文末 `---` 生成的 hr)时,打出来的
+/** 块选中(NodeSelection:退格/Delete 撞上代码块/表格、↓/↑ 撞上嵌入/分割线、Esc 选块、文末 `---` 生成的 hr)时,打出来的
  *  字该落在哪。PM 的默认是「用输入替换选区」—— 整块被一个字替换并落盘,输入法组字开头的
  *  deleteSelection 同样删块。块选中是「看着这个块」,不是「要换掉它」(Notion 同):
  *   · 代码块 → 进块尾;表格 → 进首格(末尾);

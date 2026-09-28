@@ -204,11 +204,12 @@ async function main() {
     if (want('K02')) {
       const cases = [
         // [名, 种子, 光标所在 {type,nth,atStart}, 选块按键, 期望块选中的节点, 打的字, 期望结构]
-        ['↓ 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'code_block', 'kk',
+        // 代码块/表格的块选中入口:块尾 Delete / 行首退格(K-09 起 ↑↓ 直接进块内,不再整块选中)。
+        ['块尾 Delete 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph' }, 'Delete', 'code_block', 'kk',
           'paragraph:"上段。" / code_block:"line1kk" / paragraph:"下段。"'],
-        ['↑ 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph', nth: 1, atStart: true }, 'ArrowUp', 'code_block', 'k',
+        ['行首退格撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph', nth: 1, atStart: true }, 'Backspace', 'code_block', 'k',
           'paragraph:"上段。" / code_block:"line1k" / paragraph:"下段。"'],
-        ['↓ 撞表格', '上段。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'table', 'k', null],
+        ['块尾 Delete 撞表格', '上段。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段。\n', { type: 'paragraph' }, 'Delete', 'table', 'k', null],
         ['↓ 撞嵌入', '上段。\n\n![[Embedded]]\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'paragraph', 'k',
           'paragraph:"上段。" / paragraph:"![[Embedded]]" / paragraph:"k" / paragraph:"下段。"'],
         ['Esc 选段', '甲段很长的一段内容。\n\n乙段。\n', { type: 'paragraph' }, 'Escape', 'paragraph', 'k',
@@ -255,7 +256,7 @@ async function main() {
         const page = await open(browser, '上段。\n\n```js\nline1\n```\n\n下段。\n')
         const cdp = await page.context().newCDPSession(page)
         await caretIn(page, 'paragraph')
-        await page.keyboard.press('ArrowDown')
+        await page.keyboard.press('Delete')
         await page.waitForTimeout(120)
         const s0 = await selInfo(page)
         await act(cdp)
@@ -602,6 +603,37 @@ async function main() {
         const s = (await shape(page)).replace(/ \/ +/g, ' / ')
         const w = await lastWrite(page)
         check(`K07 已勾选待办${name}回车:新项未勾选`, s === expect && disk.test(w || ''), `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+    }
+
+    // K-09:↑/↓ 纵向直接进代码块、表格(首行/首格或末行/末格,保持列位置);分割线与嵌入仍整块选中。
+    if (want('K09')) {
+      const CODE = '上段文字很长一些。\n\n```js\nline1 abc\nline2 def\n```\n\n下段文字。\n'
+      const TABLE = '上段文字很长一些。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段文字。\n'
+      for (const [name, md, at, key, want09] of [
+        ['↓ 进代码块首行且保持列', CODE, { text: '上段文字很长一些。', off: 2 }, 'ArrowDown', (s) => s.json === 'text' && s.parent === 'code_block' && s.col === 2 && s.line === 0],
+        ['↑ 进代码块末行', CODE, { text: '下段文字。', off: 2 }, 'ArrowUp', (s) => s.json === 'text' && s.parent === 'code_block' && s.line === 1],
+        ['↓ 进表格首格', TABLE, { text: '上段文字很长一些。', off: 1 }, 'ArrowDown', (s) => s.json === 'text' && s.cell === 'a'],
+        ['↑ 进表格末行', TABLE, { text: '下段文字。', off: 1 }, 'ArrowUp', (s) => s.json === 'text' && (s.cell === 'c' || s.cell === 'd')],
+        ['↓ 撞分割线仍整块选中', '上段。\n\n***\n\n下段。\n', { text: '上段。', off: 1 }, 'ArrowDown', (s) => s.json === 'node' && /^(hr|horizontal_rule)$/.test(s.node)],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, at.text, at.off)
+        await page.waitForTimeout(150)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(200)
+        const s = await page.evaluate(() => {
+          const sel = window.__upage.probe.view().state.selection
+          const $f = sel.$from
+          let cell = null
+          for (let d = $f.depth; d > 0; d--) if (/^table_(cell|header)$/.test($f.node(d).type.name)) { cell = $f.node(d).textContent; break }
+          const before = $f.parent.textContent.slice(0, $f.parentOffset)
+          return { json: sel.toJSON().type, node: sel.node ? sel.node.type.name : null, parent: $f.parent.type.name, cell,
+            line: before.split('\n').length - 1, col: before.length - before.lastIndexOf('\n') - 1 }
+        })
+        const doc = await shape(page)
+        check(`K09 ${name}`, want09(s) && doc === (await shape(page)), JSON.stringify(s))
         await page.close()
       }
     }
