@@ -216,7 +216,13 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       setMarks((m) => noteAttempt(m, row.id, p))
     }
     void runOn(cloudApiBase(), row.id, {
-      ensureSelf: () => window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }),
+      // 懒登记一完成就刷新「本机」一行(M1B):runOn 接下来可能在「请在那台电脑上允许」里等上几十秒,
+      // 等它整个结束才刷新 = 这段时间一直写着「尚未登记」,而本机其实已经登记好了
+      ensureSelf: async () => {
+        const r = await (window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }))
+        if (r.ok && !ac.signal.aborted) loadSelf()
+        return r
+      },
       fetchJson: async (url, init) => {
         const r = await fetch(url, init)
         let json: unknown = null
