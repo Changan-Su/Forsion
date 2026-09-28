@@ -4,7 +4,7 @@
 // 仅 macOS(lsappinfo,无需辅助功能权限);其它平台跳过。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { execFile, execFileSync } = require('child_process')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 if (process.platform !== 'darwin') { console.log('SKIP quiet-focus: macOS only'); process.exit(0) }
 const ROOT = path.resolve(__dirname, '..')

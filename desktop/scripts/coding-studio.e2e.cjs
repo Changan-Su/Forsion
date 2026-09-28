@@ -14,7 +14,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { writeChatBoxProbe, verifyChatBoxProbe } = require('./lib/chatbox-probe.cjs')
 

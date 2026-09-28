@@ -5,7 +5,7 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os')
 const { spawn } = require('node:child_process'), { randomUUID } = require('node:crypto')
 const { createServer } = require('node:net'), assert = require('node:assert/strict')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const ROOT = path.resolve(__dirname, '..'), OUT = path.resolve(ROOT, '../outputs/image-studio-live', new Date().toISOString().replace(/[:.]/g, '-'))
 const MODEL = process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna'
 const AUTH_HOME = process.env.IMAGE_STUDIO_AUTH_HOME || path.join(os.homedir(), '.forsion-dev')

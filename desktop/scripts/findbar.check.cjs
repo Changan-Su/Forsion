@@ -10,7 +10,7 @@
 //  F2 **非 Amadeus View** 里真按 Cmd/Ctrl+F 能开条并命中(用户实报的第一条:「没有适配大多数 view」);
 //  F3 浮条贴的是活动 View 的右上角,不是窗口右上角(分栏时贴错栏就没意义了);
 //  F4 Esc 收干净:条没了 + CSS.highlights 两格都清空(留着的话高亮会在整个应用上赖着)。
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { mkdtempSync, existsSync } = require('fs')
 const os = require('os')
 const path = require('path')

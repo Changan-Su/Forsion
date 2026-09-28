@@ -23,7 +23,7 @@
  * 渲染层改动不 build 就跑 = 测的是旧代码(调试铁律 2)。
  */
 const fs = require('fs'), os = require('os'), path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 

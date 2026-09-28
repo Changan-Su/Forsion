@@ -22,7 +22,7 @@ const os = require('os')
 const path = require('path')
 const { spawn } = require('child_process')
 const { pathToFileURL } = require('url')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')

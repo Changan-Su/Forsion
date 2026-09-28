@@ -9,7 +9,7 @@ const http = require('node:http')
 const {execFileSync} = require('node:child_process')
 const REPO = path.resolve(__dirname, '../..')
 const ROOT = path.join(REPO, 'desktop')
-const { _electron: electron } = require(path.join(ROOT, 'node_modules/playwright-core'))
+const electron = require(path.join(ROOT, 'scripts/lib/launch-electron.cjs'))
 const { startStubEngine } = require(path.join(ROOT, 'scripts/lib/stub-engine.cjs'))
 const locale = process.argv[3] || 'zh'
 if(!['zh','en'].includes(locale)) throw Error('Locale must be zh or en')

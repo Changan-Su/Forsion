@@ -10,7 +10,7 @@
 const fs = require('fs'), os = require('os'), path = require('path')
 const ROOT = path.resolve(__dirname, '..')
 const OUT = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ctxlimit-shots-'))
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const fails = []
 const check = (name, ok, extra) => { console.log((ok ? '✓ ' : '✗ ') + name + (extra ? '  ' + extra : '')); if (!ok) fails.push(name) }

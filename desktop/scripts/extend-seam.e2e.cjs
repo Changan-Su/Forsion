@@ -16,7 +16,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -31,10 +31,7 @@ function check(name, ok, detail) {
 async function launch(home, stubUrl) {
   const logs = []
   const app = await electron.launch({
-    // -ApplePersistenceIgnoreState:所有台架与用户 dev 实例共用同一个 node_modules/electron/dist/Electron.app,前一个实例被杀后
-    // macOS 会弹「应用在重新打开窗口时意外退出」模态框,主进程卡在 NSAlert runModal、永远不出窗口(同日日志「Electron 台架启动卡死」)。
-    // ⚠️ 单短横的 Cocoa 参数必须放在应用路径之后:放前面会被 Electron 当成应用路径,launch 直接超时。
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     // ELECTRON_ENABLE_LOGGING:主进程 console 实时走 stderr;不开的话 stdout 是管道时要到进程退出才冲出来,起不来窗口就什么也看不到。
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, ELECTRON_ENABLE_LOGGING: '1' },

@@ -31,7 +31,7 @@ const net = require('net')
 const os = require('os')
 const path = require('path')
 const { spawnSync } = require('child_process')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -296,13 +296,10 @@ async function launchApp(home, sock, stubUrl, extraEnv = {}) {
   const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, ...extraEnv }
   if (sock) env.PI_CU_SOCKET_PATH = sock
   else delete env.PI_CU_SOCKET_PATH
-  // -ApplePersistenceIgnoreState YES(放在 ROOT 之后,否则 YES 会被当成 app 路径):跳过 macOS 窗口恢复。
-  //  ① 任何一轮 Electron 崩过之后,macOS 对 com.github.Electron 弹「意外退出,是否重新打开窗口」模态
-  //     (sample:NSPersistentUIRestorer promptToIgnorePersistentStateWithCrashHistory → NSAlert runModal),
-  //     下一轮 firstWindow 干等 30s、主进程日志全空 —— 台架被上一轮的崩溃拖死;
-  //  ② T15 偶发主进程 SIGSEGV(台架经 inspector 对设置浮窗 setContentSize/center 之后第一次输入即崩,产品路径不改浮窗尺寸):
+  // -ApplePersistenceIgnoreState YES 由 lib/launch-electron.cjs 统一追加(跳过 macOS 崩溃后的「重新打开窗口」模态)。另:
+  //  T15 偶发主进程 SIGSEGV(台架经 inspector 对设置浮窗 setContentSize/center 之后第一次输入即崩,产品路径不改浮窗尺寸):
   //     加了它之后同组合 0/10 复现(不加时 4/4;无同条件对照 —— 崩溃史让不加 flag 的启动卡在上面的模态)。
-  const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'], cwd: ROOT, env })
+  const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env })
   const mainLog = []
   app.process().stdout?.on('data', (d) => mainLog.push(String(d)))
   app.process().stderr?.on('data', (d) => mainLog.push(String(d)))
