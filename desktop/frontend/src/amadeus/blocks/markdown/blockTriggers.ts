@@ -274,7 +274,7 @@ const inAny = ($p: ResolvedPos, names: string[]): boolean => names.some((n) => f
  *
  * 嵌套列表要提多次,故循环;liftTarget 给不出目标(结构不允许)就停在当前层,绝不硬改。
  */
-function liftOutOfWrappers(tr: Transaction, pos: number, names: string[]): number {
+export function liftOutOfWrappers(tr: Transaction, pos: number, names: string[]): number {
   let p = pos
   // 上限只是失控保险(每轮都靠「没产生 step 就 break」保证推进);6 层对深嵌套列表不够,给到 32。
   for (let i = 0; i < 32; i++) {

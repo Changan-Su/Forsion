@@ -12,7 +12,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
-import { NodeSelection, TextSelection, type Selection } from '@milkdown/kit/prose/state'
+import { NodeSelection, TextSelection, type Selection, type Transaction } from '@milkdown/kit/prose/state'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -59,7 +59,7 @@ import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusPro
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
+import { applyTrigger, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
 import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
 import { columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
@@ -575,13 +575,45 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       let d = $from.depth
       while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(d - 1).type.name)) d--
       if (d < 1) return
+      /** 落点 = 插入内容的末尾(v3 的 requestSelfFocus('end') 同位):near() 会自己找最近的合法文字位。 */
+      const land = (tr: Transaction, end: number): void => {
+        tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size))))
+      }
+      // 列表项 / 引用(callout)里的**空行**(B-07):就在这一行原地换成要插的块。此前一律按「整个顶层块空不空」判,
+      // 容器永远非空 → 插到整只列表 / 引用之后,原处留下 `-`、`- [ ] <br />`、`>` 空项残渣,callout 里的代码块跑到外面。
+      // 引用 / callout 收任何块:原地替换,留在容器里;列表项的首子只能是段落 → 容不下时只脱出**列表**(不脱引用),再替换。
+      // 非空行照旧插到顶层块之后(列表中间插代码块不劈列表)。
+      if ($from.depth > d && $from.parent.isTextblock && $from.parent.content.size === 0) {
+        const tr = view.state.tr
+        const fits = (at: number): boolean => {
+          const $p = tr.doc.resolve(at)
+          const i = $p.index(-1)
+          return $p.parent.isTextblock && $p.parent.content.size === 0 && $p.node(-1).canReplace(i, i + 1, content)
+        }
+        let at = $from.pos
+        if (!fits(at)) {
+          for (let k = tr.doc.resolve(at).depth; k > 0; k--) {
+            if (tr.doc.resolve(at).node(k).type.name !== 'list_item') continue
+            at = liftOutOfWrappers(tr, at, ['list_item'])
+            break
+          }
+        }
+        if (fits(at)) {
+          const $p = tr.doc.resolve(at)
+          const from = $p.before()
+          tr.replaceWith(from, $p.after(), content)
+          land(tr, from + content.size)
+          view.dispatch(tr.scrollIntoView())
+          view.focus()
+          done = true
+          return
+        }
+      }
       const from = $from.before(d)
       const to = $from.after(d)
       const blank = $from.node(d).textContent.trim() === ''
-      let tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
-      // 落点=插入内容的末尾(v3 的 requestSelfFocus('end') 同位):near() 会自己找最近的合法文字位。
-      const end = Math.min((blank ? from : to) + content.size, tr.doc.content.size)
-      tr = tr.setSelection(TextSelection.near(tr.doc.resolve(end)))
+      const tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
+      land(tr, (blank ? from : to) + content.size)
       view.dispatch(tr.scrollIntoView())
       view.focus()
       done = true
