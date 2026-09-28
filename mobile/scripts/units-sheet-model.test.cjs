@@ -16,7 +16,7 @@ const src = buildSync({
 const mod = { exports: {} }
 new Function('module', 'exports', 'require', src)(mod, mod.exports, require)
 const {
-  runRows, statusKey, rowTone, runOn, isRunnableUnit, phoneIssueOfCode, removeThisPhone, REASON_STATUS_KEYS, CONFIRM_POLL_MS, CONFIRM_TIMEOUT_MS, CONFIRM_GRACE_MS,
+  runRows, statusKey, rowTone, runOn, isRunnableUnit, phoneIssueOfCode, removeThisPhone, rosterNameOf, REASON_STATUS_KEYS, CONFIRM_POLL_MS, CONFIRM_TIMEOUT_MS, CONFIRM_GRACE_MS,
   beginAttempt, noteAttempt, endAttempts, NO_MARKS,
 } = mod.exports
 
@@ -335,11 +335,19 @@ const rowOf = (out, now) => runRows([U(DESK)], null, HOME, {}, { [DESK]: out.sti
     assert.deepEqual(order2, ['forget'])
   })
 
-  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef) = return setFocusTarget(ref)(K6-S2 整端切换);runOn 与移除本机只注入它', async () => {
+  await check('16b rosterNameOf:切到电脑时的焦点展示名 = 名册里那台的名字(id 不分大小写);home / 不在名册 / 名字空 → null(M1B)', async () => {
+    const units = [U('AAAA-1'), U('b-2', { name: '  ' })]
+    assert.equal(rosterNameOf(units, { kind: 'unit', unitId: 'aaaa-1' }), 'N-AAAA-1')
+    assert.equal(rosterNameOf(units, { kind: 'unit', unitId: 'b-2' }), null)
+    assert.equal(rosterNameOf(units, { kind: 'unit', unitId: 'zzz' }), null)
+    assert.equal(rosterNameOf(units, HOME), null)
+  })
+
+  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef) = return setFocusTarget(ref, {name})(K6-S2 整端切换);runOn 与移除本机只注入它', async () => {
     const tsx = fs.readFileSync(path.resolve(__dirname, '../src/UnitsSheet.tsx'), 'utf8')
     const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): Promise<void> \{([\s\S]*?)\n\}/g) || []
     assert.equal(defs.length, 1, '必须恰好一个 selectRunLocation 定义')
-    assert.match(defs[0], /\{\s*return setFocusTarget\(ref\)\s*\}/, '生效 = 返回 setFocusTarget 的 Promise(移除本机要等它)')
+    assert.match(defs[0], /\{\s*return setFocusTarget\(ref, \{ name: rosterNameOf\(lastRoster, ref\) \}\)\s*\}/, '生效 = 返回 setFocusTarget 的 Promise(移除本机要等它);展示名取名册(M1B)')
     assert.equal((tsx.match(/select: selectRunLocation,/g) || []).length, 2, 'runOn 与 removeThisPhone 各注入一次')
     assert.match(tsx, /removeThisPhone\(\{/)
     assert.doesNotMatch(tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /unitForgetSelf\?\.\(\)[^\n]*\.then\(/, '移除不许绕过 removeThisPhone 直接调 unitForgetSelf')

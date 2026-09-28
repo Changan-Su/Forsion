@@ -30,6 +30,17 @@ export interface RunRow {
   selected: boolean
 }
 
+/**
+ * 切到一台电脑时交给整端焦点的展示名(M1B):名册里那台的名字(与「在哪运行」那一行同一个字段);home / 名册里没有 / 名字空 → null。
+ * 焦点名是不可信串、只作展示(审批结局行「在执行的电脑上(名字)」、连接态提示),setFocusTarget 自己再截 120。
+ */
+export function rosterNameOf(units: ReadonlyArray<Pick<UnitInfo, 'id' | 'name'>>, ref: TargetRef): string | null {
+  if (ref.kind !== 'unit') return null
+  const id = ref.unitId.toLowerCase()
+  const name = units.find((u) => u.id.toLowerCase() === id)?.name?.trim()
+  return name || null
+}
+
 /** 名册里能当运行位置 / 能打开设备页的:电脑(kind 缺席按电脑),且不是本机。 */
 export function isRunnableUnit(u: Pick<UnitInfo, 'id' | 'kind'>, selfId: string | null): boolean {
   return (u.kind ?? 'desktop') === 'desktop' && u.id !== selfId
