@@ -15,7 +15,8 @@ import {
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
-import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
+import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
+import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
 import { useUiOverlay } from './amadeusOverlayStore'
@@ -41,7 +42,7 @@ import { openTutorial } from './amadeusTutorial'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { REF_MIME, PATHS_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, PATHS_MIME, setChatRefDrag } from './views/chat2/chatDragRef'
 import { useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
@@ -2126,6 +2127,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const unifiedHistRef = useRef<UnifiedHistory | null>(null)
   /** 本 leaf 的 v4 实例的文件写口(G1-02):拖入 / 上传直接交给它,不按路径全局找 —— 同篇双开时那会找到另一个标签。 */
   const unifiedFilesRef = useRef<((files: File[]) => boolean) | null>(null)
+  const unifiedMdRef = useRef<((md: string) => boolean) | null>(null) // 树行拖入的 markdown 写口(G4-05)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
@@ -2416,25 +2418,24 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // ④ 面板关掉 → 回收它那份 store(内部先 flush 落盘,不带走没写完的改动)。
   useEffect(() => () => disposePageScope(leaf.id), [leaf.id])
 
-  // 侧栏笔记行拖进编辑器 → 追加 [[链接]] 块。链接一律路径限定形态([[dir/Name|Name]]):
-  // resolvePageName 对带路径名不做同名回退,重名笔记也指向唯一目标;根目录笔记只能裸名(天花板:
-  // 与当前页同夹的同名笔记会优先命中,极罕见)。会话/工作区文件引用与笔记语义不兼容,编辑器不收。
-  const noteWikiInner = (rel: string): string => {
-    const link = rel.replace(/\.md$/i, '')
-    const base = link.split(/[\\/]/).pop() || link
-    return link === base ? link : `${link}|${base}`
-  }
+  // 侧栏笔记行拖进编辑器 → [[链接]] 块(映射与链接形态见 unified/treeRefDrop 顶注,v3 / v4 共用)。
   // 拖入文件 → 按 Tangu 笔记设置存放(attachments/同目录/固定夹)→ 预览开则插 ![[base]],否则插 [名](相对路径)。
   const onDrop = async (e: RDragEvent<HTMLDivElement>): Promise<void> => {
     setDragging(false) // ⚠️必须在任何 early return 之前:落个不认识的东西也得把虚线框收掉
     // 树行拖源对一切叶子(含图片/PDF/.db 附件)都打 kind:'note' —— 按真实类型分流:
     // .md → [[链接]];非笔记 → ![[嵌入]](与 OS 文件拖入 importToPage 的语义一致,评审 P1)。
-    const treeRefs = readChatRefs(e.dataTransfer).filter((r) => r.kind === 'note')
+    const treeRefs = treeRefBlocks(e.dataTransfer)
     if (treeRefs.length) {
       e.preventDefault()
+      // v4:交给**本 leaf** 的实例插在光标处(blockLayer 已把光标送到落点横线;G1-02 同理不按路径找实例)。
+      // 此前只走下面 v3 那条 —— v4 的 activePage 恒空,虚线框亮着、松手什么都没发生(评审 G4-05)。
+      if (unifiedRoute && notePath) {
+        const md = treeRefs.join('\n\n')
+        if (unifiedMdRef.current ? unifiedMdRef.current(md) : unifiedInsertMarkdown(notePath, md, 'cursor')) return
+      }
       const ps = myPs()
       if (!ps.activePage) return
-      ps.insertBlocksAfter(null, treeRefs.map((r) => (isNotePath(r.path) ? `[[${noteWikiInner(r.path)}]]` : `![[${r.path}]]`)))
+      ps.insertBlocksAfter(null, treeRefs)
       return
     }
     const files = Array.from(e.dataTransfer?.files ?? [])
@@ -2628,6 +2629,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           onCanvasMode={setCanvasSeg}
           historyRef={unifiedHistRef}
           filesRef={unifiedFilesRef}
+          mdRef={unifiedMdRef}
           onRenamed={(np) => {
             leaf.setParams({ ...leaf.params, notePath: np })
             leaf.setTitle(baseName(np))

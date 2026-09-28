@@ -50,6 +50,7 @@ import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugi
 import { SidebarRow } from './components/SidebarRow'
 import { FileText as FileTextIcon } from 'lucide-react'
 import { QuickFind, useQuickFind } from './quickFind'
+import { treeRefBlocks } from './amadeus/unified/treeRefDrop'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
@@ -1859,6 +1860,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       // `&udrop`:宿主级 OS 文件拖入(镜像 amadeusViews EditorScope 的 onDrop):文件递给**本宿主**的实例写口(filesRef),
       // 不按路径找实例(评审 G1-02)。opt-in:别的仪器里合成的文件拖放不该突然开始插上传占位。
       const filesRef = useRef<((files: File[]) => boolean) | null>(null)
+      // 同一开关下的侧栏树行拖入(评审 G4-05):映射走生产的 treeRefBlocks,插入走本宿主实例的 mdRef(镜像 amadeusViews)。
+      const mdRef = useRef<((md: string) => boolean) | null>(null)
       const hostDrop = new URLSearchParams(location.search).has('udrop')
       // `&ulock`:锁定页面(评审 C-07)的宿主一半,镜像 amadeusViews:锁定态存本机、进 key 触发重挂,换实例时按盘上
       // 现文重挂(生产先 flush 再重读路由;台架的写是同步落 vault 的,直接重读)。仪器:unified-readonly 的 K 组。
@@ -1892,8 +1895,10 @@ if (new URLSearchParams(location.search).has('dock')) {
           )}
           {st.block ? <div data-uroute="block" /> : <div
             style={{ display: 'contents' }}
-            onDragOver={hostDrop ? (e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault() } : undefined}
+            onDragOver={hostDrop ? (e) => { const ty = Array.from(e.dataTransfer?.types ?? []); if (ty.includes('Files') || ty.includes('application/x-forsion-chatref')) e.preventDefault() } : undefined}
             onDrop={hostDrop ? (e) => {
+              const refs = treeRefBlocks(e.dataTransfer)
+              if (refs.length) { e.preventDefault(); mdRef.current?.(refs.join('\n\n')); return }
               const files = Array.from(e.dataTransfer?.files ?? [])
               if (!files.length) return
               e.preventDefault()
@@ -1906,6 +1911,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             diskRaw={st.diskRaw}
             probe={probe}
             filesRef={filesRef}
+            mdRef={mdRef}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
             readOnly={new URLSearchParams(location.search).has('uro') || locked}
             onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}

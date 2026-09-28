@@ -17,6 +17,8 @@
 //   B14 上传在途被剪切+粘贴(锚换了)= 占位仍被换成引用,不会永远停在「上传中」
 //   B15 OS 文件拖到列表 / callout / 表格的**下半区**:线画在这块下沿,文件就插在这块之后(评审 G4-03:
 //       块尾位置的文本选区默认 +1 偏置找到了下一块,文件落在下一块之后);段落下半区与列表上半区作对照
+//   B16 侧栏树行(REF_MIME)拖进 v4 正文:落点画横线,松手在线处插 `[[dir/Name|Name]]` / `![[附件]]`(评审 G4-05:
+//       此前虚线框亮着、松手什么都没发生);`&udrop` 宿主镜像与生产 amadeusViews 共用 treeRefBlocks + mdRef 写口
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -509,6 +511,45 @@ async function main() {
       record(`B15 ${label} → 文件紧跟在 ${before} 之后`, i > 0 && top[i - 1] === before, JSON.stringify(top))
       await p.close()
     }
+  }
+
+  // ── B16 树行拖入 v4 正文 = 落点处插链接(G4-05)────────────────────────────────
+  {
+    const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
+    p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await p.goto(`${URL}?upage&upane&udrop&useed=${encodeURIComponent('# 页\n\n首段。\n\n- 列表一\n- 列表二\n\n末段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await p.waitForSelector(PM, { timeout: 20000 })
+    await p.waitForTimeout(400)
+    const w0 = await p.evaluate(() => window.__upage.writes.length)
+    const r16 = await p.evaluate(() => {
+      const pm = document.querySelector('.unified-body .ProseMirror')
+      const el = [...pm.querySelectorAll('ul')].find((x) => x.textContent.includes('列表二'))
+      const r = el.getBoundingClientRect()
+      const x = r.left + 30
+      const y = r.bottom - 3
+      const dt = new DataTransfer()
+      dt.setData('application/x-forsion-chatref', JSON.stringify([{ kind: 'note', path: '子夹/会议纪要.md' }, { kind: 'note', path: '根笔记.md' }, { kind: 'note', path: '图/照片.png' }]))
+      const at = document.elementFromPoint(x, y)
+      const fire = (t) => { const ev = new DragEvent(t, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }); at.dispatchEvent(ev); return ev.defaultPrevented }
+      fire('dragenter')
+      const over = fire('dragover')
+      const line = [...document.querySelectorAll('.unified-drop-line')].some((e) => getComputedStyle(e).display !== 'none')
+      const drop = fire('drop')
+      return { over, line, drop }
+    })
+    await p.waitForTimeout(1300)
+    const out16 = await p.evaluate((w0) => {
+      const top = []
+      window.__upage.probe.view().state.doc.forEach((n) => top.push(n.type.name === 'paragraph' ? n.textContent : n.type.name))
+      const w = window.__upage.writes
+      return { top, saved: w.length > w0 ? w[w.length - 1].text : null }
+    }, w0)
+    record('B16 树行拖到列表下半区 → 画线,松手在列表之后插路径限定链接 / 根笔记裸名 / 附件嵌入,并落盘',
+      r16.over && r16.line && r16.drop
+        && JSON.stringify(out16.top.slice(2, 6)) === JSON.stringify(['bullet_list', '[[子夹/会议纪要|会议纪要]]', '[[根笔记]]', '![[图/照片.png]]'])
+        && /- 列表二\n\n\[\[子夹\/会议纪要\|会议纪要\]\]\n\n\[\[根笔记\]\]\n\n!\[\[图\/照片\.png\]\]\n\n末段。/.test(out16.saved || ''),
+      JSON.stringify({ ...r16, ...out16 }))
+    await p.close()
   }
 
   await browser.close()

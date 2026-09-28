@@ -936,7 +936,7 @@ export interface UnifiedHistory {
   indent?: (dir: 1 | -1) => boolean
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, onUnlock, compact = false, readOnly = false, hardBreaks = false }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -959,6 +959,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  不按路径全局查找 —— 同篇双开时按路径找到的是另一个标签:指示线画在这边,文件却插进那边、随即被这边的写入盖掉。
    *  返回 false = 本实例不接(只读 / 已退休)。卸载时清空。 */
   filesRef?: { current: ((files: File[]) => boolean) | null }
+  /** 本 leaf 自己的 markdown 写口(评审 G4-05:侧栏树行拖入 `[[链接]]`),口径同 filesRef:插在光标所在顶层块之后
+   *  (空块原地替换;拖入时 blockLayer 已把光标送到落点横线处)。返回 false = 本实例不接。卸载时清空。 */
+  mdRef?: { current: ((md: string) => boolean) | null }
   /** 锁定页面(评审 C-07,拍板 #15):宿主按本机记忆把自己的笔记锁成只读时给;只读下显示「已锁定」条与解锁键。
    *  分享页 / 收件箱这类天生只读的宿主不给 —— 那里没有「解锁」可言。锁定态由宿主放进本组件的 key(pipe.readOnly
    *  只在首次渲染写入,换锁定态必须重挂)。 */
@@ -2036,6 +2039,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return () => { if (filesRef.current === f) filesRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesRef])
+  useEffect(() => {
+    if (!mdRef) return
+    const f = (md: string): boolean => (pipe.readOnly || pipe.retired || pipe.dead ? false : (hostApi.current?.insertMarkdown(md, 'cursor') ?? false))
+    mdRef.current = f
+    return () => { if (mdRef.current === f) mdRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mdRef])
 
   // 生命周期登记(Codex P0):换库前 flushAllScopes 要等我们落盘;删除/改名/移动要能叫停本实例
   // (防抖写复活刚删/刚移走的文件)。

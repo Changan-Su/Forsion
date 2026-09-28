@@ -33,6 +33,7 @@ import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
+import { REF_MIME } from '../../views/chat2/chatDragRef'
 
 registerMessages({
   'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
@@ -1555,7 +1556,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : []
           // OS 文件拖入:内容插入仍归 fileDropGuard/importToPage 那条链,但落点得**看得见**——
           // 画一条横线,并在 drop 时把光标先送到线所在处,否则文件恒插在原光标位置、线在撒谎。
-          if (types.includes('Files')) {
+          // 侧栏树行拖入(REF_MIME,评审 G4-05)同理:`[[链接]]` 由宿主经本 leaf 的 mdRef 插在光标处。
+          // 画布模式的树行拖入归舞台(canvasStage 落卡),这里不插手。
+          if (types.includes('Files') || (types.includes(REF_MIME) && !!view && !inCanvas(view))) {
             if (!view) return
             const hit = topBlockAtY(view, e.clientY)
             if (!hit) return
