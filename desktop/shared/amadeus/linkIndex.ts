@@ -134,8 +134,10 @@ export function mentionHits(plain: string, text: string, names: string[], limit 
   if (!keys.length) return []
   const lower = plain.toLowerCase()
   if (!keys.some((k) => lower.includes(k.low))) return []
-  const lines = plain.split('\n')
-  const rawLines = text.split('\n')
+  // 行尾 `\r`(CRLF 笔记)一律剥掉:回写端 mdMarks.findMarkLine 按 /\r?\n/ 切行比对,raw 带着 `\r` 就永远对不上
+  // (按钮出现、点了写不进去)。列位不受影响 —— `\r` 只可能在行尾。
+  const lines = plain.split('\n').map((l) => l.replace(/\r$/, ''))
+  const rawLines = text.split('\n').map((l) => l.replace(/\r$/, ''))
   const masked = maskCode(plain).split('\n')
   const seen = new Map<string, number>()
   const out: MentionHit[] = []
@@ -169,6 +171,8 @@ export function mentionHits(plain: string, text: string, names: string[], limit 
  * 把一处未链接提及改写成 `[[inner]]`(L-16「一键链接」;主进程 linkMention 在同篇路径锁内调用)。
  * 定位**按内容**:raw + occ 找行(mdMarks.findMarkLine,与 patchMark 同一把尺子),再核 [col, col+match) 的原文 ——
  * 任何一步对不上 = null 不写(文件在列出之后被改过),**绝不模糊匹配**。inner 带 `]` 或换行也拒。
+ * 只替换命中那一段(按原文偏移拼接),其余字节原样 —— 混合换行(CRLF 与 LF 并存)的笔记不许因为一次链接被整篇
+ * 统一换行符(Codex 复核 P1)。行的切分口径与 findMarkLine 相同(/\r?\n/)。
  */
 export function linkMentionInText(
   fileText: string,
@@ -178,10 +182,18 @@ export function linkMentionInText(
   if (!inner.trim() || /[\]\r\n]/.test(inner) || !hit.match) return null
   const at = findMarkLine(fileText, hit.raw, hit.occ)
   if (at < 0) return null
-  const eol = fileText.includes('\r\n') ? '\r\n' : '\n'
-  const lines = fileText.split(/\r?\n/)
-  const line = lines[at]
+  // 第 at 行在原文里的起止偏移(分隔符 = /\r?\n/,与 findMarkLine 的 split 同口径)。
+  const sep = /\r?\n/g
+  let start = 0
+  for (let k = 0; k < at; k++) {
+    const m = sep.exec(fileText)
+    if (!m) return null
+    start = m.index + m[0].length
+  }
+  sep.lastIndex = start
+  const end = sep.exec(fileText)?.index ?? fileText.length
+  const line = fileText.slice(start, end)
   if (line.slice(hit.col, hit.col + hit.match.length) !== hit.match) return null
-  lines[at] = `${line.slice(0, hit.col)}[[${inner}]]${line.slice(hit.col + hit.match.length)}`
-  return lines.join(eol)
+  const pos = start + hit.col
+  return `${fileText.slice(0, pos)}[[${inner}]]${fileText.slice(pos + hit.match.length)}`
 }

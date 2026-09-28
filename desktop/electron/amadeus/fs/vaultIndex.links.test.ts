@@ -100,6 +100,25 @@ describe('L-16 反链', () => {
     expect(linkMentionInText(VAULT['Plain.md'].replace('I mention target', 'I mention nothing'), h, 'Target')).toBeNull()
     expect(linkMentionInText(VAULT['Plain.md'], h, 'Bad]]name')).toBeNull()
   })
+  it('CRLF 笔记:提及的 raw 不带行尾 \\r,一键链接找得到行,落盘仍是 CRLF(Codex 复核 P1)', async () => {
+    const CRLF = '# Plain\r\n\r\nI mention target here.\r\n\r\ntail\r\n'
+    const ix = await setup({ 'Target.md': '# Target\n', 'Crlf.md': CRLF })
+    const h = ix.unlinkedMentions('Target.md')[0].hits[0] as { raw: string; occ: number; col: number; match: string }
+    expect(h.raw).toBe('I mention target here.')
+    const next = linkMentionInText(CRLF, h, 'Target|target')
+    expect(next).toBe(CRLF.replace('I mention target here.', 'I mention [[Target|target]] here.'))
+  })
+  it('混合换行笔记:只替换命中片段,其余字节(含每一处换行符)原样(Codex 复核 P1)', async () => {
+    const MIXED = 'a\r\nb\n\nI mention target here.\n\nc\r\nd\n'
+    const ix = await setup({ 'Target.md': '# Target\n', 'Mixed.md': MIXED })
+    const h = ix.unlinkedMentions('Target.md')[0].hits[0] as { raw: string; occ: number; col: number; match: string }
+    const next = linkMentionInText(MIXED, h, 'Target|target')
+    expect(next).toBe(MIXED.replace('I mention target here.', 'I mention [[Target|target]] here.'))
+    // 命中在 CRLF 行上、文件里也有 LF 行:同样只动那一段
+    const MIXED2 = 'x\n\nI mention target here.\r\ny\n'
+    const h2 = { raw: 'I mention target here.', occ: 0, col: 10, match: 'target' }
+    expect(linkMentionInText(MIXED2, h2, 'Target|target')).toBe(MIXED2.replace('target here', '[[Target|target]] here'))
+  })
   it('未链接提及也认 fm 别名', async () => {
     const ix = await setup({ ...VAULT, 'Mention.md': '提到甲和 aliasa 了\n' })
     const um = ix.unlinkedMentions('Alpha.md')
