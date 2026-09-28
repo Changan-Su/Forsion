@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -60,6 +60,7 @@ import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
+import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -109,7 +110,8 @@ registerMessages({
   'unipage.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
   'unipage.bookmark.label': { zh: '粘贴链接地址（https:// 开头）；YouTube 链接会直接内嵌播放器。', en: 'Paste a link starting with https:// — YouTube links turn into an embedded player.' },
   'unipage.embed.title': { zh: '嵌入块引用', en: 'Embed a block reference' },
-  'unipage.embed.label': { zh: '形如 笔记名#块ID（块菜单「复制嵌入引用」可得）；也可只填笔记名嵌整篇首块。', en: 'Looks like NoteName#blockId — the block menu item "Copy embed reference" gives you one. A note name on its own embeds the first block of that note.' },
+  // B-15:v4 块菜单没有「复制嵌入引用」(那是 v3 BlockHost 的项),说明改指 v4 真有的「复制标题链接 / 复制块链接」。
+  'unipage.embed.label': { zh: '形如 笔记名#标题 或 笔记名#^块ID（块菜单「复制标题链接」「复制块链接」可得）；也可只填笔记名嵌整篇首块。', en: 'Looks like NoteName#Heading or NoteName#^blockId — the block menu items "Copy heading link" and "Copy block link" give you one. A note name on its own embeds the first block of that note.' },
   'unipage.embed.confirm': { zh: '嵌入', en: 'Embed' },
   'unipage.title.iconAction': { zh: '更换/移除页面图标', en: 'Change or remove the page icon' },
   'unipage.title.addIcon': { zh: '添加图标', en: 'Add icon' },
@@ -751,7 +753,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       void (async () => {
         let prefill = ''
         try {
-          const m = /!\[\[([^\]\n]+)\]\]/.exec(await navigator.clipboard.readText())
+          const m = /!?\[\[([^\]\n]+)\]\]/.exec(await navigator.clipboard.readText()) // 块菜单复制的是 `[[笔记#…]]`
           if (m) prefill = m[1].trim()
         } catch { /* clipboard unavailable */ }
         const raw = await askString(translate('unipage.embed.title'), prefill, {
@@ -1267,6 +1269,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 菜单打开那一刻的目标(B-10):动作一律作用在它上面,不在点下去那一刻现读选区 ——
    *  此前菜单开着时按 ↓ 选区就挪到下一块,「删除」删掉的是别人。文档期间变了 → 不动手(fail closed)。 */
   const menuTarget = useRef<{ doc: ProseNode; sel: Selection } | null>(null)
+  /** 「移动到…」选择器开着时要搬的那段(B-15)。 */
+  const [movePick, setMovePick] = useState<{ doc: ProseNode; from: number; to: number } | null>(null)
   const onBlocksDeletedRef = useRef<(content: Fragment) => void>(() => {})
   // 文档模式卡片拖拽的层级上下文(2026-08-31)。layer 是 useMemo([]) 的终身单例,而 pipe 随
   // path 换新 —— 闭包必须经 ref 现读(与 onBlocksDeletedRef 同一条纪律),否则捏着首篇的 fm。
@@ -2671,6 +2675,29 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           />
         </OverlayPortal>
       )}
+      {movePick && !readOnly && (
+        <OverlayPortal>
+          <NotePicker
+            pages={scoped.getState().pages}
+            exclude={path}
+            onClose={() => { setMovePick(null); layer.getView()?.focus() }}
+            onPick={(target) => {
+              const pick = movePick
+              setMovePick(null)
+              const view = layer.getView()
+              if (!view) return
+              // 选择器开着的这段时间文档变了 → 旧区间不再指向那几块(同块菜单的 fail closed)。
+              if (view.state.doc !== pick.doc) {
+                window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.menu.stale') } }))
+                return
+              }
+              void moveBlocksTo({ view, from: pick.from, to: pick.to, source: path, target, serialize: (c) => hostApi.current?.serializeMd(c) ?? null })
+                .then((moved) => { if (moved) { syncFromEditor(); schedule() } })
+              view.focus()
+            }}
+          />
+        </OverlayPortal>
+      )}
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
@@ -2773,6 +2800,36 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
+            {/* 复制标题链接 / 复制块链接 / 移动到(B-15):只在真能用的时候露出 —— 块链接只给已有 `^id` 的块(不铸 ID)。 */}
+            {(() => {
+              const view = layer.getView()
+              if (!view) return null
+              const sel = view.state.selection
+              const range = layer.topRangeOf(view) ?? (sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : null)
+              const link = sel instanceof NodeSelection ? blockLinkOf(sel.node, path, scoped.getState().pages) : null
+              const movable = !!range && canMove(view.state.doc.slice(range.from, range.to).content)
+              return (
+                <>
+                  {link && (
+                    <button role="menuitem" tabIndex={-1} data-act="copyLink" onClick={() => { setBlockMenu(null); copyLink(link.link); layer.getView()?.focus() }}>
+                      <Link2 size={13} /> {t(link.kind === 'heading' ? 'blocklinks.copyHeading' : 'blocklinks.copyBlock')}
+                    </button>
+                  )}
+                  {movable && (
+                    <button role="menuitem" tabIndex={-1} data-act="moveTo" onClick={() => {
+                      setBlockMenu(null)
+                      const v = layer.getView()
+                      if (!v || !restoreMenuTarget(v)) return
+                      const s2 = v.state.selection
+                      const r = layer.topRangeOf(v) ?? (s2 instanceof NodeSelection ? { from: s2.from, to: s2.to } : null)
+                      if (r) setMovePick({ doc: v.state.doc, ...r })
+                    }}>
+                      <FileInput size={13} /> {t('blocklinks.moveTo')}
+                    </button>
+                  )}
+                </>
+              )
+            })()}
             <button role="menuitem" tabIndex={-1} className="danger" onClick={() => withBlocks(
               (view, r) => {
                 const removed = view.state.doc.slice(r.from, r.to).content

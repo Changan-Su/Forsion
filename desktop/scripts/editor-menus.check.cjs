@@ -11,6 +11,8 @@
 //   B10  块菜单开着时:方向键不挪编辑器选区(在菜单项间移动)、Enter 执行聚焦项、动作落在打开时的那一块;
 //        role=menu / menuitem;键盘打开把焦点送进菜单(B-10)
 //   B14  块菜单「转换为」有代码块(按原文造,不把文字挪到空代码块下面)与标注(`[!note]`)(B-14)
+//   B15  块菜单「复制标题链接」(`[[笔记#标题]]`)/「复制块链接」(只给已有 `^id` 的块)/「移动到…」(追加到目标末尾再删源);
+//        /embed 说明不再指向 v4 没有的「复制嵌入引用」(B-15)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -493,6 +495,64 @@ async function main() {
         if (open) await clickItem(page, '标注')
         const md = await mdOf(page, nm)
         check('B14b 转换为 → 标注 = `> [!note] 原文`', open && /\n> \[!note\] 注意这里。\n/.test(md || ''), JSON.stringify(md))
+      }
+    }
+
+    if (want('B15')) {
+      await page.evaluate(() => {
+        window.__clip = []
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (t) => { window.__clip.push(t); return Promise.resolve() }, readText: () => Promise.resolve('') } })
+      })
+      const clip = () => page.evaluate(() => window.__clip.splice(0))
+      // B15a 标题 → 复制标题链接。
+      {
+        const nm = await load(page, '# 大标题\n\n## 小节 A\n\n正文。\n')
+        const open = await openHandleMenu(page, '小节 A')
+        const ok = open && await clickItem(page, '复制标题链接')
+        await page.waitForTimeout(200)
+        const c = await clip()
+        check('B15a 标题块「复制标题链接」= [[笔记#标题]]', ok && c[0] === `[[${nm.replace(/\.md$/, '')}#小节 A]]`, JSON.stringify(c))
+      }
+      // B15b 已有 ^id 的块 → 复制块链接;没有 ^id 的段落不列链接项。
+      {
+        const nm = await load(page, '有锚的段 ^abc123\n\n普通段。\n')
+        const open = await openHandleMenu(page, '有锚的段')
+        const ok = open && await clickItem(page, '复制块链接')
+        await page.waitForTimeout(200)
+        const c = await clip()
+        const open2 = await openHandleMenu(page, '普通段')
+        const labels = open2 ? await page.evaluate(() => [...document.querySelectorAll('.unified-block-menu button')].map((b) => b.textContent.trim())) : []
+        await page.keyboard.press('Escape')
+        check('B15b 有 ^id 的块给「复制块链接」,普通段不给(不铸 ID)', ok && c[0] === `[[${nm.replace(/\.md$/, '')}#^abc123]]` && !labels.some((l) => /复制.*链接/.test(l)), JSON.stringify({ c, labels }))
+      }
+      // B15c 移动到 → 追加到目标笔记末尾,再从本篇删掉。
+      {
+        await page.evaluate(() => {
+          window.__upage.vault.set('搬家目标.md', '# 目标\n\n已有内容。\n')
+          const st = window.__upage.pageStore.getState()
+          window.__upage.pageStore.setState({ pages: [...new Set([...(st.pages || []), '搬家目标.md'])] })
+        })
+        const nm = await load(page, '留下。\n\n搬走我。\n\n也留下。\n')
+        const open = await openHandleMenu(page, '搬走我')
+        const ok = open && await clickItem(page, '移动到')
+        const picker = await waitSel(page, '[data-testid=note-picker]')
+        await page.keyboard.type('搬家目标')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        const target = await page.evaluate(() => window.__upage.vault.get('搬家目标.md'))
+        check('B15c 移动到:目标末尾多了这块、本篇删掉了', ok && picker && target === '# 目标\n\n已有内容。\n\n搬走我。\n' && (md || '') === '留下。\n\n也留下。\n', JSON.stringify({ target, md }))
+      }
+      // B15d /embed 的说明指向 v4 真有的菜单项。
+      {
+        await load(page, '段\n')
+        await caretAt(page, '段')
+        await page.keyboard.type(' /embed')
+        await waitSel(page, '.slash-menu')
+        await page.keyboard.press('Enter')
+        await waitSel(page, '.dialog-msg')
+        const msg = await page.evaluate(() => document.querySelector('.dialog-msg')?.textContent ?? '')
+        await page.keyboard.press('Escape')
+        check('B15d /embed 说明指向「复制标题链接 / 复制块链接」,不再提「复制嵌入引用」', /复制标题链接/.test(msg) && !/复制嵌入引用/.test(msg), JSON.stringify(msg))
       }
     }
 

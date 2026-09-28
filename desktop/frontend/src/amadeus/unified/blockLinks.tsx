@@ -1,0 +1,157 @@
+// 块菜单(⠿)的「复制标题链接 / 复制块链接 / 移动到…」(评审 B-15)。全是纯 md:
+//  · 标题链接 = `[[笔记#标题]]`(Obsidian 同形,L-05 起点击能落到标题);
+//  · 块链接只给**已有** `^id` 的块 —— 不为了复制链接去给用户的文件铸块 ID(评审 §3);
+//  · 移动到 = 先把这几块追加到目标笔记末尾,成功了再从本篇删掉(反过来会在写失败时丢内容)。
+import { useEffect, useState } from 'react'
+import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
+import type { EditorView } from '@milkdown/kit/prose/view'
+import { fuzzyRank } from '@lcl/engine/fuzzy'
+import { pageKey, resolvePageName } from '@amadeus-shared/links'
+import { trailingBlockId } from '@amadeus-shared/pdfLink'
+import { toStoredMarkdown } from '@amadeus-shared/assets'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { anchorSafe } from '../blocks/markdown/wikiSubpath'
+import { amadeus } from '../api'
+import { hasUnifiedInstance, unifiedInsertMarkdown } from './lifecycle'
+import { registerMessages, translate, useI18n } from '../../i18n'
+
+registerMessages({
+  'blocklinks.copyHeading': { zh: '复制标题链接', en: 'Copy heading link' },
+  'blocklinks.copyBlock': { zh: '复制块链接', en: 'Copy block link' },
+  'blocklinks.moveTo': { zh: '移动到…', en: 'Move to…' },
+  'blocklinks.copied': { zh: '已复制 {link}', en: 'Copied {link}' },
+  'blocklinks.copyFailed': { zh: '没能写入剪贴板', en: "Couldn't write to the clipboard" },
+  'blocklinks.pickTitle': { zh: '移动到哪篇笔记', en: 'Move to which note' },
+  'blocklinks.pickPlaceholder': { zh: '输入笔记名…', en: 'Type a note name…' },
+  'blocklinks.noMatch': { zh: '没有匹配的笔记', en: 'No matching notes' },
+  'blocklinks.moved': { zh: '已移动到「{name}」末尾', en: 'Moved to the end of "{name}"' },
+  'blocklinks.moveFailed': { zh: '没能移动到「{name}」，原块没动', en: 'Couldn\'t move to "{name}" — the blocks were left in place' },
+  'blocklinks.moveConflict': { zh: '「{name}」刚被别处改过，没有移动，请重试', en: '"{name}" was just changed elsewhere — nothing was moved, try again' },
+  'blocklinks.keptSource': { zh: '已追加到「{name}」，但这几块期间被改过，没有从本篇删掉', en: 'Added to "{name}", but these blocks changed meanwhile, so they were kept here too' },
+})
+
+const toast = (text: string): void => { window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text } })) }
+const baseOf = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
+
+/** 链接里写笔记的哪个名字:裸名在全库解析得回这篇就用裸名,重名时写库相对路径(去 .md)—— 与 resolvePageName 同一套规则。 */
+export function linkNameFor(path: string, pages: string[]): string {
+  const base = baseOf(path)
+  return resolvePageName(base, pages) === path ? base : path.replace(/\.md$/i, '')
+}
+
+/** 选中的这一块能给出的链接:标题 → `[[笔记#标题]]`;行尾已有 `^id` → `[[笔记#^id]]`;都不是 → null。 */
+export function blockLinkOf(node: ProseNode, notePath: string, pages: string[]): { kind: 'heading' | 'block'; link: string } | null {
+  const name = linkNameFor(notePath, pages)
+  if (node.type.name === 'heading') {
+    const h = anchorSafe(node.textContent)
+    return h ? { kind: 'heading', link: `[[${name}#${h}]]` } : null
+  }
+  const id = trailingBlockId(node.textContent)
+  return id ? { kind: 'block', link: `[[${name}#^${id}]]` } : null
+}
+
+export function copyLink(link: string): void {
+  const done = navigator.clipboard?.writeText(link)
+  if (!done) { toast(translate('blocklinks.copyFailed')); return }
+  done.then(() => toast(translate('blocklinks.copied', { link })), () => toast(translate('blocklinks.copyFailed')))
+}
+
+/** 这段内容能不能搬去别的笔记:画布卡 / 分栏行的锚与本篇 frontmatter 绑着,搬走就成了悬空锚。 */
+export function canMove(content: Fragment): boolean {
+  let ok = true
+  content.descendants((n) => {
+    if (/^amadeus(CanvasCard|ColumnRow|ColumnCell)$/.test(n.type.name)) ok = false
+    return ok
+  })
+  return ok
+}
+
+/**
+ * 把 [from, to) 追加到 target 末尾,成功后从本篇删掉。
+ *  · target 开着(有活的 v4 实例)→ 走它的 insertMarkdown(进它的撤销栈与保存链,不和它抢写盘);
+ *  · 没开 → readTextFile + writeTextFile CAS(基线指纹不符 = 期间被别处改过 → 不写、不删,提示重试)。
+ *  md 按**目标**笔记的目录落成相对路径(图片 `![](…)` 跟着对)。
+ *  删源之前核对这段还是原样:追加期间本篇被改过就只追加不删(内容多一份,绝不丢)。
+ */
+export async function moveBlocksTo(opts: {
+  view: EditorView
+  from: number
+  to: number
+  source: string
+  target: string
+  serialize: (content: Fragment) => string | null
+}): Promise<boolean> {
+  const { view, from, to, source, target } = opts
+  const name = baseOf(target)
+  if (target === source) return false
+  const content = view.state.doc.slice(from, to).content
+  const display = opts.serialize(content)
+  if (!display?.trim()) { toast(translate('blocklinks.moveFailed', { name })); return false }
+  const md = toStoredMarkdown(display, target.split('/').slice(0, -1).join('/')).trim()
+  try {
+    if (hasUnifiedInstance(target)) {
+      if (!unifiedInsertMarkdown(target, md, 'end')) throw new Error('insert refused')
+    } else {
+      const cur = await amadeus.readTextFile(target)
+      if (cur == null) throw new Error('missing')
+      const next = cur.trim() ? `${cur.replace(/\s+$/, '')}\n\n${md}\n` : `${md}\n`
+      const res = await amadeus.writeTextFile(target, next, { base: textFingerprint(cur) })
+      if (res && !res.ok) { toast(translate('blocklinks.moveConflict', { name })); return false }
+    }
+  } catch {
+    toast(translate('blocklinks.moveFailed', { name }))
+    return false
+  }
+  if (view.isDestroyed || to > view.state.doc.content.size || !view.state.doc.slice(from, to).content.eq(content)) {
+    toast(translate('blocklinks.keptSource', { name }))
+    return true
+  }
+  view.dispatch(view.state.tr.delete(from, to).scrollIntoView())
+  toast(translate('blocklinks.moved', { name }))
+  return true
+}
+
+/** 「移动到…」的目标笔记选择器(QuickSwitcher 同款外观与键位:↑↓ 选、↵ 定、Esc 关)。 */
+export function NotePicker({ pages, exclude, onPick, onClose }: {
+  pages: string[]
+  exclude: string
+  onPick: (path: string) => void
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState(0)
+  const results = fuzzyRank(query, pages.filter((p) => p !== exclude && /\.md$/i.test(p)), pageKey).slice(0, 30)
+  useEffect(() => { setActive(0) }, [query])
+  return (
+    <div className="cmd-overlay" onMouseDown={onClose}>
+      <div className="cmd-panel" role="dialog" aria-label={t('blocklinks.pickTitle')} data-testid="note-picker" onMouseDown={(e) => e.stopPropagation()}>
+        <input
+          className="cmd-input"
+          autoFocus
+          placeholder={t('blocklinks.pickPlaceholder')}
+          aria-label={t('blocklinks.pickTitle')}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, results.length - 1)) }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)) }
+            else if (e.key === 'Enter') { e.preventDefault(); if (results[active]) onPick(results[active]) }
+            else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
+          }}
+        />
+        <div className="cmd-list" role="listbox">
+          {results.map((p, i) => (
+            <button key={p} className="cmd-item" role="option" aria-selected={i === active} data-active={i === active || undefined} onMouseEnter={() => setActive(i)} onClick={() => onPick(p)}>
+              <span className="cmd-row">
+                <span className="cmd-title">{baseOf(p)}</span>
+                <span className="cmd-path">{p}</span>
+              </span>
+            </button>
+          ))}
+          {!results.length && <div className="cmd-empty">{t('blocklinks.noMatch')}</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
