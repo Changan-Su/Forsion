@@ -8,6 +8,7 @@ import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computer
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
+import type { RemoteSafetyApi, RemoteSafetyState } from '../shared/remoteSafety' // P1-K2
 import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -114,6 +115,18 @@ const api = {
       return () => ipcRenderer.removeListener('remoteSessions:changed', listener)
     },
   } satisfies RemoteSessionsApi,
+  // P1-K2 ── 急停 / 远程锁定(只在本机;解锁在主进程弹系统认证;主进程校验发送方)──
+  remoteSafety: {
+    get: () => ipcRenderer.invoke('remoteSafety:get'),
+    estop: () => ipcRenderer.invoke('remoteSafety:estop'),
+    unlock: () => ipcRenderer.invoke('remoteSafety:unlock'),
+    setHotkey: (accelerator) => ipcRenderer.invoke('remoteSafety:setHotkey', accelerator),
+    onChanged: (cb) => {
+      const listener = (_e: unknown, s: RemoteSafetyState): void => cb(s)
+      ipcRenderer.on('remoteSafety:changed', listener)
+      return () => ipcRenderer.removeListener('remoteSafety:changed', listener)
+    },
+  } satisfies RemoteSafetyApi,
   // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
@@ -508,6 +521,8 @@ const AGENT_KEYS = [
   'reportRunningSessions', // 无 agent 后端就没有 run
   // P1-K3
   'onApprovalOpen', // 审批送达的通知只在有 agent 后端(本机引擎)的产品里发
+  // P1-K2
+  'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]

@@ -11,6 +11,9 @@
  * ponytail: 只认渲染层订阅的 run(本机发的消息 / 打开过的会话,= 侧栏「运行中」圆点那份);
  * 通道(微信等)、Muse、自动化、其他设备经 Unit 起的后台 run 不算。要全口径 → 引擎暴露在飞 run 数
  * (agentLoop 的 runTasks.size),主进程轮询它。
+ *
+ * P1-K2 强制通道 force(key, on):不看开关、不看渲染层上报 —— 远程 run 在跑时阻止闲置休眠(远端没法把电脑唤醒;
+ * 仍只拦闲置休眠,合盖照睡)。任一 key 开着即持有;与开关 + 上报的判定取「或」。
  */
 export interface KeepAwakeDeps {
   isEnabled: () => boolean
@@ -20,10 +23,11 @@ export interface KeepAwakeDeps {
 
 export function createKeepAwake(d: KeepAwakeDeps) {
   const busy = new Set<number>() // 有在飞 run 的 webContents id
+  const forced = new Set<string>() // P1-K2:强制通道(remote = 远程 run 在跑)
   let blocker: number | null = null
-  /** 按当前开关 + 上报重算;开关变化后必须调一次(关掉要立刻放、运行中打开要立刻拦)。返回是否持有。 */
+  /** 按当前开关 + 上报 + 强制通道重算;开关变化后必须调一次(关掉要立刻放、运行中打开要立刻拦)。返回是否持有。 */
   const refresh = (): boolean => {
-    const want = d.isEnabled() && busy.size > 0
+    const want = (d.isEnabled() && busy.size > 0) || forced.size > 0
     if (want && blocker === null) blocker = d.start()
     else if (!want && blocker !== null) {
       d.stop(blocker)
@@ -43,6 +47,12 @@ export function createKeepAwake(d: KeepAwakeDeps) {
       return refresh()
     },
     /** 睡眠唤醒后重新申请:Windows 在用户主动睡眠时会终止电源请求,手里的 id 还在但已失效。 */
+    /** P1-K2:强制通道开 / 关(不看「有会话运行时不休眠」开关)。返回是否持有。 */
+    force(key: string, on: boolean): boolean {
+      if (on) forced.add(key)
+      else forced.delete(key)
+      return refresh()
+    },
     rearm(): boolean {
       if (blocker !== null) {
         d.stop(blocker)

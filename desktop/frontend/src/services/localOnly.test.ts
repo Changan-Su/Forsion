@@ -60,3 +60,17 @@ describe('localOnly × P1-K4 拒绝码', () => {
     expect(remoteCallerMessage({ state: 'denied', reason: 42 })).toBe(translateFor('zh', 'unitpage.remoteCallerDenied'))
   })
 })
+
+// P1-K2:急停锁定(423 REMOTE_LOCKED)
+describe('localOnly × P1-K2 远程锁定', () => {
+  it('423 REMOTE_LOCKED → 本地化「在电脑本机上解锁」(zh / en 成对,en 无汉字),带 code', async () => {
+    setLocaleGlobal('zh')
+    expect(remoteRefusalMessage('REMOTE_LOCKED')).toBe(translateFor('zh', 'unitpage.remoteLocked'))
+    expect(remoteRefusalMessage('REMOTE_LOCKED')).toContain('解锁')
+    const en = translateFor('en', 'unitpage.remoteLocked')
+    expect(en).toContain('Unlock it on the computer itself')
+    expect(/[一-鿿]/.test(en)).toBe(false)
+    const r = await httpErrorMessage(res({ code: 'REMOTE_LOCKED', detail: 'Remote access to this computer is locked. Unlock it on the computer itself.' }, 423))
+    expect(r).toEqual({ message: translateFor('zh', 'unitpage.remoteLocked'), code: 'REMOTE_LOCKED' })
+  })
+})

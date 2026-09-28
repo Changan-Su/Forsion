@@ -69,8 +69,7 @@ async function fakeEngine() {
   }
 }
 
-type Harness = Awaited<ReturnType<typeof harness>>
-const opened: Harness[] = []
+const opened: Array<{ close(): void; dir: string }> = []
 async function harness(o: {
   engineUp?: boolean; register?: (acc: string) => boolean; auth?: Awaited<ReturnType<RemoteSafetyDeps['systemAuth']>>;
   writeFails?: () => boolean; dir?: string; trusted?: Record<string, string>; capable?: boolean

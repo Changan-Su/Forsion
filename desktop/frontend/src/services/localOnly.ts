@@ -10,6 +10,7 @@
  */
 import { registerMessages, translate } from '../i18n'
 import { REMOTE_CALLER_UNCONFIRMED, REMOTE_SESSIONS_OFF, type TrustReason } from '../../../shared/remoteSessions' // P1-K4
+import { REMOTE_LOCKED } from '../../../shared/remoteSafety' // P1-K2
 
 registerMessages({
   'unitpage.localOnly': {
@@ -169,3 +170,13 @@ Object.assign(REFUSAL_KEYS, {
   UNIT_CALLER_EXPIRED: 'engine.refusal.callerExpired',
   BAD_CALLER_ASSERTION: 'engine.refusal.badCallerAssertion',
 })
+
+// P1-K2 ── 急停后那台电脑锁定了远程访问(unitWeb 顶层 / /engine / /vault/rpc 与引擎中间件同码 423 REMOTE_LOCKED)。
+// 只能在那台电脑本机经系统认证解锁;锁定期间远端只能看、只能停。run 终态 reason 'remote_estop' / 'remote_locked' 的展示归会话 / 移动端包。
+registerMessages({
+  'unitpage.remoteLocked': {
+    zh: '那台电脑已锁定远程访问，需要在电脑本机上解锁',
+    en: 'Remote access to that computer is locked. Unlock it on the computer itself',
+  },
+})
+Object.assign(REFUSAL_KEYS, { [REMOTE_LOCKED]: 'unitpage.remoteLocked' })
