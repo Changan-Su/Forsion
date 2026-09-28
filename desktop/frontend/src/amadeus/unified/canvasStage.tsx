@@ -31,7 +31,7 @@ import { zoomOf } from '@lcl/engine'
 // 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
 // dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
 import {
-  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, NUDGE, PRESS_SLOP, TOUCH_SLOP,
+  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, PRESS_SLOP, TOUCH_SLOP, nudgeStep,
   CanvasChrome, CanvasMiniMap as KitMiniMap, gridLayerStyle, recallViewport, rememberViewport, resizeBox, snapGrid,
   type MiniItem, type ResizeEdge, type Viewport,
 } from './canvasKit'
@@ -3371,12 +3371,15 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     }
     if (e.key.startsWith('Arrow')) {
       e.preventDefault()
-      const step = e.shiftKey ? 1 : NUDGE
+      // 步长与仪表盘共用 canvasKit 的 nudgeStep(V-11):开吸附 = 一格,否则 8 / Shift = 32。
+      const step = nudgeStep(snapRef.current, e.shiftKey)
       const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
       const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
       if (!dx && !dy) return
       const view = getView()
-      const anchors = sel.filter((k) => k.startsWith('c:')).map(keyId)
+      // 选中的 Frame 连辖域一起走(V-11,与拖标题条同一个 expandFrames):修前只挪框,框里的卡 / 形状留在原地。
+      const moving = expandFrames(sel)
+      const anchors = moving.filter((k) => k.startsWith('c:')).map(keyId)
       if (view && anchors.length) {
         const boxes = measureCards(hostRef.current)
         setCardAttrs(view, new Map(anchors.map((a) => {
@@ -3386,8 +3389,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         onCommit()
       }
       // 元素 + 主卡合成一笔;还牵着卡片(上面那笔 PM)时并成 'pair'(与拖拽落笔同一口径)。
-      const ids = new Set(sel.filter((k) => k.startsWith('e:')).map(keyId))
-      const m = sel.includes(MAIN_KEY) ? { ...main, x: Math.round(main.x + dx), y: Math.round(main.y + dy) } : undefined
+      const ids = new Set(moving.filter((k) => k.startsWith('e:')).map(keyId))
+      const m = moving.includes(MAIN_KEY) ? { ...main, x: Math.round(main.x + dx), y: Math.round(main.y + dy) } : undefined
       if (ids.size || m) {
         writeFm({
           ...(ids.size ? { e: moveElements(rawList(elements), ids, dx, dy) } : {}),

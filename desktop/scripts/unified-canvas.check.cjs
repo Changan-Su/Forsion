@@ -91,6 +91,7 @@
 //   C95 画布视口的会话记忆按「库 + 路径」作键、只在画布态记(V-15)
 //   C96 拖动中的卡压在文档序靠后的卡上面(V-10)
 //   C97 拖卡途中 ⠿/+ 把手隐藏(不悬在原位的空白画布上),松手后悬停照常出现(V-12)
+//   C98 方向键微移:选中 Frame 连辖域一起走;步长与仪表盘同一个 nudgeStep(吸附开 = 一格,关 = 8 / Shift 32)(V-11)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -441,6 +442,48 @@ async function wave2(browser) {
   await p97.close()
   record('C97 拖卡途中 ⠿/+ 把手隐藏;松手后悬停别的块照常出现',
     hover97?.visible === true && mid97?.visible === false && after97?.visible === true, JSON.stringify({ hover97, mid97, after97 }))
+
+  // ── C98 方向键微移(V-11)──────────────────────────────────────────────────────────
+  //  修前:① 选中 Frame 按方向键只挪框,框里的卡 / 形状留在原地(拖标题条却会带走,两条路分叉);
+  //  ② 步长 8 / Shift=1、不看点阵吸附,仪表盘共用的 canvasKit 是「吸附开 = 一格 24,关 = 8 / Shift 32」。
+  const SEED98 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":540,"y":60,"w":260}],"elements":[{"id":"f1","type":"frame","x":504,"y":0,"w":408,"h":312,"title":"区域"},{"id":"s1","type":"shape","shape":"rect","x":528,"y":192,"w":96,"h":72}]}',
+    '---', '', '# 画布页', '', '主卡。', '', '<!-- a k1 -->', '', '框里的卡', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p98 = await open(browser, SEED98)
+  await p98.waitForTimeout(800)
+  const st98 = async () => {
+    const cv = await cvOf(p98)
+    const f = (cv?.elements ?? []).find((e) => e.id === 'f1'), sh = (cv?.elements ?? []).find((e) => e.id === 's1'), k = (cv?.cards ?? []).find((c) => c.ref === 'k1')
+    return { f1: [f?.x, f?.y], s1: [sh?.x, sh?.y], k1: [k?.x, k?.y] }
+  }
+  const bar98 = await p98.evaluate(() => { const r = document.querySelector('.amx-el-frame-bar').getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 } })
+  await p98.mouse.click(bar98.x, bar98.y); await p98.waitForTimeout(200)
+  const a98 = await st98()
+  await p98.keyboard.press('ArrowDown'); await p98.waitForTimeout(500)
+  const b98 = await st98()
+  const frameOk = b98.f1[1] - a98.f1[1] === 24 && b98.s1[1] - a98.s1[1] === 24 && b98.k1[1] - a98.k1[1] === 24
+    && b98.f1[0] === a98.f1[0] && b98.s1[0] === a98.s1[0] && b98.k1[0] === a98.k1[0]
+  // 单张卡:吸附开 → 24;Shift 也是 24(吸附优先,同 canvasKit);关吸附 → 8 / Shift 32
+  await p98.keyboard.press('Escape'); await p98.waitForTimeout(150)
+  const kp98 = async () => p98.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  let kp = await kp98()
+  await p98.mouse.click(kp.x, kp.y); await p98.waitForTimeout(150)
+  const steps98 = []
+  const stepOf = async (key) => { const x0 = (await st98()).k1[0]; await p98.keyboard.press(key); await p98.waitForTimeout(300); const x1 = (await st98()).k1[0]; steps98.push(`${key}:${x1 - x0}`); return x1 - x0 }
+  const on1 = await stepOf('ArrowRight')
+  const on2 = await stepOf('Shift+ArrowRight')
+  await p98.click('.amx-stage-hud button[title="关闭点阵吸附"]'); await p98.waitForTimeout(150)
+  kp = await kp98()
+  await p98.mouse.click(kp.x, kp.y); await p98.waitForTimeout(150)
+  const off1 = await stepOf('ArrowRight')
+  const off2 = await stepOf('Shift+ArrowRight')
+  await p98.close()
+  record('C98a 选中 Frame 按方向键:框里的卡与形状一起走(与拖标题条同一个辖域)',
+    frameOk, JSON.stringify({ before: a98, after: b98 }))
+  record('C98b 方向键步长与仪表盘同一个 nudgeStep:吸附开 24(Shift 同),关 8 / Shift 32',
+    on1 === 24 && on2 === 24 && off1 === 8 && off2 === 32, steps98.join(' '))
 }
 
 async function main() {
@@ -1967,19 +2010,19 @@ async function main() {
   let pt36 = await k136()
   await p36.mouse.click(pt36.x, pt36.y)
   await p36.waitForTimeout(200)
-  await p36.keyboard.press('ArrowRight') // 卡 +8(NUDGE)
+  await p36.keyboard.press('ArrowRight') // 卡 +24(点阵吸附默认开 = 一格,与仪表盘同一个 nudgeStep,V-11)
   await p36.waitForTimeout(600)
   pt36 = await s136()
   await p36.mouse.click(pt36.x, pt36.y)
   await p36.waitForTimeout(200)
-  await p36.keyboard.press('ArrowDown') // 形状 +8
+  await p36.keyboard.press('ArrowDown') // 形状 +24
   await p36.waitForTimeout(600)
-  const g36a = await geo36() // k1.x=48, s1.y=308
+  const g36a = await geo36() // k1.x=64, s1.y=324
   // ③④ Cmd+Z ×2:先退**形状**(最近),再退卡 —— 修前这里恒是先元素栈打光才轮到 PM,次序错乱
   await p36.evaluate(() => document.querySelector('.amx-stage').focus())
   await p36.keyboard.press(Z)
   await p36.waitForTimeout(700)
-  const g36b = await geo36() // s1 回 300,卡仍 48
+  const g36b = await geo36() // s1 回 300,卡仍 64
   await p36.keyboard.press(Z)
   await p36.waitForTimeout(700)
   const g36c = await geo36() // 卡回 40
@@ -1988,12 +2031,12 @@ async function main() {
   await p36.waitForTimeout(700)
   await p36.keyboard.press(SZ)
   await p36.waitForTimeout(700)
-  const g36d = await geo36() // 48 / 308
+  const g36d = await geo36() // 64 / 324
   record('C36a 统一时间线:卡→形状交替操作,Cmd+Z 先退形状再退卡;重做按原时序重放',
-    g36a.k1?.x === 48 && g36a.s1?.y === 308
-      && g36b.k1?.x === 48 && g36b.s1?.y === 300
+    g36a.k1?.x === 64 && g36a.s1?.y === 324
+      && g36b.k1?.x === 64 && g36b.s1?.y === 300
       && g36c.k1?.x === 40 && g36c.s1?.y === 300
-      && g36d.k1?.x === 48 && g36d.s1?.y === 308,
+      && g36d.k1?.x === 64 && g36d.s1?.y === 324,
     JSON.stringify({ a: g36a, b: g36b, c: g36c, d: g36d }))
   // ⑥ Tab 建子节点 = 'pair':一次 Cmd+Z 卡与层级一起退(修前要按两次,评审点名)
   pt36 = await k136()
@@ -2024,7 +2067,7 @@ async function main() {
   pt36 = await s136()
   await p36.mouse.click(pt36.x, pt36.y)
   await p36.waitForTimeout(200)
-  await p36.keyboard.press('ArrowDown') // s1: 308 → 316
+  await p36.keyboard.press('ArrowDown') // s1: 324 → 348
   await p36.waitForTimeout(600)
   pt36 = await k136()
   await p36.mouse.click(pt36.x, pt36.y)
@@ -2039,7 +2082,7 @@ async function main() {
     return el?.textContent ?? ''
   })
   record('C36c 卡内 Cmd+Z 同样按时序:退的是刚动过的形状,不动刚打的字',
-    g36g.s1?.y === 308 && text36.includes('xyz'),
+    g36g.s1?.y === 324 && text36.includes('xyz'),
     JSON.stringify({ s1: g36g.s1, text: text36.slice(0, 40) }))
   await p36.close()
 
