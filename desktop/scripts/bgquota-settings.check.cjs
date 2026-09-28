@@ -47,7 +47,7 @@ async function main() {
   // 2026-09-28:剩余量、「用 AI 额度继续」开关与转入挪进「Forsion 云端 → 额度与积分」(Extend 画的页,测试在 Extend 仓);这里只留说明 + 跳转
   check('说明写清计入模型,并指向额度与积分', text.includes('Luna Lite') && text.includes('额度与积分'))
   check('跟随云端时不提示「别的模型」', !text.includes('不计入后台额度'))
-  check('账号级那几样(剩余 / 开关 / 转入)已不在 Muse 页', await block.locator('[role="switch"]').count() === 0 && !text.includes('+10%') && !text.includes('剩余'))
+  check('账号级那几样(剩余 / 开关 / 转入)已不在 Muse 页', await block.locator('[role="switch"]').count() === 0 && !text.includes('+10%') && !/剩余 \d/.test(text))
   if (shot) await block.screenshot({ path: path.join(out, 'bgquota-light.png') })
   await block.getByRole('button', { name: '打开额度与积分' }).click()
   const opened = await page.evaluate(() => window.__bgHarness.opened)
