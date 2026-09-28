@@ -151,7 +151,7 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
  *   extraRoots —— 免审批可写根;
  *   clientCapabilities / client_capabilities —— 会给 run 注册手机能力,而回执打的是云端;
  *   devices —— 设备挂载(P1),远端不可改;
- *   remoteOrigin —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉;
+ *   remoteOrigin / remoteContent —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉;
  *   muse / activityAccess / automationOrigin / approvalDeferral —— 引擎内部角色键:muse 让 run 看见 add_muse_todo / set_next_wake /
  *     read_activity,TODO 被批准后排出的 Muse run **不带污点**(Muse 自动档是完全通行)= 远端借 Muse 起一条无钳制的后续执行;
  *     其余几个改的是「有没有人在看、审批往哪排」;
@@ -161,7 +161,7 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
  * 会话配置的远程**写**走白名单,见 REMOTE_WRITABLE_CONFIG_KEYS。
  */
 export const REMOTE_STRIPPED_CONFIG_KEYS = [
-  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin',
+  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin', 'remoteContent',
   'muse', 'activityAccess', 'automationOrigin', 'approvalDeferral', 'delegatedFrom', 'delegatedBy', 'subAgentGrants',
   'systemPrompt', 'soul', 'toolsMode', 'toolsList',
 ] as const;

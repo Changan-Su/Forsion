@@ -5,7 +5,8 @@
  * 流进本机不带污点的 run —— 尤其是 Muse(无人值守、审批档可能比远程上限宽):这是提示注入的洗白通道。与 P0「远程轮不写长期记忆」
  * (localHistorian.historianRoundRemote)同一条规矩:远端内容不自动进本机无污点的上下文。
  *
- * 判据(一个 SQL 谓词,两方言):会话 agent_config.remoteOrigin 在场(远端建 / 分支 / 改过项目路径),**或**会话里有任一 run 的
+ * 判据(一个 SQL 谓词,两方言):会话 agent_config.remoteOrigin 在场(远端建 / 分支 / 改过项目路径),或 agent_config.remoteContent 在场
+ * (远端改过标题 / 配置里的 title·name —— 串是远端给的,见 routes/sessions.ts;单列一个键,不盖 remoteOrigin,理由同下),**或**会话里有任一 run 的
  * input.remote(远端起的)或 input.remoteTainted(本机起、中途被远端 steer / 答审批 / 答询问染上的 —— 那张表只在进程内,
  * 这里在首次染色时落进 run 行,重启后照样认得)。agent_runs 只随会话删除而删,判据长期有效。
  * ⚠️ 刻意不给被染色的本机会话盖 remoteOrigin:那个标记还管设备页 /unit/host* 的读范围(P0 D1),盖上会让手机接着聊的本机项目会话
@@ -20,13 +21,13 @@ import { effectiveRemote, onRunTainted, type RemoteInfo } from './remoteOrigin.j
 export function notRemoteTaintedSql(alias = 's'): string {
   const cfg = `${alias}.agent_config`;
   if (getDbType() === 'sqlite') {
-    return `NOT ((${cfg} IS NOT NULL AND (json_valid(${cfg}) = 0 OR json_type(${cfg}, '$.remoteOrigin') IS NOT NULL))`
+    return `NOT ((${cfg} IS NOT NULL AND (json_valid(${cfg}) = 0 OR json_type(${cfg}, '$.remoteOrigin') IS NOT NULL OR json_type(${cfg}, '$.remoteContent') IS NOT NULL))`
       + ` OR EXISTS (SELECT 1 FROM agent_runs rt WHERE rt.session_id = ${alias}.id AND rt.input IS NOT NULL AND json_valid(rt.input)`
       + ` AND (json_type(rt.input, '$.remote') IS NOT NULL OR json_type(rt.input, '$.remoteTainted') IS NOT NULL)))`;
   }
   // PG:只为方言对称保留 —— 调用方都按 hostExec 门控(远程污点只存在于本机引擎,本机引擎是 sqlite),这一支目前没有执行者、也没有测试。
   // jsonb 的 `?` 运算符会被 query() 当占位符换成 $n,改用 -> IS NOT NULL
-  return `NOT ((jsonb_typeof(${cfg}) = 'object' AND (${cfg} -> 'remoteOrigin') IS NOT NULL)`
+  return `NOT ((jsonb_typeof(${cfg}) = 'object' AND ((${cfg} -> 'remoteOrigin') IS NOT NULL OR (${cfg} -> 'remoteContent') IS NOT NULL))`
     + ` OR EXISTS (SELECT 1 FROM agent_runs rt WHERE rt.session_id = ${alias}.id AND jsonb_typeof(rt.input) = 'object'`
     + ` AND ((rt.input -> 'remote') IS NOT NULL OR (rt.input -> 'remoteTainted') IS NOT NULL)))`;
 }
