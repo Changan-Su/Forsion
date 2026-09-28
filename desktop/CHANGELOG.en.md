@@ -14,6 +14,8 @@
 - Shortcuts (symlinks) in an agent's private Library folder that point outside it can no longer be read.
 - The local engine now uses its own local token instead of your Forsion account token.
 - MCP: the server names `dev` and anything starting with `dev_` are reserved for built-in developer tools. Existing servers with those names stop loading and show an error in their status; renaming them brings them back. Error and text results from MCP tools are marked as external data before they reach the model, and images they return are treated as untrusted content.
+<!-- P1-K10a -->
+- The session workspace (the files panel, attachments you send and artifacts you download, including when you use this computer remotely from the device page or your phone) only reads and writes files inside the workspace: shortcuts (symlinks) that point outside it are never listed, downloaded or written through, even when the whole session folder has been replaced by one, and a named pipe in the workspace no longer makes requests hang. Workspaces synced to the cloud skip such shortcuts too when pulling attachments and sending artifacts back.
 
 ## 2.11.4 (2026-09-23)
 
