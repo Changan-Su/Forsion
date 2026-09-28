@@ -107,7 +107,7 @@ it('keeps usage, invite, and account-center actions when the host provides those
   expect(document.body.textContent).toContain('邀请好友')
   expect(document.body.textContent).toContain('用户中心')
   await click('邀请好友')
-  expect(window.tangu!.openAccountCenter).toHaveBeenCalledWith('points-exchange')
+  expect(window.tangu!.openAccountCenter).toHaveBeenCalledWith('profile')
 })
 
 it('shows the reset ceremony only after the card has been consumed', async () => {

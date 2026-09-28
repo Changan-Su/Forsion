@@ -214,7 +214,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
             {confirmConvert ? t('quota.banner.confirmReset') : t('quota.banner.bg.convert', { percent: String(BANNER_CONVERT_PERCENT) })}
           </button>
         )}
-        <button className="t2-quota-action settings" onClick={() => useApp.getState().openSettings('agents')}>
+        <button className="t2-quota-action settings" onClick={() => useApp.getState().openSettings('agents/ag-special')}>
           <Settings2 size={12} aria-hidden="true" /> {t('quota.banner.bg.settings')}
         </button>
       </span> : <span className="t2-quota-advisory-actions">

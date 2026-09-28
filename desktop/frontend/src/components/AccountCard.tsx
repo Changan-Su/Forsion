@@ -345,7 +345,7 @@ export const AccountCard: React.FC<{
         </div>
       )}
       {hasAccountCenter && <>
-      <button className="ap-item" onClick={() => { void window.tangu?.openAccountCenter?.('points-exchange'); setMenu(null) }}>
+      <button className="ap-item" onClick={() => { void window.tangu?.openAccountCenter?.('profile'); setMenu(null) /* 邀请卡 08-04 起在个人资料页,积分兑换页没有 */ }}>
         <Send size={14} /><span>{t('sidebar.account.menu.invite')}</span>
       </button>
       <button className="ap-item" onClick={() => { openCenter(); setMenu(null) }}>
