@@ -246,7 +246,7 @@ export class UnitHost {
             await this.deps.clearPairing()
             throw new Error(`通道被拒(${resp.status} ${code}),已清除配对待重新入册`)
           }
-          throw new Error(`channel HTTP ${resp.status}(非 hub 判决,保留配对重试)`)
+          throw new Error(`channel HTTP ${resp.status} (not a hub verdict; keeping pairing and retrying)`)
         }
         if (!resp.ok || !resp.body) throw new Error(`channel HTTP ${resp.status}`)
         this.connected = true

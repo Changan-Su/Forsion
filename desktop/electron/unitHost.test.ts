@@ -217,7 +217,7 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
       expect(await until(() => hub.channels.length >= 2, 4000)).toBe(true) // 1s 退避后又拨了一次
       expect(cleared).toEqual([])
       expect(hub.registers.length).toBe(0)
-      expect(logs.some((l) => l.includes('保留配对重试'))).toBe(true)
+      expect(logs.some((l) => l.includes('keeping pairing and retrying'))).toBe(true)
       hub.channelReject = null // 网关起好了 → 同一配对直接连上
       expect(await until(() => h.status().connected, 5000)).toBe(true)
       expect(cleared).toEqual([])
