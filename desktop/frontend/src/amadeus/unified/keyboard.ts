@@ -532,7 +532,7 @@ const deleteSelectNextAtom: Command = (state, dispatch) => {
  *  只接管跨容器的那几种;同层相邻兄弟(段↔段、段↔标题)base 本来就并对,原样交回。
  *  下一块是 callout 标题 → 整块选中(与撞上代码块同一口径),不把 `[!note]` 令牌拉成正文;
  *  中间夹着分割线等叶子、代码块、表格、折叠藏起来的块 → 交回原路。 */
-const CALLOUT_HEAD = /^\[![A-Za-z]+\]/
+const CALLOUT_HEAD = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09)
 const deleteJoinNextText: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
   if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false

@@ -394,6 +394,27 @@
 .am-app .milkdown .ProseMirror blockquote.callout-bug { --callout-color: #f50057; }
 .am-app .milkdown .ProseMirror blockquote.callout-example { --callout-color: #7c4dff; }
 .am-app .milkdown .ProseMirror blockquote.callout-quote { --callout-color: #9e9e9e; }
+/* R-09:Obsidian 其余正名的配色(别名由 callout.ts 另挂正名 class:`[!faq]` → .callout-question,只按正名写一份)。 */
+.am-app .milkdown .ProseMirror blockquote.callout-abstract { --callout-color: #00b0ff; }
+.am-app .milkdown .ProseMirror blockquote.callout-todo { --callout-color: #00b8d4; }
+.am-app .milkdown .ProseMirror blockquote.callout-success { --callout-color: #00c853; }
+.am-app .milkdown .ProseMirror blockquote.callout-question { --callout-color: #ffab00; }
+.am-app .milkdown .ProseMirror blockquote.callout-failure { --callout-color: #ff5252; }
+/* 有色标注的标题行 = [类型图标] 标题(没写标题时显示类型名)[折叠箭头,仅 +/-]。标题加粗、偏标注色,
+   与底色一起把「这是一条警告 / 提示」说清楚(此前只有底色,没写标题时标题行空空如也)。折叠块([!fold])不在此列。 */
+.am-app .milkdown .ProseMirror blockquote.callout:not(.callout-fold) > p:first-child {
+  font-weight: 600;
+  color: color-mix(in srgb, var(--callout-color) 72%, var(--text));
+}
+.am-app .milkdown .ProseMirror .callout-icon {
+  display: inline-flex;
+  vertical-align: -0.14em;
+  margin-right: 6px;
+  color: var(--callout-color, #448aff);
+  user-select: none;
+}
+.am-app .milkdown .ProseMirror .callout-icon svg { width: 1em; height: 1em; }
+.am-app .milkdown .ProseMirror .callout-default-title { user-select: none; pointer-events: none; }
 .am-app .milkdown .ProseMirror .callout-token {
   color: var(--callout-color, #448aff);
   background: color-mix(in srgb, var(--callout-color, #448aff) 14%, transparent);

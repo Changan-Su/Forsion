@@ -33,7 +33,7 @@ export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | '
 // 令牌**不带尾随空格**:contenteditable 会把行尾空格吃掉(实测),留着只会得到一个「有时有有时没有」
 // 的落盘形态。标题紧跟在 `-` 后面 Obsidian 照样认,渲染层靠 CSS 给出间距。
 export const FOLD_TOKEN = '[!fold]-'
-const CALLOUT_HEAD_RE = /^\[!\w+\]/
+const CALLOUT_HEAD_RE = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09:`[!my-type]` 也是 callout)
 
 export interface Trigger {
   kind: TriggerKind
