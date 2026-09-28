@@ -2717,7 +2717,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.menu.stale') } }))
                 return
               }
-              void moveBlocksTo({ view, from: pick.from, to: pick.to, source: path, target, serialize: (c) => hostApi.current?.serializeMd(c) ?? null })
+              void moveBlocksTo({ view, from: pick.from, to: pick.to, source: path, target, pages: [...scoped.getState().pages].sort(), serialize: (c) => hostApi.current?.serializeMd(c) ?? null })
                 .then((moved) => { if (moved) { syncFromEditor(); schedule() } })
               view.focus()
             }}
