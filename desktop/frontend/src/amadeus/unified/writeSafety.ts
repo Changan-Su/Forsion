@@ -33,8 +33,12 @@ registerMessages({
   'unisave.draft.restore': { zh: '恢复草稿', en: 'Restore draft' },
   'unisave.draft.discard': { zh: '丢弃', en: 'Discard' },
   'unisave.gone.toast': {
-    zh: '「{name}」已在别处被删除或移走，最后的改动没来得及保存。可以把这篇的内容复制下来。',
-    en: '"{name}" was deleted or moved elsewhere before your last changes were saved. You can copy its text.',
+    zh: '「{name}」已在别处被删除或移走，最后的改动没来得及保存，另存副本也没写成。可以把这篇的内容复制下来。',
+    en: '"{name}" was deleted or moved elsewhere before your last changes were saved, and a backup copy couldn’t be written. You can copy its text.',
+  },
+  'unisave.rescued.toast': {
+    zh: '「{name}」已在别处被删除或移走。你还没保存的内容另存为「{copy}」。',
+    en: '"{name}" was deleted or moved elsewhere. Your unsaved changes were saved as "{copy}".',
   },
   'unisave.gone.copy': { zh: '复制内容', en: 'Copy text' },
   'unisave.gone.copied': { zh: '已复制到剪贴板', en: 'Copied to clipboard' },
@@ -59,7 +63,17 @@ const noteName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$
 /** 把即将被本地版本盖掉的盘上内容另存为冲突副本,返回副本路径。
  *  命名与云同步引擎同一口径(shared/writeConflict):同分钟撞名按 `-2/-3…` 递增;已有**同内容**副本就直接复用
  *  (同一版本不出第二份)。写不进去就抛 —— 调用方据此**不许**覆盖原文件(宁可这次保存卡住重试,不吃掉别人的改动)。 */
-export async function writeConflictCopy(path: string, content: string, now = new Date()): Promise<string> {
+// 本窗内的副本写入排成一条队(评审 G1-08 返修):「查空位 → 写」不是原子的,同篇双开的两个实例同时另存
+// (别处删了这篇、两边各有没落盘的字)会看中同一个空位,后写的把先写的整份盖掉 —— 正是要保住的那份字。
+// 跨窗口的同一竞态仍在(记账:需要主进程的「仅新建」写口)。
+let copyQueue: Promise<unknown> = Promise.resolve()
+export function writeConflictCopy(path: string, content: string, now = new Date()): Promise<string> {
+  const run = copyQueue.then(() => writeConflictCopyNow(path, content, now), () => writeConflictCopyNow(path, content, now))
+  copyQueue = run.catch(() => {})
+  return run
+}
+
+async function writeConflictCopyNow(path: string, content: string, now: Date): Promise<string> {
   const first = conflictCopyPath(path, now)
   for (let n = 1; n <= 50; n++) {
     const candidate = conflictCopyVariant(first, n)
@@ -104,13 +118,26 @@ export function toastSaveFailed(path: string, error: unknown): void {
   })
 }
 
-/** 评审 G1-08:这篇在别处被删除 / 移走(没有新路径可交接草稿)时,本实例手里还有没落盘的字。退休之后不许再写旧路径
- *  (会复活幽灵文件),也不存旧路径草稿(孤儿,同名新笔记会误弹恢复)—— 只能当面说一声,把全文交给剪贴板。
- *  复制在点按钮时发生(用户手势,剪贴板写得进)。 */
+/** 这篇在盘上没了、手里的字已另存为副本(评审 G1-08 返修):error 级常驻,带「打开副本」。
+ *  去重键按**副本**:同篇双开两个实例各存各的副本、各出一条,不互相顶掉(同内容共用一份副本时也只出一条)。 */
+export function toastRescued(path: string, copy: string): void {
+  emitAmadeusToast({
+    level: 'error',
+    dedupeKey: `amx-rescued:${copy}`,
+    text: translate('unisave.rescued.toast', { name: noteName(path), copy: noteName(copy) }),
+    action: {
+      label: translate('unisave.conflict.open'),
+      run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },
+    },
+  })
+}
+
+/** 兜底(评审 G1-08):另存副本也写不进去时,最后的入口是剪贴板。复制在点按钮时发生(用户手势,剪贴板写得进)。
+ *  去重键带一段内容指纹:同篇双开两个实例的字不同,各出一条。 */
 export function toastGoneUnsaved(path: string, text: string): void {
   emitAmadeusToast({
-    level: 'warning',
-    dedupeKey: `amx-gone:${path}`,
+    level: 'error',
+    dedupeKey: `amx-gone:${path}:${textFingerprint(text)}`,
     text: translate('unisave.gone.toast', { name: noteName(path) }),
     action: {
       label: translate('unisave.gone.copy'),

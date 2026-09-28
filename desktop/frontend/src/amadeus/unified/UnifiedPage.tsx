@@ -46,7 +46,7 @@ import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { findTextHit, unfoldToReveal } from './revealText'
@@ -1790,6 +1790,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
 
+  /** 这篇在盘上没了(别处删除 / 挪走,或在途的 CAS 写撞上删除),手里还有没落盘的字(评审 G1-08 返修 P0):按冲突副本的命名
+   *  另存一份 —— 持久、树里看得见,不是 8 秒就消失的提示里的一个按钮;提示「已另存为 X」。按实例各存各的(同篇双开两边的字
+   *  各落各的副本)。绝不写回旧路径(复活幽灵文件),也不存旧路径草稿(孤儿,同名新笔记会误弹恢复)。
+   *  副本写不进去就抛:调用方按写失败处理 / 退回剪贴板提示。 */
+  const rescueUnsaved = async (text: string): Promise<void> => {
+    const copy = await writeConflictCopy(path, toDisk(text, pipe.eol))
+    toastRescued(path, copy)
+    void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
+  }
+
   /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
   const noteWriteFailed = (error: unknown): void => {
     // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
@@ -2406,14 +2416,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 本实例一个字都不再写,还没落盘的字先**同步**存成新路径的草稿 —— 标签随后改指新路径,新实例挂载即出
         // 「恢复草稿」条,恢复时 0a 的流程负责保全盘上那版(基线对不上先落冲突副本)。不做异步交接写:新实例挂载就
         // 读盘,两边会赛跑。本实例自己发起的改名(doRename)先置 retired 并自己补写新路径,这里不重复。
-        // 被删除 / 挪走而没有新路径可交接(评审 G1-08:别的窗口删了它、库根换了、路由判 missing)→ 没落盘的字当面说一声,
-        // 全文交给剪贴板。只在**真有**用户改动时出声:切号 / 本端删除前都先冲洗过,那几条路走到这里手里是干净的。
+        // 被删除 / 挪走而没有新路径可交接(评审 G1-08:别的窗口删了它、路由判 missing)→ 没落盘的字另存为冲突副本并提示
+        // (返修 P0:原先只在提示的「复制内容」回调里,提示一消失就再没入口)。库根已换(切库 / 切侧)时不往新库写副本:
+        // 草稿记在旧库的这条路径上,回到那个库打开它时出「恢复草稿」条。
+        // 只在**真有**用户改动时出声:切号 / 本端删除前都先冲洗过,那几条路走到这里手里是干净的。
         if (!pipe.retired && !pipe.readOnly && !pipe.dead) {
           syncFromEditor()
           const text = composeFm(pipe.fm, pipe.body)
           if (text !== pipe.lastSaved && !isPristine()) {
             if (movedTo) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
-            else toastGoneUnsaved(path, text)
+            else if ((scoped.getState().vaultRoot ?? null) !== (vaultRoot ?? null)) stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+            else void rescueUnsaved(text).catch(() => toastGoneUnsaved(path, text))
           }
         }
         pipe.retired = true
