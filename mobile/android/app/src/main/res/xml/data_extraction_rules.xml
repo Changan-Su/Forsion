@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+ 的备份 / 设备迁移规则(AndroidManifest android:dataExtractionRules)。P1-K8:手机 Unit 身份条目两路都排除。 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="forsion_unit.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="forsion_unit.xml" />
+    </device-transfer>
+</data-extraction-rules>
