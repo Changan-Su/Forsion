@@ -239,6 +239,14 @@ export async function installUnitShim(): Promise<boolean> {
       if (!r.ok) throw new Error(`hostfile HTTP ${r.status}`)
       return r.json()
     },
+    // 下载对方电脑上的原文件(P1-DL):/unit/hostfile/download 流式回原字节(钳制与 hostfile 同一个解析,不受预览的 4MB 隧道上限),
+    // 存成文件走与工作区下载同一个出口。设备页没有 revealHostPath —— 没有它,display_file 的卡片在这里就没有下载位。
+    downloadHostFile: async (p: string, name: string) => {
+      const r = await fetch(new URL(`unit/hostfile/download?path=${encodeURIComponent(p)}`, base()), { headers: authHeaders() })
+      const { hostDownloadError, saveResponseAs } = await import('@/services/nativeDownload')
+      if (!r.ok) throw await hostDownloadError(r)
+      await saveResponseAs(name, r)
+    },
     // 主机目录列表/条目 stat(工作台文件面板/悬停提示):错误语义与桌面契约同形 —— listDir 失败=[],
     // statPath 失败=null(消费端按 null 省略提示行,不是 throw)。
     listDir: async (p: string) => {

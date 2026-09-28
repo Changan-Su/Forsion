@@ -248,9 +248,9 @@ export function fetchOpts(t: EngineTarget, timeoutMs?: number): { timeoutMs?: nu
   return timeoutMs ? { timeoutMs, target: t.key } : { target: t.key }
 }
 
-/** 设备辅助面只许这几条只读路径(§3.7 与 unitWeb 的 /unit/config 只读白名单)。`/unit/mcp*` 永不经这里发
+/** 设备辅助面只许这几条只读路径(§3.7 与 unitWeb 的 /unit/config 只读白名单;hostfile/download = P1-DL 下载原文件)。`/unit/mcp*` 永不经这里发
  *  (方案 §6.2-7:MCP 面永不携带 proxy 调用方断言),`/unit/remote-access*` 归 K4 / K8。 */
-const UNIT_SURFACE = /^\/unit\/(?:hostfile|hostdir|hoststat|config)(?:\?|$)/
+const UNIT_SURFACE = /^\/unit\/(?:hostfile|hostfile\/download|hostdir|hoststat|config)(?:\?|$)/
 
 /**
  * unit 目标的设备辅助面(`{unitBase}/unit/hostfile|hostdir|hoststat|config`,§3.7)。与 engineFetch 同一道路径闸,

@@ -1,6 +1,6 @@
 import { unitConfigFace } from './unitConfigFace'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
-import { buildUnitScopeGuard, openUnitHostFile, withVerifiedUnitPath } from './unitHostScope'
+import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
@@ -1050,7 +1050,7 @@ function unitSessionRootsSource(): UnitSessionRootsSource {
  *  会话根:无远程标记、且 realpath 落在本机根(工作区 / vault / Coding Studio 项目根 / 本机登记表)里的 project_path
  *  (unitLocalRoots.ts);再过 `/`、家目录、受保护目录祖先的过滤;受保护路径(Forsion 家目录 / 引擎 home / userData /
  *  通用凭据库)无条件拒(契约 C4,评审 A-desktop#1)。「校验和读取绑同一对象」的竞态防线在 unitHostScope.ts(vitest 直测):
- *  文件读走 openUnitHostFile,目录 / stat 走 withVerifiedUnitPath。 */
+ *  文件读走 openUnitHostRegularFile(经下面的 openUnitScopedFile),目录 / stat 走 withVerifiedUnitPath。 */
 async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: string[] }; env: { home: string }; guard: ReturnType<typeof buildUnitScopeGuard> }> {
   const stored = await loadConfig()
   const base: string[] = []
@@ -1068,6 +1068,13 @@ async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: strin
   const env = { home: homedir() }
   const roots = await composeUnitRoots({ base, localExtra, registry: localProjectRegistry(), source: unitSessionRootsSource(), env, guard })
   return { roots, env, guard }
+}
+
+/** /unit/hostfile(readHostFile)与 /unit/hostfile/download(openHostFile)的唯一文件解析(P1-DL):同一份根 / 凭据闸 / fd 绑定,
+ *  两条路永远同判。只认普通文件;句柄归调用方关闭。 */
+async function openUnitScopedFile(p: string): ReturnType<typeof openUnitHostRegularFile> {
+  const ctx = await unitScopeCtx()
+  return openUnitHostRegularFile(p, ctx.roots, ctx.env, ctx.guard)
 }
 
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
@@ -1162,13 +1169,12 @@ async function doRefreshUnitHost(): Promise<void> {
     // 只钳默认工作区会让那些会话的 Desk/文件卡全 404;这些目录本就是 agent 的可达范围,只读不扩权)。
     // default-deny —— 越界/不存在一律 null(unitWeb 统一 404,不泄露存在性)。写/删一概不给(审计 C1)。
     readHostFile: async (p: string, maxBytes?: number) => {
-      const ctx = await unitScopeCtx()
       // 文件读:根本身是目录,不含。校验与读取绑在同一个 FileHandle 上(换软链的竞态读不到凭据,Codex 三轮 P1)。
-      const opened = await openUnitHostFile(p, ctx.roots, ctx.env, ctx.guard)
+      // 与下面的 openHostFile(/unit/hostfile/download)同一个解析,两条路判据不分叉。
+      const opened = await openUnitScopedFile(p)
       if (!opened) return null
       const { fh, real, st } = opened
       try {
-        if (!st.isFile()) return null
         // 上限:直连 50MB(同 fs:readFile);隧道路径由 unitWeb 按信封余量传入更小值(Codex P2:
         // base64 双重膨胀,10MB 信封实际只装得下 ~4MB 原文,超了会超时而不是优雅 tooLarge)。
         const UNIT_MAX_READ = Math.min(maxBytes || 50 * 1024 * 1024, 50 * 1024 * 1024)
@@ -1186,6 +1192,11 @@ async function doRefreshUnitHost(): Promise<void> {
       } finally {
         await fh.close().catch(() => {})
       }
+    },
+    // 主机文件下载(P1-DL,/unit/hostfile/download):与 readHostFile 同一个解析,拿到的句柄交 unitWeb 流式写出(它负责关)。
+    openHostFile: async (p: string) => {
+      const opened = await openUnitScopedFile(p)
+      return opened ? { fh: opened.fh, real: opened.real, size: opened.st.size } : null
     },
     // 主机目录/条目只读面(工作台文件面板/悬停提示的数据源):钳制同 hostfile,目录类可指根本身。
     // 与 fs:listDir / fs:stat 共用唯一真源实现(listDirImpl/statPathImpl)。写/删仍一概不给。

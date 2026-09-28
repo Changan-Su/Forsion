@@ -1429,6 +1429,8 @@ declare global {
       mkdirHost?(parentDir: string, name: string): Promise<{ path: string }>
       trashHostPath?(p: string): Promise<{ ok: boolean }>
       revealHostPath?(p: string): Promise<{ ok: boolean }>
+      /** 设备页(unitShim):经 /unit/hostfile/download 下载对方电脑上的原文件并存下(P1-DL)。桌面没有(桌面用 revealHostPath)。 */
+      downloadHostFile?(path: string, name: string): Promise<void>
       startHostDrag?(filePath: string): void
       /** 拖 OS 文件/文件夹进 host 工作区目录 → 复制。 */
       copyHostFiles?(srcPaths: string[], destDir: string): Promise<{ copied: number }>

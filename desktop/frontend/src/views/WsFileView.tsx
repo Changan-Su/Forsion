@@ -325,7 +325,8 @@ export function WsFileView({ leaf }: ViewProps) {
   else if (error || !data) body = (
     <div className="wsfile-center wsfile-fallback">
       <FileWarning size={26} /><div>{error === 'not-found' ? t('preview.notFound') : t('preview.loadFailed')}</div>
-      {path && <div className="wsfile-ask-actions">{hostActions}</div>}
+      {/* 预览读不出(手机经隧道读对方电脑超时 / 413……)不等于下载也不行:瞬态 target 的下载位照样给(P1-DL) */}
+      {hostActions && <div className="wsfile-ask-actions">{hostActions}</div>}
     </div>
   )
   else if (kind === 'image') body = blobUrl ? <ImageView src={blobUrl} alt={name} view={imgView} setView={setImgView} /> : null
