@@ -8,6 +8,19 @@ const env = vi.hoisted(() => ({ root: '', creds: {} as { cloudUrl?: string; toke
 vi.mock('electron', () => ({ app: { getPath: () => env.root } }))
 vi.mock('../forsionHome', () => ({ isDevMode: () => false }))
 vi.mock('../forsionAuth', () => ({ loadTanguCreds: () => env.creds }))
+
+/** shadow 文件住在 Forsion Extend(sync/shadow.ts 的 renameShadowFile):这里按同一语义(copy EXCL → unlink;ENOENT / EEXIST = 没动)在测试里实现。 */
+const renameShadow = async (from: string, to: string): Promise<boolean> => {
+  const { constants } = await import('node:fs')
+  const file = (name: string): string => path.join(env.root, `${name}.json`)
+  try { await fs.copyFile(file(from), file(to), constants.COPYFILE_EXCL) } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code
+    if (code === 'EEXIST' || code === 'ENOENT') return false
+    throw e
+  }
+  await fs.unlink(file(from)).catch(() => {})
+  return true
+}
 const token = (userId: string, iat = 1) => `x.${Buffer.from(JSON.stringify({ userId, iat })).toString('base64url')}.x`
 const login = (id: string, cloudUrl = 'https://cloud.example') => { env.creds = { cloudUrl, token: token(id) } }
 
@@ -90,17 +103,17 @@ describe('legacy cloud state adoption', () => {
   it('adopts bindings and their shadow once the account resolves the same vault', async () => {
     await seed()
     const { readConfig, writeConfig, adoptLegacyCloudState, cloudAccountNamespace } = await import('./settings')
-    expect(await adoptLegacyCloudState()).toBe(false) // vault not resolved yet → stays quarantined
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(false) // vault not resolved yet → stays quarantined
     expect((await readConfig()).entrySync).toEqual([])
     await writeConfig({ cloudSync: { vaultId: 'vault-a', deviceId: 'desk-new' } })
-    expect(await adoptLegacyCloudState()).toBe(true)
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(true)
     expect((await readConfig()).entrySync).toEqual(legacy.entrySync)
     expect((await readConfig()).cloudSync).toMatchObject({ vaultId: 'vault-a', deviceId: 'desk-new' })
     expect((await stored()).legacyCloudState).toBeUndefined()
     const moved = path.join(env.root, `amadeus-sync-${cloudAccountNamespace()}-entry-${h8('/local/notes')}.json`)
     expect(JSON.parse(await fs.readFile(moved, 'utf8'))).toEqual(legacyShadow) // byte-for-byte the old baseline
     await expect(fs.access(oldShadow())).rejects.toThrow()
-    expect(await adoptLegacyCloudState()).toBe(false) // idempotent
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(false) // idempotent
     vi.resetModules()
     const reloaded = await import('./settings')
     expect((await reloaded.readConfig()).entrySync).toEqual(legacy.entrySync)
@@ -111,7 +124,7 @@ describe('legacy cloud state adoption', () => {
     const { readConfig, writeConfig, adoptLegacyCloudState } = await import('./settings')
     login('B')
     await writeConfig({ cloudSync: { vaultId: 'vault-b' } })
-    expect(await adoptLegacyCloudState()).toBe(false)
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(false)
     expect((await readConfig()).entrySync).toEqual([])
     expect((await stored()).legacyCloudState.entrySync).toEqual(legacy.entrySync)
     await expect(fs.access(oldShadow())).resolves.toBeUndefined()
@@ -123,12 +136,12 @@ describe('legacy cloud state adoption', () => {
     await writeConfig({ cloudSync: { vaultId: 'vault-a' } })
     const nodeFs = await import('node:fs')
     const busy = vi.spyOn(nodeFs.promises, 'copyFile').mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }))
-    expect(await adoptLegacyCloudState()).toBe(false)
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(false)
     busy.mockRestore()
     expect((await readConfig()).entrySync).toEqual([])
     expect((await stored()).legacyCloudState.entrySync).toEqual(legacy.entrySync)
     await expect(fs.access(oldShadow())).resolves.toBeUndefined()
-    expect(await adoptLegacyCloudState()).toBe(true) // the next attempt succeeds once the file is free
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(true) // the next attempt succeeds once the file is free
     expect((await readConfig()).entrySync).toEqual(legacy.entrySync)
   })
 
@@ -139,7 +152,7 @@ describe('legacy cloud state adoption', () => {
     await writeConfig({ cloudSync: { vaultId: 'vault-a' }, entrySync: [fresh] })
     const newShadow = path.join(env.root, `amadeus-sync-${cloudAccountNamespace()}-entry-${h8('/local/notes')}.json`)
     await fs.writeFile(newShadow, JSON.stringify({ vaultRoot: '/local/notes', vaultId: 'vault-a', cursor: 7, files: {} }))
-    expect(await adoptLegacyCloudState()).toBe(true)
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(true)
     expect((await readConfig()).entrySync).toEqual([fresh])
     expect((await stored()).legacyCloudState).toBeUndefined()
     expect(JSON.parse(await fs.readFile(newShadow, 'utf8')).cursor).toBe(7)

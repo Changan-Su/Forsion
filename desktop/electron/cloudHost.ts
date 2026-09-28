@@ -21,6 +21,7 @@ import { activeBundleDir, readManifest, type BuiltinSource } from './builtinPlug
 import { verifyBundleSignature } from './bundleSignature'
 import type { RemoteBackendFactory } from './remotesync/backends'
 import type { Creds, ExternalCredsChange } from './accountCore'
+import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 
 /** 验签必须覆盖的文件:入口本身,以及决定 id / 版本 / 门禁的 manifest(否则改一改未签的 minAppVersion 就能改装载判断)。 */
 export const signedEssentials = (entry: string): string[] => [entry, 'manifest.json']
@@ -73,6 +74,8 @@ export interface CloudHost {
   onExternalCredsChange(cb: (change: ExternalCredsChange) => void): void
   /** 登记滑动续期实现;宿主启动时(4s 封顶,排在引擎启动之前)与之后每 24h 调一次。 */
   setTokenRefresher(fn: (timeoutMs?: number) => Promise<void>): void
+  // ── 0.4 起(Amadeus 云同步 + collab:引擎与 11 个通道住在 Extend,宿主在 registerAmadeusIpc 里 vault 建好后调工厂)──
+  setAmadeusSyncFactory(factory: AmadeusSyncFactory): void
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 

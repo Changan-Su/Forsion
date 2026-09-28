@@ -4,6 +4,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type AmadeusApi } from '@amadeus-shared/ipc'
 import { SYNC_IPC } from './sync/ipcKeys'
+import { cloudPresent } from '../cloudPresent'
 
 const api: AmadeusApi = {
   openVault: () => ipcRenderer.invoke(IPC.openVault),
@@ -115,7 +116,11 @@ const api: AmadeusApi = {
 contextBridge.exposeInMainWorld('amadeus', api)
 
 // 云同步(桌面专属,不进三端共享的 AmadeusApi 契约;web/mobile 下为 undefined)。
-contextBridge.exposeInMainWorld('amadeusSync', {
+// 0.4 起引擎与这 11 个通道住在内置包 Forsion Extend 的主进程半身:没装载(缺包 / 验签失败)通道就没人接 →
+// 两个桥都不暴露,渲染层按 window.amadeusSync / amadeusCollab 是否存在自动隐藏云端笔记库 / 同步 / 分享(与 window.tangu 的云键同一套口径)。
+const syncPresent = cloudPresent().has(SYNC_IPC.get)
+const collabPresent = cloudPresent().has(SYNC_IPC.collabCall)
+if (syncPresent) contextBridge.exposeInMainWorld('amadeusSync', {
   get: () => ipcRenderer.invoke(SYNC_IPC.get),
   setEnabled: (on: boolean) => ipcRenderer.invoke(SYNC_IPC.setEnabled, on),
   syncNow: () => ipcRenderer.invoke(SYNC_IPC.syncNow),
@@ -145,7 +150,7 @@ contextBridge.exposeInMainWorld('amadeusSync', {
 
 // 页面级共享/发布/presence(与 web 的 cloudCollab 同构;HTTP 在主进程,token 不下发)。
 const collabCall = (fn: string, ...args: unknown[]): Promise<any> => ipcRenderer.invoke(SYNC_IPC.collabCall, fn, args)
-contextBridge.exposeInMainWorld('amadeusCollab', {
+if (collabPresent) contextBridge.exposeInMainWorld('amadeusCollab', {
   listVaults: () => collabCall('listVaults'),
   activeVaultId: () => collabCall('activeVaultId'),
   // 桌面无「切库」:共享内容在镜像的 与我共享/ 里,SharedWithMeSection 用 localPath 直开。
@@ -190,5 +195,7 @@ let cachedUserId: string | null = null
 let hbTimer: ReturnType<typeof setInterval> | null = null
 let hbPage: string | null = null
 void hbPage
-void collabCall('linkBase').then((b) => { linkBase = String(b ?? '') }).catch(() => {})
-void collabCall('myUserId').then((u) => { cachedUserId = (u as string | null) ?? null }).catch(() => {})
+if (collabPresent) {
+  void collabCall('linkBase').then((b) => { linkBase = String(b ?? '') }).catch(() => {})
+  void collabCall('myUserId').then((u) => { cachedUserId = (u as string | null) ?? null }).catch(() => {})
+}

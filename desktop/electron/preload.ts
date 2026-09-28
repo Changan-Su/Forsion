@@ -7,6 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { PRODUCT } from './product'
+import { cloudPresent } from './cloudPresent'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
 
@@ -492,8 +493,6 @@ const CLOUD_KEYS: Record<string, string> = {
   connectMeta: 'connect:meta', connectList: 'connect:list', connectPublish: 'connect:publish', connectUnpublish: 'connect:unpublish',
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
 }
-const cloudPresentRaw: unknown = ipcRenderer.sendSync('cloud:present')
-const cloudPresent = new Set<string>(Array.isArray(cloudPresentRaw) ? (cloudPresentRaw as string[]) : [])
-for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent.has(channel)) delete (api as Record<string, unknown>)[k]
+for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 
 contextBridge.exposeInMainWorld('tangu', api)

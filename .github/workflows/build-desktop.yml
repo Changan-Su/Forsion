@@ -128,8 +128,8 @@ jobs:
           cd ../desktop
           npx vitest run \
             electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/accountCore.test.ts \
-            electron/amadeus/sync/engine.moves.test.ts electron/amadeus/sync/engine.lifecycle.test.ts \
-            electron/amadeus/sync/engine.massdelete.test.ts electron/codeStudioProjects.test.ts
+            electron/amadeus/settings.account.test.ts electron/amadeus/ipc.account.test.ts \
+            electron/codeStudioProjects.test.ts
 
       # Verify the distributed tool/prompt contract on every native runner, without operating its GUI.
       - name: Check bundled Computer Use platform contract

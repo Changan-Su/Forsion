@@ -7,7 +7,6 @@ import { app } from 'electron'
 import { isDevMode } from '../forsionHome'
 import { loadTanguCreds } from '../forsionAuth'
 import { forsionAccountId } from '../../shared/forsionAccount'
-import { renameShadowFile } from './sync/shadow'
 
 export interface AmadeusCloudSyncConfig {
   enabled?: boolean
@@ -15,9 +14,16 @@ export interface AmadeusCloudSyncConfig {
   deviceId?: string
 }
 
+/** 按条目云同步的注册表项(与 Extend 的 entryRegistry.EntrySyncVault 同形;引擎住在 Extend,宿主只负责落盘)。 */
+export interface EntrySyncVault {
+  vaultRoot: string
+  cloudName: string
+  entries: import('@amadeus-shared/entrySync').EntrySyncEntry[]
+  exclude?: string[]
+}
 interface CloudAccountConfig {
   cloudSync?: AmadeusCloudSyncConfig
-  entrySync?: import('./sync/entryRegistry').EntrySyncVault[]
+  entrySync?: EntrySyncVault[]
 }
 
 export interface AmadeusConfig extends CloudAccountConfig {
@@ -117,8 +123,12 @@ export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCl
  * per user, so equality proves the owner. Legacy entry shadows move into the account
  * namespace so sync resumes from its baseline instead of re-pairing every file.
  * ponytail: called from refreshEntryBindings; an account whose vault id is still unknown
- * at that moment adopts on the next refresh or launch, no change listener. */
-export function adoptLegacyCloudState(accountId = currentCloudAccountId()): Promise<boolean> {
+ * at that moment adopts on the next refresh or launch, no change listener.
+ * renameShadow:shadow 文件住在 Extend(sync/shadow.ts 随引擎搬走),由调用方递进来;缺省 = 不动 shadow(只有测试会这样调)。 */
+export function adoptLegacyCloudState(
+  accountId = currentCloudAccountId(),
+  renameShadow: (from: string, to: string) => Promise<unknown> = async () => {},
+): Promise<boolean> {
   const work = writes.then(async () => {
     if (!accountId) return false
     const stored = await storedConfig()
@@ -132,7 +142,7 @@ export function adoptLegacyCloudState(accountId = currentCloudAccountId()): Prom
     const hash8 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 8)
     try {
       for (const v of adopted) {
-        await renameShadowFile(`amadeus-sync-entry-${hash8(v.vaultRoot)}`, `amadeus-sync-${key}-entry-${hash8(v.vaultRoot)}`)
+        await renameShadow(`amadeus-sync-entry-${hash8(v.vaultRoot)}`, `amadeus-sync-${key}-entry-${hash8(v.vaultRoot)}`)
       }
     } catch {
       return false // shadow move failed (EPERM, EBUSY…): keep the legacy state, never adopt onto an empty baseline

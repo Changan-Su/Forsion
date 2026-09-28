@@ -764,8 +764,9 @@ export function AmadeusPagesView() {
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaultLoading = usePageStore((s) => s.vaultLoading)
-  // 云端笔记库入口:web(无 amadeusSync)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
-  const cloudLib = !window.amadeusSync || vaultSide === 'cloud'
+  // 云端笔记库入口:web / 移动端(库本身在云端,cloudBridge 挂 amadeusCloudVaults)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
+  // ⚠️ 不能用「没有 amadeusSync」当 web 的判据:桌面没装 Forsion Extend 时 amadeusSync 也不在,那是本地机器,不是云端库。
+  const cloudLib = !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults || vaultSide === 'cloud'
 
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set()) // 文件夹默认全折叠
