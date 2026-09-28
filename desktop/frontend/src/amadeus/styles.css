@@ -4070,6 +4070,7 @@ body.amx-marquee-active * {
 }
 .am-app .am-agent-capsule > svg { flex: 0 0 auto; color: var(--green); }
 .am-app .am-agent-capsule-text { font-weight: 500; white-space: nowrap; }
+.am-app .am-agent-capsule-hint { color: var(--text-muted); padding-right: 6px; }
 .am-app .am-agent-capsule-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
 .am-app .am-agent-capsule .btn.sm { border-radius: var(--radius-pill); }
 /* 画布底边正中是舞台的元素工具条:胶囊抬到它上方,别压住。 */

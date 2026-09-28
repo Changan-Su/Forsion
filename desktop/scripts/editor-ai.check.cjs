@@ -9,6 +9,8 @@
 //   D = G3-06 插件异步 slash 命令:唤起处钉锚 +「进行中… · 取消」占位 → 结果插到锚所在的块(空行原地替换、不留空段);
 //       期间挪去别段打字 / 去别的输入框打字 → 光标与焦点都不被拽走;焦点还在锚所在的行 → 光标跟到结果末尾;
 //       取消 → 结果丢弃;那一行被删 → 不插并提示;一步 Cmd+Z 撤掉整段结果。
+//   E = G3-05 Tangu 正在改这篇:写类工具参数流式生成 / 已发出未回结果时挂「正在修改」胶囊(不拦打字),结果回来即撤;
+//       打字中撞上 Tangu 的写入 → 本地胜 + Tangu 那版进冲突副本 + 提示点名 Tangu;别人的外部改动仍是「被别处改过」。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -679,6 +681,71 @@ async function groupD(browser) {
   }
 }
 
+// ─────────────────────────────── G3-05 ───────────────────────────────
+const LEDGER = ['/src/stores/agentWriteLedger\\.ts(\\?|$)', '/src/stores/agentWriteLedger.ts']
+async function ledger(page, fn, arg) {
+  return page.evaluate(async ({ MOD, LEDGER, fn, arg }) => {
+    const m = await eval(MOD)(LEDGER[0], LEDGER[1])
+    const root = window.__upage.pageStore.getState().vaultRoot
+    const abs = root ? `${root.replace(/[\\/]+$/, '')}/Unified.md` : 'Unified.md'
+    return eval(fn)(m, abs, arg)
+  }, { MOD, LEDGER, fn: fn.toString(), arg })
+}
+const liveCap = (page) => page.evaluate(() => document.querySelector('[data-testid="agent-live-capsule"]')?.textContent ?? null)
+async function groupE(browser) {
+  const md = '# 文档\n\n第一段原文。\n\n第二段原文。\n'
+  {
+    const page = await open(browser, md)
+    await page.evaluate(() => { window.__t5 = []; window.addEventListener('amadeus:toast', (e) => window.__t5.push(e.detail)) })
+    await ledger(page, (m, abs) => m.noteAgentWriteLive('w1', abs))
+    await page.waitForTimeout(200)
+    const cap1 = await liveCap(page)
+    await caretAfterText(page, '第二段原文。')
+    await page.keyboard.type('照打')
+    await ledger(page, (m, abs) => m.noteAgentWriteStart('w1', [abs]))
+    await page.waitForTimeout(200)
+    const cap2 = await liveCap(page)
+    await ledger(page, (m) => m.noteAgentWriteEnd('w1', false))
+    await page.waitForTimeout(200)
+    const cap3 = await liveCap(page)
+    await page.waitForTimeout(1200)
+    const d = await vault(page)
+    check('E1 Tangu 的写入流式生成 / 在途时挂「正在修改」胶囊、不拦打字;结果回来即撤',
+      !!cap1 && cap1.includes('Tangu') && !!cap2 && cap3 == null && d.includes('第二段原文。照打'), JSON.stringify({ cap1, cap2, cap3, d }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate(() => { window.__t5 = []; window.addEventListener('amadeus:toast', (e) => window.__t5.push({ text: e.detail.text, level: e.detail.level, act: e.detail.action?.label })) })
+    const agentMd = '# 文档\n\n第一段 TANGU 改的。\n\n第二段原文。\n'
+    await caretAfterText(page, '第二段原文。')
+    await page.keyboard.type('用户在打')
+    await ledger(page, (m, abs, full) => m.noteAgentWriteStart('w2', [{ path: abs, full }]), agentMd)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd)
+    await ledger(page, (m) => m.noteAgentWriteEnd('w2', true))
+    await page.waitForTimeout(2500)
+    const d = await vault(page)
+    const copies = await page.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)).map(([, v]) => v))
+    const t = await page.evaluate(() => window.__t5.filter((x) => x.level === 'error'))
+    check('E2 打字中撞上 Tangu 的写入 → 本地胜、Tangu 那版进冲突副本,提示点名 Tangu 并带「打开副本」',
+      d.includes('第二段原文。用户在打') && !d.includes('TANGU') && copies.length === 1 && copies[0] === agentMd && t.length === 1 && t[0].text.includes('Tangu') && t[0].act === '打开副本',
+      JSON.stringify({ d, copies, t }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate(() => { window.__t5 = []; window.addEventListener('amadeus:toast', (e) => window.__t5.push({ text: e.detail.text, level: e.detail.level })) })
+    await caretAfterText(page, '第二段原文。')
+    await page.keyboard.type('用户在打')
+    await page.evaluate(() => window.__upage.fire('Unified.md', '# 文档\n\n第一段 别处改的。\n\n第二段原文。\n'))
+    await page.waitForTimeout(2500)
+    const t = await page.evaluate(() => window.__t5.filter((x) => x.level === 'error'))
+    check('E3 对照:不是 Tangu 写的外部改动 → 仍是「被别处改过」,不点名 Tangu、不挂正在修改胶囊',
+      t.length === 1 && !t[0].text.includes('Tangu') && (await liveCap(page)) == null, JSON.stringify(t))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
@@ -687,6 +754,7 @@ async function main() {
     if (!only || only.includes('B')) await groupB(browser)
     if (!only || only.includes('C')) await groupC(browser)
     if (!only || only.includes('D')) await groupD(browser)
+    if (!only || only.includes('E')) await groupE(browser)
   } finally {
     await browser.close()
   }

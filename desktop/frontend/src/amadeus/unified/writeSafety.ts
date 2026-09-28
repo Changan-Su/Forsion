@@ -16,6 +16,10 @@ registerMessages({
     zh: '「{name}」在你编辑时被别处改过。已保留你的版本，被覆盖的那一版另存为「{copy}」。',
     en: '"{name}" was changed elsewhere while you were editing. Your version was kept, and the overwritten version was saved as "{copy}".',
   },
+  'unisave.conflict.agentToast': {
+    zh: 'Tangu 在你编辑时改了「{name}」。已保留你的版本，Tangu 的改动另存为「{copy}」。',
+    en: 'Tangu changed "{name}" while you were editing. Your version was kept, and Tangu’s changes were saved as "{copy}".',
+  },
   'unisave.conflict.open': { zh: '打开副本', en: 'Open copy' },
   'unisave.failed.toast': {
     zh: '「{name}」没能保存（{reason}），正在自动重试。保存成功之前请不要关闭它。',
@@ -69,11 +73,12 @@ export async function writeConflictCopy(path: string, content: string, now = new
 }
 
 /** D-03 / G1-01:error 级提示 + 「打开副本」。同一篇的连续冲突合并成一条(dedupeKey)。 */
-export function toastConflictCopy(path: string, copy: string): void {
+/** agent:被盖掉的那一版是 Tangu 写的(评审 G3-05:归属账本认得出)—— 说清是谁的改动进了副本,别让它像「别处」一样模糊。 */
+export function toastConflictCopy(path: string, copy: string, agent = false): void {
   emitAmadeusToast({
     level: 'error',
     dedupeKey: `amx-conflict:${path}`,
-    text: translate('unisave.conflict.toast', { name: noteName(path), copy: noteName(copy) }),
+    text: translate(agent ? 'unisave.conflict.agentToast' : 'unisave.conflict.toast', { name: noteName(path), copy: noteName(copy) }),
     action: {
       label: translate('unisave.conflict.open'),
       // 走导航门面事件(amadeusOverlays → openNote):副本是刚写出来的新文件,按名字解析可能还没进页面清单。

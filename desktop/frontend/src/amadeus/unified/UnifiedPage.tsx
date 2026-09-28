@@ -9,7 +9,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
@@ -69,14 +69,14 @@ import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
 import { reconcileTr, type ReconcileChange } from './reconcileDiff'
 import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
-import { AgentChangeCapsule } from './AgentChangeCapsule'
+import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
 import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
 import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
-import { claimAgentWrite } from '../../stores/agentWriteLedger'
+import { agentEditing, claimAgentWrite, subscribeAgentWrites } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
@@ -1336,6 +1336,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // Agent 改动呈现(G3-03):插件状态 → 胶囊的 N / 当前第几处。回调经 ref 现读(editorPlugins 只建一次)。
   const [agentView, setAgentView] = useState<{ count: number; index: number }>({ count: 0, index: 0 })
   const agentStateRef = useRef<(st: AgentChangesState) => void>(() => {})
+  /** 归属账本比对用的绝对路径(与回灌认领同一口径)。 */
+  const agentAbsPath = vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path
+  /** Tangu 此刻正在改这篇(评审 G3-05:参数流式生成中 / 工具已发出未回结果)→ 挂「正在修改」胶囊。只读实例不挂。 */
+  const agentLive = useSyncExternalStore(subscribeAgentWrites, () => !readOnly && agentEditing(agentAbsPath))
   agentStateRef.current = (st) => {
     const index = st.current == null ? 0 : st.changes.findIndex((c) => c.id === st.current) + 1
     setAgentView((v) => (v.count === st.changes.length && v.index === index ? v : { count: st.changes.length, index }))
@@ -1637,7 +1641,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (pipe.preserved.has(fp)) return
     const copy = await writeConflictCopy(path, content)
     pipe.preserved.add(fp)
-    toastConflictCopy(path, copy)
+    // 被盖掉的那一版是 Tangu 写的(归属账本核得上内容,评审 G3-05)→ 提示点名 Tangu。CAS 拒写与打字中回灌两条路都在这里汇合。
+    toastConflictCopy(path, copy, !pipe.readOnly && claimAgentWrite(agentAbsPath, content))
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
 
@@ -1921,7 +1926,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           // 归属(G3-03):写类工具在途或刚结束、目标就是这篇、且盘上正文核得上这次写入 → 按 Tangu 的改动画出来。
           // 每次写入只认领一次(Codex 复核 P0):之后同路径的别的改动不再算 Tangu 的。
           // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
-          const agent = !pipe.readOnly && claimAgentWrite(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path, raw)
+          const agent = !pipe.readOnly && claimAgentWrite(agentAbsPath, raw)
           if (hostApi.current?.applyBody(body, agent)) {
             pipe.body = body
           } else {
@@ -2647,6 +2652,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             </MilkdownProvider>
           </CanvasStage>
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
+          {agentLive && <AgentLiveCapsule />}
           {!readOnly && agentView.count > 0 && (
             <AgentChangeCapsule
               count={agentView.count}
