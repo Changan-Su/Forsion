@@ -42,6 +42,7 @@ import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
+import { Lock as LockIcon } from 'lucide-react'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
@@ -115,6 +116,8 @@ registerMessages({
   'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
   'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
   'unipage.menu.delete': { zh: '删除', en: 'Delete' },
+  'unipage.lock.bar': { zh: '页面已锁定，防止误改。', en: 'This page is locked to prevent accidental edits.' },
+  'unipage.lock.unlock': { zh: '解锁', en: 'Unlock' },
 })
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
@@ -892,7 +895,7 @@ export interface UnifiedHistory {
   redo: () => boolean
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, compact = false, readOnly = false, hardBreaks = false }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, onUnlock, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -915,6 +918,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  不按路径全局查找 —— 同篇双开时按路径找到的是另一个标签:指示线画在这边,文件却插进那边、随即被这边的写入盖掉。
    *  返回 false = 本实例不接(只读 / 已退休)。卸载时清空。 */
   filesRef?: { current: ((files: File[]) => boolean) | null }
+  /** 锁定页面(评审 C-07,拍板 #15):宿主按本机记忆把自己的笔记锁成只读时给;只读下显示「已锁定」条与解锁键。
+   *  分享页 / 收件箱这类天生只读的宿主不给 —— 那里没有「解锁」可言。锁定态由宿主放进本组件的 key(pipe.readOnly
+   *  只在首次渲染写入,换锁定态必须重挂)。 */
+  onUnlock?: () => void
   /** 只读实例(公开分享页 /share/<token>,2026-09-07):同一套渲染(块/分栏/卡片/画布/嵌入/chrome),
    *  但**一个字节都不写**:PM editable=false,writeNow/schedule/setFm/改名/生命周期 flush 全部短路,
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
@@ -2201,6 +2208,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             void writeNow()
           }}
         /></PropsDraftFlushContext.Provider>}
+        {/* 锁定条(C-07):锁着的笔记一眼看得出为什么打不了字,解锁就在手边。样式复用写盘状态条。 */}
+        {readOnly && onUnlock && (
+          <div className="mk-notice unified-savebar" data-lock="on" role="status">
+            <LockIcon size={15} />
+            <div className="mk-notice-body"><span>{t('unipage.lock.bar')}</span></div>
+            <button type="button" className="btn sm" onClick={onUnlock}>{t('unipage.lock.unlock')}</button>
+          </div>
+        )}
         {/* 写盘状态条(D-04):写失败 → 常驻「未保存」+ 立即重试;上次没写成的草稿 → 恢复 / 丢弃。
             样式复用全局 `.mk-notice` 提示条(base.css),本处只在 amadeus-host.css 里改宽度与外距。 */}
         {!readOnly && saveFailed && (

@@ -2,6 +2,9 @@
 // 用生产 UnifiedPage(readOnly)+ CanvasStage(readOnly),台架 `?upage&upane&uro`(harness.tsx)。
 // 用法:npm run check:unifiedro(由 e2e-editor 自起/复用 Vite);`--nc` = 负对照:不带 &uro 跑同一套断言,
 // 至少 8 条必须转红,证明这些断言真的量到了「只读」而不是恒真。
+// K 组(评审 C-07 锁定页面,`&ulock` = amadeusViews 宿主一半的镜像):锁定 → 同一套只读实例 + 锁定条与解锁键、
+// 打字零写盘、外部改动照常回灌;解锁 → 按盘上现文重挂成可编辑,接着打的字与外部那段一起落盘、零冲突副本;
+// 锁定态是本机记忆,重开仍锁着。负对照不跑 K 组(它量的是锁定切换,不是 &uro)。
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -193,6 +196,8 @@ async function main() {
   const writes = await page.evaluate(() => window.__upage.writes.length)
   check('画布一轮交互后零写盘', writes === 0, `writes=${writes}`)
 
+  if (!NC) await groupLock(browser)
+
   await browser.close()
   const ok = results.filter(Boolean).length
   const failed = results.length - ok
@@ -203,6 +208,80 @@ async function main() {
   }
   console.log(`\n${ok}/${results.length} 通过`)
   process.exit(ok === results.length ? 0 : 1)
+}
+
+async function groupLock(browser) {
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+  page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  const url = `${URL}?upage&upane&ulock&useed=${encodeURIComponent('# 锁定\n\n第一段。\n\n第二段。\n')}`
+  await page.goto(url, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('.unified-body .ProseMirror p', { timeout: 20000 })
+  await page.evaluate(() => localStorage.clear())
+  await page.waitForTimeout(400)
+  const disk = () => page.evaluate(() => window.__upage.vault.get('Unified.md'))
+  const state = () => page.evaluate(() => ({
+    editable: document.querySelector('.unified-body .ProseMirror')?.getAttribute('contenteditable'),
+    bar: !!document.querySelector('[data-lock="on"] button'),
+    writes: window.__upage.writes.length,
+    text: document.querySelector('.unified-body .ProseMirror')?.textContent ?? '',
+  }))
+  const endOf = async (text) => {
+    const box = await page.evaluate((text) => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => x.textContent.includes(text))
+      const r = document.createRange(); r.selectNodeContents(el); const b = r.getBoundingClientRect()
+      return { x: b.right - 1, y: b.top + b.height / 2 }
+    }, text)
+    await page.mouse.click(box.x, box.y)
+    await page.waitForTimeout(80) // selectionchange 异步:光标就位再打字
+  }
+
+  await endOf('第一段。')
+  await page.keyboard.type('甲')
+  await page.waitForFunction(() => window.__upage.writes.length >= 1, null, { timeout: 5000 }).catch(() => {})
+  const s0 = await state()
+  check('K0 基线:未锁定时可编辑、打字落盘、没有锁定条', s0.editable === 'true' && !s0.bar && s0.writes >= 1 && (await disk()).includes('第一段。甲'), JSON.stringify(s0))
+
+  await page.evaluate(() => window.__upage.setLocked(true))
+  await page.waitForSelector('[data-lock="on"]', { timeout: 5000 }).catch(() => {})
+  await page.waitForTimeout(300)
+  const s1 = await state()
+  await endOf('第二段。')
+  await page.keyboard.type('乙')
+  // 按路径的写口(模板 / 块表面插入)也不许往锁着的页里塞 —— 只读闸在实例的 pipe.readOnly 上,而它只在首次渲染
+  // 写入:锁定态不进 key(不重挂)时这里照样插得进去(随后既不显示为可编辑、也永远不落盘)。
+  const inserted = await page.evaluate(() => window.__upage.lifecycle.unifiedInsertMarkdown('Unified.md', '模板插入', 'end'))
+  await page.waitForTimeout(1200)
+  const s2 = await state()
+  check('K1 锁定:只读实例 + 锁定条带解锁键,打字 / 插入都进不去、零写盘',
+    s1.editable === 'false' && s1.bar && !s2.text.includes('乙') && !inserted && !s2.text.includes('模板插入') && s2.writes === s1.writes, JSON.stringify({ s1, s2, inserted }))
+  if (SHOT) await page.screenshot({ path: path.join(SHOT, 'unified-locked.png') })
+
+  const ext = (await disk()).replace('第二段。', '第二段。外部追加')
+  await page.evaluate((t) => window.__upage.fire('Unified.md', t), ext)
+  await page.waitForTimeout(800)
+  const s3 = await state()
+  check('K2 锁定下外部改动照常回灌、不写盘', s3.text.includes('外部追加') && s3.writes === s1.writes, JSON.stringify(s3))
+
+  await page.click('[data-lock="on"] button')
+  await page.waitForFunction(() => document.querySelector('.unified-body .ProseMirror')?.getAttribute('contenteditable') === 'true', null, { timeout: 5000 }).catch(() => {})
+  await page.waitForTimeout(300)
+  await endOf('外部追加')
+  await page.keyboard.type('丙')
+  await page.waitForTimeout(1300)
+  const s4 = await state()
+  const d4 = await disk()
+  const copies = await page.evaluate(() => [...window.__upage.vault.keys()].filter((k) => k.includes('(conflict')))
+  check('K3 解锁:按盘上现文重挂成可编辑,接着打的字与外部那段一起落盘、零冲突副本',
+    s4.editable === 'true' && !s4.bar && d4.includes('外部追加丙') && d4.includes('第一段。甲') && copies.length === 0, JSON.stringify({ s4, d4, copies }))
+
+  await page.evaluate(() => window.__upage.setLocked(true))
+  await page.goto(url, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('.unified-body .ProseMirror p', { timeout: 20000 })
+  await page.waitForTimeout(400)
+  const s5 = await state()
+  check('K4 锁定是本机记忆:重开仍锁着', s5.editable === 'false' && s5.bar, JSON.stringify(s5))
+  await page.evaluate(() => localStorage.clear())
+  await page.close()
 }
 
 main().catch((e) => {

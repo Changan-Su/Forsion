@@ -1,4 +1,5 @@
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
+import { Lock as LockIcon } from 'lucide-react'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
@@ -15,6 +16,8 @@ import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
+import { flushUnifiedPath } from '@amadeus/unified/lifecycle'
+import { onNoteLockChange, readNoteLocked, writeNoteLocked } from '@amadeus/unified/viewMemory'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
@@ -1827,6 +1830,19 @@ function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, 
   )
 }
 
+// ── 锁定页面(评审 C-07,拍板 #15)的宿主一半:状态存本机(viewMemory),锁定态进 UnifiedPage 的 key 触发重挂。 ──
+registerMessages({
+  'amxv.menu.lockPage': { zh: '锁定页面', en: 'Lock page' },
+  'amxv.menu.unlockPage': { zh: '解锁页面', en: 'Unlock page' },
+})
+
+/** path 这篇在本机是否锁定(随任一标签 / 窗口的锁定切换刷新)。 */
+function useNoteLocked(vaultRoot: string | null, path: string | null): boolean {
+  const [, bump] = useState(0)
+  useEffect(() => onNoteLockChange(() => bump((n) => n + 1)), [])
+  return !!path && readNoteLocked(vaultRoot, path)
+}
+
 function EditorScope({
   children, dragging, rootRef, onDrop, onDragOver, onDragLeave, onClick, onPaste,
 }: {
@@ -2224,6 +2240,33 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 编辑器实例身份 = 库根 + 路径:切侧后同路径的判定即使仍是 unified 也必须换实例(旧实例持有旧库正文)。
   const routeRoot = route && route.forPath === notePath ? route.root ?? '' : ''
 
+  // 锁定页面(C-07):锁定态进 UnifiedPage 的 key(pipe.readOnly 只在首次渲染写入)。**换实例前先落盘、再按盘上现文重挂** ——
+  // 路由里的 initial 是打开那一刻读的,直接换 key 等于把几分钟前的正文当基线交给新实例:解锁后赶在挂载补读之前打一个字,
+  // 就走「本地胜」拿旧全文盖掉盘上新版。切到别的笔记时不走这一套(新路径本来就重读、重挂),直接取它自己的锁定态。
+  const lockWanted = useNoteLocked(vaultRoot, notePath)
+  const [lockApplied, setLockApplied] = useState<{ path: string | null; on: boolean }>({ path: notePath, on: lockWanted })
+  const lockOn = lockApplied.path === notePath ? lockApplied.on : lockWanted
+  useEffect(() => {
+    if (lockApplied.path !== notePath) {
+      setLockApplied({ path: notePath, on: lockWanted })
+      return
+    }
+    if (lockApplied.on === lockWanted || !notePath) return
+    let alive = true
+    void (async () => {
+      await flushUnifiedPath(notePath)
+      const raw = await amadeus.readTextFile(notePath).catch(() => null)
+      if (!alive) return
+      if (raw != null) {
+        const decision = routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString())
+        if (decision.editor === 'unified') setRoute((r) => (r && r.forPath === notePath ? { ...r, decision } : r))
+      }
+      setLockApplied({ path: notePath, on: lockWanted })
+    })()
+    return () => { alive = false }
+  }, [lockWanted, lockApplied, notePath])
+  const toggleLock = (): void => { if (notePath) writeNoteLocked(vaultRoot, notePath, !lockWanted) }
+
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
   // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
   // ⚠️ 必须先排掉 unified:v4 走 UnifiedPage,**根本不设 activePage**(见下面 barPath 的注释),
@@ -2543,6 +2586,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
             <Star size={13} /> {starred ? t('amxv.menu.unstar') : t('amxv.menu.star')}
           </button>
           <button onClick={() => { void amadeus.revealInFileManager(barPath); setNoteMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
+          {unifiedRoute && (
+            <button onClick={() => { setNoteMenu(null); toggleLock() }}><LockIcon size={13} /> {lockWanted ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage')}</button>
+          )}
           <button className="danger" onClick={() => { const p = barPath; setNoteMenu(null); void deleteNoteFlow(p, myPs) }}>
             <Trash2 size={13} /> {t('amxv.menu.deleteNote')}
           </button>
@@ -2556,7 +2602,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
            页面 chrome(封面/图标/标题/属性)在 UnifiedPage 内部;顶栏/菜单走上面的 barPath 门。 */
         <UnifiedPage
           compact={!!leaf.params.miniSurface}
-          key={`${routeRoot}\u0000${notePath}`}
+          key={`${routeRoot}\u0000${notePath}${lockOn ? '\u0000locked' : ''}`}
+          readOnly={lockOn}
+          onUnlock={lockOn ? toggleLock : undefined}
           path={notePath}
           initial={unifiedRoute.initial}
           diskRaw={unifiedRoute.diskRaw}
@@ -2653,7 +2701,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
-          ...(barPath ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockWanted ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockWanted, run: toggleLock }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn'), on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),

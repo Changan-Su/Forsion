@@ -42,6 +42,7 @@ import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, use
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
+import { onNoteLockChange, readNoteLocked, writeNoteLocked } from './amadeus/unified/viewMemory'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
@@ -1746,6 +1747,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     unmountB() { unmountB?.(); unmountB = null },
     /** 生产 lifecycle 模块(按路径路由的 insertMarkdown / flush 等,仪器直调;与 UnifiedPage 同一模块实例)。 */
     lifecycle: null as unknown,
+    /** `&ulock`:锁 / 解锁主实例那篇(与生产 ⋯ 菜单同一个写口,C-07)。 */
+    setLocked(on: boolean, path = 'Unified.md') { writeNoteLocked(null, path, on) },
     /** 生产 pageStore(仪器直调它的 fm 写口:setPageIcon / syncFdChildren,评审 G1-05)。 */
     pageStore: usePageStore,
     /** 生产的改名 / 挪走收尾(pageStore.onPathGone 收到别处改名时调的就是它;评审 G2-03 仪器)。标签改指由仪器接着
@@ -1798,6 +1801,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 不按路径找实例(评审 G1-02)。opt-in:别的仪器里合成的文件拖放不该突然开始插上传占位。
       const filesRef = useRef<((files: File[]) => boolean) | null>(null)
       const hostDrop = new URLSearchParams(location.search).has('udrop')
+      // `&ulock`:锁定页面(评审 C-07)的宿主一半,镜像 amadeusViews:锁定态存本机、进 key 触发重挂,换实例时按盘上
+      // 现文重挂(生产先 flush 再重读路由;台架的写是同步落 vault 的,直接重读)。仪器:unified-readonly 的 K 组。
+      const ulock = new URLSearchParams(location.search).has('ulock')
+      const [, bumpLock] = useState(0)
+      useEffect(() => {
+        if (!ulock) return
+        return onNoteLockChange(() => {
+          setSt((cur) => ({ path: cur.path, initial: vault.get(cur.path) ?? '' }))
+          bumpLock((n) => n + 1)
+        })
+      }, [ulock])
+      const locked = ulock && readNoteLocked(null, st.path)
       // ⚠️ `&udelay` = **顶栏晚于编辑器到场**的时序(用户 2026-08-18 实报:开机还原到一篇 md 笔记时
       //    胶囊必不显示,点过别的笔记才出来)。生产里顶栏整块挂在 `barPath` 这道门后面,而 barPath
       //    要等一次异步分类才落定 —— 也就是说**插槽可能比 UnifiedPage 晚出现**。默认壳是两者同时到,
@@ -1826,14 +1841,15 @@ if (new URLSearchParams(location.search).has('dock')) {
               filesRef.current?.(files)
             } : undefined}
           ><UnifiedPage
-            key={st.path}
+            key={`${st.path}${locked ? ':locked' : ''}`}
             path={st.path}
             initial={st.initial}
             diskRaw={st.diskRaw}
             probe={probe}
             filesRef={filesRef}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
-            readOnly={new URLSearchParams(location.search).has('uro')}
+            readOnly={new URLSearchParams(location.search).has('uro') || locked}
+            onUnlock={locked ? () => writeNoteLocked(null, st.path, false) : undefined}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}

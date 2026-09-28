@@ -46,4 +46,41 @@ export function remapNoteViewMemory(vaultRoot: string | null | undefined, oldPat
   if (mode) writeNoteSurfaceMode(vaultRoot, newPath, mode)
   const oldId = noteMemoryId(vaultRoot, oldPath)
   if (docScroll.has(oldId)) docScroll.set(noteMemoryId(vaultRoot, newPath), docScroll.get(oldId)!)
+  if (readNoteLocked(vaultRoot, oldPath)) {
+    writeNoteLocked(vaultRoot, newPath, true)
+    writeNoteLocked(vaultRoot, oldPath, false)
+  }
+}
+
+// ── 锁定页面(评审 C-07,拍板 #15)──────────────────────────────────────────────────────────────
+// 「这台设备上别手滑改到它」是视图偏好,不是内容:只落本机 localStorage(键含库根),不写 frontmatter ——
+// 写进文件就会同步到别的设备、被别的编辑器读到,还会为了一个开关改动文件。锁定的笔记用只读实例渲染
+// (与公开分享页同一套 readOnly),外部改动照常回灌。
+
+const LOCK_PREFIX = 'amx.noteLocked:'
+const LOCK_EVENT = 'amadeus:note-lock'
+const lockKey = (vaultRoot: string | null | undefined, path: string): string => `${LOCK_PREFIX}${noteMemoryId(vaultRoot, path)}`
+
+export function readNoteLocked(vaultRoot: string | null | undefined, path: string): boolean {
+  try { return localStorage.getItem(lockKey(vaultRoot, path)) === '1' } catch { return false }
+}
+
+/** 锁 / 解锁。同窗的其它标签(同一篇开在几处)经事件一起换实例;别的窗口经 `storage` 事件跟上。 */
+export function writeNoteLocked(vaultRoot: string | null | undefined, path: string, on: boolean): void {
+  try {
+    if (on) localStorage.setItem(lockKey(vaultRoot, path), '1')
+    else localStorage.removeItem(lockKey(vaultRoot, path))
+  } catch { /* 私有模式:这次会话照样能锁,只是记不住 */ }
+  try { window.dispatchEvent(new Event(LOCK_EVENT)) } catch { /* 非浏览器环境 */ }
+}
+
+/** 订阅锁定状态变化(任一篇;订阅方自己按路径重读)。返回退订函数。 */
+export function onNoteLockChange(fn: () => void): () => void {
+  const onStorage = (e: StorageEvent): void => { if (!e.key || e.key.startsWith(LOCK_PREFIX)) fn() }
+  window.addEventListener(LOCK_EVENT, fn)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    window.removeEventListener(LOCK_EVENT, fn)
+    window.removeEventListener('storage', onStorage)
+  }
 }

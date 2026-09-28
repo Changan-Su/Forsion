@@ -131,6 +131,11 @@ export async function flushUnifiedScopes(strict = false): Promise<void> {
   await Promise.all([...handles].map((h) => strict ? h.flush(true) : h.flush().catch(() => {})))
 }
 
+/** path 上的实例待写先落盘(换实例前用:锁定页面 = 按新 key 重挂,新实例要读到旧实例刚打的字,C-07)。 */
+export async function flushUnifiedPath(path: string): Promise<void> {
+  await Promise.all([...handles].filter((h) => h.path === path).map((h) => h.flush().catch(() => {})))
+}
+
 /** Account changes retire every cloud editor before its vault root can change. */
 export function retireAllUnifiedScopes(): void {
   for (const handle of handles) handle.retire()
