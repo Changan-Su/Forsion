@@ -79,10 +79,46 @@ export function hoursSinceLocalMidnight(now: number): number {
   return Math.max(1 / 60, (now - startOfLocalDay(now)) / HOUR)
 }
 
-/** 预览只要今天(本地日界)还在进行或结束于今天的段,新的在前。 */
-export function todaySessions(sessions: ComputerHistorySession[], now: number): ComputerHistorySession[] {
+export const BLOCK_MS = 20 * MINUTE
+
+/** 时间线上的一段(不调模型的「总结」):窗口按停留时长排,第一条当标题;App 同理排成图标行。 */
+export interface HistoryBlock {
+  start: number
+  items: Array<{ app: string; bundleId?: string; title: string; host: string }>
+  apps: Array<{ name: string; bundleId?: string }>
+}
+
+/**
+ * 今天的会话 → 按本地钟点对齐的 20 分钟段(15:00 / 15:20 / 15:40…),新的在前。跨段的会话按重叠时长拆给每一段;
+ * 零时长的一闪而过也记 1ms,保证它的 App 露个图标。排除的会话没有标题,只进图标行。
+ */
+export function historyBlocks(sessions: ComputerHistorySession[], now: number, blockMs = BLOCK_MS): HistoryBlock[] {
   const dayStart = startOfLocalDay(now)
-  return sessions.filter((s) => s.end >= dayStart).sort((a, b) => b.start - a.start)
+  type Acc = { apps: Map<string, { name: string; bundleId?: string; ms: number }>; items: Map<string, HistoryBlock['items'][number] & { ms: number }> }
+  const acc = new Map<number, Acc>()
+  for (const s of sessions) {
+    if (s.end < dayStart) continue
+    const from = Math.max(s.start, dayStart), to = Math.max(from, s.end)
+    const appKey = s.bundleId || s.app
+    const first = dayStart + Math.floor((from - dayStart) / blockMs) * blockMs
+    // 恰好结束在段界上的不溢进下一段(b < to);零时长的只落在自己那段(b === first)
+    for (let b = first; b === first || b < to; b += blockMs) {
+      const ms = Math.max(1, Math.min(to, b + blockMs) - Math.max(from, b))
+      let a = acc.get(b)
+      if (!a) acc.set(b, a = { apps: new Map(), items: new Map() })
+      const app = a.apps.get(appKey) ?? { name: s.app, bundleId: s.bundleId, ms: 0 }
+      app.ms += ms
+      a.apps.set(appKey, app)
+      if (!s.title) continue
+      const key = `${appKey}\u0000${s.title}`
+      const item = a.items.get(key) ?? { app: s.app, bundleId: s.bundleId, title: s.title, host: urlHost(s.url), ms: 0 }
+      item.ms += ms
+      a.items.set(key, item)
+    }
+  }
+  const byMs = <T extends { ms: number }>(m: Map<string, T>): Array<Omit<T, 'ms'>> =>
+    [...m.values()].sort((x, y) => y.ms - x.ms).map(({ ms: _, ...rest }) => rest)
+  return [...acc].sort((x, y) => y[0] - x[0]).map(([start, a]) => ({ start, items: byMs(a.items), apps: byMs(a.apps) }))
 }
 
 /** 预览行尾只露主机名(网址已在 helper 侧去掉查询串;这里再收成 host,行更短)。 */

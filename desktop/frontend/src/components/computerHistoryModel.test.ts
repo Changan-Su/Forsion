@@ -4,7 +4,7 @@ import './computerHistoryMessages'
 import type { ComputerHistorySession, ComputerHistoryStatus } from '../../../shared/computerHistory'
 import {
   CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, hoursSinceLocalMidnight, needsHelperSetup, normalizeBundleId,
-  normalizeDomain, pauseArg, startOfLocalDay, statusTone, todaySessions, urlHost,
+  normalizeDomain, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost,
 } from './computerHistoryModel'
 
 const MIN = 60_000
@@ -56,16 +56,26 @@ describe('computerHistoryModel', () => {
     expect(hoursSinceLocalMidnight(at(0, 0))).toBeCloseTo(1 / 60)
   })
 
-  it('今天的会话:按本地日界过滤,新的在前', () => {
-    const s = (start: number, end: number, app: string): ComputerHistorySession => ({ start, end, app, typed: [] })
+  it('时间线:按本地钟点 20 分钟分段,跨段按重叠拆,排除的只进图标行,新的在前', () => {
+    const s = (start: number, end: number, app: string, title?: string, url?: string): ComputerHistorySession =>
+      ({ start, end, app, bundleId: `id.${app}`, title, url, typed: [] })
     const now = at(12)
-    const list = [
-      s(at(9), at(9, 20), 'A'),
-      s(at(23, 50, -1), at(0, 10), 'B'), // 跨午夜:结束在今天,留
-      s(at(22, 0, -1), at(23, 0, -1), 'C'), // 昨天,丢
-      s(at(11), at(11, 30), 'D'),
-    ]
-    expect(todaySessions(list, now).map((x) => x.app)).toEqual(['D', 'A', 'B'])
+    const blocks = historyBlocks([
+      s(at(23, 50, -1), at(0, 10), 'Mail', 'Inbox'), // 跨午夜:只算今天那 10 分钟
+      s(at(22, 0, -1), at(23, 0, -1), 'Old', 'yesterday'), // 昨天,丢
+      s(at(11, 10), at(11, 30), 'Chrome', 'Docs', 'https://docs.example.com/a'), // 11:00 段 10 分钟 + 11:20 段 10 分钟
+      s(at(11, 25), at(11, 40), 'Code', 'main.ts'), // 恰好收在 11:40,不溢进下一段
+      s(at(11, 5), at(11, 8), 'Secret'), // 排除:无标题
+      s(at(11, 9), at(11, 9), 'Finder', 'Downloads'), // 零时长也露面
+    ], now)
+    expect(blocks.map((b) => b.start)).toEqual([at(11, 20), at(11), at(0)])
+    expect(blocks[0].items.map((i) => i.title)).toEqual(['main.ts', 'Docs'])
+    expect(blocks[1].items).toEqual([
+      { app: 'Chrome', bundleId: 'id.Chrome', title: 'Docs', host: 'docs.example.com' },
+      { app: 'Finder', bundleId: 'id.Finder', title: 'Downloads', host: '' },
+    ])
+    expect(blocks[1].apps.map((a) => a.name)).toEqual(['Chrome', 'Secret', 'Finder'])
+    expect(blocks[2].apps).toEqual([{ name: 'Mail', bundleId: 'id.Mail' }])
     expect(startOfLocalDay(now)).toBe(at(0))
   })
 

@@ -18,7 +18,7 @@ import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
 import {
   CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, hoursSinceLocalMidnight, needsHelperSetup, normalizeBundleId,
-  normalizeDomain, pauseArg, statusTone, todaySessions, urlHost, type ClearChoice,
+  normalizeDomain, historyBlocks, pauseArg, statusTone, type ClearChoice,
 } from './computerHistoryModel'
 import './computerHistoryMessages'
 import './computerHistory.css'
@@ -30,8 +30,12 @@ export function computerHistoryApi(): ComputerHistoryApi | undefined {
   return typeof tangu.computerHistory?.get === 'function' ? tangu.computerHistory : undefined
 }
 
-/** 预览最多画这么多段(一天可能上百段;设置页只是预览,全量由 Agent 工具读)。 */
-const RECENT_LIMIT = 50
+/** 图标取不到时的首字母方块。 */
+function AppIcon({ name, src }: { name: string; src?: string | null }): React.ReactNode {
+  return src
+    ? <img className="ch-app-icon" src={src} alt="" draggable={false} />
+    : <span className="ch-app-icon ch-app-icon--letter" aria-hidden="true">{Array.from(name.trim())[0]?.toUpperCase() ?? '?'}</span>
+}
 
 /** @param anchor 设置搜索落点(settingsSearchIndex.ts),挂在首张面板上。 */
 export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dark'; anchor?: string }): React.ReactNode {
@@ -44,6 +48,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const [actionError, setActionError] = useState<string | null>(null)
   const [sessions, setSessions] = useState<ComputerHistorySession[]>([])
   const [recentApps, setRecentApps] = useState<Array<{ name: string; bundleId: string }>>([])
+  const [icons, setIcons] = useState<Record<string, string | null>>({})
   const [recentError, setRecentError] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState<ClearChoice | null>(null)
   const [cleared, setCleared] = useState(false)
@@ -97,6 +102,9 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
       setSessions(list)
       setRecentApps(apps)
       setRecentError(null)
+      // 图标后到:不挡列表,取不到就一直是首字母方块(主进程有缓存,重复刷新不再查 Spotlight)
+      const ids = [...new Set(list.map((s) => s.bundleId).filter((id): id is string => !!id))]
+      if (ids.length) api.appIcons(ids).then((got) => { if (alive.current) setIcons((prev) => ({ ...prev, ...got })) }, () => {})
     } catch (error) {
       if (alive.current && seq === recentSeq.current) setRecentError(ipcErrorText(error))
     }
@@ -178,7 +186,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   for (const a of recentApps) appNames.set(a.bundleId, a.name)
   const appName = (bundleId: string): string => appNames.get(bundleId) || bundleId
   const addableApps = recentApps.filter((a) => !exclude.apps.includes(a.bundleId))
-  const today = todaySessions(sessions, now)
+  const blocks = historyBlocks(sessions, now)
 
   /** 清除 / 改排除表会让主进程重订阅:权限卡正在更新 / 重启助手时锁住(见文件头 ⚠️)。 */
   const locked = !!busy || permissionBusy
@@ -329,24 +337,40 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
         actions={<button type="button" className="btn ghost sm" onClick={() => void loadRecent()}><RefreshCw size={13} aria-hidden="true" />{t('computerHistory.recent.refresh')}</button>}
       >
         {recentError !== null && <p className="ch-field-error ch-recent-error" role="alert">{t('computerHistory.actionFailed', { error: recentError })}</p>}
-        {today.length === 0
+        {blocks.length === 0
           ? <div className="settings-empty-row">{t('computerHistory.recent.empty')}</div>
-          : <ol className="ch-sessions">
-              {today.slice(0, RECENT_LIMIT).map((s, i) => {
-                const host = urlHost(s.url)
+          : <ol className="ch-timeline">
+              {blocks.map((b) => {
+                const [head, ...rest] = b.items
                 return (
-                  <li className="ch-session" key={`${s.start}:${s.bundleId ?? s.app}:${i}`}>
-                    <span className="ch-session-time">{formatTime(s.start)}–{formatTime(s.end)}</span>
-                    <span className="ch-session-main">
-                      <strong title={s.bundleId}>{s.app}</strong>
-                      {s.title && <span className="ch-session-title" title={s.title}>{s.title}</span>}
-                    </span>
-                    {host && <span className="ch-session-host" title={s.url}>{host}</span>}
+                  <li className="ch-block" key={b.start}>
+                    <time className="ch-block-time" dateTime={new Date(b.start).toISOString()}>{formatTime(b.start)}</time>
+                    <div className="ch-block-body">
+                      {head
+                        ? <p className="ch-block-title"><strong title={head.title}>{head.title}</strong>{head.host && <span className="ch-host">{head.host}</span>}</p>
+                        : <p className="ch-block-title"><strong>{b.apps.map((a) => a.name).join(', ')}</strong></p>}
+                      {rest.length > 0 && <ul className="ch-block-items">
+                        {rest.slice(0, 3).map((it) => (
+                          <li key={`${it.bundleId ?? it.app}:${it.title}`}>
+                            {it.title !== it.app && <span className="ch-item-app">{it.app}</span>}
+                            <span className="ch-item-title" title={it.title}>{it.title}</span>
+                            {it.host && <span className="ch-host">{it.host}</span>}
+                          </li>
+                        ))}
+                      </ul>}
+                      <ul className="ch-apps">
+                        {b.apps.slice(0, 8).map((a) => (
+                          <li className="ch-app" key={a.bundleId ?? a.name} title={a.bundleId}>
+                            <AppIcon name={a.name} src={a.bundleId ? icons[a.bundleId] : null} />
+                            <span className="ch-app-name">{a.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </li>
                 )
               })}
             </ol>}
-        {today.length > RECENT_LIMIT && <p className="ch-more">{t('computerHistory.recent.more', { n: RECENT_LIMIT })}</p>}
       </SettingsPanel>
 
       <SettingsPanel icon={<Ban size={16} />} title={t('computerHistory.apps.title')} description={t('computerHistory.apps.hint')}>

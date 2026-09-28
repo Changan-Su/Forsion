@@ -48,6 +48,10 @@ const sessions: ComputerHistorySession[] = empty ? [] : [
   { start: at(55), end: at(40), app: 'Slack', bundleId: 'com.tinyspeck.slackmacgap', title: 'design-review (Channel) - Forsion - 2 new items', typed: [] },
   { start: at(80), end: at(55), app: 'Safari', bundleId: 'com.apple.Safari', title: 'Docs', url: 'https://docs.example.com/guide/getting-started', typed: [] },
   { start: at(120), end: at(80), app: 'Microsoft Word', bundleId: 'com.microsoft.Word', title: 'Q3 季度复盘（草稿）.docx', typed: [] },
+  // 同一段里穿插的短停留:时间线按停留时长排,短的排后面
+  { start: at(9), end: at(7), app: '微信', bundleId: 'com.tencent.xinWeChat', title: '微信', typed: [] },
+  { start: at(33), end: at(30), app: 'Finder', bundleId: 'com.apple.finder', title: 'Downloads', typed: [] },
+  { start: at(95), end: at(93), app: '1Password', bundleId: 'com.1password.1password', typed: [] }, // 排除的 App:只有图标
 ]
 const recentApps = empty ? [] : [
   { name: 'Visual Studio Code', bundleId: 'com.microsoft.VSCode' },
@@ -55,6 +59,10 @@ const recentApps = empty ? [] : [
   { name: '备忘录', bundleId: 'com.apple.Notes' },
   { name: 'Health', bundleId: 'com.apple.Health' },
 ]
+
+const fakeIcon = (color: string): string =>
+  `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="${color}"/></svg>`)}`
+const FAKE_ICONS: Record<string, string> = { 'com.microsoft.VSCode': fakeIcon('#2f80ed'), 'com.google.Chrome': fakeIcon('#e8453c') }
 
 const listeners = new Set<(v: ComputerHistoryView) => void>()
 const push = (): ComputerHistoryView => { const v = view(); for (const cb of listeners) cb(v); return v }
@@ -67,6 +75,8 @@ const computerHistory: ComputerHistoryApi = {
   setExclude: async (next) => { exclude = next; return push() },
   recent: async () => sessions,
   recentApps: async () => recentApps,
+  // 台架拿不到真图标:两枚色块代表「取到了」,其余走首字母兜底
+  appIcons: async (ids) => Object.fromEntries(ids.map((id) => [id, FAKE_ICONS[id] ?? null])),
   reveal: async () => {},
   onChanged: (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } },
 }

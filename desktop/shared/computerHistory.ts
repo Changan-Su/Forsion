@@ -119,6 +119,8 @@ export interface ComputerHistoryApi {
   recent(hours: number): Promise<ComputerHistorySession[]>
   /** 最近见过的 App(给「排除 App」选择器),按最近出现排序。 */
   recentApps(): Promise<Array<{ name: string; bundleId: string }>>
+  /** bundle id → App 图标 dataURL(找不到为 null),时间线的图标行用。 */
+  appIcons(bundleIds: string[]): Promise<Record<string, string | null>>
   reveal(): Promise<void>
   /** 状态变化推送(录制 ↔ 断开 ↔ 暂停…);返回取消订阅。 */
   onChanged(cb: (view: ComputerHistoryView) => void): () => void
