@@ -11,6 +11,8 @@
  *   node scripts/cloud-gap.check.cjs
  * 负对照(修复时实跑):重连不带 since → G1–G4、G7/G8 红;兜底只补 lastLoadedPage → G5/G6 红;
  *   hello 就把 lastSeq 推到服务端 seq → G7/G8 红。
+ * G9–G13 = writeTextFile 带 base 的比对交换写(Codex g3#1):409 分支不比指纹、改回强写 → G9 红;
+ *   摘掉写前的本端指纹预检 → G10 红(G9 仍绿);G11 是不带 base 老语义的阳性对照。
  */
 const fs = require('fs')
 const os = require('os')

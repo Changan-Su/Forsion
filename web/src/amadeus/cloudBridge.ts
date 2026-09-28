@@ -41,9 +41,11 @@ import type {
   PageProps,
   SearchHit,
   TagCount,
+  TextWriteResult,
   TrashEntry,
   VaultInfo,
 } from '@amadeus-shared/ipc'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { createCloudHttp, is404, is409, HttpError } from './cloudHttp'
 import { startCloudEvents } from './cloudEvents'
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
@@ -177,6 +179,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- path → seq(乐观并发基准;只由自己的 GET/PUT 更新) ---------------------
   const seqMap = new Map<string, number>()
+  /** 本端经 GET/PUT 最后见到的内容指纹(textFingerprint),连同当时的 seq。**只在 seq 与 seqMap 对得上时可信**
+   *  (seq 被迁移 / 别的途径推进过就当不知道,由调用方重新拉)。writeTextFile 的比对交换写(base)靠它认出
+   *  「seq 是新的、调用方的基线却是旧的」—— 同端两个实例 / 一次 GET 推进了 seq 而编辑器还没回灌,服务端不会 409。 */
+  const seqFp = new Map<string, { seq: number; fp: string }>()
+  const knownFp = (path: string, seq: number): string | undefined => {
+    const e = seqFp.get(path)
+    return e && e.seq === seq && seqMap.get(path) === seq ? e.fp : undefined
+  }
   /** 本会话从服务端拿到过 seq 的路径。只由**本端**的删除/改名(forgetSeq/migrateSeq)清掉,别处的删除不清。
    *  用途:自动保存撞上 404 时区分「新文件」与「别处删掉了」—— 后者绝不能按 baseSeq 0 重建。
    *  2026-09-05 幽灵旧名空白页的真因:桌面把 A 改名成 B 后,手机端开着 A 的编辑器一保存,
@@ -451,12 +461,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   const getFile = async (path: string): Promise<FileDto> => {
     const f = await http.get<FileDto>(fileUrl(), { path })
     noteSeq(path, f.seq)
+    seqFp.set(path, { seq: f.seq, fp: textFingerprint(f.content) })
     return f
   }
 
   const putFile = async (path: string, content: string, baseSeq: number, force = false): Promise<PutResultDto> => {
     const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}) })
     noteSeq(path, r.seq)
+    seqFp.set(path, { seq: r.seq, fp: textFingerprint(content) })
     pageCache.delete(path) // 单点咽喉:任何文本写(fm 外科写/画板/trash meta…)后缓存失效;savePage 随手回填
     return r
   }
@@ -1230,7 +1242,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     },
     writeTextFile: (p, text, opts) => {
       const held = keysFor(p)
-      return enqueue(held, async () => {
+      // 比对交换写(Codex g3#1,契约见 ipc.ts writeTextFile):调用方以为盘上是什么的指纹。云端的乐观并发是按 seq 的,
+      // 这里把它补成与桌面主进程同形的内容 CAS —— 盘上不是基线就**不写**,回 { ok:false, current } 让 UnifiedPage
+      // 已有的拒写路径接管(回灌 / 冲突副本);不带 base 的调用方(插件文件类型等)下面那条老路一字不变。
+      const casBase = typeof opts?.base === 'string' ? opts.base : null
+      const done = (): void | TextWriteResult => (casBase != null ? { ok: true } : undefined)
+      return enqueue(held, async (): Promise<void | TextWriteResult> => {
         await ensureVault()
         if (opts?.create) {
           // 新建意图(素文件出生 / 模板 / 种子笔记):按新文件创建,绕过「本会话见过、现 404 = 别处删了」的
@@ -1239,7 +1256,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             await putFile(p, text, 0)
             movedTo.delete(p)
             invalidateTree()
-            return
+            return done()
           } catch (e) {
             if (!is409(e)) throw e
           }
@@ -1252,8 +1269,46 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         try {
           ({ target, base } = await writeTargetFor(p))
         } catch (e) {
-          if (e instanceof VanishedError) { await recoverVanished(p, text, meaningful); return }
+          if (e instanceof VanishedError) { await recoverVanished(p, text, meaningful); return done() }
           throw e
+        }
+        if (casBase != null) {
+          const cas = casBase
+          return underTarget(held, target, async (): Promise<void | TextWriteResult> => {
+            /** 拉服务端现文比基线:不符 → 拒写交回现文;符 → 换成它的 seq 接着写。别处删了 → 同下面老路另存 recovered。 */
+            const recheck = async (): Promise<TextWriteResult | 'vanished' | number> => {
+              let f: FileDto
+              try {
+                f = await getFile(target) // 顺带对齐 seq / 指纹
+              } catch (e2) {
+                if (is404(e2)) return 'vanished'
+                throw e2
+              }
+              return textFingerprint(f.content) === cas ? f.seq : { ok: false, current: f.content }
+            }
+            // 本端最后见到的这版(seq = base)不是调用方的基线,或者不知道是什么 → 写前先拉一次(服务端不会替我们 409:
+            // seq 是本端自己推进的)。稳态(上一发就是本实例自己写的)指纹对得上,零额外请求。base 0 = 服务端没有 = 无冲突。
+            if (base > 0 && knownFp(target, base) !== cas) {
+              const r = await recheck()
+              if (r === 'vanished') { await recoverVanished(p, text, meaningful); return done() }
+              if (typeof r !== 'number') return r
+              base = r
+            }
+            for (let attempt = 0; ; attempt++) {
+              try {
+                await putFile(target, text, base)
+                return { ok: true }
+              } catch (e) {
+                // 409 = 预读之后别处抢先写了:内容变了就拒写(绝不强写);内容恰好还是基线(别处写了同样的字)→ 按新 seq 重试。
+                if (!is409(e)) throw e
+                const r = await recheck()
+                if (r === 'vanished') { await recoverVanished(p, text, meaningful); return done() }
+                if (typeof r !== 'number') return r
+                if (attempt >= 2) throw e // seq 一直在跳、内容却一直是基线:按写失败交给渲染层退避,不空转
+                base = r
+              }
+            }
+          })
         }
         await underTarget(held, target, async () => {
         try {

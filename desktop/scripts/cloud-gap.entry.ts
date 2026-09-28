@@ -238,6 +238,75 @@ export async function run(): Promise<Result[]> {
     check('G8 两篇开着的 v4 笔记最终都补上', ea.text.includes('A-OFF') && eb.text.includes('B-OFF'), `a=${JSON.stringify(ea.text)} b=${JSON.stringify(eb.text)}`)
     ea.unmount(); eb.unmount()
   }
+  // ④ 比对交换写(Codex g3#1):UnifiedPage 带 base(= 它以为盘上是什么的 textFingerprint)写。云桥原先忽略 base ——
+  //    409 后拉最新 seq 强写,别处的修改既不回灌也没有冲突副本。现在盘上不是基线 → 回 { ok:false, current } 交渲染层,
+  //    与桌面主进程同一形状;不带 base 的调用方(插件文件类型等)一字不变。
+  //    负对照(实跑过):摘掉 409 分支的指纹比对 → G9 红;摘掉写前的本端指纹预检 → G10 红而 G9 仍绿(两半各自被钉住)。
+  {
+    const { textFingerprint } = await import('../shared/amadeus/writeConflict')
+    const fp = textFingerprint
+    const puts = (path: string) => log.filter((l) => l.startsWith(`PUT ${path} `))
+    // G9 跨端:B 读过基线,A 随后改了它(B 的 seq 已陈旧)→ B 带 base 保存 = 409 → 盘上不是基线 → 拒写交回现文,不强写
+    {
+      reset({ 'n.md': 'base\n' })
+      const A = mk(); const B = mk()
+      await A.restoreVault(); await B.restoreVault()
+      await B.readTextFile('n.md')
+      await A.writeTextFile('n.md', 'base\nA-elsewhere\n')
+      const res = await B.writeTextFile('n.md', 'base\nB-local\n', { base: fp('base\n') })
+      const disk = files.get('n.md')!.content
+      check('G9 跨端 409 且盘上不是基线 → { ok:false, current },不强写、别处的修改还在',
+        JSON.stringify(res) === JSON.stringify({ ok: false, current: 'base\nA-elsewhere\n' }) && disk === 'base\nA-elsewhere\n' && !log.some((l) => l.includes('FORCE')),
+        `res=${JSON.stringify(res)} disk=${JSON.stringify(disk)} log=${JSON.stringify(log)}`)
+    }
+    // G10 同端两个实例(分屏 / 陈旧编辑器):seq 是本端自己推进的、服务端不会 409 —— 靠本端记下的指纹认出陈旧基线
+    {
+      reset({ 'n.md': 'base\n' })
+      const B = mk()
+      await B.restoreVault()
+      await B.readTextFile('n.md')
+      const r1 = await B.writeTextFile('n.md', 'base\nE1\n', { base: fp('base\n') })
+      const r2 = await B.writeTextFile('n.md', 'base\nE2-stale\n', { base: fp('base\n') })
+      const disk = files.get('n.md')!.content
+      check('G10 同端陈旧实例带旧 base → 拒写交回现文,零次成功 PUT',
+        JSON.stringify(r1) === JSON.stringify({ ok: true }) && JSON.stringify(r2) === JSON.stringify({ ok: false, current: 'base\nE1\n' }) && disk === 'base\nE1\n' && puts('n.md').length === 1,
+        `r1=${JSON.stringify(r1)} r2=${JSON.stringify(r2)} disk=${JSON.stringify(disk)} log=${JSON.stringify(log)}`)
+    }
+    // G11 阳性对照:不带 base 的老调用方语义不变(409 → 拉 seq 强写,后写胜,返回 void)
+    {
+      reset({ 'n.md': 'base\n' })
+      const A = mk(); const B = mk()
+      await A.restoreVault(); await B.restoreVault()
+      await B.readTextFile('n.md')
+      await A.writeTextFile('n.md', 'base\nA\n')
+      const res = await B.writeTextFile('n.md', 'base\nB-plugin\n')
+      const disk = files.get('n.md')!.content
+      check('G11 不带 base 照旧:409 后强写、返回 void', res === undefined && disk === 'base\nB-plugin\n' && log.some((l) => l.includes('FORCE')),
+        `res=${JSON.stringify(res)} disk=${JSON.stringify(disk)} log=${JSON.stringify(log)}`)
+    }
+    // G12 409 但盘上内容恰好就是基线(别处写了同样的字,seq 白跳一格)→ 按新 seq 正常写,不误报冲突、不强写
+    {
+      reset({ 'n.md': 'base\n' })
+      const A = mk(); const B = mk()
+      await A.restoreVault(); await B.restoreVault()
+      await B.readTextFile('n.md')
+      await A.writeTextFile('n.md', 'base\n')
+      const res = await B.writeTextFile('n.md', 'base\nB\n', { base: fp('base\n') })
+      const disk = files.get('n.md')!.content
+      check('G12 409 但内容等于基线 → 换新 seq 写成、{ ok:true }、无 FORCE',
+        JSON.stringify(res) === JSON.stringify({ ok: true }) && disk === 'base\nB\n' && !log.some((l) => l.includes('FORCE')),
+        `res=${JSON.stringify(res)} disk=${JSON.stringify(disk)} log=${JSON.stringify(log)}`)
+    }
+    // G13 新文件(服务端没有、本会话没见过)带 base → 无冲突照建
+    {
+      reset({})
+      const B = mk()
+      await B.restoreVault()
+      const res = await B.writeTextFile('fresh.md', 'hello\n', { base: fp('') })
+      check('G13 新文件带 base → 建成、{ ok:true }', JSON.stringify(res) === JSON.stringify({ ok: true }) && files.get('fresh.md')?.content === 'hello\n',
+        `res=${JSON.stringify(res)} log=${JSON.stringify(log)}`)
+    }
+  }
   for (const s of FakeES.all) s.close()
   return results
 }
