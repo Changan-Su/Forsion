@@ -365,12 +365,13 @@ async function main(): Promise<void> {
       check('批准原样发出:action=approve、不带 argsOverride', sent.action === 'approve' && sent.argsOverride === undefined, JSON.stringify(sent))
 
       // P1-K3:受保护路径的审批(approval_request.localOnly)只能在执行它的电脑上批准 —— 设备页的卡只给「拒绝」,写明原因。
+      // 剧本不带 `remote`:真引擎对远程污点 run 的受保护写入在闸里直接硬拒(approvals.ts gateToolCall → protectedRemoteWrite),
+      // 永远产不出 localOnly 审批;设备页能看到的 localOnly 卡只有「本机 run 在设备页上打开」这一种,它没有来源行。
       await apage.locator('.t2c-stop').first().click({ timeout: 3000 }).catch(() => {}) // 先收掉上一条挂着的 run
       await apage.waitForTimeout(1500)
       stub.script([
         { type: 'approval_request', payload: { approvalId: 'ra-lo', name: 'write_file', arguments: JSON.stringify({ path: '/tmp/e2e-home/.forsion/config.json', content: '{}' }),
-          preview: '⚠ 受保护的配置 / 凭据 · Protected config or credentials · write /tmp/e2e-home/.forsion/config.json (2 chars)', reason: { kind: 'protected', mode: 'auto-edit' }, localOnly: true,
-          remote: { via: 'tunnel', callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone', callerName: 'E2E 手机' } } },
+          preview: '⚠ 受保护的配置 / 凭据 · Protected config or credentials · write /tmp/e2e-home/.forsion/config.json (2 chars)', reason: { kind: 'protected', mode: 'auto-edit' }, localOnly: true } },
         { type: '__hold' },
       ])
       for (let i = 0; i < 40 && !(await ta.isEnabled().catch(() => false)); i++) await apage.waitForTimeout(500)
@@ -383,10 +384,23 @@ async function main(): Promise<void> {
         return c && {
           buttons: [...c.querySelectorAll('.approval-actions button')].map((b) => (b.textContent || '').trim()),
           localOnly: (c.querySelector('[data-local-only]')?.textContent || '').trim(),
+          source: (c.querySelector('[data-approval-remote]')?.textContent || '').trim(),
         }
       })
-      check('P1-K3 受保护审批:设备页只给「拒绝」并写明只能在执行它的电脑上批准',
-        !!lo && lo.buttons.length === 1 && lo.buttons[0].includes('拒绝') && lo.localOnly.includes('只能在执行它的电脑上批准'), JSON.stringify(lo))
+      check('P1-K3 受保护审批:设备页只给「拒绝」并写明只能在执行它的电脑上批准(本机 run 没有来源行)',
+        !!lo && lo.buttons.length === 1 && lo.buttons[0].includes('拒绝') && lo.localOnly.includes('只能在执行它的电脑上批准') && !lo.source, JSON.stringify(lo))
+      // 截图前清场:上一幕留下的通知(「审批没送达…」「正在停止…」)一律手动关掉,成就 toast 等它自己出队 —— 图里只该有这张卡
+      for (let i = 0; i < 60; i++) {
+        const left = await apage.evaluate(() => {
+          for (const b of document.querySelectorAll<HTMLButtonElement>('.ntf-close')) b.click()
+          return document.querySelectorAll('.ntf, .ach-toast').length
+        })
+        if (!left) break
+        await apage.waitForTimeout(500)
+      }
+      await apage.waitForTimeout(400)
+      const clutter = await apage.evaluate(() => document.querySelectorAll('.ntf, .ach-toast').length)
+      check('P1-K3 截图前没有残留的通知 / 成就 toast', clutter === 0, `left=${clutter}`)
       await apage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-approval-localonly.png') })
       await apage.evaluate(() => {
         const r = document.documentElement
