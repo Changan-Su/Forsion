@@ -14,8 +14,10 @@
 //   whitelist 评审附录 A / 拍板表里认定的既定规范化,断言「恰好规范成这个样子」,第二轮必须逐字。红 = exit 1。
 //   stable    首轮允许偏离(修前就有的一次性丢失,另记在残余风险里),但**第二轮必须逐字**(相对首轮落盘)——
 //             专抓「越存越多」(R-01 返修:读写两侧认公式不一致,反斜杠每存翻一倍,首轮看不出)。红 = exit 1。
-//   pending   已知未修、归别的波次/包(D-18/D-05/R-25 → 0b;D-01 → 0a 另一包)。按逐字断言但只记 XFAIL,
+//   pending   已知未修、归别的波次/包(R-25 → 0b;R-01 余项 / D-11)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
+//             ⚠️ D-18(0b)起**未编辑的顶层块逐字写回原文**:病在序列化器里的条目,EDITHERE 要和病灶放在**同一块**
+//             (`${M} …`),否则逐字回填直接绕过序列化、XPASS 却什么都没修。附录 A 的规范化同理(*_edited 条目)。
 // 另:任何桶打开即写盘、或命中 forbid(比「没修」更坏的形态),一律红。
 // 编辑用例(EDITS,verbatim 桶):动作不是「首段敲字」而是删掉某一段,golden = 删后落盘;重开后链接 href 必须还是删之前那个,
 //   第二轮敲字逐字(D-12 返修:删掉同名定义的第一条,引用形只在剩下的首个定义解析出同一地址时写回)。
@@ -51,26 +53,37 @@ const V = 'verbatim', W = 'whitelist', S = 'stable', P = 'pending'
 const CASES = [
   // ── d18-rt 的 21 份(verify-integrity-3/d18-rt.cjs)────────────────────────────────
   { id: 'd18.ordered_tight', bucket: V, md: `${M}\n\n1. a\n2. b\n` },
-  { id: 'd18.list_dash_tight', bucket: P, why: 'D-05(0b):`-`→`*` 是既定,但紧凑变松散是 bug', md: `${M}\n\n- a\n- b\n  - c\n` },
-  { id: 'd18.tasks_dash', bucket: P, why: 'D-05(0b)', md: `${M}\n\n- [ ] todo\n- [x] done\n` },
-  { id: 'd18.ordered_all1', bucket: P, why: 'D-18(0b):`1. 1. 1.` 被重编号', md: `${M}\n\n1. a\n1. b\n1. c\n` },
-  { id: 'd18.table', bucket: P, why: 'D-18(0b):表格对齐重排(tablePipeAlign)', md: `${M}\n\n| A | B |\n|---|---|\n| 1 | 2 |\n` },
-  { id: 'd18.setext', bucket: P, why: 'D-18(0b):setext→ATX', md: `${M}\n\nTitle\n=====\n\ntext\n` },
-  { id: 'd18.fences_tilde', bucket: P, why: 'D-18(0b):`~~~`→```', md: `${M}\n\n~~~js\nx\n~~~\n` },
-  { id: 'd18.hr_dash', bucket: W, why: '拍板 #16(推荐不改):分割线落 `***`,文首 `---` 会被当 frontmatter 栅栏', md: `${M}\n\n---\n\ntext\n`, golden: `${M}Z\n\n***\n\ntext\n` },
-  { id: 'd18.hr_under', bucket: W, why: '拍板 #16(同上)', md: `${M}\n\n___\n\ntext\n`, golden: `${M}Z\n\n***\n\ntext\n` },
-  { id: 'd18.emph_underscore', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);D-18:强调符统一 `*`(attentionFlanking.ts)', md: `${M}\n\n_emph_ and __strong__\n`, golden: `${M}Z\n\n*emph* and **strong**\n` },
-  { id: 'd18.callout', bucket: P, why: 'D-18(0b):callout 标题后插 `>` 空行', md: `${M}\n\n> [!note] Title\n> body\n` },
-  { id: 'd18.footnote', bucket: P, why: 'D-18(0b):脚注之间插空行', md: `${M}\n\nA[^1] B[^2].\n\n[^1]: one\n[^2]: two\n` },
-  { id: 'd18.indented_code', bucket: P, why: 'D-18(0b):缩进代码→围栏', md: `${M}\n\n    code\n\ntext\n` },
-  { id: 'd18.hardbreak_2sp', bucket: P, why: 'D-18(0b):两空格硬换行→`\\`', md: `${M}\n\nline one  \nline two\n` },
-  { id: 'd18.bare_url', bucket: W, why: '附录 A I-16 / D-18:句中 `<url>`(links.ts normalizeUrlLiterals 取舍)', md: `${M}\n\nsee https://x.com/a_b ok\n`, golden: `${M}Z\n\nsee <https://x.com/a_b> ok\n` },
-  { id: 'd18.www_url', bucket: P, why: 'D-18(0b):`www.` 被改写成显式链接', md: `${M}\n\nsee www.x.com ok\n` },
-  { id: 'd18.snake', bucket: P, why: 'D-18(0b):`snake\\_case`、`5 \\* 3`', md: `${M}\n\nsnake_case_var and 5 * 3\n` },
-  { id: 'd18.mark_html', bucket: P, why: 'D-18(0b):`<mark>` 被补 style', md: `${M}\n\nsome <mark>hi</mark> text\n` },
-  { id: 'd18.no_trailing_nl', bucket: P, why: 'D-18(0b):自动补文末换行', md: `${M}\n\nlast` },
+  { id: 'd18.list_dash_tight', bucket: V, md: `${M}\n\n- a\n- b\n  - c\n` },
+  { id: 'd18.tasks_dash', bucket: V, md: `${M}\n\n- [ ] todo\n- [x] done\n` },
+  { id: 'd18.ordered_all1', bucket: V, md: `${M}\n\n1. a\n1. b\n1. c\n` },
+  { id: 'd18.table', bucket: V, md: `${M}\n\n| A | B |\n|---|---|\n| 1 | 2 |\n` },
+  { id: 'd18.setext', bucket: V, md: `${M}\n\nTitle\n=====\n\ntext\n` },
+  { id: 'd18.fences_tilde', bucket: V, md: `${M}\n\n~~~js\nx\n~~~\n` },
+  { id: 'd18.hr_dash', bucket: V, md: `${M}\n\n---\n\ntext\n` },
+  { id: 'd18.hr_under', bucket: V, md: `${M}\n\n___\n\ntext\n` },
+  { id: 'd18.emph_underscore', bucket: V, md: `${M}\n\n_emph_ and __strong__\n` },
+  { id: 'd18.callout', bucket: V, md: `${M}\n\n> [!note] Title\n> body\n` },
+  { id: 'd18.footnote', bucket: V, md: `${M}\n\nA[^1] B[^2].\n\n[^1]: one\n[^2]: two\n` },
+  { id: 'd18.indented_code', bucket: V, md: `${M}\n\n    code\n\ntext\n` },
+  { id: 'd18.hardbreak_2sp', bucket: V, md: `${M}\n\nline one  \nline two\n` },
+  { id: 'd18.bare_url', bucket: V, md: `${M}\n\nsee https://x.com/a_b ok\n` },
+  { id: 'd18.www_url', bucket: V, md: `${M}\n\nsee www.x.com ok\n` },
+  { id: 'd18.snake', bucket: V, md: `${M}\n\nsnake_case_var and 5 * 3\n` },
+  { id: 'd18.mark_html', bucket: V, md: `${M}\n\nsome <mark>hi</mark> text\n` },
+  { id: 'd18.no_trailing_nl', bucket: V, md: `${M}\n\nlast` },
   { id: 'd18.bom', bucket: P, why: 'D-01(0a 另一包:BOM)', md: `\uFEFF${M}\n\npara\n` },
-  { id: 'd18.task_upper_X', bucket: W, why: '附录 A D-05:`[X]`→`[x]` 是规范化;`-`→`*` 列表符(拍板 #17 未改缺省)', md: `${M}\n\n- [X] Done\n`, golden: `${M}Z\n\n* [x] Done\n` },
+  { id: 'd18.task_upper_X', bucket: V, md: `${M}\n\n- [X] Done\n` },
+  // 附录 A 认定的规范化对**被编辑的块**照旧适用(未编辑的块见上面逐字的同名条目)。
+  { id: 'd18.emph_underscore_edited', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);强调符统一 `*`(attentionFlanking.ts)', md: `_emph_ and __strong__ ${M}\n`, golden: `*emph* and **strong** ${M}Z\n` }, // 标记放句尾:紧跟光标的空格会被 I-06 换成 NBSP(另一包)
+  { id: 'd18.bare_url_edited', bucket: W, why: '附录 A I-16 / D-18:句中 `<url>`(links.ts normalizeUrlLiterals 取舍)', md: `${M} see https://x.com/a_b ok\n`, golden: `${M}Z see <https://x.com/a_b> ok\n` },
+
+  // ── D-05:编辑**列表里**的字 —— 整只列表重新序列化,列表符与紧凑度必须沿用原文(拍板 #17:记住原标记、写回沿用)──
+  { id: 'd05.edit_in_list', bucket: V, md: `- ${M}\n- b\n  - c\n\ntail\n` },
+  { id: 'd05.edit_in_tasks', bucket: V, md: `- [ ] ${M}\n- [x] done\n` },
+  { id: 'd05.edit_plus_nested_star', bucket: V, md: `+ ${M}\n  * b\n+ c\n` },
+  { id: 'd05.edit_loose', bucket: V, md: `- ${M}\n\n- b\n` },
+  { id: 'd05.edit_nested_ordered', bucket: V, md: `1. ${M}\n   1. y\n2. z\n` },
+  { id: 'd05.edit_upper_X', bucket: W, why: '附录 A D-05:被编辑的列表里 `[X]`→`[x]` 仍是规范化', md: `- [X] ${M}\n- [ ] b\n`, golden: `- [x] ${M}Z\n- [ ] b\n` },
 
   // ── D-06:行内 / 单元格 / 列表项里的 `<br>`(verify-rich-1/br.cjs、verify-keyboard-1/v01-br.cjs、d06_br.cjs)──
   { id: 'd06.para', bucket: V, md: `${M}\n\nhello<br>world\n\nOther.\n`, visible: 'hello\nworld' },
@@ -85,8 +98,10 @@ const CASES = [
   { id: 'd06.heading', bucket: V, md: `${M}\n\n## 上<br>下\n\ntext\n` },
   { id: 'd06.soft_then_br', bucket: V, md: `${M}\n\nline<br>\nnext\n` },
   // 段落里独占一行的 `<br>`:旧版(v3)空段落的落盘形,与写侧 stripEmptyLineBr 同口径 = 空行(不当换行,见 inlineBr.ts ownLine)。
-  { id: 'd06.own_line_in_para', bucket: W, why: '附录 A D-18:空行编码', md: `${M}\n\ntext\n<br />\nmore\n`, golden: `${M}Z\n\ntext\n\nmore\n` },
-  { id: 'd06.block_br_line', bucket: W, why: '附录 A D-18:空行编码(整行 `<br>` = 空段落 = 真空行)', md: `${M}\n\n甲\n\n<br>\n\n乙\n`, golden: `${M}Z\n\n甲\n\n\n\n乙\n` },
+  // 没被编辑的块里的整行 `<br>` 原样(D-18 逐字);被编辑的块按附录 A 的空行编码写。
+  { id: 'd06.own_line_in_para', bucket: V, md: `${M}\n\ntext\n<br />\nmore\n` },
+  { id: 'd06.block_br_line', bucket: V, md: `${M}\n\n甲\n\n<br>\n\n乙\n` },
+  { id: 'd06.own_line_in_para_edited', bucket: W, why: '附录 A D-18:空行编码(被编辑的块)', md: `${M}\ntext\n<br />\nmore\n`, golden: `${M}Z\ntext\n\nmore\n` },
 
   // ── R-01:公式里的「反斜杠 + 标点」(verify-rich-1/math*.cjs、verify-integrity-1/d02_math*.cjs)──
   { id: 'r01.matrix_block', bucket: V, md: `${M}\n\n$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$\n` },
@@ -94,7 +109,8 @@ const CASES = [
   { id: 'r01.inline_brace', bucket: V, md: `${M}\n\nset $\\{x\\}$ here\n` },
   // 行内公式里的 `\$`:scanMath 见 `$` 就收、不认 `\$`(mathLivePreview 顶注 ponytail),落盘侧认不出这个跨度;
   // 解析侧补了反斜杠就会越存越多,所以两侧都不认、维持旧行为 —— 要逐字得连 scanMath / unescapeMathSource 一起改。
-  { id: 'r01.inline_dollar', bucket: P, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)', md: `${M}\n\nprice $\\$5$ here\n`, forbid: /\\\\\$/ },
+  // 放进被编辑的块:未编辑的块 D-18 起逐字写回,病只剩在「被编辑、要重新序列化」的块里。
+  { id: 'r01.inline_dollar', bucket: P, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)', md: `${M} price $\\$5$ here\n`, forbid: /\\\\\$/ },
   { id: 'r01.punct_mix', bucket: V, md: `${M}\n\n$a\\,b \\| c \\% d \\# e \\_ f \\{g\\}$ 尾\n` },
   { id: 'r01.set_matrix_cn', bucket: V, md: `${M}\n\n集合 $\\{a,b\\}$ 与 $\\begin{matrix}1 \\\\ 2\\end{matrix}$ 尾\n` },
   { id: 'r01.single_line_display', bucket: V, md: `${M}\n\nseed\n\n$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$\n\nafter\n` },
@@ -103,7 +119,7 @@ const CASES = [
   { id: 'r01.control_cmds', bucket: V, md: `${M}\n\n$x_i + \\sum_{k} a*b$ ok\n\n$$\n\\frac{a}{b} + \\alpha_{1}\n$$\n` },
   { id: 'r01.escape_outside_math', bucket: V, why: '公式外的转义不许被补回(对照)', md: `${M}\n\nliteral \\*not em\\* and \\_x\\_ and $\\{y\\}$\n` },
   // 被转义的 `$` 不当定界符 —— 这条的旧病是 D-11(转义被剥,0b),但**绝不能**被本修复变成 `\\$x\\$`。
-  { id: 'r01.escaped_dollars', bucket: P, why: 'D-11(0b):转义被剥', md: `${M}\n\nnot math: \\$x\\$ ok\n`, forbid: /\\\\\$/ },
+  { id: 'r01.escaped_dollars', bucket: P, why: 'D-11:转义被剥(被编辑的块;未编辑的块 D-18 起逐字)', md: `${M} not math: \\$x\\$ ok\n`, forbid: /\\\\\$/ },
   // R-01 返修(评审阻断 R-01-growth):行内代码 / 链接地址里的 `$`、粗体里的货币挨着公式 —— 返修前每存一次反斜杠翻一倍。
   // 两侧现按同一份原文认公式:这些行里的公式可能认不出(首轮反斜杠一次性丢掉 = 修前行为),但第二轮必须逐字。
   { id: 'r01.grow_code_dollar', bucket: S, md: `${M}\n\n用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
@@ -117,18 +133,20 @@ const CASES = [
   { id: 'd12.cn_label_line', bucket: V, md: `${M}\n\n会议记录\n\n[重要]: 明天开会\n\n[TODO]: 回复邮件\n\n结尾\n`, visible: '[重要]: 明天开会' },
   { id: 'd12.en_label', bucket: V, md: `${M}\n\nnotes\n\n[Note]: remember-this\n` },
   { id: 'd12.unused_defs', bucket: V, md: `${M}\n\ntext\n\n[bookmark]: https://example.com\n[other]: https://other.com "t"\n` },
-  { id: 'd12.reflink', bucket: W, why: 'D-12 取舍:引用式链接落盘写成行内链接(URL 不丢),定义行逐字保留', md: `${M}\n\nsee [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n`,
-    golden: `${M}Z\n\nsee [a](http://example.com "Title") and [b](http://x.y) and [c](/c)\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n` },
+  // 引用式链接所在的块没被编辑、定义也都在 → 逐字(D-18);被编辑 → 按 D-12 取舍写成行内链接(URL 不丢)。
+  { id: 'd12.reflink', bucket: V, md: `${M}\n\nsee [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n` },
+  { id: 'd12.reflink_edited', bucket: W, why: 'D-12 取舍:被编辑的块里引用式链接写成行内链接,定义行逐字保留', md: `${M} see [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n`,
+    golden: `${M}Z see [a](http://example.com "Title") and [b](http://x.y) and [c](/c)\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n` },
   { id: 'd12.def_in_quote', bucket: V, md: `${M}\n\n> 引文\n>\n> [ref]: https://q.example\n` },
   { id: 'd12.def_multiline_in_list', bucket: V, md: `${M}\n\n* [a]: http://x.example\n  "title"\n` },
-  // 定义下一行紧跟正文:落盘时两段之间补一个空行(与 `text\n# h` 同一类块间 join,D-18 / 0b);定义行本身必须还在。
-  { id: 'd12.def_then_text', bucket: P, why: 'D-18(0b):块间补空行', md: `${M}\n\n[a]: x\ntext\n`, require: /\n\[a\]: x\n/ },
+  // 定义下一行紧跟正文:两块都没被编辑 → 逐字(D-18);定义行本身必须还在。
+  { id: 'd12.def_then_text', bucket: V, md: `${M}\n\n[a]: x\ntext\n`, require: /\n\[a\]: x\n/ },
   { id: 'd12.def_escapes', bucket: V, md: `${M}\n\n[a_b]: https://x.com/a_b*c "t_1"\n\n[k]: <https://x.com/y z>\n` },
   // 同名定义(首个生效):剩下那条以原地址为前缀 / 地址写在下一行 —— 都还在时照旧逐字(删掉第一条见 EDITS)。
-  { id: 'd12.dup_def_prefix', bucket: W, why: 'D-12 取舍:引用式链接落盘写成行内链接(URL 不丢),定义行逐字保留', md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`,
-    golden: `${M}Z\n\nsee [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
-  { id: 'd12.dup_def_dest_next_line', bucket: W, why: 'D-12 取舍:引用式链接落盘写成行内链接(URL 不丢),定义行逐字保留', md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n`,
-    golden: `${M}Z\n\nsee [a](http://first.example) here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n` },
+  { id: 'd12.dup_def_prefix', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
+  { id: 'd12.dup_def_dest_next_line', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n` },
+  { id: 'd12.dup_def_prefix_edited', bucket: W, why: 'D-12 取舍:被编辑的块里引用式链接写成行内链接(首个定义生效)', md: `${M} see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`,
+    golden: `${M}Z see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
 
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },

@@ -204,7 +204,9 @@ const tailParas = (blanks: number): number => Math.max(0, Math.floor((blanks + 1
 
 /** 节点的起/止行号;拿不到位置信息返回 null(宁可少还原,绝不臆造)。 */
 function lineOf(node: MdNode, side: 'start' | 'end'): number | null {
-  const n = node?.position?.[side]?.line
+  // 结构缩进标记(structuralIndent.ts)被摘掉后,块的起点按标记那一行算 —— 标记行与它后面的空行不是空段落。
+  const marked = side === 'start' ? node?.data?.amadeusIndentLine : undefined
+  const n = typeof marked === 'number' ? marked : node?.position?.[side]?.line
   return typeof n === 'number' ? n : null
 }
 
