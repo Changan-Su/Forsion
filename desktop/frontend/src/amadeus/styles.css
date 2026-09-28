@@ -3059,6 +3059,10 @@ body.amx-marquee-active * {
 
 /* 链接悬停卡片(500ms 出 / 250ms 收)与双框编辑面板。 */
 .am-app .amx-linkcard {
+  /* ⚠️ fixed 必须写在这里:OverlayAt(lcl/engine/menuAnchor.tsx)只给视口坐标 left/top,定位方式归浮层自己的类。
+     漏了它 = 静态流排到 .am-app 末尾,卡片落到页底、鼠标一挪过去就收(I-05,仪器 check:linkcard)。 */
+  position: fixed;
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -3084,6 +3088,7 @@ body.amx-marquee-active * {
 .am-app .amx-linkcard-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .am-app .amx-linkedit-backdrop { position: fixed; inset: 0; z-index: 119; }
 .am-app .amx-linkedit {
+  position: fixed; /* 同上:没有定位 z-index 不生效,面板被自己 z119 的遮罩盖住,一点输入框就关(I-05) */
   z-index: 120;
   display: flex;
   flex-direction: column;
@@ -3095,6 +3100,7 @@ body.amx-marquee-active * {
   border: 1px solid var(--border);
   box-shadow: var(--card-shadow);
 }
+.am-app .amx-linkedit-form { display: contents; } /* form 只为 Enter 提交,不参与布局 */
 .am-app .amx-linkedit label { display: flex; flex-direction: column; gap: 4px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .am-app .amx-linkedit input {
   padding: 6px 8px;

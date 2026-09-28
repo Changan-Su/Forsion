@@ -74,6 +74,7 @@
     "check:attention": "node scripts/e2e-editor.cjs --check=attention-save",
     "check:rtcorpus": "node scripts/e2e-editor.cjs --check=rtcorpus",
     "check:cjk": "node scripts/e2e-editor.cjs --check=cjk-flanking",
+    "check:linkcard": "node scripts/e2e-editor.cjs --check=linkcard",
     "check:enter": "node scripts/e2e-editor.cjs --check=enter-semantics",
     "check:caretmerge": "node scripts/e2e-editor.cjs --check=caret-merge",
     "check:canvascaret": "node scripts/e2e-editor.cjs --check=canvas-caret",
