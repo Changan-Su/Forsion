@@ -43,9 +43,13 @@ import {
   bgSchema,
   colorSchema,
   inlineHtmlMarksRemark,
+  kbdSchema,
+  subSchema,
+  supSchema,
   toggleUnderlineCommand,
   underlineSchema,
 } from './marks'
+import { obsidianInlinePlugin, toggleObsHighlight } from './obsidianInline'
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
@@ -106,9 +110,11 @@ import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { askString } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
+import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
+import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
-import { unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠
+import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions, editorExtensionGen, subscribeEditorExtensions } from '../../plugins/editorExtensions'
 import { registerMessages, translate, useI18n } from '../../../i18n'
@@ -206,10 +212,11 @@ export function stampedFileName(kind: string): string {
  *  新打的 [[链接]] 在重解析成 wikilink 节点前仍是纯文本,remark 会转义成 \[\[(索引抽不到,双链失联);
  *  math 纯文本的 _ * { } 被转义(x_i→x\_i);`> [!note]-` 的 `[` 被转义 Obsidian 不认;空段落落成 <br />。
  *  行首 `#tag` 被转义成 `\#tag`(标签索引与 Obsidian 都不认,R-25;须在 unescapeMathSource 之前,见 tagEscape.ts)。
+ *  行首 `==高亮==` 被转义成 `\==`(setext 防护过宽,I-17;同在 tagEscape.ts)。
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
  *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
@@ -224,7 +231,7 @@ export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(markdown))))
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown)))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
@@ -835,9 +842,23 @@ export function MilkdownInner({
           // 量不到就只是没菜单。⚠️ 不许在这里 return：preventDefault 已经调过,
           // 提前返回 = 默认粘贴被拦下、URL 也没插进去,用户那一下粘贴直接蒸发了。
         }
-        view.dispatch(view.state.tr.insertText(raw, from, sel.to))
+        // uiEvent=paste:embedLayer 据此当场成卡(键入中的裸 URL 段才等光标离开,I-13)。
+        view.dispatch(view.state.tr.insertText(raw, from, sel.to).setMeta('uiEvent', 'paste'))
         if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
+      }
+      // 纯文本多行(D-10,拍板 #12):只有 text/plain、不像 markdown → 一行一段,再交回同一条 markdown 粘贴管线
+      // (Milkdown clipboard 从 clipboardData 取 text/plain → parserCtx)。转换后已无单个 `\n`,重入本函数不会再进这一支。
+      // 代码块内不动(那里 `\n` 就是代码的换行)。见 ./plainPaste。
+      const plain = event.clipboardData?.getData('text/plain') ?? ''
+      if (
+        unified && plain && !event.clipboardData?.getData('text/html') &&
+        !sel.$from.parent.type.spec.code && isPlainMultiline(plain)
+      ) {
+        const dt = new DataTransfer()
+        dt.setData('text/plain', plainLinesToParagraphs(plain))
+        event.preventDefault()
+        return view.pasteText(dt.getData('text/plain'), new ClipboardEvent('paste', { clipboardData: dt }))
       }
       return false
     }
@@ -928,6 +949,8 @@ export function MilkdownInner({
       // ⚠️ 这是**唯一**的生产编辑器,漏这行 = 09-18 复发(08-25 只挂到了 UnifiedSpike 台架)。
       // 仪器:npm run check:attention;attentionWiring.test.ts 钉住这一行在不在。
       .use(attentionSerializer)
+      // 句中「文字 === 地址」的链接:裸写后重解析等价就落裸 URL,不再写 `<url>`(I-13,见 ./autolink)。
+      .use(autolinkSerializer)
       // 块内换行 = 单个 '\n'(Obsidian 语义),不再「空行分段」。必须晚于 inlineHtmlMarksRemark:
       // 折叠先跑完,跨行的 <u>…</u> 才不会被拆段撕成开合分家的两半(见 softBreak.ts 注释)。
       // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
@@ -937,10 +960,14 @@ export function MilkdownInner({
       .use(underlineSchema)
       .use(colorSchema)
       .use(bgSchema)
+      .use(kbdSchema) // <kbd> / <sub> / <sup>:可编辑 mark,不再是开合两个不可编辑原子(I-17,见 ./marks)
+      .use(subSchema)
+      .use(supSchema)
       .use(toggleUnderlineCommand)
       .use(applyColorCommand)
       .use(applyBgCommand)
       .use(mathLivePreviewPlugin()) // 公式=纯文本+装饰渲染(不再用 plugin-math 原子节点),离行才渲染、在行可编辑
+      .use(obsidianInlinePlugin()) // `==高亮==` / `%%注释%%`:同上口径的零 schema 实况预览(I-17,拍板 #11)
       .use(history)
       .use(listener)
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
@@ -1006,6 +1033,7 @@ export function MilkdownInner({
               .catch(() => { /* 读不到剪贴板(权限 / 非安全上下文):这一下就当没按 */ })
             return true
           },
+          'Mod-Shift-h': toggleObsHighlight, // `==` 高亮切换(I-17;仓内与 darwin 默认菜单均无占用)
           'Mod-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
           'Mod-e': (state, dispatch) => setTextAlignment(state, dispatch, 'center'),
           'Mod-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
@@ -1021,6 +1049,7 @@ export function MilkdownInner({
         }),
       ))
       .use(linkInputRule) // 打完 `[文字](地址)` 当场成链接(commonmark 预设没这条行内规则)
+      .use(autolinkInputRule) // 手打裸 URL 在空格 / 全角标点收尾时成链接(I-13,见 ./autolink)
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。

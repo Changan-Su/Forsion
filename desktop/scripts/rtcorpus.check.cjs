@@ -75,7 +75,26 @@ const CASES = [
   { id: 'd18.task_upper_X', bucket: V, md: `${M}\n\n- [X] Done\n` },
   // 附录 A 认定的规范化对**被编辑的块**照旧适用(未编辑的块见上面逐字的同名条目)。
   { id: 'd18.emph_underscore_edited', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);强调符统一 `*`(attentionFlanking.ts)', md: `_emph_ and __strong__ ${M}\n`, golden: `*emph* and **strong** ${M}Z\n` }, // 标记放句尾:紧跟光标的空格会被 I-06 换成 NBSP(另一包)
-  { id: 'd18.bare_url_edited', bucket: W, why: '附录 A I-16 / D-18:句中 `<url>`(links.ts normalizeUrlLiterals 取舍)', md: `${M} see https://x.com/a_b ok\n`, golden: `${M}Z see <https://x.com/a_b> ok\n` },
+  // I-13 起句中「文字 === 地址」的链接裸写后重解析等价就落裸 URL(autolink.ts),原先的 `<url>` 取舍作废 —— 挪进 verbatim。
+  { id: 'd18.bare_url_edited', bucket: V, md: `${M} see https://x.com/a_b ok\n` },
+  { id: 'i13.url_period_edited', bucket: V, md: `${M} see https://x.com/a. Next\n` },
+  { id: 'i13.url_in_strong_edited', bucket: V, md: `${M} see **https://x.com/s** ok\n` },
+  // gfm 自己把 `。后` 吞进地址:读写同一口径,逐字。
+  { id: 'i13.url_cjk_tail_edited', bucket: V, md: `${M} 见 https://x.com/p。后\n` },
+  // 显式 autolink 后紧跟全角标点:裸写会把 `。后` 吞进地址 → 必须留 `<url>`。
+  { id: 'i13.autolink_cjk_edited', bucket: V, md: `${M} 见 <https://x.com/p>。后\n`, require: /<https:\/\/x\.com\/p>。后/ },
+  // I-17:`==` / `%%` 零 schema 装饰(磁盘纯文本);<kbd>/<sub>/<sup> 折叠成 mark 后序列化回原标签;大写 / 带属性的仍是原子。
+  { id: 'i17.highlight_edited', bucket: V, md: `${M} x ==高亮== y\n` },
+  { id: 'i17.highlight_line_start_edited', bucket: V, md: `==重点== ${M}\n` },
+  { id: 'i17.comment_edited', bucket: V, md: `${M} 文字 %%注释%% 结尾\n` },
+  { id: 'i17.comment_multiline_edited', bucket: V, md: `%%\n${M} 多行注释\n%%\n\ntail\n` },
+  { id: 'i17.kbd_edited', bucket: V, md: `${M} 按 <kbd>Cmd</kbd>+<kbd>K</kbd>\n` },
+  { id: 'i17.subsup_edited', bucket: V, md: `${M} H<sub>2</sub>O 与 x<sup>2</sup>\n` },
+  { id: 'i17.tags_upper_attr_edited', bucket: V, md: `${M} <KBD>Up</KBD> 与 <kbd class="k">A</kbd>\n` },
+  // `==` 装饰不碰存量 `<mark>`(拍板 #11)。裸 `<mark>` 被写成 `style="background:"` 是另一条(I-16e,不在本包),这里用带色的。
+  { id: 'i17.mark_untouched_edited', bucket: V, md: `${M} some <mark style="background:#fef3a1">hi</mark> and ==hl== text\n` },
+  { id: 'i17.highlight_list_quote_edited', bucket: V, md: `- ==项== ${M}\n\n> ==引用== 行\n` },
+  { id: 'i13.explicit_autolink_edited', bucket: W, why: 'I-13:句中显式 `<url>` 与裸 URL 解析成同一个链接,编辑该块时统一落裸 URL(与整行 `<url>` 同一取舍,links.ts)', md: `${M} see <https://x.com/a> ok\n`, golden: `${M}Z see https://x.com/a ok\n` },
 
   // ── D-05:编辑**列表里**的字 —— 整只列表重新序列化,列表符与紧凑度必须沿用原文(拍板 #17:记住原标记、写回沿用)──
   { id: 'd05.edit_in_list', bucket: V, md: `- ${M}\n- b\n  - c\n\ntail\n` },

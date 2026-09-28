@@ -996,6 +996,85 @@ async function main() {
     await pg.close()
   }
 
+  // P14e:Obsidian 行内语法实况(I-17,拍板 #11)。`==高亮==` / `%%注释%%` 是纯文本 + 装饰(obsidianInline.ts):
+  //   光标不在那处 → 定界符 / 整条注释藏起来(注释留一枚徽章);光标碰到 → 露源码可编辑。<kbd>/<sub>/<sup> 是可编辑 mark
+  //   (不再是开合两个 contenteditable=false 原子)。行内代码与 `===` 不误伤;打开零写盘;⌘⇧H 切换 `==`。
+  {
+    const seed = '# T\n\nhl: x ==高亮== y\n\ncmt: 文字 %%注释%% 结尾\n\n%%\n多行注释\n%%\n\nkbd: 按 <kbd>Cmd</kbd> 与 H<sub>2</sub>O x<sup>2</sup>\n\ncode: `==不是==` 与 a === b\n\n末段文字\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    /** 段落可见文字(innerText 不含 display:none)+ 各装饰 / 标签计数。 */
+    const look = () => pg.evaluate((s) => {
+      const ps = [...document.querySelector(s).querySelectorAll(':scope > p')]
+      const txt = (k) => (ps.find((p) => p.textContent.startsWith(k)) || { innerText: '' }).innerText
+      return {
+        hl: txt('hl:'), cmt: txt('cmt:'), code: txt('code:'),
+        hlText: [...document.querySelectorAll(s + ' .amx-obs-hl')].map((e) => e.textContent),
+        delims: document.querySelectorAll(s + ' .amx-obs-delim').length,
+        badges: document.querySelectorAll(s + ' .amx-obs-cmt-badge').length,
+        multiHidden: !ps.some((p) => p.innerText.includes('多行注释')),
+        kbd: [...document.querySelectorAll(s + ' kbd')].map((e) => e.textContent).join(','),
+        sub: document.querySelectorAll(s + ' sub').length, sup: document.querySelectorAll(s + ' sup').length,
+        atoms: document.querySelectorAll(s + ' [data-type="html"]').length,
+      }
+    }, PM)
+    const caretIn = (needle, off) => pg.evaluate(([needle, off]) => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes(needle)) at = pos + n.text.indexOf(needle) + off; return at < 0 })
+      let proto = Object.getPrototypeOf(v.state.selection)
+      while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+      v.focus()
+      const TS = proto.constructor.near(v.state.doc.resolve(at)).constructor // Selection.near 给的是 TextSelection
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at)))
+    }, [needle, off])
+    const a = await look()
+    const w0 = await pg.evaluate(() => window.__upage.writes.length)
+    // b:光标进高亮 → 定界符露出
+    await caretIn('高亮', 1)
+    await pg.waitForTimeout(150)
+    const b = await look()
+    // c:点注释徽章 → 光标进注释、源码露出
+    const badge = await pg.evaluate((s) => { const e = document.querySelector(s + ' .amx-obs-cmt-badge'); const r = e?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null }, PM)
+    if (badge) await pg.mouse.click(badge.x, badge.y)
+    await pg.waitForTimeout(150)
+    const c = await look()
+    const w1 = await pg.evaluate(() => window.__upage.writes.length)
+    // d:<kbd> 里打字 = 可编辑 mark
+    await caretIn('Cmd', 2)
+    await pg.keyboard.type('X')
+    // e:⌘⇧H 包成 `==末段==`,再按一次摘掉
+    const selectWord = () => pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('末段')) at = pos + n.text.indexOf('末段'); return at < 0 })
+      let proto = Object.getPrototypeOf(v.state.selection)
+      while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+      v.focus()
+      const TS = proto.constructor.near(v.state.doc.resolve(at)).constructor
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at, at + 2)))
+    })
+    await selectWord()
+    await pg.keyboard.press('Meta+Shift+h')
+    await pg.waitForTimeout(1400)
+    const md1 = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    await pg.keyboard.press('Meta+Shift+h')
+    await pg.waitForTimeout(1400)
+    const md2 = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    record('P14e Obsidian 行内语法实况:==/%% 离开渲染、光标进入露源码;kbd/sub/sup 可编辑;代码与 === 不误伤;⌘⇧H 切换',
+      a.hl === 'hl: x 高亮 y' && a.hlText.join() === '高亮' && a.delims === 0 && a.badges === 2 && a.multiHidden && !a.cmt.includes('注释') &&
+        a.code.includes('==不是==') && a.code.includes('a === b') &&
+        a.kbd === 'Cmd' && a.sub === 1 && a.sup === 1 && a.atoms === 0 &&
+        b.delims === 2 && b.hl.includes('==高亮==') &&
+        c.cmt.includes('%%注释%%') && c.badges === 1 && w0 === 0 && w1 === 0 &&
+        md1.includes('<kbd>CmXd</kbd>') && md1.includes('\n==末段==文字\n') && md2.includes('\n末段文字\n') && md2.includes('hl: x ==高亮== y') && md2.includes('%%\n多行注释\n%%'),
+      JSON.stringify({ a, b: { hl: b.hl, delims: b.delims }, c: { cmt: c.cmt, badges: c.badges }, w0, w1, md1: md1.slice(-80), md2: md2.slice(-40) }))
+    await pg.close()
+  }
+
   // P15:真实鼠标路径下把手可达(真机回归 2026-08-13 第4振:把手悬在 .milkdown 左缘之外,
   // hover 追踪挂 container 的话指针一穿越容器边界 mouseleave 就藏把手 —— 必须挂 pane 级
   // .unified-body。合成事件直打 gutter 的其余检查绕过了这条路径,只有真 mouse.move 能抓)。
@@ -1415,6 +1494,114 @@ async function main() {
         !c20.bar && c20.hits === 0,
       JSON.stringify({ barOpen, a20, b20, e20, d20, c20 }),
     )
+    await pg.close()
+  }
+
+  // P20b:页内查找替换(C-18)。UnifiedPage 注册 replace provider(所见即所得 → PM 事务;源码模式 → textarea 镜像 +
+  //  execCommand)。钉:单行选区预填查找词;大小写 / 正则开关改计数;替换当前后跳到下一条;全部替换 = 一步撤销;
+  //  嵌入卡里的命中查得到但不可替换;源码模式也能查能换、落盘带新文、原生撤销能撤回。
+  {
+    const seed = '# 替换页\n\napple 一号,Apple 二号。\n\n苹**果**三号,苹果四号,苹果五号。\n\n![[Embedded]]\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(600)
+    const q = (v) => pg.evaluate((v) => {
+      const inp = document.querySelector('.amx-findbar input')
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(inp, v)
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+    }, v).then(() => pg.waitForTimeout(300))
+    const r = (v) => pg.evaluate((v) => {
+      const inp = document.querySelector('.amx-findbar-replace')
+      if (!inp) return
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(inp, v)
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+    }, v).then(() => pg.waitForTimeout(100))
+    const st = () => pg.evaluate(() => {
+      const all = [...(CSS.highlights.get('amx-find') ?? [])]
+      const acts = [...document.querySelectorAll('.amx-findbar-act')]
+      return {
+        count: document.querySelector('.amx-findbar-count')?.textContent ?? '',
+        hits: all.length,
+        inMirror: all.filter((x) => !!x.startContainer.parentElement?.closest('.amx-find-mirror')).length,
+        canReplace: acts.length === 2 && acts.every((b) => !b.disabled),
+        rows: document.querySelectorAll('.amx-findbar-row').length,
+      }
+    })
+    const lastMd = () => pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    const pressOpt = (i) => pg.evaluate((i) => document.querySelectorAll('.amx-findbar-opt')[i]?.click(), i).then(() => pg.waitForTimeout(250))
+    const act = (i) => pg.evaluate((i) => document.querySelectorAll('.amx-findbar-act')[i]?.click(), i).then(() => pg.waitForTimeout(250))
+    // a:单行选区预填
+    await pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('二号')) at = pos + n.text.indexOf('二号'); return at < 0 })
+      const S = Object.getPrototypeOf(Object.getPrototypeOf(v.state.selection)).constructor
+      const TS = S.near(v.state.doc.resolve(at)).constructor
+      v.focus()
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at, at + 2)))
+    })
+    await pg.waitForTimeout(100)
+    await pg.evaluate(() => window.__openFind())
+    await pg.waitForTimeout(300)
+    const a = { prefill: await pg.inputValue('.amx-findbar input'), ...(await st()) }
+    // b:大小写
+    await q('apple')
+    const b1 = await st()
+    await pressOpt(0)
+    const b2 = await st()
+    await pressOpt(0)
+    // c:正则 + 替换当前(`$1` 展开)→ 跳到下一条;全部替换;一步撤销
+    await pressOpt(1)
+    await q('苹(.)')
+    const c1 = await st()
+    await pg.evaluate(() => document.querySelector('.amx-findbar-expand')?.click())
+    await pg.waitForTimeout(150)
+    await r('梨$1')
+    await act(0)
+    const c2 = await st()
+    await act(1)
+    await pg.waitForTimeout(1300)
+    const c3 = { ...(await st()), md: await lastMd() }
+    await pg.evaluate(() => window.__upage.probe.view().focus())
+    await pg.keyboard.press('Meta+z')
+    await pg.waitForTimeout(1300)
+    const c4 = await lastMd()
+    // e:嵌入卡里的命中:查得到、不可替换
+    await pg.evaluate(() => document.querySelector('.amx-findbar input').focus())
+    await pressOpt(1)
+    await q('被嵌入')
+    const e1 = await st()
+    // f:源码模式:镜像里查、替换落盘、原生撤销
+    await pg.evaluate(() => window.__upage.setEditorMode('source'))
+    await pg.waitForSelector('.amx-source', { timeout: 5000 })
+    await pg.waitForTimeout(400)
+    await q('二号')
+    const f1 = await st()
+    await r('贰号')
+    await act(1)
+    await pg.waitForTimeout(1300)
+    const f2 = { ta: await pg.evaluate(() => document.querySelector('.amx-source').value), md: await lastMd(), ...(await st()) }
+    await pg.evaluate(() => document.querySelector('.amx-source').focus())
+    await pg.keyboard.press('Meta+z')
+    await pg.waitForTimeout(1300)
+    const f3 = { ta: await pg.evaluate(() => document.querySelector('.amx-source').value), md: await lastMd() }
+    if (process.argv.includes('--shot')) {
+      await pg.evaluate(() => window.__upage.setEditorMode('wysiwyg'))
+      await pg.waitForTimeout(400)
+    }
+    record('P20b 页内查找替换:选区预填 + 大小写 / 正则 + 替换当前跳下一条 + 全部替换一步撤销 + 嵌入不可换 + 源码模式能换能撤',
+      a.prefill === '二号' && a.count === '1/1' &&
+        b1.count === '1/2' && b2.count === '1/1' &&
+        c1.count === '1/3' && c2.count === '1/2' && c3.count === '0' && c3.hits === 0 &&
+        c3.md.includes('梨果四号,梨果五号') && !c3.md.includes('苹果') &&
+        c4.includes('苹果四号,苹果五号') && !c4.includes('梨果四号') &&
+        e1.hits === 2 && !e1.canReplace &&
+        f1.hits === 1 && f1.inMirror === 1 && f1.canReplace &&
+        f2.ta.includes('Apple 贰号') && f2.md.includes('Apple 贰号') && f2.hits === 0 &&
+        f3.ta.includes('Apple 二号') && f3.md.includes('Apple 二号'),
+      JSON.stringify({ a, b1: b1.count, b2: b2.count, c1: c1.count, c2: c2.count, c3: { count: c3.count, hits: c3.hits, md: c3.md.slice(0, 80) }, c4: c4.slice(0, 80), e1, f1, f2: { ...f2, ta: f2.ta.slice(0, 60), md: f2.md.slice(0, 60) }, f3: { ta: f3.ta.slice(0, 60), md: f3.md.slice(0, 60) } }))
     await pg.close()
   }
 

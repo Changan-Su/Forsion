@@ -13,6 +13,8 @@
 //   LC5 页面滚动 → 卡片收起(fixed 坐标是悬停那一刻的,滚走了不能钉在原处)
 //   L1~L5 链接末尾接着输入不并进链接(I-04):键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴
 //   M1~M3 本地 md 链接(L-07):点击走库内打开(不补 https)、悬停卡「打开」同路、键入落盘逐字
+//   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
+//          全角标点收尾成链、落盘 `<url>`(裸写会把 `。后` 吞进地址);ASCII 句末标点留在链接外;行内代码 / 字母后不成链
 //
 // 用法:node scripts/e2e-editor.cjs --check=linkcard(或 npm run check:linkcard)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
@@ -294,6 +296,84 @@ async function mdLinks(browser) {
   await p.close()
 }
 
+// ── AU 组(I-13):手打裸 URL。药在 blocks/markdown/autolink.ts(输入规则 + link 落盘 handler)与
+// unified/embedLayer.tsx 的 pendingPos(键入中的「整段一个 URL」不交给书签卡)。
+async function bareUrlTyping(browser) {
+  /** 光标放到含 needle 的段末(直接设 PM 选区,再等一帧让 DOM 选区跟上 —— 别撞 selectionchange 竞态)。 */
+  const caretEnd = (p, needle) => p.evaluate((needle) => {
+    const view = window.__upage.probe.view()
+    let at = -1
+    view.state.doc.descendants((n, pos) => {
+      if (at < 0 && n.isTextblock && n.textContent.includes(needle)) at = pos + n.nodeSize - 1
+      return at < 0
+    })
+    let proto = Object.getPrototypeOf(view.state.selection)
+    while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+    view.focus()
+    view.dispatch(view.state.tr.setSelection(proto.constructor.near(view.state.doc.resolve(at))))
+    return at >= 0
+  }, needle).then(async (ok) => { await p.waitForTimeout(80); return ok })
+  const links = (p) => p.evaluate((s) => [...document.querySelectorAll(s + ' a[href]')].map((a) => `${a.getAttribute('href')}|${a.textContent}`), PM)
+  const saved = async (p) => { await p.waitForTimeout(1400); return (await lastWrite(p)) || '' }
+  const headPara = (p) => p.evaluate(() => { const v = window.__upage.probe.view(); return v.state.selection.$head.parent.textContent })
+  const cards = (p) => p.evaluate(() => [...document.querySelectorAll('.amx-bm')].map((a) => a.getAttribute('href')))
+
+  // AU1 句中键入,空格收尾成链;落盘裸 URL(不是 `<url>`)
+  let p = await open(browser, '# T\n\n起始\n', '')
+  await caretEnd(p, '起始')
+  await p.keyboard.press('Enter')
+  await p.keyboard.type('see https://example.com/a now', { delay: 15 })
+  let md = await saved(p)
+  let ls = await links(p)
+  check('AU1 句中键入裸 URL + 空格:成链,落盘仍是裸 URL', ls.includes('https://example.com/a|https://example.com/a') && md.includes('\nsee https://example.com/a now\n') && !md.includes('<https'),
+    JSON.stringify({ ls, md }))
+  await p.close()
+
+  // AU2 空段里键入 URL:打到一半不成书签卡、光标不被弹走;回车离开后才成卡
+  p = await open(browser, '# T\n\n起始\n', '')
+  await caretEnd(p, '起始')
+  await p.keyboard.press('Enter')
+  await p.keyboard.type('https://f', { delay: 15 })
+  const mid = { cards: await cards(p), head: await headPara(p) }
+  await p.keyboard.type('oo.com/b', { delay: 15 })
+  const full = { cards: await cards(p), head: await headPara(p) }
+  await p.keyboard.press('Enter')
+  await p.waitForTimeout(300)
+  const after = await cards(p)
+  md = await saved(p)
+  check('AU2 空段键入 URL:打到 https://f 不成卡、光标还在该段', mid.cards.length === 0 && mid.head === 'https://f', JSON.stringify(mid))
+  check('AU2 空段键入 URL:写完也不抢跑成卡', full.cards.length === 0 && full.head === 'https://foo.com/b', JSON.stringify(full))
+  check('AU2 回车离开后该段落成书签卡,落盘整行裸 URL', after.includes('https://foo.com/b') && md.includes('\nhttps://foo.com/b\n'), JSON.stringify({ after, md }))
+  await p.close()
+
+  // AU3 全角标点收尾:成链(不含「。」);落盘 `<url>` —— 裸写的话 gfm 会把 `。后` 吞进地址
+  p = await open(browser, '# T\n\n起始\n', '')
+  await caretEnd(p, '起始')
+  await p.keyboard.type('见 https://x.com/p。后', { delay: 15 })
+  md = await saved(p)
+  ls = await links(p)
+  check('AU3 全角标点收尾成链,落盘 `<url>`。', ls.includes('https://x.com/p|https://x.com/p') && md.includes('起始见 <https://x.com/p>。后\n'), JSON.stringify({ ls, md }))
+  await p.close()
+
+  // AU4 句末 ASCII 标点留在链接外(与重开时 gfm 认出的边界一致);落盘裸 URL
+  p = await open(browser, '# T\n\n起始\n', '')
+  await caretEnd(p, '起始')
+  await p.keyboard.type(' go https://x.com/q. ok', { delay: 15 })
+  md = await saved(p)
+  ls = await links(p)
+  check('AU4 URL 后的句号不进链接,落盘裸 URL', ls.includes('https://x.com/q|https://x.com/q') && md.includes('起始 go https://x.com/q. ok\n'), JSON.stringify({ ls, md }))
+  await p.close()
+
+  // AU5 不该成链的:行内代码里(未闭合的反引号之后)、紧贴 ASCII 字母(gfm 同样不认)
+  p = await open(browser, '# T\n\n起始\n', '')
+  await caretEnd(p, '起始')
+  await p.keyboard.type(' `https://x.com/c ok` abchttps://x.com/d ok', { delay: 15 })
+  md = await saved(p)
+  ls = await links(p)
+  check('AU5 行内代码里 / 紧贴字母的 URL 不成链', ls.length === 0 && md.includes('`https://x.com/c ok`'), JSON.stringify({ ls, md }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
@@ -303,6 +383,7 @@ async function main() {
   await scrollCloses(browser)
   await typingAfterLink(browser)
   await mdLinks(browser)
+  await bareUrlTyping(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

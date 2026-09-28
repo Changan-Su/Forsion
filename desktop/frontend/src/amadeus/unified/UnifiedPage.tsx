@@ -89,6 +89,8 @@ import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmTe
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
 import { createFoldMemory, remapFoldMemory } from './foldActions'
 import { registerMessages, translate, useI18n } from '../../i18n'
+import { registerFindProvider, textareaFindProvider } from '../../findInPage'
+import { pmFindProvider } from './findReplace'
 
 registerMessages({
   'unipage.upload.uploading': { zh: '上传中 {name}', en: 'Uploading {name}' },
@@ -2373,6 +2375,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       el.style.height = `${el.scrollHeight}px`
     }
   }, [mode, srcDraft, srcText])
+  // 页内查找替换(C-18):可编辑实例把本篇注册成 replace provider —— 所见即所得映射成 PM 事务(findReplace.ts),
+  // 源码模式走 textarea(textareaFindProvider,保原生撤销栈)。只读实例不注册 = 查找条不给替换行。
+  useEffect(() => {
+    if (readOnly) return
+    if (mode === 'source') {
+      const ta = srcTaRef.current
+      return ta ? registerFindProvider(textareaFindProvider(ta)) : undefined
+    }
+    const el = bodyRef.current
+    return el ? registerFindProvider(pmFindProvider(el, () => layer.getView())) : undefined
+  }, [readOnly, mode, layer])
 
   return (
     <>

@@ -10,6 +10,7 @@ import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { cjkFriendlyRemark } from './cjkFriendly'
 import { attentionSerializer } from './attentionFlanking'
+import { autolinkSerializer } from './autolink'
 import { blankLineRemark, softBreakRemark } from './softBreak'
 import { calloutTitleRemark } from './callout'
 import { normalizeSerializedMd, serializeUnified } from './MarkdownBlock'
@@ -54,6 +55,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): 
       .use(structuralIndentRemark)
       .use(cjkFriendlyRemark)
       .use(attentionSerializer)
+      .use(autolinkSerializer)
       .use(opts.v3 ? softBreakRemark : blankLineRemark)
       .use(calloutTitleRemark)
       .create()
