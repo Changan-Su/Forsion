@@ -90,3 +90,9 @@ export function columnSplitApplies(sel: Selection): boolean {
   return sel.$from.depth === 0 && !/^amadeus(CanvasCard|ColumnRow)$/.test(node.type.name)
 }
 
+/** 块菜单「取消分栏」列不列(B-08):选中的块 / 光标在分栏的某一列里。返回所在行的前位,不在列里 null。 */
+export function columnRowOf(sel: Selection): number | null {
+  const $p = sel.$from
+  for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.name === 'amadeusColumnRow') return $p.before(d)
+  return null
+}

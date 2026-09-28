@@ -36,6 +36,7 @@ import { commandsCtx } from '@milkdown/kit/core'
 import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
 import { buildBlockString } from '../blocks/markdown/mathLivePreview'
+import { removeEmptyColumnTr } from './columns'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -460,7 +461,18 @@ const bsOutdentParagraph: Command = (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
+/** 已经空了的列里再按退格 / Delete = 删掉这一列(B-08,Notion 同:空列没内容就收起)。此前两颗键都无效,
+ *  ⠿「删除」又会补出一个空段 —— 空列没有任何删除办法。锚转惰性标记、不足两列解散,见 removeEmptyColumnTr。 */
+const deleteEmptyColumn = (dir: -1 | 1): Command => (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.depth < 2 || $from.node(-1).type.name !== 'amadeusColumnCell') return false
+  const tr = removeEmptyColumnTr(state, $from.before(-1), dir)
+  if (!tr) return false
+  dispatch?.(tr)
+  return true
+}
+
+const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
@@ -537,6 +549,13 @@ const deleteJoinNextText: Command = (state, dispatch) => {
   if ($n.parentOffset !== 0 || !$n.parent.isTextblock || $n.parent.type.name === 'code_block' || inTable($n)) return false
   if ($n.depth === $from.depth && $n.before() === after) return false // 同层相邻兄弟:base 的 joinForward 就对
   if (hiddenAt(state, $n.pos)) return false
+  // 不跨隔离边界(分栏的列、画布卡):列里最后一段按 Delete 会把行后的正文拽进列里(B-08 探针实测)。
+  // 列是 isolating —— 退格本来就不跨,Delete 同一口径;表格单元格上面已单独挡过。
+  const isolated = ($p: ResolvedPos): number => {
+    for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.spec.isolating) return $p.before(d)
+    return -1
+  }
+  if (isolated($from) !== isolated($n)) return false
   let blocked = false
   state.doc.nodesBetween(after, $n.before(), (node, pos) => {
     if (pos >= after && pos + node.nodeSize <= $n.before() && (node.isLeaf || node.isTextblock)) blocked = true
@@ -695,10 +714,10 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       'Shift-Enter': enterInDisplayMath, // 公式外交回 preset 的硬换行
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
-      Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
+      Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
-      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
       ArrowUp: arrowToAtom('up'),
       ArrowDown: arrowToAtom('down'),
     }),

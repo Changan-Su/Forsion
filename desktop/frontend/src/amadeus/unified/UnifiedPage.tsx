@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -61,14 +61,14 @@ import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
 import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
-import { columnSplitApplies } from '../blocks/markdown/menuContext'
+import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { withFoldedSections } from './foldCarry'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, removeEmptyColumnTr, splitToColumn, unsplitRow } from './columns'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
@@ -138,6 +138,7 @@ registerMessages({
   'unipage.menu.code': { zh: '代码块', en: 'Code block' },
   'unipage.menu.card': { zh: '卡片', en: 'Card' },
   'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
+  'unipage.menu.unsplit': { zh: '取消分栏', en: 'Unsplit columns' },
   'unipage.menu.aria': { zh: '块操作', en: 'Block actions' },
   'unipage.menu.stale': { zh: '笔记在菜单打开期间变了，请重新打开块菜单', en: 'The note changed while the menu was open — open the block menu again' },
   'unipage.menu.toNewColumnMulti': { zh: '选中多块时不能移到新列，请只选一块', en: 'Select a single block to move it to a new column' },
@@ -2826,6 +2827,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
               </button>
             )}
+            {/* 块在分栏的某一列里(B-08):整行解散回自然流,各列内容按列序排开。 */}
+            {layer.getView() && columnRowOf(layer.getView()!.state.selection) != null && (
+              <button role="menuitem" tabIndex={-1} data-act="unsplit" onClick={() => {
+                setBlockMenu(null)
+                const view = layer.getView()
+                if (!view || !restoreMenuTarget(view)) return
+                const rowPos = columnRowOf(view.state.selection)
+                if (rowPos != null) unsplitRow(view, rowPos)
+                view.focus()
+              }}>
+                <Rows2 size={13} /> {t('unipage.menu.unsplit')}
+              </button>
+            )}
             {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。
                 条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
             {layer.getView()?.state.selection instanceof NodeSelection
@@ -2892,7 +2906,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               },
               (view, sel) => {
                 const removed = Fragment.from(sel.node)
-                view.dispatch(view.state.tr.deleteSelection().scrollIntoView())
+                // 列里唯一的块:连这一列一起删(B-08)—— 只删块的话列里当场补回一个空段,空列永远删不掉。
+                const cell = sel.$from.parent
+                const col = cell.type.name === 'amadeusColumnCell' && cell.childCount === 1
+                  ? removeEmptyColumnTr(view.state, sel.$from.before(), -1, true) : null
+                view.dispatch(col ?? view.state.tr.deleteSelection().scrollIntoView())
                 onBlocksDeleted(removed)
               },
             )}>
