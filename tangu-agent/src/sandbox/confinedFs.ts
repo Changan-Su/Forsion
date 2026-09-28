@@ -10,11 +10,30 @@
  *     当成新根,家目录下所有东西都算「在根内」。
  *  2. 词法拼接落在真实根上,`..` 越界拒。
  *  3. 目标按真实路径判在根内(根内互指的软链照常跟随 —— 与 P0 一致,「普通文件行为不变」)。
- *  4. 打开时末段 O_NOFOLLOW;打开后 fstat 的 dev/ino 必须等于「此刻重新解析出的根内路径」的 lstat(防检查与打开之间把
- *     文件或中间目录换成软链的竞态)。写:打开不带 O_TRUNC,核验通过后才截断写入 —— 输掉竞态也不会把根外文件清空。
+ *  4. 打开时末段 O_NOFOLLOW;打开后 fstat 的 dev/ino 必须等于「此刻重新解析出的根内路径」的 lstat。写:打开不带 O_TRUNC,
+ *     核验通过后才截断写入。
  *
- * 残余(Node 没有 openat,做不到完全无竞态):
- *  - 写入输掉竞态时,可能在根外留下一个空文件或空目录(不写内容、不截断已有文件)。
+ * 第 4 步挡得住的:末段在检查后被换成软链;中间目录在检查与打开之间被换一次(换出去、或换出去再换回)。
+ * 挡不住的见下 —— 竞态没有关上,只是把读 / 写的攻击成本从「换一次」抬到「按时序连换三次」。
+ *
+ * 竞态残余(Node 没有 openat,没有便宜的代码修法;输掉竞态的后果是完整的越界读 / 写 / 删,不是「至多一个空文件」):
+ *  - 读 / 写:O_NOFOLLOW 只管末段,中间目录照常跟随(根内互指的软链目录要能用,见第 3 步)。并发进程把某个中间目录在
+ *    「真目录」与「指到根外的软链」之间来回换,赢下 open 时是链接 → 复核 realpath 时是真目录 → 复核 lstat 时又是链接,
+ *    复核就对着根外 inode 通过:读拿到根外文件的完整内容;写把根外已有文件截断并写入内容,或在根外新建带内容的文件
+ *    (真目录里放同名诱饵过 realpath)。P1 K10a 评审在真 fs 上用 renamex_np(RENAME_SWAP) 换链循环撞出过读、写两种(按概率)。
+ *  - 删(unlinkConfined):realpath(父目录) 与 unlink 之间只要换一次,就删掉根外同名文件;重 hydrate 的「云端已删」清理
+ *    在宿主侧自动走这里,不只是远程删除路由。
+ *  - 列(listConfined):realpath(子目录) 与 readdir 之间换一次,就列出根外目录的文件名 / 大小 / 时间(只泄元数据,内容
+ *    仍要过 readConfined)。
+ *  - 建目录(mkdirInside):中间段被换出去时,根外可能多出空目录(随后的 realpath 复核会拒)。
+ *  谁能当换链的并发进程:宿主侧本来就能跑命令的进程;docker 模式下容器里的代码对 bind mount 的工作区换链,同时手机
+ *  上传 / 下载(或 hydrate / snapshot / 重 hydrate 清理)打到同一批宿主 inode。关上的是非竞态情形:预先种好软链(或把
+ *  整个会话目录换成软链)再等手机来下载 / 上传。
+ *  为什么没有小修法:检查时拒绝中间软链没用(检查后再把真目录换成链接,同样的窗口);多复核几轮只是多要几次换链;
+ *  macOS 的 /dev/fd/N 不能拿来逐段解析目录。真正的保证要 openat / RESOLVE_BENEATH 级的原生绑定。
+ *  这里的结论改了,要同步改 test/confinedFs.race.test.ts 的「残余」组(那组把现状钉住,关上之后翻断言)。
+ *
+ * 其它残余:
  *  - 硬链接:根内指向根外文件的硬链接 inode 相同,核验认它是根内文件。硬链接只能由宿主侧进程用 `ln` 显式建(docker 沙箱里
  *    看不到宿主文件,建不出),与直接 `cp` 同权,不是放大器。
  *  - Windows 没有 O_NOFOLLOW(按 0 处理),只靠第 3、4 步。
@@ -180,7 +199,11 @@ export async function writeConfined(
   }
 }
 
-/** 删根内条目。父目录按真实路径钳;末段是软链只删链接本身(unlink 不跟随)。越界 / 不存在 → false。 */
+/**
+ * 删根内条目。父目录按真实路径钳;末段是软链只删链接本身(unlink 不跟随)。越界 / 不存在 → false。
+ * 竞态残余:realpath(父目录) 与 unlink 之间中间目录被换成指到根外的软链,删的是根外同名文件(见头注释)。
+ * 调用方不只是远程删除路由,还有 sessionSandbox 重 hydrate 的「云端已删」清理(宿主侧自动触发)。
+ */
 export async function unlinkConfined(root: string, rel: string, o: ConfinedFsOps = NODE_CONFINED_FS): Promise<boolean> {
   const realRoot = await anchoredRoot(root, o);
   const abs = realRoot && joinInside(realRoot, rel);
@@ -195,6 +218,7 @@ export interface ConfinedEntry { rel: string; size: number; mtimeMs: number }
 /**
  * 递归列根内普通文件(posix 相对路径)。根内互指的软链文件照列(大小 / 时间取目标);指到根外的、
  * 悬空的、指向目录的软链不列;不跟软链目录往下走。
+ * 竞态残余:子目录在 realpath 复核与 readdir 之间被换成软链,会列出根外目录的元数据(见头注释)。
  */
 export async function listConfined(root: string, o: ConfinedFsOps = NODE_CONFINED_FS): Promise<ConfinedEntry[]> {
   const realRoot = await anchoredRoot(root, o);
@@ -206,7 +230,7 @@ export async function listConfined(root: string, o: ConfinedFsOps = NODE_CONFINE
       const r = rel ? `${rel}/${e.name}` : e.name;
       const p = path.join(realDir, e.name);
       if (e.isDirectory()) {
-        const real = await orNull(o.realpath(p)); // 读目录前复核:两次 readdir 之间被换成软链的子目录不跟
+        const real = await orNull(o.realpath(p)); // 读目录前复核:两次 readdir 之间被换成软链的子目录不跟(复核之后再换挡不住)
         if (real && pathWithin(real, realRoot)) await walk(real, r);
         continue;
       }

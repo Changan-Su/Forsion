@@ -262,7 +262,8 @@ async function ensureHydrated(s: Session): Promise<void> {
         if (r.complete) {
           for (const [rel, hash] of prev) {
             if (s.manifest.has(rel)) continue;
-            // 读 / 删都钳在会话目录内(P1 K10a):中间目录被换成指到外面的软链时,不去删外面恰好同内容的文件。
+            // 读 / 删都钳在会话目录内(P1 K10a):中间目录已被换成指到外面的软链时,不去删外面恰好同内容的文件。
+            // 与并发换链的竞态没关上(realpath 父目录到 unlink 之间换一次就删到外面),见 confinedFs.ts 头注释。
             const buf = await readConfined(s.dir, rel);
             if (buf && createHash('sha256').update(buf).digest('hex') === hash) {
               await unlinkConfined(s.dir, rel);

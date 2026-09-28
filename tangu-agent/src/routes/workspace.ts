@@ -81,8 +81,8 @@ async function isCloudStorageUp(userId: string, appId: string): Promise<boolean>
  * 本地会话目录的读 / 列 / 写 / 删一律经 confinedFs(设备能力方案 §6.6「只限该会话工作区、禁路径穿越」;P1 K10a):
  * 工作区里的软链(agent 自己 ln -s 的、解压 / clone 带出来的、docker 沙箱里种的宿主绝对路径)指向 ~/.ssh/id_rsa,
  * 字面上在工作区里 —— 手机经隧道的下载 / 上传一跟随就成了任意读写。P0(评审 A#7)按 realpath 判了目标,
- * confinedFs 补上:会话目录自身被换成软链(根锚定)、判定与打开之间的换链竞态(O_NOFOLLOW + 打开后 dev/ino 复核、
- * 写入核验通过才截断)、FIFO 挂死。残余见 confinedFs.ts 头注释。
+ * confinedFs 补上:会话目录自身被换成软链(根锚定)、FIFO 挂死,并缩窄判定与打开之间的换链竞态(O_NOFOLLOW + 打开后
+ * dev/ino 复核、写入核验通过才截断)。竞态没有关上:并发换链赢了仍能越界读 / 写 / 删,残余见 confinedFs.ts 头注释。
  */
 
 async function localList(key: SessionKey): Promise<WorkspaceMeta[]> {

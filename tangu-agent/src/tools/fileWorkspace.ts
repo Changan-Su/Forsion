@@ -394,7 +394,8 @@ export async function snapshotDirToWorkspace(
   const pending: Array<{ posixRel: string; buf: Buffer; hash: string }> = [];
   for (const rel of rels) {
     if (pending.length >= WS_MAX_FILES) break;
-    // walkLocal 已跳过软链条目;readConfined 再挡「列完到读之间换成软链」的竞态(O_NOFOLLOW + 打开后 inode 复核)。
+    // walkLocal 已跳过软链条目;readConfined 缩窄「列完到读之间换成软链」的竞态(O_NOFOLLOW + 打开后 inode 复核;
+    // 中间目录三态换链仍能读到外面,残余见 confinedFs.ts 头注释)。
     const buf = await readConfined(srcDir, rel, { maxBytes: WS_MAX_FILE_BYTES });
     if (!buf) continue;
     const posixRel = rel.split(path.sep).join('/');
