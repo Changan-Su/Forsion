@@ -218,7 +218,7 @@ export const CLASSIFICATION = {
   'DELETE /agent/plugins/:id/files': [D, 'engine plugins are local-only'],
 
   // ── special.ts(Historian / Muse / 自动化 / 日程 / 异步审批)──
-  'GET /agent/special/config': [A, 'read special-agent config (also the renderer auth probe)'],
+  'GET /agent/special/config': [A, 'renderer auth probe; remote callers get only on/off + two cadence values (P1-K10b projection)'],
   'POST /agent/special/config': [D, 'special-agent config write (design appendix C)'],
   'GET /agent/special/historian/activity': [A, 'Historian activity'],
   'GET /agent/special/muse/todos': [A, 'Muse todos'],

@@ -29,6 +29,7 @@
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
+ * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
  */
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -40,7 +41,7 @@ import { hasHistorianTask } from '../services/historianSession.js';
 import { createRun } from '../services/runStore.js';
 import { parseRemoteOrigin, sanitizeRemoteAgentConfig, remoteCwdViolation, remoteCwdErrorBody, remoteArgsOverrideRejected, remoteArgsOverrideBody } from '../services/remoteOrigin.js';
 import { enqueueRun } from '../services/agentLoop.js';
-import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS } from '../services/specialAgentsConfig.js';
+import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS, type SpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
@@ -83,12 +84,31 @@ const cloudConfigView = (h: UserHistorianConfig) => ({
   cloud: true,
 });
 
+/**
+ * 远程来源(unitWeb 盖了 x-forsion-remote:手机经隧道 / 设备页 / 局域网 / P2P)的最小投影(P1 · K10b,INTEGRATION §4 G3)。
+ * 这条 GET 远端是 allow(渲染层鉴权探针),整份配置里有自定义提示词、Muse 授权文件夹的本机绝对路径、权限档、心跳 / 时段、
+ * 预算、升级对象 —— 全留在本机。只回渲染层远端调用点真读的四个字段:
+ *   enabled ×2 —— appStore.refreshSpecialEnabled(手机焦点在「我的电脑」时点亮 Historian / Muse 入口);
+ *   historian.everyRounds / muse.supervisorPollMinutes —— 设备页自动化 Space 详情卡的「触发」一栏。
+ * remote:true 让设置页(设备页的 SpecialAgentsTab)改显示「只能在那台电脑上设置」;写入(POST)远端本就 deny-remote。
+ * ⚠️ 新增字段先找到远端真用它的调用点,再改 test/specialConfigRemoteProjection.test.ts 的精确相等断言。
+ */
+const remoteConfigView = (c: SpecialAgentsConfig) => ({
+  config: {
+    historian: { enabled: c.historian.enabled, everyRounds: c.historian.everyRounds },
+    muse: { enabled: c.muse.enabled, supervisorPollMinutes: c.muse.supervisorPollMinutes },
+  },
+  remote: true as const,
+});
+
 router.get('/agent/special/config', authMiddleware, async (req: AuthRequest, res) => {
   if (!deps().profile.capabilities.hostExec) {
     try { res.json(cloudConfigView(await loadUserHistorianConfig(req.user!.userId))); } catch (e: any) { res.status(500).json({ detail: e?.message || 'load config failed' }); }
     return;
   }
   try {
+    // 头在就按远程(值不在契约内也算 —— 同 parseRemoteOrigin 的 fail-closed:标记只会收紧)
+    if (parseRemoteOrigin(req.headers)) { res.json(remoteConfigView(loadSpecialAgentsConfig())); return; }
     res.json({
       config: loadSpecialAgentsConfig(),
       // 默认提示词随配置下发,供前端预填进「可修改框」(留空=用默认)。

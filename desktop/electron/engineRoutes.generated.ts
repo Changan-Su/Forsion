@@ -158,7 +158,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/special/automation/runs', access: 'allow', src: 'routes/special.ts', why: 'automation runs' },
   { method: 'GET', path: '/agent/special/automation/sessions', access: 'allow', src: 'routes/special.ts', why: 'automation sessions' },
   { method: 'POST', path: '/agent/special/automation/triggers/:id/fire', access: 'deny-remote', src: 'routes/special.ts', why: 'fires an automation (design appendix C)' },
-  { method: 'GET', path: '/agent/special/config', access: 'allow', src: 'routes/special.ts', why: 'read special-agent config (also the renderer auth probe)' },
+  { method: 'GET', path: '/agent/special/config', access: 'allow', src: 'routes/special.ts', why: 'renderer auth probe; remote callers get only on/off + two cadence values (P1-K10b projection)' },
   { method: 'POST', path: '/agent/special/config', access: 'deny-remote', src: 'routes/special.ts', why: 'special-agent config write (design appendix C)' },
   { method: 'GET', path: '/agent/special/historian/activity', access: 'allow', src: 'routes/special.ts', why: 'Historian activity' },
   { method: 'POST', path: '/agent/special/muse/feedback', access: 'deny-remote', src: 'routes/special.ts', why: 'appends to Muse LOG (memory write into an autonomous Agent)' },
