@@ -3241,8 +3241,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       const host = hostRef.current
       const t = e.target as HTMLElement | null
       if (used || readOnlyRef.current || !host || !t || !host.contains(t) || t.closest('.ProseMirror')) return
+      // ⚠️ 不看 editingRef:点正在编辑那张卡的 chrome 圈会把焦点交回舞台而 editing 仍挂着它,
+      //    这时空格就该把光标送回去(与修前 keydown 即进编辑同口径;block-file-ops B13 钉着)。
       const s = selRef.current
-      if (s.length === 1 && (s[0].startsWith('c:') || s[0] === MAIN_KEY) && !editingRef.current) actRef.current.enterNodeEdit(s[0])
+      if (s.length === 1 && (s[0].startsWith('c:') || s[0] === MAIN_KEY)) actRef.current.enterNodeEdit(s[0])
     }
     window.addEventListener('keyup', onKeyUp, true)
     window.addEventListener('blur', end)
