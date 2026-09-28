@@ -134,6 +134,11 @@ describe('teamRuns', () => {
     childFinishes('ok');
     await activateMember(await base({ onStarted: (ids) => started.push(ids) }));
     expect(input(await getRun(started[1].runId)).remote).toBeUndefined();
+    // P1 · K1 S11:调用方设备随成员子 run 传播
+    const caller = { via: 'tunnel', marked: true, callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone', callerName: 'Pixel' };
+    childFinishes('ok');
+    await activateMember(await base({ remote: caller as any, onStarted: (ids) => started.push(ids) }));
+    expect(input(await getRun(started[2].runId)).remote).toEqual(caller);
   });
 
   it('followSessionMode:激活时按团队会话此刻的档写成员会话与子 run(团队 run 启动后才切的「完全通行」也跟上)', async () => {

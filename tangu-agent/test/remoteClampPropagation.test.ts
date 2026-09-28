@@ -58,4 +58,13 @@ describe('start_discussion', () => {
     const steered = await start.execute({ topic: 'x', instructions: 'be a peer' }, { ...ctx, runId: 'R-steered' });
     expect((await inputOf(String(steered))).remote).toEqual({ via: 'tunnel', marked: false });
   });
+
+  it('K1 S11 调用方随讨论 run 传播(整对象抄 remote,库里读回按同一规则重建)', async () => {
+    const caller = { via: 'tunnel' as const, marked: true, callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone' as const, callerName: 'Pixel' };
+    const out = await start.execute({ topic: 'x', instructions: 'be a peer' }, { ...ctx, remote: caller });
+    const { remoteOf } = await import('../src/services/remoteOrigin.js');
+    const input = await inputOf(String(out));
+    expect(input.remote).toEqual(caller);
+    expect(remoteOf(input)).toEqual(caller);
+  });
 });
