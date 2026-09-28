@@ -34,10 +34,15 @@ export interface VaultFace {
   root: () => string | null
 }
 
-export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[]) => [string, unknown?]> = {
+/** 写通道 → 回灌事件。isPagePath = VaultManager.isPagePath(笔记判据,插件文件类型 / 画板不算),
+ *  **必传**:两个派发口(ipc.ts 的 handle 与 vaultFace.call)漏传就是类型错,不会静默退回旧映射。 */
+export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel: string) => boolean) => [string, unknown?]> = {
   [IPC.savePage]: (a) => [IPC.externalChange, a[0]],
   [IPC.setPageFrontmatter]: (a) => [IPC.externalChange, a[0]],
-  [IPC.writeTextFile]: (a) => [IPC.fileChange, a[0]],
+  // v4 笔记唯一的落盘通道就是它,而开着的 UnifiedPage 只听 externalChange:映射成 fileChange = 只进插件
+  // watchFile,Unit 另一端写的改动本机编辑器永不回灌、下一击键整篇盖掉;反方向同理(评审 G1-04)。
+  // 非笔记文件照旧 fileChange —— watchFile 的契约是「非 .md 页面」,与 watcher 的分流一致。
+  [IPC.writeTextFile]: (a, isPagePath) => [typeof a[0] === 'string' && isPagePath(a[0]) ? IPC.externalChange : IPC.fileChange, a[0]],
   [IPC.drawingWrite]: (a) => [IPC.fileChange, a[0]],
   [IPC.saveVaultBytes]: (a) => [IPC.fileChange, a[0]],
   [IPC.dbWrite]: (a) => [IPC.dbChange, a[0]],

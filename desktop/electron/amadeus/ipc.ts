@@ -209,6 +209,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
    * 自写账本压掉主进程落盘 —— 设备互联后「另一端」就永远听不到。两个派发口各补一半:
    *   渲染层 IPC 起源 → 只发 SSE 给远端(本机各窗维持既有静默,不动外部回灌 P0 契约);
    *   RPC 起源(远端写) → 本机窗口回灌 + SSE(带写入者 origin,远端桥据此丢自己的回声)。
+   * 笔记写(savePage / 外科 fm / v4 的 writeTextFile)一律 externalChange —— 编辑器只听这一条;非笔记文件
+   * 走 fileChange 给插件 watchFile。判据 = vault.isPagePath(评审 G1-04:v4 笔记曾被映射成 fileChange)。
    * ⚠️ reconcilePage 是只读重载(本身就是 externalChange 的响应),映射它=回灌风暴+带新打字的
    *    窗口被旧盘面回灌丢字,绝不能进这张表(Codex P1)。
    */
@@ -222,6 +224,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   const writesVault = (channel: string): boolean => !!VAULT_WRITE_EVENTS[channel] ||
     channel === IPC.reconcilePage || channel === IPC.patchMark
   const vaultHandlers = new Map<string, (e: unknown, ...args: any[]) => unknown>()
+  const isPagePath = (rel: string): boolean => vault.isPagePath(rel)
   const handle = (channel: string, fn: (e: unknown, ...args: any[]) => unknown): void => {
     vaultHandlers.set(channel, fn)
     ipcMain.handle(channel, async (e, ...a) => {
@@ -234,7 +237,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       try {
         const r = await operation
         if (mayBind && r) rendererRoots.set(e.sender.id, (r as { root: string }).root)
-        const ev = VAULT_WRITE_EVENTS[channel]?.(a)
+        const ev = VAULT_WRITE_EVENTS[channel]?.(a, isPagePath)
         if (ev) emitRemote(ev[0], ev[1], 'host')
         return r
       } finally { pendingVaultWrites.delete(operation) }
@@ -1620,7 +1623,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         try {
           const r = await operation
           if (mayBind && r) remoteRoots.set(key, (r as { root: string }).root)
-          const ev = VAULT_WRITE_EVENTS[channel]?.(args)
+          const ev = VAULT_WRITE_EVENTS[channel]?.(args, isPagePath)
           if (ev) {
             notifyWindows(ev[0], ev[1])
             emitRemote(ev[0], ev[1], origin ?? null)

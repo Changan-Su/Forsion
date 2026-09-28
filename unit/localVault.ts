@@ -143,9 +143,11 @@ export async function createLocalVault(options: LocalVaultOptions): Promise<Loca
       const handler = handlers.get(channel)
       if (!handler) throw new Error(`Unknown local vault channel: ${channel}`)
       const result = await handler(null, ...args)
-      const event = VAULT_WRITE_EVENTS[channel]?.(args)
+      const event = VAULT_WRITE_EVENTS[channel]?.(args, (rel) => vault.isPagePath(rel))
       // A failed CAS did not write; it must not prompt another editor to reload.
-      if (event && !(channel === IPC.dbWriteCas && (result as { ok?: boolean })?.ok === false)) emit(event[0], event[1], origin ?? null)
+      // writeTextFile with a base is a CAS too, and page writes now map to externalChange (editors reload on it).
+      const casRejected = (channel === IPC.dbWriteCas || channel === IPC.writeTextFile) && (result as { ok?: boolean } | undefined)?.ok === false
+      if (event && !casRejected) emit(event[0], event[1], origin ?? null)
       return result
     }),
     root: () => closed ? null : root,
