@@ -82,13 +82,16 @@ describe.skipIf(process.platform === 'win32')('known-safe git 只信任落在受
     rmSync(marker, { force: true });
   });
 
-  it('cwd 本身被摆成 git dir(没有 .git 祖先):git status / log / rev-parse / describe 都不免审批(修复前:四个都免审批)', () => {
+  it('cwd 本身被摆成 git dir(没有 .git 祖先):git status / log / rev-parse / describe / branch / remote 都不免审批(修复前:全部免审批)', () => {
     const parent = join(base, 'a');
     const dir = join(parent, 'ws');
     plant(dir, parent);
     for (const c of ['git status', 'git status --short', 'git log --oneline', 'git rev-parse --show-toplevel', 'git describe']) {
       expect(isKnownSafeBash(c, dir), c).toBe(false);
     }
+    // branch / remote 的列表形态同样读这份 config(今天没有探到会执行命令的键,但 log.showSignature + gpg.program 之类
+    // 只看 config 的执行点不止 fsmonitor):git 子命令一律按同一份发现判定,不逐个论证(修复前:两个都免审批)
+    for (const c of ['git branch --list', 'git remote -v']) expect(isKnownSafeBash(c, dir), c).toBe(false);
   });
 
   it('真 git 仓里的子目录被摆成 git dir,cwd 在它里面(或更深):不免审批(修复前:免审批);仓根照旧免审批', () => {
@@ -104,6 +107,8 @@ describe.skipIf(process.platform === 'win32')('known-safe git 只信任落在受
     expect(isKnownSafeBash('git status', repo)).toBe(true);
     expect(isKnownSafeBash('git status', join(repo, 'src'))).toBe(true);
     expect(isKnownSafeBash('git diff --no-ext-diff --no-textconv', join(repo, 'src'))).toBe(true);
+    expect(isKnownSafeBash('git branch --list', repo)).toBe(true);
+    expect(isKnownSafeBash('git remote -v', join(repo, 'src'))).toBe(true);
   });
 
   it('不在任何仓库里:git 读不出东西,也就不免审批(修复前:status / log 免审批)', () => {

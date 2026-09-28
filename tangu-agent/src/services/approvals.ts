@@ -387,6 +387,8 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
     return splitOptions(args).options.every((a) => flags.has(a));
   }
   if (program !== 'git') return false;
+  // Every git subcommand reads the discovered git dir's config; only a repo whose config the agent cannot write qualifies.
+  if (!vettedGitToplevel(cwd)) return false;
   const [sub, ...rest] = args;
   // branch and remote have mutating forms; only exact listing invocations qualify.
   if (sub === 'branch') return rest.every((a) => ['-a', '-r', '--all', '--remotes', '--list'].includes(a));
