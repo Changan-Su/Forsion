@@ -9,7 +9,7 @@
 // K1 嵌入内按键不动文档 / K2 嵌入外按键照常生效(防修过头)/ K3 双击不进源码 / K4 丝滑光标下
 // 嵌入内控件仍有原生 caret / K5 负对照:同一页的编辑器本体仍是 transparent(自绘覆盖层接管)。
 // K6 切视图保住 React 实例/搜索 / K7 数据库只经显式入口编辑源码 / K8 v3 数据库不抢 Shift 选字。
-// K11 坏 JSON 的按钮块回落普通代码块、改好当场变回按钮(R-13)。
+// K11 坏 JSON 的按钮块回落普通代码块、改好当场变回按钮(R-13)/ K12 按钮块悬停不冒代码块工具条(R-14)。
 // 用法:node scripts/e2e-editor.cjs --check=embed-inputs
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -308,6 +308,28 @@ async function main() {
     await p.waitForTimeout(400)
     const fixed = await p.evaluate((PM) => !!document.querySelector(PM + ' pre .amx-btnblock'), PM)
     record('K11 源码改好后当场变回按钮', fixed)
+    await p.close()
+  }
+  // K12 悬停按钮块不冒代码块工具条(R-14):工具条的语言下拉一改,按钮就回不去了;`</>` 也不再压在别的钮上。
+  {
+    const p = await btnPage('段一\n\n```forsion-button\n{"v":1,"label":"好的按钮"}\n```\n\n```js\nlet a = 1\n```\n\n段尾\n')
+    const pres = await p.$$(`${PM} pre`)
+    const hover = async (el) => {
+      const b = await el.boundingBox()
+      await p.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
+      await p.waitForTimeout(300)
+    }
+    await hover(pres[0])
+    const btn = await p.evaluate((PM) => {
+      const t = document.querySelector(PM + ' pre').querySelector('.amx-code-tools')
+      return { tools: !!t && getComputedStyle(t).opacity !== '0' && getComputedStyle(t).display !== 'none', src: !!document.querySelector(PM + ' pre .amx-src-btn') }
+    }, PM)
+    await hover(pres[1])
+    const code = await p.evaluate((PM) => {
+      const t = document.querySelectorAll(PM + ' pre')[1].querySelector('.amx-code-tools')
+      return !!t && getComputedStyle(t).opacity === '1'
+    }, PM)
+    record('K12 悬停按钮块:没有代码块工具条(只有按钮自己的 `</>`);普通代码块照常有', !btn.tools && btn.src && code, JSON.stringify({ btn, code }))
     await p.close()
   }
 
