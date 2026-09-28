@@ -19,6 +19,7 @@ import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
+import { openTagView } from './amadeusPanels'
 import { registerMessages, useI18n } from './i18n'
 import { useNotifications } from './stores/notificationStore'
 import { windowKind } from './windowKind'
@@ -82,6 +83,15 @@ export function AmadeusOverlays() {
     }
     window.addEventListener('amadeus:toast', onToast)
     return () => window.removeEventListener('amadeus:toast', onToast)
+  }, [])
+  // 正文 #标签 胶囊点击(编辑器 tagPill 发事件解耦,L-14)→ 左栏标签视图定位该标签。
+  useEffect(() => {
+    const onOpenTag = (e: Event): void => {
+      const tag = (e as CustomEvent<{ tag?: string }>).detail?.tag
+      if (typeof tag === 'string' && tag) openTagView(tag)
+    }
+    window.addEventListener('amadeus:open-tag', onOpenTag)
+    return () => window.removeEventListener('amadeus:open-tag', onOpenTag)
   }, [])
   // [[xxx.db]] 点击应用内开 db tab(pageStore 发事件解耦,同模板选择器模式)。
   useEffect(() => {

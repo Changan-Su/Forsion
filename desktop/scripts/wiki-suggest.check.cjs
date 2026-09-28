@@ -4,6 +4,7 @@
 //   L-03 代码块 / 行内代码里的 [[ 与 @ 照样弹面板、劫持 Enter/Tab —— 代码里须恒字面;
 //   L-04 编辑器失焦后面板不关、继续在 window 捕获阶段劫持 ↑↓/Enter —— 失焦即关,按键只在编辑器持焦时拦;
 //   L-08 输入法组字时 ↓/Enter 被面板抢走(拼音选词回车直接插入候选)—— 组字一律放行。
+//   L-14 正文 #标签 渲染成可点胶囊(光标行露源码)、点击发 amadeus:open-tag、`#` 补全(打字才弹、Esc 闩锁、代码里不弹)。
 //        合成 KeyboardEvent 的 isComposing 到不了页面,必须走 CDP Input.imeSetComposition 起真组合。
 // 用法:npm run check:wikisuggest(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/wiki-suggest.check.cjs
 //       ONLY=L-04 只跑某一节。
@@ -305,6 +306,77 @@ async function main() {
     check('L-08a [[ 组字中 Enter 不插入候选', !r.doc.includes(']]'), JSON.stringify(r.doc))
     r = await imeRun(' @Al')
     check('L-08b @ 组字中 Enter 不插入候选', r.opened === 1 && !r.doc.includes('[['), JSON.stringify(r.doc))
+  })
+
+  // ── L-14:正文 #标签 胶囊(非光标行)+ 点击发 open-tag + `#` 补全(打字才弹、Esc 闩锁、代码里不弹) ──
+  await tryTest('L-14', async () => {
+    const MD = '# T\n\n正文 #项目 与 #work/urgent 在此,#1 不是标签\n\n`#code` 行内\n\nx\n'
+    const tagPage = async () => {
+      const page = await open(browser, MD, PAGES)
+      await page.evaluate(() => {
+        window.__upage.vault.set('Other.md', '#work/urgent #项目\n\n#work/urgent')
+        window.__tagEvents = []
+        window.addEventListener('amadeus:open-tag', (e) => window.__tagEvents.push(e.detail.tag))
+      })
+      return page
+    }
+    const pills = (page, nth) => page.evaluate(({ PM, nth }) => [...document.querySelectorAll(`${PM} > p`)][nth].querySelectorAll('.amx-tag-pill').length, { PM, nth })
+    let page = await tagPage()
+    await clickEnd(page, `${PM} > p:last-child`)
+    const tags0 = await page.evaluate((PM) => [...document.querySelectorAll(`${PM} .amx-tag-pill`)].map((e) => e.dataset.tag), PM)
+    check('L-14a 非光标行的 #标签 渲染成胶囊(#1 与行内代码里的不算)', JSON.stringify(tags0) === '["项目","work/urgent"]', JSON.stringify(tags0))
+    // 点胶囊 → 发 open-tag,不落光标、不改文档
+    const box = await page.evaluate((PM) => { const r = document.querySelector(`${PM} .amx-tag-pill`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, PM)
+    const before = await docText(page)
+    await page.mouse.click(box.x, box.y)
+    await page.waitForTimeout(200)
+    const ev = await page.evaluate(() => window.__tagEvents)
+    check('L-14b 点胶囊 → amadeus:open-tag(项目),文档不变', JSON.stringify(ev) === '["项目"]' && (await docText(page)) === before, JSON.stringify(ev))
+    // 光标进标签那一行 → 露源码(无胶囊)
+    await clickEnd(page, `${PM} > p:nth-of-type(1)`)
+    await page.waitForTimeout(150)
+    check('L-14c 光标所在行不装饰(字面源码)', (await pills(page, 0)) === 0, String(await pills(page, 0)))
+    // 光标挪到已有标签末尾(没打字)不弹
+    await page.keyboard.press('Meta+ArrowLeft')
+    for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight') // `正文 #项目` 之后
+    await page.waitForTimeout(200)
+    check('L-14d 光标路过已有 #标签 不弹补全(不劫持 ↑↓)', (await page.locator('.tag-suggest').count()) === 0)
+    // `#` 补全:打字才弹 → 选中补全标签 + 空格,落盘字面 #work/urgent
+    await clickEnd(page, `${PM} > p:last-child`)
+    await page.keyboard.type(' #wo', { delay: 30 })
+    await page.waitForTimeout(300)
+    const shown = await page.evaluate(() => [...document.querySelectorAll('.tag-suggest .wiki-item')].map((e) => (e.dataset.active !== undefined ? '*' : '') + e.querySelector('.wiki-item-name').textContent))
+    check('L-14e 打 `#wo` 弹已有标签候选', shown[0] === '*#work/urgent', JSON.stringify(shown))
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Z', { delay: 30 })
+    const out = await saved(page)
+    check('L-14e 回车补全成 `#work/urgent ` 落盘', typeof out === 'string' && out.endsWith('x #work/urgent Z\n'), JSON.stringify(out))
+    // Esc 闩锁:Esc 后继续打字不再弹
+    await page.keyboard.type(' #项', { delay: 30 })
+    await page.waitForTimeout(250)
+    const opened = await page.locator('.tag-suggest').count()
+    await page.keyboard.press('Escape')
+    await page.keyboard.type('x', { delay: 30 })
+    await page.waitForTimeout(250)
+    check('L-14f Esc 关掉后同一个 # 继续打字不再弹', opened === 1 && (await page.locator('.tag-suggest').count()) === 0, `opened=${opened}`)
+    await page.close()
+    // 行首孤 `#`(标题语法)不弹;代码块里不弹
+    page = await tagPage()
+    await clickEnd(page, `${PM} > p:last-child`)
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('#', { delay: 30 })
+    await page.waitForTimeout(200)
+    check('L-14g 行首孤 # 不弹(标题语法不被劫持)', (await page.locator('.tag-suggest').count()) === 0)
+    await page.close()
+    page = await open(browser, '# T\n\n```\nx\n```\n', PAGES)
+    await page.evaluate(() => window.__upage.vault.set('Other.md', '#work/urgent'))
+    const c = await page.evaluate((PM) => { const r = document.createRange(); r.selectNodeContents(document.querySelector(PM + ' pre code') || document.querySelector(PM + ' pre')); const b = r.getBoundingClientRect(); return { x: b.right - 1, y: b.top + b.height / 2 } }, PM)
+    await page.mouse.click(c.x, c.y)
+    await page.waitForTimeout(150)
+    await page.keyboard.type(' #wo', { delay: 30 })
+    await page.waitForTimeout(250)
+    check('L-14h 代码块里 # 不弹、不装饰', (await page.locator('.tag-suggest').count()) === 0 && (await page.locator(`${PM} .amx-tag-pill`).count()) === 0)
+    await page.close()
   })
 
   const fails = results.filter((r) => !r.ok).length

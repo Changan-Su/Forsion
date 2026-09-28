@@ -282,6 +282,16 @@
   text-decoration-style: dashed;
   text-decoration-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
 }
+/* 正文 #标签 胶囊(L-14,tagPill.ts):零 schema 装饰,光标所在行不装饰(露字面源码)。只加底色与圆角,
+ * 不改字号 / 行高 —— 胶囊与正文同一基线,打字行与非打字行切换时不跳行。 */
+.am-app .milkdown .ProseMirror .amx-tag-pill {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  padding: 0 0.35em;
+  cursor: pointer;
+}
+.am-app .milkdown .ProseMirror .amx-tag-pill:hover { background: color-mix(in srgb, var(--accent-ink) 20%, transparent); }
 
 /* ── 快速切换浮层(复用 engine 的 cmd-* 外观;这两个双行类 engine.css 没有) ── */
 .cmd-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }

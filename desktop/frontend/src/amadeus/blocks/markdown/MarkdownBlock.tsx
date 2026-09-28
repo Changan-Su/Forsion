@@ -94,6 +94,8 @@ import { getRecentPages } from '../../lib/recents'
 import { fdDirOf } from '../../lib/fd'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
+import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
+import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { taskCheckboxPlugin } from './taskList'
@@ -530,6 +532,8 @@ export function MilkdownInner({
   iconRef.current = wikiIcon ?? (() => undefined)
   const [wiki, setWiki] = useState<WikiQuery | null>(null)
   const [mention, setMention] = useState<WikiQuery | null>(null) // "@" 提及页面
+  const [tagQ, setTagQ] = useState<WikiQuery | null>(null) // "#" 标签补全(L-14)
+  const tagDismissedFrom = useRef<number | null>(null) // Esc 闩锁(同 @)
   const [slash, setSlash] = useState<WikiQuery | null>(null) // "/" 命令菜单(query 驻留文档,同 @/[[)
   const [toolbar, setToolbar] = useState<SelRect | null>(null) // 选中文字上浮的格式工具栏
   const [pasteAs, setPasteAs] = useState<PasteAs | null>(null) // 粘贴链接后的「粘贴为」菜单
@@ -930,6 +934,7 @@ export function MilkdownInner({
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
       .use(wikilinkPlugin((name) => wikiRef.current(name), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
+      .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q) => { wikiOpenRef.current = !!q; setWiki(q) }))
       .use(mentionSuggestPlugin((q, blurred) => {
@@ -942,6 +947,11 @@ export function MilkdownInner({
         if (mentionDismissedFrom.current === q.from) { mentionOpenRef.current = false; return }
         mentionOpenRef.current = true
         setMention(q)
+      }))
+      .use(tagSuggestPlugin((q, blurred) => {
+        if (!q) { if (!blurred) tagDismissedFrom.current = null; setTagQ(null); return }
+        if (tagDismissedFrom.current === q.from) { setTagQ(null); return } // Esc 关掉的同一个 '#' 不再弹
+        setTagQ(q)
       }))
       // '/' 命令菜单:query 驻留文档(同 @/[[),字符不被吞、空格自动关成字面文本。注册在
       // wiki/mention 之后 —— 好让它们的 *OpenRef 已就绪,slash 在它们开着时让位(避免叠开两个菜单)。
@@ -1243,6 +1253,20 @@ export function MilkdownInner({
     setMention(null)
   }
 
+  /** `#` 补全选中:查询串换成完整标签 + 空格(光标后已是空白就不再补)。 */
+  const pickTag = (tag: string): void => {
+    const q = tagQ
+    if (q) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const next = view.state.doc.textBetween(q.to, Math.min(q.to + 1, view.state.doc.content.size), undefined, '￼')
+        view.dispatch(view.state.tr.insertText(/^\s/.test(next) ? tag : `${tag} `, q.from, q.to))
+        view.focus()
+      })
+    }
+    setTagQ(null)
+  }
+
   // @ 候选:最近打开的页面排最前(宿主经 setRecentsProvider 注入),其余页面跟后;空查询即按此序展示。
   const mentionPageNames = (): string[] => {
     const all = getPageNames()
@@ -1414,6 +1438,20 @@ export function MilkdownInner({
             mentionDismissedFrom.current = mention.from // Esc:同一 '@' 不再弹
             mentionOpenRef.current = false
             setMention(null)
+          }}
+        />
+      )}
+      {tagQ && !wiki && !mention && !readOnly && (
+        <TagSuggest
+          query={tagQ.query}
+          left={tagQ.left}
+          top={tagQ.top}
+          anchorTop={tagQ.anchorTop}
+          onPick={pickTag}
+          editorFocused={editorFocused}
+          onClose={() => {
+            tagDismissedFrom.current = tagQ.from // Esc:同一个 '#' 不再弹
+            setTagQ(null)
           }}
         />
       )}

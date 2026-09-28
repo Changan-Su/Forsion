@@ -24,7 +24,7 @@ export const fullWidthWikiRule = $inputRule(
 /** 触发串([[ / @ / '/')到光标这一段落在代码里:代码块,或带 code 标记(行内代码)的文字。
  *  代码里这些字符恒字面(`if [[ -f x ]]`、Java 的 `@Test`、路径里的 `/`),弹面板还会劫持
  *  Enter/Tab(L-03)。判的是**触发串本身**而不只是光标处的 marks:光标刚出行内代码、`[[` 却在里面也算。 */
-function inCode(state: EditorState, from: number, to: number): boolean {
+export function inCode(state: EditorState, from: number, to: number): boolean {
   if (state.selection.$head.parent.type.spec.code) return true
   let hit = false
   state.doc.nodesBetween(from, to, (n) => {
@@ -40,7 +40,7 @@ export type SuggestReport = (q: WikiQuery | null, blurred?: boolean) => void
 /** 失焦即关(L-04):面板在 window 捕获阶段拦 ↑↓/Enter/Tab,编辑器不持焦时还挂着,就会劫持
  *  标题框、侧栏聊天框等别处输入框的按键(甚至把 Enter 变成往正文插链接、把焦点拽回正文)。
  *  update 里的 hasFocus 闸管「失焦后的任何事务」,这里的 blur 管「失焦本身不派事务」的情形。 */
-const closeOnBlur = (report: SuggestReport) => ({
+export const closeOnBlur = (report: SuggestReport) => ({
   handleDOMEvents: {
     blur: () => {
       report(null, true)
