@@ -4,7 +4,7 @@
  * 这里钉住:scripts/ 里没有脚本再直接从 playwright-core 解构 _electron。
  */
 import { readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
+import { join, sep } from 'path'
 import { describe, expect, it } from 'vitest'
 
 const SCRIPTS = join(__dirname, '../scripts')
@@ -15,7 +15,7 @@ const ALLOWED = new Set([
 
 describe('Electron 台架启动入口', () => {
   it('scripts/ 里除入口外没有直接用 playwright 的 _electron', () => {
-    const files = readdirSync(SCRIPTS, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.cjs'))
+    const files = readdirSync(SCRIPTS, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.cjs')).map((f) => f.split(sep).join('/'))
     expect(files.length).toBeGreaterThan(50)
     const direct = files.filter((f) => !ALLOWED.has(f) && /\{[^}]*\b_electron\b[^}]*\}\s*=\s*require\(/.test(readFileSync(join(SCRIPTS, f), 'utf8')))
     expect(direct).toEqual([])
