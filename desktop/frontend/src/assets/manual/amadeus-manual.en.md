@@ -553,7 +553,7 @@ Type `/` at the start of a line or after a space in any text block and a block-t
 | Warning callout | `> [!warning] ` | — |
 
 > [!note] Groups and gates
-> The three "Callouts" items come from the built-in "Callouts" plugin, toggled in Settings → Plugins; plugin item names only follow a UI language change after a restart. "Button" is desktop only. "Card" is not offered in the touch "+" block panel. The table scaffold's header cells are always written as 「列 1」 and 「列 2」, in either language — just type over them.
+> The three "Callouts" items come from the built-in "Callouts" plugin, toggled in Settings → Plugins; plugin item names only follow a UI language change after a restart. "Button" is desktop only. "Card" is not offered in the touch "+" block panel. The table scaffold's header cells are written as `Column 1` and `Column 2` (「列 1」 and 「列 2」 in the Chinese UI) — just type over them.
 
 ### Markdown prefixes and inline syntax
 
@@ -1544,7 +1544,7 @@ Working with a markdown table:
 - Move between cells: `Tab` for the next cell, `Shift + Tab` for the previous one. `Tab` in a corner cell will not throw focus out of the editor.
 - Add or remove rows and columns: visual editing has no row or column buttons, so switch to source and edit the `|` lines directly. Two ways in: the `</>` button at the right of the note top bar ("Switch to Markdown source"), or the command palette `⌘/Ctrl + K` → "Toggle source / visual editing".
 
-> [!warning] The inserted table's header cells are hardcoded as 「列 1」「列 2」 — shown in Chinese in every language, and written to disk that way. Rename them by hand after inserting.
+> [!note] The inserted table's header cells are `Column 1` and `Column 2`, following the UI language (the Chinese UI writes 「列 1」「列 2」 to disk). Rename them by hand after inserting.
 
 A database embedded in a note can be written as `![[name.db|view name]]` to pin that spot to one view; more on that later.
 
@@ -3394,7 +3394,7 @@ Almost every "the feature is gone" report lands in one of these five. Run throug
 | On a second machine, Starred, Pinned and Collections are all empty | All three are stored on this device only and do not travel with the files | Mark them again on the new machine |
 
 > [!note]
-> A few labels still read in Chinese in the English UI: the calendar's column-mapping dialog, the due chip at the end of a to-do row, the paper-size dialog for a new whiteboard, the "新建链接" row in the `[[` completion, the `| 列 1 | 列 2 |` header of a table inserted from the slash menu, and the leftmost button on the inline toolbar that shows the current block type. That is how they ship — your language setting is fine.
+> A few labels still read in Chinese in the English UI: the calendar's column-mapping dialog, the due chip at the end of a to-do row, the paper-size dialog for a new whiteboard, the "新建链接" row in the `[[` completion, and the leftmost button on the inline toolbar that shows the current block type. That is how they ship — your language setting is fine.
 
 ### Nothing responds on the canvas
 

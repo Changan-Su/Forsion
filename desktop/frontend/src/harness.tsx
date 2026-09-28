@@ -30,7 +30,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { setLocaleGlobal } from './i18n'
+import { HostLocaleProvider, setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -1790,6 +1790,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       vault.set(path, text)
       for (const cb of listeners) cb(path)
     },
+    /** 切界面语言(走真广播;`?upage` 的根包了 HostLocaleProvider,useI18n 与 translate 两路一起跟,评审 R-15 / C-14)。 */
+    setLocale: (l: 'zh' | 'en') => setLocaleGlobal(l),
     /** 把一个侧栏视图挂在页面右侧(台架没有 dockview 侧栏;反链面板等观感自查用)。mod = '/src/…' 模块路径。 */
     async mountSide(mod: string, name: string) {
       const m = (await import(/* @vite-ignore */ mod)) as Record<string, () => React.ReactElement>
@@ -1968,7 +1970,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       document.body.appendChild(hostB)
       const rootB = createRoot(hostB)
       // B 挂在自己的面板作用域里(生产里每个标签一个 leaf):同篇多开的实例身份(草稿槽位 / 改名聚焦认领)靠它区分,评审 G1-02。
-      rootB.render(<PageScopeCtx.Provider value="harness-B"><UPageHost probe={upageProbe2} /></PageScopeCtx.Provider>)
+      rootB.render(<HostLocaleProvider><PageScopeCtx.Provider value="harness-B"><UPageHost probe={upageProbe2} /></PageScopeCtx.Provider></HostLocaleProvider>)
       unmountB = () => rootB.unmount()
     }
     // `&utoc`(配 &upane):挂生产的笔记浮动目录(与 amadeusViews 同一个 NoteFloatingToc,根 = 滚动的 .amx-pane),评审 C-04。
@@ -1981,8 +1983,10 @@ if (new URLSearchParams(location.search).has('dock')) {
         </div>
       )
     }
+    // 生产的编辑器挂在 LocaleProvider 之下(useI18n 跟界面语言);台架原来没包,useI18n 一律回落中文,英文界面的
+    // 断言写不了(评审 §0 台架边界)。包 HostLocaleProvider(不接管 setter、不探 IP),仪器用 `__upage.setLocale` 切。
     createRoot(document.getElementById('root')!).render(
-      <>
+      <HostLocaleProvider>
         <FindBar />
         {upane ? (
           <UPane />
@@ -1991,7 +1995,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             <UPageHost />
           </div>
         )}
-      </>,
+      </HostLocaleProvider>,
     )
   })
 } else if (new URLSearchParams(location.search).has('unified')) {

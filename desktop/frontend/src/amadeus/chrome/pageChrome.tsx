@@ -377,10 +377,10 @@ export function IconPicker({ x, y, current, onPick, onClose }: {
                 </button>
               ))
             : EMOJI_GROUPS.map((g) => (
-                <Fragment key={g.name}>
-                  <div className="amx-iconpick-group">{g.name}</div>
+                <Fragment key={g.nameKey}>
+                  <div className="amx-iconpick-group">{t(g.nameKey)}</div>
                   {g.items.map(([em, kw]) => (
-                    <button key={`${g.name}-${em}`} className={`amx-iconpick-item${current === em ? ' active' : ''}`} title={kw} onClick={() => onPick(em)}>
+                    <button key={`${g.nameKey}-${em}`} className={`amx-iconpick-item${current === em ? ' active' : ''}`} title={kw} onClick={() => onPick(em)}>
                       {em}
                     </button>
                   ))}

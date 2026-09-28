@@ -8,11 +8,13 @@
 //   A. zh 有的键 en 必须也有(反之亦然)
 //   B. en 的值里不许出现汉字(= 没真翻,只是把中文抄过去了)
 //   C. 源码里 t('literal') / translate('literal') 用到的键必须在字典里(动态键跳过)
+//   I. 编辑器 / 嵌入层 / web·mobile 写通道的源码里,用户可见的字面量不许带汉字(JSX 文本、aria/title、报错与提示)
 //
 // 新增文案时这个文件红了,不要来这里加豁免 —— 去把 en 词条补上,那才是它存在的意义。
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import ts from 'typescript'
 import './i18n.generated' // 必须先注册,否则只看到 i18n.tsx 里的基础键
 import { __dictSnapshot } from './i18n'
 // LCL 引擎自带的文案表(宿主装配期 registerMessages 进来;见 lcl/engine/i18nSeam.ts)。纯字面量,直接 import。
@@ -22,6 +24,12 @@ const HAN = /[一-龥]/
 const SRC = __dirname
 /** 引擎源码:以前只扫 desktop,lcl 里的 t('…') / engineTr('…') 缺键没人管(U-45)。 */
 const LCL_ENGINE = join(__dirname, '../../../lcl/engine')
+/**
+ * Web / 移动端的 Amadeus 写通道(评审 G2-14):以前完全不在扫描范围内,冲突 / 改名 / 报错提示写死中文没人管。
+ * 它们与桌面渲染层同吃 `@/i18n`,片段(registerMessages)与键存在性(C)照同一套规则查。
+ * ⚠️ 只并进 A/B/C/D/I;H/H2(日期格式)按 `relative(SRC, …)` 逐项登记,是桌面渲染层自己的账。
+ */
+const BRIDGE_ROOTS = [join(__dirname, '../../../web/src/amadeus'), join(__dirname, '../../../mobile/src/amadeus')]
 
 /**
  * 15 个组件在**模块作用域**自带 `registerMessages({...})` 片段,只有 import 了那个组件才会进字典。
@@ -69,7 +77,8 @@ function collectFragments(files: string[]): { zh: Record<string, string>; en: Re
 const base = __dictSnapshot()
 const ALL_SRC = walk(SRC)
 const ENGINE_SRC = walk(LCL_ENGINE)
-const frag = collectFragments(ALL_SRC.filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
+const BRIDGE_SRC = BRIDGE_ROOTS.flatMap((d) => walk(d)).filter((f) => !f.endsWith('.d.ts'))
+const frag = collectFragments([...ALL_SRC, ...BRIDGE_SRC].filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
 const lclZh = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.zh]))
 const lclEn = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.en]))
 const zh = { ...base.zh, ...frag.zh, ...lclZh }
@@ -79,6 +88,58 @@ const en = { ...base.en, ...frag.en, ...lclEn }
 const EN_MAY_CONTAIN_HAN = new Set<string>([
   'locale.zh', // 语言切换器里的语言名:英文界面下也该写「中文」,不是漏翻
 ])
+
+/**
+ * I 断言的桌面侧范围:v4 编辑器 + 嵌入层(embedLayer 的独立 React 根里挂的那几个组件)+ 查找条 + 图标库。
+ * ⚠️ blocks/database 刻意不在内(多维表另有审计):「属性 / 状态 / 日期」是笔记视图的 frontmatter 键身份,
+ *    `#错误` / `#循环` 是公式哨兵,`修改时间` / `人员` 有逐字断言 —— 不能按界面文案直接翻,单独立项。
+ */
+const EDITOR_SCOPE = [
+  'amadeus/unified', 'amadeus/blocks/markdown', 'amadeus/blocks/button', 'amadeus/blocks/plugin', 'amadeus/blocks/excalidraw',
+  'amadeus/components/BookmarkCard.tsx', 'amadeus/components/MediaPlayer.tsx', 'amadeus/components/WebEmbed.tsx',
+  'amadeus/lib/emoji.ts', 'amadeus/plugins/components/OutlinePanel.tsx', 'findInPage.tsx',
+]
+/** 范围内的非产品文件:台架(UnifiedSpike 是 `?unified` spike,不进生产)。 */
+const EDITOR_SKIP = new Set(['amadeus/unified/UnifiedSpike.tsx'])
+/** I / I2 的扫描范围:编辑器 / 嵌入层(EDITOR_SCOPE)+ 两个写通道。 */
+const I_SRC = [
+  ...ALL_SRC.filter((f) => {
+    const rel = relative(SRC, f)
+    return !EDITOR_SKIP.has(rel) && EDITOR_SCOPE.some((s) => rel === s || rel.startsWith(`${s}/`))
+  }),
+  ...BRIDGE_SRC,
+]
+
+/**
+ * 汉字字面量里**刻意**留中文的形态(CLAUDE.md「刻意留中文」一栏),只按 AST 上下文认,不按文件豁免 ——
+ * 按文件豁免会把同文件里真正的界面文案一起放过去(emoji.ts 的分组名就是这么漏的,C-15)。
+ *   · `zh:` 词条值(registerMessages 片段 / 双语表)
+ *   · 模糊搜索的中文 / 拼音别名:属性名 kw / keywords / words / aliases,变量名 *KEYWORDS / *_WORDS
+ *   · emoji 库每条 `[emoji, 关键词]` 元组的第二项(`items: [[…, '关键词'], …]`)
+ *   · console.* 开发日志、正则(`new RegExp('[一-龥]')`)
+ */
+const HAN_OK_PROPS = new Set(['zh', 'kw', 'keywords', 'words', 'aliases'])
+const HAN_OK_VARS = /(?:KEYWORDS|_WORDS)$/
+function hanExempt(lit: ts.Node): boolean {
+  const pa = lit.parent
+  // emoji 元组:items: [[emoji, '关键词'], …]
+  if (pa && ts.isArrayLiteralExpression(pa) && pa.elements.length === 2 && pa.elements[1] === lit) {
+    const list = pa.parent
+    const prop = list?.parent
+    if (list && ts.isArrayLiteralExpression(list) && prop && ts.isPropertyAssignment(prop) && prop.name.getText() === 'items') return true
+  }
+  for (let n: ts.Node | undefined = lit.parent; n && !ts.isSourceFile(n); n = n.parent) {
+    if (ts.isPropertyAssignment(n) && HAN_OK_PROPS.has(n.name.getText().replace(/['"]/g, ''))) return true
+    if (ts.isVariableDeclaration(n)) return HAN_OK_VARS.test(n.name.getText())
+    if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+      const callee = n.expression.getText()
+      if (/^console\./.test(callee) || callee === 'RegExp') return true
+    }
+    // 出了表达式就停:语句 / 函数体 / 类成员不再往上找豁免上下文
+    if (ts.isStatement(n) || ts.isFunctionLike(n) || ts.isClassElement(n)) return false
+  }
+  return false
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -135,7 +196,7 @@ describe('i18n 覆盖', () => {
     // t('a.b') / translate('a.b') / tr('a.b');只收字面量,模板串与变量键跳过(静态判不了)。
     const USE = /\b(?:t|tr|translate|engineTr)\(\s*(['"])([\w.-]+)\1/g
     const unknown = new Map<string, string[]>()
-    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
+    for (const file of [...ALL_SRC, ...ENGINE_SRC, ...BRIDGE_SRC]) {
       const text = readFileSync(file, 'utf8')
       for (const m of text.matchAll(USE)) {
         const key = m[2]
@@ -149,6 +210,77 @@ describe('i18n 覆盖', () => {
     }
     const report = [...unknown.entries()].map(([k, files]) => `${k}  <- ${[...new Set(files)].join(', ')}`).sort()
     expect(report, `字典里没有这些键,界面会直接渲染键名:\n  ${report.join('\n  ')}`).toEqual([])
+  })
+
+  it('I. 编辑器 / 嵌入层 / web·mobile 写通道:用户可见字面量不含汉字(C-14 / C-15 / R-15 / G2-14)', () => {
+    // A/B/C 只看字典,JSX 里的裸文本、aria-label / title 字面量、`throw new Error('中文')`、toast 串它们看不见 ——
+    // 链接悬停卡、emoji 分组名、插件预览空态、web / 移动端写通道的冲突提示就是这样一直漏着的(评审 C-14 / C-15 / G2-14)。
+    // 红了:界面文案走 t() / translate() + registerMessages 成对登记;落盘产物命名走 translate('amadeus.default.*');
+    // 确属搜索别名 / 日志 / 正则就按上面 hanExempt 的上下文写(别往这里加文件豁免)。
+    const files = I_SRC
+    const bad: string[] = []
+    let exempted = 0
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8')
+      const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      const visit = (n: ts.Node): void => {
+        const lit = ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n)
+          || ts.isTemplateTail(n) || ts.isJsxText(n)
+        if (lit && HAN.test(n.text)) {
+          if (hanExempt(n)) exempted++
+          else bad.push(`${relative(SRC, file)}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}  ${JSON.stringify(n.text.trim().slice(0, 40))}`)
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(sf)
+    }
+    // 仪器自检(防空跑全绿):范围确实扫到了编辑器 / 嵌入层 / 两个写通道;豁免分支确实走到过(slash 的 kw、emoji 关键词)。
+    const rels = files.map((f) => relative(SRC, f))
+    for (const must of ['amadeus/unified/linkCard.tsx', 'amadeus/unified/embedLayer.tsx', 'amadeus/blocks/markdown/MarkdownBlock.tsx', 'amadeus/lib/emoji.ts']) {
+      expect(rels, `I 的扫描范围漏了 ${must} —— 目录挪了先来改 EDITOR_SCOPE`).toContain(must)
+    }
+    expect(BRIDGE_SRC.some((f) => f.endsWith('web/src/amadeus/cloudBridge.ts')), 'web 写通道没扫到').toBe(true)
+    expect(BRIDGE_SRC.some((f) => f.endsWith('mobile/src/amadeus/mobileAmadeusBridge.ts')), '移动端写通道没扫到').toBe(true)
+    expect(exempted, '一条豁免都没命中 —— hanExempt 失效了,I 断言在空跑').toBeGreaterThan(100)
+    expect(bad, `用户可见字面量里有汉字(英文界面会原样显示中文):\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('I2. 同一范围里 aria-label / title / placeholder / alt 不许写死字面量(查找条的 aria 曾写死英文,C-14)', () => {
+    // I 只管汉字;写死的英文同样是单语(中文界面下读屏念出 previous match)。命令式 DOM 的
+    // `setAttribute('aria-label', '…')` / `el.title = '…'` 一并查。刻意保留的逐条登记理由。
+    const ALLOW: Record<string, string> = {
+      'amadeus/unified/UnifiedPage.tsx  placeholder="New Page"': '标题占位 New Page 是已定口径(手册写明,评审附录 A · C-15)',
+    }
+    const ATTR = /^(aria-label|title|placeholder|alt)$/
+    const found: string[] = []
+    const bad: string[] = []
+    for (const file of I_SRC) {
+      const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      const hit = (n: ts.Node, what: string): void => {
+        const key = `${relative(SRC, file)}  ${what}`
+        found.push(key)
+        if (!ALLOW[key]) bad.push(`${relative(SRC, file)}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}  ${what}`)
+      }
+      const lettered = (e: ts.Node | undefined): boolean =>
+        !!e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) && /[A-Za-z]/.test(e.text)
+      const visit = (n: ts.Node): void => {
+        if (ts.isJsxAttribute(n) && ATTR.test(n.name.getText()) && n.initializer) {
+          const v = ts.isJsxExpression(n.initializer) ? n.initializer.expression : n.initializer
+          if (lettered(v)) hit(n, n.getText())
+        } else if (ts.isCallExpression(n) && /\.setAttribute$/.test(n.expression.getText()) && n.arguments.length === 2
+          && ts.isStringLiteral(n.arguments[0]) && ATTR.test(n.arguments[0].text) && lettered(n.arguments[1])) {
+          hit(n, n.getText())
+        } else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken
+          && /\.(title|placeholder|alt|ariaLabel)$/.test(n.left.getText()) && lettered(n.right)) {
+          hit(n, n.getText())
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(sf)
+    }
+    const stale = Object.keys(ALLOW).filter((k) => !found.includes(k))
+    expect(stale, `登记了但源码里已经没有的项(删掉登记):\n  ${stale.join('\n  ')}`).toEqual([])
+    expect(bad, `写死的 aria / title / placeholder(换 t() / translate()):\n  ${bad.join('\n  ')}`).toEqual([])
   })
 
   it('G. 术语表:zh 不许出现已收口的旧叫法(U-27,见 genesis-ui skill「术语表」)', () => {

@@ -16,7 +16,7 @@
 // Images are stored as PORTABLE page-relative links (![](.amadeus/x.png)); for display
 // they are rewritten to the amadeus-asset:// protocol and back on save (see @amadeus-shared/assets).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   Editor,
   commandsCtx,
@@ -122,7 +122,7 @@ import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions } from '../../plugins/editorExtensions'
-import { registerMessages, translate, useI18n } from '../../../i18n'
+import { registerMessages, subscribeLocale, translate, useI18n } from '../../../i18n'
 
 // 本文件的文案命名空间恒为 `mdblock.*`(别的组件在同一本全局字典里注册,撞键=静默覆盖)。
 // ⚠️ 模块作用域的表(SLASH_ITEMS)只存**键**,取文案一律在渲染期 t()/translate() ——
@@ -136,6 +136,8 @@ registerMessages({
   'mdblock.default.drawing': { zh: '画板', en: 'Drawing' },
   'mdblock.default.noteViewFolder': { zh: '笔记视图', en: 'Note view' },
   'mdblock.default.noteView': { zh: '未命名视图', en: 'Untitled view' },
+  // `/表格` 骨架的表头(R-16):写进磁盘的「列 1 | 列 2」跟当前界面语言走,英文界面不再落中文表头。
+  'amadeus.default.tableColumn': { zh: '列 {n}', en: 'Column {n}' },
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
   'mdblock.group.basic': { zh: '基础', en: 'Basic' },
@@ -200,6 +202,8 @@ registerMessages({
   'mdblock.pasteAs.embedHint': { zh: '播放器 / 网页', en: 'Player / web page' },
   // 菜单空态与脚注
   'mdblock.menu.noMatch': { zh: '无匹配项', en: 'No matches' },
+  // 编辑器根的可达名(P-10):读屏进到正文时念出这是什么,而不是一个无名的文本框。
+  'mdblock.editorLabel': { zh: '笔记正文', en: 'Note body' },
   'mdblock.menu.noDatabase': { zh: '库里还没有多维表（用 /多维表 新建一个）', en: 'No databases in this vault yet (create one with /database)' },
   'mdblock.foot.select': { zh: '↑↓ 选择', en: '↑↓ Select' },
   'mdblock.foot.confirm': { zh: '↵ 确认', en: '↵ Confirm' },
@@ -1081,6 +1085,15 @@ export function MilkdownInner({
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
       .use($prose(() => new Plugin({ props: { attributes: (): Record<string, string> => (pagePathRef.current ? { 'data-amx-src': pagePathRef.current } : {}) } })))
+      // 编辑器根的 aria-label(P-10):直接写 DOM + 订语言变更 —— PM 只回收自己经 attributes 管过的属性,不会抹掉它;
+      // 走 attributes prop 的话切语言要等下一个事务才刷新。
+      .use($prose(() => new Plugin({
+        view: (v) => {
+          const label = (): void => { v.dom.setAttribute('aria-label', translate('mdblock.editorLabel')) }
+          label()
+          return { destroy: subscribeLocale(label) }
+        },
+      })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q, blurred) => {
@@ -1405,6 +1418,11 @@ export function MilkdownInner({
     })
     return focused
   }
+  const editorDom = (): HTMLElement | null => {
+    let dom: HTMLElement | null = null
+    getInstance()?.action((ctx) => { dom = ctx.get(editorViewCtx).dom })
+    return dom
+  }
 
   // @ 提及:把 "@query"(含 @ 本身)整体替换成 [[name]] 双链。
   const pickMention = (name: string): void => {
@@ -1678,6 +1696,7 @@ export function MilkdownInner({
           ctx={slash.ctx}
           unified={unified}
           editorFocused={editorFocused}
+          editorDom={editorDom}
           onPick={(it) => {
             setSlash(null)
             getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), slash.from) }) // 选中了:标记作废
@@ -2210,7 +2229,18 @@ export interface SlashItem {
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
  *  ⚠️ 模块作用域调不了 hook —— 表里直接写文案 = 冻在模块加载那一刻,切语言纹丝不动。
  *  对外(菜单 / 移动端块面板)露出的仍是 SlashItem,label/group 已是当前语言的成品文案。 */
-type SlashSeed = Omit<SlashItem, 'label' | 'group'> & { labelKey: string; groupKey: string }
+type SlashSeed = Omit<SlashItem, 'label' | 'group' | 'scaffold'> & {
+  labelKey: string; groupKey: string
+  /** 函数形态 = 落盘内容里带界面语言的文案(如表格表头),同样在渲染期取词。 */
+  scaffold: string | ((tr: (key: string, vars?: Record<string, unknown>) => string) => string)
+}
+
+/** `/表格` 的骨架(R-16)。表头是**落盘产物命名**,跟当前界面语言 —— 以前表里写死 `| 列 1 | 列 2 |`,
+ *  英文界面插出来的表头也是中文并照样写进磁盘。它不是 sentinel / 前缀触发符,现算的串不会撞 applySlash 的分流。 */
+function tableScaffold(tr: (key: string, vars?: Record<string, unknown>) => string): string {
+  const h = (n: number): string => tr('amadeus.default.tableColumn', { n })
+  return `| ${h(1)} | ${h(2)} |\n| --- | --- |\n|  |  |`
+}
 
 /** 触发型 scaffold 的对外名册:v4 统一实例(unified/UnifiedPage 的 applySlash)按同一套判定分流。
  *  ⚠️ 这些常量的字面量含 NUL 字符 —— 一律从这里引用,**绝不在别的文件里重打一遍**。 */
@@ -2265,7 +2295,7 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'quote', labelKey: 'mdblock.slash.quote', hint: '|', icon: <QuoteIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| ', kw: 'quote 引用 yinyong blockquote' },
   { key: 'fold', labelKey: 'mdblock.slash.fold', hint: '>', icon: <FoldIcon />, groupKey: 'mdblock.group.advanced', scaffold: '> ', kw: 'fold toggle 折叠 zhedie collapse 展开 详情 details' },
   { key: 'code', labelKey: 'mdblock.slash.code', hint: '```', icon: <CodeBlockIcon />, groupKey: 'mdblock.group.advanced', scaffold: '```\n\n```', kw: 'code 代码 daima codeblock' },
-  { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |', kw: 'table 表格 biaoge grid 网格' },
+  { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: tableScaffold, kw: 'table 表格 biaoge grid 网格' },
   { key: 'divider', labelKey: 'mdblock.slash.divider', hint: '---', icon: <DividerIcon />, groupKey: 'mdblock.group.advanced', scaffold: '---\n\n', kw: 'divider hr 分割线 分隔 fenge' },
   // 单行 $$  $$(两 delimiter 同处一个 textblock,填内容即渲染为居中块公式)。旧的 '$$\n\n$$' 会被 commonmark
   // 拆成两个段落、每段只剩一个 $$ → 实况预览永远扫不到成对公式(见 mathLivePreview.scanMath)。
@@ -2304,7 +2334,9 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
   const pluginSlash = usePluginStore((s) => s.slashItems)
   const all: SlashItem[] = [
     // 内置项在**这里**取词(表里只有键):切语言时 useI18n 让消费方重渲染,菜单当场跟上。
-    ...SLASH_ITEMS.map(({ labelKey, groupKey, ...rest }) => ({ ...rest, label: t(labelKey), group: t(groupKey) })),
+    ...SLASH_ITEMS.map(({ labelKey, groupKey, scaffold, ...rest }) => ({
+      ...rest, label: t(labelKey), group: t(groupKey), scaffold: typeof scaffold === 'function' ? scaffold(t) : scaffold,
+    })),
     ...pluginSlash.map(({ item }) => ({
       key: item.id,
       label: textOf(item.label), // 函数形态每次渲染求值(B-20)
@@ -2491,7 +2523,7 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, editorDom, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
@@ -2500,10 +2532,15 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   unified?: boolean
   /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
   editorFocused?: () => boolean
+  /** 宿主编辑器的根 DOM:焦点一直留在编辑器里,读屏靠它上面的 aria-activedescendant 知道高亮的是哪一项(P-10)。 */
+  editorDom?: () => HTMLElement | null
   onPick: (it: SlashItem) => void; onClose: () => void
 }) {
   const { t } = useI18n()
   const [active, setActive] = useState(0)
+  const menuId = `amx-slash-${useId().replace(/[^\w-]/g, '')}`
+  const editorDomRef = useRef(editorDom)
+  editorDomRef.current = editorDom
   const all = useAllSlashItems({ unified })
   const allItems = useMemo(
     () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
@@ -2524,6 +2561,21 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   useEffect(() => {
     setActive(0)
   }, [query])
+
+  // 读屏(P-10):焦点留在编辑器,高亮项靠编辑器根的 aria-activedescendant 指过去(菜单是 role=menu / menuitem,
+  // menuitem 不支持 aria-selected,「当前项」就用 activedescendant 表达);关菜单时摘掉,别让读屏指向已卸载的节点。
+  const activeIdx = items.length ? Math.min(active, items.length - 1) : -1
+  useEffect(() => {
+    const dom = editorDomRef.current?.()
+    if (!dom) return
+    dom.setAttribute('aria-controls', menuId)
+    if (activeIdx >= 0) dom.setAttribute('aria-activedescendant', `${menuId}-${activeIdx}`)
+    else dom.removeAttribute('aria-activedescendant')
+    return () => {
+      dom.removeAttribute('aria-activedescendant')
+      dom.removeAttribute('aria-controls')
+    }
+  }, [menuId, activeIdx])
 
   useEffect(() => {
     const stop = (e: KeyboardEvent): void => {
@@ -2561,6 +2613,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   const renderItem = (it: SlashItem, i: number) => (
     <button
       key={it.key}
+      id={`${menuId}-${i}`}
       className="slash-item"
       data-active={i === active || undefined}
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
@@ -2593,7 +2646,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
-      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
+      <OverlayAt id={menuId} className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
         {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
         <div className="slash-scroll">
           {q

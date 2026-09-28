@@ -11,6 +11,15 @@ import type { Mark, MarkType, Node as ProseNode } from '@milkdown/kit/prose/mode
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { hrefKind, normalizeHref } from '../blocks/markdown/linkHref'
+import { registerMessages, useI18n } from '../../i18n'
+
+// 取消 / 保存 / 编辑 / 删除复用 common.*;这里只登记卡片自己的(评审 C-14:原来全是 JSX 裸中文)。
+registerMessages({
+  'linkcard.text': { zh: '文字', en: 'Text' },
+  'linkcard.link': { zh: '链接', en: 'Link' },
+  'linkcard.copy': { zh: '复制链接', en: 'Copy link' },
+  'linkcard.unlink': { zh: '移除链接', en: 'Remove link' },
+})
 
 const OPEN_DELAY = 500
 const CLOSE_DELAY = 250
@@ -67,6 +76,7 @@ export function LinkHoverCard({ getView, onOpenNote }: {
   /** 库内笔记链接 `[t](笔记.md)` 的打开(与编辑器点击同路,L-07);不给就退回 window.open。 */
   onOpenNote?: (href: string) => void
 }): ReactElement | null {
+  const { t } = useI18n()
   const [hover, setHover] = useState<Hover | null>(null)
   const [edit, setEdit] = useState<{ from: number; to: number; text: string; href: string; wasHref: string } | null>(null)
   const openT = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -206,7 +216,7 @@ export function LinkHoverCard({ getView, onOpenNote }: {
             }}
           >
           <label>
-            文字
+            {t('linkcard.text')}
             <input
               autoFocus
               value={edit.text}
@@ -215,13 +225,13 @@ export function LinkHoverCard({ getView, onOpenNote }: {
             />
           </label>
           <label>
-            链接
+            {t('linkcard.link')}
             <input value={edit.href} onChange={(e) => setEdit({ ...edit, href: e.target.value })} />
           </label>
           <div className="amx-linkedit-row">
-            <button type="button" onClick={close}>取消</button>
+            <button type="button" onClick={close}>{t('common.cancel')}</button>
             <button type="submit" className="primary" disabled={!canSave}>
-              保存
+              {t('common.save')}
             </button>
           </div>
           </form>
@@ -265,15 +275,15 @@ export function LinkHoverCard({ getView, onOpenNote }: {
           {host}
         </button>
         <span className="amx-linkcard-sep" />
-        <button onClick={() => void navigator.clipboard.writeText(hover.href)}>复制链接</button>
+        <button onClick={() => void navigator.clipboard.writeText(hover.href)}>{t('linkcard.copy')}</button>
         {editable && (
-          <button onClick={() => setEdit({ from: hover.from, to: hover.to, text: hover.text, href: hover.href, wasHref: hover.href })}>编辑</button>
+          <button onClick={() => setEdit({ from: hover.from, to: hover.to, text: hover.text, href: hover.href, wasHref: hover.href })}>{t('common.edit')}</button>
         )}
         {editable && (
-          <button onClick={() => { rewrite(hover.from, hover.to, hover.href, null, null); setHover(null) }}>移除链接</button>
+          <button onClick={() => { rewrite(hover.from, hover.to, hover.href, null, null); setHover(null) }}>{t('linkcard.unlink')}</button>
         )}
         {editable && (
-          <button className="danger" onClick={() => { rewrite(hover.from, hover.to, hover.href, '', null); setHover(null) }}>删除</button>
+          <button className="danger" onClick={() => { rewrite(hover.from, hover.to, hover.href, '', null); setHover(null) }}>{t('common.delete')}</button>
         )}
       </OverlayAt>
     </OverlayPortal>

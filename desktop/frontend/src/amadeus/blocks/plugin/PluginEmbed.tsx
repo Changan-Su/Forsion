@@ -4,9 +4,16 @@
 import { useEffect, useRef } from 'react'
 import { usePluginStore, findEmbedRenderer } from '../../plugins/pluginStore'
 import { useBlockSelection } from '../../store/blockSelection'
+import { registerMessages, useI18n } from '../../../i18n'
+
+// 嵌入层(unified/embedLayer)的独立根也渲染本组件,那里由 HostLocaleProvider 供 useI18n(评审 R-15 / C-15)。
+registerMessages({
+  'plugembed.noRenderer': { zh: '没有已启用的插件能预览「{target}」', en: 'No enabled plugin can preview “{target}”' },
+})
 
 export function PluginEmbed({ target, pagePath, blockId }: { target: string; pagePath: string; blockId?: string }) {
   // 订阅 embedRenderers:插件加载后新注册的渲染器会触发重渲染 → 从「无人能预览」变为正常挂载。
+  const { t } = useI18n()
   const renderers = usePluginStore((s) => s.embedRenderers)
   const r = findEmbedRenderer(renderers, target)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -32,6 +39,6 @@ export function PluginEmbed({ target, pagePath, blockId }: { target: string; pag
     }
   }, [r, target, pagePath, blockId])
 
-  if (!r) return <div className="embed-missing">没有已启用的插件能预览「{target}」</div>
+  if (!r) return <div className="embed-missing">{t('plugembed.noRenderer', { target })}</div>
   return <div className="amx-plugin-embed" ref={hostRef} />
 }
