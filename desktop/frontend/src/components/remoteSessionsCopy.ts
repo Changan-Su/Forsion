@@ -29,7 +29,7 @@ registerMessages({
   },
   'remoteSessions.capDesc.readonly': { zh: '改文件和执行命令都要逐条批准。', en: 'Changing files and running commands both need approval.' },
   'remoteSessions.capDesc.autoEdit': { zh: '在工作区里改文件不用问，执行命令仍要批准。', en: 'Editing files in the workspace is automatic. Commands still need approval.' },
-  'remoteSessions.capDesc.fullAuto': { zh: '不再逐条询问。', en: 'Nothing is checked one by one.' },
+  'remoteSessions.capDesc.fullAuto': { zh: '改文件和执行命令都不再逐条询问。', en: "File changes and commands aren't checked one by one." },
   'remoteSessions.fullAutoTitle': { zh: '「全自动」下，审批不再保证来自真人', en: 'With Full auto, approvals are no longer guaranteed to come from a person' },
   'remoteSessions.fullAutoWarn': {
     zh: '「全自动」下，远程会话里的命令不再逐条询问。Agent 能以你的身份读写这台电脑上未被硬性保护的文件、调用本机接口，甚至可能替你批准它自己的请求。只在你完全信任所有已允许的设备并了解风险时使用。',

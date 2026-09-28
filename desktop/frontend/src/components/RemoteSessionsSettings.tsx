@@ -8,7 +8,7 @@
  * 设备页 / web / 手机没有这一页(remoteSessionsApi 门控,同 computerHistoryApi)。
  */
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Check, Globe, Laptop, Loader2, MonitorSmartphone, ShieldAlert, Smartphone, TriangleAlert } from 'lucide-react'
+import { Check, Eye, FilePen, Globe, Laptop, Loader2, MonitorSmartphone, ShieldAlert, Smartphone, TriangleAlert, Zap } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { formatDate, formatListTime } from '../format/time'
 import { ipcErrorText } from '../ipcError'
@@ -27,6 +27,7 @@ export { registerRemoteSettingsSection, type RemoteSettingsSection } from './rem
 export { remoteSessionsApi }
 
 const CAP_LABEL: Record<CapMode, string> = { readonly: 'approval.mode.readonly', 'auto-edit': 'approval.mode.autoEdit', 'full-auto': 'approval.mode.fullAuto' }
+const CAP_ICON: Record<CapMode, React.ReactNode> = { readonly: <Eye size={16} />, 'auto-edit': <FilePen size={16} />, 'full-auto': <Zap size={16} /> }
 const CAP_DESC: Record<CapMode, string> = { readonly: 'remoteSessions.capDesc.readonly', 'auto-edit': 'remoteSessions.capDesc.autoEdit', 'full-auto': 'remoteSessions.capDesc.fullAuto' }
 
 /** IPC 抛错的可读原因:secret-store-insecure 换成本地化那句,其余照 ipcErrorText。 */
@@ -137,6 +138,7 @@ export function RemoteSessionsSettings(): React.ReactNode {
             return (
               <button key={m} type="button" role="radio" aria-checked={checked} tabIndex={radioTabIndex(checked, i, true)} data-cap={m}
                 className={`settings-choice-card${checked ? ' active' : ''}`} disabled={!!busy} onClick={() => pickCap(m)}>
+                <span className="settings-choice-icon">{CAP_ICON[m]}</span>
                 <span><strong>{t(CAP_LABEL[m])}</strong><small>{t(CAP_DESC[m])}</small></span>
                 {checked && (busy === `cap:${m}` ? <Loader2 size={14} className="spin settings-choice-check" /> : <Check size={15} className="settings-choice-check" />)}
               </button>

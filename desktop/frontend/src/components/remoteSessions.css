@@ -18,13 +18,16 @@
 .rs-note,
 .rs-scope {
   margin: 0;
-  padding: 0 15px 12px;
+  padding: 11px 15px 12px;
   color: var(--text-faint);
   font-size: var(--ui-font-caption, 11px);
   line-height: 1.5;
 }
 .rs-note { color: var(--text-light); }
-.rs-scope { padding-top: 11px; border-top: var(--border-width) solid var(--border); }
+/* 面板头自带下边线,这里不再画第二条;几段说明连着排时不叠两份间距。 */
+.rs-note + .rs-scope,
+.rs-secrets + .rs-scope,
+.rs-note + .rs-secrets .rs-note { padding-top: 0; }
 .rs-secrets .secnotice.secnotice-inpanel { margin: 0 15px 12px; }
 
 /* 三档单选:一行三张卡(窄栏改单列,见文件末尾断点)。 */
@@ -63,7 +66,9 @@
 .rs-confirm-actions .btn { white-space: nowrap; }
 
 /* 信任列表:行首图标 + 名字(长名字省略),说明里时间单独一行。 */
-.rs-row-title { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; }
+/* 名字很长时要能省略:窄栏里行改成纵排(base.css 820px 断点 align-items:flex-start),文字列按内容取宽 → 钳到行宽。 */
+.rs-row .settings-control-copy { max-width: 100%; }
+.rs-row-title { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; }
 .rs-row-title > svg { flex: 0 0 auto; color: var(--text-faint); }
 .rs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rs-meta { display: block; margin-top: 2px; }
