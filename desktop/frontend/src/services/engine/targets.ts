@@ -158,6 +158,7 @@ export function knownTargets(): EngineTarget[] {
   }
   const f = focusRef()
   if (f.kind === 'unit') add(f)
+  ensureBindingsLoaded() // 与调用顺序无关:K3 的轮询可能早于 boot 的 restoreSessionBindings
   for (const key of new Set(sessionTargets.values())) if (key !== 'home') add(refOfKey(key)) // S4:有绑定会话的 unit
   return out
 }

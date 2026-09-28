@@ -1864,8 +1864,9 @@ export const useApp = create<AppState>((set, get) => ({
       const configBySession = { ...s.configBySession }
       for (const x of [...act, ...arch]) if (x.agent_config && !configBySession[x.id]) configBySession[x.id] = x.agent_config
       const listed = new Set([...act, ...arch].map((x) => x.id))
-      merged = [...act, ...s.sessions.filter((x) => x.location?.kind === 'unit' && !listed.has(x.id))]
-      return { sessions: merged, archivedSessions: arch, configBySession }
+      const keep = (x: SessionRecord): boolean => x.location?.kind === 'unit' && !listed.has(x.id)
+      merged = [...act, ...s.sessions.filter((x) => keep(x) && !x.archived)]
+      return { sessions: merged, archivedSessions: [...arch, ...s.archivedSessions.filter(keep)], configBySession }
     })
     return merged
   },
@@ -2522,6 +2523,15 @@ export const useApp = create<AppState>((set, get) => ({
   archiveSession: async (id, archived) => {
     try {
       await api.updateSession(targetForSession(id), id, { archived })
+      // S4:在别的电脑上的会话不在本端列表里,refreshSessions 拉不到它 —— 本地挪到归档区 / 挪回来(打标沿用)
+      if (refForSession(id).kind === 'unit') set((s) => {
+        const rec = [...s.sessions, ...s.archivedSessions].find((x) => x.id === id)
+        if (!rec) return {}
+        const moved = { ...rec, archived }
+        return archived
+          ? { sessions: s.sessions.filter((x) => x.id !== id), archivedSessions: [moved, ...s.archivedSessions.filter((x) => x.id !== id)] }
+          : { archivedSessions: s.archivedSessions.filter((x) => x.id !== id), sessions: [moved, ...s.sessions.filter((x) => x.id !== id)] }
+      })
       await get().refreshSessions(get().cfg)
       if (archived && get().activeId === id) get().setActiveId(null)
     } catch (e: any) { get().toast(get().tr('app.operationFail', { e: e?.message || e }), true) }

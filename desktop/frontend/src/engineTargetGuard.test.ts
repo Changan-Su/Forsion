@@ -23,7 +23,7 @@ import { join, relative } from 'node:path'
 const GENESIS = join(__dirname, '../../..')
 const ROOTS = ['desktop/frontend/src', 'mobile/src', 'web/src']
 type RuleId = 'R1' | 'R2' | 'R3' | 'R4'
-interface Rule { id: RuleId; what: string; re: RegExp; allowed: (rel: string) => boolean; exempt?: (before: string) => boolean }
+interface Rule { id: RuleId; what: string; re: RegExp; allowed: (rel: string) => boolean; exempt?: (before: string, after: string) => boolean }
 
 const inEngineDir = (rel: string): boolean => rel.startsWith('desktop/frontend/src/services/engine/')
 
@@ -38,8 +38,10 @@ export const RULES: Rule[] = [
       || rel === 'desktop/frontend/src/components/SettingsModal.tsx' // 外部连接表单
       || rel === 'desktop/frontend/src/components/OnboardingWizard.tsx' // 连接测试
       || /(^|\/)(\w*[hH]arness|ChatPreview)\.tsx$/.test(rel),
-    // 同名字段搬运:`backendUrl: c.backendUrl` / `backendUrl: stored?.backendUrl || prev.backendUrl`(同一表达式里)
-    exempt: (before) => /\bbackendUrl\s*:\s*[\w$.?!()|\s]*$/.test(before.slice(before.lastIndexOf('\n') + 1)),
+    // 同名字段搬运:`backendUrl: c.backendUrl` / `backendUrl: stored?.backendUrl || prev.backendUrl`(同一表达式里)。
+    // 前后都看:前面是 `backendUrl:` 开头的纯取值链,后面紧跟 `,` `}` `)` 换行或 `||` / `??` —— 拼成别的(`+ '/agent/x'`)照样红
+    exempt: (before, after) => /\bbackendUrl\s*:\s*[\w$.?!()|\s]*$/.test(before.slice(before.lastIndexOf('\n') + 1))
+      && /^\s*(?:,|\}|\)|\n|$|\|\||\?\?)/.test(after),
   },
   {
     id: 'R2',
@@ -81,7 +83,7 @@ export function hits(rule: Rule, rel: string, src: string): number[] {
   const text = stripLineComments(src)
   for (const m of text.matchAll(rule.re)) {
     const before = text.slice(0, m.index)
-    if (rule.exempt?.(before)) continue
+    if (rule.exempt?.(before, text.slice(m.index! + m[0].length))) continue
     lines.push(before.split('\n').length)
   }
   return lines
@@ -140,6 +142,8 @@ describe('引擎目标棘轮', () => {
     expect(hits(rule('R1'), f, 'const x = { backendUrl: `${c.backendUrl}/agent` }\n')).toEqual([1])
     expect(hits(rule('R1'), f, 'const x = { url: c.backendUrl }\n')).toEqual([1])
     expect(hits(rule('R1'), f, "fetch(c.backendUrl + '/health')\n")).toEqual([1])
+    expect(hits(rule('R1'), f, "const x = { backendUrl: c.backendUrl + '/agent/x' }\n")).toEqual([1]) // 前面像搬运、后面在拼 URL
+    expect(hits(rule('R1'), f, 'const x = { backendUrl: c.backendUrl }\n')).toEqual([])
   })
 
   it('零违规(K6-S3 起没有基线:存量已由 codemod + 人工清零)', () => {

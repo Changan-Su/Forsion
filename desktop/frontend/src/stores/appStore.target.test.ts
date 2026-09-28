@@ -253,6 +253,29 @@ describe('setFocusTarget(S4:焦点 = 新会话建在哪)', () => {
     expect(calls.map((c) => [c.method, c.url])).toEqual([['PATCH', `${UNIT}/agent/sessions/s-mac`]])
   })
 
+  it('归档 / 取消归档那台上的会话:请求打那台,本地挪进 / 挪出归档区;本端列表刷新不把它塞回活动列表', async () => {
+    router = (url) => {
+      if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-1')] } }
+      if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
+      if (url === `${UNIT}/agent/sessions/s-mac`) return { status: 200, body: { session: sessionRec('s-mac') } }
+      return { status: 200, body: {} }
+    }
+    T.bindSession('s-mac', { kind: 'unit', unitId: U })
+    useApp.setState({ sessions: [T.withLocation(sessionRec('s-mac')) as any, sessionRec('home-1') as any], archivedSessions: [] })
+    calls.length = 0
+    await useApp.getState().archiveSession('s-mac', true)
+    expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.url)).toEqual([`${UNIT}/agent/sessions/s-mac`])
+    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['home-1'])
+    expect(useApp.getState().archivedSessions.map((s) => s.id)).toEqual(['s-mac'])
+    await useApp.getState().refreshSessions(useApp.getState().cfg) // 再刷一次也不回活动列表、不从归档区丢
+    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['home-1'])
+    expect(useApp.getState().archivedSessions.map((s) => s.id)).toEqual(['s-mac'])
+    await useApp.getState().archiveSession('s-mac', false)
+    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['home-1', 's-mac'])
+    expect(useApp.getState().archivedSessions).toEqual([])
+  })
+
   it('两台并存:会话绑在 A、焦点换到 B → 批准 / 询问 / 转向 / 撤回 / 中止仍打 A,B 一条都收不到', async () => {
     const U2 = '7f0e8a52-0000-4000-8000-00000000000b'
     const UNIT_B = `${API}/units/${U2}/proxy/engine`
