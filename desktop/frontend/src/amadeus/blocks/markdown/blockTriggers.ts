@@ -99,12 +99,15 @@ export function triggerFromStructuralPrefix(source: string): Trigger | null {
   return null
 }
 
-/** 光标前最近的 '/'(slash 菜单触发符)→ 消费区间;找不到返回 null。 */
-export function slashRange($from: ResolvedPos): { from: number; to: number } | null {
+/** 光标前最近的 '/'(slash 菜单触发符)→ 消费区间;找不到返回 null。
+ *  B-17:行中触发 slash 必须先补一个空格(`段甲内容 /h2`),这个空格是**触发语法**的一部分 —— 一并删掉,
+ *  否则落盘成 `## 段甲内容 `。行内插入(keepSpace,如单元格里的 `[[`)要接着正文往下写,保留它。 */
+export function slashRange($from: ResolvedPos, opts?: { keepSpace?: boolean }): { from: number; to: number } | null {
   const seg = textBeforeCursor($from)
   const idx = seg.lastIndexOf('/')
   if (idx < 0) return null
-  return { from: $from.start() + idx, to: $from.pos }
+  const lead = !opts?.keepSpace && idx > 0 && /\s/.test(seg[idx - 1]) ? 1 : 0
+  return { from: $from.start() + idx - lead, to: $from.pos }
 }
 
 /**

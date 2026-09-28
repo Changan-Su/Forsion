@@ -13,6 +13,7 @@
 //   B14  块菜单「转换为」有代码块(按原文造,不把文字挪到空代码块下面)与标注(`[!note]`)(B-14)
 //   B15  块菜单「复制标题链接」(`[[笔记#标题]]`)/「复制块链接」(只给已有 `^id` 的块)/「移动到…」(追加到目标末尾再删源);
 //        /embed 说明不再指向 v4 没有的「复制嵌入引用」(B-15)
+//   B17  为触发 slash 补的那个空格不留在转换结果里(`段甲内容 /h2` → `## 段甲内容`)(B-17 只修这半)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -554,6 +555,22 @@ async function main() {
         await page.keyboard.press('Escape')
         check('B15d /embed 说明指向「复制标题链接 / 复制块链接」,不再提「复制嵌入引用」', /复制标题链接/.test(msg) && !/复制嵌入引用/.test(msg), JSON.stringify(msg))
       }
+    }
+
+    if (want('B17')) {
+      const run = async (cmd, pick) => {
+        const nm = await load(page, '段甲内容\n\n段乙。\n')
+        await caretAt(page, '段甲内容')
+        await page.keyboard.type(` /${cmd}`)
+        const open = await waitSel(page, '.slash-menu')
+        if (pick) await page.locator('.slash-item').filter({ hasText: pick }).first().dispatchEvent('mousedown')
+        else await page.keyboard.press('Enter')
+        return { open, md: await mdOf(page, nm) }
+      }
+      const h2 = await run('h2')
+      const todo = await run('todo')
+      const code = await run('code', '代码块')
+      check('B17 slash 转换 / 插入后不留尾空格', h2.open && h2.md === '## 段甲内容\n\n段乙。\n' && /^\* \[ \] 段甲内容\n/.test(todo.md || '') && /^段甲内容\n\n```/.test(code.md || ''), JSON.stringify({ h2: h2.md, todo: todo.md, code: code.md }))
     }
 
     await page.close()
