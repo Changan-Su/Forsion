@@ -106,7 +106,8 @@ registerMessages({
     zh: '管理 Forsion 账号、会员、额度与安全，以及笔记与记忆的云端同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
     en: 'Manage your Forsion account, membership, quota and security, plus cloud sync for notes and memory. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
   },
-  'settings.forsionCloud.sync': { zh: '同步', en: 'Sync' },
+  // 不叫「同步」:下面就是一级页「同步」(远程同步),左栏会出现两个同名项
+  'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },

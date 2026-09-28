@@ -163,7 +163,7 @@ async function extendCard(sp) {
         const forsionSubs = await navSubs(sp, 'Forsion 云端', 'forsion')
         const generalSubs = await navSubs(sp, '常规', 'general')
         const syncSubs = await navSubs(sp, '同步', 'sync')
-        check('⑥ 「Forsion 云端」一级页 = Extend 画的五页 + 宿主的同步 / 连接,旧深链落到 Extend 的账号页;常规里没有 Forsion、同步里没有在线同步', tops.includes('Forsion 云端') && account === 1 && forsionSubs?.join() === '账号,额度与积分,安全,用量记录,反馈,同步,连接' && Array.isArray(generalSubs) && !generalSubs.includes('Forsion') && Array.isArray(syncSubs) && !syncSubs.includes('在线同步'), JSON.stringify({ tops, account, forsionSubs, generalSubs, syncSubs }))
+        check('⑥ 「Forsion 云端」一级页 = Extend 画的五页 + 宿主的同步 / 连接,旧深链落到 Extend 的账号页;常规里没有 Forsion、同步里没有在线同步', tops.includes('Forsion 云端') && account === 1 && forsionSubs?.join() === '账号,额度与积分,安全,用量记录,反馈,云端同步,连接' && Array.isArray(generalSubs) && !generalSubs.includes('Forsion') && Array.isArray(syncSubs) && !syncSubs.includes('在线同步'), JSON.stringify({ tops, account, forsionSubs, generalSubs, syncSubs }))
 
         // ⑥b 插件卡上 Extend 的开关:读主进程状态(开),拨下 → 落盘 + 待重启;拨回 → 名单清空、提示消失
         const before = await extendCard(sp)

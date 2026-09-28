@@ -17,8 +17,8 @@ const ROOT = path.join(__dirname, '..')
 const LANG = (process.argv.find((a) => a.startsWith('--lang=')) || '--lang=zh').slice(7) === 'en' ? 'en' : 'zh'
 const OUT = (process.argv.find((a) => a.startsWith('--out=')) || '').slice(6) || path.join(os.tmpdir(), 'forsion-account-center')
 const EXPECT = LANG === 'en'
-  ? ['Account', 'Quota & points', 'Security', 'Usage', 'Feedback', 'Sync', 'Connection']
-  : ['账号', '额度与积分', '安全', '用量记录', '反馈', '同步', '连接']
+  ? ['Account', 'Quota & points', 'Security', 'Usage', 'Feedback', 'Cloud sync', 'Connection']
+  : ['账号', '额度与积分', '安全', '用量记录', '反馈', '云端同步', '连接']
 
 let failed = 0
 function check(name, ok, detail) {
@@ -74,6 +74,16 @@ function check(name, ok, detail) {
       check(`${label}:画出了内容`, isExtend ? body.pluginChildren > 0 : body.text.length > 20, JSON.stringify(body))
       await sp.screenshot({ path: path.join(OUT, `${LANG}-${String(i + 1).padStart(2, '0')}-${label.replace(/[^\p{L}\p{N}]+/gu, '_')}.png`) })
     }
+    // 页内跳转:账号页点「手机」那一行 → ctx.app.openSettings('forsion/fx:forsion-extend:security') → 窗口事件 →
+    // 应用层 openSettings → openFloatingPanel 从设置浮窗自己身上重定向 —— 左栏当前项应变成「安全」
+    await sp.locator('#settings-nav-subitems-forsion .settings-nav-subitem').first().click()
+    await sp.waitForSelector('[data-plugin-settings="forsion-extend:account"] .fx-link-row', { timeout: 10_000 }).catch(() => {})
+    await sp.locator('[data-plugin-settings="forsion-extend:account"] .fx-link-row').first().click().catch(() => {})
+    const jumped = await sp.waitForFunction((want) => document.querySelector('#settings-nav-subitems-forsion .settings-nav-subitem.active')?.textContent?.trim() === want,
+      EXPECT[2], { timeout: 8_000 }).then(() => true, () => false)
+    const activeNow = await sp.$eval('#settings-nav-subitems-forsion .settings-nav-subitem.active', (b) => b.textContent.trim()).catch(() => null)
+    check(`页内跳转:账号页点「手机」→ 左栏落到「${EXPECT[2]}」(ctx.app.openSettings 在设置浮窗里真走通)`, jumped, `active=${activeNow}`)
+
     const hits = cloud.requests.filter((r) => r.path.startsWith('/api/')).map((r) => `${r.method} ${r.path}${r.authed ? '' : ' (no token)'}`)
     // 公开端点本就不带 token:/features(功能开关)、/auth/region(首屏语言的 IP 区域探测,非中文系统才会打)
     const unauthed = cloud.requests.filter((r) => !r.authed && !['/api/features', '/api/auth/region'].includes(r.path)).map((r) => `${r.method} ${r.path}`)

@@ -1375,8 +1375,6 @@ registerMessages({
   "settings.skills.openFolder": { "zh": "打开技能文件夹", "en": "Open skills folder" },
   "settings.agents.openFolder": { "zh": "打开文件夹", "en": "Open folder" },
   "sidebar.account.expired": { "zh": "登录已过期 · 点击重新登录", "en": "Session expired · click to re-login" },
-  "settings.forsion.expired": { "zh": "登录已过期，请重新登录（否则后端无法连接）。", "en": "Session expired — please re-login (the backend can't connect otherwise)." },
-  "settings.forsion.relogin": { "zh": "重新登录", "en": "Re-login" },
   "settings.skills.libraryHintPrefix": {
     "zh": "按来源渠道（Agent 文件夹）分组。本地技能放 ",
     "en": "Grouped by source channel (agent folder). Put local skills in "
@@ -1759,10 +1757,7 @@ registerMessages({
 registerMessages({
   "settings.tab.forsion": { "zh": "Forsion", "en": "Forsion" },
   "settings.forsion.accountLabel": { "zh": "Forsion 账号", "en": "Forsion account" },
-  "settings.forsion.loggedInAs": { "zh": "已登录：{name}", "en": "Signed in: {name}" },
-  "settings.forsion.notLoggedIn": { "zh": "未登录 Forsion", "en": "Not signed in to Forsion" },
   "settings.forsion.login": { "zh": "登录 Forsion", "en": "Sign in to Forsion" },
-  "settings.forsion.logout": { "zh": "退出登录", "en": "Sign out" },
   "settings.forsion.cloudUrlLabel": { "zh": "Forsion 云端地址", "en": "Forsion cloud URL" },
   "settings.forsion.cloudUrlHint": { "zh": "连接到哪个 Forsion 后端（登录、Brain 同步、云端模型/技能均走此地址）。", "en": "Which Forsion backend to connect to (login, Brain sync, cloud models/skills use this URL)." },
   "settings.forsion.save": { "zh": "保存", "en": "Save" },
@@ -1776,9 +1771,6 @@ registerMessages({
   "settings.forsion.syncFail": { "zh": "同步失败：{e}", "en": "Sync failed: {e}" },
   "settings.forsion.lastSynced": { "zh": "上次同步：{time}", "en": "Last synced: {time}" },
   "settings.forsion.never": { "zh": "从未", "en": "Never" },
-  "settings.forsion.needLoginHint": { "zh": "登录 Forsion 后才能同步；未登录也能用直连 API（模型页配置）正常使用 Tangu。", "en": "Sign in to Forsion to sync; Tangu works fully without it via direct API providers (configure in Model tab)." },
-  "settings.forsion.gatedTitle": { "zh": "需要登录 Forsion 的功能", "en": "Features that need Forsion" },
-  "settings.forsion.gatedList": { "zh": "云端模型目录 · 技能分享 · 云工作区存储 · Brain 记忆同步", "en": "Cloud model catalog · skill sharing · cloud vault storage · Brain memory sync" },
 })
 
 // ── 群聊模式(Group Chat;2026-06 新增;补到此处,见文件头说明)──
