@@ -15,7 +15,7 @@ afterEach(() => {
   __resetActivityForTests();
 });
 
-const REMOTE = { remote: { via: 'tunnel', marked: true, callerUnit: '0f5b2c1e-8a3d-4c6b-9e7f-1a2b3c4d5e6f', callerKind: 'phone', callerName: 'Pixel‮ evil' } };
+const REMOTE = { remote: { via: 'tunnel', marked: true, callerUnit: '0f5b2c1e-8a3d-4c6b-9e7f-1a2b3c4d5e6f', callerKind: 'phone', callerName: `Pixel${String.fromCharCode(0x202e)} evil` } };
 
 describe('runCategory', () => {
   it('四类:remote / channel / unattended(muse、automation)/ local', () => {
@@ -116,7 +116,12 @@ describe('activitySnapshot', () => {
     expect(seen).toEqual([s0 + 1, s0 + 2]);
   });
 
-  it('快照带锁状态(env 没设 = 未锁)与 bootId', () => {
+  it('快照带锁状态(env 没设 = 未锁)与 bootId;字段与 desktop/shared/remoteActivity.test.ts 镜像同一组', () => {
+    registerRun('RK', 'SK', REMOTE);
+    const withRun = activitySnapshot();
+    expect(Object.keys(withRun).sort()).toEqual(['bootId', 'lock', 'processes', 'runs', 'seq', 'v']);
+    expect(Object.keys(withRun.runs[0]).sort()).toEqual(['category', 'pendingApprovals', 'pendingInquiries', 'remote', 'runId', 'sessionId', 'startedAt']);
+    unregisterRun('RK');
     const snap = activitySnapshot();
     expect(snap.lock).toEqual({ locked: false, source: null });
     expect(snap.bootId).toMatch(/^[0-9a-f]{8}$/);
