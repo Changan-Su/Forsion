@@ -51,6 +51,8 @@ registerMessages({
   'itb.turn.fold': { zh: '折叠', en: 'Toggle' },
   'itb.turn.codeblock': { zh: '代码块', en: 'Code block' },
   'itb.turn.math': { zh: '公式', en: 'Equation' },
+  'itb.askTangu': { zh: '问 Tangu', en: 'Ask Tangu' },
+  'itb.askTanguTitle': { zh: '把选中的文字带到侧栏对话里问', en: 'Ask about the selection in the side chat' },
 })
 
 export type ToolbarAction =
@@ -138,6 +140,7 @@ export function InlineToolbar({
   onColor,
   onBg,
   onClose,
+  onAsk,
 }: {
   left: number
   /** 选区行上沿(视口 px) */
@@ -154,6 +157,8 @@ export function InlineToolbar({
   onColor: (v: string) => void // '' = 清除文字色
   onBg: (v: string) => void // '' = 清除背景色
   onClose: () => void
+  /** 「问 Tangu」(评审 G3-04):宿主有侧栏对话时才传;不传 = 不出这个按钮(v3 块 / 整篇宿主 / 无对话的产品)。 */
+  onAsk?: () => void
 }) {
   const { t } = useI18n()
   const [panel, setPanel] = useState<'color' | 'turn' | null>(null)
@@ -185,6 +190,13 @@ export function InlineToolbar({
     // 会把摆位覆盖掉 120ms:工具栏先出现在选区右下、动画结束才跳到文字上方(用户实报)。
     <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center role="toolbar" data-testid="inline-toolbar">
       <div className="itb-row">
+        {/* 排在最前(Notion 的 Ask AI 同位):选区 AI 的入口,点了把选区交给侧栏对话,笔记一个字不动。 */}
+        {onAsk && (
+          <>
+            <button className="itb-btn itb-ask" title={t('itb.askTanguTitle')} data-act="ask" onMouseDown={down(onAsk)}>{t('itb.askTangu')}</button>
+            <span className="itb-sep" />
+          </>
+        )}
         <button className="itb-btn itb-turn" title={t('itb.turnInto')} onMouseDown={down(() => setPanel(panel === 'turn' ? null : 'turn'))}>
           {kind} ▾
         </button>

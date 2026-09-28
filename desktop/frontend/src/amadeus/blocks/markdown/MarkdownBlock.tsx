@@ -476,6 +476,7 @@ export function MilkdownInner({
   unified = false,
   attachmentPagePath,
   extraPlugins,
+  onAskTangu,
 }: {
   initial: string
   onChange: (md: string) => void
@@ -510,6 +511,8 @@ export function MilkdownInner({
   attachmentPagePath?: string
   /** 宿主追加的 Milkdown 插件(UnifiedPage 的块交互层等)。⚠️ 须传稳定引用:编辑器只建一次。 */
   extraPlugins?: MilkdownPlugin[]
+  /** 选区工具栏的「问 Tangu」(评审 G3-04):宿主有侧栏对话才传,拿到的是当前 view(选区现读)。缺 = 不出按钮。 */
+  onAskTangu?: (view: EditorView) => void
 }) {
   const ready = useRef(false)
   const pagePathRef = useRef(attachmentPagePath)
@@ -1455,6 +1458,10 @@ export function MilkdownInner({
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}
           onClose={() => setToolbar(null)}
+          onAsk={onAskTangu ? () => {
+            setToolbar(null)
+            getInstance()?.action((ctx) => onAskTangu(ctx.get(editorViewCtx)))
+          } : undefined}
         />
       )}
       </OverlayPortal>

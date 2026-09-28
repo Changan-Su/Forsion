@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -66,6 +66,8 @@ import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
 import { reconcileTr } from './reconcileDiff'
+import { askTanguQuote } from './askTangu'
+import { readTangu } from '../plugins/tanguSeam'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
@@ -290,7 +292,7 @@ interface HostApi {
   revealSelection: () => void
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu }: {
   path: string
   pageDir: string
   body: string
@@ -311,6 +313,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onCard: (view: EditorView) => void
   /** 只读:PM `editable=false`、不挂键盘/粘贴/slash/工具栏(MilkdownInner 同一道门)。 */
   readOnly?: boolean
+  /** 选区工具栏「问 Tangu」(G3-04);缺 = 宿主没有侧栏对话,不出按钮。 */
+  onAskTangu?: (view: EditorView) => void
 }): ReactElement {
   const [, getInstance] = useInstance()
   const store = useScopedPageStore()
@@ -741,6 +745,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         attachmentPagePath={path}
         extraPlugins={extraPlugins}
         readOnly={readOnly}
+        onAskTangu={onAskTangu}
       />
       {dbPick && (
         <OverlayPortal><DbLinkPicker
@@ -1302,6 +1307,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (r) multi(view, r)
     else if (view.state.selection instanceof NodeSelection) single(view, view.state.selection)
     view.focus()
+  }
+  /** 「问 Tangu」(评审 G3-04):选区 / 块的文字 + 最近标题的锚点交给侧栏对话(挂成引用,不发送)。
+   *  笔记一个字不动 —— 不铸 `^id`,锚点只到标题(askTangu.ts)。入口只在宿主给了 askInChat(= 注册了侧栏
+   *  对话)时出现:纯 Amadeus 壳、automation-only 档案、台架都不给,不画一个点了没反应的按钮。 */
+  const canAskTangu = !readOnly && !!readTangu()?.askInChat
+  const askTangu = (view: EditorView, from: number, to: number): void => {
+    const quote = askTanguQuote(view.state.doc, from, to, path)
+    if (quote) readTangu()?.askInChat?.(quote)
   }
   const turnInto = (trig: Trigger): void => withSelectedNode((view, sel) => {
     // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
@@ -2248,6 +2261,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 }}
                 onCard={makeCard}
                 readOnly={readOnly}
+                onAskTangu={canAskTangu ? (view) => askTangu(view, view.state.selection.from, view.state.selection.to) : undefined}
               />
             </MilkdownProvider>
           </CanvasStage>
@@ -2269,6 +2283,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       {blockMenu && !readOnly && (
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
+            {canAskTangu && (
+              <>
+                {/* 块级 AI 入口排首位(Notion ⋮⋮ 的 Ask AI 同位)。不走 withBlocks:那条收尾会把焦点拽回编辑器,
+                    而这里焦点该留给侧栏输入框(引用落地后它自己 focus)。 */}
+                <button data-act="ask" onClick={() => {
+                  setBlockMenu(null)
+                  const view = layer.getView()
+                  if (!view) return
+                  const r = layer.topRangeOf(view)
+                  const sel = view.state.selection
+                  if (r) askTangu(view, r.from, r.to)
+                  else if (sel instanceof NodeSelection) askTangu(view, sel.from, sel.to)
+                }}>
+                  <MessageSquarePlus size={13} /> {t('unipage.menu.askTangu')}
+                </button>
+                <div className="ubm-sep" />
+              </>
+            )}
             <div className="ubm-label">{t('unipage.menu.turnInto')}</div>
             <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
             <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>

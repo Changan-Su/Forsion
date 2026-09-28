@@ -83,6 +83,7 @@
     "check:unifiedkeys": "node scripts/e2e-editor.cjs --check=unified-keys",
     "check:taskbox": "node scripts/e2e-editor.cjs --check=taskbox",
     "check:unifiedsync": "node scripts/e2e-editor.cjs --check=unified-sync",
+    "check:editorai": "node scripts/e2e-editor.cjs --check=editor-ai",
     "check:cloudgap": "node scripts/cloud-gap.check.cjs",
     "check:amadeusinteractions": "node scripts/e2e-editor.cjs --check=amadeus-interactions",
     "check:dashboard": "node scripts/e2e-editor.cjs --check=dashboard",

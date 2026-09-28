@@ -14,6 +14,7 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
+import { quoteInChatPanel } from './chat2/chatPanelQuote'
 import { DESK_DRAFT_KEY, resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -591,13 +592,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                   className="t2-quote-action"
                   data-testid="selection-ask-in-panel"
                   onClick={() => {
-                    const text = quoteButton.text
-                    useApp.getState().setPendingChatQuote('chat-panel', text)
-                    const workspace = useWorkspace.getState()
-                    const panelIsFront = workspace.rightVisible
-                      && workspace.rightTabs.some((tab) => tab.type === 'chat-panel' && tab.active)
-                    // showSideView 对当前活动项是 toggle；这里的语义是 reveal，已在前台时不能反向收起。
-                    if (!panelIsFront) workspace.showSideView('right', 'chat-panel')
+                    quoteInChatPanel(quoteButton.text) // 与编辑器「问 Tangu」同一份交接(reveal 语义见该模块)
                     setQuoteButton(null)
                     window.getSelection()?.removeAllRanges()
                   }}

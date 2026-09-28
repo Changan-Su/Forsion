@@ -1506,6 +1506,13 @@ body.amx-marquee-active * {
   color: var(--text);
   white-space: nowrap;
 }
+/* 「问 Tangu」(G3-04):文字按钮,关键操作用中等字重;色值只消费语义 token。 */
+.am-app .itb-ask {
+  font-size: var(--ui-font-meta, 12px);
+  font-weight: 500;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .am-app .itb-sep {
   width: 1px;
   align-self: stretch;

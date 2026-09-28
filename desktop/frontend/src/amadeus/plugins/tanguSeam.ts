@@ -138,6 +138,11 @@ export interface TanguProbe {
   /** agent 自建 Space 读写自家数据(2026-09-27+);slug 没有数据源 → null(今天只有 muse)。
    *  可选:台架假探针 / 纯 Amadeus 壳不给 = 插件那边整个没有 `ctx.agent`。 */
   agentSelf?(slug: string): TanguAgentSelf | null
+  /** 编辑器「问 Tangu」(评审 G3-04,2026-09-28):把一段引用交给侧栏对话(挂成输入框上方的引用,不发送),
+   *  侧栏没在前台就把它揭出来。**宿主内部接缝,不进 `ctx.tangu`**(pluginStore 按字段挑着暴露)。
+   *  存在性 = 宿主注册了 `chat-panel` 视图(与 features/tangu.tsx 同一个谓词);没有侧栏对话的宿主不给 →
+   *  编辑器里整个入口不出现,不画一个点了没反应的按钮。 */
+  askInChat?(text: string): void
 }
 
 /** agent 自建 Space 读写自家数据(2026-09-27+):`ctx.agent` 的宿主实现。字段都是插件可见的契约,别塞绝对路径。 */
