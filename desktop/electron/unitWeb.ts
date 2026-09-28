@@ -12,6 +12,8 @@
  * (engineRoutes.generated.ts),只放行 allow 行;其余一律 403 LOCAL_ONLY。放行的请求盖远端来源标记
  * `x-forsion-remote: tunnel|p2p|lan` + `x-forsion-remote-mark`(per-boot 密钥,引擎据 TANGU_REMOTE_MARK_SECRET 验),
  * 入站同名头一律不透传(契约 C1)。
+ * 调用方身份(P1 · K1):隧道来路带 unitHost 签的 x-unit-caller → resolveCaller 验签(每请求只调一次、一次性消费),
+ * 通过才在从零重建的头表里盖 x-forsion-remote-caller;验不过 403 BAD_CALLER_ASSERTION(不降级);局域网 / P2P 来路的该头一律无视。
  *
  * ⚠️ 刻意零 electron 依赖(deps 注入):vitest 直接跑真 HTTP 全链(scripts 之外的脊柱测试
  * electron/unitWeb.test.ts —— 配对/鉴权/反代盖章/SSE 直通都在那里钉)。
@@ -27,6 +29,7 @@ import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { PRODUCT, type ProductProfile } from './product'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
+import { encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller } from './unitCaller'
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
 
@@ -63,6 +66,8 @@ export const UNIT_P2P_HEADER = 'x-unit-p2p'
 
 /** 引擎路由里远端不许用的回包(设备页据 code 出本地化提示,见 frontend services/localOnly.ts)。 */
 const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }
+/** 隧道上的调用方断言验不过(R-08):403 不是 401(渲染层 401 = 重新登录),也不降级成「未识别」放行(INV-MONO)。 */
+const BAD_CALLER_BODY = { code: 'BAD_CALLER_ASSERTION', detail: 'Invalid caller assertion' }
 
 /**
  * 路径里**只认** RFC 3986 的 pchar(未保留字符 + sub-delims + `:` `@`)和 `/`,百分号必须带两位十六进制。
@@ -189,6 +194,8 @@ export interface UnitWebHandle {
   internalSecret: string
   /** P2P 执行器(attachHostChannel)专用的 per-boot 密钥(x-unit-p2p);与隧道分钥,仅 loopback 有效。 */
   p2pSecret: string
+  /** unitHost 签调用方断言(x-unit-caller)用的 per-boot 钥(P1 · K1);与上面两把、将来 /unit/mcp 的钥都不同。 */
+  proxyCallerKey: string
   close: () => Promise<void>
 }
 
@@ -235,6 +242,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   }
   const internalSecret = randomUUID()
   const p2pSecret = randomBytes(32).toString('hex')
+  const proxyCallerKey = randomBytes(32).toString('hex')
+  /** 调用方断言的重放表:派发 id → 过期时刻(gc() 清理)。只记验签全过的,表长 ≤ 合法请求速率 × 120s。 */
+  const seenCallerDispatch = new Map<string, number>()
   /** 便携 Unit 的本地投影(projection local)里,唯一能过鉴权的是工作区主人的访问密钥 —— 那是主人自己的界面,
    *  不是「另一台设备」:/engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。桌面(main.ts)从不传 projection,
    *  所以桌面的三条远端通路恒走允许清单(unitWeb.test 两个方向都钉住)。 */
@@ -256,6 +266,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       }
     }
     for (const [t, rec] of assetTokens) if (rec.exp < now) assetTokens.delete(t)
+    gcSeenCallers(seenCallerDispatch, now)
   }
 
   /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
@@ -272,6 +283,22 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     return { ok: hit, pairHash: hit ? h : null, via: hit ? 'lan' : null }
   }
   const authed = (req: http.IncomingMessage): boolean => authInfo(req).ok
+
+  /**
+   * 调用方断言(P1 · K1,INTEGRATION §1.2):**每个请求只调一次** —— 验过即消费重放表,第二次调必回失败。
+   * 只对隧道来路验;局域网 / P2P 来路的 x-unit-caller 一律无视(不验、不转):那两条路没有 hub 盖章,
+   * 就算带着用正确钥签出的断言也不作数(K1 S5)。隧道上缺头 = 账号级未识别(caller:null);在场却验不过 → ok:false
+   * (调用方回 403 BAD_CALLER_ASSERTION,不降级)。/engine 分支与 K4 的 /unit/remote-access* 共用。
+   */
+  const resolveCaller = (req: http.IncomingMessage, info: { via: UnitIngress | null }): { ok: true; caller: ProxyCaller | null } | { ok: false } => {
+    if (info.via !== 'tunnel') return { ok: true, caller: null }
+    const raw = req.headers[UNIT_CALLER_HEADER]
+    if (raw === undefined) return { ok: true, caller: null }
+    if (typeof raw !== 'string') return { ok: false }
+    const r = verifyProxyCaller(proxyCallerKey, raw, { method: req.method || 'GET', url: req.url || '' }, seenCallerDispatch)
+    if (!r.ok) { deps.log(`[unit-web] 调用方断言无效(${r.reason}),已拒绝`); return { ok: false } }
+    return { ok: true, caller: r.caller }
+  }
 
   /** 资源令牌活性:未过期 + 发行者(若为配对设备)仍在已配对列表里。 */
   const assetTokenLive = (at: string): boolean => {
@@ -312,9 +339,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     })
 
   /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。
-   *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote*
-   *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。 */
-  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null): void => {
+   *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote* / x-unit-caller
+   *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。
+   *  caller = resolveCaller 验过的调用方:只在隧道来路盖 x-forsion-remote-caller(引擎在 marked && tunnel 时才读)。 */
+  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
@@ -328,6 +356,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (via) {
       headers['x-forsion-remote'] = via
       if (engine.remoteMark) headers['x-forsion-remote-mark'] = engine.remoteMark
+      if (via === 'tunnel' && caller) headers[ENGINE_CALLER_HEADER] = encodeEngineCaller(caller)
     }
     const up = http.request({
       host: target.hostname,
@@ -548,16 +577,25 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       json(res, 200, { config: await deps.writeConfig(patch && typeof patch === 'object' ? patch : {}) })
       return
     }
+    // /engine 分支的次序由 INTEGRATION §2.3 钉死(K1 → K4 → K2 按此插入,不自行调序):
+    // 鉴权 → 投影主人直通 → 路径规整 → 允许清单 → 调用方断言(K1)→ 急停锁定(K2)→ 会话档闸(K4)→ 反代。
     if (path === '/engine' || path.startsWith('/engine/')) {
+      const method = req.method || 'GET'
       const info = authInfo(req)
       if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null); return }
+      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
       // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
       const target = engineTarget(url.slice('/engine'.length))
       if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
-      if (engineRouteAccess(req.method || 'GET', target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
-      proxyEngine(req, res, target.path + target.query, info.via)
+      if (engineRouteAccess(method, target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
+      const rc = resolveCaller(req, info) // K1:每请求只调一次(重放表一次性消费)
+      if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
+      // K2 插在这里:if (deps.remoteLock?.() && !lockedEngineAllowed(method, target.path)) { json(res, 423, REMOTE_LOCKED_BODY); return }
+      // K4 插在这里:const caller = callerOf(info.via, pairInfo(info), rc.caller)(unitCaller.ts)
+      //   const g = deps.remoteAccess ? deps.remoteAccess.gateEngine({ method, path: target.path, via: info.via, caller }) : baseTierOnly(method, target.path)
+      //   if (!g.ok) { json(res, g.status, g.body); return }
+      proxyEngine(req, res, target.path + target.query, info.via, rc.caller)
       return
     }
 
@@ -683,6 +721,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         port,
         internalSecret,
         p2pSecret,
+        proxyCallerKey,
         close: () => new Promise<void>((r) => { server.close(() => r()); for (const socket of sockets) socket.destroy() }),
       })
     })

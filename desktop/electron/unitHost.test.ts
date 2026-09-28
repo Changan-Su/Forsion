@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { UnitHost } from './unitHost'
+import { verifyProxyCaller, type ProxyCaller } from './unitCaller'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 async function until(fn: () => boolean, ms = 3000): Promise<boolean> {
@@ -30,7 +31,7 @@ interface Hub {
   holdResp: boolean
   respClosed: string[]
   mode: ChannelMode
-  dispatch: (env: { id: string; method: string; path: string; accept?: string }) => void
+  dispatch: (env: { id: string; method: string; path: string; accept?: string; proxyCaller?: unknown }) => void
   endChannel: () => void
   close: () => void
 }
@@ -78,7 +79,7 @@ function fakeHub(): Promise<Hub> {
       const { port } = server.address() as AddressInfo
       Object.assign(hub, {
         url: `http://127.0.0.1:${port}`,
-        dispatch: (env: { id: string; method: string; path: string; accept?: string }) => {
+        dispatch: (env: { id: string; method: string; path: string; accept?: string; proxyCaller?: unknown }) => {
           channels.at(-1)!.write(`event: dispatch\ndata: ${JSON.stringify({ body: null, ...env })}\n\n`)
         },
         endChannel: () => channels.at(-1)!.end(),
@@ -112,12 +113,12 @@ function fakeUnitWeb(): Promise<{ url: string; hits: string[]; cut: string[]; cl
   })
 }
 
-function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean; requestTimeoutMs?: number; hubFetch?: typeof fetch }): { h: UnitHost; logs: string[]; saved: unknown[] } {
+function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean; requestTimeoutMs?: number; hubFetch?: typeof fetch; proxyCallerKey?: string }): { h: UnitHost; logs: string[]; saved: unknown[] } {
   const logs: string[] = []
   const saved: unknown[] = []
   const h = new UnitHost({
     getCreds: () => ({ cloudUrl: hub.url, token: 'tok' }),
-    getUnitWeb: () => ({ url: web?.url ?? null, internalSecret: 'INTERNAL' }),
+    getUnitWeb: () => ({ url: web?.url ?? null, internalSecret: 'INTERNAL', proxyCallerKey: opts?.proxyCallerKey ?? '' }),
     getLanUrl: () => null,
     getPairing: () => (opts?.unpaired ? null : { unitId: 'u1', secret: 's1' }),
     savePairing: async (p) => { saved.push(p) },
@@ -388,5 +389,73 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
       expect(web.cut).not.toContain('/hang-l')
       expect(h.abortEnvelope('env-l')).toBe(true) // 仍在飞
     } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  // ── P1 · K1:信封 proxyCaller → x-unit-caller ──────────────────────────────────
+  const PHONE: ProxyCaller = { unit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', kind: 'phone', name: 'Pixel', platform: 'android', registeredAt: null }
+  /** 记录型本机 unitWeb:收到的原始请求目标、方法与头。 */
+  function recordingWeb(): Promise<{ url: string; got: Array<{ method: string; url: string; headers: http.IncomingHttpHeaders }>; close: () => void }> {
+    const got: Array<{ method: string; url: string; headers: http.IncomingHttpHeaders }> = []
+    const server = http.createServer((req, res) => {
+      got.push({ method: req.method || '', url: req.url || '', headers: req.headers })
+      req.resume()
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 2 }); res.end('{}')
+    })
+    return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, got, close: () => { server.closeAllConnections(); server.close() },
+    })))
+  }
+
+  it('K1 S8 签名绑定**实际发出**的请求:会被 URL 规整的点段 / 空格 query 签的是规整后的目标,unitWeb 收到的 req.url 验得过', async () => {
+    const hub = await fakeHub()
+    const web = await recordingWeb()
+    const { h } = host(hub, web, 0, { proxyCallerKey: 'PCK' })
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-s8', method: 'POST', path: '/engine/./agent/runs?q=a b&x=%41', proxyCaller: PHONE })
+      expect(await until(() => web.got.length === 1)).toBe(true)
+      const hit = web.got[0]
+      expect(hit.url).toBe('/engine/agent/runs?q=a%20b&x=%41') // 发出去的目标已被 URL 规整
+      const v = verifyProxyCaller('PCK', String(hit.headers['x-unit-caller']), { method: hit.method, url: hit.url }, new Map())
+      expect(v).toEqual({ ok: true, caller: PHONE, dispatchId: 'env-s8' })
+      // 直接签原始 env.path 的实现在这里必红:
+      expect(verifyProxyCaller('PCK', String(hit.headers['x-unit-caller']), { method: 'POST', url: '/engine/./agent/runs?q=a b&x=%41' }, new Map()).ok).toBe(false)
+      // SSRF:信封 path 是 `//host/x` 时,请求仍只发到本机 unitWeb(主机不被相对解析换掉)
+      hub.dispatch({ id: 'env-ssrf', method: 'GET', path: '//evil.example/engine/agent/sessions', proxyCaller: PHONE })
+      expect(await until(() => web.got.length === 2)).toBe(true)
+      expect(web.got[1].url).toBe('//evil.example/engine/agent/sessions')
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  it('K1 S7 /unit/mcp* 永不带 proxy 断言;没有 proxyCaller / 钥未就绪不签;畸形 proxyCaller 丢弃并只记一次日志', async () => {
+    const hub = await fakeHub()
+    const web = await recordingWeb()
+    const { h, logs } = host(hub, web, 0, { proxyCallerKey: 'PCK' })
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      for (const path of ['/unit/mcp', '/unit/mcp/tools/call', '/UNIT//mcp', '/unit/%6dcp']) hub.dispatch({ id: `mcp-${path}`, method: 'POST', path, proxyCaller: PHONE })
+      hub.dispatch({ id: 'plain', method: 'GET', path: '/engine/agent/sessions' })
+      hub.dispatch({ id: 'bad-1', method: 'GET', path: '/engine/agent/sessions', proxyCaller: { unit: 'not-a-uuid', kind: 'phone' } })
+      hub.dispatch({ id: 'bad-2', method: 'GET', path: '/engine/agent/sessions', proxyCaller: 'phone' })
+      hub.dispatch({ id: 'ok', method: 'GET', path: '/unit/remote-access', proxyCaller: PHONE })
+      expect(await until(() => web.got.length === 8)).toBe(true)
+      for (const g of web.got) {
+        const signed = g.headers['x-unit-caller'] !== undefined
+        expect(signed, g.url).toBe(g.url === '/unit/remote-access')
+      }
+      expect(logs.filter((l) => l.includes('调用方字段不合法')).length).toBe(1)
+    } finally { h.stop(); web.close(); hub.close() }
+    const hub2 = await fakeHub()
+    const web2 = await recordingWeb()
+    const { h: h2 } = host(hub2, web2, 0) // proxyCallerKey 缺省 '' = unitWeb 还没起好
+    try {
+      h2.start()
+      expect(await until(() => hub2.channels.length === 1)).toBe(true)
+      hub2.dispatch({ id: 'nokey', method: 'GET', path: '/engine/agent/sessions', proxyCaller: PHONE })
+      expect(await until(() => web2.got.length === 1)).toBe(true)
+      expect(web2.got[0].headers['x-unit-caller']).toBeUndefined()
+    } finally { h2.stop(); web2.close(); hub2.close() }
   })
 })
