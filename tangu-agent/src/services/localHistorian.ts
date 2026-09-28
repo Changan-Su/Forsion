@@ -47,6 +47,7 @@ import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
+import { sessionRemoteTainted } from './remoteTaint.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -504,8 +505,12 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要照常(会话自有资产)。
     // 日志(LOG)与工作笔记候选同样不写(P1 · M1A,G7):LOG 按日进 Muse 周期提示词的活动摘要、read_log,远端原话经它流进 Muse;
     // 工作笔记候选进 Agent 的收件箱,之后 /refine 摆到本机 run 面前。远程 run 自己的 log_event 同样硬拒(remoteOrigin.remoteManagementDenied)。
-    const remoteRound = historianRoundRemote(sk, opts?.runRemote);
-    if (remoteRound) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
+    // 会话级污点一并算(P1 · M1A 复审 P1):手机接着聊桌面的会话、用户回到桌面再跑一轮本机 run —— 这一轮本身无污点,
+    // 但判官读的最近 30 条里就有远端原话,只看「轮」会把远程轮刚跳过的内容原样收回去。会话里有过远程 run(input.remote /
+    // remoteTainted)、远端建 / 改过项目路径(remoteOrigin)或远端改过标题(remoteContent)→ 此后每一轮都按远程处理。
+    // 取舍:这类会话从此与带 remoteOrigin 的会话一样,不再自动写 LOG / 记忆候选 / 工作笔记候选、不拉辅助讨论;标题 / 摘要照常。
+    const remoteRound = historianRoundRemote(sk, opts?.runRemote) || (await sessionRemoteTainted(sessionId));
+    if (remoteRound) log(`第 ${roundN} 轮来自远端设备或会话经远端驱动过,本轮不写长期记忆`);
     const memoryDue = due && !remoteRound;
     const logDue = due && !remoteRound;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
