@@ -298,7 +298,8 @@ export function installTanguProbe(): void {
     // automation-only 档案也会装本探针(bootstrapEngine),那里没有侧栏对话 → 方法缺席,编辑器不出入口。
     ...(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {}),
     // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
-    complete: (req, opts) => completeInline(req, readActiveModel()?.id ?? null, opts),
+    // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
+    ...(hasNativeFeature('tangu') ? { complete: (req, opts) => completeInline(req, readActiveModel()?.id ?? null, opts) } : {}),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {
