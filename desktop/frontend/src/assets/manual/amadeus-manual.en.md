@@ -608,6 +608,7 @@ Hover any block and a ⠿ handle plus a ＋ button appear in the left margin.
 - `Esc` selects the whole block the caret is in, so copy, cut and delete act on the block; press `Esc` again to get back into the text. If a popup is open, `Esc` closes that first.
 - `⌘/Ctrl + A` selects in tiers: first the current text block, then its top-level block (the whole list, the whole quote, or the block within its column), and only on the third press the whole note.
 - `⌘/Ctrl + ⇧ + ↑` / `⌘/Ctrl + ⇧ + ↓` move the current block up or down among its siblings.
+- `⌘/Ctrl + D` duplicates, the same as "Duplicate block" in the block menu: the block the caret is in (a single item inside a list), the selected block, or every block a cross-block selection touches. The copy goes right below, and the caret or selection moves onto it. On a Mac, `Ctrl + D` still deletes the next character.
 - Deleting a block that points at a file on disk asks whether to delete that file too; cutting does not.
 
 The block menu, in order: the section header "Turn into", then "Text", "Heading 1", "Heading 2", "Heading 3", "Bulleted list", "Numbered list", "To-do list", "Quote", "Toggle", "Card", a separator, then "Move to new column", "Return to document", "Duplicate block", "Delete".

@@ -70,6 +70,8 @@ export interface BlockLayer {
   getView: () => EditorView | null
   /** 跨块选区覆盖到的顶层块边界(整节点对齐、两端同父);⠿ 菜单的整批动作与拖拽共用这一份判定。 */
   topRangeOf: (view: EditorView) => { from: number; to: number } | null
+  /** 复制块(⠿ 菜单「复制块」与 Mod-D 同一份,B-12):跨块选区 / 块选中 / 光标所在块。没东西可复制返回 false。 */
+  duplicate: (view: EditorView) => boolean
 }
 
 /** 元素的**累计视觉缩放**(CSS zoom × 全部祖先的 transform scale)。`rect` 是视口 px、`offsetWidth`
@@ -2140,6 +2142,62 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     }),
   )
 
+  // ── 复制块 Mod-D(B-12:v3 块世界有这颗键,v4 迁移时漏了)。────────────────────────
+  // ⠿ 菜单「复制块」与键盘共用这一份(UnifiedPage 经 BlockLayer.duplicate 调)。四种选区一个口径:
+  //  · 跨块选区(拖选跨段 / 框选 / 把手子树)→ 按 topRangeOf 的整块边界整批复制到范围之后;
+  //  · 块选中(Esc / 点 ⠿,NodeSelection)→ 复制该节点(列表项就在本列表里复制一项);
+  //  · 光标 / 块内选区 → 复制光标所在的块,单位与键盘搬块一致(顶层块 / 列内块 / 列表里的单项;
+  //    引用 / callout 整只),另加卡内逐块(与把手在卡内的逐行粒度一致)。
+  // 画布卡的副本**当场铸新锚**并报宿主(理由见 mintCardCopies 顶注:原样复制 = 两个同锚卡,下次打开
+  // 整个 canvas 键作废;漏报 ownedCards = 派生冻结),单卡再错开 40px,免得在画布上与原卡完全重叠。
+  // 副本插在原块之后,选区跟到副本上(Notion 同):连按一路往下复制,屏幕上也看得到新块在哪。
+  const duplicateBlocks = (state: EditorState, dispatch?: (tr: Transaction) => void, view?: EditorView): boolean => {
+    const sel = state.selection
+    const range = view ? topRangeOf(view) : null
+    if (range) {
+      if (!dispatch) return true
+      const { content, minted } = mintCardCopies(state.doc, state.doc.slice(range.from, range.to).content)
+      if (minted.length) hooks.onCardsMinted?.(minted)
+      const shift = range.to - range.from
+      const tr = state.tr.insert(range.to, content)
+      tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
+      if (blockSelectionKey.getState(state)) tr.setMeta(blockSelectionKey, true) // 框选副本仍按整块呈现
+      dispatch(tr.scrollIntoView())
+      return true
+    }
+    if (sel instanceof NodeSelection) {
+      if (!sel.node.isBlock) return false // 行内原子(图片 / 公式)不归块复制
+      if (!dispatch) return true
+      let copy = sel.node
+      if (copy.type.name === 'amadeusCanvasCard') {
+        const { content, minted } = mintCardCopies(state.doc, Fragment.from(copy))
+        const c = content.firstChild ?? copy
+        copy = c.type.create({ ...c.attrs, x: Number(c.attrs.x) + 40, y: Number(c.attrs.y) + 40 }, c.content, c.marks)
+        if (minted.length) hooks.onCardsMinted?.(minted)
+      }
+      const tr = state.tr.insert(sel.to, copy)
+      tr.setSelection(NodeSelection.create(tr.doc, sel.to))
+      dispatch(tr.scrollIntoView())
+      return true
+    }
+    if (!(sel instanceof TextSelection) || !sel.$from.sameParent(sel.$to)) return false
+    const { $from } = sel
+    let d = $from.depth
+    while (d >= 1 && !['doc', 'amadeusColumnCell', 'amadeusCanvasCard', 'bullet_list', 'ordered_list'].includes($from.node(d - 1).type.name)) d--
+    if (d < 1) return false
+    const from = $from.before(d)
+    const to = $from.after(d)
+    const node = state.doc.nodeAt(from)
+    if (!node) return false
+    if (!dispatch) return true
+    const shift = to - from
+    const tr = state.tr.insert(to, node)
+    tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
+    dispatch(tr.scrollIntoView())
+    return true
+  }
+  const duplicateKeymap = $prose(() => keymap({ 'Mod-d': duplicateBlocks }))
+
   // ── Mod+A 分级全选(AFFiNE/Notion 对齐)。──────────────────────────────────────
   // 一级=光标所在文本块的内容;二级=它所属的顶层块(列表整只 / 引用整只 / 列内那一块);
   // 三级=整篇。PM 原生只有「整篇」一级 —— 整页一实例之后,那一下会把别的段落一起吞掉,
@@ -2304,8 +2362,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   return {
-    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, keyboardPlugins].flat(),
+    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, duplicateKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
+    duplicate: (view) => duplicateBlocks(view.state, view.dispatch.bind(view), view),
   }
 }

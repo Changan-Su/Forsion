@@ -60,7 +60,7 @@ import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn } from './columns'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
@@ -2314,30 +2314,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <Undo2 size={13} /> {t('unipage.menu.backToDoc')}
               </button>
             )}
-            <button onClick={() => withBlocks(
-              // 跨块选区:整批复制(AFFiNE 的 Duplicate 也是「只选半行也复制整块」)。范围可能盖到
-              // 整卡(topRangeOf 对卡内选区爬升到卡边界)—— 与单卡支同款:铸新锚 + 进归属集合
-              // (漏登记 = 首次派生落盘后归属判据 fail-closed,派生冻结;C89b 修前红)。
-              (view, r) => {
-                const { content, minted } = mintCardCopies(view.state.doc, view.state.doc.slice(r.from, r.to).content)
-                view.dispatch(view.state.tr.insert(r.to, content).scrollIntoView())
-                for (const a of minted) pipe.ownedCards.add(a)
-              },
-              (view, sel) => {
-                // ⚠️ 画布卡片必须换新锚再复制(Codex P0-6):原样插入会得到两个 anchor=c1,派生写出
-                // 重复 ref,下次打开 parseCanvasJson 判歧义**整键作废** —— 全部画布卡一起失效。
-                if (sel.node.type.name === 'amadeusCanvasCard') {
-                  const anchor = freshAnchorId(view.state.doc)
-                  const copy = sel.node.type.create({ ...sel.node.attrs, anchor, x: Number(sel.node.attrs.x) + 40, y: Number(sel.node.attrs.y) + 40 }, sel.node.content)
-                  view.dispatch(view.state.tr.insert(sel.to, copy).setMeta('amxCanvas', true))
-                  pipe.ownedCards.add(anchor)
-                  syncFromEditor()
-                  schedule()
-                  return
-                }
-                view.dispatch(view.state.tr.insert(sel.to, sel.node))
-              },
-            )}>
+            {/* 与 Mod-D 同一份(blockLayer.duplicate,B-12):跨块选区整批(AFFiNE 的 Duplicate 也是「只选半行
+                也复制整块」)、块选中复制该节点。画布卡(含跨块选区盖到的整卡)一律当场铸新锚并经 onCardsMinted
+                进归属集合 —— 原样插入 = 两个同锚卡、整个 canvas 键作废(Codex P0-6);漏登记 = 派生冻结(C89b)。
+                菜单这条再立刻拉平一次派生 + 排保存(原单卡支的做法),键盘那条走编辑器 onChange 的常规链。 */}
+            <button onClick={() => {
+              setBlockMenu(null)
+              const view = layer.getView()
+              if (!view) return
+              if (layer.duplicate(view)) {
+                syncFromEditor()
+                schedule()
+              }
+              view.focus()
+            }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
             <button className="danger" onClick={() => withBlocks(

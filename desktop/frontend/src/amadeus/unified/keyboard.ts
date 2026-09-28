@@ -545,6 +545,9 @@ const blockSelectionTypingPlugin = $prose(
     }),
 )
 
+/** 与 prosemirror-keymap 判「Mod 是 Cmd 还是 Ctrl」同一口径(它按 navigator.platform)。 */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
+
 export const keyboardPlugins: MilkdownPlugin[] = [
   blockSelectionTypingPlugin,
   wrapSelectionPlugin,
@@ -555,7 +558,9 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
       Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom),
-      'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom), // mac 习惯键,与 Delete 同一支
+      // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
+      // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom) } : {}),
       ArrowUp: arrowToAtom('up'),
       ArrowDown: arrowToAtom('down'),
     }),
