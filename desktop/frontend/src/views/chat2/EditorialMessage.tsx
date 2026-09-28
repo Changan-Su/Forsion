@@ -44,7 +44,8 @@ import { useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { useEdgeNudge } from '@lcl/engine'
-import { splitSuggestions, type SuggestState, type TaskCard } from './suggest'
+import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
+import { CreationCards } from './CreationCards'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, parseApprovalUpdate, pickPlanInquiry } from './approvalQueue'
@@ -373,7 +374,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
 
   // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
   const streaming = msg.status === 'streaming'
-  const { text: body, items: suggestions, tasks } = splitSuggestions(msg.content, { streaming })
+  // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
+  const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
+  const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
   const pendingApv = (msg.approvals || []).filter((a) => a.status === 'pending')
@@ -409,7 +412,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             const lastTextIdx = msg.segments.reduce((acc, s2, j) => (s2.t === 'text' ? j : acc), -1)
             return msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
-                const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState })
+                const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
@@ -457,6 +460,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
         {!!tasks.length && msg.status === 'done' && <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} />}
+        {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
+        {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
 
         {msg.planProposal && (
 

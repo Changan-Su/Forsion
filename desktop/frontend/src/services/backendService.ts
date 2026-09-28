@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
-  NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitSettings, NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
@@ -25,6 +25,7 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
+    let info: string | undefined
     try {
       const j = await r.json()
       detail = j?.detail || detail
@@ -33,8 +34,9 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
       // REMOTE_ARGS_OVERRIDE_FORBIDDEN)→ 换成本地化提示,而不是把英文 detail 原样上屏(见 services/localOnly.ts)
       const refusal = remoteRefusalMessage(j?.code)
       if (refusal) { detail = refusal; code = j.code }
+      if (typeof j?.info === 'string') info = j.info // 与错误码配套的原文(如 git 的 stderr),调用方按需展示
     } catch { /* keep */ }
-    throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
+    throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {}, info ? { info } : {})
   }
   return r.json() as Promise<T>
 }
@@ -1078,6 +1080,37 @@ export const getProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
 /** 有会话就按 sessionId 绑定;没有会话可借的项目(全删光又加回来)按路径读用户侧记录 —— 只有这个只读端点收 cwd。 */
 export const getProjectSettings = (cfg: TanguDesktopConfig, ref: { sessionId: string } | { cwd: string }, opts?: { timeoutMs?: number }) =>
   request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/settings?${'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`}`, undefined, opts).then((r) => r.settings ?? null)
+// ── 项目的 git 动作(PROJECT 详情「Git」页;用户点了才做)。失败带机器码 code(not_repo / nothing_to_commit / embedded_repo /
+//    too_many_files / large_files / no_identity / invalid_branch / no_remote / git_failed …)+ info(git 原文 / 点名的文件)。
+//    成功一律带回新的项目上下文,面板一次刷新。
+//    context 为 null = 动作做完了、只是随后读上下文失败:调用方照「成功」处理并自己重读,别报成失败(用户会重试 → 重复提交)。
+//    trust=true = 用户刚点了「信任并继续」(仓库自带会执行程序的配置)。
+const withContext = <T extends { context: ProjectContext | null }>(r: T): T => ({ ...r, context: r.context ? projectContextShape(r.context) : null })
+const gitPost = <T,>(cfg: TanguDesktopConfig, action: string, body: object, timeoutMs = 60_000) =>
+  request<T>(cfg, `/agent/project-context/git/${action}`, { method: 'POST', body: JSON.stringify(body) }, { timeoutMs })
+export const gitInitProject = (cfg: TanguDesktopConfig, sessionId: string) =>
+  gitPost<{ createdGitignore: boolean; context: ProjectContext | null }>(cfg, 'init', { sessionId }).then(withContext)
+export const gitTrustProject = (cfg: TanguDesktopConfig, sessionId: string) =>
+  gitPost<{ trusted: boolean; context: ProjectContext | null }>(cfg, 'trust', { sessionId }).then(withContext)
+/** 这次会提交的文件(有已暂存的只列已暂存的,stagedOnly=true)。 */
+export const gitPendingProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
+  gitPost<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean }>(cfg, 'pending', { sessionId, trust })
+/** 用会话自己的模型写一条提交信息(计入额度)。 */
+export const generateGitCommitMessage = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
+  gitPost<{ message: string }>(cfg, 'message', { sessionId, trust }, 120_000).then((r) => r.message)
+/** expect = 提交框里那份清单的指纹:用户看完之后改动又变了,引擎回 changes_changed,不会悄悄多提交。 */
+export const gitCommitProject = (cfg: TanguDesktopConfig, sessionId: string, message: string, expect: string | undefined, trust = false) =>
+  gitPost<{ commit: { sha: string; subject: string; stagedOnly: boolean }; context: ProjectContext | null }>(cfg, 'commit', { sessionId, message, trust, ...(expect ? { expect } : {}) }, 120_000).then(withContext)
+export const gitCreateProjectBranch = (cfg: TanguDesktopConfig, sessionId: string, name: string, trust = false) =>
+  gitPost<{ branch: string; context: ProjectContext | null }>(cfg, 'branch', { sessionId, name, trust }).then(withContext)
+export const gitPushProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
+  gitPost<{ remote: string; branch: string; target: string; output: string; context: ProjectContext | null }>(cfg, 'push', { sessionId, trust }, 180_000).then(withContext)
+/** 「设置 → Git」。writable=false(云端 worker 的 config.json 是所有用户共用的)时设置页只读说明、不给改。 */
+export const getGitSettings = (cfg: TanguDesktopConfig) =>
+  request<{ settings: GitSettings; defaults: GitSettings; writable: boolean }>(cfg, '/agent/git-settings')
+/** 逐键改;某键给 null = 恢复缺省。 */
+export const setGitSettings = (cfg: TanguDesktopConfig, patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) =>
+  request<{ settings: GitSettings }>(cfg, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
 export const initProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(cfg, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

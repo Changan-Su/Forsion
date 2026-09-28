@@ -21,6 +21,7 @@ import { tanguHome, WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { PROJECT_DOC_FILENAMES, isPlainFileUnder, loadProjectDocSafe } from './projectDoc.js';
 import { listProjectSkills } from '../skills/localSkills.js';
 import { runGit } from './runtimeContext.js';
+import { isRepoTrusted, repoConfigRisks } from './gitTrust.js';
 import { AVATAR_EXT_MIME, AVATAR_MAX_BYTES } from '../agents/agentRegistry.js';
 
 export interface ProjectSettings {
@@ -73,6 +74,14 @@ export interface GitSummary {
   commits?: GitCommitInfo[];
   /** origin 的地址,凭据已遮盖;没有 origin 时 null。 */
   remote?: string | null;
+  /** 远端个数(没有 origin 但只有一个远端时也能推)。 */
+  remotes?: number;
+  /** 仓库级「会执行程序」的配置项与钩子(gitTrust 的 write 级);空 = 没有。 */
+  configRisks?: string[];
+  /** 用户在面板上信任过这个仓的配置。 */
+  trusted?: boolean;
+  /** 读工作区会跑仓库自带的过滤器且未信任 → 这次没读改动(changes 为空不代表干净)。 */
+  changesUnread?: boolean;
 }
 export interface ProjectContext {
   cwd: string;
@@ -456,13 +465,18 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
   const inside = await g(['rev-parse', '--is-inside-work-tree']);
   if (inside.reason === 'spawn-error') return { available: false, repo: false };
   if (inside.code !== 0 || inside.stdout.trim() !== 'true') return { available: true, repo: false };
-  const [branchR, topR, upstreamR, statusR, logR, remoteR] = await Promise.all([
+  // 打开面板就会跑的 status 会执行仓库自带的过滤器 —— 零点击路径:未经用户信任就不读改动(gitTrust)
+  const risk = await repoConfigRisks(cwd).catch(() => null);
+  const trusted = risk ? await isRepoTrusted(risk.commonDir) : false;
+  const unread = !risk || (!!risk.read.length && !trusted);
+  const [branchR, topR, upstreamR, statusR, logR, remoteR, remotesR] = await Promise.all([
     g(['rev-parse', '--abbrev-ref', 'HEAD']),
     g(['rev-parse', '--show-toplevel']),
     g(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
-    g(['status', '--porcelain', '--untracked-files=normal']),
+    unread ? Promise.resolve({ code: 1, stdout: '', stderr: '' }) : g(['status', '--porcelain', '--untracked-files=normal']),
     g(['log', `-${GIT_COMMITS_SHOWN}`, '--format=%h%x1f%H%x1f%ct%x1f%s']),
     g(['remote', 'get-url', 'origin']),
+    g(['remote']),
   ]);
   const commits: GitCommitInfo[] = logR.code === 0
     ? logR.stdout.split('\n').filter(Boolean).map((line) => {
@@ -498,6 +512,8 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
     available: true, repo: true, nested: !!top && top !== real, branch, detached, upstream, ahead, behind,
     staged, unstaged, untracked, changes: changes.slice(0, GIT_CHANGES_SHOWN), changesTotal: changes.length, commits,
     remote: remoteR.code === 0 ? maskRemoteUrl(remoteR.stdout) : null,
+    remotes: remotesR.code === 0 ? remotesR.stdout.split('\n').filter((line) => line.trim()).length : 0,
+    configRisks: risk?.write ?? [], trusted, ...(unread ? { changesUnread: true } : {}),
   };
 }
 

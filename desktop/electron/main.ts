@@ -2425,7 +2425,7 @@ app.whenReady().then(async () => {
     if (!(await stat(rootDir)).isDirectory()) throw new Error('Preview root is not a directory')
     // Each project gets its own origin: localStorage and simultaneous preview windows stay isolated.
     // 托管根下的项目 = 产物 → 稳定源(跨重启同源,本地数据不丢);其余走一次性令牌根。
-    return previewOriginFor(join(forsionWorkspaceDir(), 'Project'), rootDir)
+    return previewOriginFor(join(forsionWorkspaceDir(), 'Project'), rootDir, forsionHomeDir())
   })
   const studioWatchers = new Map<number, ReturnType<typeof createCodeStudioProjectWatcher>>()
   ipcMain.handle('codeStudio:watch', async (e, rootDir: string | null) => {
