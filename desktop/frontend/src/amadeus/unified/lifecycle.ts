@@ -209,6 +209,12 @@ export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' 
   return false
 }
 
+/** path 上最近用过的实例手里的外来 fm 原文(插模板合并属性用,G4-09);没有实例 = null。 */
+export function unifiedFmNow(path: string): string | null {
+  for (const h of byRecency(path)) if (h.fmNow) return h.fmNow()
+  return null
+}
+
 /** 块锚点击:让 path 上那篇把尾部挂着 `^id` 的块滚进视野。没有 v4 实例、或那篇里没有这个块 →
  *  false(调用方 openNoteAtBlock 据此重试几拍再放弃 —— 实例挂上但 doc 还空是常态)。 */
 export function unifiedRevealBlock(path: string, id: string, flash = false): boolean {
