@@ -42,9 +42,11 @@ function loadRelayPaths() {
  * @param {string} [o.deviceName]
  * @param {{ dropCallerHeader?: boolean }} [o.negctl]
  * @param {(m: string) => void} [o.log]
+ * @param {typeof fetch} [o.fetch]   发往 hub 的传输(台架把构建期的 apiBase 主机映射到假 hub 的真实端口;缺省全局 fetch)
  */
 function createFakePhoneNative(o) {
   const { checkRelayPath } = loadRelayPaths()
+  const fetch = o.fetch || globalThis.fetch
   const negctl = { ...(o.negctl || {}) }
   const log = o.log || (() => {})
   let identity = null // { unitId, secret, callerSecret, name }

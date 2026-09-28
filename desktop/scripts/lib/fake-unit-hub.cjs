@@ -232,7 +232,7 @@ async function startFakeUnitHub(o) {
     }
     if (p === '/api/brain/llm/build-and-stream') {
       const b = (await readJson(req)) || {}
-      const call = { at: Date.now(), user, auth: String(req.headers.authorization || ''), client: b.client ?? null, projectSource: b.projectSource ?? b.usageSource ?? null, modelId: b.modelId, messages: b.messages || [], tools: (b.tools || []).map((t) => t?.function?.name || t?.name), body: b }
+      const call = { at: Date.now(), user, auth: String(req.headers.authorization || ''), client: b.client ?? null, projectSource: b.projectSource ?? b.usageSource ?? null, cacheKey: b.cacheKey ?? null, modelId: b.modelId, messages: b.messages || [], tools: (b.tools || []).map((t) => t?.function?.name || t?.name), body: b }
       ledger.brain.push(call)
       const frames = brainFrames(call)
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
@@ -448,7 +448,8 @@ async function startFakeUnitHub(o) {
     }
   })
   // 代理模式下浏览器对 https 外站(mobileShim 的 GitHub 版本检查等)发 CONNECT:快速失败,别让 6s 超时叠起来
-  server.on('connect', (_req, socket) => { try { socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n') } catch { /* 已断 */ } })
+  server.on('connect', (_req, socket) => { socket.on('error', () => {}); try { socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n') } catch { /* 已断 */ } })
+  server.on('clientError', (_e, socket) => { try { socket.destroy() } catch { /* 已断 */ } })
   server.keepAliveTimeout = 5_000
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const port = server.address().port
