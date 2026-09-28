@@ -133,7 +133,94 @@ async function groupK(browser) {
   }
 }
 
-const GROUPS = { K: groupK }
+// ─────────────────────────────── D-08 ───────────────────────────────
+async function groupD(browser) {
+  const items = Array.from({ length: 12 }, (_, i) => `- item${i + 1} text`)
+  const md1 = '# Outline\n\n' + items.join('\n') + '\n'
+  const cases = [
+    ['D1 大列表:光标在第 10 项,外部改第 1 项 → 光标原地', md1, 'item10 te', md1.replace('item1 text', 'item1 text CHANGED'), (l) => l.includes('item10 teQxt')],
+    ['D2 表格:光标在第 3 行,外部改第 1 行 → 光标原地', '# T\n\n| a | b |\n| --- | --- |\n| r1c1 | r1c2 |\n| r2c1 | r2c2 |\n| r3c1 | r3c2 |\n', 'r3c', null, (l) => /\| r3cQ1\s*\|/.test(l)],
+    ['D3 引用:光标在第 3 段,外部改第 1 段 → 光标原地', '# T\n\n> quote one\n>\n> quote two\n>\n> quote three here\n', 'quote three', null, (l) => l.includes('quote threeQ here')],
+    ['D4 同一段:光标前的字被外部改 → 光标跟着字走、不甩到段尾', '# T\n\nalpha beta gamma delta epsilon\n', 'gamma', null, (l) => l.includes('gammaQ delta')],
+  ]
+  const exts = [null, (m) => m.replace('r1c1', 'r1c1 CHANGED'), (m) => m.replace('quote one', 'quote one CHANGED'), (m) => m.replace('alpha', 'ALPHA-EXT')]
+  for (let i = 0; i < cases.length; i++) {
+    const [name, md, caretText, ext0, want] = cases[i]
+    const ext = ext0 ?? exts[i](md)
+    const p = await open(browser, md)
+    await caretAfter(p, caretText)
+    const before = await caret(p)
+    await fire(p, ext)
+    await wait(1500)
+    const after = await caret(p)
+    await p.keyboard.type('Q')
+    await wait(1600)
+    const line = (await disk(p)).split('\n').find((l) => l.includes('Q')) ?? ''
+    record(name, want(line), JSON.stringify({ before, after, line }))
+    await p.close()
+  }
+  // D5:带标题的长文档只改一处(标题 id 解析出来是空串,活文档里由插件回填)
+  const N = 40
+  const mk = (edit) => {
+    const out = ['# 文档']
+    for (let i = 1; i <= N; i++) {
+      if (i === 10 || i === 25) out.push(`## 小节${i}`)
+      out.push(edit && edit[i] ? edit[i] : `段落${i} 原文内容。`)
+    }
+    return out.join('\n\n') + '\n'
+  }
+  {
+    const p = await open(browser, mk(null))
+    await caretAfter(p, '段落20 原文')
+    const before = await caret(p)
+    await fire(p, mk({ 5: '段落5 AGENT。' }))
+    await wait(1500)
+    const after = await caret(p)
+    await p.keyboard.type('Z')
+    await wait(1600)
+    const line = (await disk(p)).split('\n').find((l) => l.includes('Z')) ?? ''
+    record('D5 带标题的文档只改一处 → 光标不被甩走(标题 id 回填不算改动)', line === '段落20 原文Z内容。', JSON.stringify({ before, after, line }))
+    await p.close()
+  }
+  // D6:折叠一个小节,外部改文末 → 折叠还在
+  {
+    const p = await open(browser, mk(null))
+    const folded = () => p.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const pl = v.state.plugins.find((x) => x.key === 'AMX_HEADING_FOLD$')
+      return (pl.getState(v.state).folded || []).map((pos) => v.state.doc.nodeAt(pos)?.textContent ?? '?')
+    })
+    await p.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const key = v.state.plugins.find((x) => x.key === 'AMX_HEADING_FOLD$').spec.key
+      let pos = -1
+      v.state.doc.forEach((n, off) => { if (pos < 0 && n.type.name === 'heading' && n.textContent === '小节10') pos = off })
+      v.dispatch(v.state.tr.setMeta(key, { toggle: pos }))
+    })
+    const f0 = await folded()
+    await fire(p, mk({ 40: '段落40 AGENT。' }))
+    await wait(1500)
+    const f1 = await folded()
+    record('D6 折叠了「小节10」,外部改文末 → 折叠还在', JSON.stringify(f0) === '["小节10"]' && JSON.stringify(f1) === '["小节10"]', JSON.stringify({ f0, f1 }))
+    await p.close()
+  }
+  // D7:两处不相邻的改动 → 都进来,中间的光标不动;回灌只重建被改的那两块 DOM
+  {
+    const p = await open(browser, mk(null))
+    await caretAfter(p, '段落20 原文')
+    // 标记用 expando 而不是 data-* 属性:属性改动会被 PM 的 DOMObserver 当脏数据、整块重绘(假红)。
+    await p.evaluate((s) => { document.querySelectorAll(`${s} > *`).forEach((el) => { el.__amxKeep = true }) }, PM)
+    await fire(p, mk({ 3: '段落3 EXT。', 37: '段落37 EXT。' }))
+    await wait(1500)
+    const after = await caret(p)
+    const dom = await p.evaluate((s) => [...document.querySelectorAll(`${s} > *`)].filter((el) => !el.__amxKeep).map((el) => el.textContent), PM)
+    const text = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    record('D7 两处不相邻的外部改动 → 两处都进来、中间光标不动、别的块 DOM 一个不重建', after.text === '段落20 原文内容。' && after.off === 7 && text.includes('段落3 EXT。') && text.includes('段落37 EXT。') && dom.every((x) => x.includes('EXT')), JSON.stringify({ after, rebuilt: dom }))
+    await p.close()
+  }
+}
+
+const GROUPS = { K: groupK, D: groupD }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

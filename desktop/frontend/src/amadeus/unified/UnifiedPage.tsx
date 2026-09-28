@@ -62,6 +62,7 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
+import { reconcileTr } from './reconcileDiff'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
@@ -127,8 +128,6 @@ const NOOP_KEYS = {
   selfFocus: () => {},
 }
 
-/** 顶层子节点级最小差异替换:首尾相同段跳过,只替换中间不同的范围。
- *  选区在范围外由 PM 映射自动保持;在范围内钳到边界。整文替换是它的退化情形。 */
 /** 存一个 OS 文件为附件 → 磁盘形态的引用 md(`![[base]]`);失败 null。
  *  正文粘贴/拖入(saveFiles)与画布落卡(CanvasStage.saveFile)共用这一份。 */
 async function saveOneFile(page: string, f: File): Promise<string | null> {
@@ -186,28 +185,12 @@ function flashCiteTip(r: DOMRect): void {
   citeTip = { el, timer: window.setTimeout(dropCiteTip, 1400), arm, off }
 }
 
+/** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
+ *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
+ *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
 function applyMinimalDiff(view: EditorView, next: ProseNode): void {
-  const cur = view.state.doc
-  if (next.eq(cur)) return
-  let start = 0
-  const maxStart = Math.min(cur.childCount, next.childCount)
-  while (start < maxStart && cur.child(start).eq(next.child(start))) start++
-  let endCur = cur.childCount
-  let endNext = next.childCount
-  while (endCur > start && endNext > start && cur.child(endCur - 1).eq(next.child(endNext - 1))) {
-    endCur--
-    endNext--
-  }
-  let from = 0
-  for (let i = 0; i < start; i++) from += cur.child(i).nodeSize
-  let to = from
-  for (let i = start; i < endCur; i++) to += cur.child(i).nodeSize
-  const repl: ProseNode[] = []
-  for (let i = start; i < endNext; i++) repl.push(next.child(i))
-  // K-05(用户拍板 #7):回灌是别人的改动,**不进撤销栈** —— 否则 Cmd+Z 撤掉的是外部那次写入、800ms 后再写盘盖掉对端。
-  // PM history 会把本地已有的撤销步骤按这次替换的 mapping rebase,不清空撤销栈(同 MarkdownBlock / canvasStage 的外部同步)。
-  // 恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。
-  view.dispatch(view.state.tr.replaceWith(from, to, repl).setMeta('addToHistory', false))
+  const tr = reconcileTr(view.state, next)
+  if (tr) view.dispatch(tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
