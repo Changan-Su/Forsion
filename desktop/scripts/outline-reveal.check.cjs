@@ -14,6 +14,14 @@
 //  O6 块锚 `^id`(unifiedRevealBlock)新开笔记首击即生效、贴顶
 //  O7 端级 zoom 1.25 下落点不按比例过冲;引用条闪片(flash)正落在标题上
 //
+//  —— 编辑器里点笔记锚点链接(评审 L-05:原先 `[[笔记#标题]]` / `[[笔记#^块]]` 只开笔记丢锚点,`[[#标题]]` 画成坏链点了没反应)——
+//  L1 显示:`[[Alpha#Sec]]` →「Alpha › Sec」、`[[Alpha#^b1]]` →「Alpha › ^b1」、`[[#小节 5]]` →「小节 5」且**不**是虚线坏链
+//  L2 点 `[[#小节 5]]`(本页锚点)→ 不换页,标题落在顶栏下 12px
+//  L3 点 `[[Unified#小节 4]]`(指名本页)→ 不换页,标题落点正确
+//  L4 点 `[[Nope#X]]`(笔记不存在)→ 询问创建的名字是「Nope」,不是「Nope#X」
+//  L5 点 `[[Alpha#Sec]]` → 打开 Alpha.md 并把 Sec 标题亮到阅读位置(台架的 loadPage 换成 switchFile,模拟宿主路由)
+//  L6 点 `[[Alpha#^b1]]` → 打开 Alpha.md 并把挂 ^b1 的那段亮到阅读位置
+//
 // 用法:npm run check:outlinereveal(= node scripts/e2e-editor.cjs --check=outline-reveal;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -83,6 +91,101 @@ const H = `${PM} h2`
 const landed = (m) => Math.abs(m.top - (m.bar + GAP)) <= TOL
 const clickOl = async (p, text) => { await p.click(`.fake-ol[data-t="${text}"]`); await p.waitForTimeout(250) }
 
+// ── L-05:编辑器里的笔记锚点链接 ────────────────────────────────────────────────────────────────
+const LINK_MD = `# 文首\n\n见 [[Alpha#Sec]] 与 [[#小节 5]] 与 [[Alpha#^b1]] 与 [[Unified#小节 4]] 与 [[Nope#X]] 完\n\n${[1, 2, 3, 4, 5, 6].map(sec).join('\n\n')}\n`
+const ALPHA_MD = `# Alpha\n\n${Array.from({ length: 30 }, (_, i) => `Alpha 填充 ${i}。`).join('\n\n')}\n\n## Sec\n\n小节正文。\n\n${Array.from({ length: 20 }, (_, i) => `后续 ${i}。`).join('\n\n')}\n\n锚定的那一段 ^b1\n\n${Array.from({ length: 40 }, (_, i) => `尾部 ${i}。`).join('\n\n')}\n`
+
+async function openLinks(browser) {
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+  p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(LINK_MD)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+  await p.waitForSelector(PM, { timeout: 120000 })
+  await p.waitForFunction(() => !!(window.__upage && window.__upage.lifecycle), null, { timeout: 20000 })
+  await p.waitForTimeout(400)
+  await p.evaluate((alpha) => {
+    const up = window.__upage
+    up.vault.set('Alpha.md', alpha)
+    window.__loaded = []
+    // 台架没有宿主路由:把 store 的 loadPage 换成 switchFile(= 生产里 leaf 换到那篇、UnifiedPage 按新路径挂载)。
+    up.pageStore.setState({ pages: ['Alpha.md', 'Unified.md'], loadPage: async (path) => { window.__loaded.push(path); up.switchFile(path) } })
+    const v = up.probe.view()
+    v.dispatch(v.state.tr) // pages 变了 → 让双链装饰按新解析态重建
+  }, ALPHA_MD)
+  await p.waitForTimeout(200)
+  return p
+}
+const clickLink = async (p, text) => {
+  // 链接在文首那一行:上一步的定位可能把它滚出了视口,先滚回顶再点(真鼠标点不到视口外)。
+  await p.evaluate(() => { document.querySelector('.amx-pane').scrollTop = 0 })
+  await p.waitForTimeout(150)
+  const b = await p.evaluate((t) => {
+    const el = [...document.querySelectorAll('.unified-body .wikilink')].find((x) => x.textContent === t)
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  }, text)
+  if (!b) return false
+  await p.mouse.click(b.x, b.y)
+  return true
+}
+/** 等到当前挂载的是 path 那篇、且 sel 里含 text 的块落在顶栏下 12px(或超时)。 */
+const waitLanded = async (p, sel, text, ms = 3000) => {
+  const t0 = Date.now()
+  let m = null
+  while (Date.now() - t0 < ms) {
+    m = await p.evaluate(([sel, text]) => {
+      const pane = document.querySelector('.amx-pane')
+      const el = [...document.querySelectorAll(sel)].find((x) => x.textContent.includes(text))
+      if (!el || !pane) return null
+      const r = el.getBoundingClientRect()
+      const v = window.__upage.probe.view()
+      const s = v.state.selection
+      const $f = v.state.doc.resolve(s.from)
+      return {
+        top: Math.round(r.top), bar: Math.round(document.querySelector('.amx-pane > .amx-toolbar').getBoundingClientRect().bottom),
+        scroll: Math.round(pane.scrollTop), selIn: $f.parent.textContent.includes(text),
+      }
+    }, [sel, text])
+    if (m && landed(m) && m.selIn) break
+    await p.waitForTimeout(100)
+  }
+  // reveal 在 600ms 后还有一次补跳(amadeusNav.reveal*WhenReady):不等它落完,下一步「滚回顶再点」会被它滚走、点空。
+  await p.waitForTimeout(750)
+  return m
+}
+
+async function anchorLinks(browser) {
+  let p = await openLinks(browser)
+  const links = await p.evaluate(() => [...document.querySelectorAll('.unified-body .wikilink')].map((e) => ({ t: e.textContent, bad: e.classList.contains('wikilink-unresolved') })))
+  const by = (t) => links.find((x) => x.t === t)
+  record('L1 锚点链接显示「笔记 › 标题」,本页锚点不是坏链',
+    !!by('Alpha › Sec') && !!by('Alpha › ^b1') && !!by('Unified › 小节 4') && by('小节 5')?.bad === false && by('Nope › X')?.bad === true,
+    JSON.stringify(links))
+  await clickLink(p, '小节 5')
+  const l2 = await waitLanded(p, `${PM} h2`, '小节 5')
+  record('L2 点 [[#小节 5]] → 本页标题落在顶栏下 12px,不换页', !!l2 && landed(l2) && l2.selIn && (await p.evaluate(() => window.__loaded.length)) === 0, JSON.stringify(l2))
+  await clickLink(p, 'Unified › 小节 4')
+  const l3 = await waitLanded(p, `${PM} h2`, '小节 4')
+  record('L3 点 [[Unified#小节 4]] → 指名本页也就地定位,不换页', !!l3 && landed(l3) && l3.selIn && (await p.evaluate(() => window.__loaded.length)) === 0, JSON.stringify(l3))
+  await clickLink(p, 'Nope › X')
+  await p.waitForTimeout(300)
+  const pend = await p.evaluate(() => window.__upage.pageStore.getState().pendingWikiCreate)
+  record('L4 点 [[Nope#X]] → 询问创建「Nope」(不带 #X)', pend?.name === 'Nope', JSON.stringify(pend))
+  await p.evaluate(() => window.__upage.pageStore.getState().cancelWikiCreate())
+  await clickLink(p, 'Alpha › Sec')
+  const l5 = await waitLanded(p, `${PM} h2`, 'Sec')
+  const loaded5 = await p.evaluate(() => window.__loaded)
+  record('L5 点 [[Alpha#Sec]] → 打开 Alpha.md 并定位到 Sec', loaded5.join() === 'Alpha.md' && !!l5 && landed(l5) && l5.selIn, JSON.stringify({ loaded5, ...l5 }))
+  await p.close()
+
+  p = await openLinks(browser)
+  await clickLink(p, 'Alpha › ^b1')
+  const l6 = await waitLanded(p, `${PM} p`, '^b1')
+  const loaded6 = await p.evaluate(() => window.__loaded)
+  record('L6 点 [[Alpha#^b1]] → 打开 Alpha.md 并定位到挂 ^b1 的段', loaded6.join() === 'Alpha.md' && !!l6 && landed(l6) && l6.selIn, JSON.stringify({ loaded6, ...l6 }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
@@ -142,6 +245,7 @@ async function main() {
       landed(m7) && flash.n === 1 && Math.abs(flash.dTop + 2) <= TOL && Math.abs(flash.dLeft + 4) <= TOL,
       JSON.stringify({ ...m7, flash }))
     await p.close()
+    await anchorLinks(browser)
   } finally {
     await browser.close()
   }

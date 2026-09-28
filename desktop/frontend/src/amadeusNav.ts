@@ -120,6 +120,13 @@ export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey
  *  (unifiedHeadings 给空)—— 重试几拍再放弃。v3 渲染的笔记没有 unified 实例,同样自然放弃。 */
 export async function openNoteAtHeading(path: string, heading: string): Promise<void> {
   await openNote(path)
+  await revealHeadingWhenReady(path, heading)
+}
+
+/** openNoteAtHeading 的后半段(「已经在打开了,等实例挂上再滚到标题」),单独导出给不走 openNote 门面的
+ *  打开路径复用 —— 编辑器里点 `[[笔记#标题]]` / `[[#标题]]`(pageStore.openWikiLink,评审 L-05)。
+ *  重试节拍、600ms 补跳、「找不到就不动」全部与聊天引用条同一份,别在调用方另写一套。 */
+export async function revealHeadingWhenReady(path: string, heading: string): Promise<void> {
   for (let tries = 0; tries < 5; tries++) {
     const hs = unifiedHeadings(path)
     if (hs && hs.length) {
@@ -148,6 +155,11 @@ export async function openNoteAtHeading(path: string, heading: string): Promise<
  *     自然停在「只开了笔记」,与本轮之前的行为一致。 */
 export async function openNoteAtBlock(path: string, blockId: string): Promise<void> {
   await openNote(path)
+  await revealBlockWhenReady(path, blockId)
+}
+
+/** openNoteAtBlock 的后半段,复用口径同 revealHeadingWhenReady(编辑器里点 `[[笔记#^块]]`,评审 L-05)。 */
+export async function revealBlockWhenReady(path: string, blockId: string): Promise<void> {
   for (let tries = 0; tries < 5; tries++) {
     // 一次调用同时回答「实例挂上了吗」与「这篇里有没有这个块」—— 两种 false 都该再等一拍
     // (编辑器刚挂载时 doc 常常还是空的,与 openNoteAtHeading 轮询 headings 同一个理由)。
