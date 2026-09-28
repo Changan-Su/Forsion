@@ -816,6 +816,13 @@ async function main() {
     check('K3f 只为远程那条弹系统通知:标题带调用方设备名,正文带会话名与工具名,不含命令',
       k3n.length === 1 && k3n[0].title.includes('Pixel 9') && k3n[0].body.includes('手机发起的远程会话') && k3n[0].body.includes('run_bash') && !k3n[0].closed,
       JSON.stringify(k3n))
+    // P1-KF:系统通知跟**界面**语言(本台架 --lang=zh-CN = 渲染层 ② 判中文、从不写手选键),不跟主进程自己的系统语言。
+    // K5 原接线只读手选键 → 在非中文系统的机器上这里弹的是英文(P1-K3 修复报告实测)。系统语言打出来:是 zh* 时本条区分不了新旧。
+    const k3Sys = await app.evaluate(({ app: a }) => a.getPreferredSystemLanguages()).catch(() => [])
+    const k3Ui = await win.evaluate(() => ({ lang: document.documentElement.lang, pref: localStorage.getItem('tangu_locale') })).catch(() => null)
+    check('K3f′ 通知文案跟界面语言(中文界面 + 手选键为空):标题 =「Pixel 9 上的远程会话等你批准」,正文中文',
+      k3n.length === 1 && k3n[0].title === 'Pixel 9 上的远程会话等你批准' && /^「手机发起的远程会话」请求使用 run_bash。点击查看。$/.test(k3n[0].body),
+      JSON.stringify({ note: k3n[0], systemLanguages: k3Sys, ui: k3Ui }))
     // 真 macOS 通知截图(DESIGN §8 / 规格 §8「需要真机」):屏幕录制权限或通知权限不在时拿到的是没有横幅的桌面 —— 人工看图判定,不据此断言。
     if (process.platform === 'darwin' && process.env.K3_NOTIF_SHOT) {
       await win.waitForTimeout(1500)
