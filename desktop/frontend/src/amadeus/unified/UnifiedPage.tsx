@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -59,7 +59,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '..
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
-import { turnBlocksInto } from './blockTurn'
+import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -129,6 +129,8 @@ registerMessages({
   'unipage.menu.task': { zh: '待办', en: 'To-do list' },
   'unipage.menu.quote': { zh: '引用', en: 'Quote' },
   'unipage.menu.fold': { zh: '折叠', en: 'Toggle' },
+  'unipage.menu.callout': { zh: '标注', en: 'Callout' },
+  'unipage.menu.code': { zh: '代码块', en: 'Code block' },
   'unipage.menu.card': { zh: '卡片', en: 'Card' },
   'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
   'unipage.menu.aria': { zh: '块操作', en: 'Block actions' },
@@ -1581,6 +1583,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     )
     if (!ok) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
   }
+  /** 「转换为 → 代码块 / 标注」(B-14):不是前缀型转换,各走 blockTurn 里的整块重写。 */
+  const turnIntoSpecial = (kind: 'code' | 'callout', label: string): void => {
+    let ok = true
+    withBlocks(
+      (view, r) => { ok = kind === 'code' ? turnRangeIntoCode(view, r.from, r.to) : turnIntoCallout(view, r.from, r.to, true) },
+      (view, sel) => { ok = kind === 'code' ? turnRangeIntoCode(view, sel.from, sel.to) : turnIntoCallout(view, sel.from, sel.to, false) },
+    )
+    if (!ok) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
+  }
 
   /** 当前块 → Canvas 卡片。slash 落点是 TextSelection，块菜单落点是 NodeSelection；两条入口先
    *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。
@@ -2694,7 +2705,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'ordered' }, t('unipage.menu.ordered'))}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
                 <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'task' }, t('unipage.menu.task'))}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
                 <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'quote' }, t('unipage.menu.quote'))}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnIntoSpecial('callout', t('unipage.menu.callout'))}><Info size={13} /> {t('unipage.menu.callout')}</button>
                 <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'fold' }, t('unipage.menu.fold'))}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnIntoSpecial('code', t('unipage.menu.code'))}><Code2 size={13} /> {t('unipage.menu.code')}</button>
               </>
             )}
             {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}

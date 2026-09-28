@@ -10,6 +10,7 @@
 //   B5   块菜单作用于多块选区:「转换为」逐块生效(列表并成一只,一次撤销全回)、「移到新列」置灰并说明(B-05)
 //   B10  块菜单开着时:方向键不挪编辑器选区(在菜单项间移动)、Enter 执行聚焦项、动作落在打开时的那一块;
 //        role=menu / menuitem;键盘打开把焦点送进菜单(B-10)
+//   B14  块菜单「转换为」有代码块(按原文造,不把文字挪到空代码块下面)与标注(`[!note]`)(B-14)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -154,6 +155,8 @@ async function openHandleMenu(page, prefix) {
 }
 /** 块菜单里文字以 label 结尾的那一项。 */
 const menuItem = (page, label) => page.locator('.unified-block-menu button').filter({ hasText: label }).first()
+/** 点块菜单项;没有这一项 → false(不抛,一格红不中断后面的组)。 */
+const clickItem = (page, label, opts = {}) => menuItem(page, label).click({ timeout: 2000, ...opts }).then(() => true, () => false)
 const shape = (page) => page.evaluate(() => {
   const o = []
   window.__upage.probe.view().state.doc.forEach((n) => {
@@ -383,7 +386,7 @@ async function main() {
         await load(page, SEED)
         await dragSelect(page, '段甲', '段乙')
         const open = await openHandleMenu(page, '段甲')
-        if (open) await menuItem(page, '标题 2').click()
+        if (open) await clickItem(page, '标题 2')
         await page.waitForTimeout(250)
         const sh = await shape(page)
         check('B5a 多块选中 → 转换为标题 2:每块都转', open && sh.join(' / ') === 'heading2:段甲。 / heading2:段乙。 / 段丙。', JSON.stringify(sh))
@@ -393,7 +396,7 @@ async function main() {
         await load(page, SEED)
         await dragSelect(page, '段甲', '段乙')
         const open = await openHandleMenu(page, '段甲')
-        if (open) await menuItem(page, '无序列表').click()
+        if (open) await clickItem(page, '无序列表')
         await page.waitForTimeout(250)
         const sh = await shape(page)
         await page.keyboard.press('Meta+z')
@@ -409,7 +412,7 @@ async function main() {
         const dis = open ? await menuItem(page, '移到新列').getAttribute('aria-disabled') : null
         const title = open ? await menuItem(page, '移到新列').getAttribute('title') : null
         await toasts(page)
-        if (open) await menuItem(page, '移到新列').click({ force: true })
+        if (open) await clickItem(page, '移到新列', { force: true })
         await page.waitForTimeout(200)
         const ts = await toasts(page)
         const sh = await shape(page)
@@ -430,7 +433,7 @@ async function main() {
         await page.keyboard.press('ArrowDown')
         const s1 = await selNow()
         const inMenu = await page.evaluate(() => !!document.activeElement?.closest('.unified-block-menu'))
-        if (open) await menuItem(page, '删除').click()
+        if (open) await clickItem(page, '删除')
         await page.waitForTimeout(250)
         const sh = await shape(page)
         check('B10a 菜单开着 ↓↓ 不挪编辑器选区(焦点进菜单),删除落在打开时那一块', open && s0 === s1 && inMenu && sh.join(' / ') === '段甲。 / hr: / 段丙。', JSON.stringify({ s0, s1, inMenu, sh }))
@@ -471,6 +474,25 @@ async function main() {
         const st = await page.evaluate(() => ({ inMenu: !!document.activeElement?.closest('.unified-block-menu'), sel: window.__upage.probe.view().state.selection.toJSON().type }))
         check('B10d 键盘打开:块已选上、焦点进菜单首项', open && st.inMenu && st.sel === 'node', JSON.stringify(st))
         await page.keyboard.press('Escape')
+      }
+    }
+
+    if (want('B14')) {
+      // B14a 段落 → 代码块:原文进代码块,不另起空块。
+      {
+        const nm = await load(page, '段甲。\n\nconst a = 1\n\n段丙。\n')
+        const open = await openHandleMenu(page, 'const a')
+        if (open) await clickItem(page, '代码块')
+        const md = await mdOf(page, nm)
+        check('B14a 转换为 → 代码块:原文进代码块', open && (md || '') === '段甲。\n\n```\nconst a = 1\n```\n\n段丙。\n', JSON.stringify(md))
+      }
+      // B14b 段落 → 标注:`> [!note] 原文`。
+      {
+        const nm = await load(page, '段甲。\n\n注意这里。\n\n段丙。\n')
+        const open = await openHandleMenu(page, '注意这里')
+        if (open) await clickItem(page, '标注')
+        const md = await mdOf(page, nm)
+        check('B14b 转换为 → 标注 = `> [!note] 原文`', open && /\n> \[!note\] 注意这里。\n/.test(md || ''), JSON.stringify(md))
       }
     }
 
