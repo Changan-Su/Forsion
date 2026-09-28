@@ -1251,7 +1251,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             //    短行右侧点击光标落到段首、Shift+点击塌成光标、三击选不中、方框点不动,全是这一处。
             mqPending = { x: e.clientX, y: e.clientY }
             window.addEventListener('pointermove', onPendingMove)
-            window.addEventListener('pointerup', endPending, { once: true })
+            window.addEventListener('pointerup', onPendingUp, { once: true })
             return
           }
           e.preventDefault() // 块外空白(块间缝/两侧余白)手势由框选接管,不让浏览器同时起原生文字拖选。
@@ -1269,7 +1269,23 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const endPending = (): void => {
           mqPending = null
           window.removeEventListener('pointermove', onPendingMove)
-          window.removeEventListener('pointerup', endPending)
+          window.removeEventListener('pointerup', onPendingUp)
+        }
+        /** 没拖起来就松手 = 一次原生点按。PM 对普通点按不自己设选区,等浏览器**异步**派发的 selectionchange
+         *  (实测晚 mouseup 一帧左右)才把 DOM 选区读进状态 —— 这一拍里紧跟的按键/状态读取仍按旧光标办:
+         *  点完立刻 Tab 缩进到了首块、立刻回车在文首连插空段、源码态判定读到旧块。P-01 之前这里由 onMqUp
+         *  同步 dispatch,放行原生按下后这个「点完即落定」的契约要补回来:等 PM 的 mouseup(挂在 document、
+         *  冒泡期)处理完,在 window 冒泡期让 PM 当场把 DOM 选区读进来。⚠️ 不能用捕获期/微任务(先于 PM 的
+         *  mouseup)也不能用 setTimeout(赌不过下一个输入事件);拖起来的那支归 holdNativeDrag,不走这里。 */
+        const onPendingUp = (): void => {
+          endPending()
+          window.addEventListener('mouseup', syncNativeClick, { once: true })
+        }
+        const syncNativeClick = (): void => {
+          if (editorView.isDestroyed) return
+          // domObserver.flush() 是 PM 内部接口:它自己在 compositionstart 与 onSelectionChange 里调的就是这一句,
+          // 这里只是抢在迟到的 selectionchange 之前调;DOM 选区与已知的一致时是空操作,重复调用无害。
+          ;(editorView as unknown as { domObserver?: { flush?: () => void } }).domObserver?.flush?.()
         }
         const onPendingMove = (e: PointerEvent): void => {
           const from = mqPending

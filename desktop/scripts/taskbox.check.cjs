@@ -96,6 +96,22 @@ async function main() {
         check(`[${shell}] 短行右侧 +${dx}px 点击:光标到行尾,字落在末尾`, s.type === 'text' && s.from === a.to && text === '第一段文字比较短。X', `${JSON.stringify(s)} → ${text}`)
         await page.keyboard.press('Backspace')
       }
+      // ②b 点完即落定:PM 对原生点按不自己设选区,只等浏览器异步派发的 selectionchange(晚 mouseup 约一帧)
+      //    读 DOM 选区 —— 点完紧跟的按键按旧光标办(点完 Tab 缩进到首块、回车在文首插空段;tab-indent /
+      //    caret-merge / toggle-block 三处台架都撞过)。这里把 selectionchange 挡在 PM 之外,确定性地验
+      //    「松手那一刻 PM 状态已经落到点击处」,不赌时序。
+      {
+        await reset(page)
+        const a = await para(page, 0)
+        await page.evaluate(() => {
+          window.__holdSC = (e) => e.stopImmediatePropagation()
+          window.addEventListener('selectionchange', window.__holdSC, true)
+        })
+        await page.mouse.click(a.x1 + 60, a.y)
+        const s = await sel(page)
+        await page.evaluate(() => window.removeEventListener('selectionchange', window.__holdSC, true))
+        check(`[${shell}] 行尾留白点按:松手即同步进 PM,不等迟到的 selectionchange`, s.type === 'text' && s.from === a.to && s.to === a.to, `${JSON.stringify(s)} 期望 ${a.to}`)
+      }
       // ③ Shift+点击另一段右侧留白 → 从原光标扩选到那一行尾。
       {
         await reset(page)
