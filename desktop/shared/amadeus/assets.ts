@@ -13,6 +13,7 @@
 // 搜索索引永远只见字面制表符。
 
 import { tabsToEntities, entitiesToTabs } from './indentIo'
+import { mapOutsideFences, outsideCodeSpans } from './links'
 
 export const ASSET_SCHEME = 'amadeus-asset'
 
@@ -62,7 +63,9 @@ export function fromAssetUrl(url: string): string | null {
 }
 
 // ![alt](path) or ![alt](path "title") — captures alt-wrapper, the URL token, then the rest.
-const IMG_RE = /(!\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g
+// URL 位认两种写法:尖括号目标 `<a b.png>`(CommonMark 允许,里面可以有空格)排在前面,其余是裸目标(I-15:
+// 旧版只认裸目标,`<a.png>` 被整段当路径 → 显示 `%3Ca.png%3E`、落盘写成指向不存在文件的 `%3Ca.png%3E`)。
+const IMG_RE = /(!\[[^\]]*\]\()(<[^>\n]*>|[^)\s]+)((?:\s+"[^"]*")?\))/g
 
 /** markdown 的链接目标里,空格和括号会当场把图片语法弄坏 —— 必须百分号编码。
  *
@@ -83,14 +86,25 @@ function isExternal(url: string): boolean {
 }
 
 /** Stored (page-relative) markdown → display markdown (protocol URLs for local images;
- *  行首字面制表符 → &#9; 实体,防 remark 读成缩进代码块/列表吸入)。 */
+ *  行首字面制表符 → &#9; 实体,防 remark 读成缩进代码块/列表吸入)。
+ *
+ *  **代码里的 `![](…)` 逐字不动**(I-15,评审 2026-09-27):围栏代码块整块、行内代码 span 跳过(links 的
+ *  mapOutsideFences / outsideCodeSpans,与存盘还原 / 搜索解码同一套配对)。旧版对全文做替换,代码里的示例被换成
+ *  `amadeus-asset://…` 显示、「复制代码」拿到内部地址,落盘时又按解码→编码不对称地写回:`%E5%9B%BE.png` 变
+ *  `图.png`、`<a.png>` 变 `%3Ca.png%3E`,都不可逆。
+ *  ⚠️ 跳过只做在这一侧:toStoredMarkdown 照旧全文把协议 URL 换回相对路径 —— 它是安全网,两侧对「哪里是代码」
+ *  的判断万一不一致(缩进代码块、跨行的行内代码按行认不出),协议 URL 也绝不会漏到盘上。
+ *  ponytail: 按行匹配,alt 文字跨行的图片(`![a⏎b](x.png)`)不再换成协议 URL(只是显示不出,盘上逐字)。 */
 export function toDisplayMarkdown(md: string, pageDir: string): string {
-  return tabsToEntities(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
-    const u = url.trim()
-    if (isExternal(u)) return full
+  const toDisplay = (seg: string): string => seg.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
+    // 尖括号目标:括号是语法不是路径(`<a b.png>` = `a b.png`);落盘经 encodeDest 写成 `a%20b.png`(与 Obsidian 同口径)。
+    const u = (url.startsWith('<') ? url.slice(1, -1) : url).trim()
+    if (!u || isExternal(u)) return full
     // 先解码再拼:盘上是 `%20` 编码形态,不解码的话 toAssetUrl 会二次编码 → 协议侧找不到文件。
     return pre + toAssetUrl(joinRel(pageDir, decodeSafe(u))) + rest
-  }))
+  })
+  const out = md.includes('![') ? mapOutsideFences(md, (line) => (line.includes('![') ? outsideCodeSpans(line, toDisplay) : line)) : md
+  return tabsToEntities(out)
 }
 
 /** Display markdown (protocol URLs) → stored (page-relative) markdown(行首缩进实体 → 字面制表符)。 */
