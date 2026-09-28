@@ -5,7 +5,7 @@
  *   60s 投递(body 只有 {sessionId,count,kinds})/ 10 分钟冷却 / 通道未连不投 / 429 记冷却 / 点击调 openSession /
  *   S5 通知不含命令 / 参数 / 调用方标签先看 callerUnit(名字清洗后为空 → 「已登记设备」,K1 评审缺口)。
  * 负对照(实跑见红,记在 K3 交付报告):去掉 onAdded 里的 `if (!it.remote) return` → 「本机 added 不弹」红;
- *   bodyOf 改用 preview → S5 红。
+ *   bodyOf 改用 preview → S5 红;escalate 去掉「按剩下最老一条重新计时」→ 「A 先答、B 才等 10s」红。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createApprovalDelivery, ESCALATE_AFTER_MS, ESCALATE_COOLDOWN_MS, RENOTIFY_AFTER_MS, type ApprovalDeliveryDeps, type PendingPromptWire } from './approvalDelivery'
@@ -300,6 +300,24 @@ describe('投收件箱', () => {
     h.last().push({ type: 'removed', rev: 'b:3', id: a.id, sessionId: SID, outcome: 'approved' }); await flush()
     await h.c.advance(ESCALATE_AFTER_MS)
     expect(h.posts).toEqual([])
+  })
+
+  it('计时按剩下里最老的一条:A 在 0s、B 在 50s 到,A 在 55s 被答 → 60s 不投(B 才等了 10s),B 等满 60s(110s)才投、count=1', async () => {
+    const h = harness()
+    await started(h)
+    const a = item()
+    h.last().push({ type: 'added', rev: 'b:2', item: a }); await flush()
+    await h.c.advance(50_000)
+    h.last().push({ type: 'added', rev: 'b:3', item: item({ kind: 'inquiry', tool: null }) }); await flush()
+    await h.c.advance(5_000)
+    h.last().push({ type: 'removed', rev: 'b:4', id: a.id, sessionId: SID, outcome: 'approved' }); await flush()
+    await h.c.advance(5_000) // t = 60s:原定时器到点
+    expect(h.posts).toEqual([])
+    await h.c.advance(ESCALATE_AFTER_MS - 10_000 - 1) // t = 110s - 1ms
+    expect(h.posts).toEqual([])
+    await h.c.advance(1)
+    expect(h.posts).toHaveLength(1)
+    expect(JSON.parse(String(h.posts[0].init.body))).toEqual({ sessionId: SID, count: 1, kinds: ['inquiry'] })
   })
 
   it('同会话 10 分钟冷却:答完又来一条 → 60s 后不再投;冷却过了才投', async () => {

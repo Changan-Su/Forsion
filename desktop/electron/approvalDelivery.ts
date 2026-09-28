@@ -115,6 +115,8 @@ export function createApprovalDelivery(d: ApprovalDeliveryDeps): ApprovalDeliver
   const sessions = new Map<string, SessionState>()
   /** 会话 → 上次投收件箱的时刻;会话条目清空也留着(冷却要跨过「答完又来一条」)。 */
   const escalatedAt = new Map<string, number>()
+  /** 条目 → 本端第一次见到它的时刻(本端时钟;不用引擎的 createdAt —— 两边时钟、测试里的假钟都不必对齐)。 */
+  const arrivedAt = new Map<string, number>()
 
   // ── 通知 ──
   const deviceTitle = (items: PendingPromptWire[]): string => {
@@ -155,6 +157,15 @@ export function createApprovalDelivery(d: ApprovalDeliveryDeps): ApprovalDeliver
   const escalate = async (s: SessionState): Promise<void> => {
     s.escalateTimer = null
     if (!s.items.size || !s.sessionId) return
+    // 定时器是会话第一条远程待批到达时起的;那条先被答掉、剩下的还没等满 60s → 按剩下里最老的一条重新计时,
+    // 别替一条才等了几秒的待批发提醒(还顺手吃掉这个会话 10 分钟的冷却)。
+    let oldest = Infinity
+    for (const id of s.items.keys()) oldest = Math.min(oldest, arrivedAt.get(id) ?? now())
+    const waited = now() - oldest
+    if (waited < ESCALATE_AFTER_MS) {
+      s.escalateTimer = setT(() => { void escalate(s) }, ESCALATE_AFTER_MS - waited)
+      return
+    }
     const last = escalatedAt.get(s.sessionId)
     if (last !== undefined && now() - last < ESCALATE_COOLDOWN_MS) return
     const creds = d.unitCreds()
@@ -179,6 +190,7 @@ export function createApprovalDelivery(d: ApprovalDeliveryDeps): ApprovalDeliver
   const sessionKey = (it: PendingPromptWire): string => it.sessionId || `run:${it.runId}`
   const onAdded = (it: PendingPromptWire): void => {
     all.set(it.id, it)
+    if (!arrivedAt.has(it.id)) arrivedAt.set(it.id, now())
     if (!it.remote) return // 本机 run 由渲染层托盘负责
     const key = sessionKey(it)
     let s = sessions.get(key)
@@ -201,6 +213,7 @@ export function createApprovalDelivery(d: ApprovalDeliveryDeps): ApprovalDeliver
   }
   const onRemoved = (id: string): void => {
     all.delete(id)
+    arrivedAt.delete(id)
     for (const [key, s] of sessions) {
       if (!s.items.delete(id)) continue
       // 先答先得的桌面侧收起:手机先答、别的窗口先答、run 中止 —— 会话里没有远程待批了就关通知、撤投递。
@@ -217,6 +230,7 @@ export function createApprovalDelivery(d: ApprovalDeliveryDeps): ApprovalDeliver
   const clearAll = (): void => {
     for (const [key, s] of [...sessions]) dropSession(key, s)
     all.clear()
+    arrivedAt.clear()
   }
 
   // ── 连接 ──
