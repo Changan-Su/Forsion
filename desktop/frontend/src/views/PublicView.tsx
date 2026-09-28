@@ -242,7 +242,7 @@ export function PublicView(_: ViewProps) {
       {/* 没登录 = 不知道有没有发布过:别把三个分区画成「0 · 暂无内容」,给一个登录入口(W-02) */}
       {needLogin && sites?.length === 0 && <div className="pv-notice">
         {t('public.needLogin')}
-        <button className="btn sm" onClick={() => useApp.getState().openSettings('forsion')}><LogIn size={13} />{t('sidebar.account.login')}</button>
+        {!!window.tangu?.forsionLogin && <button className="btn sm" onClick={() => useApp.getState().openSettings('forsion')}><LogIn size={13} />{t('sidebar.account.login')}</button>}
       </div>}
       {!(needLogin && sites?.length === 0) && <div className="pv-body">
         <Section

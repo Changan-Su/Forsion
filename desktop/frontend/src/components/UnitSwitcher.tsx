@@ -312,7 +312,7 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 </button>
               )}
               {/* 未登录:可点,直接去登录(W-02);原先是一行不可点的灰字,没有下一步 */}
-              {units === null && <button className="unitsw-row" onClick={() => { setOpen(false); useApp.getState().openSettings('forsion') }}>
+              {units === null && !!window.tangu?.forsionLogin && <button className="unitsw-row" onClick={() => { setOpen(false); useApp.getState().openSettings('forsion') }}>
                 <span className="unitsw-col"><span className="unitsw-desc">{t('unit.notLoggedIn')} ›</span></span>
               </button>}
               {units?.filter((u) => u.id !== host?.unitId).flatMap((u) => {

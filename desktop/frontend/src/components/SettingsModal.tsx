@@ -388,6 +388,8 @@ export const SettingsModal: React.FC<{
   const [modelsLoading, setModelsLoading] = useState(false)
   // Electron 托管后端(window.tangu 缺省=浏览器调试,隐藏 managed UI)
   const isDesktop = !!window.tangu?.backendStatus
+  // Forsion 账号面(登录 / 登出 / 切号)住在内置包 Forsion Extend 里:forsionLogin 是它的桥键,没装 Extend 就没有 Forsion 子页与登录入口
+  const cloudAccount = !!window.tangu?.forsionLogin
   // Tangu Web(浏览器云端客户端):解闸云端可用特性(技能);其余 host tab 仍随 isDesktop 隐藏。
   const cloudWeb = !!window.tangu?.cloudWeb
   // Unit 设备页(B 端渲染):插件真的在装(unit/plugins),插件页必须给 —— 只藏 shell 类操作;
@@ -1102,7 +1104,7 @@ export const SettingsModal: React.FC<{
       ['g-conn', t('settings.sub.connection')],
       // 本机运行环境单列(原先埋在「连接」页最底部,2.11.4 用户找不到);条件与下方正文块一致。
       ...(isDesktop && stored ? [['g-runtime', t('settings.runtime.title')] as [string, string]] : []),
-      ...(isDesktop ? [['g-forsion', 'Forsion'] as [string, string]] : []),
+      ...(isDesktop && cloudAccount ? [['g-forsion', 'Forsion'] as [string, string]] : []),
       ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
     ],
     model: [
@@ -1228,6 +1230,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
+      : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(g-forsion)
       : need === 'managed' ? isDesktop && mode === 'managed' // 托管参数只在已落盘为托管时渲染(g-runtime)
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
   }
@@ -1560,9 +1563,9 @@ export const SettingsModal: React.FC<{
                         {externalConn
                           ? <span>{t('settingsmodal.status.external', { state: t(connState === 'ok' ? 'settingsmodal.status.connOk' : connState === 'err' ? 'settingsmodal.status.connErr' : 'settingsmodal.status.connPending') })}</span>
                           : <span>{t('settingsmodal.status.backend', { state: backendSt ? t(BACKEND_STATE_LABEL[backendSt.state] || 'settings.backend.state.stopped') : t('common.loading') })}</span>}
-                        <span>{t('settingsmodal.status.account', { state: authSt?.loggedIn && authSt.tokenValid !== false ? t('settings.overview.signedIn') : t('settings.overview.signedOut') })}</span>
+                        {cloudAccount && <span>{t('settingsmodal.status.account', { state: authSt?.loggedIn && authSt.tokenValid !== false ? t('settings.overview.signedIn') : t('settings.overview.signedOut') })}</span>}
                       </span>
-                      {isDesktop && !(authSt?.loggedIn && authSt.tokenValid !== false) && (
+                      {isDesktop && cloudAccount && !(authSt?.loggedIn && authSt.tokenValid !== false) && (
                         <button type="button" className="btn ghost sm" disabled={loggingIn} onClick={() => { openSubPage('general', 'g-forsion'); void doForsionLogin() }}>
                           <LogIn size={12} /> {t('settings.forsion.login')}
                         </button>
@@ -1817,7 +1820,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'general' && isDesktop && activeSub === 'g-forsion' && (
+                {tab === 'general' && isDesktop && cloudAccount && activeSub === 'g-forsion' && (
                   <>
                     {/* 账号 */}
                     <div className="field" data-setting-anchor="forsion-account">

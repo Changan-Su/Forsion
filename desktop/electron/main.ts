@@ -34,15 +34,8 @@ import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
-import {
-  forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
-  forsionRefreshToken, shouldRefreshToken,
-  cancelForsionLogin, forsionAccounts, savedForsionAccount, rememberForsionAccount, forsionAccountId,
-  loadAccountCloudSettings, saveAccountCloudSettings,
-  forgetForsionAccount,
-} from './forsionAuth'
-import type { WhoamiResult } from './forsionAuth'
-import { waitForAccountRenderers } from './accountTransition'
+import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
+import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
 import { createTray, refreshTrayMenu, setTrayLocale, UI_LOCALE_PREF_KEY } from './tray'
@@ -69,6 +62,7 @@ import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { registerRemoteSync } from './remotesyncIpc'
+import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
@@ -798,6 +792,10 @@ let unitHost: UnitHost | null = null
 let unitWeb: UnitWebHandle | null = null
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
+// 登录成功后踢一次 Amadeus 云同步引擎(值由 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
+// auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
+let restartAmadeusSync: (() => Promise<void>) | null = null
+let stopAmadeusSync: (() => Promise<void>) | null = null
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
@@ -1968,12 +1966,33 @@ app.whenReady().then(async () => {
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
-  const bundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
+  const bundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend })
   // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
   // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
   // 记下 Extend 实际注册的通道:preload 只保留有人接的桥键(账号面 / Connect 各自独立,Extend 版本与宿主接缝不同步时不会留下悬空键)。
   const cloudChannels = new Set<string>()
-  if (PRODUCT.agentBackend) {
+  // 账号编排(accountCore.ts):auth.json + 渲染层握手 + 停/起同步 + 引擎重启 + 设备互联。Forsion 云端那半(device flow / whoami /
+  // 续期 / 多账号 / auth:* 通道)在 Extend 里,经下面 host 的 account* 接缝调进来;Extend 缺席 = 只剩 auth.json watcher 这一条。
+  const accountCore = createAccountCore({
+    loadCreds: loadTanguCreds,
+    saveCreds: saveTanguCreds,
+    saveConfig: (patch) => saveConfig(patch),
+    loadConfig,
+    ensureBackend,
+    refreshUnitHost,
+    renderers: () => [mainWindow, miniWindow, ...detachedWindows.values()]
+      .filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
+      .map((w) => w.webContents)
+      .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame()),
+    events: ipcMain,
+    broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
+    stopSync: () => stopAmadeusSync?.(),
+    restartSync: () => restartAmadeusSync?.(),
+    log: (m) => console.error(m),
+  })
+  // 全档案都播种 / 装载(2026-09-28 起):Amadeus / basic 单品也跑云同步、penzor、登录态续期,这些都住在 Extend 里;
+  // 只在 agent 后端才有意义的包(电脑操作)由清单 requires 挡在 bundleSources 之外。
+  {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
     const host: CloudHost = {
@@ -1991,6 +2010,23 @@ app.whenReady().then(async () => {
       transpileForServe,
       mimeOf: (ext) => MIME[ext],
       setPreviewHooks: setForsionPreviewHooks,
+      // ── 0.3 起:原样凭据 / 账号身份(不回落 DEFAULT_CLOUD_URL,与 amadeus/settings.ts 的 currentCloudAccountId 同口径)、远程同步外置后端注册点 ──
+      readCreds: () => { const c = loadTanguCreds(); return { cloudUrl: c.cloudUrl || '', token: c.token || '' } },
+      accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+      registerRemoteSyncBackend,
+      // ── 0.3 起:账号核心(auth:* 通道住在 Extend,编排在 accountCore)──
+      homeDir: forsionHomeDir,
+      appVersion: () => app.getVersion(),
+      broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
+      // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
+      // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
+      accountBackendState: async () => (PRODUCT.agentBackend && (await loadConfig()).mode === 'managed' ? backend.getStatus().state : null),
+      accountTransition: (fn) => accountCore.transition(fn),
+      accountCommit: (creds, assertCurrent, onCommitPoint) => accountCore.commit(creds, assertCurrent, onCommitPoint),
+      accountClear: (assertCurrent, onCommitPoint) => accountCore.clear(assertCurrent, onCommitPoint),
+      writeCreds: (patch) => accountCore.writeCreds(patch),
+      onExternalCredsChange: (cb) => accountCore.onExternalChange(cb),
+      setTokenRefresher: (fn) => accountCore.setRefresher(fn),
     }
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) cloudChannels.clear()
@@ -1998,7 +2034,7 @@ app.whenReady().then(async () => {
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 内置捆绑包的 npm 更新(builtinUpdates.ts):启动 1 分钟后查一次、之后每 6 小时一次,新版只下载进暂存区,
   // 由下次启动的上面那次播种换上。只在打包版跑:dev 的随包来源就是 node_modules,跟着 npm install 走。
-  if (PRODUCT.agentBackend && app.isPackaged) {
+  if (app.isPackaged) {
     let busy = false
     const runBuiltinUpdates = async (): Promise<void> => {
       if (busy) return
@@ -2834,157 +2870,6 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('asr:localRemove', async () => { await removeLocalModel(); return { ok: true } })
 
-  // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
-  const broadcast = (channel: string, payload: any): void => {
-    for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload)
-  }
-  // 登录态变更处理的去重锚:桌面登录/登出 IPC 与 auth.json watcher 都会触发「广播 + 重启后端」,
-  // 以「上次已处理的 token 值」判重,IPC 路径先行更新它 → watcher 随后触发时识别为已处理。
-  const credKey = (url: string, tok: string): string => `${url.replace(/\/+$/, '')}\u0000${tok}`
-  const currentAuthKey = (): string => { const c = loadTanguCreds(); return credKey(c.cloudUrl || '', c.token || '') }
-  let lastAuthCreds = loadTanguCreds()
-  let lastAuthKey = currentAuthKey()
-  const updateLastAuth = (): void => {
-    lastAuthCreds = loadTanguCreds()
-    lastAuthKey = credKey(lastAuthCreds.cloudUrl || '', lastAuthCreds.token || '')
-  }
-  let authIntent = 0
-  let authTransitions: Promise<unknown> = Promise.resolve()
-  const runAuthTransition = <T,>(fn: () => Promise<T>): Promise<T> => {
-    const task = authTransitions.then(fn, fn)
-    authTransitions = task.catch(() => {})
-    return task
-  }
-  const prepareAccountTransition = async (): Promise<void> => {
-    const renderers = [mainWindow, miniWindow, ...detachedWindows.values()]
-      .filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
-      .map((w) => w.webContents)
-      .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame())
-    try { await waitForAccountRenderers(renderers, ipcMain) } catch (error) {
-      broadcast('auth:changed', { loggedIn: !!loadTanguCreds().token })
-      throw error
-    }
-  }
-  const withPreparedAccount = async <T,>(fn: () => Promise<T>): Promise<T> => {
-    await prepareAccountTransition()
-    try {
-      await stopAmadeusSync?.()
-      return await fn()
-    } finally {
-      try { await restartAmadeusSync?.() } finally {
-        broadcast('auth:changed', { loggedIn: !!loadTanguCreds().token })
-      }
-    }
-  }
-
-  /**
-   * 登录态滑动续期:启动时(及运行中每 24h)拿旧 token 静默换一枚新的 → 「离上次进入软件不满
-   * 2 周」永远不必重登;超过 2 周没开,服务端那枚自然过期,auth:status 的 401 链路负责领回登录页。
-   * 失败一律静默(离线/老版本 server/已失效),绝不在这里清凭证。
-   */
-  const refreshAuthSliding = async (timeoutMs?: number): Promise<void> => {
-    const intent = authIntent
-    const originalKey = currentAuthKey()
-    const creds = loadTanguCreds()
-    const token = creds.token || ''
-    if (!shouldRefreshToken(token)) return
-    const stored = await loadConfig()
-    const base = stored.cloudUrl || creds.cloudUrl || ''
-    const fresh = await forsionRefreshToken(base, token, timeoutMs, `desktop/${app.getVersion()}`)
-    // 留痕:日后「又被登出了」的第一个排查问题就是「续期到底跑没跑」,没日志只能靠猜。
-    if (!fresh) { console.log('[auth] 滑动续期未成功(离线/老版本 server/这枚已失效),继续用旧 token'); return }
-    // 竞态防线:换新在途期间可能已并发登录/登出换了凭证——绝不拿旧链条换来的 token 盖掉新的。
-    if (intent !== authIntent || currentAuthKey() !== originalKey) return
-    saveTanguCreds({ ...loadTanguCreds(), cloudUrl: base, token: fresh })
-    updateLastAuth() // 同步更新凭据快照:watcher 随后识别相同即跳过。
-    console.log('[auth] 登录态已滑动续期(有效期重新计满 2 周)')
-    // ponytail: 只写文件,不重启 managed 后端 / 同步引擎。启动那次由调用点排序保证(spawn 排在续期
-    // 之后),运行中每 24h 这次留下的漂移是良性的:渲染层的 cfg.token 也是「boot / 后端 ready」时的
-    // 同一次快照,两边同为旧串 → 逐字比对照样通过。代价仍是连续运行 >14d 不重启时 env 那枚会过期。
-  }
-
-  // 最近一次**成功**的云端用户资料,按「云端地址 + token」记账。whoami 把超时/5xx/网关 401 一律
-  // 折成 offline,而账号卡在窗口聚焦、引擎每次状态变化时都重拉 —— 不缓存的话云端抖一下就把
-  // 头像/昵称/会员标全抹成 null(loggedIn 还是 true),表现就是「头像时不时消失」。
-  // 换号/登出/换云端地址一律不复用;whoami 在途期间凭据变了则整份作废(见下方 fresh 复核)。
-  let whoProfileCache: { key: string; user: NonNullable<WhoamiResult['user']> } | null = null
-  ipcMain.handle('auth:status', async () => {
-    const statusIntent = authIntent
-    const requestAuthKey = currentAuthKey()
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    const cloudUrl = stored.cloudUrl || creds.cloudUrl || ''
-    const token = creds.token || ''
-    const who = token ? await forsionWhoami(cloudUrl, token) : null
-    // ⚠️ whoami 最长 5s;这期间用户完全可能登出/换号。回来先复核当下的凭据还是不是我查的那份 ——
-    //    不复核的话,A 账号的迟到响应会把 A 的头像写进(或读出)B 的位置上(Codex 评审 medium)。
-    const nowStored = await loadConfig()
-    const nowCreds = loadTanguCreds()
-    const currentUrl = nowStored.cloudUrl || nowCreds.cloudUrl || ''
-    const stale = credKey(currentUrl, nowCreds.token || '') !== credKey(cloudUrl, token)
-    const key = credKey(cloudUrl, token)
-    if (!stale && who?.status === 'ok' && who.user) {
-      whoProfileCache = { key, user: who.user }
-      rememberForsionAccount({ ...nowCreds, cloudUrl }, who.user)
-    }
-    // 离线沿用同一凭据的上次资料;ok 用新的;其余(未登录/换号/凭据已漂)一律留空。
-    const u = stale
-      ? undefined
-      : who?.status === 'ok'
-        ? who.user
-        : who?.status === 'offline' && whoProfileCache?.key === key ? whoProfileCache.user : undefined
-    // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
-    // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
-    const backendState = PRODUCT.agentBackend && stored.mode === 'managed' ? backend.getStatus().state : null
-    // A late whoami response describes an old session. Return the current session
-    // even when the old token was valid; otherwise a completed sign-out looks signed in again.
-    if (stale) return {
-      loggedIn: !!nowCreds.token, tokenValid: null, cloudUrl: currentUrl,
-      accountId: forsionAccountId(currentUrl, nowCreds.token || ''),
-      username: null, nickname: null, avatar: null, membershipTier: null,
-      tokenSource: nowCreds.token ? 'tangu-login' : null, backendState,
-    }
-    if (who?.status === 'expired') {
-      // token 已被服务端吊销(账号中心「退出登录」按 jti 吊销桌面这枚也走到这)或自然过期:
-      // 就地转真登出——清 auth.json、后端重启丢弃旧 token、踢同步引擎,所有表面一致回「未登录」,
-      // 而不是挂着一个服务端早已不认的僵尸登录态。仅 401/403 走这里,离线(offline)绝不误清。
-      // 竞态防线:whoami 在途期间可能已并发登录换新凭证(auth.json 里已不是验失败的那枚)——绝不清新 token。
-      await runAuthTransition(async () => {
-        if (statusIntent !== authIntent || currentAuthKey() !== requestAuthKey) return
-        await withPreparedAccount(async () => {
-          if (statusIntent !== authIntent || currentAuthKey() !== requestAuthKey) return
-          console.log('[auth] token 已失效(服务端 401/403),自动登出')
-          ++authIntent
-          forsionLogout()
-          whoProfileCache = null
-          updateLastAuth()
-          if (stored.mode === 'managed') await ensureBackend()
-          void refreshUnitHost()
-        })
-      })
-      const current = loadTanguCreds()
-      return {
-        loggedIn: !!current.token, tokenValid: null, cloudUrl: current.cloudUrl || cloudUrl,
-        accountId: forsionAccountId(current.cloudUrl || cloudUrl, current.token || ''),
-        username: null, nickname: null, avatar: null, membershipTier: null,
-        tokenSource: current.token ? 'tangu-login' : null, backendState,
-      }
-    }
-    return {
-      loggedIn: !!token,
-      // null=未校验/离线(不确定);true=有效。失效(401/403)已在上面就地转登出,不再返回 false。
-      tokenValid: who ? (who.status === 'ok' ? true : null) : null,
-      cloudUrl,
-      accountId: forsionAccountId(cloudUrl, token),
-      username: u?.username || null,
-      nickname: u?.nickname || null,
-      avatar: u?.avatar || null,
-      membershipTier: u?.membershipTier || null,
-      tokenSource: token ? 'tangu-login' : null,
-      backendState,
-    }
-  })
-
   ipcMain.handle('app:version', () => app.getVersion())
   // forsion:// 待处理队列:仅主窗顶层可拉(卫星窗不是 deep link 目标);拉过=就绪,后续直推。
   ipcMain.handle('deeplink:drain', (e) => {
@@ -3201,80 +3086,6 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
-  // 登录成功后踢一次 Amadeus 云同步引擎(值由下方 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
-  // auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
-  let restartAmadeusSync: (() => Promise<void>) | null = null
-  let stopAmadeusSync: (() => Promise<void>) | null = null
-  const activateAccount = async (creds: ReturnType<typeof loadTanguCreds>, assertCurrent: () => void): Promise<void> => {
-    assertCurrent()
-    await withPreparedAccount(async () => {
-      assertCurrent()
-      // Finish endpoint persistence before committing the new credential. loadConfig
-      // keeps using the old active credential's endpoint while this write is pending.
-      await saveConfig({ cloudUrl: creds.cloudUrl })
-      assertCurrent()
-      saveTanguCreds({ ...loadTanguCreds(), ...creds })
-      updateLastAuth()
-      whoProfileCache = null
-      const stored = await loadConfig()
-      if (stored.mode === 'managed') await ensureBackend()
-      void refreshUnitHost()
-    })
-  }
-
-  ipcMain.handle('auth:accounts', () => forsionAccounts())
-  ipcMain.handle('auth:switchAccount', async (_e, accountId: string) => {
-    if (typeof accountId !== 'string') throw new Error('Invalid account.')
-    const intent = ++authIntent
-    cancelForsionLogin()
-    return runAuthTransition(async () => {
-      const creds = savedForsionAccount(accountId)
-      await activateAccount(creds, () => { if (intent !== authIntent) throw new Error('Account switch cancelled.') })
-      return { ok: true, cloudUrl: creds.cloudUrl || '' }
-    })
-  })
-  ipcMain.handle('auth:forsionLogin', async (_e, cloudUrl?: string) => {
-    const intent = ++authIntent
-    cancelForsionLogin()
-    const stored = await loadConfig()
-    if (intent !== authIntent) throw new Error('Sign-in cancelled.')
-    const url = (cloudUrl || stored.cloudUrl || '').trim()
-    const r = await forsionDeviceLogin(url, (info) => broadcast('auth:device', info), (creds, assertCurrent) =>
-      runAuthTransition(() => activateAccount(creds, () => {
-        assertCurrent()
-        if (intent !== authIntent) throw new Error('Sign-in cancelled.')
-      })))
-    return { ok: true, cloudUrl: r.cloudUrl }
-  })
-
-  ipcMain.handle('auth:logout', async () => {
-    ++authIntent
-    cancelForsionLogin()
-    return runAuthTransition(async () => {
-      // 先请求服务端吊销本机这一枚 token(jti 单枚吊销:网页独立会话/其他设备不受影响;
-      // 从本机跳转出去的账号中心页持有的同为这枚,一并失效)。
-      // 离线/失败不阻断本地登出——本地清了、服务端 token 还活着,靠 14d 自然过期兜底。
-      const stored = await loadConfig()
-      const creds = loadTanguCreds()
-      const base = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-      return withPreparedAccount(async () => {
-        forsionLogout()                 // Clear the active account and its restorable credential.
-        updateLastAuth()
-        whoProfileCache = null
-        if (base && creds.token) {
-          void fetch(`${base}/api/auth/logout`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${creds.token}` },
-            signal: AbortSignal.timeout(5000),
-          }).catch(() => {})
-        }
-        if (stored.mode === 'managed') await ensureBackend()
-        void refreshUnitHost() // 同上:登出即重建互联通道(未登录态下 unitWeb 局域网面照常,云通道退避等登录)
-        return { ok: true }
-      })
-    })
-  })
-
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
   // 与 `tangu login <provider>` 同一实现、同一份 ~/.tangu/provider-auth.json。
   const providerOAuthModule = async (): Promise<any> => {
@@ -3324,36 +3135,13 @@ app.whenReady().then(async () => {
 
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证
   // 变化(终端 tangu login / logout、手工改文件)也走与桌面登录同一条传播链——广播渲染层 + managed
-  // 后端带新 token 重启(token 经 env 快照注入,重启是唯一传播手段)+ 踢 Amadeus 云同步。
-  // 桌面自己的登录/登出 IPC 已先行处理并更新 lastAuthKey,watcher 比对相同即跳过,不会二次重启。
-  let authWatchTimer: ReturnType<typeof setTimeout> | null = null
-  const onAuthFileMaybeChanged = (): void => {
-    if (authWatchTimer) clearTimeout(authWatchTimer)
-    authWatchTimer = setTimeout(() => {
-      void runAuthTransition(async () => {
-        if (currentAuthKey() === lastAuthKey) return
-        ++authIntent
-        cancelForsionLogin()
-        const current = loadTanguCreds()
-        if (lastAuthCreds.token && !current.token) forgetForsionAccount(lastAuthCreds)
-        // Old clients are bound to their original account and root. Editors must
-        // flush before stopSync moves a cloud vault back to the local folder.
-        await withPreparedAccount(async () => {
-          updateLastAuth()
-          whoProfileCache = null
-          rememberForsionAccount(loadTanguCreds())
-          const stored = await loadConfig()
-          if (stored.mode === 'managed') await ensureBackend()
-          void refreshUnitHost()
-        })
-      }).catch((e) => console.error('[auth] external account change failed:', e))
-    }, 300) // 防抖:登录流程对 auth.json 的连续写只触发一次
-  }
+  // 后端带新 token 重启(token 经 env 快照注入,重启是唯一传播手段)+ 踢 Amadeus 云同步(accountCore.ts)。
+  // 桌面自己的登录/登出(Extend 的 auth:* 通道经 accountCommit / accountClear)已先行处理并更新去重快照,watcher 比对相同即跳过,不会二次重启。
   try {
     mkdirSync(forsionHomeDir(), { recursive: true })
-    fsWatch(forsionHomeDir(), (_ev, fname) => { if (!fname || fname === 'auth.json') onAuthFileMaybeChanged() })
+    fsWatch(forsionHomeDir(), (_ev, fname) => { if (!fname || fname === "auth.json") accountCore.onAuthFileMaybeChanged() })
   } catch (e) {
-    console.error('[auth] auth.json watcher 注册失败(外部登录变化需重启 App 才生效):', e)
+    console.error("[auth] auth.json watcher 注册失败(外部登录变化需重启 App 才生效):", e)
   }
 
   // ── 多窗口 IPC:独立窗 + mini 卡片 + floating 面板 ──
@@ -3587,8 +3375,8 @@ app.whenReady().then(async () => {
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
   // auth.json)一连就整片 401,表现为「本地会话列表加载失败 + 假的『登录已过期』」。开窗不等这条
   // (4s 封顶,离线不拖启动);无需续期时(1h 内换过)立即落到 finally,后端照常即刻起。
-  void refreshAuthSliding(4000).catch(() => {}).finally(() => { void ensureBackend() })
-  setInterval(() => { void refreshAuthSliding() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
+  void accountCore.refresh(4000).catch(() => {}).finally(() => { void ensureBackend() })
+  setInterval(() => { void accountCore.refresh() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
   // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
   // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
   void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)

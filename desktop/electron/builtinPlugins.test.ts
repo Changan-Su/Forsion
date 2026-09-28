@@ -207,4 +207,13 @@ describe('builtinBundleSources', () => {
     expect(builtinBundleSources({ isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'linux' }).map((s) => s.pkg)).toEqual(['@forsion/extend'])
     for (const b of BUILTIN_BUNDLES) expect(b.platforms.length, b.pkg).toBeGreaterThan(0)
   })
+
+  it('按清单项 requires 过滤产品档案:电脑操作只进带 agent 后端的档案,Forsion Extend(云同步 / penzor / 登录态)全档案都进;缺省当作带', () => {
+    const base = { isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'darwin' as const }
+    expect(builtinBundleSources({ ...base, agentBackend: false }).map((s) => s.pkg)).toEqual(['@forsion/extend'])
+    expect(builtinBundleSources({ ...base, agentBackend: true }).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend'])
+    expect(builtinBundleSources(base).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend'])
+    expect(BUILTIN_BUNDLES.find((b) => b.id === 'tangu-computer-use')?.requires).toBe('agentBackend')
+    expect(BUILTIN_BUNDLES.find((b) => b.id === 'forsion-extend')?.requires).toBeUndefined()
+  })
 })

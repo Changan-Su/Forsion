@@ -462,6 +462,7 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     iconUrl: src.iconUrl,
     builtin: false,
     preinstalled: !!src.preinstalled,
+    locked: !!src.locked,
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,

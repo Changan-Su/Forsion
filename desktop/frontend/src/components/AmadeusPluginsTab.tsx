@@ -441,7 +441,8 @@ const PluginDetail: React.FC<{
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
-        <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />
+        {/* 带主进程半身的内置包(Forsion Extend):开关对主进程半身是空操作(每次启动都装),不给开关免得像能关 */}
+        {!p.locked && <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />}
       </div>
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
       {p.dev && (

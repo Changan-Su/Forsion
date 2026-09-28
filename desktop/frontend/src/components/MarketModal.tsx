@@ -448,7 +448,8 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
             <button className={tab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>
             <button className={tab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>
-            <button className={tab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>
+            {/* 投稿要去个人中心(openAccountCenter 住在 Forsion Extend):没装 Extend 就没有这一页,别留一个点了没反应的按钮 */}
+            {!!window.tangu?.openAccountCenter && <button className={tab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
           </div>
         </div>
       </aside>

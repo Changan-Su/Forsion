@@ -751,7 +751,7 @@ export const Composer2: React.FC<{
       '/plugins': () => { app().openSettings('plugins'); close() },
       '/memory': () => { app().openSettings('sync'); close() },
       '/config': () => { app().openSettings('general'); close() },
-      '/login': () => { app().openSettings('forsion'); close() },
+      '/login': window.tangu?.forsionLogin ? () => { app().openSettings('forsion'); close() } : undefined, // Forsion 账号面随 Extend 出现
       // Historian / Muse 的桌面入口在「特殊 Agent」名册页(没有各自独立的视图)。
       '/historian': () => { app().setActiveSpecial('agents'); close() },
       '/muse': () => { app().setActiveSpecial('agents'); close() },

@@ -28,6 +28,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
   const [dbxWaiting, setDbxWaiting] = useState(false)
   const [dbxBuiltin, setDbxBuiltin] = useState(false) // 有官方应用 = 不用填 App Key
   const [dbxOwnApp, setDbxOwnApp] = useState(false) // 用户主动要用自建应用
+  const [backends, setBackends] = useState<string[]>([]) // 外置后端(Forsion Extend 注册的,如 penzor);没装 Extend 就没有
 
   /** 只吃回授权得来的凭据,不覆盖用户此刻未保存的 appKey/baseDir 输入。 */
   const applyDbxCreds = (d?: RemoteSyncConfig['dropbox']): void =>
@@ -45,6 +46,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
       setProgress(s.progress ?? null)
       setReport(s.lastReport)
       setDbxBuiltin(!!s.dropboxBuiltin)
+      setBackends(Array.isArray(s.backends) ? s.backends : [])
     })
     const offStatus = api.onStatus((s) => {
       setRunning(s.running)
@@ -156,6 +158,8 @@ export function RemoteSyncSection(): React.ReactElement | null {
 
   const on = cfg.backend !== 'off'
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
+  // Forsion 云端后端住在 Forsion Extend:主进程报有才列;配置里还选着它(Extend 后来没了)也要列出来,否则用户切不走
+  const penzorListed = backends.includes('penzor') || cfg.backend === 'penzor'
   return (
     <>
       {/* ── 远程服务(remotely-save: Choose remote service + Check Connectivity)── */}
@@ -166,7 +170,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
         <div style={{ marginTop: 6 }}>
           <select value={cfg.backend} onChange={(e) => patch({ backend: e.target.value as RemoteSyncConfig['backend'] })}>
             <option value="off">{t('settings.remotesync.backendOff')}</option>
-            <option value="penzor">{t('settings.remotesync.backendPenzor')}</option>
+            {penzorListed && <option value="penzor">{t('settings.remotesync.backendPenzor')}</option>}
             <option value="dropbox">Dropbox</option>
             <option value="folder">{t('settings.remotesync.backendFolder')}</option>
             <option value="s3">{t('settings.remotesync.backendS3')}</option>

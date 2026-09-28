@@ -17,7 +17,7 @@ import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHom
 import { getProduct } from '../productsRegistry'
 import { effectivePluginId } from '../../shared/products'
 import { isDevLoaded, readDevLoads } from '../devLoadStore'
-import { builtinPluginIds } from '../builtinPlugins'
+import { builtinPluginIds, lockedPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
@@ -1451,6 +1451,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           blocked: blocked ?? undefined,
           bundle,
           preinstalled: builtinPluginIds().has(id) || undefined, // 随 App 播种的捆绑包(electron/builtinPlugins.ts)
+          locked: lockedPluginIds().has(id) || undefined, // 其中带主进程半身的(Forsion Extend):不给启停开关
         })
       } catch {
         /* skip malformed plugin */

@@ -2,13 +2,14 @@
   {
     "pkg": "@forsion/tangu-computer-use",
     "id": "tangu-computer-use",
-    "platforms": ["darwin", "win32"]
+    "platforms": ["darwin", "win32"],
+    "requires": "agentBackend"
   },
   {
     "pkg": "@forsion/extend",
     "id": "forsion-extend",
     "platforms": ["darwin", "win32", "linux"],
-    "minVersion": "0.2.0",
+    "minVersion": "0.3.0",
     "desktop": {
       "entry": "dist/desktop.mjs",
       "signingKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAR7HV1LAPMME+MiPnSmpl7GxTiTA1K/DT6xvwIzLdlSI=\n-----END PUBLIC KEY-----\n"
