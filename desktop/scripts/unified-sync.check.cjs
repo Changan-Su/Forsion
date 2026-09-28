@@ -307,7 +307,51 @@ async function groupR(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: groupR }
+// ─────────────────────────────── D-17 ───────────────────────────────
+/** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
+async function titleEnter(p, delay) {
+  await p.evaluate((d) => {
+    const o = window.amadeus.renamePageFile
+    window.amadeus.renamePageFile = (path, n) => new Promise((r) => setTimeout(r, d)).then(() => o(path, n))
+  }, delay)
+  const title = await p.$('.amx-title-input')
+  await title.click()
+  await p.keyboard.press('Meta+a')
+  await p.keyboard.type('Meeting')
+  await p.keyboard.press('Enter')
+  await wait(120) // 人的反应时间:回车后 ~120ms 开始打正文
+}
+async function groupE(browser) {
+  const seed = '# heading\n\nbody para\n'
+  for (const delay of [300, 800]) {
+    for (const typeEarly of [false, true]) {
+      const p = await open(browser, seed)
+      await titleEnter(p, delay)
+      if (typeEarly) await p.keyboard.type('first', { delay: 40 })
+      await wait(delay + 1500)
+      await p.keyboard.type('SECOND')
+      await wait(1500)
+      const d = await disk(p, 'Meeting.md')
+      const want = typeEarly ? 'firstSECOND\n\n# heading\n\nbody para\n' : 'SECOND\n\n# heading\n\nbody para\n'
+      record(`E${delay}${typeEarly ? 'b' : 'a'} 标题回车改名(IPC ${delay}ms)${typeEarly ? '、改名返回前已打字' : ''} → 「进入正文」只一次,接着打的字接在原处`,
+        d === want, JSON.stringify(d))
+      await p.close()
+    }
+  }
+  for (const delay of [300, 800]) {
+    const p = await open(browser, seed)
+    await titleEnter(p, delay)
+    const S = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    await p.keyboard.type(S, { delay: 40 }) // 连续打字,跨过改名重建
+    await wait(delay + 1800)
+    const d = (await disk(p, 'Meeting.md')) ?? ''
+    const letters = d.split('\n# heading')[0].replace(/[^a-z0-9]/g, '')
+    record(`E${delay}c 连续打字跨过改名重建(IPC ${delay}ms)→ 字序不乱、顶部只一个段`, letters === S && d.startsWith(`${S}\n\n# heading`), JSON.stringify(d))
+    await p.close()
+  }
+}
+
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: groupR, E: groupE }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
