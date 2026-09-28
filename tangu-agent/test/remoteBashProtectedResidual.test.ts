@@ -12,11 +12,18 @@
  *   R3 批下来以后沙箱关的执行路径(spawnHostShell = spawn(shell:true) + 剥凭据环境)照写不误 → 远程上限档被抬到 full-auto:
  *      此后远端起 run 时带的 approvalMode:'full-auto' 不再被钳(sanitizeRemoteAgentConfig 按现读上限),这样的 run 跑 run_bash 不再问任何人。
  *   R4 宿主沙箱 workspace-write(macOS Seatbelt)下同一条命令写不进去(protectedHostPaths 已含 configFile())—— 现成机制能挡。
+ *   R5 **零审批**的那条链(K10b 评审发现,本包已修):远程 run 在工作区里用 write_file 摆出一个 git 目录(HEAD / config / objects /
+ *      refs,没有 `.git` 段,每一步都免审批),config 里 core.fsmonitor = 改写 config.json 的命令;再跑 known-safe 的 `git status`
+ *      —— git 的仓库发现把这个目录当 git dir,读它的 config 执行 fsmonitor。修复前 `git status` 直接放行(不出卡),上限档被抬到
+ *      full-auto;修复后 isKnownSafeBash 只信任发现落在受保护 `.git` 上的仓库,这里要审批。
+ *      ⚠️ R5 是**回归钉**,必须一直绿;要随缓解翻过来的只有 R2 / R3。R5 里「批了就会执行」那一步照旧成立 —— 它说明这张卡有分量,
+ *      而卡上写的只是 `git status`(评估正文「A 仍挡不住的」)。
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../src/hooks/index.js', () => ({ runHooks: vi.fn(async () => ({})) }));
 
@@ -47,7 +54,7 @@ const ESCALATE = (p: string): string => `printf '%s' '{"remote":{"maxApprovalMod
 const writeCap = (mode: string): void => writeFileSync(cfgPath, JSON.stringify({ remote: { maxApprovalMode: mode } }));
 
 /** 过闸;要审批时按「手机上点了批准」兑现(by = 隧道),把审批请求的载荷带回来。 */
-async function gateAsPhone(runId: string, c: ToolCall, approvalMode: 'auto-edit' | 'full-auto' = 'auto-edit'): Promise<{ action: string; rejectReason?: string; request?: any }> {
+async function gateAsPhone(runId: string, c: ToolCall, approvalMode: 'auto-edit' | 'full-auto' = 'auto-edit', cwd: string = ws): Promise<{ action: string; rejectReason?: string; request?: any }> {
   let request: any;
   const off = subscribe(runId, (ev) => {
     if (ev.type !== 'approval_request') return;
@@ -55,7 +62,7 @@ async function gateAsPhone(runId: string, c: ToolCall, approvalMode: 'auto-edit'
     setTimeout(() => resolveApproval(request.approvalId, { action: 'approve' }, runId, { via: 'tunnel' }), 0);
   });
   try {
-    const d = await gateToolCall(runId, c, { sessionId: 'G5', execMode: 'host', approvalMode, cwd: ws, profile, remote: REMOTE });
+    const d = await gateToolCall(runId, c, { sessionId: 'G5', execMode: 'host', approvalMode, cwd, profile, remote: REMOTE });
     return { action: d.action, rejectReason: d.rejectReason, request };
   } finally { off(); }
 }
@@ -139,5 +146,90 @@ describe.skipIf(process.platform === 'win32')('§6.8 残余:远程污点 run 经
     expect(remoteApprovalCap()).toBe('auto-edit');
     expect(await runShell(box, `printf ok > '${join(ws, 'artifact.txt')}'`)).toBe(0);
     expect(existsSync(join(ws, 'artifact.txt'))).toBe(true);
+  });
+});
+
+/**
+ * R5:在 dir 里摆一个 git 目录,**每一步都过真闸**(远程 auto-edit、cwd = dir):HEAD / config / objects/keep / refs/keep / payload.json。
+ * config 的 core.worktree 指向 worktree,core.fsmonitor = 把 payload 拷到 config.json(`; false` 让 git 当成 fsmonitor 失败、照常扫盘)。
+ * 返回每次写入的闸结果 —— 断言它们全都免审批(工作区内、没有 `.git` / `.tangu` 段,write_file 自己建父目录)。
+ */
+async function plantGitDir(runPrefix: string, dir: string, worktree: string): Promise<Array<{ action: string; request?: any }>> {
+  const payload = join(dir, 'payload.json');
+  const files: Record<string, string> = {
+    HEAD: 'ref: refs/heads/main\n',
+    config: `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = ${worktree}\n\tfsmonitor = "cp '${payload}' '${cfgPath}'; false"\n`,
+    'objects/keep': '',
+    'refs/keep': '',
+    'payload.json': JSON.stringify({ remote: { maxApprovalMode: 'full-auto' } }),
+  };
+  const out: Array<{ action: string; request?: any }> = [];
+  for (const [rel, content] of Object.entries(files)) {
+    const target = join(dir, rel);
+    const r = await gateAsPhone(`${runPrefix}-w-${rel}`, call('write_file', { path: target, content }), 'auto-edit', dir);
+    out.push(r);
+    if (r.action === 'approve') { mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, content); } // = write_file 的执行
+  }
+  return out;
+}
+
+// git 的结果不能由跑测试这台机器的 ~/.gitconfig / 系统 gitconfig 决定(例如 safe.bareRepository=explicit 会让链自己断掉)
+const GIT_ENV_KEYS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'] as const;
+describe.skipIf(process.platform === 'win32')('§6.8 R5:零审批链 —— 工作区里摆的 git 目录 + known-safe git status(回归钉,必须一直绿)', () => {
+  const prevEnv: Partial<Record<(typeof GIT_ENV_KEYS)[number], string | undefined>> = {};
+  let base: string;
+  beforeAll(() => {
+    for (const k of GIT_ENV_KEYS) prevEnv[k] = process.env[k];
+    process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'tangu-k10b-g5-r5-')));
+  });
+  afterAll(() => {
+    for (const k of GIT_ENV_KEYS) { if (prevEnv[k] === undefined) delete process.env[k]; else process.env[k] = prevEnv[k]; }
+    try { rmSync(base, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('R5a 工作区根本身被摆成 git 目录(工作区里没有 .git,如 Tangu 默认文件夹):摆放全程免审批,git status 要审批;批了 fsmonitor 真会执行', async () => {
+    writeCap('auto-edit');
+    const parent = join(base, 'a');
+    const dir = join(parent, 'ws');
+    mkdirSync(dir, { recursive: true });
+    const writes = await plantGitDir('G5-R5a', dir, parent);
+    for (const w of writes) { expect(w.action).toBe('approve'); expect(w.request).toBeUndefined(); }
+
+    const st = await gateAsPhone('G5-R5a-status', call('run_bash', { command: 'git status' }), 'auto-edit', dir);
+    // 修复前:action=approve、request=undefined(known-safe 免审批)→ 下一步直接执行,零张卡把上限档抬到 full-auto
+    expect(st.request, 'git status in a planted git dir must not be known-safe').toBeDefined();
+    expect(st.request.name).toBe('run_bash');
+    expect(st.request.reason).toEqual({ kind: 'mode', mode: 'auto-edit' });
+
+    // 这张卡有分量:批了以后 git 真会读摆进来的 config、执行 fsmonitor(卡上只写着 `git status`)
+    await runShell({ cwd: dir, hostSandbox: undefined }, 'git status');
+    expect(remoteApprovalCap()).toBe('full-auto');
+    writeCap('auto-edit');
+  });
+
+  it('R5b 工作区是真 git 仓,远端把会话 cwd 设在摆好的子目录:git status 同样要审批', async () => {
+    writeCap('auto-edit');
+    const repo = join(base, 'b');
+    mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: repo, env: process.env });
+    const sub = join(repo, 'sub');
+    mkdirSync(sub);
+    const writes = await plantGitDir('G5-R5b', sub, repo);
+    for (const w of writes) { expect(w.action).toBe('approve'); expect(w.request).toBeUndefined(); }
+
+    const st = await gateAsPhone('G5-R5b-status', call('run_bash', { command: 'git status' }), 'auto-edit', sub);
+    expect(st.request, 'git status from a planted subdir must not be known-safe').toBeDefined();
+    expect(st.request.reason).toEqual({ kind: 'mode', mode: 'auto-edit' });
+
+    await runShell({ cwd: sub, hostSandbox: undefined }, 'git status');
+    expect(remoteApprovalCap()).toBe('full-auto'); // 发现落在 sub(不是 repo/.git)的实证
+    writeCap('auto-edit');
+
+    // 负对照:同一个真仓的根目录,git status 仍然免审批(没被一刀切成「git 一律要批」)
+    const root = await gateAsPhone('G5-R5b-root', call('run_bash', { command: 'git status' }), 'auto-edit', repo);
+    expect(root.request).toBeUndefined();
+    expect(root.action).toBe('approve');
   });
 });

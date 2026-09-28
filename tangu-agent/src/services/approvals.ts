@@ -14,9 +14,9 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
-import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
+import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite, metadataSegment } from '../tools/fsPolicy.js';
 import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched, pluginSettingsTreeTouched } from '../sandbox/hostSandboxProtection.js';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteApprovalPayload, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
@@ -291,15 +291,52 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   });
 }
 
-/** The git work tree containing `dir` (nearest ancestor holding a `.git` dir or file), or null outside any repo. */
-function gitToplevel(dir: string): string | null {
-  let cur = path.resolve(dir);
+/** Does `.git` (a directory or a `gitdir:` file) lead to a git dir that structured writes cannot reach? A directory named
+ * `.git` is protected by fsPolicy; a `gitdir:` file must point at a path carrying a `.git` segment (worktrees →
+ * `.git/worktrees/<name>`, submodules → `.git/modules/<name>`), in both its literal and its realpath form — a
+ * `--separate-git-dir` target in an ordinary folder is writable, so its config is not trusted. Symlinks and anything
+ * without a HEAD are not vetted. */
+function protectedDotGit(top: string): boolean {
+  const dotgit = path.join(top, '.git');
+  let st;
+  try { st = lstatSync(dotgit); } catch { return false; }
+  if (st.isDirectory()) return existsSync(path.join(dotgit, 'HEAD'));
+  if (!st.isFile()) return false;
+  let m: RegExpExecArray | null;
+  try { m = /^gitdir:[ \t]*(.+?)[ \t\r]*$/m.exec(readFileSync(dotgit, 'utf8')); } catch { return false; }
+  if (!m) return false;
+  const target = path.resolve(top, m[1]);
+  const inGitSegment = (p: string): boolean => p.split(path.sep).some((part) => metadataSegment(part) === '.git');
+  return [target, canonicalFuturePath(target)].every(inGitSegment) && existsSync(path.join(target, 'HEAD'));
+}
+
+/** Walk one directory chain the way git's discovery does (setup_git_directory): at each level `D/.git` first, then `D`
+ * itself as a git dir. Returns the work tree only when discovery lands on a protected `.git`. */
+function vettedToplevelFrom(start: string): string | null {
+  let cur = start;
   for (;;) {
-    if (existsSync(path.join(cur, '.git'))) return cur;
+    if (existsSync(path.join(cur, '.git'))) return protectedDotGit(cur) ? cur : null;
+    // A git dir needs HEAD (plus objects/ and refs/); HEAD alone is the conservative test — false positives only cost a card.
+    if (existsSync(path.join(cur, 'HEAD'))) return null;
     const parent = path.dirname(cur);
     if (parent === cur) return null;
     cur = parent;
   }
+}
+
+/** The git work tree `git` would use from `dir`, or null when that is not a repo whose config the agent cannot write
+ * (review K10b-2): known-safe `git status` / `log` / … read the discovered git dir's config, and a git-dir layout (HEAD,
+ * config, objects/, refs/) with no `.git` segment can be planted with ordinary in-workspace writes — its `core.fsmonitor`
+ * then runs under the known-safe label with zero approvals. Both the literal and the realpath chain must land on the same
+ * kind of protected `.git` (git itself walks getcwd(), i.e. the realpath). GIT_DIR set in the environment bypasses
+ * discovery entirely — not modelled, so not vetted. Outside any repo git has nothing to show: not vetted either. */
+function vettedGitToplevel(dir: string): string | null {
+  if (process.env.GIT_DIR) return null;
+  const literal = path.resolve(dir);
+  const top = vettedToplevelFrom(literal);
+  if (!top) return null;
+  const real = canonicalFuturePath(literal);
+  return real === literal || vettedToplevelFrom(real) ? top : null;
 }
 
 /** Contract C4 for `git diff` / `git show` (review F#0): given a path outside the work tree, `git diff` silently switches to
@@ -311,8 +348,8 @@ function gitToplevel(dir: string): string | null {
 function gitReadStaysInRepo(sub: string, args: string[], cwd: string): boolean {
   if (args.includes('--no-index')) return false;
   const operands = splitOptions(args).operands;
-  const top = gitToplevel(cwd);
-  if (!top) return !['diff', 'show'].includes(sub) && operands.length === 0;
+  const top = vettedGitToplevel(cwd);
+  if (!top) return false;
   const tops = [...new Set([top, canonicalFuturePath(top)])];
   if (['diff', 'show'].includes(sub) && credentialPaths().some((c) => tops.some((t) => pathWithin(c, t)))) return false;
   return operands.every((a) => {
