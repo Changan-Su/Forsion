@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { HOST_TOOLS } from '../src/tools/hostExec.js';
 import { startBackgroundProcess, writeStdin, waitForOutput, disposeAllProcesses } from '../src/tools/processRegistry.js';
-import { prepareHostCommand, hostSandboxBackend, remoteShellSeatbeltApplies } from '../src/sandbox/hostSandbox.js';
+import { prepareHostCommand, hostSandboxBackend, remoteShellSeatbeltApplies, shellWriteProtectApplies } from '../src/sandbox/hostSandbox.js';
 import { renderRemoteShellProfile, ciRegexLiteral, RemoteShellProtectionError } from '../src/sandbox/remoteShellSeatbelt.js';
 import { remoteShellWriteDenySpec } from '../src/sandbox/hostSandboxProtection.js';
 import { taintRunRemote, clearRunRemoteTaint } from '../src/services/remoteOrigin.js';
@@ -73,6 +73,12 @@ describe('远程 shell 写保护:判定与形态(各平台)', () => {
     expect(remoteShellSeatbeltApplies(remoteCtx({ hostSandbox: { mode: 'workspace-write', network: 'deny' } }), 'darwin')).toBe(false);
     expect(remoteShellSeatbeltApplies(remoteCtx(), 'linux')).toBe(false);
     expect(remoteShellSeatbeltApplies(remoteCtx(), 'win32')).toBe(false);
+    // 方案 B:writeProtectShell(引擎自己的 git、免审批的 git 读命令)本机也套;remoteShellSeatbeltApplies 仍只认远程
+    expect(shellWriteProtectApplies(ctxOf({ writeProtectShell: true }), 'darwin')).toBe(true);
+    expect(remoteShellSeatbeltApplies(ctxOf({ writeProtectShell: true }), 'darwin')).toBe(false);
+    expect(shellWriteProtectApplies(ctxOf(), 'darwin')).toBe(false);
+    expect(shellWriteProtectApplies(ctxOf({ writeProtectShell: true, hostSandbox: { mode: 'workspace-write', network: 'deny' } }), 'darwin')).toBe(false);
+    expect(shellWriteProtectApplies(ctxOf({ writeProtectShell: true }), 'linux')).toBe(false);
   });
 
   it('本机 run 的命令形态与改动前逐字相同(沙箱关:原命令,不包)', () => {
@@ -206,9 +212,9 @@ describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)',
 
   // 方案 A 刻意不拒 `.git`(远程 run 要能 commit / init / clone),于是被批准的远程命令能在工作区仓库里摆 clean filter;
   // 引擎自己在每个 host run 开头收集 git 现场(runtimeContext.collectGitState → runGit),runGit 的固定前缀关了 fsmonitor / hooks /
-  // 外部 diff / gpg,没关 filter。远程污点 run(input.remote 或中途 steer 染色的 runId)的这一跑经 prepareHostCommand 套同一层写保护
-  // (agentLoop 把 remote / runId 带进 ctx,真 loop 那条见 remoteGitStateSeatbelt.test.ts);本机 run 与项目详情面板不套 —— 残余钉。
-  it('远程命令摆进仓库的 clean filter:远程污点(含 steer 染色)的 git 现场收集执行它也改不动 config.json;本机收集照旧执行(残余钉)', async () => {
+  // 外部 diff / gpg,没关 filter。G5 起远程污点 run 的这一跑套写保护;方案 B 起 runGit **每一条**都套(writeProtectShell,不看污点),
+  // 本机 run 与项目详情面板同样改不动 config.json(面板那条见 engineGitSeatbelt.test.ts)。原先这里的最后一步是「本机照旧执行」的残余钉,已翻转。
+  it('远程命令摆进仓库的 clean filter:远程污点(含 steer 染色)与本机的 git 现场收集执行它都改不动 config.json', async () => {
     const repo = join(base, 'filter-repo');
     mkdirSync(repo, { recursive: true });
     execFileSync('git', ['init', '-q'], { cwd: repo });
@@ -232,8 +238,12 @@ describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)',
       expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
     } finally { clearRunRemoteTaint('R-G5-GIT'); }
     touch();
-    await collectGitState(repo, { cwd: repo, execMode: 'host' });
-    expect(readFileSync(cfgPath, 'utf8')).toBe(''); // 残余:本机收集(与项目详情面板)不套,filter 以用户身份执行
+    expect(await collectGitState(repo, { cwd: repo, execMode: 'host' })).toContain('f.txt'); // 本机:照常收集(filter 真被调用)
+    expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0); // 方案 B:本机收集也套写保护(原残余钉 = '' 被清空)
+    // 对照:同一个 filter 在不套的进程里确实改得动 config.json(链是真的,不是 filter 没跑)
+    touch();
+    execFileSync('git', ['status', '--porcelain'], { cwd: repo });
+    expect(readFileSync(cfgPath, 'utf8')).toBe('');
   });
 
   it('git fsmonitor 的子进程继承同一个 profile(R5 执行面的最小复现)', async () => {

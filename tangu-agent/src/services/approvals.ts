@@ -14,9 +14,10 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
-import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite, metadataSegment } from '../tools/fsPolicy.js';
+import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
 import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched, pluginSettingsTreeTouched } from '../sandbox/hostSandboxProtection.js';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { gitDiscovery, repoGitPrograms, type GitDiscovery } from './gitRepoPrograms.js';
+import { hostSandboxBackend } from '../sandbox/hostSandbox.js';
 import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteApprovalPayload, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
@@ -38,6 +39,9 @@ export interface ApprovalDecision {
   argsOverride?: Record<string, any>;
   /** 拒绝原因（仅规则自动拒绝时有）：让模型与用户都看得见是**哪条规则**挡的，否则无从调起。 */
   rejectReason?: string;
+  /** G5 方案 B:这次放行只因为它是 known-safe 的 `git` 读命令(没人看过卡)→ 执行时套写拒绝 profile(macOS、宿主沙箱关;
+   *  本机 run 也套)。用户亲手批的命令不带它,照旧不包。 */
+  writeProtect?: boolean;
 }
 
 /** 挂起的审批(gateToolCall 带 park):审批请求已发出、**不等**用户,调用方先给模型一个占位结果继续干活,
@@ -291,62 +295,6 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   });
 }
 
-/** Does `.git` (a directory or a `gitdir:` file) lead to a git dir that structured writes cannot reach? A directory named
- * `.git` is protected by fsPolicy; a `gitdir:` file must point at a path carrying a `.git` segment (worktrees →
- * `.git/worktrees/<name>`, submodules → `.git/modules/<name>`), in both its literal and its realpath form — a
- * `--separate-git-dir` target in an ordinary folder is writable, so its config is not trusted. Symlinks and anything
- * without a HEAD are not vetted. */
-function protectedDotGit(top: string): boolean {
-  const dotgit = path.join(top, '.git');
-  let st;
-  try { st = lstatSync(dotgit); } catch { return false; }
-  if (st.isDirectory()) return existsSync(path.join(dotgit, 'HEAD'));
-  if (!st.isFile()) return false;
-  let m: RegExpExecArray | null;
-  try { m = /^gitdir:[ \t]*(.+?)[ \t\r]*$/m.exec(readFileSync(dotgit, 'utf8')); } catch { return false; }
-  if (!m) return false;
-  const target = path.resolve(top, m[1]);
-  const inGitSegment = (p: string): boolean => p.split(path.sep).some((part) => metadataSegment(part) === '.git');
-  return [target, canonicalFuturePath(target)].every(inGitSegment) && existsSync(path.join(target, 'HEAD'));
-}
-
-/** Where git's discovery lands from a directory: a vetted work tree, no repository at all, or somewhere whose config the
- * agent may have written. */
-type GitDiscovery = { top: string } | 'none' | 'unvetted';
-
-/** Walk one directory chain the way git's discovery does (setup_git_directory): at each level `D/.git` first, then `D`
- * itself as a git dir. */
-function discoverFrom(start: string): GitDiscovery {
-  let cur = start;
-  for (;;) {
-    if (existsSync(path.join(cur, '.git'))) return protectedDotGit(cur) ? { top: cur } : 'unvetted';
-    // A git dir needs HEAD (plus objects/ and refs/); HEAD alone is the conservative test — false positives only cost a card.
-    if (existsSync(path.join(cur, 'HEAD'))) return 'unvetted';
-    const parent = path.dirname(cur);
-    if (parent === cur) return 'none';
-    cur = parent;
-  }
-}
-
-/** What `git` would use from `dir` (review K10b-2): known-safe `git status` / `log` / … read the discovered git dir's
- * config, and a git-dir layout (HEAD, config, objects/, refs/) with no `.git` segment can be planted with ordinary
- * in-workspace writes — its `core.fsmonitor` then ran under the known-safe label with zero approvals. A work tree counts
- * only when discovery lands on a protected `.git`, on both the literal and the realpath chain (git itself walks getcwd(),
- * i.e. the realpath). 'none' = neither chain has a `.git` or a HEAD anywhere up to the root, so git reads no repository
- * config and just reports "not a git repository" — harmless. GIT_DIR in the environment bypasses discovery entirely — not
- * modelled, so unvetted; so are chains that disagree on whether there is a repo at all. */
-function gitDiscovery(dir: string): GitDiscovery {
-  if (process.env.GIT_DIR) return 'unvetted';
-  const literal = path.resolve(dir);
-  const lit = discoverFrom(literal);
-  const real = canonicalFuturePath(literal);
-  const rea = real === literal ? lit : discoverFrom(real);
-  if (lit === 'unvetted' || rea === 'unvetted') return 'unvetted';
-  if (lit === 'none' && rea === 'none') return 'none';
-  if (lit === 'none' || rea === 'none') return 'unvetted';
-  return lit;
-}
-
 /** Contract C4 for `git diff` / `git show` (review F#0): given a path outside the work tree, `git diff` silently switches to
  * `--no-index` and prints the file — `git diff --no-ext-diff --no-textconv ~/.forsion/auth.json /dev/null` read the token
  * with zero approvals. Known-safe only when inside a repo, and every operand (revisions resolve harmlessly as in-tree names)
@@ -398,6 +346,14 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   // Every git subcommand reads the discovered git dir's config; only a repo whose config the agent cannot write qualifies.
   const found = gitDiscovery(cwd);
   if (found === 'unvetted') return false;
+  // G5 方案 B:仓库级配置(含已检出的子模块)里有 git 会替人跑的程序 —— filter、fsmonitor、post-index-change 钩子、外部 diff /
+  // textconv、pager、gpg、ssh、credential、include …… —— 就不算只读(读不懂也不算)。远程命令能在 .git 里摆这些,卡上却只写着 `git status`。
+  if (found !== 'none') {
+    const programs = repoGitPrograms(found.top);
+    if (programs === 'unknown' || programs.keys.length) return false;
+  }
+  // macOS:免审批的 git 在写拒绝 profile 里跑(agentLoop 按 decision.writeProtect 包);包不上(sandbox-exec 缺失)就回到审批。
+  if (process.platform === 'darwin' && !hostSandboxBackend('darwin').available) return false;
   const [sub, ...rest] = args;
   // branch and remote have mutating forms; only exact listing invocations qualify.
   if (sub === 'branch') return rest.every((a) => ['-a', '-r', '--all', '--remotes', '--list'].includes(a));
@@ -652,7 +608,10 @@ export async function gateToolCall(
   }
 
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
-  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return { action: 'approve' };
+  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
+    // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
+    return /^git( |$)/.test(bashCommandOf(call).trim()) ? { action: 'approve', writeProtect: true } : { action: 'approve' };
+  }
 
   // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。远程污点 run 不认额外可写根(同 fsPolicy.writableRoots)。
   const escCtx = remote ? { ...ctx, extraRoots: undefined, remote } : ctx;

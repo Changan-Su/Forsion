@@ -16,8 +16,11 @@ import { remoteShellWriteDenySpec, protectedAncestors, type RemoteShellWriteDeny
 
 /** 远程 shell 写保护不可用 / 渲染失败:命令一律不跑(失败即关)。run_bash 据此把它当工具错误回给模型。 */
 export class RemoteShellProtectionError extends Error {
-  constructor(detail: string) {
-    super(`This command comes from a remote session, and on this Mac such commands only run inside a write-protection sandbox (sandbox-exec) that keeps them away from Forsion settings, credentials and startup files. The sandbox could not be set up (${detail}), so the command was not run. Run it on this computer directly, or turn on the host sandbox in Settings.`);
+  /** local = 不带远程污点、因 writeProtectShell 才套的那一类(引擎自己的 git、免审批的 git 读命令)—— 文案不能说「来自远程会话」。 */
+  constructor(readonly detail: string, local = false) {
+    super(local
+      ? `On this Mac, git commands that run without approval only run inside a write-protection sandbox (sandbox-exec) that keeps programs configured in the repository away from Forsion settings, credentials and startup files. The sandbox could not be set up (${detail}), so the command was not run.`
+      : `This command comes from a remote session, and on this Mac such commands only run inside a write-protection sandbox (sandbox-exec) that keeps them away from Forsion settings, credentials and startup files. The sandbox could not be set up (${detail}), so the command was not run. Run it on this computer directly, or turn on the host sandbox in Settings.`);
     this.name = 'RemoteShellProtectionError';
   }
 }
@@ -69,9 +72,12 @@ export function renderRemoteShellProfile(spec: RemoteShellWriteDenySpec): string
 }
 
 /** 现算名单并渲染(每条命令一次:名单里有随配置变的项,如微信状态目录、急停锁文件)。 */
-export function remoteShellProfile(): string {
+export function remoteShellProfile(local = false): string {
   try { return renderRemoteShellProfile(remoteShellWriteDenySpec()); }
-  catch (e) { throw e instanceof RemoteShellProtectionError ? e : new RemoteShellProtectionError(`the protected path list could not be built: ${String((e as Error)?.message || e)}`); }
+  catch (e) {
+    const detail = e instanceof RemoteShellProtectionError ? e.detail : `the protected path list could not be built: ${String((e as Error)?.message || e)}`;
+    throw e instanceof RemoteShellProtectionError && !local ? e : new RemoteShellProtectionError(detail, local);
+  }
 }
 
 /** 远程写保护下 shell 输出的补充说明(只在被包住的命令上加)。 */

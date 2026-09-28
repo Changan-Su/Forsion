@@ -3,13 +3,13 @@
  * 而不是靠翻聊天记录猜进度。拼进尾部 user 消息(与 /skill 指令同通道,不动 system 前缀字节,
  * 前缀缓存只失效最短尾巴),不落库不上屏,纯 harness 脚手架。
  */
-import { existsSync } from 'node:fs';
 import { prepareHostCommand } from '../sandbox/hostSandbox.js';
+import { engineGitBlocked, gitExecutable, GIT_SCRUBBED_ENV } from './gitRepoPrograms.js';
 import { runBoundedProcess } from '../utils/boundedProcess.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 /** remote / runId:远程污点 run 的 git 现场收集也要套写保护(macOS 宿主沙箱关时经 prepareHostCommand 包 Seatbelt)——
  *  被批准的远程命令能在工作区仓库摆 clean filter,引擎自己的 `git status` 会执行它(P1-G5 评审)。 */
-export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal' | 'remote' | 'runId'>;
+export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal' | 'remote' | 'runId' | 'writeProtectShell'>;
 import { renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 
 /** todo 现场段:有未完项才注入(全完成/空单=null,别拿旧清单占 token)。 */
@@ -66,21 +66,27 @@ export async function runVerifyCommand(command: string, cwd?: string, signal?: A
 const GIT_TIMEOUT_MS = 800;
 const GIT_STATUS_MAX_LINES = 20; // ponytail: 大仓 status 截断到 20 行 + 计数,模型要全量自己跑 git status
 
-/** 这几个环境变量会把 git 整个指到别的仓去(GIT_DIR 泄进来时 `-C cwd` 形同虚设);仓永远只由 -C 决定,一律剥掉(同 desktop gitHistory.ts)。 */
-const GIT_SCRUBBED_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_NAMESPACE'];
-
 export interface GitRunResult { code: number; stdout: string; stderr: string; reason?: 'aborted' | 'timeout' | 'output-limit' | 'spawn-error' }
+
+/** 引擎自己的 git 这一次不跑(失败即关):调用方各自按「没有」处理 —— git 现场不注入、面板显示不可用。 */
+export class EngineGitSkipped extends Error {
+  constructor(reason: string) { super(`Engine git skipped: ${reason}`); this.name = 'EngineGitSkipped'; }
+}
 
 /** 跑一条**只读** git 命令,返回退出码与输出(非零不抛:仓库状态天生靠退出码判;项目详情面板据此区分「非仓库 / 无上游」)。
  *  固定前缀:不分页、不跑 fsmonitor / 钩子 / 外部 diff、不验签也不调 gpg —— 外来仓的 `.git/config` 能借这几处执行任意程序。
+ *  前缀关不掉 filter(没有通配写法)。P1 · G5 方案 B:
+ *   · macOS:每一条都套写拒绝 profile(writeProtectShell,不看远程污点;宿主沙箱开时沿用那一档的 profile)。
+ *     sandbox-exec 缺失 / 名单渲不出 → prepareHostCommand 抛错,这一条不跑,绝不裸跑。
+ *   · Linux / Windows 没有这一层:仓库配了前缀中和不了的程序(filter / include / …,见 engineGitBlocked)→ 抛 EngineGitSkipped,不跑。
+ *  两种「不跑」都是**抛**:collectGitState 吞成 null,projectContext 吞成 available:false。
  *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
 export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
+  if (process.platform !== 'darwin' && engineGitBlocked(cwd)) throw new EngineGitSkipped('the repository configures programs git would run (filter, include, …) and this platform has no write-protection sandbox');
   // Apple's /usr/bin/git shim can start xcodebuild for each private sandbox cache.
   // These fixed native developer-tool locations avoid an unsandboxed xcrun probe.
-  const executable = process.platform === 'darwin'
-    ? ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git'].find(existsSync) || 'git'
-    : 'git';
-  const prepared = prepareHostCommand({ ...ctx, cwd }, [
+  const executable = gitExecutable();
+  const prepared = prepareHostCommand({ ...ctx, cwd, writeProtectShell: true }, [
     executable, '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
     '-c', 'diff.external=', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-C', cwd, ...args,
   ]);
