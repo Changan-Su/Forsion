@@ -17,6 +17,7 @@
 //   HP1 双链悬停预览按链接所在笔记就近解析同名笔记(L-10):预览的就是点击会打开的那篇
 //   NT1~NT5 双链 / 库内 md 链接按鼠标键分流(L-11):右键不跳转不弹块菜单;中键、⌘(非 mac 为 Ctrl)+点击 → 新标签页
 //   FL1~FL6 打开光标处链接(L-20):Alt+Enter 跟随 / Alt+Shift+Enter 新标签页;不在链接上不吞键;命令面板那条作用于最近聚焦的编辑器
+//   LI1~LI3 卡片 / 编辑面板文案跟界面语言(C-14):英文界面全英文,切中文当场跟上
 //   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
 //          全角标点收尾成链、落盘 `<url>`(裸写会把 `。后` 吞进地址);ASCII 句末标点留在链接外;行内代码 / 字母后不成链
 //
@@ -45,8 +46,8 @@ const check = (name, ok, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-async function open(browser, md, flags) {
-  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+async function open(browser, md, flags, locale = 'zh-CN') {
+  const p = await browser.newPage({ locale, viewport: { width: 1200, height: 900 } })
   p.__errs = []
   p.on('pageerror', (e) => p.__errs.push(e.message))
   await p.goto(`${URL}?upage${flags}&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
@@ -605,11 +606,31 @@ async function followAtCursor(browser) {
   await p.close()
 }
 
+/** LI1–LI3 卡片与编辑面板的文案跟界面语言(C-14):以前是 JSX 裸中文,英文界面照样「复制链接 / 编辑 / 移除链接 / 删除」。 */
+async function cardLocale(browser) {
+  const HAN = /[\u4e00-\u9fa5]/
+  const texts = (p) => p.evaluate(() => [...document.querySelectorAll('.amx-linkcard button:not(.amx-linkcard-host), .amx-linkedit label, .amx-linkedit button')]
+    .map((b) => (b.childNodes[0]?.nodeType === 3 ? b.childNodes[0].textContent : b.textContent).trim()))
+  const p = await open(browser, '# T\n\nSee [example](https://example.com) here.\n', '', 'en-US')
+  await hoverLink(p)
+  const card = await texts(p)
+  check('LI1 英文界面:悬停卡按钮是英文', card.join('|') === 'Copy link|Edit|Remove link|Delete', JSON.stringify(card))
+  await p.evaluate(() => [...document.querySelectorAll('.amx-linkcard button')].find((x) => x.textContent === 'Edit')?.click())
+  await p.waitForTimeout(250)
+  const panel = await texts(p)
+  check('LI2 英文界面:编辑面板的标签与按钮是英文', panel.join('|') === 'Text|Link|Cancel|Save', JSON.stringify(panel))
+  await p.evaluate(() => window.__upage.setLocale('zh'))
+  await p.waitForTimeout(250)
+  const zh = await texts(p)
+  check('LI3 切到中文 → 开着的面板当场跟上', zh.join('|') === '文字|链接|取消|保存' && !panel.some((t) => HAN.test(t)), JSON.stringify(zh))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
   const long = '# T\n\n' + Array.from({ length: 40 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
-  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP / NT / FL
+  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP / NT / FL / LI
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null
   const want = (g) => !only || only.includes(g)
   if (want('LC')) {
@@ -624,6 +645,7 @@ async function main() {
   if (want('HP')) await hoverPreview(browser)
   if (want('NT')) await newTabClicks(browser)
   if (want('FL')) await followAtCursor(browser)
+  if (want('LI')) await cardLocale(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

@@ -101,6 +101,14 @@ const EDITOR_SCOPE = [
 ]
 /** 范围内的非产品文件:台架(UnifiedSpike 是 `?unified` spike,不进生产)。 */
 const EDITOR_SKIP = new Set(['amadeus/unified/UnifiedSpike.tsx'])
+/** I / I2 的扫描范围:编辑器 / 嵌入层(EDITOR_SCOPE)+ 两个写通道。 */
+const I_SRC = [
+  ...ALL_SRC.filter((f) => {
+    const rel = relative(SRC, f)
+    return !EDITOR_SKIP.has(rel) && EDITOR_SCOPE.some((s) => rel === s || rel.startsWith(`${s}/`))
+  }),
+  ...BRIDGE_SRC,
+]
 
 /**
  * 汉字字面量里**刻意**留中文的形态(CLAUDE.md「刻意留中文」一栏),只按 AST 上下文认,不按文件豁免 ——
@@ -209,13 +217,7 @@ describe('i18n 覆盖', () => {
     // 链接悬停卡、emoji 分组名、插件预览空态、web / 移动端写通道的冲突提示就是这样一直漏着的(评审 C-14 / C-15 / G2-14)。
     // 红了:界面文案走 t() / translate() + registerMessages 成对登记;落盘产物命名走 translate('amadeus.default.*');
     // 确属搜索别名 / 日志 / 正则就按上面 hanExempt 的上下文写(别往这里加文件豁免)。
-    const files = [
-      ...ALL_SRC.filter((f) => {
-        const rel = relative(SRC, f)
-        return !EDITOR_SKIP.has(rel) && EDITOR_SCOPE.some((s) => rel === s || rel.startsWith(`${s}/`))
-      }),
-      ...BRIDGE_SRC,
-    ]
+    const files = I_SRC
     const bad: string[] = []
     let exempted = 0
     for (const file of files) {
@@ -241,6 +243,44 @@ describe('i18n 覆盖', () => {
     expect(BRIDGE_SRC.some((f) => f.endsWith('mobile/src/amadeus/mobileAmadeusBridge.ts')), '移动端写通道没扫到').toBe(true)
     expect(exempted, '一条豁免都没命中 —— hanExempt 失效了,I 断言在空跑').toBeGreaterThan(100)
     expect(bad, `用户可见字面量里有汉字(英文界面会原样显示中文):\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('I2. 同一范围里 aria-label / title / placeholder / alt 不许写死字面量(查找条的 aria 曾写死英文,C-14)', () => {
+    // I 只管汉字;写死的英文同样是单语(中文界面下读屏念出 previous match)。命令式 DOM 的
+    // `setAttribute('aria-label', '…')` / `el.title = '…'` 一并查。刻意保留的逐条登记理由。
+    const ALLOW: Record<string, string> = {
+      'amadeus/unified/UnifiedPage.tsx  placeholder="New Page"': '标题占位 New Page 是已定口径(手册写明,评审附录 A · C-15)',
+    }
+    const ATTR = /^(aria-label|title|placeholder|alt)$/
+    const found: string[] = []
+    const bad: string[] = []
+    for (const file of I_SRC) {
+      const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      const hit = (n: ts.Node, what: string): void => {
+        const key = `${relative(SRC, file)}  ${what}`
+        found.push(key)
+        if (!ALLOW[key]) bad.push(`${relative(SRC, file)}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}  ${what}`)
+      }
+      const lettered = (e: ts.Node | undefined): boolean =>
+        !!e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) && /[A-Za-z]/.test(e.text)
+      const visit = (n: ts.Node): void => {
+        if (ts.isJsxAttribute(n) && ATTR.test(n.name.getText()) && n.initializer) {
+          const v = ts.isJsxExpression(n.initializer) ? n.initializer.expression : n.initializer
+          if (lettered(v)) hit(n, n.getText())
+        } else if (ts.isCallExpression(n) && /\.setAttribute$/.test(n.expression.getText()) && n.arguments.length === 2
+          && ts.isStringLiteral(n.arguments[0]) && ATTR.test(n.arguments[0].text) && lettered(n.arguments[1])) {
+          hit(n, n.getText())
+        } else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken
+          && /\.(title|placeholder|alt|ariaLabel)$/.test(n.left.getText()) && lettered(n.right)) {
+          hit(n, n.getText())
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(sf)
+    }
+    const stale = Object.keys(ALLOW).filter((k) => !found.includes(k))
+    expect(stale, `登记了但源码里已经没有的项(删掉登记):\n  ${stale.join('\n  ')}`).toEqual([])
+    expect(bad, `写死的 aria / title / placeholder(换 t() / translate()):\n  ${bad.join('\n  ')}`).toEqual([])
   })
 
   it('G. 术语表:zh 不许出现已收口的旧叫法(U-27,见 genesis-ui skill「术语表」)', () => {
