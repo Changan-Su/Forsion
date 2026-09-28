@@ -9,7 +9,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
@@ -39,7 +39,6 @@ import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, casc
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
-import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedScopeLive } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
@@ -1006,24 +1005,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
   const [editorKey, setEditorKey] = useState(0) // 源码 → 可视切回时重建编辑器(正文可能被改)
 
-  // ⚠️ 插件启停 = **第四条重 parse 路径**,而且是唯一一条绕开本组件的:MarkdownBlock 自己订阅
-  //    `editorExtensionGen` 并把它挂在 `useEditor` 的 deps 上,milkdown 于是 destroy+create,
-  //    `ctx.set(defaultValueCtx, initial)` 吃的是**那一刻的 prop**。v3 时代 content 由 store 驱动、
-  //    变了就重渲,所以 prop 恒新;v4 换成 ref 型 pipe 之后,拖块成卡与打字全程零 setState ——
-  //    prop 停在上一次 UnifiedPage 渲染那一刻。后果不是「丢几个字」而是**毁数据**:陈旧 body 里
-  //    缺新卡的锚 → foldCanvas fail-closed 早退 → onFolded 不被调用,而这条重建**不经
-  //    setEditorKey、也不卸载 UnifiedEditorHost**,三处 ownedCards.clear() 一处都够不着 →
-  //    归属集合停在上一世代 ⊇ 磁盘 cards → 派生判据放行 → 写回 `cards: []`,全部卡片几何没了
-  //    (没有 elements 时更狠:整个 amadeus_canvas 键被剥)。
-  //    修法是把它拉回既有纪律:代次进 MilkdownProvider 的 key(整棵子树按**本次渲染**的 pipe.body
-  //    重挂,旧实例卸载时的 onFinalFlush 先把真实内容收回来),归属集合在**渲染期**换世代 ——
-  //    放 effect 里会排在子树 fold 之后,把刚折出来的锚当场清掉。
-  const extGen = useSyncExternalStore(subscribeEditorExtensions, editorExtensionGen)
-  const lastExtGen = useRef(extGen)
-  if (lastExtGen.current !== extGen) {
-    lastExtGen.current = extGen
-    pipe.ownedCards.clear()
-  }
+  // 插件启停 / 重载(评审 G1-06):编辑器**原地重配**(见 editorExtensions.pluginEditorExtensions),不重挂、不重 parse ——
+  // 焦点、撤销栈、选区、防抖窗里的字、画布卡的归属集合全都原样留着。此前注册表代次进了 MilkdownProvider 的 key:
+  // 整棵子树按渲染期的 pipe.body 重挂,旧实例的防抖窗(~200ms)里的字随之丢失,组字中的拼音被当正文写盘;
+  // 那条重建路径还要求在渲染期给 ownedCards 换世代(否则陈旧 body 缺锚 → 派生写回 `cards: []`)。原地重配没有新 parse,
+  // 归属集合不许清 —— 清了 = 归属 ⊂ 盘上 cards,派生 fail-closed 冻结到重开。
   const hostApi = useRef<HostApi | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const segAnchorRef = useRef<HTMLSpanElement | null>(null)
@@ -2580,7 +2566,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               schedule()
             }}
           >
-            <MilkdownProvider key={`${path}:${editorKey}:${extGen}${readOnly ? ':ro' : ''}`}>
+            <MilkdownProvider key={`${path}:${editorKey}${readOnly ? ':ro' : ''}`}>
               <UnifiedEditorHost
                 path={path}
                 pageDir={pageDir}

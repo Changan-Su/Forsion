@@ -18,6 +18,12 @@
 //   R2 没有未落盘的字 → 不留草稿,新实例干净打开
 //   R3(评审 G1-08)防抖窗内被别的窗口**删除**(没有新路径可交接)→ 旧路径不复活、不留孤儿草稿,出 warning 提示,
 //      「复制内容」把全文(含刚打的字)交给剪贴板;R4 已落盘后被删 → 零提示
+//  X 组(评审 G1-06,插件编辑器扩展启停 = 原地重配,不重挂):
+//   X1 打字后 50ms 内启用一个带编辑器扩展的插件 → 编辑器 DOM 还是同一个、扩展已生效、焦点还在、刚打的字在屏上也在盘上,
+//      不点击接着打的字接在后面 · X2 停用 → 扩展摘掉、编辑器仍是同一个;空闲启停零写盘
+//   X3 撤销栈跨启停保留:停用后 Cmd+Z 撤掉的是启停之前打的字 · X4 输入法组字中启停 → 推迟到上屏后,盘上是汉字不是拼音
+//   X5 画布卡归属不随启停清零:启停后删掉一张卡,amadeus_canvas 照常跟着更新(清了归属 = 派生冻结)
+//   X6 嵌入不随启停变空壳:重配会重建全部插件视图,嵌入层的 React 根不许被卸(widget DOM 还在用)
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -51,6 +57,7 @@ async function open(browser, seed, flags = '') {
   p.errs = []
   p.on('pageerror', (e) => { p.errs.push(e.message); console.log('[pageerror]', e.message) })
   await p.addInitScript(() => {
+    performance.setResourceTimingBufferSize(20000) // X 组按已加载模块的 URL 取生产模块实例(裸 /src 路径会另起一份)
     window.__toasts = []
     window.addEventListener('amadeus:toast', (e) => window.__toasts.push({ text: e.detail.text, level: e.detail.level }))
   })
@@ -351,6 +358,116 @@ async function groupR2(browser) {
   }
 }
 
+// ─────────────────────────────── G1-06 ───────────────────────────────
+const XPLUG = `ctx.registerEditorExtension((pm) => [new pm.Plugin({ props: { attributes: { 'data-xext': 'on' } } })])`
+const pmTag = (p) => p.evaluate((s) => { const el = document.querySelector(s); if (!el.__xtag) el.__xtag = Math.random().toString(36).slice(2); return el.__xtag }, PM)
+const extOn = (p) => p.evaluate((s) => document.querySelector(s)?.getAttribute('data-xext') === 'on', PM)
+const pmFocused = (p) => p.evaluate((s) => { const el = document.querySelector(s); return !!el && (el === document.activeElement || el.contains(document.activeElement)) }, PM)
+const setPlugin = (p, on) => p.evaluate(async (on) => {
+  const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/plugins\/pluginStore\.ts/.test(n))
+  const m = await import(url)
+  const st = m.usePluginStore.getState()
+  if (on) st.enable('xext')
+  else st.disable('xext')
+}, on)
+async function groupX(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    const tag = await pmTag(p)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('RACE')
+    await wait(50)
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG) // 真 setup 路径:registerEditorExtension
+    await wait(400)
+    const r = { same: (await pmTag(p)) === tag, on: await extOn(p), focus: await pmFocused(p) }
+    await p.keyboard.type('y') // 不点击直接接着打
+    await wait(1600)
+    const d = await disk(p)
+    record('X1 打字后 50ms 内启用编辑器扩展 → 不重挂、扩展生效、焦点还在、字不丢,接着打的字接在后面',
+      r.same && r.on && r.focus && d.includes('第一段。RACEy'), JSON.stringify({ ...r, d }))
+    const w0 = (await p.evaluate(() => window.__upage.writes.length))
+    await setPlugin(p, false)
+    await wait(400)
+    const off = { same: (await pmTag(p)) === tag, on: await extOn(p) }
+    await setPlugin(p, true)
+    await wait(400)
+    const on2 = await extOn(p)
+    await wait(1200)
+    const dw = (await p.evaluate(() => window.__upage.writes.length)) - w0
+    record('X2 停用 → 扩展摘掉、编辑器仍是同一个;再启用又生效;空闲启停零写盘', off.same && !off.on && on2 && dw === 0, JSON.stringify({ ...off, on2, dw }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(400)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('UNDOME')
+    await wait(1600)
+    await setPlugin(p, false)
+    await wait(400)
+    await p.keyboard.press('Meta+z')
+    await wait(1500)
+    const txt = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    const d = await disk(p)
+    record('X3 撤销栈跨启停保留:停用扩展后 Cmd+Z 撤掉启停之前打的字(屏上、盘上都撤了)', !txt.includes('UNDOME') && !d.includes('UNDOME'), JSON.stringify({ txt, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(400)
+    await caretAfter(p, '第一段。')
+    const cdp = await p.context().newCDPSession(p)
+    await cdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
+    await wait(200)
+    await setPlugin(p, false)
+    await wait(300)
+    await cdp.send('Input.insertText', { text: '你' })
+    await wait(1800)
+    const d = await disk(p)
+    const txt = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    record('X4 输入法组字中停用扩展 → 推迟到上屏后重配:屏上、盘上都是「你」,没有残留拼音、扩展已摘掉',
+      d.includes('第一段。你\n') && !d.includes('ni') && txt.includes('第一段。你') && !(await extOn(p)), JSON.stringify({ d, txt }))
+    await p.close()
+  }
+  {
+    const seed = ['---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":700,"y":40,"w":300},{"ref":"k2","x":700,"y":300,"w":300}]}',
+      '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一甲。', '', '<!-- a k2 -->', '卡二乙。', ''].join('\n')
+    const p = await open(browser, seed)
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(300)
+    await setPlugin(p, false)
+    await wait(300)
+    // 删掉卡二(直驱事务 = 与块菜单删卡同一类文档改动),派生应把 k2 从 cards 里剪掉
+    await p.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1, size = 0
+      v.state.doc.forEach((n, pos) => { if (n.type.name === 'amadeusCanvasCard' && n.attrs.anchor === 'k2') { at = pos; size = n.nodeSize } })
+      if (at >= 0) v.dispatch(v.state.tr.delete(at, at + size))
+    })
+    await wait(1600)
+    const d = await disk(p)
+    const line = (/^amadeus_canvas:\s*(.*)$/m.exec(d) || [])[1] ?? ''
+    record('X5 启停之后删掉一张卡 → amadeus_canvas 照常更新(k2 剪掉、k1 还在),归属集合没被清零冻结派生',
+      line.includes('"k1"') && !line.includes('"k2"') && !d.includes('卡二乙'), JSON.stringify({ line }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n前一段。\n\n![[Embedded]]\n\n后一段。\n')
+    await wait(800)
+    const emb = () => p.evaluate(() => (document.querySelector('.unified-body')?.innerText ?? '').includes('被嵌入的第一段'))
+    const before = await emb()
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(300)
+    await setPlugin(p, false)
+    await wait(800)
+    record('X6 启停之后嵌入仍有内容(重配重建插件视图不卸嵌入的 React 根)', before && (await emb()), JSON.stringify({ before, after: await emb() }))
+    await p.close()
+  }
+}
+
 // ─────────────────────────────── D-17 ───────────────────────────────
 /** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
 async function titleEnter(p, delay) {
@@ -401,7 +518,7 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE }
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: groupX }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

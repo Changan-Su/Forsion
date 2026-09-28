@@ -16,7 +16,7 @@
 // Images are stored as PORTABLE page-relative links (![](.amadeus/x.png)); for display
 // they are rewritten to the amadeus-asset:// protocol and back on save (see @amadeus-shared/assets).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Editor,
   commandsCtx,
@@ -116,7 +116,7 @@ import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
-import { pluginEditorExtensions, editorExtensionGen, subscribeEditorExtensions } from '../../plugins/editorExtensions'
+import { pluginEditorExtensions } from '../../plugins/editorExtensions'
 import { registerMessages, translate, useI18n } from '../../../i18n'
 
 // 本文件的文案命名空间恒为 `mdblock.*`(别的组件在同一本全局字典里注册,撞键=静默覆盖)。
@@ -572,11 +572,9 @@ export function MilkdownInner({
     return normalizeFragmentMd(out)
   }
 
-  // 插件编辑器扩展(ctx.registerEditorExtension)的注册表代次。变了 = 有插件被启用/停用,
-  // 已建好的编辑器带着旧扩展集合,必须重建才能跟上 —— 塞进 useEditor 的 deps 即可(milkdown 会
-  // destroy 旧实例再建新的)。代次不变时与原来的空 deps 行为完全一致。
-  // 时机注意:插件启停发生在设置界面,那会儿没人在笔记里打字(200ms 的保存 debounce 早已落盘)。
-  const extGen = useSyncExternalStore(subscribeEditorExtensions, editorExtensionGen)
+  // 插件编辑器扩展(ctx.registerEditorExtension)启停 / 重载:**不再重建编辑器**(评审 G1-06)。
+  // 此前注册表代次挂在 useEditor 的 deps 上 → milkdown destroy + create,焦点、撤销栈、listener 防抖窗里
+  // 最近 ~200ms 的字全丢,组字中重建还把拼音写盘。现在由 pluginEditorExtensions 自己订阅注册表、原地重配。
 
   useEditor((root) => {
     const handleKeyDown = (view: EditorView, event: KeyboardEvent): boolean => {
@@ -1055,7 +1053,7 @@ export function MilkdownInner({
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
       .use(pluginEditorExtensions('normal', { pagePath: () => pagePathRef.current }))
       .use(extraPlugins ?? [])
-  }, [extGen])
+  }, [])
 
   // slash 选中 → 由外部(applySlash)驱动编辑器:consume 消费触发 '/',transform 原地转换。
   // 一律单事务直接改编辑器文档,绝不经 store 回写:markdownUpdated 有 200ms debounce、序列化
