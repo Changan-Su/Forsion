@@ -78,6 +78,15 @@ describe('DeviceSessionSections', () => {
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined()
   })
 
+  it('K3 attention dot shows on a remote row through the rowBadge slot (priority over running / unread)', async () => {
+    const { attentionBadge } = await import('./DeviceSessionSections')
+    const ids = new Map([['a1', { n: 2, localOnly: false }]])
+    await act(async () => { root.render(React.createElement(DeviceSessionSections, { activeId: null, runningIds: new Set<string>(['a1']), unreadIds: new Set<string>(), rowBadge: (x: SessionRecord) => attentionBadge(ids, x.id) })) })
+    const row = host.querySelector(`[data-device-section="${A}"] .t2s-srow`)!
+    expect(row.querySelector('.t2s-dot.attention')).not.toBeNull()
+    expect(row.querySelector('.t2s-dot.running')).toBeNull()
+  })
+
   it('S4: row menu has Rename and Archive only (no Delete)', async () => {
     await render()
     const trigger = host.querySelector(`[data-device-section="${A}"] .t2s-srow-menu`) as HTMLElement

@@ -13,7 +13,7 @@ import { showDetails } from '../stores/detailsSubject'
 import { useSessionAttention } from '../stores/attentionStore' // P1-K3
 import { isHomeSession } from '../types'
 import { runLocationsAvailable } from '../features/runtime'
-import { DeviceSessionSections } from './chat2/DeviceSessionSections' // P1-K7a
+import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */
@@ -113,7 +113,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       onAuthChange={() => { setTimeout(() => void s.connect(s.cfg), 1500) }}
       activeWorkspaceKey={s.activeWorkspaceKey}
       onEnterWorkspace={(key) => s.setActiveWorkspaceKey(key)}
-      deviceSections={runLocationsAvailable() ? <DeviceSessionSections filter={deviceFilter} activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} /> : undefined}
+      deviceSections={runLocationsAvailable() ? <DeviceSessionSections filter={deviceFilter} activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} rowBadge={(x) => attentionBadge(attentionIds, x.id)} /> : undefined}
     />
     </div>
   )

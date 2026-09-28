@@ -23,6 +23,7 @@ import { useDeviceMarks } from '../../services/deviceMarks'
 import type { DeviceStatus } from '../../services/deviceStatus'
 import { runLocationsAvailable } from '../../features/runtime'
 import { sessionActivityAt } from './SidebarPane'
+import { AttentionDot } from './AttentionDot'
 import './deviceSessions.css'
 
 registerMessages({
@@ -76,6 +77,12 @@ function saveCollapsed(s: Set<string>): void {
 function DeviceIcon({ u }: { u: Pick<UnitInfo, 'icon' | 'platform'> }): React.ReactElement {
   if (u.icon) return <span className="t2d-emoji" aria-hidden>{clampText(u.icon, 4)}</span>
   return u.platform === 'win32' || u.platform === 'linux' ? <Monitor className="t2s-lead-icon" /> : <Laptop className="t2s-lead-icon" />
+}
+
+/** 行角标:K3「等你处理」点(与本端行同一个 AttentionDot;没有 = null,回落到运行中 / 未读点)。 */
+export function attentionBadge(ids: Map<string, { n: number; localOnly: boolean }> | undefined, sid: string): React.ReactNode {
+  const a = ids?.get(sid)
+  return a ? <AttentionDot n={a.n} localOnly={a.localOnly} /> : null
 }
 
 /** 刷新节奏:挂载时、回到前台、连上时、在前台每 30s(后台不计时)。 */

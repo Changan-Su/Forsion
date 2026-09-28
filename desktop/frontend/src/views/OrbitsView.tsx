@@ -36,7 +36,7 @@ import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
 import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
 import { runLocationsAvailable } from '../features/runtime'
-import { DeviceSessionSections } from './chat2/DeviceSessionSections' // P1-K7a
+import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
 import { homeTarget } from '../services/engine/targets'
@@ -504,7 +504,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           activeWorkspaceKey={s.activeWorkspaceKey}
           onEnterWorkspace={(key) => s.setActiveWorkspaceKey(key)}
           sessionWorkspaceKeyOf={(session) => inOrbit(session) ? null : sessionWorkspaceKey(session, workspaces)}
-          deviceSections={runLocationsAvailable() && (filter === 'all' || filter === 'project') ? <DeviceSessionSections activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} /> : undefined}
+          deviceSections={runLocationsAvailable() && (filter === 'all' || filter === 'project') ? <DeviceSessionSections activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} rowBadge={(x) => attentionBadge(attentionIds, x.id)} /> : undefined}
         />
       </div>
 
