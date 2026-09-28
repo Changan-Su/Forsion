@@ -10,8 +10,9 @@ import { hasNativeFeature } from './runtime'
 const app = () => useApp.getState()
 
 export function registerOperationsViews(): void {
-  // Public Space:管理已发布网站(Forsion Connect)+ 已公开发布/协作共享的笔记。档案点名 public 时注册。
-  if (hasNativeFeature('public')) registerView({ type: 'public-view', kind: 'page', displayName: () => app().tr('view.publicHub'), icon: Rocket, factory: (props) => <PublicView {...props} />, singleton: true })
+  // Public Space:管理已发布网站(Forsion Connect)+ 已公开发布/协作共享的笔记。档案点名 public 时注册;
+  // 两路数据(Connect 住在内置包 Extend、协作共享走 amadeusCollab)一个都没有就不注册(与 spaces.tsx 的 Space 图标同一门控)。
+  if (hasNativeFeature('public') && (!!window.tangu?.connectList || !!window.amadeusCollab)) registerView({ type: 'public-view', kind: 'page', displayName: () => app().tr('view.publicHub'), icon: Rocket, factory: (props) => <PublicView {...props} />, singleton: true })
   // Automation 主区接原生工作区数据源；旧列表/运行 View ID 保留给用户已有布局;仅档案点名 automation 时注册。
   if (hasNativeFeature('automation')) {
     registerAutomationListSource()

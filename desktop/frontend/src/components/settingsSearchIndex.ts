@@ -12,7 +12,8 @@
  *    中英混写属于「刻意留中文」一类,不进字典。
  */
 
-export type SettingsSearchNeed = 'stored' | 'desktop' | 'managed' | 'external'
+/** cloud = Forsion 账号面在(内置包 Forsion Extend 装载了,桥键 forsionLogin 在)。 */
+export type SettingsSearchNeed = 'stored' | 'desktop' | 'managed' | 'external' | 'cloud'
 
 export interface SettingsSearchEntry {
   /** 结果行的稳定 id(台架按它点)。 */
@@ -37,9 +38,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'python', tab: 'general', sub: 'g-runtime', anchor: 'python', labelKey: 'settings.python.label', keywords: 'python 解释器 interpreter', needs: ['stored', 'managed'] },
   { id: 'mirror', tab: 'general', sub: 'g-runtime', anchor: 'mirror', labelKey: 'settings.mirror.label', keywords: '镜像 国内 加速 mirror china', needs: ['stored', 'managed'] },
   { id: 'external-backend', tab: 'general', sub: 'g-conn', anchor: 'external-backend', labelKey: 'settings.external.title', keywords: '外部地址 令牌 url token', needs: ['external'] },
-  { id: 'forsion-account', tab: 'general', sub: 'g-forsion', anchor: 'forsion-account', labelKey: 'settings.forsion.accountLabel', keywords: '账号 登录 account login sign', needs: ['desktop'] },
-  { id: 'cloud-url', tab: 'general', sub: 'g-forsion', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored'] },
-  { id: 'memory-sync', tab: 'general', sub: 'g-forsion', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored'] },
+  { id: 'forsion-account', tab: 'general', sub: 'g-forsion', anchor: 'forsion-account', labelKey: 'settings.forsion.accountLabel', keywords: '账号 登录 account login sign', needs: ['desktop', 'cloud'] },
+  { id: 'cloud-url', tab: 'general', sub: 'g-forsion', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored', 'cloud'] },
+  { id: 'memory-sync', tab: 'general', sub: 'g-forsion', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored', 'cloud'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },
   { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 default model' },
   { id: 'model-providers', tab: 'model', sub: 'm-providers', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 apikey provider' },

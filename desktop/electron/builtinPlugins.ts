@@ -48,10 +48,12 @@ export interface BuiltinBundle {
   /** 宿主要求的最低随包版本:宿主每删掉一块原生实现(账号面 / Connect …)就抬到提供那块的包版本,
    *  release-content 与 builtinBundles.test 核「钉的版本 ≥ 它」—— 否则钉着旧版的干净构建会静默丢功能。 */
   minVersion?: string
+  /** 只在带这个产品能力的档案里播种 / 更新 / 打包(电脑操作要 agent 后端);缺省 = 全产品(Forsion Extend:Amadeus 单品也是云产品)。 */
+  requires?: 'agentBackend'
 }
 
 /** 随 App 内置的捆绑包清单(builtinBundles.json)。 */
-export const BUILTIN_BUNDLES: readonly BuiltinBundle[] = bundlesJson
+export const BUILTIN_BUNDLES: readonly BuiltinBundle[] = bundlesJson as readonly BuiltinBundle[]
 export const BUILTIN_BUNDLE_PACKAGES: readonly string[] = BUILTIN_BUNDLES.map((b) => b.pkg)
 
 /** 打包版落点目录名 = 包名去掉 scope(与 electron-builder.config.cjs 的 extraResources `to` 同一约定)。 */
@@ -62,6 +64,8 @@ export interface BuiltinSourceOpts {
   resourcesPath: string
   appPath: string
   platform?: NodeJS.Platform
+  /** 产品档案是否带 agent 后端(缺省 true):清单里 requires: 'agentBackend' 的包在单品变体里既不播种也不更新。 */
+  agentBackend?: boolean
 }
 
 /** 清单项 + 随包来源目录。 */
@@ -72,7 +76,8 @@ export interface BuiltinSource extends BuiltinBundle {
 /** 当前平台要播种的内置包及其随包来源目录(存在与否不在这里判,seedBuiltinBundles 逐个 stat)。 */
 export function builtinBundleSources(o: BuiltinSourceOpts): BuiltinSource[] {
   const platform = o.platform ?? process.platform
-  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform)).map((b) => ({
+  const agentBackend = o.agentBackend ?? true
+  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform) && (!b.requires || agentBackend)).map((b) => ({
     ...b,
     dir: o.isPackaged
       ? path.join(o.resourcesPath, 'bundled-plugins', bundledDirName(b.pkg))
@@ -85,6 +90,9 @@ const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 const builtinIds = new Set<string>()
 /** 本进程播种/确认过的内置插件 id(manifest id)。设置页据此标「内置」+ 隐藏卸载。 */
 export const builtinPluginIds = (): ReadonlySet<string> => builtinIds
+const lockedIds = new Set<string>()
+/** 其中带主进程半身(清单 desktop)的:启停开关对主进程半身是空操作(cloudHost 每次启动都装),设置页不给开关。 */
+export const lockedPluginIds = (): ReadonlySet<string> => lockedIds
 
 export interface SeedBundlesReport {
   installed: string[]
@@ -226,6 +234,7 @@ export async function seedBuiltinBundles(
         report.kept.push(bundled.id)
       }
       builtinIds.add(bundled.id)
+      if (signing) lockedIds.add(bundled.id)
     } catch (e) {
       log(`[builtin-plugins] 播种 ${src} 失败(忽略,下次启动再试):${(e as Error)?.message || e}`)
     }
@@ -239,4 +248,5 @@ export async function seedBuiltinBundles(
 /** 测试用:清掉进程内的内置 id 集。 */
 export function _resetBuiltinIdsForTest(): void {
   builtinIds.clear()
+  lockedIds.clear()
 }

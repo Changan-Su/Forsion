@@ -307,14 +307,15 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           </label>
           <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.shareMemoryHint')}</div>
         </div>
-        <div className="field">
+        {/* 云同步要 Forsion 账号(登录态住在内置包 Forsion Extend,桥键 authStatus):没装就不给这个开关 */}
+        {!!window.tangu?.authStatus && <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
             <input type="checkbox" checked={editing.cloudSync}
               onChange={(e) => setEditing({ ...editing, cloudSync: e.target.checked })} />
             {t('settings.agents.cloudSync')}
           </label>
           <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncHint')}</div>
-        </div>
+        </div>}
         <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
             <input type="checkbox" checked={editing.activityAccess}
@@ -415,8 +416,8 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
                 {a.createdBy === 'system' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('agent.badge.system')}</span>}
                 {a.description && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{agentDescription(a, t).length > 60 ? `${agentDescription(a, t).slice(0, 60)}…` : agentDescription(a, t)}</span>}
               </span>
-              <button className="icon-btn" title={a.cloudSync ? t('settings.agents.cloudSyncOn') : t('settings.agents.cloudSyncOff')}
-                onClick={() => toggleCloudSync(a)} style={a.cloudSync ? { color: 'var(--accent-ink)' } : { opacity: 0.5 }}><Cloud size={13} /></button>
+              {!!window.tangu?.authStatus && <button className="icon-btn" title={a.cloudSync ? t('settings.agents.cloudSyncOn') : t('settings.agents.cloudSyncOff')}
+                onClick={() => toggleCloudSync(a)} style={a.cloudSync ? { color: 'var(--accent-ink)' } : { opacity: 0.5 }}><Cloud size={13} /></button>}
               {a.slug !== defaultSlug && <button className="icon-btn" title={t('settings.agents.setDefault')} onClick={() => setDefault(a.slug)}><Star size={13} /></button>}
               <button className="icon-btn" title={t('settings.agents.viewMem')} onClick={() => setViewing(a)}><BookOpen size={13} /></button>
               <button className="icon-btn" title={t('common.edit')} onClick={() => startEdit(a)}><Pencil size={13} /></button>

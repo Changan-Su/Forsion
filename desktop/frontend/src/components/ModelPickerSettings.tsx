@@ -79,14 +79,15 @@ export function ModelPickerSettings({ models, onContextWindow }: { models: Model
   return <section className="field model-catalog-settings">
     <div className="hint">{t('picker.hint')}</div>
     {onContextWindow && <div className="hint">{t('picker.ctxWindowHint')}</div>}
-    <details className="model-catalog-cloud">
+    {/* 云端模型块:有云端模型、或者能登录 Forsion 账号(桥键 forsionLogin,住在内置包 Extend)才画;两者都没有就是纯本地机器,别给一个 0 的折叠块 */}
+    {(cloud.some((g) => g.models.length > 0) || !!window.tangu?.forsionLogin) && <details className="model-catalog-cloud">
       <summary><LockKeyhole size={13} /> {t('model.group.forsion')} · {cloud.reduce((n, g) => n + g.models.length, 0)}</summary>
       <p className="hint">{t('picker.cloudHint')}</p>
       <div className="model-catalog-model-list">{cloud.map((g) => <div key={g.key}>
         {g.provider && <div className="model-source-heading">{g.provider}</div>}
         {g.models.map((m) => <div key={m.id} className="model-catalog-model"><span className="model-catalog-name">{m.name}</span><ModelMetadata model={m} />{onContextWindow && (m.modelType || 'llm') === 'llm' && <CtxWindowInput model={m} onSave={onContextWindow} />}</div>)}
       </div>)}</div>
-    </details>
+    </details>}
     <div>
       <label>{t('picker.groups')}</label>
       {prefs.groups.map((g, index) => <div key={g.id} className="model-catalog-group-editor">

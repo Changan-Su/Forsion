@@ -79,7 +79,9 @@ export const OnboardingWizard: React.FC<{
   useEffect(() => { void window.tangu?.appVersion?.().then((v) => setAppVer(v || '')).catch(() => {}) }, [])
 
   // ── ① 连接 ──
-  const [connectMode, setConnectMode] = useState<'forsion' | 'sub' | 'byok'>('forsion')
+  // Forsion 账号登录住在内置包 Forsion Extend 里(桥键 forsionLogin):没装就不列「Forsion 账号」这一项,缺省落到自带密钥
+  const canForsion = !!window.tangu?.forsionLogin
+  const [connectMode, setConnectMode] = useState<'forsion' | 'sub' | 'byok'>(canForsion ? 'forsion' : 'byok')
   const [cloudUrl, setCloudUrl] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
@@ -299,7 +301,7 @@ export const OnboardingWizard: React.FC<{
         </div>}
         {step === 'connect' && <div className="ob-connect-layout">
           <div className="ob-connect-options">
-            {(['forsion', ...(canSubLogin ? ['sub'] : []), 'byok'] as const).map((mode) => {
+            {([...(canForsion ? ['forsion'] : []), ...(canSubLogin ? ['sub'] : []), 'byok'] as const).map((mode) => {
               const Icon = mode === 'forsion' ? Cloud : mode === 'sub' ? LogIn : KeyRound
               return <button key={mode} aria-pressed={connectMode === mode} className={`ob-connect-option${connectMode === mode ? ' selected' : ''}`}
                 onClick={() => { setConnectMode(mode as 'forsion' | 'sub' | 'byok'); setConnectMsg('') }}>

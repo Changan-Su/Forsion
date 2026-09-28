@@ -90,6 +90,17 @@ module.exports = {
     { from: 'electron/remotesync/NOTICE.md', to: 'licenses/remotesync/NOTICE.md' },
     // 托盘/菜单栏图标:运行时主进程读 resources/tray.png(build/ 不进包,故显式复制)。
     { from: 'build/icon.png', to: 'tray.png' },
+    // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 package.json 钉死的 npm
+    // 精确版本装进 node_modules 的包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
+    // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定;清单里每个包都要在,少了
+    // release-content.check 会红(不再静默漏包)。清单 requires: 'agentBackend' 的(电脑操作)只进带 agent 后端的档案;
+    // Forsion Extend 全档案都带 —— Amadeus 单品也是云产品(云同步 / penzor / 登录态续期都住在它里面)。
+    ...builtinBundles.filter((b) => !b.requires || product[b.requires]).map((b) => ({
+      from: `node_modules/${b.pkg}`,
+      to: `bundled-plugins/${bundledDirName(b.pkg)}`,
+      // 电脑操作的 CI 原生编译会留下数百 MB 的 Rust 中间文件;只交付 prebuilt 和源码。别的包没有这个目录,过滤器无副作用。
+      filter: ['**/*', '!native/**/target{,/**}'],
+    })),
     ...(product.agentBackend
       ? [
           { from: '../tangu-agent/dist', to: 'tangu-server/dist' },
@@ -118,16 +129,6 @@ module.exports = {
           { from: 'build/office/node_modules', to: 'office/node_modules' },
           // 设备页 web 构建(unitWeb 静态壳;webDistDir 读 resourcesPath/unit-web)
           { from: 'unit-web-dist', to: 'unit-web' },
-          // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 package.json 钉死的 npm
-          // 精确版本装进 node_modules 的包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
-          // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定;清单里每个包都要在,少了
-          // release-content.check 会红(不再静默漏包)。
-          ...builtinBundles.map((b) => ({
-            from: `node_modules/${b.pkg}`,
-            to: `bundled-plugins/${bundledDirName(b.pkg)}`,
-            // 电脑操作的 CI 原生编译会留下数百 MB 的 Rust 中间文件;只交付 prebuilt 和源码。别的包没有这个目录,过滤器无副作用。
-            filter: ['**/*', '!native/**/target{,/**}'],
-          })),
         ]
       : []),
   ],

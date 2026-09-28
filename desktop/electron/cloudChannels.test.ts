@@ -48,6 +48,16 @@ async function extendChannels(): Promise<string[]> {
     readCreds: () => ({ cloudUrl: '', token: '' }),
     accountId: () => null,
     registerRemoteSyncBackend: () => {},
+    homeDir: () => '/tmp/forsion-home',
+    appVersion: () => '2.11.5',
+    broadcast: () => {},
+    accountBackendState: async () => null,
+    accountTransition: (fn: () => Promise<unknown>) => fn(),
+    accountCommit: async () => {},
+    accountClear: async () => {},
+    writeCreds: () => {},
+    onExternalCredsChange: () => {},
+    setTokenRefresher: () => {},
   }
   await registerCloud(host)
   return channels

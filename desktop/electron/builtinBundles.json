@@ -2,7 +2,8 @@
   {
     "pkg": "@forsion/tangu-computer-use",
     "id": "tangu-computer-use",
-    "platforms": ["darwin", "win32"]
+    "platforms": ["darwin", "win32"],
+    "requires": "agentBackend"
   },
   {
     "pkg": "@forsion/extend",

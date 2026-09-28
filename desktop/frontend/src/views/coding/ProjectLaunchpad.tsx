@@ -241,6 +241,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
               </details>
               {pluginProject
                 ? <p className="csl-plugin-note" data-plugin-note>{t('csl.pluginProjectHint')}</p>
+                : !window.tangu?.connectMeta ? null // Forsion Connect 能力(预览态 AI 代理)住在 Extend:没装就不给选
                 : <fieldset className="csl-capabilities">
                   <legend>{t('csl.capabilities')}<span>{t('csl.optional')}</span></legend>
                   <div className="csl-capability-list">

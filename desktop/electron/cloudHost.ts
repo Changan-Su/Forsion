@@ -20,6 +20,7 @@ import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { activeBundleDir, readManifest, type BuiltinSource } from './builtinPlugins'
 import { verifyBundleSignature } from './bundleSignature'
 import type { RemoteBackendFactory } from './remotesync/backends'
+import type { Creds, ExternalCredsChange } from './accountCore'
 
 /** 验签必须覆盖的文件:入口本身,以及决定 id / 版本 / 门禁的 manifest(否则改一改未签的 minAppVersion 就能改装载判断)。 */
 export const signedEssentials = (entry: string): string[] => [entry, 'manifest.json']
@@ -51,6 +52,26 @@ export interface CloudHost {
   accountId(): string | null
   /** 远程同步(设置 → 同步 → 本地库远程同步)注册一个外置后端(remotesync/backends.ts);remotesync:get 会把 kind 报给渲染层。 */
   registerRemoteSyncBackend(kind: string, factory: RemoteBackendFactory): void
+  // ── 0.3 起(账号核心:auth:* 通道住在 Extend,编排在 accountCore.ts)──
+  /** Forsion 家目录(auth.json / auth-accounts.json 所在;dev = ~/.forsion-dev)。 */
+  homeDir(): string
+  appVersion(): string
+  /** 向全部窗口 webContents.send。 */
+  broadcast(channel: string, payload: unknown): void
+  /** managed 变体的引擎状态(auth:status 的 backendState 轴);external / 无 agent 后端 = null。 */
+  accountBackendState(): Promise<string | null>
+  /** 账号变更串行队列;commit / clear 不自带排队,调用方用它包一层(与今天 runAuthTransition(…withPreparedAccount) 同构)。 */
+  accountTransition<T>(fn: () => Promise<T>): Promise<T>
+  /** 换成这份凭据:握手 → 停同步 → 写 cloudUrl → 写 auth.json → 引擎重启 → 设备互联 → 起同步 → 广播 auth:changed。assertCurrent 抛错即中止。 */
+  accountCommit(creds: Creds, assertCurrent?: () => void): Promise<void>
+  /** 清 token(保留 cloudUrl / model),链同上;不做任何 HTTP(服务端吊销由调用方自己发)。 */
+  accountClear(assertCurrent?: () => void): Promise<void>
+  /** 只换 auth.json 不重启(滑动续期),并同步 watcher 的去重快照。 */
+  writeCreds(patch: Partial<Creds>): void
+  /** auth.json 被别的来源改了(终端 tangu login / logout、手改):watcher 在走传播链之前先调它。 */
+  onExternalCredsChange(cb: (change: ExternalCredsChange) => void): void
+  /** 登记滑动续期实现;宿主启动时(4s 封顶,排在引擎启动之前)与之后每 24h 调一次。 */
+  setTokenRefresher(fn: (timeoutMs?: number) => Promise<void>): void
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 

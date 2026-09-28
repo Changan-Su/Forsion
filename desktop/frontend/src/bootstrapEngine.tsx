@@ -347,7 +347,9 @@ export function installEngine(): void {
   //   反馈当时一并撤下,2026-09-17 按用户要求放回,排在商店之上。
   // 账号卡复用 AccountCard,随 ribbon 展开切换「完整卡 / 紧凑头像」;原聊天列表底部那份已移除,避免重复。
   addRibbonIcon({ id: 'rb-settings', side: 'bottom', icon: Settings, tooltip: () => app().tr('settings.title'), onClick: () => app().openSettings() })
-  if (PRODUCT.agentBackend || window.tangu?.account) addRibbonIcon({
+  // 账号卡随 Forsion Extend 出现:登录 / 登出 / 切号 / 状态那五个通道都住在 Extend(authStatus 是它们的桥键);
+  // 没装 Extend(验签失败 / 缺包)连卡都不画,引擎重启入口仍在设置 → 连接。Unit 网页投射装了账号提供方时照旧(tangu.account)。
+  if (window.tangu?.authStatus || window.tangu?.account) addRibbonIcon({
     id: 'rb-account',
     side: 'bottom',
     pinned: true, // 账号卡钉死最底:不参与拖拽/收纳/溢出

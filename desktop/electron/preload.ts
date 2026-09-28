@@ -481,6 +481,9 @@ if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInsta
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),
 // 这里同步问一次,逐键按「它的通道有人接」保留 —— Extend 版本与宿主接缝不同步(比如老 Extend 没有 Connect)时不留悬空键。
 const CLOUD_KEYS: Record<string, string> = {
+  // 账号核心(0.3 起):登录 / 登出 / 切号 / 状态。onAuthChanged / onAuthWillChange 留宿主:auth.json watcher 那条链没 Extend 也在广播。
+  authStatus: 'auth:status', forsionLogin: 'auth:forsionLogin', forsionLogout: 'auth:logout',
+  authAccounts: 'auth:accounts', forsionSwitchAccount: 'auth:switchAccount', onAuthDevice: 'auth:forsionLogin',
   openAccountCenter: 'auth:openAccountCenter', openPayCenter: 'auth:openPayCenter',
   accountQuota: 'account:quota', accountUseResetCard: 'account:useResetCard', accountBgConvert: 'account:bgConvert', accountBgAutoMain: 'account:bgAutoMain',
   submitFeedback: 'feedback:submit', cloudFetch: 'cloud:fetch',

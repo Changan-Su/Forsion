@@ -36,6 +36,16 @@ const host: CloudHost = {
   readCreds: () => ({ cloudUrl: '', token: '' }),
   accountId: () => null,
   registerRemoteSyncBackend: () => {},
+  homeDir: () => '/tmp/forsion-home',
+  appVersion: () => '2.11.5',
+  broadcast: () => {},
+  accountBackendState: async () => null,
+  accountTransition: (fn) => fn(),
+  accountCommit: async () => {},
+  accountClear: async () => {},
+  writeCreds: () => {},
+  onExternalCredsChange: () => {},
+  setTokenRefresher: () => {},
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({

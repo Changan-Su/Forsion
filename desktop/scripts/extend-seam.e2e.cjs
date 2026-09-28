@@ -55,7 +55,15 @@ async function launch(home, stubUrl) {
     const out = {
       accountQuota: typeof t.accountQuota, submitFeedback: typeof t.submitFeedback, cloudFetch: typeof t.cloudFetch, openPayCenter: typeof t.openPayCenter,
       connectStore: typeof t.connectStore, connectPublish: typeof t.connectPublish, connectMeta: typeof t.connectMeta,
+      // 账号核心(Extend 0.3 起):登录 / 状态 / 多账号也是 Extend 的通道
+      authStatus: typeof t.authStatus, forsionLogin: typeof t.forsionLogin, authAccounts: typeof t.authAccounts, forsionSwitchAccount: typeof t.forsionSwitchAccount,
+      // 渲染层门控的可见结果:账号卡(ribbon 底部)与设置里的 Forsion 子页是否存在
+      dom: {
+        accountCard: !!document.querySelector('.ribbon-account, .account-card'),
+      },
     }
+    if (typeof t.authStatus === 'function') out.status = await t.authStatus()
+    if (typeof t.authAccounts === 'function') out.accounts = await t.authAccounts()
     if (typeof t.accountQuota === 'function') out.quota = await t.accountQuota()
     if (typeof t.cloudFetch === 'function') out.evil = await t.cloudFetch({ path: 'https://evil.test/x' })
     // Connect(Extend 0.2 起):meta 读不存在的目录 → {};publish 越界目录 → 拒(不打云端)
@@ -78,6 +86,7 @@ async function launch(home, stubUrl) {
       const { app, logs, bridge } = await launch(home, stub.url)
       await app.close().catch(() => {})
       check('④ 随包缺席:播种跳过、装载器没装、cloud:present=[] → 账号面与 Connect 的桥键全从 window.tangu 删掉', bridge.accountQuota === 'undefined' && bridge.submitFeedback === 'undefined' && bridge.cloudFetch === 'undefined' && bridge.openPayCenter === 'undefined' && bridge.connectStore === 'undefined' && bridge.connectPublish === 'undefined' && !fs.existsSync(installed), JSON.stringify(bridge))
+      check('④b 账号核心(0.3 起)也随包消失:authStatus / forsionLogin / authAccounts / forsionSwitchAccount 全 undefined,账号卡不画', bridge.authStatus === 'undefined' && bridge.forsionLogin === 'undefined' && bridge.authAccounts === 'undefined' && bridge.forsionSwitchAccount === 'undefined' && bridge.dom?.accountCard === false, JSON.stringify({ authStatus: bridge.authStatus, dom: bridge.dom }))
       check('④ 主进程日志:随包来源缺失被记下(不是静默)', logs().includes('随包来源缺失'), logs().split('\n').filter((l) => l.includes('builtin')).join(' / ').slice(0, 200))
     } else {
       const bundledVersion = JSON.parse(fs.readFileSync(path.join(BUNDLED, 'manifest.json'), 'utf8')).version
@@ -90,6 +99,7 @@ async function launch(home, stubUrl) {
       check(`① 随包 @forsion/extend@${bundledVersion} 播种进 <home>/plugins/forsion-extend(含 SIGNATURE),[cloud-host] 装载成功`, seeded && run1.logs().includes(`[cloud-host] 已装载 forsion-extend@${bundledVersion}`), run1.logs().split('\n').filter((l) => l.includes('cloud-host') || l.includes('builtin-plugins')).join(' / ').slice(0, 300))
       check('② 渲染层四个云端键都在;未登录 accountQuota → 401;cloudFetch 绝对 URL → bad_path', run1.bridge.accountQuota === 'function' && run1.bridge.submitFeedback === 'function' && run1.bridge.cloudFetch === 'function' && run1.bridge.openPayCenter === 'function' && run1.bridge.quota?.status === 401 && run1.bridge.quota?.json === null && run1.bridge.evil?.error === 'bad_path', JSON.stringify(run1.bridge))
       check('②b Connect(0.2 起)由 Extend 注册:三个 connect 键在;meta 读不存在目录 → {};publish 越界目录被拒且不打云端', run1.bridge.connectStore === 'function' && run1.bridge.connectPublish === 'function' && run1.bridge.connectMeta === 'function' && JSON.stringify(run1.bridge.meta) === '{}' && run1.bridge.publishOutside?.ok === false && /只能发布|不存在/.test(String(run1.bridge.publishOutside?.detail)), JSON.stringify({ meta: run1.bridge.meta, publishOutside: run1.bridge.publishOutside }))
+      check('②c 账号核心(0.3 起)由 Extend 注册:authStatus 未登录 → loggedIn=false / tokenSource=null / 不含 token;authAccounts=[];账号卡画出来了', run1.bridge.authStatus === 'function' && run1.bridge.forsionLogin === 'function' && run1.bridge.status?.loggedIn === false && run1.bridge.status?.tokenSource === null && !('token' in (run1.bridge.status || {})) && Array.isArray(run1.bridge.accounts) && run1.bridge.accounts.length === 0 && run1.bridge.dom?.accountCard === true && run1.logs().includes('[forsion-extend] account core registered'), JSON.stringify({ status: run1.bridge.status, accounts: run1.bridge.accounts, dom: run1.bridge.dom }))
 
       // ③ 用户目录里的副本被改:抬版本 + 改入口 + 不重签
       const evil = fs.readFileSync(path.join(installed, 'dist', 'desktop.mjs'), 'utf8') + '\n// tampered'

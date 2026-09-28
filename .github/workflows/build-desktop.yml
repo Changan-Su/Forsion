@@ -127,7 +127,7 @@ jobs:
             test/memoryDream.test.ts test/memorySync.test.ts test/agentFolder.test.ts
           cd ../desktop
           npx vitest run \
-            electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/forsionAuth.test.ts \
+            electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/accountCore.test.ts \
             electron/amadeus/sync/engine.moves.test.ts electron/amadeus/sync/engine.lifecycle.test.ts \
             electron/amadeus/sync/engine.massdelete.test.ts electron/codeStudioProjects.test.ts
 
