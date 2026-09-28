@@ -159,6 +159,8 @@ async function openPhonePage({ world, native, locale = 'zh-CN', colorScheme = 'l
     return native[method](options)
   })
   await ctx.addInitScript(capacitorInit, { token: world.PHONE_TOKEN })
+  // 暗色截图:应用缺省明暗偏好是 light(不跟系统),光模拟 prefers-color-scheme 不够 —— 首屏前把偏好设成 system
+  if (colorScheme === 'dark') await ctx.addInitScript(() => { try { if (!localStorage.getItem('forsion_theme_pref')) localStorage.setItem('forsion_theme_pref', 'system') } catch { /* 隐私模式 */ } })
   await page.goto(`${PHONE_ORIGIN}/`, { waitUntil: 'domcontentloaded', timeout: 60_000 })
   await page.waitForSelector('.mb-shell', { timeout: 60_000 })
   await page.waitForFunction(() => window.__forsionStore?.getState().connState === 'ok', null, { timeout: 30_000 })
@@ -218,10 +220,17 @@ async function compose(page, text, attach) {
   if (attach) {
     await page.locator('.add-pill-btn').first().click()
     await sleep(300)
+    const item = page.locator('.composer-menu--add .menu-item').filter({ hasText: /文件|files/i }).first()
     const [chooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 8000 }),
-      page.locator('.composer-menu--add .menu-item').filter({ hasText: /文件|Files/ }).first().click(),
-    ])
+      item.click({ timeout: 7000 }),
+    ]).catch(async (e) => {
+      // 留证:当时的界面 + 菜单项文字(界面语言 / 遮挡问题一眼可见)
+      const dir = process.env.SHOT_DIR
+      if (dir) await page.screenshot({ path: require('node:path').join(dir, 'compose-fail.png') }).catch(() => {})
+      const items = await page.locator('.composer-menu--add .menu-item').allTextContents().catch(() => [])
+      throw new Error(`${e?.message || e} | 菜单项 ${JSON.stringify(items)}`)
+    })
     await chooser.setFiles(attach)
     await sleep(500)
   }
