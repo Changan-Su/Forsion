@@ -4219,6 +4219,10 @@ html.dark .brand-logo--dark { display: inline-block; }
   margin-bottom: 4px;
 }
 .account-pop .ap-head .account-avatar { width: 26px; height: 26px; font-size: 12px; }
+/* 头部可点(→ 设置「Forsion 云端 → 账号」):与菜单项同一套悬停底色 */
+.account-pop .ap-head--link { cursor: pointer; border-radius: var(--radius-sm); }
+.account-pop .ap-head--link:hover, .account-pop .ap-head--link:focus-visible { background: var(--menu-hover); }
+.account-pop .ap-head-go { flex-shrink: 0; color: var(--text-faint); }
 .account-pop .ap-name {
   font-size: var(--ui-font-body, 13px);
   font-weight: 600;

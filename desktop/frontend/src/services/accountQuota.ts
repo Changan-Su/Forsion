@@ -80,6 +80,17 @@ export function remainingPercent(
 }
 
 /**
+ * 剩余百分比的**唯一**显示口径(2026-09-28,个人中心盘点 C4:同一个数原来四种算法,剩 0.4% 时有的写 0%、有的写 <1%):
+ * 向下取整、夹到 0–100;还有剩余但不足 1% 写「<1%」;null(不限)写 unlimited。
+ * 头像菜单、提醒条、用卡前后对比、Muse 页、Extend 的额度页与网页个人中心都照此显示,别再各算各的。
+ */
+export function formatRemaining(pct: number | null, unlimited: string): string {
+  if (pct === null) return unlimited
+  const floor = Math.max(0, Math.min(100, Math.floor(pct)))
+  return pct > 0 && floor === 0 ? '<1%' : `${floor}%`
+}
+
+/**
  * 今日和本周任一周期都会成为真实用量闸；选择剩余比例更低的那一个提醒。
  * 阈值用精确 remaining / limit 判定，不依赖服务端四舍五入后的 used percent。
  */
