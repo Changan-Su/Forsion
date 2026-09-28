@@ -119,6 +119,13 @@ export function confirmDialogOptions(info: ConfirmInfo): ConfirmDialogOptions {
   }
 }
 
+// ── 审批档上限的写法(main.ts 在 config.json 的跨进程写锁内调;引擎 remoteApprovalCap() 每次现读同一个键)──────────────
+/** 只改 remote.maxApprovalMode 一个键:其他段、remote 段的其他键原样保留;remote 不是对象(坏值)就换成只含这一键的新段。 */
+export function withRemoteCap(home: Record<string, any>, m: CapMode): Record<string, any> {
+  const remote = home.remote && typeof home.remote === 'object' && !Array.isArray(home.remote) ? home.remote : {}
+  return { ...home, remote: { ...remote, maxApprovalMode: m } }
+}
+
 // ── 名册查询(GET {cloud}/api/units,主进程凭 auth.json 的 token;main.ts 注入 base / token)──────────────────────────
 export interface RosterUnit { name: string; registeredName: string | null; kind: string | null; platform: string | null; createdAt: string | null }
 

@@ -67,7 +67,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
-import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE } from './remoteSessions' // P1-K4
+import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
@@ -577,10 +577,7 @@ const remoteSessions = createRemoteSessions({
   file: () => join(app.getPath('userData'), REMOTE_SESSIONS_FILE),
   unitHostEnabled: async () => (await readShellConfig()).unitHostEnabled === true,
   readCap: async () => normalizeCap((await readHomeConfig()).remote?.maxApprovalMode),
-  writeCap: (m) => configQueue(() => updateHomeConfig((home) => ({
-    ...home,
-    remote: { ...(home.remote && typeof home.remote === 'object' && !Array.isArray(home.remote) ? home.remote : {}), maxApprovalMode: m },
-  }))),
+  writeCap: (m) => configQueue(() => updateHomeConfig((home) => withRemoteCap(home, m))),
   accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
   lookupUnit: async (unitId) => lookupRosterUnit({ base: (await loadConfig()).cloudUrl, token: loadTanguCreds().token || '' }, unitId),
   confirm: async (opts, signal) => {
