@@ -60,3 +60,56 @@ describe('localOnly × P1-K4 拒绝码', () => {
     expect(remoteCallerMessage({ state: 'denied', reason: 42 })).toBe(translateFor('zh', 'unitpage.remoteCallerDenied'))
   })
 })
+
+// P1-KF:所有渲染这条拒绝的出口都按 reason 先、state 后 —— remoteRefusalMessage 带上响应体;只凭码的老调用 = 「正在等待确认」(兼容)。
+describe('localOnly × P1-KF 拒绝按 reason 选文案', () => {
+  const RCU = 'REMOTE_CALLER_UNCONFIRMED'
+  const REASONS: Array<[reason: string, state: string, key: string]> = [
+    ['strict', 'denied', 'unitpage.remoteCallerStrict'],
+    ['never-prompts', 'unconfirmed', 'unitpage.remoteCallerNeverPrompts'],
+    ['not-signed-in', 'unconfirmed', 'unitpage.remoteCallerNotSignedIn'],
+    ['roster-miss', 'denied', 'unitpage.remoteCallerRosterMiss'],
+    ['roster-unreachable', 'unconfirmed', 'unitpage.remoteCallerRosterUnreachable'],
+    ['no-answer', 'unconfirmed', 'unitpage.remoteCallerNoAnswer'],
+    ['busy', 'unconfirmed', 'unitpage.remoteCallerBusy'],
+  ]
+
+  it.each(['zh', 'en'] as const)('remoteRefusalMessage(code, body)[%s]:reason → reason 那句;不是「正在等待确认」,也不是「已拒绝」', (lang) => {
+    setLocaleGlobal(lang)
+    try {
+      const waiting = translateFor(lang, 'unitpage.remoteCallerUnconfirmed')
+      const denied = translateFor(lang, 'unitpage.remoteCallerDenied')
+      for (const [reason, state, key] of REASONS) {
+        const m = remoteRefusalMessage(RCU, { code: RCU, detail: 'x', state, reason })
+        expect(m, reason).toBe(translateFor(lang, key))
+        expect(m, reason).not.toBe(waiting)
+        expect(m, reason).not.toBe(denied)
+      }
+      // 没有 reason:state 分句 —— pending = 真在等;unconfirmed = 还没问过(此刻没有弹框);denied = 点了「不允许」
+      expect(remoteRefusalMessage(RCU, { state: 'pending' })).toBe(waiting)
+      expect(remoteRefusalMessage(RCU, { state: 'unconfirmed' })).toBe(translateFor(lang, 'unitpage.remoteCallerNotAsked'))
+      expect(remoteRefusalMessage(RCU, { state: 'denied' })).toBe(denied)
+      expect(remoteRefusalMessage(RCU)).toBe(waiting) // 只有码(老调用 / 老体):兼容旧口径
+      expect(remoteRefusalMessage(RCU, null)).toBe(waiting)
+      expect(remoteRefusalMessage('REMOTE_SESSIONS_OFF', { reason: 'strict' })).toBe(translateFor(lang, 'unitpage.remoteSessionsOff')) // reason 只对这个码有意义
+    } finally { setLocaleGlobal('zh') }
+  })
+
+  it('「10 分钟后可以再次请求」只属于用户点了「不允许」的那次;严格档 / 名册缺失(zh / en)都不许诺它', () => {
+    for (const lang of ['zh', 'en'] as const) {
+      for (const key of ['unitpage.remoteCallerStrict', 'unitpage.remoteCallerRosterMiss', 'unitpage.remoteCallerNotAsked']) {
+        expect(translateFor(lang, key), `${lang} ${key}`).not.toMatch(/10\s*分钟|10 minutes/)
+      }
+      expect(translateFor(lang, 'unitpage.remoteCallerDenied')).toMatch(/10\s*分钟|10 minutes/)
+      expect(/[一-鿿]/.test(translateFor('en', 'unitpage.remoteCallerNotAsked'))).toBe(false)
+    }
+  })
+
+  it('httpErrorMessage 与 remoteRefusalMessage 同一口径(设备页 startRun / web 走前者,服务层 request 走后者)', async () => {
+    for (const [reason, state] of REASONS) {
+      const body = { code: RCU, detail: 'x', state, reason }
+      expect((await httpErrorMessage(res(body))).message, reason).toBe(remoteRefusalMessage(RCU, body))
+    }
+  })
+})
+

@@ -46,6 +46,17 @@ export type TrustReason =
   /** 待确认队列满了(全局 1 框 + 3 排队):稍后再试。state='unconfirmed'。 */
   | 'busy'
 
+/** P1-KF:TrustReason 的运行期清单(消费方判「认得的 reason」用;Record 键钉住与类型逐项一致,新增 reason 不补这里就编不过)。 */
+const TRUST_REASON_SET: Record<TrustReason, true> = {
+  strict: true, 'never-prompts': true, 'not-signed-in': true, 'roster-miss': true, 'roster-unreachable': true, 'no-answer': true, busy: true,
+}
+export const TRUST_REASONS = Object.keys(TRUST_REASON_SET) as readonly TrustReason[]
+export function isTrustReason(v: unknown): v is TrustReason {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(TRUST_REASON_SET, v)
+}
+/** 稍后再试就可能弹框的几种(冷却 ≤ 1 分钟 / 排满);其余要那台电脑上的人先做点什么(登录 / 同账号 / 在设置里允许)。 */
+export const RETRY_SOON_REASONS: ReadonlySet<TrustReason> = new Set<TrustReason>(['roster-unreachable', 'no-answer', 'busy'])
+
 export type GateBody = { code: RemoteGateCode; detail: string; state?: TrustState; reason?: TrustReason }
 export type GateResult = { ok: true } | { ok: false; status: 403; body: GateBody }
 

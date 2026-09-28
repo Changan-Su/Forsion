@@ -53,9 +53,10 @@ registerMessages({
     zh: '那台电脑没有登录 Forsion 账号，无法确认这次请求。请先在那台电脑上登录，然后再试。',
     en: "That computer isn't signed in to Forsion, so it can't confirm this request. Sign in there, then try again.",
   },
+  // P1-KF:不许诺「10 分钟后可以再次请求」—— 账号对不上时 10 分钟后再请求照样被拒(冷却只是节流),出路是换同一个账号。
   'unitpage.remoteCallerRosterMiss': {
-    zh: '那台电脑在它登录的账号里找不到这台设备。请确认两台设备登录的是同一个账号，10 分钟后可以再次请求。',
-    en: "That computer can't find this device in the account it's signed in to. Make sure both devices use the same account. You can ask again in 10 minutes.",
+    zh: '那台电脑在它登录的账号里找不到这台设备，不会弹框询问。请确认两台设备登录的是同一个 Forsion 账号，然后稍后再试。',
+    en: "That computer can't find this device in the account it's signed in to, so it won't ask. Make sure both devices are signed in to the same Forsion account, then try again later.",
   },
   'unitpage.remoteCallerRosterUnreachable': {
     zh: '那台电脑暂时无法向 Forsion 核对这台设备。请稍后再试。',
@@ -71,6 +72,15 @@ registerMessages({
   },
 })
 
+// P1-KF:state 分句 —— pending = 弹框开着 / 在队里(真的在等);unconfirmed 且没有 reason = 还没问过 / 弹框没等到回答就收了,
+// 那台电脑上此刻**没有**弹框,不能说「正在等待确认」(与 shared/remoteSessions.ts 的 TrustReason 注释同口径)。
+registerMessages({
+  'unitpage.remoteCallerNotAsked': {
+    zh: '那台电脑还没有允许这台设备运行会话。再试一次会在那台电脑上弹框询问。',
+    en: "That computer hasn't allowed this device to run sessions yet. Try again to ask for permission there.",
+  },
+})
+
 const REASON_KEYS: Record<TrustReason, string> = {
   strict: 'unitpage.remoteCallerStrict',
   'never-prompts': 'unitpage.remoteCallerNeverPrompts',
@@ -81,14 +91,22 @@ const REASON_KEYS: Record<TrustReason, string> = {
   busy: 'unitpage.remoteCallerBusy',
 }
 
+/** 拒绝体里认得的 reason(shared/remoteSessions.ts TrustReason);不认的 / 缺席 = null(按 state 出句)。K8 手机弹层与本文件共用。 */
+export function trustReasonOf(body: unknown): TrustReason | null {
+  const r = (body as { reason?: unknown } | null | undefined)?.reason
+  return typeof r === 'string' && Object.prototype.hasOwnProperty.call(REASON_KEYS, r) ? (r as TrustReason) : null
+}
+
 /**
  * REMOTE_CALLER_UNCONFIRMED 的本地化(P1-K4;设备页 / web / 手机共用):**reason 先于 state**(有 reason = 不是在等人点允许);
- * 没有 reason 时 denied = 被拒(10 分钟后可再请求),其余 = 正在等那台电脑确认。K7 / K8 渲染同一个码时照此口径。
+ * 没有 reason 时 denied = 被拒(10 分钟后可再请求)、unconfirmed = 还没问过(再试会弹框;此刻没有弹框)、
+ * 其余(pending / 缺 state 的老体)= 正在等那台电脑确认。K7 / K8 渲染同一个码时照此口径。
  */
-export function remoteCallerMessage(body: { state?: unknown; reason?: unknown }): string {
-  const r = typeof body.reason === 'string' && Object.prototype.hasOwnProperty.call(REASON_KEYS, body.reason) ? REASON_KEYS[body.reason as TrustReason] : null
-  if (r) return translate(r)
-  return translate(body.state === 'denied' ? 'unitpage.remoteCallerDenied' : 'unitpage.remoteCallerUnconfirmed')
+export function remoteCallerMessage(body: unknown): string {
+  const r = trustReasonOf(body)
+  if (r) return translate(REASON_KEYS[r])
+  const state = (body as { state?: unknown } | null | undefined)?.state
+  return translate(state === 'denied' ? 'unitpage.remoteCallerDenied' : state === 'unconfirmed' ? 'unitpage.remoteCallerNotAsked' : 'unitpage.remoteCallerUnconfirmed')
 }
 
 export const LOCAL_ONLY_CODE = 'LOCAL_ONLY'
@@ -117,8 +135,13 @@ const REFUSAL_KEYS: Record<string, string> = {
   [APPROVAL_LOCAL_ONLY]: 'approval.localOnlyToast',
 }
 
-/** 远端拒绝码 → 本地化提示;不认得的码 → null(调用方照旧用 detail / HTTP 状态)。 */
-export function remoteRefusalMessage(code: unknown): string | null {
+/**
+ * 远端拒绝码 → 本地化提示;不认得的码 → null(调用方照旧用 detail / HTTP 状态)。
+ * body = 同一个拒绝响应体(P1-KF):REMOTE_CALLER_UNCONFIRMED 必须带上它 —— 只凭码只能出「正在等待确认」,
+ * 而 reason(严格档 / 名册缺失 / 未登录 / 没人答 / 排满 …)时那台电脑上根本没有弹框。
+ */
+export function remoteRefusalMessage(code: unknown, body?: unknown): string | null {
+  if (code === REMOTE_CALLER_UNCONFIRMED) return remoteCallerMessage(body)
   const key = typeof code === 'string' && Object.prototype.hasOwnProperty.call(REFUSAL_KEYS, code) ? REFUSAL_KEYS[code] : null
   return key ? translate(key) : null
 }
@@ -132,7 +155,7 @@ export async function httpErrorMessage(r: Response): Promise<{ message: string; 
   let j: { code?: unknown; detail?: unknown } | null = null
   try { j = text ? JSON.parse(text) : null } catch { /* 非 JSON */ }
   const code = typeof j?.code === 'string' ? j.code : undefined
-  const mapped = code === REMOTE_CALLER_UNCONFIRMED ? remoteCallerMessage(j as { state?: unknown; reason?: unknown }) : remoteRefusalMessage(code) // P1-K4:按 reason / state 分句
+  const mapped = remoteRefusalMessage(code, j) // P1-K4 / P1-KF:REMOTE_CALLER_UNCONFIRMED 按 reason / state 分句
   if (mapped) return { message: mapped, code }
   if (typeof j?.detail === 'string' && j.detail) return { message: j.detail, ...(code ? { code } : {}) }
   return { message: text || `HTTP ${r.status}`, ...(code ? { code } : {}) }

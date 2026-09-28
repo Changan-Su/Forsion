@@ -12,12 +12,17 @@
  * 真正的拒绝永远是 HTTP 码;本模块只把码翻成界面状态。
  *
  * 与 K7 §3.2 的差异(INTEGRATION R-10 覆盖包规格):
- *   - 拒绝码以 K4 为准:`403 REMOTE_CALLER_UNCONFIRMED {state}` —— state ∈ {pending, unconfirmed} → awaitingConfirm,
- *     state === 'denied' → **denied**(第十态;K7 表里的 CALLER_CONFIRM_PENDING / CALLER_REJECTED 已作废)。
+ *   - 拒绝码以 K4 为准:`403 REMOTE_CALLER_UNCONFIRMED {state, reason?}` —— **reason 先于 state**(P1-KF):带 reason
+ *     (严格档 / 名册缺失 / 那台没登录 / 名册查不了 / 没人答 / 排满 / P2P 不弹框)= 那台电脑上**不会**有弹框 → **callerBlocked**
+ *     (第十一态,文案按 reason 出;绝不显示成「请在那台电脑上允许」)。没有 reason 时 state ∈ {pending, unconfirmed} →
+ *     awaitingConfirm,state === 'denied' → **denied**(第十态;K7 表里的 CALLER_CONFIRM_PENDING / CALLER_REJECTED 已作废)。
  *   - K8 中继合成的 `503 CALLER_UNAVAILABLE / CALLER_UNSUPPORTED` 是「这台手机」的全局状况,不是某台电脑的状态:
  *     这里只折成 unreachable(消费方别见到未知码),具体文案由界面按码另显一条横幅。
  */
 import type { UnitInfo } from '../types'
+import { isTrustReason } from '../../../shared/remoteSessions'
+// 手机弹层(K8)/ 选择器(K7)按 reason 选文案要用到;从这里转出,消费方不必另找 shared 的相对路径。
+export { isTrustReason, RETRY_SOON_REASONS, type TrustReason } from '../../../shared/remoteSessions'
 
 export type DeviceStatus =
   | 'checking'
@@ -30,27 +35,33 @@ export type DeviceStatus =
   | 'remoteOff'
   | 'awaitingConfirm'
   | 'denied'
+  /** P1-KF:那台电脑不给这台设备跑会话,**也不会弹框问**(拒绝体带 reason);出路看 reason(见 shared/remoteSessions.ts TrustReason)。 */
+  | 'callerBlocked'
 
-/** 探针结果:ok,或失败时的 HTTP 状态(0 = 网络错 / 被中止)与响应 JSON 里的 code / state。 */
-export type ProbeResult = { ok: true } | { ok: false; status: number; code?: string; state?: string }
+/** 探针结果:ok,或失败时的 HTTP 状态(0 = 网络错 / 被中止)与响应 JSON 里的 code / state / reason。 */
+export type ProbeResult = { ok: true } | { ok: false; status: number; code?: string; state?: string; reason?: string }
 
-/** 粘滞拒绝:最近一次建会话被拒时记下的码(at = Date.now() 毫秒)。 */
+/** 粘滞拒绝:最近一次建会话被拒时记下的码(at = Date.now() 毫秒);REMOTE_CALLER_UNCONFIRMED 带 state / reason。 */
 export interface StickyRefusal {
   code: string
   state?: string
+  reason?: string
   at: number
 }
+
+/** 拒绝细节:决定状态的那条拒绝(探针或粘滞)里的 state / reason —— 界面按 reason 先、state 后选文案。 */
+export type RefusalDetail = { state?: string; reason?: string }
 
 /** 粘滞拒绝的有效期(K7 §3.2:5 分钟,或直到一次建会话成功)。 */
 export const STICKY_TTL_MS = 5 * 60_000
 
-/** 可以选作运行位置的状态:在线可用,或正等着那台电脑上点「允许」(选了就会弹确认)。 */
+/** 可以选作运行位置的状态:在线可用,或正等着那台电脑上点「允许」(选了就会弹确认)。callerBlocked 不在内:选了也不会弹框。 */
 export const SELECTABLE: ReadonlySet<DeviceStatus> = new Set<DeviceStatus>(['ready', 'awaitingConfirm'])
 
 /** 只用到名册的这三个字段;caps / capsLive 缺席(老 server)= 未知。 */
 export type RosterUnit = Pick<UnitInfo, 'online'> & Partial<Pick<UnitInfo, 'caps' | 'capsLive'>>
 
-const REFUSAL_STATES: ReadonlySet<DeviceStatus> = new Set<DeviceStatus>(['remoteOff', 'awaitingConfirm', 'denied'])
+const REFUSAL_STATES: ReadonlySet<DeviceStatus> = new Set<DeviceStatus>(['remoteOff', 'awaitingConfirm', 'denied', 'callerBlocked'])
 
 /**
  * 错误 → 状态。收 `{status, code, state}`(backendService.request 抛的错、探针的失败结果都长这样),
@@ -58,7 +69,7 @@ const REFUSAL_STATES: ReadonlySet<DeviceStatus> = new Set<DeviceStatus>(['remote
  */
 export function statusFromError(e: unknown): DeviceStatus | null {
   if (e == null) return null
-  const o = (typeof e === 'object' ? e : {}) as { status?: unknown; code?: unknown; state?: unknown; name?: unknown }
+  const o = (typeof e === 'object' ? e : {}) as { status?: unknown; code?: unknown; state?: unknown; reason?: unknown; name?: unknown }
   const code = typeof o.code === 'string' ? o.code : ''
   const status = typeof o.status === 'number' ? o.status : NaN
   switch (code) {
@@ -72,6 +83,7 @@ export function statusFromError(e: unknown): DeviceStatus | null {
     case 'REMOTE_SESSIONS_OFF':
       return 'remoteOff'
     case 'REMOTE_CALLER_UNCONFIRMED':
+      if (isTrustReason(o.reason)) return 'callerBlocked' // reason 先于 state:不会弹框,不是「等确认」
       return o.state === 'denied' ? 'denied' : 'awaitingConfirm'
     // 手机中继的失败关闭(K8)与坏票重发一次后仍被拒(R-04):都是「这台手机此刻证明不了自己」,换台电脑也一样。
     case 'CALLER_UNAVAILABLE':
@@ -93,20 +105,38 @@ export function statusFromError(e: unknown): DeviceStatus | null {
  * 探针失败排在粘滞拒绝前面:连不上 / 引擎在起的时候,开关与信任都无从谈起。
  */
 export function deviceStatus(u: RosterUnit, probe: ProbeResult | null, sticky?: StickyRefusal | null, now: number = Date.now()): DeviceStatus {
-  if (!u.online) return 'offline'
+  return describeDevice(u, probe, sticky, now).status
+}
+
+const detailOf = (x: { state?: string; reason?: string }): RefusalDetail | undefined =>
+  x.state || x.reason ? { ...(x.state ? { state: x.state } : {}), ...(x.reason ? { reason: x.reason } : {}) } : undefined
+
+/**
+ * deviceStatus 连同**决定它的那条拒绝**的 state / reason(P1-KF):awaitingConfirm / denied / callerBlocked 的文案要看它们
+ * (reason 先、state 后;pending 与「还没问过」也不是一句话)。次序与 deviceStatus 完全相同(它就是本函数的 .status)。
+ */
+export function describeDevice(u: RosterUnit, probe: ProbeResult | null, sticky?: StickyRefusal | null, now: number = Date.now()): { status: DeviceStatus; refusal?: RefusalDetail } {
+  if (!u.online) return { status: 'offline' }
   if (u.capsLive && u.caps) {
     const engine = u.caps.engine
-    if (engine === 'external') return 'noEngine'
-    if (engine === 'stopped') return 'engineStopped'
-    if (engine === 'starting') return 'starting'
+    if (engine === 'external') return { status: 'noEngine' }
+    if (engine === 'stopped') return { status: 'engineStopped' }
+    if (engine === 'starting') return { status: 'starting' }
   }
-  if (probe && !probe.ok) return statusFromError(probe) ?? 'unreachable'
+  if (probe && !probe.ok) {
+    const status = statusFromError(probe) ?? 'unreachable'
+    const refusal = REFUSAL_STATES.has(status) ? detailOf(probe) : undefined
+    return refusal ? { status, refusal } : { status }
+  }
   if (sticky && now - sticky.at >= 0 && now - sticky.at < STICKY_TTL_MS) {
-    const s = statusFromError({ status: 403, code: sticky.code, state: sticky.state })
-    if (s && REFUSAL_STATES.has(s)) return s
+    const s = statusFromError({ status: 403, code: sticky.code, state: sticky.state, reason: sticky.reason })
+    if (s && REFUSAL_STATES.has(s)) {
+      const refusal = detailOf(sticky)
+      return refusal ? { status: s, refusal } : { status: s }
+    }
   }
-  if (probe?.ok) return 'ready'
-  return 'checking'
+  if (probe?.ok) return { status: 'ready' }
+  return { status: 'checking' }
 }
 
 /** 设备自报「引擎在跑」(capsLive 且 engine==='ready'):只作还没探过时的提示,不等于可用。 */

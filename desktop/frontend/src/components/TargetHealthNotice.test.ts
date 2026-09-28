@@ -4,7 +4,7 @@
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { LocaleProvider, translateFor } from '../i18n'
+import { LocaleProvider, setLocaleGlobal, translateFor } from '../i18n'
 import { TargetHealthNotice } from './TargetHealthNotice'
 import { resetFocusForTests, useEngineFocus } from '../services/engine/targets'
 import { noteHealth, noteVerdict, resetHealth } from '../services/engine/health'
@@ -83,3 +83,28 @@ describe('TargetHealthNotice', () => {
     expect(notice()?.textContent).toContain(translateFor('zh', 'engine.target.connecting', { name: 'Mac' }))
   })
 })
+
+// P1-KF:「拒绝」这一格带上拒绝体的 state / reason —— 只凭码会一律说「正在等待那台电脑确认」,而带 reason 时那边根本没有弹框。
+describe('TargetHealthNotice × P1-KF 拒绝按 reason 先、state 后', () => {
+  const RCU = 'REMOTE_CALLER_UNCONFIRMED'
+  it.each(['zh', 'en'] as const)('[%s] reason 那句;reason 变了提示条跟着换(同态不同原因要重写健康格);没有 reason 的 pending 才是「等待确认」', async (lang) => {
+    await act(async () => setLocaleGlobal(lang))
+    try {
+      useEngineFocus.setState({ ref: { kind: 'unit', unitId: U }, name: 'Mac' })
+      noteVerdict(KEY, 'refused', { code: RCU, refusal: { state: 'denied', reason: 'strict' } })
+      await render()
+      const waiting = translateFor(lang, 'unitpage.remoteCallerUnconfirmed')
+      expect(notice()?.dataset.targetHealth).toBe('refused')
+      expect(notice()?.textContent).toContain(translateFor(lang, 'unitpage.remoteCallerStrict'))
+      expect(notice()?.textContent).not.toContain(waiting)
+      await act(async () => { noteVerdict(KEY, 'refused', { code: RCU, refusal: { state: 'unconfirmed', reason: 'not-signed-in' } }) })
+      expect(notice()?.textContent).toContain(translateFor(lang, 'unitpage.remoteCallerNotSignedIn'))
+      await act(async () => { noteVerdict(KEY, 'refused', { code: RCU, refusal: { state: 'denied', reason: 'roster-miss' } }) })
+      expect(notice()?.textContent).toContain(translateFor(lang, 'unitpage.remoteCallerRosterMiss'))
+      expect(notice()?.textContent).not.toMatch(/10\s*分钟|10 minutes/)
+      await act(async () => { noteVerdict(KEY, 'refused', { code: RCU, refusal: { state: 'pending' } }) })
+      expect(notice()?.textContent).toContain(waiting)
+    } finally { await act(async () => setLocaleGlobal('zh')) }
+  })
+})
+

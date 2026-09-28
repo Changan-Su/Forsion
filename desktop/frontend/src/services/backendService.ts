@@ -36,7 +36,7 @@ async function request<T>(cfg: EngineArg, path: string, init?: RequestInit, opts
       if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
       // 设备页打到远端不许用的路由(unitWeb 403 LOCAL_ONLY)、或引擎拒了远端请求(400 REMOTE_CWD_FORBIDDEN /
       // REMOTE_ARGS_OVERRIDE_FORBIDDEN)→ 换成本地化提示,而不是把英文 detail 原样上屏(见 services/localOnly.ts)
-      const refusal = remoteRefusalMessage(j?.code)
+      const refusal = remoteRefusalMessage(j?.code, j) // P1-KF:REMOTE_CALLER_UNCONFIRMED 按 reason / state 分句
       if (refusal) { detail = refusal; code = j.code }
     } catch { /* keep */ }
     // P1-K6 S2:经 hub 打「我的电脑」的失败(离线 / 引擎没起 / 设备被移除 / 调用方身份 / 413)→ 人话 + 记健康表
@@ -47,7 +47,7 @@ async function request<T>(cfg: EngineArg, path: string, init?: RequestInit, opts
       // 是**这一条请求**的事,读照常放行(K4 文案本身就说「可以查看、回答审批和停止任务」)—— 与 local-only / 413 同理
       // 不写健康表;写成整台 refused 会让轮询停摆、提示条卡住,那台点了「允许」/ 解锁之后也没人把它清掉。
       if (v !== 'refused') noteVerdict(t.key, v, hubCode ? { code: hubCode } : {})
-      const msg = unitFailureMessage(t, v, hubCode)
+      const msg = unitFailureMessage(t, v, hubCode, j)
       if (msg && v !== 'fatal' && v !== 'local-only') { detail = msg; if (hubCode) code = hubCode }
     }
     throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})

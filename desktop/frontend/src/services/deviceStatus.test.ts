@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { capsSaysReady, deviceStatus, SELECTABLE, statusFromError, STICKY_TTL_MS, type ProbeResult, type RosterUnit } from './deviceStatus'
+import { capsSaysReady, describeDevice, deviceStatus, SELECTABLE, statusFromError, STICKY_TTL_MS, type ProbeResult, type RosterUnit } from './deviceStatus'
 
 const T0 = 1_790_000_000_000
 const online = (extra: Partial<RosterUnit> = {}): RosterUnit => ({ online: true, ...extra })
@@ -104,3 +104,36 @@ describe('SELECTABLE / capsSaysReady', () => {
     expect(capsSaysReady(live('starting'))).toBe(false)
   })
 })
+
+// P1-KF:拒绝体带 reason = 那台电脑上不会弹框 → callerBlocked(不可选、不是「等确认」);没有 reason 才按 state。
+describe('deviceStatus × P1-KF reason 先于 state', () => {
+  const REASONS = ['strict', 'never-prompts', 'not-signed-in', 'roster-miss', 'roster-unreachable', 'no-answer', 'busy']
+  const refused = (state: string, reason?: string): ProbeResult => ({ ok: false, status: 403, code: 'REMOTE_CALLER_UNCONFIRMED', state, ...(reason ? { reason } : {}) })
+
+  it('探针 / statusFromError:任一认得的 reason(不论 state 是 denied / unconfirmed / pending)→ callerBlocked,不可选', () => {
+    for (const reason of REASONS) {
+      for (const state of ['denied', 'unconfirmed', 'pending']) {
+        expect(statusFromError(refused(state, reason)), `${state}/${reason}`).toBe('callerBlocked')
+        expect(deviceStatus(online(), refused(state, reason), null, T0)).toBe('callerBlocked')
+      }
+    }
+    expect(SELECTABLE.has('callerBlocked')).toBe(false)
+    // 没有 / 不认得的 reason:照旧按 state
+    expect(statusFromError(refused('pending'))).toBe('awaitingConfirm')
+    expect(statusFromError(refused('denied', 'from-the-future'))).toBe('denied')
+  })
+
+  it('粘滞拒绝也带 reason;describeDevice 把决定状态的那条拒绝的 state / reason 交给界面', () => {
+    const sticky = { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'denied', reason: 'roster-miss', at: T0 }
+    expect(describeDevice(online(), null, sticky, T0)).toEqual({ status: 'callerBlocked', refusal: { state: 'denied', reason: 'roster-miss' } })
+    expect(describeDevice(online(), refused('pending'), null, T0)).toEqual({ status: 'awaitingConfirm', refusal: { state: 'pending' } })
+    expect(describeDevice(online(), null, { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'unconfirmed', at: T0 }, T0)).toEqual({ status: 'awaitingConfirm', refusal: { state: 'unconfirmed' } })
+    // 过期的粘滞不作数;非拒绝态不带 refusal
+    expect(describeDevice(online(), null, { ...sticky, at: T0 - STICKY_TTL_MS }, T0)).toEqual({ status: 'checking' })
+    expect(describeDevice(online(), fail(503, 'UNIT_OFFLINE'), null, T0)).toEqual({ status: 'offline' })
+    for (const [u, p, st] of [[online(), refused('denied', 'strict'), null], [online(), null, sticky], [online(), { ok: true } as ProbeResult, null]] as const) {
+      expect(describeDevice(u, p, st, T0).status).toBe(deviceStatus(u, p, st, T0))
+    }
+  })
+})
+

@@ -10,7 +10,7 @@ import { authFetch } from './http'
 import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 import { asTarget, fetchOpts, isEngineTarget, routeSession, targetLabel, type EngineArg, type EngineTarget } from './engine/targets'
-import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, noteVerdict, waitReady, type Verdict } from './engine/health'
+import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, noteVerdict, refusalOf, waitReady, type Verdict } from './engine/health'
 import { remoteRefusalMessage } from './localOnly'
 import './engine/messages'
 import { currentPlatform } from './platform'
@@ -73,8 +73,8 @@ export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; mes
       if (cfg.via === 'unit') {
         const body = await r.clone().json().catch(() => null) as { code?: string } | null
         const verdict = classify(r.status, body)
-        noteVerdict(cfg.key, verdict, body?.code ? { code: body.code } : {})
-        return { ok: false, message: unitFailureMessage(cfg, verdict, body?.code) || `HTTP ${r.status}`, verdict }
+        noteVerdict(cfg.key, verdict, noteExtra(body))
+        return { ok: false, message: unitFailureMessage(cfg, verdict, body?.code, body) || `HTTP ${r.status}`, verdict }
       }
       return { ok: false, message: `HTTP ${r.status}` }
     }
@@ -89,8 +89,8 @@ export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; mes
       const pb = probe && !probe.ok ? await probe.clone().json().catch(() => null) as { code?: string } | null : null
       const pv = probe && !probe.ok ? classify(probe.status, pb) : 'ok'
       if (pv === 'caller-unavailable' || pv === 'refused' || pv === 'gone') {
-        noteVerdict(cfg.key, pv, pb?.code ? { code: pb.code } : {})
-        return { ok: false, message: unitFailureMessage(cfg, pv, pb?.code) || `HTTP ${probe!.status}`, verdict: pv }
+        noteVerdict(cfg.key, pv, noteExtra(pb))
+        return { ok: false, message: unitFailureMessage(cfg, pv, pb?.code, pb) || `HTTP ${probe!.status}`, verdict: pv }
       }
       noteVerdict(cfg.key, 'ok')
     }
@@ -105,9 +105,19 @@ export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; mes
   }
 }
 
-/** unit 目标的失败 → 一句人话(拒绝码优先走 localOnly 的本地化表;其余按类别给 engine.target.*)。认不出 → null。 */
-export function unitFailureMessage(t: EngineTarget, v: Verdict, code?: unknown): string | null {
-  const refusal = remoteRefusalMessage(code)
+/** 失败响应体 → 记健康表的附带信息:码 + 拒绝细节(REMOTE_CALLER_UNCONFIRMED 的 state / reason,P1-KF)。 */
+export function noteExtra(body: unknown): { code?: string; refusal?: { state?: string; reason?: string } } {
+  const code = (body as { code?: unknown } | null)?.code
+  const refusal = refusalOf(body)
+  return { ...(typeof code === 'string' && code ? { code } : {}), ...(refusal ? { refusal } : {}) }
+}
+
+/**
+ * unit 目标的失败 → 一句人话(拒绝码优先走 localOnly 的本地化表;其余按类别给 engine.target.*)。认不出 → null。
+ * body = 同一个失败响应体(P1-KF):REMOTE_CALLER_UNCONFIRMED 按它的 reason / state 分句,只凭码会一律说「正在等待确认」。
+ */
+export function unitFailureMessage(t: EngineTarget, v: Verdict, code?: unknown, body?: unknown): string | null {
+  const refusal = remoteRefusalMessage(code, body)
   if (refusal) return refusal
   const name = targetLabel(t)
   switch (v) {
@@ -407,9 +417,9 @@ export async function subscribeRunEvents(
       throw e
     }
   }
-  const unitFail = (v: Verdict, status: number, code?: string): Error => {
-    noteVerdict(t.key, v, code ? { code } : {})
-    return Object.assign(new Error(unitFailureMessage(t, v, code) || translate('agentrun.subscribeFailed', { status })), { status, ...(code ? { code } : {}) })
+  const unitFail = (v: Verdict, status: number, code?: string, body?: unknown): Error => {
+    noteVerdict(t.key, v, { ...(code ? { code } : {}), ...noteExtra(body) })
+    return Object.assign(new Error(unitFailureMessage(t, v, code, body) || translate('agentrun.subscribeFailed', { status })), { status, ...(code ? { code } : {}) })
   }
 
   while (true) {
@@ -448,11 +458,11 @@ export async function subscribeRunEvents(
         continue
       }
       if (v === 'transient') {
-        if (++failures > MAX) throw unitFail(v, res.status, code)
+        if (++failures > MAX) throw unitFail(v, res.status, code, body)
         await delay(1000 * failures)
         continue
       }
-      throw unitFail(v, res.status, code)
+      throw unitFail(v, res.status, code, body)
     }
     if (res.status >= 400 && res.status < 500) throw new Error(translate('agentrun.subscribeFailed', { status: res.status }))
     if (!res.ok || !res.body) {
