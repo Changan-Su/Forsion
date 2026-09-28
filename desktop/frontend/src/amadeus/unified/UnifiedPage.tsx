@@ -1690,15 +1690,6 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       if (pipe.retired) {
         if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed)
         pipe.stashed = null
-        // D-17:改名后交给新实例的「接着写」按**卸载这一刻**的 doc / 选区刷新(新实例在渲染期已拿到同一个对象,
-        // 它的编辑器异步建好后才读)—— 改名 IPC 到重建之间打进旧实例的字就不会随旧实例一起消失。
-        const carry = outgoingCarry.current
-        const v = layer.getView()
-        if (carry && v) {
-          carry.doc = v.state.doc.toJSON()
-          carry.anchor = v.state.selection.anchor
-          carry.head = v.state.selection.head
-        }
         return
       }
       const text = composeFm(pipe.fm, pipe.body)
@@ -1736,6 +1727,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       pipe.dead = true
       window.removeEventListener('beforeunload', onUnload)
       flush()
+      // D-17:改名后交给新实例的「接着写」按**卸载这一刻**的 doc / 选区刷新(新实例在渲染期已拿到同一个对象,
+      // 它的编辑器异步建好后才读)—— 改名 IPC 到重建之间打进旧实例的字不随旧实例一起消失。
+      // 放在 flush 外面:writeFailures.test 把 flush 的源码单独切出来求值,不往里加自由标识符。
+      const carry = outgoingCarry.current
+      const v = layer.getView()
+      if (carry && v) {
+        carry.doc = v.state.doc.toJSON()
+        carry.anchor = v.state.selection.anchor
+        carry.head = v.state.selection.head
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
