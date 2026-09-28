@@ -29,14 +29,15 @@ function harness() {
     isPristine: vi.fn<() => boolean>(() => false),
     reconcileNow: vi.fn<() => void>(),
   }
+  const flushPropDrafts = vi.fn<() => void>() // 属性面板草稿冲洗(C-02)
   const script = writer + '\n({ writeNow, handle: { path, ' + flushProperty + ' retire() {} } })'
   const result = runInNewContext(transform(script, { transforms: ['typescript'] }).code, {
     path: 'Note.md', pipe, composeFm, textFingerprint, amadeus: { writeTextFile }, ...safety,
     scoped: { getState: () => ({ bumpLinkGraph: vi.fn() }) },
-    syncFromEditor() {}, clearTimeout,
+    syncFromEditor() {}, clearTimeout, flushPropDrafts,
   }) as { writeNow: (strict?: boolean) => Promise<void>; handle: Parameters<typeof registerUnifiedPipe>[0] }
   disposers.push(registerUnifiedPipe(result.handle))
-  return { pipe, writeTextFile, ...safety, ...result }
+  return { pipe, writeTextFile, flushPropDrafts, ...safety, ...result }
 }
 
 describe('unified editor account-switch persistence barrier', () => {
@@ -50,6 +51,15 @@ describe('unified editor account-switch persistence barrier', () => {
     expect(h.pipe.pending).toBe(false)
     expect(h.pipe.lastSaved).toBe(composeFm('', 'Unsaved note'))
     expect(h.writeTextFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('the barrier commits pending property-panel drafts before writing (C-02)', async () => {
+    const h = harness()
+    h.flushPropDrafts.mockImplementation(() => { h.pipe.fm = '---\nstatus: typed before quit\n---\n' })
+    h.writeTextFile.mockResolvedValue(undefined)
+    await flushUnifiedScopes(true)
+    expect(h.flushPropDrafts).toHaveBeenCalled()
+    expect(h.writeTextFile).toHaveBeenLastCalledWith('Note.md', composeFm('---\nstatus: typed before quit\n---\n', 'Unsaved note'), expect.anything())
   })
 
   it('retains the existing best-effort behavior of ordinary editor saves', async () => {
@@ -203,7 +213,7 @@ describe('retired instances never leave drafts behind (N-5)', () => {
       setSaveFailed: vi.fn(), toastSaveFailed: vi.fn(),
     }
     const fns = runInNewContext(transform(`${unmountFlush}\n${noteFailed}\n({ flush, noteWriteFailed })`, { transforms: ['typescript'] }).code, {
-      pipe, path: 'Untitled.md', vaultRoot: '/vault', composeFm, syncFromEditor() {}, clearTimeout, setTimeout, SAVE_RETRY_MS: [2000], ...stubs,
+      pipe, path: 'Untitled.md', vaultRoot: '/vault', composeFm, syncFromEditor() {}, flushPropDrafts() {}, clearTimeout, setTimeout, SAVE_RETRY_MS: [2000], ...stubs,
     }) as { flush: () => void; noteWriteFailed: (e: unknown) => void }
     return { pipe, ...stubs, ...fns }
   }

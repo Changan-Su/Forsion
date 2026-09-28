@@ -1677,8 +1677,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 卸载/刷新:立刻冲洗待写(同步启动写,不等防抖;先拉平编辑器最后几击)。
   useEffect(() => {
     const flush = (): void => {
-      flushPropDrafts()
       syncFromEditor()
+      flushPropDrafts()
       if (pipe.timer) clearTimeout(pipe.timer)
       pipe.timer = null
       if (pipe.readOnly) return
@@ -1765,8 +1765,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       peerWrote: () => reconcileNow(), // 同窗另一实例刚写盘:与外部改动同一条回灌路径
       flush: (strict = false) => {
         if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
-        flushPropDrafts()
         syncFromEditor()
+        flushPropDrafts()
         if (pipe.timer) {
           clearTimeout(pipe.timer)
           pipe.timer = null
