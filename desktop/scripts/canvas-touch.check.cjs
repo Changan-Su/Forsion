@@ -261,9 +261,12 @@ const pickTool = async (p, title) => {
   {
     const { p, cdp } = await open(browser)
     const blank = await blankPoint(p)
-    await doubleTap(cdp, p, blank.x, blank.y) // 建一张卡(建完是选中态)
+    await doubleTap(cdp, p, blank.x, blank.y) // 建一张卡(V-04 起建完即进编辑)
     await wait(p, 700)
-    await p.keyboard.press('Escape') // 取消选中(点空白也行,但这一带全是卡,Esc 没有歧义)
+    // 两下 Esc:第一下退出编辑回到选中,第二下取消选中(点空白也行,但这一带全是卡,Esc 没有歧义)
+    await p.keyboard.press('Escape')
+    await wait(p, 200)
+    await p.keyboard.press('Escape')
     await wait(p, 250)
     const selBefore = await p.evaluate(() => document.querySelectorAll('.amx-el-selbox').length)
     const card = await rectOf(p, '.amx-ucard')
@@ -377,6 +380,9 @@ const pickTool = async (p, title) => {
     const card = await rectOf(p, '.amx-ucard')
     const mid = { x: Math.round(card.x + card.w / 2), y: Math.round(card.y + card.h / 2) }
     await wait(p, 700)
+    // V-04 起新卡建完即进编辑;Esc 退回选中态 —— 本格测的是「选中的卡上拖 = 搬卡」那条手势
+    await p.keyboard.press('Escape')
+    await wait(p, 250)
     const geo0 = (await cardsOf(p))[0]
     const tbtn = await rectOf(p, '.amx-stage-tools button')
     const tb = { x: Math.round(tbtn.x + tbtn.w / 2), y: Math.round(tbtn.y + tbtn.h / 2) }
