@@ -408,6 +408,8 @@
 .t2s-lead .t2s-dot { position: absolute; right: -1px; bottom: -1px; box-shadow: 0 0 0 1.5px var(--sidebar-bg); }
 .t2s-dot.running { background: var(--accent-ink); animation: t2s-pulse 1.4s ease-in-out infinite; }
 .t2s-dot.unread { background: var(--accent-ink); opacity: 0.6; }
+/* P1-K3「等你处理」:审批 / 询问在等人,优先级高于运行中 / 未读;警示色、不跳动(跳动留给「正在跑」)。 */
+.t2s-dot.attention { background: var(--warning); }
 @keyframes t2s-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
 .t2s-srow-menu {
   display: inline-flex; align-items: center; justify-content: center;

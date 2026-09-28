@@ -15,6 +15,8 @@ import { useWorkspace, setActiveSpace } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
 import { FeedbackThread, feedbackThreadAvailable } from './FeedbackThread'
 import { inboxThreadOf } from './feedbackThreadLib'
+import { approvalThreadOf } from './approvalThreadLib'
+import { openSessionFromApproval } from '../../stores/attentionOpen'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
 import './inbox.css'
 
@@ -24,6 +26,9 @@ const ATTACH_ICONS: Record<string, string> = {
 }
 
 registerMessages({
+  // P1-K3:审批提醒信的「打开会话」
+  'inbox.approvalOpen': { zh: '打开会话', en: 'Open session' },
+  'inbox.approvalOpenFail': { zh: '这台设备现在连不上那台电脑', en: "Can't reach that computer right now" },
   'inbox.reader.unread': { zh: '{n} 封未读', en: '{n} unread' },
   'inbox.reader.readLatest': { zh: '阅读最新一封', en: 'Read latest' },
   'inbox.reader.caughtUp': { zh: '没有未读消息', en: "You're all caught up" },
@@ -81,6 +86,13 @@ export function InboxReaderView() {
   const expired = !!expiresAt && expiresAt.getTime() <= Date.now()
   // 反馈线程:服务端投递的定向信(thread 判别列)+ 桌面壳有云端接缝才挂;Web / 移动端只看正文。
   const thread = feedbackThreadAvailable() ? inboxThreadOf(msg) : null
+  // P1-K3:电脑上的远程会话在等人 → 一键打开那条会话。
+  // ponytail: K7 合入前只认本端已知的会话(手机整端切到那台电脑后,它的会话就在列表里);K7 的 openRemoteSession(unitId, sid) 接上后改走它。
+  const approvalThread = approvalThreadOf(msg)
+  const openApprovalSession = async (): Promise<void> => {
+    if (!approvalThread) return
+    if (!(await openSessionFromApproval(approvalThread.sessionId))) useApp.getState().toast(t('inbox.approvalOpenFail'), true)
+  }
 
   /** 与发件 agent 开新聊天:切 Tangu Space + blankNewChat 等价序列(不 import bootstrapEngine 防环)+ 选中该 agent。 */
   const chatWithSender = () => {
@@ -149,6 +161,11 @@ export function InboxReaderView() {
           <InboxBody msg={msg} />
         </div>
         <InboxAttachments msg={msg} expired={expired} />
+        {approvalThread && !expired && (
+          <div className="ibx-approval-open">
+            <button type="button" className="btn primary sm" data-action="approval-open" onClick={() => { void openApprovalSession() }}>{t('inbox.approvalOpen')}</button>
+          </div>
+        )}
         {thread && <FeedbackThread key={thread.ticketId} ticketId={thread.ticketId} event={thread.event} />}
       </div>
     </div>

@@ -25,6 +25,7 @@ import { isOrbitPinned, orderOrbitEntries, type OrbitPinTimes } from './orbitPin
 import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import './sidebar2.css'
 import { OverlayAt } from '@lcl/engine'
+import { AttentionDot } from './AttentionDot'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
@@ -70,6 +71,8 @@ export interface SidebarPaneProps {
   activeId: string | null
   runningIds: Set<string>
   unreadIds: Set<string>
+  /** P1-K3:会话 → 等你处理的审批 / 询问数(attentionStore.useSessionAttention)。优先级 等你处理 > 运行中 > 未读;缺省不画。 */
+  attentionIds?: Map<string, { n: number; localOnly: boolean }>
   /** opts.newTab = ⌘/Ctrl 单击:把会话开进新标签页而不是就地。 */
   onSelect: (id: string, opts?: { newTab?: boolean }) => void
   cfg: TanguDesktopConfig
@@ -325,9 +328,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
       lead={<>
         {p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />}
-        {p.runningIds.has(s.id)
-          ? <span className="t2s-dot running" title={t('sidebar.running')} />
-          : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}
+        {p.attentionIds?.get(s.id)
+          ? <AttentionDot n={p.attentionIds.get(s.id)!.n} localOnly={p.attentionIds.get(s.id)!.localOnly} />
+          : p.runningIds.has(s.id)
+            ? <span className="t2s-dot running" title={t('sidebar.running')} />
+            : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}
       </>}
       trailing={<span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>}
       // 统一点击语义(见 views/itemSelect):裸击开、⌘ 开新标签、shift/option 只动选中态。
