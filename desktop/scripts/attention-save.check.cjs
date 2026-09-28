@@ -230,6 +230,85 @@ async function main() {
     await p.close()
   }
 
+  // ── I-01(评审 2026-09-27):段落里已有字面 `~x~` / `_x_`,行末每敲一个字都删掉远处一个字、吞掉刚敲的字 ──
+  // preset 的删除线 / 下划线强调输入规则没 `$` 锚,run 按「匹配紧贴光标」推起点 → 删错位置。药在 anchoredMarkRules.ts。
+  // v4 生产壳(?upage)上真键盘逐字敲 + CDP Input.imeSetComposition 真输入法(合成键的 isComposing 到不了 React)。
+  {
+    const PMU = '.unified-body .ProseMirror'
+    const openU = async (md) => {
+      const page = await browser.newPage({ locale: 'zh-CN' })
+      page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await page.goto(`${BASE}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector(PMU, { timeout: 20000 })
+      await page.waitForTimeout(500)
+      return page
+    }
+    /** 光标落到第 i 个顶层段落末尾(DOM Selection 精确落点)。 */
+    const caretAtParaEnd = (page, i) => page.evaluate(([s, i]) => {
+      const p = document.querySelectorAll(s + ' > p')[i]
+      const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT)
+      let last = null
+      while (w.nextNode()) last = w.currentNode
+      document.querySelector(s).focus()
+      const r = document.createRange()
+      r.setStart(last, last.data.length)
+      r.collapse(true)
+      getSelection().removeAllRanges()
+      getSelection().addRange(r)
+    }, [PMU, i])
+    const para = (page) => page.evaluate((s) => {
+      const p = document.querySelectorAll(s + ' > p')[0]
+      return { text: p.textContent, marks: p.querySelectorAll('del, em, s').length }
+    }, PMU)
+    const I_CASES = [
+      { id: 'I1', name: '字面 `~` 对 + 行末键入', seed: '今天好累~ 明天继续~ 加油', keys: '!' },
+      { id: 'I2', name: '中文里的 `_tmp_`', seed: '变量_tmp_的值是多少', keys: '？' },
+      { id: 'I3', name: '行内代码里的 `_tmp_` + 连续击键', seed: '变量 `_tmp_` 的值是多少呢', keys: 'abc' },
+    ]
+    for (const c of I_CASES) {
+      const page = await openU(`# T\n\n${c.seed}\n`)
+      const before = await para(page)
+      await caretAtParaEnd(page, 0)
+      await page.waitForTimeout(150)
+      await page.keyboard.type(c.keys, { delay: 60 })
+      await page.waitForTimeout(300)
+      const after = await para(page)
+      check(`${c.id} ${c.name}:一个字不少、不吞`, after.text === before.text + c.keys, `${JSON.stringify(before.text)} → ${JSON.stringify(after.text)}`)
+      check(`${c.id} ${c.name}:不凭空生出删除线/斜体`, after.marks === before.marks, `marks ${before.marks} → ${after.marks}`)
+      await page.close()
+    }
+    // I4 输入法:组合中 → 上屏(compositionend 后 customInputRules 用空串重跑一遍规则)
+    {
+      const page = await openU('# T\n\n今天好累~ 明天继续~ 加油\n')
+      await caretAtParaEnd(page, 0)
+      await page.waitForTimeout(150)
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Input.imeSetComposition', { text: 'wo', selectionStart: 2, selectionEnd: 2 })
+      await page.waitForTimeout(120)
+      await cdp.send('Input.insertText', { text: '我们' })
+      await page.waitForTimeout(400)
+      const after = await para(page)
+      check('I4 输入法上屏:不删远处的字', after.text === '今天好累~ 明天继续~ 加油我们', JSON.stringify(after.text))
+      check('I4 输入法上屏:不凭空生出删除线', after.marks === 0, `marks=${after.marks}`)
+      await page.close()
+    }
+    // I5 对照:正常快捷输入照旧触发(键盘 `~~x~~` / `_x_`)
+    {
+      const page = await openU('# T\n\n开头\n')
+      await caretAtParaEnd(page, 0)
+      await page.waitForTimeout(150)
+      await page.keyboard.type(' ~~删~~ 与 _斜_', { delay: 60 })
+      await page.waitForTimeout(300)
+      const got = await page.evaluate((s) => {
+        const p = document.querySelectorAll(s + ' > p')[0]
+        return { del: [...p.querySelectorAll('del, s')].map((e) => e.textContent), em: [...p.querySelectorAll('em')].map((e) => e.textContent), text: p.textContent }
+      }, PMU)
+      check('I5 对照:`~~x~~` 照旧转删除线', got.del.join() === '删', JSON.stringify(got))
+      check('I5 对照:`_x_` 照旧转斜体', got.em.join() === '斜', JSON.stringify(got))
+      await page.close()
+    }
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

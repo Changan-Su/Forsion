@@ -1,0 +1,287 @@
+// @vitest-environment happy-dom
+//
+// D-12:链接定义行 / `[标签]: 值` 中文行打开看不见、编辑后从磁盘删掉(评审 2026-09-27)。定义行逐字保留;
+// 引用式链接落盘一律写成行内链接(= origin/main 行为,URL 不丢;写回引用形已放弃,见 refDefinitions.ts 顶注)。
+// 真 Milkdown(生产装配,见 parseFidelity.testkit.ts)。真浏览器那一半:npm run check:rtcorpus 的 d12.* / entry.*。
+import { describe, expect, it } from 'vitest'
+import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model'
+import { bootEditor, roundTrip, type Booted } from './parseFidelity.testkit'
+import { normalizeFragmentMd } from './MarkdownBlock'
+
+describe('定义行 / 引用式链接逐字往返', () => {
+  it.each([
+    ['中文标签行', '会议记录\n\n[重要]: 明天开会\n\n[TODO]: 回复邮件\n\n结尾\n'],
+    ['没被引用的书签定义(相邻两行合一段)', 'text\n\n[bookmark]: https://example.com\n[other]: https://other.com "t"\n'],
+    ['full / collapsed / shortcut 三种引用', 'see [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n'],
+    ['定义里的 `_` `*` 尖括号地址不被转义', '[a_b]: https://x.com/a_b*c "t_1"\n\n[k]: <https://x.com/y z>\n'],
+    ['引用里的定义', '> 引文\n>\n> [ref]: https://q.example\n'],
+    ['列表项里的多行定义', '* [a]: http://x.example\n  "title"\n'],
+    ['图片引用与链接引用同在(不白屏)', '![pic][1] and [t][1]\n\n[1]: http://x.y/p.png\n'],
+  ])('%s', async (label, md) => {
+    const out = await roundTrip(md)
+    // 定义行逐字;引用(含图片引用)落盘成行内形式。
+    if (label.startsWith('图片引用')) expect(out).toBe('![pic](http://x.y/p.png) and [t](http://x.y/p.png)\n\n[1]: http://x.y/p.png\n')
+    else if (label.startsWith('full')) expect(out).toBe('see [a](http://example.com "Title") and [b](http://x.y) and [c](/c)\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n')
+    else expect(out).toBe(md)
+  })
+
+  it('v3 宿主(softBreakRemark 按行拆段)也逐字:每段只认自己那一行原文', async () => {
+    const md = 'text\n\n[bookmark]: https://example.com\n[other]: https://other.com "t"\n'
+    expect(await roundTrip(md, { v3: true })).toBe(md)
+  })
+
+  it('定义行打开即可见(段落正文就是原文)', async () => {
+    const b = await bootEditor('会议记录\n\n[重要]: 明天开会\n')
+    try {
+      expect(b.view.dom.textContent).toContain('[重要]: 明天开会')
+    } finally { await b.destroy() }
+  })
+
+  it('相邻几条定义一行一条(硬换行),不挤成一行', async () => {
+    const b = await bootEditor('[1]: http://a.example\n[c]: /c\n')
+    try {
+      const p = b.view.dom.querySelector('p')!
+      expect(p.innerHTML).toMatch(/http:\/\/a\.example<br[^]*?\[c\]: \/c/)
+    } finally { await b.destroy() }
+  })
+
+  it('引用照常渲染成链接,对象 attr 不漏进 DOM', async () => {
+    const b = await bootEditor('see [a][1]\n\n[1]: http://example.com\n')
+    try {
+      const a = b.view.dom.querySelector('a')!
+      expect(a.getAttribute('href')).toBe('http://example.com')
+      expect(a.hasAttribute('ref')).toBe(false)
+      expect(JSON.parse(a.getAttribute('data-md-ref')!)).toMatchObject({ referenceType: 'full', label: '1' })
+    } finally { await b.destroy() }
+  })
+
+  it('改了链接地址(链接卡)→ 退成行内链接,不写回指向旧地址的引用', async () => {
+    const b = await bootEditor('see [a][1]\n\n[1]: http://example.com\n')
+    try {
+      const { state } = b.view
+      const link = state.schema.marks.link
+      let from = -1, to = -1, attrs: Record<string, unknown> = {}
+      state.doc.descendants((n, pos) => {
+        const m = n.marks.find((x) => x.type === link)
+        if (m && from < 0) { from = pos; to = pos + n.nodeSize; attrs = m.attrs }
+      })
+      b.view.dispatch(state.tr.removeMark(from, to, link).addMark(from, to, link.create({ ...attrs, href: 'http://new.example' })))
+      expect(b.md()).toBe('see [a](http://new.example)\n\n[1]: http://example.com\n')
+    } finally { await b.destroy() }
+  })
+
+  it('动过的定义行按普通段落写(转义成字面,内容不丢)', async () => {
+    const b = await bootEditor('[重要]: 明天开会\n')
+    try {
+      b.view.dispatch(b.view.state.tr.insertText('！', b.view.state.doc.content.size - 1))
+      expect(b.md()).toBe('\\[重要]: 明天开会！\n')
+    } finally { await b.destroy() }
+  })
+
+  it('给定义行加缩进档:不能原样写回吞掉缩进', async () => {
+    const b = await bootEditor('[重要]: 明天开会\n')
+    try {
+      const p = b.view.state.doc.firstChild!
+      b.view.dispatch(b.view.state.tr.setNodeMarkup(0, undefined, { ...p.attrs, indent: 1 }))
+      expect(b.md()).not.toBe('[重要]: 明天开会\n')
+      expect(b.md()).toContain('明天开会')
+    } finally { await b.destroy() }
+  })
+
+  it('粘贴链路(md → PM → DOM → parseSlice)保留定义原文,引用落成行内链接', async () => {
+    const md = 'see [a][1]\n\n[1]: http://example.com "T"\n'
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const dom = DOMSerializer.fromSchema(schema).serializeFragment(b.parse(md).content)
+      const slice = DOMParser.fromSchema(schema).parseSlice(dom)
+      b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+      expect(b.md()).toBe('see [a](http://example.com "T")\n\n[1]: http://example.com "T"\n')
+    } finally { await b.destroy() }
+  })
+})
+
+// 引用离开定义的四条真实路径 + 同名定义「首个生效」:落盘都是带**原地址**的行内链接,重开仍指向原地址。
+describe('引用离开定义 → 退行内链接,URL 不丢', () => {
+  const A = 'see [a][1] here\n\n[1]: http://example.com "T"\n'
+  /** 找第一个正文以 prefix 开头的段落。 */
+  const para = (b: Booted, prefix: string): { pos: number; size: number } => {
+    let hit: { pos: number; size: number } | null = null
+    b.view.state.doc.descendants((n, pos) => {
+      if (!hit && n.type.name === 'paragraph' && n.textContent.startsWith(prefix)) hit = { pos, size: n.nodeSize }
+      return !hit
+    })
+    if (!hit) throw new Error(`no paragraph starting with ${prefix}`)
+    return hit
+  }
+
+  it('① 跨笔记粘贴(复制带 data-md-ref,贴进没有这条定义的笔记)', async () => {
+    const a = await bootEditor(A)
+    const b = await bootEditor('B 正文\n')
+    try {
+      const p = para(a, 'see ')
+      // 同 PM 自己的复制:选区切片 → DOM(text/html)→ 目标编辑器 parseSlice
+      const dom = DOMSerializer.fromSchema(a.view.state.schema).serializeFragment(a.view.state.doc.slice(p.pos, p.pos + p.size).content)
+      const slice = DOMParser.fromSchema(b.view.state.schema).parseSlice(dom)
+      b.view.dispatch(b.view.state.tr.insert(b.view.state.doc.content.size, slice.content))
+      const out = b.md()
+      expect(out).toBe('B 正文\n\nsee [a](http://example.com "T") here\n')
+      expect(await roundTrip(out)).toBe(out) // 重开不再是字面 `[a][1]`
+    } finally { await a.destroy(); await b.destroy() }
+  })
+
+  it('② 删掉定义那一段', async () => {
+    const b = await bootEditor(A)
+    try {
+      const p = para(b, '[1]:')
+      b.view.dispatch(b.view.state.tr.delete(p.pos, p.pos + p.size))
+      expect(b.md()).toBe('see [a](http://example.com "T") here\n')
+    } finally { await b.destroy() }
+  })
+
+  it('③ 结构化复制给外部应用(剪贴板序列化的是切片文档,不是编辑器里那份)', async () => {
+    const b = await bootEditor('* 看 [a][1] 吧\n\n[1]: http://example.com\n')
+    try {
+      const { state } = b.view
+      let list = -1, size = 0
+      state.doc.forEach((n, pos) => { if (list < 0 && n.type.name === 'bullet_list') { list = pos; size = n.nodeSize } })
+      // 同 clipboardTextSerializer:切片内容 → topNodeType.createAndFill → 宿主序列化器 → normalizeFragmentMd
+      const doc = state.schema.topNodeType.createAndFill(undefined, state.doc.slice(list, list + size).content)!
+      expect(normalizeFragmentMd(b.serialize(doc)).trim()).toBe('* 看 [a](http://example.com) 吧')
+      expect(b.md()).toBe('* 看 [a](http://example.com) 吧\n\n[1]: http://example.com\n')
+    } finally { await b.destroy() }
+  })
+
+  it('④ 改了定义行(改错字):定义落盘成转义字面,引用退成带原地址的行内链接', async () => {
+    const b = await bootEditor('see [a][1] here\n\n[1]: http://exmaple.com\n')
+    try {
+      const p = para(b, '[1]:')
+      const at = p.pos + 1 + b.view.state.doc.nodeAt(p.pos)!.textContent.indexOf('exmaple')
+      b.view.dispatch(b.view.state.tr.insertText('example', at, at + 7))
+      const out = b.md()
+      expect(out).toBe('see [a](http://exmaple.com) here\n\n\\[1]: http://example.com\n')
+      expect(out).not.toContain('[a][1]')
+    } finally { await b.destroy() }
+  })
+
+  it('同名定义首个生效:删掉第一条后剩下的那条地址不同 → 不能写回引用形(否则重开指向别处)', async () => {
+    const b = await bootEditor('see [a][1]\n\n[1]: http://first.example\n\n[1]: http://second.example\n')
+    try {
+      const p = para(b, '[1]: http://first')
+      b.view.dispatch(b.view.state.tr.delete(p.pos, p.pos + p.size))
+      expect(b.md()).toBe('see [a](http://first.example)\n\n[1]: http://second.example\n')
+    } finally { await b.destroy() }
+  })
+
+  // 评审返修 D-12-prefix-collision:剩下那条定义的地址以原地址**开头**(/docs → /docs/v2),旧的 startsWith 判定放行,
+  // 引用形写回后重开指向 /docs/v2。同一个动作不能因为「谁是谁的前缀」给出两种结果。
+  /** 删掉正文含 needle 的第一段,返回落盘与重开后的 href|title 列表。 */
+  const deleteDef = async (md: string, needle: string): Promise<{ out: string; hrefs: string[] }> => {
+    const b = await bootEditor(md)
+    let out = ''
+    try {
+      let hit: { pos: number; size: number } | null = null
+      b.view.state.doc.descendants((n, pos) => {
+        if (!hit && n.type.name === 'paragraph' && n.textContent.includes(needle)) hit = { pos, size: n.nodeSize }
+        return !hit
+      })
+      if (!hit) throw new Error(`no paragraph ${needle}`)
+      const { pos, size } = hit as { pos: number; size: number }
+      b.view.dispatch(b.view.state.tr.delete(pos, pos + size))
+      out = b.md()
+    } finally { await b.destroy() }
+    const r = await bootEditor(out)
+    const hrefs: string[] = []
+    try {
+      r.view.state.doc.descendants((n) => { for (const m of n.marks) if (m.type.name === 'link') hrefs.push(`${m.attrs.href}|${m.attrs.title ?? ''}`) })
+    } finally { await r.destroy() }
+    return { out, hrefs }
+  }
+
+  /** 打开后所有链接的 href|title。 */
+  const hrefsOf = async (md: string): Promise<string[]> => {
+    const r = await bootEditor(md)
+    const hrefs: string[] = []
+    try {
+      r.view.state.doc.descendants((n) => { for (const m of n.marks) if (m.type.name === 'link') hrefs.push(`${m.attrs.href}|${m.attrs.title ?? ''}`) })
+    } finally { await r.destroy() }
+    return hrefs
+  }
+
+  it.each([
+    ['剩下那条的地址以原地址开头(/docs → /docs/v2)',
+      'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n', '[1]: http://x.example/docs',
+      'see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs/v2\n', 'http://x.example/docs|'],
+    ['地址写在下一行(首行都是 `[1]:`)',
+      'see [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n', 'first.example',
+      'see [a](http://first.example) here\n\n[1]:\n  http://second.example\n', 'http://first.example|'],
+    ['只差下一行的标题',
+      'see [a][1] here\n\n[1]: http://x.example\n  "T"\n\n[1]: http://x.example\n', '"T"',
+      'see [a](http://x.example "T") here\n\n[1]: http://x.example\n', 'http://x.example|T'],
+    ['剩下那条与原定义逐字相同',
+      'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs\n', '[1]: http://x.example/docs',
+      'see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n', 'http://x.example/docs|'],
+  ])('删掉同名定义的第一条:%s', async (_label, md, del, want, href) => {
+    const { out, hrefs } = await deleteDef(md, del)
+    expect(out).toBe(want)
+    expect(hrefs).toEqual([href]) // 重开后链接仍指向删之前那个地址(标题也一样)
+  })
+
+  it('定义都还在(同名前缀地址 / 地址或标题写在下一行 / 缩进 / 行尾空白):定义逐字,引用成行内且地址不变(v3 宿主拆行后也一样)', async () => {
+    for (const md of [
+      'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n',
+      'see [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n',
+      'see [a][1] here\n\n[1]: http://x.example\n  "T"\n',
+      'see [a][1] here\n\n  [1]: http://x.example\n  "T"\n',
+      'see [a][x y] here\n\n[x\ny]: http://e.example\n',
+      'see [a][1] here\n\n[1]: http://x.example   \n',
+      '> see [a][1]\n>\n> [1]: http://q.example\n> "T"\n',
+    ]) {
+      const before = await hrefsOf(md)
+      for (const out of [await roundTrip(md), await roundTrip(md, { v3: true })]) {
+        const [head, ...rest] = out.split('\n')
+        expect(rest.join('\n')).toBe(md.split('\n').slice(1).join('\n')) // 引用只在首行,其余(定义)逐字
+        expect(head).not.toMatch(/\]\[/)
+        expect(await hrefsOf(out)).toEqual(before)
+      }
+    }
+  })
+
+  it('链接卡只改了标题 → 退成带新标题的行内链接(引用形重开会拿回旧标题)', async () => {
+    const b = await bootEditor('see [a][1]\n\n[1]: http://example.com "Old"\n')
+    try {
+      const { state } = b.view
+      const link = state.schema.marks.link
+      let from = -1, to = -1, attrs: Record<string, unknown> = {}
+      state.doc.descendants((n, pos) => {
+        const m = n.marks.find((x) => x.type === link)
+        if (m && from < 0) { from = pos; to = pos + n.nodeSize; attrs = m.attrs }
+      })
+      b.view.dispatch(state.tr.removeMark(from, to, link).addMark(from, to, link.create({ ...attrs, title: 'New' })))
+      expect(b.md()).toBe('see [a](http://example.com "New")\n\n[1]: http://example.com "Old"\n')
+    } finally { await b.destroy() }
+  })
+
+  it('大小写 / 空白不同的 label 也认:引用成行内链接,地址取对', async () => {
+    expect(await roundTrip('see [a][Foo  Bar] ok\n\n[foo bar]: http://x.example\n')).toBe('see [a](http://x.example) ok\n\n[foo bar]: http://x.example\n')
+    expect(await roundTrip('* [a][1]\n\n> [1]: http://q.example\n')).toBe('* [a](http://q.example)\n\n> [1]: http://q.example\n')
+  })
+})
+
+describe('外来剪贴板 HTML 的 data-md-raw', () => {
+  it('首行不是定义的一律作废(这份原文会不经转义落盘);合法定义照旧逐字', async () => {
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const paste = (html: string): string => {
+        const div = document.createElement('div')
+        div.innerHTML = html
+        const slice = DOMParser.fromSchema(schema).parseSlice(div)
+        b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+        return b.md()
+      }
+      expect(paste('<p>前</p><p data-md-raw="&lt;b&gt;x&lt;/b&gt;">&lt;b&gt;x&lt;/b&gt;</p>')).toBe('前\n\n\\<b>x\\</b>\n')
+      expect(paste('<p>前</p><p data-md-raw="[1]: http://x.example">[1]: http://x.example</p>')).toBe('前\n\n[1]: http://x.example\n')
+    } finally { await b.destroy() }
+  })
+})

@@ -155,6 +155,43 @@ async function main() {
     await page.close()
   }
 
+  // B7 v4(?upage 生产 UnifiedPage):段落 / 单元格 / 列表项里的行内 `<br>`(D-06,评审 2026-09-27)。
+  //    病:preset 的 preserve-empty-line 在任意深度删掉 `<br>`,`hello<br>world` → `helloworld`,编辑别处即落盘。
+  //    打开要渲染成真换行;在首段打一个字,远处的 `<br>` 逐字写回(整套语料在 check:rtcorpus 的 d06.*)。
+  {
+    const PMU = '.unified-body .ProseMirror'
+    const seed = '首段\n\nhello<br>world 与 甲<BR>乙\n\n* 项<br>续行\n\n| k | v          |\n| - | ---------- |\n| a | 第一行<br>第二行 |\n' // 表格按序列化器的规范宽度写(对齐重排是 D-18 / 0b)
+    const page = await browser.newPage({ locale: 'zh-CN' })
+    page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await page.goto(`${BASE}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector(PMU, { timeout: 20000 })
+    await page.waitForTimeout(1300)
+    const shown = await page.evaluate((s) => ({
+      p: document.querySelectorAll(s + ' > p')[1].innerText,
+      td: document.querySelector(s + ' td:last-child').innerText,
+      w: window.__upage.writes.length,
+    }), PMU)
+    check('B7 v4 行内 <br> 渲染成真换行(不粘连)', shown.p.startsWith('hello\nworld'), JSON.stringify(shown.p))
+    check('B7 v4 单元格 <br> 渲染成真换行', shown.td.includes('第一行\n第二行'), JSON.stringify(shown.td))
+    check('B7 v4 只读打开零写盘', shown.w === 0, `writes=${shown.w}`)
+    await page.evaluate((s) => {
+      const p = document.querySelectorAll(s + ' > p')[0]
+      const t = p.firstChild
+      document.querySelector(s).focus()
+      const r = document.createRange()
+      r.setStart(t, t.data.length)
+      r.collapse(true)
+      getSelection().removeAllRanges()
+      getSelection().addRange(r)
+    }, PMU)
+    await page.waitForTimeout(150)
+    await page.keyboard.type('Z')
+    await page.waitForTimeout(1500)
+    const md = await page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : null })
+    check('B7 v4 编辑别处后 <br> 逐字写回(段落 / 列表项 / 单元格)', md === seed.replace('首段', '首段Z'), JSON.stringify(md))
+    await page.close()
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

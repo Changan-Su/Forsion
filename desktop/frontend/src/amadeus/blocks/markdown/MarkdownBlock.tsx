@@ -28,7 +28,6 @@ import {
   serializerCtx,
   type CmdKey,
 } from '@milkdown/kit/core'
-import { gfm } from '@milkdown/kit/preset/gfm'
 import {
   toggleStrongCommand,
   toggleEmphasisCommand,
@@ -50,6 +49,7 @@ import {
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
+import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
@@ -200,6 +200,14 @@ export function stampedFileName(kind: string): string {
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
   return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))
+}
+/** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
+ *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
+ *  unescapeCalloutToken:切出来的那半段也可能带 callout 令牌;
+ *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
+ *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
+export function normalizeFragmentMd(markdown: string): string {
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(markdown)))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
@@ -525,8 +533,7 @@ export function MilkdownInner({
   const serialize = (node: ProseNode): string => {
     let out = ''
     getInstance()?.action((ctx) => { out = ctx.get(serializerCtx)(node) })
-    // stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个)
-    return stripEmptyLineBr(unescapeCalloutToken(out)) // 切块切出来的那半段也可能带 callout 令牌
+    return normalizeFragmentMd(out)
   }
 
   // 插件编辑器扩展(ctx.registerEditorExtension)的注册表代次。变了 = 有插件被启用/停用,
@@ -863,7 +870,7 @@ export function MilkdownInner({
       // 契约:high 桶的插件不该自己处理的必须返回 false,否则内置行为在它手里静默消失。
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
       .use(commonmarkWithIndent)
-      .use(gfm)
+      .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)

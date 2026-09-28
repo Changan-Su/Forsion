@@ -95,6 +95,17 @@ export function splitParagraph(p: MdNode): MdNode[] {
   // 这里若一并过滤,那个空行每次重开笔记就少一个(实测:a⏎⏎b 重开后 a、b 贴到了一起)。
   while (lines.length && lines[0].length === 0) lines.shift()
   while (lines.length && lines[lines.length - 1].length === 0) lines.pop()
+  // 定义行字面段落(./refDefinitions,D-12)带着整组原文:拆成多段后每段只认自己那一行,
+  // 否则每段都「正文 ≠ 原文」,落盘全被转义成 `\[…]`。对不上行数就不认(按普通段落写,内容不丢)。
+  const raw = p?.data?.amadeusRaw
+  if (typeof raw === 'string' && lines.length > 1) {
+    const rawLines = raw.split('\n')
+    return lines.map((children, i) => ({
+      ...p,
+      children,
+      data: { ...p.data, amadeusRaw: rawLines.length === lines.length ? rawLines[i] : undefined },
+    }))
+  }
   return lines.map((children) => ({ ...p, children }))
 }
 
@@ -104,7 +115,8 @@ export function splitParagraph(p: MdNode): MdNode[] {
  * Milkdown 的 preserve-empty-line 把空段落序列化成 `<br />`(preset-commonmark/node/paragraph.ts),
  * 于是文件里到处是莫名其妙的 `<br />` —— 在 Obsidian / 任何别的编辑器里都看得见(用户实报)。
  * 空行本身要留住:读回时按**行距**重建空段落(见 expand 里的 blankGap),不再靠 `<br />` 当记号。
- * 围栏内的 `<br />` 是代码不是排版,一律不动;行内的 `<br />`(`a<br />b`)也不动(brLead 认它)。
+ * 围栏内的 `<br />` 是代码不是排版,一律不动;行内的 `<br />`(`a<br />b`)也不动(v3 由 brLead 认它;
+ * v4 由 ./inlineBr 在解析时转成带原文的 break,写回原样 `<br />`)。
  */
 export function stripEmptyLineBr(md: string): string {
   if (!md.includes('<br')) return md
