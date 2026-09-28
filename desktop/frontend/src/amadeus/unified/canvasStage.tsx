@@ -111,6 +111,9 @@ function hintTarget(target: HTMLElement, clientX: number): boolean {
 /** 元素的文字键与弹窗抬头:连线=label、Frame=title、其余=text。四处调用共用,别再各写一遍三元。 */
 const textKeyOf = (el: El): 'text' | 'label' | 'title' => (el.kind === 'connector' ? 'label' : el.kind === 'frame' ? 'title' : 'text')
 const textTitleOf = (el: El): string => translate(el.kind === 'connector' ? 'canvasstage.textTitle.connector' : el.kind === 'frame' ? 'canvasstage.textTitle.frame' : 'canvasstage.textTitle.element')
+/** 卡片落位 / 避让用的形状障碍:**Frame 不算**(V-02)。Frame 是容器 —— 在框里双击 / 用卡片工具建卡、
+ *  Tab 长子节点、认亲吸附、编辑增高推开邻卡,都不该把卡当碰撞弹到框外(拖进框本来就不弹,两条路口径一致)。 */
+const solidShapeBoxes = (elements: unknown): ElBox[] => [...shapeBoxes(safeElements(elements).filter((e) => e.kind !== 'frame'), null).values()]
 
 export type { Viewport }
 
@@ -1022,7 +1025,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // 新卡也走与拖拽同源的“最近无碰撞位置”。过去工具点击/双击/回车只照搬调用点，右侧已经
     // 塞满时仍会把卡叠上去；先用空卡的保守高度占位，真实高度在挂载后还会由编辑避让继续兜底。
     const seed: ElBox = { x, y, w: CARD_W, h: 80 }
-    const obstacles = [...boxesNow(null).values()]
+    const obstacles = [...measureCards(hostRef.current).values(), ...solidShapeBoxes(cbRef.current.elements)]
+    const mainBox = measureMain(hostRef.current)
+    if (mainBox) obstacles.push(mainBox)
     const push = resolveCardRepulsion([seed], obstacles)
     const px = x + push.x
     const py = y + push.y
@@ -1184,7 +1189,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         : allNodes.filter((a) => typeof treeNow[a] !== 'string' || !treeNow[a])
     const peerBoxes = peers.map((a) => nodeBox(a)).filter(Boolean) as ElBox[]
     const center = basis.x + basis.w / 2
-    const obstacles = [...boxesNow(null).values()]
+    const obstacles = [...measureCards(hostRef.current).values(), ...solidShapeBoxes(cbRef.current.elements)]
+    const mainBox = measureMain(hostRef.current)
+    if (mainBox) obstacles.push(mainBox)
     const GAP_X = 80
     const GAP_Y = 32
     let best: { x: number; y: number; score: number } | null = null
@@ -1259,7 +1266,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const obstacles: ElBox[] = [...boxes].filter(([a]) => !sourceSet.has(a)).map(([, b]) => b)
     const mainBox = measureMain(hostRef.current)
     if (mainBox) obstacles.push(mainBox)
-    for (const b of shapeBoxes(safeElements(cbRef.current.elements), null).values()) obstacles.push(b)
+    obstacles.push(...solidShapeBoxes(cbRef.current.elements))
     const push = resolveCardRepulsion(movingBoxes, obstacles, { x: baseDx, y: baseDy })
     const dx = baseDx + push.x
     const dy = baseDy + push.y
@@ -1816,7 +1823,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         const obstacles: ElBox[] = [...mutable].filter(([a]) => a !== anchor).map(([, b]) => b)
         const mainBox = measureMain(host)
         if (mainBox && fixedId !== MAIN_KEY) obstacles.push(mainBox)
-        for (const b of shapeBoxes(safeElements(cbRef.current.elements), null).values()) obstacles.push(b)
+        obstacles.push(...solidShapeBoxes(cbRef.current.elements))
         const intent = {
           x: box.x + box.w / 2 - (fixed.x + fixed.w / 2),
           y: box.y + box.h / 2 - (fixed.y + fixed.h / 2),

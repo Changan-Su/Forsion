@@ -85,6 +85,8 @@
 //   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
 //   C91 按住空格 = 临时抓手:重复 keydown 不写进卡、松开(没拖)才进编辑、拖 = 平移(V-05)
 //   C92 画布键盘缩放 Cmd+=/-/0 + Shift+1 适应,舞台焦点才接管;HUD 百分比 = 重置 100% 按钮(V-06)
+//   —— 波次 2(评审 2026-09-27 画布打磨)在 wave2();`UCANVAS_ONLY=w2` 只跑这一段(调试 / 负对照用)——
+//   C93 Frame 里用卡片工具 / 双击建卡:留在框内,只避让卡片不避让 Frame(V-02)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -210,8 +212,76 @@ async function dragBlockOnto(p, text, targetText, frac) {
   }, { targetText, frac })
 }
 
+/** 画布 fm 键(解析后;读不出 → null)。 */
+const cvOf = (pg) => pg.evaluate(() => {
+  window.__upage.probe.flush?.()
+  try { return JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { return null }
+})
+/** 卡片的舞台几何(dataset 为准;高按视口高 ÷ z)。 */
+const cardBox = (pg, a) => pg.evaluate((a) => {
+  const c = document.querySelector(`.amx-ucard[data-anchor="${a}"]`)
+  if (!c) return null
+  const z = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a
+  return { x: +c.dataset.x, y: +c.dataset.y, w: +c.dataset.w, h: Math.round(c.getBoundingClientRect().height / z) }
+}, a)
+/** 舞台坐标 → 视口坐标。 */
+const stageToClient = (pg, x, y) => pg.evaluate(([x, y]) => {
+  const inner = document.querySelector('.amx-stage-inner')
+  const m = new DOMMatrixReadOnly(getComputedStyle(inner).transform)
+  const r = inner.getBoundingClientRect()
+  return { x: r.left + x * m.a, y: r.top + y * m.d }
+}, [x, y])
+const anchorsOf = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-ucard')].map((c) => c.dataset.anchor))
+
+/** 波次 2(评审 2026-09-27 画布打磨)的格子。默认跟在全套后面跑;`UCANVAS_ONLY=w2` 只跑这里。 */
+async function wave2(browser) {
+  // ── C93 Frame 里建卡不被弹出框(V-02)──────────────────────────────────────────────
+  //  修前:addCardAt 的障碍集含 Frame(Frame 是容器),框里任何一处建卡都被当碰撞推到框外;
+  //  拖进框却不弹(拖放口径只避卡片 / 主卡),两条路不一致。现在 Frame 不算障碍,卡片照避。
+  const F93 = { x: 500, y: 0, w: 600, h: 420 }
+  const SEED93 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    `amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k2","x":540,"y":40,"w":200}],"elements":[{"id":"f1","type":"frame","x":${F93.x},"y":${F93.y},"w":${F93.w},"h":${F93.h},"title":"区域"}]}`,
+    '---', '', '# 画布页', '', '主卡一段。', '', '<!-- a k2 -->', '', '框内卡', '', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const p93 = await open(browser, SEED93)
+  await p93.waitForTimeout(700)
+  const in93 = (c) => !!c && c.x >= F93.x && c.y >= F93.y && c.x + c.w <= F93.x + F93.w && c.y + c.h <= F93.y + F93.h
+  const newest93 = async (known) => (await anchorsOf(p93)).find((a) => !known.has(a))
+  const known93 = new Set(await anchorsOf(p93))
+  // ① 卡片工具点在 k2 右下的空白:种子盒与 k2 相撞 → 必须被推开(卡片仍是障碍),但留在框内
+  await pickTool(p93, '新建卡片')
+  let pt93 = await stageToClient(p93, 800, 140)
+  await p93.mouse.click(pt93.x, pt93.y)
+  await p93.waitForTimeout(500)
+  const a93 = await newest93(known93)
+  if (a93) known93.add(a93)
+  const b93a = a93 ? await cardBox(p93, a93) : null
+  const k293 = await cardBox(p93, 'k2')
+  const clear93 = !!b93a && !!k293 && (b93a.x >= k293.x + k293.w + 18 || b93a.y >= k293.y + k293.h + 18 || b93a.x + b93a.w <= k293.x - 18 || b93a.y + b93a.h <= k293.y - 18)
+  await p93.keyboard.press('Escape'); await p93.keyboard.press('Escape'); await p93.waitForTimeout(200)
+  // ② 双击框内空白:落在指针处(左上 = 指针 - (200, 24)),不被推出框
+  pt93 = await stageToClient(p93, 900, 330)
+  await p93.mouse.dblclick(pt93.x, pt93.y)
+  await p93.waitForTimeout(500)
+  const a93b = await newest93(known93)
+  const b93b = a93b ? await cardBox(p93, a93b) : null
+  await p93.close()
+  record('C93a Frame 里用卡片工具建卡:与框内卡相撞时照常被推开,但留在框内(Frame 不是障碍)',
+    in93(b93a) && clear93, JSON.stringify({ card: b93a, k2: k293, frame: F93 }))
+  record('C93b Frame 里双击空白建卡:落在指针处、留在框内',
+    in93(b93b) && b93b.x === 700 && b93b.y === 306, JSON.stringify({ card: b93b, want: { x: 700, y: 306 } }))
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
+  if (process.env.UCANVAS_ONLY === 'w2') {
+    await wave2(browser)
+    await browser.close()
+    const ok = results.filter(Boolean).length
+    console.log(`\n${ok}/${results.length} 通过(仅波次 2 段)`)
+    process.exit(ok === results.length ? 0 : 1)
+  }
   const SEED = '# 画布页\n\n主卡一段。\n\n要拖出去的段。\n'
 
   // ── C1 默认文档模式 + 切画布不写盘 ────────────────────────────────────────────
@@ -5669,6 +5739,7 @@ async function main() {
       && inCard92.prevented.length === 2 && inCard92.prevented[1] === false,
     JSON.stringify({ vEdit0, vEdit1, inCard92 }))
 
+  await wave2(browser)
   await browser.close()
   const ok = results.filter(Boolean).length
   console.log(`\n${ok}/${results.length} 通过`)
