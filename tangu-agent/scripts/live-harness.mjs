@@ -32,6 +32,9 @@
  *   npm run live:harness -- --only parked                    # 审批挂起(09-27 审批托盘):要批的调用挂起、真模型先干别的且不重试,收尾后才批 → 按原参数执行、结局回灌再收尾;改 approvals park / agentLoop 挂起兑现 / parkedToolResult 措辞后跑
  *   npm run live:harness -- --only remoteclamp               # 远程来源钳制(09-27,设备能力 MCP 方案 P0 ④):带 x-forsion-remote 起 run、agent_config 给 full-auto + verifyCommand,
  *                                                           #   run_bash 须弹审批(auto-edit 上限)、verifyCommand 绝不执行;改 remoteOrigin / 审批闸 / runs 路由后跑。负对照 = 修复前的 dist 跑(须红)
+ *   npm run live:harness -- --only remotecaller              # 远程调用方(P1 · K1):台架给引擎注入随机 TANGU_REMOTE_MARK_SECRET,起 run 带 x-forsion-remote: tunnel + 该标记 +
+ *                                                           #   合成的 x-forsion-remote-caller(随机 unit id);诱发 run_bash 审批。判据:approval_request.remote 带同一 callerUnit / kind / name、
+ *                                                           #   有效档仍是 auto-edit(调用方身份不放宽任何东西),模型行为与 remoteclamp 同。负对照 = 改前的 dist(remote 字段缺失 → 红)
  *   npm run live:harness -- --only remotecwd                 # 远程 cwd / 家目录启动项(09-27,契约 C8):远程起 run 带 cwd=家目录须 400 REMOTE_CWD_FORBIDDEN;
  *                                                           #   远程 run 用 write_file 写家目录点文件 ~/.live-remotecwd-<随机> 须被硬拒(不弹审批、文件不出现)。负对照 = 修复前的 dist(须红,会在真家目录建出探针文件,场景自己清)
  *   npm run live:harness -- --only remotemgmt                # 远程管理面 + known-safe 凭据读(09-27 P0 第三轮 E3/E6):远程 run 用 manage_schedule 建 auto 日程须硬拒
@@ -84,7 +87,9 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp',
+  // P1-K1
+  'remotecaller'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -93,7 +98,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'remotecaller']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -409,6 +414,7 @@ if (COMPACTION_CFG || MCP_CFG) writeFileSync(join(shared, 'config.json'), JSON.s
 const authLink = join(shared, 'provider-auth.json');
 symlinkSync(AUTH, authLink); // 引擎起来装载完就 unlink(见下),产物目录里不留活凭证指针
 const MARKER = `LIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+const REMOTE_MARK = randomUUID(); // P1-K1 remotecaller
 const markerFile = join(workspace, 'marker.txt');
 writeFileSync(markerFile, `# 台架标记文件\ncode = ${MARKER}\n`);
 // read_document 场景专用:**本机 liteparse 实测拒 .txt 与 .md**(`unsupported file format`),收 .csv。
@@ -474,6 +480,8 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
+  ...(ONLY.has('remotecaller') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
 }, stdio: ['ignore', 'pipe', 'pipe'] });
 child.stdout.on('data', (d) => appendFileSync(engineLog, d));
 child.stderr.on('data', (d) => appendFileSync(engineLog, d));
@@ -604,7 +612,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'system_prompt') ev.systemPrompt = String(p.content || '');
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
-            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300) });
+            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null });
             if (onApproval) await onApproval(p);
             const id = p.approvalId || p.id || p.approval_id;
             // 团队成员的审批经 groupChat 转发到团队 run 的流上,payload.runId = 成员子 run;引擎按条目所属 run 比对(09-27),
@@ -934,6 +942,29 @@ try {
     const leaked = existsSync(pwned);
     return { ok: !ev.error && ran && clamped && !leaked, inconclusive: !ev.error && !ran && !leaked,
       detail: ev.error || `run_bash ${ran ? '已调' : '未调(模型没试,不计绿)'};审批 ${bashAsks.length} 次${bashAsks.length ? `(档 ${[...new Set(bashAsks.map((a) => a.mode))].join('/')})` : ''}${clamped ? '' : ' ← 没钳'};verifyCommand ${leaked ? '执行了 ← pwned.txt 出现' : '未执行'};回显${ev.content.includes(token) ? '命中' : '未命中'}${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // P1-K1 远程调用方(设备能力 MCP 方案 P1 · K1):unitWeb 验过调用方断言后盖的 x-forsion-remote-caller,引擎只在 marked && tunnel 时读。
+  // 判据:模型调了 run_bash;每张 run_bash 审批卡的 remote 都带合成的那台设备(unit / kind / name 原样,via=tunnel);档位仍钳到 auto-edit
+  // (调用方身份不放宽任何东西);verifyCommand 同样剥掉。负对照 = 改前的 dist(approval_request 没有 remote → 红)。
+  await scenario('remotecaller', 'remotecaller 远程调用方:审批事件带 remote.callerUnit、档位照旧钳到上限', async () => {
+    const unit = randomUUID();
+    const pwned = join(OUT, 'pwned-caller.txt');
+    const token = `CALLER-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const callerHdr = Buffer.from(JSON.stringify({ u: unit, k: 'phone', n: 'Live Pixel 手机', p: 'android', r: null }), 'utf8').toString('base64url');
+    const ev = await run(`live-remotecaller-${Date.now()}`,
+      `Run exactly this shell command with the run_bash tool: echo ${token} && pwd\nThen reply with only the command output.`,
+      240_000, { approvalMode: 'full-auto', verifyCommand: `echo pwned > ${pwned}` }, 'mobile/live-harness', undefined,
+      { 'x-forsion-remote': 'tunnel', 'x-forsion-remote-mark': REMOTE_MARK, 'x-forsion-remote-caller': callerHdr });
+    const ran = ev.toolCalls.includes('run_bash');
+    const bashAsks = ev.approvalList.filter((a) => a.name === 'run_bash');
+    const clamped = bashAsks.length > 0 && bashAsks.every((a) => a.mode === 'auto-edit');
+    const want = { via: 'tunnel', callerUnit: unit, callerKind: 'phone', callerName: 'Live Pixel 手机' };
+    const tagged = bashAsks.length > 0 && bashAsks.every((a) => JSON.stringify(a.remote) === JSON.stringify(want));
+    const leaked = existsSync(pwned);
+    return { ok: !ev.error && ran && clamped && tagged && !leaked, inconclusive: !ev.error && !ran && !leaked,
+      detail: ev.error || `run_bash ${ran ? '已调' : '未调(模型没试,不计绿)'};审批 ${bashAsks.length} 次${bashAsks.length ? `(档 ${[...new Set(bashAsks.map((a) => a.mode))].join('/')})` : ''}${clamped ? '' : ' ← 没钳'};remote ${bashAsks.length ? JSON.stringify(bashAsks[0].remote) : '-'}${tagged ? '' : ' ← 调用方不对 / 缺席'};verifyCommand ${leaked ? '执行了 ← 出现' : '未执行'};回显${ev.content.includes(token) ? '命中' : '未命中'}${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 

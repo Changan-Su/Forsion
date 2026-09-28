@@ -3,7 +3,7 @@
  * 审批事件会持久化重放,畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律);kind 白名单外的一律丢掉。
  * 契约 C6:protected = 写凭据 / Forsion 本机配置(C4),引擎每次都问、「总允许」不落 —— 与 escalate 分开标注。
  */
-import type { ApprovalReason } from './types'
+import type { ApprovalReason, ApprovalRemote } from './types'
 
 const KINDS: ReadonlySet<string> = new Set<ApprovalReason['kind']>(['custom-ask', 'escalate', 'mode', 'protected'])
 const MODES: ReadonlySet<string> = new Set(['readonly', 'auto-edit', 'full-auto'])
@@ -38,4 +38,44 @@ export function approvalReasonText(r: ApprovalReason | undefined, t: (k: string,
   if (r.kind === 'protected') return t('approval.why.protected')
   const m = r.mode && MODE_KEY[r.mode] ? t(MODE_KEY[r.mode]) : ''
   return m ? t('approval.why.mode', { mode: m }) : ''
+}
+
+// P1-K1
+const VIAS: ReadonlySet<string> = new Set(['tunnel', 'p2p', 'lan'])
+const CALLER_KINDS: ReadonlySet<string> = new Set(['phone', 'desktop'])
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** 名字是登记者自选的不可信串:剥控制符、零宽与双向覆写(防在审批卡上伪装成别的名字)。 */
+const UNSAFE_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g
+
+/**
+ * approval_request.remote 的白名单清洗(P1 · K1;事件会持久化重放,同 sanitizeApprovalReason 纪律)。
+ * 调用方三字段只在 via==='tunnel' 时收(与引擎「只在 marked && tunnel 时认调用方」同一个不变式);
+ * callerUnit 过 uuid、callerKind 过枚举,二者缺一则调用方整组丢;callerName 截 120。不是对象 → undefined(卡上不写来源)。
+ */
+export function sanitizeApprovalRemote(raw: unknown): ApprovalRemote | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const r = raw as Record<string, unknown>
+  const via = typeof r.via === 'string' && VIAS.has(r.via) ? (r.via as ApprovalRemote['via']) : undefined
+  const out: ApprovalRemote = via ? { via } : {}
+  if (via === 'tunnel' && typeof r.callerUnit === 'string' && UUID_RE.test(r.callerUnit) && typeof r.callerKind === 'string' && CALLER_KINDS.has(r.callerKind)) {
+    out.callerUnit = r.callerUnit.toLowerCase()
+    out.callerKind = r.callerKind as ApprovalRemote['callerKind']
+    const name = typeof r.callerName === 'string' ? r.callerName.replace(UNSAFE_CHARS, '').trim().slice(0, 120) : ''
+    if (name) out.callerName = name
+  }
+  return out
+}
+
+/** 审批卡的来源行:hub 验过的调用方(callerUnit 在)→ 「来自远程会话 · 名字」,名字清洗后为空 → 「已登记设备」;
+ *  否则按来路(隧道无调用方 = 账号下未识别的客户端)。remote 缺席(本机 run)→ ''(不显示)。
+ *  判「是不是已验证设备」看 callerUnit 不看 callerName:登记名是自选串,可以只由零宽 / 双向符号组成 —— 服务端 trim()
+ *  留着它们,桌面 / 引擎 / 渲染层的清洗把它剥成空串,名字一路被丢掉;按名字判就把验过的设备说成了「未识别」。
+ *  名字是不可信串:调用方只许放进 React 文本节点,不进 dangerouslySetInnerHTML。 */
+export function approvalRemoteText(r: ApprovalRemote | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
+  if (!r) return ''
+  if (r.callerUnit) return r.callerName ? t('approval.remote.caller', { name: r.callerName }) : t('approval.remote.device')
+  if (r.via === 'tunnel') return t('approval.remote.account')
+  if (r.via === 'lan') return t('approval.remote.lan')
+  if (r.via === 'p2p') return t('approval.remote.p2p')
+  return t('approval.remote.unknown')
 }

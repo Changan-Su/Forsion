@@ -1142,7 +1142,7 @@ async function doRefreshUnitHost(): Promise<void> {
   }
   const host: UnitHost = new UnitHost({
     getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
-    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '', proxyCallerKey: unitWeb?.proxyCallerKey ?? '' }),
     getLanUrl: () => unitLanUrl(),
     getPairing: () => unitHostPairing,
     // 入册回包到达时这个 host 已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。

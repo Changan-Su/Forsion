@@ -922,6 +922,19 @@ export interface ApprovalRequest {
   reason?: ApprovalReason
   /** 对应的工具调用 id(挂起的工具卡据此判断「还在等你」还是早已了结)。旧事件没有。 */
   toolCallId?: string
+  // P1-K1
+  /** 远程会话发起的审批:来路 + 调用方设备(引擎只给远程污点 run 带;reducer 白名单清洗)。本机 run 没有。 */
+  remote?: ApprovalRemote
+}
+
+// P1-K1
+/** approval_request.remote(设备能力 MCP 方案 P1 · K1)。callerUnit/Kind/Name 只在 via==='tunnel' 且 hub → 本机 unitWeb 验过调用方断言时才有;
+ *  缺席 = 账号下未识别的客户端(隧道)/ 局域网配对设备 / 点对点直连。callerName 是登记者自选的不可信串,只作纯文本展示。 */
+export interface ApprovalRemote {
+  via?: 'tunnel' | 'p2p' | 'lan'
+  callerUnit?: string
+  callerKind?: 'phone' | 'desktop'
+  callerName?: string
 }
 
 /** 引擎给出的审批判定理由。kind 由 reducer 白名单清洗,渲染层可以信任。 */
@@ -1143,6 +1156,19 @@ export interface UnitInfo {
   lastSeenAt?: string | null
   /** 设备自报的局域网直连地址(同网段优先直连的候选;不作可达性担保)。 */
   lanUrl?: string | null
+  // P1-K1(INTEGRATION R-27:六个字段一次加全,K7 / K8 不再碰 UnitInfo;两端数据桥原样转 hub JSON,无需改 main)
+  /** 设备类型(server 2.3.23 起;老 server 不回 → 按 desktop)。手机 P1 不开通道,切换器滤掉它。 */
+  kind?: 'desktop' | 'phone'
+  /** 用户起的短别名(拼进 MCP server 名 dev_<alias>);null = 没起。 */
+  alias?: string | null
+  /** 登记时的名字(server 2.3.24 起;之后改名不影响它)。确认框 / 信任条目快照用它,不用谁都能改的 name。 */
+  registeredName?: string | null
+  /** 设备自报的能力快照(不作授权依据);capsLive=false 时 engine 当「未知」,不沿用重连前的 ready。 */
+  caps?: { engine?: 'ready' | 'starting' | 'external' | 'stopped' | null; tools?: { id: string; version: string }[] } | null
+  /** caps 上报时刻(只作展示 / 年龄)。 */
+  capsAt?: string | null
+  /** 这份 caps 是不是设备**当前这次连接**里报的。 */
+  capsLive?: boolean
 }
 
 /** 已配对的来访设备(本机 unitWeb 的 T1 局域网配对;令牌只存 hash)。 */

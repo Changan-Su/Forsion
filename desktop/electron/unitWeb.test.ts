@@ -2,7 +2,7 @@
  * unitWeb 脊柱测试(真 HTTP 全链,零 electron):配对流(6 位码/限速/拒绝/令牌一次性)、
  * 鉴权(配对令牌 hash / loopback+内部密钥豁免)、/engine 反代盖章 + 请求体直通 + SSE 边收边转、
  * index.html unit 标记注入、路径穿越拒绝、缺构建提示页;/engine default-deny 允许清单(路由分类表与引擎源码
- * 逐条对齐)+ 三入口分钥 + 远端来源标记(契约 C1)。
+ * 逐条对齐)+ 三入口分钥 + 远端来源标记(契约 C1)+ 调用方断言(P1 · K1 S5 / S6)。
  * 跑法:npx vitest run electron/unitWeb.test.ts
  */
 import { describe, it, expect } from 'vitest'
@@ -18,6 +18,7 @@ import type { VaultFace } from './amadeus/ipc'
 import { startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairedDevice, type UnitWebDeps } from './unitWeb'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { PRODUCT } from './product'
+import { signProxyCaller, type ProxyCaller } from './unitCaller'
 
 type Seen = { method: string; path: string; auth: string; body: string; headers: http.IncomingHttpHeaders }
 function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Seen[]; close(): void }> {
@@ -629,5 +630,97 @@ describe('unitWeb', () => {
       const token = await pairUp(desk)
       expect((await fetch(`${desk.base}/engine/agent/plugins/install`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: '{}' })).status).toBe(403)
     } finally { desk.close() }
+  })
+  // ── P1 · K1:调用方断言 ─────────────────────────────────────────────────────────
+  const PHONE: ProxyCaller = { unit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', kind: 'phone', name: '小米 14', platform: 'android', registeredAt: '2026-09-28T01:02:03.000Z' }
+  let dseq = 0
+  const assertion = (key: string, over: { method?: string; target?: string; nowMs?: number; dispatchId?: string } = {}): string =>
+    signProxyCaller(key, { dispatchId: over.dispatchId ?? `d-${++dseq}`, method: over.method ?? 'GET', target: over.target ?? '/engine/agent/sessions', caller: PHONE, nowMs: over.nowMs })
+  const callerHeaderOf = (h: http.IncomingHttpHeaders): unknown => {
+    const v = h['x-forsion-remote-caller']
+    return typeof v === 'string' ? JSON.parse(Buffer.from(v, 'base64url').toString('utf8')) : v
+  }
+
+  it('K1 隧道 + 有效断言:引擎收到 x-forsion-remote-caller(中文名往返);x-unit-caller 本身不透传;无断言 = 不盖(账号级)', async () => {
+    const b = await boot()
+    try {
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      expect(b.handle.proxyCallerKey).toMatch(/^[0-9a-f]{64}$/)
+      expect(new Set([b.handle.proxyCallerKey, b.handle.internalSecret, b.handle.p2pSecret]).size).toBe(3)
+      const ok = await raw(b.base, 'GET', '/engine/agent/sessions', { ...tunnel, 'x-unit-caller': assertion(b.handle.proxyCallerKey) })
+      expect(ok.status).toBe(200)
+      const hit = b.engine.seen.at(-1)!
+      expect(hit.headers['x-forsion-remote']).toBe('tunnel')
+      expect(callerHeaderOf(hit.headers)).toEqual({ u: PHONE.unit, k: 'phone', n: '小米 14', p: 'android', r: PHONE.registeredAt })
+      expect(hit.headers['x-unit-caller']).toBeUndefined()
+      // 路径规整后转发(//agent/Sessions/ → /agent/Sessions),断言绑的是**原始**请求目标
+      const target = '/engine//agent/Sessions/?limit=5'
+      expect((await raw(b.base, 'GET', target, { ...tunnel, 'x-unit-caller': assertion(b.handle.proxyCallerKey, { target }) })).status).toBe(200)
+      expect(b.engine.seen.at(-1)!.path).toBe('/agent/Sessions?limit=5')
+      expect((callerHeaderOf(b.engine.seen.at(-1)!.headers) as { u: string }).u).toBe(PHONE.unit)
+      // 隧道无断言 = 账号级未识别:不盖;入站伪造的引擎头照样不透传
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', { ...tunnel, 'x-forsion-remote-caller': 'forged' })).status).toBe(200)
+      expect(b.engine.seen.at(-1)!.headers['x-forsion-remote-caller']).toBeUndefined()
+    } finally { b.close() }
+  })
+
+  it('K1 S5 调用方头只在隧道来路生效:局域网 / P2P 带**用正确钥签出**的断言 → 引擎一个调用方头都收不到(按来路挡,不是签名碰巧失败)', async () => {
+    const b = await boot()
+    try {
+      const token = await pairUp(b)
+      const signed = (): string => assertion(b.handle.proxyCallerKey)
+      for (const [label, h] of [
+        ['lan', { Authorization: `Bearer ${token}` }],
+        ['p2p', { 'x-unit-p2p': b.handle.p2pSecret }],
+      ] as const) {
+        const r = await raw(b.base, 'GET', '/engine/agent/sessions', { ...h, 'x-unit-caller': signed(), 'x-forsion-remote-caller': 'forged' })
+        expect(r.status, label).toBe(200)
+        const hit = b.engine.seen.at(-1)!
+        expect(hit.headers['x-forsion-remote'], label).toBe(label)
+        expect(hit.headers['x-forsion-remote-caller'], label).toBeUndefined()
+        expect(hit.headers['x-unit-caller'], label).toBeUndefined()
+      }
+      // 同一种断言在局域网上被无视而不是被拒:带坏断言也照常 200(不验、不转)
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', { Authorization: `Bearer ${token}`, 'x-unit-caller': 'v1.garbage.x' })).status).toBe(200)
+    } finally { b.close() }
+  })
+
+  it('K1 S6 隧道上的坏断言 fail closed:错钥 / 方法不符 / 目标不符 / 超 60s / 同一派发重放 / 乱码 → 403 BAD_CALLER_ASSERTION,引擎零命中', async () => {
+    const b = await boot()
+    try {
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      const key = b.handle.proxyCallerKey
+      const good = assertion(key, { dispatchId: 'replayed' })
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', { ...tunnel, 'x-unit-caller': good })).status).toBe(200)
+      const before = b.engine.seen.length
+      for (const [label, h] of [
+        ['wrong key', assertion(b.handle.internalSecret)],
+        ['method', assertion(key, { method: 'POST' })],
+        ['target', assertion(key, { target: '/engine/agent/runs' })],
+        ['stale', assertion(key, { nowMs: Date.now() - 61_000 })],
+        ['future', assertion(key, { nowMs: Date.now() + 61_000 })],
+        ['replay', good],
+        ['garbage', 'v1.nope.nope'],
+        ['empty', ''],
+      ] as const) {
+        const r = await raw(b.base, 'GET', '/engine/agent/sessions', { ...tunnel, 'x-unit-caller': h })
+        expect(r.status, label).toBe(403)
+        expect(JSON.parse(r.body).code, label).toBe('BAD_CALLER_ASSERTION')
+      }
+      expect(b.engine.seen.length).toBe(before)
+      // 允许清单先判:本机专属路由带着坏断言照样是 403 LOCAL_ONLY(断言没被消费,也没机会被判)
+      const denied = await raw(b.base, 'POST', '/engine/agent/plugins/install', { ...tunnel, 'x-unit-caller': 'v1.nope.nope' })
+      expect(JSON.parse(denied.body).code).toBe('LOCAL_ONLY')
+    } finally { b.close() }
+  })
+
+  it('K1 便携 Unit 的工作区主人(projection local)不盖调用方头', async () => {
+    const ownerToken = 'owner-access-key-2'
+    const b = await boot(null, undefined, undefined, { projection: { mode: 'local', basePath: '/', product: PRODUCT } })
+    try {
+      b.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', { Authorization: `Bearer ${ownerToken}`, 'x-unit-caller': assertion(b.handle.proxyCallerKey) })).status).toBe(200)
+      expect(b.engine.seen.at(-1)!.headers['x-forsion-remote-caller']).toBeUndefined()
+    } finally { b.close() }
   })
 })

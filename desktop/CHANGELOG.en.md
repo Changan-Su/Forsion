@@ -24,6 +24,10 @@
 - The LAN pairing prompt, the repeated-crash dialog, the download-complete notification and the titles of system file pickers now follow the interface language. They used to always be in Chinese.
 <!-- /P1-K5 -->
 
+<!-- P1-K1 -->
+- **Approval cards now say which device a request came from**. When a task started from another device (a phone or the device page) asks for approval, the card shows its source under the title: a device registered to your account and recognized by the server appears as "From a remote session · device name" (the name it was registered with; renaming it later doesn't change this. If that name has only invisible characters, it shows "a registered device"); clients that can't be tied to a specific device, such as the device page in a browser or the web app, appear as "an unidentified client on your account", and LAN-paired devices and peer-to-peer connections are labeled too. Tasks started on this computer show nothing extra. Recognizing specific devices requires server 2.3.24.
+- The device switcher no longer lists phones. A phone only drives your computers and doesn't accept connections, so it used to show up as a device that was always "offline".
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.

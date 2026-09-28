@@ -17,7 +17,7 @@ import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
 import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched, pluginSettingsTreeTouched } from '../sandbox/hostSandboxProtection.js';
 import { existsSync } from 'node:fs';
-import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
+import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteApprovalPayload, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
@@ -134,17 +134,20 @@ export function setApprovalTray(runId: string, on: boolean): void {
   else trayRuns.delete(runId);
 }
 
-/** 登记一次审批请求:同 run 内排队逐个发布(发事件 + await 决定)。中止信号触发时按拒绝兑现。 */
+/** 登记一次审批请求:同 run 内排队逐个发布(发事件 + await 决定)。中止信号触发时按拒绝兑现。
+ *  origin = 这次调用的有效远程污点(P1 · K1):远程污点 run 的 approval_request 带 `remote {via, callerUnit?, callerKind?, callerName?}`,
+ *  审批卡据此写「来自远程会话 · X」;本机 run 不带该键。只作展示,不参与任何判定。 */
 export function requestApproval(
   runId: string,
   call: ToolCall,
   preview: string,
   signal?: AbortSignal,
   reason?: ApprovalReason,
+  origin?: RemoteInfo,
 ): Promise<ApprovalDecision> {
-  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason);
+  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin);
   const tail = approvalQueues.get(runId) || Promise.resolve();
-  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason));
+  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin));
   const entry = mine.then(() => undefined, () => undefined);
   approvalQueues.set(runId, entry);
   void entry.then(() => { if (approvalQueues.get(runId) === entry) approvalQueues.delete(runId); });
@@ -157,6 +160,7 @@ function requestApprovalNow(
   preview: string,
   signal?: AbortSignal,
   reason?: ApprovalReason,
+  origin?: RemoteInfo,
 ): Promise<ApprovalDecision> {
   if (signal?.aborted) return Promise.resolve({ action: 'reject' });
   const approvalId = nextApprovalId();
@@ -179,6 +183,7 @@ function requestApprovalNow(
       arguments: call.function.arguments,
       preview,
       ...(reason ? { reason } : {}), // 旧客户端忽略未知字段;preview 一个字都没动(它是越界警示的唯一载体)
+      ...(origin ? { remote: remoteApprovalPayload(origin) } : {}), // 远程污点 run 才带(P1 · K1);旧客户端忽略
       toolCallId: call.id, // 客户端据此把审批挂回对应的工具卡(挂起的调用在卡上显示「等你批准」)
     });
   });
@@ -630,7 +635,7 @@ export async function gateToolCall(
     const { deferApproval } = await import('./pendingApprovals.js');
     return deferApproval(runId, call, preview, reason, ctx);
   }
-  const decided = requestApproval(runId, call, preview, signal, reason).then(async (d): Promise<ApprovalDecision> => {
+  const decided = requestApproval(runId, call, preview, signal, reason, remote).then(async (d): Promise<ApprovalDecision> => {
     if (d.action === 'reject') return d;
     let out: ApprovalDecision = { action: 'approve' };
     if (d.argsOverride) {

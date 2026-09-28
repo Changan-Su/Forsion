@@ -176,6 +176,36 @@ describe('C3 审批闸有效档', () => {
     expect(isAlwaysAllowed('S2', 'run_bash')).toBe(false);
   });
 
+  it('K1 S13 调用方身份不改变任何判定:同一远程 run,有无 callerUnit,决定 / 是否弹卡 / 有效档完全一致;approval_request.remote 如实带调用方(本机不带)', async () => {
+    const CALLER = { ...REMOTE, callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone' as const, callerName: 'Pixel' };
+    const cases: Array<[ToolCall, Record<string, any>]> = [
+      [call('run_bash', { command: 'touch x' }), { approvalMode: 'full-auto' }],
+      [call('run_bash', { command: 'ls' }), { approvalMode: 'readonly' }],
+      [call('write_file', { path: join(ws, 'a.txt'), content: 'x' }), { approvalMode: 'auto-edit' }],
+      [call('write_file', { path: '/etc/forsion-k1-probe', content: 'x' }), { approvalMode: 'full-auto' }],
+      [call('manage_schedule', { action: 'create', name: 'x' }), { approvalMode: 'full-auto' }],
+      [call('run_bash', { command: 'touch x' }), {}],
+    ];
+    for (const [c, ctx] of cases) {
+      const anon = await gate(c, { ...ctx, remote: REMOTE });
+      const named = await gate(c, { ...ctx, remote: CALLER });
+      const label = `${c.function.name} ${JSON.stringify(ctx)}`;
+      expect([named.asked, named.decision.action, named.request?.reason], label).toEqual([anon.asked, anon.decision.action, anon.request?.reason]);
+      if (named.asked) {
+        expect(named.request.remote, label).toEqual({ via: 'tunnel', callerUnit: CALLER.callerUnit, callerKind: 'phone', callerName: 'Pixel' });
+        expect(anon.request.remote, label).toEqual({ via: 'tunnel' });
+      }
+    }
+    state.rules = { base: 'full-auto', allow: ['run_bash'], deny: [] };
+    const anon = await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'custom', remote: REMOTE });
+    const named = await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'custom', remote: CALLER });
+    expect([named.asked, named.request?.reason]).toEqual([anon.asked, anon.request?.reason]);
+    state.rules = undefined;
+    const local = await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'auto-edit', sessionId: 'S-k1' }); // 'S' 上别的用例点过「总允许」
+    expect(local.asked).toBe(true);
+    expect('remote' in local.request).toBe(false);
+  });
+
   it('远端 steer 进本机 run:之后的调用按远程钳(runId 染色)', async () => {
     taintRunRemote('R-steered', REMOTE);
     const ac = new AbortController();
