@@ -1586,6 +1586,8 @@ export interface RemoteSyncState {
   rootError: string | null
   /** 装机自带 Forsion 官方 Dropbox 应用 → 无需用户填 App Key,点一下即登。 */
   dropboxBuiltin?: boolean
+  /** 外置后端(Forsion Extend 注册的 kind,如 'penzor'):选项只列这里有的;老宿主没有这个字段 = 没有外置后端。 */
+  backends?: string[]
 }
 
 /** 非活动侧日历只读快照(Calendar 汇总另一侧用)。root=另一侧磁盘根;vaultName=显示名(云端/文件夹名)。 */

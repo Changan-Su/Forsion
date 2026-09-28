@@ -69,6 +69,7 @@ import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { registerRemoteSync } from './remotesyncIpc'
+import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
@@ -1991,6 +1992,10 @@ app.whenReady().then(async () => {
       transpileForServe,
       mimeOf: (ext) => MIME[ext],
       setPreviewHooks: setForsionPreviewHooks,
+      // ── 0.3 起:原样凭据 / 账号身份(不回落 DEFAULT_CLOUD_URL,与 amadeus/settings.ts 的 currentCloudAccountId 同口径)、远程同步外置后端注册点 ──
+      readCreds: () => { const c = loadTanguCreds(); return { cloudUrl: c.cloudUrl || '', token: c.token || '' } },
+      accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+      registerRemoteSyncBackend,
     }
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) cloudChannels.clear()

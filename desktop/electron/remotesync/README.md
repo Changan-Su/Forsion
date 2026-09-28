@@ -12,7 +12,7 @@
 | `folder` | 本地/外接目录(U 盘、NAS 挂载点);也是测试用假远端 |
 | `s3` | S3 兼容对象存储(AWS/阿里 OSS/腾讯 COS/MinIO/R2) |
 | `webdav` | WebDAV(坚果云/Nextcloud/自建) |
-| `penzor` | Forsion 云端(server microserver/remotesync;条件写 CAS) |
+| `penzor` | Forsion 云端(server microserver/remotesync;条件写 CAS)—— 实现住在 Forsion Extend 包,经 `backends.ts` 注册点接入;没装 Extend 就没有这一项 |
 | `dropbox` | Dropbox(自研直连 REST v2;OAuth PKCE + refresh token,rev 条件写 CAS) |
 
 Dropbox 授权 = 链接登录。App Key 来自 `fsDropbox.ts` 的 `FORSION_DROPBOX_APP_KEY`

@@ -33,6 +33,9 @@ const host: CloudHost = {
   transpileForServe: () => null,
   mimeOf: () => undefined,
   setPreviewHooks: () => {},
+  readCreds: () => ({ cloudUrl: '', token: '' }),
+  accountId: () => null,
+  registerRemoteSyncBackend: () => {},
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({

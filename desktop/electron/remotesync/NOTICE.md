@@ -28,8 +28,9 @@
 | `types.ts`(RemoteFs 接口形状) | `src/fsAll.ts`、`src/baseTypes.ts`(Entity) |
 
 Forsion 自研(不含上游代码):`decide.ts`、`engine.ts`、`prevSync.ts`、`ignore.ts`、
-`fsLocal.ts`、`fsPenzor.ts`、`fsDropbox.ts`(直连 Dropbox 公开 REST v2 API 实现,
-未使用、未参考上游任何 Dropbox 相关代码)及全部测试文件。
+`fsLocal.ts`、`backends.ts`、`fsDropbox.ts`(直连 Dropbox 公开 REST v2 API 实现,
+未使用、未参考上游任何 Dropbox 相关代码)及全部测试文件。Forsion 云端后端(penzor)自 2026-09-28 起住在
+Forsion Extend 包里,经 `backends.ts` 的注册点接入,不在本目录。
 
 ## 维护规则
 

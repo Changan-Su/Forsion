@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { activeBundleDir, readManifest, type BuiltinSource } from './builtinPlugins'
 import { verifyBundleSignature } from './bundleSignature'
+import type { RemoteBackendFactory } from './remotesync/backends'
 
 /** 验签必须覆盖的文件:入口本身,以及决定 id / 版本 / 门禁的 manifest(否则改一改未签的 minAppVersion 就能改装载判断)。 */
 export const signedEssentials = (entry: string): string[] => [entry, 'manifest.json']
@@ -42,6 +43,14 @@ export interface CloudHost {
   mimeOf(ext: string): string | undefined
   /** codePreview 本地服务器的 Forsion 挂钩:/forsion-connect.js 的 SDK 源码 + /__forsion/* 的云端代理。 */
   setPreviewHooks(h: { sdkJs?: string; proxy?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): void
+  // ── 0.3 起(penzor 远程同步后端 / 账号核心用)──
+  /** auth.json **原样**同步读(空串 = 没有),不做 DEFAULT_CLOUD_URL 回落:身份、基线指纹、镜像目录都从这里推,
+   *  getCloud() 的回落会把「没登录」凭空造成一个账号。 */
+  readCreds(): { cloudUrl: string; token: string }
+  /** 当前账号身份(shared/forsionAccount.ts 的 forsionAccountId(readCreds()));未登录 / 拿不到 = null。 */
+  accountId(): string | null
+  /** 远程同步(设置 → 同步 → 本地库远程同步)注册一个外置后端(remotesync/backends.ts);remotesync:get 会把 kind 报给渲染层。 */
+  registerRemoteSyncBackend(kind: string, factory: RemoteBackendFactory): void
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 

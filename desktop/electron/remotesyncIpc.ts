@@ -14,8 +14,8 @@ import { BrowserWindow, app, ipcMain, shell } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { cloudVaultDir, isManagedCloudVault } from './amadeus/sync/engine'
 import { hash8 } from './amadeus/sync/entryRegistry'
-import { forsionWhoami, loadTanguCreds } from './forsionAuth'
 import { isDevMode } from './forsionHome'
+import { clampMaxFile, extraBackend, extraBackendKinds } from './remotesync/backends'
 import { runSync } from './remotesync/engine'
 import {
   FORSION_DROPBOX_APP_KEY,
@@ -26,12 +26,12 @@ import {
   pkcePair,
 } from './remotesync/fsDropbox'
 import { createDirRemote } from './remotesync/fsLocal'
-import { createPenzorRemote } from './remotesync/fsPenzor'
 import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 
 export interface RemoteSyncConfig {
+  /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
   backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox'
   /** 定时同步间隔(分钟);0 = 仅手动。 */
   intervalMin: number
@@ -83,21 +83,9 @@ async function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncC
   return next
 }
 
-/** whoami 身份缓存(token → username):Penzor 基线指纹要绑账号,换号绝不带旧基线对新库做删除判定。 */
-const whoamiMemo = new Map<string, string>()
-async function penzorIdentity(cloudUrl: string, token: string): Promise<{ id: string } | { error: string }> {
-  const hit = whoamiMemo.get(token)
-  if (hit) return { id: hit }
-  const w = await forsionWhoami(cloudUrl, token)
-  if (w.status === 'offline') return { error: 'penzor-offline' }
-  if (w.status !== 'ok') return { error: 'penzor-not-logged-in' }
-  const name = w.user?.username?.trim()
-  if (!name) return { error: 'penzor-auth-unverified' }
-  whoamiMemo.set(token, name)
-  return { id: name }
-}
+interface BuiltRemote { remote: RemoteFs; fingerprint: string; maxFileBytes?: number }
 
-async function buildRemote(cfg: RemoteSyncConfig): Promise<{ remote: RemoteFs; fingerprint: string } | { error: string }> {
+async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error: string }> {
   if (cfg.backend === 'folder') {
     const p = cfg.folder?.path?.trim()
     if (!p) return { error: 'no folder path' }
@@ -123,21 +111,11 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<{ remote: RemoteFs; f
       fingerprint: `dropbox:${d.accountId || key}|${(d.baseDir ?? '').trim() || '/'}`,
     }
   }
-  if (cfg.backend === 'penzor') {
-    const creds = loadTanguCreds()
-    if (!creds.token || !creds.cloudUrl) return { error: 'penzor-not-logged-in' }
-    const vault = (cfg.penzor?.vault ?? 'default').trim() || 'default'
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(vault)) return { error: 'penzor-bad-vault' }
-    const ident = await penzorIdentity(creds.cloudUrl, creds.token)
-    if ('error' in ident) return ident
-    // token 冻结整轮:getToken 若每次重读 auth.json,同步中途换号会拿 A 的基线对 B 的库做增删
-    const frozenToken = creds.token
-    return {
-      remote: createPenzorRemote({ baseUrl: creds.cloudUrl, vault, getToken: () => frozenToken }),
-      fingerprint: `penzor:${creds.cloudUrl.replace(/\/+$/, '')}|u:${ident.id}|${vault}`,
-    }
-  }
-  return { error: 'backend off' }
+  if (cfg.backend === 'off') return { error: 'backend off' }
+  // 外置后端(penzor 住在 Forsion Extend):没注册 = 这台机器没装 Extend / 验签失败,配置还选着它 → 报具体原因,别报 backend off
+  const factory = extraBackend(cfg.backend)
+  if (!factory) return { error: `${cfg.backend}-unavailable` }
+  return factory((cfg as unknown as Record<string, unknown>)[cfg.backend])
 }
 
 /** realpath(存在时),否则退回 resolve —— 比较用统一口径,防符号链接绕过。 */
@@ -192,13 +170,10 @@ function broadcast(): void {
   sendAll('remotesync:status', { running, lastReport, progress })
 }
 
-/** Penzor 服务端单文件上限(与 server REMOTESYNC_MAX_FILE_BYTES 对齐):客户端钳住,
- *  否则超限文件每轮推送每轮 413,永远打不完。 */
-const PENZOR_MAX_FILE = 50 * 1024 * 1024
-function effectiveMaxFileSize(cfg: RemoteSyncConfig): number {
+/** 用户单文件上限,再夹到后端硬上限之下(外置后端自报,如 penzor 的服务端 50MB:不钳住的话超限文件每轮 413 永远打不完)。 */
+function effectiveMaxFileSize(cfg: RemoteSyncConfig, cap?: number): number {
   const user = cfg.maxFileMB === 0 ? 0 : (cfg.maxFileMB ?? 100) * 1024 * 1024
-  if (cfg.backend !== 'penzor') return user
-  return user === 0 ? PENZOR_MAX_FILE : Math.min(user, PENZOR_MAX_FILE)
+  return clampMaxFile(user, cap)
 }
 
 /** 删除闸确认的作用域(root|指纹):挂起后用户改了配置,旧确认不得放行新目标的删除计划。 */
@@ -246,7 +221,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       statePath: path.join(app.getPath('userData'), 'remotesync-state', `${hash8(scope)}.json`),
       fingerprint: built.fingerprint,
       ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root))],
-      maxFileSize: effectiveMaxFileSize(cfg),
+      maxFileSize: effectiveMaxFileSize(cfg, built.maxFileBytes),
       direction: cfg.direction,
       concurrency: cfg.concurrency,
       allowMassDelete: opts?.allowMassDelete,
@@ -358,6 +333,8 @@ export function registerRemoteSync(): void {
       rootError: 'error' in rooted ? rooted.error : null,
       // 有内置官方 Dropbox 应用 → UI 收起 App Key 那一栏,直接给「连接 Dropbox」
       dropboxBuiltin: FORSION_DROPBOX_APP_KEY !== '',
+      // 外置后端(Forsion Extend 注册的 kind,如 penzor):渲染层只列这里有的选项
+      backends: extraBackendKinds(),
     }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {
