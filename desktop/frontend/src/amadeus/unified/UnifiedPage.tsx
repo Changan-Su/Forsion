@@ -73,7 +73,7 @@ import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, 
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
 import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
-import { agentWroteRecently } from '../../stores/agentWriteLedger'
+import { claimAgentWrite } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
@@ -1829,9 +1829,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
           pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
-          // 归属(G3-03):写类工具在途或刚结束、目标就是这篇 → 按 Tangu 的改动画出来(胶囊 + 装饰)。
+          // 归属(G3-03):写类工具在途或刚结束、目标就是这篇、且盘上正文核得上这次写入 → 按 Tangu 的改动画出来。
+          // 每次写入只认领一次(Codex 复核 P0):之后同路径的别的改动不再算 Tangu 的。
           // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
-          const agent = !pipe.readOnly && agentWroteRecently(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path)
+          const agent = !pipe.readOnly && claimAgentWrite(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path, raw)
           if (hostApi.current?.applyBody(body, agent)) {
             pipe.body = body
           } else {
