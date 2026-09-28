@@ -8,14 +8,19 @@
  * 模型是假 hub 里的可编剧模型:先匀速吐一段比总时长更久的带序号 token(逼出总时长断流),再每 4 个停一段比空闲时限更长的时间
  * (逼出空闲断流),共 ≥ 7 次断流。
  *
+ * 另:hub 把**第 3 次续订**的 fromSeq 改回 0(STREAMRENEW_REPLAY0=all → 每次续订都改)—— 引擎从头回放,已送达过的事件再来一遍;
+ *   客户端 subscribeRunEvents 必须按 seq 丢掉 seq ≤ 已见的事件(M1B;修前这些重复 token 会在流式过程里一闪而过)。
+ *
  * 断言:断流次数 ≥ 7(越过 subscribeRunEvents 的 6 次失败上限 —— 若失败计数在续订成功后不清零,第 7 次就会整条 run 挂掉);
  *   每次重连都带上 fromSeq 且单调前进;最终那条助手消息 = 48 个 token 按序拼接(不丢、不重),过程中的采样都是终稿的前缀(没有一闪而过的重复);
- *   消息没被标错;每次重连都带有效 X-Forsion-Caller(票每请求现取)。
+ *   消息没被标错;每次重连都带有效 X-Forsion-Caller(票每请求现取);
+ *   从 0 回放的那次续订确实给客户端送来了重复帧(ledger.replayDups,场景成立 —— 否则「无重复」是空的)且过程中没有任何重复 token。
  *   每条被掐的流都是**半截断开**(hub destroy 两侧),不是干净收尾 —— 与生产同形。
  * ⚠️ 「终稿」那条单独判不出丢帧:引擎的 done 事件带整段正文,appStore 收尾时用它覆盖流式拼出来的内容 —— 丢 / 重只在流式过程中可见,
  *   所以真正有牙的是「过程采样都是终稿的前缀」那条(负对照实测:两种故障终稿都完整,红的是采样)。
- * 负对照:NEGCTL=drop(hub 在第 2 次续订的回放里丢一帧 → 流式过程缺 token,须红);NEGCTL=fromseq0(续订时 fromSeq 被改回 0 →
- *   引擎从头回放 → 客户端不按 seq 去重、过程里出现重复,须红)。
+ * 负对照:NEGCTL=drop(hub 在第 2 次续订的回放里丢一帧 → 流式过程缺 token,须红)。
+ *   (原 NEGCTL=fromseq0 在 M1B 客户端按 seq 去重后变成正向场景,已并进缺省流程;去重本身的负对照 = 删掉 subscribeRunEvents 里那行
+ *   `ev.seq <= lastSeq` 判断、重构 mobile 后实跑,M1B 交付时实跑须红。)
  *
  * 前置同 check:remotechain(tangu-agent 的 dist;mobile 构建按源码戳缓存,源码一变就现构建 —— 见 scripts/lib/phone-page.cjs 的 buildPhoneDist)。
  * 世界的产物目录判红时留下,否则删掉(REMOTECHAIN_KEEP=1 一律留)。
@@ -36,6 +41,8 @@ const IDLE_MS = Number(process.env.STREAMRENEW_IDLE_MS) || 1200
 const STEADY = Math.ceil((TOTAL_MS * 1.5) / 150)
 const TOKENS = STEADY + 32
 const NEGCTL = process.env.NEGCTL || ''
+// hub 把第几次续订的 fromSeq 改回 0(引擎从头回放 → 客户端收到重复事件,须按 seq 丢掉);all = 每次续订
+const REPLAY0 = process.env.STREAMRENEW_REPLAY0 === 'all' ? true : Number(process.env.STREAMRENEW_REPLAY0) || 3
 const SHOT_DIR = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-streamrenew-shots-'))
 const MARK = `SR-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
 const tok = (i) => `[${String(i).padStart(3, '0')}]`
@@ -66,7 +73,7 @@ async function main() {
   const world = await startRemoteWorld({
     staticDir: dist, homeEngineUrl: home.url, llm,
     streamCut: { totalMs: TOTAL_MS, idleMs: IDLE_MS },
-    hubNegctl: { dropReplayFrame: NEGCTL === 'drop' ? 2 : 0, rewriteFromSeq0: NEGCTL === 'fromseq0' },
+    hubNegctl: { dropReplayFrame: NEGCTL === 'drop' ? 2 : 0, rewriteFromSeq0: REPLAY0 },
   })
   console.log(`  产物目录 ${world.out}`)
   const native = createFakePhoneNative({
@@ -110,6 +117,11 @@ async function main() {
     check(`终稿 = ${TOKENS} 个 token 按序拼接(不丢、不重)`, content === EXPECT, `缺 ${missing.join('') || '无'};重 ${dups.join('') || '无'};长 ${content.length}/${EXPECT.length}`)
     const badSample = samples.find((s) => s.c && !EXPECT.startsWith(s.c.replace(/^\s+/, '')))
     check('过程中每次采样都是终稿的前缀(没有一闪而过的重复 / 乱序)', !badSample, badSample ? `@${badSample.at}ms ${badSample.c.slice(0, 80)}` : `${samples.length} 次采样`)
+    // M1B:hub 把某次续订改成从 0 回放 → 已送达的事件又来一遍;场景须成立(确有重复帧到了客户端),且过程里没有任何重复 token
+    const replays = world.hub.ledger.replayDups
+    check(`从 0 回放的续订确实给客户端送来了重复帧(第 ${REPLAY0 === true ? '每' : REPLAY0} 次续订;场景成立)`, replays.length >= 1 && replays.some((r) => r.dupFrames > 0), JSON.stringify(replays.map((r) => ({ fromSeq: r.clientFromSeq, dup: r.dupFrames }))))
+    const dupSample = samples.find((x) => { const g = x.c.match(/\[\d{3}\]/g) || []; return new Set(g).size !== g.length })
+    check('客户端按 seq 丢掉了重复事件:过程中没有任何一次采样含重复 token', !dupSample, dupSample ? `@${dupSample.at}ms ${dupSample.c.slice(0, 120)}` : `${samples.length} 次采样`)
     check('页面无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
     await page.screenshot({ path: path.join(SHOT_DIR, 'streamrenew-done.png') })
     console.log(`screenshots → ${SHOT_DIR}`)

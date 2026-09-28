@@ -126,9 +126,12 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
  * @param {string} [o.homeEngineUrl]     手机「本端(云端)」引擎:/api/agent/* 与 /api/health 转过去;缺省回空列表
  * @param {(call: object) => Array<object>} [o.llm]  可编剧模型:给一次 build-and-stream 的请求体,回 SSE 帧数组(见 brainFrames)
  * @param {{ totalMs?: number, idleMs?: number }} [o.streamCut]  流式回包的总时长 / 空闲上限(缺省 1h / 15min,同生产)
- * @param {{ omitProxyCaller?: boolean, dropReplayFrame?: number, rewriteFromSeq0?: boolean, noRegisteredSnapshot?: boolean }} [o.negctl]  负对照开关:
+ * @param {{ omitProxyCaller?: boolean, dropReplayFrame?: number, rewriteFromSeq0?: boolean | number, noRegisteredSnapshot?: boolean }} [o.negctl]  负对照开关:
  *        omitProxyCaller = 信封不写 proxyCaller(断 hub → 设备那一跳);dropReplayFrame = N → 第 N 次带 fromSeq>0 的事件流续订丢掉头一帧(丢事件);
- *        rewriteFromSeq0 = 续订时把 fromSeq 改回 0(引擎从头回放,客户端会收到重复事件);
+ *        rewriteFromSeq0 = 续订时把 fromSeq 改回 0(引擎从头回放,客户端会收到重复事件):true = 每次续订;数字 N = 只改第 N 次续订
+ *        (fromSeq>0 的事件流)。改过的那条流里 seq ≤ 客户端 fromSeq 的帧(= 重复事件)记进 ledger.replayDups —— 客户端按 seq 去重(M1B)后
+ *        这是正向场景,不再是负对照;
+
  *        noRegisteredSnapshot = 不留登记名快照(名册的 registeredName 与信封 proxyCaller.name 都取**当前**名 —— R-25 失守的样子)
  * @param {(row: object) => void} [o.onRegister]  POST /units/register 建完行之后调(台架在这里模拟「用户随后在名册里改了名」)
  */
@@ -138,7 +141,7 @@ async function startFakeUnitHub(o) {
   const channels = new Map() // unitId → res
   const pending = new Map() // did → { unitId, res, path, timer, at }
   const streams = new Set() // 在途流式回包 { did, path, client, up, startedAt, cut(reason) }
-  const ledger = { proxy: [], brain: [], cuts: [], requests: [], memoryWrites: [], unknown: [], attention: [], unitLists: [] }
+  const ledger = { proxy: [], brain: [], cuts: [], requests: [], memoryWrites: [], unknown: [], attention: [], unitLists: [], replayDups: [] }
   const cfg = {
     streamCut: { totalMs: 60 * 60_000, idleMs: 15 * 60_000, ...(o.streamCut || {}) },
     negctl: { ...(o.negctl || {}) },
@@ -185,7 +188,7 @@ async function startFakeUnitHub(o) {
     }
   }
 
-  function dispatch(unitId, env, clientRes, timeoutMs = 30_000) {
+  function dispatch(unitId, env, clientRes, timeoutMs = 30_000, meta = {}) {
     const ch = channels.get(unitId)
     if (!ch) return false
     const id = crypto.randomUUID()
@@ -194,7 +197,7 @@ async function startFakeUnitHub(o) {
       if (!clientRes.headersSent) json(clientRes, 504, { detail: '设备超时未响应', code: 'UNIT_TIMEOUT' })
       else try { clientRes.end() } catch { /* 已断 */ }
     }, timeoutMs)
-    pending.set(id, { unitId, res: clientRes, timer, path: env.path, at: Date.now() })
+    pending.set(id, { unitId, res: clientRes, timer, path: env.path, at: Date.now(), meta })
     clientRes.on('close', () => { const p = pending.get(id); if (p && p.res === clientRes) { pending.delete(id); clearTimeout(p.timer) } })
     try { ch.write(`event: dispatch\ndata: ${JSON.stringify({ ...env, id })}\n\n`) } catch { pending.delete(id); clearTimeout(timer); return false }
     return true
@@ -420,6 +423,11 @@ async function startFakeUnitHub(o) {
           dropFrame = cfg.replays === cfg.negctl.dropReplayFrame
         }
         let pend = ''
+        // rewriteFromSeq0 改过的续订:数一数送给客户端的重复帧(seq ≤ 客户端 fromSeq),证明「重复事件确实到了客户端」
+        const replayFrom = got.meta?.replayFrom || 0
+        const dupRec = replayFrom ? { did: entry.did, clientFromSeq: replayFrom, dupFrames: 0 } : null
+        if (dupRec) ledger.replayDups.push(dupRec)
+        let scan = ''
         // 真 hub:Node requestTimeout(1h)/ socket 空闲(15min)→ 设备上行 aborted → abortClient → client.destroy()(半截断开)
         const cut = (reason) => {
           if (entry.cut) return
@@ -437,6 +445,17 @@ async function startFakeUnitHub(o) {
           clearTimeout(idle)
           idle = setTimeout(() => cut('idle'), cfg.streamCut.idleMs)
           if (client.destroyed) return
+          if (dupRec) {
+            scan += c.toString('utf8')
+            let j
+            while ((j = scan.indexOf('\n\n')) >= 0) {
+              const fr = scan.slice(0, j)
+              scan = scan.slice(j + 2)
+              const d = /^data: ?(.*)$/m.exec(fr)
+              if (!d) continue
+              try { if (Number(JSON.parse(d[1]).seq) <= replayFrom) dupRec.dupFrames++ } catch { /* 非 JSON 帧 */ }
+            }
+          }
           if (!dropFrame) { client.write(c); return }
           pend += c.toString('utf8')
           let i
@@ -473,14 +492,21 @@ async function startFakeUnitHub(o) {
           if (bodyStr.length > 10 * 1024 * 1024) return json(res, 413, { code: 'UNIT_BODY_TOO_LARGE' })
         }
         const withCaller = rc.caller && !cfg.negctl.omitProxyCaller
-        const envPath = cfg.negctl.rewriteFromSeq0 ? (m[2] + u.search).replace(/([?&]fromSeq=)\d+/, '$10') : m[2] + u.search
+        let envPath = m[2] + u.search
+        let replayFrom = 0
+        const rw = cfg.negctl.rewriteFromSeq0
+        const renew = /\/events\?(?:.*&)?fromSeq=([1-9]\d*)/.exec(envPath)
+        if (rw && renew) {
+          cfg.renewals = (cfg.renewals || 0) + 1
+          if (rw === true || cfg.renewals === rw) { replayFrom = Number(renew[1]); envPath = envPath.replace(/([?&]fromSeq=)\d+/, '$10') }
+        }
         const ok = dispatch(target.id, {
           method: req.method, path: envPath,
           ct: bodyless ? undefined : String(req.headers['content-type'] || 'application/json'),
           accept: req.headers.accept ? String(req.headers.accept) : undefined,
           body: bodyStr,
           ...(withCaller ? { proxyCaller: rc.caller } : {}),
-        }, res)
+        }, res, undefined, replayFrom ? { replayFrom } : {})
         entry.dispatched = ok
         if (!ok) json(res, 503, { detail: '设备不在线', code: 'UNIT_OFFLINE' })
         return

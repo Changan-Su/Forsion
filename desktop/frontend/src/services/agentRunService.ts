@@ -492,7 +492,12 @@ export async function subscribeRunEvents(
           if (!data) continue
           try {
             const ev = JSON.parse(data) as AgentRunEvent
-            if (ev.seq > lastSeq) lastSeq = ev.seq
+            // M1B:按 seq 去重。引擎只在单条流内去重;续订若从更早处回放(hub / 设备重连后 fromSeq 被改回 0、引擎重放),
+            // 已送达的事件会再来一遍 —— token 会被 reducer 再拼一次(check:streamrenew 的回放场景)。seq ≤ 已见最大值 = 见过,丢掉。
+            if (Number.isFinite(ev.seq)) {
+              if (ev.seq <= lastSeq) continue
+              lastSeq = ev.seq
+            }
             onEvent(ev)
             if (ev.type === 'done' || ev.type === 'error') terminal = true
           } catch {
