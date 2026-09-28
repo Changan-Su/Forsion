@@ -2176,6 +2176,11 @@ export const SLASH_ITEMS: SlashSeed[] = [
  *   自己的 path 发 `amadeus:template-picker`,宿主 TemplatePicker 按 v4Path 走 insertMarkdown。) */
 const UNIFIED_HIDDEN_SLASH: ReadonlySet<string> = new Set<string>()
 
+/** 插件贡献点的文案:函数形态在**这一刻**求值(切语言即时跟上,B-20),字符串原样。 */
+export function textOf<T extends string | undefined>(v: T | (() => string)): T | string {
+  return typeof v === 'function' ? v() : v
+}
+
 /** 内置项 + 插件注册项的合并清单(桌面 slash 菜单与移动端块面板共用,插件新增项两处自动都有)。 */
 export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}): SlashItem[] {
   const { t } = useI18n()
@@ -2185,15 +2190,15 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
     ...SLASH_ITEMS.map(({ labelKey, groupKey, ...rest }) => ({ ...rest, label: t(labelKey), group: t(groupKey) })),
     ...pluginSlash.map(({ item }) => ({
       key: item.id,
-      label: item.label,
+      label: textOf(item.label), // 函数形态每次渲染求值(B-20)
       hint: item.hint ?? '',
       // 插件项走图标词表(见 components/icons 的 resolveIcon):写图标名 → 和内置项同一套 SVG;
       // 写 emoji/字形 → 原样画(老插件零改动)。兜底 '·' 只在插件压根没给 icon 时出现。
       icon: resolveIcon(item.icon, '·'),
-      group: item.group ?? t('mdblock.group.plugin'),
+      group: textOf(item.group) ?? t('mdblock.group.plugin'),
       scaffold: item.scaffold ?? '',
       run: item.run,
-      kw: `${item.keywords ?? ''} ${item.label}`,
+      kw: `${item.keywords ?? ''} ${textOf(item.label)}`,
     })),
   ]
   const ai = !!readTangu()?.complete
