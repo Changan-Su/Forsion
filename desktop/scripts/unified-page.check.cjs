@@ -1969,6 +1969,46 @@ async function main() {
     await pg.close()
   }
 
+  // P25b:空块提示的焦点门控(评审 K-23)。装饰跟着选区走、不看焦点:失焦后空段仍挂着「输入 '/'」;空 H2 反过来 ——
+  //  聚焦时行首是 `## ` 前缀 input,提示被收掉,失焦后前缀收回它才露出「标题 2」。现在:只有聚焦的空块有提示,
+  //  标题的提示画在前缀之后(::after)。量的是**渲染出来的伪元素内容**,不是属性。
+  //  负对照:摘掉 styles.css 的两条 K-23 规则 → 失焦两项与 H2 聚焦项全红(已实跑)。
+  {
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent('首段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(400)
+    const at = await pg.evaluate((s) => { const p = document.querySelector(s + ' > p'); const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect(); return { x: b.right - 1, y: b.top + b.height / 2 } }, PM)
+    await pg.mouse.click(at.x, at.y)
+    await pg.waitForTimeout(150)
+    const ph = () => pg.evaluate((s) => {
+      const el = document.querySelector(`${s} .is-empty`)
+      if (!el) return null
+      const c = (k) => { const v = getComputedStyle(el, k).content; return v === 'none' || v === 'normal' ? '' : v.replace(/^"|"$/g, '') }
+      return { tag: el.tagName, before: c('::before'), after: c('::after') }
+    }, PM)
+    await pg.keyboard.press('Enter')
+    await pg.waitForTimeout(150)
+    const a = await ph()
+    await pg.click('.amx-title-input')
+    await pg.waitForTimeout(150)
+    const b = await ph()
+    await pg.mouse.click(at.x, at.y + 30) // 回到空段(首段下一行)
+    await pg.waitForTimeout(150)
+    await pg.keyboard.type('## ')
+    await pg.waitForTimeout(250)
+    const c = await ph()
+    await pg.click('.amx-title-input')
+    await pg.waitForTimeout(200)
+    const d = await ph()
+    record('P25b 空块提示只给聚焦的空块:失焦即收;空标题聚焦时提示画在 `## ` 之后,失焦不再露出(K-23)',
+      a?.tag === 'P' && a.before.includes('/') && b?.tag === 'P' && b.before === '' && b.after === '' &&
+        c?.tag === 'H2' && c.before === '' && c.after === '标题 2' && d?.tag === 'H2' && d.before === '' && d.after === '',
+      JSON.stringify({ a, b, c, d }))
+    await pg.close()
+  }
+
   // P26:多块选中的**语义面**本来就由 PM 原生给了(Shift+方向键跨块扩展、整批删除、整批复制),
   // 缺的一直只是「看起来不像块选中」。这一关把「语义 + 呈现」一起钉住,免得日后有人另造一套
   // 块选区 store —— 单实例里没有块 id 可挂,那条路是死的。

@@ -1730,6 +1730,23 @@ body.amx-marquee-active * {
 .am-app .milkdown .ProseMirror .is-empty:has(.amx-struct-prefix)::before {
   content: none;
 }
+/* 焦点门控(评审 K-23):提示只给正在编辑的空块。装饰跟着选区走、不看焦点 —— 编辑器失焦后选区还在,
+   空段的「输入 '/'」就一直挂着;PM 聚焦时才有 ProseMirror-focused 类,按它收。 */
+.am-app .milkdown .ProseMirror:not(.ProseMirror-focused) .is-empty::before {
+  content: none;
+}
+/* 空标题聚焦时行首是 `## ` 前缀 input(只在编辑中的标题上出现),上面那条把提示收掉了 —— 于是聚焦时反而看不到
+   「标题 2」、失焦后前缀收回它才露出来(K-23 的另一半)。改画在前缀**之后**:::after 紧跟 input,空标题那枚
+   trailing <br> 让位(否则 ::after 被挤到下一行);光标仍落在前缀与提示之间。列表的前缀行不在此列。 */
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6).is-empty:has(> .amx-struct-prefix)::after {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+  font-style: normal;
+}
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6).is-empty:has(> .amx-struct-prefix) > br.ProseMirror-trailingBreak {
+  display: none;
+}
 
 /* ── Command palette (quick switch / search) ─────────────── */
 .am-app .cmd-overlay {
