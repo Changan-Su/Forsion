@@ -2454,9 +2454,11 @@ async function main() {
   await p42.close()
 
   // ── C43 pair 半边失效(编辑器重建)→ 整条丢弃,绝不半撤销(Codex 评审 F2) ────────────────
-  // 插件启停(C17 同款)重建编辑器 → PM 撤销栈清零,而 fm 栈/时间线还活着。修前:pair 只退 fm
+  // 编辑器整实例重建 → PM 撤销栈清零,而 fm 栈/时间线还活着。修前:pair 只退 fm
   // 半边(层级没了、卡还在),还把残废 pair 推进 redo。现在两侧可执行性预检,缺一侧整条丢弃 ——
   // 断言「按了 Cmd+Z 但**什么都没变**」,半退才是红。
+  // 重建的触发:原来借插件启停(C17 同款),评审 G1-06 之后插件启停是原地重配、撤销栈保留,不再重建;
+  // 改用仍会整实例重建的那条路 —— 外部只改了结构键(正文一字未变,卡片坐标挪了 1px)的回灌(见 UnifiedPage 的 structChanged)。
   const p43 = await open(browser, SEED36)
   await p43.waitForTimeout(500)
   const k143 = await p43.evaluate(() => {
@@ -2469,9 +2471,15 @@ async function main() {
   await p43.keyboard.press('Tab') // pair:建子卡 + 记层级
   await p43.waitForTimeout(1000)
   const g43a = await cvDoc(p43)
-  await p43.evaluate(async () => {
-    const m = await import('/src/amadeus/plugins/editorExtensions.ts')
-    m.addEditorExtension('__probe43__', () => []) // 编辑器重建,PM 栈清零
+  await p43.evaluate(() => {
+    const u = window.__upage
+    const raw = u.vault.get('Unified.md')
+    const next = raw.replace(/^amadeus_canvas: (.*)$/m, (_m, json) => {
+      const cv = JSON.parse(json)
+      cv.cards[0].x += 1
+      return `amadeus_canvas: ${JSON.stringify(cv)}`
+    })
+    u.fire('Unified.md', next) // 只动结构键的外部改动 → 编辑器整实例重建,PM 栈清零
   })
   await p43.waitForTimeout(900)
   await p43.evaluate(() => document.querySelector('.amx-stage').focus())

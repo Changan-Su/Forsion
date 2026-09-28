@@ -39,7 +39,6 @@ import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, casc
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
-import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedScopeLive } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
@@ -47,12 +46,12 @@ import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
-import { useUiOverlay } from '../../amadeusOverlayStore'
+import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
 import { claimCanvasToggle, releaseCanvasToggle } from './canvasToggleCommand'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
@@ -74,13 +73,15 @@ import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
 import { reconcileTr, type ReconcileChange } from './reconcileDiff'
 import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
-import { AgentChangeCapsule } from './AgentChangeCapsule'
+import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
+import { alignByAnchor, hostTop, registerModeCapture, scrollHostOf, textareaCaretY } from './modeRelay'
+import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
 import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
-import { claimAgentWrite } from '../../stores/agentWriteLedger'
+import { agentEditing, claimAgentWrite, subscribeAgentWrites } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
@@ -240,11 +241,14 @@ function flashCiteTip(r: DOMRect): void {
 /** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
  *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
  *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
-function applyMinimalDiff(view: EditorView, next: ProseNode, agent = false): void {
+function applyMinimalDiff(view: EditorView, next: ProseNode, agent = false, history = false): void {
   // agent = 这次外部改动是 Tangu 写的(G3-03):顺带交出每一处改动(新区间 + 旧片段),打标给 agentChanges 画出来。
   const changes: ReconcileChange[] = []
   const tr = reconcileTr(view.state, next, agent ? changes : undefined)
-  if (tr) view.dispatch(agent ? markAgentChanges(tr, view.state.doc, changes) : tr)
+  if (!tr) return
+  // history = 这是**用户自己**在源码模式里的改动(C-06 回可视时交给隐藏着的编辑器):一步可撤,不按外部回灌处理。
+  if (history) tr.setMeta('addToHistory', true)
+  view.dispatch(agent ? markAgentChanges(tr, view.state.doc, changes) : tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
@@ -305,7 +309,7 @@ interface Pipe {
 interface HostApi {
   /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
    *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
-  applyBody: (stored: string, agent?: boolean) => boolean
+  applyBody: (stored: string, agent?: boolean, history?: boolean) => boolean
   /** 当前 doc 立即序列化为 stored md(编辑器未挂载 = null)。flush 路径必用:listener 的
    *  markdownUpdated 有 200ms 防抖,pipe.body 可能落后最后几击(Codex A4:快打字后立刻
    *  改名/关页,不强制序列化就丢字)。 */
@@ -334,6 +338,10 @@ interface HostApi {
   hasFocus: () => boolean
   /** 画布 → 文档：DOM 恢复为流式排版后，把原 PM 选区滚回视野并继续编辑。 */
   revealSelection: () => void
+  /** 源码 ↔ 可视接力(C-06):文档开头到 pos 这一段序列化成 stored md(= 源码里光标之前的正文;行内标记可能多出几个字符)。 */
+  serializePrefix: (pos: number) => string | null
+  /** 源码 ↔ 可视接力(C-06):一段正文前缀按本编辑器解析后末尾落在哪(结构与全文一致时就是源码光标的对应点)。 */
+  posAfterPrefix: (md: string) => number | null
 }
 
 function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
@@ -378,13 +386,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   useEffect(() => {
     apiRef.current = {
       applySlashItem: (it) => applySlashRef.current(it),
-      applyBody: (stored, agent) => {
+      applyBody: (stored, agent, history) => {
         let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
-          applyMinimalDiff(view, doc as ProseNode, agent)
+          applyMinimalDiff(view, doc as ProseNode, agent, history)
           adoptOrigins(view.state.doc, doc as ProseNode) // D-18:保留下来的块改记到新盘上文本的来源
           ok = true
           if (probe) probe.reconciled = ((probe.reconciled as number) ?? 0) + 1
@@ -478,6 +486,30 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           view.dispatch(view.state.tr.scrollIntoView())
           view.focus()
         })
+      },
+      serializePrefix: (pos) => {
+        let out: string | null = null
+        try {
+          getInstance()?.action((ctx) => {
+            const view = ctx.get(editorViewCtx)
+            out = toStoredMarkdown(serializeUnified(ctx, view.state.doc.cut(0, Math.min(pos, view.state.doc.content.size))), pageDir)
+          })
+        } catch {
+          return null // 截在分栏 / 卡片中间时序列化器可能抛(见 serializeMd 注):交回 null,调用方退回锚文本
+        }
+        return out
+      },
+      posAfterPrefix: (md) => {
+        let out: number | null = null
+        try {
+          getInstance()?.action((ctx) => {
+            const doc = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
+            if (doc) out = TextSelection.atEnd(doc).head
+          })
+        } catch {
+          return null
+        }
+        return out
       },
     }
     return () => {
@@ -591,23 +623,47 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     return done
   }
 
-  /** 建文件类 slash 项的落点守卫:await 期间用户可能已切走(实例退休/换页)。v3 靠 blockId 三道闸,
-   *  统一实例只需一道 —— 编辑器还活着就还是同一篇(实例与路径同生共死,pipe.retired 会拆掉它)。 */
-  const insertAsync = (md: string): void => {
-    if (!apiRef.current) {
-      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
+  /** 异步 slash 项的锚(评审 G3-06,见 pendingInsert.ts):'/query' 消费掉之后**当场**在光标处钉住,结果回来插到那里 ——
+   *  不插在完成那一刻的光标处、不抢别的输入框的焦点、不在唤起处留空段。编辑器已拆 = null。
+   *  visible=false:只记位置不画占位(弹对话框问地址的那几项,对话框开着时画「进行中」是噪音)。 */
+  const pinPending = (label: string, visible = true): PendingAnchor | null => {
+    let a: PendingAnchor | null = null
+    getInstance()?.action((ctx) => { a = beginPending(ctx.get(editorViewCtx), label, visible) })
+    return a
+  }
+  const dropPending = (a: PendingAnchor | null): void => {
+    if (a) getInstance()?.action((ctx) => endPending(ctx.get(editorViewCtx), a.id))
+  }
+  /** 异步 slash 项的落点。await 期间用户可能已切走(实例退休/换页):v3 靠 blockId 三道闸,统一实例先看编辑器还在不在
+   *  (实例与路径同生共死,pipe.retired 会拆掉它),再看锚还在不在(那一行被删了 / 点了取消)。
+   *  fileMade:文件已经建好了(多维表 / 画板 / 子页面 / 图片)—— 落点没了要说清「文件在,只是没插进来」。 */
+  const insertAsync = (md: string, a: PendingAnchor | null, fileMade = true): void => {
+    if (a?.cancelled()) return
+    const lost = (): void => {
+      if (fileMade || !a) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
+      else toastPendingLost(a.label)
+    }
+    if (!apiRef.current || !a) {
+      lost()
       return
     }
-    insertMd(md)
+    let placed = false
+    getInstance()?.action((ctx) => {
+      const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
+      placed = insertAtPending(ctx.get(editorViewCtx), a.id, parsed?.childCount ? parsed.content : null)
+    })
+    if (!placed) lost()
   }
 
-  /** 新建 .fd 子文件(数据库/画板/笔记视图)→ 插 `![[base]]` 嵌入块。三处只差文件名与内容。 */
-  const createFdFile = async (name: string, bytes: Uint8Array, stripMd = false): Promise<void> => {
+  /** 新建 .fd 子文件(数据库/画板/笔记视图)→ 插 `![[base]]` 嵌入块。三处只差文件名与内容;锚由调用方在消费 '/query' 时钉好。 */
+  const createFdFile = async (name: string, bytes: Uint8Array, a: PendingAnchor | null, stripMd = false): Promise<void> => {
     try {
       const { base } = await amadeus.saveAttachment(path, name, bytes, { mode: 'vault', folder: fdDirOf(path) })
-      insertAsync(`![[${stripMd ? base.replace(/\.md$/i, '') : base}]]`) // Obsidian 惯例:嵌入链接省掉 .md
+      insertAsync(`![[${stripMd ? base.replace(/\.md$/i, '') : base}]]`, a) // Obsidian 惯例:嵌入链接省掉 .md
       void store.getState().syncFdChildren(path)
-    } catch { /* 保存失败静默跳过(v3 同款) */ }
+    } catch {
+      dropPending(a) // 保存失败静默跳过(v3 同款),锚撤掉
+    }
   }
 
   /** 移动端双列块面板的落点(真身)。登记/撤销由**宿主 UnifiedPage** 管(见那边的 stableApply):
@@ -648,19 +704,25 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     if (item.run) {
       // 插件注册的「先干活再插入」项。插件是 new Function 装载的第三方 JS,返回值一律当外部输入校验
       // (与 v3 同一套闸:非字符串会毒化文档,NUL/控制字符会污染笔记文件)。
+      const a = pinPending(item.label) // 「进行中…」占位 + 取消(G3-06)
       void (async () => {
         try {
           const md = await item.run!({ pagePath: path, folder: fdDirOf(path) })
-          if (md === '' || md == null) return
+          if (md === '' || md == null) {
+            dropPending(a)
+            return
+          }
           if (typeof md !== 'string') throw new Error(translate('unipage.plugin.notString', { type: typeof md }))
           if (md.length > 8192) throw new Error(translate('unipage.plugin.tooLong'))
           // 控制字符逐码点判(放行 \t \n):正则字面量写法会把真控制字节带进源文件。
           if (Array.from(md).some((c) => c.charCodeAt(0) < 32 && c !== String.fromCharCode(9) && c !== String.fromCharCode(10))) {
             throw new Error(translate('unipage.plugin.controlChars'))
           }
-          insertAsync(md)
+          insertAsync(md, a, false)
           void store.getState().syncFdChildren(path)
         } catch (e) {
+          dropPending(a)
+          if (a?.cancelled()) return // 用户已取消:结果与失败一并不提
           console.error('[plugin] slash item failed', e)
           window.dispatchEvent(new CustomEvent('amadeus:toast', {
             detail: { text: translate('unipage.plugin.failed', { label: item.label, err: e instanceof Error ? e.message : String(e) }), error: true },
@@ -676,13 +738,17 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       input.onchange = () => {
         const f = input.files?.[0]
         if (!f) return
+        // 对话框是模态的,选好文件这一刻光标还在唤起处:此刻钉锚(选文件对话框取消时不留占位)。
+        const a = pinPending(item.label)
         void (async () => {
           try {
             const bytes = new Uint8Array(await f.arrayBuffer())
             const { opts } = await getAttachmentPrefs()
             const { base } = await amadeus.saveAttachment(path, f.name || 'image.png', bytes, opts)
-            insertAsync(`![[${base}]]`) // 与拖入同形态:嵌入层渲染成图片块
-          } catch { /* 保存失败静默跳过 */ }
+            insertAsync(`![[${base}]]`, a) // 与拖入同形态:嵌入层渲染成图片块
+          } catch {
+            dropPending(a) // 保存失败静默跳过
+          }
         })()
       }
       input.click()
@@ -705,28 +771,32 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.page) {
       // 新建子页面(Notion /page):落本笔记的 .fd 子文件夹,插入 [[链接]] 随后打开。
+      const a = pinPending(item.label)
       void (async () => {
         try {
           const st = store.getState()
           const newPath = await st.createChildNote(path, translate('amadeus.default.note'))
-          insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`)
+          insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`, a)
           void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
-        } catch { /* 创建失败静默跳过 */ }
+        } catch {
+          dropPending(a) // 创建失败静默跳过
+        }
       })()
       return
     }
     if (item.scaffold === S.database) {
       const dbName = translate('amadeus.default.database')
-      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))))
+      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))), pinPending(item.label))
       return
     }
     if (item.scaffold === S.drawing) {
       // Obsidian Excalidraw 插件同款 .excalidraw.md(同一个库两边可互开);时间戳命名照抄它。
-      void createFdFile(`${stampedFileName(translate('unipage.file.drawing'))}.excalidraw.md`, new TextEncoder().encode(blankDrawing(BLANK_SCENE_JSON)), true)
+      void createFdFile(`${stampedFileName(translate('unipage.file.drawing'))}.excalidraw.md`, new TextEncoder().encode(blankDrawing(BLANK_SCENE_JSON)), pinPending(item.label), true)
       return
     }
     if (item.scaffold === S.noteview) {
       // 「笔记视图」(Bases 式,行即笔记):行文件夹与 .db 视图定义都落 .fd 子文件夹。
+      const a = pinPending(item.label)
       void (async () => {
         const fdDir = fdDirOf(path)
         let folderRel: string | null = null
@@ -735,9 +805,12 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
             folderRel = await amadeus.createFolder(fdDir, i === 1 ? translate('unipage.file.noteView') : translate('unipage.file.noteViewN', { n: i }))
           } catch { /* 撞名,试下一个 */ }
         }
-        if (folderRel === null) return
+        if (folderRel === null) {
+          dropPending(a)
+          return
+        }
         const viewName = translate('unipage.file.untitledView')
-        await createFdFile(`${viewName}.db`, new TextEncoder().encode(serializeDb(emptyNoteView(viewName, folderRel))))
+        await createFdFile(`${viewName}.db`, new TextEncoder().encode(serializeDb(emptyNoteView(viewName, folderRel))), a)
       })()
       return
     }
@@ -747,14 +820,17 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.bookmark) {
       // 整块 = 一行裸 URL → 嵌入层渲染为书签卡(og 元数据/YouTube 播放器);md 零私有语法。
+      const a = pinPending(item.label, false)
       void askString(translate('unipage.bookmark.title'), '', { label: translate('unipage.bookmark.label') }).then((raw) => {
         const url = raw?.trim()
-        if (url && /^https?:\/\/\S+$/i.test(url)) insertAsync(url)
+        if (url && /^https?:\/\/\S+$/i.test(url)) insertAsync(url, a, false)
+        else dropPending(a)
       })
       return
     }
     if (item.scaffold === S.embed) {
       // 跨笔记块嵌入:剪贴板里有块菜单复制的 `![[笔记#块]]` 就预填。
+      const a = pinPending(item.label, false)
       void (async () => {
         let prefill = ''
         try {
@@ -766,7 +842,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           confirmLabel: translate('unipage.embed.confirm'),
         })
         const target = raw?.trim().replace(/^!?\[\[/, '').replace(/\]\]$/, '').trim()
-        if (target) insertAsync(`![[${target}]]`)
+        if (target) insertAsync(`![[${target}]]`, a, false)
+        else dropPending(a)
       })()
       return
     }
@@ -991,10 +1068,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 所属 leaf(不在面板里 = null):同篇多开时的实例身份 —— 草稿槽位、改名聚焦的认领、openNote 落点都认它(G1-02)。 */
   const scope = useContext(PageScopeCtx)
   const activeScope = useActivePageScope()
-  // 源码模式是全局开关(`</>`):只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
+  // 源码模式按 leaf 记(`</>`,评审 C-08:分屏另一侧不再被动切走、重建);不在面板里的实例跟随活动面板。
+  // 只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
   // 什么也不会落盘,切走即丢,等于假编辑(Codex 09-11 P1)。
-  const globalMode = useUiOverlay((s) => s.editorMode)
-  const mode = readOnly ? 'wysiwyg' : globalMode
+  const modeKey = scope ?? activeScope
+  const leafMode = useUiOverlay((s) => editorModeOf(s, modeKey))
+  const mode = readOnly ? 'wysiwyg' : leafMode
   const { t } = useI18n()
   // 源码模式与可视模式同一个拼写检查开关(G4-07:此前源码恒关、可视恒开,两种模式口径相反)。
   const spellcheck = useNotesSpellcheck()
@@ -1024,25 +1103,27 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
   const [editorKey, setEditorKey] = useState(0) // 源码 → 可视切回时重建编辑器(正文可能被改)
 
-  // ⚠️ 插件启停 = **第四条重 parse 路径**,而且是唯一一条绕开本组件的:MarkdownBlock 自己订阅
-  //    `editorExtensionGen` 并把它挂在 `useEditor` 的 deps 上,milkdown 于是 destroy+create,
-  //    `ctx.set(defaultValueCtx, initial)` 吃的是**那一刻的 prop**。v3 时代 content 由 store 驱动、
-  //    变了就重渲,所以 prop 恒新;v4 换成 ref 型 pipe 之后,拖块成卡与打字全程零 setState ——
-  //    prop 停在上一次 UnifiedPage 渲染那一刻。后果不是「丢几个字」而是**毁数据**:陈旧 body 里
-  //    缺新卡的锚 → foldCanvas fail-closed 早退 → onFolded 不被调用,而这条重建**不经
-  //    setEditorKey、也不卸载 UnifiedEditorHost**,三处 ownedCards.clear() 一处都够不着 →
-  //    归属集合停在上一世代 ⊇ 磁盘 cards → 派生判据放行 → 写回 `cards: []`,全部卡片几何没了
-  //    (没有 elements 时更狠:整个 amadeus_canvas 键被剥)。
-  //    修法是把它拉回既有纪律:代次进 MilkdownProvider 的 key(整棵子树按**本次渲染**的 pipe.body
-  //    重挂,旧实例卸载时的 onFinalFlush 先把真实内容收回来),归属集合在**渲染期**换世代 ——
-  //    放 effect 里会排在子树 fold 之后,把刚折出来的锚当场清掉。
-  const extGen = useSyncExternalStore(subscribeEditorExtensions, editorExtensionGen)
-  const lastExtGen = useRef(extGen)
-  if (lastExtGen.current !== extGen) {
-    lastExtGen.current = extGen
-    pipe.ownedCards.clear()
+  // 插件启停 / 重载(评审 G1-06):编辑器**原地重配**(见 editorExtensions.pluginEditorExtensions),不重挂、不重 parse ——
+  // 焦点、撤销栈、选区、防抖窗里的字、画布卡的归属集合全都原样留着。此前注册表代次进了 MilkdownProvider 的 key:
+  // 整棵子树按渲染期的 pipe.body 重挂,旧实例的防抖窗(~200ms)里的字随之丢失,组字中的拼音被当正文写盘;
+  // 那条重建路径还要求在渲染期给 ownedCards 换世代(否则陈旧 body 缺锚 → 派生写回 `cards: []`)。原地重配没有新 parse,
+  // 归属集合不许清 —— 清了 = 归属 ⊂ 盘上 cards,派生 fail-closed 冻结到重开。
+  // 源码模式下编辑器**不卸载**(评审 C-06):隐藏着留在原地,撤销栈 / 折叠 / 选区跟着活着,回可视时把源码里的改动
+  // 当成一步用户编辑交给它。对外它在源码模式里仍然「不在」:hostApi 与 liveView() 此时一律 null —— 与此前
+  // 卸载时同一套语义(同步 / 插入 / 大纲 / 跳转 / 移动端撤销都认 textarea 为唯一真源,隐藏的旧 doc 不许写回 pipe)。
+  // 只有回灌与恢复草稿、以及回可视那一下会直接用 hostRaw 去喂隐藏的编辑器。
+  const hostRaw = useRef<HostApi | null>(null)
+  const srcRef = useRef(mode === 'source')
+  const hostApi = useMemo<{ readonly current: HostApi | null }>(() => ({ get current() { return srcRef.current ? null : hostRaw.current } }), [])
+  if (srcRef.current !== (mode === 'source')) {
+    // 兜底:没经 store 咽喉的切换抓取就切进源码(正常路径下 modeRelay 的抓取已经拉平过了),至少把
+    // listener 防抖窗里的最后几击收进 pipe.body,textarea 从最新正文开始。只读编辑器、不 setState。
+    if (mode === 'source') {
+      const md = hostRaw.current?.serializeNow()
+      if (md != null) pipe.body = md
+    }
+    srcRef.current = mode === 'source'
   }
-  const hostApi = useRef<HostApi | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const segAnchorRef = useRef<HTMLSpanElement | null>(null)
   const [segAnchor, setSegAnchor] = useState<HTMLElement | null>(null)
@@ -1134,11 +1215,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const step = (dir: 'undo' | 'redo'): boolean => {
       if (pipe.readOnly) return false
       if (canvasModeRef.current && stageHist.current) return stageHist.current(dir)
-      const v = layer.getView()
+      const v = liveView()
       return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
     }
     const indent = (dir: 1 | -1): boolean => {
-      const v = layer.getView()
+      const v = liveView()
       return !pipe.readOnly && !!v && layer.indent(v, dir)
     }
     const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo'), indent }
@@ -1302,6 +1383,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     onCardDetach: (anchors) => cardDragCtxRef.current.detach(anchors),
     onCardsMinted: (anchors) => cardDragCtxRef.current.minted(anchors),
   }), [])
+  /** 对外可用的编辑器视图:源码模式下编辑器隐藏着,一律当它不在(见 hostApi 注,C-06)。 */
+  const liveView = (): EditorView | null => (srcRef.current ? null : layer.getView())
   /** 整块删掉的内容里若牵着只有本篇引用的磁盘文件,删完问一句(见 assetDelete 顶注)。
    *  ⚠️ 只能在删除事务**之后**调:这里读的 doc 已是删完的,「同一篇里还有没有别处引用」才算得准。 */
   const onBlocksDeleted = (content: Fragment): void => {
@@ -1337,6 +1420,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // Agent 改动呈现(G3-03):插件状态 → 胶囊的 N / 当前第几处。回调经 ref 现读(editorPlugins 只建一次)。
   const [agentView, setAgentView] = useState<{ count: number; index: number }>({ count: 0, index: 0 })
   const agentStateRef = useRef<(st: AgentChangesState) => void>(() => {})
+  /** 归属账本比对用的绝对路径(与回灌认领同一口径)。 */
+  const agentAbsPath = vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path
+  /** Tangu 此刻正在改这篇(评审 G3-05:参数流式生成中 / 工具已发出未回结果)→ 挂「正在修改」胶囊。只读实例不挂。 */
+  const agentLive = useSyncExternalStore(subscribeAgentWrites, () => !readOnly && agentEditing(agentAbsPath))
   agentStateRef.current = (st) => {
     const index = st.current == null ? 0 : st.changes.findIndex((c) => c.id === st.current) + 1
     setAgentView((v) => (v.count === st.changes.length && v.index === index ? v : { count: st.changes.length, index }))
@@ -1362,6 +1449,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
       ...createEmbedLayer({ path, readOnly }),
+      ...createPendingInsert(), // 异步 slash 项的锚与「进行中」占位(G3-06)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
       // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
       // 时间线只在画布模式被查询,顺序跨模式仍然成立)。
@@ -1697,7 +1785,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (pipe.preserved.has(fp)) return
     const copy = await writeConflictCopy(path, toDisk(content, pipe.eol))
     pipe.preserved.add(fp)
-    toastConflictCopy(path, copy)
+    // 被盖掉的那一版是 Tangu 写的(归属账本核得上内容,评审 G3-05)→ 提示点名 Tangu。CAS 拒写与打字中回灌两条路都在这里汇合。
+    toastConflictCopy(path, copy, !pipe.readOnly && claimAgentWrite(agentAbsPath, content))
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
 
@@ -1835,7 +1924,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  (先 layout、else 才轮到 canvas)时有个必现雷:一篇曾经有分栏、后来被解散的笔记 sawRows 恒 true,
    *  阶梯永远停在 layout 分支,画布的任何改动从此再也写不进 fm。结构键之间没有优先级,别再串成阶梯。 */
   const deriveFmFromDoc = (): void => {
-    const v = layer.getView()
+    const v = liveView() // 源码模式:结构键的真源是 textarea 里的 fm,隐藏的旧 doc 不许派生回去(C-06)
     if (!v) return
     const storedLayout = layoutLineOf(pipe.fm)
     const json = deriveLayoutJson(v.state.doc)
@@ -1988,8 +2077,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           // 归属(G3-03):写类工具在途或刚结束、目标就是这篇、且盘上正文核得上这次写入 → 按 Tangu 的改动画出来。
           // 每次写入只认领一次(Codex 复核 P0):之后同路径的别的改动不再算 Tangu 的。
           // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
-          const agent = !pipe.readOnly && claimAgentWrite(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path, rawDisk)
-          if (hostApi.current?.applyBody(body, agent)) {
+          const agent = !pipe.readOnly && claimAgentWrite(agentAbsPath, rawDisk)
+          // 源码模式下编辑器隐藏着:照样喂给它(撤销栈随回灌映射,不进栈),textarea 由下面的 syncSrcDraft 跟上(C-06)。
+          if ((hostApi.current ?? (srcRef.current ? hostRaw.current : null))?.applyBody(body, agent)) {
             pipe.body = body
           } else {
             pipe.body = body
@@ -2122,6 +2212,54 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
+  // G2-08:切到后台 / 页面隐藏 / 休眠 / 窗口失焦时立即落盘(不等 800ms 防抖)。移动端进后台后进程随时被杀,
+  // 桌面切走也可能就此关机 —— 原先只挂了 beforeunload,这几种离场都要等防抖计时器自己到点。
+  // 走的是同一条带 CAS 基线的保存链(writeNow),绝不裸写;先同步存本机草稿(进程可能在异步写回来之前就没了)。
+  // 押后回灌期间照旧冻结保存:回灌收尾(reconcile 的 finally)会补发这一笔,这里只留草稿。
+  // 与上面 D-04 的 kick 分开:那条只管「写失败后的补写」,这条管「还没到点的防抖写」。
+  useEffect(() => {
+    const flushNow = (props: boolean): void => {
+      if (pipe.readOnly || pipe.retired || pipe.dead) return
+      syncFromEditor()
+      if (props) flushPropDrafts()
+      if (pipe.timer) {
+        clearTimeout(pipe.timer)
+        pipe.timer = null
+      }
+      const text = composeFm(pipe.fm, pipe.body)
+      if (!pipe.writing && (text === pipe.lastSaved || isPristine())) return
+      pipe.pending = true
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+      if (pipe.reconcileBusy) return
+      void writeNow()
+    }
+    const onHidden = (): void => { if (document.visibilityState === 'hidden') flushNow(true) }
+    const onLeave = (): void => flushNow(true)
+    // 窗口失焦要节流:在几个窗口间来回切是常态,每切一次都整篇写一遍没必要。属性框的草稿不在这里提交 ——
+    // 窗口失焦时输入框自己会收到 blur 并提交。
+    let lastBlur = 0
+    const onBlur = (): void => {
+      const now = Date.now()
+      if (now - lastBlur < 1000) return
+      lastBlur = now
+      flushNow(false)
+    }
+    document.addEventListener('visibilitychange', onHidden)
+    window.addEventListener('pagehide', onLeave)
+    document.addEventListener('freeze', onLeave)
+    document.addEventListener('pause', onLeave) // Cordova / Capacitor 进后台
+    window.addEventListener('blur', onBlur)
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden)
+      window.removeEventListener('pagehide', onLeave)
+      document.removeEventListener('freeze', onLeave)
+      document.removeEventListener('pause', onLeave)
+      window.removeEventListener('blur', onBlur)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path])
+
   /** OS 文件进本实例(存附件 + 光标处插 `![[base]]`)。只读 / 已退休 / 编辑器不在 = 不接(false),宿主据此不另找实例。 */
   const insertFilesHere = (files: File[]): boolean => {
     if (pipe.readOnly || pipe.retired || pipe.dead || !hostApi.current) return false
@@ -2185,11 +2323,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
       headings: () => {
-        const v = layer.getView()
+        const v = liveView()
         return v ? docHeadings(v.state.doc) : []
       },
       revealHeading: (index, text, flash) => {
-        const v = layer.getView()
+        const v = liveView()
         if (!v) return
         // 现遍历一次:大纲那份是渲染时算的,点击之间文档可能已增删标题 → 同序号未必是同一条。
         // 先按序号取,文本对不上就退回按文本找第一条;都不成就不动(绝不静默跳到别的标题)。
@@ -2209,7 +2347,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         if (flash) flashCiteTip(el.getBoundingClientRect())
       },
       revealBlock: (id, flash) => {
-        const v = layer.getView()
+        const v = liveView()
         if (!v) return false
         // Obsidian 的块锚在 v4 素文件里**没有任何结构** —— 就是块最后一行尾部的一段字面文本,
         // 所以「按原文找」就是唯一正确的找法(现取一遍 doc,与 revealHeading 同理:点击发生在
@@ -2240,7 +2378,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         return true
       },
       revealText: (needles, opts) => {
-        const v = layer.getView()
+        const v = liveView()
         if (!v) return false
         const hit = findTextHit(v.state.doc, needles, !!opts?.tag)
         if (!hit) return false // 命中只在标题 / 属性里,或这篇还没装上正文:不动(调用方据此重试 / 放弃)
@@ -2268,10 +2406,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 本实例一个字都不再写,还没落盘的字先**同步**存成新路径的草稿 —— 标签随后改指新路径,新实例挂载即出
         // 「恢复草稿」条,恢复时 0a 的流程负责保全盘上那版(基线对不上先落冲突副本)。不做异步交接写:新实例挂载就
         // 读盘,两边会赛跑。本实例自己发起的改名(doRename)先置 retired 并自己补写新路径,这里不重复。
-        if (movedTo && !pipe.retired && !pipe.readOnly && !pipe.dead) {
+        // 被删除 / 挪走而没有新路径可交接(评审 G1-08:别的窗口删了它、库根换了、路由判 missing)→ 没落盘的字当面说一声,
+        // 全文交给剪贴板。只在**真有**用户改动时出声:切号 / 本端删除前都先冲洗过,那几条路走到这里手里是干净的。
+        if (!pipe.retired && !pipe.readOnly && !pipe.dead) {
           syncFromEditor()
           const text = composeFm(pipe.fm, pipe.body)
-          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+          if (text !== pipe.lastSaved && !isPristine()) {
+            if (movedTo) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+            else toastGoneUnsaved(path, text)
+          }
         }
         pipe.retired = true
         if (pipe.timer) {
@@ -2328,7 +2471,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (body !== pipe.body) {
       pipe.ownedCards.clear() // 与回灌同一条纪律:重 parse 前归属集合换世代
       pipe.body = body
-      if (!hostApi.current?.applyBody(body)) setEditorKey((k) => k + 1)
+      if (!(hostApi.current ?? (srcRef.current ? hostRaw.current : null))?.applyBody(body)) setEditorKey((k) => k + 1)
     }
     syncSrcDraft()
     pipe.pending = true
@@ -2453,17 +2596,94 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const coverY = Number.isFinite(coverYNum) ? Math.max(0, Math.min(100, coverYNum)) : 50
 
   const srcText = useMemo(() => (mode === 'source' ? composeFm(pipe.fm, pipe.body) : ''), [mode, fmVer]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 源码 ↔ 可视接力(评审 C-06):切换前(store 咽喉 → modeRelay)抓光标 / 视口高度 / 最后几击,切换后摆回去。 ──
+  // 抓取必须在翻模式之前:之后 textarea 已经没了(见 modeRelay 顶注)。
+  const relay = useRef<null | { to: 'source' | 'wysiwyg'; offset: number; bodyOff?: number; y: number; focused: boolean; bodyAtEnter?: string; struct?: string }>(null)
+  const structKey = (): string => `${layoutLineOf(pipe.fm) ?? ''}\u0000${canvasLineOf(pipe.fm) ?? ''}`
   useEffect(() => {
-    // 源码 → 可视:textarea 编辑已实时进 pipe,这里只负责让编辑器重建吃新正文。
-    if (mode !== 'source') {
-      setSrcDraft(null)
+    if (readOnly) return
+    return registerModeCapture(modeKey, (to) => {
+      const host = scrollHostOf(segAnchorRef.current)
+      const top = hostTop(host)
+      if (to === 'source') {
+        syncFromEditor() // 此刻还在可视模式:拉平 listener 防抖窗里的最后几击 + 派生结构键(原来靠卸载时的 onFinalFlush)
+        const view = layer.getView()
+        const text = composeFm(pipe.fm, pipe.body)
+        let offset = pipe.fm.length
+        let y = 0
+        let focused = false
+        if (view) {
+          const { head, $head } = view.state.selection
+          focused = view.hasFocus()
+          try { y = view.coordsAtPos(head).top - top } catch { /* 位置量不出:不校准滚动 */ }
+          const anchor = $head.parent.isTextblock ? $head.parent.textBetween(Math.max(0, $head.parentOffset - 16), $head.parentOffset, undefined, '\ufffc') : ''
+          const prefix = hostRaw.current?.serializePrefix(head)
+          offset = alignByAnchor(text, pipe.fm.length + (prefix?.trimEnd().length ?? 0), anchor)
+        }
+        relay.current = { to, offset, y, focused, bodyAtEnter: pipe.body, struct: structKey() }
+        return
+      }
+      const ta = srcTaRef.current
+      if (!ta) return
+      const offset = ta.selectionStart ?? 0
+      let y = 0
+      try { y = textareaCaretY(ta, offset) - top } catch { /* 同上 */ }
+      relay.current = { ...(relay.current ?? {}), to, offset, bodyOff: offset - splitFm(ta.value).fmText.length, y, focused: document.activeElement === ta }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeKey, readOnly])
+  const prevMode = useRef(mode)
+  useLayoutEffect(() => {
+    const prev = prevMode.current
+    prevMode.current = mode
+    if (prev === mode) return
+    const r = relay.current
+    const host = scrollHostOf(segAnchorRef.current)
+    if (mode === 'source') {
+      // 切过来前拉平进 pipe 的最后几击(防抖窗里的,隐藏编辑器的 listener 之后不再回写)照常排一发保存 —— 原来由卸载时的
+      // onFinalFlush 排,编辑器不卸载了就得在这里补上,否则那几个字只在屏上、不进盘。
+      schedule()
+      const ta = srcTaRef.current
+      if (!ta || r?.to !== 'source') return
+      const keep = host.scrollTop
+      ta.style.height = 'auto' // 先撑高(撑高 effect 排在后面),滚动容器才有高度可滚
+      ta.style.height = `${ta.scrollHeight}px`
+      host.scrollTop = keep
+      const o = Math.min(r.offset, ta.value.length)
+      ta.setSelectionRange(o, o)
+      if (r.focused) ta.focus({ preventScroll: true })
+      host.scrollTop += textareaCaretY(ta, o) - hostTop(host) - r.y
+      return
+    }
+    // 源码 → 可视
+    relay.current = null
+    setSrcDraft(null)
+    const raw = hostRaw.current
+    const view = layer.getView()
+    if (!raw || !view || !r || r.struct !== structKey()) {
+      // 编辑器不在 / 没抓到进源码时的底 / 源码里改了分栏、画布结构键:按新正文整实例重建(折叠要拿新结构键重跑)。
       // ⚠️ 重建 = 一次新 parse,归属集合必须跟着换世代(与 reconcile 那两处同一条纪律,Codex P0-5)。
       // 漏在这里是潜伏的毁数据:在源码模式把某张卡的锚改坏 → 回可视时折叠失败、doc 零卡片,而
       // 上一代的集合仍然满足 deriveCanvasJson 的归属判据 → 派生出 `cards: []` → 整个 amadeus_canvas
       // 键被剥,全部卡片几何一次没。(sawRows 是分栏那边的同族布尔量,毛病更老,不在本轮动。)
       pipe.ownedCards.clear()
       setEditorKey((k) => k + 1)
+      return
     }
+    // 源码里的改动 = 用户自己的一次编辑:一步交给隐藏着的编辑器(进撤销栈,之前可视模式里的步骤随它映射、照样可撤)。
+    // 没改过就一笔都不发 —— 否则规范化差异会凭空多出一个撤销步。
+    if (pipe.body !== r.bodyAtEnter) raw.applyBody(pipe.body, false, true)
+    if (r.to !== 'wysiwyg' || r.bodyOff == null) return
+    const v = layer.getView()
+    if (!v) return
+    const size = v.state.doc.content.size
+    const guess = r.bodyOff <= 0 ? 0 : raw.posAfterPrefix(pipe.body.slice(0, r.bodyOff)) ?? 0
+    const sel = TextSelection.near(v.state.doc.resolve(Math.max(0, Math.min(guess, size))), -1)
+    v.dispatch(v.state.tr.setSelection(sel).setMeta('addToHistory', false))
+    if (r.focused) v.focus()
+    try { host.scrollTop += v.coordsAtPos(sel.head).top - hostTop(host) - r.y } catch { /* 量不出就不校准 */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
   // 源码 textarea 自动撑高(v3 SourceEditor 的 grow 同款):.amx-source 是 overflow:hidden,
   // 滚动交给外层容器 —— unified 首版漏带这一手,超过 min-height(60vh) 的尾部被整段裁掉且
@@ -2473,8 +2693,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   useEffect(() => {
     const el = srcTaRef.current
     if (mode === 'source' && el) {
+      // 先 auto 再量:这一瞬内容变矮,滚动容器会把 scrollTop 夹小,撑回来后不会自己回去 —— 量之前记下、撑完还原
+      // (否则切进源码时的视口接力、在长文下方打字都会被弹回上面去,C-06)。
+      const host = scrollHostOf(el)
+      const keep = host.scrollTop
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
+      host.scrollTop = keep
     }
   }, [mode, srcDraft, srcText])
   // 页内查找替换(C-18):可编辑实例把本篇注册成 replace provider —— 所见即所得映射成 PM 事务(findReplace.ts),
@@ -2592,10 +2817,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             schedule()
           }}
         />
-      ) : (
+      ) : null}
+      {/* 源码模式下编辑器隐藏着留在原地(C-06:撤销栈 / 折叠 / 选区跨切换保住),display:none 同时摘掉它的一切交互。 */}
         <div
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
+          style={mode === 'source' ? { display: 'none' } : undefined}
+          aria-hidden={mode === 'source' || undefined}
           data-bare
           onFocusCapture={() => { touchActive(); setFocusedBlockApply(stableApply) }}
           onPointerDownCapture={touchActive}
@@ -2605,7 +2833,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           <CanvasStage
             path={path}
             vaultRoot={vaultRoot}
-            active={canvasOn}
+            active={canvasOn && mode !== 'source'}
             readOnly={readOnly}
             revealSelection={canvasReveal}
             getView={() => layer.getView()}
@@ -2629,12 +2857,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               schedule()
             }}
           >
-            <MilkdownProvider key={`${path}:${editorKey}:${extGen}${readOnly ? ':ro' : ''}`}>
+            <MilkdownProvider key={`${path}:${editorKey}${readOnly ? ':ro' : ''}`}>
               <UnifiedEditorHost
                 path={path}
                 pageDir={pageDir}
                 body={pipe.body}
                 onChange={(stored) => {
+                  if (srcRef.current) return // 源码模式:textarea 是唯一真源,隐藏编辑器的事务(回灌喂进去的)不回写(C-06)
                   pipe.body = stored
                   deriveFmFromDoc() // 分栏 layout 单一真源 = 当前 doc(Codex A13)
                   schedule()
@@ -2645,8 +2874,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                   schedule()
                   setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
                 }}
-                skipFinalFlush={() => pipe.reconcileBusy > 0}
-                apiRef={hostApi}
+                skipFinalFlush={() => pipe.reconcileBusy > 0 || srcRef.current}
+                apiRef={hostRaw}
                 probe={probe}
                 extraPlugins={editorPlugins}
                 focusPlace={bodyFocus != null && typeof bodyFocus === 'object' ? 'start' : bodyFocus}
@@ -2663,6 +2892,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             </MilkdownProvider>
           </CanvasStage>
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
+          {agentLive && <AgentLiveCapsule />}
           {!readOnly && agentView.count > 0 && (
             <AgentChangeCapsule
               count={agentView.count}
@@ -2673,7 +2903,6 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             />
           )}
         </div>
-      )}
       <LinkHoverCard
         getView={() => layer.getView()}
         onOpenNote={(href) => void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)}

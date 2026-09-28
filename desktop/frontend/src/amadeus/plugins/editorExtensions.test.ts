@@ -31,7 +31,7 @@ describe('editor extension source context', () => {
     expect(a.plugins()[0]).not.toBe(b.plugins()[0])
     if (typeof stopA === 'function') stopA()
     expect(a.plugins()).toHaveLength(0)
-    expect(b.plugins()).toHaveLength(1)
+    expect(b.plugins()).toHaveLength(2) // 本桶的锚插件(原地重配的插入位置,G1-06)+ 扩展本身
     if (typeof stopB === 'function') stopB()
   })
 
@@ -39,7 +39,7 @@ describe('editor extension source context', () => {
     addEditorExtension('source-context-test', pm => [new pm.Plugin({})])
     const editor = editorContext()
     const stop = await pluginEditorExtensions()(editor.ctx)()
-    expect(editor.plugins()).toHaveLength(1)
+    expect(editor.plugins()).toHaveLength(2) // 锚 + 扩展
     if (typeof stop === 'function') stop()
   })
 })

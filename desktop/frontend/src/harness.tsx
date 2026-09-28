@@ -1803,9 +1803,10 @@ if (new URLSearchParams(location.search).has('dock')) {
     setRecents(paths: string[]) {
       setRecentsProvider(() => paths)
     },
-    // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。
-    setEditorMode(m: 'wysiwyg' | 'source') {
-      void import('./amadeusOverlayStore').then(({ useUiOverlay }) => useUiOverlay.setState({ editorMode: m }))
+    // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。按 leaf 记(评审 C-08):
+    // 缺省切主实例('main' = 没挂 PageScopeCtx 的主实例跟随的活动面板),`&udual` 的第二实例传 'harness-B'。
+    setEditorMode(m: 'wysiwyg' | 'source', scope = 'main') {
+      void import('./amadeusOverlayStore').then(({ useUiOverlay }) => useUiOverlay.getState().setEditorMode(scope, m))
     },
   }
   void import('./amadeus/unified/lifecycle').then((m) => { (window as unknown as { __upage: { lifecycle: unknown } }).__upage.lifecycle = m })
