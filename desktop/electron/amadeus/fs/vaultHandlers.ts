@@ -516,9 +516,10 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   handle(IPC.listFolders, () => vault.listFolders())
 
-  handle(IPC.resolveEmbed, (_e, target: string) => {
+  handle(IPC.resolveEmbed, (_e, target: string, sourcePath?: string) => {
     // The inline index already holds each block's content + owning note.
-    const hit = index.resolveBlock(target)
+    // sourcePath(可选,评审 L-15):嵌入所在笔记 → 被嵌笔记就近解析;旧 preload / 远端 RPC 不带时照旧全库解析。
+    const hit = index.resolveBlock(target, typeof sourcePath === 'string' && sourcePath ? sourcePath : undefined)
     return hit ? { owner: hit.path, content: hit.content, type: hit.type } : null
   })
 

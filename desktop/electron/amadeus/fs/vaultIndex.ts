@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { decodeCharRefs, linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
+import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { assetKey, assetRefs } from '@amadeus-shared/assets'
 import type { BacklinkRef, SearchHit, TagCount } from '@amadeus-shared/ipc'
 import { parseMdMarks, type MdMark } from '@amadeus-shared/mdMarks'
@@ -260,23 +261,32 @@ export class VaultIndex {
   }
 
   /** Resolve a `![[note#id]]` embed to its content + owning note (note-scoped by id). */
-  resolveBlock(target: string): { path: string; content: string; type: string } | null {
-    const { noteKey, id } = parseEmbedTarget(target)
+  resolveBlock(target: string, sourcePath?: string): { path: string; content: string; type: string } | null {
+    // `|别名` / `|宽度` 不参与解析(评审 L-15:`![[笔记|300]]` 原先整条拿去匹配 → 恒「嵌入丢失」)。
+    const { note, subpath } = splitNoteEmbed(target)
+    const bare = subpath ? `${note}#${subpath}` : note
+    // 被嵌笔记按**源笔记所在处**就近解析(同目录 → 源的 .fd 子笔记 → 全库,四级规则同 `[[链接]]`);
+    // 原先不带 sourcePath,同名笔记一律取全库第一篇 = 嵌错。笔记名为空(`![[#标题]]`)= 源笔记自己。
+    const pages = [...this.entries.keys()].sort()
+    const ownerPath = note ? resolvePageName(note, pages, sourcePath) : sourcePath && this.entries.has(sourcePath) ? sourcePath : null
+    const owner = ownerPath ? this.entries.get(ownerPath) : undefined
+    // ① v3 标记块 `![[笔记#3]]`(按 id,笔记名限域):先看就近解析到的那篇,再退回按名扫全库(与从前逐字一致)。
+    const { noteKey, id } = parseEmbedTarget(bare)
+    const own = owner?.blocks.find((x) => x.id === id)
+    if (owner && own) return { path: owner.path, content: own.content, type: 'markdown' }
     for (const e of this.entries.values()) {
       if (noteKey && e.key !== noteKey) continue
       const b = e.blocks.find((x) => x.id === id)
       if (b) return { path: e.path, content: b.content, type: 'markdown' }
     }
-    // 整篇笔记转写:`![[笔记名]]` 无 `#` 块锚 → 按名(四级规则,同 `[[链接]]`)解析到笔记,返回整篇正文
-    // (`text` 已剥 frontmatter/marker → 干净 md,交前端 markdown 块只读渲染)。
-    // ponytail: 被嵌笔记里的 `![[db]]`/画板/二次嵌入只作源码行渲染(块级重解析在 BlockHost,不在本层);
-    //           要活块级需满血多块渲染,现不值当。
-    if (!target.includes('#')) {
-      const notePath = resolvePageName(target, [...this.entries.keys()].sort())
-      const e = notePath ? this.entries.get(notePath) : undefined
-      if (e) return { path: e.path, content: e.text, type: 'markdown' }
+    // ② v4 素文件:`#标题` 只读切出那一节,`#^块` 只读解析已有的块锚(shared/noteEmbed)。
+    if (subpath) {
+      const content = owner ? sliceEmbedSubpath(owner.text, subpath) : null
+      return content != null && owner ? { path: owner.path, content, type: 'markdown' } : null
     }
-    return null
+    // ③ 整篇笔记转写:`text` 已剥 frontmatter/marker → 干净 md,交前端 markdown 块只读渲染。
+    // ponytail: 被嵌笔记里的 `![[db]]`/画板/二次嵌入只作源码行渲染(块级重解析在 BlockHost,不在本层)。
+    return owner ? { path: owner.path, content: owner.text, type: 'markdown' } : null
   }
 
   /** Notes that embed the given block (passed as its own `note#id`), for safe-delete warnings. */

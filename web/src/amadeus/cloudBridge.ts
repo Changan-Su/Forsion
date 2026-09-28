@@ -47,6 +47,9 @@ import type {
   VaultInfo,
 } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
+import { findEmbedBlock } from './shareBridge'
 import { createCloudHttp, is404, is409, HttpError } from './cloudHttp'
 import { startCloudEvents } from './cloudEvents'
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
@@ -905,9 +908,32 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const r = await http.get<{ paths: string[] }>(`/amadeus/vaults/${encodeURIComponent(vid())}/tags/pages`, { tag })
       return r.paths
     },
-    resolveEmbed: async (target) => {
+    resolveEmbed: async (target, sourcePath) => {
       await ensureVault()
-      const r = await http.get<EmbedResolved | null>(`/amadeus/vaults/${encodeURIComponent(vid())}/embed`, { target })
+      // 评审 L-15:服务端 /embed 按 page_key 扫同名笔记、不认 sourcePath,也不认 `|别名/宽度`、`^块`、嵌套标题链。
+      // 客户端先用树按**源笔记所在处**就近解析出确切那篇(同目录 → .fd 子笔记 → 全库,同 `[[链接]]`;
+      // 空笔记名 `![[#标题]]` = 源笔记自己),解析到了就拉原文在本端切:v3 标记块 / 标题小节与服务端同口径
+      // (shareBridge.findEmbedBlock 是它的镜像),其余(`^块`、嵌套链、带格式标题)走 shared/noteEmbed。
+      // 解析不到才退回服务端(`|` 已剥),保留它对老目标形态的兜底。
+      const { note, subpath } = splitNoteEmbed(target)
+      const pages = [...(await fetchTree()).pages].sort()
+      const owner = note ? resolvePageName(note, pages, sourcePath) : sourcePath && pages.includes(sourcePath) ? sourcePath : null
+      if (owner) {
+        let raw: string | null = null
+        try {
+          raw = (await getFile(owner)).content
+        } catch (e) {
+          if (!is404(e)) throw e
+        }
+        if (raw != null) {
+          if (!subpath) return { owner, content: stripForIndex(raw), type: 'markdown' }
+          const content = findEmbedBlock(raw, subpath.trim().replace(/\.block$/i, '').toLowerCase()) ?? sliceEmbedSubpath(stripForIndex(raw), subpath)
+          return content == null ? null : { owner, content, type: 'markdown' }
+        }
+      }
+      const wire = subpath ? `${note}#${subpath}` : note
+      if (!wire) return null
+      const r = await http.get<EmbedResolved | null>(`/amadeus/vaults/${encodeURIComponent(vid())}/embed`, { target: wire })
       return r ?? null
     },
     blockBacklinks: async (target) => {

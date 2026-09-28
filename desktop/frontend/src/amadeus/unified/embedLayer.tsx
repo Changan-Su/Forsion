@@ -21,6 +21,8 @@ import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
+import { resolvePageName } from '@amadeus-shared/links'
+import { splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { parseMediaLinkInner, VIDEO_EXT_RE, mediaLabel, embedWidthOf, withEmbedWidth, embedUrlOf, wikiSafeUrl, type MediaLoc } from '@amadeus-shared/pdfLink'
 import type { EmbedResolved } from '@amadeus-shared/ipc'
 import { getBlockType } from '../blocks/registry'
@@ -60,6 +62,8 @@ registerMessages({
   'uembed.editAtSource': { zh: '去源头编辑', en: 'Edit at the source' },
   'uembed.resolving': { zh: '解析中…', en: 'Resolving…' },
   'uembed.embedMissing': { zh: '嵌入丢失：', en: 'Embed missing: ' },
+  'uembed.create': { zh: '创建', en: 'Create' },
+  'uembed.createTip': { zh: '新建笔记「{name}」', en: 'Create the note “{name}”' },
 })
 
 /**
@@ -230,22 +234,35 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
   )
 }
 
-function CrossNoteEmbed({ target }: { target: string }): ReactElement {
+function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePath: string; readOnly: boolean }): ReactElement {
   const t = useT()
   const openWikiLink = usePageStore((s) => s.openWikiLink)
   const loadPage = usePageStore((s) => s.loadPage)
   const pages = usePageStore((s) => s.pages)
   const linkVersion = usePageStore((s) => s.linkGraphVersion)
   const [embed, setEmbed] = useState<EmbedResolved | null | 'loading'>('loading')
+  // 评审 L-15:`|别名 / |宽度` 在这里就剥掉(不止靠各宿主的解析器 —— 没跟上的后端也不再对 `![[笔记|300]]`
+  // 报「嵌入丢失」);sourcePath = 本篇,被嵌笔记按它就近解析、`![[#标题]]` 的空笔记名也指它。
+  const { note, subpath } = splitNoteEmbed(target)
+  const wire = subpath ? `${note}#${subpath}` : note
   useEffect(() => {
     let alive = true
     setEmbed('loading')
     // IPC 面可选调用:web/harness 环境没有 resolveEmbed 时按「未解析」降级,不炸组件。
-    Promise.resolve(amadeus.resolveEmbed?.(target) ?? null)
+    Promise.resolve(wire ? amadeus.resolveEmbed?.(wire, pagePath) ?? null : null)
       .then((r) => { if (alive) setEmbed(r) })
       .catch(() => { if (alive) setEmbed(null) })
     return () => { alive = false }
-  }, [target, linkVersion])
+  }, [wire, pagePath, linkVersion])
+  // 丢失壳的「创建」(Obsidian 同款):只在**笔记本身不存在**时给 —— 笔记在、只是标题 / 块锚找不到,新建笔记帮不上忙;
+  // 只读宿主(分享页)不给。走 openWikiLink 的全套闸(已有文件 / 画板 / 插件文件类型绝不被覆盖成空笔记),
+  // 它落到「询问创建」时直接确认(用户点的就是「创建」,不再问第二遍),新笔记落在本篇的 .fd 下,嵌入随即就近解析到它。
+  const creatable = !readOnly && embed === null && !!note && !resolvePageName(note, pages, pagePath)
+  const create = (): void => {
+    const st = usePageStore.getState()
+    st.openWikiLink(note, pagePath)
+    if (usePageStore.getState().pendingWikiCreate?.name === note) void usePageStore.getState().confirmWikiCreate()
+  }
   const et = embed && embed !== 'loading' ? getBlockType(embed.type) : undefined
   const EmbedEditor = et?.Editor
   return (
@@ -279,7 +296,14 @@ function CrossNoteEmbed({ target }: { target: string }): ReactElement {
           getPageNames={() => pages}
         />
       ) : (
-        <div className="embed-missing">{t('uembed.embedMissing')}<code>{target}</code></div>
+        <div className="embed-missing">
+          {t('uembed.embedMissing')}<code>{target}</code>
+          {creatable && (
+            <button type="button" className="embed-media-btn embed-create" title={t('uembed.createTip', { name: note })} onClick={create}>
+              {t('uembed.create')}
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -320,7 +344,7 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
         />
       )
     case 'note':
-      return <CrossNoteEmbed target={kind.target} />
+      return <CrossNoteEmbed target={kind.target} pagePath={pagePath} readOnly={readOnly} />
     case 'bookmark':
       // 卡片 ⇄ 内嵌互转就是同一行文本的两种字面,可逆无损(Notion / AFFiNE 的三态互转同款)。
       // 只读语境按 BookmarkCard 的契约**不传**回调(传 noop = 铅笔照给、改完静默丢,见其 props 注)。

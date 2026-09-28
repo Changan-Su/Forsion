@@ -612,6 +612,11 @@
   font-size: var(--ui-font-body, 13px);
   font-style: italic;
 }
+/* 丢失壳里的「创建」(评审 L-15):复用嵌入工具钮 .embed-media-btn,只把丢失提示的斜体摘掉、留一点间距。 */
+.am-app .embed-missing .embed-create {
+  margin-left: 8px;
+  font-style: normal;
+}
 .am-app .embed-body .md-block :is(.ProseMirror) {
   cursor: default;
 }

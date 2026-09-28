@@ -553,8 +553,10 @@ export interface AmadeusApi {
   deletePage(pagePath: string): Promise<void>
   /** Move a page into another folder ('' = vault root); returns its new path. */
   movePage(pagePath: string, destFolder: string): Promise<string>
-  /** Resolve a `![[ ]]` block embed target (by basename) to its content + owning note. */
-  resolveEmbed(target: string): Promise<EmbedResolved | null>
+  /** Resolve a `![[ ]]` block embed target (by basename) to its content + owning note.
+   *  sourcePath = 嵌入所在的笔记(评审 L-15):被嵌笔记按它就近解析(同目录 → .fd 子笔记 → 全库,同 `[[链接]]`),
+   *  `![[#标题]]` 的空笔记名也指它。可选:旧宿主 / 旧调用方不传 = 全库第一篇(历史行为)。 */
+  resolveEmbed(target: string, sourcePath?: string): Promise<EmbedResolved | null>
   /** Notes that embed the given block basename (for safe-delete warnings). */
   blockBacklinks(target: string): Promise<BacklinkRef[]>
   /** All sub-folders (incl. empty), vault-relative. */
