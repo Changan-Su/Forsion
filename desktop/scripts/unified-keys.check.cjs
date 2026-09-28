@@ -670,6 +670,48 @@ async function main() {
         else check(`K08 ${kind}前缀第 0 位退格离开 input`, !inPrefix(got['退格'].trail[2]), `${got['退格'].doc} | ${JSON.stringify(got['退格'].trail)}`)
       }
     }
+
+    // K-12 / K-12d(拍板 #5:不回退 K11,只修可逆性):callout / 引用首段行首退格得到字面 `>…`(K11 钉住),
+    // 补回空格 = 按引用处理并与紧邻的 blockquote 合回一只 —— 回到原样,盘上逐字不变。空行 `> ` 仍是折叠。
+    if (want('K12')) {
+      const bqInfo = (page) => page.evaluate((PM) => [...document.querySelectorAll(PM + ' > blockquote')].map((b) => b.className || '(plain)').join(','), PM)
+      for (const [name, md, text, expect, cls] of [
+        ['callout 首段', '前段。\n\n> [!note] 标题\n>\n> 内容\n\n丙段。\n', '[!note] 标题',
+          'paragraph:"前段。" / blockquote / paragraph:"[!note] 标题" / paragraph:"内容" / paragraph:"丙段。"', /callout-note/],
+        ['两段普通引用首段(K-12d)', '前段。\n\n> 甲\n>\n> 乙\n\n丙段。\n', '甲',
+          'paragraph:"前段。" / blockquote / paragraph:"甲" / paragraph:"乙" / paragraph:"丙段。"', /^\(plain\)$/],
+        ['两段普通引用次段', '前段。\n\n> 甲\n>\n> 乙\n\n丙段。\n', '乙',
+          'paragraph:"前段。" / blockquote / paragraph:"甲" / paragraph:"乙" / paragraph:"丙段。"', /^\(plain\)$/],
+        ['单段普通引用(K-12d)', '前段。\n\n> 引用甲\n\n丙段。\n', '引用甲',
+          'paragraph:"前段。" / blockquote / paragraph:"引用甲" / paragraph:"丙段。"', /^\(plain\)$/],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text, 0)
+        await page.waitForTimeout(150)
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const lit = (await shape(page)).replace(/ \/ +/g, ' / ')
+        await page.keyboard.type(' ')
+        await page.waitForTimeout(1300)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const c = await bqInfo(page)
+        await page.evaluate(() => window.__upage.probe.flush?.())
+        await page.waitForTimeout(300)
+        const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+        check(`K12 ${name}:行首退格字面化后补空格 = 原样合回`, lit.includes(`paragraph:">${text}"`) && s === expect && cls.test(c) && disk === md,
+          `${lit} → ${s} | bq=${c} | disk=${JSON.stringify(disk)}`)
+        await page.close()
+      }
+      // 07-29 键位不变:空行敲 `> ` 仍是折叠块。
+      const page = await open(browser, '前段。\n')
+      await caretAtText(page, '前段。')
+      await page.keyboard.press('Enter')
+      await typeSeq(page, '> X')
+      await page.waitForTimeout(300)
+      const s = await shape(page)
+      check('K12 空行 `> ` 仍是折叠(07-29 键位)', /blockquote \/ +paragraph:"\[!fold\]-X"/.test(s), s)
+      await page.close()
+    }
   } finally {
     await browser.close()
   }

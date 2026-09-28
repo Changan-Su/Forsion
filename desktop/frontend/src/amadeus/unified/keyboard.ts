@@ -29,7 +29,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed } from './embedLayer'
 import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
-import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
+import { applyTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 import { tableKeyPlugins } from './tableKeys'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
@@ -146,7 +146,7 @@ const enterOnBlockSelection: Command = (state, dispatch) => {
 const enterRunsTrigger: Command = (state, dispatch, view) => {
   const { $from, empty } = state.selection
   if (!empty || !view || !dispatch) return false
-  const trig = matchTrigger(textBeforeCursor($from))
+  const trig = triggerAtCursor($from)
   if (!trig || !canAutoTriggerFromBlock($from.parent.type.name, trig)) return false
   return applyTrigger(view, trig, { from: $from.start(), to: $from.pos })
 }

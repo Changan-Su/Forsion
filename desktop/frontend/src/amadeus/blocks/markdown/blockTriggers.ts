@@ -29,6 +29,8 @@ export interface Trigger {
   checked?: boolean
   /** code 专用:围栏后的语言(```py → 'py');空串 = 纯文本。 */
   lang?: string
+  /** quote 专用:包好之后与紧邻的前/后 blockquote 合回一只(K-12,见 triggerAtCursor)。 */
+  rejoin?: boolean
 }
 
 /**
@@ -69,6 +71,21 @@ export function matchTrigger(before: string): Trigger | null {
   if ((m = /^```([A-Za-z0-9+#._-]*)$/.exec(b))) return { kind: 'code', lang: m[1] }
   if (b === '$$') return { kind: 'math' }
   return null
+}
+
+/**
+ * 键盘入口(行首触发符 + 空格 / 回车)用的判定:matchTrigger 之外再看**光标之后**有没有内容。
+ *
+ * `>` = 折叠是给**空行起新块**定的键位(07-29)。光标后面已经有字 = 这是在给现成的一行补 `>`,最常见的
+ * 来路正是 K11 的字面化:callout/引用首段行首退格 → 得到字面 `>[!note] 标题`,补回空格想还原。按折叠处理
+ * 会把它包成一只新的折叠块(或包成独立引用、与后文的正文断开),往返不可逆(K-12 / K-12d)。
+ * 拍板 #5:不回退 K11,只修可逆性 —— 这种情况按引用处理,并与紧邻的 blockquote 合回一只。
+ * slash 菜单「折叠」走 applyTrigger 直调,不经这里,照旧是折叠。
+ */
+export function triggerAtCursor($from: ResolvedPos): Trigger | null {
+  const trig = matchTrigger(textBeforeCursor($from))
+  if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
+  return trig
 }
 
 /**
@@ -357,6 +374,16 @@ export function applyTrigger(
       tr.wrap(range, wrap)
       pos = tr.mapping.slice(n).map(pos) // wrap 插了容器开标签,位置整体后移
       $blk = tr.doc.resolve(pos)
+      if (trig.rejoin) {
+        // 与紧邻的 blockquote 合回一只(K-12):先并后面的(不影响前面的位置),再并前面的。
+        const d = findDepth($blk, 'blockquote')
+        if (d !== null) {
+          const end = $blk.after(d)
+          if (tr.doc.resolve(end).nodeAfter?.type === blockquote && canJoin(tr.doc, end)) tr.join(end)
+          const start = $blk.before(d)
+          if (tr.doc.resolve(start).nodeBefore?.type === blockquote && canJoin(tr.doc, start)) tr.join(start)
+        }
+      }
     } // 已在引用内:幂等,只消费触发符。
     // 折叠:在首行行首补 `[!fold]- ` 令牌(已经是 callout 就不重复补,重打幂等)。
     if (trig.kind === 'fold' && !CALLOUT_HEAD_RE.test($blk.parent.textContent)) {
