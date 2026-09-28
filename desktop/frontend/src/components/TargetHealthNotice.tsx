@@ -10,8 +10,8 @@ import type { ReactNode } from 'react'
 import { CircleOff, KeyRound, Loader2, PowerOff, RotateCcw, ShieldAlert, Timer, WifiOff } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
-import { focusTarget, useEngineFocus } from '../services/engine/targets'
-import { probeTarget, useTargetHealth, type TargetHealthState } from '../services/engine/health'
+import { retryFocusTarget, useEngineFocus } from '../services/engine/targets'
+import { useTargetHealth, type TargetHealthState } from '../services/engine/health'
 import { remoteRefusalMessage } from '../services/localOnly'
 import '../services/engine/messages'
 
@@ -41,8 +41,10 @@ const MESSAGE_KEYS: Partial<Record<TargetHealthState, string>> = {
   gone: 'engine.target.gone',
 }
 
-/** 可恢复的态给「重试」(立即探一次);终局态(设备被移除 / 身份 / 拒绝)重试也没用,不给。 */
-const RETRYABLE = new Set<string>(['offline', 'engine-unavailable', 'rate-limited', 'failed'])
+/** 「重试」= retryFocusTarget(没连上 → 重连;已连上但健康不好 → 探一次)。可恢复态本来就会自己好,按钮只是「现在就试」;
+ *  身份取不到(K8 换票抖一下)/ 引擎拒了凭据 / 拒绝**不自动重试**(R-32),按钮是它们唯一的就地出口 —— 原先只能切走再切回
+ *  或重载 app。设备被移除才是真没救(connect 见 gone 会自己切回本端),不给。 */
+const RETRYABLE = new Set<string>(['offline', 'engine-unavailable', 'rate-limited', 'failed', 'caller-unavailable', 'engine-auth', 'refused'])
 
 /** 焦点在「我的电脑」且还没连上时,输入框的禁用占位换成「等待那台连上」(缺省那句「先在设置里连接后端」
  *  说的是本端的外部连接,放在这里是误导)。焦点在本端 / 已连上 → undefined(调用方用它自己的占位)。 */
@@ -82,12 +84,7 @@ export function TargetHealthNotice({ fallback }: { fallback?: ReactNode }) {
   if (!state) return <>{fallback}</>
 
   const Icon = ICONS[state] ?? WifiOff
-  const retry = (): void => {
-    void probeTarget(focusTarget()).then((h) => {
-      const app = useApp.getState()
-      if (h.state === 'ready' && app.connState !== 'ok') void app.connect(app.cfg)
-    }).catch(() => {})
-  }
+  const retry = (): void => { void retryFocusTarget().catch(() => {}) }
   return (
     <div className="t2-quota-advisory t2-target-health" data-target-health={state} role="status" aria-live="polite">
       <span className="t2-quota-advisory-copy">

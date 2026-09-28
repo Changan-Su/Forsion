@@ -15,9 +15,9 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef } from '../services/engine/targets'
+import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, sameRef, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
-import { healthOf, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
+import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
 import { ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
 import { unitHostProfile } from '../services/engine/hostFs'
 import '../services/engine/messages'
@@ -422,6 +422,42 @@ const focusUnhealthy = (): boolean => focusRef().kind === 'unit' && healthOf(foc
 /** unit 焦点的轮询间隔(home 仍是 bootstrap 的 4s):经 hub 的每条请求都吃全局限流。 */
 const UNIT_POLL_MS = 12_000
 let lastUnitPollAt = 0
+
+/** 焦点代的中止器:换焦点 / 换账号时 abort,挂在它上面的后台等恢复随之撤掉(探针环没人等 → 当场收工,不再经 hub 探旧那台)。 */
+let focusAbort = new AbortController()
+/** 当前焦点代上挂着的那个后台等恢复(同一代只挂一个;探针环本就按目标共用)。 */
+let focusRecovery: { signal: AbortSignal } | null = null
+
+/** 结束当前焦点代:撤掉后台等恢复。句柄同步清空 —— waitReady 的拒绝在微任务里才到,紧接着的 ensureFocusRecovery 不能看见旧句柄。 */
+function endFocusGeneration(): void {
+  focusAbort.abort()
+  focusAbort = new AbortController()
+  focusRecovery = null
+}
+
+/**
+ * 焦点那台掉进可恢复态(离线 / 引擎没起 / 限流,或 connect 撞上瞬态、健康还是 unknown)→ 挂一个后台 waitReady
+ * (与 SSE 暂停共用一条探针环),转好时:connect 失败过 → 再 connect 一次;已连上 → 放开轮询(lastUnitPollAt 归零,下一拍就拉带外消息)。
+ * 提示条说的「恢复连接后会自动继续」不能只靠「恰好有 SSE 在等 / connect 失败时挂的那个等待者」(K6-S2 评审 F1:
+ * 空闲时一次 502 就让轮询永久停摆)。终局态不挂(R-32 不无限重试;手动出口 = retryFocusTarget / 再选一次同一台)。
+ */
+function ensureFocusRecovery(): void {
+  if (focusRef().kind !== 'unit') return
+  const signal = focusAbort.signal
+  if (focusRecovery?.signal === signal) return
+  const key = focusKey()
+  const h = healthOf(key)
+  if (h.state === 'ready' || isTerminal(h)) return
+  const handle = { signal }
+  focusRecovery = handle
+  waitReady(key, signal).then(() => {
+    if (signal.aborted || focusKey() !== key) return
+    lastUnitPollAt = 0
+    // 只接「连过、失败了」的:idle = 正在连(refocus / boot 的 connect 在飞),不插第二条
+    const st = useApp.getState()
+    if (st.connState === 'err') void st.connect(st.cfg)
+  }, () => { /* 中止(换了焦点)或转成终局(提示条给「重试」)*/ }).finally(() => { if (focusRecovery === handle) focusRecovery = null })
+}
 /** 换焦点前 home 的家目录 / 默认工作区(web / 手机上本就为空;桌面不会有 unit 焦点)。回 home 时还原。 */
 let homeProfile: { homeDir: string | undefined; defaultWsDir: string } | null = null
 /** unit 焦点的「上次用的模型」(按设备记):手机自己的 cfg.modelId 在那台电脑上未必存在。 */
@@ -1794,12 +1830,10 @@ export const useApp = create<AppState>((set, get) => ({
         void setFocusTarget(HOME_REF).catch(() => {})
       }
       // 可恢复的(不在线 / 引擎没起 / 限流 / 网关 5xx):提示说了「恢复连接后会自动继续」就得真的自己连回去 ——
-      // 等这台的健康探针转好(退避探 /health,回前台 / 网络恢复会提前探)再 connect 一次;期间换了焦点 / 又有新的 connect 就作废。
+      // 挂到焦点代的后台等恢复上(探针转好再 connect 一次;换了焦点即中止,不再探旧那台)。瞬态不写健康表(还是 unknown),
+      // 健康表的订阅看不见它,所以这里显式挂;终局(设备移除 / 身份 / 拒绝)由提示条说明、给重试,不自动重连。
       if (onUnit && (r.verdict === 'offline' || r.verdict === 'engine-unavailable' || r.verdict === 'rate-limited' || r.verdict === 'transient')) {
-        const key = focusKey()
-        void waitReady(key).then(() => {
-          if (latest() && focusRef().kind === 'unit' && focusKey() === key) void get().connect(get().cfg)
-        }).catch(() => { /* 终局(设备移除 / 身份 / 拒绝)由提示条说明,不自动重连 */ })
+        ensureFocusRecovery()
       }
       return
     }
@@ -2075,6 +2109,7 @@ export const useApp = create<AppState>((set, get) => ({
         set({ desktopConfig: c, cfg: effective })
         // P1-K6 S2:焦点按账号落盘 —— 换了号就读新账号的那份(没有 = home);绑定表 / 健康 / 目录缓存都是上个账号的
         clearSessionBindings()
+        endFocusGeneration()
         resetHealth()
         forgetCatalog()
         const prevFocus = focusRef()
@@ -2161,7 +2196,7 @@ export const useApp = create<AppState>((set, get) => ({
     // P1-K6 S2:焦点在「我的电脑」→ 每 12s 一次(bootstrap 的全局轮询是 4s;经 hub 的请求吃全局限流),不健康时暂停。
     // 不因 SSE 在线而跳过:它还负责拉带外消息(有人在那台电脑本机往同一会话打字)。
     if (focusRef().kind === 'unit') {
-      if (focusUnhealthy()) return
+      if (focusUnhealthy()) { ensureFocusRecovery(); return } // 暂停,但确保有人在等它恢复(兜底;健康表订阅通常已挂上)
       const now = Date.now()
       if (now - lastUnitPollAt < UNIT_POLL_MS) return
       lastUnitPollAt = now
@@ -3479,6 +3514,10 @@ async function refocusEngine(next: TargetRef, prev: TargetRef): Promise<void> {
   if (next.kind === 'unit') resetHealth(targetKeyOf(next))
   runAborts.forEach((controller) => controller.abort())
   runAborts.clear()
+  // 旧焦点的后台等恢复 / connect 挂的等待者一并撤掉(SSE 的暂停已随上面的 abort 撤掉)→ 探针环没人等,当场收工(在飞的探针也撤);
+  // 离开的那台健康格清掉(没人再探它,留着就是过期的「离线」给 K3 / K7 读)。gone 是永久事实,留着。
+  endFocusGeneration()
+  if (prev.kind === 'unit' && !sameRef(prev, next) && healthOf(targetKeyOf(prev)).state !== 'gone') resetHealth(targetKeyOf(prev))
   subscribedRuns.clear()
   stoppedRuns.clear()
   runWatchdogs.forEach((wd) => clearInterval(wd))
@@ -3529,9 +3568,34 @@ function backfillSessionConfig(sessionId: string, init: AgentConfig): Promise<un
   return api.putSessionConfig(cfg, sessionId, init).catch(() => {})
 }
 
+/**
+ * 焦点没换、手动重试那台(setFocusTarget(同一台) / retryFocusTarget;K8 UnitsSheet 再点一次同一台、提示条的「重试」):
+ * 没连上 → connect(testConnection 本身就是一次探针,结果写回健康表);已连上但健康不是 ready(终局 / 离线)→ 探一次,
+ * 转好了轮询自己续上。已连上且健康 → 什么都不做。终局态只在这里由用户触发重试(R-32)。
+ */
+async function reconnectFocus(ref: TargetRef): Promise<void> {
+  if (ref.kind !== 'unit' || !sameRef(focusRef(), ref)) return
+  const key = focusKey()
+  const st = useApp.getState()
+  if (st.connState !== 'ok') { await st.connect(st.cfg); return }
+  if (healthOf(key).state === 'ready') return
+  const h = await probeTarget(focusTarget()).catch(() => null)
+  if (h?.state === 'ready' && sameRef(focusRef(), ref)) lastUnitPollAt = 0
+}
+
 // P1-K6:引擎目标解析层读本端连接配置的唯一接缝(homeTarget / knownTargets / cloudApiBase 每次现读);
-// S2 起还接 setFocusTarget 的宿主半身(refocus)。
-installEngineHost({ cfg: () => useApp.getState().cfg, desktopConfig: () => useApp.getState().desktopConfig, refocus: refocusEngine })
+// S2 起还接 setFocusTarget 的宿主半身(refocus)与焦点不变时的手动重试(reconnect)。
+installEngineHost({ cfg: () => useApp.getState().cfg, desktopConfig: () => useApp.getState().desktopConfig, refocus: refocusEngine, reconnect: reconnectFocus })
+
+// 焦点那台的健康格被任何人(轮询 / 服务层 / SSE / 探针)写进可恢复态 → 确保有个后台等恢复(评审 F1:
+// 空闲时一次 502、或 run 进行中并行请求吃到 504,原先只要没有 SSE 恰好在等,就再也没人把它写回 ready)。
+useTargetHealth.subscribe((s, prev) => {
+  if (focusRef().kind !== 'unit') return
+  const key = focusKey()
+  const h = s.byKey[key]
+  if (!h || h === prev.byKey[key] || !isRecoverable(h)) return
+  ensureFocusRecovery()
+})
 
 /** steer 被引擎受理后的等待区落位(Codex 评审 #1):turn_boundary 走 SSE,可能抢在 POST 响应之前
  *  到达——消息已上屏、或 run 已易主/终结时**不进等待区**(否则 chip 永久残留,run 终结还会把已

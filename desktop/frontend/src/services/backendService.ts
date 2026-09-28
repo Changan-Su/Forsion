@@ -9,7 +9,7 @@ import type {
 import { authFetch } from './http'
 import { asTarget, fetchOpts, routeSession, type EngineArg, type EngineTarget } from './engine/targets'
 import { targetCaps, type TargetCaps } from './engine/targetCaps'
-import { classify, noteVerdict } from './engine/health'
+import { classify, noteReachable, noteVerdict } from './engine/health'
 import './engine/messages'
 import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
@@ -43,13 +43,25 @@ async function request<T>(cfg: EngineArg, path: string, init?: RequestInit, opts
     if (t.via === 'unit') {
       const hubCode = typeof j?.code === 'string' ? j.code : undefined
       const v = classify(r.status, j)
-      noteVerdict(t.key, v, hubCode ? { code: hubCode } : {})
+      // 执行设备的拒绝码(K4 REMOTE_SESSIONS_OFF / REMOTE_CALLER_UNCONFIRMED 只拒 session 层;K2 REMOTE_LOCKED 只拒非 GET)
+      // 是**这一条请求**的事,读照常放行(K4 文案本身就说「可以查看、回答审批和停止任务」)—— 与 local-only / 413 同理
+      // 不写健康表;写成整台 refused 会让轮询停摆、提示条卡住,那台点了「允许」/ 解锁之后也没人把它清掉。
+      if (v !== 'refused') noteVerdict(t.key, v, hubCode ? { code: hubCode } : {})
       const msg = unitFailureMessage(t, v, hubCode)
       if (msg && v !== 'fatal' && v !== 'local-only') { detail = msg; if (hubCode) code = hubCode }
     }
     throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
   }
+  if (t.via === 'unit') noteReachable(t.key) // 2xx:这台此刻是通的(离线类不必干等探针,见 health.noteReachable)
   return r.json() as Promise<T>
+}
+
+/** 头像 / 项目图标这类 blob 的 GET。home 与改造前逐字一致(两参);非 home 带目标键,让 401 拦截器知道是哪台拒的
+ *  (§3.5 的 401 单一路径 —— 漏了第三参,unit 的 401 会被当成 home 的走本机过期流程)。 */
+async function blobFetch(t: EngineTarget, url: string): Promise<Response> {
+  const init = { headers: await t.headers(true) }
+  const o = fetchOpts(t)
+  return o ? authFetch(url, init, o) : authFetch(url, init)
 }
 
 // ── P1-K6 S2:会话类路由(§3.3)──
@@ -145,7 +157,7 @@ export const deleteTeamAvatar = (cfg: EngineArg, slug: string) =>
 export async function fetchTeamAvatar(cfg: EngineArg, slug: string): Promise<string | null> {
   try {
     const t = asTarget(cfg)
-    const response = await authFetch(`${t.base}/agent/teams/${encodeURIComponent(slug)}/avatar`, { headers: await t.headers(true) })
+    const response = await blobFetch(t, `${t.base}/agent/teams/${encodeURIComponent(slug)}/avatar`)
     if (!response.ok) return null
     return URL.createObjectURL(await response.blob())
   } catch { return null }
@@ -645,7 +657,7 @@ export const deleteAgentAvatar = (cfg: EngineArg, slug: string) =>
 export async function fetchAgentAvatar(cfg: EngineArg, slug: string): Promise<string | null> {
   try {
     const t = asTarget(cfg)
-    const r = await authFetch(`${t.base}/agent/agents/${encodeURIComponent(slug)}/avatar`, { headers: await t.headers(true) })
+    const r = await blobFetch(t, `${t.base}/agent/agents/${encodeURIComponent(slug)}/avatar`)
     if (!r.ok) return null
     return URL.createObjectURL(await r.blob())
   } catch { return null }
@@ -1174,7 +1186,7 @@ export async function fetchProjectIcon(cfg: EngineArg, ref: { sessionId: string 
   try {
     const q = 'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`
     const t = asTarget(cfg)
-    const response = await authFetch(`${t.base}/agent/project-context/icon?${q}`, { headers: await t.headers(true) })
+    const response = await blobFetch(t, `${t.base}/agent/project-context/icon?${q}`)
     if (!response.ok) return null
     return URL.createObjectURL(await response.blob())
   } catch { return null }

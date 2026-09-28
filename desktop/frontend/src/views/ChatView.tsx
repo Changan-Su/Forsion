@@ -675,7 +675,10 @@ export function ChatView({ leaf, params }: ViewProps) {
             />
           ) : undefined}
           advisory={!params.childSurface ? (
-            // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)
+            // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
+            // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
+            //    接管这一格 —— 要么收编 TargetHealthNotice(读同一张 useTargetHealth、同一个 retryFocusTarget),要么换成自己的条并把
+            //    这里还原成裸 QuotaAdvisoryBanner;下面 disabledPlaceholder 的 targetPlaceholder 随 K7 的 remoteBlocked 一起并过去。
             <TargetHealthNotice fallback={
               <QuotaAdvisoryBanner
                 loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}

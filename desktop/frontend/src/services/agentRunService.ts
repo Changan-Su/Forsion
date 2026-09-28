@@ -10,7 +10,7 @@ import { authFetch } from './http'
 import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 import { asTarget, fetchOpts, isEngineTarget, routeSession, targetLabel, type EngineArg, type EngineTarget } from './engine/targets'
-import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteVerdict, waitReady, type Verdict } from './engine/health'
+import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, noteVerdict, waitReady, type Verdict } from './engine/health'
 import { remoteRefusalMessage } from './localOnly'
 import './engine/messages'
 import { currentPlatform } from './platform'
@@ -31,7 +31,10 @@ async function engineRequest(cfg: EngineArg, path: string, init: RequestInit = {
   const t = routeSession(cfg)
   const req = { ...init, headers: await t.headers(true) }
   const o = fetchOpts(t, opts?.timeoutMs)
-  return o ? authFetch(`${t.base}${path}`, req, o) : authFetch(`${t.base}${path}`, req)
+  const r = await (o ? authFetch(`${t.base}${path}`, req, o) : authFetch(`${t.base}${path}`, req))
+  // unit 的带鉴权请求 2xx → 这台此刻是通的(与 backendService.request 同口径)。/health 不鉴权(令牌漂了照样 200),不算数。
+  if (t.via === 'unit' && r.ok && path !== '/health') noteReachable(t.key)
+  return r
 }
 
 /**

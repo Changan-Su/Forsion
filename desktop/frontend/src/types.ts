@@ -1261,9 +1261,11 @@ declare global {
       secretStorageResetUnitPairing?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       /** 只在 restartRequired 时放行:重启 Forsion(进程内的重试救不回钥匙串被拒绝)。 */
       secretStorageRelaunch?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
-      // P1-K6 ── unit 目标的调用方头接缝(INTEGRATION R-05;消费方 services/engine/targets.ts,K6-S2 在此声明,K8 勿重复声明)──
+      // P1-K6 ── unit 目标的调用方头接缝(INTEGRATION R-05;§2.2 把声明记在 K8 的块里,消费方 services/engine/targets.ts 先落地,
+      //   所以 K6-S2 先在这里声明)。⚠️ 保持**方法签名**:K8 合入时在自己的块里再声明一次(方法或属性签名皆可)= 重载合并,
+      //   不报 TS2300(tsc 实测:只有「属性 + 属性」才重复标识符);K8 合入后二者留一即可,这一条可删。──
       /** 手机原生层给经 hub 隧道打「我的电脑」的请求现取调用方头(只认 `X-Forsion-Caller`)。K8 **桥模式**才实现;
-       *  中继模式缺省(原生层自己附头)→ 渲染层不带头。实现抛错 / 拒绝 = 失败关闭,请求不发。 */
+       *  中继模式缺省(原生层自己附头)→ 渲染层不带头。实现了却抛错 / 拒绝 / 给不出有效的 X-Forsion-Caller = 失败关闭,请求不发。 */
       unitCallerHeaders?(unitId: string): Promise<Record<string, string>>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>

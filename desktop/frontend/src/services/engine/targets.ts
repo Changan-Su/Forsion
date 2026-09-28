@@ -47,6 +47,9 @@ export interface EngineHost {
   desktopConfig(): Partial<StoredDesktopConfig> | null
   /** S2:焦点换了之后宿主(appStore)清引擎作用域状态并按新焦点重连。setFocusTarget 等它做完才 resolve。 */
   refocus?(next: TargetRef, prev: TargetRef): Promise<void>
+  /** S2:焦点**没换**、但那台现在连不上 / 健康态不是 ready(终局态不自动重试,R-32)时的手动出口:没连上 → 重连;
+   *  已连上但健康不好 → 探一次。setFocusTarget(同一台)与 retryFocusTarget() 都走它;不清任何状态。 */
+  reconnect?(ref: TargetRef): Promise<void>
 }
 let host: EngineHost | null = null
 export function installEngineHost(h: EngineHost): void {
@@ -326,17 +329,22 @@ export function callerUnavailableError(cause?: unknown): Error {
 
 /**
  * 每个请求现取调用方头(R-05:含每次 SSE 重连;caller token 会轮换)。
- * - 宿主没有 `unitCallerHeaders`(K8 中继模式缺省、web)→ 不带头 = hub 眼里的「账号级未识别调用方」;
- * - 有但抛错 / 拒绝 → **失败关闭**:抛 CALLER_UNAVAILABLE,请求不发(绝不静默降级成匿名)。
+ * - 宿主没有 `unitCallerHeaders`(K8 中继模式缺省、web)→ 不带头 = hub 眼里的「账号级未识别调用方」(缺席是设计);
+ * - 有,但抛错 / 拒绝,**或给不出一个有效的 `X-Forsion-Caller`**(`{}` / 非对象 / 空串 / 错键 / 带换行被丢)→
+ *   **失败关闭**:抛 CALLER_UNAVAILABLE,请求不发。桥装着就说明这台手机是按已登记设备的身份在连,只带 Bearer 照发 =
+ *   静默降级成账号级未识别调用方,绕开那台电脑按调用方的信任 / 确认(INTEGRATION §4.2「失败关闭」、K8 S4)。
  * ⚠️ 门控字面量逐字写成 `window.tangu?.unitCallerHeaders`(platform-parity 的 D 段靠正则扫它)。
  */
 async function callerHeadersFor(unitId: string): Promise<Record<string, string>> {
   if (typeof window === 'undefined' || typeof window.tangu?.unitCallerHeaders !== 'function') return {}
+  let picked: Record<string, string>
   try {
-    return pickCallerHeaders(await window.tangu.unitCallerHeaders(unitId))
+    picked = pickCallerHeaders(await window.tangu.unitCallerHeaders(unitId))
   } catch (e) {
     throw callerUnavailableError(e)
   }
+  if (!picked['X-Forsion-Caller']) throw callerUnavailableError(new Error('unitCallerHeaders returned no usable X-Forsion-Caller'))
+  return picked
 }
 
 /** unit 目标只经 bareHeaders 拿「不带调用方头」的 Bearer(设备辅助面用)。 */
@@ -479,7 +487,8 @@ let focusSeq = 0
 /**
  * 把整端切到某个位置(S2 = 设计文档「最小切片」;K8 的 UnitsSheet「在哪运行」、K7 之前的唯一入口)。
  * - 校验:位置形状(未知 kind 抛 TypeError);unit 须 `targetForRef` 能解析(否则抛 TARGET_UNSUPPORTED,焦点不动);
- * - 同一个位置是幂等的(只更新展示名);
+ * - 同一个位置不清任何状态(只更新展示名);是 unit 时再交给宿主 reconnect —— 那台没连上 / 健康不是 ready 就重连或探一次
+ *   (终局态不自动重试,「再选一次同一台」就是用户的手动重试;已连上且健康时 reconnect 什么都不做);
  * - 先改焦点、落盘、通知订阅者,再交给宿主 refocus(清引擎作用域状态 → 按新焦点重连),等它做完才 resolve。
  *   连续切换时只有最后一次的 refocus 有意义,宿主按 authGeneration 丢弃过期结果。
  */
@@ -495,6 +504,7 @@ export async function setFocusTarget(ref: TargetRef, opts: { name?: string | nul
       useEngineFocus.setState({ ref: prev, name })
       persistFocus({ ref: prev, name })
     }
+    if (next.kind === 'unit') await host?.reconnect?.(prev)
     return
   }
   const state: FocusState = { ref: next, name }
@@ -505,6 +515,15 @@ export async function setFocusTarget(ref: TargetRef, opts: { name?: string | nul
     try { cb(next, prev) } catch { /* 订阅者自己的错不拦焦点切换 */ }
   }
   if (seq === focusSeq) await host?.refocus?.(next, prev)
+}
+
+/**
+ * 焦点那台的手动重试(连接态提示的「重试」、K8 UnitsSheet 等):没连上 → 重连;已连上但健康不是 ready → 探一次。
+ * 焦点在本端 → 什么都不做。终局态(身份取不到 / 引擎拒了凭据 / 拒绝)不自动重试(R-32),只经这里由用户触发。
+ */
+export async function retryFocusTarget(): Promise<void> {
+  const f = focusRef()
+  if (f.kind === 'unit') await host?.reconnect?.(f)
 }
 
 /** @internal 测试 / 账号切换:焦点回 home,不落盘、不触发 refocus。 */

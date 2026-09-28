@@ -146,10 +146,15 @@ describe('setFocusTarget(S2 整端切换)', () => {
       if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
       if (url.includes('/agent/models')) return { status: 200, body: { models: [{ id: 'mac-model', name: 'Mac' }], defaultModelId: 'mac-model' } }
       if (url.includes('/unit/config')) return { status: 200, body: { config: { homeDir: '/Users/mac', defaultWorkspaceDir: '/Users/mac/Forsion' } } }
+      // 带头像的 Agent / 团队:头像 blob 拉取也得带目标键(评审 F5:三个 fetch*Avatar/Icon 漏了第三参 → 401 被当成 home 的)
+      if (url.endsWith('/agent/agents')) return { status: 200, body: { agents: [{ slug: 'ava', name: 'Ava', avatar: 'avatar.png' }] } }
+      if (url.endsWith('/agent/teams')) return { status: 200, body: { teams: [{ slug: 'crew', name: 'Crew', members: [], avatar: 'avatar.png' }] } }
       return { status: 200, body: {} }
     }
     await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
     await vi.waitFor(() => expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1']))
+    await vi.waitFor(() => expect(calls.some((c) => c.url === `${UNIT}/agent/agents/ava/avatar`)).toBe(true))
+    await vi.waitFor(() => expect(calls.some((c) => c.url === `${UNIT}/agent/teams/crew/avatar`)).toBe(true))
     expect(useApp.getState().connState).toBe('ok')
     expect(H.healthOf(`unit:${U}`).state).toBe('ready')
     expect(calls.some((c) => c.url === `${UNIT}/health`)).toBe(true)
@@ -265,4 +270,93 @@ describe('setFocusTarget(S2 整端切换)', () => {
     await vi.waitFor(() => expect(T.focusRef()).toEqual({ kind: 'home' }))
     expect(H.healthOf(`unit:${U}`).state).toBe('gone')
   })
+})
+
+// 评审(K6-S2 第二轮):焦点那台的健康态一旦掉到离线类,恢复不能只靠「恰好有 SSE 在等 / connect 失败时挂的那个等待者」。
+describe('焦点那台的健康态自愈(评审 F1 / F2 / F3)', () => {
+  const KEY = `unit:${U}` as const
+  /** 一台正常的 Mac:会话 mac-1、消息空、没有在飞的 run;down=true 时隧道断(hub 502)。 */
+  const macRouter = (state: { down: boolean }) => (url: string): Reply => {
+    if (url.startsWith(`${API}/units/`) && state.down) return { status: 502, body: { code: 'UNIT_DISCONNECTED', detail: 'Unit disconnected' } }
+    if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+    if (url.startsWith(UNIT) && url.includes('/agent/sessions?archived=false')) return { status: 200, body: { sessions: [sessionRec('mac-1')] } }
+    if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
+    if (url.includes('/agent/sessions/mac-1/messages')) return { status: 200, body: { messages: [] } }
+    if (url.includes('/agent/runs?session_id')) return { status: 200, body: { runs: [] } }
+    return { status: 200, body: {} }
+  }
+
+  it('F1 空闲时(没有在飞的 run)一次 502 → 不点重试、不发消息:健康自己回 ready,轮询自己续上', async () => {
+    const state = { down: false }
+    router = macRouter(state)
+    await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+    expect(useApp.getState().connState).toBe('ok')
+    useApp.setState({ activeId: 'mac-1' })
+    state.down = true
+    await useApp.getState().pollSession('mac-1') // listMessages 吃到 502 UNIT_DISCONNECTED
+    expect(H.healthOf(KEY).state).toBe('offline')
+    state.down = false // 那台电脑 / 隧道回来了
+    await vi.waitFor(() => expect(H.healthOf(KEY).state).toBe('ready'), { timeout: 8000, interval: 100 })
+    const at = calls.length
+    await useApp.getState().pollSession('mac-1') // bootstrap 的下一次 4s 轮询
+    expect(calls.slice(at).some((c) => c.url.startsWith(`${UNIT}/agent/sessions/mac-1/messages`))).toBe(true)
+  }, 15_000)
+
+  it('F1 谁写的离线都一样(run 进行中并行请求吃了 504、SSE 本身没断 → 没人暂停等待):探针转好自己回 ready', async () => {
+    router = macRouter({ down: false })
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    expect(H.healthOf(KEY).state).toBe('ready')
+    H.noteVerdict(KEY, 'offline', { code: 'UNIT_TIMEOUT' })
+    await vi.waitFor(() => expect(H.healthOf(KEY).state).toBe('ready'), { timeout: 8000, interval: 100 })
+  }, 15_000)
+
+  it('F2 焦点离开一台离线的电脑 → 不再经 hub 探它,健康表也不留它的离线格', async () => {
+    router = (url) => {
+      if (url.startsWith(`${API}/units/`)) return { status: 503, body: { code: 'UNIT_OFFLINE', detail: 'Unit offline' } }
+      if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
+      return { status: 200, body: {} }
+    }
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    expect(useApp.getState().connState).toBe('err') // connect 失败 → 挂了等恢复
+    await T.setFocusTarget({ kind: 'home' })
+    expect(useApp.getState().connState).toBe('ok')
+    const at = calls.length
+    await new Promise((r) => setTimeout(r, 2600)) // 越过探针退避的第一档(2s)
+    expect(calls.slice(at).filter((c) => c.url.startsWith(`${API}/units/`)).map((c) => c.url)).toEqual([])
+    expect(H.useTargetHealth.getState().byKey[KEY]).toBeUndefined()
+  }, 10_000)
+
+  it('F3 会话级拒绝(403 REMOTE_CALLER_UNCONFIRMED pending)只拒这一条:健康不变、轮询照常(读仍放行)', async () => {
+    const state = { down: false }
+    const base = macRouter(state)
+    router = (url, method) => (method === 'POST' && url === `${UNIT}/agent/sessions`
+      ? { status: 403, body: { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'pending', detail: 'Waiting for confirmation' } }
+      : base(url))
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    useApp.setState({ activeId: 'mac-1' })
+    const api = await import('../services/backendService')
+    await expect(api.createSession(T.focusTarget(), { title: 'x' })).rejects.toMatchObject({ status: 403, code: 'REMOTE_CALLER_UNCONFIRMED' })
+    expect(H.healthOf(KEY).state).toBe('ready')
+    const at = calls.length
+    await useApp.getState().pollSession('mac-1')
+    expect(calls.slice(at).some((c) => c.url.startsWith(`${UNIT}/agent/sessions/mac-1/messages`))).toBe(true)
+  })
+
+  it('F3 终局(调用方身份取不到)不自动重试(R-32);再选一次同一台(K8 UnitsSheet)= 重连', async () => {
+    let callerOk = false
+    const base = macRouter({ down: false })
+    router = (url) => (url.startsWith(`${API}/units/`) && !callerOk ? { status: 503, body: { code: 'CALLER_UNAVAILABLE', detail: 'x' } } : base(url))
+    await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+    expect(useApp.getState().connState).toBe('err')
+    expect(H.healthOf(KEY).state).toBe('caller-unavailable')
+    callerOk = true // 换票的网络抖动过去了
+    const at = calls.length
+    await new Promise((r) => setTimeout(r, 2300))
+    expect(calls.slice(at).filter((c) => c.url.startsWith(`${API}/units/`))).toEqual([]) // 不无限重试
+    await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+    await vi.waitFor(() => expect(useApp.getState().connState).toBe('ok'))
+    expect(H.healthOf(KEY).state).toBe('ready')
+    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1'])
+  }, 10_000)
 })

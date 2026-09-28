@@ -336,11 +336,25 @@ describe('S2 · unit 目标与焦点', () => {
     expect(b['X-Forsion-Caller']).toBe(`fuc1.${U}.2`) // 轮换的 caller token 不缓存
   })
 
-  it('调用方头带换行(头注入)一律丢;桥抛错 → 失败关闭(CALLER_UNAVAILABLE),不带头也不发', async () => {
-    phone({ unitCallerHeaders: async () => ({ 'X-Forsion-Caller': 'a\r\nX-Evil: 1' }) })
-    expect(await T.targetForRef({ kind: 'unit', unitId: U })!.headers()).not.toHaveProperty('X-Forsion-Caller')
-    T.resetFocusForTests()
+  it('桥抛错 → 失败关闭(CALLER_UNAVAILABLE),不带头也不发', async () => {
     phone({ unitCallerHeaders: async () => { throw new Error('keystore locked') } })
+    const t = T.targetForRef({ kind: 'unit', unitId: U })!
+    await expect(t.headers()).rejects.toMatchObject({ code: 'CALLER_UNAVAILABLE', status: 503 })
+    await expect(T.engineFetch(t, '/agent/sessions')).rejects.toMatchObject({ code: 'CALLER_UNAVAILABLE' })
+    expect(authFetch).not.toHaveBeenCalled()
+  })
+
+  // 评审 F4:桥装了(K8 桥模式)却给不出一个有效的 X-Forsion-Caller —— 原先照发只带 Bearer 的请求,
+  // 已登记的手机被静默降级成「账号级未识别调用方」,绕开那台电脑按调用方的信任 / 确认。缺席(没装桥)才是「不带头」。
+  it.each([
+    ['空对象(原生层还没登记完)', async () => ({})],
+    ['null', async () => null],
+    ['非对象', async () => 'fuc1.x.y'],
+    ['空串', async () => ({ 'X-Forsion-Caller': '' })],
+    ['错键', async () => ({ 'X-Caller': 'fuc1.x.y' })],
+    ['值带换行(头注入)', async () => ({ 'X-Forsion-Caller': 'a\r\nX-Evil: 1' })],
+  ])('桥给不出有效调用方头(%s)→ 同样失败关闭,绝不降级成匿名', async (_label, bridge) => {
+    phone({ unitCallerHeaders: bridge })
     const t = T.targetForRef({ kind: 'unit', unitId: U })!
     await expect(t.headers()).rejects.toMatchObject({ code: 'CALLER_UNAVAILABLE', status: 503 })
     await expect(T.engineFetch(t, '/agent/sessions')).rejects.toMatchObject({ code: 'CALLER_UNAVAILABLE' })

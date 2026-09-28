@@ -120,3 +120,70 @@ describe('hub 的失败给人话 + 记健康', () => {
     if (health) expect(H.healthOf(`unit:${U}`).state).toBe(health)
   })
 })
+
+// 评审(K6-S2 第二轮)
+describe('健康表只记「这台能不能用」:成功即 ready、会话级拒绝只拒这一条(评审 F1 / F3)', () => {
+  const KEY = `unit:${U}` as const
+  it('unit 请求成功 → 记 ready(一次 502 之后不必干等探针);agentRunService 的请求同口径', async () => {
+    router = () => ({ status: 502, body: { code: 'UNIT_DISCONNECTED', detail: 'x' } })
+    await expect(api.listMessages(home, 's1')).rejects.toBeTruthy()
+    expect(H.healthOf(KEY).state).toBe('offline')
+    router = () => ({ status: 200, body: { messages: [] } })
+    await api.listMessages(home, 's1')
+    expect(H.healthOf(KEY).state).toBe('ready')
+    H.noteVerdict(KEY, 'offline')
+    router = () => ({ status: 200, body: { runs: [] } })
+    const { listActiveRuns } = await import('./agentRunService')
+    await listActiveRuns(home, 's1')
+    expect(H.healthOf(KEY).state).toBe('ready')
+  })
+
+  it('/health 的 200 不算数(不鉴权:令牌漂了照样 200)—— 带鉴权的探针 401 时健康不能被它写成 ready', async () => {
+    H.noteVerdict(KEY, 'offline')
+    router = (url) => (url.endsWith('/health') ? { status: 200, body: { ok: true } } : { status: 401, body: {} })
+    const { testConnection } = await import('./agentRunService')
+    const r = await testConnection(T.focusTarget())
+    expect(r.authRejected).toBe(true)
+    expect(H.healthOf(KEY).state).not.toBe('ready')
+  })
+
+  it('成功也不复活被移除的设备(gone 是永久的)', async () => {
+    H.noteVerdict(KEY, 'gone')
+    router = () => ({ status: 200, body: { messages: [] } })
+    await api.listMessages(home, 's1')
+    expect(H.healthOf(KEY).state).toBe('gone')
+  })
+
+  it.each([
+    [403, 'REMOTE_CALLER_UNCONFIRMED', { state: 'pending' }],
+    [403, 'REMOTE_SESSIONS_OFF', {}],
+    [423, 'REMOTE_LOCKED', {}],
+  ])('%i %s 按层 / 按方法拒(K4 base 层与 K2 的 GET 照常放行)→ 给人话,但不把整台判成 refused', async (status, code, extra) => {
+    H.noteVerdict(KEY, 'ok')
+    router = (_url, method) => (method === 'POST' ? { status, body: { code, detail: 'english detail', ...extra } } : { status: 200, body: { messages: [] } })
+    const { unitFailureMessage } = await import('./agentRunService')
+    const t = T.focusTarget() // 建会话是目录类:appStore 显式传焦点目标(catalogArg)
+    await expect(api.createSession(t, { title: 'x' })).rejects.toMatchObject({ status, code, message: unitFailureMessage(t, 'refused', code)! })
+    expect(H.healthOf(KEY).state).toBe('ready')
+    await api.listMessages(home, 's1') // 读照常(K4 base 层 / K2 锁定时的 GET 都放行)
+    expect(H.healthOf(KEY).state).toBe('ready')
+  })
+})
+
+describe('头像 / 项目图标的 blob 拉取也带目标键(§3.5 的 401 单一路径;评审 F5)', () => {
+  it('unit → 第三参带 target;home → 与改造前一样不带', async () => {
+    const t = T.focusTarget()
+    await api.fetchAgentAvatar(t, 'ava')
+    await api.fetchTeamAvatar(t, 'crew')
+    await api.fetchProjectIcon(t, { sessionId: 's1' })
+    expect(calls.map((c) => [c.url.startsWith(`${UNIT}/agent/`), (c.opts as { target?: string } | undefined)?.target])).toEqual([
+      [true, `unit:${U}`], [true, `unit:${U}`], [true, `unit:${U}`],
+    ])
+    calls.length = 0
+    await T.setFocusTarget({ kind: 'home' })
+    await api.fetchAgentAvatar(home, 'ava')
+    await api.fetchTeamAvatar(home, 'crew')
+    await api.fetchProjectIcon(home, { cwd: '/p' })
+    expect(calls.map((c) => [c.url.startsWith(`${API}/agent/`), c.opts])).toEqual([[true, undefined], [true, undefined], [true, undefined]])
+  })
+})

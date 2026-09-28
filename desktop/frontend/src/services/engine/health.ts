@@ -24,7 +24,8 @@ export type Verdict =
   | 'gone' // 设备不属于本人 / 已移除
   | 'local-only' // 403 LOCAL_ONLY:这条路由远端不许
   | 'caller-unavailable' // 调用方身份取不到 / 验不过(R-32)
-  | 'refused' // 执行设备拒绝远程会话 / 已急停锁定(K4 / K2 的码)
+  | 'refused' // 执行设备拒绝远程会话 / 已急停锁定(K4 / K2 的码)。按层 / 按方法拒(读照常放行):服务层把它当这一条请求的事,
+  //             只有 GET 探针 / 事件流(本该放行的读)也被拒时才写进健康表
   | 'too-large' // 413 UNIT_BODY_TOO_LARGE
   | 'fatal' // 其它 4xx
 
@@ -72,9 +73,12 @@ export type TargetHealth =
   | { state: 'offline' | 'engine-unavailable' | 'engine-auth' | 'rate-limited' | 'caller-unavailable' | 'refused'; since: number; retryAt?: number; code?: string }
   | { state: 'gone' }
 
-/** 终局态:等不回来,waitReady 直接拒;SSE / 轮询见它就收尾。 */
+/** 终局态:等不回来,waitReady 直接拒;SSE / 轮询见它就收尾。不自动重试(R-32),手动出口是 targets.retryFocusTarget。 */
 export const TERMINAL_STATES: ReadonlySet<TargetHealthState> = new Set(['gone', 'caller-unavailable', 'engine-auth', 'refused'])
 export const isTerminal = (h: TargetHealth): boolean => TERMINAL_STATES.has(h.state)
+/** 可恢复态:探针退避等它自己好(焦点那台掉进来时宿主挂一个后台 waitReady,不靠「恰好有 SSE 在等」)。 */
+export const RECOVERABLE_STATES: ReadonlySet<TargetHealthState> = new Set(['offline', 'engine-unavailable', 'rate-limited'])
+export const isRecoverable = (h: TargetHealth): boolean => RECOVERABLE_STATES.has(h.state)
 
 export const useTargetHealth = create<{ byKey: Partial<Record<TargetKey, TargetHealth>> }>(() => ({ byKey: {} }))
 
@@ -105,6 +109,16 @@ export function noteVerdict(key: TargetKey, v: Verdict, extra: { retryAt?: numbe
     case 'gone': noteHealth(key, { state: 'gone' }); return
     default: return
   }
+}
+
+/**
+ * 一条**带鉴权**的 unit 请求拿到 2xx:hub、隧道、那台的引擎、凭据、调用方身份此刻都通 → 记 ready(一次 502 之后
+ * 不必干等探针;轮询 / 看门狗随之解除暂停)。不复活 gone(设备 id 不会回来)。
+ * ⚠️ 别拿 `/health` 的 200 调它:那条不鉴权,令牌漂了照样 200(testConnection 的注释)—— 调用方负责排除。
+ */
+export function noteReachable(key: TargetKey): void {
+  if (healthOf(key).state === 'gone') return
+  noteVerdict(key, 'ok')
 }
 
 /** @internal 焦点切换 / 测试:清一格或全部。 */
@@ -152,8 +166,16 @@ export async function probeTarget(t: EngineTarget, signal?: AbortSignal): Promis
 }
 
 // ── 等恢复 ──
-/** 探针退避:2 → 4 → 8 → 16 → 30s 封顶。 */
+/** 探针退避:2 → 4 → 8 → 16 → 30s 封顶。限流态另有 retryAt 时至少睡到那一刻(别在 429 的 hub 上按 2/4/8s 追打)。 */
 export const PROBE_BACKOFF_MS = [2000, 4000, 8000, 16000, 30000] as const
+const RETRY_AT_CAP_MS = 120_000
+
+function probeDelay(key: TargetKey, i: number): number {
+  const backoff = PROBE_BACKOFF_MS[Math.min(i, PROBE_BACKOFF_MS.length - 1)]
+  const h = healthOf(key)
+  const until = h.state === 'rate-limited' && 'retryAt' in h && h.retryAt ? h.retryAt - Date.now() : 0
+  return Math.max(backoff, Math.min(until, RETRY_AT_CAP_MS))
+}
 
 function refOfKey(key: TargetKey): TargetRef {
   return key === 'home' ? { kind: 'home' } : { kind: 'unit', unitId: key.slice('unit:'.length) }
@@ -198,31 +220,34 @@ export function healthError(h: TargetHealth): Error {
   return Object.assign(new Error(`Engine target ${h.state}`), { code, health: h.state })
 }
 
-const loops = new Map<TargetKey, Promise<void>>()
-/** 每个目标还有几个等待者:探针环只在有人等时才转(SSE 被中止、没人等了 → 下一轮醒来就收工,不对离线的电脑空探一整夜)。 */
+/** 每个目标一条探针环;`ac` 在最后一个等待者离开时中止 —— 睡着的环立刻收工,**在飞的探针也一并撤掉**
+ *  (否则焦点已经离开那台,慢到的探针结果还会把一格旧健康态写回表里)。 */
+const loops = new Map<TargetKey, { p: Promise<void>; ac: AbortController }>()
+/** 每个目标还有几个等待者:探针环只在有人等时才转(SSE 被中止、换了焦点、没人等了 → 立即收工,不对离线的电脑空探一整夜)。 */
 const waiters = new Map<TargetKey, number>()
 
 /** 同一目标的所有等待者共用一条探针环(不重复打 hub);环在 ready / 终局 / 没人等时结束。 */
 function probeLoop(key: TargetKey): Promise<void> {
   const running = loops.get(key)
-  if (running) return running
+  if (running) return running.p
+  const ac = new AbortController()
   const p = (async () => {
     for (let i = 0; ; i++) {
       const h = healthOf(key)
       if (h.state === 'ready') return
       if (isTerminal(h)) throw healthError(h)
-      if (!waiters.get(key)) return
-      await sleepOrWake(key, PROBE_BACKOFF_MS[Math.min(i, PROBE_BACKOFF_MS.length - 1)])
+      if (!waiters.get(key) || ac.signal.aborted) return
+      try { await sleepOrWake(key, probeDelay(key, i), ac.signal) } catch { return } // 中止 = 没人等了
       const after = healthOf(key)
       if (after.state === 'ready') return
       if (isTerminal(after)) throw healthError(after)
-      if (!waiters.get(key)) return
+      if (!waiters.get(key) || ac.signal.aborted) return
       const t = isTargetKey(key) ? targetForRef(refOfKey(key)) : null
       if (!t) throw healthError({ state: 'gone' })
-      await probeTarget(t).catch(() => undefined)
+      await probeTarget(t, ac.signal).catch(() => undefined) // 中止时 probeTarget 抛、不写表
     }
-  })().finally(() => { loops.delete(key) })
-  loops.set(key, p)
+  })().finally(() => { if (loops.get(key)?.p === p) loops.delete(key) })
+  loops.set(key, { p, ac })
   return p
 }
 
@@ -241,8 +266,11 @@ export function waitReady(key: TargetKey, signal?: AbortSignal): Promise<void> {
     if (released) return
     released = true
     const n = (waiters.get(key) ?? 1) - 1
-    if (n <= 0) waiters.delete(key)
-    else waiters.set(key, n)
+    if (n > 0) { waiters.set(key, n); return }
+    waiters.delete(key)
+    // 最后一个等待者走了:当场撤掉这条环(先摘下再中止 —— 之后到的等待者起一条新环,不接上这条正在收工的)
+    const loop = loops.get(key)
+    if (loop) { loops.delete(key); loop.ac.abort() }
   }
   return new Promise<void>((resolve, reject) => {
     const onAbort = (): void => { release(); reject(abortError(signal)) }

@@ -1,13 +1,21 @@
 // P1-K6 S2 · 健康状态机:classify 全表(hub / unitWeb / 引擎 / K8 中继合成的码)、状态转移、waitReady、probeTarget。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-type Reply = { status: number; body?: unknown }
+type Reply = { status: number; body?: unknown } | 'hang'
 let router: (url: string) => Reply = () => ({ status: 200, body: {} })
-const authFetch = vi.fn(async (url: string) => {
+const authFetch = vi.fn(async (url: string, init?: RequestInit) => {
   const r = router(url)
+  if (r === 'hang') {
+    // 挂住的请求(隧道那头迟迟不回):只有 signal 中止才结束 —— 与真 fetch 同语义
+    return new Promise<Response>((_resolve, reject) => {
+      const sig = init?.signal
+      if (sig?.aborted) { reject(sig.reason); return }
+      sig?.addEventListener('abort', () => reject(sig.reason), { once: true })
+    })
+  }
   return new Response(JSON.stringify(r.body ?? {}), { status: r.status })
 })
-vi.mock('../http', () => ({ authFetch: (url: string) => authFetch(url) }))
+vi.mock('../http', () => ({ authFetch: (url: string, init?: RequestInit) => authFetch(url, init) }))
 
 const H = await import('./health')
 const T = await import('./targets')
@@ -142,6 +150,45 @@ describe('waitReady / probeTarget', () => {
     expect(await p).toBeDefined()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(authFetch.mock.calls.length).toBeLessThanOrEqual(1) // 最多醒来探一次就发现没人等了
+  })
+
+  // 评审 F2:焦点离开那台时撤掉等待者 —— 探针环当场收工,**在飞的探针也撤**,慢到的结果不许把一格旧健康态写回表里
+  it('最后一个等待者离开 → 在飞的探针一并中止,不写回健康表;之后到的等待者起新环', async () => {
+    vi.useFakeTimers()
+    router = () => 'hang'
+    H.noteVerdict(KEY, 'offline')
+    const ac = new AbortController()
+    const p = H.waitReady(KEY, ac.signal).catch((e) => e)
+    await vi.advanceTimersByTimeAsync(2000) // 第一轮探针发出去,挂住
+    expect(authFetch).toHaveBeenCalledTimes(1)
+    const sig = (authFetch.mock.calls[0][1] as RequestInit | undefined)?.signal
+    expect(sig?.aborted).toBe(false)
+    ac.abort()
+    await p
+    expect(sig?.aborted).toBe(true) // 在飞的探针被撤
+    H.resetHealth(KEY) // 宿主离开那台时清格
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(H.useTargetHealth.getState().byKey[KEY]).toBeUndefined() // 没有迟到的结果写回来
+    expect(authFetch).toHaveBeenCalledTimes(1)
+    // 同一目标之后再来的等待者:起一条新环照常探
+    router = () => ({ status: 200, body: {} })
+    H.noteVerdict(KEY, 'offline')
+    const q = H.waitReady(KEY)
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(q).resolves.toBeUndefined()
+    expect(H.healthOf(KEY).state).toBe('ready')
+  })
+
+  it('限流态带 retryAt → 探针至少等到那一刻(不在 429 的 hub 上按 2 / 4 / 8s 追打)', async () => {
+    vi.useFakeTimers()
+    router = () => ({ status: 200, body: {} })
+    H.noteVerdict(KEY, 'rate-limited', { retryAt: Date.now() + 10_000 })
+    const p = H.waitReady(KEY)
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(authFetch).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_500)
+    await expect(p).resolves.toBeUndefined()
+    expect(authFetch).toHaveBeenCalled()
   })
 
   it('probeTarget:/health 好 + 探针 401 → engine-auth;引擎没起 → engine-unavailable;都好 → ready', async () => {
