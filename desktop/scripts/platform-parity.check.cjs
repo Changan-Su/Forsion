@@ -65,6 +65,11 @@ const GATE_FILES = [
   // 实证:`checkForUpdates`/`onUpdaterStatus` 移动端 shim 一直没实现 → 装了旧版永远没有更新提醒,
   // 而 A/B/C 三段全绿(useBootstrap 两边都调),D 段又扫不到这个文件 = 整条通道没有台账。
   path.join(GENESIS, 'desktop/frontend/src/stores/bootstrap.ts'),
+  // P1-K6
+  // 2026-09-28 加入 platform.ts:端判定单源 currentPlatform() 从 agentRunService.ts 搬到这个叶子模块(解开与引擎目标解析层的循环依赖),门控随之搬家。
+  path.join(GENESIS, 'desktop/frontend/src/services/platform.ts'),
+  // 2026-09-28 加入 services/engine/targets.ts:引擎目标解析层按宿主标志推 home 目标的来路(设备页 unitPage),S2 起还有 unit 目标的调用方头接缝。
+  path.join(GENESIS, 'desktop/frontend/src/services/engine/targets.ts'),
 ]
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */

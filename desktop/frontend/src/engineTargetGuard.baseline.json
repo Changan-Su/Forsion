@@ -1,0 +1,21 @@
+{
+  "_note": "P1-K6 引擎目标棘轮基线(engineTargetGuard.test.ts):K6-S0 时的存量违规,只许减少;S3 codemod 清零后删除本文件。",
+  "R1": {
+    "desktop/frontend/src/components/AgentHarnessPanel.tsx": 1,
+    "desktop/frontend/src/components/AgentMemoryModal.tsx": 1,
+    "desktop/frontend/src/components/AgentMemoryPanel.tsx": 1,
+    "desktop/frontend/src/components/AgentSchedulePanel.tsx": 1,
+    "desktop/frontend/src/components/AutoCompactSetting.tsx": 1,
+    "desktop/frontend/src/components/SpecialAgentsTab.tsx": 1,
+    "desktop/frontend/src/Root.tsx": 2,
+    "desktop/frontend/src/services/ttsService.ts": 3,
+    "desktop/frontend/src/stores/appStore.ts": 5,
+    "desktop/frontend/src/views/automation/AutomationRunsView.tsx": 1,
+    "desktop/frontend/src/views/chat2/btwStore.ts": 1
+  },
+  "R2": {
+    "desktop/frontend/src/services/ttsService.ts": 3,
+    "desktop/frontend/src/views/chat2/btwStore.ts": 1
+  },
+  "R3": {}
+}

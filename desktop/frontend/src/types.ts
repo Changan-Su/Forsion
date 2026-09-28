@@ -4,6 +4,7 @@ import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, Produc
 import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
+import type { TargetRef } from './services/engine/target'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 
 /**
@@ -38,6 +39,10 @@ export interface TanguDesktopConfig {
   visionModelId?: string
   /** 图像识别何时介入(落 config.json models.visionMode;缺省 auto)。 */
   visionMode?: VisionMode
+  // P1-K6
+  /** Forsion 云端 API 基址(含 `/api`,无尾斜杠)。web / 手机 / 设备页垫片直接给;桌面主进程不给,由
+   *  services/engine/cloudBase.ts 从纯源 `cloudUrl` 现算。读它一律经 `cloudApiBase()` / `cloudApiBaseOf()`。 */
+  cloudApiBase?: string
 }
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
@@ -114,6 +119,16 @@ export interface SessionRecord {
   projectless?: boolean
   created_at: string
   updated_at: string
+  // P1-K6
+  /** 会话跑在哪台引擎上(**渲染层专用**:引擎不返回、绝不回写引擎)。缺省 = home。
+   *  只由 services/engine/targets.ts 的 withLocation 从绑定表派生,别处不许自己拼(INTEGRATION R-15)。 */
+  location?: TargetRef
+}
+
+// P1-K6
+/** 会话在本端引擎上(未打标 = home)。 */
+export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
+  return !s.location || s.location.kind === 'home'
 }
 
 // ── Special Agents（Historian / Muse;本地）──────────────────────────────────

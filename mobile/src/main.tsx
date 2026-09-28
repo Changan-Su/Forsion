@@ -15,6 +15,7 @@ import { installMobileShim } from './mobileShim'
 import { createMobileAmadeusBridge } from './amadeus/mobileAmadeusBridge'
 import { createCloudAmadeusBridge, setCloudNotify } from '@webamadeus/cloudBridge'
 import { installCloudCollab } from '@webamadeus/cloudCollab'
+import { cloudApiBaseOf } from '@/services/engine/cloudBase'
 
 const VAULT_MODE_KEY = 'amadeus_vault_mode' // 'cloud'(缺省,移动端主打云客户端) | 'local'(显式选过才本地)
 const vaultMode = (): 'local' | 'cloud' => {
@@ -28,22 +29,25 @@ const vaultMode = (): 'local' | 'cloud' => {
 void installMobileShim().then(async (ok) => {
   if (!ok) return // 未就绪:已发起登录(native 开系统浏览器 / web 跳 /auth),不挂载。
   const cfg = await (window as unknown as {
-    tangu: { getConfig(): Promise<{ backendUrl: string; token: string }> }
+    tangu: { getConfig(): Promise<{ backendUrl: string; token: string; cloudApiBase?: string; cloudUrl?: string }> }
   }).tangu.getConfig()
   const getToken = (): string => cfg.token
+  // Amadeus 云桥 / 协作打的是**云端 API**,不是引擎:读 cloudApiBase(P1-K6 S1)。今天两者同值,
+  // 手机把引擎切到「我的电脑」后 backendUrl 就变成隧道地址了,云桥不能跟着走。
+  const cloudApi = cloudApiBaseOf(cfg)
 
   type Bridge = Record<string, unknown>
   const makeBridge = (side: 'local' | 'cloud'): Bridge =>
     side === 'cloud'
       ? (createCloudAmadeusBridge({
-          apiBase: cfg.backendUrl,
+          apiBase: cloudApi,
           getToken,
           onAuthError: () => {
             void (window as unknown as { tangu?: { forsionLogout?: () => Promise<void> } }).tangu?.forsionLogout?.()
           },
         }) as unknown as Bridge)
       : // 本地 Capacitor vault;cfg 供 fetchLinkMeta(书签卡 server 代理)/searchImages。
-        (createMobileAmadeusBridge({ apiBase: () => cfg.backendUrl, getToken }) as unknown as Bridge)
+        (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken }) as unknown as Bridge)
 
   let side = vaultMode()
   let impl = makeBridge(side)
@@ -74,7 +78,7 @@ void installMobileShim().then(async (ok) => {
   const ensureCollab = (): void => {
     if (collabInstalled) return
     collabInstalled = true
-    installCloudCollab({ apiBase: cfg.backendUrl, getToken })
+    installCloudCollab({ apiBase: cloudApi, getToken })
   }
   if (side === 'cloud') ensureCollab()
 
