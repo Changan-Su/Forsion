@@ -37,6 +37,15 @@ describe('parseMdMarks', () => {
     expect(parse(`体检 @${D} @remind:2026-08-31T20:00`)[0]).toMatchObject({ due: D, remind: '2026-08-31T20:00' })
   })
 
+  it('I-06:旧编辑器把空格落成 U+00A0 的存量行照样认(JS `\\s` 含 NBSP);日期紧贴汉字才失效', () => {
+    // 修复前 .ProseMirror 是 white-space:normal,空格以 NBSP 落盘 —— 这些行已经在用户库里,不能因为口径收紧而掉出视图。
+    const legacy = parse(`开会\u00a0@${D}\u00a0讨论方案`)
+    expect(legacy.map((m) => m.due)).toEqual([D])
+    expect(legacy[0].text).toMatch(/^开会\s讨论方案$/)
+    // 反面:空格被塌掉吃掉后的落盘形(修复前 `@明天` 回车后接着打字)—— 这就是 I-06 要堵的那条。
+    expect(parse(`开会 @${D}讨论方案`)).toEqual([])
+  })
+
   it('负对照:@ 前非空白不触发(邮箱 / 词中 @)', () => {
     expect(parse(`寄给 foo@${D} 看看`)).toEqual([])
     expect(parse(`a@${DT}`)).toEqual([])

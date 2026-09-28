@@ -309,6 +309,46 @@ async function main() {
     }
   }
 
+  // ── I-06(评审 2026-09-27):`.ProseMirror` 的 white-space 是 normal → 空格以 NBSP 落盘、`@日期` 后的空格被塌掉吃掉 ──
+  // 药在 styles.css 的 `.am-app .milkdown .ProseMirror { white-space: pre-wrap / break-spaces }`(PM 的硬性要求)。
+  // jsdom 不跑样式表,只能在真浏览器里证:生产壳(?upage)真键盘敲,看落盘。
+  {
+    const PMU = '.unified-body .ProseMirror'
+    const page = await browser.newPage({ locale: 'zh-CN' })
+    page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await page.goto(`${BASE}?upage&useed=${encodeURIComponent('# T\n\n开会\n')}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector(PMU, { timeout: 20000 })
+    await page.waitForTimeout(500)
+    const ws = await page.evaluate((s) => getComputedStyle(document.querySelector(s)).whiteSpace, PMU)
+    check('W1 .ProseMirror white-space 不是 normal(PM 要求 pre-wrap/break-spaces)', ws !== 'normal', ws)
+    await page.evaluate((s) => {
+      const p = document.querySelectorAll(s + ' > p')[0]
+      document.querySelector(s).focus()
+      const r = document.createRange()
+      r.setStart(p.firstChild, p.firstChild.data.length)
+      r.collapse(true)
+      getSelection().removeAllRanges()
+      getSelection().addRange(r)
+    }, PMU)
+    await page.waitForTimeout(150)
+    for (const line of ['double  space', 'trail ', 'x **b** y']) {
+      await page.keyboard.press('Enter')
+      await page.keyboard.type(line, { delay: 40 })
+    }
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('开会 @明天', { delay: 60 })
+    await page.waitForTimeout(500)
+    await page.keyboard.press('Enter') // 选中日期候选(落盘规范形 @YYYY-MM-DD + 一个空格)
+    await page.waitForTimeout(300)
+    await page.keyboard.type('讨论方案', { delay: 40 })
+    await page.waitForTimeout(1500)
+    const md = await page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : '' })
+    const vis = JSON.stringify(md).replace(/ /g, '⍽')
+    check('W2 键入的空格(连续 / 行尾 / 加粗后)落盘是普通空格,没有 U+00A0', !md.includes(' ') && md.includes('double  space\n') && md.includes('trail \n') && md.includes('x **b** y'), vis)
+    check('W3 `@明天` 回车后接着打字:日期后的空格还在,标记不失效', /开会 @\d{4}-\d{2}-\d{2} 讨论方案/.test(md), vis)
+    await page.close()
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

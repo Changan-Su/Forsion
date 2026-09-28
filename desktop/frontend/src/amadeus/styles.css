@@ -696,6 +696,13 @@
   line-height: 1.6;
   color: var(--text);
   caret-color: var(--primary);
+  /* ProseMirror 的硬性要求(prosemirror-view/style/prosemirror.css 同款,我们没引那份表)。
+     white-space 缺省 normal 时浏览器把连续/行尾空格塌掉,PM 只好用 U+00A0 撑住 → 空格以 NBSP 落盘;
+     `@明天` 回车后的空格被塌掉吃掉 → `@2026-09-28讨论` 标记失效(I-06)。break-spaces 让行尾空格占位、光标跟得上。 */
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  word-wrap: break-word;
+  font-variant-ligatures: none;
 }
 .am-app .milkdown .ProseMirror > *:first-child {
   margin-top: 0;
