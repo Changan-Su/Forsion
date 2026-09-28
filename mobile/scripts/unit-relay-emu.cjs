@@ -12,11 +12,16 @@
  * 用法:
  *   ANDROID_SERIAL=emulator-5584 node scripts/unit-relay-emu.cjs
  *   NEGCTL=failclosed ...   负对照(配合临时去掉 UnitRelay 失败关闭分支的包):S4 那条必须红
+ *   SKIP_RELOAD=1 ...       跳过 ⑤b 重载段(对修复前的包跑负对照时用:那段泄漏会占满 16 个名额,后面的用例全被 relay_busy 挡住)
  *
- * 覆盖:懒登记带 kind=phone、caller-secret 带 X-Unit-Secret、换票带 X-Unit-Caller-Secret;中继请求带 X-Forsion-Caller 且
- * Authorization 是原生 token 而不是 JS 递的诱饵(S3);非中继请求不带票;SSE 逐块到达;JS abort 后 hub 1s 内见到断开;
- * 403 UNIT_CALLER_INVALID 换票重发一次;PATCH 过得去;换票失败 → 合成 503 CALLER_UNAVAILABLE 且 hub 零匿名请求(S4);
- * 换号重登记、A 的条目仍在(S7);移除本机 → DELETE;shared_prefs / localStorage / Preferences / logcat 里扫不到任何 secret 与票(S1,先植入标记证明扫描器读得到)。
+ * 覆盖:懒登记带 kind=phone(登记前先探 caller-token 路由)、caller-secret 带 X-Unit-Secret、换票带 X-Unit-Caller-Secret;
+ * 中继请求带 X-Forsion-Caller 且 Authorization 是原生 token 而不是 JS 递的诱饵(S3);非中继请求不带票;SSE 逐块到达;
+ * JS abort 后 hub 1s 内见到断开;**WebView 重载后 hub 1s 内见到在途中继断开、16 条流重载后名额全还回来**(评审 P1);
+ * 403 UNIT_CALLER_INVALID 换票重发一次;PATCH 过得去;**中继不带、不存全局 cookie 罐里的 cookie**(评审 P2);
+ * 换不到票三种原因(评审 P1):换票 500 → TypeError(network,不是终局)、换票 401 → 合成 401、明确拒绝 → 合成 503
+ * CALLER_UNAVAILABLE,三种 hub 都零匿名请求(S4);换号重登记、A 的条目仍在(S7);移除本机 → DELETE,**之后中继请求不悄悄重新登记**
+ * (评审 P2);**慢网登记途中 status() 与别的插件调用不被卡住**(评审 P2);shared_prefs / localStorage / Preferences / logcat
+ * 里扫不到任何 secret 与票(S1,先植入标记证明扫描器读得到)。
  */
 const { execFileSync } = require('node:child_process')
 const crypto = require('node:crypto')
@@ -34,6 +39,7 @@ const API = `http://localhost:${PORT}/api`
 const NEGCTL = process.env.NEGCTL || ''
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const TARGET = '0f8fad5b-d9cb-469f-a165-70867728950e' // 「我的电脑」的 unit id(假 hub 不校验它是谁的)
+const UNIT_RELAY_SLOTS = 16 // UnitRelay.MAX_CONCURRENT
 
 const b64u = (s) => Buffer.from(s).toString('base64url')
 const jwt = (userId) => `${b64u('{"alg":"HS256","typ":"JWT"}')}.${b64u(JSON.stringify({ userId, username: userId }))}.emu-sig`
@@ -51,7 +57,9 @@ const rows = new Map() // id -> { user, secretHash, callerHash, kind, name }
 const issued = { secrets: [], callerSecrets: [], tokens: new Map() } // token -> { unit, user }
 const ledger = [] // { t, method, path, headers, body }
 const proxy = [] // { t, method, path, caller, auth }
-const hub = { tokenFail: false, invalidOnceHit: 0 }
+const hub = { mintFail: null, invalidOnceHit: 0, registerDelayMs: 0 }
+const PROBE_UNIT = '00000000-0000-0000-0000-000000000000'
+const openStreams = new Set() // 在途的中继 SSE(hub 侧的 res)
 let sse = null
 let sseClosedAt = 0
 
@@ -81,6 +89,7 @@ const server = http.createServer(async (req, res) => {
     return send(200, { units: [{ id: TARGET, name: 'Emu Mac', platform: 'darwin', icon: null, online: true, kind: 'desktop', capsLive: true, caps: { engine: 'ready', tools: [] } }] })
   }
   if (p === '/api/units/register' && req.method === 'POST') {
+    if (hub.registerDelayMs) await sleep(hub.registerDelayMs)
     let b = {}
     try { b = JSON.parse(body || '{}') } catch { /* ignore */ }
     const id = crypto.randomUUID()
@@ -103,7 +112,7 @@ const server = http.createServer(async (req, res) => {
     const r = rows.get(m[1])
     if (!r || r.user !== user) return send(404, { code: 'UNIT_NOT_FOUND' })
     if (!r.callerHash || sha(String(req.headers['x-unit-caller-secret'] || '')) !== r.callerHash) return send(403, { code: 'UNIT_CALLER_SECRET_MISMATCH' })
-    if (hub.tokenFail) return send(500, { detail: 'emu: mint down' })
+    if (hub.mintFail) return send(hub.mintFail.status, hub.mintFail.body)
     const token = `fuc1.${crypto.randomBytes(18).toString('base64url')}.${crypto.randomBytes(8).toString('base64url')}`
     issued.tokens.set(token, { unit: m[1], user })
     return send(200, { unitId: m[1], token, expiresAt: Math.floor(Date.now() / 1000) + 600 })
@@ -117,7 +126,7 @@ const server = http.createServer(async (req, res) => {
   if ((m = /^\/api\/units\/([^/]+)\/proxy(\/.*)$/.exec(p))) {
     const sub = m[2]
     const caller = req.headers['x-forsion-caller']
-    proxy.push({ t: Date.now(), method: req.method, path: sub + url.search, caller: caller || null, auth: req.headers.authorization || null })
+    proxy.push({ t: Date.now(), method: req.method, path: sub + url.search, caller: caller || null, auth: req.headers.authorization || null, cookie: req.headers.cookie || null })
     if (caller !== undefined) {
       const tk = issued.tokens.get(caller)
       if (!tk || tk.user !== user) return send(403, { code: 'UNIT_CALLER_INVALID', detail: 'emu: bad ticket' })
@@ -127,9 +136,11 @@ const server = http.createServer(async (req, res) => {
       res.write('data: one\n\n')
       sse = res
       sseClosedAt = 0
-      res.on('close', () => { if (sse === res) { sse = null; sseClosedAt = Date.now() } })
+      openStreams.add(res)
+      res.on('close', () => { openStreams.delete(res); if (sse === res) { sse = null; sseClosedAt = Date.now() } })
       return
     }
+    if (sub === '/engine/agent/set-cookie') return send(200, { ok: true }, { 'Set-Cookie': 'k8relay=from-relay; Path=/' })
     if (sub === '/engine/agent/invalid-once' && hub.invalidOnceHit++ === 0) return send(403, { code: 'UNIT_CALLER_INVALID', detail: 'emu: first ticket refused' })
     if (sub === '/engine/agent/always-invalid') return send(403, { code: 'UNIT_CALLER_INVALID', detail: 'emu: always' })
     if (sub === '/unit/remote-access') return send(200, { remoteSessions: true, principal: 'unit', caller: 'trusted', maxApprovalMode: 'auto-edit' })
@@ -214,7 +225,12 @@ async function run() {
   check('首个中继请求触发登记,kind=phone / platform=android', reg.length === 1 && regBody.kind === 'phone' && regBody.platform === 'android', regBody)
   const cs = ledger.filter((l) => /\/caller-secret$/.test(l.path))
   check('caller-secret 带 X-Unit-Secret(设备密钥)', cs.length === 1 && !!cs[0].headers['x-unit-secret'], cs.map((c) => Object.keys(c.headers)))
-  const mint = ledger.filter((l) => /\/caller-token$/.test(l.path))
+  const probeAt = ledger.findIndex((l) => l.path === `/api/units/${PROBE_UNIT}/caller-token`)
+  const regAt = ledger.findIndex((l) => l.path === '/api/units/register')
+  const probe = ledger.filter((l) => l.path === `/api/units/${PROBE_UNIT}/caller-token`)
+  check('评审 P2:登记前先探一次 caller-token 路由(老 server 一行不建);探测不带任何 secret', probe.length === 1 && probeAt >= 0 && probeAt < regAt && !probe[0].headers['x-unit-secret'] && !probe[0].headers['x-unit-caller-secret'], { probeAt, regAt, probe: probe.map((c) => Object.keys(c.headers)) })
+  const isMint = (l) => /\/caller-token$/.test(l.path) && !l.path.includes(PROBE_UNIT)
+  const mint = ledger.filter(isMint)
   check('换票带 X-Unit-Caller-Secret、不带设备密钥', mint.length === 1 && !!mint[0].headers['x-unit-caller-secret'] && !mint[0].headers['x-unit-secret'], mint.map((c) => Object.keys(c.headers)))
   const p1 = proxy.filter((x) => x.path === '/engine/agent/sessions')
   check('中继请求到 hub 带 X-Forsion-Caller(hub 签发过的那张)', r1.status === 200 && p1.length === 1 && issued.tokens.has(p1[0].caller), { r1, p1 })
@@ -257,22 +273,73 @@ async function run() {
   const errName = await js('return window.__sse.err || null')
   check('JS abort → hub 1s 内见到断开;reader 以 AbortError 结束', !sse && sseClosedAt > 0 && sseClosedAt - tAbort < 1000 && errName === 'AbortError', { closedIn: sseClosedAt - tAbort, errName })
 
+  // ⑤b 评审 P1:WebView 重载(深链重登 / 切界面模式 / ErrorBoundary 都会 reload)→ 旧页面的在途中继必须收掉:
+  //     不收的话长连 SSE 一直读、一直占着 16 个名额,几次重载后手机再也连不上任何电脑(relay_busy)。
+  const waitShim = async () => { for (let i = 0; i < 60; i++) { try { if (await evaluate('!!(window.tangu && window.tangu.unitSelf)')) return true } catch { /* 重载中 */ } await sleep(500) } return false }
+  const openSse = (n) => js(`for (let k = 0; k < ${n}; k++) fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/events`)}, { headers: { Accept: 'text/event-stream' } }).then(async (r) => { const rd = r.body.getReader(); for (;;) { const { done } = await rd.read(); if (done) break } }).catch(() => {}); return 1`)
+  const reloadPage = async () => {
+    const t0 = Date.now()
+    await evaluate('setTimeout(() => location.reload(), 50), 1').catch(() => 0)
+    for (let i = 0; i < 150 && openStreams.size > 0; i++) await sleep(20)
+    const ms = Date.now() - t0
+    await waitShim()
+    return ms
+  }
+  if (!process.env.SKIP_RELOAD) {
+  await openSse(1)
+  for (let i = 0; i < 100 && openStreams.size < 1; i++) await sleep(50)
+  const opened1 = openStreams.size
+  const closeMs = await reloadPage()
+  check(`评审 P1:WebView 重载 → 在途中继 SSE 在 hub 侧 1s 内断开(实测 ${closeMs}ms,含 50ms 触发延迟)`, opened1 === 1 && openStreams.size === 0 && closeMs < 1100, { opened1, stillOpen: openStreams.size, closeMs })
+  await openSse(UNIT_RELAY_SLOTS)
+  for (let i = 0; i < 200 && openStreams.size < UNIT_RELAY_SLOTS; i++) await sleep(50)
+  const openedAll = openStreams.size
+  const closeMsAll = await reloadPage()
+  await sleep(300)
+  const afterReload = await js(`try { const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/sessions`)}); return 'status ' + r.status } catch (e) { return 'threw ' + e.name + ' ' + JSON.stringify(e.cause || null) }`)
+  check(`评审 P1:${UNIT_RELAY_SLOTS} 条中继 SSE 占满名额 → 重载 → 全部断开,新页面的中继请求照常 200(不是 relay_busy)`, openedAll === UNIT_RELAY_SLOTS && openStreams.size === 0 && afterReload === 'status 200', { openedAll, stillOpen: openStreams.size, closeMsAll, afterReload })
+  } // SKIP_RELOAD=1:跳过重载这段(负对照:老包在这里泄漏占满名额,后面的用例就全被 relay_busy 挡住,跳过才看得到它们各自的红)
+
   // ⑥ 坏票重发一次(R-04)
-  const mintsBefore = ledger.filter((l) => /\/caller-token$/.test(l.path)).length
+  const mintsBefore = ledger.filter(isMint).length
   const r6 = await js(`const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/invalid-once`)}); return r.status`)
   const p6 = proxy.filter((x) => x.path === '/engine/agent/invalid-once')
-  const mintsAfter = ledger.filter((l) => /\/caller-token$/.test(l.path)).length
+  const mintsAfter = ledger.filter(isMint).length
   check('403 UNIT_CALLER_INVALID → 强制换票重发一次,JS 拿到 200', r6 === 200 && p6.length === 2 && p6[0].caller !== p6[1].caller && mintsAfter === mintsBefore + 1, { r6, p6: p6.length, mints: mintsAfter - mintsBefore })
 
-  // ⑦ S4 失败关闭:缓存票被拒 → 强制换票 → 换票 500 → 合成 503 CALLER_UNAVAILABLE,hub 零匿名中继请求
-  hub.tokenFail = true
-  const anonBefore = proxy.filter((x) => x.caller === null && /^\/(engine|unit\/remote-access)/.test(x.path)).length
-  const r7 = await js(`const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/always-invalid`)}); return { status: r.status, body: await r.text() }`)
-  const anonAfter = proxy.filter((x) => x.caller === null && /^\/(engine|unit\/remote-access)/.test(x.path)).length
-  let code7 = null
-  try { code7 = JSON.parse(r7.body).code } catch { /* 非 JSON */ }
-  check(`S4:换不到票 → 503 CALLER_UNAVAILABLE、hub 收到的匿名中继请求 = 0${NEGCTL === 'failclosed' ? '(NEGCTL:本条应红)' : ''}`, r7.status === 503 && code7 === 'CALLER_UNAVAILABLE' && anonAfter === anonBefore, { r7, anon: anonAfter - anonBefore })
-  hub.tokenFail = false
+  // ⑥b 评审 P2:中继不碰进程全局 cookie 罐 —— CapacitorCookies 在 load() 里无条件把 WebView 的罐装成全局 CookieHandler,
+  //     不挡的话中继请求会带上 apiBase 主机的 cookie(设备页种下的 forsion_unit_session 可能是上一个账号的 token)、还把 Set-Cookie 存回去。
+  await evaluate(`Capacitor.Plugins.CapacitorCookies.setCookie({ url: 'http://localhost:${PORT}', key: 'forsion_unit_session', value: 'k8stale' }).then(() => 'ok')`)
+  const jar0 = await js('return document.cookie')
+  const ck0 = proxy.length
+  await js(`const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/set-cookie`)}); return r.status`)
+  await js(`const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/sessions`)}); return r.status`)
+  const ck = proxy.slice(ck0)
+  const jar1 = await js('return document.cookie')
+  check('评审 P2 仪器自检:植入的 cookie 真在 WebView 罐里(document.cookie 读得到 k8stale)', /k8stale/.test(jar0), jar0)
+  check('评审 P2:中继请求不带全局罐里的 cookie;中继响应的 Set-Cookie 不进罐', ck.length === 2 && ck.every((x) => !x.cookie) && !/k8relay/.test(jar1), { cookies: ck.map((x) => x.cookie), jar1 })
+  await evaluate(`Capacitor.Plugins.CapacitorCookies.deleteCookie({ url: 'http://localhost:${PORT}', key: 'forsion_unit_session' }).then(() => 'ok')`).catch(() => 0)
+
+  // ⑦ S4 失败关闭 × 三种原因(评审 P1):缓存票被拒 → 强制换票 → 换票失败。三种都不发匿名请求,但交给渲染层的不一样:
+  //     短暂失败(500)→ TypeError(network,K6 当离线、网络回来就续);token 被拒(401)→ 合成 401(复检账号);
+  //     明确拒绝(400 UNIT_KIND_INVALID)→ 合成 503 CALLER_UNAVAILABLE(终局)。原先三种都是终局的 503 —— 一次断网永久判死。
+  const anonCount = () => proxy.filter((x) => x.caller === null && /^\/(engine|unit\/remote-access)/.test(x.path)).length
+  const anonBefore = anonCount()
+  const hitInvalid = () => js(`try { const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/always-invalid`)}); return { status: r.status, body: await r.text() } } catch (e) { return { threw: e.name, cause: e.cause || null } }`)
+  const jsonCode = (r) => { try { return JSON.parse(r.body).code ?? null } catch { return 'not-json' } }
+  hub.mintFail = { status: 500, body: { detail: 'emu: mint down' } }
+  const r7a = await hitInvalid()
+  hub.mintFail = { status: 401, body: { detail: 'Invalid or expired token' } }
+  const r7b = await hitInvalid()
+  hub.mintFail = { status: 400, body: { detail: 'emu', code: 'UNIT_KIND_INVALID' } }
+  const r7c = await hitInvalid()
+  hub.mintFail = null
+  const anonAfter = anonCount()
+  const neg = NEGCTL === 'failclosed' ? '(NEGCTL:本条应红)' : ''
+  check('S4 / 评审 P1:换票 500(短暂)→ TypeError(cause.code = network),不合成终局的 503', r7a.threw === 'TypeError' && r7a.cause?.code === 'network', r7a)
+  check('S4 / 评审 P1:换票 401(forsion_token 被拒)→ 合成 401、不带码(K6 判 account-auth?,复检账号)', r7b.status === 401 && jsonCode(r7b) === null, r7b)
+  check('S4:明确拒绝(400 UNIT_KIND_INVALID)→ 合成 503 CALLER_UNAVAILABLE', r7c.status === 503 && jsonCode(r7c) === 'CALLER_UNAVAILABLE', r7c)
+  check(`S4:三种原因下 hub 收到的匿名中继请求都 = 0${neg}`, anonAfter === anonBefore, { anon: anonAfter - anonBefore })
   if (NEGCTL === 'failclosed') return
 
   // ⑧ unitSelf / unitEnsureSelf
@@ -297,6 +364,28 @@ async function run() {
   const del = ledger.filter((l) => l.method === 'DELETE' && regB && l.path === `/api/units/${regB[0]}`)
   const self2 = await js('return await window.tangu.unitSelf()')
   check('unitForgetSelf → DELETE /units/:id,本地条目没了', fg.ok && del.length === 1 && self2.registered === false, { fg, del: del.length, self2 })
+
+  // ⑩b 评审 P2:移除之后到达的中继请求(集成后 = 那台电脑的轮询 / SSE 重连)不许借懒登记悄悄登记出新身份
+  const regCount = () => ledger.filter((l) => l.path === '/api/units/register').length
+  const regs10 = regCount()
+  const r10 = await js(`const r = await fetch(${JSON.stringify(`${API}/units/${TARGET}/proxy/engine/agent/sessions`)}); return { status: r.status, body: await r.text() }`)
+  check('评审 P2:移除本机后的中继请求 → 503 CALLER_UNAVAILABLE,不悄悄重新登记(名册零新行)', r10.status === 503 && jsonCode(r10) === 'CALLER_UNAVAILABLE' && regCount() === regs10, { r10, regs: regCount() - regs10 })
+
+  // ⑩c 评审 P2:慢网登记(hub 让 register 慢 6s)途中,status() 与别的插件调用不排在它后面(Capacitor 所有插件共用一条线程)
+  //     先确保从「未登记」起步(修复前的包在 ⑩b 已经悄悄重登过,不移除的话 ensureRegistered 不走网络、测不到卡顿)
+  await js('return await window.tangu.unitForgetSelf()')
+  const regs10c = regCount()
+  hub.registerDelayMs = 6000
+  const blk = await js(`const P = Capacitor.Plugins; const t0 = performance.now();
+    const reg = P.ForsionUnit.ensureRegistered().then(() => Math.round(performance.now() - t0), (e) => 'rej ' + e.code);
+    await new Promise((r) => setTimeout(r, 400));
+    const t1 = performance.now();
+    const st = P.ForsionUnit.status().then(() => Math.round(performance.now() - t1));
+    const pf = P.Preferences.get({ key: 'forsion_token' }).then(() => Math.round(performance.now() - t1)); // 同时发:别的插件排不排在后面
+    return { statusMs: await st, prefMs: await pf, regAt: await reg }`)
+  hub.registerDelayMs = 0
+  check(`评审 P2:慢网登记途中 status() / Preferences.get 不被卡住(${blk && blk.statusMs}ms / ${blk && blk.prefMs}ms,登记本身 ${blk && blk.regAt}ms)`, blk && blk.statusMs < 1000 && blk.prefMs < 1000 && typeof blk.regAt === 'number' && blk.regAt >= 5500, blk)
+  check('评审 P2:用户显式登记(ensureRegistered)解闩 → 重新登记一次', regCount() === regs10c + 1, { regs: regCount() - regs10c })
   await evaluate(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(TOKEN_A)} }).then(() => 'ok')`)
 
   // ⑪ S1 扫描:先植入标记,证明扫描器读得到这几处;再扫 hub 签发过的全部 secret / 票
