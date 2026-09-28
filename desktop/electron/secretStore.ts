@@ -7,8 +7,13 @@
  *
  * 判据只有一条:静态存放的秘密是否绑定到 OS 登录会话(decideLevel)。永不调用 setUsePlainTextEncryption(true) ——
  * Linux 的 basic_text 用的是内置固定口令,任何一份 userData 拷贝都能解开,等同明文。
- *   - unitPairing / externalToken:plaintext 时兼容回落(enc:'plain',0600,状态标降级)—— 这就是今天的行为,无钥匙串的 Linux 设备页不能因此回退。
+ *   - unitPairing / externalToken:**只在 Linux** 的 plaintext 时兼容回落(enc:'plain',0600,状态标降级)—— 这就是今天的行为,
+ *     无钥匙串的 Linux 设备页不能因此回退。
  *   - unitCallerSecret(P2):fail-closed,plaintext 时 set 抛 secret-store-insecure,不落盘。
+ *   - macOS / Windows 的加密用不了(level=unavailable:钥匙串被拒绝 / 没解锁 / DPAPI 失败)时**任何槽都不落盘**
+ *     (抛 secret-store-unavailable):那不是「这台机器没有钥匙串」,而是这一次运行拿不到;回落明文会让 Mac 上的配对明文躺盘。
+ *     Chromium OSCrypt(os_crypt_mac.mm DeriveKey)一个进程只试一次钥匙串、成败都不再试 → 进程内 retry 救不回,只能重启
+ *     (status.restartRequired)。
  *
  * 懒加载:init() 只读文件;只有某个槽真被要求取值 / 写入时才判定 level、调 decrypt。所有槽都空时整个进程不碰加密后端
  * (台架零改动、不弹钥匙串)。
@@ -42,6 +47,11 @@ export class SecretStoreInsecureError extends Error {
   readonly code = 'secret-store-insecure'
   constructor() { super('secret-store-insecure') }
 }
+/** level=unavailable(macOS / Windows 这次运行里系统加密用不了):任何槽都不落盘,也不回落明文;重启 Forsion 才可能恢复。 */
+export class SecretStoreUnavailableError extends Error {
+  readonly code = 'secret-store-unavailable'
+  constructor() { super('secret-store-unavailable') }
+}
 /** 文件存在但解析不了:任何槽的写入都会丢掉别的槽(可能连带让配对「消失」→ 自动重新登记),只允许显式 force(重新登记本机)。 */
 export class SecretStoreUnreadableError extends Error {
   readonly code = 'secret-store-unreadable'
@@ -58,12 +68,13 @@ type Entries = Partial<Record<SecretSlot, Entry>>
 
 const OS_BACKEND: Partial<Record<NodeJS.Platform, string>> = { darwin: 'keychain', win32: 'dpapi' }
 
-/** 判定等级。darwin / win32:加密可用即 os;linux:还要求后端不是 basic_text / unknown;其余平台一律 plaintext。 */
+/** 判定等级。darwin / win32:加密可用即 os,不可用 = unavailable(不回落明文);linux:还要求后端不是 basic_text / unknown,
+ *  否则 plaintext(兼容回落);其余平台一律 plaintext。 */
 export function decideLevel(platform: NodeJS.Platform, c: CryptoProvider): { level: SecretLevel; backend: string } {
   let available = false
   try { available = c.available() } catch { available = false }
   if (platform === 'darwin' || platform === 'win32') {
-    return available ? { level: 'os', backend: OS_BACKEND[platform]! } : { level: 'plaintext', backend: 'none' }
+    return { level: available ? 'os' : 'unavailable', backend: OS_BACKEND[platform]! }
   }
   if (platform === 'linux') {
     let backend = 'unknown'
@@ -99,11 +110,12 @@ export interface SecretStore {
   set(s: SecretSlot, v: string | null, opts?: { force?: boolean }): Promise<void>
   /** 迁移专用:写入后从**磁盘字节**重新读出、重新解密核对;对不上就把整份文件恢复成写入前的内容并回 false。 */
   setVerified(s: SecretSlot, v: string): Promise<boolean>
-  /** 当前状态;会判定 level(可能碰加密后端)。 */
+  /** 当前状态;会判定 level(可能碰加密后端)。restartRequired 见 SecretStorageStatus。 */
   status(): SecretStorageStatus
   /** 某槽在盘上的形态(不解密):remoteSessionsPermitted 要求配对不是明文条目。 */
   describe(s: SecretSlot): 'absent' | 'os' | 'plain' | 'unreadable'
-  /** 重新读文件、重新判定 level、清掉缓存与锁,并立即对 enc=os 的条目各解密一次(用户点「重试」那一刻才弹系统钥匙串)。 */
+  /** 重新读文件、重新判定 level、清掉缓存与锁,并立即对 enc=os 的条目各解密一次。只救得回「解密失败」这一类(文件被换回 /
+   *  条目修好);加密后端本身这次运行不可用(restartRequired)时照样返回那个状态,绝不谎报恢复。 */
   retry(): Promise<SecretStorageStatus>
   wipe(): Promise<void>
   onChange(cb: (s: SecretStorageStatus) => void): () => void
@@ -133,9 +145,12 @@ export function createSecretStore(d: SecretStoreDeps): SecretStore {
 
   const ensureLevel = (): { level: SecretLevel; backend: string } => (levelCache ??= decideLevel(d.platform, d.crypto))
   const lockedList = (): SecretSlot[] => (unreadable ? [...ALL_SLOTS] : ALL_SLOTS.filter((s) => locked.has(s)))
+  /** 进程内救不回:unavailable(macOS / Windows 这次拿不到系统加密),或 Linux 降级而盘上有 enc=os 条目(这次没起钥匙串)。 */
+  const restartRequired = (lv: { level: SecretLevel }): boolean =>
+    lv.level === 'unavailable' || (lv.level === 'plaintext' && ALL_SLOTS.some((s) => entries[s]?.enc === 'os'))
   const statusNow = (): SecretStorageStatus => {
     const lv = ensureLevel()
-    return { level: lv.level, backend: lv.backend, locked: lockedList(), lastError }
+    return { level: lv.level, backend: lv.backend, locked: lockedList(), restartRequired: restartRequired(lv), lastError }
   }
   /** 变化检测用的指纹:level 没判定过就不带(不为了发事件去碰加密后端)。 */
   const fingerprint = (): string => JSON.stringify([levelCache, lockedList(), lastError])
@@ -170,6 +185,10 @@ export function createSecretStore(d: SecretStoreDeps): SecretStore {
         throw new SecretStoreEncryptError()
       }
       return { enc: 'os', backend: lv.backend, data, at: now() }
+    }
+    if (lv.level === 'unavailable') { // macOS / Windows:绝不回落明文(那是 Linux 无钥匙串的兼容路径)
+      lastError = 'os-crypto-unavailable'
+      throw new SecretStoreUnavailableError()
     }
     if (!SLOT_POLICY[slot].allowPlaintext) throw new SecretStoreInsecureError()
     return { enc: 'plain', data: v, at: now() }
@@ -275,9 +294,12 @@ export function createSecretStore(d: SecretStoreDeps): SecretStore {
       let prevFile: string | null = null
       try { prevFile = await d.read(d.file) } catch { prevFile = null }
       try {
-        await setInner(s, v, true)
-      } catch {
-        lastError = 'migrate-verify-failed'
+        // force 只给配对:文件读不懂时,shell 里的配对按设计为准(迁移 §3.4-4),重写文件。external token 不许 force ——
+        // 只为迁一个 token 就整份重写,会把读不懂的配对一并丢掉 → 配对「消失」→ 自动重新登记(新 unit id)。
+        await setInner(s, v, s === 'unitPairing')
+      } catch (e) {
+        // 读不懂 / 这次加密不可用:原因码已由 load / encryptEntry 记下(store-unreadable / os-crypto-unavailable),不盖掉
+        if (!(e instanceof SecretStoreUnreadableError || e instanceof SecretStoreUnavailableError)) lastError = 'migrate-verify-failed'
         return false
       }
       // 从磁盘字节重新读、重新解密(不看内存缓存):迁移后要删掉 shell 里的原件,必须确认新家真的读得回来。

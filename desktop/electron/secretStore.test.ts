@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSecretStore, decideLevel, SecretStoreInsecureError, SLOT_POLICY, type CryptoProvider, type SecretStoreDeps } from './secretStore'
+import { createSecretStore, decideLevel, SecretStoreInsecureError, SecretStoreUnavailableError, SLOT_POLICY, type CryptoProvider, type SecretStoreDeps } from './secretStore'
 
 const FILE = '/ud/device-secrets.json'
 const SECRET = 'unit-secret-7f3a9c2e1d'
@@ -20,6 +20,22 @@ function fakeCrypto(o: { available?: boolean; backend?: string; identity?: boole
     },
   }
   return { crypto, calls, st }
+}
+
+/** 照 Chromium OSCrypt(os_crypt_mac.mm DeriveKey)的语义:一个进程只试一次钥匙串 —— 第一次调用按用户在系统框里的选择
+ *  (allow / deny)定格,之后无论用户怎么改主意都不再试(`try_keychain_ = false`,「Never try it again」)。
+ *  新进程 = 新建一个 provider。 */
+function chromiumMacKeychain(user: { choice: 'allow' | 'deny' }) {
+  const inner = fakeCrypto()
+  let key: boolean | null = null // null = 还没试过钥匙串
+  const derive = (): boolean => (key ??= user.choice === 'allow')
+  const crypto: CryptoProvider = {
+    available: () => derive(),
+    backend: () => 'keychain',
+    encrypt: (s) => { if (!derive()) throw new Error('Error while encrypting the text provided'); return inner.crypto.encrypt(s) },
+    decrypt: (b) => { if (!derive()) throw new Error('Error while decrypting the ciphertext provided'); return inner.crypto.decrypt(b) },
+  }
+  return { crypto, calls: inner.calls, st: inner.st }
 }
 
 function memFs(init?: Record<string, string>) {
@@ -56,11 +72,11 @@ function expectNoPlaintext(text: string | undefined, secret: string): void {
 
 describe('decideLevel', () => {
   const p = (available: boolean, backend = 'unknown') => fakeCrypto({ available, backend }).crypto
-  it('darwin / win32:加密可用即 os', () => {
+  it('darwin / win32:加密可用即 os;不可用 = unavailable(绝不回落 plaintext —— 那是 Linux 无钥匙串的兼容路径)', () => {
     expect(decideLevel('darwin', p(true))).toEqual({ level: 'os', backend: 'keychain' })
-    expect(decideLevel('darwin', p(false))).toEqual({ level: 'plaintext', backend: 'none' })
+    expect(decideLevel('darwin', p(false))).toEqual({ level: 'unavailable', backend: 'keychain' })
     expect(decideLevel('win32', p(true))).toEqual({ level: 'os', backend: 'dpapi' })
-    expect(decideLevel('win32', p(false))).toEqual({ level: 'plaintext', backend: 'none' })
+    expect(decideLevel('win32', p(false))).toEqual({ level: 'unavailable', backend: 'dpapi' })
   })
   it('linux:basic_text / unknown 一律 plaintext,libsecret / kwallet* 才是 os', () => {
     expect(decideLevel('linux', p(true, 'basic_text'))).toEqual({ level: 'plaintext', backend: 'basic_text' })
@@ -69,10 +85,11 @@ describe('decideLevel', () => {
     expect(decideLevel('linux', p(true, 'kwallet6'))).toEqual({ level: 'os', backend: 'kwallet6' })
     expect(decideLevel('linux', p(false, 'gnome_libsecret'))).toEqual({ level: 'plaintext', backend: 'gnome_libsecret' })
   })
-  it('其余平台 / 后端抛错 → plaintext', () => {
+  it('其余平台 → plaintext;darwin 上 available() 抛错 → unavailable', () => {
     expect(decideLevel('freebsd', p(true, 'gnome_libsecret')).level).toBe('plaintext')
     const boom: CryptoProvider = { available: () => { throw new Error('x') }, backend: () => 'kwallet', encrypt: () => Buffer.alloc(0), decrypt: () => '' }
-    expect(decideLevel('darwin', boom).level).toBe('plaintext')
+    expect(decideLevel('darwin', boom).level).toBe('unavailable')
+    expect(decideLevel('linux', boom).level).toBe('plaintext')
   })
   it('槽策略:只有 unitCallerSecret 不许明文', () => {
     expect(SLOT_POLICY).toEqual({ unitPairing: { allowPlaintext: true }, externalToken: { allowPlaintext: true }, unitCallerSecret: { allowPlaintext: false } })
@@ -101,7 +118,7 @@ describe('secretStore', () => {
     await store.set('externalToken', 'tok-1')
     expect(await store.get('unitPairing')).toEqual({ state: 'ok', value: SECRET })
     expect(JSON.parse(fs.files.get(FILE)!).entries.unitPairing.enc).toBe('plain')
-    expect(store.status()).toMatchObject({ level: 'plaintext', backend: 'basic_text', locked: [] })
+    expect(store.status()).toMatchObject({ level: 'plaintext', backend: 'basic_text', locked: [], restartRequired: false })
     const before = fs.files.get(FILE)
     const err = await store.set('unitCallerSecret', 'caller-secret').catch((e) => e)
     expect(err).toBeInstanceOf(SecretStoreInsecureError)
@@ -120,7 +137,7 @@ describe('secretStore', () => {
     await fresh.init()
     c.st.failDecrypt = true
     expect(await fresh.get('unitPairing')).toEqual({ state: 'locked' })
-    expect(fresh.status()).toMatchObject({ locked: ['unitPairing'], lastError: 'decrypt-failed' })
+    expect(fresh.status()).toMatchObject({ locked: ['unitPairing'], lastError: 'decrypt-failed', restartRequired: false }) // 解密失败:进程内重试有意义
     const n = c.calls.decrypt
     expect(await fresh.get('unitPairing')).toEqual({ state: 'locked' })
     expect(c.calls.decrypt, '锁定后还在反复解密').toBe(n)
@@ -149,7 +166,8 @@ describe('secretStore', () => {
     const down = mk({ crypto: fakeCrypto({ backend: 'basic_text' }), files: { [FILE]: osBytes } })
     await down.store.init()
     expect(await down.store.get('unitPairing')).toEqual({ state: 'locked' })
-    expect(down.store.status()).toMatchObject({ level: 'plaintext', locked: ['unitPairing'], lastError: 'os-crypto-unavailable' })
+    // Linux 这次没起钥匙串而盘上有加密条目:进程内救不回(后端在启动时就定了),要重启
+    expect(down.store.status()).toMatchObject({ level: 'plaintext', locked: ['unitPairing'], lastError: 'os-crypto-unavailable', restartRequired: true })
     expect(down.fs.files.get(FILE)).toBe(osBytes)
   })
 
@@ -246,5 +264,75 @@ describe('secretStore', () => {
     await fresh.retry()
     // 第一条:init 读到条目、level 首次判定出来(也算状态变化);之后锁定、恢复各一条。
     expect(seen).toEqual([[], ['unitPairing'], []])
+  })
+})
+
+describe('macOS / Windows 加密不可用(钥匙串被拒绝):不回落明文、进程内重试救不回', () => {
+  const pairingFile = (c: CryptoProvider): string => JSON.stringify({ v: 1, entries: { unitPairing: { enc: 'os', backend: 'keychain', data: c.encrypt(SECRET).toString('base64'), at: 1 } } }, null, 2)
+
+  it('拒绝钥匙串 → 配对锁定、restartRequired;retry 不谎报恢复(Chromium 一个进程只试一次);重启后选允许 → 恢复', async () => {
+    const user = { choice: 'deny' as 'allow' | 'deny' }
+    const bytes = pairingFile(fakeCrypto().crypto)
+    const fs = memFs({ [FILE]: bytes })
+    const p1 = chromiumMacKeychain(user)
+    const store = createSecretStore({ file: FILE, crypto: p1.crypto, platform: 'darwin', ...fs.deps })
+    await store.init()
+    expect(await store.get('unitPairing')).toEqual({ state: 'locked' })
+    expect(store.status()).toMatchObject({ level: 'unavailable', backend: 'keychain', locked: ['unitPairing'], restartRequired: true, lastError: 'os-crypto-unavailable' })
+    // 用户按提示「这次选允许」再点重试:同一进程里 Chromium 不再问钥匙串 → 必须仍报 restartRequired,不能说恢复了
+    user.choice = 'allow'
+    const st = await store.retry()
+    expect(st).toMatchObject({ level: 'unavailable', locked: ['unitPairing'], restartRequired: true })
+    expect(await store.get('unitPairing')).toEqual({ state: 'locked' })
+    expect(fs.files.get(FILE), '锁定时文件被动了').toBe(bytes)
+    // 重启 = 新进程 = 新 provider:这次选允许 → 读回原配对(没有重新登记)
+    const store2 = createSecretStore({ file: FILE, crypto: chromiumMacKeychain(user).crypto, platform: 'darwin', ...fs.deps })
+    await store2.init()
+    expect(await store2.get('unitPairing')).toEqual({ state: 'ok', value: SECRET })
+    expect(store2.status()).toMatchObject({ level: 'os', locked: [], restartRequired: false })
+  })
+
+  it('unavailable 时任何槽都不落盘(抛 secret-store-unavailable,不写 enc:plain):配对、token 都一样,文件字节不变', async () => {
+    const bytes = pairingFile(fakeCrypto().crypto)
+    const { store, fs } = mk({ platform: 'darwin', crypto: fakeCrypto({ available: false }), files: { [FILE]: bytes } })
+    await store.init()
+    for (const slot of ['unitPairing', 'externalToken', 'unitCallerSecret'] as const) {
+      const err = await store.set(slot, 'v-' + slot).catch((e) => e)
+      expect(err, slot).toBeInstanceOf(SecretStoreUnavailableError)
+      expect(err.code).toBe('secret-store-unavailable')
+    }
+    expect(fs.files.get(FILE)).toBe(bytes)
+    expect(await store.setVerified('externalToken', 'tok'), '迁移也不许明文落盘').toBe(false)
+    expect(fs.files.get(FILE)).toBe(bytes)
+    expect(store.status().lastError).toBe('os-crypto-unavailable')
+
+    // 空文件的 Mac:同样不建文件(旧实现这里会写出 {enc:'plain', data:'{unitId,secret}'})
+    const empty = mk({ platform: 'darwin', crypto: fakeCrypto({ available: false }) })
+    await empty.store.init()
+    await expect(empty.store.set('unitPairing', SECRET)).rejects.toMatchObject({ code: 'secret-store-unavailable' })
+    expect(empty.fs.files.has(FILE)).toBe(false)
+    expect(empty.store.status()).toMatchObject({ level: 'unavailable', restartRequired: true })
+  })
+})
+
+describe('setVerified × 读不懂的文件', () => {
+  const V2 = JSON.stringify({ v: 2, entries: { unitPairing: { enc: 'os', data: 'newer-format' } } })
+
+  it('只迁 token:文件读不懂 → 不写(不许为一个 token 丢掉读不懂的配对),字节不变、配对仍锁定、原因码 store-unreadable', async () => {
+    const { store, fs } = mk({ files: { [FILE]: V2 } })
+    await store.init()
+    expect(await store.setVerified('externalToken', 'tok')).toBe(false)
+    expect(fs.files.get(FILE)).toBe(V2)
+    expect(fs.st.writes).toBe(0)
+    expect(await store.get('unitPairing')).toEqual({ state: 'locked' })
+    expect(store.status().lastError).toBe('store-unreadable')
+  })
+
+  it('迁配对:shell 里的配对按设计为准,force 重写', async () => {
+    const { store, fs } = mk({ files: { [FILE]: V2 } })
+    await store.init()
+    expect(await store.setVerified('unitPairing', SECRET)).toBe(true)
+    expect(await store.get('unitPairing')).toEqual({ state: 'ok', value: SECRET })
+    expectNoPlaintext(fs.files.get(FILE), SECRET)
   })
 })
