@@ -7,7 +7,7 @@ import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
 import { decodeCharRefs, parseWikiLinks, resolvePageName } from '@amadeus-shared/links'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
-import { openNote } from './amadeusNav'
+import { openNote, revealTextWhenReady } from './amadeusNav'
 import { create } from 'zustand'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
@@ -71,13 +71,20 @@ export function AmadeusSearchView() {
       if (!q) return
       // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
       const hit = Object.values(ps().blocks).find((b) => decodeCharRefs(b.content).toLowerCase().includes(q))
-      if (!hit) return
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-block-id="${hit.id}"]`)
-        if (!el) return
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        el.classList.add('amx-block-flash')
-        setTimeout(() => el.classList.remove('amx-block-flash'), 1300)
+        const el = hit ? document.querySelector(`[data-block-id="${hit.id}"]`) : null
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          el.classList.add('amx-block-flash')
+          setTimeout(() => el.classList.remove('amx-block-flash'), 1300)
+          return
+        }
+        // v4(评审 G4-01):正文不进 pageStore —— blocks 要么空,要么是 v4 文件打开途中被临时水合的 v3 快照
+        // (DOM 里没有 data-block-id)。不能拿「此刻有没有 unified 实例」当分流判据:openNote 在那份临时快照上
+        // 就已经放行了,实例可能还没挂上。一律交给实例的 revealText 接缝(自带重试;v3 笔记自然放弃)。
+        // 整串优先、切词兜底 —— 多词查询是「全部词都出现」即命中,整串未必连着出现(切法同 vaultIndex.searchTerms)。
+        const terms = q.split(/[\s\-_/.]+/).filter(Boolean)
+        void revealTextWhenReady(h.path, terms.length > 1 ? [q, ...terms] : [q])
       })
     })
   }
@@ -201,7 +208,13 @@ export function AmadeusTagsView() {
                 <span className="amx-tag-count">{tc.count}</span>
               </button>
               {openTag === tc.tag && tagPages.map((p) => (
-                <button key={p} className="amx-list-item amx-tag-page" onClick={() => void openNote(p)} title={p}>
+                <button
+                  key={p}
+                  className="amx-list-item amx-tag-page"
+                  // 打开后定位到这个标签第一次出现的地方(评审 G4-01「标签面板同」;标签只在 frontmatter 里时就停在文首)。
+                  onClick={() => void openNote(p).then(() => revealTextWhenReady(p, [`#${tc.tag}`], { tag: true }))}
+                  title={p}
+                >
                   {baseName(p)}
                 </button>
               ))}

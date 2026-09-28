@@ -14,7 +14,7 @@ import type {
   StackNode,
 } from '@amadeus-shared/compiler/types'
 import { pageKey, resolvePageName } from '@amadeus-shared/links'
-import { parsePdfLinkInner, parseMediaLinkInner } from '@amadeus-shared/pdfLink'
+import { parseBlockSubpath, parsePdfLinkInner, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
 import { amadeus } from '../api'
@@ -884,14 +884,35 @@ function makePageStore(opts: PageStoreOptions = {}) {
         window.dispatchEvent(new CustomEvent('amadeus:open-drawing', { detail: { path: hit ?? raw } }))
         return
       }
-      const match = resolvePageName(raw, get().pages, src)
+      // 笔记内锚点(评审 L-05):`[[笔记#标题]]` / `[[笔记#^块]]` / `[[#标题]]`(笔记名为空 = 本页)。
+      // 必须赶在下面的页面 / 文件解析之前拆开 —— 整串 `笔记#标题` 解析不到任何页面,会一路落到
+      // 「要不要新建一篇叫 `笔记#标题` 的笔记」。整串恰好是真实页名(文件名里带 `#`)时照旧按页名开。
+      let wanted = raw
+      const anchor = raw.includes('#') && !resolvePageName(raw, get().pages, src) ? splitLinkInner(raw) : null
+      if (anchor?.subpath) {
+        const sub = anchor.subpath
+        const owner = anchor.target ? resolvePageName(anchor.target, get().pages, src) : src && isNoteMd(src) ? src : null
+        if (owner) {
+          if (owner !== src) void get().loadPage(owner)
+          // 定位走聊天引用条同一套(amadeusNav 的 reveal*WhenReady:等实例挂上、600ms 补跳、找不到就不动)。
+          // 动态 import 同上面的媒体分支(amadeusNav 反向 import 本模块)。`^` 开头却不合块锚字符集的
+          // 畸形形态不当标题(与 ChatWikiLink 同口径):只开笔记不动。
+          const block = parseBlockSubpath(sub)
+          void import('../../amadeusNav').then((m) =>
+            block ? m.revealBlockWhenReady(owner, block) : sub.startsWith('^') ? undefined : m.revealHeadingWhenReady(owner, sub))
+          return
+        }
+        if (!anchor.target) return // 本页锚点却没有可定位的来源页:无处可跳,也绝不落「创建」兜底
+        wanted = anchor.target // 目标笔记不存在:下面的「询问创建」只用笔记名,不带 `#标题`
+      }
+      const match = resolvePageName(wanted, get().pages, src)
       if (match) {
         void get().loadPage(match)
         return
       }
       // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开
       // (渲染层不 import 宿主 openDb,发事件由 amadeusOverlays 接;无监听的宿主静默),其余系统程序打开。
-      const file = resolveFileName(raw, get().files, src)
+      const file = resolveFileName(wanted, get().files, src)
       if (file) {
         if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file } }))
         else void amadeus.openVaultFile?.(file)?.catch(() => {})
@@ -903,13 +924,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 用 resolveVaultPath 而非上面的 resolveFileName:后者的 isFileRef 闸把一切 `.md` 结尾的名字
       // 都挡掉,而这些类型的正典写法恰恰以 `.md` 结尾,过不了那道闸就永远解析不到。
       // 事件解耦同 open-db:渲染层不 import 宿主的 openFile(无监听的宿主静默)。
-      const vaultHit = resolveVaultPath(raw, get().files, src) ?? resolveVaultPath(`${raw}.md`, get().files, src)
+      const vaultHit = resolveVaultPath(wanted, get().files, src) ?? resolveVaultPath(`${wanted}.md`, get().files, src)
       if (vaultHit) {
         window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit } }))
         return
       }
       // 未解析:询问而非静默建根。源须是笔记(.db 独立视图等无 .fd 语义 → 走根兜底)。
-      set({ pendingWikiCreate: { name: raw, sourcePath: src && isNoteMd(src) ? src : null } })
+      set({ pendingWikiCreate: { name: wanted, sourcePath: src && isNoteMd(src) ? src : null } })
     },
 
     async createWikiPage(name) {

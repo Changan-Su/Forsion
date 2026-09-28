@@ -585,8 +585,10 @@ export interface AmadeusApi {
   deletePage(pagePath: string): Promise<void>
   /** Move a page into another folder ('' = vault root); returns its new path. */
   movePage(pagePath: string, destFolder: string): Promise<string>
-  /** Resolve a `![[ ]]` block embed target (by basename) to its content + owning note. */
-  resolveEmbed(target: string): Promise<EmbedResolved | null>
+  /** Resolve a `![[ ]]` block embed target (by basename) to its content + owning note.
+   *  sourcePath = 嵌入所在的笔记(评审 L-15):被嵌笔记按它就近解析(同目录 → .fd 子笔记 → 全库,同 `[[链接]]`),
+   *  `![[#标题]]` 的空笔记名也指它。可选:旧宿主 / 旧调用方不传 = 全库第一篇(历史行为)。 */
+  resolveEmbed(target: string, sourcePath?: string): Promise<EmbedResolved | null>
   /** Notes that embed the given block basename (for safe-delete warnings). */
   blockBacklinks(target: string): Promise<BacklinkRef[]>
   /** All sub-folders (incl. empty), vault-relative. */
@@ -669,7 +671,8 @@ export interface AmadeusApi {
    *  `base` = 比对交换写(G1-01,同 dbWriteCas 的思路):调用方认为盘上现在的内容的 `textFingerprint`。
    *  支持的宿主(桌面主进程 / 经它的 Unit RPC / web 与移动端的云桥)比对不上就**不写**,回 `{ ok:false, current }`
    *  交调用方回灌或另存冲突副本;文件不在 = 无冲突照写(云桥例外:本会话见过、现已被别处删掉 → 照旧另存 recovered 副本)。
-   *  不支持的宿主(移动端本地库 / 分享页)忽略它、照旧无条件写,返回 void —— 调用方一律把 void 当「写成了」。
+   *  不支持的宿主(分享页)忽略它、照旧无条件写,返回 void —— 调用方一律把 void 当「写成了」。
+   *  移动端本地库自 G2-04 复核起支持(按路径串行锁内 读 → 比对 → 写)。
    *  不传 `base` 时所有宿主行为与从前逐字一致。 */
   writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string }): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */

@@ -28,6 +28,10 @@ export interface UnifiedPipeHandle {
   /** 块锚跳转:把尾部挂着 `^<id>` 的那个块滚进视野。**找不到返回 false**(调用方据此重试/放弃,
    *  同标题锚:宁可不动,绝不静默跳到别处)。`^id` 是 Obsidian 互操作格式,详见 pdfLink.ts。 */
   revealBlock?: (id: string, flash?: boolean) => boolean
+  /** 全文命中跳转(评审 G4-01:全智库搜索 / 标签面板点命中):按文档序找第一处命中(needles 依次尝试,整串优先),
+   *  命中藏在会话折叠(标题小节 / 列表子项)里先展开,再选中命中文字并亮到阅读位置。找不到返回 false(同块锚)。
+   *  tag=true:needle 是 `#标签`,按标签边界匹配(`#work` 不落在 `#workshop` 上)。 */
+  revealText?: (needles: string[], opts?: { tag?: boolean; flash?: boolean }) => boolean
   /** 外来 frontmatter 原文(插件的每页数据存这儿)。v3 那份在 manifest.fmExtra,v4 在 pipe.fm 里。
    *  **只读**:写口本轮不做(不带 bind 的块表面上零消费者,且 v4 fm 写要与结构键派生同场竞技,
    *  见 docs/ToBeImproved/块表面v4适配方案_2026-08-20.md §6.3)。 */
@@ -166,6 +170,13 @@ export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' 
  *  false(调用方 openNoteAtBlock 据此重试几拍再放弃 —— 实例挂上但 doc 还空是常态)。 */
 export function unifiedRevealBlock(path: string, id: string, flash = false): boolean {
   for (const h of handles) if (h.path === path && h.revealBlock) return h.revealBlock(id, flash)
+  return false
+}
+
+/** 搜索 / 标签命中:让 path 上那篇把第一处命中亮出来。没有 v4 实例、或那篇里没有命中 → false
+ *  (调用方 amadeusNav.revealTextWhenReady 据此重试几拍再放弃,同块锚)。 */
+export function unifiedRevealText(path: string, needles: string[], opts?: { tag?: boolean; flash?: boolean }): boolean {
+  for (const h of handles) if (h.path === path && h.revealText) return h.revealText(needles, opts)
   return false
 }
 
