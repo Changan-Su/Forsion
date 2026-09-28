@@ -976,6 +976,9 @@ export function MilkdownInner({
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
       .use(wikilinkPlugin((name) => wikiRef.current(name), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
+      // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
+      // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
+      .use($prose(() => new Plugin({ props: { attributes: (): Record<string, string> => (pagePathRef.current ? { 'data-amx-src': pagePathRef.current } : {}) } })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q, blurred) => {

@@ -14,6 +14,7 @@
 //   L1~L5 链接末尾接着输入不并进链接(I-04):键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴
 //   M1~M3 本地 md 链接(L-07):点击走库内打开(不补 https)、悬停卡「打开」同路、键入落盘逐字
 //   LK1~LK5 卡片动作作用于整条链接(I-07):`[**粗**普通](url)` 悬停半条也改 / 摘 / 删整条;只改地址不丢 code / 斜体 / 粗体
+//   HP1 双链悬停预览按链接所在笔记就近解析同名笔记(L-10):预览的就是点击会打开的那篇
 //   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
 //          全角标点收尾成链、落盘 `<url>`(裸写会把 `。后` 吞进地址);ASCII 句末标点留在链接外;行内代码 / 字母后不成链
 //
@@ -443,11 +444,49 @@ async function wholeLink(browser) {
   check('LK5 改文字:整条都有的格式(粗体)留着', r.doc.includes('新名[strong,link:https://a.dev/x]'), JSON.stringify(r))
 }
 
+// ── HP 组(L-10):双链悬停预览按**链接所在笔记**就近解析 —— 同名笔记 a/Note、b/Note,在 b/Src 里悬停 [[Note]]
+// 预览的必须是 b/Note(= 点击打开的那篇)。药在 MarkdownBlock 钉的 data-amx-src 与 WikiHoverPreview 的读法。
+// 台架没挂 AmadeusOverlays:照生产把 WikiHoverPreview 挂进页面(用 app 自己那份 react / react-dom 模块)。
+async function hoverPreview(browser) {
+  const p = await open(browser, '# T\n\nx\n', '')
+  await p.evaluate(() => window.__upage.switchFile('b/Src.md', '# Src\n\n链接 [[Note]] 结束\n\n尾\n'))
+  await p.waitForTimeout(800)
+  await p.evaluate(async () => {
+    window.__pageStore.setState({ pages: ['a/Note.md', 'b/Note.md', 'b/Src.md'], files: [] })
+    window.__readReq = []
+    window.amadeus.readPage = (path) => {
+      window.__readReq.push(path)
+      return Promise.resolve({ manifest: { root: { children: [{ columns: [{ children: [{ ref: 'b1' }] }] }] } }, blocks: { b1: { content: 'PREVIEW OF ' + path } } })
+    }
+    const urls = performance.getEntriesByType('resource').map((e) => e.name)
+    const React = await import(urls.find((n) => /deps\/react\.js/.test(n)))
+    const RDC = await import(urls.find((n) => /deps\/react-dom_client\.js/.test(n)))
+    const hoverUrl = urls.find((n) => /\/src\/amadeus\/components\/WikiHoverPreview\.tsx/.test(n)) || '/src/amadeus/components/WikiHoverPreview.tsx'
+    const { WikiHoverPreview } = await import(hoverUrl)
+    const host = document.createElement('div')
+    host.className = 'amadeus-root am-app'
+    document.body.appendChild(host)
+    ;(RDC.createRoot || RDC.default.createRoot)(host).render((React.createElement || React.default.createElement)(WikiHoverPreview))
+  })
+  // 光标挪到别的段,让链接那行渲染成双链部件
+  const tail = await (await p.$(`${PM} > p:last-of-type`)).boundingBox()
+  await p.mouse.click(tail.x + tail.width - 2, tail.y + tail.height / 2)
+  await p.waitForTimeout(300)
+  const w = await p.evaluate((s) => { const e = document.querySelector(s + ' .wikilink[data-wiki]'); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, PM)
+  if (!w) { check('HP 前置 [[Note]] 渲染成双链部件', false); await p.close(); return }
+  await p.mouse.move(5, 5)
+  await p.mouse.move(w.x, w.y, { steps: 3 })
+  await p.waitForTimeout(1000)
+  const got = await p.evaluate(() => ({ req: window.__readReq, body: document.querySelector('.amx-hoverprev-body')?.textContent ?? null }))
+  check('HP1 同名笔记:悬停预览读的是链接所在目录那篇(b/Note.md)', JSON.stringify(got.req) === '["b/Note.md"]' && /PREVIEW OF b\/Note\.md/.test(got.body || ''), JSON.stringify(got))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
   const long = '# T\n\n' + Array.from({ length: 40 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
-  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK
+  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null
   const want = (g) => !only || only.includes(g)
   if (want('LC')) {
@@ -459,6 +498,7 @@ async function main() {
   if (want('M')) await mdLinks(browser)
   if (want('AU')) await bareUrlTyping(browser)
   if (want('LK')) await wholeLink(browser)
+  if (want('HP')) await hoverPreview(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)
