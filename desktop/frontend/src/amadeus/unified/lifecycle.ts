@@ -219,7 +219,7 @@ export function unifiedRevealBlock(path: string, id: string, flash = false): boo
 /** 搜索 / 标签命中:让 path 上那篇把第一处命中亮出来。没有 v4 实例、或那篇里没有命中 → false
  *  (调用方 amadeusNav.revealTextWhenReady 据此重试几拍再放弃,同块锚)。 */
 export function unifiedRevealText(path: string, needles: string[], opts?: { tag?: boolean; flash?: boolean }): boolean {
-  for (const h of handles) if (h.path === path && h.revealText) return h.revealText(needles, opts)
+  for (const h of byRecency(path)) if (h.revealText) return h.revealText(needles, opts)
   return false
 }
 
