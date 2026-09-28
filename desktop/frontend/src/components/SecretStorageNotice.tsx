@@ -24,7 +24,7 @@ registerMessages({
   'unit.secrets.restartHintLinux': { zh: 'Forsion 这次启动时系统钥匙串不可用。解锁 GNOME Keyring 或 KWallet 后重启 Forsion。', en: "The system keyring wasn't available when Forsion started. Unlock GNOME Keyring or KWallet, then restart Forsion." },
   'unit.secrets.restartHint': { zh: 'Forsion 这次启动时系统加密不可用。重启 Forsion 后再试。', en: "System encryption wasn't available when Forsion started. Restart Forsion and try again." },
   'unit.secrets.lockedHint': { zh: '保存的凭据无法解密，系统钥匙串可能已被重置。可以重试；仍然不行就重新登记本机。', en: "The saved credentials can't be decrypted. The system keychain may have been reset. Try again, or re-register this device if that doesn't work." },
-  'unit.secrets.lockedHintToken': { zh: '保存的令牌无法解密，系统钥匙串可能已被重置。可以重试，或在下方重新填写令牌。', en: "The saved token can't be decrypted. The system keychain may have been reset. Try again, or enter the token again below." },
+  'unit.secrets.lockedHintToken': { zh: '保存的令牌无法解密，系统钥匙串可能已被重置。可以重试，或重新填写令牌后保存。', en: "The saved token can't be decrypted. The system keychain may have been reset. Try again, or enter the token again and save." },
   'unit.secrets.retry': { zh: '重试', en: 'Retry' },
   'unit.secrets.restart': { zh: '重启 Forsion', en: 'Restart Forsion' },
   'unit.secrets.reset': { zh: '重新登记本机', en: 'Re-register this device' },
@@ -44,7 +44,7 @@ export function secretNoticeView(st: SecretStorageStatus, slot?: SecretSlot): { 
   return { kind, lockedHere, canReset }
 }
 
-export function SecretStorageNotice({ onChange, slot }: { onChange?: (s: SecretStorageStatus) => void; slot?: SecretSlot } = {}): React.ReactElement | null {
+export function SecretStorageNotice({ onChange, slot, className }: { onChange?: (s: SecretStorageStatus) => void; slot?: SecretSlot; className?: string } = {}): React.ReactElement | null {
   const { t } = useI18n()
   const [st, setSt] = useState<SecretStorageStatus | null>(null)
   const [busy, setBusy] = useState(false)
@@ -78,7 +78,7 @@ export function SecretStorageNotice({ onChange, slot }: { onChange?: (s: SecretS
     : kind === 'locked' ? (token ? t('unit.secrets.lockedHintToken') : t('unit.secrets.lockedHint')) : t('unit.secrets.plaintextHint')
 
   return (
-    <div className="secnotice" role="status" data-secrets={kind}>
+    <div className={className ? `secnotice ${className}` : 'secnotice'} role="status" data-secrets={kind}>
       <span className="secnotice-ic" aria-hidden><ShieldAlert size={13} /></span>
       <div className="secnotice-body">
         <div className="secnotice-title">{title}</div>

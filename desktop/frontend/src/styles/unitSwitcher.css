@@ -95,7 +95,10 @@
 /* P1-K5 设备凭据存储提示(SecretStorageNotice):降级 / 锁定时挂在「允许其他设备连接本机」之下。只用已有 token。 */
 .secnotice { display: flex; gap: 7px; margin: 2px 9px 5px; padding: 7px 8px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
 .secnotice-ic { flex: none; display: inline-flex; padding-top: 1px; color: var(--warning); }
-.secnotice[data-secrets='locked'] .secnotice-ic { color: var(--danger); }
+.secnotice[data-secrets='locked'] .secnotice-ic,
+.secnotice[data-secrets='restart'] .secnotice-ic { color: var(--danger); }
+/* 设置页外部连接面板里(与 .settings-external-panel > .field 的 15px 横向内边距对齐) */
+.secnotice.secnotice-inpanel { margin: 12px 15px 0; }
 .secnotice-body { flex: 1; min-width: 0; }
 .secnotice-title { color: var(--text-light); font-weight: 500; }
 .secnotice-hint { margin-top: 2px; }

@@ -24,6 +24,8 @@
  *   D 迁移卡住(device-secrets.json 是个目录:读 EISDIR、写 rename 失败)→ shell 里的三键原样保留 → getConfig() 仍不许带
  *     unitHostId / unitHostSecret(loadConfig 的 `...shell` 剥离;迁移成功时 shell 已空,A3 证不到这条)、token 回落 shell、
  *     配对按锁定(unitHost 不运行)、存储「文件」没被写成别的东西。
+ *   E external token 锁定且互联关着(切换器里不挂提示):设置 › 连接 › 外部连接面板出 token 锁定提示(只有「重试」,
+ *     没有「重新登记本机」),截图;把好的密文放回、点重试 → 提示消失、getConfig().token 恢复。
  *
  * 负对照(断言必须能红):在 K5 之前的 main.ts 上跑(git checkout 297408ab -- electron/main.ts && npm run build)→
  *   A1(shell 字节里有明文)、A3(getConfig 带 unitHostSecret)必须红;删掉 loadConfig 里两行 `delete merged.unitHost*` → D2 红
@@ -289,6 +291,51 @@ async function main() {
       await closeApp(app); app = null
       if (!KEEP) fs.rmSync(homeD, { recursive: true, force: true })
       else note('保留临时目录(D)', homeD)
+    }
+
+    // ── E external token 锁定、互联关着:设置页外部连接面板给提示 ─────────────────────────────────────
+    const homeE = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-secrets-e-'))
+    try {
+      const udE = path.join(homeE, 'userdata-dev')
+      const storeE = path.join(udE, 'device-secrets.json')
+      fs.mkdirSync(udE, { recursive: true })
+      const goodE = JSON.parse(good)
+      delete goodE.entries.unitPairing
+      const goodEText = JSON.stringify(goodE, null, 2)
+      const badE = JSON.parse(goodEText)
+      badE.entries.externalToken = { enc: 'os', backend: 'keychain', data: Buffer.from('v10' + 'y'.repeat(29)).toString('base64'), at: 1 }
+      fs.writeFileSync(storeE, JSON.stringify(badE, null, 2), { mode: 0o600 })
+      fs.writeFileSync(path.join(udE, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, unitHostEnabled: false, mcpEnabled: false }, null, 2))
+      ;({ app, mainLog } = await launchApp(homeE, stub.url))
+      win = await mainWindow(app)
+      await skipOnboarding(win)
+      const cfgE = await bridge(win, () => window.tangu.getConfig())
+      check('E1 token 锁定 → getConfig().token 为空(不是乱码),status.locked 含 externalToken', cfgE.token === '' && (await bridge(win, () => window.tangu.secretStorageStatus())).locked.includes('externalToken'), cfgE.token)
+      await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'connection' } }))
+      let fl = null
+      const until = Date.now() + 20_000
+      while (Date.now() < until && !fl) { fl = app.windows().find((w) => w.url().includes('window=floating')) || null; if (!fl) await sleep(200) }
+      if (!fl) throw new Error('settings floating window missing')
+      const noticeE = fl.locator('.settings-external-panel .secnotice[data-secrets="locked"]').first()
+      const shownE = await noticeE.waitFor({ timeout: 20_000 }).then(() => true, () => false)
+      const txt = shownE ? await noticeE.innerText() : ''
+      check('E2 设置 › 外部连接面板出 token 锁定提示:只有「重试」,没有「重新登记本机」', shownE && (await noticeE.locator('button').count()) === 1 && !txt.includes('重新登记'), txt)
+      if (shownE) {
+        await fl.waitForTimeout(400)
+        const panel = fl.locator('.settings-external-panel').first()
+        const file = path.join(SHOT_DIR, 'device-secrets-token-locked-settings-zh.png')
+        await panel.screenshot({ path: file })
+        note('E 截图', file)
+        fs.writeFileSync(storeE, goodEText, { mode: 0o600 })
+        await noticeE.locator('button').first().click()
+        const goneE = await fl.locator('.settings-external-panel .secnotice').first().waitFor({ state: 'detached', timeout: 8_000 }).then(() => true, () => false)
+        const cfgE2 = await bridge(win, () => window.tangu.getConfig())
+        check('E3 放回好的密文、点重试 → 提示消失、token 恢复', goneE && cfgE2.token === EXT_TOKEN, cfgE2.token)
+      }
+    } finally {
+      await closeApp(app); app = null
+      if (!KEEP) fs.rmSync(homeE, { recursive: true, force: true })
+      else note('保留临时目录(E)', homeE)
     }
   } catch (e) {
     check('台架未抛错', false, String(e && e.stack || e).slice(0, 800))

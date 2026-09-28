@@ -1659,7 +1659,7 @@ export const SettingsModal: React.FC<{
                           />
                         </div>
                         {/* P1-K5:已落盘为外部连接时,保存的 token 读不出来(钥匙串拒绝 / 被重置)/ 系统加密不可用 → 这里说清楚并给重试 / 重启 */}
-                        {isDesktop && mode === 'external' && <SecretStorageNotice slot="externalToken" />}
+                        {isDesktop && mode === 'external' && <SecretStorageNotice slot="externalToken" className="secnotice-inpanel" />}
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <button className="btn ghost sm" onClick={test} disabled={testing || connCfgPending}>
                             {testing ? <Loader2 size={13} className="spin" /> : null} {t('settings.btn.testConnection')}
