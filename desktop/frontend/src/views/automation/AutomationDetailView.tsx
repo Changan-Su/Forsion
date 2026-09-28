@@ -13,6 +13,7 @@ import { AutomationExtension } from './AutomationExtension'
 import { automationListSource, subscribeAutomation } from './automationListSource'
 import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
+import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
 import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
@@ -240,7 +241,7 @@ export const AutomationDetailView: React.FC<Partial<ViewProps>> = ({ extendView 
 
 const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns: () => void }> = ({ extendView, onRuns }) => {
   const { t } = useI18n()
-  const agentDefs = useApp((s) => s.agentDefs)
+  const agentDefs = useHomeAgentDefs() // 自动化是本端的(P1-K6)
   const st = useAutomation()
 
   if (st.builder) {

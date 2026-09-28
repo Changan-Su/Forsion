@@ -7,6 +7,7 @@ import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
 import { translate } from '../i18n'
 import { useApp } from './appStore'
+import { homeAgentDefs } from './homeCatalog'
 import { notifyApp } from './notificationStore'
 import {
   listInbox, getInboxUnreadCount, patchInboxMessage, readAllInbox, deleteInboxMessage, pullInbox, claimInboxAttachment,
@@ -38,7 +39,7 @@ export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): st
   if (m.sender_kind === 'server') return 'Forsion'
   if (m.sender_kind === 'system') return translate('inbox.sender.system')
   if (isAutomationSender(m)) return translate('inbox.sender.automation')
-  const a = useApp.getState().agentDefs.find((x) => x.slug === m.sender_id)
+  const a = homeAgentDefs().find((x) => x.slug === m.sender_id) // 收件箱是本端的:焦点在我的电脑时也按本端的 Agent 认发件人
   return a?.name || m.sender_id || 'agent'
 }
 

@@ -4,6 +4,7 @@ import { usePluginStore } from '../../amadeus/plugins/pluginStore'
 import type { ListItem, ListSourceContribution } from '../../amadeus/plugins/types'
 import { translate as t } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { homeAgentDefs, subscribeHomeAgents } from '../../stores/homeCatalog'
 import { notifyApp } from '../../stores/notificationStore'
 import { windowKind } from '../../windowKind'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
@@ -61,7 +62,7 @@ let stopPolling: (() => void) | undefined
 /** Shared polling survives a hidden sidebar; each mounted consumer releases its subscription. */
 export function subscribeAutomation(cb: () => void): () => void {
   const off = useAutomation.subscribe(cb)
-  const offAgents = useApp.subscribe((s, p) => { if (s.agentDefs !== p.agentDefs) cb() })
+  const offAgents = subscribeHomeAgents(cb) // 自动化是本端的:焦点在我的电脑时也按本端的 Agent 目录
   if (readers++ === 0) {
     const refresh = () => void useAutomation.getState().refresh(useApp.getState().cfg)
     const offState = useAutomation.subscribe((s, p) => { if (s.refreshNonce !== p.refreshNonce) refresh() })
@@ -78,7 +79,7 @@ export const automationListSource: ListSourceContribution = {
   activeKey: () => useAutomation.getState().builder ? null : keyOf(useAutomation.getState().sel),
   subscribe: subscribeAutomation,
   items(filter) {
-    const state = useAutomation.getState(), defs = useApp.getState().agentDefs
+    const state = useAutomation.getState(), defs = homeAgentDefs()
     const q = filter?.query?.trim().toLowerCase()
     const rows: Array<ListItem & { category: string; searchText?: string }> = state.triggers.map((tr) => ({
       key: keyOf({ kind: 'trigger', triggerId: tr.id })!, title: tr.desc, icon: 'today',

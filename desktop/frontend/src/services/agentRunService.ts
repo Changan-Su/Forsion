@@ -9,7 +9,10 @@ import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
 import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
-import { asTarget, isEngineTarget, type EngineArg } from './engine/targets'
+import { asTarget, fetchOpts, isEngineTarget, routeSession, targetLabel, type EngineArg, type EngineTarget } from './engine/targets'
+import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, noteVerdict, waitReady, type Verdict } from './engine/health'
+import { remoteRefusalMessage } from './localOnly'
+import './engine/messages'
 import { currentPlatform } from './platform'
 
 registerMessages({
@@ -21,11 +24,17 @@ registerMessages({
 })
 
 /** 对目标引擎发一条请求(P1-K6):基址与鉴权头都归目标(`asTarget`),本文件不再直读 cfg.backendUrl / cfg.token。
- *  头与改造前的 `headers(cfg.token)` 同形;opts 缺省时不传第三参,与改造前逐字一致。 */
+ *  头与改造前的 `headers(cfg.token)` 同形;home 目标 opts 缺省时不传第三参,与改造前逐字一致;
+ *  非 home 目标恒带 `target`(401 分流,§3.5)。
+ *  S2:本文件的 13 个函数全是会话类(§3.3),调用方传整份本端 cfg 时按 routeSession 走会话所在的目标(= 焦点)。 */
 async function engineRequest(cfg: EngineArg, path: string, init: RequestInit = {}, opts?: { timeoutMs?: number }): Promise<Response> {
-  const t = asTarget(cfg)
+  const t = routeSession(cfg)
   const req = { ...init, headers: await t.headers(true) }
-  return opts ? authFetch(`${t.base}${path}`, req, opts) : authFetch(`${t.base}${path}`, req)
+  const o = fetchOpts(t, opts?.timeoutMs)
+  const r = await (o ? authFetch(`${t.base}${path}`, req, o) : authFetch(`${t.base}${path}`, req))
+  // unit 的带鉴权请求 2xx → 这台此刻是通的(与 backendService.request 同口径)。/health 不鉴权(令牌漂了照样 200),不算数。
+  if (t.via === 'unit' && r.ok && path !== '/health') noteReachable(t.key)
+  return r
 }
 
 /**
@@ -48,23 +57,69 @@ export function currentClientId(): string {
   return `${currentPlatform()}/${APP_VERSION || '0'}`
 }
 
-/** /health 之后追打的带鉴权探针:任一需要 authMiddleware 的轻量 GET 即可(special/config 无副作用、体积小)。 */
-export const AUTH_PROBE_PATH = '/agent/special/config'
+/** /health 之后追打的带鉴权探针:任一需要 authMiddleware 的轻量 GET 即可(special/config 无副作用、体积小)。
+ *  单源在 services/engine/health.ts(健康探针同一条),这里 re-export,既有 import 不变。 */
+export const AUTH_PROBE_PATH = PROBE_PATH
 
 /** authRejected:探针 401(令牌被拒)。凭证问题不是瞬态连接故障 —— 调用方(boot 重试环)见它即停,自愈归 handleAuthExpired。 */
-export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; message: string; authRejected?: boolean }> {
+export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; message: string; authRejected?: boolean; verdict?: Verdict }> {
+  // 目录类(§3.3 target 类):探的是**调用方指定的那台**(设置页外部连接表单现拼的地址 / appStore 显式传的焦点),
+  // 不按会话路由 —— 老调用点传整份 cfg 仍折成 home,与改造前一致。
+  cfg = asTarget(cfg)
   try {
     const r = await engineRequest(cfg, '/health', {}, { timeoutMs: 15000 })
-    if (!r.ok) return { ok: false, message: `HTTP ${r.status}` }
+    if (!r.ok) {
+      // unit 目标(经 hub):离线 / 引擎没起 / 设备被移除 / 调用方身份取不到各给一句人话,并把类别带回去(appStore 据此定健康态)
+      if (cfg.via === 'unit') {
+        const body = await r.clone().json().catch(() => null) as { code?: string } | null
+        const verdict = classify(r.status, body)
+        noteVerdict(cfg.key, verdict, body?.code ? { code: body.code } : {})
+        return { ok: false, message: unitFailureMessage(cfg, verdict, body?.code) || `HTTP ${r.status}`, verdict }
+      }
+      return { ok: false, message: `HTTP ${r.status}` }
+    }
     const j = await r.json().catch(() => ({}))
     // /health 不鉴权(standalone/main.ts 直接 res.json)—— 令牌漂了它照样 200,connState 假绿,随后每个真请求
     // 各自 401(真机一轮 9 次)。再追一次带鉴权的 GET:**只认 401**(凭证被拒);403 / 404 / 5xx / 网络错是别的
     // 问题(云端面没有这条路由、配额、后端半启动),不把连接判死。authFetch 的 401 拦截器照常触发重登录自愈。
     const probe = await engineRequest(cfg, AUTH_PROBE_PATH, {}, { timeoutMs: 15000 }).catch(() => null)
     if (probe && probe.status === 401) return { ok: false, message: translate('agentrun.authFailed'), authRejected: true }
+    if (cfg.via === 'unit') {
+      // 带鉴权的那条被执行设备 / hub 按调用方拒了(身份、远程会话开关、急停)= 这台连不上,不是「已连接」
+      const pb = probe && !probe.ok ? await probe.clone().json().catch(() => null) as { code?: string } | null : null
+      const pv = probe && !probe.ok ? classify(probe.status, pb) : 'ok'
+      if (pv === 'caller-unavailable' || pv === 'refused' || pv === 'gone') {
+        noteVerdict(cfg.key, pv, pb?.code ? { code: pb.code } : {})
+        return { ok: false, message: unitFailureMessage(cfg, pv, pb?.code) || `HTTP ${probe!.status}`, verdict: pv }
+      }
+      noteVerdict(cfg.key, 'ok')
+    }
     return { ok: true, message: translate('agentrun.connected', { sandbox: j.sandbox ?? '?' }) }
   } catch (e: any) {
+    if (cfg.via === 'unit') {
+      const verdict = classifyError(e)
+      noteVerdict(cfg.key, verdict, typeof e?.code === 'string' ? { code: e.code } : {})
+      return { ok: false, message: unitFailureMessage(cfg, verdict, e?.code) || e?.message || translate('agentrun.connectFailed'), verdict }
+    }
     return { ok: false, message: e?.message || translate('agentrun.connectFailed') }
+  }
+}
+
+/** unit 目标的失败 → 一句人话(拒绝码优先走 localOnly 的本地化表;其余按类别给 engine.target.*)。认不出 → null。 */
+export function unitFailureMessage(t: EngineTarget, v: Verdict, code?: unknown): string | null {
+  const refusal = remoteRefusalMessage(code)
+  if (refusal) return refusal
+  const name = targetLabel(t)
+  switch (v) {
+    case 'offline': return translate('engine.target.offline', { name })
+    case 'engine-unavailable': return translate('engine.target.engineUnavailable', { name })
+    case 'account-auth?': return translate('engine.target.engineAuth', { name })
+    case 'gone': return translate('engine.target.gone')
+    case 'rate-limited': return translate('engine.target.rateLimited')
+    case 'too-large': return translate('engine.target.tooLarge')
+    case 'caller-unavailable': return translate('engine.target.callerUnavailable', { name })
+    case 'refused': return translate('engine.target.refused', { name })
+    default: return null
   }
 }
 
@@ -78,9 +133,11 @@ export async function startRun(
     agentConfig?: AgentConfig
   },
 ): Promise<StartRunResult> {
-  // 模型回退:老调用点传整份 cfg 时沿用 cfg.modelId(行为不变);目标本身不带模型(S2 起改走按目标的 modelFor)。
-  const fallbackModel = isEngineTarget(cfg) ? undefined : cfg.modelId
-  const r = await engineRequest(cfg, '/agent/runs', {
+  // 模型回退:老调用点传整份 cfg 时沿用 cfg.modelId(行为不变);目标本身不带模型。
+  // S2:焦点在「我的电脑」时 cfg.modelId 是这台手机的偏好,那台电脑未必有这个模型 → 不回退,交给调用方 / 引擎缺省。
+  const t = routeSession(cfg, params.sessionId)
+  const fallbackModel = isEngineTarget(cfg) || t.key !== 'home' ? undefined : cfg.modelId
+  const r = await engineRequest(t, '/agent/runs', {
     method: 'POST',
     body: JSON.stringify({
       session_id: params.sessionId,
@@ -291,31 +348,111 @@ export async function resolveApproval(
   return { ok: false, gone: false, ...(await httpErrorMessage(r)) }
 }
 
-/** 订阅 run 的 SSE 事件流;onEvent 收到每条 {seq,type,payload}。done/error 时返回。 */
+/** 429 的等待:Retry-After(秒或 HTTP 日期)缺省 10s,钳在 1s–120s。 */
+function retryAfterMs(res: Response): number {
+  const raw = res.headers.get('Retry-After')
+  let ms = 10_000
+  if (raw) {
+    const secs = Number(raw)
+    if (Number.isFinite(secs)) ms = secs * 1000
+    else {
+      const at = Date.parse(raw)
+      if (Number.isFinite(at)) ms = at - Date.now()
+    }
+  }
+  return Math.min(120_000, Math.max(1000, ms))
+}
+
+/** 可被中止的睡眠(中止 = 立即返回,由调用方看 signal.aborted 收尾)。 */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, ms)
+    const onAbort = (): void => { clearTimeout(timer); resolve() }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * 订阅 run 的 SSE 事件流;onEvent 收到每条 {seq,type,payload}。done/error 时返回。
+ *
+ * P1-K6 S2 · 重试策略按目标(§3.6),目标在订阅时解析一次,重连一直打同一台(换焦点会中止整条订阅):
+ *   干净断流且非终态 → 800ms 后以 fromSeq 续订(两类目标同;覆盖 hub 1h 总时长 / 15min 空闲断流)
+ *   429               → 按 Retry-After(缺省 10s)续订,不计失败次数(改造前 4xx 一律抛 = 限流直接杀流)
+ *   unit 离线类       → 503 UNIT_OFFLINE / 502 / 504 / 网络错 / 503 ENGINE_NOT_READY:**暂停**等 waitReady(探针退避),
+ *                       恢复后以原 lastSeq 续订,不把消息标错
+ *   unit 终局         → 404 UNIT_NOT_FOUND / 调用方身份(503 CALLER_* / 403 UNIT_CALLER_* / BAD_CALLER_ASSERTION)/
+ *                       执行设备拒绝(403 REMOTE_* / 423)/ 其它 4xx:抛,健康表记下(不无限重试,R-32)
+ *   home 5xx / 网络错 → 重试 6 次(约 21s)后抛(不变);home 其它 4xx → 抛(不变)
+ */
 export async function subscribeRunEvents(
   cfg: EngineArg,
   runId: string,
   onEvent: (ev: AgentRunEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const t = routeSession(cfg)
+  const unit = t.via === 'unit'
   let lastSeq = 0
   let failures = 0
   const MAX = 6
+  /** unit 离线类:记健康、等恢复。中止 → 返回 false(调用方退出);终局 → 抛。 */
+  const pause = async (v: Verdict, code?: string): Promise<boolean> => {
+    noteVerdict(t.key, v, code ? { code } : {})
+    try {
+      await waitReady(t.key, signal)
+      return true
+    } catch (e) {
+      if (signal?.aborted) return false
+      throw e
+    }
+  }
+  const unitFail = (v: Verdict, status: number, code?: string): Error => {
+    noteVerdict(t.key, v, code ? { code } : {})
+    return Object.assign(new Error(unitFailureMessage(t, v, code) || translate('agentrun.subscribeFailed', { status })), { status, ...(code ? { code } : {}) })
+  }
 
   while (true) {
     if (signal?.aborted) return
     let res: Response
     try {
       res = await engineRequest(
-        cfg,
+        t,
         `/agent/runs/${encodeURIComponent(runId)}/events?fromSeq=${lastSeq}`,
         { signal },
       )
     } catch (e) {
       if (signal?.aborted) return
+      if (unit) {
+        const v = classifyError(e)
+        if (v === 'caller-unavailable') { noteVerdict(t.key, v, { code: (e as { code?: string }).code || 'CALLER_UNAVAILABLE' }); throw e }
+        if (!(await pause('offline'))) return
+        continue
+      }
       if (++failures > MAX) throw e
       await delay(1000 * failures)
       continue
+    }
+    if (res.status === 429) {
+      const wait = retryAfterMs(res)
+      if (unit) noteVerdict(t.key, 'rate-limited', { retryAt: Date.now() + wait })
+      await sleep(wait, signal)
+      continue
+    }
+    if (unit && !res.ok) {
+      const body = await res.clone().json().catch(() => null) as { code?: string } | null
+      const code = typeof body?.code === 'string' ? body.code : undefined
+      const v = classify(res.status, body)
+      if (v === 'offline' || v === 'engine-unavailable') {
+        if (!(await pause(v, code))) return
+        continue
+      }
+      if (v === 'transient') {
+        if (++failures > MAX) throw unitFail(v, res.status, code)
+        await delay(1000 * failures)
+        continue
+      }
+      throw unitFail(v, res.status, code)
     }
     if (res.status >= 400 && res.status < 500) throw new Error(translate('agentrun.subscribeFailed', { status: res.status }))
     if (!res.ok || !res.body) {
@@ -324,6 +461,7 @@ export async function subscribeRunEvents(
       continue
     }
     failures = 0
+    if (unit) noteVerdict(t.key, 'ok')
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()

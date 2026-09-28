@@ -136,6 +136,8 @@ const KNOWN_GATES = {
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
   // P1-K3
   'window.tangu?.onApprovalOpen': '远程会话待批的系统通知被点击 → 打开会话 — 仅 Electron:通知由桌面主进程 approvalDelivery 订阅本机引擎待批流后发出(webContents.send approval:open)。移动端没有本机引擎、P1 没有原生通知(方案 P2),手机侧走收件箱审批提醒信的「打开会话」按钮(InboxReaderView,共享)与会话列表「等你处理」点(attentionStore,经 useBootstrap 三端共用);web 无此 IPC',
+  // P1-K6
+  'window.tangu?.unitCallerHeaders': 'unit 目标(手机 / 网页版经 hub 打「我的电脑」)的调用方头接缝(INTEGRATION R-05),读在 services/engine/targets.ts:每个请求现取、只放行 X-Forsion-Caller、抛错即失败关闭不发请求。只有 K8 手机原生**桥模式**实现它;K8 缺省中继模式(原生层自己附头)与 web 都不实现 → 不带头(hub 眼里的账号级未识别调用方),桌面 / 设备页根本没有 unit 目标。缺席是设计,不是移动端漏了功能',
   'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
 }
 

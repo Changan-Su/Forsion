@@ -7,11 +7,14 @@ import type {
   NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
-import { asTarget, type EngineArg } from './engine/targets'
-import { AGENT_APP_ID } from './agentRunService'
+import { asTarget, fetchOpts, routeSession, type EngineArg, type EngineTarget } from './engine/targets'
+import { targetCaps, type TargetCaps } from './engine/targetCaps'
+import { classify, noteReachable, noteVerdict } from './engine/health'
+import './engine/messages'
+import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
-import { remoteRefusalMessage } from './localOnly'
+import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -21,12 +24,14 @@ registerMessages({
  *  `headers(cfg.token)` 同形同序)。本文件不再直读 cfg.backendUrl / cfg.token(棘轮 R1 钉住)。 */
 async function request<T>(cfg: EngineArg, path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
   const t = asTarget(cfg)
-  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, opts)
+  // home 目标的第三参与改造前逐字一致(opts 原样,可能是 undefined);非 home 恒带 target(401 分流,K6 §3.5)。
+  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs))
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
+    let j: any = null
     try {
-      const j = await r.json()
+      j = await r.json()
       detail = j?.detail || detail
       if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
       // 设备页打到远端不许用的路由(unitWeb 403 LOCAL_ONLY)、或引擎拒了远端请求(400 REMOTE_CWD_FORBIDDEN /
@@ -34,9 +39,41 @@ async function request<T>(cfg: EngineArg, path: string, init?: RequestInit, opts
       const refusal = remoteRefusalMessage(j?.code)
       if (refusal) { detail = refusal; code = j.code }
     } catch { /* keep */ }
+    // P1-K6 S2:经 hub 打「我的电脑」的失败(离线 / 引擎没起 / 设备被移除 / 调用方身份 / 413)→ 人话 + 记健康表
+    if (t.via === 'unit') {
+      const hubCode = typeof j?.code === 'string' ? j.code : undefined
+      const v = classify(r.status, j)
+      // 执行设备的拒绝码(K4 REMOTE_SESSIONS_OFF / REMOTE_CALLER_UNCONFIRMED 只拒 session 层;K2 REMOTE_LOCKED 只拒非 GET)
+      // 是**这一条请求**的事,读照常放行(K4 文案本身就说「可以查看、回答审批和停止任务」)—— 与 local-only / 413 同理
+      // 不写健康表;写成整台 refused 会让轮询停摆、提示条卡住,那台点了「允许」/ 解锁之后也没人把它清掉。
+      if (v !== 'refused') noteVerdict(t.key, v, hubCode ? { code: hubCode } : {})
+      const msg = unitFailureMessage(t, v, hubCode)
+      if (msg && v !== 'fatal' && v !== 'local-only') { detail = msg; if (hubCode) code = hubCode }
+    }
     throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
   }
+  if (t.via === 'unit') noteReachable(t.key) // 2xx:这台此刻是通的(离线类不必干等探针,见 health.noteReachable)
   return r.json() as Promise<T>
+}
+
+/** 头像 / 项目图标这类 blob 的 GET。home 与改造前逐字一致(两参);非 home 带目标键,让 401 拦截器知道是哪台拒的
+ *  (§3.5 的 401 单一路径 —— 漏了第三参,unit 的 401 会被当成 home 的走本机过期流程)。 */
+async function blobFetch(t: EngineTarget, url: string): Promise<Response> {
+  const init = { headers: await t.headers(true) }
+  const o = fetchOpts(t)
+  return o ? authFetch(url, init, o) : authFetch(url, init)
+}
+
+// ── P1-K6 S2:会话类路由(§3.3)──
+/** 会话类:老调用点传整份本端 cfg 时,按会话所在的目标发(S2 = 焦点);传目标原样用。 */
+const S = (cfg: EngineArg, sessionId: string): EngineTarget => routeSession(cfg, sessionId)
+
+/** 会话类里远端 deny-remote 的五个(硬删 / 回退 / 检查点恢复 / 整对象 PUT 配置 / 工作区删除):目标没有这项能力 →
+ *  **不发请求**,直接给与 unitWeb 403 LOCAL_ONLY 同一句本地化提示(K6 §3.3「服务层预判」)。异步抛:调用方的 .catch 接得住。 */
+async function requestCap<T>(cfg: EngineArg, sessionId: string, cap: keyof TargetCaps, path: string, init?: RequestInit): Promise<T> {
+  const t = S(cfg, sessionId)
+  if (!targetCaps(t)[cap]) throw Object.assign(new Error(localOnlyMessage()), { status: 403, code: LOCAL_ONLY_CODE })
+  return request<T>(t, path, init)
 }
 
 // ── 记忆同步(本地 ↔ Forsion Brain)──
@@ -120,7 +157,7 @@ export const deleteTeamAvatar = (cfg: EngineArg, slug: string) =>
 export async function fetchTeamAvatar(cfg: EngineArg, slug: string): Promise<string | null> {
   try {
     const t = asTarget(cfg)
-    const response = await authFetch(`${t.base}/agent/teams/${encodeURIComponent(slug)}/avatar`, { headers: await t.headers(true) })
+    const response = await blobFetch(t, `${t.base}/agent/teams/${encodeURIComponent(slug)}/avatar`)
     if (!response.ok) return null
     return URL.createObjectURL(await response.blob())
   } catch { return null }
@@ -141,18 +178,18 @@ export const updateSession = (
     project_path?: string | null; project_name?: string | null; projectless?: boolean
   },
 ) =>
-  request<{ session: SessionRecord }>(cfg, `/agent/sessions/${encodeURIComponent(id)}`, {
+  request<{ session: SessionRecord }>(S(cfg, id), `/agent/sessions/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   }).then((r) => r.session)
 
 export const deleteSession = (cfg: EngineArg, id: string) =>
-  request<{ ok: boolean }>(cfg, `/agent/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  requestCap<{ ok: boolean }>(cfg, id, 'hardDeleteSession', `/agent/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 /** 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于空的新会话)。返回新会话。 */
 export const branchSession = (cfg: EngineArg, sessionId: string, messageId: string, title?: string) =>
   request<{ session: SessionRecord; copied: number }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/branch`,
+    S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/branch`,
     { method: 'POST', body: JSON.stringify({ message_id: messageId, ...(title ? { title } : {}) }) },
   ).then((r) => r.session)
 
@@ -169,23 +206,23 @@ export interface BackgroundSessionInfo {
 }
 
 export const getSessionDetail = (cfg: EngineArg, sessionId: string) =>
-  request<{ session: SessionRecord & { delegate_running?: boolean } }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/detail`).then((r) => r.session)
+  request<{ session: SessionRecord & { delegate_running?: boolean } }>(S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/detail`).then((r) => r.session)
 export const openTeamMemberSession = (cfg: EngineArg, parentId: string, slug: string) =>
-  request<{ session: SessionRecord }>(cfg, `/agent/sessions/${encodeURIComponent(parentId)}/team-members/${encodeURIComponent(slug)}`, { method: 'POST' }).then((r) => r.session)
+  request<{ session: SessionRecord }>(S(cfg, parentId), `/agent/sessions/${encodeURIComponent(parentId)}/team-members/${encodeURIComponent(slug)}`, { method: 'POST' }).then((r) => r.session)
 export const getBackgroundSessions = (cfg: EngineArg, sessionId: string, kind?: string) =>
   request<{ background: BackgroundSessionInfo[] }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/background${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
+    S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/background${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
   ).then((r) => r.background)
 
 export const listMessages = (cfg: EngineArg, sessionId: string, limit = 200, before?: number) =>
   request<{ messages: MessageRecord[] }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
+    S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
   ).then((r) => r.messages)
 
 /** 按精确 id 列表删除会话内消息(编辑重发 / 重新生成前截断该点及之后的消息)。 */
 export const deleteMessages = (cfg: EngineArg, sessionId: string, ids: string[]) =>
-  request<{ ok: boolean; deleted: number }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/messages/delete`,
+  requestCap<{ ok: boolean; deleted: number }>(
+    cfg, sessionId, 'rewind', `/agent/sessions/${encodeURIComponent(sessionId)}/messages/delete`,
     { method: 'POST', body: JSON.stringify({ ids }) },
   )
 
@@ -225,23 +262,23 @@ export interface CheckpointInfo {
 }
 export const listCheckpoints = (cfg: EngineArg, sessionId: string) =>
   request<{ checkpoints: CheckpointInfo[] }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
+    S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
   ).then((r) => r.checkpoints || [])
 
 /** 把代码恢复到 `at` 时刻(该时刻之后所有写工具改动按最早 pre-image 回滚)。 */
 export const restoreCheckpoint = (cfg: EngineArg, sessionId: string, at: number) =>
-  request<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
+  requestCap<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
+    cfg, sessionId, 'checkpointRestore', `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
     { method: 'POST', body: JSON.stringify({ at }) },
   )
 
 export const getSessionConfig = (cfg: EngineArg, sessionId: string) =>
   request<{ agent_config: AgentConfig }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/config`,
+    S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/config`,
   ).then((r) => r.agent_config || {})
 
 export const putSessionConfig = (cfg: EngineArg, sessionId: string, config: AgentConfig) =>
-  request<{ agent_config: AgentConfig }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/config`, {
+  requestCap<{ agent_config: AgentConfig }>(cfg, sessionId, 'putSessionConfig', `/agent/sessions/${encodeURIComponent(sessionId)}/config`, {
     method: 'PUT',
     body: JSON.stringify(config),
   }).then((r) => r.agent_config)
@@ -249,14 +286,18 @@ export const putSessionConfig = (cfg: EngineArg, sessionId: string, config: Agen
 /** 按键合并写会话配置:只带要改的键(undefined 上线为 null = 删这个键),服务端并进存值。整对象 PUT 会把本地缓存里
  *  别的键的旧值一起写回去(另一窗口的陈旧缓存、同窗口先发后到的请求)—— 审批档是引擎审批时现读的存值,被盖回去 = 悄悄放宽。
  *  老引擎没有这个路由(404/405)→ 回落整对象 PUT,full() 给本地最新的整对象(旧行为)。会话不存在时 PUT 照样 404,不碍事。 */
-export const patchSessionConfig = (cfg: EngineArg, sessionId: string, patch: Partial<AgentConfig>, full: () => AgentConfig) =>
-  request<{ agent_config: AgentConfig }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/config`, {
+export const patchSessionConfig = (cfg: EngineArg, sessionId: string, patch: Partial<AgentConfig>, full: () => AgentConfig) => {
+  const t = S(cfg, sessionId)
+  return request<{ agent_config: AgentConfig }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/config`, {
     method: 'PATCH',
     body: JSON.stringify(Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, v === undefined ? null : v]))),
   }).then((r) => r.agent_config, (e) => {
     if (e?.status !== 404 && e?.status !== 405) throw e
-    return putSessionConfig(cfg, sessionId, full())
+    // 远端目标没有整对象 PUT(deny-remote):回落不了就把 PATCH 的错原样交出去,别换成一句误导的「只能在本机」
+    if (!targetCaps(t).putSessionConfig) throw e
+    return putSessionConfig(t, sessionId, full())
   })
+}
 
 // ── custom 审批档规则(H2:此前只能手写 ~/.tangu/config.json)。规则是**全局**的(跨会话),
 //    档位才是按会话;引擎每次工具调用现读 config.json → 保存后下一次调用即生效。
@@ -276,17 +317,17 @@ export const putApprovalRules = (cfg: EngineArg, rules: Partial<ApprovalRules>) 
 
 /** 本会话累计 token 消耗(跨 run 求和)+ 最近一次的上下文占用(重载会话后恢复上下文圈用)。 */
 export const getSessionUsage = (cfg: EngineArg, sessionId: string) =>
-  request<{ tokensTotal: number; contextTokens?: number }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/usage`)
+  request<{ tokensTotal: number; contextTokens?: number }>(S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/usage`)
     .then((r) => ({ base: Number(r.tokensTotal) || 0, ctx: Number(r.contextTokens) || 0 }))
 
 /** 会话事件时间线骨架(无正文;流式帧折叠成段):导出日志携带,tangu-agent 的 scripts/stall-timeline.mjs 据此归属秒数。 */
 export const getSessionTimeline = (cfg: EngineArg, sessionId: string) =>
-  request<{ runs: any[] }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/timeline`).then((r) => r.runs || [])
+  request<{ runs: any[] }>(S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/timeline`).then((r) => r.runs || [])
 
 /** 手动压缩上下文(生成并持久化总结检查点;后续 run 起步即精简)。 */
 export const compactSession = (cfg: EngineArg, sessionId: string, modelId?: string, instructions?: string) =>
   request<{ ok: boolean; reason?: string; summarizedCount?: number; contextTokens?: number }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/compact`,
+    S(cfg, sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/compact`,
     { method: 'POST', body: JSON.stringify({ ...(modelId ? { model_id: modelId } : {}), ...(instructions ? { instructions } : {}) }) },
   )
 
@@ -616,7 +657,7 @@ export const deleteAgentAvatar = (cfg: EngineArg, slug: string) =>
 export async function fetchAgentAvatar(cfg: EngineArg, slug: string): Promise<string | null> {
   try {
     const t = asTarget(cfg)
-    const r = await authFetch(`${t.base}/agent/agents/${encodeURIComponent(slug)}/avatar`, { headers: await t.headers(true) })
+    const r = await blobFetch(t, `${t.base}/agent/agents/${encodeURIComponent(slug)}/avatar`)
     if (!r.ok) return null
     return URL.createObjectURL(await r.blob())
   } catch { return null }
@@ -755,7 +796,7 @@ export interface SessionHistorianStatus {
   records: Array<{ id: string; content: string; timestamp: number }>
 }
 export const getSessionHistorian = (cfg: EngineArg, sessionId: string, detail = false) =>
-  request<SessionHistorianStatus>(cfg, `/agent/special/historian/activity?limit=8&sessionId=${encodeURIComponent(sessionId)}${detail ? '&detail=1' : ''}`)
+  request<SessionHistorianStatus>(S(cfg, sessionId), `/agent/special/historian/activity?limit=8&sessionId=${encodeURIComponent(sessionId)}${detail ? '&detail=1' : ''}`)
 
 export const getHistorianActivity = (cfg: EngineArg, limit = 50) =>
   request<{ activity: HistorianActivityItem[] }>(cfg, `/agent/special/historian/activity?limit=${limit}`).then((r) => r.activity)
@@ -928,21 +969,31 @@ const wsQ = (sessionId: string, project?: string) =>
 
 export const listWorkspace = (cfg: EngineArg, sessionId: string, project?: string) =>
   request<{ files: WorkspaceFileMeta[] }>(
-    cfg, `/agent/workspace/list?${wsQ(sessionId, project)}`,
+    S(cfg, sessionId), `/agent/workspace/list?${wsQ(sessionId, project)}`,
   ).then((r) => r.files)
 
 export const readWorkspaceFile = (cfg: EngineArg, sessionId: string, path: string, project?: string) =>
   request<{ path: string; mimeType: string; content: string; encoding: 'base64'; size: number }>(
-    cfg, `/agent/workspace/read?${wsQ(sessionId, project)}&path=${encodeURIComponent(path)}`,
+    S(cfg, sessionId), `/agent/workspace/read?${wsQ(sessionId, project)}&path=${encodeURIComponent(path)}`,
   )
 
-export const workspaceDownloadUrl = (cfg: EngineArg, sessionId: string, path: string, project?: string) =>
-  `${asTarget(cfg).base}/agent/workspace/download?${wsQ(sessionId, project)}&path=${encodeURIComponent(path)}`
+const downloadUrlOf = (t: EngineTarget, sessionId: string, path: string, project?: string): string =>
+  `${t.base}/agent/workspace/download?${wsQ(sessionId, project)}&path=${encodeURIComponent(path)}`
+
+/** 可以直接当 `<img src>` 的下载直链。目标不能直链(unit:隧道 cookie 对手机源是跨站,`<img>` 不带凭据)→ null,
+ *  调用方改走 readWorkspaceFile 读字节做 blob(K6 §3.7;凭据永不进 URL)。 */
+export const workspaceDownloadUrl = (cfg: EngineArg, sessionId: string, path: string, project?: string): string | null => {
+  const t = S(cfg, sessionId)
+  return targetCaps(t).directAssetUrl ? downloadUrlOf(t, sessionId, path, project) : null
+}
 
 /** 下载工作区文件(fetch 带 Bearer → blob → 触发保存)。 */
 export async function downloadWorkspaceFile(cfg: EngineArg, sessionId: string, path: string, project?: string): Promise<void> {
-  const t = asTarget(cfg)
-  const r = await authFetch(workspaceDownloadUrl(t, sessionId, path, project), { headers: await t.headers(true) })
+  const t = S(cfg, sessionId)
+  const url = downloadUrlOf(t, sessionId, path, project)
+  const init = { headers: await t.headers(true) }
+  const o = fetchOpts(t)
+  const r = await (o ? authFetch(url, init, o) : authFetch(url, init))
   if (!r.ok) throw new Error(translate('backendsvc.downloadFailed', { status: r.status }))
   const blob = await r.blob()
   const a = document.createElement('a')
@@ -952,18 +1003,49 @@ export async function downloadWorkspaceFile(cfg: EngineArg, sessionId: string, p
   setTimeout(() => URL.revokeObjectURL(a.href), 5000)
 }
 
-export const uploadWorkspaceFiles = (
-  cfg: EngineArg,
-  sessionId: string,
-  files: Array<{ path: string; content: string; encoding?: 'base64'; mimeType?: string }>,
-) =>
-  request<{ success: boolean; saved: number; total: number; errors: string[] }>(cfg, '/agent/workspace/upload', {
+type UploadFile = { path: string; content: string; encoding?: 'base64'; mimeType?: string }
+type UploadResult = { success: boolean; saved: number; total: number; errors: string[] }
+
+/** 经 hub 中转的单次请求体上限:hub 收 10MB JSON(413 UNIT_BODY_TOO_LARGE),留 1MB 余量。 */
+export const UNIT_UPLOAD_BATCH_BYTES = 9 * 1024 * 1024
+
+/** 一个文件在上传 JSON 里大约占多少字节(内容是 base64 / 纯文本,都是 ASCII 或按 UTF-8 计)。 */
+const uploadBytes = (f: UploadFile): number => new TextEncoder().encode(JSON.stringify(f)).length + 8
+
+export const uploadWorkspaceFiles = async (cfg: EngineArg, sessionId: string, files: UploadFile[]): Promise<UploadResult> => {
+  const t = S(cfg, sessionId)
+  const post = (batch: UploadFile[]): Promise<UploadResult> => request<UploadResult>(t, '/agent/workspace/upload', {
     method: 'POST',
-    body: JSON.stringify({ sessionId, files }),
+    body: JSON.stringify({ sessionId, files: batch }),
   })
+  if (t.via !== 'unit') return post(files)
+  // unit 目标(K6 §3.7):按单次 ≤ 9MB 分批;单个文件本身就超 → 前端直接拒(不白传一趟换个 413)
+  const tooLarge = (): Error => Object.assign(new Error(translate('engine.target.tooLarge')), { status: 413, code: 'UNIT_BODY_TOO_LARGE' })
+  const overhead = uploadBytes({ path: '', content: '' }) + JSON.stringify({ sessionId, files: [] }).length
+  const batches: UploadFile[][] = []
+  let cur: UploadFile[] = []
+  let size = overhead
+  for (const f of files) {
+    const n = uploadBytes(f)
+    if (n + overhead > UNIT_UPLOAD_BATCH_BYTES) throw tooLarge()
+    if (cur.length && size + n > UNIT_UPLOAD_BATCH_BYTES) { batches.push(cur); cur = []; size = overhead }
+    cur.push(f)
+    size += n
+  }
+  if (cur.length) batches.push(cur)
+  const out: UploadResult = { success: true, saved: 0, total: 0, errors: [] }
+  for (const b of batches) {
+    const r = await post(b)
+    out.success = out.success && r.success
+    out.saved += r.saved
+    out.total += r.total
+    out.errors.push(...(r.errors || []))
+  }
+  return out
+}
 
 export const deleteWorkspaceFile = (cfg: EngineArg, sessionId: string, path: string, project?: string) =>
-  request<{ ok: boolean }>(cfg, '/agent/workspace/delete', {
+  requestCap<{ ok: boolean }>(cfg, sessionId, 'workspaceDelete', '/agent/workspace/delete', {
     method: 'POST',
     body: JSON.stringify({ sessionId, path, appId: AGENT_APP_ID, ...(project ? { project } : {}) }),
   })
@@ -1104,7 +1186,7 @@ export async function fetchProjectIcon(cfg: EngineArg, ref: { sessionId: string 
   try {
     const q = 'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`
     const t = asTarget(cfg)
-    const response = await authFetch(`${t.base}/agent/project-context/icon?${q}`, { headers: await t.headers(true) })
+    const response = await blobFetch(t, `${t.base}/agent/project-context/icon?${q}`)
     if (!response.ok) return null
     return URL.createObjectURL(await response.blob())
   } catch { return null }

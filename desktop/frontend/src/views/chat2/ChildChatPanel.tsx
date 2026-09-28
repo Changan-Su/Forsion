@@ -5,6 +5,7 @@ import { listActiveRuns } from '../../services/agentRunService'
 import { recordToUi, useApp } from '../../stores/appStore'
 import { useChildChat } from '../../stores/childChatStore'
 import { getBackgroundSessions, getSessionDetail, listMessages, openTeamMemberSession, type BackgroundSessionInfo } from '../../services/backendService'
+import { focusRef } from '../../services/engine/targets'
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
@@ -34,7 +35,8 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
       if (!disposed) setSaved(rows)
     }).catch(() => {})
     load()
-    const timer = setInterval(load, 4000)
+    // P1-K6 S2:焦点在「我的电脑」时这条轮询走 hub 隧道(吃全局限流),放慢到与 pollSession 同档的 12s
+    const timer = setInterval(load, focusRef().kind === 'unit' ? 12_000 : 4000)
     return () => { disposed = true; clearInterval(timer) }
   }, [cfg, sessionId])
   const rows = subChatRows(saved, live, historianOn)

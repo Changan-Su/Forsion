@@ -1003,3 +1003,14 @@
 .t2-apv-update-row:not([data-status='approved']) svg { color: var(--danger); }
 .t2-apv-update-what { flex-shrink: 0; color: var(--text-muted); }
 .t2-apv-update-preview { min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ====== P1-K6 焦点目标连接态提示(components/TargetHealthNotice)======
+ * 完全派生额度提示条 .t2-quota-advisory(同一段 Chatbox 延伸、同材质);只在图标色上分态:
+ * 终局(拒了凭据 / 身份取不到 / 拒绝远程会话 / 设备被移除)= danger,可恢复 = warning(基础规则),连接中 = 弱文本。
+ * 放文件末尾:与基础规则 `.t2-quota-advisory-copy > svg` 同属这一组覆盖(DESIGN §7.2)。 */
+.t2-target-health[data-target-health='engine-auth'] .t2-quota-advisory-copy > svg,
+.t2-target-health[data-target-health='caller-unavailable'] .t2-quota-advisory-copy > svg,
+.t2-target-health[data-target-health='refused'] .t2-quota-advisory-copy > svg,
+.t2-target-health[data-target-health='gone'] .t2-quota-advisory-copy > svg { color: var(--danger); }
+.t2-target-health[data-target-health='connecting'] .t2-quota-advisory-copy > svg { color: var(--text-muted); }
+.t2-target-health .t2-quota-advisory-copy > span { min-width: 0; overflow-wrap: anywhere; }

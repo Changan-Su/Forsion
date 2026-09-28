@@ -50,6 +50,7 @@ import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
+import { TargetHealthNotice, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -62,6 +63,7 @@ const isHiddenInList = (m: UiMessage): boolean =>
 
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
+  const targetPlaceholder = useTargetComposerPlaceholder() // P1-K6:焦点在我的电脑且没连上 → 「等待那台连上」
   const showWaitDetails = useChatWaitDetailsEnabled()
   const childSelections = useChildChat((state) => state.selected)
   const [raiseTeam, setRaiseTeam] = useState(false)
@@ -666,22 +668,29 @@ export function ChatView({ leaf, params }: ViewProps) {
             <ApprovalTray
               // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
               key={activeId ?? ''}
+              sessionId={activeId ?? undefined}
               items={pendingApprovals}
               onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
               onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
             />
           ) : undefined}
           advisory={!params.childSurface ? (
-            <QuotaAdvisoryBanner
-              loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
-              onToast={s.toast}
-            />
+            // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
+            // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
+            //    接管这一格 —— 要么收编 TargetHealthNotice(读同一张 useTargetHealth、同一个 retryFocusTarget),要么换成自己的条并把
+            //    这里还原成裸 QuotaAdvisoryBanner;下面 disabledPlaceholder 的 targetPlaceholder 随 K7 的 remoteBlocked 一起并过去。
+            <TargetHealthNotice fallback={
+              <QuotaAdvisoryBanner
+                loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
+                onToast={s.toast}
+              />
+            } />
           ) : undefined}
           // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
           liveOwner={followActive && leaf.loc === 'main'}
           liveSessionKey={activeId}
           disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
-          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
+          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : targetPlaceholder}
           running={running}
           execConfig={teamCfg ? { ...mvCfg, approvalMode: teamCfg.approvalMode || mvCfg.approvalMode } : mvCfg}
           teamApproval={!!teamCfg}
