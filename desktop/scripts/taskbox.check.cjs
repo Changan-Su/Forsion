@@ -4,6 +4,7 @@
 // 块矩形之外的留白(块间缝/两侧余白)维持立即起框。「从行尾留白拉框选」(selection-display.check
 // 钉住的设计)照旧成立,这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
 // K8b(K-11):待办上 Mod+Enter 翻转勾选,普通列表仍拆项。
+// G2-15:触屏(粗指针)上编辑器未聚焦时点方框 = 只翻转,焦点不进正文(真机不弹软键盘);只翻一次;点正文照常聚焦。
 // 用法:npm run check:taskbox(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
 const os = require('os')
@@ -219,6 +220,43 @@ async function main() {
       const d = await items(pg)
       check('K8b 待办下的普通子项:只拆子项,外层待办勾选态不动', d.endsWith(' :父待办 | -:子项 | -:'), d)
       await pg.close()
+    }
+    // G2-15 触屏点方框:移动视口 + 触屏(isMobile/hasTouch → pointer:coarse),真 touchscreen.tap。
+    {
+      const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 })
+      const pg = await ctx.newPage()
+      pg.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+      await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# T\n\n- [ ] 一\n- [ ] 二\n\n正文段。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector(PM, { timeout: 120000 })
+      await pg.waitForTimeout(500)
+      const boxAt = (i) => pg.evaluate(({ PM, i }) => {
+        const li = document.querySelectorAll(PM + ' li[data-item-type="task"]')[i]
+        const r = li.getBoundingClientRect(), s = getComputedStyle(li, '::before')
+        return { x: r.left + parseFloat(s.left) + parseFloat(s.width) / 2, y: r.top + parseFloat(s.top) + parseFloat(s.height) / 2 }
+      }, { PM, i })
+      const st = () => pg.evaluate((PM) => ({
+        coarse: matchMedia('(pointer: coarse)').matches,
+        checked: [...document.querySelectorAll(PM + ' li[data-item-type="task"]')].map((l) => l.dataset.checked).join(','),
+        focused: window.__upage.probe.view().hasFocus(),
+      }), PM)
+      await pg.evaluate(() => document.activeElement?.blur?.())
+      const b0 = await boxAt(0)
+      await pg.touchscreen.tap(b0.x, b0.y)
+      await pg.waitForTimeout(300)
+      const s1 = await st()
+      check('G2-15 触屏未聚焦点方框:翻转一次,焦点不进正文(不弹软键盘)', s1.coarse && s1.checked === 'true,false' && !s1.focused, JSON.stringify(s1))
+      const b1 = await boxAt(1)
+      await pg.touchscreen.tap(b1.x, b1.y)
+      await pg.waitForTimeout(1300)
+      const s2 = await st()
+      const saved = await pg.evaluate(() => (window.__upage.writes.at(-1) || {}).text || '')
+      check('G2-15 连点第二个方框同样只翻它、落盘', s2.checked === 'true,true' && !s2.focused && /- \[x\] 一\n- \[x\] 二/.test(saved), JSON.stringify({ ...s2, saved }))
+      const pp = await pg.evaluate((PM) => { const p = [...document.querySelectorAll(PM + ' > p')].find((x) => x.textContent.includes('正文段')); const r = p.getBoundingClientRect(); return { x: r.left + 20, y: r.top + r.height / 2 } }, PM)
+      await pg.touchscreen.tap(pp.x, pp.y)
+      await pg.waitForTimeout(300)
+      const s3 = await st()
+      check('G2-15 对照:触屏点正文照常聚焦(编辑意图)', s3.focused && s3.checked === 'true,true', JSON.stringify(s3))
+      await ctx.close()
     }
   } finally {
     await browser.close()

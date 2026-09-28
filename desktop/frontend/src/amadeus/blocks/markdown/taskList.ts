@@ -7,6 +7,8 @@
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin } from '@milkdown/kit/prose/state'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
+import type { EditorView } from '@milkdown/kit/prose/view'
+import { isCoarsePointer } from '../../../touch'
 
 /** 翻转 `pos` 所在**最内层**列表项的勾选态;该项不是待办(checked == null)返回 null。
  *  鼠标点方框与键盘 Mod+Enter(unified/keyboard.ts,K-11)共用这一份 —— 只认最内层,
@@ -22,24 +24,44 @@ export function toggleTaskTr(state: EditorState, pos: number): Transaction | nul
   return null
 }
 
+/** 指针落在待办的方框槽里(内容盒左侧)→ 那个 li;否则 null。点击与触屏按下共用同一份判据。 */
+function taskBoxAt(view: EditorView, event: MouseEvent): HTMLElement | null {
+  const li = (event.target as HTMLElement | null)?.closest?.('li[data-item-type="task"]') as HTMLElement | null
+  if (!li) return null
+  // Only toggle when the click lands in the checkbox gutter (left of the content box).
+  return event.clientX - li.getBoundingClientRect().left > 2 ? null : li
+}
+
 export function taskCheckboxPlugin() {
   return $prose(
     () =>
       new Plugin({
         props: {
           handleClick(view, _pos, event) {
-            const target = event.target as HTMLElement | null
-            const li = target?.closest('li[data-item-type="task"]') as HTMLElement | null
-            if (!li) return false
             // 只读视图(分享页/嵌入体):PM 对 handleClick 不看 editable,这里自己挡,勾选框不翻转。
             if (!view.editable) return false
-            // Only toggle when the click lands in the checkbox gutter (left of the content box).
-            const rect = li.getBoundingClientRect()
-            if (event.clientX - rect.left > 2) return false
+            const li = taskBoxAt(view, event)
+            if (!li) return false
             const tr = toggleTaskTr(view.state, view.posAtDOM(li, 0))
             if (!tr) return false
             view.dispatch(tr)
             return true
+          },
+          handleDOMEvents: {
+            // 触屏上点方框(评审 G2-15):编辑器没聚焦时,按下的默认行为会把焦点送进正文 —— 真机当场弹软键盘,
+            // 用户只是想勾一下。沿用 blockLayer「触屏不 focus」的约定:粗指针 + 未聚焦时在按下这一拍就翻转并
+            // preventDefault(焦点不动);返回 true = PM 不再起它自己的点击跟踪,随后的 handleClick 不会再翻一次。
+            // 已聚焦(键盘本来就开着)照旧走 handleClick,光标行为不变。
+            mousedown(view, event) {
+              if (!view.editable || view.hasFocus() || event.button !== 0 || !isCoarsePointer()) return false
+              const li = taskBoxAt(view, event)
+              if (!li) return false
+              const tr = toggleTaskTr(view.state, view.posAtDOM(li, 0))
+              if (!tr) return false
+              event.preventDefault()
+              view.dispatch(tr)
+              return true
+            },
           },
         },
       }),
