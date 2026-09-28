@@ -25,7 +25,8 @@ const CMDS: Command[] = [
   { id: 'amadeus-new-note', title: () => translate('amadeus.new.note'), keywords: 'new note create 新建 笔记', hotkey: 'mod+n', run: () => { if (ps().vaultRoot) void ps().createPage() } },
   { id: 'amadeus-new-drawing', title: () => translate('amadeus.new.drawing'), keywords: 'new drawing whiteboard canvas excalidraw 新建 白板 画板 baiban', run: () => { if (ps().vaultRoot) void createDrawing('') } },
   { id: 'amadeus-new-dashboard', title: () => translate('amadeus.new.dashboard'), keywords: 'new dashboard canvas grid widget 新建 仪表盘 面板 看板 yibiaopan', run: () => { if (ps().vaultRoot) void createDashboard('') } },
-  { id: 'amadeus-quick-switcher', title: () => translate('amadeus.cmd.quickSwitch'), keywords: 'quick switcher open jump 快速 切换 跳转', hotkey: 'mod+p', run: () => useUiOverlay.getState().open('switcher') },
+  // (「快速切换」amadeus-quick-switcher 已并入全局快速查找 quick-find(bootstrapEngine,mod+p):两条命令同绑 mod+p,
+  //  分发取先注册的那条,能新建笔记的这个切换器永远按不出来(评审 G4-11)。新建 / ⌘Enter 新标签都搬进了 quickFind.tsx。)
   { id: 'amadeus-search', title: () => translate('amadeus.cmd.search'), keywords: 'search full text 搜索 全文', hotkey: 'mod+shift+f', run: () => openSearchView() },
   { id: 'amadeus-tutorial', title: () => translate('amadeus.cmd.tutorial'), keywords: 'tutorial guide help onboarding 教程 使用教程 帮助 入门 新手 jiaocheng bangzhu', run: () => void openTutorial() },
   { id: 'amadeus-manual', title: () => translate('amadeus.cmd.manual'), keywords: 'manual handbook reference docs help 手册 使用手册 说明书 参考 帮助 文档 shouce cankao', run: () => void openManual() },

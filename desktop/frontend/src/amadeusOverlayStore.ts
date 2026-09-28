@@ -14,10 +14,9 @@ export interface TemplateCtx { afterId?: string; emptyBlock?: boolean; v4Path?: 
 //  两次。现在由 UnifiedPage 自己 portal 进本 pane 顶栏的插槽,理由与被排除的假设见 CanvasModeSeg 顶注。)
 
 interface UiOverlayState {
-  overlay: 'switcher' | 'template' | null
+  overlay: 'template' | null
   templateCtx: TemplateCtx | null
   editorMode: 'wysiwyg' | 'source'
-  open(o: 'switcher'): void
   openTemplate(ctx: TemplateCtx): void
   close(): void
   toggleEditorMode(): void
@@ -27,7 +26,6 @@ export const useUiOverlay = create<UiOverlayState>((set) => ({
   overlay: null,
   templateCtx: null,
   editorMode: 'wysiwyg',
-  open: (o) => set({ overlay: o, templateCtx: null }),
   openTemplate: (ctx) => set({ overlay: 'template', templateCtx: ctx }),
   close: () => set({ overlay: null, templateCtx: null }),
   // 切换前把光标位置抓下来交给对面(见 lib/modeCursor)。抓取必须在这里做:

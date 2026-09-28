@@ -13,7 +13,7 @@ import { amadeusAvailable, sessionsAvailable } from './features/runtime'
 import React, { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { create } from 'zustand'
 import './quickFind.css'
-import { Search, FileText, Database, MessageSquare, File } from 'lucide-react'
+import { Search, FileText, Database, MessageSquare, File, Plus } from 'lucide-react'
 import { openSession } from './sessionNav'
 import { usePageStore } from './amadeus/store/pageStore'
 import { useAllDatabases } from './amadeus/store/dbAggregateStore'
@@ -21,6 +21,8 @@ import { fuzzyScore } from './amadeus/lib/fuzzy'
 import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
+import { pageKey } from '@amadeus-shared/links'
+import { isMacPlatform } from '@lcl/engine'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -42,6 +44,9 @@ registerMessages({
   'quickfind.footScope': { zh: '分类', en: 'Scope' },
   'quickfind.footOpen': { zh: '打开', en: 'Open' },
   'quickfind.footClose': { zh: '关闭', en: 'Close' },
+  'quickfind.footNewTab': { zh: '新标签打开', en: 'Open in new tab' },
+  'quickfind.createNote': { zh: '新建笔记「{name}」', en: 'Create note “{name}”' },
+  'quickfind.subNewNote': { zh: '新建', en: 'New' },
 })
 
 /** 选取模式(2026-08-25,仪表盘嵌卡要「挑一个文件」):同一个面板,回车不导航而是回调给调用方。
@@ -119,7 +124,8 @@ const base = (p: string): string => (p.split(/[\\/]/).pop() ?? p).replace(/\.(md
 const fileName = (p: string): string => p.split(/[\\/]/).pop() ?? p
 const dirOf = (p: string): string => p.replace(/\\/g, '/').split('/').slice(0, -1).join('/') || '/'
 
-interface Item { kind: Kind; id: string; title: string; sub: string; emoji?: string; open: () => void }
+/** open 的 newTab = ⌘/Ctrl+Enter(评审 G4-11:合并前 Amadeus 那个快切有「新标签打开」的对标缺口,这里一并补上)。 */
+interface Item { kind: Kind; id: string; title: string; sub: string; emoji?: string; open: (opts?: { newTab?: boolean }) => void }
 
 export function QuickFind() {
   const open = useQuickFind((s) => s.open)
@@ -146,19 +152,19 @@ function QuickFindInner() {
   const allItems = useMemo<Item[]>(() => {
     const notes: Item[] = pages
       .filter((p) => /\.md$/i.test(p))
-      .map((p) => ({ kind: 'note', id: p, title: base(p), sub: dirOf(p), open: () => void openNote(p) }))
-    const dbItems: Item[] = dbs.map((d) => ({ kind: 'db', id: d.path, title: d.name || base(d.path), sub: dirOf(d.path), open: () => openDb(d.path) }))
+      .map((p) => ({ kind: 'note', id: p, title: base(p), sub: dirOf(p), open: (o) => void openNote(p, o) }))
+    const dbItems: Item[] = dbs.map((d) => ({ kind: 'db', id: d.path, title: d.name || base(d.path), sub: dirOf(d.path), open: (o) => openDb(d.path, o) }))
     // 库里的非笔记文件(pdf/图片/画板/插件文件…)。.db 排掉 —— 上面那份带库名,更好认。
     const fileItems: Item[] = files
       .filter((p) => !/\.db$/i.test(p))
-      .map((p) => ({ kind: 'file', id: p, title: fileName(p), sub: dirOf(p), open: () => openFile(p) }))
+      .map((p) => ({ kind: 'file', id: p, title: fileName(p), sub: dirOf(p), open: (o) => openFile(p, o) }))
     const sess: Item[] = sessions.map((s) => ({
       kind: 'session',
       id: s.id,
       title: s.title || t('quickfind.untitledSession'),
       sub: t('quickfind.subSession'),
       emoji: s.emoji ?? undefined,
-      open: () => openSession(s.id),
+      open: (o) => openSession(s.id, o),
     }))
     return [...(amadeusAvailable() ? [...notes, ...dbItems, ...fileItems] : []), ...(sessionsAvailable() ? sess : [])]
   }, [pages, files, dbs, sessions, t])
@@ -192,21 +198,39 @@ function QuickFindInner() {
       .filter(inCat)
   }, [q, allItems, sessions, cat, pick])
 
+  // 「新建笔记」行(评审 G4-11:⌘P 曾被本面板与 Amadeus 的快速切换同时绑定,能新建的那个永远打不开 ——
+  // 两个合成本面板一个,新建能力搬过来)。条件同旧快切:有查询、没有 pageKey 精确同名的笔记;
+  // 只在「全部 / 笔记」分类、有智库时出现,选取模式没有。落盘走 createWikiPage → birthAndOpen(G4-12 素文件出生)。
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const createName = q.trim()
+  const showCreate = !pick && !!createName && !!vaultRoot && amadeusAvailable() && (cat === 'all' || cat === 'note')
+    && !pages.some((p) => /\.md$/i.test(p) && pageKey(p) === pageKey(createName))
+  const total = results.length + (showCreate ? 1 : 0)
+
   useEffect(() => setSel(0), [q, pos])
   useEffect(() => inputRef.current?.focus(), [])
 
-  const openItem = (it: Item): void => {
+  const openItem = (it: Item, opts?: { newTab?: boolean }): void => {
     if (pick) { pick.onPick(it.id); close(); return } // 选取模式:不导航、不记最近(选卡片内容 ≠ 我最近开过它)
     pushRecent({ kind: it.kind, id: it.id, title: it.title, sub: it.sub, emoji: it.emoji })
-    it.open()
+    it.open(opts?.newTab ? { newTab: true } : undefined)
     close()
+  }
+  const createNote = (): void => {
+    close()
+    void usePageStore.getState().createWikiPage(createName)
+  }
+  const chooseAt = (i: number, opts?: { newTab?: boolean }): void => {
+    if (showCreate && i === results.length) { createNote(); return }
+    const it = results[i]
+    if (it) openItem(it, opts)
   }
 
   const onKey = (e: ReactKeyboardEvent): void => {
     if (e.key === 'Escape') { e.preventDefault(); close() }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((i) => Math.min(i + 1, results.length - 1)) }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((i) => Math.min(i + 1, total - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((i) => Math.max(i - 1, 0)) }
-    else if (e.key === 'Enter') { e.preventDefault(); const it = results[sel]; if (it) openItem(it) }
+    else if (e.key === 'Enter') { e.preventDefault(); chooseAt(sel, { newTab: e.metaKey || e.ctrlKey }) }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       if (pick) return // 选取模式没有分类胶囊 → 左右恒归输入框
       const el = inputRef.current
@@ -272,18 +296,29 @@ function QuickFindInner() {
               key={`${it.kind}:${it.id}`}
               className={`amx-qf-row${i === sel ? ' sel' : ''}`}
               onMouseMove={() => setSel(i)}
-              onClick={() => openItem(it)}
+              onClick={(e) => openItem(it, { newTab: e.metaKey || e.ctrlKey })}
             >
               <span className="amx-qf-icon">{icon(it.kind, it.emoji)}</span>
               <span className="amx-qf-title">{it.title}</span>
               <span className="amx-qf-sub">{it.sub}</span>
             </button>
           ))}
-          {results.length === 0 && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
+          {showCreate && (
+            <button
+              className={`amx-qf-row amx-qf-create${sel === results.length ? ' sel' : ''}`}
+              onMouseMove={() => setSel(results.length)}
+              onClick={createNote}
+            >
+              <span className="amx-qf-icon"><Plus size={15} /></span>
+              <span className="amx-qf-title">{t('quickfind.createNote', { name: createName })}</span>
+              <span className="amx-qf-sub">{t('quickfind.subNewNote')}</span>
+            </button>
+          )}
+          {results.length === 0 && !showCreate && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
         </div>
         <div className="amx-qf-foot">{pick
           ? <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>↵</kbd> {t('quickfind.footChoose')} · <kbd>esc</kbd> {t('quickfind.footCancel')}</>
-          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>
+          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>{isMacPlatform() ? '⌘↵' : 'Ctrl+↵'}</kbd> {t('quickfind.footNewTab')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>
       </div>
     </div>
   )

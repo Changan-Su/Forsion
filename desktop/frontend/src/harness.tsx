@@ -686,6 +686,15 @@ if (new URLSearchParams(location.search).has('dock')) {
   })
   useQuickFind.getState().openPalette()
   createRoot(document.getElementById('root')!).render(<QuickFind />)
+  // 从外部进入编辑器的几个输入框(评审 G4-02 IME 守卫 / G4-11 快切合并)同台:命令面板 + Amadeus 浮层(模板选择器)
+  // 另挂一个根,store 露到 `window.__qf` 由仪器开关。动态 import:别的台架模式不求值这些模块。见 scripts/quickfind-entry.check.cjs。
+  void Promise.all([import('@lcl/engine/CommandPalette'), import('@lcl/engine/commandRegistry'), import('./amadeusOverlays'), import('./amadeusOverlayStore')])
+    .then(([{ CommandPalette }, { useCommandStore }, { AmadeusOverlays }, { useUiOverlay }]) => {
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
+      ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
+    })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []
