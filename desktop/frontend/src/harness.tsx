@@ -41,7 +41,7 @@ import { presentDockedExtension } from '@lcl/engine/dockviewStore'
 import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
-import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
+import { usePageStore, pageStoreFor, remapScopePaths } from './amadeus/store/pageStore'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
@@ -1748,6 +1748,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     lifecycle: null as unknown,
     /** 生产 pageStore(仪器直调它的 fm 写口:setPageIcon / syncFdChildren,评审 G1-05)。 */
     pageStore: usePageStore,
+    /** 生产的改名 / 挪走收尾(pageStore.onPathGone 收到别处改名时调的就是它;评审 G2-03 仪器)。标签改指由仪器接着
+     *  调 switchFile 模拟(生产里是 amadeusViews 听 onNotePathGone 改 leaf 参数)。 */
+    remapScopePaths,
     switchFile(path: string, text?: string) {
       if (typeof text === 'string') vault.set(path, text)
       switchUPage?.(path)

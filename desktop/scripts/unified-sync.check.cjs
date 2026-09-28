@@ -257,7 +257,57 @@ async function groupF(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF }
+// ─────────────────────────────── G2-03 ───────────────────────────────
+/** 别处把 Unified.md 改名成 Moved.md:盘上挪走 → 生产收尾 remapScopePaths(onPathGone 的落点)→ 标签改指新路径。 */
+async function remoteMove(p) {
+  await p.evaluate(() => {
+    const u = window.__upage
+    u.vault.set('Moved.md', u.vault.get('Unified.md'))
+    u.vault.delete('Unified.md')
+    u.remapScopePaths('Unified.md', 'Moved.md', 'file')
+    u.switchFile('Moved.md')
+  })
+  await p.waitForFunction(() => document.querySelector('[data-unified-path]')?.getAttribute('data-unified-path') === 'Moved.md', null, { timeout: 20000 })
+  await wait(800)
+}
+const draftFor = (p, file) => p.evaluate((f) => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:') && k.endsWith(`:${f}`)), file)
+async function groupR(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('未落盘')
+    await remoteMove(p) // 防抖窗内(800ms)就被别处改名
+    await wait(1200)
+    const old = await disk(p, 'Unified.md')
+    const drafts = await draftFor(p, 'Moved.md')
+    const bar = await p.evaluate(() => !!document.querySelector('[data-save="draft"]'))
+    await p.click('[data-save="draft"] .btn.primary').catch(() => {})
+    await wait(1500)
+    const moved = await disk(p, 'Moved.md')
+    record('R1 改名时有未落盘的字 → 旧路径不复活、草稿记在新路径、新实例出恢复条,点恢复后字落到新路径',
+      old == null && drafts.length === 1 && bar && moved.includes('第一段。未落盘') && (await copies(p)).length === 0,
+      JSON.stringify({ old, drafts, bar, moved }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('已落盘')
+    await wait(1600)
+    await remoteMove(p)
+    const drafts = await draftFor(p, 'Moved.md')
+    const bar = await p.evaluate(() => !!document.querySelector('[data-save="draft"]'))
+    await caretAfter(p, '已落盘')
+    await p.keyboard.type('+')
+    await wait(1600)
+    const moved = await disk(p, 'Moved.md')
+    record('R2 没有未落盘的字 → 不留草稿、新实例干净打开,接着打的字落在新路径、旧路径不复活',
+      drafts.length === 0 && !bar && moved.includes('第一段。已落盘+') && (await disk(p, 'Unified.md')) == null, JSON.stringify({ drafts, bar, moved }))
+    await p.close()
+  }
+}
+
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: groupR }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

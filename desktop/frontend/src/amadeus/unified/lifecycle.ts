@@ -11,7 +11,9 @@ export interface UnifiedPipeHandle {
   path: string
   /** strict=true must reject write failures and drain all pending edits before retiring. */
   flush: (strict?: boolean) => Promise<void>
-  retire: () => void
+  /** 停写。movedTo = 这篇是被**挪走 / 改名**到了那里(删除 / 切号时不给):实例据此把还没落盘的字存成新路径的草稿
+   *  (评审 G2-03),新路径的实例挂载时出「恢复草稿」条 —— 退休不许把它们静默丢掉。 */
+  retire: (movedTo?: string) => void
   /** OS 拖入/上传按钮的文件走这里进 unified(存附件 + 光标处插 `![[base]]`);可选。 */
   insertFiles?: (files: File[]) => void
   /** 当前正文(**不重新与编辑器同步**:上次保存那一刻的快照,≤800ms 陈旧,与只读面板的刷新
@@ -113,10 +115,12 @@ export function insertFilesForPath(path: string, files: File[]): boolean {
   return false
 }
 
-/** 退休 path 上(kind='prefix' 时含子树)的全部实例:防「动完文件,防抖写复活旧路径」。 */
-export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file'): void {
+/** 退休 path 上(kind='prefix' 时含子树)的全部实例:防「动完文件,防抖写复活旧路径」。
+ *  to = 挪去的新路径(kind='prefix' 时是新的目录前缀):交给实例保全未落盘的字(见 UnifiedPipeHandle.retire)。 */
+export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file', to?: string | null): void {
   for (const h of handles) {
-    if (kind === 'file' ? h.path === path : h.path === path || h.path.startsWith(`${path}/`)) h.retire()
+    if (kind === 'file' ? h.path !== path : h.path !== path && !h.path.startsWith(`${path}/`)) continue
+    h.retire(to ? (kind === 'file' ? to : to + h.path.slice(path.length)) : undefined)
   }
 }
 
