@@ -877,6 +877,31 @@ async function main() {
         await page.close()
       }
     }
+
+    // K-22:块尾 Delete = 把下一块的文字并到本块末尾(Notion 同),被掏空的列表项 / 引用随之消失;
+    //       下一块是 callout 标题 → 整块选中不合并;同层段↔段仍走 base 的合并(对照)。
+    if (want('K22')) {
+      for (const [name, md, text, expect, selWant] of [
+        ['段尾撞列表首项', '甲段。\n\n- 乙\n- 丙\n', '甲段。', 'paragraph:"甲段。X乙" / bullet_list / list_item / paragraph:"丙"', null],
+        ['列表末项尾撞段落', '- 甲\n\n乙段。\n', '甲', 'bullet_list / list_item / paragraph:"甲X乙段。"', null],
+        ['段尾撞引用', '甲段。\n\n> 乙\n', '甲段。', 'paragraph:"甲段。X乙"', null],
+        ['列表项尾撞子项', '- 甲\n    - 子\n', '甲', 'bullet_list / list_item / paragraph:"甲X子"', null],
+        ['段尾撞 callout 标题 = 整块选中', '甲段。\n\n> [!note] 标题\n> 内容\n', '甲段。', 'paragraph:"甲段。" / blockquote / paragraph:"[!note] 标题" / paragraph:"内容"', 'blockquote'],
+        ['段↔段对照', '甲段。\n\n乙段。\n', '甲段。', 'paragraph:"甲段。X乙段。"', null],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text)
+        await page.waitForTimeout(150)
+        await page.keyboard.press('Delete')
+        await page.waitForTimeout(150)
+        const sel = await selInfo(page)
+        if (!selWant) await page.keyboard.type('X')
+        await page.waitForTimeout(200)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        check(`K22 ${name}`, s === expect && (selWant ? sel.node === selWant : sel.json === 'text'), `${s} | sel=${JSON.stringify(sel)}`)
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }

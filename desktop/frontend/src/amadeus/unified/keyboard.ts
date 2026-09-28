@@ -479,6 +479,51 @@ const deleteSelectNextAtom: Command = (state, dispatch) => {
   return true
 }
 
+/** 块尾 Delete:把**下一个文本块的文字**接到本块末尾,被掏空的列表项/引用随之消失(K-22,Notion 同)。
+ *  base 的 joinForward 遇到「下一块在列表/引用里」只会 lift 或 wrap:段尾 Delete 撞列表只把首项拆壳、
+ *  列表末项尾 Delete 把下面的段落包成新列表项 —— 与反方向「退格一次就并对」不对称。
+ *  只接管跨容器的那几种;同层相邻兄弟(段↔段、段↔标题)base 本来就并对,原样交回。
+ *  下一块是 callout 标题 → 整块选中(与撞上代码块同一口径),不把 `[!note]` 令牌拉成正文;
+ *  中间夹着分割线等叶子、代码块、表格、折叠藏起来的块 → 交回原路。 */
+const CALLOUT_HEAD = /^\[![A-Za-z]+\]/
+const deleteJoinNextText: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false
+  if ($from.parent.type.name === 'code_block' || $from.depth < 1) return false
+  const inTable = ($p: ResolvedPos): boolean => {
+    for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.name === 'table') return true
+    return false
+  }
+  if (inTable($from)) return false
+  const after = $from.after()
+  const next = Selection.findFrom(state.doc.resolve(after), 1, true)
+  if (!(next instanceof TextSelection)) return false
+  const $n = next.$from
+  if ($n.parentOffset !== 0 || !$n.parent.isTextblock || $n.parent.type.name === 'code_block' || inTable($n)) return false
+  if ($n.depth === $from.depth && $n.before() === after) return false // 同层相邻兄弟:base 的 joinForward 就对
+  if (hiddenAt(state, $n.pos)) return false
+  let blocked = false
+  state.doc.nodesBetween(after, $n.before(), (node, pos) => {
+    if (pos >= after && pos + node.nodeSize <= $n.before() && (node.isLeaf || node.isTextblock)) blocked = true
+    return !blocked
+  })
+  if (blocked) return false
+  const bq = $n.depth >= 2 && $n.node(-1).type.name === 'blockquote' && $n.index(-1) === 0 ? $n.before(-1) : null
+  if (bq != null && CALLOUT_HEAD.test($n.parent.textContent)) {
+    const node = state.doc.nodeAt(bq)
+    if (!node || !NodeSelection.isSelectable(node)) return false
+    dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, bq)).scrollIntoView())
+    return true
+  }
+  const joined = $from.parent.textContent + $n.parent.textContent
+  const tr = state.tr.delete($from.pos, $n.pos)
+  // 不盲信 Fitter:合并后光标所在块的文字必须恰好是「本块 + 下一块」,否则交回原路。
+  const $j = tr.doc.resolve(tr.mapping.map($from.pos))
+  if (!$j.parent.isTextblock || $j.parent.textContent !== joined || tr.doc.textContent !== state.doc.textContent) return false
+  dispatch?.(tr.setSelection(TextSelection.create(tr.doc, $j.pos)).scrollIntoView())
+  return true
+}
+
 // ── 方向键 ───────────────────────────────────────────────────────────────────
 
 /** 竖直方向键撞上分割线/嵌入 → 变成块选中,而不是钻进它的隐藏源码(嵌入段)或停在没有行盒的地方。 */
@@ -612,10 +657,10 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
-      Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom),
+      Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
-      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom) } : {}),
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
       ArrowUp: arrowToAtom('up'),
       ArrowDown: arrowToAtom('down'),
     }),
