@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SessionRecord } from '../types'
-import { inheritBinding } from '../services/engine/targets'
+import { inheritChildRows } from '../services/engine/targets'
 
 export interface ChildChatTarget {
   id: string
@@ -23,8 +23,9 @@ export const useChildChat = create<{
   sessions: {},
   remember: (session) => set((s) => ({ sessions: { ...s.sessions, [session.id]: session } })),
   open: (parentId, child) => {
-    // P1-K6 S4:子会话(@讨论 / 团队成员 / Historian 辅助)在父会话那台引擎上 → 路由跟父会话走(先绑再露给视图,视图立刻按它发请求)
-    if (child.sessionId) inheritBinding(child.sessionId, parentId)
+    // P1-K6 S4:子会话(@讨论 / 团队成员 / Historian 辅助)在父会话那台引擎上 → 路由跟父会话走(先绑再露给视图,视图立刻按它发请求)。
+    // 绑不上(那台报来的 id 撞上本端会话 / 已在别处,R-16)→ 不打开:否则视图会拿这个 id 去读写别处的会话。
+    if (child.sessionId && !inheritChildRows([child], parentId).length) return
     set((s) => ({ selected: { ...s.selected, [parentId]: child } }))
   },
   close: (parentId) => set((s) => ({ selected: { ...s.selected, [parentId]: undefined } })),

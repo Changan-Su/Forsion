@@ -330,6 +330,98 @@ describe('setFocusTarget(S4:焦点 = 新会话建在哪)', () => {
     expect(T.locationOf('mac-member')).toEqual({ kind: 'unit', unitId: U })
   })
 
+  // 评审(K6-S4 P1):本端列出来的会话从没绑过(缺省即 home),设备自报的同 id 原先第一次 bindSession / inheritBinding 就得 'bound' 并落盘 →
+  // 那条本端会话的请求从此改发那台电脑(R-16 声称挡住的正是这个)。
+  describe('设备自报的会话 id 撞上本端会话(R-16:不许劫持路由)', () => {
+    const homeListing = (url: string): Reply | null => {
+      if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (url === `${API}/agent/sessions?archived=false&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-1')] } }
+      if (url === `${API}/agent/sessions?archived=true&app_id=tangu`) return { status: 200, body: { sessions: [sessionRec('home-old')] } }
+      if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
+      return null
+    }
+
+    it('那台建会话回来一个本端会话的 id → 建不成(提示),不绑定、不落盘、不插第二条;之后这条本端会话照旧打本端', async () => {
+      router = (url, method) => {
+        if (method === 'POST' && url === `${UNIT}/agent/sessions`) return { status: 200, body: { session: sessionRec('home-1') } }
+        return homeListing(url) ?? { status: 200, body: {} }
+      }
+      useApp.setState({ tr: ((k: string, p?: object) => (p ? `${k}:${JSON.stringify(p)}` : k)) as never })
+      await useApp.getState().refreshSessions(useApp.getState().cfg)
+      await T.setFocusTarget({ kind: 'unit', unitId: U }, { name: 'Mac mini' })
+      calls.length = 0
+      const activeBefore = useApp.getState().activeId
+      await useApp.getState().createInWorkspace({ key: '/Users/mac/proj', name: 'proj', kind: 'local', path: '/Users/mac/proj' })
+      await new Promise((r) => setTimeout(r, 20))
+      expect(useApp.getState().toast).toHaveBeenCalledWith(expect.stringContaining('app.cannotCreateSession'), true)
+      // 建会话那一下之后,不再给那台发任何请求(补写配置 / 拉历史 / 订阅都没有)
+      const post = calls.findIndex((c) => c.method === 'POST' && c.url === `${UNIT}/agent/sessions`)
+      expect(post).toBeGreaterThanOrEqual(0)
+      expect(calls.slice(post + 1).filter((c) => c.url.startsWith(`${API}/units/`)).map((c) => [c.method, c.url])).toEqual([])
+      expect(useApp.getState().activeId).toBe(activeBefore) // 失败的建会话不切走当前会话
+      expect(T.locationOf('home-1')).toEqual({ kind: 'home' })
+      expect([...store.entries()].filter(([k]) => k.startsWith('forsion_session_targets:')).every(([, v]) => !v.includes('home-1'))).toBe(true)
+      expect(useApp.getState().sessions.filter((s) => s.id === 'home-1')).toHaveLength(1)
+      await T.setFocusTarget({ kind: 'home' })
+      await useApp.getState().refreshSessions(useApp.getState().cfg)
+      calls.length = 0
+      await useApp.getState().renameSession('home-1', 'renamed')
+      expect(calls.map((c) => [c.method, c.url])).toEqual([['PATCH', `${API}/agent/sessions/home-1`]])
+      expect(calls.some((c) => c.url.startsWith(UNIT))).toBe(false)
+    })
+
+    it('那台上的父会话自报的子会话(/background、团队成员)是本端会话(含归档的)→ 丢掉那行,不绑到那台', async () => {
+      router = (url) => {
+        if (url === `${UNIT}/agent/sessions/mac-parent/background?kind=teamwork`) return { status: 200, body: { background: [
+          { sessionId: 'home-1', agentSlug: 'spy', runStatus: 'done' },
+          { sessionId: 'home-old', agentSlug: 'spy2', runStatus: 'done' },
+          { sessionId: 'mac-member', agentSlug: 'ava', runStatus: 'done' },
+        ] } }
+        return homeListing(url) ?? { status: 200, body: {} }
+      }
+      await useApp.getState().refreshSessions(useApp.getState().cfg)
+      T.bindSession('mac-parent', { kind: 'unit', unitId: U })
+      await useApp.getState().hydrateTeamWork('mac-parent')
+      expect(T.locationOf('home-1')).toEqual({ kind: 'home' })
+      expect(T.locationOf('home-old')).toEqual({ kind: 'home' })
+      expect(T.locationOf('mac-member')).toEqual({ kind: 'unit', unitId: U })
+      expect(Object.keys(useApp.getState().teamWorkBySession['mac-parent'] || {})).toEqual(['ava'])
+      // 子会话面板(@讨论 / Historian 记录)同理:打不开,也不绑
+      const { useChildChat } = await import('./childChatStore')
+      useChildChat.getState().open('mac-parent', { id: 'c1', title: 'x', sessionId: 'home-1' })
+      expect(useChildChat.getState().selected['mac-parent']).toBeUndefined()
+      expect(T.locationOf('home-1')).toEqual({ kind: 'home' })
+      // 团队 run 的实时事件自报成员工作会话 = 本端会话 → 不收(成员面板不拿它去读写本端那条),正常的照收并绑到那台
+      useApp.setState({ runningBySession: { 'mac-parent': 'r1' } })
+      const emit = (payload: Record<string, unknown>) => useApp.getState().reduceEvent('mac-parent', 'r1', { current: 'a0' }, { seq: 1, type: 'team_member', payload } as never)
+      emit({ phase: 'start', slug: 'spy', name: 'Spy', messageId: 'm-spy', sessionId: 'home-1', runId: 'c1' })
+      emit({ phase: 'start', slug: 'bo', name: 'Bo', messageId: 'm-bo', sessionId: 'mac-bo', runId: 'c2' })
+      const work = useApp.getState().teamWorkBySession['mac-parent']
+      expect(work.spy.sessionId).toBe('')
+      expect(work.bo.sessionId).toBe('mac-bo')
+      expect(T.locationOf('home-1')).toEqual({ kind: 'home' })
+      expect(T.locationOf('mac-bo')).toEqual({ kind: 'unit', unitId: U })
+    })
+
+    it('启动竞态:本端列表还没回来,那台自报的同 id 先绑上并落盘 → 本端列表一到就撤回本端(本端胜),请求打本端、盘上不留', async () => {
+      router = (url) => {
+        if (url === `${UNIT}/agent/sessions/mac-parent/background?kind=teamwork`) return { status: 200, body: { background: [{ sessionId: 'home-1', agentSlug: 'spy', runStatus: 'done' }] } }
+        return homeListing(url) ?? { status: 200, body: {} }
+      }
+      T.bindSession('mac-parent', { kind: 'unit', unitId: U })
+      await useApp.getState().hydrateTeamWork('mac-parent') // 本端列表还空着:认不出 home-1 是本端的
+      expect(T.locationOf('home-1')).toEqual({ kind: 'unit', unitId: U })
+      await useApp.getState().refreshSessions(useApp.getState().cfg)
+      expect(T.locationOf('home-1')).toEqual({ kind: 'home' })
+      expect(T.locationOf('mac-parent')).toEqual({ kind: 'unit', unitId: U }) // 真在那台上的不动
+      const persisted = [...store.entries()].filter(([k]) => k.startsWith('forsion_session_targets:')).map(([, v]) => JSON.parse(v))
+      expect(persisted).toEqual([{ 'mac-parent': `unit:${U}` }])
+      calls.length = 0
+      await useApp.getState().renameSession('home-1', 'renamed')
+      expect(calls.map((c) => [c.method, c.url])).toEqual([['PATCH', `${API}/agent/sessions/home-1`]])
+    })
+  })
+
   it('桌面(非手机 / 网页版)不能把焦点切到远端:抛 TARGET_UNSUPPORTED,焦点不动', async () => {
     ;(globalThis as any).window = { tangu: {} }
     await expect(T.setFocusTarget({ kind: 'unit', unitId: U })).rejects.toMatchObject({ code: 'TARGET_UNSUPPORTED' })

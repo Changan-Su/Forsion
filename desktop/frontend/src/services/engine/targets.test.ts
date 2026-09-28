@@ -473,6 +473,49 @@ describe('S2 · unit 目标与焦点', () => {
     expect(T.locationOf('squatter')).toEqual({ kind: 'unit', unitId: U2 })
   })
 
+  // 评审(K6-S4 P1):本端列出来的会话缺省即 home、从不进绑定表 —— 只看绑定表的撞 id 闸对它们形同虚设。
+  it('S4 · 宿主认得的本端会话(从没绑过)往 unit 绑 → conflict,不写表、不落盘;子会话行撞上它就丢;宿主不认得的照常绑', () => {
+    phone()
+    const homeIds = new Set(['listed'])
+    T.installEngineHost({ cfg: () => ({ backendUrl: API, token: JWT, modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }), isHomeSession: (sid) => homeIds.has(sid) })
+    T.clearSessionBindings()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(T.bindSession('listed', { kind: 'unit', unitId: U })).toBe('conflict')
+    expect(T.locationOf('listed')).toEqual({ kind: 'home' })
+    expect(store.has(bindingsKey)).toBe(false)
+    expect(T.bindSession('listed', { kind: 'home' })).toBe('bound') // 往本端绑照旧幂等
+    expect(T.bindSession('fresh', { kind: 'unit', unitId: U })).toBe('bound')
+    homeIds.add('fresh') // 已经绑在那台的,宿主后来也列出它 → 这道问询不改它(改不改由 yieldToHomeListing 决定)
+    expect(T.bindSession('fresh', { kind: 'unit', unitId: U })).toBe('bound')
+    T.bindSession('parent', { kind: 'unit', unitId: U })
+    const rows = [{ sessionId: 'listed', n: 1 }, { sessionId: 'kid', n: 2 }, { sessionId: null, n: 3 }]
+    expect(T.inheritChildRows(rows, 'parent').map((r) => r.n)).toEqual([2, 3])
+    expect(T.locationOf('kid')).toEqual({ kind: 'unit', unitId: U })
+    expect(T.locationOf('listed')).toEqual({ kind: 'home' })
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('S4 · yieldToHomeListing:本端列表里被 unit 抢绑的 id 撤回本端(只许 unit → home),别的不动,盘上同步', () => {
+    phone()
+    T.clearSessionBindings()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    T.bindSession('squatted', { kind: 'unit', unitId: U })
+    T.bindSession('mac-only', { kind: 'unit', unitId: U2 })
+    T.bindSession('home-bound', { kind: 'home' })
+    const seen = T.useSessionBindings.getState().version
+    expect(T.yieldToHomeListing(['squatted', 'home-bound', 'never-bound'])).toEqual(['squatted'])
+    expect(T.locationOf('squatted')).toEqual({ kind: 'home' })
+    expect(T.locationOf('mac-only')).toEqual({ kind: 'unit', unitId: U2 })
+    expect(T.locationOf('home-bound')).toEqual({ kind: 'home' })
+    expect(JSON.parse(store.get(bindingsKey)!)).toEqual({ 'mac-only': `unit:${U2}` })
+    expect(T.useSessionBindings.getState().version).toBeGreaterThan(seen)
+    const after = T.useSessionBindings.getState().version
+    expect(T.yieldToHomeListing(['mac-other'])).toEqual([]) // 没撞的:不打扰订阅者
+    expect(T.useSessionBindings.getState().version).toBe(after)
+    warn.mockRestore()
+  })
+
   it('S4 · 绑定按账号落盘:只存 unit 条;读回逐条过 isTargetKey + 设备 id 形状;别的账号读不到', () => {
     phone()
     T.clearSessionBindings()

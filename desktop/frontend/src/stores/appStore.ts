@@ -13,9 +13,9 @@ import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot, TeamDef } from '../types'
-import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
+import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { bindSession, clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, installEngineHost, knownTargets, nameOfRef, refForSession, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../services/engine/targets'
+import { bindSession, clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, installEngineHost, knownTargets, nameOfRef, refForSession, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
 import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
 import { catalogFor, ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
@@ -1475,11 +1475,14 @@ export const useApp = create<AppState>((set, get) => ({
         } else if (pl.phase === 'end' && mid && pl.reason === 'aborted') {
           patchMessage(sessionId, mid, (m) => ({ ...m, status: 'stopped', work: undefined }))
         }
+        // S4:成员这次的工作会话在团队会话那台上 → 路由跟它走;撞上本端会话 / 别处的 id(R-16)不收,留原来那条
+        const reported = pl.phase === 'start' ? String(pl.sessionId || '') : ''
+        const memberSid = reported && inheritChildRows([{ sessionId: reported }], sessionId).length ? reported : ''
         set((s) => {
           const cur = s.teamWorkBySession[sessionId] || {}
           const prev = cur[slug] || { slug, name, status: 'idle' as const, since: Date.now() }
           const next = pl.phase === 'start'
-            ? { ...prev, name, sessionId: String(pl.sessionId || prev.sessionId || ''), runId: String(pl.runId || ''), messageId: mid, status: 'working' as const, task: String(pl.task || ''), activity: undefined, since: Date.now() }
+            ? { ...prev, name, sessionId: String(memberSid || prev.sessionId || ''), runId: String(pl.runId || ''), messageId: mid, status: 'working' as const, task: String(pl.task || ''), activity: undefined, since: Date.now() }
             : { ...prev, name, runId: String(pl.runId || prev.runId || ''), messageId: mid || prev.messageId, status: (pl.reason === 'failed' ? 'failed' : pl.reason === 'aborted' ? 'idle' : 'done') as TeamWorkMember['status'], activity: undefined, since: Date.now() }
           return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: { ...cur, [slug]: next } } }
         })
@@ -1857,6 +1860,9 @@ export const useApp = create<AppState>((set, get) => ({
     const t = homeTarget()
     const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== authGeneration) return []
+    // 本端列表 = 本端会话的权威证据:早先被设备自报的同 id 抢绑到那台的(启动时列表还没回来就绑上了),撤回本端;
+    // 那条会话此前按那台拉过的历史作废,下次打开从本端重拉。
+    for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) loadedHistory.delete(id)
     let merged: SessionRecord[] = act
     set((s) => {
       // 列表行自带 agent_config:本地还没有的会话先用它预填。重载/切入会话时 loadSessionHistory 到达前不再按 {} 渲染成 work,
@@ -1987,7 +1993,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 打开 / 重载团队会话:成员的工作会话与最近一次 run 从持久端点复原(实时事件只覆盖本客户端订阅着的团队 run)。已有实时状态的成员不覆盖。
     let rows: api.BackgroundSessionInfo[] = []
     try { rows = await api.getBackgroundSessions(targetForSession(sessionId), sessionId, 'teamwork') } catch { return }
-    for (const r of rows) if (r.sessionId) inheritBinding(r.sessionId, sessionId) // 成员工作会话在父会话那台上(S4)
+    rows = inheritChildRows(rows, sessionId) // 成员工作会话在父会话那台上(S4);撞上本端会话 / 别处的行丢掉(R-16)
     set((s) => {
       const cur = s.teamWorkBySession[sessionId] || {}
       const next = { ...cur }
@@ -3702,7 +3708,17 @@ async function reconnectFocus(ref: TargetRef): Promise<void> {
 
 // P1-K6:引擎目标解析层读本端连接配置的唯一接缝(homeTarget / knownTargets / cloudApiBase 每次现读);
 // S2 起还接 setFocusTarget 的宿主半身(refocus)与焦点不变时的手动重试(reconnect)。
-installEngineHost({ cfg: () => useApp.getState().cfg, desktopConfig: () => useApp.getState().desktopConfig, refocus: refocusEngine, reconnect: reconnectFocus })
+installEngineHost({
+  cfg: () => useApp.getState().cfg,
+  desktopConfig: () => useApp.getState().desktopConfig,
+  refocus: refocusEngine,
+  reconnect: reconnectFocus,
+  // R-16:本端列表 / 归档区里没打 unit 标的会话 = 本端会话(它们从不 bindSession,绑定表里没有)。设备自报撞上它们的 id 一律 conflict。
+  isHomeSession: (sid) => {
+    const st = useApp.getState()
+    return st.sessions.some((x) => x.id === sid && isHomeSession(x)) || st.archivedSessions.some((x) => x.id === sid && isHomeSession(x))
+  },
+})
 
 // 焦点那台的健康格被任何人(轮询 / 服务层 / SSE / 探针)写进可恢复态 → 确保有个后台等恢复(评审 F1:
 // 空闲时一次 502、或 run 进行中并行请求吃到 504,原先只要没有 SSE 恰好在等,就再也没人把它写回 ready)。

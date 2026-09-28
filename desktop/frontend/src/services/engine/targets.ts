@@ -23,6 +23,9 @@
  *     「新会话建在哪」的缺省),分支 / 旁聊 / 团队成员子会话 inheritBinding 跟父会话走。绑定按账号落盘
  *     (`forsion_session_targets:<账号>`,只存 unit 条、≤ 500 条、读回逐条 isTargetKey + 设备 id 形状过滤)——只是路由提示,
  *     不是信任依据(hub 逐请求校验属主)。knownTargets() = home + 焦点 + 有绑定会话的 unit(R-20)。
+ *     本端会话缺省即 home、不进绑定表,所以撞 id 的闸还要问宿主(EngineHost.isHomeSession:本端列表 / 归档区里的会话往 unit
+ *     绑一律 conflict);设备报回的子会话行过 inheritChildRows(conflict 的行丢掉);本端列表到手时 yieldToHomeListing 撤掉
+ *     早先被设备抢绑的本端 id(本端胜,唯一的改绑例外,只许 unit → home)。
  */
 import type { SessionRecord, StoredDesktopConfig, TanguDesktopConfig } from '../../types'
 import { create } from 'zustand'
@@ -49,6 +52,10 @@ export interface EngineHost {
   /** S2:焦点**没换**、但那台现在连不上 / 健康态不是 ready(终局态不自动重试,R-32)时的手动出口:没连上 → 重连;
    *  已连上但健康不好 → 探一次。setFocusTarget(同一台)与 retryFocusTarget() 都走它;不清任何状态。 */
   reconnect?(ref: TargetRef): Promise<void>
+  /** S4(R-16):这个会话 id 是不是**本端**已知的会话(本端列表 / 归档区里没打 unit 标的那些)。本端列出来的会话从不
+   *  bindSession(缺省即 home),绑定表里没有它们 —— 没有这道问询,设备自报一个撞上的 id 第一次绑就得 'bound' 并落盘,
+   *  那条本端会话的请求从此改发那台电脑。没装 / 不答 = 不知道(只有绑定表那道闸)。 */
+  isHomeSession?(sid: string): boolean
 }
 let host: EngineHost | null = null
 export function installEngineHost(h: EngineHost): void {
@@ -334,6 +341,8 @@ function persistBindings(): void {
 /**
  * 把会话绑到一个位置。**先到先得、永不改绑**(R-16):已绑到别处 → 'conflict'(设备自报的会话 id 可能故意撞 id,
  * 不能被它劫持路由);绑到同一处是幂等的 'bound'(顺带刷新「最近」序)。unit 绑定落盘。
+ * 本端会话缺省即 home、从不写进绑定表,所以「已绑到别处」还包括**宿主认得的本端会话**(EngineHost.isHomeSession):
+ * 它们往 unit 绑一律 'conflict',不写表、不落盘。
  */
 export function bindSession(sid: string, ref: TargetRef): 'bound' | 'conflict' {
   if (typeof sid !== 'string' || !sid) throw new TypeError('bindSession: session id is required')
@@ -342,6 +351,7 @@ export function bindSession(sid: string, ref: TargetRef): 'bound' | 'conflict' {
   ensureBindingsLoaded()
   const current = sessionTargets.get(sid)
   if (current !== undefined && current !== key) return 'conflict'
+  if (current === undefined && key !== 'home' && host?.isHomeSession?.(sid)) return 'conflict'
   sessionTargets.delete(sid)
   sessionTargets.set(sid, key)
   if (key !== 'home') persistBindings()
@@ -360,6 +370,40 @@ export function inheritBinding(childSid: string, parentSid: string): 'bound' | '
     return cur && cur !== 'home' ? 'conflict' : 'bound'
   }
   return bindSession(childSid, loc)
+}
+
+/**
+ * 父会话那台报回来的子会话行(/background、团队成员、@讨论 / Historian 子会话)逐行 inheritBinding;得 'conflict' 的行
+ * (撞上本端会话 / 已绑到别处 —— 设备自报的 id 撞 id)**丢掉**,不交给视图(K7 合并规则同口径:console.warn,不提示)。
+ */
+export function inheritChildRows<R extends { sessionId?: string | null }>(rows: readonly R[], parentSid: string): R[] {
+  return rows.filter((r) => {
+    if (!r.sessionId || inheritBinding(r.sessionId, parentSid) !== 'conflict') return true
+    console.warn(`[engine-target] dropped child session ${r.sessionId} reported under ${parentSid}: it already belongs to another location`)
+    return false
+  })
+}
+
+/**
+ * 本端列表(refreshSessions 拉到的活动 + 归档)是「这是本端会话」的**权威证据**。列表里的 id 若绑在某台电脑上,只可能是
+ * 设备自报的 id 撞上了本端会话(本端 id 由云端引擎 uuidv4 生成,设备左右不了),而那次绑定早于本端列表到手 —— 启动时列表
+ * 还没回来,那台上的父会话已在轮询子会话;或那条本端会话是别的端刚建的。此时撤掉那条 unit 绑定,**本端胜**(与 refreshSessions
+ * 的保留规则、K7 合并规则同口径)。这是「永不改绑」唯一的例外,方向只能是 unit → home。返回被撤掉的会话 id。
+ */
+export function yieldToHomeListing(ids: Iterable<string>): string[] {
+  ensureBindingsLoaded()
+  const dropped: string[] = []
+  for (const sid of ids) {
+    const k = sessionTargets.get(sid)
+    if (k === undefined || k === 'home') continue
+    sessionTargets.delete(sid)
+    dropped.push(sid)
+  }
+  if (!dropped.length) return dropped
+  console.warn(`[engine-target] home listing reclaimed ${dropped.length} session id(s) a device had claimed: ${dropped.join(', ')}`)
+  persistBindings()
+  bumpBindings()
+  return dropped
 }
 
 /** 会话删掉了(硬删成功)→ 忘掉它的绑定。归档不忘(还会被打开)。 */
