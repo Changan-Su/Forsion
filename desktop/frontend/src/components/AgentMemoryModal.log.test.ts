@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AgentMemoryModal } from './AgentMemoryModal'
 import * as api from '../services/backendService'
-vi.mock('../i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+import { homeTarget } from '../services/engine/targets'
+vi.mock('../i18n', () => ({ useI18n: () => ({ t: (key: string) => key }), registerMessages: () => {}, translate: (key: string) => key }))
 vi.mock('./AgentMemoryPanel', () => ({ AgentMemoryPanel: () => null }))
 vi.mock('../services/backendService', () => ({
   listAgentLogDates: vi.fn(), getAgentLogSnapshot: vi.fn(), putAgentLog: vi.fn(),
@@ -31,7 +32,10 @@ it('log saves include the loaded version; a conflict leaves the editable draft a
     textarea.dispatchEvent(new Event('input', { bubbles: true }))
   })
   await act(async () => buttons().find((b) => b.textContent?.trim() === 'common.save')!.click())
-  expect(api.putAgentLog).toHaveBeenCalledWith(cfg, 'alpha', '2026-09-08', 'my log draft', 'log-v1')
+  // P1-K6 S3:请求走 homeTarget()(活目标;按对象身份比,别让深比较去读 getter —— 本测没装宿主)
+  const put = vi.mocked(api.putAgentLog).mock.calls.at(-1)!
+  expect(put[0]).toBe(homeTarget())
+  expect(put.slice(1)).toEqual(['alpha', '2026-09-08', 'my log draft', 'log-v1'])
   expect(textarea.value).toBe('my log draft')
   expect(host.textContent).toContain('409: log changed')
   expect(host.textContent).not.toContain('settings.agents.memSaved')
