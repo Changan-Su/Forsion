@@ -128,7 +128,9 @@ describe('I1 远端 PATCH project_path → 会话盖远程标记', () => {
     expect((await send('PATCH', '/agent/sessions/I1d', { project_path: moved }, REMOTE_HDR)).status).toBe(200);
     expect((await send('PATCH', '/agent/sessions/I1d', { project_path: null }, REMOTE_HDR)).status).toBe(200);
     const row = await rowOf('I1d');
-    expect(row.cfg).toEqual({ agentSlug: 'a1' });
+    // 远端改标题从 M1A 复审起盖的是 remoteContent(标题是远端给的串,挡在 Muse / 召回外),**不是** remoteOrigin:D1 读范围不动
+    expect(row.cfg).toEqual({ agentSlug: 'a1', remoteContent: expect.objectContaining({ via: 'lan' }) });
+    expect(row.cfg.remoteOrigin).toBeUndefined();
     expect(row.path).toBeNull();
   });
 
