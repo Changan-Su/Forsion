@@ -286,6 +286,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     toggleMode: () => void toggleMode(),
     setTheme: (t) => applyAccent(t),
     openSearch: () => useUiStore.getState().setPalette('search'),
+    // 插件层不依赖应用层 store:发窗口事件,应用层(bootstrapEngine)接住转给 openSettings
+    openSettings: (target) => { if (ok() && typeof target === 'string' && target) window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: target })) },
     openSwitcher: () => useUiStore.getState().setPalette('switch'),
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),

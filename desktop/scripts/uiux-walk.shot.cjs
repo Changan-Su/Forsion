@@ -53,7 +53,7 @@ const MENUS = [
 ]
 const SPACES = ['tangu', 'agents', 'inbox', 'amadeus', 'calendar', 'coding', 'artificial', 'image-studio', 'automation', 'muse', 'public', 'homepage']
 const SETTINGS = [
-  'general/g-basic', 'general/g-conn', 'general/g-runtime', 'forsion/f-account', 'forsion/f-notes', 'general/g-inbox',
+  'general/g-basic', 'general/g-conn', 'general/g-runtime', 'forsion/fx:forsion-extend:account', 'forsion/fx:forsion-extend:quota', 'forsion/fx:forsion-extend:security', 'forsion/fx:forsion-extend:usage', 'forsion/fx:forsion-extend:feedback', 'forsion/f-sync', 'forsion/f-conn', 'general/g-inbox',
   'model/m-models', 'model/m-display', 'model/m-providers', 'model/m-voice',
   'mcp', 'hooks', 'skills/k-library', 'skills/k-discovery', 'agents/ag-roster', 'agents/ag-special', 'agents/ag-clis',
   'amadeus-plugins/pl-forsion', 'amadeus-plugins/pl-engine', 'browser', 'channels', 'notes', 'sync/s-remote',

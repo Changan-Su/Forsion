@@ -138,6 +138,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   toggleMode(): void
   setTheme(theme: string): void
   openSearch(): void
+  /** 2026-09-28+:打开设置到某一页或某个子页,口径同宿主深链(如 'model/m-providers'、'forsion/fx:forsion-extend:quota')。
+   *  旧宿主 / 没有设置页的宿主没有:`ctx.app.openSettings?.(…)`。 */
+  openSettings?(target: string): void
   openSwitcher(): void
   /** Show a transient toast. */
   notify(message: string): void

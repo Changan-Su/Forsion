@@ -6,9 +6,10 @@ describe('resolveSettingsTarget', () => {
   it.each([
     [undefined, { tab: 'general' }],
     ['', { tab: 'general' }],
-    ['forsion', { tab: 'forsion', sub: 'f-account' }], // appStore handleAuthExpired、/login
-    ['general/g-forsion', { tab: 'forsion', sub: 'f-account' }], // 2026-09-28 前的二级落点
-    ['sync/s-cloud', { tab: 'forsion', sub: 'f-notes' }],
+    ['forsion', { tab: 'forsion' }], // appStore handleAuthExpired、/login:落到第一个子页(Extend 的「账号」)
+    ['general/g-forsion', { tab: 'forsion' }], // 2026-09-28 前的二级落点
+    ['sync/s-cloud', { tab: 'forsion', sub: 'f-sync' }],
+    ['forsion/fx:forsion-extend:quota', { tab: 'forsion', sub: 'fx:forsion-extend:quota' }], // Extend 自绘子页的深链
     ['connection', { tab: 'general', sub: 'g-conn' }],
     ['agent-clis', { tab: 'agents', sub: 'ag-clis' }],
     ['wechat', { tab: 'channels' }],

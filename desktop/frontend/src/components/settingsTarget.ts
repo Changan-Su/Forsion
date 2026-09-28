@@ -14,9 +14,10 @@
 export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?]>> = {
   // 连接合并进「常规」(general);Forsion 账号自成一级页(随 Extend 出现),旧的二级落点照样认
   connection: ['general', 'g-conn'],
-  forsion: ['forsion', 'f-account'],
-  'general/g-forsion': ['forsion', 'f-account'],
-  'sync/s-cloud': ['forsion', 'f-notes'],
+  // 不带子页 = 落到第一个子页:Extend 自绘的「账号」(没装 Extend 0.5 时落到宿主的「同步」)
+  forsion: ['forsion'],
+  'general/g-forsion': ['forsion'],
+  'sync/s-cloud': ['forsion', 'f-sync'],
   // Agent CLI 并进 Agents 页
   'agent-clis': ['agents', 'ag-clis'],
   // 微信设置迁「通道」

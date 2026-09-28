@@ -408,6 +408,12 @@ const api = {
    */
   cloudFetch: (req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }> =>
     ipcRenderer.invoke('cloud:fetch', req),
+  /** Forsion Extend 的渲染半身调它自己主进程半身注册的通道(2026-09-28):只放行 cloud:present 列出的通道,宿主自己的通道一律拒。
+   *  Extend 以后新加的通道随它的 npm 版本走,不用等 Genesis 加专门的桥键。没装载 Extend 时整个键被删(见下)。 */
+  cloudInvoke: (channel: string, ...args: unknown[]): Promise<unknown> =>
+    typeof channel === 'string' && cloudPresent().has(channel)
+      ? ipcRenderer.invoke(channel, ...args)
+      : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
   /** 可共享的屏幕/窗口(带 dataURL 缩略图)。选源 UI 由调用方自己画 —— 宿主不提供选择器。 */
@@ -498,5 +504,6 @@ const CLOUD_KEYS: Record<string, string> = {
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
+if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
 
 contextBridge.exposeInMainWorld('tangu', api)
