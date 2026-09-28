@@ -39,7 +39,6 @@ const WatchedColumns: React.FC<{ cond: Extract<MuseTriggerInfo['cond'], { type: 
 /** 试跑按钮:同一执行器立即执行动作链(旧式规则=起一次无人值守 run),结果行内展示。 */
 const FireButton: React.FC<{ tr: MuseTriggerInfo; onResult: () => void }> = ({ tr, onResult }) => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState('')
@@ -102,7 +101,7 @@ const SessionTranscript: React.FC<{ sessionId: string }> = ({ sessionId }) => {
 
 const HistorianFeed: React.FC = () => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
+  const cfg = useApp((s) => s.cfg) // 只作「换了引擎连接就重订」的依赖(请求本身打 homeTarget())
   const [items, setItems] = React.useState<HistorianActivityItem[]>([])
   useEffect(() => {
     let alive = true
@@ -129,7 +128,6 @@ const HistorianFeed: React.FC = () => {
  * 条目退出自动化列表(列表只收 date&&prompt 条目),纯规划条目去 Calendar 建。 */
 const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: () => void }> = ({ slug, en, onDone }) => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
   const [name, setName] = useState(en.name)
   const [date, setDate] = useState(en.date)

@@ -105,6 +105,15 @@ export function connectionTarget<C extends EngineConnection>(conn: C): EngineTar
   return fromLegacy(conn)
 }
 
+/**
+ * 一份连接的**身份**(不是请求地址):基址(去尾斜杠)+ 令牌(可传 digest 只留指纹)。给「换了引擎 / 令牌就重挂、重拉、换缓存桶」的
+ * React key、effect 依赖、草稿 / 缓存分桶键用 —— 那些地方只关心「是不是同一个连接」,不该自己读 cfg.backendUrl(棘轮 R1)。
+ * 令牌原样在内(除非传 digest):别落盘、别上屏。
+ */
+export function connectionKey(conn: EngineConnection, digest: (token: string) => string = (x) => x): string {
+  return JSON.stringify([conn.backendUrl.replace(/\/+$/, ''), conn.token ? digest(conn.token) : ''])
+}
+
 /** 服务函数入口:已是目标就原样用,老调用点传来的 cfg 折成 home 目标(Phase A)。 */
 export function asTarget(arg: EngineArg): EngineTarget {
   return isEngineTarget(arg) ? arg : fromLegacy(arg)
@@ -139,7 +148,8 @@ let liveHome: EngineTarget | null = null
  * (旧 token 撞 401 会触发 handleAuthExpired → backendRestart,又换一次 token = 重启回环)。
  */
 export function homeTarget(): EngineTarget {
-  requireHost()
+  // 解析不要求宿主已装:目标是活的,base / 鉴权头**用到时**才现读宿主(没装 → 那一刻抛)。这样模块求值早期、
+  // 或 mock 掉 appStore 的单测里拿目标(交给被 mock 的服务函数)不会炸;真发请求时照样失败关闭。
   return liveHome ??= mintTarget({
     key: 'home',
     ref: HOME_REF,
@@ -157,6 +167,7 @@ export function homeTarget(): EngineTarget {
  * (或订阅 onFocusChange)。
  */
 export function knownTargets(): EngineTarget[] {
+  requireHost() // 宿主还没装 → 抛(K3 的待批轮询据此跳过这一拍,不对一个读不出基址的目标发请求)
   const home = homeTarget()
   const f = focusRef()
   const focus = f.kind === 'unit' ? targetForRef(f) : null

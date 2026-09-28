@@ -76,7 +76,6 @@ interface InboxState {
   stopPolling(): void
 }
 
-const cfg = () => useApp.getState().cfg
 const fail = (e: any) => useApp.getState().toast(useApp.getState().tr('inbox.opFail', { e: e?.message || e }), true)
 const setBadge = (n: number) => { void window.tangu?.setInboxBadge?.(n) }
 /** 未归档 / 已归档两份里找一封(阅读面板可能开着已归档的那封)。 */

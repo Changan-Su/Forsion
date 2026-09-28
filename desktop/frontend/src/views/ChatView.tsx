@@ -39,6 +39,7 @@ import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
+import { homeTarget } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
@@ -428,7 +429,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const ttsEnabled = !!s.desktopConfig?.ttsModelId?.trim()
   const speak = (id: string, text: string): void => {
     if (tts?.msgId === id) { stopSpeaking(); return }
-    speakMessage(s.cfg, s.desktopConfig, id, text).catch((e: any) => {
+    speakMessage(homeTarget(), s.desktopConfig, id, text).catch((e: any) => {
       s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
     })
   }

@@ -50,7 +50,7 @@ export const RightPanel: React.FC<{
       {active === 'workspace' && <WorkspaceTab {...p} />}
       {active === 'toc' && <ChatToc containerRef={p.chatScrollRef} scanTrigger={p.messages.length} />}
       {active === 'memory' && <MemoryTab {...p} />}
-      {active === 'subchats' && <SubChatsTab cfg={p.cfg} subChats={p.subChats} />}
+      {active === 'subchats' && <SubChatsTab sessionId={p.sessionId} subChats={p.subChats} />}
     </>
   )
 

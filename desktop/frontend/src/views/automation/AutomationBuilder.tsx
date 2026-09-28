@@ -59,7 +59,6 @@ function defaultDatetime(): string {
 
 export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel, extendView }) => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
   const agentDefs = useHomeAgentDefs() // 自动化是本端的(P1-K6)
   const st = useAutomation()
   const catalog = st.actionsCatalog

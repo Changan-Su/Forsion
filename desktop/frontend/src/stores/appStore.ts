@@ -15,7 +15,7 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, sameRef, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef, homeTarget } from '../services/engine/targets'
+import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, sameRef, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef, homeTarget, connectionKey } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
 import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
 import { ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
@@ -412,9 +412,6 @@ const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
     : s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
 
 // ── P1-K6 S2:焦点目标(整端切到一台电脑)在 store 里的落点 ──
-/** 目录 / 建会话类(§3.3 target 类)的目标:焦点在 home → 调用方给的 cfg 原样(与改造前逐字一致);否则 = 焦点目标。
- *  只在 appStore 的「焦点目录」加载路径上用;管理面板自己拿 cfg 调同名函数 → 仍打 home(K6 待定 2 的缺省)。 */
-const catalogArg = (c: TanguDesktopConfig): EngineArg => (focusRef().kind === 'home' ? c : focusTarget())
 /** 焦点的目标键(home / unit:<id>)。 */
 const focusKey = (): TargetKey => targetKeyOf(focusRef())
 /** 焦点是 unit 且它的健康态不是 ready(离线 / 引擎没起 / 终局):轮询暂停、看门狗不收尾(K6 §3.6)。 */
@@ -618,7 +615,7 @@ let connectGen = 0
 let lastOkConnectKey = ''
 // 焦点在 unit 时连的是那台电脑(基址不在 cfg 里):键按焦点算,否则换焦点后 inflight 复用 / lastOkConnectKey 会误判「已连同一个」。
 const connectKey = (c: { backendUrl: string; token: string }): string =>
-  focusRef().kind === 'home' ? `${c.backendUrl}|${c.token}` : `${focusKey()}|${c.token}`
+  focusRef().kind === 'home' ? connectionKey(c) : `${focusKey()}|${c.token}`
 let lastEngineResyncAt = 0 // 凭据不同步时的引擎重启节流:401 持续不断也不许变成重启风暴
 const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
 const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
@@ -1221,7 +1218,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (drop) { recordUiAction({ runId, ackId, ...req, drop }); break }
         if (uiActionDoneAcks.size >= MAX_DONE_ACKS) uiActionDoneAcks.clear()
         uiActionDoneAcks.add(ackId)
-        const cfg = get().cfg
+        const target = targetForSession(sessionId) // run 的回执打到会话所在的引擎(S4:绑定表;未绑 = home)
         void (async () => {
           const [{ applyUiSetting, runAgentCommand, readUiValues }, { sendUiAck }] = await Promise.all([
             import('../agentCommands'),
@@ -1236,15 +1233,14 @@ export const useApp = create<AppState>((set, get) => ({
             : await runAgentCommand(pl.id, pl.args && typeof pl.args === 'object' ? pl.args : undefined)
           // 回执带全份设置新值(在 setter 落地**之后**读):引擎据此刷新 run 内快照,同 run 里再 list 才是新值。
           // pending(setter 没在时限内落地)就不带:那一刻读到的还是旧值,写进引擎等于把病换个出口再犯一次。
-          const ack = await sendUiAck(cfg, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
+          const ack = await sendUiAck(target, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
           recordUiAction({ runId, ackId, ...req, ok: r.ok, error: r.error, state: r.state, ack })
         })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
         break
       }
       case 'desk_capture_request':
         if (pl.shotId) {
-          const cfg = get().cfg
-          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(cfg, String(pl.runId || runId), sessionId, String(pl.shotId)))
+          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(String(pl.runId || runId), sessionId, String(pl.shotId)))
         }
         break
       case 'approval_request': {
@@ -1568,7 +1564,7 @@ export const useApp = create<AppState>((set, get) => ({
             // 把「forsion-suggest」和反引号念出来 —— 同一条消息两个入口读出两样东西。
             const spoken = msg?.content ? splitSuggestions(msg.content).text : ''
             if (spoken.trim()) {
-              speakMessage(st.cfg, dc, assistantId, spoken).catch((e: any) => {
+              speakMessage(homeTarget(), dc, assistantId, spoken).catch((e: any) => {
                 if (e?.message !== 'EMPTY') get().toast(get().tr('tts.failed', { e: e?.message || e }), true)
               })
             }
@@ -1777,7 +1773,7 @@ export const useApp = create<AppState>((set, get) => ({
       expireRunPrompts(set, sessionId, runId) // 引擎查实已不跑:它那边的审批早没了,托盘里别留死卡
       endRun(set, get, sessionId, runId)
     })() }, 30000))
-    void subscribeRunEvents(get().cfg, runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
+    void subscribeRunEvents(targetForSession(sessionId), runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
       .catch((e) => {
         if (get().runningBySession[sessionId] !== runId || stoppedRuns.has(runId)) return
         if (!stoppedRuns.has(runId)) {
@@ -1802,6 +1798,8 @@ export const useApp = create<AppState>((set, get) => ({
     return act
   },
 
+  // P1-K6 S3:请求走目标解析层(焦点 / homeTarget() 活目标现读 store.cfg);c 只作去重键。调用方先把 cfg 落进 store 再 connect
+  // (patchConfig → onReconnect、boot / 引导回调、账号切换都是这个顺序)。
   connect: async (c) => {
     const key = connectKey(c)
     if (connectInflight?.key === key) return connectInflight.p
@@ -2747,7 +2745,7 @@ export const useApp = create<AppState>((set, get) => ({
     const activeRunId = get().runningBySession[sessionId]
     if (activeRunId) {
       try {
-        const sr = await steerRun(get().cfg, activeRunId, { message: text, attachments })
+        const sr = await steerRun(targetForSession(sessionId), activeRunId, { message: text, attachments })
         if (sr.ok) {
           // G2 所有权转移:用户此刻在**这个**窗口/这台设备说话,界面动作就该落在这里。
           // 只在 startRun 处认领的话,「A 设备起 run、用户换到 B 设备追一句」会让 A 替 B 执行并
@@ -2795,7 +2793,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!item) return null
     const runId = get().runningBySession[sessionId]
     if (runId && !item.localOnly) {
-      const r = await cancelSteer(get().cfg, runId, msgId).catch(() => ({ ok: false, gone: false }))
+      const r = await cancelSteer(targetForSession(sessionId), runId, msgId).catch(() => ({ ok: false, gone: false }))
       // 来不及(已注入/引擎已收尾):等待区的这条交给 turn_boundary 或 endRun 收拾,别在这里硬拔。
       if (!r.ok) return null
     }
@@ -2809,7 +2807,7 @@ export const useApp = create<AppState>((set, get) => ({
     const runId = get().runningBySession[sid]
     if (!runId || !(get().steerPendingBySession[sid] || []).length || get().stoppingBySession[sid]) return
     try {
-      const result = await expediteSteer(get().cfg, runId)
+      const result = await expediteSteer(targetForSession(sid), runId)
       if (result.ok && get().runningBySession[sid] === runId) get().toast(translate('appstore.steerQueued'))
       // Only turn_boundary removes the queued messages, including their attachments.
     } catch (e: any) {
@@ -3002,7 +3000,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!approval?.runId) return false
     let r: Awaited<ReturnType<typeof resolveApproval>>
     try {
-      r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
+      r = await resolveApproval(targetForSession(sid), approval.runId, approvalId, action, argsOverride)
     } catch (e: any) {
       get().toast(get().tr('approval.sendFail', { e: e?.message || e }), true)
       return false
@@ -3028,7 +3026,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!inquiry?.runId) return false
     let r: Awaited<ReturnType<typeof resolveApproval>>
     try {
-      r = await resolveInquiry(get().cfg, inquiry.runId, inquiryId, answer)
+      r = await resolveInquiry(targetForSession(sid), inquiry.runId, inquiryId, answer)
     } catch (e: any) {
       get().toast(t('inquiry.sendFail', { e: e?.message || e }), true)
       return false // 没送达:卡片解锁,用户能重试(否则决策按钮永久置灰=死路)
@@ -3144,7 +3142,6 @@ export const useApp = create<AppState>((set, get) => ({
     // 连接拒绝的请求(控制台红噪音)且把失败缓存成关 —— 云端直接视为关,不发请求。
     if ((window as any).tangu?.cloudWeb) return
     if (!slug || get().voiceOnByAgent[slug] !== undefined) return // 已缓存不重复拉
-    const cfg = get().cfg
     try {
       const plugins = await api.listPlugins(homeTarget())
       const enabled = !!plugins.find((p) => p.id === VOICE_MESSAGE_PLUGIN_ID)?.enabled
@@ -3159,7 +3156,6 @@ export const useApp = create<AppState>((set, get) => ({
 
   setVoiceMode: async (slug, on) => {
     set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: on } })) // 乐观更新
-    const cfg = get().cfg
     try {
       if (on) await api.setPluginEnabled(homeTarget(), VOICE_MESSAGE_PLUGIN_ID, true).catch(() => {}) // 确保插件启用
       await api.putPluginSettings(homeTarget(), VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`, { apply: on })
@@ -3564,11 +3560,10 @@ async function unitAuthExpired(key: TargetKey): Promise<void> {
 /** 新会话的初始配置补写(老引擎 POST 不收 agent_config):远端目标没有整对象 PUT(deny-remote)→ 按键 PATCH。 */
 function backfillSessionConfig(sessionId: string, init: AgentConfig): Promise<unknown> {
   const t = targetForSession(sessionId)
-  const cfg = useApp.getState().cfg
   if (focusRef().kind === 'unit' && !capsForRef(focusRef()).putSessionConfig) {
     return api.patchSessionConfig(t, sessionId, init, () => init).catch(() => {})
   }
-  return api.putSessionConfig(targetForSession(sessionId), sessionId, init).catch(() => {})
+  return api.putSessionConfig(t, sessionId, init).catch(() => {})
 }
 
 /**

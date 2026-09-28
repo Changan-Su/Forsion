@@ -2,7 +2,7 @@
  *  这里找到面板 DOM → 交主进程 capturePage 抓真实像素 → POST 回引擎兑现。
  *  截**渲染结果**而不是 DOM 复刻:Desk 里跑的是原生视图/webview/canvas,复刻方案一律抓成空白。 */
 import { sendDeskCapture } from '../../services/agentRunService'
-import type { TanguDesktopConfig } from '../../types'
+import { targetForSession } from '../../services/engine/targets'
 
 export interface DeskShotOut {
   dataUrl?: string
@@ -77,12 +77,12 @@ export async function captureDesk(sessionId: string): Promise<DeskShotOut> {
 }
 
 /** SSE 入口:截图并兑现。失败也必须 POST——否则引擎那头只能干等到超时。 */
-export async function answerDeskCapture(cfg: TanguDesktopConfig, runId: string, sessionId: string, shotId: string): Promise<void> {
+export async function answerDeskCapture(runId: string, sessionId: string, shotId: string): Promise<void> {
   let out: DeskShotOut
   try {
     out = await captureDesk(sessionId)
   } catch (e: any) {
     out = { error: String(e?.message || e) }
   }
-  await sendDeskCapture(cfg, runId, shotId, out)
+  await sendDeskCapture(targetForSession(sessionId), runId, shotId, out) // 回执打到会话所在的引擎
 }

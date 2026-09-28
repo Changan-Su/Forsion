@@ -17,7 +17,7 @@ import { useI18n } from '../../i18n'
 import { fmtTime } from './lib'
 import type { AutomationExecutionInfo, AutomationRunInfo, HistorianActivityItem, TanguDesktopConfig } from '../../types'
 import './automation.css'
-import { homeTarget } from '../../services/engine/targets'
+import { homeTarget, connectionKey } from '../../services/engine/targets'
 
 const dotClass = (status: string): string =>
   status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
@@ -45,7 +45,7 @@ function tokenDigest(token: string): string {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
 }
 export function executionsScope(cfg: Pick<TanguDesktopConfig, 'backendUrl' | 'token'>, accountId: string | null | undefined): string {
-  return JSON.stringify([cfg.backendUrl.replace(/\/+$/, ''), cfg.token ? tokenDigest(cfg.token) : '', accountId ?? ''])
+  return JSON.stringify([connectionKey(cfg, tokenDigest), accountId ?? ''])
 }
 /** 取桶(没有就建),并把它挪到「最近使用」一端;超出桶数上限时淘汰最久没用的。 */
 const cacheOf = (scope: string): Map<string, AutomationExecutionInfo[]> => {

@@ -8,7 +8,7 @@ import { track } from '../achievements/store'
 import { CapabilityMenu } from './CapabilityMenu'
 import { publishAccountQuota, subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
 import './specialAgents.css'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 registerMessages({
   'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
@@ -173,7 +173,7 @@ const specialDrafts = new Map<string, SpecialDraft>()
 /** Explicit, field-level saves keep text editing stable and preserve unrelated backend changes. */
 export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktopConfig; localHost?: boolean }) {
   const { t } = useI18n()
-  const draftKey = JSON.stringify([cfg.backendUrl, cfg.token])
+  const draftKey = connectionKey(cfg)
   const [conf, setConf] = useState<SpecialAgentsConfig | null>(null)
   const [baseline, setBaseline] = useState<SpecialAgentsConfig | null>(null)
   const [promptDefault, setPromptDefault] = useState('')

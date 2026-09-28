@@ -10,7 +10,7 @@ import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
 const HISTORY_PREVIEW = 8
@@ -27,7 +27,7 @@ type Props = {
 }
 
 /** 换后端 / 账号 / Agent 整体重挂,旧请求画不进新身份。 */
-export const AgentHarnessPanel: React.FC<Props> = (props) => <AgentHarnessBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug])} {...props} />
+export const AgentHarnessPanel: React.FC<Props> = (props) => <AgentHarnessBody key={JSON.stringify([connectionKey(props.cfg), props.slug])} {...props} />
 
 const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCandidates }) => {
   const { t, locale } = useI18n()

@@ -8,7 +8,7 @@ import {
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 registerMessages({
   'agentMemory.search': { zh: '搜索记忆', en: 'Search memory' },
@@ -78,7 +78,7 @@ const sourceText = (source: AgentMemoryRevision['source'], label: string) => [la
 /** Changing backend, account, or Agent remounts all state; an old request can never paint into a new identity. */
 const validDream = (d: AgentMemoryDream | null | undefined): AgentMemoryDream | null => (d?.status && d.config ? d : null)
 
-export const AgentMemoryPanel: React.FC<Props> = (props) => <AgentMemoryPanelBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug, props.shareDefaultMemory])} {...props} />
+export const AgentMemoryPanel: React.FC<Props> = (props) => <AgentMemoryPanelBody key={JSON.stringify([connectionKey(props.cfg), props.slug, props.shareDefaultMemory])} {...props} />
 
 const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, organized = false }) => {
   const { t } = useI18n()

@@ -87,7 +87,6 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
 export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
   const { t } = useI18n()
   const agents = useApp((s) => s.agentDefs)
-  const cfg = useApp((s) => s.cfg)
   const creating = params.creating === true
   const setCreating = (value: boolean) => leaf.setParams({ creating: value })
   const [newName, setNewName] = useState('')
@@ -139,7 +138,6 @@ export function AgentsRosterView() {
   const { t } = useI18n()
   const agents = useApp((s) => s.agentDefs)
   const avatars = useApp((s) => s.agentAvatars)
-  const cfg = useApp((s) => s.cfg)
   const defaultSlug = useApp((s) => s.defaultAgentSlug)
   const selected = useWorkspace(useShallow((s) => {
     const profile = s.api?.panels.find((panel) => panel.params?.__type === 'agent-profile')

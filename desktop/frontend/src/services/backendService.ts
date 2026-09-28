@@ -116,6 +116,24 @@ export const designTtsVoice = (cfg: EngineArg, body: { baseUrl: string; apiKey: 
 export const deleteTtsVoice = (cfg: EngineArg, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
   request<{ ok: boolean }>(cfg, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
 
+/** 语音合成(POST /agent/tts → 音频字节;home 类:朗读 / 语音条 / 设置页试听)。以前 ttsService 自拼 URL(K6 §3.3「直连三处」之一),
+ *  现在基址与鉴权头归目标。非 2xx 抛引擎的 detail(与改造前同一句)。 */
+export async function synthesizeTts(
+  t: EngineTarget,
+  body: { text: string; model: string; voice?: string; speed?: number },
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const init: RequestInit = { method: 'POST', headers: await t.headers(true), ...(signal ? { signal } : {}), body: JSON.stringify(body) }
+  const o = fetchOpts(t)
+  const r = await (o ? authFetch(`${t.base}/agent/tts`, init, o) : authFetch(`${t.base}/agent/tts`, init))
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`
+    try { detail = (await r.json())?.detail || detail } catch { /* keep */ }
+    throw new Error(detail)
+  }
+  return r.blob()
+}
+
 // ── 会话 ──
 // list/create 与 run 同源显式带 app_id:此前不带,云端落 worker 基线(ai-studio)→ 会话归属
 // 与 run/用量(tangu)分叉。存量误标行由引擎 runMigration 按 run 证据归位(db/migrate.ts)。

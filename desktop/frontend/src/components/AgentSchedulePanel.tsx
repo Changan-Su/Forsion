@@ -14,12 +14,12 @@ import { condText, fmtTime, isFinishedTrigger } from '../views/automation/lib'
 import { nextOccurrence, triggerWakes } from './agentScheduleLib'
 import type { AgentScheduleEntry, MuseTriggerInfo, TanguDesktopConfig } from '../types'
 import '../views/agentProfile.css'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 type Props = { cfg: TanguDesktopConfig; slug: string; /** run 起止时重读:Agent 刚用 manage_schedule 排的条目不用手动刷新。 */ running?: boolean }
 
 /** 换后端 / 账号 / Agent 整体重挂,旧请求画不进新身份。 */
-export const AgentSchedulePanel: React.FC<Props> = (props) => <AgentScheduleBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug])} {...props} />
+export const AgentSchedulePanel: React.FC<Props> = (props) => <AgentScheduleBody key={JSON.stringify([connectionKey(props.cfg), props.slug])} {...props} />
 
 const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const { t } = useI18n()

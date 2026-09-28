@@ -8,7 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type ConnResult = { ok: boolean; message: string; authRejected?: boolean }
 const deferreds = new Map<string, { resolve: (r: ConnResult) => void }>()
-const testConnection = vi.fn((c: { backendUrl: string; token: string }) => new Promise<ConnResult>((resolve) => { deferreds.set(c.token, { resolve }) }))
+/** 每次探测实际带出去的令牌(P1-K6 S3:connect 传的是活目标,令牌在 headers() 里现读 —— 与发请求那一刻同源)。 */
+const seenTokens: string[] = []
+const testConnection = vi.fn((t: { headers: () => Promise<Record<string, string>> }) => new Promise<ConnResult>((resolve) => {
+  // headers() 的函数体在第一个 await 之前就同步读完令牌(targets.ts 的约定):登记推迟一个微任务,读到的仍是调用那一刻的令牌
+  void t.headers().then((h) => {
+    const token = (h.Authorization || '').replace(/^Bearer /, '')
+    seenTokens.push(token)
+    deferreds.set(token, { resolve })
+  })
+}))
 vi.mock('../services/agentRunService', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/agentRunService')>()),
   testConnection: (c: any) => testConnection(c),
@@ -63,6 +72,7 @@ describe('appStore.connect:代数只认最新', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     deferreds.clear()
+    seenTokens.length = 0
     testConnection.mockClear()
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
     vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
@@ -95,7 +105,8 @@ describe('appStore.connect:代数只认最新', () => {
     expect(useApp.getState().connMessage).toBe('ECONNREFUSED') // 老 401 没盖上来
     await tick(BOOT_RETRY_MS + 20)
     expect(testConnection).toHaveBeenCalledTimes(3) // 重试环活着(旧代码:老 401 把 lastConnectAuthRejected 置真 → 停)
-    expect(testConnection.mock.calls[2][0].token).toBe('new')
+    await tick()
+    expect(seenTokens[2]).toBe('new')
     deferreds.get('new')!.resolve({ ok: true, message: 'ok' })
     await tick()
     expect(useApp.getState().connState).toBe('ok')
@@ -143,13 +154,18 @@ describe('appStore.connect:代数只认最新', () => {
     deferreds.get('old')!.resolve({ ok: true, message: 'managed ok' })
     await tick()
     expect(useApp.getState().connState, '前置:旧目标已连通').toBe('ok')
-    // 同一目标再连一次(如手动重连):结果回来前仍是 ok
-    void useApp.getState().connect({ backendUrl: 'http://127.0.0.1:1', token: 'old', modelId: '' })
+    // 同一目标再连一次(如手动重连):结果回来前仍是 ok。
+    // P1-K6 S3:connect 的请求走 homeTarget()(活目标,现读 store.cfg)—— 与真调用方一样先把 cfg 落进 store 再 connect
+    // (patchConfig → onReconnect、boot / 引导回调都是这个顺序)。
+    useApp.setState({ cfg: { backendUrl: 'http://127.0.0.1:1', token: 'old', modelId: '' } })
+    void useApp.getState().connect(useApp.getState().cfg)
     expect(useApp.getState().connState).toBe('ok')
     deferreds.get('old')!.resolve({ ok: true, message: 'managed ok' })
     await tick()
     // 切到外部地址:请求挂着 → 不许仍报 ok
-    void useApp.getState().connect({ backendUrl: 'https://ext.example', token: 'ext', modelId: '' })
+    useApp.setState({ cfg: { backendUrl: 'https://ext.example', token: 'ext', modelId: '' } })
+    void useApp.getState().connect(useApp.getState().cfg)
+    await Promise.resolve() // 探测的令牌登记推迟一个微任务(见 testConnection 替身)
     expect(useApp.getState().connState).not.toBe('ok')
     deferreds.get('ext')!.resolve({ ok: false, message: 'ECONNREFUSED' })
     await tick()

@@ -1003,11 +1003,11 @@ export const SettingsModal: React.FC<{
     }
   }
 
-  // cfg 缺省取实时 store 值而非 draft:draft 是挂载时快照,后端一重启(换端口)就成死地址。
+  // cfg 缺省取实时 store 值(homeTarget 活目标)而非 draft:draft 是挂载时快照,后端一重启(换端口)就成死地址。
   const loadModels = async (cfg?: TanguDesktopConfig) => {
     setModelsLoading(true)
     try {
-      setModels(await listModels(cfg ?? useApp.getState().cfg))
+      setModels(await listModels(cfg ? connectionTarget(cfg) : homeTarget())) // 重启后刚从主进程读到的配置 = 显式连接;缺省 = 本端当前那份
     } catch (e: any) {
       setModels(null)
       setTestResult(e?.message || t('settings.model.loadFailed'))
@@ -2657,7 +2657,7 @@ export const SettingsModal: React.FC<{
                               disabled={ttsTesting || !(stored.ttsModelId || '').trim()}
                               onClick={() => {
                                 setTtsTesting(true); setTtsTestMsg('')
-                                previewTts(p.cfg, { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
+                                previewTts(homeTarget(), { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
                                   .then(() => setTtsTestMsg(`✓ ${t('settings.tts.testOk')}`))
                                   .catch((e: any) => setTtsTestMsg(`✗ ${e?.message || e}`))
                                   .finally(() => setTtsTesting(false))

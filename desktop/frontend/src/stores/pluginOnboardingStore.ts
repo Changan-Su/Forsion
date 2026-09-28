@@ -200,7 +200,7 @@ export function nudgeOnboardingOnce(p: AmadeusPlugin): void {
     if (localStorage.getItem(nudgedKey(p.id)) === '1') return
     localStorage.setItem(nudgedKey(p.id), '1')
   } catch { return }
-  const { cfg, tr } = useApp.getState()
+  const { tr } = useApp.getState()
   void postInboxMessage(homeTarget(), {
     title: tr('plugin.onboarding.nudgeTitle', { name: p.name }),
     body: tr('plugin.onboarding.nudgeBody', { name: p.name }),

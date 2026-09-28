@@ -453,7 +453,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
               {body && (
                 voiceMode
-                  ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
+                  ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
                   : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} /></div>
               )}
             </>

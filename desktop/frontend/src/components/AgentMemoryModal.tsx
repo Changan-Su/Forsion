@@ -13,7 +13,7 @@ import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { AgentMemoryPanel } from './AgentMemoryPanel'
 import { AgentHarnessPanel } from './AgentHarnessPanel'
-import { homeTarget } from '../services/engine/targets'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 // 与后端 agentRegistry 的文本扩展名口径一致(决定上传走 content 还是 dataBase64)。
 const LIB_TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'text', 'json', 'jsonl', 'toml', 'yaml', 'yml', 'csv', 'tsv', 'xml', 'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'log', 'ini', 'env', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'rb', 'php', 'sql'])
@@ -41,7 +41,7 @@ type AgentMemoryModalProps = {
 }
 
 export const AgentMemoryModal: React.FC<AgentMemoryModalProps> = (props) =>
-  <AgentMemoryModalBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug, props.shareDefaultMemory])} {...props} />
+  <AgentMemoryModalBody key={JSON.stringify([connectionKey(props.cfg), props.slug, props.shareDefaultMemory])} {...props} />
 
 const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name, shareDefaultMemory, onClose }) => {
   const { t } = useI18n()

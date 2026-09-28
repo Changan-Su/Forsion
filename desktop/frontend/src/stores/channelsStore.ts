@@ -18,7 +18,6 @@ export type { ChannelStatus }
 let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
 
-const cfg = () => useApp.getState().cfg
 
 /** 通道显示名(设置卡与侧栏文件夹同源)。 */
 export function channelLabel(kind: ChannelKind): string {
@@ -72,7 +71,7 @@ export const useChannels = create<ChannelsState>((set, get) => ({
   connect: async (kind) => {
     const r = await connectChannel(homeTarget(), kind)
     await get().refresh()
-    void useApp.getState().refreshSessions(cfg()) // 连接即新会话 → 列表立即可见
+    void useApp.getState().refreshSessions(useApp.getState().cfg) // 连接即新会话 → 列表立即可见
     return r
   },
 
