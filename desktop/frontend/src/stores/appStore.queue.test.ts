@@ -123,6 +123,27 @@ describe('queued commands while a run is active', () => {
     expect(queued()).toEqual([])
   })
 
+  it('an idle /retry holds the dispatch lock, so /compact during its delete waits instead of racing the resend', async () => {
+    let finishDelete!: (r: unknown) => void
+    service.del.mockImplementation(() => new Promise((resolve) => { finishDelete = resolve }))
+    service.compact.mockResolvedValue({ ok: true })
+    useApp.setState({ runningBySession: {}, messagesBySession: { s: [
+      { id: 'u1', role: 'user', content: 'again', timestamp: 1, status: 'done' },
+      { id: 'a', role: 'assistant', content: 'meh', timestamp: 2, status: 'done' },
+    ] } })
+    await useApp.getState().retry('s')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.del).toHaveBeenCalledOnce()
+    expect(queued()).toEqual([]) // 空闲:当场出队
+    await useApp.getState().compact('s')
+    expect(service.compact).not.toHaveBeenCalled() // 重试还在途:压缩排队
+    expect(queued()).toEqual(['/compact'])
+    finishDelete({ ok: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.start).toHaveBeenCalledOnce()
+    expect(service.compact).not.toHaveBeenCalled() // 重发起了 run,压缩等这一轮收尾
+  })
+
   it('still steers plain messages when nothing is queued, but queues /refine', async () => {
     await useApp.getState().send('look here', [], undefined, undefined, undefined, 's')
     expect(service.steer).toHaveBeenCalledOnce()

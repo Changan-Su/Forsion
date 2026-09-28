@@ -2758,7 +2758,8 @@ export const useApp = create<AppState>((set, get) => ({
   retry: async (targetSessionId, fromQueue) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return false
-    if (get().runningBySession[sid] || (!fromQueue && queueBusy(get(), sid))) {
+    // 一律经队列派发:空闲时当场出队,但带派发闸 —— 删消息与重发之间不许 /compact 或别的发送插进来并发
+    if (!fromQueue || get().runningBySession[sid]) {
       queueAfterRun(set, sid, { text: '/retry', kind: 'retry' })
       drainQueued(get, set, sid)
       return true

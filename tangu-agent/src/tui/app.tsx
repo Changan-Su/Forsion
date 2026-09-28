@@ -337,6 +337,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       .catch((e: any) => {
         teardownRun();
         dispatch({ type: 'ERROR', msg: e?.message || String(e) });
+        setTimeout(() => void runQueued(), 0); // 起 run 失败不会有 done/error 事件,自己接着取队
       });
   };
 
@@ -927,7 +928,8 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   const submit = async (text: string, fromQueue = false): Promise<void> => {
     const t = text.trim();
     if (!t) return;
-    if (!fromQueue && mustQueue(t, !!activeRunId.current || compactingRef.current, queueRef.current.length)) {
+    // 出队进行中也算忙:出队那条在读 @文件(await)时 run 还没起,别让新消息抢跑、把它挤掉(startRun 见 run 在跑会静默返回)
+    if (!fromQueue && mustQueue(t, !!activeRunId.current || compactingRef.current || drainingRef.current, queueRef.current.length)) {
       setQueue([...queueRef.current, t]);
       void runQueued(); // 空闲却有队(上一条没起来)时顺带重试队首
       return;
