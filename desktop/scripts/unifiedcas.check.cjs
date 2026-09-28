@@ -30,6 +30,9 @@
 //      要么落盘、要么进冲突副本,绝不静默消失;新属性与写者的字同理
 //   H7 草稿槽位的归属(Codex 复核 P1):B 还开着时它槽里的草稿不许被 A 读到(A 重挂不出恢复条);
 //      主人已不在的孤槽照旧提示给 A,A 丢弃只删那一格,B 的草稿原样留着
+//  V 组(评审 G2-08,离场即时落盘):打字后(防抖窗内)visibilitychange→hidden / pagehide / freeze / Cordova pause / 窗口失焦
+//   → 150ms 内落盘(不等 800ms);V6 盘上被悄悄改过(无回灌通知)时隐藏 → 走 CAS:盘上那版进冲突副本、本地版落盘,绝不裸写;
+//   V7 失焦节流:1s 内第二次失焦不重复写;V8 没有改动时隐藏 → 零写
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -762,10 +765,73 @@ async function groupH7(browser) {
   await p.close()
 }
 
+// ─────────────────────────────── G2-08 ───────────────────────────────
+/** 在 A 里打字后(不等防抖)立刻派发离场事件,150ms 内看写盘次数。 */
+async function leaveAndCount(p, kind) {
+  return p.evaluate(async (kind) => {
+    const n0 = window.__upage.writes.length
+    if (kind === 'hidden') {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    if (kind === 'pagehide') window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    if (kind === 'freeze') document.dispatchEvent(new Event('freeze'))
+    if (kind === 'pause') document.dispatchEvent(new Event('pause'))
+    if (kind === 'blur') window.dispatchEvent(new Event('blur'))
+    await new Promise((r) => setTimeout(r, 150))
+    return window.__upage.writes.length - n0
+  }, kind)
+}
+async function groupV(browser) {
+  const seed = '# 标题\n\n第一段。\n'
+  const names = { hidden: 'V1 visibilitychange→hidden', pagehide: 'V2 pagehide', freeze: 'V3 freeze', pause: 'V4 Cordova pause', blur: 'V5 窗口失焦' }
+  for (const kind of Object.keys(names)) {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', '离场前')
+    const n = await leaveAndCount(p, kind)
+    const d = await disk(p)
+    record(`${names[kind]} → 150ms 内落盘(不等防抖)`, n === 1 && d.includes('第一段。离场前'), JSON.stringify({ n, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', '本地')
+    // 别的窗口悄悄改了盘(回灌通知还在路上):离场冲洗必须带基线走 CAS,不许拿本地版直接盖掉
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# 标题\n\n第一段。别处写的。\n'))
+    await leaveAndCount(p, 'hidden')
+    await wait(600)
+    const d = await disk(p)
+    const cs = await copies(p)
+    const rejects = await p.evaluate(() => window.__upage.casRejects.length)
+    record('V6 盘上被悄悄改过时隐藏 → 走 CAS:被拒后盘上那版进冲突副本、本地版落盘',
+      rejects >= 1 && d.includes('第一段。本地') && cs.length === 1 && cs[0][1].includes('别处写的'), JSON.stringify({ rejects, d, cs }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', 'a')
+    const n1 = await leaveAndCount(p, 'blur')
+    await typeIn(p, 0, '第一段。a', 'b')
+    const n2 = await leaveAndCount(p, 'blur') // 1s 内第二次失焦:节流,等防抖照常写
+    await wait(1200)
+    const d = await disk(p)
+    record('V7 失焦节流:1s 内第二次失焦不重复写,改动仍由防抖落盘', n1 === 1 && n2 === 0 && d.includes('第一段。ab'), JSON.stringify({ n1, n2, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    const n = await leaveAndCount(p, 'hidden')
+    await wait(900)
+    record('V8 没有改动时隐藏 → 零写', n === 0 && (await writeCount(p)) === 0, JSON.stringify({ n, writes: await writeCount(p) }))
+    await p.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()

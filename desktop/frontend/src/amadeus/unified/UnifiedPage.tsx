@@ -2022,6 +2022,54 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
+  // G2-08:切到后台 / 页面隐藏 / 休眠 / 窗口失焦时立即落盘(不等 800ms 防抖)。移动端进后台后进程随时被杀,
+  // 桌面切走也可能就此关机 —— 原先只挂了 beforeunload,这几种离场都要等防抖计时器自己到点。
+  // 走的是同一条带 CAS 基线的保存链(writeNow),绝不裸写;先同步存本机草稿(进程可能在异步写回来之前就没了)。
+  // 押后回灌期间照旧冻结保存:回灌收尾(reconcile 的 finally)会补发这一笔,这里只留草稿。
+  // 与上面 D-04 的 kick 分开:那条只管「写失败后的补写」,这条管「还没到点的防抖写」。
+  useEffect(() => {
+    const flushNow = (props: boolean): void => {
+      if (pipe.readOnly || pipe.retired || pipe.dead) return
+      syncFromEditor()
+      if (props) flushPropDrafts()
+      if (pipe.timer) {
+        clearTimeout(pipe.timer)
+        pipe.timer = null
+      }
+      const text = composeFm(pipe.fm, pipe.body)
+      if (!pipe.writing && (text === pipe.lastSaved || isPristine())) return
+      pipe.pending = true
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+      if (pipe.reconcileBusy) return
+      void writeNow()
+    }
+    const onHidden = (): void => { if (document.visibilityState === 'hidden') flushNow(true) }
+    const onLeave = (): void => flushNow(true)
+    // 窗口失焦要节流:在几个窗口间来回切是常态,每切一次都整篇写一遍没必要。属性框的草稿不在这里提交 ——
+    // 窗口失焦时输入框自己会收到 blur 并提交。
+    let lastBlur = 0
+    const onBlur = (): void => {
+      const now = Date.now()
+      if (now - lastBlur < 1000) return
+      lastBlur = now
+      flushNow(false)
+    }
+    document.addEventListener('visibilitychange', onHidden)
+    window.addEventListener('pagehide', onLeave)
+    document.addEventListener('freeze', onLeave)
+    document.addEventListener('pause', onLeave) // Cordova / Capacitor 进后台
+    window.addEventListener('blur', onBlur)
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden)
+      window.removeEventListener('pagehide', onLeave)
+      document.removeEventListener('freeze', onLeave)
+      document.removeEventListener('pause', onLeave)
+      window.removeEventListener('blur', onBlur)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path])
+
   /** OS 文件进本实例(存附件 + 光标处插 `![[base]]`)。只读 / 已退休 / 编辑器不在 = 不接(false),宿主据此不另找实例。 */
   const insertFilesHere = (files: File[]): boolean => {
     if (pipe.readOnly || pipe.retired || pipe.dead || !hostApi.current) return false
