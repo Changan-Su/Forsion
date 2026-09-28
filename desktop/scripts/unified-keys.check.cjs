@@ -1,5 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
+// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -899,6 +900,102 @@ async function main() {
         await page.waitForTimeout(200)
         const s = (await shape(page)).replace(/ \/ +/g, ' / ')
         check(`K22 ${name}`, s === expect && (selWant ? sel.node === selWant : sel.json === 'text'), `${s} | sel=${JSON.stringify(sel)}`)
+        await page.close()
+      }
+    }
+
+    // B-03:键盘搬块按选区类型分三路 —— 块选中(Esc / ⠿)搬该节点且仍块选中、到头吞键(不扩选到文首);
+    //       跨块选区整批搬;⠿ 选中列表项只在列表内换位。
+    if (want('B03')) {
+      /** 文本块序列(含嵌套),顶层非段落类型前缀一个标记,足够看出谁挪到了哪。 */
+      const order = (page) => page.evaluate(() => {
+        const out = []
+        window.__upage.probe.view().state.doc.forEach((n) => {
+          if (n.isTextblock) out.push(n.textContent)
+          else { const a = []; n.descendants((c) => { if (c.isTextblock) { a.push(c.textContent); return false } return true }); out.push(n.type.name + '[' + a.join(',') + ']') }
+        })
+        return out.join(' | ')
+      })
+      const sel = (page) => page.evaluate(() => {
+        const v = window.__upage.probe.view()
+        const s = v.state.selection
+        return { type: s.toJSON().type, node: s.node ? s.node.type.name + ':' + s.node.textContent : null, text: v.state.doc.textBetween(s.from, s.to, '|') }
+      })
+      /** 程序化块选中(⠿ 点击的等价物):第 nth 个 type 节点。 */
+      const nodeSel = (page, type, nth = 0) => page.evaluate(({ type, nth }) => {
+        const v = window.__upage.probe.view()
+        let at = -1, k = 0
+        v.state.doc.descendants((n, p) => { if (at >= 0) return false; if (n.type.name === type && k++ === nth) { at = p; return false } return true })
+        let Base = v.state.selection.constructor
+        while (Object.getPrototypeOf(Base) !== Function.prototype) Base = Object.getPrototypeOf(Base)
+        v.dispatch(v.state.tr.setSelection(Base.fromJSON(v.state.doc, { type: 'node', anchor: at })))
+        v.focus()
+      }, { type, nth })
+      const across = (page, a, b) => page.evaluate(({ a, b }) => {
+        const v = window.__upage.probe.view()
+        let from = -1, to = -1
+        v.state.doc.descendants((n, p) => {
+          if (!n.isTextblock) return true
+          if (from < 0 && n.textContent.startsWith(a)) from = p + 1
+          if (n.textContent.startsWith(b)) to = p + n.nodeSize - 1
+          return false
+        })
+        const S = v.state.selection.constructor
+        v.dispatch(v.state.tr.setSelection(S.create(v.state.doc, from, to)))
+        v.focus()
+      }, { a, b })
+      const SEED = '段甲。\n\n段乙。\n\n段丙。\n\n段丁。\n'
+      for (const key of ['Meta+Shift+ArrowUp', 'Meta+Alt+ArrowUp']) {
+        const page = await open(browser, SEED)
+        await caretAtText(page, '段丙。')
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(120)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(150)
+        const o = await order(page), s = await sel(page)
+        check(`B03 Esc 块选中 → ${key}:该块上移一格,仍块选中`, o === '段甲。 | 段丙。 | 段乙。 | 段丁。' && s.type === 'node' && s.node === 'paragraph:段丙。', `${o} | ${JSON.stringify(s)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, SEED)
+        await nodeSel(page, 'paragraph', 0)
+        await page.keyboard.press('Meta+Shift+ArrowUp')
+        await page.waitForTimeout(150)
+        const s = await sel(page)
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const o = await order(page)
+        check('B03 首块块选中再 Mod-Shift-↑:到头吞键,不扩选到文首(退格只删这一块)', s.type === 'node' && o === '段乙。 | 段丙。 | 段丁。', `${JSON.stringify(s)} → ${o}`)
+        await page.close()
+      }
+      for (const [a, b, key, want] of [
+        ['段乙。', '段丙。', 'Meta+Shift+ArrowUp', '段乙。 | 段丙。 | 段甲。 | 段丁。'],
+        ['段甲。', '段乙。', 'Meta+Alt+ArrowDown', '段丙。 | 段甲。 | 段乙。 | 段丁。'],
+      ]) {
+        const page = await open(browser, SEED)
+        await across(page, a, b)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(150)
+        const o = await order(page), s = await sel(page)
+        check(`B03 跨块选区 ${a}..${b} ${key}:整批搬、选区跟着走`, o === want && s.type === 'text' && s.text === `${a}|${b}`, `${o} | ${JSON.stringify(s)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '上段。\n\n- 项一\n- 项二\n- 项三\n- 项四\n')
+        await nodeSel(page, 'list_item', 1)
+        await page.keyboard.press('Meta+Shift+ArrowUp')
+        await page.waitForTimeout(150)
+        const o = await order(page), s = await sel(page)
+        check('B03 ⠿ 选中列表第二项 Mod-Shift-↑:只在列表内换位,不连整只列表', o === '上段。 | bullet_list[项二,项一,项三,项四]' && s.node === 'list_item:项二', `${o} | ${JSON.stringify(s)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '上段。\n\n- 项一\n- 项二\n- 项三\n- 项四\n')
+        await across(page, '项二', '项三')
+        await page.keyboard.press('Meta+Alt+ArrowDown')
+        await page.waitForTimeout(150)
+        const o = await order(page)
+        check('B03 跨列表项选区 Mod-Alt-↓:两项一起在列表内下移', o === '上段。 | bullet_list[项一,项四,项二,项三]', o)
         await page.close()
       }
     }

@@ -2176,32 +2176,66 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   // ── 键盘搬块 Mod-Alt-↑/↓(AFFiNE 另绑 Mod-Shift-↑/↓,两套都收)。────────────────
-  // 与前/后一个**同级兄弟**互换位置,光标跟着走(块内偏移原样保留)。v3 块世界靠 keys.moveDir
-  // 走 store 换序,统一实例里 ArrowUp/Down 分支整条 `if (unified) return false` 让给原生 ——
-  // 于是键盘搬块在 v4 页面上直接消失了(只剩鼠标拖 ⠿)。
+  // 与前/后一个**同级兄弟**互换位置。v3 块世界靠 keys.moveDir 走 store 换序,统一实例里
+  // ArrowUp/Down 分支整条 `if (unified) return false` 让给原生 —— 于是键盘搬块在 v4 页面上直接消失了
+  // (只剩鼠标拖 ⠿)。
+  // 搬运单位按选区类型分三路(B-03:此前一律拿 $from.depth 推算,块选中时 depth=0 直接放行给原生
+  // Mod-Shift-↑ = 扩选到文首,接着退格就删光上面所有块;跨块选区只搬首块;⠿ 选中列表项连整只列表搬):
+  //  · 块选中(Esc / 点 ⠿,NodeSelection)→ 就是这个节点(列表项 = 单项);所在容器不收换位(引用 / callout
+  //    里的段)时爬到可换位的祖先,与光标态同一粒度;
+  //  · 跨块选区(拖选跨段 / 框选 / 把手子树)→ 两端共同容器里被盖到的整批兄弟;
+  //  · 光标 / 块内选区 → 最内层可与兄弟换位的祖先:顶层块、列内块,或列表里的**单个列表项**(AFFiNE 是项级,
+  //    爬到顶层会把整只列表搬走)。引用 / callout 不在名单里 → 整只搬,与把手粒度一致。
+  // 搬完原样重建选区(块选中仍块选中、框选仍框选、光标块内偏移不变);命中后一律吞键 —— 到头了也不把
+  // 这颗键还给原生的扩选。
+  const MOVE_CONTAINERS = ['doc', 'amadeusColumnCell', 'bullet_list', 'ordered_list']
+  const climbMovable = ($p: ResolvedPos): number => {
+    let d = $p.depth
+    while (d >= 1 && !MOVE_CONTAINERS.includes($p.node(d - 1).type.name)) d--
+    return d
+  }
+  /** 键盘搬块的单位 = 同一容器里的一段整块兄弟 [from, to);null = 选区不在可搬的地方(交回原路)。 */
+  const moveUnitOf = (state: EditorState): { from: number; to: number } | null => {
+    const sel = state.selection
+    if (sel instanceof NodeSelection) {
+      if (!sel.node.isBlock) return null // 行内原子(图片 / 公式)不归块搬
+      if (MOVE_CONTAINERS.includes(sel.$from.parent.type.name)) return { from: sel.from, to: sel.to }
+      const d = climbMovable(sel.$from)
+      return d < 1 ? null : { from: sel.$from.before(d), to: sel.$from.after(d) }
+    }
+    const { $from, $to } = sel
+    if (!$from.sameParent($to)) {
+      let c = $from.sharedDepth($to.pos)
+      while (c > 0 && !MOVE_CONTAINERS.includes($from.node(c).type.name)) c--
+      return { from: $from.before(c + 1), to: $to.after(c + 1) }
+    }
+    const d = climbMovable($from)
+    return d < 1 ? null : { from: $from.before(d), to: $from.after(d) }
+  }
   const moveBlock = (dir: -1 | 1) => (state: EditorState, dispatch?: (tr: Transaction) => void): boolean => {
-    const { $from } = state.selection
-    // 搬运单位 = 最内层「可与兄弟换位」的祖先:顶层块,或列表里的**单个列表项**(AFFiNE 是项级,
-    // 爬到顶层会把整只列表搬走)。引用/callout 不在名单里 → 整只搬,与把手粒度一致。
-    let d = $from.depth
-    while (d >= 1 && !['doc', 'amadeusColumnCell', 'bullet_list', 'ordered_list'].includes($from.node(d - 1).type.name)) d--
-    if (d < 1) return false
-    const parent = $from.node(d - 1)
-    const index = $from.index(d - 1)
-    const swapWith = index + dir
-    if (swapWith < 0 || swapWith >= parent.childCount) return false
-    const from = $from.before(d)
-    const to = $from.after(d)
-    const node = state.doc.nodeAt(from)
-    if (!node) return false
-    const offset = state.selection.from - from // 块内光标偏移,搬完原样还原
-    const siblingSize = parent.child(swapWith).nodeSize
+    const unit = moveUnitOf(state)
+    if (!unit) return false
+    const { from, to } = unit
+    const $f = state.doc.resolve(from)
+    const parent = $f.parent
+    const i0 = $f.index()
+    const i1 = state.doc.resolve(to).index() - 1
+    const sib = dir < 0 ? i0 - 1 : i1 + 1
+    if (sib < 0 || sib >= parent.childCount) return true // 到头了:吞键,不让原生 Mod-Shift-↑ 扩选到文首
+    const size = to - from
+    const content = state.doc.slice(from, to).content
+    const siblingSize = parent.child(sib).nodeSize
     // 上移:落到前一个兄弟之前(该位置在删除点之前,不受删除影响);
-    // 下移:落到后一个兄弟之后(原坐标 to+size,删掉本块后左移 to-from → from+size)。
-    const at = dir < 0 ? from - siblingSize : from + siblingSize
-    const tr = state.tr.delete(from, to).insert(at, node)
-    tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(at + offset, tr.doc.content.size))))
-    dispatch?.(tr.scrollIntoView())
+    // 下移:落到后一个兄弟之后(原坐标 to+size,删掉本段后左移 size)。
+    const at = dir < 0 ? from - siblingSize : to + siblingSize - size
+    if (!dispatch) return true
+    const tr = state.tr.delete(from, to).insert(at, content)
+    const shift = at - from
+    const sel = state.selection
+    if (sel instanceof NodeSelection) tr.setSelection(NodeSelection.create(tr.doc, sel.from + shift))
+    else tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
+    if (blockSelectionKey.getState(state)) tr.setMeta(blockSelectionKey, true) // 框选搬完仍按整块呈现
+    dispatch(tr.scrollIntoView())
     return true
   }
   const moveBlockKeymap = $prose(() =>
