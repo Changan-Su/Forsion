@@ -2341,6 +2341,8 @@ body.amx-marquee-active * {
   border-color: var(--danger, #e5484d);
   color: var(--on-danger, #fff);
 }
+/* 次要出口(如编辑链接的「移除链接」)靠左,与取消/确定分开。 */
+.am-app .dialog-btn[data-alt] { margin-right: auto; }
 
 /* ── Theme picker ─────────────────────────────────────────── */
 .am-app .sidebar {

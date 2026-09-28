@@ -4,12 +4,17 @@
 import { create } from 'zustand'
 import { PromptDialog } from './Dialogs'
 
+/** askStringOrAlt 的次要出口(如「移除链接」)被点时的返回值。 */
+export const ASK_ALT: unique symbol = Symbol('askString.alt')
+
 interface Req {
   title: string
   label?: string
   initial: string
   confirmLabel?: string
-  resolve: (v: string | null) => void
+  /** 次要出口按钮的文案;缺省 = 没有这个按钮(askString 的全部调用点)。 */
+  altLabel?: string
+  resolve: (v: string | null | typeof ASK_ALT) => void
 }
 
 const usePromptStore = create<{ req: Req | null; open(r: Req): void; clear(): void }>((set) => ({
@@ -22,7 +27,16 @@ export function askString(title: string, initial = '', opts?: { label?: string; 
   return new Promise((resolve) => {
     // 已有弹窗未决:先取消旧的(单例;嵌套询问不是我们的形态)
     usePromptStore.getState().req?.resolve(null)
-    usePromptStore.getState().open({ title, initial, label: opts?.label, confirmLabel: opts?.confirmLabel, resolve })
+    usePromptStore.getState().open({ title, initial, label: opts?.label, confirmLabel: opts?.confirmLabel, resolve: (v) => resolve(v === ASK_ALT ? null : v) })
+  })
+}
+
+/** 同 askString,多一个次要出口按钮(`altLabel`,如编辑链接时的「移除链接」):点它 resolve ASK_ALT。
+ *  为什么要单独一个出口:PromptDialog 的空输入等同「取消」,拿不到「确认了但留空」这个信号(I-10)。 */
+export function askStringOrAlt(title: string, initial: string, opts: { label?: string; confirmLabel?: string; altLabel: string }): Promise<string | null | typeof ASK_ALT> {
+  return new Promise((resolve) => {
+    usePromptStore.getState().req?.resolve(null)
+    usePromptStore.getState().open({ title, initial, label: opts.label, confirmLabel: opts.confirmLabel, altLabel: opts.altLabel, resolve })
   })
 }
 
@@ -33,7 +47,7 @@ export function askString(title: string, initial = '', opts?: { label?: string; 
 export function AskStringHost() {
   const req = usePromptStore((s) => s.req)
   if (!req) return null
-  const settle = (v: string | null): void => {
+  const settle = (v: string | null | typeof ASK_ALT): void => {
     if (usePromptStore.getState().req !== req) return // 已决(confirm 先到,close 随后)不再二次 resolve
     usePromptStore.getState().clear()
     req.resolve(v)
@@ -45,6 +59,8 @@ export function AskStringHost() {
         label={req.label}
         initial={req.initial}
         confirmLabel={req.confirmLabel}
+        altLabel={req.altLabel}
+        onAlt={req.altLabel ? () => settle(ASK_ALT) : undefined}
         onConfirm={(v) => settle(v)}
         onClose={() => settle(null)}
       />

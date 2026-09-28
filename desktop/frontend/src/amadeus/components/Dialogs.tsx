@@ -76,6 +76,8 @@ export function PromptDialog({
   label,
   initial = '',
   confirmLabel,
+  altLabel,
+  onAlt,
   onConfirm,
   onClose,
 }: {
@@ -83,6 +85,9 @@ export function PromptDialog({
   label?: string
   initial?: string
   confirmLabel?: string
+  /** 次要出口(如「移除链接」):靠左单列,不经输入框的值。缺省不出。 */
+  altLabel?: string
+  onAlt?: () => void
   onConfirm: (value: string) => void
   onClose: () => void
 }) {
@@ -114,6 +119,11 @@ export function PromptDialog({
           }}
         />
         <div className="dialog-actions">
+          {altLabel && onAlt && (
+            <button className="dialog-btn" data-alt onClick={() => { onAlt(); onClose() }}>
+              {altLabel}
+            </button>
+          )}
           <button className="dialog-btn" onClick={onClose}>
             {t('amdlg.cancel')}
           </button>

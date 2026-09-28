@@ -1058,15 +1058,17 @@ async function main() {
     const md = (await mdOf(p)).trim()
     check('T36 裸域名自动补 https:// 并写成 markdown 链接', md === '[点这里](https://forsion.net/docs)', `md=${JSON.stringify(md)}`)
     check('T36 渲染成可点的 <a>', (await p.locator('.md-block .ProseMirror a[href="https://forsion.net/docs"]').count()) === 1)
-    // 再点一次 = 取消链接(空输入等同取消,拿不到「确认了但留空」,故去链接走无弹窗路径)
+    // 已是链接时再点 = 编辑:弹框预填原地址,「移除链接」才去掉(I-10;此前再点一下不问就直接摘掉)。
     await p.locator('.md-block .ProseMirror').first().click()
     await p.keyboard.press('End')
     for (let i = 0; i < 3; i++) await p.keyboard.press('Shift+ArrowLeft')
     await p.waitForTimeout(400)
     await p.locator('.inline-toolbar [data-act="link"]').dispatchEvent('mousedown')
+    await p.waitForTimeout(300)
+    check('T36 已是链接时再点 = 弹框预填原地址', (await p.locator('.dialog-input').count()) === 1 && (await p.inputValue('.dialog-input')) === 'https://forsion.net/docs')
+    await p.locator('.dialog-btn[data-alt]').click()
     await p.waitForTimeout(600)
-    check('T36 已是链接时再点 = 去链接(不再弹框)', (await p.locator('.dialog-input').count()) === 0)
-    check('T36 去链接后回到纯文本', (await mdOf(p)).trim() === '点这里', `md=${JSON.stringify(await mdOf(p))}`)
+    check('T36「移除链接」后回到纯文本', (await mdOf(p)).trim() === '点这里', `md=${JSON.stringify(await mdOf(p))}`)
     await p.close()
 
     // javascript: 一律拒绝 —— 笔记会被分享页独立渲染,这是个真 XSS 面。

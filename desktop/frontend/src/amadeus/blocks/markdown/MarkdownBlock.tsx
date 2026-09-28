@@ -61,7 +61,7 @@ import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
+import type { MarkType, Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -108,7 +108,7 @@ import { taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
-import { askString } from '../../components/askString'
+import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
@@ -170,6 +170,8 @@ registerMessages({
   'mdblock.slash.ai': { zh: 'AI 写作', en: 'AI writing' },
   // 弹框(askString)
   'mdblock.link.title': { zh: '插入链接', en: 'Insert link' },
+  'mdblock.link.editTitle': { zh: '编辑链接', en: 'Edit link' },
+  'mdblock.link.remove': { zh: '移除链接', en: 'Remove link' },
   'mdblock.link.label': { zh: '输入或粘贴地址（裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
   'mdblock.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
   'mdblock.bookmark.label': { zh: '粘贴链接地址（https:// 开头）；YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
@@ -1017,12 +1019,12 @@ export function MilkdownInner({
       .use(spellcheckPlugin) // 拼写检查开关 + 行内代码 / 公式不查(G4-07,见 ./spellcheck)
       // 行内格式键位补齐(AFFiNE 六件套):预设只给了 Mod-B / Mod-I / Mod-E(行内代码)与 Mod-Alt-X,
       // 下划线(自有 mark)、Mod-Shift-S 删除线、Mod-K 链接三个一直没有键位。
-      // Mod-K 走与工具栏 🔗 完全同一条 editLink(选区已是链接=直接摘掉,空选区不弹框)。
+      // Mod-K 走与工具栏 🔗 完全同一条 editLink(碰到链接 = 预填编辑 / 移除;空选区 = 插一条新链接,I-10)。
       .use($prose((c) =>
         keymap({
           'Mod-u': () => { c.get(commandsCtx).call(toggleUnderlineCommand.key); return true },
           'Mod-Shift-s': () => { c.get(commandsCtx).call(toggleStrikethroughCommand.key); return true },
-          'Mod-k': () => { editLink(); return true },
+          'Mod-k': () => editLink(),
           // 粘贴为纯文本(评审 G4-08,Obsidian / Notion 同键):只取剪贴板的 text/plain,不带格式、不解析 HTML;
           // 走 PM 自己的纯文本粘贴(每行一段,代码块里原样)。mac 上 Cmd+Shift+V 原本什么都不发生;
           // Windows / Linux 的 Ctrl+Shift+V 原生粘贴又会被 markdown 剪贴板插件按 HTML 解析 —— 三端统一在这里接管。
@@ -1337,29 +1339,33 @@ export function MilkdownInner({
       ctx.get(editorViewCtx).focus()
     })
   }
-  // 行内链接:先问地址,再把 link mark 套到当前选区上。
+  // 行内链接(⌘K / 工具栏 🔗,I-10):
+  //  · 选区或光标碰到已有链接 → 先扩到整条链接,弹框**预填**原地址;改了就换地址,「移除链接」= 去掉链接(对标 Notion)。
+  //  · 普通选区 → 问地址,套到选区上。
+  //  · 空选区、不在链接里 → 问地址,在光标处插一条链接(文字取主机名,同「粘贴为链接」—— 拿 URL 原文当文字
+  //    会被嵌入层当成裸 URL 升级成书签卡)。
   // ⚠️别改回 `runCmd(toggleLinkCommand.key)` —— 那个命令不带 payload 时 href 为 undefined,
   // 而 link schema 的 href 是必填 string,mark.create 直接抛 → 按钮点了「完全没反应」(用户实报)。
-  // 留空地址 = 去掉链接;javascript: 之类由 normalizeHref 挡下(笔记会被分享页独立渲染)。
-  const editLink = (): void => {
+  // javascript: 之类由 normalizeHref 挡下(笔记会被分享页独立渲染)。
+  const editLink = (): boolean => {
     const inst = getInstance()
-    if (!inst) return
+    if (!inst) return false
+    let handled = false
     inst.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const type = linkSchema.type(ctx)
-      const { from, to, empty } = view.state.selection
-      if (empty) return
-      // 选区已经是链接 → 直接取消链接,不弹框。PromptDialog 的空输入等同「取消」(拿不到
-      // 「确认了但留空」这个信号),所以去链接只能走这条无弹窗的路 —— 与 toggleLink 的语义也一致。
-      if (view.state.doc.rangeHasMark(from, to, type)) {
-        view.dispatch(view.state.tr.removeMark(from, to, type))
-        view.focus()
-        return
-      }
+      const { from, to, empty, $from } = view.state.selection
+      if (!$from.parent.isTextblock || $from.parent.type.spec.code) return // 代码块里没有链接:键放行
+      handled = true
+      const hit = linkExtent(view.state.doc, from, to, type)
       const docAtAsk = view.state.doc // 弹框期间文档可能被换掉(外部改文件回灌 / agent 写盘 / 云同步)
-      void askString(translate('mdblock.link.title'), '', { label: translate('mdblock.link.label') }).then((raw) => {
-        const href = raw === null ? null : normalizeHref(raw)
-        if (!href) return
+      const range = hit ?? { from, to, href: '' }
+      const ask = hit
+        ? askStringOrAlt(translate('mdblock.link.editTitle'), hit.href, { label: translate('mdblock.link.label'), altLabel: translate('mdblock.link.remove') })
+        : askString(translate('mdblock.link.title'), '', { label: translate('mdblock.link.label') })
+      void ask.then((raw) => {
+        const href = raw === null || raw === ASK_ALT ? null : normalizeHref(raw)
+        if (raw !== ASK_ALT && !href) return
         // ⚠️ 重新取实例:弹框期间这个块可能已重挂,闭包里的 inst 是个死实例。
         getInstance()?.action((c2) => {
           const v = c2.get(editorViewCtx)
@@ -1367,11 +1373,21 @@ export function MilkdownInner({
           // 也不能给错的文字加链接(更别说越界抛)。
           if (v.state.doc !== docAtAsk) return
           const t = linkSchema.type(c2)
-          v.dispatch(v.state.tr.removeMark(from, to, t).addMark(from, to, t.create({ href })))
+          if (raw === ASK_ALT) {
+            v.dispatch(v.state.tr.removeMark(range.from, range.to, t))
+          } else if (range.to > range.from) {
+            v.dispatch(v.state.tr.removeMark(range.from, range.to, t).addMark(range.from, range.to, t.create({ href })))
+          } else if (href) {
+            const label = hostLabel(href)
+            const tr = v.state.tr.insertText(label, range.from)
+            tr.addMark(range.from, range.from + label.length, t.create({ href }))
+            v.dispatch(tr.setSelection(TextSelection.create(tr.doc, range.from + label.length)).scrollIntoView())
+          }
           v.focus()
         })
       })
     })
+    return handled
   }
   const clearFormatting = (): void => {
     getInstance()?.action((ctx) => {
@@ -2169,6 +2185,30 @@ export interface PasteAs {
   left: number
   top: number
   anchorTop: number
+}
+
+/** 选区 / 光标碰到的链接的**完整**区间(I-10):同一文本块里相连且同地址的 link 片段算一条;
+ *  碰到几条就从第一条的头扩到最后一条的尾(并上选区本身)。空选区时光标在链接首尾也算碰到。
+ *  跨块选区 / 没碰到 → null。 */
+export function linkExtent(doc: ProseNode, from: number, to: number, type: MarkType): { from: number; to: number; href: string } | null {
+  const $from = doc.resolve(from)
+  if (!$from.sameParent(doc.resolve(to)) || !$from.parent.isTextblock) return null
+  const segs: Array<{ from: number; to: number; href: string }> = []
+  let pos = $from.start()
+  $from.parent.forEach((child) => {
+    const end = pos + child.nodeSize
+    const m = type.isInSet(child.marks)
+    if (m) {
+      const href = String(m.attrs.href ?? '')
+      const last = segs[segs.length - 1]
+      if (last && last.to === pos && last.href === href) last.to = end
+      else segs.push({ from: pos, to: end, href })
+    }
+    pos = end
+  })
+  const hits = segs.filter((s) => (from === to ? s.from <= from && from <= s.to : s.from < to && from < s.to))
+  if (!hits.length) return null
+  return { from: Math.min(from, hits[0].from), to: Math.max(to, hits[hits.length - 1].to), href: hits[0].href }
 }
 
 /** 链接 → 短标签(主机名,去 www.)。解析不了就原样。 */

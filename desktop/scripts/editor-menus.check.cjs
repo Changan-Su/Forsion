@@ -1,6 +1,7 @@
 // v4 统一编辑器的三件菜单:选区工具栏 / 块菜单(⠿)/ slash 菜单 —— 「哪个上下文显示哪些项、点了做什么」
 // (Amadeus 评审 2026-09-27 波次 2 · menus 包)。全部跑生产 UnifiedPage(台架 `?upage`),落盘以 window.__upage.writes 为准。
 //   I9   ⌘E = 行内代码(对齐改 ⌘⇧L/E/R);选区上敲反引号 = 行内代码,不是两个字面反引号(I-09 / K-18b)
+//   I10  ⌘K 碰到已有链接 = 扩到整条、预填原地址、可「移除链接」;空选区 = 插一条新链接(I-10)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -92,6 +93,8 @@ const caretAt = (page, text, atStart = false) => page.evaluate(({ text, atStart 
   v.dispatch(v.state.tr.setSelection(S.create(v.state.doc, hit, hit)))
   return true
 }, { text, atStart })
+/** 等一个选择器出现;超时返回 false(不抛:一格红不该中断后面的组)。 */
+const waitSel = (page, sel, timeout = 3000) => page.waitForSelector(sel, { timeout }).then(() => true, () => false)
 const topBlocks = (page) => page.evaluate(() => {
   const o = []
   window.__upage.probe.view().state.doc.forEach((n) => o.push(`${n.type.name}:${JSON.stringify(n.textContent)}`))
@@ -131,6 +134,45 @@ async function main() {
         const md = await mdOf(page, nm)
         const sel = await page.evaluate(() => { const s = window.__upage.probe.view().state.selection; return s.to - s.from })
         check('I9c 选区敲 ` = 行内代码,选区保持', (md || '').trim() === '甲`乙丙`丁。' && sel === 2, JSON.stringify({ md, sel }))
+      }
+    }
+
+    if (want('I10')) {
+      const LINKED = 'alpha [甲乙丙](https://example.com/a) omega\n'
+      // I10a 光标在链接中间按 ⌘K → 弹框预填原地址;改地址 → 整条链接换新地址(文字不丢、不只改一段)。
+      {
+        const nm = await load(page, LINKED)
+        await caretAt(page, '甲乙')
+        await page.keyboard.press('Meta+k')
+        await waitSel(page, '.dialog-input')
+        const pre = await page.inputValue('.dialog-input')
+        const alt = await page.locator('.dialog-btn[data-alt]').count()
+        await page.fill('.dialog-input', 'forsion.net/x')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        check('I10a 光标在链接里 ⌘K:预填原地址 + 有「移除链接」,改地址作用于整条', pre === 'https://example.com/a' && alt === 1 && (md || '').trim() === 'alpha [甲乙丙](https://forsion.net/x) omega', JSON.stringify({ pre, alt, md }))
+      }
+      // I10b 只选中链接的一部分 → 「移除链接」去掉整条(不是只去选中的那段)。
+      {
+        const nm = await load(page, LINKED)
+        await selectText(page, '乙')
+        await page.keyboard.press('Meta+k')
+        if (await waitSel(page, '.dialog-btn[data-alt]')) await page.click('.dialog-btn[data-alt]')
+        else await page.keyboard.press('Escape')
+        const md = await mdOf(page, nm)
+        check('I10b 部分选中链接 →「移除链接」去掉整条', (md || '').trim() === 'alpha 甲乙丙 omega', JSON.stringify(md))
+      }
+      // I10c 空选区、不在链接里 → 弹「插入链接」,确认后在光标处插一条链接(文字 = 主机名)。
+      {
+        const nm = await load(page, 'alpha omega\n')
+        await caretAt(page, 'alpha ')
+        await page.keyboard.press('Meta+k')
+        await waitSel(page, '.dialog-input')
+        const alt = await page.locator('.dialog-btn[data-alt]').count()
+        await page.fill('.dialog-input', 'forsion.net')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        check('I10c 空选区 ⌘K → 插入新链接', alt === 0 && (md || '').trim() === 'alpha [forsion.net](https://forsion.net)omega', JSON.stringify({ alt, md }))
       }
     }
 
