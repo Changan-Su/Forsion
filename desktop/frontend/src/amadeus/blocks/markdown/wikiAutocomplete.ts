@@ -5,7 +5,7 @@
 
 import { $inputRule, $prose } from '@milkdown/kit/utils'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
-import { Plugin, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { blockLabel, type BlockNode } from './blockTriggers'
 import { editContextOf, toolbarShape, type ToolbarShape } from './menuContext'
@@ -232,11 +232,17 @@ export interface SelRect {
  *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
  *  行内格式工具栏据此让位:对图片来说 B/I/U 毫无意义,浮条还会盖住正文(截图自查发现)。 */
 const IMG_EMBED_SEL_RE = /^!\[\[[^\]\n|]+\.(png|jpe?g|gif|webp|svg|avif|bmp)(\|\d+)?\]\]$/i
+const toolbarFocused = (): boolean => !!(document.activeElement as Element | null)?.closest?.('.inline-toolbar')
+
 function isImageSelection(state: EditorState): boolean {
   const sel = state.selection
   if (sel instanceof NodeSelection) return sel.node.type.name === 'image'
   return IMG_EMBED_SEL_RE.test(state.doc.textBetween(sel.from, sel.to))
 }
+
+/** Esc 关掉工具栏 = 这个选区不再弹(直到选区变了):宿主派一笔带此 meta 的空事务(I-20)。
+ *  不设这道闩,焦点从工具栏还给编辑器的那一拍 update 又把它弹回来。 */
+export const toolbarDismissKey = new PluginKey<boolean>('amx-toolbar-dismissed')
 
 export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
   return $prose(() => {
@@ -245,11 +251,18 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
     // 键盘产生的选区(Shift+方向键 / ⌘A)没有按住这回事,照旧即时显示。
     let held = false
     const compute = (view: EditorView): void => {
-            if (held) return report(null)
+            if (held || toolbarDismissKey.getState(view.state)) return report(null)
             const { selection, doc } = view.state
             // hasFocus:编辑器失焦(点到别处/别的块)时 blur 会派空事务触发 update、选区仍非空 →
             // 不判此条会留下过期工具栏,点它会对已离开的块施格式(Codex L2)。
-            if (selection.empty || !view.editable || !view.hasFocus()) return report(null)
+            if (selection.empty || !view.editable) return report(null)
+            // 焦点在工具栏自己身上(Alt+F10 进去的键盘用户,I-20)不算失焦 —— 否则一进工具栏它就被卸载。
+            // ⚠️ blur 那一拍 activeElement 还是 body(焦点没落到目标上),当场判会把「正要进工具栏」误判成失焦:
+            //    失焦时推迟一拍再判,真去了别处才收。
+            if (!view.hasFocus() && !toolbarFocused()) {
+              setTimeout(() => { if (!view.isDestroyed && !view.hasFocus() && !toolbarFocused()) report(null) }, 0)
+              return
+            }
             // 选中的是一张图片(md 图片节点 / `![[pic.png|200]]` 整段源码)→ 让位:B/I/U 对图片
             // 没有意义,浮条还正好盖住上一段正文(2026-08-27 观感自查揪出来的)。
             if (isImageSelection(view.state)) return report(null)
@@ -312,6 +325,11 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
             report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
     }
     return new Plugin({
+      key: toolbarDismissKey,
+      state: {
+        init: () => false,
+        apply: (tr, prev, oldState, newState) => (tr.getMeta(toolbarDismissKey) ? true : prev && newState.selection.eq(oldState.selection)),
+      },
       props: {
         handleDOMEvents: {
           mousedown: (view, e) => {

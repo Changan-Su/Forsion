@@ -91,7 +91,7 @@ import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { editContextOf } from './menuContext'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
-import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
+import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles } from 'lucide-react'
 import { readTangu } from '../../plugins/tanguSeam'
@@ -1039,6 +1039,13 @@ export function MilkdownInner({
             return true
           },
           'Mod-Shift-h': toggleObsHighlight, // `==` 高亮切换(I-17;仓内与 darwin 默认菜单均无占用)
+          // 选区工具栏的键盘入口(I-20,Google Docs / WAI 工具栏惯例 Alt+F10):焦点送进首钮,Esc 回编辑器。
+          'Alt-F10': () => {
+            const btn = document.querySelector<HTMLElement>('[data-testid="inline-toolbar"] .itb-row button')
+            if (!btn) return false
+            btn.focus()
+            return true
+          },
           // 对齐 = ⌘⇧L / ⌘⇧E / ⌘⇧R(拍板 #2,I-09):⌘E 还给行内代码(预设 inlineCodeKeymap 的 Mod-e,
           // Notion / AFFiNE 同键)。⚠️ 别再在这里绑 Mod-e —— 本表的键盖得过预设(当年居中就是这么把行内代码唯一的键吃掉的)。
           'Mod-Shift-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
@@ -1581,7 +1588,15 @@ export function MilkdownInner({
           onAct={onToolbarAct}
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}
-          onClose={() => setToolbar(null)}
+          onClose={() => {
+            setToolbar(null)
+            // Esc 关掉 = 这个选区不再弹,直到选区变了(否则焦点一回编辑器它就又冒出来)。
+            getInstance()?.action((ctx) => {
+              const v = ctx.get(editorViewCtx)
+              v.dispatch(v.state.tr.setMeta(toolbarDismissKey, true))
+            })
+          }}
+          onReturnFocus={() => getInstance()?.action((ctx) => ctx.get(editorViewCtx).focus())}
           onAsk={onAskTangu ? () => {
             setToolbar(null)
             getInstance()?.action((ctx) => onAskTangu(ctx.get(editorViewCtx)))

@@ -5,6 +5,8 @@
 //   I12  选区工具栏在鼠标按住(拖选)期间不出、松手才出;向上拖选不被它挡住;键盘选区照旧即时出(I-12)
 //   I19  选区工具栏看上下文:代码块里只留「转换为 / 清除」;单元格里不列「转换为」与对齐;链接 / 下划线 / 颜色显示当前状态;
 //        转换做不成要么真转了、要么给提示,不许静默(I-19)
+//   I20  选区工具栏键盘可达 + ARIA:Alt+F10 进工具栏(焦点进去工具栏不被卸载)、←→ 移动、Enter 触发、子面板键盘开 +
+//        ↓ 选项、Esc 退回编辑器;格式钮有 aria-pressed / aria-label(I-20)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -267,6 +269,61 @@ async function main() {
         await page.waitForTimeout(200)
         const c = await toolbar(page)
         check('I19c 链接 / 下划线亮、A▾ 显示当前文字色', a?.on.includes('link') && b?.on.includes('underline') && c?.fg === '#c62222', JSON.stringify({ a: a?.on, b: b?.on, fg: c?.fg }))
+      }
+    }
+
+    if (want('I20')) {
+      const focusIn = () => page.evaluate(() => {
+        const a = document.activeElement
+        return { tb: !!a?.closest('[data-testid=inline-toolbar]'), act: a?.dataset?.act ?? a?.className ?? null, editor: window.__upage.probe.view().hasFocus(), mounted: !!document.querySelector('[data-testid=inline-toolbar]') }
+      })
+      // I20a Alt+F10 → 焦点进工具栏,工具栏不因编辑器失焦被卸载;→ 到 B,Enter 加粗。
+      {
+        const nm = await load(page, 'alpha beta gamma\n')
+        await selectText(page, 'beta')
+        await page.waitForTimeout(200)
+        await page.keyboard.press('Alt+F10')
+        await page.waitForTimeout(300)
+        const f1 = await focusIn()
+        // 首钮是「转换为」,→ 一格到 B。
+        await page.keyboard.press('ArrowRight')
+        const f2 = await focusIn()
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        check('I20a Alt+F10 进工具栏且不被卸载,→ 移到 B,Enter 加粗', f1.tb && f1.mounted && f2.act === 'bold' && (md || '').trim() === 'alpha **beta** gamma', JSON.stringify({ f1, f2, md }))
+        const aria = await page.evaluate(() => {
+          const tb = document.querySelector('[data-testid=inline-toolbar]')
+          const b = tb?.querySelector('[data-act=bold]')
+          return { label: tb?.getAttribute('aria-label'), pressed: b?.getAttribute('aria-pressed'), bl: b?.getAttribute('aria-label'), popup: tb?.querySelector('.itb-turn')?.getAttribute('aria-haspopup') }
+        })
+        check('I20b ARIA:toolbar 有名字,B 有 aria-label / aria-pressed=true,「转换为」标 aria-haspopup', !!aria.label && aria.pressed === 'true' && !!aria.bl && aria.popup === 'menu', JSON.stringify(aria))
+      }
+      // I20c 键盘开「转换为」子面板 → 焦点进首项,↓ 到「标题 1」,Enter 转换。
+      {
+        const nm = await load(page, 'alpha beta gamma\n')
+        await selectText(page, 'beta')
+        await page.waitForTimeout(200)
+        await page.keyboard.press('Alt+F10')
+        await page.waitForTimeout(200)
+        await page.keyboard.press('Enter') // 首钮 = 「转换为 ▾」
+        await page.waitForTimeout(200)
+        const inPanel = await page.evaluate(() => !!document.activeElement?.closest('.itb-panel'))
+        await page.keyboard.press('ArrowDown')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        check('I20c 键盘开子面板焦点进首项,↓ + Enter = 转为标题 1', inPanel && (md || '').trim() === '# alpha beta gamma', JSON.stringify({ inPanel, md }))
+      }
+      // I20d 焦点在工具栏里按 Esc → 工具栏关、焦点回编辑器。
+      {
+        await load(page, 'alpha beta gamma\n')
+        await selectText(page, 'beta')
+        await page.waitForTimeout(200)
+        await page.keyboard.press('Alt+F10')
+        await page.waitForTimeout(200)
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(200)
+        const f = await focusIn()
+        check('I20d 工具栏里 Esc → 关工具栏、焦点回编辑器', !f.mounted && f.editor, JSON.stringify(f))
       }
     }
 
