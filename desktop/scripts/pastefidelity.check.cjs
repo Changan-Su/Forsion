@@ -1,4 +1,5 @@
-// 粘贴保真仪器(check:pastefidelity,评审 2026-09-27 §6 规划名):D-10(PF1–PF9)、D-13(PF10–PF14)。
+// 粘贴保真仪器(check:pastefidelity,评审 2026-09-27 §6 规划名):D-10(PF1–PF9)、D-13(PF10–PF14);
+// 另含复制出去的 text/plain(D-14,CP1–CP5)。
 //
 // D-10(拍板 #12):剪贴板只有 text/plain、不像 markdown 的多行文本 → **一行一段**(单个 `\n` 升成段落);
 // 像 markdown 的照旧走 CommonMark(紧凑列表不许变 loose、硬折行的 markdown 段落不许拆行);代码块内粘贴不变;
@@ -174,6 +175,46 @@ async function main() {
       const out = await settle(page, w0)
       await page.close()
       check('PF14 ⌘⇧V 逐字粘贴(只有 text/plain):不解析 markdown', out === 'ANCHOR\n\n\\*\\*粗\\*\\* 与 - x\n\ntail\n' && !errs.length, JSON.stringify({ out, errs }))
+    }
+    // ── D-14:复制到外部的 text/plain(真 copy 事件 → PM 的 clipboardTextSerializer,与 Cmd+C 同一条路径)──
+    {
+      const MD = 'Intro para with **bold** and [[Wiki]] end.\n\nSecond para *ital* here.\n\n- item one **b**\n- [ ] task two\n- item three\n\nAfter list.\n'
+      const errs = []
+      const page = await open(browser, MD, errs)
+      /** 文字选区 [from 里第 fo 字, to 里第 to2 字) —— selection 初始就是 TextSelection,构造器直接拿来 create。 */
+      const selectText = (from, fo, to, to2) => page.evaluate(({ from, fo, to, to2 }) => {
+        const v = window.__upage.probe.view()
+        const find = (t, off) => { let p = -1; v.state.doc.descendants((n, pos) => { if (p >= 0) return false; if (n.isTextblock && n.textContent.includes(t)) { p = pos + 1 + n.textContent.indexOf(t) + off; return false } return true }); return p }
+        v.focus()
+        const TS = window.__cpTextSel || (window.__cpTextSel = v.state.selection.constructor) // 首次调用时还是文字选区,记下构造器
+        v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, find(from, fo), find(to, to2))))
+      }, { from, fo, to, to2 })
+      const copy = () => page.evaluate(() => {
+        const v = window.__upage.probe.view()
+        const dt = new DataTransfer()
+        v.dom.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: dt }))
+        return { plain: dt.getData('text/plain'), sel: v.state.selection.toJSON().type }
+      })
+      await selectText('Second', 7, 'task two', 8)
+      const c1 = await copy()
+      check('CP1 从段落中间选到待办末尾:待办的 `- [ ]` 不丢,块间空行', c1.plain === 'para *ital* here.\n\n- item one **b**\n- [ ] task two', JSON.stringify(c1))
+      await selectText('task two', 2, 'task two', 2)
+      await page.waitForTimeout(150)
+      await page.keyboard.press('Escape') // 块选中:列表项 NodeSelection
+      await page.waitForTimeout(150)
+      const c2 = await copy()
+      check('CP2 块选中的待办复制:带 `- [ ]`(修前只剩纯文字)', c2.sel === 'node' && c2.plain === '- [ ] task two', JSON.stringify(c2))
+      await selectText('Intro', 0, 'here.', 5)
+      const c3 = await copy()
+      check('CP3 两整段纯文字:纯文本(贴微信),段间空一行', c3.plain === 'Intro para with bold and [[Wiki]] end.\n\nSecond para ital here.', JSON.stringify(c3))
+      await selectText('Intro', 0, 'task two', 8)
+      const c4 = await copy()
+      check('CP4 跨块复制含双链:双链不被转义成 `\\[\\[`', c4.plain.startsWith('Intro para with **bold** and [[Wiki]] end.\n\n') && c4.plain.endsWith('- [ ] task two') && !c4.plain.includes('\\['), JSON.stringify(c4))
+      await selectText('Intro', 6, 'end.', 4)
+      const c5 = await copy()
+      check('CP5 对照:段内半句照旧纯文本', c5.plain === 'para with bold and [[Wiki]] end.', JSON.stringify(c5))
+      await page.close()
+      check('CP 无页面错误', !errs.length, JSON.stringify(errs))
     }
   } finally {
     await browser.close()

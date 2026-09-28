@@ -721,7 +721,8 @@ export function MilkdownInner({
      * 「ul>li>p>text」这种单链也判成 isPureText,同样退化成纯文本 —— 单行待办正好落进它的盲区。
      */
     const clipboardTextSerializer = (slice: Slice, view: EditorView): string => {
-      const plain = (): string => slice.content.textBetween(0, slice.content.size, '\n')
+      // 块与块之间空一行(D-14):单个 `\n` 贴到 markdown 编辑器里是软换行,两段就并成了一段。
+      const plain = (): string => slice.content.textBetween(0, slice.content.size, '\n\n')
       // 整张图片被选中(NodeSelection)→ 纯文本 flavor 给字面 markdown。默认的 textBetween 对
       // image 这种无文本叶子返回**空串**:编辑器内粘贴靠 text/html 没事,复制到聊天框/别的编辑器
       // 却是一片空白。`![[…]]` 那条形态本来就是文本、一直给字面源码,两边口径得一致。
@@ -738,15 +739,23 @@ export function MilkdownInner({
         const src = String(onlyImage.attrs.src ?? '')
         return `![${String(onlyImage.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src})`
       }
-      const { $from, $to } = view.state.selection
-      const whole = $from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size
+      const sel = view.state.selection
+      const { $from, $to } = sel
+      // 结构化(带 markdown)的三种:整块选中(NodeSelection —— `$from.parentOffset` 是相对外层的,旧判据对它恒假,
+      // 块选中复制退化成纯文字,D-14 / B-06)、跨块选区(从段落中间选到待办,`- [ ]` 不许丢)、恰好盖住整个文本块。
+      const whole = sel instanceof NodeSelection || !$from.sameParent($to) ||
+        ($from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size)
       if (!whole) return plain()
       // 只看 firstChild 不够:「从一个段落一直选到下面的待办」时首块是段落,会退回纯文本、
       // 把后面那条的 `- [ ]` 丢掉(Codex 复审)。只要**任意一个**顶层块不是普通段落就走 markdown。
       let structured = false
       slice.content.forEach((n) => { if (n.type.name !== 'paragraph') structured = true })
       if (!structured) return plain()
-      const doc = view.state.schema.topNodeType.createAndFill(undefined, slice.content)
+      // 块选中的列表项(Esc 选中 / ⠿):切片里是光秃秃的 list_item,doc 收不下 —— 套回它所在的那只列表。
+      const content = sel instanceof NodeSelection && sel.node.type.name === 'list_item' && /_list$/.test($from.parent.type.name)
+        ? Fragment.from($from.parent.type.create($from.parent.attrs, slice.content))
+        : slice.content
+      const doc = view.state.schema.topNodeType.createAndFill(undefined, content)
       if (!doc) return plain()
       // 复制分栏内容(v4 unified)时剥锚注释行:锚脱离本文件的 amadeus_layout 就是散标记,
       // 贴到别处只会污染目标(规范:锚随文件,不随剪贴板)。v3 编辑器内永远不出现标记,零影响。
@@ -762,7 +771,13 @@ export function MilkdownInner({
         return !structural
       })
       // 纯文本给人看:关掉 attention 边界编码(`**注意：**&#x540E;面` 贴进微信就是乱码,见 withoutBoundaryRefs)。
-      let out = withoutBoundaryRefs(() => serialize(doc))
+      // 与落盘同一条规范化(D-14):片段那条(normalizeFragmentMd)不还原 `\[\[`,多块复制时双链被转义成 `\[\[x]]`。
+      // 从裸序列化出发只过一次 —— 叠在 serialize() 的片段规范化上,公式反转义会跑两遍。
+      let out = withoutBoundaryRefs(() => {
+        let raw = ''
+        getInstance()?.action((c) => { raw = c.get(serializerCtx)(doc) })
+        return normalizeSerializedMd(raw)
+      })
       if (structural) out = out.replace(/^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->[ \t]*\n?/gm, '')
       // entitiesToTabs:缩进段落序列化出的 &#9; 归一成字面制表符,外部应用不见实体垃圾(评审 P2)。
       const md = entitiesToTabs(out)
