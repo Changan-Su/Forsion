@@ -20,6 +20,7 @@ import { OverlayAt, setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
+import { useSessionAttention } from '../stores/attentionStore' // P1-K3
 import { openSpecial } from './SpecialViews'
 import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../sessionNav'
 import { AvatarStack } from '../components/AvatarStack'
@@ -133,6 +134,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const [teamEditor, setTeamEditor] = useState<{ team: TeamDef | null } | null>(null)
   const [agentRemoving, setAgentRemoving] = useState<NormalAgentDef | null>(null)
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
+  const attentionIds = useSessionAttention() // P1-K3「等你处理」点
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
   const [plusMenu, setPlusMenu] = useState<MenuAt | null>(null)
@@ -468,6 +470,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           allArchived={s.archivedSessions}
           activeId={s.activeId}
           runningIds={runningIds}
+          attentionIds={attentionIds}
           unreadIds={s.unread}
           cfg={s.cfg}
           modelId={activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''}

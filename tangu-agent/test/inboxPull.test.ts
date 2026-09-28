@@ -14,6 +14,10 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { pullBroadcastsOnce } from '../src/services/inboxPull.js';
+import { forwardInboxToChannels } from '../src/channels/forward.js';
+
+// P1 · K3 S10:审批提醒不转通道 —— 转发出口换成探针(其余用例本来就不断言它;首拉基准本就不转)。
+vi.mock('../src/channels/forward.js', () => ({ forwardInboxToChannels: vi.fn() }));
 
 const USER = 'u1';
 const B1 = { id: 'b1', title: 'T1', body: 'B1', created_at: '2026-07-01 10:00:00.123456' };
@@ -36,6 +40,7 @@ function setup(withSeam = true): void {
 beforeEach(async () => {
   setup();
   await runMigration();
+  vi.mocked(forwardInboxToChannels).mockClear();
 });
 
 async function rows(): Promise<any[]> {
@@ -127,5 +132,40 @@ describe('pullBroadcastsOnce', () => {
     expect(JSON.parse(all[0].attachments)).toEqual({ items: JSON.parse(items), claimed: false, requires: { minVersion: '2.11.0', tiers: ['plus', 'pro'] } });
     expect(JSON.parse(all[1].attachments)).toEqual({ items: JSON.parse(items), claimed: false });
     expect(all[2].attachments).toBeNull();
+  });
+
+  it('S10 审批提醒(thread.kind=approval,P1 · K3):照样落库但当场软删 —— 不可见、不计 added、不转通道;游标照样前进', async () => {
+    listBroadcasts.mockResolvedValueOnce([B1]); // 首拉基准(本就不转发)
+    await pullBroadcastsOnce(USER);
+    const approval = {
+      id: 'b-apv', title: '有 Agent 在等你处理', body: 'Mac 上有 1 项', created_at: '2026-07-01 10:00:05.000000',
+      thread: JSON.stringify({ kind: 'approval', unitId: '6c1d7a4e-2b3f-4a5c-8d9e-0f1a2b3c4d5e', sessionId: '7d2e8b5f-3c4a-4b6d-9e0f-1a2b3c4d5e6f', event: 'pending' }),
+    };
+    const plain = { id: 'b-plain', title: 'News', body: 'hi', created_at: '2026-07-01 10:00:06.000000' };
+    listBroadcasts.mockResolvedValueOnce([approval, plain]);
+    const { added } = await pullBroadcastsOnce(USER);
+    expect(added).toBe(1);
+    const all = await rows();
+    const apvRow = all.find((r) => r.origin_broadcast_id === 'b-apv');
+    expect(apvRow?.deleted_at).toBeTruthy();
+    expect(all.find((r) => r.origin_broadcast_id === 'b-plain')?.deleted_at).toBeNull();
+    expect(vi.mocked(forwardInboxToChannels).mock.calls.map((c) => c[0].title)).toEqual(['News']);
+    // 下一轮游标 = 最新一行(含软删的审批提醒),不会每 5 分钟重拉它
+    listBroadcasts.mockResolvedValueOnce([]);
+    await pullBroadcastsOnce(USER);
+    expect(listBroadcasts).toHaveBeenLastCalledWith(plain.created_at);
+    // 桌面收件箱读端看不到它
+    const visible = await query<any[]>(`SELECT origin_broadcast_id FROM inbox_messages WHERE user_id = ? AND deleted_at IS NULL`, [USER]);
+    expect(visible.map((r) => r.origin_broadcast_id).sort()).toEqual(['b-plain', 'b1']);
+  });
+
+  it('S10 反例:thread 是反馈线程 / 脏 JSON → 照常可见', async () => {
+    listBroadcasts.mockResolvedValueOnce([
+      { ...B1, thread: JSON.stringify({ kind: 'feedback', ticketId: '6c1d7a4e-2b3f-4a5c-8d9e-0f1a2b3c4d5e', event: 'admin_reply' }) },
+      { ...B2, thread: '{oops' },
+    ]);
+    const { added } = await pullBroadcastsOnce(USER);
+    expect(added).toBe(2);
+    expect((await rows()).every((r) => r.deleted_at == null)).toBe(true);
   });
 });

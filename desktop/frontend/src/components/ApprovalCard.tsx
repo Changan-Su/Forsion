@@ -14,7 +14,7 @@ import type { ApprovalRequest } from '../types'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
-import { alwaysAllowWorks, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
+import { alwaysAllowWorks, answeredByText, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
 
 export { MODE_KEY }
 
@@ -30,7 +30,20 @@ registerMessages({
   'approval.remote.lan': { zh: '来自远程会话 · 局域网配对设备', en: 'From a remote session · a LAN-paired device' },
   'approval.remote.p2p': { zh: '来自远程会话 · 点对点直连', en: 'From a remote session · a peer-to-peer connection' },
   'approval.remote.unknown': { zh: '来自远程会话', en: 'From a remote session' },
+  // P1-K3:受保护项只在本机批准 + 收起时「在哪答的」
+  'approval.localOnly': {
+    zh: '这项操作涉及受保护的配置，只能在执行它的电脑上批准',
+    en: 'This touches protected configuration and can only be approved on the computer running it',
+  },
+  'approval.byHost': { zh: '在执行的电脑上', en: 'on the host computer' },
+  'approval.byDevice': { zh: '在 {device} 上', en: 'on {device}' },
+  'approval.byRegisteredDevice': { zh: '在已登记设备上', en: 'on a registered device' },
+  'approval.byOther': { zh: '在另一台设备上', en: 'on another device' },
+  'approval.byChannel': { zh: '经消息通道', en: 'via a messaging channel' },
 })
+
+/** P1-K3:本页点过决定的审批 id(托盘与内嵌两处渲染同一张卡,状态放模块级)。收起后「在哪答的」对答复方自己不写。 */
+const decidedHere = new Set<string>()
 
 /** 本页驱动的是别的设备的引擎、且以远端身份(x-forsion-remote)调用:审批改参数 / 总允许都不兑现。 */
 export const isRemoteApprover = (): boolean => typeof window !== 'undefined' && !!window.tangu?.remoteCaller
@@ -55,8 +68,16 @@ export const ApprovalCard: React.FC<{
   const why = approvalReasonText(req.reason, t as (k: string, v?: Record<string, unknown>) => string)
   const source = approvalRemoteText(req.remote, t as (k: string, v?: Record<string, unknown>) => string)
 
+  // P1-K3:受保护路径的审批只能在执行它的电脑上批准 —— 远端页不给「批准 / 总允许」(引擎也会 403),「拒绝」照留。
+  const approveHere = !(req.localOnly && remote)
+  const answeredWhere = resolved
+    ? answeredByText(req.answeredBy, { remotePage: remote, answeredHere: decidedHere.has(req.approvalId) }, t as (k: string, v?: Record<string, unknown>) => string)
+    : ''
+
   const decide = (action: 'approve' | 'approve_always' | 'reject') => {
     if (resolved) return
+    if (action !== 'reject' && !approveHere) return
+    decidedHere.add(req.approvalId)
     const argsOverride = isBash && !remote && cmd.trim() && cmd !== initialCmd ? { command: cmd } : undefined
     onDecide(action, action === 'reject' ? undefined : argsOverride)
   }
@@ -69,6 +90,7 @@ export const ApprovalCard: React.FC<{
         {resolved && (
           <span style={{ fontWeight: 400, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)' }}>
             {req.status === 'approved' ? t('approval.statusApproved') : req.status === 'rejected' ? t('approval.statusRejected') : t('approval.statusExpired')}
+            {answeredWhere && <span data-answered-by> · {answeredWhere}</span>}
           </span>
         )}
       </div>
@@ -89,15 +111,18 @@ export const ApprovalCard: React.FC<{
           {/* preview 恒显:它是「⚠ 工作区外写入」等升级警示的唯一载体(引擎 approvals.ts 拼进字符串),diff 只能附加不能替换 */}
           <div className="approval-preview">{req.preview}</div>
           {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
-          {remote && !resolved && <div className="approval-why" data-remote-readonly>{t('approval.remoteReadOnly')}</div>}
+          {remote && !resolved && approveHere && <div className="approval-why" data-remote-readonly>{t('approval.remoteReadOnly')}</div>}
+          {!resolved && !approveHere && <div className="approval-why" data-local-only>{t('approval.localOnly')}</div>}
         </>
       )}
       {!resolved && (
         <div className="approval-actions">
-          <button className="btn primary sm" onClick={() => decide('approve')}>
-            <Check size={13} /> {t('approval.approve')}
-          </button>
-          {alwaysWorks && (
+          {approveHere && (
+            <button className="btn primary sm" onClick={() => decide('approve')}>
+              <Check size={13} /> {t('approval.approve')}
+            </button>
+          )}
+          {alwaysWorks && approveHere && (
             <button className="btn ghost sm" onClick={() => decide('approve_always')}>
               <CheckCheck size={13} /> {t('approval.approveAlways')}
             </button>

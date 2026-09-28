@@ -7,6 +7,8 @@ import { useChannels } from './channelsStore'
 import { setActiveSpace } from '@lcl/engine'
 import { openChangelogTab } from '../views/ChangelogView'
 import { setUnauthorizedHandler } from '../services/http'
+import { useAttention } from './attentionStore'
+import { openSessionFromApproval } from './attentionOpen'
 
 // 任意请求(含轮询/SSE)返回 401 → 集中触发登录过期处理(在 React 外注册一次)。
 setUnauthorizedHandler(() => useApp.getState().handleAuthExpired())
@@ -66,6 +68,18 @@ export function useBootstrap(): void {
   // 系统通知点击 → 聚焦窗口后回跳 Inbox Space(main 进程 webContents.send('inbox:open'))。
   useEffect(() => {
     const off = window.tangu?.onInboxOpen?.(() => setActiveSpace('inbox'))
+    return () => off?.()
+  }, [])
+
+  // P1-K3:会话列表「等你处理」点的数据源(引擎待批索引 20s 轮询 + 回前台立即拉)。门控与收件箱同款:桌面壳 或 移动端;Tangu Web 不跑。
+  useEffect(() => {
+    if (!window.tangu?.backendStatus && !window.tangu?.mobile) return
+    return useAttention.getState().install()
+  }, [])
+
+  // P1-K3:远程会话待批的系统通知被点击(主进程 approvalDelivery → approval:open)→ 打开那条会话。仅桌面壳有这个 IPC。
+  useEffect(() => {
+    const off = window.tangu?.onApprovalOpen?.(({ sessionId }) => { void openSessionFromApproval(sessionId) })
     return () => off?.()
   }, [])
 

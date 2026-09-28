@@ -8,6 +8,7 @@ import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computer
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
+import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
@@ -72,6 +73,14 @@ const api = {
     const listener = (): void => cb()
     ipcRenderer.on('inbox:open', listener)
     return () => ipcRenderer.removeListener('inbox:open', listener)
+  },
+  // P1-K3:远程会话待批的系统通知被点击 → 主窗打开那条会话(main 进程 approvalDelivery → webContents.send('approval:open'))
+  onApprovalOpen: (cb: (p: ApprovalOpenPayload) => void): (() => void) => {
+    const listener = (_e: unknown, p: { sessionId?: unknown } | null): void => {
+      if (typeof p?.sessionId === 'string' && p.sessionId) cb({ sessionId: p.sessionId })
+    }
+    ipcRenderer.on(APPROVAL_OPEN_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(APPROVAL_OPEN_CHANNEL, listener)
   },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
   unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
@@ -497,6 +506,8 @@ const AGENT_KEYS = [
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
   'computerHistory', // 电脑历史同理:读者是 agent 工具与 Muse(主进程也只在 agentBackend 下建控制器)
   'reportRunningSessions', // 无 agent 后端就没有 run
+  // P1-K3
+  'onApprovalOpen', // 审批送达的通知只在有 agent 后端(本机引擎)的产品里发
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]

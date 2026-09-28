@@ -63,6 +63,9 @@ export const CLASSIFICATION = {
   'POST /agent/runs/:runId/captures/:shotId': [A, 'Agent Desk capture upload for a run (shotId bound to run, P0 ②)'],
   'GET /agent/approval-rules': [D, 'approval rules are local policy'],
   'PUT /agent/approval-rules': [D, 'approval rules are local policy'],
+  // P1-K3
+  'GET /agent/approvals/pending': [A, 'per-session pending counts for the session-list badge (no ids / previews)'],
+  'GET /agent/approvals/stream': [D, 'engine-wide pending approval feed for the host main process only'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],

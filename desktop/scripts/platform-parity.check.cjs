@@ -134,6 +134,8 @@ const KNOWN_GATES = {
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
+  // P1-K3
+  'window.tangu?.onApprovalOpen': '远程会话待批的系统通知被点击 → 打开会话 — 仅 Electron:通知由桌面主进程 approvalDelivery 订阅本机引擎待批流后发出(webContents.send approval:open)。移动端没有本机引擎、P1 没有原生通知(方案 P2),手机侧走收件箱审批提醒信的「打开会话」按钮(InboxReaderView,共享)与会话列表「等你处理」点(attentionStore,经 useBootstrap 三端共用);web 无此 IPC',
   'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
 }
 

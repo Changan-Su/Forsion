@@ -52,7 +52,10 @@ function useInboxAutoPull(): void {
     const timer = window.setInterval(doPull, 5 * 60_000)
     let prev = useApp.getState().connState
     const unsub = useApp.subscribe((s) => { if (s.connState === 'ok' && prev !== 'ok') void doPull(); prev = s.connState })
-    return () => { window.clearInterval(timer); unsub() }
+    // P1-K3:回到前台立即拉(电脑上的远程会话等你批准时投的提醒信,要一打开 App 就看得到,别等 5 分钟那一轮)
+    const onVisible = (): void => { if (!document.hidden) void doPull() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { window.clearInterval(timer); unsub(); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
 }
 

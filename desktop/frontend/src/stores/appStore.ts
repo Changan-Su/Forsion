@@ -37,7 +37,7 @@ import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
 import { publishAccountQuota } from '../services/accountQuota'
-import { sanitizeApprovalReason, sanitizeApprovalRemote } from '../approvalReason'
+import { sanitizeAnswerBy, sanitizeApprovalReason, sanitizeApprovalRemote } from '../approvalReason'
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
@@ -1164,7 +1164,7 @@ export const useApp = create<AppState>((set, get) => ({
         // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, live: undefined, work: m.work ? { ...m.work, waiting: true } : m.work,
-          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(remote ? { remote } : {}), ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
+          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(remote ? { remote } : {}), ...(pl.localOnly === true ? { localOnly: true } : {}) /* P1-K3 */, ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         break
@@ -1174,7 +1174,8 @@ export const useApp = create<AppState>((set, get) => ({
         const owner = (get().messagesBySession[sessionId] || []).find((m) => m.approvals?.some((a) => a.approvalId === pl.approvalId))?.id ?? targetOf(pl)
         patchMessage(sessionId, owner, (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
-          approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
+          // P1-K3:by = 谁答的(白名单清洗);卡片收起时写「在 X 上」
+          approvals: (m.approvals || []).map((a) => { if (a.approvalId !== pl.approvalId) return a; const answeredBy = sanitizeAnswerBy(pl.by); return { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const), ...(answeredBy ? { answeredBy } : {}) } }),
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
@@ -1219,7 +1220,7 @@ export const useApp = create<AppState>((set, get) => ({
       case 'inquiry_result':
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
-          inquiries: (m.inquiries || []).map((q) => q.inquiryId === pl.inquiryId ? { ...q, status: 'answered' as const, answer: String(pl.answer ?? '') } : q),
+          inquiries: (m.inquiries || []).map((q) => { if (q.inquiryId !== pl.inquiryId) return q; const answeredBy = sanitizeAnswerBy(pl.by); return { ...q, status: 'answered' as const, answer: String(pl.answer ?? ''), ...(answeredBy ? { answeredBy } : {}) } }), // P1-K3
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
@@ -2874,6 +2875,8 @@ export const useApp = create<AppState>((set, get) => ({
       get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId && a.status === 'pending' ? { ...a, status: 'expired' as const } : a)) }))
       return true
     }
+    // P1-K3:受保护路径的审批只能在执行它的电脑上批准(引擎 403 APPROVAL_LOCAL_ONLY)—— 卡保持待批(还能拒绝),不写成「发送失败」
+    if (!r.ok && r.code === 'APPROVAL_LOCAL_ONLY') { get().toast(get().tr('approval.localOnlyToast'), true); return false }
     // 其余失败必须上屏(设备页改了命令 → 引擎 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN;以前静默吞掉,卡片挂着、按钮像没反应)
     if (!r.ok) { get().toast(get().tr('approval.sendFail', { e: r.message || 'HTTP' }), true); return false }
     return true

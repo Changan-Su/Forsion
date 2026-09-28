@@ -10,6 +10,7 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { currentPlatform } from '../services/agentRunService'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from './sessionMode'
 import { showDetails } from '../stores/detailsSubject'
+import { useSessionAttention } from '../stores/attentionStore' // P1-K3
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */
@@ -43,6 +44,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
     setSessionMode: state.setSessionMode,
   })))
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
+  const attentionIds = useSessionAttention() // P1-K3「等你处理」点
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
   // Chat/Work 模式(新对话行右侧胶囊)。桌面左栏是 WorkspaceView 挂的 sessions 面,另带一层本地/云端侧过滤(sideFilter):
@@ -77,6 +79,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       allArchived={s.archivedSessions}
       activeId={s.activeId}
       runningIds={runningIds}
+      attentionIds={attentionIds}
       unreadIds={s.unread}
       cfg={s.cfg}
       modelId={activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''}
