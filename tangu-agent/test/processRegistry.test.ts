@@ -93,13 +93,17 @@ import { taintRunRemote, clearRunRemoteTaint } from '../src/services/remoteOrigi
 describe('来源标签 + killProcessesWhere(P1-K2)', () => {
   const alive = (pid: number | null): boolean => { try { process.kill(pid!, 0); return true; } catch { return false; } };
 
-  it('来源按 ctx 判:远程(起跑污点 / 中途染色)> 通道 > 无人值守 > 本机', () => {
+  it('来源按 ctx 判:远程(起跑污点 / 中途染色)> 这条 run 自己的来源(runOrigin)> 无人值守 > 本机;会话级 channelSession 不算', () => {
     expect(processOriginOf(undefined)).toBe('local');
     expect(processOriginOf({ remote: { via: 'tunnel', marked: true } } as any)).toBe('remote');
     taintRunRemote('R-proc', { via: 'p2p', marked: false });
-    expect(processOriginOf({ runId: 'R-proc' } as any)).toBe('remote');
+    expect(processOriginOf({ runId: 'R-proc', runOrigin: 'local' } as any)).toBe('remote'); // 本机起、中途染色
     clearRunRemoteTaint('R-proc');
-    expect(processOriginOf({ channelSession: true } as any)).toBe('channel');
+    expect(processOriginOf({ runOrigin: 'channel', channelSession: true } as any)).toBe('channel');
+    // 连着微信的会话里用户在桌面敲的 run:会话级旗标为真,run 本身是本机(独立评审 P2)
+    expect(processOriginOf({ runOrigin: 'local', channelSession: true } as any)).toBe('local');
+    expect(processOriginOf({ channelSession: true } as any)).toBe('local');
+    expect(processOriginOf({ runOrigin: 'unattended' } as any)).toBe('unattended');
     expect(processOriginOf({ muse: true } as any)).toBe('unattended');
     expect(processOriginOf({ automationOrigin: 't1' } as any)).toBe('unattended');
     expect(processOriginOf({ runId: 'R-local' } as any)).toBe('local');

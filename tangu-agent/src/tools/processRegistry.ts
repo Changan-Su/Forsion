@@ -39,11 +39,15 @@ export interface BackgroundProcess {
   origin: ProcessOrigin;
 }
 
-/** 起进程那一刻的来源:远程污点(起跑时的 input.remote 或中途染色)> 通道 > 无人值守(Muse / 自动化)> 本机。 */
+/**
+ * 起进程那一刻的来源:远程污点(起跑时的 input.remote 或中途染色)> 这条 run 自己的来源(ctx.runOrigin,与 runCategory 同口径)。
+ * ⚠️ 不看 ctx.channelSession:那是会话级旗标,连着微信的会话里用户在桌面敲的 run 也为真 —— 按它标会让急停杀掉本机用户自己的
+ * dev server(独立评审 P2)。没带 runOrigin 的 ctx(loop 之外的调用方)退回 muse / automationOrigin 判无人值守,其余本机。
+ */
 export function processOriginOf(ctx: ToolContext | undefined): ProcessOrigin {
   if (!ctx) return 'local';
   if (effectiveRemote(ctx)) return 'remote';
-  if (ctx.channelSession) return 'channel';
+  if (ctx.runOrigin) return ctx.runOrigin;
   if (ctx.muse || ctx.automationOrigin) return 'unattended';
   return 'local';
 }

@@ -1413,6 +1413,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
     const toolGateCtx = {
       userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
+      runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
