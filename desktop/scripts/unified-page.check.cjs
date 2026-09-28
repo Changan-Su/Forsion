@@ -1690,6 +1690,43 @@ async function main() {
     await pg.close()
   }
 
+  // P20d:状态栏计数的 v4 接缝(评审 C-22:按原始 md 计数 —— 链接地址、表格竖线、`- [ ]` 全算进去,156 vs 可见约 25;
+  //  没有词数、没有选区计数)。走生产 lifecycle.unifiedStats(状态栏 WordCountItem 读的就是它):
+  //  全文只数可见文字;选中一段 → 另给选区的数,且计数版本号跟着选区变(状态栏据此刷新),折叠选区 → 选区数消失。
+  //  负对照:statsNow 改回数 pipe.body 原文 → 全文字数红(已实跑)。
+  {
+    const seed = '# Hello **world**\n\n看 [这篇文章](https://example.com/a/very/long/path?utm_source=x) 吧。\n\n![[Embedded]]\n\n- [ ] 待办一项\n\n| a | b |\n|---|---|\n| 1 | 2 |\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForFunction(() => !!(window.__upage && window.__upage.lifecycle), null, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const stats = () => pg.evaluate(() => ({ st: window.__upage.lifecycle.unifiedStats('Unified.md'), ver: window.__upage.lifecycle.unifiedStatsVer() }))
+    const a = await stats()
+    // 选中「这篇文章」四个字(真键盘:点到「看」后,Shift+→ 走过空格与四个字)
+    const at = await pg.evaluate((s) => {
+      const p = [...document.querySelectorAll(s + ' > p')].find((x) => x.textContent.includes('这篇文章'))
+      const t = p.firstChild; const r = document.createRange(); r.setStart(t, 1); r.setEnd(t, 1); const b = r.getBoundingClientRect()
+      return { x: b.left, y: b.top + b.height / 2 }
+    }, PM)
+    await pg.mouse.click(at.x, at.y)
+    await pg.waitForTimeout(150)
+    await pg.keyboard.press('ArrowRight')
+    for (let i = 0; i < 4; i++) await pg.keyboard.press('Shift+ArrowRight')
+    await pg.waitForTimeout(150)
+    const b = await stats()
+    await pg.keyboard.press('ArrowRight')
+    await pg.waitForTimeout(150)
+    const c = await stats()
+    record('P20d 计数只数可见文字(Hello world / 看这篇文章吧。/ 待办一项 / a b 1 2 = 25 字 16 词);选区另计且随选区刷新(C-22)',
+      a.st && a.st.all.chars === 25 && a.st.all.words === 16 && a.st.sel === null &&
+        b.st && b.st.sel && b.st.sel.chars === 4 && b.st.sel.words === 4 && b.ver > a.ver &&
+        c.st && c.st.sel === null && c.ver > b.ver,
+      JSON.stringify({ a, b, c }))
+    await pg.close()
+  }
+
   // P21:跨块文字拖选按真实字符范围呈现;块内选字也仍是原生高亮。
   {
     const seed = '甲段落文字。\n\n乙段落文字。\n\n丙段落文字。\n'

@@ -50,6 +50,7 @@ import { formatDateTime } from '../../format/time'
 import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
+import { createStatsReader, createStatsTicker } from './noteStats'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
@@ -1297,6 +1298,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     onCardDetach: (anchors) => cardDragCtxRef.current.detach(anchors),
     onCardsMinted: (anchors) => cardDragCtxRef.current.minted(anchors),
   }), [])
+  /** 状态栏计数(C-22):全文按 doc 身份缓存,只动选区不重数全文。 */
+  const [statsReader] = useState(() => createStatsReader(() => layer.getView()))
   /** 整块删掉的内容里若牵着只有本篇引用的磁盘文件,删完问一句(见 assetDelete 顶注)。
    *  ⚠️ 只能在删除事务**之后**调:这里读的 doc 已是删完的,「同一篇里还有没有别处引用」才算得准。 */
   const onBlocksDeleted = (content: Fragment): void => {
@@ -1373,6 +1376,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...headingFoldPlugins,
       ...listFoldPlugins,
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
+      ...createStatsTicker(), // 状态栏字 / 词 / 选区计数的刷新节拍(C-22)
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -2170,6 +2174,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
+      statsNow: () => statsReader(),
       headings: () => {
         const v = layer.getView()
         return v ? docHeadings(v.state.doc) : []
