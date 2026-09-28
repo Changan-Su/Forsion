@@ -937,6 +937,35 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     setVp({ z, x: r.width / u / 2 - worldX * z, y: r.height / u / 2 - worldY * z })
   }, [stopFocusMotion])
 
+  /** 只读实例的复制:先把 PM 的选区对齐到原生选区,再让 PM 的 copy 处理器序列化(V-16)。
+   *  只读 PM 只在原生选区**两端都在编辑器内**时才同步选区(prosemirror-view hasSelection);三击选段时
+   *  Chromium 把焦点端放到下一块开头 —— 卡是文末那块时就落在编辑器外,PM 的选区停在上一次(比如双击选的那个词),
+   *  Cmd+C 复制出来的是旧词。这里捕获期(先于 PM 挂在 view.dom 上的处理器)把原生区间夹进编辑器、换成 PM 选区。
+   *  舞台根在文档模式也常驻包着编辑器,所以两种模式都生效。 */
+  useEffect(() => {
+    const host = hostRef.current
+    if (!readOnly || !host) return
+    const onCopy = (): void => {
+      const view = cbRef.current.getView()
+      const ds = document.getSelection()
+      if (!view || !ds || ds.isCollapsed || !ds.rangeCount) return
+      const r = ds.getRangeAt(0)
+      const inView = (n: Node): boolean => view.dom.contains(n.nodeType === 3 ? n.parentNode : n)
+      const a = inView(r.startContainer)
+      const b = inView(r.endContainer)
+      if (!a && !b) return
+      try {
+        const doc = view.state.doc
+        const from = a ? view.posAtDOM(r.startContainer, r.startOffset) : 0
+        const to = b ? view.posAtDOM(r.endContainer, r.endOffset) : doc.content.size
+        const sel = TextSelection.between(doc.resolve(Math.min(from, to)), doc.resolve(Math.max(from, to)))
+        if (!sel.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(sel))
+      } catch { /* 算不出位置就交给 PM 原样处理 */ }
+    }
+    host.addEventListener('copy', onCopy, true)
+    return () => host.removeEventListener('copy', onCopy, true)
+  }, [readOnly])
+
   /** 页内查找的「露出命中」钩子。画布拿 transform 当视口,滚动 API 一律够不着(实测:Chromium
    *  连试都不试 —— `.amx-stage` 是 overflow:hidden,scrollTop 纹丝不动、零 scroll 事件),
    *  所以由这里把命中矩形折回舞台坐标再居中,`preventDefault()` 告诉查找「我接手了」。
@@ -2116,6 +2145,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     //    所以双指一成立就把在途的 drag 整笔作废(cancel 语义,不落笔),并在**全部手指抬起前**
     //    一概不进单指逻辑。编辑态不动:视口 transform 不惊动 PM,捏合时正在编辑的卡照常编辑。
     const touchPts = new Map<number, { x: number; y: number }>()
+    /** 只读舞台上一次鼠标按下(V-16 连击判定):双击 / 三击落在正文上时放行给原生选字。 */
+    let roLastDown: { t: number; x: number; y: number } | null = null
     let pinch: { d0: number; z0: number; sx: number; sy: number; ids: string } | null = null
     let pressTimer = 0
     let pressAt: { x: number; y: number } | null = null
@@ -2252,6 +2283,16 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       // 分享页里的双链就点不动了 —— 与下面 CARD_CTL 那条「必须在 preventDefault 之前放行」同一个坑。
       if (readOnlyRef.current) {
         if (target.closest(`${CARD_CTL}, .wikilink`)) return
+        // 连击(双击 / 三击)落在正文上 = 选字(V-16,Notion 公开页可以选中复制):这一下不 preventDefault、不起平移,
+        // 浏览器照常派发 mousedown,原生按词 / 按段选中,随后 Cmd+C 复制。单击(含按住拖)仍是平移 ——
+        // 第一下已被上面吞掉并起了零位移的平移,所以「拖卡 = 平移」一格不变(unified-readonly 钉着)。
+        // 只认鼠标:触屏双击另有缩放 / 长按选字的系统语义,不在这里改。
+        // 连击判据与浏览器自己的点击计数同口径(间隔 < 500ms、位移 < 6px 就接着数,不封顶):只有计数 ≥ 2 的那几下放行,
+        // 浏览器派发的 mousedown 带的正是同一个计数,原生按词 / 按段选中。
+        const now = performance.now()
+        const prev = roLastDown
+        roLastDown = e.pointerType === 'mouse' ? { t: now, x: e.clientX, y: e.clientY } : null
+        if (prev && now - prev.t < 500 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 6 && target.closest('.ProseMirror')) return
         e.preventDefault()
         drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y }
         capture(e.pointerId)
