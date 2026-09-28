@@ -127,6 +127,7 @@ registerMessages({
   'unipage.toast.cardUnavailable': { zh: '当前块不能转换为卡片；请先移出列表或分栏', en: 'This block cannot be turned into a card — move it out of the list or columns first.' },
   'unipage.toast.cardMade': { zh: '已转换为卡片 —— 右上角切到画布模式查看', en: 'Turned into a card — switch to canvas mode at the top right to see it.' },
   'unipage.menu.turnInto': { zh: '转换为', en: 'Turn into' },
+  'unipage.toast.renameDetachedFailed': { zh: '没能把笔记改名为「{name}」（可能已有同名笔记），保留了原名', en: 'Couldn’t rename the note to “{name}” (the name may be taken). The old name was kept.' },
   'unipage.menu.text': { zh: '正文', en: 'Text' },
   'unipage.menu.h1': { zh: '标题 1', en: 'Heading 1' },
   'unipage.menu.h2': { zh: '标题 2', en: 'Heading 2' },
@@ -845,7 +846,7 @@ function caretOnLastLine(ta: HTMLTextAreaElement): boolean {
 }
 
 /** 行内标题 + emoji 图标 + 添加图标/封面动作(与 v3 NoteTitle 同 DOM/同 CSS,数据走 fm 管线)。 */
-function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal, compact = false, readOnly = false }: {
+function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onDetachedRename, onEnterBody, focusSignal, compact = false, readOnly = false }: {
   compact?: boolean
   path: string
   icon: string | null
@@ -858,6 +859,9 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   /** focusKind = 触发本次 commit 的按键档(回车/方向键),点走 blur 恒 null —— 逐次绑定逐次消费,
    *  不用时间窗推断(Codex 深夜 F2:5 秒窗会把「回车后 5 秒内点走改名」误判成回车改名,凭空插首行抢焦点)。 */
   onRename: (next: string, focusKind: 'enter' | 'move' | null) => Promise<boolean>
+  /** 框还聚焦着就被卸载(键盘导航换篇 / 关标签,C-02):React 不给已脱离的节点派 onBlur,没提交的标题交给父级
+   *  按「脱离」语义改名(不改指标签、不交接正文焦点)。只在确有未提交的改动时调。 */
+  onDetachedRename: (next: string) => void
   /** 'enter' = 回车确定标题(首块非空段则顶插空白首行);'move' = 方向键滑入正文(只落光标不插行)。 */
   onEnterBody: (kind: 'enter' | 'move') => void
   /** 聚焦标题(光标落到末尾)的请求计数:新建流挂载即聚焦(认领 pageStore 的一次性请求)、正文首行按 ↑ / ← 回标题(K-24)
@@ -872,7 +876,17 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const [coverPick, setCoverPick] = useState<{ x: number; y: number } | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => { setVal(shown) }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** 未提交的标题草稿(同步镜像,C-02):打字即记,失焦提交 / Esc 放弃 / 换路径时清。卸载时还在 = 没来得及提交。 */
+  const draft = useRef<string | null>(null)
+  const detachedRef = useRef(onDetachedRename)
+  detachedRef.current = onDetachedRename
+  useEffect(() => { setVal(shown); draft.current = null }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 卸载冲洗放在 layout cleanup:节点脱离之前、父级的卸载落盘(passive cleanup)之前执行(属性草稿 C-02 同一时机)。
+  useLayoutEffect(() => () => {
+    const d = draft.current
+    draft.current = null
+    if (d != null) detachedRef.current(d)
+  }, [])
   // 长标题折行(评审 C-12):单行 input 把十几个字以上的标题直接截掉(手机上更甚)。textarea rows=1 按内容撑高;
   // 宽度变了(窗口 / 分屏 / 侧栏)重排后行数会变,跟着再撑一次。
   useLayoutEffect(() => { growTitle(ref.current) }, [val])
@@ -895,9 +909,18 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   }, [focusSignal])
   // 本次 blur 由哪个键触发(commit 时一次性消费):回车/方向键在 keydown 里设,点走 blur 恒 null。
   const blurKind = useRef<'enter' | 'move' | null>(null)
+  /** Esc 放弃:keydown 里同步 blur,失焦提交拿到的还是这一轮渲染的 val(setVal(shown) 还没生效)—— 旧版因此 Esc 反倒
+   *  把打的字改名了。用同步标记告诉 commit「这次是放弃」。 */
+  const escaping = useRef(false)
   const commit = (): void => {
     const kind = blurKind.current
     blurKind.current = null
+    draft.current = null
+    if (escaping.current) {
+      escaping.current = false
+      setVal(shown)
+      return
+    }
     const next = val.trim()
     if (next && next !== current) void onRename(next, kind).then((ok) => { if (!ok) setVal(shown) })
     else setVal(shown)
@@ -945,7 +968,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
           value={val}
           placeholder="New Page"
           // 标题是文件名:没有换行这回事。粘贴进来的换行折成空格(回车本身在下面拦掉,不会走到这里)。
-          onChange={(e) => setVal(e.target.value.replace(/[\r\n]+/g, ' '))}
+          onChange={(e) => { const v = e.target.value.replace(/[\r\n]+/g, ' '); draft.current = v; setVal(v) }}
           onBlur={commit}
           onKeyDown={(e) => {
             // 输入法组合中一律放行(AFFiNE doc-title 同款守卫):中文用拼音打标题、按 Enter 选词,
@@ -968,7 +991,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
               el.blur() // blur → commit(改名);统一实例正文恒存在,先后顺序无 v3 的首块竞态
               onEnterBody(e.key === 'Enter' ? 'enter' : 'move')
             }
-            if (e.key === 'Escape') { setVal(shown); el.blur() }
+            if (e.key === 'Escape') { draft.current = null; escaping.current = true; setVal(shown); el.blur() }
           }}
         />
       </div>
@@ -2451,12 +2474,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     view.dispatch(tr.setMeta('addToHistory', false).scrollIntoView())
   }
 
-  const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null): Promise<boolean> => {
+  /** detached(C-02):标题框聚焦中被卸载(键盘导航换篇 / 关标签)时由 UnifiedTitle 的卸载冲洗调 —— 标签已经换篇或关了:
+   *  · 不调 onRenamed(那会把标签拽回这篇)、不交接正文焦点 / 「接着写」;
+   *  · 换库闸:开头认 pipe.retired(切号先 retireAll、别处删 / 挪走也会退休),改名前再比一次库根 —— 换了库就放弃,
+   *    绝不按相对路径去新库里改名;
+   *  · 写序:父级的卸载落盘(passive cleanup)会在本调用之后再往 pipe.chain 排一发写 —— 改名前把链排干,
+   *    否则旧路径的写落在改名之后 = 幽灵文件。 */
+  const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null, detached = false): Promise<boolean> => {
     if (readOnly) return false
+    if (detached && pipe.retired) return false
+    const root = vaultRoot
     try {
       syncFromEditor() // 快打字后立刻回车改名:先拉平防抖窗里的最后几击(Codex A4)
       await writeNow() // 待写先落旧路径(chain 串行:在途写全部排完)
       await flushAllScopes() // 全库 [[链接]] 重写前,其它面板待存文本先落盘
+      if (detached) {
+        await pipe.chain
+        if (pipe.retired || usePageStore.getState().vaultRoot !== root) return false
+      }
       const newPath = await amadeus.renamePageFile(path, next)
       if (newPath !== path) {
         remapNoteViewMemory(vaultRoot, path, newPath)
@@ -2476,11 +2511,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 已经执行过、光标在正文里 →「接着写」(旧 doc + 选区),绝不再执行一遍。
         // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
         // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文);点走 blur 的改名只在光标确在正文里时续上。
+        // detached(C-02):标签已经不在这篇上,没有正文焦点可交接,也没有「接着写」。
         const pending = bodyFocusRef.current
         const view = layer.getView()
-        if (focusKind && pending != null && typeof pending !== 'object') {
+        if (!detached && focusKind && pending != null && typeof pending !== 'object') {
           pendingBodyFocus = { path: newPath, scope, req: pending, at: Date.now() }
-        } else if (view?.hasFocus()) {
+        } else if (!detached && view?.hasFocus()) {
           const carry: BodyCarry = { place: 'restore', body: writtenBody, doc: view.state.doc.toJSON(), anchor: view.state.selection.anchor, head: view.state.selection.head }
           outgoingCarry.current = carry
           pendingBodyFocus = { path: newPath, scope, req: carry, at: Date.now() }
@@ -2489,11 +2525,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         remapScopePaths(path, newPath, 'file')
         await cascadeFdAfterRename(path, newPath)
         void usePageStore.getState().refreshPages()
-        onRenamed?.(newPath)
+        if (!detached) onRenamed?.(newPath)
       }
       return true
     } catch {
-      return false // 撞名/非法名:调用方(UnifiedTitle)把输入框还原成旧名
+      // 撞名/非法名:调用方(UnifiedTitle)把输入框还原成旧名。脱离的改名没有输入框可还原,人也已经不在这篇上 —— 说一声。
+      if (detached) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.renameDetachedFailed', { name: next }) } }))
+      return false
     }
   }
 
@@ -2591,6 +2629,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           onSetIcon={(em) => setFm({ icon: em ?? undefined })}
           onSetCover={(c) => setFm({ cover: c })}
           onRename={doRename}
+          onDetachedRename={(next) => {
+            const t = next.trim()
+            if (t && t !== (path.split('/').pop() ?? path).replace(/\.md$/i, '')) void doRename(t, null, true)
+          }}
           onEnterBody={(kind) => setBodyFocus(kind === 'enter' ? 'body-enter' : 'start')}
           focusSignal={titleFocus}
         />

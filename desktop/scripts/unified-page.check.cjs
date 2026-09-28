@@ -424,6 +424,63 @@ async function main() {
         JSON.stringify({ a, b, c }))
     }
 
+    // PR7b 标题框草稿冲洗(评审 C-02 的标题那一半):标题框还聚焦着就被卸载(键盘导航换篇 = switchFile / 关标签),
+    //  React 不给已脱离的节点派 onBlur —— 改名丢了。现在卸载冲洗按「脱离」语义改名:
+    //  a 正文刚打的字 + 标题改字 → 换篇:新名文件带着全部正文、旧名不在(没有幽灵文件,写 ack 拖慢 300ms 也一样)、
+    //    标签仍停在换去的那篇(不被拽回);
+    //  b 标题改字后 Esc 放弃再换篇 → 不改名(旧版 Esc 本身就把打的字改名了:keydown 里同步 blur,失焦提交拿到的还是旧一轮的值);
+    //  c 换库竞态闸:库根在卸载前已经换了 → 不改名(绝不按相对路径去新库改名)。
+    //  负对照:UnifiedTitle 的卸载冲洗摘掉 → a 红;doRename 的库根复核摘掉 → c 红;基线 b46b1703 上 b 红(均已实跑)。
+    //  ⚠️ 台架的 renamePageFile 同步落盘,「改名前排干写链」那道写序闸在这里区分不出来(见 doRename 注释)。
+    {
+      const seed = '# 标题段\n\n正文。\n'
+      const openT = async () => {
+        const pg = await browser.newPage({ locale: 'zh-CN' })
+        pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+        await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+        await pg.waitForSelector(PM, { timeout: 20000 })
+        await pg.waitForTimeout(400)
+        return pg
+      }
+      const keys = (pg) => pg.evaluate(() => [...window.__upage.vault.keys()].filter((k) => k.endsWith('.md') && k !== 'Embedded.md').sort())
+      // a
+      let pg = await openT()
+      await pg.evaluate(() => { window.__upage.writeLagMs = 300 })
+      const at = await pg.evaluate((s) => { const p = document.querySelector(s + ' > p'); const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect(); return { x: b.right - 1, y: b.top + b.height / 2 } }, PM)
+      await pg.mouse.click(at.x, at.y)
+      await pg.keyboard.type('正文追加')
+      await pg.click('.amx-title-input')
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('改名')
+      await pg.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n'))
+      await pg.waitForTimeout(2200)
+      const a = { keys: await keys(pg), renamed: await pg.evaluate(() => window.__upage.vault.get('Unified改名.md') ?? null), title: await pg.evaluate(() => document.querySelector('.amx-title-input')?.value) }
+      await pg.close()
+      // b
+      pg = await openT()
+      await pg.click('.amx-title-input')
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('放弃')
+      await pg.keyboard.press('Escape')
+      await pg.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n'))
+      await pg.waitForTimeout(1200)
+      const b = { keys: await keys(pg) }
+      await pg.close()
+      // c
+      pg = await openT()
+      await pg.click('.amx-title-input')
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('换库')
+      await pg.evaluate(() => { window.__upage.pageStore.setState({ vaultRoot: '/another-vault' }); window.__upage.switchFile('Other.md', '# 另一篇\n') })
+      await pg.waitForTimeout(1200)
+      const c = { keys: await keys(pg) }
+      await pg.close()
+      record('PR7b 标题框聚焦中换篇 / 关标签:按脱离语义改名(正文全在、无幽灵旧文件、标签不被拽回);Esc 放弃不改;换库后不改(C-02)',
+        a.keys.join() === 'Other.md,Unified改名.md' && (a.renamed ?? '').includes('正文。正文追加') && a.title === 'Other' &&
+          b.keys.join() === 'Other.md,Unified.md' && c.keys.join() === 'Other.md,Unified.md',
+        JSON.stringify({ a, b, c }))
+    }
+
     // PR8 行级提交(评审 2026-09-27 D-20):改一个值 → 只有那一行变,注释 / 007 / 1.10 / flow / 多行块逐字;
     //  多行值是多行框,白点零写。负对照:pageFrontmatter 行级核对恒判失败(退回整块重排)→ 应红(同款已在 pageFrontmatter.test 实跑)。
     {
