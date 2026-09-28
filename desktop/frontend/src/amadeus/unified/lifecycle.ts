@@ -33,6 +33,9 @@ export interface UnifiedPipeHandle {
    *  命中藏在会话折叠(标题小节 / 列表子项)里先展开,再选中命中文字并亮到阅读位置。找不到返回 false(同块锚)。
    *  tag=true:needle 是 `#标签`,按标签边界匹配(`#work` 不落在 `#workshop` 上)。 */
   revealText?: (needles: string[], opts?: { tag?: boolean; flash?: boolean }) => boolean
+  /** 让正文拿焦点、**不动选区**(评审 G4-06:从快速查找 / 日记进入已有笔记后直接打字)。编辑器还没建好 → false
+   *  (调用方重试);只读 / 已退休 → true(没什么可做,别让调用方空转)。 */
+  focusBody?: () => boolean
   /** 外来 frontmatter 原文(插件的每页数据存这儿)。v3 那份在 manifest.fmExtra,v4 在 pipe.fm 里。
    *  **只读**:写口本轮不做(不带 bind 的块表面上零消费者,且 v4 fm 写要与结构键派生同场竞技,
    *  见 docs/ToBeImproved/块表面v4适配方案_2026-08-20.md §6.3)。 */
@@ -206,6 +209,13 @@ export function unifiedFm(path: string): string | null {
  *  同篇多开时落到最近用过的那个(G1-02),它不接再问下一个。 */
 export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' | 'start' | 'end'): boolean {
   for (const h of byRecency(path)) if (h.insertMarkdown?.(md, where)) return true
+  return false
+}
+
+/** 正文聚焦(G4-06):落到 path 上最近用过的那个实例(同篇多开时 = 刚被 openNote 激活的那个,G1-02)。
+ *  没有实例 / 实例的编辑器还没建好 → false(调用方 focusBodyWhenReady 据此重试几拍)。 */
+export function unifiedFocusBody(path: string): boolean {
+  for (const h of byRecency(path)) if (h.focusBody) return h.focusBody()
   return false
 }
 

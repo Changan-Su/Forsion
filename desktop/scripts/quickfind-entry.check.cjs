@@ -5,6 +5,8 @@
 //         源码里 `hotkey: 'mod+p'` 只许出现一次。
 //   G4-02 快速查找 / 模板选择器 / 命令面板的输入框没有 IME 守卫:拼音组字中按 Enter 直接打开第一条、↓ 移动选中、
 //         Esc 连面板一起关掉。合成 KeyboardEvent 的 isComposing 到不了 React,必须走 CDP Input.imeSetComposition。
+//   G4-06 从快速查找 / 日记进入**已有**笔记后焦点不在编辑器上,直接打字无效 —— openNote(focus:'body')经
+//         UnifiedPipeHandle.focusBody 把焦点给正文(不动选区);`?upage` 台架直调生产 openNote。
 // 用法:npm run check:quickfind(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/quickfind-entry.check.cjs
 //       ONLY=G4-02 只跑某一节。
 const fs = require('fs')
@@ -144,6 +146,37 @@ const qfState = (page) => page.evaluate(() => ({
       await page.waitForTimeout(250)
       const tp2 = await page.evaluate(() => window.__qf.useUiOverlay.getState().overlay)
       check('G4-02 对照:组字提交后 Enter 照常选中模板', tp2 === null, String(tp2))
+      await page.close()
+    })
+    await tryTest('G4-06', async () => {
+      const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 800 } })
+      page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+      await page.goto(`${BASE}?upage&useed=${encodeURIComponent('# A\n\nA 正文。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await page.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await page.waitForTimeout(400)
+      /** 焦点先在编辑器外的输入框(= 快速查找面板里打完字),再经生产 openNote 进入这篇已开着的笔记。 */
+      const enter = (focus) => page.evaluate(async (focus) => {
+        const i = document.createElement('input')
+        document.body.appendChild(i)
+        i.focus()
+        const nav = await import('/src/amadeusNav.ts')
+        i.remove()
+        await nav.openNote('Unified.md', focus ? { focus: 'body' } : undefined)
+        return window.__upage.probe.view().hasFocus()
+      }, focus)
+      const without = await enter(false)
+      check('G4-06 对照:不带 focus 参数进入 → 焦点不在正文(修前的全部入口)', without === false, String(without))
+      const withFocus = await enter(true)
+      check("G4-06 openNote(focus:'body') → 正文拿到焦点", withFocus === true, String(withFocus))
+      const w0 = await page.evaluate(() => window.__upage.writes.length)
+      await page.keyboard.type('zz')
+      await page.waitForTimeout(1300)
+      const typed = await page.evaluate((w0) => ({ doc: window.__upage.probe.view().state.doc.textContent, writes: window.__upage.writes.length - w0 }), w0)
+      check('G4-06 进入后直接打字落进正文并落盘', typed.doc.includes('zz') && typed.writes > 0, JSON.stringify(typed))
+      // 源码台账:快速查找的笔记项与日记入口必须带 focus:'body'(新建流不带 —— 新建聚焦标题)。
+      const qf = fs.readFileSync(path.join(SRC, 'quickFind.tsx'), 'utf8')
+      const tpl = fs.readFileSync(path.join(SRC, 'amadeusTemplates.ts'), 'utf8')
+      check("G4-06 快速查找笔记项 / 日记入口带 focus:'body'", /openNote\(p, \{[^}]*focus: 'body'/.test(qf) && /openNote\(path, \{ focus: 'body' \}\)/.test(tpl))
       await page.close()
     })
   } finally {

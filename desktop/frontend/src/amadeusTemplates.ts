@@ -101,7 +101,8 @@ export async function openDailyNote(): Promise<void> {
     await amadeus.writeTextFile(path, '', { create: true })
     await ps().refreshStructure()
   }
-  await openNote(path) // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记
+  // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记。focus:'body' = 进来就能打字(G4-06;新日记没套模板时同样要)。
+  await openNote(path, { focus: 'body' })
   if (existed) return
   const daily = ps().pages.find((p) => /^templates\/daily\.md$/i.test(p))
   if (!daily) return

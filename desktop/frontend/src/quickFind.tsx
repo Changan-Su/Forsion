@@ -152,7 +152,7 @@ function QuickFindInner() {
   const allItems = useMemo<Item[]>(() => {
     const notes: Item[] = pages
       .filter((p) => /\.md$/i.test(p))
-      .map((p) => ({ kind: 'note', id: p, title: base(p), sub: dirOf(p), open: (o) => void openNote(p, o) }))
+      .map((p) => ({ kind: 'note', id: p, title: base(p), sub: dirOf(p), open: (o) => void openNote(p, { ...o, focus: 'body' }) }))
     const dbItems: Item[] = dbs.map((d) => ({ kind: 'db', id: d.path, title: d.name || base(d.path), sub: dirOf(d.path), open: (o) => openDb(d.path, o) }))
     // 库里的非笔记文件(pdf/图片/画板/插件文件…)。.db 排掉 —— 上面那份带库名,更好认。
     const fileItems: Item[] = files

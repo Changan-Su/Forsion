@@ -2139,6 +2139,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         return true
       },
+      focusBody: () => {
+        if (pipe.readOnly || pipe.retired || pipe.dead) return true
+        const v = layer.getView()
+        if (!v) return false
+        // 不动选区(光标留在上次 / 文首),只把焦点给正文 —— PM 的 focus 自带 preventScroll,阅读位置不跳。
+        if (!v.hasFocus()) v.focus()
+        return true
+      },
       revealText: (needles, opts) => {
         const v = layer.getView()
         if (!v) return false
