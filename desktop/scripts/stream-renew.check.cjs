@@ -17,7 +17,8 @@
  * 负对照:NEGCTL=drop(hub 在第 2 次续订的回放里丢一帧 → 流式过程缺 token,须红);NEGCTL=fromseq0(续订时 fromSeq 被改回 0 →
  *   引擎从头回放 → 客户端不按 seq 去重、过程里出现重复,须红)。
  *
- * 前置同 check:remotechain(tangu-agent 的 dist;mobile 构建缺省复用 REMOTECHAIN_DIST / 临时目录那份)。
+ * 前置同 check:remotechain(tangu-agent 的 dist;mobile 构建按源码戳缓存,源码一变就现构建 —— 见 scripts/lib/phone-page.cjs 的 buildPhoneDist)。
+ * 世界的产物目录判红时留下,否则删掉(REMOTECHAIN_KEEP=1 一律留)。
  */
 'use strict'
 const fs = require('node:fs')
@@ -59,7 +60,7 @@ function llm(call) {
 
 async function main() {
   console.log(`K9 stream renew  total=${TOTAL_MS}ms idle=${IDLE_MS}ms tokens=${TOKENS}(匀速 ${STEADY})${NEGCTL ? `  NEGCTL=${NEGCTL}` : ''}`)
-  const dist = buildPhoneDist(process.env.REMOTECHAIN_DIST || path.join(os.tmpdir(), 'forsion-remotechain-dist'))
+  const dist = buildPhoneDist(process.env.REMOTECHAIN_DIST || undefined)
   const nativeCfg = JSON.parse(fs.readFileSync(path.join(dist, 'forsion-native.json'), 'utf8'))
   const home = await startStubEngine({ sessions: [], models: [{ id: 'cloud-model', name: 'Cloud Model', provider: 'forsion', contextWindow: 128000 }], agents: [{ slug: 'xyra', name: 'Tangu' }] })
   const world = await startRemoteWorld({
@@ -114,7 +115,7 @@ async function main() {
     console.log(`screenshots → ${SHOT_DIR}`)
   } finally {
     if (browser) await browser.close().catch(() => {})
-    await world.close()
+    await world.close({ keep: results.some((r) => !r.ok) })
     home.close()
   }
   const failed = results.filter((r) => !r.ok)
