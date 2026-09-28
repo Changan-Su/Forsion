@@ -45,12 +45,12 @@ function gotoWebLogin(force = false): void {
   location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-mobile' + (force ? '&logout=1' : ''))
 }
 
-/** 用 token + 云端 API 基址装 window.tangu(两条路共用)。login/logout 落点按 native/web 分。 */
-function setWindowTangu(apiBaseUrl: string, token: string, native: boolean): void {
+/** 用 token + 后端基址装 window.tangu(两条路共用)。login/logout 落点按 native/web 分。 */
+function setWindowTangu(backendUrl: string, token: string, native: boolean): void {
   // P1-K6 S1:两个基址分家。cloudApiBase = Forsion 云端 API(登录态 / 额度 / 名册 / 更新源 / 云桥),
   // backendUrl = 本端引擎。手机的 home 引擎就是云网关,所以今天两者同值;引擎切到「我的电脑」时只换 backendUrl。
-  const cloudApiBase = apiBaseUrl
-  const backendUrl = apiBaseUrl
+  // 云端读者一律读 cloudApiBase(源码守卫:desktop/frontend/src/services/engine/cloudBase.test.ts)。
+  const cloudApiBase = backendUrl
   const origFetch = window.fetch.bind(window)
   syncCloudAccountCache(cloudApiBase, token)
   const authListeners = new Set<() => void>()
