@@ -26,6 +26,8 @@
 //   H3 fm 补丁:A 有未落盘的字、B 是最近用过的 → 新属性与 A 的字都在盘上,零冲突副本零提示,两边都看得见新属性
 //   H4 A 标题回车改名、B 同篇跟着改指(先挂上):「进入正文」由 A 认领,接着打的字进 A、焦点在 A
 //   H5 两边都有未落盘的字时被别处改名:新路径上两份草稿分槽保存,A / B 各自恢复出自己的那份
+//   H6 fm 补丁 × 跟随者**自己也有未落盘的 fm 改动**(Codex 复核 P0):它那笔 fm 不许被当成外来补丁豁免 ——
+//      要么落盘、要么进冲突副本,绝不静默消失;新属性与写者的字同理
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -709,6 +711,22 @@ async function groupH(browser) {
     record('H5 两边都有未落盘的字时被别处改名:两份草稿分槽保存,A / B 各自恢复出自己的那份',
       drafts.length === 2 && drafts.some((x) => x.includes('AAA')) && drafts.some((x) => x.includes('BBB')) && bars.every(Boolean) && aGot.includes('AAA') && bGot.includes('BBB'),
       JSON.stringify({ drafts, bars, aGot, bGot }))
+    await p.close()
+  }
+  // H6
+  {
+    const p = await open(browser, SEED, '&udual')
+    await p.evaluate(() => window.__upage.probe2.setFm({ mine: 'B' })) // B:只有 fm 改动,还在防抖窗里
+    await typeIn(p, 0, '第一段。', 'AAA') // A:正文改动、最近用过 → 被选为补丁写者,B 跟随
+    await p.evaluate(() => window.__upage.lifecycle.unifiedPatchFm('Unified.md', { status: 'done' }))
+    await wait(3000)
+    const d = await disk(p)
+    const c = await copies(p)
+    const everywhere = [d, ...c.map(([, v]) => v)]
+    const kept = (x) => everywhere.some((t) => t.includes(x))
+    record('H6 fm 补丁 × 跟随者自己有未落盘的 fm 改动:它的 fm、新属性、写者的字都没有静默消失(盘上或冲突副本)',
+      kept('mine: B') && d.includes('status: done') && kept('第一段。AAA'),
+      JSON.stringify({ d, copies: c.map(([k, v]) => [k, v]) }))
     await p.close()
   }
 }

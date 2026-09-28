@@ -263,10 +263,12 @@ interface Pipe {
   readOnly: boolean
   /** 本实例的草稿槽位(= 所属 leaf,见 writeSafety 的 draftKey;评审 G1-02 返修)。同样挂在 pipe 上(理由同 readOnly)。 */
   slot: string | null
-  /** 同篇另一个实例替两边写的 fm 补丁(unifiedPatchFm 的 follow,G1-02 返修):pipe.fm 恰是它时,isPristine 不把 fm
-   *  这一半算成本实例的改动 —— 否则本实例卸载冲洗 / CAS 让位时会拿「旧正文 + 新 fm」抢着写,盖掉写者的字。
+  /** 同篇另一个实例替两边写的 fm 补丁(unifiedPatchFm 的 follow,G1-02 返修),多次 follow 累积。isPristine 只豁免
+   *  **这部分**:基线 fm 打上它恰好等于 pipe.fm → fm 这一半不算本实例的改动(否则本实例卸载冲洗 / CAS 让位时会拿
+   *  「旧正文 + 新 fm」抢着写,盖掉写者的字)。本实例自己的 fm 改动不在里面,照旧算改动(Codex 复核 P0:早先记成
+   *  「补丁后的整份 fm」,把本实例没落盘的 fm 修改一并豁免了,回灌随即用盘上版本整份换掉,既不保存也不留副本)。
    *  回灌采纳盘上版本、本实例写成功后清掉。 */
-  peerFm: string | null
+  peerPatch: Record<string, unknown> | null
 }
 
 interface HostApi {
@@ -951,7 +953,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerFm: null }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerPatch: null }
   }
   const pipe = pipeRef.current
   /** 最近一次被用户用到的时刻(评审 G1-02):焦点 / 指针进入本实例、或所属 leaf 成为活动面板时记一笔。
@@ -1408,8 +1410,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。 */
   const isPristine = (): boolean => {
     const base = splitFm(pipe.lastSaved)
-    // 同篇另一个实例正替两边写的 fm 补丁(peerFm)不算本实例的改动(G1-02 返修,见 Pipe.peerFm)。
-    if (base.fmText !== pipe.fm && pipe.fm !== pipe.peerFm) return false
+    // 同篇另一个实例正替两边写的 fm 补丁不算本实例的改动(G1-02 返修,见 Pipe.peerPatch)—— 只豁免那一份补丁。
+    if (base.fmText !== pipe.fm && (pipe.peerPatch == null || patchFm(base.fmText, pipe.peerPatch) !== pipe.fm)) return false
     if (base.body === pipe.body) return true
     if (layoutLineOf(pipe.fm) != null || canvasLineOf(pipe.fm) != null) return false
     const canon = hostApi.current?.canonical(base.body)
@@ -1476,7 +1478,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   /** 写成功:收掉「未保存」;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
   const noteWriteOk = (written: string): void => {
-    pipe.peerFm = null // 自己写成功:盘上 fm 已是本实例的,别人的补丁标记作废
+    pipe.peerPatch = null // 自己写成功:盘上 fm 已是本实例的,别人的补丁记录作废
     settleUnsaved(written)
     announceUnifiedWrite(path, pipe)
   }
@@ -1703,7 +1705,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 结构键行变没变要在换 pipe.fm **之前**判(Codex P0-4)。
         const structChanged = layoutLineOf(fmText) !== layoutLineOf(pipe.fm) || canvasLineOf(fmText) !== canvasLineOf(pipe.fm)
         pipe.fm = fmText // fold 闭包现读 pipe.fm:此行必须先于 applyBody 的重 parse(advisor)
-        pipe.peerFm = null // 采纳了盘上版本:同篇写者替我们写的那笔已经在里面了
+        pipe.peerPatch = null // 采纳了盘上版本:同篇写者替我们写的那笔已经在里面了
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
           pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
@@ -1886,9 +1888,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         if (pipe.readOnly || pipe.retired || pipe.dead) return null
         if (follow) {
           // G1-02 返修:同篇另一个实例在写这一笔 —— 只并进本实例的 fm(chrome / 源码草稿跟上),不写;
-          // 记成 peerFm:写者落盘后本实例经 peerWrote 回灌对齐,期间卸载 / CAS 让位都不拿旧正文抢着写。
+          // 记进 peerPatch(只记外来这一份,本实例自己的 fm 差异不混进去):写者落盘后本实例经 peerWrote 回灌对齐,
+          // 期间卸载 / CAS 让位都不拿旧正文抢着写;本实例若另有自己的改动,照旧按冲突策略处理。
           pipe.fm = patchFm(pipe.fm, patch)
-          pipe.peerFm = pipe.fm
+          pipe.peerPatch = { ...(pipe.peerPatch ?? {}), ...patch }
           setFmVer((v) => v + 1)
           syncSrcDraft()
           return Promise.resolve()
@@ -2038,6 +2041,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       return writeNow()
     }
     probe.fmState = () => ({ fm: pipe.fm, body: pipe.body })
+    probe.setFm = (patch: Record<string, unknown>) => setFm(patch, false) // 仪器造「本实例有未落盘的 fm 改动」(防抖写)
     probe.view = () => layer.getView() // 仪器直驱 PM 事务(分栏 spike/检查用)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probe])
