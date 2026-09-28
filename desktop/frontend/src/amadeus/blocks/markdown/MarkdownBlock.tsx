@@ -93,6 +93,7 @@ import { getRecentPages } from '../../lib/recents'
 import { fdDirOf } from '../../lib/fd'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
+import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
@@ -1158,7 +1159,15 @@ export function MilkdownInner({
       const editor = getInstance()
       editor?.action((ctx) => {
         const view = ctx.get(editorViewCtx)
-        view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
+        const { doc } = view.state
+        if (w.closeAt !== undefined && doc.textBetween(w.closeAt, Math.min(w.closeAt + 2, doc.content.size)) === ']]') {
+          // 在已闭合链接里改目标名(L-02):只替换 [from, closeAt),保留原 `#锚点`/`|别名` 与 `]]`,光标落到 `]]` 之后。
+          const inner = retargetWikiInner(doc.textBetween(w.to, w.closeAt, undefined, '￼'), name)
+          const tr = view.state.tr.insertText(inner, w.from, w.closeAt)
+          view.dispatch(tr.setSelection(TextSelection.create(tr.doc, w.from + inner.length + 2)))
+        } else {
+          view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
+        }
         view.focus()
       })
     }

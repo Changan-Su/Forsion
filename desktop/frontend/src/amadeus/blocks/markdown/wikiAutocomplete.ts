@@ -32,6 +32,9 @@ export interface WikiQuery {
   top: number
   /** 光标行上沿(视口 px):下方放不下时菜单翻到这条线之上,不盖住正在打字的行。 */
   anchorTop: number
+  /** 仅 [[:光标所在链接**已闭合**时,收尾 `]]` 的文档位置 —— 选中候选只替换目标名这一段
+   *  (见 wikiRetarget),不再插入第二个 `]]`。缺省 = 新写的未闭合链接。 */
+  closeAt?: number
 }
 
 export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
@@ -62,6 +65,9 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             const nextOpen = line.indexOf('[[')
             const closed = close >= 0 && (nextOpen < 0 || close < nextOpen)
             if (closed && (!prevState || prevState.doc.eq(view.state.doc))) return report(null)
+            // 已闭合链接里光标已越过目标名(在 `#锚点` / `|别名` 里打字)→ 不给目标候选,
+            // 否则选中会拿页面名盖掉用户正在改的锚点/别名(L-02)。
+            if (closed && /[#|]/.test(q)) return report(null)
             const from = $head.start() + open + 2
             const to = selection.head
             let coords: { left: number; top: number; bottom: number }
@@ -70,7 +76,9 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             } catch {
               return report(null)
             }
-            report({ query: q, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
+            // textBetween 的 leaf 占位是 1 字符 = 1 位置,块内偏移与文档位置一一对应。
+            const closeAt = closed ? to + close : undefined
+            report({ query: q, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top, closeAt })
           },
         }),
       }),
