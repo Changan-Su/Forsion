@@ -2248,6 +2248,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     probe.fmState = () => ({ fm: pipe.fm, body: pipe.body })
     probe.setFm = (patch: Record<string, unknown>) => setFm(patch, false) // 仪器造「本实例有未落盘的 fm 改动」(防抖写)
     probe.view = () => layer.getView() // 仪器直驱 PM 事务(分栏 spike/检查用)
+    probe.serializeNow = () => hostApi.current?.serializeNow() ?? null // 与 200ms 监听同一条落盘序列化链(check:editorperf 计时)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probe])
 
