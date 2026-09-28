@@ -19,6 +19,7 @@
 //   F6 离开确认只在非 Electron 宿主、且真有写不进去的内容时拦 · F7 失败存草稿后又打字、重试成功 → 旧草稿删掉
 //   F8/F9 失败中把改动撤回到盘上那版(恢复信号到达 / 没等重试就切走)→ 条收掉、旧草稿删掉、切回不提示恢复
 //   F10 同上、随后外部改动被回灌采纳(收口 N-4)→ 条收掉、旧草稿删掉
+//   F11 改名 IPC 窗口里打字(收口 N-5)→ 退休实例卸载不在旧路径留孤儿草稿,同名新笔记不误弹恢复
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -457,6 +458,40 @@ async function groupF(browser) {
     r.barsBack = await p.evaluate(() => [...document.querySelectorAll('.unified-page [data-save]')].map((e) => e.dataset.save))
     record('F10 写失败后撤回、外部改动随后被回灌采纳 → 条收掉、旧草稿删掉、切回不提示恢复;盘上是外部那版、零写入零副本',
       r.k1.length === 1 && r.bars.length === 0 && r.k2.length === 0 && r.shown && r.d === EXT && r.dw === 0 && r.copies === 0 && r.barsBack.length === 0,
+      JSON.stringify(r))
+    await p.close()
+  }
+  // F11(收口 N-5):改名 IPC 窗口里又打了字 → 字按新路径补写(doRename),本实例退休;退休实例卸载冲洗过去不看
+  //  retired:本地 ≠ 旧基线 → 在**旧路径**存一份草稿,writeNow 对退休实例不写、这份草稿永不删除 → 之后同名位置
+  //  出现新笔记(又一篇 Untitled.md 之类)就误弹「恢复草稿」。要求:旧路径零草稿、新笔记不弹条、字在新路径上。
+  //  负对照:卸载冲洗摘掉 retired 分支 → 红。
+  {
+    const p = await open(browser, '# T\n\npara1 AAA\n')
+    await p.evaluate(() => {
+      localStorage.clear()
+      const orig = window.amadeus.renamePageFile
+      window.amadeus.renamePageFile = (from, next) => new Promise((r) => setTimeout(() => r(orig(from, next)), 900)) // 改名 IPC 窗口
+    })
+    await p.click('.amx-title-input')
+    await p.keyboard.press('Meta+A')
+    await p.keyboard.type('Meeting', { delay: 30 })
+    await p.keyboard.press('Enter')
+    await wait(150) // 进了 IPC 窗口:doRename 已过 writeNow / flushAllScopes,在等 renamePageFile
+    await typeIn(p, 0, 'AAA', ' INWINDOW')
+    await p.waitForFunction(() => window.__upage.vault.has('Meeting.md'), null, { timeout: 5000 }).catch(() => {})
+    await wait(1500) // 改名收尾 + 重挂 + 退休实例卸载冲洗
+    const r = {
+      keys: await draftKeys(p),
+      moved: await p.evaluate(() => window.__upage.vault.get('Meeting.md') ?? null),
+      oldGone: await p.evaluate(() => !window.__upage.vault.has('Unified.md')),
+    }
+    // 用户可见的症状:同名位置出现一篇新笔记 → 不许弹「恢复草稿」
+    await p.evaluate(() => window.__upage.switchFile('Unified.md', '# Fresh\n\nnew note\n'))
+    await wait(1200)
+    r.bars = await p.evaluate(() => [...document.querySelectorAll('.unified-page [data-save]')].map((e) => e.dataset.save))
+    r.keys2 = await draftKeys(p)
+    record('F11 改名 IPC 窗口里打字:字落新路径、旧路径零草稿,同名新笔记不误弹「恢复草稿」',
+      typeof r.moved === 'string' && r.moved.includes('AAA INWINDOW') && r.oldGone && r.keys.length === 0 && r.bars.length === 0 && r.keys2.length === 0,
       JSON.stringify(r))
     await p.close()
   }

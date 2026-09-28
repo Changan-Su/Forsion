@@ -1357,8 +1357,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
   const noteWriteFailed = (error: unknown): void => {
-    pipe.stashed = composeFm(pipe.fm, pipe.body)
-    stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved)
+    // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
+    if (!pipe.retired) {
+      pipe.stashed = composeFm(pipe.fm, pipe.body)
+      stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved)
+    }
     if (!pipe.failed) {
       pipe.failed = true
       setSaveFailed(true)
@@ -1675,6 +1678,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       if (pipe.timer) clearTimeout(pipe.timer)
       pipe.timer = null
       if (pipe.readOnly) return
+      // 退休实例(改名 / 删除 / 移动之后,收口 N-5):这条路径已不归本实例 —— writeNow 对它一个字都不写,在这里存草稿
+      // 就是一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。改名 IPC 窗口里打的字由 doRename 按新路径
+      // 补写;本实例此前写失败存下的那份也一并清掉(只删自己存的,别的会话留的不碰)。
+      if (pipe.retired) {
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed)
+        pipe.stashed = null
+        return
+      }
       const text = composeFm(pipe.fm, pipe.body)
       // ⚠️ 下面两个同步出口都拿 lastSaved 比,只在**本实例没有写盘在跑**时作数(返修 R1):在途那发 ack 回来会把
       //    lastSaved 改成它写的那份。ack 前用户撤回到旧基线再切走 → 此刻「本地 = lastSaved / 没改动」,直接 return

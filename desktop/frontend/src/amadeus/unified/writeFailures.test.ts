@@ -189,3 +189,49 @@ describe('unified editor write safety (review 2026-09-27 D-03 / D-04 / G1-01)', 
     expect(h.pipe.writing).toBe(0)
   })
 })
+
+// 收口 N-5:退休实例(改名 / 删除 / 移动之后)的路径已不归它 —— writeNow 对它一个字都不写,这时存草稿就是旧路径上
+// 一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。卸载冲洗与写失败两个存草稿的口子都要看 retired。
+// 真浏览器版:check:unifiedcas F11(改名 IPC 窗口里打字)。
+describe('retired instances never leave drafts behind (N-5)', () => {
+  const unmountFlush = source.slice(source.indexOf('    const flush = (): void => {\n      syncFromEditor()'), source.indexOf('    const onUnload ='))
+  const noteFailed = source.slice(source.indexOf('  const noteWriteFailed = '), source.indexOf('  /** 本地与盘上重新一致'))
+  function load() {
+    const pipe = { retired: true, readOnly: false, fm: '', body: 'Typed during the rename IPC window', lastSaved: 'Old note', pending: true, timer: null as unknown, writing: 0, stashed: null as string | null, failed: false, retryTimer: null as unknown, retryN: 0, dead: false }
+    const stubs = {
+      stashDraft: vi.fn(), clearDraft: vi.fn(), writeNow: vi.fn(async () => {}), settleUnsaved: vi.fn(), isPristine: vi.fn(() => false),
+      setSaveFailed: vi.fn(), toastSaveFailed: vi.fn(),
+    }
+    const fns = runInNewContext(transform(`${unmountFlush}\n${noteFailed}\n({ flush, noteWriteFailed })`, { transforms: ['typescript'] }).code, {
+      pipe, path: 'Untitled.md', vaultRoot: '/vault', composeFm, syncFromEditor() {}, clearTimeout, setTimeout, SAVE_RETRY_MS: [2000], ...stubs,
+    }) as { flush: () => void; noteWriteFailed: (e: unknown) => void }
+    return { pipe, ...stubs, ...fns }
+  }
+
+  it('unmount flush of a retired instance stores no draft, writes nothing, and clears the draft it stashed earlier', () => {
+    const h = load()
+    h.pipe.stashed = 'Stashed after an earlier failed save'
+    h.flush()
+    expect(h.stashDraft).not.toHaveBeenCalled()
+    expect(h.writeNow).not.toHaveBeenCalled()
+    expect(h.clearDraft).toHaveBeenCalledWith('/vault', 'Untitled.md', 'Stashed after an earlier failed save')
+    expect(h.pipe.stashed).toBeNull()
+  })
+
+  it('a save that fails after retirement still reports the failure but stores no draft at the old path', () => {
+    const h = load()
+    h.noteWriteFailed(new Error('ENOENT'))
+    expect(h.stashDraft).not.toHaveBeenCalled()
+    expect(h.toastSaveFailed).toHaveBeenCalledTimes(1)
+  })
+
+  it('control: a live instance still stashes its unsaved text on unmount and on a failed save', () => {
+    const h = load()
+    h.pipe.retired = false
+    h.flush()
+    expect(h.stashDraft).toHaveBeenCalledWith('/vault', 'Untitled.md', composeFm('', 'Typed during the rename IPC window'), 'Old note')
+    expect(h.writeNow).toHaveBeenCalledTimes(1)
+    h.noteWriteFailed(new Error('Offline'))
+    expect(h.stashDraft).toHaveBeenCalledTimes(2)
+  })
+})
