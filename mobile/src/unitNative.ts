@@ -30,7 +30,8 @@ const relayNative: RelayNative = {
   cancel: (o) => ForsionUnit.cancel(o),
 }
 
-export type UnitSelf = { registered: boolean; unitId: string | null; name: string | null; relay: RelayState }
+/** relay:'native_only' = 不是安卓 App(web dev / preview 路径);'unsupported' = 原生缺席或启动断言不成立。 */
+export type UnitSelf = { registered: boolean; unitId: string | null; name: string | null; relay: RelayState | 'native_only' }
 export type UnitEnsure = { ok: true; unitId: string; name: string } | { ok: false; code: string }
 
 export interface UnitBridge {
@@ -49,7 +50,7 @@ export function createUnitBridge(apiBase: string, native: boolean, origin: strin
   if (!native) {
     return {
       relay: createRelayFetch(null, apiBase, { state: async () => 'unsupported', origin }),
-      unitSelf: async () => ({ registered: false, unitId: null, name: null, relay: 'unsupported' }),
+      unitSelf: async () => ({ registered: false, unitId: null, name: null, relay: 'native_only' }),
       unitEnsureSelf: async () => ({ ok: false, code: 'native_only' }),
       unitForgetSelf: async () => ({ ok: false }),
     }

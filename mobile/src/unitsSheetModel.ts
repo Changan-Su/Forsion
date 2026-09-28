@@ -1,0 +1,177 @@
+/**
+ * UnitsSheet「在哪运行」的纯模型(P1-K8,规格 K8 §3.7;状态口径 = services/deviceStatus.ts,INTEGRATION R-22)。
+ * 无 React / 无 capacitor 依赖(web 手机形态也 import 得到;node 单测 scripts/units-sheet-model.test.cjs)。
+ *
+ * - runRows:只列 `kind === 'desktop'` 且不是本机的设备(手机没有引擎、也没有设备页;INTEGRATION R-28 把 K1 的滤手机并到这里)。
+ *   ⚠️ kind 缺席按 desktop:server 2.3.23 之前的名册不回 kind(生产今天就是这样),严格滤会把所有电脑一起滤掉。
+ * - runOn:点一台电脑之后的流程 —— 懒登记本机 → 问那台电脑认不认这台手机(`GET /unit/remote-access`,经原生中继带票)
+ *   → 需要就发起确认并每 2s 轮询(≤ 120s)→ 探一次引擎(`GET /engine/agent/sessions`,远端允许的基础档)→ 生效。
+ *   生效 = 调注入的 select(ref);今天 UnitsSheet 里那一个 selectRunLocation 是空操作(TODO(K6-S2))。
+ */
+import type { UnitInfo } from '@/types'
+import type { TargetRef } from '@/services/engine/target'
+import { deviceStatus, type DeviceStatus, type ProbeResult, type StickyRefusal } from '@/services/deviceStatus'
+
+export interface RunRow {
+  id: string
+  name: string
+  icon: string | null
+  platform: string | null
+  status: DeviceStatus
+  /** 设备自报「引擎在跑」(还没探过时的提示,不等于可用)。 */
+  capsReady: boolean
+  selected: boolean
+}
+
+/** 名册里能当运行位置 / 能打开设备页的:电脑(kind 缺席按电脑),且不是本机。 */
+export function isRunnableUnit(u: Pick<UnitInfo, 'id' | 'kind'>, selfId: string | null): boolean {
+  return (u.kind ?? 'desktop') === 'desktop' && u.id !== selfId
+}
+
+export function runRows(
+  units: UnitInfo[],
+  selfId: string | null,
+  current: TargetRef,
+  probes: Readonly<Record<string, ProbeResult | undefined>> = {},
+  sticky: Readonly<Record<string, StickyRefusal | undefined>> = {},
+  now: number = Date.now(),
+): RunRow[] {
+  return units.filter((u) => isRunnableUnit(u, selfId)).map((u) => ({
+    id: u.id,
+    name: u.name,
+    icon: u.icon ?? null,
+    platform: u.platform ?? null,
+    status: deviceStatus(u, probes[u.id] ?? null, sticky[u.id], now),
+    capsReady: !!(u.online && u.capsLive && u.caps?.engine === 'ready'),
+    selected: current.kind === 'unit' && current.unitId === u.id,
+  }))
+}
+
+/** 行上的状态文案键(unitm.*;devstatus.* 是 K7 的命名空间,这里不注册以免集成时撞键)。 */
+export function statusKey(row: Pick<RunRow, 'status' | 'capsReady'>, probing: boolean): string {
+  switch (row.status) {
+    case 'checking':
+      if (probing) return 'unitm.checking'
+      return row.capsReady ? 'unitm.ready' : 'unitm.unknown'
+    case 'ready': return 'unitm.ready'
+    case 'starting': return 'unitm.starting'
+    case 'engineStopped': return 'unitm.engineOff'
+    case 'noEngine': return 'unitm.noEngine'
+    case 'offline': return 'unitm.offline'
+    case 'unreachable': return 'unitm.unreachable'
+    case 'remoteOff': return 'unitm.remoteOff'
+    case 'awaitingConfirm': return 'unitm.confirmPending'
+    case 'denied': return 'unitm.confirmDenied'
+  }
+}
+
+/** 这台手机自身的状况(不是某台电脑的):显示成弹层上方的一条横幅。 */
+export type PhoneIssue = 'nativeOnly' | 'callerUnavailable' | 'callerUnsupported'
+
+export function phoneIssueOfCode(code: string | undefined | null): PhoneIssue {
+  if (code === 'native_only') return 'nativeOnly'
+  if (code === 'caller_unsupported' || code === 'CALLER_UNSUPPORTED') return 'callerUnsupported'
+  return 'callerUnavailable'
+}
+
+export type RunOnOutcome =
+  | { kind: 'selected' }
+  | { kind: 'phone'; issue: PhoneIssue }
+  | { kind: 'device'; probe?: ProbeResult; sticky?: StickyRefusal }
+  | { kind: 'cancelled' }
+
+export interface RunOnDeps {
+  ensureSelf(): Promise<{ ok: true; unitId: string; name: string } | { ok: false; code: string }>
+  /** 经 window.fetch(中继面由原生带票)。网络错抛出。 */
+  fetchJson(url: string, init?: RequestInit): Promise<{ status: number; json: unknown }>
+  /** 生效:切运行位置。UnitsSheet 注入它那一个 selectRunLocation(今天空操作,TODO(K6-S2))。 */
+  select(ref: TargetRef): void
+  sleep(ms: number): Promise<void>
+  now(): number
+  /** 过程中的状态更新(等待确认时显示「请在 X 上允许这台手机」)。 */
+  progress?(p: { probe?: ProbeResult; sticky?: StickyRefusal }): void
+}
+
+export const CONFIRM_POLL_MS = 2000
+export const CONFIRM_TIMEOUT_MS = 120_000
+
+type AccessStatus = { remoteSessions?: boolean; caller?: string }
+
+function failOf(status: number, json: unknown): ProbeResult {
+  const o = (json && typeof json === 'object' ? json : {}) as { code?: unknown; state?: unknown }
+  return { ok: false, status, ...(typeof o.code === 'string' ? { code: o.code } : {}), ...(typeof o.state === 'string' ? { state: o.state } : {}) }
+}
+
+function callerCodeOf(json: unknown): string | null {
+  const c = (json as { code?: unknown } | null)?.code
+  return c === 'CALLER_UNAVAILABLE' || c === 'CALLER_UNSUPPORTED' ? c : null
+}
+
+/**
+ * 点一台电脑。signal 中止(弹层关了 / 点了别的)→ cancelled,不调 select。
+ * 任何一步拿到中继合成的 503 CALLER_* → 手机级横幅(换哪台电脑都一样),不记到这台电脑头上。
+ */
+export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, signal?: AbortSignal): Promise<RunOnOutcome> {
+  const aborted = (): boolean => !!signal?.aborted
+  const self = await deps.ensureSelf()
+  if (aborted()) return { kind: 'cancelled' }
+  if (!self.ok) return { kind: 'phone', issue: phoneIssueOfCode(self.code) }
+
+  const base = `${apiBase}/units/${unitId}/proxy`
+  const get = async (path: string, init?: RequestInit): Promise<{ status: number; json: unknown } | null> => {
+    try { return await deps.fetchJson(base + path, { ...init, signal }) } catch { return null }
+  }
+
+  // ① 那台电脑认不认这台手机(K4 的状态面;老桌面没有这条路由 → 404,跳过,交给引擎探针)
+  let access = await get('/unit/remote-access')
+  if (aborted()) return { kind: 'cancelled' }
+  if (access === null) return { kind: 'device', probe: { ok: false, status: 0 } }
+  if (callerCodeOf(access.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(access.json)) }
+  if (access.status === 200) {
+    let s = (access.json ?? {}) as AccessStatus
+    const refusal = (st: AccessStatus): RunOnOutcome | null => {
+      if (st.remoteSessions === false) return { kind: 'device', sticky: { code: 'REMOTE_SESSIONS_OFF', at: deps.now() } }
+      if (st.caller === 'denied') return { kind: 'device', sticky: { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'denied', at: deps.now() } }
+      return null
+    }
+    const r0 = refusal(s)
+    if (r0) return r0
+    if (s.caller === 'unconfirmed') {
+      const req = await get('/unit/remote-access/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      if (aborted()) return { kind: 'cancelled' }
+      if (req && callerCodeOf(req.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(req.json)) }
+      if (req && req.status === 200) s = (req.json ?? {}) as AccessStatus
+    }
+    if (s.caller === 'pending' || s.caller === 'unconfirmed') {
+      const pending: StickyRefusal = { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'pending', at: deps.now() }
+      deps.progress?.({ sticky: pending })
+      const deadline = deps.now() + CONFIRM_TIMEOUT_MS
+      for (;;) {
+        const r = refusal(s)
+        if (r) return r
+        if (s.caller !== 'pending' && s.caller !== 'unconfirmed') break
+        if (deps.now() >= deadline) return { kind: 'device', sticky: { ...pending, at: deps.now() } }
+        await deps.sleep(CONFIRM_POLL_MS)
+        if (aborted()) return { kind: 'cancelled' }
+        access = await get('/unit/remote-access')
+        if (aborted()) return { kind: 'cancelled' }
+        if (access === null) return { kind: 'device', probe: { ok: false, status: 0 } }
+        if (callerCodeOf(access.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(access.json)) }
+        if (access.status !== 200) return { kind: 'device', probe: failOf(access.status, access.json) }
+        s = (access.json ?? {}) as AccessStatus
+      }
+    }
+  } else if (access.status !== 404) {
+    return { kind: 'device', probe: failOf(access.status, access.json) }
+  }
+
+  // ② 探一次引擎(读会话列表 = 基础档;离线 / 引擎没起在这里现形)
+  const probe = await get('/engine/agent/sessions')
+  if (aborted()) return { kind: 'cancelled' }
+  if (probe === null) return { kind: 'device', probe: { ok: false, status: 0 } }
+  if (callerCodeOf(probe.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(probe.json)) }
+  if (probe.status < 200 || probe.status >= 300) return { kind: 'device', probe: failOf(probe.status, probe.json) }
+  deps.progress?.({ probe: { ok: true } })
+  deps.select({ kind: 'unit', unitId })
+  return { kind: 'selected' }
+}

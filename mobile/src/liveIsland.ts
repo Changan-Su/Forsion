@@ -27,7 +27,7 @@ registerMessages({
   'island.thinking': { zh: '思考中…', en: 'Thinking…' },
   'island.writing': { zh: '正在回复…', en: 'Writing a reply…' },
   'island.tool': { zh: '正在执行 {tool}', en: 'Running {tool}' },
-  'island.approval': { zh: '等你批准:{tool}', en: 'Needs your approval: {tool}' },
+  'island.approval': { zh: '等你批准：{tool}', en: 'Needs your approval: {tool}' },
   'island.inquiry': { zh: '有个问题等你回答', en: 'Waiting for your answer' },
   'island.chipApproval': { zh: '待审批', en: 'Approve' },
   'island.chipInquiry': { zh: '待回答', en: 'Reply' },
