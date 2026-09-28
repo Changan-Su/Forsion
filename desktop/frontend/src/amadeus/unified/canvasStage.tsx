@@ -882,7 +882,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     if (!host || !view) return
     // ⚠️ 白板元素也算内容。只量卡片和主卡的话,右边的形状/连线会被裁在舞台外 —— 几何断言全绿,
     //    截图一看就露(DESIGN.md §8 说的就是这种)。
-    const boxes = [...host.querySelectorAll('.amx-ucard, .amx-el-shape, .amx-el-conn, .amx-el-label'), view.dom].map((el) => (el as HTMLElement).getBoundingClientRect())
+    // Frame 连同它悬在框外上沿的标题条也算(V-03):缩略图一直算它,这里漏了 —— 只有 Frame 的区域
+    // 开卷 / 点「适应内容」都整片落在视野外。
+    const boxes = [...host.querySelectorAll('.amx-ucard, .amx-el-shape, .amx-el-frame, .amx-el-frame-bar, .amx-el-conn, .amx-el-label'), view.dom].map((el) => (el as HTMLElement).getBoundingClientRect())
     if (!boxes.length) return
     const { x, y, z } = vpRef.current
     const hr = host.getBoundingClientRect()

@@ -87,6 +87,7 @@
 //   C92 画布键盘缩放 Cmd+=/-/0 + Shift+1 适应,舞台焦点才接管;HUD 百分比 = 重置 100% 按钮(V-06)
 //   —— 波次 2(评审 2026-09-27 画布打磨)在 wave2();`UCANVAS_ONLY=w2` 只跑这一段(调试 / 负对照用)——
 //   C93 Frame 里用卡片工具 / 双击建卡:留在框内,只避让卡片不避让 Frame(V-02)
+//   C94 开卷自动适应与「适应内容」把 Frame(连同框外上沿的标题条)框进视野(V-03)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -271,6 +272,42 @@ async function wave2(browser) {
     in93(b93a) && clear93, JSON.stringify({ card: b93a, k2: k293, frame: F93 }))
   record('C93b Frame 里双击空白建卡:落在指针处、留在框内',
     in93(b93b) && b93b.x === 700 && b93b.y === 306, JSON.stringify({ card: b93b, want: { x: 700, y: 306 } }))
+
+  // ── C94 适应视图把 Frame 算作内容(V-03)──────────────────────────────────────────
+  //  修前:fit 只量卡片 / 形状 / 连线的 DOM,漏了 `.amx-el-frame` —— 只有 Frame 的远处区域开卷与点「适应内容」
+  //  都落在视野外(缩略图却一直算它)。对照组:同位置的小矩形本来就能框进来。
+  const mk94 = (els) => [
+    '---', 'amadeus_schema: amadeus.page/4',
+    `amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[],"elements":${JSON.stringify(els)}}`,
+    '---', '', '# 画布页', '', '主卡一段。', '',
+  ].join('\n')
+  const FRAME94 = { id: 'f1', type: 'frame', x: 2400, y: 1600, w: 600, h: 420, title: '远处的区域' }
+  const RECT94 = { id: 's1', type: 'shape', shape: 'rect', x: 2450, y: 1700, w: 100, h: 80 }
+  const vis94 = (pg) => pg.evaluate(() => {
+    const s = document.querySelector('.amx-stage').getBoundingClientRect()
+    const inV = (r) => !!r && r.left >= s.left - 1 && r.top >= s.top - 1 && r.right <= s.right + 1 && r.bottom <= s.bottom + 1
+    return { frame: inV(document.querySelector('.amx-el-frame')?.getBoundingClientRect()), bar: inV(document.querySelector('.amx-el-frame-bar')?.getBoundingClientRect()) }
+  })
+  const out94 = {}
+  for (const [name, els] of [['frame', [FRAME94]], ['frame+rect', [FRAME94, RECT94]]]) {
+    const pg = await open(browser, mk94(els))
+    await pg.waitForTimeout(900)
+    const opened = await vis94(pg)
+    // 先平移走,再点「适应内容」:确认按钮本身在重算
+    await pg.keyboard.down('Alt')
+    const c94 = await pg.evaluate(() => { const r = document.querySelector('.amx-stage').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+    await pg.mouse.move(c94.x, c94.y); await pg.mouse.down(); await pg.mouse.move(c94.x + 300, c94.y + 200, { steps: 6 }); await pg.mouse.up()
+    await pg.keyboard.up('Alt')
+    await pg.waitForTimeout(200)
+    const panned = await vis94(pg)
+    await pg.click('.amx-stage-hud button[title="适应内容"]')
+    await pg.waitForTimeout(400)
+    out94[name] = { opened, panned, fitted: await vis94(pg) }
+    await pg.close()
+  }
+  const all94 = (v) => v.frame && v.bar
+  record('C94 开卷自动适应与「适应内容」都把 Frame 连同标题条框进视野(只有 Frame / Frame 里有小矩形两种)',
+    Object.values(out94).every((r) => all94(r.opened) && all94(r.fitted) && !all94(r.panned)), JSON.stringify(out94))
 }
 
 async function main() {
