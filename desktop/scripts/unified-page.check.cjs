@@ -2228,6 +2228,75 @@ async function main() {
     await pg.close()
   }
 
+  // P29:光标 / 滚动的本机记忆(评审 C-23:只有进程内的滚动记忆 —— 换篇回来光标丢了、焦点不在编辑器里直接打字无效;
+  //  重载 / 重启 / 渲染进程崩溃重载后连滚动也没了)。&upane 生产壳(.amx-pane 滚动)。
+  //  a 点进第 50 段、滚到中段 → 重载页面:滚动与光标都回来,焦点在正文(焦点无主时才给);
+  //  b 换篇再切回:同上,接着打字就落在第 50 段;
+  //  c 离开期间这篇被改得对不上(光标附近的字变了)→ 光标不回放(不把光标放到别的字上);
+  //  d 焦点握在编辑器外(仿侧栏输入框)时换篇回来:光标照样回放,但不抢焦点。
+  //  负对照:caretMemory 插件摘掉 + 滚动记忆不落本机 → a、b 红(已实跑)。
+  {
+    const long = '# 文首\n\n' + Array.from({ length: 80 }, (_, i) => `第 ${i} 段 MARK${i} 填充。`).join('\n\n') + '\n'
+    const url = `${URL}?upage&upane&useed=${encodeURIComponent(long)}`
+    const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 800 } })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(url, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const st = () => pg.evaluate((s) => {
+      const v = window.__upage.probe.view()
+      const pane = document.querySelector('.amx-pane')
+      return { scroll: Math.round(pane.scrollTop), para: v.state.selection.$from.parent.textContent, focused: document.activeElement === document.querySelector(s) }
+    }, PM)
+    const clickPara = async (text) => {
+      await pg.evaluate((t) => { const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent.startsWith(t)); p.scrollIntoView({ block: 'center' }) }, text)
+      await pg.waitForTimeout(150)
+      const at = await pg.evaluate((t) => { const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent.startsWith(t)); const r = p.getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } }, text)
+      await pg.mouse.click(at.x, at.y)
+      await pg.waitForTimeout(700) // 光标 300ms + 落本机 500ms 的防抖
+    }
+    await clickPara('第 50 段 ')
+    const a0 = await st()
+    await pg.reload({ waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(1600)
+    const a1 = await st()
+    await pg.evaluate(() => window.__upage.switchFile('Other.md', '# 别篇\n\n别篇正文。\n'))
+    await pg.waitForTimeout(600)
+    await pg.evaluate(() => window.__upage.switchFile('Unified.md'))
+    await pg.waitForTimeout(1600)
+    const b1 = await st()
+    await pg.keyboard.type('ZZ')
+    await pg.waitForTimeout(200)
+    b1.typed = await pg.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.textContent)
+    await pg.waitForTimeout(900)
+    // c:切走期间把这篇改得对不上(光标附近的字变了)
+    await pg.evaluate(() => window.__upage.switchFile('Other.md'))
+    await pg.waitForTimeout(600)
+    await pg.evaluate((md) => window.__upage.switchFile('Unified.md', md.replace('第 50 段 MARK50 填充。', '这一段被别处整段改掉了。')), long)
+    await pg.waitForTimeout(1600)
+    const c1 = await st()
+    // d:焦点握在编辑器外(仿侧栏里的输入框)时换篇回来 —— 光标照样回放,但不抢焦点
+    await clickPara('第 60 段 ')
+    await pg.evaluate(() => window.__upage.switchFile('Other.md'))
+    await pg.waitForTimeout(600)
+    await pg.evaluate(() => {
+      const inp = document.createElement('input'); inp.id = 'fake-side'; inp.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99'
+      document.body.appendChild(inp); inp.focus()
+      window.__upage.switchFile('Unified.md')
+    })
+    await pg.waitForTimeout(1600)
+    const d1 = await pg.evaluate((s) => ({ side: document.activeElement?.id === 'fake-side', para: window.__upage.probe.view().state.selection.$from.parent.textContent, pm: document.activeElement === document.querySelector(s) }), PM)
+    record('P29 光标 / 滚动记忆跨重载与换篇(焦点无主才给焦点)、文字对不上不回放、别处握着焦点不抢(C-23)',
+      a0.para.startsWith('第 50 段') && a0.scroll > 200 &&
+        a1.para.startsWith('第 50 段') && Math.abs(a1.scroll - a0.scroll) <= 40 && a1.focused &&
+        b1.para.startsWith('第 50 段') && b1.focused && b1.typed.includes('ZZ') && b1.typed.replace('ZZ', '').startsWith('第 50 段') &&
+        !c1.para.startsWith('这一段被别处') && !c1.para.startsWith('第 50 段') &&
+        d1.side && !d1.pm && d1.para.startsWith('第 60 段'),
+      JSON.stringify({ a0, a1, b1, c1, d1 }))
+    await pg.close()
+  }
+
   // ── K 系列:unified 键盘层(unified/keyboard.ts,2026-08-14 逐条对齐 AFFiNE doc 模式)。────
   // 这四族此前全部落回 PM base + commonmark preset 的通用实现,不认我们的折叠/callout/嵌入。
   {

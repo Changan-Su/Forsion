@@ -35,7 +35,7 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
@@ -52,6 +52,7 @@ import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
 import { titleNavPlugins } from './titleNav'
+import { createCaretMemory } from './caretMemory'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
@@ -1426,6 +1427,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       ...createStatsTicker(), // 状态栏字 / 词 / 选区计数的刷新节拍(C-22)
       ...titleNavPlugins(() => titleUpRef.current()), // 正文首行 ↑ / 首段段首 ← 回标题(K-24)
+      // 光标的本机记忆(C-23):换篇回来 / 重载后回到上次的光标;有别的落点请求时让位,只在焦点无主时给焦点。
+      ...createCaretMemory({
+        where: () => foldWhere.current,
+        restore: () => caretRestoreRef.current(),
+        focus: () => caretFocusRef.current(),
+      }),
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -2405,6 +2412,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (claimTitleFocus(path)) setTitleFocus((n) => n + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
+  /** 光标记忆的回放闸(C-23,caretMemory 插件经它现读):只读 / Mini / 画布模式不放;有别的落点请求(新建流聚焦标题、
+   *  标题回车进正文、改名后「接着写」)时让位。 */
+  const caretRestoreRef = useRef<() => boolean>(() => false)
+  caretRestoreRef.current = () => !readOnly && !compact && !canvasModeRef.current && bodyFocusRef.current == null && titleFocus === 0
+  /** 回放后给不给焦点:焦点无主(掉在 body 上:换篇拆掉了旧编辑器 / 刚启动)且本实例属于活动面板才给,别处握着焦点不抢。 */
+  const caretFocusRef = useRef<() => boolean>(() => false)
+  caretFocusRef.current = () => {
+    const a = document.activeElement
+    return (!a || a === document.body) && (scope == null || scope === activePageScope())
+  }
   /** 正文首行 ↑ / 首段段首 ← 回标题(K-24,titleNav 插件经它现读):画布满铺没有标题、只读标题不可编辑 → 不接。 */
   const titleUpRef = useRef<() => boolean>(() => false)
   titleUpRef.current = () => {
