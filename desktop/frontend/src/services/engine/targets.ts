@@ -360,6 +360,21 @@ export function bindSession(sid: string, ref: TargetRef): 'bound' | 'conflict' {
 }
 
 /**
+ * 只问不绑(P1-K7a):这个会话 id 若绑到 ref,会不会 'conflict'(已绑到别处,或宿主认得它是本端会话)。与 bindSession 同一套判据,
+ * 但**不写表、不落盘、不通知** —— 设备分组每 10s 列一遍那台的会话,逐行真绑会把绑定表 / 落盘 LRU / knownTargets 灌满。
+ * 真正打开那一条时才 bindSession。
+ */
+export function bindingConflict(sid: string, ref: TargetRef): boolean {
+  if (typeof sid !== 'string' || !sid) return true
+  assertTargetRef(ref, 'bindingConflict')
+  const key = targetKeyOf(ref)
+  ensureBindingsLoaded()
+  const current = sessionTargets.get(sid)
+  if (current !== undefined) return current !== key
+  return key !== 'home' && !!host?.isHomeSession?.(sid)
+}
+
+/**
  * 子会话跟父会话走(分支 / 旁聊 / 团队成员会话 / 后台子会话 / 图片工作室……):远程污点在引擎侧同向传播(C5),
  * 渲染层的路由也必须同向。父会话没绑(= home)→ 子会话不必绑(缺省就是 home);子会话已绑到别处 → 'conflict'。
  */
@@ -710,6 +725,11 @@ export function resetFocusForTests(): void {
 const unitNames = new Map<string, string>()
 function rememberUnitName(ref: TargetRef, name: string | null): void {
   if (ref.kind === 'unit' && name) unitNames.set(ref.unitId, name)
+}
+
+/** 名册里见过的设备名(P1-K7a:设备分组列出 / 打开那台上的会话时记下,提示与结局行才叫得出名字)。不可信串,截 120。 */
+export function noteUnitName(ref: TargetRef, name: string | null | undefined): void {
+  if (ref.kind === 'unit' && typeof name === 'string' && name.trim()) rememberUnitName(ref, name.trim().slice(0, 120))
 }
 
 /** 某个位置的展示名:home = null;unit = 焦点名 / 见过的名字 ?? null(调用方自己决定兜底称呼)。 */
