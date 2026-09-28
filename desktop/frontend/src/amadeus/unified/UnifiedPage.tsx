@@ -23,6 +23,7 @@ import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
+import { useMobileBackClose } from '../lib/mobileBack'
 import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
@@ -1847,6 +1848,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     document.addEventListener('dblclick', onDbl, true)
     return () => document.removeEventListener('dblclick', onDbl, true)
   }, [])
+  useMobileBackClose(!!lightbox, () => setLightbox(null)) // Android 返回先关大图(G2-12)
+  useMobileBackClose(!!blockMenu && !readOnly, () => setBlockMenu(null)) // …与块菜单,不直接关掉整篇笔记
   useEffect(() => {
     if (!lightbox) return
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setLightbox(null) }

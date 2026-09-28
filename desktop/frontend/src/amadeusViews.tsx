@@ -18,6 +18,7 @@ import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScop
 import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
+import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
 import { useUiOverlay } from './amadeusOverlayStore'
@@ -1784,6 +1785,9 @@ function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNee
   const { lift, kbHeight } = useKeyboardMetrics()
   const [sheet, setSheet] = useState(false)
   const [pick, setPick] = useState(0) // 0 = 关;>0 = 面板高度(= 收键盘前量到的键盘高度)
+  // Android 返回先关「⋯」弹层 / 「+」块面板,不直接关掉整篇笔记(G2-12)。
+  useMobileBackClose(sheet, () => setSheet(false))
+  useMobileBackClose(pick > 0, () => setPick(0))
   const barRef = useRef<HTMLDivElement>(null)
   const keep = (e: React.PointerEvent): void => e.preventDefault()
   // lift / pick 都是**视口 px**,而元素活在 body zoom(触屏 1.15)里,写回样式前一律除以 zoom 反补偿。

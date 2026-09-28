@@ -13,6 +13,8 @@
 //     「减少缩进」= Shift-Tab(提回同级);点键不抢编辑器焦点;加了两颗键后 390 / 窄机 360 下最后一颗仍在药丸内
 //  M5 宿主能力门控(G2-13):移动本地库桥声明 hostCaps 三件 false → 「⋯」里没有导出 PDF / 在文件管理器中显示,
 //     视频卡没有「打开」、其他文件卡不是按钮(点了没反应的死键);PDF 卡照旧能开。对照:不声明(桌面桥)时它们都在。
+//  M6 Android 返回(G2-12):MobileRoot 派发的可取消 forsion:mobile-back 先关编辑器最上层的浮层 —— 胶囊「⋯」弹层、
+//     「+」块面板、⠿ 块菜单、图片大图、askString 对话框;一次只关一层(后开的先关),关完了才轮到壳(不再被拦)。
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -196,6 +198,72 @@ async function main() {
       else record('M5b 移动本地库(hostCaps 三件 false)→ 这些死键都不渲染,PDF 卡「打开」照旧',
         !hasPdf && !hasReveal && !mp4Open && pdfOpen && !st.otherIsButton.includes('BUTTON') && st.rows.includes('删除笔记'), JSON.stringify(st))
       await pg.close()
+    }
+    // ── M6:Android 返回先关编辑器浮层(G2-12)──
+    {
+      const back = () => { const ev = new Event('forsion:mobile-back', { cancelable: true }); window.dispatchEvent(ev); return ev.defaultPrevented }
+      const pg = await ctx.newPage()
+      pg.on('pageerror', (e) => { errs.push(e.message); console.log('[pageerror]', e.message) })
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      await mount(pg)
+      await pg.waitForSelector(MOB, { timeout: 60000 })
+      await pg.waitForTimeout(800)
+      await pg.locator('#mob-host .amx-mbar button[title="更多操作"]').click()
+      await pg.waitForTimeout(200)
+      const sheetOpen = await pg.evaluate(() => !!document.querySelector('.mb-sheet'))
+      const b1 = await pg.evaluate(back)
+      await pg.waitForTimeout(200)
+      const sheetAfter = await pg.evaluate(() => !!document.querySelector('.mb-sheet'))
+      // 「+」块面板
+      await pg.locator('#mob-host .amx-mbar button[title="插入块"]').click()
+      await pg.waitForTimeout(300)
+      const pickOpen = await pg.evaluate(() => !!document.querySelector('.amx-bpick'))
+      const b2 = await pg.evaluate(back)
+      await pg.waitForTimeout(200)
+      const pickAfter = await pg.evaluate(() => !!document.querySelector('.amx-bpick'))
+      const b3 = await pg.evaluate(back) // 什么都没开:不拦,交给壳
+      record('M6a 胶囊「⋯」弹层 / 「+」块面板:返回先关它们(拦下),都关了之后不再拦',
+        sheetOpen && b1 && !sheetAfter && pickOpen && b2 && !pickAfter && !b3, JSON.stringify({ sheetOpen, b1, sheetAfter, pickOpen, b2, pickAfter, b3 }))
+      await pg.close()
+
+      // 块菜单 / 大图 / askString:与指针形态无关,桌面尺寸页面里点 ⠿ 更稳(手机上 ⠿ 的可达性是 P-14 那一条)
+      const dp = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+      const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAQ0lEQVR42u3PAQ0AAAgDoL9/aYOLMZgFkA4mJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiZ2WlUBfgdx1f8AAAAASUVORK5CYII='
+      await dp.goto(`${URL}?upage&useed=${encodeURIComponent(`# T\n\nfirst para.\n\n![](${PNG})\n\nafter.\n`)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await dp.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await dp.waitForTimeout(500)
+      const p = await dp.evaluate(() => { const b = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: b.left + 20, y: b.top + b.height / 2 } })
+      await dp.mouse.move(p.x, p.y); await dp.waitForTimeout(150); await dp.mouse.move(p.x + 2, p.y + 1); await dp.waitForTimeout(300)
+      const h = await dp.evaluate(() => { const el = [...document.querySelectorAll('.drag-handle')].find((e) => e.getBoundingClientRect().width > 0); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } })
+      if (h) { await dp.mouse.click(h.x, h.y); await dp.waitForTimeout(300) }
+      const menuOpen = await dp.evaluate(() => !!document.querySelector('.unified-block-menu'))
+      // 菜单开着时再弹 askString(后开的在上):第一次返回只关对话框(取消 = null),第二次才关菜单
+      await dp.evaluate(async () => {
+        const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/components/askString.tsx')) ?? '/src/amadeus/components/askString.tsx'
+        const m = await import(url)
+        window.__askResult = 'pending'
+        m.askString('Rename', 'abc').then((v) => { window.__askResult = v })
+      })
+      await dp.waitForTimeout(300)
+      const askOpen = await dp.evaluate(() => !!document.querySelector('.dialog'))
+      const r1 = await dp.evaluate(back)
+      await dp.waitForTimeout(200)
+      const s1 = await dp.evaluate(() => ({ ask: !!document.querySelector('.dialog'), menu: !!document.querySelector('.unified-block-menu'), result: window.__askResult }))
+      const r2 = await dp.evaluate(back)
+      await dp.waitForTimeout(200)
+      const s2 = await dp.evaluate(() => ({ menu: !!document.querySelector('.unified-block-menu') }))
+      record('M6b askString 压在块菜单上:第一次返回只关对话框(取消),第二次关块菜单',
+        menuOpen && askOpen && r1 && !s1.ask && s1.menu && s1.result === null && r2 && !s2.menu, JSON.stringify({ menuOpen, askOpen, r1, s1, r2, s2 }))
+      const img = await dp.evaluate(() => { const el = document.querySelector('.unified-body img'); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } })
+      if (img) { await dp.mouse.dblclick(img.x, img.y); await dp.waitForTimeout(300) }
+      const lbOpen = await dp.evaluate(() => !!document.querySelector('.amx-lightbox'))
+      const r3 = await dp.evaluate(back)
+      await dp.waitForTimeout(200)
+      const lbAfter = await dp.evaluate(() => !!document.querySelector('.amx-lightbox'))
+      record('M6c 图片大图:返回关大图', lbOpen && r3 && !lbAfter, JSON.stringify({ lbOpen, r3, lbAfter }))
+      await dp.close()
     }
   } finally {
     await browser.close()
