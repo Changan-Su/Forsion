@@ -7,8 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
 import './styles/base.css'
-import './amadeus-host.css'
-import './amadeus/styles.css'
+import './amadeus-host.css' // 编辑器块样式经它的 @import 进来(同生产 main.tsx);别再单独 import styles.css —— 级联会反过来(评审 P-14 / §5)
 import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import { FindBar, openFindBar } from './findInPage'
 import { AskStringHost } from './amadeus/components/askString'
