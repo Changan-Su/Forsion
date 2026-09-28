@@ -397,6 +397,51 @@ async function main() {
     await page.close()
   }
 
+  // ── I-11(评审 2026-09-27):行尾的行内代码按 → 跳出 —— 第一下摘掉 code 的 stored mark(光标不动),接着打的字落在反引号外;
+  //    第二下照常移动。不全局改 inclusive:不按 → 直接打字仍进代码(对照)。药在 blocks/markdown/codeExit.ts。
+  //    走真键盘:Chrome 把字先插进 <code> 的 DOM,PM 的 readDOMChange 再按 stored marks 落 —— happy-dom 证不了这条。
+  {
+    const PMU = '.unified-body .ProseMirror'
+    const openU = async (md) => {
+      const page = await browser.newPage({ locale: 'zh-CN' })
+      page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await page.goto(`${BASE}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector(PMU, { timeout: 20000 })
+      await page.waitForTimeout(500)
+      return page
+    }
+    /** 真鼠标点首段、Cmd+→ 到段末,等 PM 自己认了光标在段末(selectionchange 竞态,见 linkcard.check)。 */
+    const caretParaEnd = async (page) => {
+      const b = await (await page.$(`${PMU} > p`)).boundingBox()
+      await page.mouse.click(b.x + 3, b.y + b.height / 2)
+      await page.keyboard.press('Meta+ArrowRight')
+      return page.waitForFunction(() => {
+        const v = window.__upage?.probe?.view?.()
+        const $h = v && v.state.selection.$head
+        return !!$h && $h.parent.type.name === 'paragraph' && $h.parentOffset === $h.parent.content.size
+      }, null, { timeout: 3000 }).then(() => true, () => false)
+    }
+    const lastMd = async (page) => { await page.waitForTimeout(1400); return page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : '' }) }
+    const run = async (md, keys, typed) => {
+      const page = await openU(md)
+      const ok = await caretParaEnd(page)
+      for (const k of keys) await page.keyboard.press(k)
+      await page.waitForTimeout(80)
+      await page.keyboard.type(typed, { delay: 40 })
+      const out = await lastMd(page)
+      await page.close()
+      return { ok, out }
+    }
+    let r = await run('# T\n\nx `code`\n', ['ArrowRight'], 'abc')
+    check('X1 行尾代码按 → 后打字:新字在反引号外', r.ok && r.out.includes('\nx `code`abc\n'), JSON.stringify(r))
+    r = await run('# T\n\nx `code`尾\n', ['ArrowLeft', 'ArrowRight'], 'Z')
+    check('X2 代码与后文交界处按 →:先跳出(光标不动),新字落在两者之间', r.ok && r.out.includes('\nx `code`Z尾\n'), JSON.stringify(r))
+    r = await run('# T\n\nx `code`尾\n', ['ArrowLeft', 'ArrowRight', 'ArrowRight'], 'Z')
+    check('X3 跳出后再按 → 照常移动', r.ok && r.out.includes('\nx `code`尾Z\n'), JSON.stringify(r))
+    r = await run('# T\n\nx `code`\n', [], 'abc')
+    check('X4 对照:不按 → 直接打字仍进代码(不全局改 inclusive)', r.ok && r.out.includes('\nx `codeabc`\n'), JSON.stringify(r))
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)
