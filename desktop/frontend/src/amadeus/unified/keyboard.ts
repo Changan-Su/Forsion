@@ -31,6 +31,7 @@ import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
+import { tableKeyPlugins } from './tableKeys'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -534,6 +535,7 @@ const blockSelectionTypingPlugin = $prose(
 )
 
 export const keyboardPlugins: MilkdownPlugin[] = [
+  tableKeyPlugins, // 表格回车族(K-10):必须排在下面的 Enter 链之前,见 tableKeys.ts
   blockSelectionTypingPlugin,
   wrapSelectionPlugin,
   $prose(() =>
