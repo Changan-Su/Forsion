@@ -16,6 +16,8 @@
 //  R 组(G2-03,别处改名后本端开着旧路径的实例):
 //   R1 退休时给了新路径且有未落盘的字 → 草稿记在**新路径**上,新实例挂载出「恢复草稿」条;旧路径零写
 //   R2 没有未落盘的字 → 不留草稿,新实例干净打开
+//   R3(评审 G1-08)防抖窗内被别的窗口**删除**(没有新路径可交接)→ 旧路径不复活、不留孤儿草稿,出 warning 提示,
+//      「复制内容」把全文(含刚打的字)交给剪贴板;R4 已落盘后被删 → 零提示
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -307,6 +309,48 @@ async function groupR(browser) {
   }
 }
 
+/** 别的窗口删了 Unified.md:盘上没了 → 生产收尾(pageStore.onPathGone 的 to=null 分支:retireUnifiedPath)→ 标签改指别处。 */
+async function remoteDelete(p) {
+  await p.evaluate(() => {
+    const u = window.__upage
+    window.__goneToasts = []
+    window.addEventListener('amadeus:toast', (e) => window.__goneToasts.push(e.detail))
+    navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve() }
+    u.vault.delete('Unified.md')
+    u.lifecycle.retireUnifiedPath('Unified.md')
+    u.switchFile('Other.md', '# 其它\n\n其它正文。\n')
+  })
+  await wait(1500)
+}
+async function groupR2(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('删前打的')
+    await remoteDelete(p)
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'warning' && x.action).map((x) => ({ text: x.text, label: x.action.label })))
+    await p.evaluate(() => { const x = window.__goneToasts.find((y) => y.action && y.level === 'warning'); x?.action.run() })
+    await wait(200)
+    const copied = await p.evaluate(() => window.__copied ?? null)
+    const old = await disk(p, 'Unified.md')
+    const drafts = await draftFor(p, 'Unified.md')
+    record('R3 防抖窗内被别处删除 → 旧路径不复活、不留孤儿草稿,出提示;「复制内容」交出全文(含刚打的字)',
+      old == null && drafts.length === 0 && t.length === 1 && /Unified/.test(t[0].text) && typeof copied === 'string' && copied.includes('第一段。删前打的'),
+      JSON.stringify({ old, drafts, t, copied }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('已落盘')
+    await wait(1600)
+    await remoteDelete(p)
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'warning'))
+    record('R4 已落盘后被别处删除 → 零提示', t.length === 0 && (await disk(p, 'Unified.md')) == null, JSON.stringify(t))
+    await p.close()
+  }
+}
+
 // ─────────────────────────────── D-17 ───────────────────────────────
 /** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
 async function titleEnter(p, delay) {
@@ -357,7 +401,7 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: groupR, E: groupE }
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

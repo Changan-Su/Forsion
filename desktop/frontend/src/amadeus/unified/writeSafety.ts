@@ -28,6 +28,12 @@ registerMessages({
   'unisave.draft.hint': { zh: '恢复后会覆盖盘上当前内容；盘上那一版若是别处改过的，会先另存为冲突副本。', en: 'Restoring replaces what’s on disk now. If that version was changed elsewhere, it is saved as a conflict copy first.' },
   'unisave.draft.restore': { zh: '恢复草稿', en: 'Restore draft' },
   'unisave.draft.discard': { zh: '丢弃', en: 'Discard' },
+  'unisave.gone.toast': {
+    zh: '「{name}」已在别处被删除或移走，最后的改动没来得及保存。可以把这篇的内容复制下来。',
+    en: '"{name}" was deleted or moved elsewhere before your last changes were saved. You can copy its text.',
+  },
+  'unisave.gone.copy': { zh: '复制内容', en: 'Copy text' },
+  'unisave.gone.copied': { zh: '已复制到剪贴板', en: 'Copied to clipboard' },
 })
 
 /** `amadeus:toast` 的事件载荷(编辑器层 → amadeusOverlays)。只有 text 时走底部吐司;带 level / action 的
@@ -90,6 +96,23 @@ export function toastSaveFailed(path: string, error: unknown): void {
     level: 'warning',
     dedupeKey: `amx-savefail:${path}`,
     text: translate('unisave.failed.toast', { name: noteName(path), reason: shortWriteError(error) }),
+  })
+}
+
+/** 评审 G1-08:这篇在别处被删除 / 移走(没有新路径可交接草稿)时,本实例手里还有没落盘的字。退休之后不许再写旧路径
+ *  (会复活幽灵文件),也不存旧路径草稿(孤儿,同名新笔记会误弹恢复)—— 只能当面说一声,把全文交给剪贴板。
+ *  复制在点按钮时发生(用户手势,剪贴板写得进)。 */
+export function toastGoneUnsaved(path: string, text: string): void {
+  emitAmadeusToast({
+    level: 'warning',
+    dedupeKey: `amx-gone:${path}`,
+    text: translate('unisave.gone.toast', { name: noteName(path) }),
+    action: {
+      label: translate('unisave.gone.copy'),
+      run: () => {
+        void navigator.clipboard?.writeText(text).then(() => emitAmadeusToast({ text: translate('unisave.gone.copied') }), () => {})
+      },
+    },
   })
 }
 

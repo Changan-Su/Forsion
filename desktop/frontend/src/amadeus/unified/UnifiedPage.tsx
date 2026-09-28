@@ -47,7 +47,7 @@ import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { findTextHit, unfoldToReveal } from './revealText'
@@ -2216,10 +2216,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 本实例一个字都不再写,还没落盘的字先**同步**存成新路径的草稿 —— 标签随后改指新路径,新实例挂载即出
         // 「恢复草稿」条,恢复时 0a 的流程负责保全盘上那版(基线对不上先落冲突副本)。不做异步交接写:新实例挂载就
         // 读盘,两边会赛跑。本实例自己发起的改名(doRename)先置 retired 并自己补写新路径,这里不重复。
-        if (movedTo && !pipe.retired && !pipe.readOnly && !pipe.dead) {
+        // 被删除 / 挪走而没有新路径可交接(评审 G1-08:别的窗口删了它、库根换了、路由判 missing)→ 没落盘的字当面说一声,
+        // 全文交给剪贴板。只在**真有**用户改动时出声:切号 / 本端删除前都先冲洗过,那几条路走到这里手里是干净的。
+        if (!pipe.retired && !pipe.readOnly && !pipe.dead) {
           syncFromEditor()
           const text = composeFm(pipe.fm, pipe.body)
-          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+          if (text !== pipe.lastSaved && !isPristine()) {
+            if (movedTo) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+            else toastGoneUnsaved(path, text)
+          }
         }
         pipe.retired = true
         if (pipe.timer) {
