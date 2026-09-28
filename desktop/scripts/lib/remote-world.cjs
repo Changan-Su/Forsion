@@ -43,6 +43,15 @@ const freePort = () => new Promise((r) => { const s = net.createServer(); s.list
  */
 async function startRemoteWorld(o) {
   if (!fs.existsSync(ENGINE_ENTRY)) throw new Error(`缺引擎构建:先 cd tangu-agent && npm run build(期望 ${ENGINE_ENTRY})`)
+  // 引擎 dist 比源码旧 = 测的是老代码(09-28 集成实测:dist 停在 P0,K1 调用方字段全缺,30/40 假红)。按 mtime 比,旧了就大声失败。
+  const newestSrc = (dir) => fs.readdirSync(dir, { withFileTypes: true }).reduce((m, e) => {
+    const f = path.join(dir, e.name)
+    return Math.max(m, e.isDirectory() ? newestSrc(f) : (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) ? fs.statSync(f).mtimeMs : 0))
+  }, 0)
+  const srcAt = newestSrc(path.join(GENESIS, 'tangu-agent/src'))
+  if (srcAt > fs.statSync(ENGINE_ENTRY).mtimeMs && !process.env.REMOTECHAIN_STALE_ENGINE_OK) {
+    throw new Error(`引擎 dist 比 tangu-agent/src 旧:先 cd tangu-agent && npm run build(硬要跑旧 dist:REMOTECHAIN_STALE_ENGINE_OK=1)`)
+  }
   const log = o.log || (() => {})
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-k9-'))
   const shared = path.join(out, 'forsion')
