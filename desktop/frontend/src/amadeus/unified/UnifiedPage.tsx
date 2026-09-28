@@ -17,6 +17,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
 import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
@@ -874,7 +875,13 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   )
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false, readOnly = false, hardBreaks = false }: {
+/** 本实例的撤销 / 重做入口(宿主的非键盘按钮用,如移动端胶囊;返回是否真退/进了一步)。 */
+export interface UnifiedHistory {
+  undo: () => boolean
+  redo: () => boolean
+}
+
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -890,6 +897,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  改由宿主(NoteView)把它放进底栏胶囊的「⋯」。交给**父组件**而不是全局槽:结构上就是同一篇
    *  笔记,旧写法「uiOverlay 单槽 + 路径比对」栽过的那三条歧路(见 CanvasModeSeg 顶注)一条都不沾。 */
   onCanvasMode?: (s: { on: boolean; toggle: () => void } | null) => void
+  /** 撤销 / 重做的出口(G2-05)。v4 不进 pageStore,宿主按 activePage 门控的 `myPs().undo()` 在这里是死键;
+   *  宿主(NoteView)给本 leaf 自己的 ref,不按路径全局查找。卸载时清空。 */
+  historyRef?: { current: UnifiedHistory | null }
   /** 只读实例(公开分享页 /share/<token>,2026-09-07):同一套渲染(块/分栏/卡片/画布/嵌入/chrome),
    *  但**一个字节都不写**:PM editable=false,writeNow/schedule/setFm/改名/生命周期 flush 全部短路,
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
@@ -1012,6 +1022,23 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current() })
     return () => onCanvasMode?.(null)
   }, [canvasOn, onCanvasMode])
+  /** 画布舞台的统一撤销仲裁(CanvasStage 经 histStepRef 交上来,与它的 Cmd+Z 捕获同一个 histStep)。 */
+  const stageHist = useRef<((dir: 'undo' | 'redo') => boolean) | null>(null)
+  // 撤销 / 重做交给宿主:与键盘**同路** —— 画布态走舞台仲裁(canvasStage 的 onKeyDownCapture),
+  // 文档态走 PM history(milkdown history keymap 的同一对命令)。只读实例没有可退的东西。
+  useEffect(() => {
+    if (!historyRef) return
+    const step = (dir: 'undo' | 'redo'): boolean => {
+      if (pipe.readOnly) return false
+      if (canvasModeRef.current && stageHist.current) return stageHist.current(dir)
+      const v = layer.getView()
+      return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
+    }
+    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo') }
+    historyRef.current = h
+    return () => { if (historyRef.current === h) historyRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyRef])
   /** 白板元素落盘。cards 的真源是 doc(deriveCanvasJson 派生),**elements 的真源是磁盘那行** ——
    *  所以这一支不经 deriveFmFromDoc,直接换掉 canvas 行里的 elements 键、其余字段逐字保留。
    *  ⚠️ 那行读不懂时(手改坏的 JSON)当面说、什么都不写:withElements 会逐字返回原行,
@@ -2109,6 +2136,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             onTree={setCanvasTree}
             onMain={setCanvasMain}
             timeline={undoTimeline}
+            histStepRef={stageHist}
             saveFile={(f) => saveOneFile(path, f)}
             // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}

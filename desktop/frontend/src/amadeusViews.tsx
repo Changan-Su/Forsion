@@ -18,7 +18,7 @@ import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycl
 import { useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
-import { UnifiedPage } from '@amadeus/unified/UnifiedPage'
+import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
@@ -2093,6 +2093,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   /** v4 统一页交出来的画布模式(移动端专用:顶栏不渲染 = 那颗「文档 | 画布」胶囊没插槽可投)。
    *  v3 笔记不挂 UnifiedPage → 恒 null → 底栏「⋯」里自然没有这一项。 */
   const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void } | null>(null)
+  /** v4 统一页交出来的撤销 / 重做(G2-05:移动端胶囊的两颗键;v4 不设 activePage,pageStore 的 undo 够不着它)。 */
+  const unifiedHistRef = useRef<UnifiedHistory | null>(null)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
@@ -2554,6 +2556,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           initial={unifiedRoute.initial}
           diskRaw={unifiedRoute.diskRaw}
           onCanvasMode={setCanvasSeg}
+          historyRef={unifiedHistRef}
           onRenamed={(np) => {
             leaf.setParams({ ...leaf.params, notePath: np })
             leaf.setTitle(baseName(np))
@@ -2636,8 +2639,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         sourceMode={mode === 'source'}
         canvas={canvasSeg}
         onUpload={() => uploadInputRef.current?.click()}
-        undo={() => { if (activePage) myPs().undo() }}
-        redo={() => { if (activePage) myPs().redo() }}
+        // 先问本 leaf 的 v4 实例(挂着才有);v3 笔记退回 pageStore 的块级历史。
+        undo={() => { if (unifiedHistRef.current) unifiedHistRef.current.undo(); else if (activePage) myPs().undo() }}
+        redo={() => { if (unifiedHistRef.current) unifiedHistRef.current.redo(); else if (activePage) myPs().redo() }}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },

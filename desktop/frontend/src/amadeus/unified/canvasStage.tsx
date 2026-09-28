@@ -379,6 +379,9 @@ export interface CanvasStageProps {
   onMain: (next: CanvasMain) => void
   /** 统一撤销时间线 —— 与编辑器插件 createHistoryTimeline **共享同一个对象**(宿主建、两头用)。 */
   timeline: UndoTimeline
+  /** 把本舞台的统一撤销仲裁(与 Cmd+Z 同一个 histStep)交给宿主 —— 移动端胶囊的撤销/重做键在画布态
+   *  必须与键盘同路,直接退 PM 会绕开时间线(G2-05)。卸载时清空。 */
+  histStepRef?: { current: ((dir: 'undo' | 'redo') => boolean) | null }
   /** 卡片几何变了(搬卡/调宽落定)→ 让宿主重新派生 fm。newCardRef = 本次新建的卡锚,
    *  宿主必须把它并进归属集合(见 deriveCanvasJson)。 */
   onCommit: (newCardRef?: string) => void
@@ -401,7 +404,7 @@ export interface CanvasStageProps {
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
@@ -844,6 +847,11 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
     return pmStep()
   }, [elUndo])
+  useEffect(() => {
+    if (!histStepRef) return
+    histStepRef.current = histStep
+    return () => { if (histStepRef.current === histStep) histStepRef.current = null }
+  }, [histStepRef, histStep])
 
   /** 视口坐标 → 舞台坐标。
    *  ⚠️ 两级缩放,顺序不能错(仓里在 zoom×浮层坐标上栽过一整轮,见 DESIGN.md / blockLayer 顶注):
