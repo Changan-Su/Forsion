@@ -218,6 +218,25 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     expect(store.get('BomBoard.md')!.content).toContain('amadeus_canvas');
   });
 
+  // Codex g2#1:覆盖闸自己的 FRONTMATTER_RE 与共享层(desktop split.ts stripFrontmatter)口径不一 —— 收尾 `---`
+  // 后带空格 / 制表符共享层认、这里不认 → 闸放行 → 整篇覆盖抹掉画布几何;反过来它还会越过这种栅栏一路懒匹配到
+  // 正文里下一个 `---`,把正文里的 `amadeus_canvas:` 算进 fm。现与 read_note 共用同一条口径正则(FM_RE)。
+  // 负对照(实跑过):换回旧 FRONTMATTER_RE → 下面两条红。
+  it('收尾栅栏后带空格 / 制表符(含 BOM、CRLF)的画布笔记同样拒绝整篇覆盖', async () => {
+    store.set('SpaceFence.md', { content: "\uFEFF---\namadeus_canvas: '{\"v\":1}'\n---   \n正文", seq: 1 });
+    await expect(runCloud('amadeus_write_note', { path: 'SpaceFence.md', content: '覆盖' })).rejects.toThrow(/canvas note/);
+    expect(store.get('SpaceFence.md')!.content).toContain('amadeus_canvas');
+    store.set('CrlfTab.md', { content: "---\r\namadeus_canvas: '{\"v\":1}'\r\n---\t\r\n正文\r\n", seq: 1 });
+    await expect(runCloud('amadeus_write_note', { path: 'CrlfTab.md', content: '覆盖' })).rejects.toThrow(/canvas note/);
+    expect(store.get('CrlfTab.md')!.content).toContain('amadeus_canvas');
+  });
+
+  it('fm 在带尾随空白的收尾栅栏处就结束:正文里的 `amadeus_canvas:` 不算(不许越过栅栏懒匹配到正文的 ---)', async () => {
+    store.set('Overrun.md', { content: '---\ntitle: x\n---  \n正文\namadeus_canvas: 是正文\n---\n', seq: 1 });
+    expect(await runCloud('amadeus_write_note', { path: 'Overrun.md', content: '改过' })).toContain('Saved note');
+    expect(store.get('Overrun.md')!.content).toBe('改过');
+  });
+
   it('⚠️读失败**不是**「文件不存在」时必须抬错,不许放行覆盖(fail-closed)', async () => {
     store.set('Flaky.md', { content: "---\namadeus_canvas: '{\"v\":1}'\n---\n正文", seq: 1 });
     const orig = facet.read;

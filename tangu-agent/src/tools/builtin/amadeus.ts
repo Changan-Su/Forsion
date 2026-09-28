@@ -201,12 +201,15 @@ const STRUCTURED_RE = /\.(mindmap\.md|excalidraw\.md|db)$/i;
  *  ⚠️不能用一条正则一路扫(codex 2026-08-17 P3):`[\s\S]*?` 再懒也**不受 `---` 约束**,
  *  正文里一行顶格的 `amadeus_canvas:`(比如文档示例)会让整篇笔记被误判成画布 → 云端写入被永久拒绝。
  *  改成先切出 frontmatter 块,再只在块内匹配键。 */
-// ⚠️ 容文件头 BOM(D-01):不认的话带 BOM 的画布笔记直接绕过这道 fail-closed 闸被整篇覆盖。
-const FRONTMATTER_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
+// ⚠️ fm 块的切法**必须**与共享层逐字同口径 —— 直接复用上面的 FM_RE(= desktop/shared/amadeus/compiler/split.ts
+//    stripFrontmatter 的正则;tangu-agent 不 import desktop,所以是抄过来的等价正则,改那边须同步这里)。
+//    曾经这里另有一条 FRONTMATTER_RE(Codex g2#1):收尾栅栏后不容空格 / 制表符 → 共享层认得的画布 fm 这里认不出,
+//    闸放行、整篇覆盖抹掉几何;还会越过那种栅栏懒匹配到正文里下一个 `---`,把正文的键当成 fm。BOM 也由 FM_RE 容下(D-01)。
+//    键只在整块里找:栅栏行本身不可能匹配 CANVAS_KEY_RE。
 const CANVAS_KEY_RE = /^[ \t]*["']?amadeus_canvas["']?[ \t]*:/m;
 const hasCanvasFrontmatter = (raw: string): boolean => {
-  const fm = FRONTMATTER_RE.exec(raw ?? '');
-  return !!fm && CANVAS_KEY_RE.test(fm[1]);
+  const fm = FM_RE.exec(raw ?? '');
+  return !!fm && CANVAS_KEY_RE.test(fm[0]);
 };
 const canvasRefusal = (rel: string): string =>
   `"${rel}" is a canvas note: its card coordinates, connectors and whiteboard elements live in the ` +
