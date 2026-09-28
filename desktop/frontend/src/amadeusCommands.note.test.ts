@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // 评审 C-10:命令面板的「收藏」「在文件管理器中显示」读 activePage —— v4 统一页不设 activePage,两条对 v4 笔记静默无效。
-const reveal = vi.fn(() => Promise.resolve())
+const reveal = vi.fn((_p: string) => Promise.resolve())
 vi.mock('@amadeus/api', () => ({ amadeus: { revealInFileManager: (p: string) => reveal(p), reindex: () => Promise.resolve() } }))
 
 const { CMDS } = await import('./amadeusCommands')
