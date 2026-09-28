@@ -743,7 +743,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         let enabled = true
         const listeners = new Set<(v: unknown) => void>()
         // 同真主进程:父开关关着不问 K5(permitted=null = 未知)
-        const view = () => ({ hostEnabled: cfg.unitHostEnabled === true, enabled, permitted: cfg.unitHostEnabled === true ? !secretsMode : null, maxApprovalMode: 'auto-edit', trusted: [], pending: [] })
+        const view = () => ({ hostEnabled: cfg.unitHostEnabled === true, enabled, permitted: cfg.unitHostEnabled === true ? !secretsMode : null, maxApprovalMode: 'auto-edit', trusted: [], pending: [], accountEntry: 'none' })
         const push = () => { const v = view(); for (const cb of listeners) cb(v); return v }
         ;(window as unknown as { __rsPush: () => unknown }).__rsPush = push
         const w2 = window as unknown as { __rsGets: number }
@@ -757,6 +757,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           },
           setMaxApprovalMode: async () => view(),
           revoke: async () => view(),
+          allowAccount: async () => view(),
           onChanged: (cb: (v: unknown) => void) => { listeners.add(cb); return () => { listeners.delete(cb) } },
         }
       })(),

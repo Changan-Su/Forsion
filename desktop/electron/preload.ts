@@ -98,6 +98,7 @@ const api = {
     setEnabled: (on) => ipcRenderer.invoke('remoteSessions:setEnabled', on),
     setMaxApprovalMode: (mode) => ipcRenderer.invoke('remoteSessions:setMaxApprovalMode', mode),
     revoke: (principal) => ipcRenderer.invoke('remoteSessions:revoke', principal),
+    allowAccount: () => ipcRenderer.invoke('remoteSessions:allowAccount'),
     onChanged: (cb) => {
       const listener = (_e: unknown, view: RemoteSessionsView): void => cb(view)
       ipcRenderer.on('remoteSessions:changed', listener)

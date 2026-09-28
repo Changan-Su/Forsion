@@ -11,7 +11,7 @@ import type { RemoteSessionsApi, RemoteSessionsView } from '../../../shared/remo
 
 const UNIT = '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f'
 const makeView = (over: Partial<RemoteSessionsView> = {}): RemoteSessionsView => ({
-  hostEnabled: true, enabled: true, permitted: true, maxApprovalMode: 'auto-edit', trusted: [], pending: [], ...over,
+  hostEnabled: true, enabled: true, permitted: true, maxApprovalMode: 'auto-edit', trusted: [], pending: [], accountEntry: 'none', ...over,
 })
 
 let host: HTMLDivElement
@@ -23,6 +23,7 @@ const api = {
   setEnabled: vi.fn<RemoteSessionsApi['setEnabled']>(),
   setMaxApprovalMode: vi.fn<RemoteSessionsApi['setMaxApprovalMode']>(),
   revoke: vi.fn<RemoteSessionsApi['revoke']>(),
+  allowAccount: vi.fn<RemoteSessionsApi['allowAccount']>(),
   onChanged: vi.fn<RemoteSessionsApi['onChanged']>(),
 }
 
@@ -34,7 +35,12 @@ beforeEach(() => {
   api.get.mockReset().mockImplementation(async () => view)
   api.setEnabled.mockReset().mockImplementation(async (on) => (view = { ...view, enabled: on }))
   api.setMaxApprovalMode.mockReset().mockImplementation(async (m) => (view = { ...view, maxApprovalMode: m }))
-  api.revoke.mockReset().mockImplementation(async (p) => (view = { ...view, trusted: view.trusted.filter((r) => (r.principal === 'account' ? p !== 'account' : r.unitId !== p)) }))
+  api.revoke.mockReset().mockImplementation(async (p) => (view = {
+    ...view, trusted: view.trusted.filter((r) => (r.principal === 'account' ? p !== 'account' : r.unitId !== p)), ...(p === 'account' ? { accountEntry: 'strict' as const } : {}),
+  }))
+  api.allowAccount.mockReset().mockImplementation(async () => (view = {
+    ...view, accountEntry: 'trusted', trusted: [{ principal: 'account', confirmedAt: Date.now(), preconfirmed: false }, ...view.trusted.filter((r) => r.principal !== 'account')],
+  }))
   api.onChanged.mockReset().mockImplementation((cb) => { pushChanged = cb; return () => { pushChanged = null } })
   window.tangu = { platform: 'darwin', remoteSessions: api, secretStorageStatus: vi.fn().mockResolvedValue({ level: 'plaintext', backend: 'basic_text', locked: [], restartRequired: false, lastError: null }) } as unknown as Window['tangu']
   host = document.createElement('div')
@@ -146,6 +152,7 @@ describe('RemoteSessionsSettings', () => {
         { principal: 'unit', unitId: UNIT, name: '小米 14', kind: 'phone', platform: 'android', registeredAt: '2026-09-20T08:00:00.000Z', confirmedAt: Date.now() - 60_000 },
       ],
       pending: [{ principal: 'unit', unitId: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e61', name: '书房 PC', kind: 'desktop', since: 1 }],
+      accountEntry: 'trusted',
     })
     await mount()
     const list = q('[data-setting-anchor="remote-trusted-devices"]')!.textContent!
@@ -163,6 +170,42 @@ describe('RemoteSessionsSettings', () => {
     expect(text()).toContain('还没有设备')
   })
 
+  it('「本账号的浏览器与网页版」三态:已允许 → 撤销 = 严格档(说明写明不再弹框)→ 在这里直接允许;还没允许也能在这里允许(P2P 只能这样);账号弹框开着时不重复画;没登录如实说', async () => {
+    view = makeView({ trusted: [{ principal: 'account', confirmedAt: 1, preconfirmed: false }], accountEntry: 'trusted' })
+    await mount()
+    const list = (): string => q('[data-setting-anchor="remote-trusted-devices"]')!.textContent!
+    expect(list()).toContain('不会再弹框询问，直到你在这里重新允许') // 撤销的后果写在撤销之前
+    expect(q('[data-rs-allow-account]')).toBeNull()
+    await act(async () => q<HTMLButtonElement>('[data-rs-revoke="account"]')!.click())
+    expect(api.revoke).toHaveBeenLastCalledWith('account')
+    expect(q('[data-rs-revoke="account"]')).toBeNull()
+    expect(q('[data-rs-allow-account]')!.getAttribute('data-rs-allow-account')).toBe('strict')
+    expect(list()).toContain('已撤销')
+    expect(list()).toContain('不会再弹框询问')
+    await act(async () => q<HTMLButtonElement>('[data-rs-allow-account]')!.click())
+    expect(api.allowAccount).toHaveBeenCalledTimes(1)
+    expect(q('[data-rs-revoke="account"]')).not.toBeNull()
+    expect(q('[data-rs-allow-account]')).toBeNull()
+    // 还没允许:能直接允许;说明写 P2P 只能在这里允许
+    await act(async () => pushChanged!(makeView({ accountEntry: 'none' })))
+    expect(q('[data-rs-allow-account]')!.getAttribute('data-rs-allow-account')).toBe('none')
+    expect(list()).toContain('P2P 连接不会弹框')
+    // 账号确认框开着:只画那条待确认行
+    await act(async () => pushChanged!(makeView({ accountEntry: 'none', pending: [{ principal: 'account', since: 1 }] })))
+    expect(q('[data-rs-allow-account]')).toBeNull()
+    expect(q('[data-rs-pending]')).not.toBeNull()
+    // 没登录:不画账号行、不画「还没有设备」,说清楚为什么
+    await act(async () => pushChanged!(makeView({ accountEntry: null })))
+    expect(q('[data-rs-allow-account]')).toBeNull()
+    expect(q('[data-rs-signed-out]')!.textContent).toContain('还没有登录 Forsion')
+    expect(list()).not.toContain('还没有设备')
+    // 主进程拒绝(竞态:点的时候还登录着)→ 本地化那句
+    await act(async () => pushChanged!(makeView({ accountEntry: 'strict' })))
+    api.allowAccount.mockRejectedValueOnce(new Error("Error invoking remote method 'remoteSessions:allowAccount': Error: not-signed-in"))
+    await act(async () => q<HTMLButtonElement>('[data-rs-allow-account]')!.click())
+    expect(q('[role="alert"]')!.textContent).toContain('还没有登录 Forsion')
+  })
+
   it('扩展槽(R-12):注册的区块按 order 渲染在三块之后,注销即消失', async () => {
     const offB = registerRemoteSettingsSection({ id: 'b', order: 200, render: () => React.createElement('section', { 'data-slot': 'b' }, 'B') })
     const offA = registerRemoteSettingsSection({ id: 'remote-safety', order: 100, render: () => React.createElement('section', { 'data-slot': 'a' }, 'A') })
@@ -178,9 +221,13 @@ describe('RemoteSessionsSettings', () => {
 
   it('en:没有汉字漏出', async () => {
     setLocaleGlobal('en')
-    view = makeView({ maxApprovalMode: 'full-auto', trusted: [{ principal: 'account', confirmedAt: 1, preconfirmed: false }] })
+    view = makeView({ maxApprovalMode: 'full-auto', trusted: [{ principal: 'account', confirmedAt: 1, preconfirmed: false }], accountEntry: 'trusted' })
     await mount()
     expect(/[一-鿿]/.test(text())).toBe(false)
     expect(text()).toContain('Allow remote sessions')
+    for (const accountEntry of ['strict', 'none', null] as const) {
+      await act(async () => pushChanged!(makeView({ accountEntry })))
+      expect(/[一-鿿]/.test(text()), String(accountEntry)).toBe(false)
+    }
   })
 })

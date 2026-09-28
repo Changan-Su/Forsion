@@ -4,7 +4,7 @@
  * 另订阅 remoteSessions:changed(本机弹框里点了允许 / 别的窗口改了)。三块 + 扩展槽:
  *   remote-sessions-switch   开关(父开关关 / 设备凭据未加密时置灰;G9:只管 Agent 会话,主机文件与智库不受影响)
  *   remote-approval-cap      最高审批档(选全自动须勾「我了解风险」再确认,之后常驻警示 —— 方案 §6.4 边界)
- *   remote-trusted-devices   已允许的设备 + 「本账号的浏览器与网页版」+ 等待确认项,可撤销
+ *   remote-trusted-devices   已允许的设备 + 「本账号的浏览器与网页版」(已允许 → 撤销 = D8 严格档;已撤销 / 还没允许 → 在这里直接允许)+ 等待确认项
  * 设备页 / web / 手机没有这一页(remoteSessionsApi 门控,同 computerHistoryApi)。
  */
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -30,10 +30,12 @@ const CAP_LABEL: Record<CapMode, string> = { readonly: 'approval.mode.readonly',
 const CAP_ICON: Record<CapMode, React.ReactNode> = { readonly: <Eye size={16} />, 'auto-edit': <FilePen size={16} />, 'full-auto': <Zap size={16} /> }
 const CAP_DESC: Record<CapMode, string> = { readonly: 'remoteSessions.capDesc.readonly', 'auto-edit': 'remoteSessions.capDesc.autoEdit', 'full-auto': 'remoteSessions.capDesc.fullAuto' }
 
-/** IPC 抛错的可读原因:secret-store-insecure 换成本地化那句,其余照 ipcErrorText。 */
+/** IPC 抛错的可读原因:secret-store-insecure / not-signed-in 换成本地化那句,其余照 ipcErrorText。 */
 function actionErrorText(e: unknown, t: (k: string) => string): string {
   const raw = ipcErrorText(e)
-  return raw.includes(SECRET_STORE_INSECURE) ? t('remoteSessions.insecure') : raw
+  if (raw.includes(SECRET_STORE_INSECURE)) return t('remoteSessions.insecure')
+  if (raw.includes('not-signed-in')) return t('remoteSessions.notSignedIn')
+  return raw
 }
 
 export function RemoteSessionsSettings(): React.ReactNode {
@@ -112,6 +114,9 @@ export function RemoteSessionsSettings(): React.ReactNode {
   }
   const accountRow = view.trusted.find((r) => r.principal === 'account')
   const unitRows = view.trusted.filter((r) => r.principal === 'unit')
+  /** 账号条目弹框开着时只画那条待确认行,不再画「允许」行(两条说的是同一件事)。 */
+  const accountPending = view.pending.some((p) => p.principal === 'account')
+  const allowAccount = (): void => { void act('allowAccount', (a) => a.allowAccount()) }
   const kindLabel = (k: 'phone' | 'desktop' | undefined): string => t(k === 'phone' ? 'remoteSessions.kind.phone' : 'remoteSessions.kind.desktop')
 
   return (
@@ -184,10 +189,18 @@ export function RemoteSessionsSettings(): React.ReactNode {
               description={t('remoteSessions.pendingHint')}
               control={<span className="rs-badge" data-rs-pending="">{t('remoteSessions.pending')}</span>} />
           ))}
-          {accountRow && (
+          {view.accountEntry === 'trusted' && accountRow && (
             <SettingsRow className="rs-row" label={<span className="rs-row-title"><Globe size={14} aria-hidden="true" />{t('remoteSessions.account')}</span>}
               description={<>{t('remoteSessions.accountDesc')}<span className="rs-meta">{accountRow.preconfirmed ? t('remoteSessions.preconfirmed') : t('remoteSessions.confirmedAt', { time: formatListTime(accountRow.confirmedAt) })}</span></>}
               control={<button type="button" className="btn ghost sm" data-rs-revoke="account" disabled={!!busy} onClick={() => void act('revoke:account', (a) => a.revoke('account'))}>{t('remoteSessions.revoke')}</button>} />
+          )}
+          {/* 已撤销(D8 严格档,不再弹框)/ 还没允许(P2P 不弹框,只能在这里允许):本机直接允许 = 等同弹框里点「允许」 */}
+          {(view.accountEntry === 'strict' || view.accountEntry === 'none') && !accountPending && (
+            <SettingsRow className="rs-row" label={<span className="rs-row-title"><Globe size={14} aria-hidden="true" />{t('remoteSessions.account')}</span>}
+              description={t(view.accountEntry === 'strict' ? 'remoteSessions.accountStrictDesc' : 'remoteSessions.accountNoneDesc')}
+              control={<button type="button" className="btn ghost sm" data-rs-allow-account={view.accountEntry} disabled={!!busy} onClick={allowAccount}>
+                {busy === 'allowAccount' && <Loader2 size={12} className="spin" aria-hidden="true" />}{t('remoteSessions.allow')}
+              </button>} />
           )}
           {unitRows.map((r) => r.principal === 'unit' && (
             <SettingsRow key={r.unitId} className="rs-row"
@@ -199,7 +212,8 @@ export function RemoteSessionsSettings(): React.ReactNode {
               ].filter(Boolean).join(' · ')}
               control={<button type="button" className="btn ghost sm" data-rs-revoke={r.unitId} disabled={!!busy} onClick={() => void act(`revoke:${r.unitId}`, (a) => a.revoke(r.unitId))}>{t('remoteSessions.revoke')}</button>} />
           ))}
-          {!accountRow && unitRows.length === 0 && view.pending.length === 0 && <div className="settings-empty-row">{t('remoteSessions.trustedEmpty')}</div>}
+          {view.accountEntry === null && <div className="settings-empty-row" data-rs-signed-out="">{t('remoteSessions.notSignedIn')}</div>}
+          {view.accountEntry !== null && unitRows.length === 0 && !view.pending.some((p) => p.principal === 'unit') && <div className="settings-empty-row">{t('remoteSessions.trustedEmpty')}</div>}
         </div>
       </SettingsPanel>
 

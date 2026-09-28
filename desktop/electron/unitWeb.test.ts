@@ -20,6 +20,7 @@ import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { PRODUCT } from './product'
 import { signProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
 import { decideRemoteEngine, remoteEngineTier } from './remoteSessionGate' // P1-K4
+import { createRemoteSessions } from './remoteSessions' // P1-K4:真控制器(零 electron,文件 / 名册 / 弹框换内存)
 import type { RemoteAccessStatus, TrustState } from '../shared/remoteSessions' // P1-K4
 
 type Seen = { method: string; path: string; auth: string; body: string; headers: http.IncomingHttpHeaders }
@@ -826,6 +827,58 @@ describe('unitWeb', () => {
       g.o.trust = { [`unit:${PHONE.unit}`]: 'trusted' }
       expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(403)
       expect((await raw(b.base, 'GET', '/engine/agent/sessions', tunnel)).status).toBe(200)
+    } finally { b.close() }
+  })
+
+  it('K4 × 真控制器(评审 P1/P2):撤销「本账号的浏览器与网页版」→ 隧道无断言与 P2P 的 HTTP 403 带 reason=strict、不再弹框;还没允许时 P2P 报 never-prompts;/unit/remote-access 如实报 reason', async () => {
+    let disk: string | null = JSON.stringify({ v: 1, enabled: true, migratedFromUnitHost: false, trusted: [{ principal: 'account', accountId: 'acc-1', confirmedAt: 1 }] })
+    let prompts = 0
+    const rs = createRemoteSessions({
+      file: () => '/t/remote-sessions.json', unitHostEnabled: async () => true,
+      readCap: async () => 'auto-edit', writeCap: async () => {},
+      accountId: () => 'acc-1', lookupUnit: async () => 'unreachable', confirm: async () => { prompts++; return null },
+      permitted: () => true, isLocked: () => false, onChanged: () => {}, log: () => {},
+      readFile: async () => disk, writeFile: async (_f, d) => { disk = JSON.stringify(d) },
+    })
+    await rs.init()
+    const b = await boot(null, undefined, undefined, { remoteAccess: rs.gate })
+    try {
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      const p2p = { 'x-unit-p2p': b.handle.p2pSecret }
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(200)
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', p2p)).status).toBe(200)
+      await rs.revoke('account')
+      const before = b.engine.seen.length
+      for (const h of [tunnel, p2p]) {
+        const r = await raw(b.base, 'POST', '/engine/agent/runs', h)
+        expect(r.status).toBe(403)
+        expect(JSON.parse(r.body)).toMatchObject({ code: 'REMOTE_CALLER_UNCONFIRMED', state: 'denied', reason: 'strict' })
+        expect(JSON.parse((await raw(b.base, 'POST', '/unit/remote-access/request', h)).body)).toMatchObject({ caller: 'denied', reason: 'strict' })
+      }
+      expect(b.engine.seen.length).toBe(before) // run 进不了引擎
+      expect((await raw(b.base, 'POST', '/engine/agent/runs/r1/approvals/a1', tunnel)).status).toBe(200) // 基础档照常
+      await new Promise((r) => setTimeout(r, 20))
+      expect(prompts).toBe(0) // 严格档:一个弹框都没有
+      // 本机设置里重新允许 → 放行
+      await rs.allowAccount()
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(200)
+      // 换成「还没允许」的新文件:P2P 如实报 never-prompts(不是「在等确认」)
+      disk = JSON.stringify({ v: 1, enabled: true, migratedFromUnitHost: false, trusted: [] })
+      const fresh = createRemoteSessions({
+        file: () => '/t/remote-sessions.json', unitHostEnabled: async () => true,
+        readCap: async () => 'auto-edit', writeCap: async () => {},
+        accountId: () => 'acc-1', lookupUnit: async () => 'unreachable', confirm: async () => null,
+        permitted: () => true, isLocked: () => false, onChanged: () => {}, log: () => {},
+        readFile: async () => disk, writeFile: async (_f, d) => { disk = JSON.stringify(d) },
+      })
+      await fresh.init()
+      const c = await boot(null, undefined, undefined, { remoteAccess: fresh.gate })
+      try {
+        const r = await raw(c.base, 'POST', '/engine/agent/runs', { 'x-unit-p2p': c.handle.p2pSecret })
+        expect(JSON.parse(r.body)).toMatchObject({ code: 'REMOTE_CALLER_UNCONFIRMED', state: 'unconfirmed', reason: 'never-prompts' })
+        expect(JSON.parse((await raw(c.base, 'GET', '/unit/remote-access', { 'x-unit-p2p': c.handle.p2pSecret })).body))
+          .toEqual({ remoteSessions: true, principal: 'p2p', caller: 'unconfirmed', reason: 'never-prompts', maxApprovalMode: 'auto-edit' })
+      } finally { c.close() }
     } finally { b.close() }
   })
 

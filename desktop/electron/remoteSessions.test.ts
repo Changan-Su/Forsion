@@ -134,6 +134,11 @@ describe('迁移(一次性、持久化)', () => {
       { principal: 'unit', accountId: ACC, unitId: PHONE_ID.toUpperCase(), name: 'A\u202eB', kind: 'phone', confirmedAt: 2 },
     ] }))
     expect(p!.trusted).toEqual([{ principal: 'unit', accountId: ACC, unitId: PHONE_ID, name: 'AB', kind: 'phone', platform: null, registeredAt: null, confirmedAt: 2 }])
+    expect(p!.accountStrict).toEqual([]) // 评审前写的文件没有这个字段 = 没有严格档
+    const q = parseRemoteSessionsFile(JSON.stringify({ enabled: true, trusted: [], accountStrict: [
+      { accountId: ACC, since: 7 }, { accountId: ACC, since: 9 }, { accountId: '' }, 'x', null, { since: 1 }, { accountId: 'https://cloud.test::u2', since: 'y' },
+    ] }))
+    expect(q!.accountStrict).toEqual([{ accountId: ACC, since: 7 }, { accountId: 'https://cloud.test::u2', since: 0 }])
   })
 })
 
@@ -207,8 +212,11 @@ describe('开关 / 审批档 / 撤销:落盘与广播', () => {
     h.env.account = other
     expect(h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } }).ok).toBe(false)
     expect(h.rs.trustedCaller(PHONE_ID)?.name).toBe('别人的手机')
-    h.env.account = null // 未登录:谁都不信
-    expect(h.rs.gate.gateEngine({ ...RUN, caller: phone() }).ok).toBe(false)
+    h.env.account = null // 未登录:谁都不信,也不弹(记不了信任)—— 如实说「那台电脑没登录」,不说「在等确认」
+    const g = h.rs.gate.gateEngine({ ...RUN, caller: phone() })
+    expect(!g.ok && g.body).toMatchObject({ state: 'unconfirmed', reason: 'not-signed-in' })
+    expect(h.rs.gate.status({ kind: 'account' })).toMatchObject({ caller: 'unconfirmed', reason: 'not-signed-in' })
+    expect((await h.rs.view()).accountEntry).toBeNull()
   })
 
   it('撤销:设备行 / 账号行都先生效再落盘;撤销后闸重新 403;不认的主体抛', async () => {
@@ -223,7 +231,9 @@ describe('开关 / 审批档 / 撤销:落盘与广播', () => {
     expect(!g.ok && g.body.code).toBe('REMOTE_CALLER_UNCONFIRMED')
     const v = await h.rs.revoke('account')
     expect(v.trusted.some((r) => r.principal === 'account')).toBe(false)
+    expect(v.accountEntry).toBe('strict')
     expect(h.disk().trusted).toEqual([])
+    expect(h.disk().accountStrict).toEqual([{ accountId: ACC, since: h.env.clock }])
     for (const bad of ['', 'x', '../etc', 42, null]) await expect(h.rs.revoke(bad)).rejects.toThrow('bad-principal')
   })
 })
@@ -257,15 +267,22 @@ describe('首次本机确认(状态机)', () => {
     h.rs.gate.gateEngine({ ...RUN, caller: phone() })
     await tick(12)
     expect(h.confirm).not.toHaveBeenCalled()
-    expect(h.rs.gate.status(phone()).caller).toBe('denied')
+    expect(h.rs.gate.status(phone())).toMatchObject({ caller: 'denied', reason: 'roster-miss' }) // 不是「那台电脑上的人拒绝了」
+    const g = h.rs.gate.gateEngine({ ...RUN, caller: phone() })
+    expect(!g.ok && g.body).toMatchObject({ state: 'denied', reason: 'roster-miss' })
   })
 
-  it('名册不可达 → 不弹框、回 unconfirmed(不拿断言自报的名字弹框);可再请求', async () => {
+  it('名册不可达 → 不弹框、回 unconfirmed + reason roster-unreachable(不拿断言自报的名字弹框);30 秒内重试不再打云端(G2),之后可再请求', async () => {
     const h = await booted({ disk: enabledDisk(), roster: 'unreachable' })
     h.rs.gate.gateEngine({ ...RUN, caller: phone() })
     await tick(12)
     expect(h.confirm).not.toHaveBeenCalled()
-    expect(h.rs.gate.status(phone()).caller).toBe('unconfirmed')
+    expect(h.rs.gate.status(phone())).toMatchObject({ caller: 'unconfirmed', reason: 'roster-unreachable' })
+    const g = h.rs.gate.gateEngine({ ...RUN, caller: phone() })
+    expect(!g.ok && g.body).toMatchObject({ code: 'REMOTE_CALLER_UNCONFIRMED', state: 'unconfirmed', reason: 'roster-unreachable' })
+    await tick(12)
+    expect(h.lookupUnit).toHaveBeenCalledTimes(1)
+    h.env.clock += 30_000 + 1
     h.rs.gate.gateEngine({ ...RUN, caller: phone() })
     await tick(12)
     expect(h.lookupUnit).toHaveBeenCalledTimes(2)
@@ -300,6 +317,7 @@ describe('首次本机确认(状态机)', () => {
     expect(h.rs.gate.status(phone()).caller).toBe('denied')
     const g = h.rs.gate.gateEngine({ ...RUN, caller: phone() })
     expect(!g.ok && g.body.state).toBe('denied')
+    expect(!g.ok && g.body.reason).toBeUndefined() // 人点的「不允许」:没有 reason
     await tick(12)
     expect(h.prompts.length).toBe(1)
     h.env.clock += 10 * 60_000 + 1
@@ -312,8 +330,9 @@ describe('首次本机确认(状态机)', () => {
   it('全局 1 框 + 队列 ≤ 3:第 5 个不同的调用方直接 unconfirmed、不排队;前一个答完才弹下一个', async () => {
     const ids = [1, 2, 3, 4, 5].map((n) => `0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6${n}`)
     const h = await booted({ disk: enabledDisk(), roster: Object.fromEntries(ids.map((id) => [id, ROSTER])) })
-    const states = ids.map((id) => { const g = h.rs.gate.gateEngine({ ...RUN, caller: phone(id) }); return g.ok ? 'ok' : g.body.state })
-    expect(states).toEqual(['pending', 'pending', 'pending', 'pending', 'unconfirmed'])
+    const states = ids.map((id) => { const g = h.rs.gate.gateEngine({ ...RUN, caller: phone(id) }); return g.ok ? 'ok' : `${g.body.state}${g.body.reason ? `:${g.body.reason}` : ''}` })
+    expect(states).toEqual(['pending', 'pending', 'pending', 'pending', 'unconfirmed:busy'])
+    expect(await h.rs.gate.request(phone(ids[4]))).toMatchObject({ caller: 'unconfirmed', reason: 'busy' })
     await tick(12)
     expect(h.prompts.length).toBe(1)
     h.prompts[0].answer(false)
@@ -322,7 +341,7 @@ describe('首次本机确认(状态机)', () => {
     expect((await h.rs.view()).pending.length).toBe(3)
   })
 
-  it('TTL 2 分钟:到点经 signal 真关框 → unconfirmed(不是 denied)', async () => {
+  it('TTL 2 分钟:到点经 signal 真关框 → unconfirmed + no-answer(不是 denied);1 分钟内不再弹(无人值守不被连着弹框),之后可再请求', async () => {
     vi.useFakeTimers()
     const h = await booted({ disk: enabledDisk() })
     h.rs.gate.gateEngine({ ...RUN, caller: phone() })
@@ -331,7 +350,15 @@ describe('首次本机确认(状态机)', () => {
     await vi.advanceTimersByTimeAsync(2 * 60_000)
     expect(h.prompts[0].signal.aborted).toBe(true)
     await tick(12)
-    expect(h.rs.gate.status(phone()).caller).toBe('unconfirmed')
+    expect(h.rs.gate.status(phone())).toMatchObject({ caller: 'unconfirmed', reason: 'no-answer' })
+    const g = h.rs.gate.gateEngine({ ...RUN, caller: phone() })
+    expect(!g.ok && g.body).toMatchObject({ state: 'unconfirmed', reason: 'no-answer' })
+    await tick(12)
+    expect(h.prompts.length).toBe(1)
+    h.env.clock += 60_000 + 1
+    h.rs.gate.gateEngine({ ...RUN, caller: phone() })
+    await tick(12)
+    expect(h.prompts.length).toBe(2)
   })
 
   it('弹框开着时关掉开关:signal 真关框、排队清空;关框后才到的「允许」一律丢弃', async () => {
@@ -385,8 +412,8 @@ describe('首次本机确认(状态机)', () => {
     setMainLocale('zh')
     const h = await booted({ disk: enabledDisk() })
     const p2p = h.rs.gate.gateEngine({ ...RUN, via: 'p2p', caller: { kind: 'p2p' } })
-    expect(!p2p.ok && p2p.body.state).toBe('unconfirmed')
-    await h.rs.gate.request({ kind: 'p2p' })
+    expect(!p2p.ok && p2p.body).toMatchObject({ state: 'unconfirmed', reason: 'never-prompts' }) // 不是「在等确认」:P2P 永远等不来弹框
+    expect(await h.rs.gate.request({ kind: 'p2p' })).toMatchObject({ caller: 'unconfirmed', reason: 'never-prompts' })
     await tick(12)
     expect(h.confirm).not.toHaveBeenCalled()
     h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })
@@ -423,17 +450,112 @@ describe('首次本机确认(状态机)', () => {
   })
 })
 
+describe('D8 严格档:撤销「本账号的浏览器与网页版」(U1;评审 P1)', () => {
+  const ACCOUNT_ROW = { principal: 'account', accountId: ACC, confirmedAt: 5, preconfirmed: true }
+  const APPROVE = { method: 'POST', path: '/agent/runs/r1/approvals/a1', via: 'tunnel' }
+
+  it('负对照:撤销后 account / p2p 只有基础档、不再弹框 —— 拒绝冷却过了、重启后都一样;已登记设备不受影响', async () => {
+    const h = await booted({ disk: enabledDisk({ trusted: [ACCOUNT_ROW] }) })
+    expect(h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })).toEqual({ ok: true })
+    const v = await h.rs.revoke('account')
+    expect(v.accountEntry).toBe('strict')
+    expect(h.disk()).toMatchObject({ trusted: [], accountStrict: [{ accountId: ACC, since: h.env.clock }] })
+    const refused = (rs: typeof h.rs): void => {
+      for (const caller of [{ kind: 'account' }, { kind: 'p2p' }] as UnitCaller[]) {
+        const g = rs.gate.gateEngine({ ...RUN, via: caller.kind === 'p2p' ? 'p2p' : 'tunnel', caller })
+        expect(!g.ok && g.body, caller.kind).toEqual({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: expect.any(String), state: 'denied', reason: 'strict' })
+        expect(rs.gate.status(caller), caller.kind).toMatchObject({ caller: 'denied', reason: 'strict' })
+      }
+    }
+    refused(h.rs)
+    expect(await h.rs.gate.request({ kind: 'account' })).toMatchObject({ caller: 'denied', reason: 'strict' })
+    await tick(12)
+    h.env.clock += 10 * 60_000 + 1 // 「不允许」的冷却早过了:严格档不是冷却
+    refused(h.rs)
+    await tick(12)
+    expect(h.confirm).not.toHaveBeenCalled()
+    expect(h.rs.trustedCaller('account')).toBeNull()
+    // 答审批 / 停止仍在基础档(D8「同账号任一客户端可答审批」的缺省不变)
+    expect(h.rs.gate.gateEngine({ ...APPROVE, caller: { kind: 'account' } })).toEqual({ ok: true })
+    // 重启:从盘上读回仍是严格档
+    const again = harness({ disk: h.env.disk })
+    await again.rs.init()
+    refused(again.rs)
+    await tick(12)
+    expect(again.confirm).not.toHaveBeenCalled()
+    expect((await again.rs.view()).accountEntry).toBe('strict')
+    // 已登记设备:照常弹它自己的确认(撤销账号条目不连坐设备)
+    again.rs.gate.gateEngine({ ...RUN, caller: phone() })
+    await tick(12)
+    expect(again.prompts.length).toBe(1)
+    expect(again.prompts[0].opts.message).toContain('小米 14')
+    // 严格档按账号记:换个账号不受影响(照常弹账号确认)
+    again.env.account = 'https://cloud.test::u2'
+    const other = again.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })
+    expect(!other.ok && other.body).toMatchObject({ state: 'pending' })
+  })
+
+  it('撤销时账号确认框开着:真关框、迟到的「允许」丢弃,落严格档', async () => {
+    const h = await booted({ disk: enabledDisk(), lateAnswer: true })
+    h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })
+    await tick()
+    expect(h.prompts.length).toBe(1)
+    await h.rs.revoke('account')
+    expect(h.prompts[0].signal.aborted).toBe(true)
+    h.prompts[0].answer(true)
+    await tick(12)
+    expect(h.disk()).toMatchObject({ trusted: [], accountStrict: [{ accountId: ACC }] })
+    expect(h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } }).ok).toBe(false)
+  })
+
+  it('allowAccount:本机设置里直接允许 → 清严格档 + 写账号行(落盘成功才生效);account / p2p 放行;未登录抛 not-signed-in', async () => {
+    const h = await booted({ disk: enabledDisk({ accountStrict: [{ accountId: ACC, since: 1 }] }) })
+    expect((await h.rs.view()).accountEntry).toBe('strict')
+    h.env.failWrite = true
+    await expect(h.rs.allowAccount()).rejects.toThrow('EIO')
+    expect(h.rs.gate.status({ kind: 'account' })).toMatchObject({ caller: 'denied', reason: 'strict' }) // 落盘失败:仍严格
+    h.env.failWrite = false
+    const v = await h.rs.allowAccount()
+    expect(v.accountEntry).toBe('trusted')
+    expect(v.trusted).toEqual([{ principal: 'account', confirmedAt: h.env.clock, preconfirmed: false }])
+    expect(h.disk()).toMatchObject({ trusted: [{ principal: 'account', accountId: ACC, confirmedAt: h.env.clock }], accountStrict: [] })
+    expect(h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })).toEqual({ ok: true })
+    expect(h.rs.gate.gateEngine({ ...RUN, via: 'p2p', caller: { kind: 'p2p' } })).toEqual({ ok: true })
+    expect(h.confirm).not.toHaveBeenCalled()
+    await tick(12)
+    expect(h.changed.at(-1)!.accountEntry).toBe('trusted')
+    h.env.account = null
+    await expect(h.rs.allowAccount()).rejects.toThrow('not-signed-in')
+  })
+
+  it('还没允许(none):P2P 报 never-prompts;allowAccount 收掉开着的账号确认框(本机已经答了),迟到的「不允许」丢弃', async () => {
+    const h = await booted({ disk: enabledDisk(), lateAnswer: true })
+    expect((await h.rs.view()).accountEntry).toBe('none')
+    h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })
+    await tick()
+    expect(h.prompts.length).toBe(1)
+    await h.rs.allowAccount()
+    expect(h.prompts[0].signal.aborted).toBe(true)
+    h.prompts[0].answer(false)
+    await tick(12)
+    expect(h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'account' } })).toEqual({ ok: true })
+    expect(h.rs.gate.gateEngine({ ...RUN, via: 'p2p', caller: { kind: 'p2p' } })).toEqual({ ok: true })
+    expect((await h.rs.view()).pending).toEqual([])
+  })
+})
+
 describe('IPC / 文案 / 名册 / 落点', () => {
-  it('IPC 四个通道都先校验发送方(webview / 子 frame → forbidden)', async () => {
+  it('IPC 五个通道都先校验发送方(webview / 子 frame → forbidden)', async () => {
     const h = await booted()
     const handlers = new Map<string, (e: any, ...a: any[]) => unknown>()
     let trusted = false
     registerRemoteSessionsIpc({ handle: (ch, fn) => { handlers.set(ch, fn) } }, h.rs, () => trusted)
-    expect([...handlers.keys()].sort()).toEqual(['remoteSessions:get', 'remoteSessions:revoke', 'remoteSessions:setEnabled', 'remoteSessions:setMaxApprovalMode'])
-    for (const [ch, args] of [['remoteSessions:get', []], ['remoteSessions:setEnabled', [true]], ['remoteSessions:setMaxApprovalMode', ['full-auto']], ['remoteSessions:revoke', ['account']]] as const) {
+    expect([...handlers.keys()].sort()).toEqual(['remoteSessions:allowAccount', 'remoteSessions:get', 'remoteSessions:revoke', 'remoteSessions:setEnabled', 'remoteSessions:setMaxApprovalMode'])
+    for (const [ch, args] of [['remoteSessions:get', []], ['remoteSessions:setEnabled', [true]], ['remoteSessions:setMaxApprovalMode', ['full-auto']], ['remoteSessions:revoke', ['account']], ['remoteSessions:allowAccount', []]] as const) {
       await expect(Promise.resolve().then(() => handlers.get(ch)!({}, ...args)), ch).rejects.toThrow('forbidden')
     }
     expect(h.capWrites).toEqual([])
+    expect(h.writes.slice(1)).toEqual([]) // 除了迁移那一次,被拒的调用一次都没落盘(allowAccount 没有偷偷写账号行)
     trusted = true
     expect(((await handlers.get('remoteSessions:setEnabled')!({}, true)) as RemoteSessionsView).enabled).toBe(true)
   })

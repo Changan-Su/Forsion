@@ -7,7 +7,7 @@
  */
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import type { UnitCaller } from './unitCaller'
-import { REMOTE_CALLER_UNCONFIRMED, REMOTE_SESSIONS_OFF, type GateResult, type TrustState } from '../shared/remoteSessions'
+import { REMOTE_CALLER_UNCONFIRMED, REMOTE_SESSIONS_OFF, type GateResult, type TrustReason, type TrustState } from '../shared/remoteSessions'
 
 export type RemoteEngineTier = 'base' | 'session'
 
@@ -68,8 +68,8 @@ export const REMOTE_SESSIONS_OFF_DETAIL = 'Remote sessions are turned off on thi
 export const REMOTE_CALLER_UNCONFIRMED_DETAIL = 'This caller has not been allowed on this device yet'
 
 export const offResult = (): GateResult => ({ ok: false, status: 403, body: { code: REMOTE_SESSIONS_OFF, detail: REMOTE_SESSIONS_OFF_DETAIL } })
-export const unconfirmedResult = (state: TrustState): GateResult =>
-  ({ ok: false, status: 403, body: { code: REMOTE_CALLER_UNCONFIRMED, detail: REMOTE_CALLER_UNCONFIRMED_DETAIL, state } })
+export const unconfirmedResult = (state: TrustState, reason?: TrustReason): GateResult =>
+  ({ ok: false, status: 403, body: { code: REMOTE_CALLER_UNCONFIRMED, detail: REMOTE_CALLER_UNCONFIRMED_DETAIL, state, ...(reason ? { reason } : {}) } })
 
 /**
  * 纯判定(K4 §3.3 真值表 + U1 缺省):
@@ -80,12 +80,12 @@ export const unconfirmedResult = (state: TrustState): GateResult =>
  * p2p 的 trust 由调用方按 account 条目给(R-09);它只在开关开时拿会话档,永不高于 paired。
  * INV-MONO:没有断言的调用方(account)与未受信的已登记设备拿到同一个 403,待遇不更好。
  */
-export function decideRemoteEngine(tier: RemoteEngineTier, enabled: boolean, caller: UnitCaller, trust: TrustState | null): GateResult {
+export function decideRemoteEngine(tier: RemoteEngineTier, enabled: boolean, caller: UnitCaller, trust: TrustState | null, reason?: TrustReason): GateResult {
   if (tier === 'base') return { ok: true }
   if (!enabled) return offResult()
   if (caller.kind === 'paired') return { ok: true }
   if (trust === 'trusted') return { ok: true }
-  return unconfirmedResult(trust ?? 'unconfirmed')
+  return unconfirmedResult(trust ?? 'unconfirmed', reason) // reason 只描述「为什么不是在等人确认」,不影响放不放行
 }
 
 /** unitWeb 没拿到 remoteAccess 依赖(便携 Unit 的 public 投影之外的别的调用方、e2e 漏传)时的缺省:只放基础档(fail closed)。 */

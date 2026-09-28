@@ -25,7 +25,28 @@ export const REMOTE_SESSIONS_OFF = 'REMOTE_SESSIONS_OFF'
 export const REMOTE_CALLER_UNCONFIRMED = 'REMOTE_CALLER_UNCONFIRMED'
 export type RemoteGateCode = typeof REMOTE_SESSIONS_OFF | typeof REMOTE_CALLER_UNCONFIRMED
 
-export type GateBody = { code: RemoteGateCode; detail: string; state?: TrustState }
+/**
+ * 为什么**不是**「在等那台电脑上的人点允许」(R-10 的只增补充,P1-K4 评审)。有 reason 时调用方不在等弹框 ——
+ * 按 reason 出文案,**不要**当成 awaitingConfirm(R-10 让 K7 / K8 把 state∈{pending,unconfirmed} 显示成「等待确认」,有 reason 时先看 reason)。
+ * 没有 reason:pending = 弹框开着 / 在队里;denied = 那台电脑上的人点了「不允许」(冷却 10 分钟);unconfirmed = 还没问过(状态面;再请求会弹)。
+ */
+export type TrustReason =
+  /** 「本账号的浏览器与网页版」在那台电脑上被撤销(D8 严格档):account / p2p 只有基础档,不再弹框,只能在那台电脑的设置里重新允许。state='denied'。 */
+  | 'strict'
+  /** P2P 从不弹框(R-09:P2P 信道可由只有局域网配对凭据的设备开出,不能凭它授出账号级条目)。state='unconfirmed'。 */
+  | 'never-prompts'
+  /** 那台电脑没登录 Forsion,记不了信任。state='unconfirmed'。 */
+  | 'not-signed-in'
+  /** 调用方设备不在那台电脑所登录账号的名册里(或 kind 对不上):不弹框。state='denied'(冷却 10 分钟)。 */
+  | 'roster-miss'
+  /** 那台电脑这会儿查不了名册:不弹框,30 秒后可再试。state='unconfirmed'。 */
+  | 'roster-unreachable'
+  /** 弹框 2 分钟没人答:1 分钟后可再试(不让无人值守的电脑被连着弹框)。state='unconfirmed'。 */
+  | 'no-answer'
+  /** 待确认队列满了(全局 1 框 + 3 排队):稍后再试。state='unconfirmed'。 */
+  | 'busy'
+
+export type GateBody = { code: RemoteGateCode; detail: string; state?: TrustState; reason?: TrustReason }
 export type GateResult = { ok: true } | { ok: false; status: 403; body: GateBody }
 
 /** 调用方主体的种类(= callerPrincipal 去掉 unit id;局域网配对叫 lan)。 */
@@ -38,6 +59,8 @@ export interface RemoteAccessStatus {
   principal: RemotePrincipalKind
   /** 局域网配对设备 = paired(配对时已本机核对 6 位码);其余按信任条目。 */
   caller: TrustState | 'paired'
+  /** 见 TrustReason(可选,只增)。 */
+  reason?: TrustReason
   maxApprovalMode: CapMode
 }
 
@@ -81,6 +104,11 @@ export interface RemoteSessionsView {
   maxApprovalMode: CapMode
   trusted: TrustedView[]
   pending: PendingView[]
+  /**
+   * 「本账号的浏览器与网页版」条目(U1)此刻的状态:trusted = 已允许;strict = 撤销过(D8 严格档,不再弹框,只能在这里重新允许);
+   * none = 还没允许(浏览器 / 网页版第一次起会话时弹框;P2P 不弹框,只能在这里允许);null = 本机没登录 Forsion(记不了信任)。
+   */
+  accountEntry: 'trusted' | 'strict' | 'none' | null
 }
 
 /** preload 暴露的 window.tangu.remoteSessions(IPC 全部只收本机可信发送方)。 */
@@ -89,8 +117,10 @@ export interface RemoteSessionsApi {
   /** 打开时设备凭据未绑系统加密 → reject(secret-store-insecure)。 */
   setEnabled(on: boolean): Promise<RemoteSessionsView>
   setMaxApprovalMode(mode: CapMode): Promise<RemoteSessionsView>
-  /** unit id 或 'account'。 */
+  /** unit id 或 'account'。撤销 'account' = D8 严格档(不再弹框,直到 allowAccount)。 */
   revoke(principal: string): Promise<RemoteSessionsView>
+  /** 在本机设置里直接允许「本账号的浏览器与网页版」(清掉严格档;等同在弹框里点「允许」)。本机没登录 → reject(not-signed-in)。 */
+  allowAccount(): Promise<RemoteSessionsView>
   onChanged(cb: (view: RemoteSessionsView) => void): () => void
 }
 

@@ -94,6 +94,16 @@ describe('decideRemoteEngine 真值表', () => {
       }
     }
   })
+  it('reason 只进 403 body、不影响放不放行:trusted 带 reason 照样放行;基础档 / 开关关不带 reason', () => {
+    const g = decideRemoteEngine('session', true, CALLERS.account, 'denied', 'strict')
+    expect(!g.ok && g.body).toEqual({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: expect.any(String), state: 'denied', reason: 'strict' })
+    expect(decideRemoteEngine('session', true, CALLERS.account, 'trusted', 'strict')).toEqual({ ok: true })
+    expect(decideRemoteEngine('base', true, CALLERS.account, 'denied', 'strict')).toEqual({ ok: true })
+    const off = decideRemoteEngine('session', false, CALLERS.account, 'denied', 'strict')
+    expect(!off.ok && off.body).toEqual({ code: 'REMOTE_SESSIONS_OFF', detail: expect.any(String) })
+    const plain = decideRemoteEngine('session', true, CALLERS.unit, 'pending')
+    expect(!plain.ok && Object.keys(plain.body).sort()).toEqual(['code', 'detail', 'state']) // 没 reason 就没有这个键
+  })
   it('INV-MONO:未识别调用方(account)与未受信的已登记设备拿到逐字相同的拒绝', () => {
     for (const t of ['pending', 'denied', 'unconfirmed'] as const) {
       expect(decideRemoteEngine('session', true, CALLERS.account, t)).toEqual(decideRemoteEngine('session', true, CALLERS.unit, t))

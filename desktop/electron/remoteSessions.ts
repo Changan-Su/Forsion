@@ -9,7 +9,10 @@
  * 信任(U1 缺省):按主体记 ——
  *   unit    设备行 {principal:'unit', accountId, unitId, name, kind, platform, registeredAt, confirmedAt}:本机确认那一刻的快照(R-25),之后只用它;
  *   account 账号行 {principal:'account', accountId, confirmedAt, preconfirmed?}:「本账号的浏览器与网页版」—— 不带调用方断言的客户端;
- *           每个账号至多一条,p2p 也按它判(R-09),撤销它 = D8 严格档。
+ *           每个账号至多一条,p2p 也按它判(R-09)。
+ *   撤销账号行 = D8 严格档(U1):另记 accountStrict[{accountId, since}](**不**进 trusted[],免得读 trusted[] 的人把它当信任)——
+ *           严格档期间 account / p2p 只有基础档、不再弹框(否则泄露的 forsion_token 可以一直弹到有人手滑点「允许」),
+ *           只能在本机「设置 › 远程会话」里 allowAccount() 重新允许。撤销设备行只回 unconfirmed(弹框点名那台设备,可再确认)。
  * 只认 accountId 等于当前登录账号的行(换号后旧行惰性保留、不生效、不显示)。
  *
  * 迁移(一次性):文件不存在才看 unitHostEnabled —— 老用户已开互联 → 开关开 + 账号行预置(preconfirmed);新用户关。文件一旦存在绝不再看。
@@ -25,7 +28,7 @@ import { decideRemoteEngine, remoteEngineTier } from './remoteSessionGate'
 import type { ProxyCaller, UnitCaller, UnitKind } from './unitCaller'
 import {
   normalizeCap, SECRET_STORE_INSECURE, type CapMode, type GateResult, type PendingView, type RemoteAccessStatus,
-  type RemoteSessionsView, type TrustedView, type TrustState,
+  type RemoteSessionsView, type TrustedView, type TrustReason, type TrustState,
 } from '../shared/remoteSessions'
 
 export const REMOTE_SESSIONS_FILE = 'remote-sessions.json'
@@ -33,6 +36,10 @@ export const REMOTE_SESSIONS_FILE = 'remote-sessions.json'
 const MAX_UNIT_ROWS = 64
 const DENY_COOLDOWN_MS = 10 * 60_000
 const PROMPT_TTL_MS = 2 * 60_000
+/** 名册查不了:这么久之内不再去云端查(每次重试都打一次 /api/units 会吃掉全局每 IP 限流,G2)。 */
+const ROSTER_RETRY_MS = 30_000
+/** 弹框没人答(TTL 到):这么久之内不再弹(无人值守的电脑不被连着弹框、连着把主窗拉到前台)。 */
+const NO_ANSWER_COOLDOWN_MS = 60_000
 /** 排队上限(不含正在弹的那一个):超出直接回 unconfirmed,不排队(防局域网 / 隧道刷框)。 */
 const MAX_QUEUED = 3
 
@@ -157,9 +164,11 @@ export async function lookupRosterUnit(
 interface UnitRow { principal: 'unit'; accountId: string; unitId: string; name: string; kind: UnitKind; platform: string | null; registeredAt: string | null; confirmedAt: number }
 interface AccountRow { principal: 'account'; accountId: string; confirmedAt: number; preconfirmed?: true }
 type Row = UnitRow | AccountRow
-interface FileState { v: 1; enabled: boolean; migratedFromUnitHost: boolean; trusted: Row[] }
+/** 撤销过「本账号的浏览器与网页版」的账号(D8 严格档)。 */
+interface StrictMark { accountId: string; since: number }
+interface FileState { v: 1; enabled: boolean; migratedFromUnitHost: boolean; trusted: Row[]; accountStrict: StrictMark[] }
 
-const EMPTY: FileState = { v: 1, enabled: false, migratedFromUnitHost: false, trusted: [] }
+const EMPTY: FileState = { v: 1, enabled: false, migratedFromUnitHost: false, trusted: [], accountStrict: [] }
 
 function parseRow(x: unknown): Row | null {
   if (!x || typeof x !== 'object' || Array.isArray(x)) return null
@@ -182,7 +191,14 @@ export function parseRemoteSessionsFile(raw: string): FileState | null {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return null
   const o = j as Record<string, unknown>
   const trusted = (Array.isArray(o.trusted) ? o.trusted : []).map(parseRow).filter((r): r is Row => !!r)
-  return { v: 1, enabled: o.enabled === true, migratedFromUnitHost: o.migratedFromUnitHost === true, trusted }
+  // 缺字段(本评审之前写的文件)= 没有严格档;同一账号只留一条
+  const accountStrict: StrictMark[] = []
+  for (const x of Array.isArray(o.accountStrict) ? o.accountStrict : []) {
+    const r = x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : null
+    if (!r || typeof r.accountId !== 'string' || !r.accountId || accountStrict.some((m) => m.accountId === r.accountId)) continue
+    accountStrict.push({ accountId: r.accountId, since: typeof r.since === 'number' && Number.isFinite(r.since) ? r.since : 0 })
+  }
+  return { v: 1, enabled: o.enabled === true, migratedFromUnitHost: o.migratedFromUnitHost === true, trusted, accountStrict }
 }
 
 /** 主体键:unit:<id> | account。p2p 按 account 判(R-09);局域网配对不进信任表(null)。 */
@@ -258,8 +274,10 @@ export interface RemoteSessions {
   view(): Promise<RemoteSessionsView>
   setEnabled(on: boolean): Promise<RemoteSessionsView>
   setMaxApprovalMode(m: unknown): Promise<RemoteSessionsView>
-  /** unit id 或 'account'。 */
+  /** unit id 或 'account'。'account' = D8 严格档(不再弹框,直到 allowAccount)。 */
   revoke(principal: unknown): Promise<RemoteSessionsView>
+  /** 本机设置里直接允许「本账号的浏览器与网页版」(清严格档 + 写账号行;落盘成功才生效)。未登录抛 not-signed-in。 */
+  allowAccount(): Promise<RemoteSessionsView>
   /** 同步、内存态:存档开 && K5 允许(R-24)。 */
   isEnabled(): boolean
   /** 同步;K2 托盘「远程会话运行中 · {name}」用本机记下的名字(R-11)。'account' → 「本账号的浏览器与网页版」。 */
@@ -293,8 +311,8 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
   let state: FileState = EMPTY
   let loaded = false
   let capCache: CapMode = 'auto-edit'
-  /** 拒绝后的冷却(内存,重启清零):`${accountId}|${key}` → 到期时刻。 */
-  const cooldown = new Map<string, number>()
+  /** 冷却(内存,重启清零):`${accountId}|${key}` → 到期时刻 + 冷却期间报的状态(拒绝 / 名册缺失 = denied;名册不可达 / 没人答 = unconfirmed)。 */
+  const cooldown = new Map<string, { until: number; state: 'denied' | 'unconfirmed'; reason?: TrustReason }>()
   const pending = new Map<string, Pending>()
   let pumping = false
 
@@ -349,6 +367,7 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       enabled: hostOn,
       migratedFromUnitHost: hostOn,
       trusted: hostOn && acc ? [{ principal: 'account', accountId: acc, confirmedAt: now(), preconfirmed: true }] : [],
+      accountStrict: [],
     }
     state = next // 写失败:本次会话与老版本行为一致,下次启动重试
     try { await writeQ(() => write(deps.file(), next)) } catch (e) {
@@ -356,16 +375,24 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     }
   }
 
-  function trustState(acc: string | null, key: PrincipalKey | null): TrustState {
-    if (!acc || !key) return 'unconfirmed'
-    if (state.trusted.some((r) => r.accountId === acc && rowKey(r) === key)) return 'trusted'
-    if (pending.has(`${acc}|${key}`)) return 'pending'
-    const until = cooldown.get(`${acc}|${key}`)
-    if (until !== undefined) {
-      if (until > now()) return 'denied'
+  type Trust = { state: TrustState; reason?: TrustReason }
+  const isStrict = (acc: string): boolean => state.accountStrict.some((m) => m.accountId === acc)
+
+  /** 调用方此刻的信任(不排确认)。有 reason = 不是在等人点允许(TrustReason)。paired 不进信任表,不该问到这里。 */
+  function trustOf(acc: string | null, caller: UnitCaller): Trust {
+    const key = keyOf(caller)
+    if (!key) return { state: 'unconfirmed' }
+    if (!acc) return { state: 'unconfirmed', reason: 'not-signed-in' }
+    if (key === 'account' && isStrict(acc)) return { state: 'denied', reason: 'strict' } // 严格档压过一切(文件被手改成两者都有时偏严)
+    if (state.trusted.some((r) => r.accountId === acc && rowKey(r) === key)) return { state: 'trusted' }
+    if (pending.has(`${acc}|${key}`)) return { state: 'pending' }
+    const cd = cooldown.get(`${acc}|${key}`)
+    if (cd) {
+      if (cd.until > now()) return { state: cd.state, ...(cd.reason ? { reason: cd.reason } : {}) }
       cooldown.delete(`${acc}|${key}`)
     }
-    return 'unconfirmed'
+    if (caller.kind === 'p2p') return { state: 'unconfirmed', reason: 'never-prompts' } // R-09:P2P 只读账号条目,自己从不弹
+    return { state: 'unconfirmed' }
   }
 
   /** 这次确认还作数吗:开关仍开、账号没换、没锁定、没被撤销 / 收掉。 */
@@ -383,20 +410,21 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     return hit
   }
 
-  /** 同步排一次本机确认,回排完之后的状态(闸与 request 共用)。只有 unit / account 会弹;p2p 只读 account 条目(R-09 / U1)。 */
-  function beginTrust(caller: UnitCaller): TrustState {
-    if (caller.kind !== 'unit' && caller.kind !== 'account') return trustState(safeAccount(), keyOf(caller))
+  /** 同步排一次本机确认,回排完之后的状态(闸与 request 共用)。只有 unit / account 会弹;p2p 只读 account 条目(R-09 / U1);
+   *  严格档 / 未登录 / 冷却中(trustOf 带 reason)一律不弹。 */
+  function beginTrust(caller: UnitCaller): Trust {
     const acc = safeAccount()
+    const t = trustOf(acc, caller)
+    if (t.state !== 'unconfirmed' || t.reason || !acc) return t
+    if (caller.kind !== 'unit' && caller.kind !== 'account') return t
+    if (!isEnabled() || safeLocked()) return t // 开关关 / 锁定:不弹(R-26)
+    if (pending.size >= 1 + MAX_QUEUED) return { state: 'unconfirmed', reason: 'busy' }
     const key = keyOf(caller)!
-    const st = trustState(acc, key)
-    if (st !== 'unconfirmed' || !acc) return st
-    if (!isEnabled() || safeLocked()) return 'unconfirmed' // 开关关 / 锁定:不弹(R-26)
-    if (pending.size >= 1 + MAX_QUEUED) return 'unconfirmed'
     const p: Pending = { id: `${acc}|${key}`, accountId: acc, key, caller, since: now(), ac: new AbortController(), active: false }
     pending.set(p.id, p)
     emit()
     void pump()
-    return 'pending'
+    return { state: 'pending' }
   }
 
   async function pump(): Promise<void> {
@@ -416,7 +444,9 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     }
   }
 
-  const deny = (p: Pending): void => { cooldown.set(p.id, now() + DENY_COOLDOWN_MS) }
+  const deny = (p: Pending, reason?: TrustReason): void => {
+    cooldown.set(p.id, { until: now() + DENY_COOLDOWN_MS, state: 'denied', ...(reason ? { reason } : {}) })
+  }
 
   async function handle(p: Pending): Promise<void> {
     if (!stillValid(p)) return
@@ -426,16 +456,21 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       const pc: ProxyCaller = p.caller.caller
       const r = await deps.lookupUnit(pc.unit).catch(() => 'unreachable' as const)
       if (!stillValid(p)) return
-      if (r === 'unreachable') { deps.log('[remote-sessions] 名册不可达:这次不弹确认'); return } // → unconfirmed
-      if (r === null) { deps.log('[remote-sessions] 调用方设备不在本账号名册里:拒绝,不弹框'); deny(p); return }
-      if (r.kind && r.kind !== pc.kind) { deps.log('[remote-sessions] 名册 kind 与调用方断言不一致:拒绝,不弹框'); deny(p); return }
+      if (r === 'unreachable') { // → unconfirmed;短冷却内不再去云端查(G2)
+        deps.log('[remote-sessions] 名册不可达:这次不弹确认')
+        cooldown.set(p.id, { until: now() + ROSTER_RETRY_MS, state: 'unconfirmed', reason: 'roster-unreachable' })
+        return
+      }
+      if (r === null) { deps.log('[remote-sessions] 调用方设备不在本账号名册里:拒绝,不弹框'); deny(p, 'roster-miss'); return }
+      if (r.kind && r.kind !== pc.kind) { deps.log('[remote-sessions] 名册 kind 与调用方断言不一致:拒绝,不弹框'); deny(p, 'roster-miss'); return }
       const name = clean(r.registeredName) || clean(r.name) || clean(pc.name)
       snapshot = { unitId: pc.unit.toLowerCase(), name, kind: pc.kind, platform: pc.platform ?? r.platform, registeredAt: pc.registeredAt ?? r.createdAt }
       info = { principal: 'unit', unitId: snapshot.unitId, name, kind: pc.kind, platform: snapshot.platform, registeredAt: snapshot.registeredAt, cap: capCache }
     } else {
       info = { principal: 'account', cap: capCache }
     }
-    const ttl = setTimeout(() => p.ac.abort(), PROMPT_TTL_MS)
+    let timedOut = false
+    const ttl = setTimeout(() => { timedOut = true; p.ac.abort() }, PROMPT_TTL_MS)
     let answer: boolean | null = null
     try {
       answer = await deps.confirm(confirmDialogOptions(info), p.ac.signal)
@@ -443,6 +478,11 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       deps.log(`[remote-sessions] 确认框出错:${(e as Error)?.message || e}`)
     } finally {
       clearTimeout(ttl)
+    }
+    // TTL 到点没人答(不是被关开关 / 撤销 / 换号收掉的):短冷却,免得无人值守时被连着弹框
+    if (timedOut && pending.get(p.id) === p) {
+      cooldown.set(p.id, { until: now() + NO_ANSWER_COOLDOWN_MS, state: 'unconfirmed', reason: 'no-answer' })
+      return
     }
     if (!stillValid(p)) return // 关框后的结果一律丢弃:不得在开关已关 / 换号 / 撤销后落信任
     if (answer === false) { deny(p); return }
@@ -471,7 +511,8 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     ])
     capCache = cap
     const acc = safeAccount()
-    const rows = acc ? state.trusted.filter((r) => r.accountId === acc) : []
+    const strict = !!acc && isStrict(acc)
+    const rows = acc ? state.trusted.filter((r) => r.accountId === acc && !(strict && r.principal === 'account')) : []
     const trusted: TrustedView[] = [
       ...rows.filter((r): r is AccountRow => r.principal === 'account').map((r) => ({ principal: 'account' as const, confirmedAt: r.confirmedAt, preconfirmed: r.preconfirmed === true })),
       ...rows.filter((r): r is UnitRow => r.principal === 'unit').sort((a, b) => b.confirmedAt - a.confirmedAt)
@@ -485,21 +526,18 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
     // 互联关着就不问 K5(与 K5 的懒加载契约同口径:main.ts 只在 unitHostEnabled 时读配对;问状态 = 判定钥匙串等级 = macOS 可能弹框)。
     // 互联关着时没有 unitWeb、也就没有远程请求,「设备凭据是否加密」这一刻无关紧要 → null(未知,不是「未加密」)。
     // 刻意不看 state.enabled:迁移过来(enabled 开)而后关了互联的用户,正是 K5 要保护的那批。isEnabled() 只在闸 / 状态面里跑(= 互联开着)。
-    return { hostEnabled, enabled: state.enabled, permitted: hostEnabled ? safePermitted() : null, maxApprovalMode: cap, trusted, pending: pend }
+    const accountEntry = !acc ? null : strict ? 'strict' as const : rows.some((r) => r.principal === 'account') ? 'trusted' as const : 'none' as const
+    return { hostEnabled, enabled: state.enabled, permitted: hostEnabled ? safePermitted() : null, maxApprovalMode: cap, trusted, pending: pend, accountEntry }
   }
 
   function emit(): void {
     void view().then((v) => deps.onChanged(v)).catch((e) => deps.log(`[remote-sessions] 广播失败:${(e as Error)?.message || e}`))
   }
 
-  function statusOf(caller: UnitCaller): RemoteAccessStatus {
-    const principal = caller.kind === 'paired' ? 'lan' : caller.kind
-    return {
-      remoteSessions: isEnabled(),
-      principal,
-      caller: caller.kind === 'paired' ? 'paired' : trustState(safeAccount(), keyOf(caller)),
-      maxApprovalMode: capCache,
-    }
+  function statusOf(caller: UnitCaller, t?: Trust): RemoteAccessStatus {
+    if (caller.kind === 'paired') return { remoteSessions: isEnabled(), principal: 'lan', caller: 'paired', maxApprovalMode: capCache }
+    const tr = t ?? trustOf(safeAccount(), caller)
+    return { remoteSessions: isEnabled(), principal: caller.kind, caller: tr.state, ...(tr.reason ? { reason: tr.reason } : {}), maxApprovalMode: capCache }
   }
 
   const gate: RemoteSessionsGate = {
@@ -508,14 +546,13 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       if (tier === 'base') return { ok: true }
       const enabled = isEnabled()
       if (!enabled || q.caller.kind === 'paired') return decideRemoteEngine(tier, enabled, q.caller, null)
-      let trust = trustState(safeAccount(), keyOf(q.caller))
-      if (trust === 'unconfirmed') trust = beginTrust(q.caller) // fire-and-forget:闸绝不等弹框
-      return decideRemoteEngine(tier, enabled, q.caller, trust)
+      const t = beginTrust(q.caller) // 已信任 / 带 reason 的原样回;否则排一次确认(fire-and-forget:闸绝不等弹框)
+      return decideRemoteEngine(tier, enabled, q.caller, t.state, t.reason)
     },
-    status: statusOf,
+    status: (caller) => statusOf(caller),
     async request(caller) {
-      beginTrust(caller)
-      return statusOf(caller)
+      if (caller.kind === 'paired') return statusOf(caller)
+      return statusOf(caller, beginTrust(caller)) // busy 只在这一拍知道,别再算一遍丢掉
     },
   }
 
@@ -566,7 +603,18 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       if (acc) {
         abortWhere((p) => p.accountId === acc && p.key === key)
         try {
-          if (state.trusted.some((r) => r.accountId === acc && rowKey(r) === key)) {
+          const hasRow = state.trusted.some((r) => r.accountId === acc && rowKey(r) === key)
+          if (key === 'account') {
+            // D8 严格档(U1「撤销它 = D8 严格档」):删行 + 记严格档,一起先生效再落盘(失败偏严)。之后 account / p2p 不再弹框
+            cooldown.delete(`${acc}|account`)
+            if (hasRow || !isStrict(acc)) {
+              await commitNow((s) => ({
+                ...s,
+                trusted: s.trusted.filter((r) => !(r.accountId === acc && rowKey(r) === 'account')),
+                accountStrict: [...s.accountStrict.filter((m) => m.accountId !== acc), { accountId: acc, since: now() }],
+              }))
+            }
+          } else if (hasRow) {
             await commitNow((s) => ({ ...s, trusted: s.trusted.filter((r) => !(r.accountId === acc && rowKey(r) === key)) }))
           }
         } finally {
@@ -575,11 +623,30 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
       }
       return view()
     },
+    async allowAccount() {
+      await ready
+      const acc = safeAccount()
+      if (!acc) throw new Error('not-signed-in')
+      abortWhere((p) => p.accountId === acc && p.key === 'account') // 弹框开着:本机设置里已经答了,关掉它
+      const row: AccountRow = { principal: 'account', accountId: acc, confirmedAt: now() }
+      try {
+        await commit((s) => ({ // 落盘成功才生效(同弹框里点「允许」)
+          ...s,
+          trusted: [...s.trusted.filter((r) => !(r.accountId === acc && rowKey(r) === 'account')), row],
+          accountStrict: s.accountStrict.filter((m) => m.accountId !== acc),
+        }))
+        cooldown.delete(`${acc}|account`)
+      } finally {
+        emit()
+      }
+      return view()
+    },
     isEnabled,
     trustedCaller(unitId) {
       const acc = safeAccount()
       if (!acc || typeof unitId !== 'string') return null
       if (unitId === 'account') {
+        if (isStrict(acc)) return null
         const r = state.trusted.find((x): x is AccountRow => x.principal === 'account' && x.accountId === acc)
         return r ? { principal: 'account', name: mt('main.remoteSessions.accountLabel'), confirmedAt: r.confirmedAt } : null
       }
@@ -608,4 +675,5 @@ export function registerRemoteSessionsIpc(
   ipc.handle('remoteSessions:setEnabled', async (e, on: unknown) => { guard(e); return rs.setEnabled(on as boolean) })
   ipc.handle('remoteSessions:setMaxApprovalMode', async (e, m: unknown) => { guard(e); return rs.setMaxApprovalMode(m) })
   ipc.handle('remoteSessions:revoke', async (e, principal: unknown) => { guard(e); return rs.revoke(principal) })
+  ipc.handle('remoteSessions:allowAccount', async (e) => { guard(e); return rs.allowAccount() })
 }
