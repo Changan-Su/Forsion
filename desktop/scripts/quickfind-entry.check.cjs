@@ -94,6 +94,58 @@ const qfState = (page) => page.evaluate(() => ({
       check('G4-11e ⌘Enter → 新标签打开(openView newTab)', JSON.stringify(s4.nav) === JSON.stringify([{ type: 'amadeus-editor', path: '月度计划.md', newTab: true }]), JSON.stringify(s4.nav))
       await p2.close()
     })
+    await tryTest('G4-02', async () => {
+      /** 在当前聚焦的输入框里起一段真组合(不提交),按 key,量面板状态。 */
+      const composeThenPress = async (page, text, key) => {
+        const cdp = await page.context().newCDPSession(page)
+        await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length })
+        await page.waitForTimeout(150)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(250)
+      }
+      // 快速查找:组字回车 / ↓ / Esc
+      for (const [key, text, want] of [['Enter', 'moc', 'Enter 不打开第一条'], ['ArrowDown', 'r', '↓ 不移动选中'], ['Escape', 'yue', 'Esc 不关面板']]) {
+        const page = await openQF(browser)
+        await composeThenPress(page, text, key)
+        const after = await qfState(page)
+        const ok = after.open && after.nav.length === 0 && (key !== 'ArrowDown' || after.rows.findIndex((r) => r.startsWith('*')) === 0)
+        check(`G4-02 快速查找组字中 ${want}`, ok, JSON.stringify({ rows: after.rows.slice(0, 3), open: after.open, nav: after.nav }))
+        await page.close()
+      }
+      // 命令面板(lcl CommandPalette)与模板选择器(Amadeus 浮层):组字回车不执行、Esc 不关。
+      const page = await openQF(browser)
+      await page.evaluate(() => {
+        window.__qf.useQuickFind.getState().close()
+        window.__qf.useCommandStore.setState({ commands: [{ id: 'x-cmd', title: 'Xcmd', run: () => window.__nav.push({ ran: 'x-cmd' }) }], paletteOpen: true })
+      })
+      await page.waitForSelector('.cmd-input')
+      await page.focus('.cmd-input')
+      await composeThenPress(page, 'x', 'Enter')
+      const cp = await page.evaluate(() => ({ open: !!document.querySelector('.cmd-input'), nav: window.__nav }))
+      check('G4-02 命令面板组字中 Enter 不执行命令', cp.open && cp.nav.length === 0, JSON.stringify(cp))
+      await composeThenPress(page, 'xy', 'Escape')
+      const cp2 = await page.evaluate(() => !!document.querySelector('.cmd-input'))
+      check('G4-02 命令面板组字中 Esc 不关面板', cp2)
+      await page.evaluate(() => {
+        window.__qf.useCommandStore.setState({ paletteOpen: false })
+        window.__qf.usePageStore.setState({ pages: ['templates/日报.md', '月度计划.md'] })
+        window.__qf.useUiOverlay.getState().openTemplate({ v4Path: '月度计划.md' })
+      })
+      await page.waitForSelector('.cmd-input')
+      await page.focus('.cmd-input')
+      await composeThenPress(page, 'ri', 'Enter')
+      const tp = await page.evaluate(() => ({ overlay: window.__qf.useUiOverlay.getState().overlay, input: !!document.querySelector('.cmd-input') }))
+      check('G4-02 模板选择器组字中 Enter 不插模板', tp.overlay === 'template' && tp.input, JSON.stringify(tp))
+      // 对照:提交组字后(不在组字中)Enter 照常选中 —— 证明上面不是面板本身坏了。
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Input.insertText', { text: 'ri' })
+      await page.waitForTimeout(150)
+      await page.keyboard.press('Enter')
+      await page.waitForTimeout(250)
+      const tp2 = await page.evaluate(() => window.__qf.useUiOverlay.getState().overlay)
+      check('G4-02 对照:组字提交后 Enter 照常选中模板', tp2 === null, String(tp2))
+      await page.close()
+    })
   } finally {
     await browser.close()
   }

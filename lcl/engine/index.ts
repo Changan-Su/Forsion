@@ -54,6 +54,8 @@ export { OverlayAt, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacemen
 export type { NestedPanelPlacement } from './menuAnchor'
 export type { AnchorOpts } from './menuAnchor'
 export { setEngineI18n, useEngineI18n, engineTr } from './i18nSeam'
+/** 输入法组字守卫:面板输入框的 onKeyDown 第一行问它,组字中的 Enter/↑↓/Esc 归输入法(评审 G4-02)。 */
+export { isImeKeyEvent } from './ime'
 export { LCL_MESSAGES } from './engineMessages'
 /** 骨架屏(list/document/chat 三变体)+ 面板级错误边界:加载分支/懒视图兜底统一用它,别再各写空白或转圈。 */
 export { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'

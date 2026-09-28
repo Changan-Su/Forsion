@@ -4,6 +4,7 @@ import { commandHotkeyText, useCommandStore } from './commandRegistry'
 import { fuzzyRank } from './fuzzy'
 import { label } from './types'
 import { useEngineI18n } from './i18nSeam'
+import { isImeKeyEvent } from './ime'
 
 export function CommandPalette() {
   const { t } = useEngineI18n()
@@ -35,6 +36,7 @@ export function CommandPalette() {
   }
 
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (isImeKeyEvent(e)) return // 组字中的 Enter/↑↓/Esc 归输入法(G4-02)
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActive((a) => Math.min(a + 1, results.length - 1))

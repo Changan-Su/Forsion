@@ -22,7 +22,7 @@ import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
-import { isMacPlatform } from '@lcl/engine'
+import { isImeKeyEvent, isMacPlatform } from '@lcl/engine'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -227,6 +227,7 @@ function QuickFindInner() {
   }
 
   const onKey = (e: ReactKeyboardEvent): void => {
+    if (isImeKeyEvent(e)) return // 组字中的 Enter/↑↓/←→/Esc 归输入法(G4-02:此前组字回车直接打开第一条)
     if (e.key === 'Escape') { e.preventDefault(); close() }
     else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((i) => Math.min(i + 1, total - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((i) => Math.max(i - 1, 0)) }

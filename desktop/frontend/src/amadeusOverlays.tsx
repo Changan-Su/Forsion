@@ -17,6 +17,7 @@ import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
 import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
+import { isImeKeyEvent } from '@lcl/engine/ime'
 import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 import { openTagView } from './amadeusPanels'
@@ -229,6 +230,7 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
     if (tpl) insertTemplate(tpl, ctx).catch(() => { /* ignore */ })
   }
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (isImeKeyEvent(e)) return // 组字中的 Enter/↑↓/Esc 归输入法(G4-02)
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, templates.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)) }
     else if (e.key === 'Enter') { e.preventDefault(); choose(active) }
