@@ -2272,19 +2272,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 押后回灌期间照旧冻结保存:回灌收尾(reconcile 的 finally)会补发这一笔,这里只留草稿。
   // 与上面 D-04 的 kick 分开:那条只管「写失败后的补写」,这条管「还没到点的防抖写」。
   useEffect(() => {
-    const flushNow = (props: boolean): void => {
-      if (pipe.readOnly || pipe.retired || pipe.dead) return
+    /** 此刻的全文同步存进本机草稿(进程可能在异步写回来之前就没了);返回是否真有待写。 */
+    const stashNow = (props: boolean): boolean => {
+      if (pipe.readOnly || pipe.retired || pipe.dead) return false
       syncFromEditor()
       if (props) flushPropDrafts()
+      const text = composeFm(pipe.fm, pipe.body)
+      if (!pipe.writing && (text === pipe.lastSaved || isPristine())) return false
+      pipe.pending = true
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+      return true
+    }
+    const flushNow = (props: boolean): void => {
+      if (!stashNow(props)) return
       if (pipe.timer) {
         clearTimeout(pipe.timer)
         pipe.timer = null
       }
-      const text = composeFm(pipe.fm, pipe.body)
-      if (!pipe.writing && (text === pipe.lastSaved || isPristine())) return
-      pipe.pending = true
-      pipe.stashed = text
-      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
       if (pipe.reconcileBusy) return
       void writeNow()
     }
@@ -2292,11 +2297,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const onLeave = (): void => flushNow(true)
     // 窗口失焦要节流:在几个窗口间来回切是常态,每切一次都整篇写一遍没必要。属性框的草稿不在这里提交 ——
     // 窗口失焦时输入框自己会收到 blur 并提交。
+    // 节流窗内的失焦(Codex 复核 inst P2-4):不许被整个吞掉 —— 此刻的字照样同步存草稿,窗口一过补一次冲洗(末次补写)。
     let lastBlur = 0
+    let trail: ReturnType<typeof setTimeout> | null = null
     const onBlur = (): void => {
-      const now = Date.now()
-      if (now - lastBlur < 1000) return
-      lastBlur = now
+      const wait = lastBlur + 1000 - Date.now()
+      if (wait > 0) {
+        stashNow(false)
+        if (!trail) trail = setTimeout(() => { trail = null; lastBlur = Date.now(); flushNow(false) }, wait)
+        return
+      }
+      lastBlur = Date.now()
       flushNow(false)
     }
     document.addEventListener('visibilitychange', onHidden)
@@ -2310,6 +2321,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       document.removeEventListener('freeze', onLeave)
       document.removeEventListener('pause', onLeave)
       window.removeEventListener('blur', onBlur)
+      if (trail) clearTimeout(trail)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])

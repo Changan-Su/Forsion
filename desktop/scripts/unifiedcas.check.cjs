@@ -35,6 +35,7 @@
 //  V 组(评审 G2-08,离场即时落盘):打字后(防抖窗内)visibilitychange→hidden / pagehide / freeze / Cordova pause / 窗口失焦
 //   → 150ms 内落盘(不等 800ms);V6 盘上被悄悄改过(无回灌通知)时隐藏 → 走 CAS:盘上那版进冲突副本、本地版落盘,绝不裸写;
 //   V7 失焦节流:1s 内第二次失焦不重复写;V8 没有改动时隐藏 → 零写
+//   V9(Codex 复核 inst P2-4)节流窗内的失焦不被吞:当场同步存草稿(含最新的字),窗口一过补写落盘(早于防抖到点)
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -820,6 +821,24 @@ async function groupV(browser) {
     await wait(1200)
     const d = await disk(p)
     record('V7 失焦节流:1s 内第二次失焦不重复写,改动仍由防抖落盘', n1 === 1 && n2 === 0 && d.includes('第一段。ab'), JSON.stringify({ n1, n2, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', 'a')
+    const r = await p.evaluate(async () => {
+      const sleep = (ms) => new Promise((res) => setTimeout(res, ms))
+      const v = window.__upage.probe.view()
+      window.dispatchEvent(new Event('blur')) // 第一次失焦:当场写
+      await sleep(850)
+      v.dispatch(v.state.tr.insertText('b')) // 节流窗快结束时又打了一个字(listener 200ms + 防抖 800ms 之后才轮到自动保存)
+      window.dispatchEvent(new Event('blur')) // 窗内第二次失焦
+      const drafts = Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')).map((k) => JSON.parse(localStorage.getItem(k)).text)
+      await sleep(420) // 窗口已过、防抖还远没到点
+      return { drafts, disk: window.__upage.vault.get('Unified.md') }
+    })
+    record('V9 节流窗内的失焦:当场同步存草稿(含最新的字),窗口一过补写落盘(不等防抖)',
+      r.drafts.some((t) => t.includes('第一段。ab')) && r.disk.includes('第一段。ab'), JSON.stringify(r))
     await p.close()
   }
   {
