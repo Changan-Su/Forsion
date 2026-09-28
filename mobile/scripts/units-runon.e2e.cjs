@@ -10,6 +10,8 @@
  *  - 出三张真实截图(中文亮 / 中文暗 / 英文亮)给人眼看(DESIGN §8)。
  *  - P1-KF 拒绝矩阵(zh / en):K4 拒绝体的每种 reason / state 在行上的状态、文案、状态点;带 reason 的不发起确认、不出「请允许」、
  *    不转圈、不切位置;denied(用户点了「不允许」)才说 10 分钟;轮询中才知道的名册缺失 / 弹框收了立刻停。另出几张拒绝态截图。
+ *    矩阵在同一页面上顺序跑(行上的表不清):先留下一条「连不上」(网络错 / 发起确认 500),下一例那台电脑的真回答
+ *    (reason / 轮询中的「请允许」)必须照出 —— 评审 P2:旧探针曾盖住后来的一切拒绝。
  *  - 端口:缺省系统分配空闲端口;PORT_RUNON 指定时先核实没人占(别的会话常驻 5301–5307 / 5173 / 5199)。
  *
  * 跑法:npm run build && npm run e2e:runon。SHOT_DIR 指定截图目录(缺省系统临时目录)。
@@ -355,6 +357,7 @@ async function simScenario(browser) {
 const EXPECT = {
   zh: {
     pending: '请在「MacBook Pro」上允许这台手机',
+    unreachable: '暂时连不上，稍后重试',
     denied: '「MacBook Pro」拒绝了这台手机，10 分钟后可以再次请求',
     notAsked: '「MacBook Pro」还没有允许这台手机，点按再次请求',
     remoteOff: '请在「MacBook Pro」上开启「允许远程会话」',
@@ -368,6 +371,7 @@ const EXPECT = {
   },
   en: {
     pending: 'Allow this phone on "MacBook Pro"',
+    unreachable: "Can't reach it right now. Try again shortly",
     denied: '"MacBook Pro" declined this phone. You can ask again in 10 minutes',
     notAsked: '"MacBook Pro" hasn\'t allowed this phone yet. Tap to ask again',
     remoteOff: 'Turn on "Allow remote sessions" on "MacBook Pro"',
@@ -392,6 +396,10 @@ const CASES = [
   { name: 'no-answer(冷却中)', get: [st('unconfirmed', { reason: 'no-answer' })], status: 'callerBlocked', reason: 'no-answer', text: 'no-answer', tone: 'warn', calls: ['GET /unit/remote-access'] },
   { name: 'busy(发起那拍才知道)', get: [st('unconfirmed')], post: st('unconfirmed', { reason: 'busy' }), status: 'callerBlocked', reason: 'busy', text: 'busy', tone: 'warn', calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request'] },
   { name: 'remote off', get: [st('unconfirmed', { remoteSessions: false })], status: 'remoteOff', text: 'remoteOff', tone: 'warn', calls: ['GET /unit/remote-access'] },
+  // 评审 P2:同一行上先留一条「连不上」,紧接着那台电脑的真回答必须照出(旧探针不许盖住 reason / 「请允许」)
+  { name: '网络错(留下一条连不上)', get: ['throw'], status: 'unreachable', text: 'unreachable', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: '连不上之后 → roster-miss', shot: 'after-blip-roster-miss', get: [st('denied', { reason: 'roster-miss' })], status: 'callerBlocked', reason: 'roster-miss', text: 'roster-miss', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: '发起确认 500(留下一条连不上)', get: [st('unconfirmed')], post: { __status: 500, body: { detail: 'boom' } }, status: 'unreachable', text: 'unreachable', tone: 'err', calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request'] },
   { name: '轮询中查完名册 → roster-miss', get: [st('unconfirmed'), st('denied', { reason: 'roster-miss' })], post: st('pending'), status: 'callerBlocked', reason: 'roster-miss', text: 'roster-miss', tone: 'err', sawPending: true, calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request', 'GET /unit/remote-access'] },
   { name: '轮询中弹框收了没回答 → 还没问过', get: [st('unconfirmed'), st('unconfirmed')], post: st('pending'), status: 'awaitingConfirm', text: 'notAsked', tone: 'warn', sawPending: true, calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request', 'GET /unit/remote-access'] },
 ]
@@ -436,8 +444,10 @@ async function refusalMatrix(browser, lang) {
       if (!m) return orig(u, init)
       const key = `${(init && init.method) || 'GET'} ${m[2]}`
       sim.calls.push(key)
-      if (key === 'GET /unit/remote-access') return json(sim.gets[Math.min(sim.i++, sim.gets.length - 1)])
-      if (key === 'POST /unit/remote-access/request') return json(sim.post || { remoteSessions: true, principal: 'unit', caller: 'pending', maxApprovalMode: 'auto-edit' })
+      // 'throw' = 网络错(fetch 抛 TypeError);{__status, body} = 非 200 回包
+      const answer = (v) => { if (v === 'throw') throw new TypeError('Failed to fetch'); return v && v.__status ? json(v.body, v.__status) : json(v) }
+      if (key === 'GET /unit/remote-access') return answer(sim.gets[Math.min(sim.i++, sim.gets.length - 1)])
+      if (key === 'POST /unit/remote-access/request') return answer(sim.post || { remoteSessions: true, principal: 'unit', caller: 'pending', maxApprovalMode: 'auto-edit' })
       if (key === 'GET /engine/agent/sessions') return json({ sessions: [] })
       return json({ detail: 'not found' }, 404)
     }
@@ -490,8 +500,8 @@ async function refusalMatrix(browser, lang) {
     expect(okState && okText && okIdle && okDot && okCalls && okPending && no10 && took < 12_000,
       `${tag} ${c.name}:${c.status}${c.reason ? `/${c.reason}` : ''} · 「${want}」· 点 ${c.tone} · 不切位置、不转圈${c.sawPending ? '' : '、从未出现「请允许」'}(${took}ms)`,
       JSON.stringify({ row, took }))
-    if (lang === 'zh' ? ['strict', 'roster-miss', 'denied(用户点了不允许)', 'busy(发起那拍才知道)'].includes(c.name) : c.name === 'strict') {
-      const shot = path.join(SHOT_DIR, `units-runon-kf-${lang}-${c.name.replace(/[^a-z-]/gi, '') || 'case'}.png`)
+    if (lang === 'zh' ? ['strict', 'roster-miss', 'denied(用户点了不允许)', 'busy(发起那拍才知道)', '连不上之后 → roster-miss'].includes(c.name) : c.name === 'strict') {
+      const shot = path.join(SHOT_DIR, `units-runon-kf-${lang}-${c.shot || c.name.replace(/[^a-z-]/gi, '') || 'case'}.png`)
       await page.screenshot({ path: shot })
       console.log(`screenshot → ${shot}`)
     }
