@@ -43,6 +43,7 @@ import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editor
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
+import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
@@ -786,6 +787,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   focusSignal: boolean
 }): ReactElement {
   const { t } = useI18n()
+  const spell = useNotesSpellcheck() // 标题与正文同一个拼写检查开关(G4-07)
   const current = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
   const shown = UNTITLED_RE.test(current) ? '' : current
   const [val, setVal] = useState(shown)
@@ -849,6 +851,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
         <input
           ref={ref}
           className="amx-title-input"
+          spellCheck={spell}
           value={val}
           placeholder="New Page"
           onChange={(e) => setVal(e.target.value)}
@@ -942,6 +945,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const globalMode = useUiOverlay((s) => s.editorMode)
   const mode = readOnly ? 'wysiwyg' : globalMode
   const { t } = useI18n()
+  // 源码模式与可视模式同一个拼写检查开关(G4-07:此前源码恒关、可视恒开,两种模式口径相反)。
+  const spellcheck = useNotesSpellcheck()
 
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
@@ -2249,7 +2254,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           ref={srcTaRef}
           className="amx-source"
           value={srcDraft ?? srcText}
-          spellCheck={false}
+          spellCheck={spellcheck}
           onFocus={touchActive}
           onChange={(e) => {
             const v = e.target.value
