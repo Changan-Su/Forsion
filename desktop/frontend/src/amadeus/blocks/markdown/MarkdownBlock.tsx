@@ -16,7 +16,7 @@
 // Images are stored as PORTABLE page-relative links (![](.amadeus/x.png)); for display
 // they are rewritten to the amadeus-asset:// protocol and back on save (see @amadeus-shared/assets).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   Editor,
   commandsCtx,
@@ -122,7 +122,7 @@ import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions, editorExtensionGen, subscribeEditorExtensions } from '../../plugins/editorExtensions'
-import { registerMessages, translate, useI18n } from '../../../i18n'
+import { registerMessages, subscribeLocale, translate, useI18n } from '../../../i18n'
 
 // 本文件的文案命名空间恒为 `mdblock.*`(别的组件在同一本全局字典里注册,撞键=静默覆盖)。
 // ⚠️ 模块作用域的表(SLASH_ITEMS)只存**键**,取文案一律在渲染期 t()/translate() ——
@@ -202,6 +202,8 @@ registerMessages({
   'mdblock.pasteAs.embedHint': { zh: '播放器 / 网页', en: 'Player / web page' },
   // 菜单空态与脚注
   'mdblock.menu.noMatch': { zh: '无匹配项', en: 'No matches' },
+  // 编辑器根的可达名(P-10):读屏进到正文时念出这是什么,而不是一个无名的文本框。
+  'mdblock.editorLabel': { zh: '笔记正文', en: 'Note body' },
   'mdblock.menu.noDatabase': { zh: '库里还没有多维表（用 /多维表 新建一个）', en: 'No databases in this vault yet (create one with /database)' },
   'mdblock.foot.select': { zh: '↑↓ 选择', en: '↑↓ Select' },
   'mdblock.foot.confirm': { zh: '↵ 确认', en: '↵ Confirm' },
@@ -1085,6 +1087,15 @@ export function MilkdownInner({
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
       .use($prose(() => new Plugin({ props: { attributes: (): Record<string, string> => (pagePathRef.current ? { 'data-amx-src': pagePathRef.current } : {}) } })))
+      // 编辑器根的 aria-label(P-10):直接写 DOM + 订语言变更 —— PM 只回收自己经 attributes 管过的属性,不会抹掉它;
+      // 走 attributes prop 的话切语言要等下一个事务才刷新。
+      .use($prose(() => new Plugin({
+        view: (v) => {
+          const label = (): void => { v.dom.setAttribute('aria-label', translate('mdblock.editorLabel')) }
+          label()
+          return { destroy: subscribeLocale(label) }
+        },
+      })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q, blurred) => {
@@ -1409,6 +1420,11 @@ export function MilkdownInner({
     })
     return focused
   }
+  const editorDom = (): HTMLElement | null => {
+    let dom: HTMLElement | null = null
+    getInstance()?.action((ctx) => { dom = ctx.get(editorViewCtx).dom })
+    return dom
+  }
 
   // @ 提及:把 "@query"(含 @ 本身)整体替换成 [[name]] 双链。
   const pickMention = (name: string): void => {
@@ -1682,6 +1698,7 @@ export function MilkdownInner({
           ctx={slash.ctx}
           unified={unified}
           editorFocused={editorFocused}
+          editorDom={editorDom}
           onPick={(it) => {
             setSlash(null)
             getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), slash.from) }) // 选中了:标记作废
@@ -2508,7 +2525,7 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, editorDom, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
@@ -2517,10 +2534,15 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   unified?: boolean
   /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
   editorFocused?: () => boolean
+  /** 宿主编辑器的根 DOM:焦点一直留在编辑器里,读屏靠它上面的 aria-activedescendant 知道高亮的是哪一项(P-10)。 */
+  editorDom?: () => HTMLElement | null
   onPick: (it: SlashItem) => void; onClose: () => void
 }) {
   const { t } = useI18n()
   const [active, setActive] = useState(0)
+  const menuId = `amx-slash-${useId().replace(/[^\w-]/g, '')}`
+  const editorDomRef = useRef(editorDom)
+  editorDomRef.current = editorDom
   const all = useAllSlashItems({ unified })
   const allItems = useMemo(
     () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
@@ -2541,6 +2563,21 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   useEffect(() => {
     setActive(0)
   }, [query])
+
+  // 读屏(P-10):焦点留在编辑器,高亮项靠编辑器根的 aria-activedescendant 指过去(菜单是 role=menu / menuitem,
+  // menuitem 不支持 aria-selected,「当前项」就用 activedescendant 表达);关菜单时摘掉,别让读屏指向已卸载的节点。
+  const activeIdx = items.length ? Math.min(active, items.length - 1) : -1
+  useEffect(() => {
+    const dom = editorDomRef.current?.()
+    if (!dom) return
+    dom.setAttribute('aria-controls', menuId)
+    if (activeIdx >= 0) dom.setAttribute('aria-activedescendant', `${menuId}-${activeIdx}`)
+    else dom.removeAttribute('aria-activedescendant')
+    return () => {
+      dom.removeAttribute('aria-activedescendant')
+      dom.removeAttribute('aria-controls')
+    }
+  }, [menuId, activeIdx])
 
   useEffect(() => {
     const stop = (e: KeyboardEvent): void => {
@@ -2578,6 +2615,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   const renderItem = (it: SlashItem, i: number) => (
     <button
       key={it.key}
+      id={`${menuId}-${i}`}
       className="slash-item"
       data-active={i === active || undefined}
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
@@ -2610,7 +2648,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
-      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
+      <OverlayAt id={menuId} className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
         {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
         <div className="slash-scroll">
           {q

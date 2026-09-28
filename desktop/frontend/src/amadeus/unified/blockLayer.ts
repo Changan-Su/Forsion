@@ -926,6 +926,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         drag.textContent = '⠿'
         drag.draggable = true
         drag.title = translate('blocklayer.dragHandle')
+        // 可达名:按钮文字是字形 ⠿,不设 aria-label 读屏就念符号本身(P-10);与 title 同串,切语言在下面一起刷。
+        drag.setAttribute('aria-label', drag.title)
         drag.addEventListener('click', (e) => {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
@@ -1132,6 +1134,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             kind === 'list'
               ? fs === 'folded' ? translate('blocklayer.expandChildren') : translate('blocklayer.foldChildren')
               : fs === 'folded' ? translate('blocklayer.expandSection') : translate('blocklayer.foldSection')
+          // 读屏:名称别念字形 ▾/▸,展开态走 aria-expanded(P-10,同 callout chevron 的写法)。
+          fold.setAttribute('aria-label', fold.title)
+          fold.setAttribute('aria-expanded', String(fs !== 'folded'))
         }
         fold.addEventListener('click', (e) => {
           e.stopPropagation()
@@ -1153,6 +1158,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         add.className = 'block-add'
         add.textContent = '＋'
         add.title = translate('blocklayer.addBelow')
+        add.setAttribute('aria-label', add.title)
         // ＋(B-19,对标 Notion):插一个新块并当场打开块选择器(新块里先放一个 `/` 唤起 slash 菜单;
         // Esc / 点空白关掉时 MarkdownBlock 把这个 `/` 删掉,见 machineSlash)。按住 Alt 点 = 插到上方。
         // 列表项上点(B-19b)插的是同级新项 —— 此前往列表中间塞了个段落,列表被劈成两段、有序列表从 1 重新编号。
@@ -1184,6 +1190,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         cardGrab.textContent = '❏'
         cardGrab.draggable = true
         cardGrab.title = translate('blocklayer.cardGrab')
+        cardGrab.setAttribute('aria-label', cardGrab.title)
         cardGrab.style.display = 'none'
         /** 悬停块所在的卡(自身就是卡 → null,主把手已经是它)。 */
         const cardHostOf = (a: ActiveBlock | null): ActiveBlock | null => {
@@ -1856,6 +1863,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           drag.title = translate('blocklayer.dragHandle')
           add.title = translate('blocklayer.addBelow')
           cardGrab.title = translate('blocklayer.cardGrab')
+          for (const b of [drag, add, cardGrab]) b.setAttribute('aria-label', b.title)
         })
 
         return {

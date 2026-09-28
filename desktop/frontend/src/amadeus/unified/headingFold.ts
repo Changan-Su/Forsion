@@ -13,7 +13,7 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { registerMessages, translate } from '../../i18n'
+import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'headfold.expandSection': { zh: '展开小节', en: 'Expand section' },
@@ -98,7 +98,12 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           b.className = 'amx-fold-caret'
           b.textContent = '▸'
           b.contentEditable = 'false'
-          b.title = translate('headfold.expandSection')
+          // 可达名 + 展开态(P-10):按钮文字是字形 ▸;这颗钮只出现在已折叠的标题上,恒 aria-expanded=false。
+          // widget 带 key、切语言不重建 DOM,所以订语言变更刷文案(spec.destroy 退订)。
+          const label = (): void => { b.title = translate('headfold.expandSection'); b.setAttribute('aria-label', b.title) }
+          label()
+          b.setAttribute('aria-expanded', 'false')
+          ;(b as unknown as { __off?: () => void }).__off = subscribeLocale(label)
           b.addEventListener('mousedown', (e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -112,7 +117,7 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           })
           return b
         },
-        { side: -1, ignoreSelection: true, key: `amxfold:${fp}` },
+        { side: -1, ignoreSelection: true, key: `amxfold:${fp}`, destroy: (dom) => { (dom as unknown as { __off?: () => void }).__off?.() } },
       ),
     )
   }
