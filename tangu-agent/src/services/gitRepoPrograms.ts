@@ -5,7 +5,7 @@
  * `filter.<x>.clean` + `.gitattributes`、`core.fsmonitor`、`.git/hooks/post-index-change` 这类东西,之后**本机**一条看似无害的
  * git 读命令(引擎每个 run 开头的 git 现场、项目详情面板、模型免审批的 `git status`)就会以用户身份执行它。
  * 这里只**读**配置,绝不在仓库里跑 git:
- *   · 配置文件逐个 `git config --no-includes --file <f> --list --null`,cwd 固定为 `/`(在仓库里跑,发现阶段会读仓库配置并跟 include);
+ *   · 配置文件逐个 `git config --no-includes --file <f> --list --null`,cwd 固定为盘根(在仓库里跑,发现阶段会读仓库配置并跟 include);
  *   · 子模块按 index 里的 gitlink(mode 160000)找 —— `git status` 会递归进**已检出**的 gitlink,.gitmodules 里没登记的也一样(实测)。
  * 任何读不懂的情形(git 报错、index 版本 / 扩展不认、层数或个数超界、`.git` 是软链)一律 'unknown',调用方按「配置了」处理(失败即关)。
  * 只看仓库级配置,不看全局 / 系统配置:git-lfs 的 `filter.lfs.*` 就在 ~/.gitconfig 里,算进来等于人人 `git status` 都要批;
@@ -149,9 +149,9 @@ function listConfig(file: string): ConfigEntries | 'unknown' {
   try {
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
     for (const k of [...GIT_SCRUBBED_ENV, 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG']) delete env[k];
-    // cwd = '/':在仓库里跑,git 的发现阶段会读那个仓库的配置并跟 include(实测 --file 也挡不住)
+    // cwd = 文件所在盘的根(POSIX 即 '/',Windows 即 'C:\\'):在仓库里跑,git 的发现阶段会读那个仓库的配置并跟 include(实测 --file 也挡不住)
     const out = execFileSync(gitExecutable(), ['--no-pager', 'config', '--no-includes', '--file', file, '--list', '--null'], {
-      cwd: '/', env, timeout: 2000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8',
+      cwd: path.parse(path.resolve(file)).root, env, timeout: 2000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8',
     });
     entries = out.split('\0').filter(Boolean).map((rec): [string, string | null] => {
       const nl = rec.indexOf('\n');

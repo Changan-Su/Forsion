@@ -13,6 +13,7 @@
  */
 import path from 'node:path';
 import { remoteShellWriteDenySpec, protectedAncestors, type RemoteShellWriteDenySpec } from './hostSandboxProtection.js';
+import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
 
 /** 远程 shell 写保护不可用 / 渲染失败:命令一律不跑(失败即关)。run_bash 据此把它当工具错误回给模型。 */
 export class RemoteShellProtectionError extends Error {
@@ -75,13 +76,17 @@ export function renderRemoteShellProfile(spec: RemoteShellWriteDenySpec): string
  *  git 现场一次 3 条、项目详情面板一次 7 条,各自现算名单在真家目录上每次要几到几十 ms(机器负载高时),远超 sandbox-exec 本身;
  *  名单里随配置变的项(微信状态目录、急停锁文件)一秒的滞后无所谓。远程污点命令照旧每条现算。 */
 const LOCAL_PROFILE_TTL_MS = 1000;
-let localProfile: { at: number; profile: string } | undefined;
+let localProfile: { at: number; key: string; profile: string } | undefined;
+/** 名单构建里唯一随调用方变的输入是 ALS 里的 Agent slug(protectedHostPaths 的各 Agent 身份文件);今天它们都落在整片拒写的
+ *  引擎 home 里、被精简掉,渲染结果与 slug 无关(实测),但缓存仍按它分键,免得将来名单改了悄悄串到别的 Agent 头上。 */
+const localProfileKey = (): string => `${currentAgentSlug() ?? ''}\0${currentDisplayAgentSlug() ?? ''}`;
 /** 现算名单并渲染(远程污点命令每条一次:名单里有随配置变的项,如微信状态目录、急停锁文件;local 见上)。 */
 export function remoteShellProfile(local = false): string {
-  if (local && localProfile && Date.now() - localProfile.at < LOCAL_PROFILE_TTL_MS) return localProfile.profile;
+  const key = local ? localProfileKey() : '';
+  if (local && localProfile && localProfile.key === key && Date.now() - localProfile.at < LOCAL_PROFILE_TTL_MS) return localProfile.profile;
   try {
     const profile = renderRemoteShellProfile(remoteShellWriteDenySpec());
-    if (local) localProfile = { at: Date.now(), profile };
+    if (local) localProfile = { at: Date.now(), key, profile };
     return profile;
   } catch (e) {
     const detail = e instanceof RemoteShellProtectionError ? e.detail : `the protected path list could not be built: ${String((e as Error)?.message || e)}`;

@@ -128,7 +128,7 @@ R5 这类「命令文字无害、真正执行的是工作区里摆好的东西�
 
 **分类器(各平台)。** `services/gitRepoPrograms.ts`(仓库发现也从 `approvals.ts` 挪到这里,`runtimeContext` 要用)。发现落在受保护 `.git` 上之后,再看这个工作树**仓库级**配置里有没有 git 会替人跑的程序,有就不免审批:
 
-- 读哪些文件:`<commondir>/config`、`<gitdir>/config.worktree`、`<commondir>/config.worktree`;逐个 `git --no-pager config --no-includes --file <f> --list --null`,cwd 固定 `/`(实测在仓库里跑,发现阶段会读仓库配置并跟 `include.path`,`--file` 也挡不住),环境剥掉 `GIT_DIR` 一类与 `GIT_CONFIG_PARAMETERS`。按文件的 dev / ino / size / mtime / ctime 缓存,闸门上缓存命中约 0.2 ms,冷的一次约 6–20 ms。
+- 读哪些文件:`<commondir>/config`、`<gitdir>/config.worktree`、`<commondir>/config.worktree`;逐个 `git --no-pager config --no-includes --file <f> --list --null`,cwd 固定为文件所在盘的根(POSIX 即 `/`;实测在仓库里跑,发现阶段会读仓库配置并跟 `include.path`,`--file` 也挡不住),环境剥掉 `GIT_DIR` 一类与 `GIT_CONFIG_PARAMETERS`。按文件的 dev / ino / size / mtime / ctime 缓存,闸门上缓存命中约 0.2 ms,冷的一次约 6–20 ms。
 - 哪些键:`filter.*.clean|smudge|process`、`core.fsmonitor`(`false` / `0` / `no` / `off` 不算)、`core.hooksPath`、`diff.external`、`diff.*.command|textconv`、`core.pager`、`pager.*`、`gpg.program`、`gpg.*.program`、`core.sshCommand`、`credential.helper`、`uploadpack.*` / `receivepack.*`、`remote.*.uploadpack|receivepack`、`!` 开头的 `alias.*`、`core.editor`、`sequence.editor`、`core.askPass`、`core.gitProxy`、`merge.*.driver`、`interactive.diffFilter`、`include.path`、`includeIf.*.path`(被包含的文件里可以有上面任何一条)、`hook.*`(较新 git 的配置式钩子),以及指到别处的 `core.worktree`(子模块的 git 目录天生带、指回检出目录的那种不算)。
 - 钩子:读命令里唯一会触发的是 `post-index-change` —— `git status` 刷新并写回 index 时跑它(实测)。`<commondir>/hooks/post-index-change` 存在就收回;`pre-commit` 之类不影响。
 - 子模块与嵌套仓:`git status` 会递归进每个**已检出**的 gitlink,`.gitmodules` 里没登记的嵌套仓(`git add sub`)也一样(实测)。所以按 `<gitdir>/index` 里 mode 160000 的条目找,逐个进 `<top>/<path>/.git`(目录或 `gitdir:` 文件)再扫一遍,最多 4 层、32 个仓。index 自己解析(v2 / v3 / v4,sha1 / sha256),不在仓库里跑 `git ls-files`。
@@ -140,7 +140,7 @@ R5 这类「命令文字无害、真正执行的是工作区里摆好的东西�
 
 **顺带(同一处)。** `runGit` 加 `--no-optional-locks`:`git status` 不再顺手写回 index。800 ms 超时会 SIGKILL 正在写 index 的 git,留下 `index.lock`,用户自己的下一条 git 就报「另一个 git 进程在跑」—— 测延迟时在高负载下实际撞上过一次。filter 照旧会被调用(负对照重跑仍红)。
 
-**开销(macOS 26.3,机器负载 ~25,别的会话在跑)。** 每次都是冷的(间隔 1.1 s,12 次取中位数):git 现场收集小仓 48 → 66 ms、Genesis 仓 75 → 95 ms,每个 run 开头多约 20 ms;项目详情面板(7 条 git)小仓 45 → 53 ms、Genesis 仓 110 → 131 ms。名单现算在真家目录上、高负载下一次要十几到三十 ms,比 `sandbox-exec` 本身(约 10 ms)还贵,所以本机那两类的 profile 缓存 1 s(`remoteShellProfile(local)`);远程污点命令照旧每条现算。离 `runGit` 的 800 ms 预算尚远。
+**开销(macOS 26.3,机器负载 ~25,别的会话在跑)。** 每次都是冷的(间隔 1.1 s,12 次取中位数):git 现场收集小仓 48 → 66 ms、Genesis 仓 75 → 95 ms,每个 run 开头多约 20 ms;项目详情面板(7 条 git)小仓 45 → 53 ms、Genesis 仓 110 → 131 ms。名单现算在真家目录上、高负载下一次要十几到三十 ms,比 `sandbox-exec` 本身(约 10 ms)还贵,所以本机那两类的 profile 缓存 1 s(`remoteShellProfile(local)`);远程污点命令照旧每条现算。名单构建里唯一随调用方变的输入是 ALS 里的 Agent slug(各 Agent 的身份文件),它们今天都落在整片拒写的引擎 home 里、被精简掉,渲染结果与 slug 无关(实测逐字相同);缓存仍按 slug 分键,免得将来名单改了串到别的 Agent 头上。离 `runGit` 的 800 ms 预算尚远。
 
 **测试。** `test/engineGitSeatbelt.test.ts`:分类器矩阵(上面每一类键逐条收回、`unset` 后恢复;`core.fsmonitor=false` 与非 `!` 别名不算;`post-index-change` 收回、`pre-commit` 不算;worktree 读主仓配置;`git submodule add` 的子模块与 `.gitmodules` 没登记的嵌套仓里的 filter;index v4、sha256、分拆 index;`GIT_CONFIG_PARAMETERS`);闸门对 git 给 `writeProtect`、对 `ls` 不给、配了 filter 的仓库 `git status` 弹卡;真 `sandbox-exec` 下项目详情面板照常出仓库信息、摆下的 filter 改不动 `config.json`(裸跑对照被清空);`run_bash` 带 `writeProtectShell` 改不动、不带(用户亲手批)照旧改得动。`test/engineGitNoSeatbelt.test.ts`:把 `process.platform` 打桩成 `linux` 跑真 git —— filter 与嵌套仓 filter 让 git 现场 null、面板不可用、`config.json` 不变;fsmonitor / 钩子 / sshCommand / credential 照跑且 fsmonitor 与钩子确实没被执行;摆出的 HEAD 布局不跑;环境里的 `GIT_DIR` 不影响引擎。残余钉翻转:`remoteGitStateSeatbelt` ②(本机 run 的 git 现场照常注入、`config.json` 不变)与新增 ③(真 loop:本机 auto-edit run 里模型免审批的 `git status --porcelain`,filter 定义在全局配置、仓库只有 `.gitattributes`,不弹卡、出结果、`config.json` 不变);`remoteShellSeatbelt` 的 filter 用例最后一步(本机收集改不动,另加裸跑对照);`remoteShellSeatbeltMissing` 的「本机照常收集」翻成 null,另加面板不可用、known-safe git 回到审批卡、放行后硬套也只回本机文案的错误。
 
@@ -150,5 +150,6 @@ R5 这类「命令文字无害、真正执行的是工作区里摆好的东西�
 - macOS 上 filter 仍以用户身份**执行**,只是写不进保护名单:读凭据、联网外发、写名单以外的路径都照旧,与任何一条被批准的远程命令同级(见「A 仍挡不住的」)。
 - 全局配置里 `includeIf "gitdir:…"` 指向工作区里的文件:分类器不看全局配置,那个文件若由模型写出,里面的 filter 不会让 known-safe 收回(macOS 上执行照样被包;Linux / Windows 上引擎的 git 也不查)。
 - Linux / Windows 上 `--separate-git-dir` 的仓库没有 git 现场与面板 git 信息(发现不受保护 → 按失败即关处理)。
+- Windows 这条路径没在真机上跑过(CI 的 Windows 作业只跑持久化写入那份名单);非 darwin 分支只在 macOS 上把 `process.platform` 打桩成 `linux` 验过,Linux CI 跑全量。若 Windows 上 `git config --file` 起不来,结果是所有仓库都判为「读不懂」:模型的 `git status` 全要批、引擎不读 git 状态 —— 方向是收紧,不会放开。
 - 用户在卡上亲手批准的 git 命令不包:卡上写着 `git status`,人批了,filter 就以用户身份照写(本机亲手批准的执行按约定逐字不变)。
 - `.git/hooks` 里的提交类钩子:用户自己在终端里提交时执行,不在引擎能管的范围内。

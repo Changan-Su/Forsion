@@ -178,10 +178,12 @@ describe('① 分类器:仓库配置了 git 会替人跑的程序 → known-safe
 
   it('闸门:免审批的 git 读命令带 writeProtect;别的 known-safe 程序不带;配置了 filter 的仓库 git status 弹卡', async () => {
     const dir = repoAt(join(base, 'gate'));
+    expect(isKnownSafeBash('git status', dir)).toBe(true); // 先把配置缓存焐热:冷的 git config 一次可能超过 gate() 的 200 ms 判定窗
     expect(await gate('git status', dir)).toEqual({ asked: false, decision: { action: 'approve', writeProtect: true } });
     expect(await gate('git log --oneline', dir)).toEqual({ asked: false, decision: { action: 'approve', writeProtect: true } });
     expect(await gate('ls', dir)).toEqual({ asked: false, decision: { action: 'approve' } });
     git(dir, 'config', 'filter.x.clean', 'evil');
+    expect(isKnownSafeBash('git status', dir)).toBe(false);
     expect((await gate('git status', dir)).asked).toBe(true);
   });
 });
