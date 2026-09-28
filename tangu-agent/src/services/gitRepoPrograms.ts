@@ -113,10 +113,10 @@ function classify(key: string, value: string | null): { engine: boolean } | null
     case 'core':
       if (sub) return null;
       if (name === 'fsmonitor') return value !== null && FALSY.has(value.trim().toLowerCase()) ? null : { engine: false };
-      return ['hookspath', 'sshcommand', 'pager', 'editor', 'askpass', 'gitproxy'].includes(name) ? { engine: false } : null;
+      return ['hookspath', 'sshcommand', 'pager', 'editor', 'askpass', 'gitproxy', 'alternaterefscommand'].includes(name) ? { engine: false } : null;
     case 'diff': return (!sub && name === 'external') || (sub && ['command', 'textconv'].includes(name)) ? { engine: false } : null;
     case 'pager': return { engine: false };
-    case 'gpg': return name === 'program' ? { engine: false } : null;
+    case 'gpg': return name === 'program' || name === 'defaultkeycommand' ? { engine: false } : null; // gpg.ssh.defaultKeyCommand 也是程序
     case 'credential': return name === 'helper' ? { engine: false } : null;
     case 'uploadpack': case 'receivepack': return { engine: false };
     case 'remote': return sub && ['uploadpack', 'receivepack'].includes(name) ? { engine: false } : null;

@@ -90,7 +90,7 @@ describe('① 分类器:仓库配置了 git 会替人跑的程序 → known-safe
       ['filter.x.clean', 'sh evil', true], ['filter.x.smudge', 'sh evil', true], ['filter.x.process', 'evil', true],
       ['core.fsmonitor', 'sh evil', false], ['core.hooksPath', '/tmp/hooks', false], ['diff.external', 'evil', false],
       ['diff.bin.textconv', 'evil', false], ['diff.bin.command', 'evil', false], ['core.pager', 'evil', false], ['pager.status', 'evil', false],
-      ['gpg.program', 'evil', false], ['gpg.ssh.program', 'evil', false], ['core.sshCommand', 'evil', false], ['credential.helper', 'evil', false],
+      ['gpg.program', 'evil', false], ['gpg.ssh.program', 'evil', false], ['gpg.ssh.defaultKeyCommand', 'evil', false], ['core.alternateRefsCommand', 'evil', false], ['core.sshCommand', 'evil', false], ['credential.helper', 'evil', false],
       ['alias.st', '!sh evil', false], ['core.editor', 'evil', false], ['include.path', '/tmp/x.inc', true], ['includeIf.onbranch:main.path', '/tmp/x.inc', true],
       ['uploadpack.packObjectsHook', 'evil', false], ['hook.pre.command', 'evil', true],
       // git-lfs 的程序键:调起它的 filter.lfs.* 在全局配置,git-lfs 再从仓库配置读这些(子节大小写不论,git-lfs 整键转小写)
@@ -113,7 +113,7 @@ describe('① 分类器:仓库配置了 git 会替人跑的程序 → known-safe
     git(dir, 'config', 'lfs.extension.evil.priority', '0');
     git(dir, 'config', 'core.fsmonitor', 'false');
     expect(isKnownSafeBash('git status', dir)).toBe(true);
-  });
+  }, 60_000); // 每行起一个 git config 进程,机器忙时 5s 不够
 
   it('post-index-change 钩子(git status 刷新 index 时会跑,实测)收回;别的钩子(pre-commit)不影响读命令', () => {
     const dir = repoAt(join(base, 'hooks'));
