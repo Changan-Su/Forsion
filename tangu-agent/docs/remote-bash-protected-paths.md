@@ -1,8 +1,10 @@
 # 远程会话经 `run_bash` 写保护路径(宿主沙箱关)· 评估
 
-> 设备能力方案 §6.8 残余风险「保护路径被 `run_bash` 写(沙箱关):远程污点 run 对保护路径另开宿主沙箱写保护(P1 评估)」。P1 · K10b(INTEGRATION §4 G5),2026-09-28。执行路径未改;评审发现的零审批链(R5)已在本包的审批闸里堵上。
+> 设备能力方案 §6.8 残余风险「保护路径被 `run_bash` 写(沙箱关):远程污点 run 对保护路径另开宿主沙箱写保护(P1 评估)」。P1 · K10b(INTEGRATION §4 G5),2026-09-28。执行路径未改;评审发现的零审批链(R5)已在本包的审批闸里堵上。**同日 P1 · G5 落地方案 A(macOS),Linux / Windows 按 C 如实告知,见文末「落地」。**
 
 **TL;DR (English).** A remote-tainted run cannot write protected paths with the structured write tools. The same write through a shell, with the host sandbox off (the default), is limited only by the approval gate. Until this package it took **zero** approvals: the run could plant a git directory in its workspace with approval-free `write_file` calls, set `core.fsmonitor` in that directory's config, and run `git status`, which was classified known-safe. Git then ran the planted command, which raised `remote.maxApprovalMode` to `full-auto`. This package closes that path in the gate: known-safe `git` now only trusts repository discovery that lands on a protected `.git` (R5). Escalation now costs one approval, and the card may still read like a harmless command (`git status` in a planted directory, `python3 fix.py`, `npm install`). After that approval, remote runs execute shell commands with no approval at all. Recommendation: a per-run Seatbelt write-deny profile for remote-tainted shell processes on macOS, shipped as its own package right after K2. Accept the gap on Linux and Windows for now, and say so plainly. Do not deny `run_bash` for remote runs.
+
+**Outcome (P1 G5, 2026-09-28).** Option A shipped for macOS. With the host sandbox off, every shell command a remote-tainted run starts (`run_bash`, `run_background`; a run tainted mid-run by a steer is checked per command) runs under `sandbox-exec` with an `(allow default)` profile that denies writes to the §6.3 set, built from the same tables as `protectedRemoteWrite`. R3 and the execution step of R5 are flipped on darwin (config.json unchanged, cap unchanged); a local run is byte-for-byte unchanged. `sandbox-exec` missing or a profile that cannot be rendered refuses the command. Cost is about 9 ms per command. Two deliberate differences from the structured write rules: `.git` stays writable (commit, init, clone), and inside existing home dot folders writes are allowed (only top-level dot entries, `~/.config`, `~/.local/bin` and `~/Library/LaunchAgents` are denied). The first of these leaves one known gap, pinned by a test: a remote command can plant a git clean filter that the engine's own git status collection, which is not wrapped, later runs. Linux and Windows: option C (settings copy and CHANGELOG).
 
 ## 现状(证据)
 
@@ -18,9 +20,9 @@
 |---|---|---|
 | R1 | 远程 run 用 `write_file` 写 `config.json` | 硬拒,不出审批卡 |
 | R2 | 同一次写换成 `run_bash`(`printf … > config.json`) | 出审批卡:`reason={kind:'mode'}`,**没有** `localOnly`;手机以隧道身份批准后闸门放行 |
-| R3 | 批下来后在宿主沙箱关的执行路径上跑 | 退出码 0,`config.json` 被改写,`remoteApprovalCap()` 变成 `full-auto`。改写前,远端起 run 要 `full-auto` 会被钳到 `auto-edit`,`run_bash` 仍要批;改写后不再被钳,`run_bash` 直接放行、不出审批卡 |
+| R3 | 批下来后在宿主沙箱关的执行路径上跑 | 退出码 0,`config.json` 被改写,`remoteApprovalCap()` 变成 `full-auto`。改写前,远端起 run 要 `full-auto` 会被钳到 `auto-edit`,`run_bash` 仍要批;改写后不再被钳,`run_bash` 直接放行、不出审批卡。**G5 之后(macOS)**:带远程污点执行 → `Operation not permitted`,文件与上限档都不变(本机 run 照写,作对照组);非 darwin 跳过 |
 | R4 | 同一条命令放进宿主沙箱 `workspace-write`(Seatbelt)跑 | 写不进 `config.json`,上限档不变;工作区照常可写。原因是 `protectedHostPaths()` 已含 `configFile()` |
-| R5 | 远程 run 用 `write_file` 在工作区摆出 HEAD / config / `objects/` / `refs/`,config 里 `core.fsmonitor` = 把 payload 拷到 `config.json`,再跑 `git status`。两种布局:工作区根本身(工作区没有 `.git`,如 Tangu 默认文件夹),以及真仓库里的子目录被设成会话 cwd(`remoteCwdForbidden` 放行) | 摆放的五次写入都免审批。**修复前** `git status` 也免审批,零张卡就把上限档抬到 `full-auto`(负对照实跑为红)。**修复后** `git status` 出审批卡(`reason=mode`,手机可批);批了以后 git 仍会执行 fsmonitor、上限档仍被抬高,卡上却只写着 `git status`。同一真仓库的根目录照旧免审批 |
+| R5 | 远程 run 用 `write_file` 在工作区摆出 HEAD / config / `objects/` / `refs/`,config 里 `core.fsmonitor` = 把 payload 拷到 `config.json`,再跑 `git status`。两种布局:工作区根本身(工作区没有 `.git`,如 Tangu 默认文件夹),以及真仓库里的子目录被设成会话 cwd(`remoteCwdForbidden` 放行) | 摆放的五次写入都免审批。**修复前** `git status` 也免审批,零张卡就把上限档抬到 `full-auto`(负对照实跑为红)。**修复后** `git status` 出审批卡(`reason=mode`,手机可批);批了以后 git 仍会执行 fsmonitor、上限档仍被抬高,卡上却只写着 `git status`。同一真仓库的根目录照旧免审批。**G5 之后(macOS)**:带远程污点执行时 fsmonitor 子进程继承同一个写拒绝 profile,拷不进 `config.json`;不带远程污点的执行照旧跑 payload(链本身是真的) |
 
 改写对象不限于上限档。K4 的 `userData/remote-sessions.json`(开关与信任列表)、将来 K2 的 `remote-lock.json`(急停锁)、hooks、插件、技能,以及 Agent 的 `config.toml`,只要进程能写到,都可以用同样的方式改掉。它们都属于方案 §6.1 的「执行设备专属」一类,或 §6.3 列出的保护路径。审批卡不是可靠的信号:`printf … > ~/.forsion/config.json` 这样直白的命令,人还有机会看出来;换成摆好目录后的 `git status`、`python3 fix.py`、带 postinstall 脚本的 `npm install`,手机上看不出后果。远程上限档设为 `full-auto` 时这一步本来就不经审批(§6.4 已如实写明)。
 
@@ -55,3 +57,50 @@ R5 这类「命令文字无害、真正执行的是工作区里摆好的东西�
 5. D 不单独做。
 
 本轮落地三样:known-safe `git` 的收紧(`src/services/approvals.ts`),现状与回归测试(`test/remoteBashProtectedResidual.test.ts` R1–R5、`test/knownSafeGitDiscovery.test.ts`),以及这份评估。执行路径与工具定义没有改动。审批闸改了,因此跑了 live 台架的 `tool`、`remoteclamp`、`remotemgmt` 三个子集,结果见交付报告。
+
+## 落地(P1 · G5,2026-09-28)
+
+分支 `feat/p1-g5-remote-shell-seatbelt`。按建议 3、4 做了 A(只 macOS)与 C(Linux / Windows),审批闸与工具定义都没改。
+
+**接缝。** `sandbox/hostSandbox.ts` 的 `remoteShellSeatbeltApplies(ctx)` = darwin ∧ 宿主沙箱 `off` ∧ `effectiveRemote(ctx)`,每条命令现算,所以 run 中途被远端 steer 染上的,下一条命令就套上。`prepareHostCommand` 在这种情况下返回 `sandbox-exec -p <profile> -- …`,环境仍是 `toolSubprocessEnv()`(与本机 run 相同,这一层只管写);`spawnHostShell` 把远程那条也导到 `/bin/sh -c`,与 Node 在 darwin 上 `shell: true` 的展开一致。覆盖面逐一核过:
+
+| 起进程的地方 | 是不是模型给的命令 | 处理 |
+|---|---|---|
+| `run_bash`(`hostExec.ts`) | 是 | 套上;写保护起不来时回 `Error: …`,命令没跑 |
+| `run_background`(`processRegistry.ts`) | 是 | 套上;进程记 `remoteSeatbelt` |
+| `write_process_input` | 是(往已有进程 stdin 写命令) | 没套这层的进程(本机 run 起的 shell / REPL)拒收远程 run 的输入;Ctrl-C 照旧 |
+| `verifyCommand`(`runVerifyCommand`) | 用户配置 | 远程 run 本来就不跑(`agentLoop` 现查 `effectiveRemote`) |
+| `runGit`(现场注入、项目面板) | 固定 argv | 不变(见下「残余」) |
+| hooks、MCP stdio | 用户配置 | 不变 |
+| 桌面终端 PTY | 用户在本机操作 | 渲染层 IPC,校验 sender,模型够不到 |
+| 外部引擎委派 | 是 | 远程 run 本来就拒(`subAgent.ts`),runs 路由也剥 `engineId` |
+
+**名单与 profile。** 名单由 `hostSandboxProtection.remoteShellWriteDenySpec()` 给出,与 `protectedRemoteWrite` 在同一个文件、用同一组表(`forsionDomains` / `tanguHomes` / 桌面 userData、`credentialPaths`、`forsionConfigPaths`、`protectedHostPaths`、C8 的启动区与 shell rc 名),渲染在 `sandbox/remoteShellSeatbelt.ts`。Seatbelt 后写的规则赢,所以顺序是:
+
+1. `(allow default)`;
+2. Library 例外能盖过的拒绝:任意位置的 `.tangu` / `.forsion` 段,Forsion 共享域、正式与 dev 家目录、引擎 home、桌面 userData 整片;
+3. `allow`:`<引擎 home>/(agents|teams|engines)/<名>/Library`;
+4. Library 里也必须赢的拒绝:Library 内的 `.tangu` / `.forsion`(按引擎 home 锚定,否则 `~/.forsion/tangu/…` 本身带 `.forsion` 段,整个 Library 会被重新拒掉)、凭据 / 本机配置 / 宿主沙箱那张表 / `~/.config` / `~/Library/LaunchAgents` / `~/.local/bin`、家目录顶层点条目本身、任意位置的 `.agents` / `.codex` 段、任意位置的 shell rc 文件名;
+5. 以上各根的祖先目录拒 `file-write-unlink`:否则可以把整个祖先挪走、改完再挪回来。
+
+路径一律渲染成大小写不敏感的正则字符串(`[aA]` 逐字母,正则元字符反斜杠转义,再按 Scheme 字符串转义 `\` 与 `"`)。原因有三,都现场探过:已存在的路径 Seatbelt 按真实大小写比,新建的路径按调用方的写法比,`.TANGU/` 在默认 APFS 上就是 `.tangu/`;`#"…"` 正则字面量装不下双引号,`(regex "…")` 字符串形式可以;带控制字符的路径直接拒绝渲染(抛错,命令不跑)。硬链接到保护文件会被拒(`ln` 报 `Operation not permitted`),用例钉住了。
+
+**与结构化写工具的两处差异(刻意)。**
+- 不拒 `.git`:远程 run 要能 `git commit`、`git init`、`git clone`,这些都会写 `.git/config` 与 `.git/hooks`。宿主沙箱开时的 profile 拒 `.git`,那一档本来就不能提交。
+- 家目录点目录不整棵拒:只拒顶层点条目**本身**(`~/.gitconfig`、`~/.npmrc` 不能新建或改写,也不能新建 `~/.foo` 目录),外加 `~/.config`、`~/.local/bin`、`~/Library/LaunchAgents` 整棵。`~/.npm`、`~/.cache`、`~/.cargo` 里面照常可写,否则 `npm install` 之类全坏。代价:`~/.npm` 这类缓存目录若还不存在,第一次创建会被拒;`~/.zsh` 之类非标准位置的启动脚本不在名单里。
+
+**失败即关。** `/usr/bin/sandbox-exec` 缺失、名单渲染失败,都抛 `RemoteShellProtectionError`:`run_bash` / `run_background` 回 `Error: This command comes from a remote session … was not run.`,绝不退回不包的命令。`sandbox_apply` 在子进程里失败(引擎自己跑在别的沙箱里)时,`sandbox-exec` 以 71 退出、不执行目标命令,同样不会裸跑。
+
+**嵌套沙箱(已知限制,接受)。** 远程 run 里自己开沙箱的工具会失败:SwiftPM(`swift build` / `swift package` 编译 manifest)、部分 Homebrew 源码构建、Bazel 的 darwin-sandbox、在 `run_bash` 里跑 Codex CLI。被包住的命令 stderr 里出现 `sandbox_apply` / `sandbox-exec:` 时,工具结果附一句说明(加 `--disable-sandbox`,或在这台电脑上运行);出现 `Operation not permitted` 时附一句「这些位置按设计写不进,别换写法重试」。
+
+**开销。** 本机(macOS 26.3)`spawnHostShell` 跑 `true` 50 次取平均:不包 2.2 ms,包 11.3 ms,每条命令多约 9 ms,其中名单现算 + 渲染约 2.6 ms(63 条规则,12 KB)。名单里有随配置变的项(微信状态目录、急停锁文件),每条命令现算,不缓存。
+
+**测试。** `test/remoteShellSeatbelt.test.ts`(真 `sandbox-exec`,非 darwin 跳过):R3 执行面、本机对照、工作区与 `git init` + commit 可写、§6.3 名单逐项(共享域凭据与配置、技能、本 Agent 与别的 Agent 的 `config.toml`、插件、hooks、Library 里的 `.tangu` 与 `.zshrc`、项目 `.tangu` / `.TANGU`、`.agents`、任意位置的 `.zshrc`、家目录 `.zshrc` / `.gitconfig` / 新点目录 / `~/.config` / LaunchAgents / `~/.local/bin` / `~/.ssh`、userData 的 `remote-sessions.json` 与 dev 兄弟目录、急停锁文件)与 Library / `~/.npm` 里照常可写、硬链接与挪祖先、steer 染色、后台进程与 stdin、宿主沙箱开沿用原 profile、名单渲染失败即关、嵌套沙箱提示、fsmonitor 子进程继承。夹具目录名里带双引号、反斜杠、空格与正则元字符。`test/remoteShellSeatbeltMissing.test.ts`:`sandbox-exec` 缺失 → 工具错误、命令没跑,本机 run 照常。`remoteBashProtectedResidual` 的 R3 与 R5 执行那一步按计划翻转。负对照(去掉 `prepareHostCommand` 里的远程分支与 `spawnHostShell` 的条件)实跑:三个文件 12 条红,恢复后全绿。live 台架新增 `remotebash` 腿(`--only remotebash`),远程 run 用 `run_bash` 往隔离 home 的 `config.json` 追加空格、台架代批 mode 卡:工具结果 `Operation not permitted`、字节不变;同一负对照下为红。`tool`、`remoteclamp`、`remotecwd`、`remotesession` 照旧通过。
+
+**宿主沙箱开(未改)。** 沿用原 `workspace-write` / `read-only` profile。它是 `deny default` 加可写根,可写根**之内**的保护比本名单少:项目里的 `.tangu` / `.forsion`、可写根里的 shell rc 文件、当前 Agent 目录里身份文件以外的东西(如 `agents/<slug>/plugins/*.json` 插件设置)对远程 run 可写。按任务约定只记录、不在这里改。
+
+**残余:引擎自己的 git 会执行远程命令摆进仓库的 filter(已用测试钉住)。** 因为不拒 `.git`,被批准的远程命令(或它起的任何程序)能在工作区仓库里写 `filter.<x>.clean` 与 `.gitattributes`。引擎在每个 host 工作区 run 开头收集 git 现场(`runtimeContext.collectGitState` → `runGit`),这个进程不带远程污点、不套本层,`runGit` 的固定前缀关了 fsmonitor、hooks、外部 diff 与 gpg,没关 filter,于是 `git status --porcelain` 会以用户身份执行它(用例里清空了 `config.json`)。本机 run 里免审批的 `git status` 同理。要堵住得二选一:远程 shell 拒写 `.git/config` 与 `.git/info/attributes`(代价是远程 run 里 `git init` / `clone` / `git config` 失败),或让引擎侧 git 与 known-safe `git` 不执行仓库配置的程序(filter 没有全局开关,可能要给 `runGit` 也套写拒绝 profile,并让分类器识别带 filter 的仓库)。待拍板。
+
+**仍挡不住的(补充)。** 除上文所列,还有经 LaunchServices 与 AppleEvents 落到沙箱外的执行:`open -a Terminal x.command`、`open x.app`、`osascript` 让 Terminal 或 System Events 执行命令。它们由系统服务在沙箱外启动进程,与 `launchctl` 同类。以及 `.git/hooks`:远程命令写进去的钩子会在用户下一次在自己的终端里提交时执行。
+
+**Linux / Windows(方案 C)。** 设置 › 远程会话的上限档下写明:在这台电脑上,手机批准的命令能改本机 Forsion 设置,包括远程上限档,而命令未必看得出来。Linux 指向「本地命令与文件沙箱 = 仅工作区可写」(需要 bubblewrap);Windows 没有宿主沙箱,如实写「暂时没有能挡住的本地沙箱,只批准看得懂的命令」。CHANGELOG 同。
