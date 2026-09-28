@@ -236,7 +236,7 @@ async function renameAt(path: string, newName: string): Promise<void> {
     await flushAllScopes()
     const newPath = await amadeus.renamePageFile(path, newName)
     if (newPath !== path) {
-      retireUnifiedPath(path) // 开着这页的 unified 实例停写旧路径(防幽灵文件)
+      retireUnifiedPath(path, 'file', newPath) // 开着这页的 unified 实例停写旧路径(防幽灵文件);带新路径 = 未落盘的字存成新路径草稿(G2-03)
       remapScopePaths(path, newPath, 'file')
       await cascadeFdAfterRename(path, newPath)
       retargetEditorLeaves(path, newPath)

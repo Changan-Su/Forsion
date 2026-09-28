@@ -2012,7 +2012,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         syncFromEditor()
         const text = composeFm(pipe.fm, pipe.body)
         const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
-        if (text !== pipe.lastSaved) await amadeus.writeTextFile(newPath, text).catch(() => {})
+        if (text !== pipe.lastSaved) {
+          // 补写失败不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。
+          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved); toastSaveFailed(newPath, e) })
+        }
         // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
         // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;
         // 已经执行过、光标在正文里 →「接着写」(旧 doc + 选区),绝不再执行一遍。
