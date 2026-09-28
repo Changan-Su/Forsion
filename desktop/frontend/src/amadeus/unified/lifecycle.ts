@@ -22,6 +22,8 @@ export interface UnifiedPipeHandle {
   bodyNow?: () => string
   /** 大纲:从 PM doc 现取标题(与渲染同源)。 */
   headings?: () => Array<{ level: number; text: string; pos: number }>
+  /** 字 / 词 / 选区计数(C-22):按可见文字现数;编辑器不在(源码模式)→ null,调用方回落 bodyNow。 */
+  statsNow?: () => import('./noteStats').NoteStats | null
   /** 大纲跳转:把第 index 个标题滚进视野。⚠️ 这是**另一次**遍历(点击发生在渲染之后,期间文档
    *  可能已增删标题),故必须带上记录时的 text 复核:对不上就按文本找,再找不到就不跳 ——
    *  宁可不动,也不要静默跳到另一个标题上(Codex 评审 medium)。 */
@@ -188,6 +190,28 @@ export function hasUnifiedInstance(path: string): boolean {
 export function unifiedBody(path: string): string | null {
   for (const h of byRecency(path)) if (h.bodyNow) return h.bodyNow()
   return null
+}
+
+/** 状态栏问 path 上那篇的计数(C-22);没有 v4 实例 / 编辑器不在 → null。 */
+export function unifiedStats(path: string): import('./noteStats').NoteStats | null {
+  for (const h of byRecency(path)) if (h.statsNow) return h.statsNow()
+  return null
+}
+
+// 计数的刷新节拍(C-22):编辑器里文档或选区变了就 bump(noteStats 的 ticker,一帧最多一次)。与 gen 分开 ——
+// 选区每动一下都 bump,不该连带大纲等只关心实例增减的面板一起重算。
+let statsVer = 0
+const statsListeners = new Set<() => void>()
+export function bumpUnifiedStats(): void {
+  statsVer++
+  for (const f of statsListeners) f()
+}
+export function unifiedStatsVer(): number {
+  return statsVer
+}
+export function subscribeUnifiedStats(f: () => void): () => void {
+  statsListeners.add(f)
+  return () => statsListeners.delete(f)
 }
 
 /** 只读面板问 path 上那篇的大纲;没有 v4 实例 → null(调用方回落 v3 的 manifest/blocks)。 */

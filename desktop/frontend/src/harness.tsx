@@ -44,6 +44,7 @@ import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
 import { switchNoteLock } from './amadeus/unified/noteLock'
+import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
@@ -1970,13 +1971,21 @@ if (new URLSearchParams(location.search).has('dock')) {
       rootB.render(<PageScopeCtx.Provider value="harness-B"><UPageHost probe={upageProbe2} /></PageScopeCtx.Provider>)
       unmountB = () => rootB.unmount()
     }
+    // `&utoc`(配 &upane):挂生产的笔记浮动目录(与 amadeusViews 同一个 NoteFloatingToc,根 = 滚动的 .amx-pane),评审 C-04。
+    function UPane(): React.ReactElement {
+      const paneRef = useRef<HTMLDivElement | null>(null)
+      return (
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
+          <UPageHost />
+        </div>
+      )
+    }
     createRoot(document.getElementById('root')!).render(
       <>
         <FindBar />
         {upane ? (
-          <div className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
-            <UPageHost />
-          </div>
+          <UPane />
         ) : (
           <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
             <UPageHost />

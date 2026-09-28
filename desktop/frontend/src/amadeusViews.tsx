@@ -23,6 +23,7 @@ import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
+import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
@@ -38,6 +39,8 @@ import type { TrashEntry } from '@amadeus-shared/ipc'
 import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { openTutorial } from './amadeusTutorial'
+import { canUploadToNote } from './amadeusNoteBar'
+import { printClone } from '@amadeus/lib/printClone'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
@@ -54,7 +57,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, FloatingToc, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -2154,7 +2157,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (!page || !host) return
     const wrap = document.createElement('div')
     wrap.id = 'amx-print-root'
-    const clone = host.cloneNode(true) as HTMLElement
+    const clone = printClone(host) // 标题框换成静态 h1(长标题折行、取此刻的值;C-12)
     clone.setAttribute('data-mode', 'light')
     wrap.appendChild(clone)
     document.body.appendChild(wrap)
@@ -2497,14 +2500,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {/* 与 Chat View 同一份 LCL FloatingToc。只给文档模式:源码没有可导航标题,画布有自己的空间导航;
           mini / coarse pointer 则把稀缺横向空间留给正文。根就是本 leaf 的滚动 EditorScope,分屏互不串页。 */}
       {barPath && mode !== 'source' && !canvasSeg?.on && !leaf.params.miniSurface && !isCoarsePointer() && (
-        <FloatingToc
-          scrollContainer={printHostRef}
-          contentRoot={printHostRef}
-          selector=".page-view h1, .page-view h2, .page-view h3"
-          label={t('amxv.floatingToc')}
-          scanTrigger={barPath}
-          placement="sticky"
-        />
+        <NoteFloatingToc host={printHostRef} label={t('amxv.floatingToc')} scanTrigger={barPath} />
       )}
       {/* ⚠️ 上传用的隐藏 input **必须住在顶栏外面**:移动端整条顶栏不渲染,而底栏胶囊的「上传」
           仍旧 uploadInputRef.current?.click() —— 留在顶栏里 = 手机上 ref 恒 null,上传静默失效。 */}
@@ -2574,7 +2570,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           >
             {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
           </button>
-          {activePage && (
+          {canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') && (
             <button
               className="amx-mode-btn"
               title={t('amxv.uploadToPage')}
@@ -2720,7 +2716,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode(leaf.id) },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
-          ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
           ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },

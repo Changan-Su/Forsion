@@ -424,6 +424,63 @@ async function main() {
         JSON.stringify({ a, b, c }))
     }
 
+    // PR7b 标题框草稿冲洗(评审 C-02 的标题那一半):标题框还聚焦着就被卸载(键盘导航换篇 = switchFile / 关标签),
+    //  React 不给已脱离的节点派 onBlur —— 改名丢了。现在卸载冲洗按「脱离」语义改名:
+    //  a 正文刚打的字 + 标题改字 → 换篇:新名文件带着全部正文、旧名不在(没有幽灵文件,写 ack 拖慢 300ms 也一样)、
+    //    标签仍停在换去的那篇(不被拽回);
+    //  b 标题改字后 Esc 放弃再换篇 → 不改名(旧版 Esc 本身就把打的字改名了:keydown 里同步 blur,失焦提交拿到的还是旧一轮的值);
+    //  c 换库竞态闸:库根在卸载前已经换了 → 不改名(绝不按相对路径去新库改名)。
+    //  负对照:UnifiedTitle 的卸载冲洗摘掉 → a 红;doRename 的库根复核摘掉 → c 红;基线 b46b1703 上 b 红(均已实跑)。
+    //  ⚠️ 台架的 renamePageFile 同步落盘,「改名前排干写链」那道写序闸在这里区分不出来(见 doRename 注释)。
+    {
+      const seed = '# 标题段\n\n正文。\n'
+      const openT = async () => {
+        const pg = await browser.newPage({ locale: 'zh-CN' })
+        pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+        await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+        await pg.waitForSelector(PM, { timeout: 20000 })
+        await pg.waitForTimeout(400)
+        return pg
+      }
+      const keys = (pg) => pg.evaluate(() => [...window.__upage.vault.keys()].filter((k) => k.endsWith('.md') && k !== 'Embedded.md').sort())
+      // a
+      let pg = await openT()
+      await pg.evaluate(() => { window.__upage.writeLagMs = 300 })
+      const at = await pg.evaluate((s) => { const p = document.querySelector(s + ' > p'); const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect(); return { x: b.right - 1, y: b.top + b.height / 2 } }, PM)
+      await pg.mouse.click(at.x, at.y)
+      await pg.keyboard.type('正文追加')
+      await pg.click('.amx-title-input')
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('改名')
+      await pg.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n'))
+      await pg.waitForTimeout(2200)
+      const a = { keys: await keys(pg), renamed: await pg.evaluate(() => window.__upage.vault.get('Unified改名.md') ?? null), title: await pg.evaluate(() => document.querySelector('.amx-title-input')?.value) }
+      await pg.close()
+      // b
+      pg = await openT()
+      await pg.click('.amx-title-input')
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('放弃')
+      await pg.keyboard.press('Escape')
+      await pg.evaluate(() => window.__upage.switchFile('Other.md', '# 另一篇\n'))
+      await pg.waitForTimeout(1200)
+      const b = { keys: await keys(pg) }
+      await pg.close()
+      // c
+      pg = await openT()
+      await pg.click('.amx-title-input')
+      await pg.keyboard.press('End')
+      await pg.keyboard.type('换库')
+      await pg.evaluate(() => { window.__upage.pageStore.setState({ vaultRoot: '/another-vault' }); window.__upage.switchFile('Other.md', '# 另一篇\n') })
+      await pg.waitForTimeout(1200)
+      const c = { keys: await keys(pg) }
+      await pg.close()
+      record('PR7b 标题框聚焦中换篇 / 关标签:按脱离语义改名(正文全在、无幽灵旧文件、标签不被拽回);Esc 放弃不改;换库后不改(C-02)',
+        a.keys.join() === 'Other.md,Unified改名.md' && (a.renamed ?? '').includes('正文。正文追加') && a.title === 'Other' &&
+          b.keys.join() === 'Other.md,Unified.md' && c.keys.join() === 'Other.md,Unified.md',
+        JSON.stringify({ a, b, c }))
+    }
+
     // PR8 行级提交(评审 2026-09-27 D-20):改一个值 → 只有那一行变,注释 / 007 / 1.10 / flow / 多行块逐字;
     //  多行值是多行框,白点零写。负对照:pageFrontmatter 行级核对恒判失败(退回整块重排)→ 应红(同款已在 pageFrontmatter.test 实跑)。
     {
@@ -715,6 +772,106 @@ async function main() {
     }, PM)
     record('P12b 标题改名回车:重建后焦点仍进正文', b.inPm && b.renamed, JSON.stringify(b))
     await pb.close()
+  }
+
+  // P12c:长标题折行(评审 C-12:单行 input 把长标题直接截断,390px 手机上十几个字就截,导出 PDF 同样)。
+  //  a 长标题(390 宽)整段可见:textarea 按内容撑高到多行,没有横向溢出;
+  //  b ↓ 按**视觉行**判:首行按 ↓ 仍在标题里(落到下一行),最后一行按 ↓ 才进正文;回车不在标题里插换行;
+  //  c 导出 PDF 的克隆(生产 printClone)里标题是静态 h1、文字 = 此刻的值、同样折行不截断。
+  //  负对照:标题换回单行 input → a、c 红(已实跑)。
+  {
+    const long = '移动端二十个字左右的普通笔记标题会怎样'
+    const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 390, height: 800 } })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('正文首段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(300)
+    await pg.evaluate((n) => window.__upage.switchFile(n + '.md', '正文首段。\n'), long)
+    await pg.waitForTimeout(700)
+    const geo = () => pg.evaluate(() => {
+      const t = document.querySelector('.amx-title-input')
+      const lh = parseFloat(getComputedStyle(t).lineHeight)
+      return { tag: t.tagName, len: (t.value ?? t.textContent).length, overflow: t.scrollWidth - t.clientWidth, lines: Math.round((t.clientHeight - parseFloat(getComputedStyle(t).paddingTop) - parseFloat(getComputedStyle(t).paddingBottom)) / lh), clipY: t.scrollHeight - t.clientHeight }
+    })
+    const a = await geo()
+    // b:点到标题首字前 → ↓(仍在标题,落第二行)→ ↓(最后一行 → 进正文)
+    const r = await pg.evaluate(() => { const b = document.querySelector('.amx-title-input').getBoundingClientRect(); return { x: b.left + 8, y: b.top + 18 } })
+    await pg.mouse.click(r.x, r.y)
+    await pg.waitForTimeout(100)
+    await pg.keyboard.press('ArrowDown')
+    await pg.waitForTimeout(100)
+    const b1 = await pg.evaluate(() => { const t = document.querySelector('.amx-title-input'); return { inTitle: document.activeElement === t, pos: t.selectionStart } })
+    await pg.keyboard.press('ArrowDown')
+    await pg.waitForTimeout(300)
+    const b2 = await pg.evaluate((s) => ({ inPm: document.activeElement === document.querySelector(s), title: document.querySelector('.amx-title-input').value }), PM)
+    await pg.click('.amx-title-input')
+    await pg.keyboard.press('Shift+Enter')
+    await pg.waitForTimeout(300)
+    const b3 = await pg.evaluate((s) => ({ inPm: document.activeElement === document.querySelector(s), nl: /\n/.test(document.querySelector('.amx-title-input').value) }), PM)
+    // c:生产 printClone 的克隆
+    const c = await pg.evaluate(async () => {
+      const { printClone } = await import('/src/amadeus/lib/printClone.ts')
+      const host = document.querySelector('.amx-pane')
+      const wrap = document.createElement('div'); wrap.id = 'amx-print-root'
+      wrap.appendChild(printClone(host)); document.body.appendChild(wrap)
+      const t = wrap.querySelector('.amx-title-input')
+      return { tag: t.tagName, text: t.textContent, controls: wrap.querySelectorAll('input.amx-title-input, textarea.amx-title-input').length }
+    })
+    await pg.emulateMedia({ media: 'print' })
+    await pg.waitForTimeout(150)
+    c.overflow = await pg.evaluate(() => { const t = document.querySelector('#amx-print-root .amx-title-input'); return t.scrollWidth - t.clientWidth })
+    await pg.emulateMedia({ media: 'screen' })
+    record('P12c 长标题折行不截断;↓ 按视觉行进正文、回车不插换行;导出 PDF 克隆里是折行的静态 h1(C-12)',
+      a.tag === 'TEXTAREA' && a.len === long.length && a.overflow <= 0 && a.lines >= 2 && a.clipY <= 1 &&
+        b1.inTitle && b1.pos > 0 && b2.inPm && b3.inPm && !b3.nl &&
+        c.tag === 'H1' && c.text === long && c.controls === 0 && c.overflow <= 0,
+      JSON.stringify({ a, b1, b2, b3, c }))
+    await pg.close()
+  }
+
+  // P12d:正文首行回标题(评审 K-24:标题 → 正文有,反方向没有 —— 首段首行按 ↑、段首按 ← 哪儿也去不了)。
+  //  a 首段折成多行:从最后一行起按 ↑,还没到第一行之前都在正文(按视觉行判),第一行再按 ↑ → 焦点进标题、光标在标题末尾,正文不变;
+  //  b 首段段首按 ← → 进标题;c 首块是列表时首行 ↑ 同样进标题;d 第二段首行 ↑ 只是回到上一段(不跳标题)。
+  //  负对照:摘掉 titleNav 插件 → a、b、c 红(已实跑)。
+  {
+    const longPara = '第一段文字很长很长,'.repeat(12)
+    const run = async (md, place, keys) => {
+      const pg = await browser.newPage({ locale: 'zh-CN' })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM, { timeout: 20000 })
+      await pg.waitForTimeout(400)
+      const pt = await pg.evaluate(([s, place]) => {
+        const el = document.querySelector(s).children[place.block]
+        const r = document.createRange(); r.selectNodeContents(el); const rs = [...r.getClientRects()]
+        const line = place.line === 'last' ? rs[rs.length - 1] : rs[0]
+        return { x: line.left + 30, y: line.top + line.height / 2, lines: new Set(rs.map((x) => Math.round(x.top))).size }
+      }, [PM, place])
+      await pg.mouse.click(pt.x, pt.y)
+      await pg.waitForTimeout(200)
+      const out = []
+      for (const k of (typeof keys === 'function' ? keys(pt.lines) : keys)) {
+        await pg.keyboard.press(k)
+        await pg.waitForTimeout(150)
+        out.push(await pg.evaluate(() => {
+          const t = document.querySelector('.amx-title-input')
+          const inTitle = document.activeElement === t
+          return { inTitle, caret: inTitle ? t.selectionStart : null, titleLen: t.value.length, sel: window.__upage.probe.view().state.selection.$from.parent.textContent.slice(0, 6) }
+        }))
+      }
+      const doc = await pg.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+      await pg.close()
+      return { out, doc, lines: pt.lines }
+    }
+    const a = await run(`${longPara}\n\n第二段。\n`, { block: 0, line: 'last' }, (n) => Array(n).fill('ArrowUp'))
+    const b = await run('第一段文字。\n\n第二段。\n', { block: 0, line: 'first' }, ['Meta+ArrowLeft', 'ArrowLeft'])
+    const c = await run('- 项一\n- 项二\n', { block: 0, line: 'first' }, ['ArrowUp'])
+    const d = await run('第一段文字。\n\n第二段。\n', { block: 1, line: 'first' }, ['ArrowUp'])
+    const aLast = a.out[a.out.length - 1]
+    record('P12d 正文首行 ↑ / 首段段首 ← 回标题(光标在标题末尾、正文不变);折行首段按视觉行判;非首块照常(K-24)',
+      a.lines >= 2 && a.out.slice(0, -1).every((x) => !x.inTitle) && aLast.inTitle && aLast.caret === aLast.titleLen && a.doc.startsWith('第一段文字很长') &&
+        b.out[1].inTitle && c.out[0].inTitle && !d.out[0].inTitle && d.out[0].sel.startsWith('第一段'),
+      JSON.stringify({ a: { lines: a.lines, out: a.out }, b: b.out, c: c.out, d: d.out }))
   }
 
   // P13:Tab 缩进层(AFFiNE 对齐,md 可表示子集)。
@@ -1547,6 +1704,8 @@ async function main() {
   // P20b:页内查找替换(C-18)。UnifiedPage 注册 replace provider(所见即所得 → PM 事务;源码模式 → textarea 镜像 +
   //  execCommand)。钉:单行选区预填查找词;大小写 / 正则开关改计数;替换当前后跳到下一条;全部替换 = 一步撤销;
   //  嵌入卡里的命中查得到但不可替换;源码模式也能查能换、落盘带新文、原生撤销能撤回。
+  //  源码模式命中只算镜像里那一条、且真画在 textarea 上(C-05「幻影命中」:扫到 textarea 子文字节点 → 1/1 无高亮;
+  //  负对照:findInPage 的 TEXTAREA 排除摘掉 → hits=2 红,已实跑)。
   {
     const seed = '# 替换页\n\napple 一号,Apple 二号。\n\n苹**果**三号,苹果四号,苹果五号。\n\n![[Embedded]]\n'
     const pg = await browser.newPage({ locale: 'zh-CN' })
@@ -1626,6 +1785,13 @@ async function main() {
     await pg.waitForTimeout(400)
     await q('二号')
     const f1 = await st()
+    // C-05「幻影命中」:源码模式曾显示 1/1 却无高亮不滚动(扫到了 textarea 的子文字节点,零尺寸)。命中必须真画在 textarea 上。
+    f1.visible = await pg.evaluate(() => {
+      const r = [...(CSS.highlights.get('amx-find') ?? [])][0]
+      if (!r) return false
+      const b = r.getBoundingClientRect(), ta = document.querySelector('.amx-source').getBoundingClientRect()
+      return b.width > 0 && b.height > 0 && b.top >= ta.top - 1 && b.bottom <= ta.bottom + 1 && b.left >= ta.left - 1 && b.right <= ta.right + 1
+    })
     await r('贰号')
     await act(1)
     await pg.waitForTimeout(1300)
@@ -1645,10 +1811,118 @@ async function main() {
         c3.md.includes('梨果四号,梨果五号') && !c3.md.includes('苹果') &&
         c4.includes('苹果四号,苹果五号') && !c4.includes('梨果四号') &&
         e1.hits === 2 && !e1.canReplace &&
-        f1.hits === 1 && f1.inMirror === 1 && f1.canReplace &&
+        f1.hits === 1 && f1.inMirror === 1 && f1.visible && f1.canReplace &&
         f2.ta.includes('Apple 贰号') && f2.md.includes('Apple 贰号') && f2.hits === 0 &&
         f3.ta.includes('Apple 二号') && f3.md.includes('Apple 二号'),
       JSON.stringify({ a, b1: b1.count, b2: b2.count, c1: c1.count, c2: c2.count, c3: { count: c3.count, hits: c3.hits, md: c3.md.slice(0, 80) }, c4: c4.slice(0, 80), e1, f1, f2: { ...f2, ta: f2.ta.slice(0, 60), md: f2.md.slice(0, 60) }, f3: { ta: f3.ta.slice(0, 60), md: f3.md.slice(0, 60) } }))
+    await pg.close()
+  }
+
+  // P20c:查找条收起后的焦点(评审 C-17:Esc / × 关掉后焦点掉到 body,直接打字无效、光标也不在命中处)。
+  //  a. Esc:选区落在当前命中上、焦点回正文,接着打字就在命中处;
+  //  b. 点 ×:焦点回到开条前的地方,光标原位不动;
+  //  c. 源码模式 Esc:焦点回 textarea,选区 = 命中(textarea 的命中在镜像上,偏移映射回 textarea)。
+  //  负对照:closeFindBar 的 restoreFocus 摘掉 → 三条全红(已实跑)。
+  {
+    const seed = '# 焦点页\n\n苹果一号。\n\n香蕉。\n\n苹果二号在这里。\n\n末段。\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const clickEnd = async (text) => {
+      const at = await pg.evaluate(([s, t]) => {
+        const p = [...document.querySelectorAll(s + ' > p')].find((x) => x.textContent.includes(t))
+        const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect()
+        return { x: b.right - 1, y: b.top + b.height / 2 }
+      }, [PM, text])
+      await pg.mouse.click(at.x, at.y)
+      await pg.waitForTimeout(150)
+    }
+    const pmSel = () => pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const { from, to } = v.state.selection
+      return { focused: document.activeElement === v.dom, text: v.state.doc.textBetween(from, to), para: v.state.selection.$from.parent.textContent, head: v.state.selection.head }
+    })
+    const openAndType = async (q) => {
+      await pg.evaluate(() => window.__openFind())
+      await pg.waitForTimeout(200)
+      await pg.keyboard.type(q)
+      await pg.waitForTimeout(350)
+    }
+    // a
+    await clickEnd('末段')
+    await openAndType('苹果')
+    await pg.keyboard.press('Enter') // → 第 2 条
+    await pg.waitForTimeout(200)
+    await pg.keyboard.press('Escape')
+    await pg.waitForTimeout(200)
+    const a = await pmSel()
+    await pg.keyboard.type('梨')
+    await pg.waitForTimeout(200)
+    a.after = await pg.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+    // b
+    await clickEnd('香蕉')
+    const b0 = await pmSel()
+    await openAndType('末段')
+    await pg.click('.amx-findbar button[aria-label="关闭（Esc）"]')
+    await pg.waitForTimeout(200)
+    const b = await pmSel()
+    b.before = b0.head
+    // c
+    await pg.evaluate(() => window.__upage.setEditorMode('source'))
+    await pg.waitForSelector('.amx-source', { timeout: 5000 })
+    await pg.waitForTimeout(300)
+    await pg.evaluate(() => { const t = document.querySelector('.amx-source'); t.focus(); t.setSelectionRange(0, 0) })
+    await openAndType('香蕉')
+    await pg.keyboard.press('Escape')
+    await pg.waitForTimeout(200)
+    const c = await pg.evaluate(() => {
+      const t = document.querySelector('.amx-source')
+      return { focused: document.activeElement === t, sel: t.value.slice(t.selectionStart, t.selectionEnd) }
+    })
+    record('P20c 查找条收起:Esc → 选区落在当前命中、接着打字就在命中处;× → 焦点回原处光标不动;源码模式 Esc → textarea 选中命中(C-17)',
+      a.focused && a.text === '苹果' && a.para.includes('二号') && a.after.includes('梨二号在这里') && a.after.includes('苹果一号') &&
+        b.focused && b.head === b.before && b.text === '' &&
+        c.focused && c.sel === '香蕉',
+      JSON.stringify({ a, b, c }))
+    await pg.close()
+  }
+
+  // P20d:状态栏计数的 v4 接缝(评审 C-22:按原始 md 计数 —— 链接地址、表格竖线、`- [ ]` 全算进去,156 vs 可见约 25;
+  //  没有词数、没有选区计数)。走生产 lifecycle.unifiedStats(状态栏 WordCountItem 读的就是它):
+  //  全文只数可见文字;选中一段 → 另给选区的数,且计数版本号跟着选区变(状态栏据此刷新),折叠选区 → 选区数消失。
+  //  负对照:statsNow 改回数 pipe.body 原文 → 全文字数红(已实跑)。
+  {
+    const seed = '# Hello **world**\n\n看 [这篇文章](https://example.com/a/very/long/path?utm_source=x) 吧。\n\n![[Embedded]]\n\n- [ ] 待办一项\n\n| a | b |\n|---|---|\n| 1 | 2 |\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForFunction(() => !!(window.__upage && window.__upage.lifecycle), null, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const stats = () => pg.evaluate(() => ({ st: window.__upage.lifecycle.unifiedStats('Unified.md'), ver: window.__upage.lifecycle.unifiedStatsVer() }))
+    const a = await stats()
+    // 选中「这篇文章」四个字(真键盘:点到「看」后,Shift+→ 走过空格与四个字)
+    const at = await pg.evaluate((s) => {
+      const p = [...document.querySelectorAll(s + ' > p')].find((x) => x.textContent.includes('这篇文章'))
+      const t = p.firstChild; const r = document.createRange(); r.setStart(t, 1); r.setEnd(t, 1); const b = r.getBoundingClientRect()
+      return { x: b.left, y: b.top + b.height / 2 }
+    }, PM)
+    await pg.mouse.click(at.x, at.y)
+    await pg.waitForTimeout(150)
+    await pg.keyboard.press('ArrowRight')
+    for (let i = 0; i < 4; i++) await pg.keyboard.press('Shift+ArrowRight')
+    await pg.waitForTimeout(150)
+    const b = await stats()
+    await pg.keyboard.press('ArrowRight')
+    await pg.waitForTimeout(150)
+    const c = await stats()
+    record('P20d 计数只数可见文字(Hello world / 看这篇文章吧。/ 待办一项 / a b 1 2 = 25 字 16 词);选区另计且随选区刷新(C-22)',
+      a.st && a.st.all.chars === 25 && a.st.all.words === 16 && a.st.sel === null &&
+        b.st && b.st.sel && b.st.sel.chars === 4 && b.st.sel.words === 4 && b.ver > a.ver &&
+        c.st && c.st.sel === null && c.ver > b.ver,
+      JSON.stringify({ a, b, c }))
     await pg.close()
   }
 
@@ -1894,6 +2168,46 @@ async function main() {
     await pg.close()
   }
 
+  // P25b:空块提示的焦点门控(评审 K-23)。装饰跟着选区走、不看焦点:失焦后空段仍挂着「输入 '/'」;空 H2 反过来 ——
+  //  聚焦时行首是 `## ` 前缀 input,提示被收掉,失焦后前缀收回它才露出「标题 2」。现在:只有聚焦的空块有提示,
+  //  标题的提示画在前缀之后(::after)。量的是**渲染出来的伪元素内容**,不是属性。
+  //  负对照:摘掉 styles.css 的两条 K-23 规则 → 失焦两项与 H2 聚焦项全红(已实跑)。
+  {
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent('首段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(400)
+    const at = await pg.evaluate((s) => { const p = document.querySelector(s + ' > p'); const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect(); return { x: b.right - 1, y: b.top + b.height / 2 } }, PM)
+    await pg.mouse.click(at.x, at.y)
+    await pg.waitForTimeout(150)
+    const ph = () => pg.evaluate((s) => {
+      const el = document.querySelector(`${s} .is-empty`)
+      if (!el) return null
+      const c = (k) => { const v = getComputedStyle(el, k).content; return v === 'none' || v === 'normal' ? '' : v.replace(/^"|"$/g, '') }
+      return { tag: el.tagName, before: c('::before'), after: c('::after') }
+    }, PM)
+    await pg.keyboard.press('Enter')
+    await pg.waitForTimeout(150)
+    const a = await ph()
+    await pg.click('.amx-title-input')
+    await pg.waitForTimeout(150)
+    const b = await ph()
+    await pg.mouse.click(at.x, at.y + 30) // 回到空段(首段下一行)
+    await pg.waitForTimeout(150)
+    await pg.keyboard.type('## ')
+    await pg.waitForTimeout(250)
+    const c = await ph()
+    await pg.click('.amx-title-input')
+    await pg.waitForTimeout(200)
+    const d = await ph()
+    record('P25b 空块提示只给聚焦的空块:失焦即收;空标题聚焦时提示画在 `## ` 之后,失焦不再露出(K-23)',
+      a?.tag === 'P' && a.before.includes('/') && b?.tag === 'P' && b.before === '' && b.after === '' &&
+        c?.tag === 'H2' && c.before === '' && c.after === '标题 2' && d?.tag === 'H2' && d.before === '' && d.after === '',
+      JSON.stringify({ a, b, c, d }))
+    await pg.close()
+  }
+
   // P26:多块选中的**语义面**本来就由 PM 原生给了(Shift+方向键跨块扩展、整批删除、整批复制),
   // 缺的一直只是「看起来不像块选中」。这一关把「语义 + 呈现」一起钉住,免得日后有人另造一套
   // 块选区 store —— 单实例里没有块 id 可挂,那条路是死的。
@@ -2010,6 +2324,75 @@ async function main() {
       a28.text.includes('[[') && !a28.full && b28a && c28.prevented,
       JSON.stringify({ a28, b28a, c28 }),
     )
+    await pg.close()
+  }
+
+  // P29:光标 / 滚动的本机记忆(评审 C-23:只有进程内的滚动记忆 —— 换篇回来光标丢了、焦点不在编辑器里直接打字无效;
+  //  重载 / 重启 / 渲染进程崩溃重载后连滚动也没了)。&upane 生产壳(.amx-pane 滚动)。
+  //  a 点进第 50 段、滚到中段 → 重载页面:滚动与光标都回来,焦点在正文(焦点无主时才给);
+  //  b 换篇再切回:同上,接着打字就落在第 50 段;
+  //  c 离开期间这篇被改得对不上(光标附近的字变了)→ 光标不回放(不把光标放到别的字上);
+  //  d 焦点握在编辑器外(仿侧栏输入框)时换篇回来:光标照样回放,但不抢焦点。
+  //  负对照:caretMemory 插件摘掉 + 滚动记忆不落本机 → a、b 红(已实跑)。
+  {
+    const long = '# 文首\n\n' + Array.from({ length: 80 }, (_, i) => `第 ${i} 段 MARK${i} 填充。`).join('\n\n') + '\n'
+    const url = `${URL}?upage&upane&useed=${encodeURIComponent(long)}`
+    const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 800 } })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(url, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const st = () => pg.evaluate((s) => {
+      const v = window.__upage.probe.view()
+      const pane = document.querySelector('.amx-pane')
+      return { scroll: Math.round(pane.scrollTop), para: v.state.selection.$from.parent.textContent, focused: document.activeElement === document.querySelector(s) }
+    }, PM)
+    const clickPara = async (text) => {
+      await pg.evaluate((t) => { const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent.startsWith(t)); p.scrollIntoView({ block: 'center' }) }, text)
+      await pg.waitForTimeout(150)
+      const at = await pg.evaluate((t) => { const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent.startsWith(t)); const r = p.getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } }, text)
+      await pg.mouse.click(at.x, at.y)
+      await pg.waitForTimeout(700) // 光标 300ms + 落本机 500ms 的防抖
+    }
+    await clickPara('第 50 段 ')
+    const a0 = await st()
+    await pg.reload({ waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(1600)
+    const a1 = await st()
+    await pg.evaluate(() => window.__upage.switchFile('Other.md', '# 别篇\n\n别篇正文。\n'))
+    await pg.waitForTimeout(600)
+    await pg.evaluate(() => window.__upage.switchFile('Unified.md'))
+    await pg.waitForTimeout(1600)
+    const b1 = await st()
+    await pg.keyboard.type('ZZ')
+    await pg.waitForTimeout(200)
+    b1.typed = await pg.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.textContent)
+    await pg.waitForTimeout(900)
+    // c:切走期间把这篇改得对不上(光标附近的字变了)
+    await pg.evaluate(() => window.__upage.switchFile('Other.md'))
+    await pg.waitForTimeout(600)
+    await pg.evaluate((md) => window.__upage.switchFile('Unified.md', md.replace('第 50 段 MARK50 填充。', '这一段被别处整段改掉了。')), long)
+    await pg.waitForTimeout(1600)
+    const c1 = await st()
+    // d:焦点握在编辑器外(仿侧栏里的输入框)时换篇回来 —— 光标照样回放,但不抢焦点
+    await clickPara('第 60 段 ')
+    await pg.evaluate(() => window.__upage.switchFile('Other.md'))
+    await pg.waitForTimeout(600)
+    await pg.evaluate(() => {
+      const inp = document.createElement('input'); inp.id = 'fake-side'; inp.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99'
+      document.body.appendChild(inp); inp.focus()
+      window.__upage.switchFile('Unified.md')
+    })
+    await pg.waitForTimeout(1600)
+    const d1 = await pg.evaluate((s) => ({ side: document.activeElement?.id === 'fake-side', para: window.__upage.probe.view().state.selection.$from.parent.textContent, pm: document.activeElement === document.querySelector(s) }), PM)
+    record('P29 光标 / 滚动记忆跨重载与换篇(焦点无主才给焦点)、文字对不上不回放、别处握着焦点不抢(C-23)',
+      a0.para.startsWith('第 50 段') && a0.scroll > 200 &&
+        a1.para.startsWith('第 50 段') && Math.abs(a1.scroll - a0.scroll) <= 40 && a1.focused &&
+        b1.para.startsWith('第 50 段') && b1.focused && b1.typed.includes('ZZ') && b1.typed.replace('ZZ', '').startsWith('第 50 段') &&
+        !c1.para.startsWith('这一段被别处') && !c1.para.startsWith('第 50 段') &&
+        d1.side && !d1.pm && d1.para.startsWith('第 60 段'),
+      JSON.stringify({ a0, a1, b1, c1, d1 }))
     await pg.close()
   }
 

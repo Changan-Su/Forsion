@@ -92,6 +92,10 @@
 }
 /* 未命名笔记标题占位(Notion 式虚化 New Page):比正文更淡。 */
 .amx-title-input::placeholder { color: var(--text-faint, var(--text-muted)); opacity: 0.45; font-weight: 700; }
+/* v4 标题是 textarea(评审 C-12:单行 input 把长标题截断):按内容撑高(组件设 height),长串无空格也折;
+   只读页的静态 h1 同样折。 */
+textarea.amx-title-input { display: block; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.amx-title-static { overflow-wrap: anywhere; }
 
 /* 编辑器正文排版:两边留白 + Obsidian 式贴左对齐。Amadeus 块默认左侧有 edge-zone(14)+列内距(2)+
  * 拖拽槽(22)+块体(4)≈42px 缩进,把正文文字推得很靠右。这里将其归零 → 正文文字贴到内容最左边(与标题齐),
@@ -1069,6 +1073,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 /* 「调整位置」模式:图片解锁可上下拖(否则默认锁定不可拖);激活时工具常显 + 内描边提示激活态。 */
 .amx-cover-repo { cursor: ns-resize; box-shadow: inset 0 0 0 2px var(--accent); }
 .amx-cover-repo .amx-cover-tools { opacity: 1; }
+.amx-cover-repo img { touch-action: none; } /* 调位模式:触屏拖动交给 pointer 事件,不让页面滚走(C-11) */
 .amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: var(--ui-font-caption, 11px); color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
 /* 底部柔和渐变:从中下部起逐渐融入页面背景色(--bg),与正文自然过渡;克制、不纯色底、无硬分界 */

@@ -79,7 +79,7 @@ async function main() {
     const pm = document.querySelector('.unified-body .ProseMirror')
     return {
       editable: pm?.getAttribute('contenteditable'),
-      titleInput: !!document.querySelector('input.amx-title-input'),
+      titleInput: !!document.querySelector('input.amx-title-input, textarea.amx-title-input'), // v4 标题是 textarea(C-12)
       titleStatic: document.querySelector('h1.amx-title-static')?.textContent ?? null,
       titleActions: !!document.querySelector('.amx-title-actions'),
       pageTail: !!document.querySelector('.page-tail'),

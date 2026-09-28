@@ -35,7 +35,7 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
@@ -49,6 +49,9 @@ import { formatDateTime } from '../../format/time'
 import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
+import { createStatsReader, createStatsTicker } from './noteStats'
+import { titleNavPlugins } from './titleNav'
+import { createCaretMemory } from './caretMemory'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
@@ -126,6 +129,7 @@ registerMessages({
   'unipage.toast.cardUnavailable': { zh: '当前块不能转换为卡片；请先移出列表或分栏', en: 'This block cannot be turned into a card — move it out of the list or columns first.' },
   'unipage.toast.cardMade': { zh: '已转换为卡片 —— 右上角切到画布模式查看', en: 'Turned into a card — switch to canvas mode at the top right to see it.' },
   'unipage.menu.turnInto': { zh: '转换为', en: 'Turn into' },
+  'unipage.toast.renameDetachedFailed': { zh: '没能把笔记改名为「{name}」（可能已有同名笔记），保留了原名', en: 'Couldn’t rename the note to “{name}” (the name may be taken). The old name was kept.' },
   'unipage.menu.text': { zh: '正文', en: 'Text' },
   'unipage.menu.h1': { zh: '标题 1', en: 'Heading 1' },
   'unipage.menu.h2': { zh: '标题 2', en: 'Heading 2' },
@@ -893,8 +897,36 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   )
 }
 
+/** 标题框按内容撑高(rows=1 起步)。 */
+function growTitle(el: HTMLTextAreaElement | null): void {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+/** 光标是否在 textarea 的**最后一个视觉行**(折行后按行算)。等宽镜像里量「光标后那个字」与文末标记的行顶 ——
+ *  量光标后的字而不是在光标处插标记:软折行边界上的光标(↓ 落到第二行行首)画在下一行,插在边界的标记却会留在上一行尾。 */
+function caretOnLastLine(ta: HTMLTextAreaElement): boolean {
+  const pos = ta.selectionEnd
+  if (pos >= ta.value.length) return true
+  const cs = getComputedStyle(ta)
+  const m = document.createElement('div')
+  for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'wordSpacing', 'lineHeight', 'textTransform', 'textIndent', 'tabSize', 'paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth', 'boxSizing', 'wordBreak', 'overflowWrap'] as const) m.style[k] = cs[k]
+  Object.assign(m.style, { position: 'absolute', visibility: 'hidden', left: '-99999px', top: '0', width: `${ta.offsetWidth}px`, whiteSpace: 'pre-wrap', borderStyle: 'solid', borderColor: 'transparent' })
+  const at = document.createElement('span')
+  const end = document.createElement('span')
+  const next = String.fromCodePoint(ta.value.codePointAt(pos) ?? 32)
+  at.textContent = next
+  end.textContent = '\u200b'
+  m.append(ta.value.slice(0, pos), at, ta.value.slice(pos + next.length), end)
+  document.body.appendChild(m)
+  const last = at.offsetTop >= end.offsetTop
+  m.remove()
+  return last
+}
+
 /** 行内标题 + emoji 图标 + 添加图标/封面动作(与 v3 NoteTitle 同 DOM/同 CSS,数据走 fm 管线)。 */
-function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal, compact = false, readOnly = false }: {
+function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onDetachedRename, onEnterBody, focusSignal, compact = false, readOnly = false }: {
   compact?: boolean
   path: string
   icon: string | null
@@ -907,10 +939,14 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   /** focusKind = 触发本次 commit 的按键档(回车/方向键),点走 blur 恒 null —— 逐次绑定逐次消费,
    *  不用时间窗推断(Codex 深夜 F2:5 秒窗会把「回车后 5 秒内点走改名」误判成回车改名,凭空插首行抢焦点)。 */
   onRename: (next: string, focusKind: 'enter' | 'move' | null) => Promise<boolean>
+  /** 框还聚焦着就被卸载(键盘导航换篇 / 关标签,C-02):React 不给已脱离的节点派 onBlur,没提交的标题交给父级
+   *  按「脱离」语义改名(不改指标签、不交接正文焦点)。只在确有未提交的改动时调。 */
+  onDetachedRename: (next: string) => void
   /** 'enter' = 回车确定标题(首块非空段则顶插空白首行);'move' = 方向键滑入正文(只落光标不插行)。 */
   onEnterBody: (kind: 'enter' | 'move') => void
-  /** 新建流:挂载即聚焦标题(认领 pageStore 的一次性聚焦请求后由父级置真)。 */
-  focusSignal: boolean
+  /** 聚焦标题(光标落到末尾)的请求计数:新建流挂载即聚焦(认领 pageStore 的一次性请求)、正文首行按 ↑ / ← 回标题(K-24)
+   *  各加一;0 = 没有请求。计数而不是布尔:同一实例里可以反复触发。 */
+  focusSignal: number
 }): ReactElement {
   const { t } = useI18n()
   const spell = useNotesSpellcheck() // 标题与正文同一个拼写检查开关(G4-07)
@@ -919,8 +955,29 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   const [val, setVal] = useState(shown)
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const [coverPick, setCoverPick] = useState<{ x: number; y: number } | null>(null)
-  const ref = useRef<HTMLInputElement>(null)
-  useEffect(() => { setVal(shown) }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  const ref = useRef<HTMLTextAreaElement>(null)
+  /** 未提交的标题草稿(同步镜像,C-02):打字即记,失焦提交 / Esc 放弃 / 换路径时清。卸载时还在 = 没来得及提交。 */
+  const draft = useRef<string | null>(null)
+  const detachedRef = useRef(onDetachedRename)
+  detachedRef.current = onDetachedRename
+  useEffect(() => { setVal(shown); draft.current = null }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 卸载冲洗放在 layout cleanup:节点脱离之前、父级的卸载落盘(passive cleanup)之前执行(属性草稿 C-02 同一时机)。
+  useLayoutEffect(() => () => {
+    const d = draft.current
+    draft.current = null
+    if (d != null) detachedRef.current(d)
+  }, [])
+  // 长标题折行(评审 C-12):单行 input 把十几个字以上的标题直接截掉(手机上更甚)。textarea rows=1 按内容撑高;
+  // 宽度变了(窗口 / 分屏 / 侧栏)重排后行数会变,跟着再撑一次。
+  useLayoutEffect(() => { growTitle(ref.current) }, [val])
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let w = el.clientWidth
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; growTitle(el) } })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   useEffect(() => {
     if (!focusSignal) return
     const el = ref.current
@@ -932,9 +989,18 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   }, [focusSignal])
   // 本次 blur 由哪个键触发(commit 时一次性消费):回车/方向键在 keydown 里设,点走 blur 恒 null。
   const blurKind = useRef<'enter' | 'move' | null>(null)
+  /** Esc 放弃:keydown 里同步 blur,失焦提交拿到的还是这一轮渲染的 val(setVal(shown) 还没生效)—— 旧版因此 Esc 反倒
+   *  把打的字改名了。用同步标记告诉 commit「这次是放弃」。 */
+  const escaping = useRef(false)
   const commit = (): void => {
     const kind = blurKind.current
     blurKind.current = null
+    draft.current = null
+    if (escaping.current) {
+      escaping.current = false
+      setVal(shown)
+      return
+    }
     const next = val.trim()
     if (next && next !== current) void onRename(next, kind).then((ok) => { if (!ok) setVal(shown) })
     else setVal(shown)
@@ -974,31 +1040,38 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
         </div>
       )}
       <div className="amx-title-row">
-        <input
+        <textarea
           ref={ref}
           className="amx-title-input"
+          rows={1}
           spellCheck={spell}
           value={val}
           placeholder="New Page"
-          onChange={(e) => setVal(e.target.value)}
+          // 标题是文件名:没有换行这回事。粘贴进来的换行折成空格(回车本身在下面拦掉,不会走到这里)。
+          onChange={(e) => { const v = e.target.value.replace(/[\r\n]+/g, ' '); draft.current = v; setVal(v) }}
           onBlur={commit}
           onKeyDown={(e) => {
             // 输入法组合中一律放行(AFFiNE doc-title 同款守卫):中文用拼音打标题、按 Enter 选词,
             // 没有这道闸就会当场跳进正文、候选词也丢了。正文侧由 PM 自己挡(inOrNearComposition),
-            // 标题是原生 input,得自己挡。
-            if (e.nativeEvent.isComposing) return
+            // 标题是原生输入框,得自己挡。keyCode 229 兜「compositionend 先于 keydown」的时序。
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return
             const el = e.currentTarget
             // Tab 吞掉:与 blockLayer tabKeymap 的「编辑器内按 Tab 绝不把焦点放走」同口径 ——
             // 标题栏此前漏了这条,一按 Tab 焦点就跑到侧栏/工具条上去了。
             if (e.key === 'Tab') { e.preventDefault(); return }
-            const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length
-            if (e.key === 'Enter' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && atEnd)) {
+            const collapsed = el.selectionStart === el.selectionEnd
+            const atEnd = collapsed && el.selectionEnd === el.value.length
+            const bare = !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey
+            // 回车(任何修饰)= 确定标题进正文,textarea 里绝不换行;→ 在末尾、↓ 在**最后一个视觉行**(折行后按行判,
+            // 不是按「在不在末尾」)= 滑进正文。
+            const down = e.key === 'ArrowDown' && bare && collapsed && caretOnLastLine(el)
+            if (e.key === 'Enter' || (e.key === 'ArrowRight' && bare && atEnd) || down) {
               e.preventDefault()
               blurKind.current = e.key === 'Enter' ? 'enter' : 'move'
               el.blur() // blur → commit(改名);统一实例正文恒存在,先后顺序无 v3 的首块竞态
               onEnterBody(e.key === 'Enter' ? 'enter' : 'move')
             }
-            if (e.key === 'Escape') { setVal(shown); el.blur() }
+            if (e.key === 'Escape') { draft.current = null; escaping.current = true; setVal(shown); el.blur() }
           }}
         />
       </div>
@@ -1362,7 +1435,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   // cell:右键单元格打开时指针下的那一格(K-10 表格区的锚格;打开那一刻记下,浮层一出来就盖住那个点)。
-  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null; keyboard?: boolean } | null>(null)
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null; keyboard?: boolean; focus?: 'turnInto' } | null>(null)
   /** 菜单打开那一刻的目标(B-10):动作一律作用在它上面,不在点下去那一刻现读选区 ——
    *  此前菜单开着时按 ↓ 选区就挪到下一块,「删除」删掉的是别人。文档期间变了 → 不动手(fail closed)。 */
   const menuTarget = useRef<{ doc: ProseNode; sel: Selection } | null>(null)
@@ -1385,6 +1458,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }), [])
   /** 对外可用的编辑器视图:源码模式下编辑器隐藏着,一律当它不在(见 hostApi 注,C-06)。 */
   const liveView = (): EditorView | null => (srcRef.current ? null : layer.getView())
+  /** 状态栏计数(C-22):全文按 doc 身份缓存,只动选区不重数全文。源码模式下编辑器隐藏着(内容会过期)→ 不给数。 */
+  const [statsReader] = useState(() => createStatsReader(liveView))
   /** 整块删掉的内容里若牵着只有本篇引用的磁盘文件,删完问一句(见 assetDelete 顶注)。
    *  ⚠️ 只能在删除事务**之后**调:这里读的 doc 已是删完的,「同一篇里还有没有别处引用」才算得准。 */
   const onBlocksDeleted = (content: Fragment): void => {
@@ -1466,6 +1541,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...headingFoldPlugins,
       ...listFoldPlugins,
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
+      ...createStatsTicker(), // 状态栏字 / 词 / 选区计数的刷新节拍(C-22)
+      ...titleNavPlugins(() => titleUpRef.current()), // 正文首行 ↑ / 首段段首 ← 回标题(K-24)
+      // 光标的本机记忆(C-23):换篇回来 / 重载后回到上次的光标;有别的落点请求时让位,只在焦点无主时给焦点。
+      ...createCaretMemory({
+        where: () => foldWhere.current,
+        restore: () => caretRestoreRef.current(),
+        focus: () => caretFocusRef.current(),
+      }),
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -1515,7 +1598,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       }
     }
     // 键盘打开的(聚焦 ⠿ 按 Enter)→ 焦点进首项;鼠标打开的不抢焦点(Cmd+C / Delete 仍直接作用于选中的块)。
-    if (blockMenu.keyboard) requestAnimationFrame(() => document.querySelector<HTMLElement>('.unified-block-menu button')?.focus())
+    // Mod-Alt-/(K-17)= 直奔「转换为」:焦点落在该区第一项(表格上没有文字类转换 → 退回首项)。
+    if (blockMenu.keyboard) requestAnimationFrame(() => {
+      const menu = document.querySelector<HTMLElement>('.unified-block-menu')
+      let el = blockMenu.focus === 'turnInto' ? menu?.querySelector('[data-sec="turnInto"]')?.nextElementSibling ?? null : null
+      while (el && el.tagName !== 'BUTTON') el = el.nextElementSibling
+      ;((el as HTMLElement | null) ?? menu?.querySelector<HTMLElement>('button'))?.focus()
+    })
     window.addEventListener('pointerdown', close, true)
     window.addEventListener('contextmenu', close, true)
     window.addEventListener('keydown', onKey, true)
@@ -2322,6 +2411,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
+      statsNow: () => statsReader(),
       headings: () => {
         const v = liveView()
         return v ? docHeadings(v.state.doc) : []
@@ -2497,11 +2587,28 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // 新建流:createPageInFolder 落聚焦请求 → 挂载即聚焦标题(Notion 式先命名)。
   // 信号住模块级而非本 scope:新建的落点面板由 openNote 现算,创建时那份 store 未必是这一份。
-  const [titleFocus, setTitleFocus] = useState(false)
+  const [titleFocus, setTitleFocus] = useState(0)
   useEffect(() => {
-    if (claimTitleFocus(path)) setTitleFocus(true)
+    if (claimTitleFocus(path)) setTitleFocus((n) => n + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
+  /** 光标记忆的回放闸(C-23,caretMemory 插件经它现读):只读 / Mini / 画布模式不放;有别的落点请求(新建流聚焦标题、
+   *  标题回车进正文、改名后「接着写」)时让位。 */
+  const caretRestoreRef = useRef<() => boolean>(() => false)
+  caretRestoreRef.current = () => !readOnly && !compact && !canvasModeRef.current && bodyFocusRef.current == null && titleFocus === 0
+  /** 回放后给不给焦点:焦点无主(掉在 body 上:换篇拆掉了旧编辑器 / 刚启动)且本实例属于活动面板才给,别处握着焦点不抢。 */
+  const caretFocusRef = useRef<() => boolean>(() => false)
+  caretFocusRef.current = () => {
+    const a = document.activeElement
+    return (!a || a === document.body) && (scope == null || scope === activePageScope())
+  }
+  /** 正文首行 ↑ / 首段段首 ← 回标题(K-24,titleNav 插件经它现读):画布满铺没有标题、只读标题不可编辑 → 不接。 */
+  const titleUpRef = useRef<() => boolean>(() => false)
+  titleUpRef.current = () => {
+    if (fullCanvas || readOnly) return false
+    setTitleFocus((n) => n + 1)
+    return true
+  }
 
   /** D-17「接着写」:新实例的编辑器建好、已聚焦到文首时调用。盘上正文就是旧实例写下的那份 → 旧 doc 原样接过来
    *  (含没进盘的顶插空段与重建窗口里打的字;多出的字随后走正常防抖保存落盘),再把选区放回原处。
@@ -2524,12 +2631,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     view.dispatch(tr.setMeta('addToHistory', false).scrollIntoView())
   }
 
-  const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null): Promise<boolean> => {
+  /** detached(C-02):标题框聚焦中被卸载(键盘导航换篇 / 关标签)时由 UnifiedTitle 的卸载冲洗调 —— 标签已经换篇或关了:
+   *  · 不调 onRenamed(那会把标签拽回这篇)、不交接正文焦点 / 「接着写」;
+   *  · 换库闸:开头认 pipe.retired(切号先 retireAll、别处删 / 挪走也会退休),改名前再比一次库根 —— 换了库就放弃,
+   *    绝不按相对路径去新库里改名;
+   *  · 写序:父级的卸载落盘(passive cleanup)会在本调用之后再往 pipe.chain 排一发写 —— 改名前把链排干,
+   *    否则旧路径的写落在改名之后 = 幽灵文件。 */
+  const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null, detached = false): Promise<boolean> => {
     if (readOnly) return false
+    if (detached && pipe.retired) return false
+    const root = vaultRoot
     try {
       syncFromEditor() // 快打字后立刻回车改名:先拉平防抖窗里的最后几击(Codex A4)
       await writeNow() // 待写先落旧路径(chain 串行:在途写全部排完)
       await flushAllScopes() // 全库 [[链接]] 重写前,其它面板待存文本先落盘
+      if (detached) {
+        await pipe.chain
+        if (pipe.retired || usePageStore.getState().vaultRoot !== root) return false
+      }
       const newPath = await amadeus.renamePageFile(path, next)
       if (newPath !== path) {
         remapNoteViewMemory(vaultRoot, path, newPath)
@@ -2549,11 +2668,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 已经执行过、光标在正文里 →「接着写」(旧 doc + 选区),绝不再执行一遍。
         // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
         // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文);点走 blur 的改名只在光标确在正文里时续上。
+        // detached(C-02):标签已经不在这篇上,没有正文焦点可交接,也没有「接着写」。
         const pending = bodyFocusRef.current
         const view = layer.getView()
-        if (focusKind && pending != null && typeof pending !== 'object') {
+        if (!detached && focusKind && pending != null && typeof pending !== 'object') {
           pendingBodyFocus = { path: newPath, scope, req: pending, at: Date.now() }
-        } else if (view?.hasFocus()) {
+        } else if (!detached && view?.hasFocus()) {
           const carry: BodyCarry = { place: 'restore', body: writtenBody, doc: view.state.doc.toJSON(), anchor: view.state.selection.anchor, head: view.state.selection.head }
           outgoingCarry.current = carry
           pendingBodyFocus = { path: newPath, scope, req: carry, at: Date.now() }
@@ -2562,11 +2682,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         remapScopePaths(path, newPath, 'file')
         await cascadeFdAfterRename(path, newPath)
         void usePageStore.getState().refreshPages()
-        onRenamed?.(newPath)
+        if (!detached) onRenamed?.(newPath)
       }
       return true
     } catch {
-      return false // 撞名/非法名:调用方(UnifiedTitle)把输入框还原成旧名
+      // 撞名/非法名:调用方(UnifiedTitle)把输入框还原成旧名。脱离的改名没有输入框可还原,人也已经不在这篇上 —— 说一声。
+      if (detached) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.renameDetachedFailed', { name: next }) } }))
+      return false
     }
   }
 
@@ -2746,6 +2868,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           onSetIcon={(em) => setFm({ icon: em ?? undefined })}
           onSetCover={(c) => setFm({ cover: c })}
           onRename={doRename}
+          onDetachedRename={(next) => {
+            const t = next.trim()
+            if (t && t !== (path.split('/').pop() ?? path).replace(/\.md$/i, '')) void doRename(t, null, true)
+          }}
           onEnterBody={(kind) => setBodyFocus(kind === 'enter' ? 'body-enter' : 'start')}
           focusSignal={titleFocus}
         />
@@ -2974,7 +3100,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <div className="ubm-sep" role="separator" />
               </>
             )}
-            <div className="ubm-label" role="presentation">{t('unipage.menu.turnInto')}</div>
+            <div className="ubm-label" role="presentation" data-sec="turnInto">{t('unipage.menu.turnInto')}</div>
             {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
             {!isTableSelected(layer.getView()) && (
               <>

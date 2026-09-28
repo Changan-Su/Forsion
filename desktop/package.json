@@ -95,6 +95,7 @@
     "check:embedinputs": "node scripts/e2e-editor.cjs --check=embed-inputs",
     "check:embedkeep": "node scripts/e2e-editor.cjs --check=embed-keep",
     "check:outlinereveal": "node scripts/e2e-editor.cjs --check=outline-reveal",
+    "check:coverrepo": "node scripts/e2e-editor.cjs --check=cover-reposition",
     "check:mobilebar": "node scripts/e2e-editor.cjs --check=mobile-bar",
     "check:editorperf": "node scripts/e2e-editor.cjs --check=editor-perf",
     "check:dbinteractions": "node scripts/e2e-editor.cjs --check=db-interactions",
