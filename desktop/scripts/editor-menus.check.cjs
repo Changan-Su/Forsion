@@ -2,6 +2,7 @@
 // (Amadeus 评审 2026-09-27 波次 2 · menus 包)。全部跑生产 UnifiedPage(台架 `?upage`),落盘以 window.__upage.writes 为准。
 //   I9   ⌘E = 行内代码(对齐改 ⌘⇧L/E/R);选区上敲反引号 = 行内代码,不是两个字面反引号(I-09 / K-18b)
 //   I10  ⌘K 碰到已有链接 = 扩到整条、预填原地址、可「移除链接」;空选区 = 插一条新链接(I-10)
+//   I12  选区工具栏在鼠标按住(拖选)期间不出、松手才出;向上拖选不被它挡住;键盘选区照旧即时出(I-12)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -174,6 +175,32 @@ async function main() {
         const md = await mdOf(page, nm)
         check('I10c 空选区 ⌘K → 插入新链接', alt === 0 && (md || '').trim() === 'alpha [forsion.net](https://forsion.net)omega', JSON.stringify({ alt, md }))
       }
+    }
+
+    if (want('I12')) {
+      const MD = '# T\n\n第一段第一段第一段第一段第一段第一段第一段第一段\n\n第二段第二段第二段第二段第二段第二段第二段第二段\n\n第三段第三段第三段第三段第三段第三段第三段第三段\n\n第四段第四段第四段\n'
+      await load(page, MD)
+      const bb = await page.evaluate((PM) => [...document.querySelectorAll(`${PM} > p`)].map((p) => { const r = p.getBoundingClientRect(); return { x: r.x, y: r.y, h: r.height } }), PM)
+      const start = { x: bb[3].x + 100, y: bb[3].y + bb[3].h / 2 }
+      const target = { x: bb[0].x + 60, y: bb[0].y + bb[0].h / 2 }
+      await page.mouse.move(start.x, start.y)
+      await page.mouse.down()
+      let during = 0
+      for (let i = 1; i <= 20; i++) {
+        await page.mouse.move(start.x + (target.x - start.x) * i / 20, start.y + (target.y - start.y) * i / 20)
+        await page.waitForTimeout(25)
+        during += await page.locator('[data-testid=inline-toolbar]').count()
+      }
+      await page.mouse.up()
+      await page.waitForTimeout(250)
+      const after = await page.locator('[data-testid=inline-toolbar]').count()
+      const sel = await page.evaluate(() => getSelection().toString())
+      check('I12a 向上拖选:按住期间工具栏不出、第一段选得进来、松手后工具栏出现', during === 0 && sel.includes('第一段') && after === 1, JSON.stringify({ during, after, sel: sel.slice(0, 8) }))
+      // I12b 键盘选区即时出。
+      await caretAt(page, '第四段第四段第四段')
+      await page.keyboard.press('Shift+ArrowLeft')
+      await page.waitForTimeout(200)
+      check('I12b Shift+← 选区:工具栏即时出现', (await page.locator('[data-testid=inline-toolbar]').count()) === 1)
     }
 
     await page.close()

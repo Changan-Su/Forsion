@@ -6,6 +6,7 @@
 import { $inputRule, $prose } from '@milkdown/kit/utils'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
+import type { EditorView } from '@milkdown/kit/prose/view'
 import { blockLabel, type BlockNode } from './blockTriggers'
 import { registerMessages, translate } from '../../../i18n'
 
@@ -232,11 +233,13 @@ function isImageSelection(state: EditorState): boolean {
 }
 
 export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
-  return $prose(
-    () =>
-      new Plugin({
-        view: () => ({
-          update(view) {
+  return $prose(() => {
+    // 鼠标按住期间(拖选中)不出工具栏,松手才出(I-12,对标 Notion / Google Docs):按住时就上报,
+    // 向上拖选时工具栏正好浮在指针要去的那一行上,指针落到工具栏上 → 第一段选不进来;向下拖则一路闪。
+    // 键盘产生的选区(Shift+方向键 / ⌘A)没有按住这回事,照旧即时显示。
+    let held = false
+    const compute = (view: EditorView): void => {
+            if (held) return report(null)
             const { selection, doc } = view.state
             // hasFocus:编辑器失焦(点到别处/别的块)时 blur 会派空事务触发 update、选区仍非空 →
             // 不判此条会留下过期工具栏,点它会对已离开的块施格式(Codex L2)。
@@ -289,8 +292,31 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
             }
             const align = aligns.size === 1 ? [...aligns][0] as 'left' | 'center' | 'right' : undefined
             report({ from, to, active, align, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
+    }
+    return new Plugin({
+      props: {
+        handleDOMEvents: {
+          mousedown: (view, e) => {
+            if (e.button !== 0) return false
+            held = true
+            report(null)
+            // 松手在窗口外收不到 mouseup:窗口失焦(非捕获 —— 捕获期会收到页内任何元素的 blur)也算松手。
+            const release = (): void => {
+              window.removeEventListener('mouseup', release, true)
+              window.removeEventListener('pointercancel', release, true)
+              window.removeEventListener('blur', release)
+              held = false
+              // 等 PM 自己的 mouseup / selectionchange 把最终选区落进 state 再算(它们与这里同在这一拍)。
+              setTimeout(() => { if (!view.isDestroyed) compute(view) }, 0)
+            }
+            window.addEventListener('mouseup', release, true)
+            window.addEventListener('pointercancel', release, true)
+            window.addEventListener('blur', release)
+            return false
           },
-        }),
-      }),
-  )
+        },
+      },
+      view: () => ({ update: compute }),
+    })
+  })
 }
