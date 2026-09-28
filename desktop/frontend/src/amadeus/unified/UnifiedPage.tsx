@@ -65,6 +65,7 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
+import { reconcileTr } from './reconcileDiff'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
@@ -118,9 +119,24 @@ registerMessages({
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
 
+/** 改名重建时的「接着写」(评审 D-17):旧实例的 doc 与选区原样交给新实例,**不重做**一遍「进入正文」。
+ *  标题回车的 body-enter 在旧实例里已经执行过(顶插了空段、光标落进去、可能已经打了字);新实例若再执行一次,
+ *  首块非空就又顶插一个空段 —— 落盘成 `SECOND\n\nfirst`、跨重建打的字劈成两段并颠倒。 */
+interface BodyCarry {
+  place: 'restore'
+  /** 旧实例写进新路径的正文(= 新实例读盘应得的那份)。对不上 = 期间盘上被别处改过:只按位置落光标,不接 doc。 */
+  body: string
+  /** 旧实例的 doc(JSON)。含没进盘的东西(回车顶插的空段序列化后读回来就没了)与重建窗口里刚打的字。 */
+  doc: unknown
+  anchor: number
+  head: number
+}
+type BodyFocusReq = 'start' | 'end' | 'body-enter' | BodyCarry
+
 /** 标题回车的聚焦请求要跨「改名 → 实例随 key 重建」存活(重建清零一切组件态,只能挂模块级)。
- *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。 */
-let pendingBodyFocus: { path: string; place: 'start' | 'body-enter' } | null = null
+ *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。
+ *  at:没人认领的请求 10s 后作废 —— 否则下次打开同一篇时凭空执行一次(顶插空段、抢焦点)。 */
+let pendingBodyFocus: { path: string; req: BodyFocusReq; at: number } | null = null
 
 const NOOP_KEYS = {
   insertAfter: () => {},
@@ -131,8 +147,6 @@ const NOOP_KEYS = {
   selfFocus: () => {},
 }
 
-/** 顶层子节点级最小差异替换:首尾相同段跳过,只替换中间不同的范围。
- *  选区在范围外由 PM 映射自动保持;在范围内钳到边界。整文替换是它的退化情形。 */
 /** 存一个 OS 文件为附件 → 磁盘形态的引用 md(`![[base]]`);失败 null。
  *  正文粘贴/拖入(saveFiles)与画布落卡(CanvasStage.saveFile)共用这一份。 */
 async function saveOneFile(page: string, f: File): Promise<string | null> {
@@ -190,25 +204,12 @@ function flashCiteTip(r: DOMRect): void {
   citeTip = { el, timer: window.setTimeout(dropCiteTip, 1400), arm, off }
 }
 
+/** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
+ *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
+ *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
 function applyMinimalDiff(view: EditorView, next: ProseNode): void {
-  const cur = view.state.doc
-  if (next.eq(cur)) return
-  let start = 0
-  const maxStart = Math.min(cur.childCount, next.childCount)
-  while (start < maxStart && cur.child(start).eq(next.child(start))) start++
-  let endCur = cur.childCount
-  let endNext = next.childCount
-  while (endCur > start && endNext > start && cur.child(endCur - 1).eq(next.child(endNext - 1))) {
-    endCur--
-    endNext--
-  }
-  let from = 0
-  for (let i = 0; i < start; i++) from += cur.child(i).nodeSize
-  let to = from
-  for (let i = start; i < endCur; i++) to += cur.child(i).nodeSize
-  const repl: ProseNode[] = []
-  for (let i = start; i < endNext; i++) repl.push(next.child(i))
-  view.dispatch(view.state.tr.replaceWith(from, to, repl))
+  const tr = reconcileTr(view.state, next)
+  if (tr) view.dispatch(tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
@@ -1163,14 +1164,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }, [canvasOn])
 
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
-  const [bodyFocus, setBodyFocus] = useState<'start' | 'end' | 'body-enter' | null>(() => {
-    if (pendingBodyFocus?.path === path) {
-      const place = pendingBodyFocus.place
+  const [bodyFocus, setBodyFocus] = useState<BodyFocusReq | null>(() => {
+    const p = pendingBodyFocus
+    if (p?.path === path) {
       pendingBodyFocus = null
-      return place
+      return Date.now() - p.at < 10_000 ? p.req : null
     }
     return null
   })
+  /** 事件里同步读「进入正文」是否已被执行(doRename 在 await 之后才看它)。 */
+  const bodyFocusRef = useRef(bodyFocus)
+  bodyFocusRef.current = bodyFocus
+  /** 本实例交给改名后新实例的「接着写」(卸载那一刻再刷一次 doc / 选区,重建窗口里打的字一并带过去)。 */
+  const outgoingCarry = useRef<BodyCarry | null>(null)
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
@@ -1755,6 +1761,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       pipe.dead = true
       window.removeEventListener('beforeunload', onUnload)
       flush()
+      // D-17:改名后交给新实例的「接着写」按**卸载这一刻**的 doc / 选区刷新(新实例在渲染期已拿到同一个对象,
+      // 它的编辑器异步建好后才读)—— 改名 IPC 到重建之间打进旧实例的字不随旧实例一起消失。
+      // 放在 flush 外面:writeFailures.test 把 flush 的源码单独切出来求值,不往里加自由标识符。
+      const carry = outgoingCarry.current
+      const v = layer.getView()
+      if (carry && v) {
+        carry.doc = v.state.doc.toJSON()
+        carry.anchor = v.state.selection.anchor
+        carry.head = v.state.selection.head
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
@@ -1805,6 +1821,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       },
       insertFiles: (files) => {
         hostApi.current?.insertFiles(files)
+      },
+      // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
+      patchFm: (patch) => {
+        if (pipe.readOnly || pipe.retired || pipe.dead) return null
+        setFm(patch)
+        return pipe.chain // setFm 刚把这发写排上链:链尾 = 它落定(恒不 reject)
       },
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
@@ -1866,8 +1888,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         return true
       },
-      retire: () => {
+      retire: (movedTo) => {
         dropCiteTip() // 视图退休时把还挂着的落点覆盖片撤掉(它住在 body 上,不随组件卸载)
+        // 被挪走 / 改名(评审 G2-03:别处改名经 onPathGone → remapScopePaths 到这里;本端树上移动同理):退休之后
+        // 本实例一个字都不再写,还没落盘的字先**同步**存成新路径的草稿 —— 标签随后改指新路径,新实例挂载即出
+        // 「恢复草稿」条,恢复时 0a 的流程负责保全盘上那版(基线对不上先落冲突副本)。不做异步交接写:新实例挂载就
+        // 读盘,两边会赛跑。本实例自己发起的改名(doRename)先置 retired 并自己补写新路径,这里不重复。
+        if (movedTo && !pipe.retired && !pipe.readOnly && !pipe.dead) {
+          syncFromEditor()
+          const text = composeFm(pipe.fm, pipe.body)
+          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved)
+        }
         pipe.retired = true
         if (pipe.timer) {
           clearTimeout(pipe.timer)
@@ -1945,6 +1976,27 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
+  /** D-17「接着写」:新实例的编辑器建好、已聚焦到文首时调用。盘上正文就是旧实例写下的那份 → 旧 doc 原样接过来
+   *  (含没进盘的顶插空段与重建窗口里打的字;多出的字随后走正常防抖保存落盘),再把选区放回原处。
+   *  不进撤销栈:这不是一次编辑,是同一次编辑会话跨重建的延续。 */
+  const continueFrom = (c: BodyCarry): void => {
+    const view = layer.getView()
+    if (!view) return
+    let tr = view.state.tr
+    if (pipe.body === c.body) {
+      try {
+        const prev = view.state.schema.nodeFromJSON(c.doc)
+        if (!prev.eq(tr.doc)) tr = tr.replaceWith(0, tr.doc.content.size, prev.content)
+      } catch { /* schema 对不上(插件启停换了 schema)→ 只按位置落光标 */ }
+    }
+    const max = tr.doc.content.size
+    const at = (n: number) => tr.doc.resolve(Math.max(0, Math.min(n, max)))
+    try {
+      tr = tr.setSelection(TextSelection.between(at(c.anchor), at(c.head)))
+    } catch { /* 落不进合法文字位就留在文首 */ }
+    view.dispatch(tr.setMeta('addToHistory', false).scrollIntoView())
+  }
+
   const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null): Promise<boolean> => {
     if (readOnly) return false
     try {
@@ -1959,15 +2011,26 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // IPC await 期间可能又打了字(200ms 监听窗)→ 补写前再拉平一次(Codex 终审 P0)。
         syncFromEditor()
         const text = composeFm(pipe.fm, pipe.body)
+        const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
         if (text !== pipe.lastSaved) await amadeus.writeTextFile(newPath, text).catch(() => {})
-        retireUnifiedPath(path) // 别的标签开着同一篇:一并停写旧路径
+        // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
+        // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;
+        // 已经执行过、光标在正文里 →「接着写」(旧 doc + 选区),绝不再执行一遍。
+        // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
+        // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文);点走 blur 的改名只在光标确在正文里时续上。
+        const pending = bodyFocusRef.current
+        const view = layer.getView()
+        if (focusKind && pending != null && typeof pending !== 'object') {
+          pendingBodyFocus = { path: newPath, req: pending, at: Date.now() }
+        } else if (view?.hasFocus()) {
+          const carry: BodyCarry = { place: 'restore', body: writtenBody, doc: view.state.doc.toJSON(), anchor: view.state.selection.anchor, head: view.state.selection.head }
+          outgoingCarry.current = carry
+          pendingBodyFocus = { path: newPath, req: carry, at: Date.now() }
+        }
+        retireUnifiedPath(path, 'file', newPath) // 别的标签开着同一篇:一并停写旧路径(它们未落盘的字存成新路径的草稿,G2-03)
         remapScopePaths(path, newPath, 'file')
         await cascadeFdAfterRename(path, newPath)
         void usePageStore.getState().refreshPages()
-        // 回车/方向键触发的改名:聚焦请求跨重建带给新实例(点走 blur 的改名 focusKind=null,不抢焦点)。
-        // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
-        // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文)。
-        if (focusKind) pendingBodyFocus = { path: newPath, place: focusKind === 'enter' ? 'body-enter' : 'start' }
         onRenamed?.(newPath)
       }
       return true
@@ -2175,8 +2238,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 apiRef={hostApi}
                 probe={probe}
                 extraPlugins={editorPlugins}
-                focusPlace={bodyFocus}
-                onFocused={() => setBodyFocus(null)}
+                focusPlace={bodyFocus != null && typeof bodyFocus === 'object' ? 'start' : bodyFocus}
+                onFocused={() => {
+                  if (bodyFocus != null && typeof bodyFocus === 'object') continueFrom(bodyFocus)
+                  setBodyFocus(null)
+                }}
                 onCard={makeCard}
                 readOnly={readOnly}
               />

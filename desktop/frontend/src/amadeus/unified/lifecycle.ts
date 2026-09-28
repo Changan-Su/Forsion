@@ -11,7 +11,9 @@ export interface UnifiedPipeHandle {
   path: string
   /** strict=true must reject write failures and drain all pending edits before retiring. */
   flush: (strict?: boolean) => Promise<void>
-  retire: () => void
+  /** 停写。movedTo = 这篇是被**挪走 / 改名**到了那里(删除 / 切号时不给):实例据此把还没落盘的字存成新路径的草稿
+   *  (评审 G2-03),新路径的实例挂载时出「恢复草稿」条 —— 退休不许把它们静默丢掉。 */
+  retire: (movedTo?: string) => void
   /** OS 拖入/上传按钮的文件走这里进 unified(存附件 + 光标处插 `![[base]]`);可选。 */
   insertFiles?: (files: File[]) => void
   /** 当前正文(**不重新与编辑器同步**:上次保存那一刻的快照,≤800ms 陈旧,与只读面板的刷新
@@ -34,6 +36,11 @@ export interface UnifiedPipeHandle {
    *  'cursor' = 光标所在**顶层块**之后(该块为空则原地替换)、'start' = 文首、'end' = 文末。
    *  实例退休(改名/删除/移动之后)一律 false —— 往幽灵路径写字比不写更糟。 */
   insertMarkdown?: (md: string, where: 'cursor' | 'start' | 'end') => boolean
+  /** frontmatter 补丁的实例写口(评审 G1-05):笔记视图 / 日历 / 图标 / `.fd` children 这类「改一个 fm 键」的写,
+   *  笔记开着时交给实例自己改 pipe.fm、走它的单写者写盘管线 —— 外科写会被实例下一次击键用旧 fm 整篇写回。
+   *  返回这次写盘的 Promise = 已接手(fm 读不懂时 fail-closed 什么都不写也算接手,不许退回外科写绕过它);
+   *  null = 本实例不接(只读 / 已退休 / 已卸载),调用方照旧外科写。补丁语义同 setFmExtraOnSource(undefined = 删键)。 */
+  patchFm?: (patch: Record<string, unknown>) => Promise<void> | null
   /** 登记者身份(实例私有的任意对象):announceUnifiedWrite 靠它把发起者自己排除在外。 */
   owner?: object
   /** 同窗同路径的**另一个**实例刚把这篇写盘成功(G1-01):盘上已是它的新版,本实例去回灌
@@ -75,6 +82,18 @@ export function announceUnifiedWrite(path: string, owner: object): void {
   for (const h of [...handles]) if (h.path === path && h.owner !== owner) h.peerWrote?.()
 }
 
+/** 往 path 上开着的 v4 实例打 frontmatter 补丁(评审 G1-05)。有实例接手 → 返回它那发写盘的 Promise;
+ *  没有(没开 / 只读 / 已退休)→ null,调用方照旧外科写(setPageFrontmatter)。同篇多开时交给第一个接手的,
+ *  它写盘成功后 announceUnifiedWrite 让其余实例回灌。 */
+export function unifiedPatchFm(path: string, patch: Record<string, unknown>): Promise<void> | null {
+  for (const h of handles) {
+    if (h.path !== path || !h.patchFm) continue
+    const done = h.patchFm(patch)
+    if (done) return done
+  }
+  return null
+}
+
 /** 全部 unified 实例待写落盘(单实例失败不拖累别家)。 */
 export async function flushUnifiedScopes(strict = false): Promise<void> {
   await Promise.all([...handles].map((h) => strict ? h.flush(true) : h.flush().catch(() => {})))
@@ -96,10 +115,12 @@ export function insertFilesForPath(path: string, files: File[]): boolean {
   return false
 }
 
-/** 退休 path 上(kind='prefix' 时含子树)的全部实例:防「动完文件,防抖写复活旧路径」。 */
-export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file'): void {
+/** 退休 path 上(kind='prefix' 时含子树)的全部实例:防「动完文件,防抖写复活旧路径」。
+ *  to = 挪去的新路径(kind='prefix' 时是新的目录前缀):交给实例保全未落盘的字(见 UnifiedPipeHandle.retire)。 */
+export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file', to?: string | null): void {
   for (const h of handles) {
-    if (kind === 'file' ? h.path === path : h.path === path || h.path.startsWith(`${path}/`)) h.retire()
+    if (kind === 'file' ? h.path !== path : h.path !== path && !h.path.startsWith(`${path}/`)) continue
+    h.retire(to ? (kind === 'file' ? to : to + h.path.slice(path.length)) : undefined)
   }
 }
 

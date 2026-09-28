@@ -41,7 +41,7 @@ import { presentDockedExtension } from '@lcl/engine/dockviewStore'
 import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
-import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
+import { usePageStore, pageStoreFor, remapScopePaths } from './amadeus/store/pageStore'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
@@ -52,6 +52,7 @@ import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { parseBody } from '@amadeus-shared/compiler/markers'
 import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from '@amadeus-shared/compiler/split'
 import { parseLayout } from '@amadeus-shared/compiler/manifest'
@@ -1703,6 +1704,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       vault.set(p, JSON.stringify(data))
       return Promise.resolve()
     },
+    // 外科写 frontmatter(桌面主进程 setPageFrontmatter 同语义:读 → 补丁 → 原子写,**本窗零通知**(自写账本压掉回声))。
+    // 评审 G1-05 仪器(check:unifiedsync 的 F 组):笔记开着时 store 本该走实例写口,根本不走到这里。
+    setPageFrontmatter: (p: string, patch: Record<string, unknown>) => {
+      const cur = vault.get(p)
+      if (cur == null) return Promise.resolve()
+      const next = setFmExtraOnSource(cur, patch)
+      if (next !== cur) {
+        vault.set(p, next)
+        writes.push({ path: p, text: next })
+      }
+      return Promise.resolve()
+    },
     renamePageFile: (p: string, next: string) => {
       const dir = p.split('/').slice(0, -1).join('/')
       const np = (dir ? dir + '/' : '') + next + '.md'
@@ -1733,6 +1746,11 @@ if (new URLSearchParams(location.search).has('dock')) {
     unmountB() { unmountB?.(); unmountB = null },
     /** 生产 lifecycle 模块(按路径路由的 insertMarkdown / flush 等,仪器直调;与 UnifiedPage 同一模块实例)。 */
     lifecycle: null as unknown,
+    /** 生产 pageStore(仪器直调它的 fm 写口:setPageIcon / syncFdChildren,评审 G1-05)。 */
+    pageStore: usePageStore,
+    /** 生产的改名 / 挪走收尾(pageStore.onPathGone 收到别处改名时调的就是它;评审 G2-03 仪器)。标签改指由仪器接着
+     *  调 switchFile 模拟(生产里是 amadeusViews 听 onNotePathGone 改 leaf 参数)。 */
+    remapScopePaths,
     switchFile(path: string, text?: string) {
       if (typeof text === 'string') vault.set(path, text)
       switchUPage?.(path)

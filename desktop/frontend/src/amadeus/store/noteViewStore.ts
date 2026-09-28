@@ -9,6 +9,7 @@ import type { CellValue, ColumnType } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
 import { translate } from '../../i18n'
 import { cascadeFdAfterRename, flushAllScopes, remapScopePaths, usePageStore } from './pageStore'
+import { unifiedPatchFm } from '../unified/lifecycle'
 
 export interface FolderView {
   status: 'loading' | 'ok' | 'error'
@@ -76,7 +77,9 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
     if (t) clearTimeout(t)
     writeTimers.set(tk, setTimeout(() => {
       writeTimers.delete(tk)
-      void amadeus.setPageFrontmatter(notePath, { [key]: fmVal })
+      // 笔记开着(v4)→ 交给实例自己写(评审 G1-05:外科写会被它下一次击键用旧 fm 写回);没开才外科写。
+      const patch = { [key]: fmVal }
+      void (unifiedPatchFm(notePath, patch) ?? amadeus.setPageFrontmatter(notePath, patch))
     }, WRITE_DELAY))
   },
 
@@ -84,7 +87,11 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
     const fv = get().folders[folder]
     if (!fv) return
     await Promise.all(
-      fv.props.map((p) => (oldKey in p.fm ? amadeus.setPageFrontmatter(p.path, { [oldKey]: undefined, [newKey]: p.fm[oldKey] }) : Promise.resolve())),
+      fv.props.map((p) => {
+        if (!(oldKey in p.fm)) return Promise.resolve()
+        const patch = { [oldKey]: undefined, [newKey]: p.fm[oldKey] }
+        return unifiedPatchFm(p.path, patch) ?? amadeus.setPageFrontmatter(p.path, patch) // 同 setProp(G1-05)
+      }),
     )
     await get().refresh(folder)
   },

@@ -30,12 +30,12 @@ export interface CloudEventsCfg {
   onDbChange(path: string): void
   /** 别处把文件改名/移走(op=move,带 newPath)。桥据此把开着的编辑器改指新路径,
    *  否则它下一次自动保存会按旧路径 404→baseSeq 0 把旧名文件**重新造出来**(2026-09-05 幽灵旧名空白页的真因)。 */
-  onPageMoved?(from: string, to: string, fileSeq: number | null): void
+  onPageMoved?(from: string, to: string, fileSeq: number | null, own?: boolean): void
   /** 别处删掉了文件(op=delete)。桥据此拒绝再往该路径写(编辑胜删除只对本端有未保存改动才成立,
    *  而那一步由用户显式重建,不该由自动保存偷偷完成)。 */
   onPageDeleted?(path: string): void
   /** 别处改名/移动了整个文件夹(op=rename-folder / move-folder,带 newPath):前缀下所有路径同上迁移。 */
-  onFolderMoved?(from: string, to: string): void
+  onFolderMoved?(from: string, to: string, own?: boolean): void
   /** 别处删了整个文件夹(op=delete-folder)。 */
   onFolderDeleted?(path: string): void
   /** 已在此处 300ms 防抖。 */
@@ -100,9 +100,11 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     // 改名/删除/文件夹事件到此为止,**不**再往下走旧路径的内容回灌:回灌 = reconcilePage → loadOrCreate 404 →
     // 重建 = 把别处刚挪走/删掉的页原地造回云端(v3 页「删了/改名了还会出现」的路径;Codex 终审 P0)。
     // 树刷新已由上面的结构事件负责;开着旧路径的编辑器由桥的 movedTo/everKnown 接管。
-    if (op === 'move' && newPath) { cfg.onPageMoved?.(path, newPath, typeof c.fileSeq === 'number' ? c.fileSeq : null); return }
+    // own = 本端(本标签页)发起的:别名 / seq 账照记,但桥不再把它当「别处改名」转给编辑器(本端早已自己改指,评审 G2-03)。
+    const ownMove = typeof c.origin?.client === 'string' && c.origin.client === cfg.clientId
+    if (op === 'move' && newPath) { cfg.onPageMoved?.(path, newPath, typeof c.fileSeq === 'number' ? c.fileSeq : null, ownMove); return }
     if (op === 'delete') { cfg.onPageDeleted?.(path); return }
-    if ((op === 'rename-folder' || op === 'move-folder') && newPath) { cfg.onFolderMoved?.(path, newPath); return }
+    if ((op === 'rename-folder' || op === 'move-folder') && newPath) { cfg.onFolderMoved?.(path, newPath, ownMove); return }
     if (op === 'delete-folder') { cfg.onFolderDeleted?.(path); return }
     // 内容事件回声抑制:自己写的 / 已知 seq 之前的旧事件 → 丢弃。
     const own = typeof c.origin?.client === 'string' && c.origin.client === cfg.clientId

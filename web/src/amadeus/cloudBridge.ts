@@ -39,6 +39,7 @@ import type {
   EmbedResolved,
   LinkMeta,
   PageProps,
+  PathGoneEvent,
   SearchHit,
   TagCount,
   TextWriteResult,
@@ -372,6 +373,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   const fireExternal = (p: string): void => { for (const cb of [...extCbs]) { try { cb(p) } catch { /* 单回调失败不断链 */ } } }
   const fireStructure = (): void => { for (const cb of [...structCbs]) { try { cb() } catch { /* 同上 */ } } }
   const fireDb = (p: string): void => { for (const cb of [...dbCbs]) { try { cb(p) } catch { /* 同上 */ } } }
+  /** 别处改名 / 挪走(评审 G2-03):交给 pageStore 的 onPathGone —— 退休旧路径的 v4 实例(未落盘的字存成新路径的草稿)、
+   *  标签改指新路径。不转的话开着旧路径的编辑器成僵尸:保存经 movedTo 改投新路径,回灌却只认旧路径、永远落空。 */
+  const pathGoneCbs = new Set<(e: PathGoneEvent) => void>()
+  const firePathGone = (e: PathGoneEvent): void => { for (const cb of [...pathGoneCbs]) { try { cb(e) } catch { /* 同上 */ } } }
 
   // ---- lastPage(localStorage,按 vault 分键)+ 资源 URL 的活动页基准 ------------
   let lastLoadedPage: string | null = null
@@ -443,9 +448,17 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // 别处改名:seq 随路径迁移,旧路径记「已挪走」→ 开着旧路径的编辑器下一次保存跟到新路径,而不是
       // 按旧路径 404→baseSeq 0 把旧名文件重新造出来。别处删除:忘掉 seq 但**留着** everKnown,
       // 使 baseSeqFor 对它抛 VanishedError 而不是当新文件创建。
-      onPageMoved: (from, to, seq) => { movedTo.set(from, to); migrateSeq(from, to, seq ?? undefined) },
+      // 账先记(seq 迁到新路径)再转给编辑器:新路径上挂起来的实例一读就是对的基线。
+      onPageMoved: (from, to, seq, own) => {
+        movedTo.set(from, to)
+        migrateSeq(from, to, seq ?? undefined)
+        if (!own) firePathGone({ from, kind: 'file', to, root: `cloud://${v}` })
+      },
       onPageDeleted: (p) => { seqMap.delete(p); pageCache.delete(p); dropAliasesTo(p) },
-      onFolderMoved: (from, to) => migrateSeqPrefix(from, to),
+      onFolderMoved: (from, to, own) => {
+        migrateSeqPrefix(from, to)
+        if (!own) firePathGone({ from, kind: 'prefix', to, root: `cloud://${v}` })
+      },
       onFolderDeleted: (dir) => vanishPrefix(dir),
       // 结构事件不带明细 → 页面缓存整体作废(300ms 防抖 + 回声抑制,频率低,代价=切回多一发 GET)
       onStructureChange: () => { invalidateTree(); pageCache.clear(); fireStructure() },
@@ -866,6 +879,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     onExternalChange: (cb) => { extCbs.add(cb); return () => { extCbs.delete(cb) } },
     onStructureChange: (cb) => { structCbs.add(cb); return () => { structCbs.delete(cb) } },
     onDbExternalChange: (cb) => { dbCbs.add(cb); return () => { dbCbs.delete(cb) } },
+    onPathGone: (cb) => { pathGoneCbs.add(cb); return () => { pathGoneCbs.delete(cb) } },
 
     // ---- 派生索引(服务端计算) ------------------------------------------------
     search: async (query) => {
