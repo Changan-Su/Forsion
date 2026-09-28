@@ -192,6 +192,12 @@ async function main() {
       readText(storePath) === storeBefore && !/unitHostId|unitHostSecret|EVIL/.test(readText(shellPath) || ''), readText(shellPath))
     const st = await bridge(win, () => window.tangu.secretStorageStatus?.()).catch((e) => ({ error: String(e) }))
     check(`A6 secretStorageStatus() level=${expectLevel},无锁定`, st && st.level === expectLevel && Array.isArray(st.locked) && st.locked.length === 0, st)
+    // main.ts 的时序契约:deviceSecrets.init 必须是 configQueue 的第一个使用者、先于一切 loadConfig。有人抢跑,
+    // deviceSecrets 会出声「在 init 之前被调用」(并按锁定 / 空处理 —— external token 那一刻读成空)。
+    const early = mainLog.join('').split('\n').filter((l) => l.includes('在 init 之前被调用'))
+    // 防假绿:日志确实接到了主进程输出(主窗建好时 main 必打「[main] …」/「[mcp]…」之类的行;一行都没有 = 管道断了)
+    check('A7 启动时没有任何调用抢在 deviceSecrets.init 之前(主进程日志)', early.length === 0 && mainLog.join('').trim().length > 0,
+      early.length ? early.slice(0, 3) : `已接到主进程日志 ${mainLog.join('').split('\n').filter(Boolean).length} 行`)
     await closeApp(app); app = null
 
     // ── B 锁定 → 重试恢复 ────────────────────────────────────────────────────────────────────
