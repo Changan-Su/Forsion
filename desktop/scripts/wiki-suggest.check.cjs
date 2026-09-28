@@ -6,6 +6,7 @@
 //   L-08 输入法组字时 ↓/Enter 被面板抢走(拼音选词回车直接插入候选)—— 组字一律放行。
 //        合成 KeyboardEvent 的 isComposing 到不了页面,必须走 CDP Input.imeSetComposition 起真组合。
 // 用法:npm run check:wikisuggest(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/wiki-suggest.check.cjs
+//       ONLY=L-04 只跑某一节。
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -29,7 +30,10 @@ function check(name, ok, detail) {
   results.push({ name, ok })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
+// ONLY=L-04 只跑一节(逗号分隔多节),负对照时省时间。
+const ONLY = process.env.ONLY ? process.env.ONLY.split(',') : null
 const tryTest = async (name, fn) => {
+  if (ONLY && !ONLY.includes(name)) return
   try {
     await fn()
   } catch (e) {
@@ -193,6 +197,79 @@ async function main() {
     await page.keyboard.type('/h', { delay: 20 })
     await page.waitForTimeout(200)
     check('L-03g 对照:正文行首 `/h` 照弹 slash 菜单', (await page.locator('.slash-menu').count()) === 1)
+    await page.close()
+  })
+
+  // ── L-04:编辑器失焦即关,按键不再被全局劫持;Esc 闩锁不因失焦而清 ──
+  await tryTest('L-04', async () => {
+    const bodyText = (p) => p.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+    const recordTitleKeys = (p) => p.evaluate(() => {
+      window.__titleKeys = []
+      document.querySelector('.amx-title-input').addEventListener('keydown', (e) => window.__titleKeys.push(e.key))
+    })
+    // a:点空白处失焦 → 面板关,Enter 不再往正文插链接
+    let page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[Al', { delay: 20 })
+    await page.waitForTimeout(200)
+    const before = await popupCount(page)
+    await page.mouse.click(5, 880)
+    await page.waitForTimeout(300)
+    check('L-04a 点空白失焦 → [[ 面板关', before === 1 && (await popupCount(page)) === 0, `before=${before} after=${await popupCount(page)}`)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(300)
+    check('L-04a 失焦后 Enter 不再往正文插链接', !(await bodyText(page)).includes('[[Alpha]]'), JSON.stringify(await bodyText(page)))
+    // 回到编辑器接着写:面板照常回来(闸只管失焦,不把补全一起废掉)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type('p', { delay: 20 })
+    await page.waitForTimeout(250)
+    check('L-04a 回到编辑器接着打字 → 面板照常回来', (await items(page))[0] === '*Alpha', JSON.stringify(await items(page)))
+    await page.close()
+
+    // b:点标题框 → 面板关,Enter 落进标题框(↓ 在标题框里本身会走进正文,单测 Enter;↓ 见 c)
+    page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[Al', { delay: 20 })
+    await page.waitForTimeout(200)
+    await page.click('.amx-title-input')
+    await page.waitForTimeout(300)
+    check('L-04b 点标题框 → [[ 面板关', (await popupCount(page)) === 0)
+    await recordTitleKeys(page)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(400)
+    const keys = await page.evaluate(() => window.__titleKeys)
+    check('L-04b Enter 落进标题框(不被面板吞)', keys.includes('Enter'), JSON.stringify(keys))
+    check('L-04b 标题框里的 Enter 不往正文插链接', !(await bodyText(page)).includes('[[Alpha]]'), JSON.stringify(await bodyText(page)))
+    await page.close()
+
+    // c:slash 菜单同一根因
+    page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' /h', { delay: 20 })
+    await page.waitForTimeout(200)
+    const sBefore = await page.locator('.slash-menu').count()
+    await page.click('.amx-title-input')
+    await page.waitForTimeout(300)
+    check('L-04c 点标题框 → slash 菜单关', sBefore === 1 && (await page.locator('.slash-menu').count()) === 0, `before=${sBefore}`)
+    await recordTitleKeys(page)
+    await page.keyboard.press('ArrowDown')
+    await page.waitForTimeout(150)
+    check('L-04c ↓ 落进标题框(不被 slash 菜单吞)', (await page.evaluate(() => window.__titleKeys)).includes('ArrowDown'))
+    await page.close()
+
+    // d:@ 面板 Esc 掉 → 失焦 → 点回同一处:被 Esc 的同一个 @ 不重弹(失焦不清闩锁)
+    page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' @Al', { delay: 20 })
+    await page.waitForTimeout(200)
+    const mBefore = await popupCount(page)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(150)
+    await page.click('.amx-title-input')
+    await page.waitForTimeout(250)
+    await clickEnd(page, `${PM} > p`)
+    await page.waitForTimeout(250)
+    check('L-04d Esc 掉的 @ 面板失焦再回来不重弹', mBefore === 1 && (await popupCount(page)) === 0, `before=${mBefore} after=${await popupCount(page)}`)
     await page.close()
   })
 

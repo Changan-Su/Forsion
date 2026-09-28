@@ -43,6 +43,8 @@ interface Props {
   dates?: boolean
   /** 日期候选的插入回调;调用方负责把它写进文档(见 MarkdownBlock.pickMentionRaw)。 */
   onPickRaw?: (text: string) => void
+  /** 宿主编辑器是否持焦。不持焦时一个键都不拦(L-04):失焦后标题框/聊天框里的 ↑↓/Enter 不许被吞。 */
+  editorFocused?: () => boolean
 }
 
 function baseName(p: string): string {
@@ -62,7 +64,7 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, allowCreate = true, dates = false }: Props) {
+export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, allowCreate = true, dates = false }: Props) {
   const [active, setActive] = useState(0)
   const { t } = useI18n()
   const icons = usePageStore((s) => s.icons) // 页面 emoji(path 键);非 vault 候选池查不到 → 无图标,天然兼容
@@ -106,6 +108,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       else if (results[i - dateCands.length]) onPick(linkInner(results[i - dateCands.length]))
     }
     const onKey = (e: KeyboardEvent): void => {
+      if (editorFocused && !editorFocused()) return // 焦点已在编辑器之外:放行(L-04)
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         e.stopPropagation()
@@ -140,7 +143,8 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   const reveal = (i: number) => (i === active ? (el: HTMLButtonElement | null) => el?.scrollIntoView({ block: 'nearest' }) : undefined)
 
   return (
-    <OverlayAt className="wiki-suggest" x={left} y={top} anchorTop={anchorTop} role="menu">
+    // 按下面板空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下面板会自己关掉。
+    <OverlayAt className="wiki-suggest" x={left} y={top} anchorTop={anchorTop} role="menu" onMouseDown={(e) => e.preventDefault()}>
       {/* 分组标签只在 @ 提及场景(Notion 的 Date / Link to page);[[ 只有页面,标签是噪音。 */}
       {dates && dateCands.length > 0 && <div className="slash-group-label">{t('wiki.sec.date')}</div>}
       {dateCands.map((d, i) => (

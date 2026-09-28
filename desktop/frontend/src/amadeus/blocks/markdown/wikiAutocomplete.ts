@@ -33,6 +33,22 @@ function inCode(state: EditorState, from: number, to: number): boolean {
   return hit
 }
 
+/** 补全上报回调。`blurred` = 因编辑器失焦而关(L-04):调用方只藏面板、**不清 Esc 闩锁** ——
+ *  失焦再回来,被 Esc 掉的同一个 `@` / `/` 不该重弹。 */
+export type SuggestReport = (q: WikiQuery | null, blurred?: boolean) => void
+
+/** 失焦即关(L-04):面板在 window 捕获阶段拦 ↑↓/Enter/Tab,编辑器不持焦时还挂着,就会劫持
+ *  标题框、侧栏聊天框等别处输入框的按键(甚至把 Enter 变成往正文插链接、把焦点拽回正文)。
+ *  update 里的 hasFocus 闸管「失焦后的任何事务」,这里的 blur 管「失焦本身不派事务」的情形。 */
+const closeOnBlur = (report: SuggestReport) => ({
+  handleDOMEvents: {
+    blur: () => {
+      report(null, true)
+      return false
+    },
+  },
+})
+
 export interface WikiQuery {
   /** Text typed after the opening "[[". */
   query: string
@@ -50,12 +66,14 @@ export interface WikiQuery {
   closeAt?: number
 }
 
-export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
+export function wikiSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
       new Plugin({
+        props: closeOnBlur(report),
         view: () => ({
           update(view, prevState) {
+            if (!view.hasFocus()) return report(null, true)
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head
@@ -106,12 +124,14 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
  *  to the editor and never get swallowed, and typing a space just leaves "/foo " as literal
  *  text (the menu vanishes). `from` = position just after "/"; the picker deletes the
  *  "/query" range via slashRange (blockTriggers) before applying the item. */
-export function slashSuggestPlugin(report: (q: WikiQuery | null) => void) {
+export function slashSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
       new Plugin({
+        props: closeOnBlur(report),
         view: () => ({
           update(view) {
+            if (!view.hasFocus()) return report(null, true)
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head
@@ -145,12 +165,14 @@ export function slashSuggestPlugin(report: (q: WikiQuery | null) => void) {
  *  triggers when "@" sits at line start or after whitespace; aborts on brackets/newline
  *  or an over-long query (an "@" far behind the caret is prose, not a mention).
  *  `from` = position just after "@" — the picker replaces [from-1, to) with "[[name]]". */
-export function mentionSuggestPlugin(report: (q: WikiQuery | null) => void) {
+export function mentionSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
       new Plugin({
+        props: closeOnBlur(report),
         view: () => ({
           update(view) {
+            if (!view.hasFocus()) return report(null, true)
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head

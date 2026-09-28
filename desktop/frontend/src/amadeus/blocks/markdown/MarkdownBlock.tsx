@@ -902,9 +902,9 @@ export function MilkdownInner({
       .use(wikilinkPlugin((name) => wikiRef.current(name), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q) => { wikiOpenRef.current = !!q; setWiki(q) }))
-      .use(mentionSuggestPlugin((q) => {
+      .use(mentionSuggestPlugin((q, blurred) => {
         if (!q) {
-          mentionDismissedFrom.current = null
+          if (!blurred) mentionDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(L-04)
           mentionOpenRef.current = false
           setMention(null)
           return
@@ -915,10 +915,10 @@ export function MilkdownInner({
       }))
       // '/' 命令菜单:query 驻留文档(同 @/[[),字符不被吞、空格自动关成字面文本。注册在
       // wiki/mention 之后 —— 好让它们的 *OpenRef 已就绪,slash 在它们开着时让位(避免叠开两个菜单)。
-      .use(slashSuggestPlugin((q) => {
+      .use(slashSuggestPlugin((q, blurred) => {
         if (!slashOpsRef) return // 整篇宿主(PlainMarkdownEditor)不启用 slash,'/' 恒字面
-        // 触发真的没了(无 '/' 或 query 非法)→ 清 Esc 闩锁 + 关菜单。
-        if (!q) { slashDismissedFrom.current = null; setSlash(null); return }
+        // 触发真的没了(无 '/' 或 query 非法)→ 清 Esc 闩锁 + 关菜单;失焦(blurred)只关菜单、闩锁留着(L-04)。
+        if (!q) { if (!blurred) slashDismissedFrom.current = null; setSlash(null); return }
         // 让位([[ / @ 弹窗开着):只藏菜单,**绝不动闩锁** —— slash 触发其实还在,若在此清闩,
         // 用户「'/' → Esc → 打 [[ → 退格」会让被 Esc 掉的同一个 '/' 重新弹出(Codex 实现审查)。
         if (wikiOpenRef.current || mentionOpenRef.current) { setSlash(null); return }
@@ -1174,6 +1174,16 @@ export function MilkdownInner({
     setWiki(null)
   }
 
+  /** 补全面板(WikiSuggest / SlashMenu)的按键只在本编辑器持焦时拦(L-04):失焦后别处输入框的
+   *  ↑↓/Enter/Tab 一个都不许吞。插件侧失焦即关是第一道,这是提交窗口里的第二道。 */
+  const editorFocused = (): boolean => {
+    let focused = false
+    getInstance()?.action((ctx) => {
+      focused = ctx.get(editorViewCtx).hasFocus()
+    })
+    return focused
+  }
+
   // @ 提及:把 "@query"(含 @ 本身)整体替换成 [[name]] 双链。
   const pickMention = (name: string): void => {
     const m = mention
@@ -1354,6 +1364,7 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickWiki}
           onClose={() => setWiki(null)}
+          editorFocused={editorFocused}
         />
       )}
       {!wiki && mention && !readOnly && (
@@ -1366,6 +1377,7 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickMention}
           onPickRaw={pickMentionRaw}
+          editorFocused={editorFocused}
           dates
           allowCreate={false}
           onClose={() => {
@@ -1383,6 +1395,7 @@ export function MilkdownInner({
           anchorTop={slash.anchorTop}
           hideKeys={unified ? UNIFIED_HIDDEN_SLASH : undefined}
           unified={unified}
+          editorFocused={editorFocused}
           onPick={(it) => { setSlash(null); onSlashPick(it) }}
           onClose={() => {
             slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
@@ -2119,11 +2132,13 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, editorFocused, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
   unified?: boolean
+  /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
+  editorFocused?: () => boolean
   onPick: (it: SlashItem) => void; onClose: () => void
 }) {
   const { t } = useI18n()
@@ -2155,6 +2170,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onC
       // IME 组字中:一律放行给输入法(拼音选词是 Enter、候选是空格,绝不能被菜单抢走)。
       // key==='Process'/keyCode===229 覆盖 isComposing 尚未置位的首帧(AFFiNE 同款守卫)。
       if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
+      if (editorFocused && !editorFocused()) return // 焦点在别处(标题框/聊天框):不劫持(L-04)
       const bareArrow = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey // Mod+Shift+↑↓=块重排,别吞
       if (e.key === 'Escape') {
         stop(e)
@@ -2176,7 +2192,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onC
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [items, active, onPick, onClose])
+  }, [items, active, onPick, onClose, editorFocused])
 
   const renderItem = (it: SlashItem, i: number) => (
     <button
@@ -2212,7 +2228,8 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onC
   return (
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
-      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop}>
+      {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
+      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
         {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
         <div className="slash-scroll">
           {q
