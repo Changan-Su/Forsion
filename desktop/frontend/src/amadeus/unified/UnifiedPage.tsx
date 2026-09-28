@@ -770,7 +770,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         keys={NOOP_KEYS}
         saveImage={saveImage}
         saveFiles={saveFiles}
-        onOpenWiki={(name) => void store.getState().openWikiLink(name, path)}
+        onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o)}
         getPageNames={() => store.getState().pages}
         slashOpsRef={slashOps}
         onSlashPick={applySlash}

@@ -17,6 +17,11 @@ import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
+/** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
+export const IS_MAC_PLATFORM = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
+
+/** 打开双链的回调:newTab = ⌘/Ctrl+点击、中键(L-11),或「在新标签页打开光标处链接」命令。 */
+export type WikiOpen = (name: string, opts?: { newTab?: boolean }) => void
 
 /** `![[pic.png|200]]` 的图片形态(前面必须紧挨着 `!`);不是图片嵌入 → null。 */
 function imageEmbed(inner: string, bang: boolean): { url: string; width?: number; name: string } | null {
@@ -51,7 +56,7 @@ function displayLabel(inner: string, anchor: { target: string; subpath: string }
 
 function buildDecorations(
   state: EditorState,
-  onOpen: (name: string) => void,
+  onOpen: WikiOpen,
   isResolved: (name: string) => boolean,
   iconOf?: (name: string) => string | undefined,
 ): DecorationSet {
@@ -185,10 +190,20 @@ function buildDecorations(
               ic.textContent = emoji
               el.append(ic, label)
             } else el.textContent = label
+            // 按键分流(L-11):只有无修饰键的左键原地跳转;⌘/Ctrl+左键、中键 → 新标签页;
+            // 右键(含 mac 的 Ctrl+点击)不跳转 —— 同样 preventDefault(不落光标,免得这一行当场露出 `[[源码]]`),
+            // contextmenu 照常冒出系统菜单(下面拦住块层,见 contextmenu 那条)。Shift / Alt+左键放行给编辑器(扩选 / 落光标)。
             el.addEventListener('mousedown', (e) => {
+              const ctxGesture = e.button === 2 || (IS_MAC_PLATFORM && e.button === 0 && e.ctrlKey)
+              if (ctxGesture) { e.preventDefault(); return }
+              if (e.button === 1) { e.preventDefault(); onOpen(openArg, { newTab: true }); return }
+              if (e.button !== 0 || e.shiftKey || e.altKey) return
               e.preventDefault() // 不落光标、不进编辑态 → 直接跳转
-              onOpen(openArg)
+              onOpen(openArg, (IS_MAC_PLATFORM ? e.metaKey : e.ctrlKey) ? { newTab: true } : undefined)
             })
+            // 正文文字上右键 = 系统菜单(W2 右键规则):部件 DOM 带 contenteditable=false(PM 给 widget 加的),
+            // 块层的右键分类会把它当「非文字块件」弹块菜单 —— 在这里止住冒泡,系统菜单照出(不 preventDefault)。
+            el.addEventListener('contextmenu', (e) => e.stopPropagation())
             return el
           },
           // key 带解析态与 emoji:同 key 的 widget DOM 会被 ProseMirror 复用,状态翻转必须换 key 才会重建。
@@ -283,7 +298,7 @@ function adjacentPlainWiki(view: EditorView, dir: 'up' | 'down'): number | null 
 }
 
 export function wikilinkPlugin(
-  onOpen: (name: string) => void,
+  onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
   iconOf?: (name: string) => string | undefined,
 ) {

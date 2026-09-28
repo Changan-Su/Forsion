@@ -15,6 +15,7 @@
 //   M1~M3 本地 md 链接(L-07):点击走库内打开(不补 https)、悬停卡「打开」同路、键入落盘逐字
 //   LK1~LK5 卡片动作作用于整条链接(I-07):`[**粗**普通](url)` 悬停半条也改 / 摘 / 删整条;只改地址不丢 code / 斜体 / 粗体
 //   HP1 双链悬停预览按链接所在笔记就近解析同名笔记(L-10):预览的就是点击会打开的那篇
+//   NT1~NT5 双链 / 库内 md 链接按鼠标键分流(L-11):右键不跳转不弹块菜单;中键、⌘(非 mac 为 Ctrl)+点击 → 新标签页
 //   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
 //          全角标点收尾成链、落盘 `<url>`(裸写会把 `。后` 吞进地址);ASCII 句末标点留在链接外;行内代码 / 字母后不成链
 //
@@ -482,11 +483,67 @@ async function hoverPreview(browser) {
   await p.close()
 }
 
+// ── NT 组(L-11):链接按鼠标键分流 —— 无修饰左键原地开;⌘(非 mac 为 Ctrl)+左键、中键 → 新标签页(openWikiLink 第三参
+// {newTab:true});右键(含 mac 的 Ctrl+点击)不跳转、不弹块菜单、不吞系统菜单。双链部件与库内 md 链接两种都测。
+// 药在 wikilink.ts 部件的 mousedown / contextmenu 与 MarkdownBlock.handleLinkClick;store 那半在 pageStore.wikiNewTab.test。
+async function newTabClicks(browser) {
+  const p = await open(browser, '# T\n\n链接 [[Alpha]] 与 [读我](Note.md) 结束\n\n尾段\n', '')
+  await p.evaluate(() => {
+    window.__pageStore.setState({ pages: ['Alpha.md', 'Note.md', 'Unified.md'], files: [] })
+    window.__opened = []
+    window.__pageStore.setState({ openWikiLink: (n, src, o) => { window.__opened.push({ n, newTab: !!(o && o.newTab) }) } })
+    window.__wopen = []
+    window.open = (u) => { window.__wopen.push(u); return null }
+    window.addEventListener('contextmenu', (e) => { window.__ctxEv = e }, true)
+  })
+  const isMac = await p.evaluate(() => /Mac/.test(navigator.platform))
+  const tail = await (await p.$(`${PM} > p:last-of-type`)).boundingBox()
+  const at = async (sel) => {
+    await p.mouse.click(tail.x + tail.width - 2, tail.y + tail.height / 2) // 光标离开链接那行:双链渲染成部件
+    await p.waitForTimeout(200)
+    return p.evaluate((q) => { const e = document.querySelector(q); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, sel)
+  }
+  const got = async (fn) => {
+    const [o0, w0] = await p.evaluate(() => [window.__opened.length, window.__wopen.length])
+    await p.evaluate(() => { window.__ctxEv = null })
+    await fn()
+    await p.waitForTimeout(250)
+    const r = await p.evaluate(([o0, w0]) => ({
+      opened: window.__opened.slice(o0), wopen: window.__wopen.slice(w0),
+      ctxPrevented: window.__ctxEv ? window.__ctxEv.defaultPrevented : null,
+      menu: document.querySelectorAll('.unified-block-menu').length,
+      nodeSel: window.__upage.probe.view().state.selection.toJSON().type === 'node',
+    }), [o0, w0])
+    await p.keyboard.press('Escape')
+    return r
+  }
+  for (const [label, sel, name] of [['双链', `${PM} .wikilink[data-wiki]`, 'Alpha'], ['md 笔记链接', `${PM} a[href="Note.md"]`, 'Note.md']]) {
+    let pt = await at(sel)
+    if (!pt) { check(`NT 前置 ${label} 可点`, false); continue }
+    let r = await got(() => p.mouse.click(pt.x, pt.y, { button: 'right' }))
+    check(`NT1 ${label} 右键:不跳转、不弹块菜单、系统菜单不被吞`, r.opened.length === 0 && r.wopen.length === 0 && r.menu === 0 && !r.nodeSel && r.ctxPrevented === false, JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(() => p.mouse.click(pt.x, pt.y, { button: 'middle' }))
+    check(`NT2 ${label} 中键 → 新标签页`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: true }]), JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(async () => { await p.keyboard.down('Meta'); await p.mouse.click(pt.x, pt.y); await p.keyboard.up('Meta') })
+    check(`NT3 ${label} ⌘+点击 → ${isMac ? '新标签页' : '(非 mac:不是 Mod,原地开)'}`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: isMac }]), JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(async () => { await p.keyboard.down('Control'); await p.mouse.click(pt.x, pt.y); await p.keyboard.up('Control') })
+    check(`NT4 ${label} Ctrl+点击 → ${isMac ? '(mac 右键手势)不跳转' : '新标签页'}`, JSON.stringify(r.opened) === JSON.stringify(isMac ? [] : [{ n: name, newTab: true }]), JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(() => p.mouse.click(pt.x, pt.y))
+    check(`NT5 ${label} 无修饰左键 → 原地开(不带 newTab)`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: false }]), JSON.stringify(r))
+  }
+  check('NT 零写盘', (await writeCount(p)) === 0)
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
   const long = '# T\n\n' + Array.from({ length: 40 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
-  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP
+  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP / NT
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null
   const want = (g) => !only || only.includes(g)
   if (want('LC')) {
@@ -499,6 +556,7 @@ async function main() {
   if (want('AU')) await bareUrlTyping(browser)
   if (want('LK')) await wholeLink(browser)
   if (want('HP')) await hoverPreview(browser)
+  if (want('NT')) await newTabClicks(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

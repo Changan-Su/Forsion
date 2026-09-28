@@ -294,8 +294,10 @@ interface PageState {
   /** 打开某路径的笔记;不存在则先创建(日记等「打开或新建」语义)。 */
   openOrCreate(path: string): Promise<void>
   renamePage(newName: string): Promise<boolean>
-  /** Open the page named by a [[wikilink]];未解析 → 记入 pendingWikiCreate 询问,不再静默创建。 */
-  openWikiLink(name: string, sourcePath?: string): void
+  /** Open the page named by a [[wikilink]];未解析 → 记入 pendingWikiCreate 询问,不再静默创建。
+   *  opts.newTab(⌘/Ctrl+点击、中键,L-11):命中的**笔记**(含 `笔记#锚点`)在新标签页打开;其余目标(PDF / 多维表 /
+   *  附件 / 外链 / 未解析)照原路径开,newTab 不适用。 */
+  openWikiLink(name: string, sourcePath?: string, opts?: { newTab?: boolean }): void
   /** 未解析 [[链接]] 点击后的待确认创建请求(确认框据此渲染)。 */
   pendingWikiCreate: { name: string; sourcePath: string | null } | null
   /** 确认创建:裸名 → 源笔记 .fd 子笔记;带路径 → 按链接写明的精确路径;无源 → vault 根。 */
@@ -830,7 +832,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
     },
 
-    openWikiLink(name, sourcePath) {
+    openWikiLink(name, sourcePath, opts) {
       const raw = name.trim()
       if (!raw) return
       const src = sourcePath ?? get().activePage ?? undefined
@@ -893,13 +895,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const sub = anchor.subpath
         const owner = anchor.target ? resolvePageName(anchor.target, get().pages, src) : src && isNoteMd(src) ? src : null
         if (owner) {
-          if (owner !== src) void get().loadPage(owner)
+          if (owner !== src && !opts?.newTab) void get().loadPage(owner)
           // 定位走聊天引用条同一套(amadeusNav 的 reveal*WhenReady:等实例挂上、600ms 补跳、找不到就不动)。
           // 动态 import 同上面的媒体分支(amadeusNav 反向 import 本模块)。`^` 开头却不合块锚字符集的
-          // 畸形形态不当标题(与 ChatWikiLink 同口径):只开笔记不动。
+          // 畸形形态不当标题(与 ChatWikiLink 同口径):只开笔记不动。newTab:先在新标签页开,再定位。
           const block = parseBlockSubpath(sub)
-          void import('../../amadeusNav').then((m) =>
-            block ? m.revealBlockWhenReady(owner, block) : sub.startsWith('^') ? undefined : m.revealHeadingWhenReady(owner, sub))
+          void import('../../amadeusNav').then(async (m) => {
+            if (opts?.newTab) await m.openNote(owner, { newTab: true })
+            if (block) await m.revealBlockWhenReady(owner, block)
+            else if (!sub.startsWith('^')) await m.revealHeadingWhenReady(owner, sub)
+          })
           return
         }
         if (!anchor.target) return // 本页锚点却没有可定位的来源页:无处可跳,也绝不落「创建」兜底
@@ -907,7 +912,9 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
       const match = resolvePageName(wanted, get().pages, src)
       if (match) {
-        void get().loadPage(match)
+        // newTab 走 openNote 门面(动态 import 同上);就地打开仍装进本 scope 的 store。
+        if (opts?.newTab) void import('../../amadeusNav').then((m) => m.openNote(match, { newTab: true }))
+        else void get().loadPage(match)
         return
       }
       // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开
