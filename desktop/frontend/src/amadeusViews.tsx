@@ -23,6 +23,7 @@ import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
+import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
@@ -55,7 +56,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, FloatingToc, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -2498,14 +2499,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {/* 与 Chat View 同一份 LCL FloatingToc。只给文档模式:源码没有可导航标题,画布有自己的空间导航;
           mini / coarse pointer 则把稀缺横向空间留给正文。根就是本 leaf 的滚动 EditorScope,分屏互不串页。 */}
       {barPath && mode !== 'source' && !canvasSeg?.on && !leaf.params.miniSurface && !isCoarsePointer() && (
-        <FloatingToc
-          scrollContainer={printHostRef}
-          contentRoot={printHostRef}
-          selector=".page-view h1, .page-view h2, .page-view h3"
-          label={t('amxv.floatingToc')}
-          scanTrigger={barPath}
-          placement="sticky"
-        />
+        <NoteFloatingToc host={printHostRef} label={t('amxv.floatingToc')} scanTrigger={barPath} />
       )}
       {/* ⚠️ 上传用的隐藏 input **必须住在顶栏外面**:移动端整条顶栏不渲染,而底栏胶囊的「上传」
           仍旧 uploadInputRef.current?.click() —— 留在顶栏里 = 手机上 ref 恒 null,上传静默失效。 */}
