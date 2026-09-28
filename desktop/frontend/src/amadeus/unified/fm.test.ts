@@ -388,3 +388,34 @@ describe('块状 YAML 结构键(V-01)', () => {
     expect(next).not.toContain('\r')
   })
 })
+
+// N-2(2026-09-28):多行 flow 写法的结构键,收尾 `}` / `]` 顶格(yaml 包接受这种写法)。
+describe('多行 flow 结构键 + 顶格收尾(N-2)', () => {
+  const inner = (fm: string): unknown => parseYaml(fm.replace(/^﻿?---\r?\n/, '').replace(/---\r?\n?$/, ''))
+  const pretty = ['amadeus_canvas: {', '  "v": 1, "mode": "canvas",', '  "cards": [{"ref": "k1", "x": 480, "y": 0, "w": 300}]', '}']
+  const CANVAS = '{"v":1,"mode":"canvas","cards":[{"ref":"k1","x":480,"y":0,"w":300}]}'
+  it.each([
+    ['结构键在最前', ['amadeus_schema: amadeus.page/4', ...pretty, 'tags: [a]']],
+    ['结构键排在外来键之后(修前:条目被挪到最前、顶格 `}` 留在原位 → 首击写出非法 YAML)', ['tags: [a]', 'amadeus_schema: amadeus.page/4', ...pretty, 'aliases: [z]']],
+  ])('%s:顶格收尾行归条目,读得出单行 JSON;首击后整块仍是合法 YAML、几何与外来键都在', (_k, lines) => {
+    const fm = `---\n${lines.join('\n')}\n---\n`
+    expect(inner(fm)).toBeTruthy() // 前提:原文是合法 YAML
+    expect(canvasLineOf(fm)).toBe(CANVAS)
+    const next = setAmadeusStructure(fm, layoutLineOf(fm), canvasLineOf(fm))
+    expect(inner(next)).toMatchObject({ amadeus_schema: 'amadeus.page/4', amadeus_canvas: JSON.parse(CANVAS), tags: ['a'] })
+    // 外来区(属性面板)同样不带结构键的收尾孤儿
+    expect(foreignFmText(fm)).not.toMatch(/^[}\]]/m)
+  })
+
+  // fail-closed 兜底:重组结构区会**挪动**条目(结构键归到最前)。原文合法、挪完却不合法的形态(这里:结构键引用了
+  // 排在它前面的外来键锚点,挪到最前就成了「别名先于锚点」)→ 原样返回,绝不写出一块解析不了的 fm。
+  it('原文合法而重组后不合法 → setAmadeusStructure / setForeignFm 原样返回', () => {
+    const fm = `---\nx: &c ${CANVAS}\namadeus_schema: amadeus.page/4\namadeus_canvas: *c\n---\n`
+    expect(inner(fm)).toBeTruthy()
+    expect(setAmadeusStructure(fm, layoutLineOf(fm), canvasLineOf(fm))).toBe(fm)
+    expect(setForeignFm(fm, 'x: &c {"v":1}\ntags: [b]')).toBe(fm)
+    // 对照:原文本来就解析不了(重复键等)→ 不拦,照旧按行级规则重写(兜底只防「由好变坏」)
+    const dup = `---\ntags: [a]\ntags: [b]\namadeus_schema: amadeus.page/4\n---\n`
+    expect(setAmadeusStructure(dup, null, CANVAS)).toContain(`amadeus_canvas: ${CANVAS}`)
+  })
+})

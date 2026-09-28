@@ -47,13 +47,39 @@ function foreignParseable(foreign: string): boolean {
   }
 }
 
-/** 整体替换外来键区(属性面板提交 YAML 文本);amadeus_* 行原样保留。 */
+/** 整体替换外来键区(属性面板提交 YAML 文本);amadeus_* 行原样保留。
+ *  提交的外来 YAML 本身合法、原块也合法,拼上保留行却解析不了 → 原样返回(fail-closed,见 keepIfYamlBroke)。 */
 export function setForeignFm(fmText: string, foreignYaml: string): string {
   const { bom } = fmInner(fmText)
   const amadeusLines = extractAmadeusLines(fmText)
   const y = foreignYaml.replace(/\n+$/, '')
   if (!amadeusLines.length && !y.trim()) return bom
-  return bom + ['---', ...amadeusLines, ...(y.trim() ? [y] : []), '---', ''].join('\n')
+  const out = bom + ['---', ...amadeusLines, ...(y.trim() ? [y] : []), '---', ''].join('\n')
+  return yamlParses(y) ? keepIfYamlBroke(fmText, out) : out // 提交的就是坏 YAML(原文模式修到一半)= 用户自己的字,照写
+}
+
+function yamlParses(s: string): boolean {
+  try {
+    parseYaml(s)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 行级重组 fm 的 fail-closed 兜底(N-2,2026-09-28):重组会**挪动**条目(结构键归到最前、保留行置顶),
+ *  fmEntries 的分组若有没料到的 YAML 形态(别名先于锚点、将来的新写法……),原本合法的 fm 就被写成解析不了
+ *  —— tags 等全部属性失效,画布/分栏几何读不回来。原块合法而重组后不合法 → 放弃这次重组、原样返回
+ *  (代价 = 这一次的结构/属性改动没落进 fm;原块本来就不合法则不拦,兜底只防「由好变坏」)。
+ *  只在产物真变了时才解析(每击都跑的派生里,稳定态 out === fmText 零开销)。 */
+function keepIfYamlBroke(fmText: string, out: string): string {
+  if (out === fmText) return out
+  const after = fmInner(out).inner
+  if (after == null || yamlParses(after)) return out
+  const before = fmInner(fmText).inner
+  if (before == null || !yamlParses(before)) return out
+  console.warn('[amadeus] frontmatter rewrite would produce invalid YAML; keeping the original block')
+  return fmText
 }
 
 const FM_BLOCK = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/
@@ -103,7 +129,7 @@ export function setAmadeusStructure(fmText: string, layoutJson: string | null, c
   })
   const lines = [...struct, ...kept]
   if (!lines.length) return bom
-  return bom + ['---', ...lines, '---', ''].join('\n')
+  return keepIfYamlBroke(fmText, bom + ['---', ...lines, '---', ''].join('\n'))
 }
 
 /** 结构键自愈:layout/canvas 任一在场却没有 `amadeus_schema` 时补发结构区(顺序也归位)。

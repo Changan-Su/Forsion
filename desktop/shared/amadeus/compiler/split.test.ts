@@ -36,6 +36,18 @@ describe('parseFrontmatter:CRLF 行尾(N-1,Windows / git autocrlf 的 v3 笔记)
   })
 })
 
+describe('fmEntries:多行 flow 的顶格收尾(N-2)', () => {
+  it('顶格 `}` / `]` / `,` 不可能起一个键,归上一个条目', () => {
+    expect(fmEntries(['k: [', '  1', ']', 'j: {', '  a: 1', '}', 'm: {a: 1', ', b: 2}', 'n: 2'])).toEqual([
+      ['k: [', '  1', ']'], ['j: {', '  a: 1', '}'], ['m: {a: 1', ', b: 2}'], ['n: 2'],
+    ])
+  })
+  it('extractFrontmatterExtra:多行 flow 的 amadeus_canvas 连同顶格 `}` 一起剔(不在外来区留孤儿)', () => {
+    const raw = ['---', 'tags: [a]', 'amadeus_schema: amadeus.page/4', 'amadeus_canvas: {', '  "v": 1, "mode": "canvas"', '}', 'aliases: [z]', '---', '正文'].join('\n')
+    expect(extractFrontmatterExtra(raw)).toBe('tags: [a]\naliases: [z]')
+  })
+})
+
 describe('extractFrontmatterExtra:amadeus_* 按条目剔除(V-01)', () => {
   it('块状写法的 amadeus_canvas/amadeus_layout 连同续行一起剔,外来键逐字留下', () => {
     const raw = [

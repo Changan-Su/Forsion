@@ -88,7 +88,7 @@ export function schemaMajorOf(fm: Record<string, string>): number | null {
 }
 
 /** frontmatter 内文按**顶层 YAML 条目**分组(V-01,2026-09-27 评审 P0)。一组 = 一个顶格行(键行)+ 它的
- *  续行:缩进行、顶格 `- ` 序列项,以及夹在它们中间的空行/顶格注释;后面不再接续行的空行/顶格注释
+ *  续行:缩进行、顶格 `- ` 序列项、顶格 flow 收尾 `}` `]` `,`(N-2),以及夹在它们中间的空行/顶格注释;后面不再接续行的空行/顶格注释
  *  各自单独成组(不属于任何键)。行尾 `\r`(CRLF 源文按 '\n' 切)不影响判定。
  *  为什么要有它:外部 YAML 工具(项目自己的 yaml 包按缺省配置往返一次就会)把单行 JSON 的
  *  amadeus_canvas / amadeus_layout 重排成块状多行。「逐行过滤 amadeus_* 键」只摘走键行、把缩进续行
@@ -105,7 +105,10 @@ export function fmEntries(lines: readonly string[]): string[][] {
   for (const l of lines) {
     if (!l.trim() || l.startsWith('#')) {
       gap.push(l) // 空行 / 顶格注释:归属看后面还有没有续行
-    } else if (/^[ \t]/.test(l) || /^-(?:[ \t]|\r?$)/.test(l)) {
+    } else if (/^[ \t]/.test(l) || /^-(?:[ \t]|\r?$)/.test(l) || /^[}\],]/.test(l)) {
+      // 顶格 `}` / `]` / `,`(N-2):多行 flow 映射/序列的收尾行顶格写也是合法 YAML(yaml 包接受),而这三个
+      // 字符在 YAML 里不可能起一个块映射键 —— 只能是上一个条目的续行。当成新条目 = 结构区重组时条目被挪走、
+      // 收尾行留在原位,首击写出解析不了的 fm。
       if (cur) {
         cur.push(...gap, l) // 续行(连同夹在中间的空行/注释)归当前条目
         gap = []
