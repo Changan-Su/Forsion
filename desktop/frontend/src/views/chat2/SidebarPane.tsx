@@ -26,6 +26,7 @@ import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import './sidebar2.css'
 import { OverlayAt } from '@lcl/engine'
 import { AttentionDot } from './AttentionDot'
+import { homeTarget } from '../../services/engine/targets'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
@@ -556,7 +557,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             return (
               <button onClick={() => {
                 setMenu(null)
-                void setChannelConnectedSession(p.cfg, chWs.channel!, menu.id)
+                void setChannelConnectedSession(homeTarget(), chWs.channel!, menu.id)
                   .then(() => p.onToast?.(t('sidebar.wechat.setConnectedOk')))
                   .catch((e) => p.onToast?.(t('sidebar.wechat.setConnectedFail', { e: e?.message || e }), true))
               }}>

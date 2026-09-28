@@ -11,6 +11,7 @@ import { useAutomation, type AutomationSel } from '../../stores/automationStore'
 import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry } from '../../services/backendService'
 import { actionsText, condText, isFinishedTrigger, triggerToUpsert } from './lib'
 import './messages'
+import { homeTarget } from '../../services/engine/targets'
 
 export const AUTOMATION_WORKSPACE_MODE = 'plugin:automation:rules' as const
 const keyOf = (sel: AutomationSel | null): string | null => sel ? JSON.stringify(sel) : null
@@ -113,21 +114,21 @@ export const automationListSource: ListSourceContribution = {
       if (!tr) return []
       return [
         { id: 'edit', label: t('common.edit'), run() { state.openBuilder(tr.id); openDetail() } },
-        { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveMuseTrigger(cfg, { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })) } },
-        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, tr.desc, () => deleteMuseTrigger(cfg, tr.id)) } },
+        { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveMuseTrigger(homeTarget(), { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })) } },
+        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, tr.desc, () => deleteMuseTrigger(homeTarget(), tr.id)) } },
       ]
     }
     if (sel.kind === 'schedule') {
       const en = state.schedules.find((s) => s.slug === sel.slug)?.entries.find((e) => e.id === sel.rowId)
       if (!en) return []
       return [
-        { id: 'toggle', label: t(en.auto ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveAgentScheduleEntry(cfg, sel.slug, { id: en.id, name: en.name, date: en.date, repeat: en.repeat, auto: !en.auto, prompt: en.prompt, description: en.description, todo: en.todo })) } },
-        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, en.name, () => deleteAgentScheduleEntry(cfg, sel.slug, en.id)) } },
+        { id: 'toggle', label: t(en.auto ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveAgentScheduleEntry(homeTarget(), sel.slug, { id: en.id, name: en.name, date: en.date, repeat: en.repeat, auto: !en.auto, prompt: en.prompt, description: en.description, todo: en.todo })) } },
+        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, en.name, () => deleteAgentScheduleEntry(homeTarget(), sel.slug, en.id)) } },
       ]
     }
     const config = state.specialCfg?.[sel.kind]
     return config ? [{ id: 'toggle', label: t(config.enabled ? 'automation.ux.pause' : 'automation.ux.enable'),
-      run() { void mutate(() => saveSpecialConfig(cfg, { [sel.kind]: { ...config, enabled: !config.enabled } })) } }] : []
+      run() { void mutate(() => saveSpecialConfig(homeTarget(), { [sel.kind]: { ...config, enabled: !config.enabled } })) } }] : []
   },
 }
 

@@ -28,6 +28,7 @@ import { starterSteps, stepIssue, type Starter } from './experience'
 import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
 import { TemplateField } from './TemplateField'
 import './messages'
+import { homeTarget } from '../../services/engine/targets'
 
 type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed'
 type TimerMode = 'daily_at' | 'at' | 'every'
@@ -216,7 +217,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     setError('')
     const actions = toSpec(steps, catalog)
     try {
-      const saved = await saveMuseTrigger(cfg, {
+      const saved = await saveMuseTrigger(homeTarget(), {
         id: editing?.id,
         // actor='user':构建器保存是显式意图(与面板拨开关同档),可以把引擎自动停用的规则开回来。
         actor: 'user',

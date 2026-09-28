@@ -14,6 +14,7 @@ import './teamProfileMessages'
 import './teamProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { homeTarget, targetForSession } from '../services/engine/targets'
 
 type Props = {
   session?: SessionRecord
@@ -51,7 +52,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
     if (!config.teamSlug) return
     let alive = true
     setLoaded(false); setLoadError('')
-    void getTeam(s.cfg, config.teamSlug).then((value) => { if (alive) { setTeam(value); setLoaded(true) } })
+    void getTeam(homeTarget(), config.teamSlug).then((value) => { if (alive) { setTeam(value); setLoaded(true) } })
       .catch((e) => { if (alive) setLoadError(String(e.message || e)) })
     return () => { alive = false }
   }, [s.cfg, config.teamSlug, retry])
@@ -92,7 +93,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
         reader.onerror = () => reject(new Error(t('agentProfile.avatarReadFailed')))
         reader.readAsDataURL(file)
       })
-      const uploaded = await uploadTeamAvatar(s.cfg, config.teamSlug, dataUrl, file.type)
+      const uploaded = await uploadTeamAvatar(homeTarget(), config.teamSlug, dataUrl, file.type)
       await syncSavedTeam({ ...(team as TeamDef), avatar: uploaded.avatar })
       setNotice(t('teamProfile.avatarSaved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
@@ -101,7 +102,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
     if (!config.teamSlug || avatarBusy || !isTeamImageAvatar(draft.avatar)) return
     setAvatarBusy(true); setError(''); setNotice('')
     try {
-      await deleteTeamAvatar(s.cfg, config.teamSlug)
+      await deleteTeamAvatar(homeTarget(), config.teamSlug)
       await syncSavedTeam({ ...(team as TeamDef), avatar: '' })
       setNotice(t('teamProfile.avatarRemoved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
@@ -123,7 +124,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
     try {
       let nextDraft = draft
       if (config.teamSlug) {
-        const updated = await patchTeam(s.cfg, config.teamSlug, { name: draft.name.trim(), description: draft.description, avatar: draft.avatar, members: draft.members, doc: draft.doc })
+        const updated = await patchTeam(homeTarget(), config.teamSlug, { name: draft.name.trim(), description: draft.description, avatar: draft.avatar, members: draft.members, doc: draft.doc })
         definitionSaved = true
         setTeam(updated)
         useApp.setState((a) => ({ teams: a.teams.some((v) => v.slug === updated.slug) ? a.teams.map((v) => v.slug === updated.slug ? updated : v) : [...a.teams, updated] }))
@@ -133,12 +134,12 @@ export function TeamProfile({ session, config, renderMember }: Props) {
         const current = useApp.getState().configBySession[session.id] || session.agent_config || config
         // 只写团队这几个键(服务端按键合并);老引擎没有 PATCH 就回落整对象 PUT —— 整对象在回落那一刻按本地最新现拼,
         // 等 404 的这一拍里别的 setter(如刚收紧的审批档)可能已经改过本地
-        const savedConfig = await patchSessionConfig(s.cfg, session.id, teamSessionPatch(nextDraft), () => teamSessionConfig(useApp.getState().configBySession[session.id] || current, nextDraft))
+        const savedConfig = await patchSessionConfig(targetForSession(session.id), session.id, teamSessionPatch(nextDraft), () => teamSessionConfig(useApp.getState().configBySession[session.id] || current, nextDraft))
         // 回来只把团队这几个键并进本地最新配置(会话配置与列表行两处):响应是保存那一刻的快照,整份盖回去会把保存途中别处改过的键
         // (如刚移除的工作范围、刚切的审批档)退回旧值
         useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: teamSessionConfig(a.configBySession[session.id] || savedConfig, nextDraft) }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: teamSessionConfig(v.agent_config || savedConfig, nextDraft) } : v) }))
         if (!config.teamSlug && nextDraft.name.trim() !== session.title) {
-          const updated = await updateSession(s.cfg, session.id, { title: nextDraft.name.trim() })
+          const updated = await updateSession(targetForSession(session.id), session.id, { title: nextDraft.name.trim() })
           useApp.setState((a) => ({ sessions: a.sessions.map((v) => v.id === session.id ? { ...v, title: updated.title } : v) }))
         }
       } else {

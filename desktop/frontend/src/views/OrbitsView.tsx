@@ -37,6 +37,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'orbits.filter.label': { zh: '筛选列表', en: 'Filter list' },
@@ -562,7 +563,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
                 // 引擎侧 fs.rm 整个 teams/<slug>/(含 Library/ 里的用户内容),不可逆 —— 与 SidebarPane 删工作区同款先确认。
                 const tm = teams.find((x) => x.slug === slug)
                 if (!window.confirm(t('orbits.team.confirmDelete', { name: tm?.name || slug }))) return
-                void api.deleteTeam(s.cfg, slug)
+                void api.deleteTeam(homeTarget(), slug)
                   .then((r) => { if (!r || r.ok !== true) throw new Error('delete failed') })
                   .then(() => Promise.all([s.refreshTeams(), s.refreshSessions(s.cfg)]))
                   .then(() => {

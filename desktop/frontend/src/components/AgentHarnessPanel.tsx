@@ -10,6 +10,7 @@ import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
+import { homeTarget } from '../services/engine/targets'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
 const HISTORY_PREVIEW = 8
@@ -45,7 +46,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
   const load = async (): Promise<void> => {
     const mine = ++seq.current
     try {
-      const r = await getAgentHarness(cfg, slug)
+      const r = await getAgentHarness(homeTarget(), slug)
       if (alive.current && mine === seq.current) { setEntries(r.entries); setJournal(r.journal); setCandidates(r.candidates || []); setError(''); onCandidates?.(r.candidates?.length ?? 0) }
     } catch (e: any) {
       // 吞掉会显示假「空」(Codex 评审 Minor);云端引擎的 404 detail 是中文硬编码,换成本地化文案。
@@ -57,7 +58,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
   const rollback = async (id: string, title: string): Promise<void> => {
     if (busy || !window.confirm(t('settings.agents.harnessRollbackConfirm', { title }))) return
     setBusy(true); setError(''); setNotice('')
-    try { await rollbackHarnessEntry(cfg, slug, id); await load() }
+    try { await rollbackHarnessEntry(homeTarget(), slug, id); await load() }
     catch (e: any) { if (alive.current) setError(String(e?.message || e)) }
     finally { if (alive.current) setBusy(false) }
   }

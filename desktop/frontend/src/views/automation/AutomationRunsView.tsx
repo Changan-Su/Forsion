@@ -17,6 +17,7 @@ import { useI18n } from '../../i18n'
 import { fmtTime } from './lib'
 import type { AutomationExecutionInfo, AutomationRunInfo, HistorianActivityItem, TanguDesktopConfig } from '../../types'
 import './automation.css'
+import { homeTarget } from '../../services/engine/targets'
 
 const dotClass = (status: string): string =>
   status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
@@ -91,7 +92,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
     let alive = true
     const pull = async (): Promise<void> => {
       try {
-        const result = await getAutomationExecutions(cfg, triggerId)
+        const result = await getAutomationExecutions(homeTarget(), triggerId)
         if (!alive) return // 已卸载 / 已换规则或配置:迟到的结果不进缓存也不上屏
         remember(scope, triggerId, result)
         setRows(result); setFailed(false)
@@ -131,7 +132,7 @@ const RunsList: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const [runs, setRuns] = useState<AutomationRunInfo[]>([])
   useEffect(() => {
     let alive = true
-    const pull = (): void => void getAutomationRuns(cfg, sessionId).then((r) => alive && setRuns(r)).catch(() => {})
+    const pull = (): void => void getAutomationRuns(homeTarget(), sessionId).then((r) => alive && setRuns(r)).catch(() => {})
     pull()
     const timer = setInterval(pull, 8000)
     return () => { alive = false; clearInterval(timer) }
@@ -158,7 +159,7 @@ const HistorianList: React.FC = () => {
   const [items, setItems] = useState<HistorianActivityItem[]>([])
   useEffect(() => {
     let alive = true
-    const pull = (): void => void getHistorianActivity(cfg, 50).then((a) => alive && setItems(a)).catch(() => {})
+    const pull = (): void => void getHistorianActivity(homeTarget(), 50).then((a) => alive && setItems(a)).catch(() => {})
     pull()
     const timer = setInterval(pull, 8000)
     return () => { alive = false; clearInterval(timer) }

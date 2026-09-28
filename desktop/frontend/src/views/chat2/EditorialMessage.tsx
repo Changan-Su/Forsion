@@ -53,7 +53,7 @@ import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
-import { useEngineFocus } from '../../services/engine/targets'
+import { useEngineFocus, targetForSession } from '../../services/engine/targets'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -216,7 +216,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
     // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
     if (!ctx?.sessionId || !at) { setStat({ files: 0, skipped: 0 }); return }
     let alive = true
-    void api.listCheckpoints(ctx.cfg, ctx.sessionId)
+    void api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
       .then((cps) => {
         if (!alive) return
         const files = new Set<string>()

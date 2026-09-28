@@ -28,6 +28,7 @@ import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { SpaceButton } from '../components/SpaceButton'
 import { openSession } from '../sessionNav'
+import { homeTarget } from '../services/engine/targets'
 
 const MuseLibraryView = lazyRetry(() => import('../views/MuseLibraryView').then((m) => ({ default: m.MuseLibraryView })))
 const MuseViewLazy = lazyRetry(() => import('../components/MuseView').then((m) => ({ default: m.MuseView })))
@@ -52,7 +53,7 @@ function MuseHome(props: ViewProps) {
     let timer: ReturnType<typeof setTimeout> | null = null
     const tick = async (): Promise<void> => {
       if (!alive) return
-      const st = await getMuseStatus(cfg).catch(() => null)
+      const st = await getMuseStatus(homeTarget()).catch(() => null)
       if (alive) await syncAgentSpace(cfg, 'muse', st?.spaceStamp)
       if (alive) timer = setTimeout(() => void tick(), 20_000)
     }

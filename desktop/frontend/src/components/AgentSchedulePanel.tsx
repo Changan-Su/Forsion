@@ -14,6 +14,7 @@ import { condText, fmtTime, isFinishedTrigger } from '../views/automation/lib'
 import { nextOccurrence, triggerWakes } from './agentScheduleLib'
 import type { AgentScheduleEntry, MuseTriggerInfo, TanguDesktopConfig } from '../types'
 import '../views/agentProfile.css'
+import { homeTarget } from '../services/engine/targets'
 
 type Props = { cfg: TanguDesktopConfig; slug: string; /** run 起止时重读:Agent 刚用 manage_schedule 排的条目不用手动刷新。 */ running?: boolean }
 
@@ -34,7 +35,7 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const load = async (): Promise<void> => {
     const mine = ++seq.current
     // 两个接口各自失败各自算:规则读不到不该把日程也抹掉。日程那半的 404 = 云端引擎(本地限定),换成本地化文案。
-    const [sched, trig] = await Promise.allSettled([getAgentSchedules(cfg), getMuseTriggers(cfg)])
+    const [sched, trig] = await Promise.allSettled([getAgentSchedules(homeTarget()), getMuseTriggers(homeTarget())])
     if (!alive.current || mine !== seq.current) return
     if (sched.status === 'fulfilled') { setEntries((Array.isArray(sched.value) ? sched.value : []).find((s) => s.slug === slug)?.entries || []); setError('') }
     else { setEntries([]); setError((sched.reason as any)?.status === 404 ? t('agentProfile.scheduleLocalOnly') : String((sched.reason as any)?.message || sched.reason)) }
@@ -45,7 +46,7 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
   const remove = async (entry: AgentScheduleEntry): Promise<void> => {
     if (busy || !window.confirm(t('agentProfile.scheduleDeleteConfirm', { name: entry.name }))) return
     setBusy(true); setError('')
-    try { await deleteAgentScheduleEntry(cfg, slug, entry.id); await load() }
+    try { await deleteAgentScheduleEntry(homeTarget(), slug, entry.id); await load() }
     catch (e: any) { if (alive.current) setError(String(e?.message || e)) }
     finally { if (alive.current) setBusy(false) }
   }

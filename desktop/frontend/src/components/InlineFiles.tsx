@@ -11,6 +11,7 @@ import { b64ToBytes, iconForFile } from '../services/fileKinds'
 import * as api from '../services/backendService'
 import { hostFsForSession } from '../services/engine/hostFs'
 import { notifyApp } from '../stores/notificationStore'
+import { targetForSession } from '../services/engine/targets'
 
 type ExecMode = 'host' | 'sandbox' | undefined
 
@@ -41,7 +42,7 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
         if (r.tooLarge) return { tooLarge: true as const, size: r.size }
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
       }
-      const r = await api.readWorkspaceFile(cfg, sessionId, f.path)
+      const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
       return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
     },
     download: f.path
@@ -49,7 +50,7 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
           // 设备页无 revealHostPath:undefined 藏掉下载位,免留静默哑弹
           ? (window.tangu?.revealHostPath ? () => { void window.tangu?.revealHostPath?.(f.path!) } : undefined)
           // 失败要看得见(P1-DL):手机上原生存「下载」会因超限 / 系统版本被拒,吞掉 = 点了没反应
-          : () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path!).catch((err) => notifyApp({ text: err?.message || String(err), level: 'error' })) })
+          : () => { void api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, f.path!).catch((err) => notifyApp({ text: err?.message || String(err), level: 'error' })) })
       : undefined,
   }
 }
@@ -58,7 +59,7 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
  *  目标不能直链(手机经 hub 打我的电脑:`<img src>` 不带凭据、隧道 cookie 对手机源是跨站)→ 沙箱文件也读字节做 blob。 */
 const Thumb: React.FC<{ f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; onClick: () => void }> = ({ f, cfg, sessionId, execMode, onClick }) => {
   sessionId = f.sourceSessionId || sessionId
-  const direct = f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(cfg, sessionId, f.path) : null)
+  const direct = f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(targetForSession(sessionId), sessionId, f.path) : null)
   const [src, setSrc] = useState<string | null>(direct)
   const urlRef = useRef<string | null>(null)
   useEffect(() => {
@@ -76,7 +77,7 @@ const Thumb: React.FC<{ f: DisplayFile; cfg: TanguDesktopConfig; sessionId: stri
           bytes = b64ToBytes(r.content)
           mime = r.mimeType
         } else if (execMode !== 'host') {
-          const r = await api.readWorkspaceFile(cfg, sessionId, f.path)
+          const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
           if (cancelled) return
           bytes = b64ToBytes(r.content)
           mime = r.mimeType

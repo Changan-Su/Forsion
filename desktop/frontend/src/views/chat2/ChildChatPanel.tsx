@@ -5,7 +5,7 @@ import { listActiveRuns } from '../../services/agentRunService'
 import { recordToUi, useApp } from '../../stores/appStore'
 import { useChildChat } from '../../stores/childChatStore'
 import { getBackgroundSessions, getSessionDetail, listMessages, openTeamMemberSession, type BackgroundSessionInfo } from '../../services/backendService'
-import { focusRef } from '../../services/engine/targets'
+import { focusRef, targetForSession } from '../../services/engine/targets'
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
@@ -31,7 +31,7 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     let disposed = false
     setSaved([])
-    const load = () => void getBackgroundSessions(cfg, sessionId).then((rows) => {
+    const load = () => void getBackgroundSessions(targetForSession(sessionId), sessionId).then((rows) => {
       if (!disposed) setSaved(rows)
     }).catch(() => {})
     load()
@@ -69,7 +69,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     if (!target?.slug || sessionId) return
     let disposed = false
     setError('')
-    void openTeamMemberSession(cfg, parentId, target.slug).then((session) => {
+    void openTeamMemberSession(targetForSession(parentId), parentId, target.slug).then((session) => {
       if (!disposed) { useChildChat.getState().open(parentId, { ...target, sessionId: session.id }); void useApp.getState().hydrateTeamWork(parentId) }
     }).catch((e) => { if (!disposed) setError(String(e.message || e)) })
     return () => { disposed = true }
@@ -78,7 +78,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     setReady(''); setError(''); setPersistedBusy(false)
     if (!sessionId) return
     let disposed = false
-    void getSessionDetail(cfg, sessionId).then(async (session) => {
+    void getSessionDetail(targetForSession(sessionId), sessionId).then(async (session) => {
       if (disposed) return
       setPersistedBusy(!!session.delegate_running)
       useChildChat.getState().remember(session)
@@ -92,9 +92,9 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   useEffect(() => {
     if (!sessionId || !persistedBusy) return
     let disposed = false
-    const timer = setInterval(() => void getSessionDetail(cfg, sessionId).then((s) => {
+    const timer = setInterval(() => void getSessionDetail(targetForSession(sessionId), sessionId).then((s) => {
       if (!disposed && !s.delegate_running) {
-        void listMessages(cfg, sessionId).then((records) => {
+        void listMessages(targetForSession(sessionId), sessionId).then((records) => {
           if (disposed) return
           useApp.setState((state) => {
             const restored = records.map((r) => recordToUi(r, undefined, (slug) => state.agentDefs.find((a) => a.slug === slug)?.name))
@@ -111,7 +111,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   useEffect(() => {
     if (!sessionId || !runId || ready !== sessionId) return
     let disposed = false
-    void listActiveRuns(cfg, sessionId).then((runs) => {
+    void listActiveRuns(targetForSession(sessionId), sessionId).then((runs) => {
       if (disposed) return
       const run = runs.find((r) => r.id === runId && (r.status === 'running' || r.status === 'queued'))
       if (!run?.assistant_message_id) return

@@ -99,6 +99,7 @@ import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import './settingsModal.css'
+import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
@@ -618,18 +619,18 @@ export const SettingsModal: React.FC<{
   const [pluginAgents, setPluginAgents] = useState<NormalAgentDef[]>([])
   const reloadPlugins = useCallback(() => {
     if (!isDesktop) return
-    void listPlugins(p.cfg).then(setPlugins).catch(() => setPlugins([]))
+    void listPlugins(homeTarget()).then(setPlugins).catch(() => setPlugins([]))
   }, [isDesktop, p.cfg])
   useEffect(() => {
     if (!p.open || !isDesktop) return
     reloadPlugins()
-    void listAgents(p.cfg).then(setPluginAgents).catch(() => { /* ignore */ })
+    void listAgents(homeTarget()).then(setPluginAgents).catch(() => { /* ignore */ })
   }, [p.open, isDesktop, reloadPlugins, p.cfg])
 
   // 本地联网搜索配置:进模型 tab 拉取;云端/旧后端 404 → wsRed=null 整段隐藏。
   useEffect(() => {
     if (!p.open || tab !== 'model' || !isDesktop) return
-    void getLocalWebSearch(p.cfg)
+    void getLocalWebSearch(homeTarget())
       .then((r) => {
         setWsRed(r)
         setWsProvider(r.provider)
@@ -662,7 +663,7 @@ export const SettingsModal: React.FC<{
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
-    void listTools(p.cfg).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
+    void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
   }
 
   const writeMcp = (next: Record<string, McpServerConfigEntry>, msg: string): void => {
@@ -723,7 +724,7 @@ export const SettingsModal: React.FC<{
 
   const refreshSyncStatus = (): void => {
     const request = ++syncRequest.current
-    backendGetSyncStatus(p.cfg).then((value) => {
+    backendGetSyncStatus(homeTarget()).then((value) => {
       if (request === syncRequest.current) setSyncSt(value)
     }).catch(() => { if (request === syncRequest.current) setSyncSt(null) })
   }
@@ -734,7 +735,7 @@ export const SettingsModal: React.FC<{
     setSyncing(true)
     setSyncMsg('')
     try {
-      const r = await backendSyncNow(p.cfg)
+      const r = await backendSyncNow(homeTarget())
       if (request !== syncRequest.current) return
       if (r.ok) {
         setSyncMsg(t('settings.forsion.syncOk', { memory: r.memory, logs: r.logs.length }) + (r.agents ? ` · ${r.agents} agent ↑${r.pushed ?? 0} ↓${r.pulled ?? 0}` : ''))
@@ -1032,7 +1033,7 @@ export const SettingsModal: React.FC<{
   const test = async () => {
     if (connCfgPending) return
     setTesting(true)
-    const r = await testConnection({ ...draft, ...connForm })
+    const r = await testConnection(connectionTarget({ ...draft, ...connForm }))
     setTestResult(r.message)
     setTesting(false)
   }
@@ -2168,8 +2169,8 @@ export const SettingsModal: React.FC<{
                 {tab === 'model' && activeSub === 'm-display' && isDesktop && <AutoCompactSetting cfg={p.cfg} />}
                 {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} onContextWindow={isDesktop ? async (modelId, tokens) => {
                   // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
-                  await setModelContextWindow(p.cfg, modelId, tokens)
-                  const next = await listModels(p.cfg)
+                  await setModelContextWindow(homeTarget(), modelId, tokens)
+                  const next = await listModels(homeTarget())
                   setModels(next)
                   // 进度环读的是 store 里启动时装的 modelsResp,且优先上一轮 run 的 context_info(只在切模型时清):
                   // 两处都刷,否则改完窗口它还显示旧数直到下一条消息。
@@ -2359,7 +2360,7 @@ export const SettingsModal: React.FC<{
                               setProviderTesting(true)
                               setProviderTestMsg('')
                               const firstModel = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)[0]
-                              void testProviderConnection(p.cfg, {
+                              void testProviderConnection(homeTarget(), {
                                 baseUrl: editProvider.baseUrl,
                                 apiKey: editProvider.apiKey || undefined,
                                 modelId: firstModel,
@@ -2380,7 +2381,7 @@ export const SettingsModal: React.FC<{
                             onClick={() => {
                               setFetchingModels(true)
                               setFetchModelsMsg('')
-                              void fetchProviderModels(p.cfg, {
+                              void fetchProviderModels(homeTarget(), {
                                 baseUrl: editProvider.baseUrl,
                                 apiKey: editProvider.apiKey || undefined,
                               })
@@ -2554,7 +2555,7 @@ export const SettingsModal: React.FC<{
                               onClick={() => {
                                 const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
                                 setWsBusy(true); setWsMsg('')
-                                void saveLocalWebSearch(p.cfg, {
+                                void saveLocalWebSearch(homeTarget(), {
                                   provider: wsProvider,
                                   bochaApiKey: keyOut('bocha'),
                                   tavilyApiKey: keyOut('tavily'),
@@ -2578,7 +2579,7 @@ export const SettingsModal: React.FC<{
                                 const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
                                 const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
                                 setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(p.cfg, { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
+                                void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
                                   .then((r) => setWsMsg(r.ok
                                     ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
                                     : `✗ ${r.provider}: ${r.error || 'failed'}`))

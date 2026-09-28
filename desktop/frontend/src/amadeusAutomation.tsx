@@ -18,6 +18,7 @@ import { useAutomation } from './stores/automationStore'
 import { fireAutomationTrigger, getMuseTriggers, kickAutomation } from './services/backendService'
 import { registerMessages, translate, useI18n } from './i18n'
 import type { MuseTriggerInfo } from './types'
+import { homeTarget } from './services/engine/targets'
 
 registerMessages({
   'amauto.noBackend': { zh: '后端未连接', en: 'Backend not connected' },
@@ -46,20 +47,20 @@ export function installAmadeusAutomationBridge(): void {
   // .db 落盘 → 踢一次巡检(dbStore 侧已节流 1.5s)。云端/移动端不注册 → 那边只有轮询,行为如常。
   setAutomationKick(() => {
     const c = cfg()
-    if (c) void kickAutomation(c).catch(() => { /* 引擎没起来/旧版本无此端点:轮询兜底 */ })
+    if (c) void kickAutomation(homeTarget()).catch(() => { /* 引擎没起来/旧版本无此端点:轮询兜底 */ })
   })
   setAutomationBridge({
     async getRule(triggerId) {
       const c = cfg()
       if (!c) return null
-      const t = (await getMuseTriggers(c)).find((x) => x.id === triggerId)
+      const t = (await getMuseTriggers(homeTarget())).find((x) => x.id === triggerId)
       // 只认手动类:引擎 fire 对 origin='button' 也只放行它们,这里先给出一致的界面反馈。
       return t && t.cond?.type === 'manual' ? { id: t.id, desc: t.desc, enabled: t.enabled } : null
     },
     async run(triggerId) {
       const c = cfg()
       if (!c) throw new Error(translate('amauto.noBackend'))
-      const r = await fireAutomationTrigger(c, triggerId, 'button')
+      const r = await fireAutomationTrigger(homeTarget(), triggerId, 'button')
       return { status: (r.status as 'done' | 'failed' | 'busy') ?? 'failed', steps: r.steps ?? [] }
     },
     async editRule(triggerId) {
@@ -68,7 +69,7 @@ export function installAmadeusAutomationBridge(): void {
       // 构建器读 automationStore 的动作目录/规则表,而那个 store 只有「自动化」Space 在轮询。
       // 从笔记里开构建器时没人拉过 → 工具步骤会是空目录(表现为「调工具」按钮恒灰)。这里补一次。
       await useAutomation.getState().refresh(c).catch(() => { /* 拉不到就退化成只有通知/跑 Agent 两种步骤 */ })
-      const editing = triggerId ? (await getMuseTriggers(c)).find((x) => x.id === triggerId) : undefined
+      const editing = triggerId ? (await getMuseTriggers(homeTarget())).find((x) => x.id === triggerId) : undefined
       return new Promise<AutomationRuleInfo | null>((resolve) => {
         useBuilderReq.getState().req?.resolve(null) // 单例:旧的未决请求先取消
         useBuilderReq.getState().open({ editing, resolve })

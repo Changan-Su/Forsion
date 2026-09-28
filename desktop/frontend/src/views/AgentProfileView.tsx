@@ -25,6 +25,7 @@ import './agentProfileMessages'
 import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { homeTarget } from '../services/engine/targets'
 
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,
@@ -114,7 +115,7 @@ export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
     if (!name || !instructions || rosterBusy) return
     setRosterBusy(true); setRosterError('')
     try {
-      const created = await saveAgentDef(cfg, { name, description: newPurpose.trim(), systemPrompt: instructions })
+      const created = await saveAgentDef(homeTarget(), { name, description: newPurpose.trim(), systemPrompt: instructions })
       useApp.setState((s) => ({ agentDefs: [...s.agentDefs, created] }))
       useApp.getState().refreshAgents()
       emitAgentsChange()
@@ -158,7 +159,7 @@ export function AgentsRosterView() {
   const setDefault = async (next: string) => {
     setRosterBusy(true); setRosterError('')
     try {
-      const meta = await putAgentsMeta(cfg, { defaultSlug: next })
+      const meta = await putAgentsMeta(homeTarget(), { defaultSlug: next })
       useApp.setState({ defaultAgentSlug: meta.defaultSlug })
       emitAgentsChange()
     } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false) }
@@ -171,7 +172,7 @@ export function AgentsRosterView() {
     order.splice(index + (after ? 1 : 0), 0, from)
     setRosterBusy(true); setRosterError('')
     try {
-      await putAgentsMeta(cfg, { order })
+      await putAgentsMeta(homeTarget(), { order })
       useApp.setState((s) => ({ agentDefs: order.map((id) => s.agentDefs.find((a) => a.slug === id)).filter((a): a is NormalAgentDef => !!a) }))
       emitAgentsChange()
     } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false); setDragSlug(null) }
@@ -260,7 +261,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
   useEffect(() => {
     let active = true
     setLoading(true); setLoadError('')
-    void Promise.allSettled([listSkills(s.cfg, agent.slug), listTools(s.cfg)]).then(([skillResult, toolResult]) => {
+    void Promise.allSettled([listSkills(homeTarget(), agent.slug), listTools(homeTarget())]).then(([skillResult, toolResult]) => {
       if (!active) return
       if (skillResult.status === 'fulfilled') setSkills(skillResult.value)
       if (toolResult.status === 'fulfilled') { setMcp(toolResult.value.mcp || []); setBuiltins(toolResult.value.builtins || []) }
@@ -275,7 +276,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
   useEffect(() => {
     if (harnessOpen) return
     let active = true
-    getAgentHarness(s.cfg, agent.slug).then((r) => { if (active) setCandidates(r.candidates?.length ?? 0) }).catch(() => { if (active) setCandidates(0) })
+    getAgentHarness(homeTarget(), agent.slug).then((r) => { if (active) setCandidates(r.candidates?.length ?? 0) }).catch(() => { if (active) setCandidates(0) })
     return () => { active = false }
   }, [s.cfg, agent.slug, s.running, retry, harnessOpen])
   const navigate = (next: Section) => {
@@ -321,8 +322,8 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
         reader.onerror = () => reject(new Error(t('agentProfile.avatarReadFailed')))
         reader.readAsDataURL(file)
       })
-      const uploaded = await uploadAgentAvatar(s.cfg, agent.slug, dataUrl, file.type)
-      replaceAvatarUrl(await fetchAgentAvatar(s.cfg, agent.slug), uploaded.avatar)
+      const uploaded = await uploadAgentAvatar(homeTarget(), agent.slug, dataUrl, file.type)
+      replaceAvatarUrl(await fetchAgentAvatar(homeTarget(), agent.slug), uploaded.avatar)
       setNotice(t('agentProfile.avatarSaved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
   }
@@ -330,7 +331,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
     if (avatarBusy || !s.avatar) return
     setAvatarBusy(true); setError(''); setNotice('')
     try {
-      await deleteAgentAvatar(s.cfg, agent.slug)
+      await deleteAgentAvatar(homeTarget(), agent.slug)
       replaceAvatarUrl(null, undefined)
       setNotice(t('agentProfile.avatarRemoved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
@@ -346,7 +347,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(next)) { setError(t('agentProfile.renameInvalid')); return }
     setBusy(true); setError(''); setNotice('')
     try {
-      const { agent: renamed, warnings } = await renameAgentDef(s.cfg, old, next)
+      const { agent: renamed, warnings } = await renameAgentDef(homeTarget(), old, next)
       const fix = <C extends AgentConfig | null | undefined>(c: C): C => {
         if (!c) return c
         const out = { ...c }
@@ -392,7 +393,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
     if (busy || !draft.name.trim()) return
     setBusy(true); setError('')
     try {
-      const latest = (await listAgents(s.cfg)).find((item) => item.slug === agent.slug)
+      const latest = (await listAgents(homeTarget())).find((item) => item.slug === agent.slug)
       if (!latest) throw new Error(t('agentProfile.saveConflict'))
       const conflicts = [...dirtyFields.current].filter((key) => JSON.stringify(latest[key]) !== JSON.stringify(baseDraft.current[key]) && JSON.stringify(latest[key]) !== JSON.stringify(draft[key]))
       if (conflicts.length) throw new Error(t('agentProfile.saveConflict'))
@@ -403,7 +404,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
       if ('enabledMcpServers' in changes && changes.enabledMcpServers === undefined) changes.enabledMcpServers = null
       if ('toolsMode' in changes && changes.toolsMode === undefined) changes.toolsMode = null
       if ('toolsList' in changes && !draft.toolsMode) changes.toolsList = null
-      const updated = await saveAgentDef(s.cfg, changes, agent.slug)
+      const updated = await saveAgentDef(homeTarget(), changes, agent.slug)
       useApp.setState((a) => ({ agentDefs: a.agentDefs.map((v) => v.slug === agent.slug ? updated : v) }))
       window.dispatchEvent(new Event('forsion:agents-changed'))
       window.tangu?.requestMainAction?.('agents-changed')

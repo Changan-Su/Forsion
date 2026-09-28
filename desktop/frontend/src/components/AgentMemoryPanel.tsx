@@ -8,6 +8,7 @@ import {
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'agentMemory.search': { zh: '搜索记忆', en: 'Search memory' },
@@ -107,7 +108,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   }
   const fail = (e: unknown) => { if (alive.current) setError(e instanceof Error ? e.message : t('agentMemory.error')) }
   const load = async () => {
-    const results = await Promise.allSettled([getAgentMemorySnapshot(cfg, slug), getAgentMemoryDream(cfg, slug)])
+    const results = await Promise.allSettled([getAgentMemorySnapshot(homeTarget(), slug), getAgentMemoryDream(homeTarget(), slug)])
     if (!alive.current) return
     if (results[0].status === 'fulfilled') { try { applySnapshot(results[0].value) } catch (e) { fail(e) } } else fail(results[0].reason)
     // 老引擎 / 外部后端可能回一个不带 status / config 的壳:当作不支持 Dream,整块不画,别让下面的 dream.status.running 崩掉整页。
@@ -131,10 +132,10 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     let cancelled = false
     const timer = setTimeout(async () => {
       try {
-        const next = await getAgentMemoryDream(cfg, slug)
+        const next = await getAgentMemoryDream(homeTarget(), slug)
         if (cancelled || !alive.current) return
         setDream(validDream(next))
-        if (!next?.status?.running) { applySnapshot(await getAgentMemorySnapshot(cfg, slug)); setRevisions(null) }
+        if (!next?.status?.running) { applySnapshot(await getAgentMemorySnapshot(homeTarget(), slug)); setRevisions(null) }
       } catch (e) { if (!cancelled) fail(e) }
     }, 2000)
     return () => { cancelled = true; clearTimeout(timer) }
@@ -147,7 +148,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   }
   const loadRevisions = () => {
     const request = ++revisionRequest.current
-    void listAgentMemoryRevisions(cfg, slug).then((items) => {
+    void listAgentMemoryRevisions(homeTarget(), slug).then((items) => {
       if (alive.current && request === revisionRequest.current) setRevisions(items)
     }).catch(fail)
   }
@@ -159,11 +160,11 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     <div style={row}>
       <label style={row}><input type="checkbox" checked={dream.config.enabled} disabled={busy || dream.status.running}
         onChange={(e) => { const enabled = e.target.checked; void action(async () => {
-          const next = await configureAgentMemoryDream(cfg, slug, { enabled })
+          const next = await configureAgentMemoryDream(homeTarget(), slug, { enabled })
           if (alive.current) { setDream(next); setConfigDraft(next.config) }
         }) }} />{t('agentMemory.auto')}</label>
       <button className="btn sm" disabled={busy || (!dream.status.running && (dirty || Boolean(editing)))} onClick={() => void action(async () => {
-        const status = await (dream.status.running ? cancelAgentMemoryDream(cfg, slug) : startAgentMemoryDream(cfg, slug))
+        const status = await (dream.status.running ? cancelAgentMemoryDream(homeTarget(), slug) : startAgentMemoryDream(homeTarget(), slug))
         if (alive.current) setDream((previous) => previous ? { ...previous, status } : previous)
       })}>{t(dream.status.running ? 'agentMemory.stop' : 'agentMemory.run')}</button>
       <span style={hint}>{t('agentMemory.pending', { count: dream.candidates })}</span>
@@ -182,7 +183,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
               onChange={(e) => setConfigDraft({ ...configDraft, [field.key]: Number(e.target.value) * field.scale })} /></div>)}
       </div>
       <button className="btn sm" disabled={busy || dream.status.running} onClick={() => void action(async () => {
-        const next = await configureAgentMemoryDream(cfg, slug, configDraft)
+        const next = await configureAgentMemoryDream(homeTarget(), slug, configDraft)
         if (alive.current) { setDream(next); setConfigDraft(next.config); setNotice(t('settings.agents.memSaved')) }
       })}>{t('common.save')}</button>
     </details>}
@@ -213,13 +214,13 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       {!organized && <p style={{ ...hint, marginTop: 12 }}>{t('agentMemory.forgetHint')}</p>}
       <details className={organized ? 'memory-add' : undefined} style={organized ? undefined : section}><summary>{organized && <Plus size={13} />}{t('agentMemory.add')}</summary><div className="field" style={{ marginTop: 8 }}>
         <textarea aria-label={t('agentMemory.fact')} rows={2} value={newFact} disabled={writeDisabled} onChange={(e) => setNewFact(e.target.value)} />
-        <button className="btn sm" disabled={writeDisabled || !newFact.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(cfg, slug,
+        <button className="btn sm" disabled={writeDisabled || !newFact.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
           { action: 'add', fact: newFact, expectedVersion: snapshot.version }))) }>{t('agentMemory.add')}</button></div></details>
       <ul className={organized ? 'harness-entries' : undefined} style={organized ? undefined : { listStyle: 'none', padding: 0, margin: 0 }}>
         {shown.map((entry) => <li key={entry.id} data-memory-entry-id={entry.id} className={organized ? 'harness-entry memory-entry' : undefined} style={organized ? undefined : section}>
           {editing?.id === entry.id ? <div className="field"><textarea aria-label={t('agentMemory.fact')} value={editing.text} disabled={busy} rows={3}
             onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
-            <div style={row}><button className="btn primary sm" disabled={busy || !editing.text.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(cfg, slug,
+            <div style={row}><button className="btn primary sm" disabled={busy || !editing.text.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'update', id: entry.id, fact: editing.text, expectedVersion: editing.version }))) }>{t('common.save')}</button>
               <button className="btn sm" disabled={busy} onClick={() => setEditing(null)}>{t('common.cancel')}</button></div></div>
             : <p style={organized ? undefined : { margin: '0 0 8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{entry.content}</p>}
@@ -229,14 +230,14 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
               <div>{sourceText(entry.source, '')}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
             <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}><Pencil size={13} /></button>
-            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(cfg, slug,
+            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }><Eraser size={13} /></button>
           </div> : <div style={{ ...row, justifyContent: 'space-between' }}>
             <details style={{ ...hint, flex: 1 }}><summary>{t('agentMemory.source')}</summary>
               <div>{sourceText(entry.source, t(`agentMemory.source.${entry.source.kind}`))}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
             <button className="btn sm" disabled={writeDisabled} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}>{t('agentMemory.edit')}</button>
-            <button className="btn danger sm" disabled={writeDisabled} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(cfg, slug,
+            <button className="btn danger sm" disabled={writeDisabled} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }>{t('agentMemory.forget')}</button>
           </div>}
         </li>)}
@@ -251,7 +252,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
         {dirty && editorBase.version !== snapshot.version && <p role="alert" style={{ ...hint, color: 'var(--danger)' }}>{t('agentMemory.changed')}</p>}
         <textarea aria-label={t('agentMemory.document')} rows={10} value={draft} disabled={busy || dream?.status.running || Boolean(editing)} onChange={(e) => { setDraft(e.target.value); setNotice('') }} />
         <div style={row}><button className="btn primary sm" disabled={busy || !dirty || dream?.status.running || Boolean(editing)}
-          onClick={() => void action(() => update(() => putAgentMemory(cfg, slug, draft, editorBase.version)))}>{t('common.save')}</button>
+          onClick={() => void action(() => update(() => putAgentMemory(homeTarget(), slug, draft, editorBase.version)))}>{t('common.save')}</button>
           {dirty && <button className="btn sm" disabled={busy} onClick={() => { setDraft(snapshot.content); setEditorBase({ version: snapshot.version, content: snapshot.content }) }}>{t('agentMemory.discard')}</button>}</div>
       </div></details>
       <details className={organized ? 'profile-disclosure' : undefined} style={organized ? undefined : section} onToggle={(e) => { if (e.currentTarget.open && revisions === null) loadRevisions() }}><summary>{t('agentMemory.revisions')}{organized && <small><code title={snapshot.version}>{snapshot.version.slice(0, 8)}</code></small>}</summary>
@@ -261,7 +262,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
         {revisions?.map((revision) => <details key={revision.version} style={{ marginTop: 8 }}><summary style={hint} title={revision.version}>
           {formatDateTime(revision.createdAt)} · {revision.version.slice(0, 8)} · {t(`agentMemory.source.${revision.source.kind}`)}</summary>
           <pre style={{ ...hint, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{revision.content}</pre>
-          <button className="btn sm" disabled={writeDisabled || revision.version === snapshot.version} onClick={() => void action(() => update(() => restoreAgentMemory(cfg, slug, revision.version, snapshot.version)))}>{t('agentMemory.restore')}</button>
+          <button className="btn sm" disabled={writeDisabled || revision.version === snapshot.version} onClick={() => void action(() => update(() => restoreAgentMemory(homeTarget(), slug, revision.version, snapshot.version)))}>{t('agentMemory.restore')}</button>
         </details>)}
       </details>
     </>}

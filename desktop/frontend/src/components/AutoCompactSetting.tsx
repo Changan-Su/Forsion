@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { registerMessages, useI18n } from '../i18n'
 import { getCompactionSettings, setCompactionSettings } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'autocompact.label': { zh: '自动压缩阈值', en: 'Auto-compact threshold' },
@@ -30,7 +31,7 @@ export function AutoCompactSetting({ cfg }: { cfg: TanguDesktopConfig }) {
 
   useEffect(() => {
     let alive = true
-    getCompactionSettings(cfg)
+    getCompactionSettings(homeTarget())
       .then((r) => { if (alive && r.writable) setState({ saved: r.settings.thresholdPercent ?? null, def: r.defaults.thresholdPercent }) })
       .catch(() => { /* 老引擎没有这个路由:整块不露 */ })
     return () => { alive = false }
@@ -43,7 +44,7 @@ export function AutoCompactSetting({ cfg }: { cfg: TanguDesktopConfig }) {
     setDraft(null)
     if (next === state.saved) return
     try {
-      const r = await setCompactionSettings(cfg, { thresholdPercent: next })
+      const r = await setCompactionSettings(homeTarget(), { thresholdPercent: next })
       setState({ ...state, saved: r.settings.thresholdPercent ?? null })
       setError('')
     } catch (e: any) { setError(e?.message || String(e)) }

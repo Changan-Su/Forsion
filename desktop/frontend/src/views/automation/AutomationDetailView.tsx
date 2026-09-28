@@ -26,6 +26,7 @@ import { AutomationRunsView } from './AutomationRunsView'
 import './messages'
 import type { AgentScheduleEntry, HistorianActivityItem, MuseTriggerInfo } from '../../types'
 import './automation.css'
+import { homeTarget } from '../../services/engine/targets'
 
 /** 监听列名单(cell_changed):表已加载就显示列名,否则/列已删显示 (id);多列 = 任一变化即命中。
  *  单独成组件:列名要订阅 dbStore,而 DetailView 主体在 tr 之前有多处早退,hook 不能放那里。 */
@@ -50,7 +51,7 @@ const FireButton: React.FC<{ tr: MuseTriggerInfo; onResult: () => void }> = ({ t
     setBusy(true)
     setResult('')
     try {
-      const r = await fireAutomationTrigger(cfg, tr.id)
+      const r = await fireAutomationTrigger(homeTarget(), tr.id)
       setResult(r.ok ? t('automation.fire.ok', { status: r.status }) : t('automation.fire.fail', { status: r.status }))
       st.bump()
     } catch (e: any) {
@@ -105,7 +106,7 @@ const HistorianFeed: React.FC = () => {
   const [items, setItems] = React.useState<HistorianActivityItem[]>([])
   useEffect(() => {
     let alive = true
-    const pull = (): void => void getHistorianActivity(cfg, 50).then((a) => alive && setItems(a)).catch(() => {})
+    const pull = (): void => void getHistorianActivity(homeTarget(), 50).then((a) => alive && setItems(a)).catch(() => {})
     pull()
     const timer = setInterval(pull, 8000)
     return () => { alive = false; clearInterval(timer) }
@@ -140,7 +141,7 @@ const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: (
     setBusy(true)
     setError('')
     try {
-      await saveAgentScheduleEntry(cfg, slug, {
+      await saveAgentScheduleEntry(homeTarget(), slug, {
         id: en.id, name: name.trim(), date: date.trim(),
         repeat: repeat.trim(), auto: en.auto, prompt: prompt.trim(),
         description: en.description, todo: en.todo,

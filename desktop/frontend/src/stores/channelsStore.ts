@@ -11,6 +11,7 @@ import {
   type ChannelStatus, type ChannelConfigPatch,
 } from '../services/backendService'
 import type { ChannelKind, WorkspaceDescriptor } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 export type { ChannelStatus }
 
@@ -55,7 +56,7 @@ export const useChannels = create<ChannelsState>((set, get) => ({
   refresh: async () => {
     if (!window.tangu?.backendStatus) return // 通道仅内置本地后端形态可用
     try {
-      const r = await listChannels(cfg())
+      const r = await listChannels(homeTarget())
       // 形状防御:老后端/桩若 200 返回但缺 channels,undefined 会毒化 store,侧栏迭代直接崩(ErrorBoundary 整片吃掉会话列表)
       const channels = Array.isArray(r.channels) ? r.channels : []
       set({ channels, available: !!r.available, loaded: true })
@@ -64,19 +65,19 @@ export const useChannels = create<ChannelsState>((set, get) => ({
   },
 
   save: async (kind, patch) => {
-    await saveChannelConfig(cfg(), kind, patch)
+    await saveChannelConfig(homeTarget(), kind, patch)
     await get().refresh()
   },
 
   connect: async (kind) => {
-    const r = await connectChannel(cfg(), kind)
+    const r = await connectChannel(homeTarget(), kind)
     await get().refresh()
     void useApp.getState().refreshSessions(cfg()) // 连接即新会话 → 列表立即可见
     return r
   },
 
   disconnect: async (kind, accountId) => {
-    await disconnectChannel(cfg(), kind, accountId)
+    await disconnectChannel(homeTarget(), kind, accountId)
     await get().refresh()
   },
 

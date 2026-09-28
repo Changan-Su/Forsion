@@ -37,6 +37,7 @@ import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
 import { MobileUnitsSheet } from './UnitsSheet'
+import { homeTarget } from '@/services/engine/targets'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
 function useInboxAutoPull(): void {
@@ -44,7 +45,7 @@ function useInboxAutoPull(): void {
     const doPull = async () => {
       if (!window.tangu?.mobile || useApp.getState().connState !== 'ok') return
       try {
-        const r = await pullInbox(useApp.getState().cfg)
+        const r = await pullInbox(homeTarget())
         if (r.added) { void useInbox.getState().refreshList(); void useInbox.getState().refreshUnread() }
       } catch { /* 静默 */ }
     }
