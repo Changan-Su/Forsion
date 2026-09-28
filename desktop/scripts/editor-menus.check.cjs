@@ -8,6 +8,8 @@
 //   I20  选区工具栏键盘可达 + ARIA:Alt+F10 进工具栏(焦点进去工具栏不被卸载)、←→ 移动、Enter 触发、子面板键盘开 +
 //        ↓ 选项、Esc 退回编辑器;格式钮有 aria-pressed / aria-label(I-20)
 //   B5   块菜单作用于多块选区:「转换为」逐块生效(列表并成一只,一次撤销全回)、「移到新列」置灰并说明(B-05)
+//   B10  块菜单开着时:方向键不挪编辑器选区(在菜单项间移动)、Enter 执行聚焦项、动作落在打开时的那一块;
+//        role=menu / menuitem;键盘打开把焦点送进菜单(B-10)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -412,6 +414,62 @@ async function main() {
         const ts = await toasts(page)
         const sh = await shape(page)
         check('B5c 多块时「移到新列」置灰 + 说明 + 点了有提示', dis === 'true' && !!title && ts.length === 1 && sh.join(' / ') === '段甲。 / 段乙。 / 段丙。', JSON.stringify({ dis, title, ts, sh }))
+        await page.keyboard.press('Escape')
+      }
+    }
+
+    if (want('B10')) {
+      const SEED = '段甲。\n\n段乙。\n\n---\n\n段丙。\n'
+      const selNow = () => page.evaluate(() => { const s = window.__upage.probe.view().state.selection; return `${s.toJSON().type}:${s.from}-${s.to}` })
+      // B10a 鼠标开菜单 → ↓↓ 不动编辑器选区;再点「删除」删的是打开时那一块(不是 hr)。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        const s0 = await selNow()
+        await page.keyboard.press('ArrowDown')
+        await page.keyboard.press('ArrowDown')
+        const s1 = await selNow()
+        const inMenu = await page.evaluate(() => !!document.activeElement?.closest('.unified-block-menu'))
+        if (open) await menuItem(page, '删除').click()
+        await page.waitForTimeout(250)
+        const sh = await shape(page)
+        check('B10a 菜单开着 ↓↓ 不挪编辑器选区(焦点进菜单),删除落在打开时那一块', open && s0 === s1 && inMenu && sh.join(' / ') === '段甲。 / hr: / 段丙。', JSON.stringify({ s0, s1, inMenu, sh }))
+      }
+      // B10b End → 末项「删除」,Enter 执行。
+      {
+        await load(page, SEED)
+        const open = await openHandleMenu(page, '段乙')
+        await page.keyboard.press('End')
+        const focused = await page.evaluate(() => document.activeElement?.textContent.trim())
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(250)
+        const sh = await shape(page)
+        check('B10b End 到末项、Enter 执行(删的是段乙)', open && /删除$/.test(focused || '') && sh.join(' / ') === '段甲。 / hr: / 段丙。', JSON.stringify({ focused, sh }))
+      }
+      // B10c ARIA。
+      {
+        await load(page, SEED)
+        await openHandleMenu(page, '段乙')
+        const aria = await page.evaluate(() => {
+          const m = document.querySelector('.unified-block-menu')
+          const btns = [...m.querySelectorAll('button')]
+          return { role: m.getAttribute('role'), label: m.getAttribute('aria-label'), items: btns.length, withRole: btns.filter((b) => /^menuitem/.test(b.getAttribute('role') || '')).length }
+        })
+        check('B10c 菜单 role=menu + 名字,每项 role=menuitem', aria.role === 'menu' && !!aria.label && aria.items > 0 && aria.withRole === aria.items, JSON.stringify(aria))
+        await page.keyboard.press('Escape')
+      }
+      // B10d 键盘打开(聚焦 ⠿ 按 Enter):块被选上、焦点进首项。
+      {
+        await load(page, SEED)
+        const r = await rectOf(page, '段乙')
+        await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+        await page.waitForTimeout(260)
+        await page.evaluate(() => document.querySelector('.unified-gutter .drag-handle')?.focus())
+        await page.keyboard.press('Enter')
+        const open = await waitSel(page, '.unified-block-menu')
+        await page.waitForTimeout(150)
+        const st = await page.evaluate(() => ({ inMenu: !!document.activeElement?.closest('.unified-block-menu'), sel: window.__upage.probe.view().state.selection.toJSON().type }))
+        check('B10d 键盘打开:块已选上、焦点进菜单首项', open && st.inMenu && st.sel === 'node', JSON.stringify(st))
         await page.keyboard.press('Escape')
       }
     }

@@ -47,8 +47,9 @@ registerMessages({
 })
 
 export interface BlockLayerHooks {
-  /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。 */
-  onMenu: (at: { x: number; y: number }) => void
+  /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。
+   *  keyboard:键盘打开的(聚焦 ⠿ 按 Enter / 空格 = detail 为 0 的 click)→ 宿主把焦点送进菜单(B-10)。 */
+  onMenu: (at: { x: number; y: number; keyboard?: boolean }) => void
   /** **整块**删掉了这些内容(块选中 Delete/Backspace)。宿主据此问「引用块牵着的磁盘文件也删吗」。
    *  剪切不发(搬家不是删除),逐字符编辑更不经过这里 —— 判据是结构性的,不靠启发式。
    *  调用时机在 dispatch **之后**:宿主要读删完的文档算「同一篇里还有没有别处引用」。 */
@@ -904,7 +905,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         drag.addEventListener('click', (e) => {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
-          hooks.onMenu({ x: r.left, y: r.bottom + 4 })
+          // 键盘激活(Enter / 空格)没有 mousedown,块还没被选上:这里补选,菜单才有目标。
+          if (e.detail === 0 && viewRef && activeRef) selectDragUnit(viewRef, activeRef)
+          hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: e.detail === 0 })
           // 焦点收回编辑器:mousedown 的浏览器默认行为把焦点给了 ⠿ 这个 <button>,不收回的话
           // 菜单一开,键盘就整片失效(块选着却 Cmd+C/Delete 无反应)。菜单是浮层,不吃焦点也照用。
           // ⚠️ 触屏上不收:focus 会弹安卓软键盘,把这个向上弹的浮层从手指底下顶走(见 touch.ts
@@ -1186,7 +1189,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           e.stopPropagation()
           if (!activeRef) return
           const r = cardGrab.getBoundingClientRect()
-          hooks.onMenu({ x: r.left, y: r.bottom + 4 })
+          hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: e.detail === 0 })
           if (!isCoarsePointer()) viewRef?.focus()
         })
 

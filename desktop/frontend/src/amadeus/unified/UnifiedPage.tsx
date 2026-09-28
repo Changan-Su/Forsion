@@ -12,7 +12,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
-import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, TextSelection, type Selection } from '@milkdown/kit/prose/state'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -131,6 +131,8 @@ registerMessages({
   'unipage.menu.fold': { zh: '折叠', en: 'Toggle' },
   'unipage.menu.card': { zh: '卡片', en: 'Card' },
   'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
+  'unipage.menu.aria': { zh: '块操作', en: 'Block actions' },
+  'unipage.menu.stale': { zh: '笔记在菜单打开期间变了，请重新打开块菜单', en: 'The note changed while the menu was open — open the block menu again' },
   'unipage.menu.toNewColumnMulti': { zh: '选中多块时不能移到新列，请只选一块', en: 'Select a single block to move it to a new column' },
   'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
   'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
@@ -1259,13 +1261,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   // cell:右键单元格打开时指针下的那一格(K-10 表格区的锚格;打开那一刻记下,浮层一出来就盖住那个点)。
-  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null } | null>(null)
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null; keyboard?: boolean } | null>(null)
+  /** 菜单打开那一刻的目标(B-10):动作一律作用在它上面,不在点下去那一刻现读选区 ——
+   *  此前菜单开着时按 ↓ 选区就挪到下一块,「删除」删掉的是别人。文档期间变了 → 不动手(fail closed)。 */
+  const menuTarget = useRef<{ doc: ProseNode; sel: Selection } | null>(null)
   const onBlocksDeletedRef = useRef<(content: Fragment) => void>(() => {})
   // 文档模式卡片拖拽的层级上下文(2026-08-31)。layer 是 useMemo([]) 的终身单例,而 pipe 随
   // path 换新 —— 闭包必须经 ref 现读(与 onBlocksDeletedRef 同一条纪律),否则捏着首篇的 fm。
   const cardDragCtxRef = useRef<{ tree: () => Record<string, unknown>; detach: (anchors: string[]) => void; minted: (anchors: string[]) => void }>({ tree: () => ({}), detach: () => {}, minted: () => {} })
   const layer = useMemo(() => createBlockLayer({
-    onMenu: (at) => setBlockMenu({ ...at, cell: tableCellAtPoint(layer.getView(), at.x, at.y) }),
+    onMenu: (at) => {
+      const v = layer.getView()
+      menuTarget.current = v ? { doc: v.state.doc, sel: v.state.selection } : null
+      setBlockMenu({ ...at, cell: tableCellAtPoint(v, at.x, at.y) })
+    },
     onBlocksDeleted: (content) => onBlocksDeletedRef.current(content),
     canvasTree: () => cardDragCtxRef.current.tree(),
     onCardDetach: (anchors) => cardDragCtxRef.current.detach(anchors),
@@ -1363,26 +1372,66 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
     // Esc 关菜单并把焦点还给编辑器(此前 Esc 对块菜单完全无效,探针实测)。块还选着,
     // 接着按 Cmd+C / Cmd+X / Delete 就能直接操作 —— 不必非得从菜单里挑。
-    const onEsc = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.stopPropagation()
+    // 菜单开着时的键盘(B-10,捕获期接管):↑↓ / Home / End 在菜单项间移动(焦点移进菜单),Enter / 空格由
+    // 聚焦项的原生 click 执行;其余键先关菜单再照常落到编辑器 —— 绝不让方向键去挪编辑器选区(此前 ↓ 把块选区
+    // 挪到下一块,「删除」删掉的是别人;菜单开着打字替换了当前块)。
+    const onKey = (e: KeyboardEvent): void => {
+      const menu = document.querySelector<HTMLElement>('.unified-block-menu')
+      const inside = !!menu && menu.contains(document.activeElement)
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setBlockMenu(null)
+        layer.getView()?.focus()
+        return
+      }
+      if (!menu || e.isComposing) return
+      const bare = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+      if (bare && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const items = [...menu.querySelectorAll<HTMLElement>('button:not([aria-disabled="true"])')]
+        const i = items.indexOf(document.activeElement as HTMLElement)
+        const n = items.length
+        const next = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : i < 0 ? (e.key === 'ArrowUp' ? n - 1 : 0) : (i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n
+        items[next]?.focus()
+        return
+      }
+      if (inside && (e.key === 'Enter' || e.key === ' ')) return // 聚焦项的原生 click
+      if (['Shift', 'Meta', 'Control', 'Alt', 'CapsLock'].includes(e.key)) return
       setBlockMenu(null)
-      layer.getView()?.focus()
+      if (inside) {
+        e.preventDefault()
+        layer.getView()?.focus()
+      }
     }
+    // 键盘打开的(聚焦 ⠿ 按 Enter)→ 焦点进首项;鼠标打开的不抢焦点(Cmd+C / Delete 仍直接作用于选中的块)。
+    if (blockMenu.keyboard) requestAnimationFrame(() => document.querySelector<HTMLElement>('.unified-block-menu button')?.focus())
     window.addEventListener('pointerdown', close, true)
     window.addEventListener('contextmenu', close, true)
-    window.addEventListener('keydown', onEsc, true)
+    window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('pointerdown', close, true)
       window.removeEventListener('contextmenu', close, true)
-      window.removeEventListener('keydown', onEsc, true)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [blockMenu])
+  /** 把选区恢复成菜单打开时的目标;期间文档变了 → false(调用方不动手,给一句提示)。 */
+  const restoreMenuTarget = (view: EditorView): boolean => {
+    const snap = menuTarget.current
+    menuTarget.current = null
+    if (!snap) return true
+    if (view.state.doc !== snap.doc) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.menu.stale') } }))
+      return false
+    }
+    if (!view.state.selection.eq(snap.sel)) view.dispatch(view.state.tr.setSelection(snap.sel))
+    return true
+  }
   /** 菜单动作作用在当前 NodeSelection 上(点 ⠿ 的 mousedown 已由交互层设好)。 */
   const withSelectedNode = (fn: (view: EditorView, sel: NodeSelection) => void): void => {
     setBlockMenu(null)
     const view = layer.getView()
-    if (!view) return
+    if (!view || !restoreMenuTarget(view)) return
     const sel = view.state.selection
     if (!(sel instanceof NodeSelection)) return
     fn(view, sel)
@@ -1395,7 +1444,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     single: (view: EditorView, sel: NodeSelection) => void): void => {
     setBlockMenu(null)
     const view = layer.getView()
-    if (!view) return
+    if (!view || !restoreMenuTarget(view)) return
     const r = layer.topRangeOf(view)
     if (r) multi(view, r)
     else if (view.state.selection instanceof NodeSelection) single(view, view.state.selection)
@@ -2614,15 +2663,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
-          <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
+          <OverlayAt className="ctx-menu unified-block-menu" role="menu" aria-label={t('unipage.menu.aria')} x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
             {canAskTangu && (
               <>
                 {/* 块级 AI 入口排首位(Notion ⋮⋮ 的 Ask AI 同位)。不走 withBlocks:那条收尾会把焦点拽回编辑器,
                     而这里焦点该留给侧栏输入框(引用落地后它自己 focus)。 */}
-                <button data-act="ask" onClick={() => {
+                <button role="menuitem" tabIndex={-1} data-act="ask" onClick={() => {
                   setBlockMenu(null)
                   const view = layer.getView()
-                  if (!view) return
+                  if (!view || !restoreMenuTarget(view)) return
                   const r = layer.topRangeOf(view)
                   const sel = view.state.selection
                   if (r) askTangu(view, r.from, r.to)
@@ -2630,22 +2679,22 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 }}>
                   <MessageSquarePlus size={13} /> {t('unipage.menu.askTangu')}
                 </button>
-                <div className="ubm-sep" />
+                <div className="ubm-sep" role="separator" />
               </>
             )}
-            <div className="ubm-label">{t('unipage.menu.turnInto')}</div>
+            <div className="ubm-label" role="presentation">{t('unipage.menu.turnInto')}</div>
             {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
             {!isTableSelected(layer.getView()) && (
               <>
-                <button onClick={() => turnInto({ kind: 'text' }, t('unipage.menu.text'))}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
-                <button onClick={() => turnInto({ kind: 'heading', level: 1 }, t('unipage.menu.h1'))}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
-                <button onClick={() => turnInto({ kind: 'heading', level: 2 }, t('unipage.menu.h2'))}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
-                <button onClick={() => turnInto({ kind: 'heading', level: 3 }, t('unipage.menu.h3'))}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
-                <button onClick={() => turnInto({ kind: 'bullet' }, t('unipage.menu.bullet'))}><List size={13} /> {t('unipage.menu.bullet')}</button>
-                <button onClick={() => turnInto({ kind: 'ordered' }, t('unipage.menu.ordered'))}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
-                <button onClick={() => turnInto({ kind: 'task' }, t('unipage.menu.task'))}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
-                <button onClick={() => turnInto({ kind: 'quote' }, t('unipage.menu.quote'))}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
-                <button onClick={() => turnInto({ kind: 'fold' }, t('unipage.menu.fold'))}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'text' }, t('unipage.menu.text'))}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'heading', level: 1 }, t('unipage.menu.h1'))}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'heading', level: 2 }, t('unipage.menu.h2'))}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'heading', level: 3 }, t('unipage.menu.h3'))}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'bullet' }, t('unipage.menu.bullet'))}><List size={13} /> {t('unipage.menu.bullet')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'ordered' }, t('unipage.menu.ordered'))}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'task' }, t('unipage.menu.task'))}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'quote' }, t('unipage.menu.quote'))}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
+                <button role="menuitem" tabIndex={-1} onClick={() => turnInto({ kind: 'fold' }, t('unipage.menu.fold'))}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
               </>
             )}
             {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
@@ -2659,7 +2708,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 if ($at.node(depth).type.name === 'amadeusColumnCell') return null
               }
               return (
-                <button onClick={() => withSelectedNode((current) => { makeCard(current) })}>
+                <button role="menuitem" tabIndex={-1} onClick={() => withSelectedNode((current) => { makeCard(current) })}>
                   <StickyNote size={13} /> {t('unipage.menu.card')}
                 </button>
               )
@@ -2667,16 +2716,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             {isTableSelected(layer.getView()) && (
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
-            <div className="ubm-sep" />
+            <div className="ubm-sep" role="separator" />
             {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}
             {layer.getView() && layer.topRangeOf(layer.getView()!) ? (
-              <button aria-disabled="true" title={t('unipage.menu.toNewColumnMulti')} data-act="toNewColumn" onClick={() => {
+              <button role="menuitem" tabIndex={-1} aria-disabled="true" title={t('unipage.menu.toNewColumnMulti')} data-act="toNewColumn" onClick={() => {
                 window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.menu.toNewColumnMulti') } }))
               }}>
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
               </button>
             ) : (
-              <button data-act="toNewColumn" onClick={() => withSelectedNode((view, sel) => {
+              <button role="menuitem" tabIndex={-1} data-act="toNewColumn" onClick={() => withSelectedNode((view, sel) => {
                 splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
               })}>
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
@@ -2686,7 +2735,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
             {layer.getView()?.state.selection instanceof NodeSelection
               && (layer.getView()!.state.selection as NodeSelection).node.type.name === 'amadeusCanvasCard' && (
-              <button onClick={() => withSelectedNode((view, sel) => {
+              <button role="menuitem" tabIndex={-1} onClick={() => withSelectedNode((view, sel) => {
                 if (sel.node.type.name !== 'amadeusCanvasCard') return
                 unwrapCard(view, String(sel.node.attrs.anchor))
                 syncFromEditor()
@@ -2699,10 +2748,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 也复制整块」)、块选中复制该节点。画布卡(含跨块选区盖到的整卡)一律当场铸新锚并经 onCardsMinted
                 进归属集合 —— 原样插入 = 两个同锚卡、整个 canvas 键作废(Codex P0-6);漏登记 = 派生冻结(C89b)。
                 菜单这条再立刻拉平一次派生 + 排保存(原单卡支的做法),键盘那条走编辑器 onChange 的常规链。 */}
-            <button onClick={() => {
+            <button role="menuitem" tabIndex={-1} onClick={() => {
               setBlockMenu(null)
               const view = layer.getView()
-              if (!view) return
+              if (!view || !restoreMenuTarget(view)) return
               if (layer.duplicate(view)) {
                 syncFromEditor()
                 schedule()
@@ -2711,7 +2760,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
-            <button className="danger" onClick={() => withBlocks(
+            <button role="menuitem" tabIndex={-1} className="danger" onClick={() => withBlocks(
               (view, r) => {
                 const removed = view.state.doc.slice(r.from, r.to).content
                 view.dispatch(view.state.tr.delete(r.from, r.to).scrollIntoView())
