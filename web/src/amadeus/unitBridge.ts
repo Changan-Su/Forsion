@@ -254,6 +254,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     scaffoldSamplePlugin: notSupported('创建示例插件'),
     uninstallPlugin: notSupported('卸载插件'),
     revealInFileManager: notSupported('在文件管理器中显示'),
+    hostCaps: { revealInFileManager: false }, // 远端设备的文件管理器够不着:入口不渲染(G2-13)
     readDatabase: (pagePath, ref) => rpc(IPC.dbRead, [pagePath, ref]),
     writeDatabase: (dbPath, data) => rpc(IPC.dbWrite, [dbPath, data]),
     writeDatabaseCas: (dbPath, data, baseVersion) => rpc(IPC.dbWriteCas, [dbPath, data, baseVersion]),

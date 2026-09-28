@@ -16,6 +16,7 @@ import { createDashboard, createDrawing } from './amadeusNav'
 import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { translate } from './i18n'
 import { FOLD_COMMANDS } from '@amadeus/unified/foldCommands'
+import { canRevealInFileManager } from '@amadeus/lib/hostCaps'
 
 const ps = () => usePageStore.getState()
 const ws = () => useWorkspace.getState()
@@ -68,7 +69,9 @@ function enter(): void {
   const st = cs()
   stashedNewChat = st.commands.find((c) => c.id === 'new-chat')
   if (stashedNewChat) st.removeCommand('new-chat')
-  for (const c of CMDS) st.addCommand(c)
+  // 宿主做不了的不注册(G2-13:没有文件管理器的宿主上「在文件管理器中显示」是死键)。进 Space 时现判 —— 模块加载那一刻
+  // 桥未必已就位。leave 照旧按全表摘,摘一条没注册过的命令是 no-op。
+  for (const c of CMDS) if (c.id !== 'amadeus-reveal' || canRevealInFileManager()) st.addCommand(c)
 }
 
 function leave(): void {

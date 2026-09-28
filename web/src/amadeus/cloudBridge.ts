@@ -1263,6 +1263,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     openPluginsFolder: async () => { notify(DESKTOP_ONLY) },
     scaffoldSamplePlugin: async () => { notify(DESKTOP_ONLY) },
     revealInFileManager: async () => { notify(DESKTOP_ONLY) },
+    // 网页 / 移动端云模式没有文件管理器:入口不渲染(G2-13;上面的提示只兜老调用方)。
+    hostCaps: { revealInFileManager: false },
 
     // ---- Database(.db) ---------------------------------------------------------
     readDatabase: async (pagePath, ref): Promise<DbReadResult> => {

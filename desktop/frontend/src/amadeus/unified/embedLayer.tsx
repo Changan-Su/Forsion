@@ -41,6 +41,7 @@ import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
 import { attachSourceButton } from '../blocks/markdown/sourceToggle'
 import { getAttachmentPrefs } from '../lib/attachments'
+import { canOpenAttachment } from '../lib/hostCaps'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
@@ -176,6 +177,16 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
   const [open, setOpen] = useState(true)
   const pdfVaultPath = fileKind === 'pdf' ? resolveFileName(name, files, pagePath) : null
   if (fileKind === 'other') {
+    const sub = /\.[a-z0-9]+\.md$/i.test(name) // 插件文件类型:应用内开,不经系统程序
+    // 宿主打不开附件(移动本地库,评审 G2-13):只是一张名片,不是一颗点了没反应的按钮。
+    if (!sub && !canOpenAttachment()) {
+      return (
+        <div className="embed-file">
+          <span className="embed-file-ic" aria-hidden>📄</span>
+          <span className="embed-file-name">{name}</span>
+        </div>
+      )
+    }
     return (
       <button
         className="embed-file"
@@ -204,7 +215,8 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
           <span className="embed-media-warn" title={t('uembed.badAnchorTip')}>{t('uembed.badAnchor')}</span>
         )}
         <button className="embed-media-btn" onClick={() => setOpen((o) => !o)}>{open ? t('uembed.collapse') : t('uembed.expand')}</button>
-        <button
+        {/* PDF 走应用内阅读器,恒可开;视频 / 音频走系统程序,宿主打不开就不出这颗键(G2-13)。 */}
+        {(fileKind === 'pdf' || canOpenAttachment()) && <button
           className="embed-media-btn"
           title={fileKind === 'pdf' ? t('uembed.openPdfInTab') : t('uembed.openWithSystem')}
           onClick={() => {
@@ -213,7 +225,7 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
           }}
         >
           {t('uembed.open')}
-        </button>
+        </button>}
       </div>
       {open && fileKind === 'pdf' && (
         pdfVaultPath ? (

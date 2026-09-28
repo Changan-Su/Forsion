@@ -11,6 +11,8 @@
 //  M3 连点两次撤销不越界、不报错(历史到底 = no-op)
 //  M4 缩进 / 提升两颗键(G2-06,软键盘没有 Tab):排在画布键之后;点「增加缩进」= Tab(乙成为甲的子项并落盘)、
 //     「减少缩进」= Shift-Tab(提回同级);点键不抢编辑器焦点;加了两颗键后 390 / 窄机 360 下最后一颗仍在药丸内
+//  M5 宿主能力门控(G2-13):移动本地库桥声明 hostCaps 三件 false → 「⋯」里没有导出 PDF / 在文件管理器中显示,
+//     视频卡没有「打开」、其他文件卡不是按钮(点了没反应的死键);PDF 卡照旧能开。对照:不声明(桌面桥)时它们都在。
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -166,6 +168,33 @@ async function main() {
       const f390 = await fitsAt(390)
       const f360 = await fitsAt(360)
       record('M4d 加两颗键后 390 / 360 下药丸不破(最后一颗键仍在药丸内)', f390.n === 9 && f390.inScreen && f390.spill <= 1 && f360.inScreen && f360.spill <= 1, JSON.stringify({ f390, f360 }))
+      await pg.close()
+    }
+    // ── M5:宿主能力门控(G2-13)──
+    for (const caps of [null, { revealInFileManager: false, exportPdf: false, openAttachment: false }]) {
+      const pg = await ctx.newPage()
+      pg.on('pageerror', (e) => { errs.push(e.message); console.log('[pageerror]', e.message) })
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      // 与生产同一个 window.amadeus 对象上声明(api.ts 抓的是这个引用,整份替换会失联)
+      await pg.evaluate((caps) => { if (caps) window.amadeus.hostCaps = caps; else delete window.amadeus.hostCaps }, caps)
+      await mount(pg, '# 移动标题\n\n第一段。\n\n![[clip.mp4]]\n\n![[pack.zip]]\n\n![[doc.pdf]]\n')
+      await pg.waitForSelector(MOB, { timeout: 60000 })
+      await pg.waitForTimeout(1000)
+      await pg.locator('#mob-host .amx-mbar button[title="更多操作"]').click()
+      await pg.waitForTimeout(300)
+      const st = await pg.evaluate(() => ({
+        rows: [...document.querySelectorAll('.mb-sheet .mb-sheet-row span')].map((e) => e.textContent),
+        mediaOpen: [...document.querySelectorAll('#mob-host .embed-media')].map((m) => `${m.querySelector('.embed-file-name')?.textContent}:${[...m.querySelectorAll('.embed-media-btn')].some((b) => b.textContent.startsWith('打开'))}`),
+        otherIsButton: [...document.querySelectorAll('#mob-host .embed-file')].map((e) => e.tagName),
+      }))
+      const hasPdf = st.rows.includes('导出为 PDF'), hasReveal = st.rows.includes('在文件管理器中显示')
+      const mp4Open = st.mediaOpen.includes('clip.mp4:true'), pdfOpen = st.mediaOpen.includes('doc.pdf:true')
+      if (!caps) record('M5a 对照:桥不声明 hostCaps(桌面)→ 导出 PDF / 在文件管理器中显示 / 视频「打开」/ 文件卡按钮都在',
+        hasPdf && hasReveal && mp4Open && pdfOpen && st.otherIsButton.includes('BUTTON'), JSON.stringify(st))
+      else record('M5b 移动本地库(hostCaps 三件 false)→ 这些死键都不渲染,PDF 卡「打开」照旧',
+        !hasPdf && !hasReveal && !mp4Open && pdfOpen && !st.otherIsButton.includes('BUTTON') && st.rows.includes('删除笔记'), JSON.stringify(st))
       await pg.close()
     }
   } finally {
