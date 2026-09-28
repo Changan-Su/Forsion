@@ -75,6 +75,7 @@
     "check:canvascaret": "node scripts/e2e-editor.cjs --check=canvas-caret",
     "check:unifiedro": "node scripts/e2e-editor.cjs --check=unified-readonly",
     "check:unifiedcas": "node scripts/e2e-editor.cjs --check=unifiedcas",
+    "check:cloudgap": "node scripts/cloud-gap.check.cjs",
     "check:amadeusinteractions": "node scripts/e2e-editor.cjs --check=amadeus-interactions",
     "check:dashboard": "node scripts/e2e-editor.cjs --check=dashboard",
     "check:embedinputs": "node scripts/e2e-editor.cjs --check=embed-inputs",
