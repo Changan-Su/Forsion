@@ -33,15 +33,33 @@
 .ch-about-row > dd { margin: 0; min-width: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.55; overflow-wrap: anywhere; }
 .ch-tip { margin: 0; padding: 9px 15px 12px; border-top: var(--border-width) solid var(--border); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
 
-/* 今天的会话:时间段 | App + 标题 | 主机名。 */
-.ch-sessions { list-style: none; margin: 0; padding: 4px 0; }
-.ch-session { display: flex; align-items: baseline; gap: 12px; min-width: 0; padding: 6px 15px; }
-.ch-session-time { flex: 0 0 auto; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
-.ch-session-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; }
-.ch-session-main > strong { flex: 0 0 auto; max-width: 40%; overflow: hidden; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.ch-session-title { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); text-overflow: ellipsis; white-space: nowrap; }
-.ch-session-host { flex: 0 1 auto; min-width: 0; max-width: 30%; overflow: hidden; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
-.ch-more { margin: 0; padding: 8px 15px 12px; border-top: var(--border-width) solid var(--border); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+/* 今天的时间线(对标 ChatGPT 的 Computer history,不调模型):钟点 | 竖线 + 圆点 | 标题(停留最久的窗口)/ 其余窗口 / App 图标行。 */
+.ch-timeline { list-style: none; margin: 0; padding: 6px 0; }
+.ch-block { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 12px; padding: 0 15px; }
+.ch-block-time { padding-top: 10px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; text-align: right; }
+.ch-block-body { position: relative; min-width: 0; padding: 8px 0 14px 18px; border-left: var(--border-width) solid var(--border); }
+.ch-block-body::before { content: ''; position: absolute; top: 14px; left: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.ch-block-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; }
+.ch-block-title > strong { min-width: 0; overflow: hidden; color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.ch-host { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
+.ch-block-items { list-style: none; margin: 4px 0 0; padding: 0; }
+.ch-block-items > li { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 1px 0; font-size: var(--ui-font-meta, 12px); }
+.ch-item-app { flex: 0 0 auto; max-width: 30%; overflow: hidden; color: var(--text-light); text-overflow: ellipsis; white-space: nowrap; }
+.ch-item-title { min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.ch-apps { display: flex; flex-wrap: wrap; gap: 4px 12px; list-style: none; margin: 8px 0 0; padding: 0; }
+.ch-app { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.ch-app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-app-icon { flex: 0 0 auto; width: 18px; height: 18px; }
+.ch-app-icon--letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-medium);
+  color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px);
+  font-weight: 600;
+}
 
 /* 排除表:芯片列表 + 添加行。 */
 .ch-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 15px 10px; }
@@ -106,6 +124,6 @@
 
 @media (max-width: 600px) {
   .ch-about-row { grid-template-columns: minmax(0, 1fr); }
-  .ch-session { flex-wrap: wrap; row-gap: 2px; }
-  .ch-session-host { max-width: 100%; }
+  .ch-block { grid-template-columns: 34px minmax(0, 1fr); column-gap: 8px; }
+  .ch-block-items > li { flex-wrap: wrap; row-gap: 0; }
 }

@@ -23,6 +23,7 @@ import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, writeFil
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { appIconDataUrls } from './appIcons'
 import { createSerialQueue } from './configWrite'
 import {
   COMPUTER_HISTORY_KEEP_DAYS, COMPUTER_HISTORY_PROTOCOL,
@@ -1608,5 +1609,6 @@ export function registerComputerHistoryIpc(ch: ComputerHistory, isTrustedSender:
   handle('setExclude', (ex) => ch.setExclude(ex))
   handle('recent', (hours) => ch.recent(Number(hours)))
   handle('recentApps', () => ch.recentApps())
+  handle('appIcons', (ids) => appIconDataUrls(ids))
   handle('reveal', () => ch.reveal())
 }

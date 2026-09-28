@@ -39,6 +39,7 @@ const api = {
   setExclude: vi.fn<ComputerHistoryApi['setExclude']>(),
   recent: vi.fn<ComputerHistoryApi['recent']>(),
   recentApps: vi.fn<ComputerHistoryApi['recentApps']>(),
+  appIcons: vi.fn<ComputerHistoryApi['appIcons']>(),
   reveal: vi.fn<ComputerHistoryApi['reveal']>(),
   onChanged: vi.fn<ComputerHistoryApi['onChanged']>(),
 }
@@ -73,6 +74,7 @@ beforeEach(() => {
   api.setExclude.mockReset().mockImplementation(async (exclude) => (view = { ...view, exclude, rev: ++revSeq }))
   api.recent.mockReset().mockResolvedValue(sessions)
   api.recentApps.mockReset().mockResolvedValue([{ name: 'Safari', bundleId: 'com.apple.Safari' }, { name: 'Health', bundleId: 'com.apple.Health' }])
+  api.appIcons.mockReset().mockResolvedValue({ 'com.apple.Notes': 'data:image/png;base64,AAAA', 'com.apple.Safari': null })
   api.reveal.mockReset().mockResolvedValue(undefined)
   unsubscribe.mockReset()
   api.onChanged.mockReset().mockImplementation((cb) => { pushChanged = cb; return unsubscribe })
@@ -122,10 +124,14 @@ describe('ComputerHistorySettings', () => {
     expect(text()).toContain('记录中')
     expect(text()).toContain('/Users/me/.forsion-dev/computer-history')
     expect(text()).toContain('7 天')
-    const rows = [...host.querySelectorAll('.ch-session')].map((li) => li.textContent)
-    expect(rows).toHaveLength(2)
+    const rows = [...host.querySelectorAll('.ch-block')].map((li) => li.textContent)
+    expect(rows).toHaveLength(2) // 14:40 段 + 14:00 段(Safari 恰好收在 14:20,不溢进下一段)
     expect(rows[0]).toContain('Notes') // 新的在前
+    expect(rows[0]).toContain('14:40')
     expect(rows[1]).toContain('docs.example.com')
+    expect(api.appIcons).toHaveBeenCalledWith(['com.apple.Safari', 'com.apple.Notes', 'com.apple.mail'])
+    expect(host.querySelector('.ch-block img.ch-app-icon')?.getAttribute('src')).toBe('data:image/png;base64,AAAA')
+    expect(host.querySelectorAll('.ch-block')[1].querySelector('.ch-app-icon--letter')?.textContent).toBe('S') // 取不到图标 → 首字母
     expect(text()).not.toContain('Yesterday')
     expect(text()).not.toContain('secret draft')
     expect(api.recent).toHaveBeenLastCalledWith(15) // 只读零点到现在(NOW = 15:00),不多读昨天的文件
@@ -199,9 +205,9 @@ describe('ComputerHistorySettings', () => {
     api.recent.mockResolvedValueOnce([])
     await click('全部')
     await click('删除') // 清完重拉 → 空
-    expect(host.querySelectorAll('.ch-session')).toHaveLength(0)
+    expect(host.querySelectorAll('.ch-block')).toHaveLength(0)
     await act(async () => resolveStale(sessions)) // 旧结果晚到
-    expect(host.querySelectorAll('.ch-session')).toHaveLength(0)
+    expect(host.querySelectorAll('.ch-block')).toHaveLength(0)
     expect(text()).toContain('今天还没有记录')
   })
 

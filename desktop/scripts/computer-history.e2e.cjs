@@ -278,7 +278,7 @@ async function shots(sp, tag, parts = ['top', 'preview', 'bottom']) {
   const center = (sel) => sp.evaluate((s) => { const el = document.querySelector(s); if (el) el.scrollIntoView({ block: 'center' }); return !!el }, sel)
   for (const part of parts) {
     if (part === 'top') await scrollTop()
-    else if (part === 'preview') await center('.ch-sessions, .ch-page .settings-empty-row')
+    else if (part === 'preview') await center('.ch-timeline, .ch-page .settings-empty-row')
     else if (part === 'bottom') await center('.ch-page [data-ch-add="app"]')
     await sp.waitForTimeout(350)
     const file = path.join(SHOT_DIR, `${tag}-${part}.png`)
@@ -426,14 +426,23 @@ async function mainPhase(stub) {
     // ── ④ 今日预览 ──
     await sp.locator('.ch-page').getByRole('button', { name: L.zh.refresh, exact: true }).first().click()
     const apps1 = await until(async () => {
-      const a = await sp.locator('.ch-session strong').allInnerTexts().catch(() => [])
+      const a = await sp.locator('.ch-app-name').allInnerTexts().catch(() => [])
       return ['Visual Studio Code', 'Safari', 'Terminal'].every((x) => a.includes(x)) ? a : null
     }, 5_000)
-    const hosts = await sp.locator('.ch-session-host').allInnerTexts().catch(() => [])
-    check('T14 刷新后「今天的记录」列出 VS Code / Safari / Terminal 三段,Safari 行露 example.com', !!apps1 && hosts.includes('example.com'),
-      { apps: apps1 || await sp.locator('.ch-session strong').allInnerTexts().catch(() => []), hosts })
+    const hosts = await sp.locator('.ch-host').allInnerTexts().catch(() => [])
+    check('T14 刷新后「今天的记录」时间线列出 VS Code / Safari / Terminal 三个 App,Safari 窗口露 example.com', !!apps1 && hosts.includes('example.com'),
+      { apps: apps1 || await sp.locator('.ch-app-name').allInnerTexts().catch(() => []), hosts })
+    // 图标经 Spotlight(mdfind)→ QuickLook 缩略图;Safari / Terminal 是系统自带 App,本机一定找得到。
+    // 「互不相同」是负对照:app.getFileIcon 在 macOS 按扩展名取图标,每个 .app 都是同一枚通用图标(09-28 实测踩过)
+    const iconSrcs = async () => sp.locator('.ch-app img.ch-app-icon').evaluateAll((els) => els.map((e) => e.getAttribute('src') || '')).catch(() => [])
+    const realIcons = await until(async () => {
+      const srcs = await iconSrcs()
+      return srcs.length >= 2 ? srcs : null
+    }, 8_000)
+    check('T14c 时间线的 App 图标是各自的真图标(img,互不相同,非首字母兜底)', !!realIcons && new Set(realIcons).size === realIcons.length,
+      { imgs: realIcons?.length ?? 0, distinct: new Set(realIcons || []).size, letters: await sp.locator('.ch-app-icon--letter').allInnerTexts().catch(() => []) })
     await shots(sp, 'zh-light-recording')
-    note('[zh-light-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-session-time'))?.ratio, host: (await contrastOf(sp, '.ch-session-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
+    note('[zh-light-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-block-time'))?.ratio, host: (await contrastOf(sp, '.ch-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
 
     // ── ⑤ 手填 Bundle ID 排除 → 重订阅带新策略 ──
     const beforeEx = helper.subscribes().length
@@ -491,8 +500,8 @@ async function mainPhase(stub) {
     const emptied = await until(() => jsonlFiles(eventsDir).length === 0, 5_000)
     check('T25 确认删除 → events/ 下没有任何 .jsonl', !!emptied, { files: jsonlFiles(eventsDir), all: fs.existsSync(eventsDir) ? fs.readdirSync(eventsDir) : null })
     const cleared = await sp.locator('.ch-page .ch-cleared').first().waitFor({ timeout: 4_000 }).then(() => true, () => false)
-    const emptyPreview = await until(async () => (await sp.locator('.ch-session').count()) === 0, 4_000)
-    check('T26 显示「已清除」且今日预览清空', cleared && !!emptyPreview, { cleared, sessions: await sp.locator('.ch-session').count() })
+    const emptyPreview = await until(async () => (await sp.locator('.ch-block').count()) === 0, 4_000)
+    check('T26 显示「已清除」且今日预览清空', cleared && !!emptyPreview, { cleared, sessions: await sp.locator('.ch-block').count() })
     await until(() => helper.subscribes().length > beforeClear && helper.open().length === 1, 6_000)
     check('T27 清除=断开重订阅(helper 丢差分基线):新订阅 1 条、开着 1 条', helper.subscribes().length === beforeClear + 1 && helper.open().length === 1,
       { subs: helper.subscribes().length, before: beforeClear, open: helper.open().length })
@@ -505,9 +514,9 @@ async function mainPhase(stub) {
     check('T28 设置 → 外观 → 暗色(documentElement.dataset.mode=dark)', await setMode(sp, 'zh', 'dark'))
     await gotoTab(sp, L.zh.ch, '.ch-page')
     await sp.locator('.ch-page').getByRole('button', { name: L.zh.refresh, exact: true }).first().click()
-    await until(async () => (await sp.locator('.ch-session').count()) >= 3, 4_000)
+    await until(async () => (await sp.locator('.ch-app').count()) >= 3, 4_000)
     await shots(sp, 'zh-dark-recording')
-    note('[zh-dark-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-session-time'))?.ratio, host: (await contrastOf(sp, '.ch-session-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
+    note('[zh-dark-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-block-time'))?.ratio, host: (await contrastOf(sp, '.ch-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
 
     const beforeOff = helper.subscribes().length
     await sp.locator('.ch-page [role="switch"]').first().click()
@@ -555,12 +564,12 @@ async function mainPhase(stub) {
     const ok3 = await until(() => (readLines(day3) || []).some((l) => l.text && l.text.includes('E2E_VSCODE_TEXT')), 5_000)
     check('T39 英文界面下事件照常落盘', !!ok3)
     await sp.locator('.ch-page').getByRole('button', { name: L.en.refresh, exact: true }).first().click()
-    await until(async () => (await sp.locator('.ch-session').count()) >= 3, 4_000)
+    await until(async () => (await sp.locator('.ch-app').count()) >= 3, 4_000)
     const pageText = await sp.locator('.ch-page').innerText()
     const zhLeft = (pageText.match(/[一-鿿][^\n]{0,20}/g) || []).slice(0, 5)
     check('T40 英文「电脑历史」页正文无汉字残留', zhLeft.length === 0, zhLeft)
     await shots(sp, 'en-light-recording')
-    note('[en-light-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-session-time'))?.ratio, host: (await contrastOf(sp, '.ch-session-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
+    note('[en-light-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-block-time'))?.ratio, host: (await contrastOf(sp, '.ch-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
 
     await sp.locator('.ch-page [role="switch"]').first().click()
     const stOff2 = await until(() => { const s = readJson(statePath); return s && s.enabled === false && s.status === 'off' ? s : null }, 5_000)
