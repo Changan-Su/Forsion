@@ -73,4 +73,14 @@ describe('cloud channels: host × Extend 不重名', () => {
     expect(clash).toEqual([])
     expect(new Set(theirs).size).toBe(theirs.length) // Extend 自己也不重复注册
   })
+
+  it('宿主生产代码不再经任何注册口(裸 ipcMain 或 amadeus/ipc.ts 的 handle() 包装)注册 SYNC_IPC.*(0.4 起 11 个通道归 Extend)', () => {
+    const offenders: string[] = []
+    for (const file of walk(ROOT)) {
+      if (file.endsWith('preload.ts')) continue // preload 只引用通道名做 invoke / on,不注册
+      const src = readFileSync(file, 'utf8')
+      for (const m of src.matchAll(/\b(?:ipcMain\.handle|ipcMain\.on|handle)\(\s*SYNC_IPC\.\w+/g)) offenders.push(`${file}: ${m[0]}`)
+    }
+    expect(offenders).toEqual([])
+  })
 })

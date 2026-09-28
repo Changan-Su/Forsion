@@ -53,3 +53,21 @@ it('explicit newPage still creates a note and existing empty notes still load', 
   expect((await invoke(IPC.loadPage, 'Empty.md')).manifest).toBeTruthy()
   expect(await fs.readFile(path.join(local, 'Empty.md'), 'utf8')).toBe('')
 })
+
+// 跨接缝的物理回滚(Codex 0.4 评审 P2):Extend 的写钩子(条目移动的配置 / 云端移动日志)抛错时,宿主 VaultManager 要把已挪走的文件放回原路径。
+// 引擎那半的配置 / scope 回滚在 Extend 的 amadeusCloud.entrymove.test;这里用一个只会抛错的假工厂钉宿主这半。
+it('a cloud move hook that throws makes movePage reject and the file is put back where it was', async () => {
+  await stop?.()
+  env.handlers.clear()
+  const { registerIpc } = await import('./ipc')
+  const { IPC } = await import('@amadeus-shared/ipc')
+  const runtime = registerIpc(() => null, (deps) => {
+    deps.setMutationHooks(() => {}, async () => { throw Object.assign(new Error('ENOSPC journal'), { code: 'ENOSPC' }) }, () => undefined)
+    return { start() {}, stopAllSync: async () => {}, restartAllSync: async () => {} }
+  })
+  stop = runtime.stopSync
+  await invoke(IPC.restoreVault)
+  await expect(invoke(IPC.movePage, 'A.md', 'Dest')).rejects.toThrow('ENOSPC')
+  expect(await fs.readFile(path.join(local, 'A.md'), 'utf8')).toBe('# A\n\nOriginal content\n')
+  await expect(fs.access(path.join(local, 'Dest', 'A.md'))).rejects.toThrow()
+})
