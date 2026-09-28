@@ -88,6 +88,7 @@ import {
 } from '../../components/icons'
 import { IS_MAC_PLATFORM, wikilinkPlugin } from './wikilink'
 import { codeExitPlugin } from './codeExit'
+import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } from './linkFollow'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
@@ -618,6 +619,17 @@ export function MilkdownInner({
         event.preventDefault()
         return true
       }
+      // 打开光标处链接(L-20):Alt+Enter / Alt+Shift+Enter(与引擎命令同一份生效热键,可改键)。
+      // 光标不在链接上就不接 —— 照旧交给后面(v3 的 Shift+Enter 切块等)。
+      const linkKind = linkKindOfEvent(event)
+      if (linkKind) {
+        const target = linkAtCursor(state)
+        if (target) {
+          event.preventDefault()
+          openLinkTarget(target, linkKind === 'followNewTab')
+          return true
+        }
+      }
       if (event.key === 'Enter') {
         if (event.shiftKey) {
           // unified:放行 PM 原生 = 段内硬换行(Notion 语义);块世界才是「切块」。
@@ -889,6 +901,21 @@ export function MilkdownInner({
     // ⚠️ 按 hrefKind 分流(L-07):库内笔记 `[t](笔记.md)` 走与 `[[ ]]` 同一条打开路径,不许补成 `https://笔记.md`;
     //    附件路径不在这儿开 —— 容器(amadeusViews 的 onClick)用 openAttachment 开。handleClick 是 PM 在 mouseup 里调的,
     //    这里 preventDefault 标不到随后的 click 事件,两边只能靠同一份判据各开各的,否则一次点击开两回。
+    /** 打开「光标处链接」(L-20,键盘 / 命令面板):双链走 onOpenWiki(与点击同一条路);md 链接按 hrefKind 分流 ——
+     *  库内笔记同 handleLinkClick,附件交 openAttachment(同容器的点击),外链开新窗。 */
+    const openLinkTarget = (t: LinkAtCursor, newTab: boolean): void => {
+      const o = newTab ? { newTab: true } : undefined
+      if (t.kind === 'wiki') return wikiRef.current(t.arg, o)
+      const kind = hrefKind(t.href)
+      if (kind === 'note') return wikiRef.current(noteLinkTarget(t.href, pagePathRef.current, pageNamesRef.current()), o)
+      if (kind === 'file') {
+        if (pagePathRef.current) void amadeus.openAttachment(pagePathRef.current, t.href)
+        return
+      }
+      const href = normalizeHref(t.href)
+      if (href) window.open(href, '_blank', 'noopener')
+    }
+
     // ⚠️ PM 的 handleClick 不分鼠标键(右键的 mouseup 也会进来):右键 / mac Ctrl+点击 = 系统菜单,不开(L-11);
     //    中键或 ⌘/Ctrl+点击库内笔记链接 → 新标签页(外链本来就开新窗)。
     const handleLinkClick = (_view: EditorView, _pos: number, event: MouseEvent): boolean => {
@@ -981,6 +1008,7 @@ export function MilkdownInner({
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
       .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
+      .use(linkFollowPlugin(openLinkTarget)) // 「打开光标处链接」的记账(命令面板 / 焦点不在正文时用,L-20)
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
       .use($prose(() => new Plugin({ props: { attributes: (): Record<string, string> => (pagePathRef.current ? { 'data-amx-src': pagePathRef.current } : {}) } })))

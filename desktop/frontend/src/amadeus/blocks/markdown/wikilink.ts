@@ -7,6 +7,7 @@
 // 只有悬停右上角 `</>` 显式打开。复制事件另补桌面原生附件 flavor,外部 App 能直接粘文件。
 import { $prose } from '@milkdown/kit/utils'
 import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
+import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
@@ -31,6 +32,34 @@ function imageEmbed(inner: string, bang: boolean): { url: string; width?: number
   if (!IMG_EXT_RE.test(p)) return null
   const w = size?.trim()
   return { url: toAssetUrl(p), width: w && /^\d+$/.test(w) ? Number(w) : undefined, name: p }
+}
+
+/** 点击 / 「打开光标处链接」交给 openWikiLink 的那一串(两处同源,L-20)。要保留的 subpath:PDF 页码 `#page=` /
+ *  媒体时刻 `#t=` 原样交(据此跳页 / 起播);笔记锚点交「笔记#锚点」(别名剥掉),openWikiLink 拆开后打开并定位。
+ *  linkTarget 会把 `#…` 砍掉 —— 不走这里就是锚点静默蒸发(打开的永远是文首 / 0 秒)。 */
+export function wikiOpenArg(inner: string): string {
+  if (isPdfLinkInner(inner) || parseMediaLinkInner(inner)) return inner
+  const split = splitLinkInner(inner)
+  return split?.subpath ? `${split.target}#${split.subpath}` : linkTarget(inner)
+}
+
+/** 文本块里块内偏移 offset 处的 `[[…]]`(光标在里面或贴着两端)→ 它的 openWikiLink 参数;图片嵌入不算链接。
+ *  代码块 / 行内代码里的不算(buildBlockString 把行内代码抹成空格,代码块由调用方挡)。 */
+export function wikiOpenArgAt(block: ProseNode, offset: number): string | null {
+  const s = buildBlockString(block)
+  if (s.indexOf('[[') === -1) return null
+  let edge: string | null = null
+  WIKILINK_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = WIKILINK_RE.exec(s))) {
+    const from = m.index
+    const to = m.index + m[0].length
+    if (offset < from || offset > to) continue
+    if (imageEmbed(m[1], from > 0 && s[from - 1] === '!')) continue
+    if (offset > from && offset < to) return wikiOpenArg(m[1])
+    edge ??= wikiOpenArg(m[1])
+  }
+  return edge
 }
 
 interface WikiState { focus: boolean; sourceFrom: number | null }
@@ -170,10 +199,8 @@ function buildDecorations(
       const label = displayLabel(m[1], anchor)
       const ok = anchor && !anchor.target ? true : isResolved(target)
       const emoji = ok && target ? iconOf?.(target) : undefined // 目标笔记的 emoji 图标,渲染在链接文字前
-      // 点击要保留的 subpath(m 是循环变量,须逐条捕获,勿在闭包里读 m):PDF 页码 `#page=` / 媒体时刻 `#t=`
-      // 原样交给 openWikiLink(据此跳页 / 起播);笔记锚点交「笔记#锚点」(别名剥掉),openWikiLink 拆开后
-      // 打开并定位。linkTarget 会把 `#…` 砍掉 —— 不走这里就是锚点静默蒸发(打开的永远是文首 / 0 秒)。
-      const openArg = fileAnchor ? m[1] : anchor ? `${anchor.target}#${anchor.subpath}` : target
+      // 点击要交给 openWikiLink 的串(m 是循环变量,须逐条捕获,勿在闭包里读 m;口径见 wikiOpenArg,与键盘跟随同源)。
+      const openArg = wikiOpenArg(m[1])
       decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
       decos.push(
         Decoration.widget(
@@ -181,6 +208,7 @@ function buildDecorations(
           () => {
             const el = document.createElement('span')
             el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡虚线,点击询问创建
+            el.setAttribute('role', 'link') // 读屏认得是链接(L-20;键盘跟随走 Alt+Enter,不给 tabindex —— 焦点留在正文里)
             el.setAttribute('data-wiki', target)
             el.dataset.srcFrom = String(from)
             el.dataset.srcTo = String(to)
