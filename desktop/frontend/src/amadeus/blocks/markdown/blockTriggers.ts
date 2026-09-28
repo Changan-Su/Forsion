@@ -6,6 +6,7 @@
 // 同级重打幂等;已在列表项内时 -/1./[] 改父列表类型/勾选态,不再嵌套包一层。
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Selection, type Transaction } from '@milkdown/kit/prose/state'
+import { closeHistory } from '@milkdown/kit/prose/history'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
 
@@ -29,6 +30,8 @@ export interface Trigger {
   checked?: boolean
   /** code 专用:围栏后的语言(```py → 'py');空串 = 纯文本。 */
   lang?: string
+  /** quote 专用:包好之后与紧邻的前/后 blockquote 合回一只(K-12,见 triggerAtCursor)。 */
+  rejoin?: boolean
 }
 
 /**
@@ -51,9 +54,20 @@ export function textBeforeCursor($from: ResolvedPos): string {
   return $from.parent.textBetween(0, $from.parentOffset, undefined, '￼')
 }
 
+/** 中文输入法直接出的全角标点 → 半角触发符(K-14):`【】`/`》`/`｜`/`···`/`￥￥`/`＃`。
+ *  `、`(顿号,中文键盘上反斜杠那颗键)故意不映射。逐字一对一换算,长度不变 —— 消费区间照旧按原文算。 */
+const FULLWIDTH_TRIGGER: Record<string, string> = { '【': '[', '】': ']', '》': '>', '｜': '|', '·': '`', '￥': '$', '＃': '#' }
+
+/** 只有**整行恰好就是触发符**时才换算(matchTrigger 的正则全是整串锚定,换完不命中就等于没换);
+ *  `1。` 单独限定成「纯数字 + 句号」,正文里的句号一概不碰。 */
+function halfWidthTrigger(b: string): string {
+  if (/^\d{1,9}。$/.test(b)) return `${b.slice(0, -1)}.`
+  return b.replace(/[【】》｜·￥＃]/g, (c) => FULLWIDTH_TRIGGER[c] ?? c)
+}
+
 /** 识别「光标前文本恰好是行首触发符」(空格尚未落字时调用;消费长度 = before.length)。 */
 export function matchTrigger(before: string): Trigger | null {
-  const b = before.replace(/\u00A0/g, ' ') // 行尾空格在 contenteditable 中是 nbsp("[ ]" 的空格即是)
+  const b = halfWidthTrigger(before.replace(/\u00A0/g, ' ')) // 行尾空格在 contenteditable 中是 nbsp("[ ]" 的空格即是)
   let m: RegExpExecArray | null
   if ((m = /^(#{1,6})$/.exec(b))) return { kind: 'heading', level: m[1].length }
   if (/^[-*+]$/.test(b)) return { kind: 'bullet' }
@@ -69,6 +83,37 @@ export function matchTrigger(before: string): Trigger | null {
   if ((m = /^```([A-Za-z0-9+#._-]*)$/.exec(b))) return { kind: 'code', lang: m[1] }
   if (b === '$$') return { kind: 'math' }
   return null
+}
+
+/**
+ * 键盘入口(行首触发符 + 空格 / 回车)用的判定:matchTrigger 之外再看**光标之后**有没有内容。
+ *
+ * `>` = 折叠是给**空行起新块**定的键位(07-29)。光标后面已经有字 = 这是在给现成的一行补 `>`,最常见的
+ * 来路正是 K11 的字面化:callout/引用首段行首退格 → 得到字面 `>[!note] 标题`,补回空格想还原。按折叠处理
+ * 会把它包成一只新的折叠块(或包成独立引用、与后文的正文断开),往返不可逆(K-12 / K-12d)。
+ * 拍板 #5:不回退 K11,只修可逆性 —— 这种情况按引用处理,并与紧邻的 blockquote 合回一只。
+ * slash 菜单「折叠」走 applyTrigger 直调,不经这里,照旧是折叠。
+ */
+export function triggerAtCursor($from: ResolvedPos): Trigger | null {
+  const trig = matchTrigger(textBeforeCursor($from))
+  if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
+  return trig
+}
+
+/**
+ * 键盘触发(行首触发符 + 空格 / 回车)专用的 applyTrigger:触发符与转换之间断开撤销分组(K-21)。
+ * `typed` = 触发键本身要落的字(空格入口传 ' ',回车入口不传):先作为一次**真实插入**,再断开分组做转换
+ * —— 撤销一下回到字面 `# `(Notion 同),而不是连 `#` 带空格一起没了(快打)或只剩 `#`(慢打)。
+ * 转换之后也断开一次,紧接着打的正文自成一组,撤销时先撤字、再撤格式。
+ * 返回值 = 这一键是否已被处理:空格已经插进去了就算转换失败也是 true(等同浏览器默认插空格)。
+ */
+export function applyTypedTrigger(view: EditorView, trig: Trigger, typed?: string): boolean {
+  const start = view.state.selection.$from.start()
+  if (typed) view.dispatch(view.state.tr.insertText(typed))
+  view.dispatch(closeHistory(view.state.tr))
+  const ok = applyTrigger(view, trig, { from: start, to: view.state.selection.from })
+  view.dispatch(closeHistory(view.state.tr))
+  return ok || !!typed
 }
 
 /**
@@ -357,6 +402,16 @@ export function applyTrigger(
       tr.wrap(range, wrap)
       pos = tr.mapping.slice(n).map(pos) // wrap 插了容器开标签,位置整体后移
       $blk = tr.doc.resolve(pos)
+      if (trig.rejoin) {
+        // 与紧邻的 blockquote 合回一只(K-12):先并后面的(不影响前面的位置),再并前面的。
+        const d = findDepth($blk, 'blockquote')
+        if (d !== null) {
+          const end = $blk.after(d)
+          if (tr.doc.resolve(end).nodeAfter?.type === blockquote && canJoin(tr.doc, end)) tr.join(end)
+          const start = $blk.before(d)
+          if (tr.doc.resolve(start).nodeBefore?.type === blockquote && canJoin(tr.doc, start)) tr.join(start)
+        }
+      }
     } // 已在引用内:幂等,只消费触发符。
     // 折叠:在首行行首补 `[!fold]- ` 令牌(已经是 callout 就不重复补,重打幂等)。
     if (trig.kind === 'fold' && !CALLOUT_HEAD_RE.test($blk.parent.textContent)) {
