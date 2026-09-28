@@ -58,7 +58,7 @@ import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { pushPresence, setRoster } from './cloudPresence'
 import { buildAssetUrl, installCloudAssetUrls } from './cloudAssets'
 import { translate } from '@/i18n'
-import './bridgeMessages' // amxbridge.* 文案(G2-14)
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案(G2-14)
 import {
   attachmentPaths,
   basenamePosix,

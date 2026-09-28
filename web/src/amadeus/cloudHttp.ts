@@ -6,7 +6,7 @@
 
 import { cloudAccountIdentity } from '@/services/cloudAccountCache'
 import { translate } from '@/i18n'
-import './bridgeMessages' // amxbridge.* 文案(G2-14)
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案(G2-14)
 
 export class HttpError extends Error {
   constructor(

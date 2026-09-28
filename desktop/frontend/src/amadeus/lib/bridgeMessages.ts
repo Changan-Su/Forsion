@@ -2,8 +2,9 @@
  * Web / 移动端 Amadeus 写通道(cloudBridge / cloudHttp / unitBridge / mobileAmadeusBridge)的提示与报错文案。
  *
  * 这些串出现在最可能丢数据的时刻(冲突、别处改名 / 删除、写失败),以前一律写死中文,英文用户看不懂(评审 G2-14)。
- * 报错在**抛出那一刻**用 translate() 按当前界面语言取词;toast 同理。移动端经 `@webamadeus/bridgeMessages` 共用本表,
- * 与 web 桥同名同义的报错只登记一份。仪器:desktop 的 i18nCoverage(A/B/C/D 收片段,I 断言禁汉字字面量)。
+ * 报错在**抛出那一刻**用 translate() 按当前界面语言取词;toast 同理。web 与移动端都经 `@/amadeus/lib/bridgeMessages`
+ * 引入本表(`@` 在 web / mobile 构建与 desktop vitest 里都解析到 desktop/frontend/src;`@webamadeus` 只有移动端认),
+ * 同名同义的报错只登记一份。仪器:desktop 的 i18nCoverage(A/B/C/D 收片段,I 断言禁汉字字面量)。
  */
 import { registerMessages } from '@/i18n'
 

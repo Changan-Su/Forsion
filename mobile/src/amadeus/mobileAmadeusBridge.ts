@@ -21,7 +21,7 @@ import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propaga
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
 import { translate } from '@/i18n'
-import '@webamadeus/bridgeMessages' // amxbridge.* 文案与 web 桥共用一份(G2-14)
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案与 web 桥共用一份(G2-14)
 
 const ROOT = '/vault' // 虚拟绝对根;实际落 Capacitor Data/vault/
 const LAST_PAGE_KEY = 'amadeus_last_page'

@@ -25,7 +25,7 @@ import type { AmadeusApi } from '@amadeus-shared/ipc'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import { LOCAL_ONLY_CODE, localOnlyMessage } from '@/services/localOnly'
 import { translate } from '@/i18n'
-import './bridgeMessages' // amxbridge.* 文案(G2-14)
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案(G2-14)
 
 export interface UnitBridgeCfg {
   /** 设备页基址(尾斜杠;局域网根或隧道子路径 —— 相对 base 两用)。 */
