@@ -5,6 +5,7 @@
  * 没有 Extend 时「允许其他设备连接本机」只起局域网面。
  * 装载分两拍(同云同步):Extend 装载时(开窗前)handle 名册四通道并登记工厂;宿主每次 doRefreshUnitHost 重建设备互联时调工厂,
  * 递进这份 deps,拿回通道面。Forsion-Extend 仓 src/desktop/host.d.ts 是它的镜像,两边同改。
+ * ⚠️ 渲染层(UnitSwitcher)拿 window.tangu.unitsList 在不在当「有云端中转」的信号:Extend 那边名册四通道与工厂同进同出(它的 registerCloud.test 钉着)。
  */
 
 export interface UnitPairing { unitId: string; secret: string }
