@@ -30,6 +30,9 @@ const SRC = __dirname
 const LCL_ENGINE = join(__dirname, '../../../lcl/engine')
 /** P1-K5:主进程源码根(desktop/electron)。 */
 const ELECTRON_ROOT = join(__dirname, '../../electron')
+/** P1-K8:移动端自有源码根(mobile/src)。UnitsSheet 等模块级 registerMessages 片段、t('…') 用键此前不受检
+ *  (「红了去补 en」的保障在移动端不存在);settingsHarness.tsx 是台架页,不进产品。 */
+const MOBILE_SRC = join(__dirname, '../../../mobile/src')
 
 /**
  * 15 个组件在**模块作用域**自带 `registerMessages({...})` 片段,只有 import 了那个组件才会进字典。
@@ -77,7 +80,9 @@ function collectFragments(files: string[]): { zh: Record<string, string>; en: Re
 const base = __dictSnapshot()
 const ALL_SRC = walk(SRC)
 const ENGINE_SRC = walk(LCL_ENGINE)
-const frag = collectFragments(ALL_SRC.filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
+// P1-K8
+const MOBILE_FILES = walk(MOBILE_SRC).filter((f) => !f.endsWith('settingsHarness.tsx'))
+const frag = collectFragments([...ALL_SRC, ...MOBILE_FILES].filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
 const lclZh = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.zh]))
 const lclEn = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.en]))
 /** 渲染层看得见的字典(C 段按它核对 t('…'):主进程片段的键在渲染层取不到,不许让它们替渲染层的缺键打掩护)。 */
@@ -112,6 +117,12 @@ describe('i18n 覆盖', () => {
     // 防假绿:collectFragments 若因格式变化一个都没解析出来,A/B/C 会全绿但什么都没查。
     expect(frag.scanned, '一个 registerMessages 片段都没解析出来 —— 仪器已失效,先修解析').toBeGreaterThanOrEqual(15)
     expect(Object.keys(frag.zh).length).toBeGreaterThan(100)
+  })
+
+  it('0c. 仪器自检:移动端源码(mobile/src)确实被扫到,UnitsSheet 的片段被收进来了(P1-K8)', () => {
+    expect(MOBILE_FILES.length, 'mobile/src 一个源文件都没扫到 —— 路径变了先来改 MOBILE_SRC').toBeGreaterThan(8)
+    expect(MOBILE_FILES.some((f) => f.endsWith('settingsHarness.tsx')), '台架页不该进扫描').toBe(false)
+    expect(frag.zh['unitm.runOn'], 'UnitsSheet 的 registerMessages 片段没被解析出来').toBeTruthy()
   })
 
   it('0b. 仪器自检:引擎源码与引擎文案表确实被收进来了', () => {
@@ -150,7 +161,7 @@ describe('i18n 覆盖', () => {
     // t('a.b') / translate('a.b') / tr('a.b');只收字面量,模板串与变量键跳过(静态判不了)。
     const USE = /\b(?:t|tr|translate|engineTr)\(\s*(['"])([\w.-]+)\1/g
     const unknown = new Map<string, string[]>()
-    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
+    for (const file of [...ALL_SRC, ...ENGINE_SRC, ...MOBILE_FILES]) {
       const text = readFileSync(file, 'utf8')
       for (const m of text.matchAll(USE)) {
         const key = m[2]

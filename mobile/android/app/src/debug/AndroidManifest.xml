@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅 debug 包:清单合并时给 application 挂上 network_security_config(见该文件注释)。release 不含本文件。
+     ⚠️ 与 origin/feat/phone-control-t2 同名同内容(K8 §7:先合者带进来,后合者删重复)。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

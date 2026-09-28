@@ -129,7 +129,8 @@ const KNOWN_GATES = {
   'window.tangu?.marketList': '应用市场入口(ribbon 图标 + open-market 命令)— 仅桌面',
   'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
-  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head)— 仅真桌面:名册/配对回收走桌面 IPC,设备行=打开对方设备页(B 端渲染,方案 §11);web/mobile 无此 IPC,vault 切换仍走 VaultSideSwitch mobile 分支',
+  // P1-K8
+  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head rb-unit)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端照样注册但 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害;webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支',
   'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变',
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',

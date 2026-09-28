@@ -13,6 +13,7 @@
  * 共享 UI(bootstrap 的启动静默检查→自动弹「更新」页、设置-关于的按钮)全靠可选链探测,移动端缺席
  * = 装了旧版也永远没有任何提示。安装仍由系统完成(下载 APK 手动安装),故不实现 installUpdate。
  */
+import { registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
@@ -21,6 +22,7 @@ import { APP_VERSION } from '@/changelog'
 import { isNewer } from '../../desktop/shared/updateVersion'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
+import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
 
 const TOKEN_KEY = 'forsion_token'
 // 本机偏好(默认模型 / 生图模型 / 上次审批档与思考档…)。移动端没有引擎的 ~/.tangu/config.json,
@@ -52,6 +54,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   // 云端读者一律读 cloudApiBase(源码守卫:desktop/frontend/src/services/engine/cloudBase.test.ts)。
   const cloudApiBase = backendUrl
   const origFetch = window.fetch.bind(window)
+  // P1-K8:手机作为 Unit —— 远端引擎请求经原生中继(调用方票只在原生)+ 本机登记三件。启动即握手:断言原生 apiBase === cloudApiBase、
+  // 并让原生收掉上一个页面遗留的在途中继。web 路径(dev / preview)不装中继(没有原生身份,同 Genesis web 走原 fetch)。
+  const unit = createUnitBridge(cloudApiBase, native ? registerPlugin<ForsionUnitPlugin>('ForsionUnit') : null, location.origin)
   syncCloudAccountCache(cloudApiBase, token)
   const authListeners = new Set<() => void>()
 
@@ -269,6 +274,11 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     downloadUpdate: async () => { await openExternal(apkUrl || 'https://github.com/Changan-Su/Forsion/releases/latest') },
     // 账号名下设备名册(Forsion Unit):互联入口 UnitsSheet 的数据面;与桌面 units:list IPC 同形 {status,json}。
     unitsList: () => cloudJson('GET', '/units'),
+    // P1-K8 手机本机的 Unit 身份(懒登记:首次选电脑 / 首个中继请求时才登记;web 路径回「仅安卓 App」)。
+    // 中继模式下刻意**没有** unitCallerHeaders(INTEGRATION R-05):调用方票不进 JS。
+    unitSelf: unit.unitSelf,
+    unitEnsureSelf: unit.unitEnsureSelf,
+    unitForgetSelf: unit.unitForgetSelf,
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
@@ -283,8 +293,13 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       openExternal(`${webOrigin}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${webOrigin}/account`)}`),
   }
 
+  // P1-K8 中继前置:`{cloudApiBase}/units/<id>/proxy/(engine…|unit/remote-access…)` 交原生中继(带调用方票);
+  // 冲着中继面去但语法不过的失败关闭;其余照旧走下面的原 fetch(web 路径 unit.relay 恒为 null)。中继 URL 不含 /api/agent/,
+  // 不会误触 401 登出(换票撞 401 时中继合成的 401 交给渲染层的复检账号去判)。
   // 401 兜底:/api/agent/* 鉴权失败 → 清 token 重新登录。
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const relayed = unit.relay(input, init)
+    if (relayed) return relayed
     const requestToken = token
     const res = await origFetch(input, init)
     try {
