@@ -4,7 +4,6 @@
  * handler 自带 authMiddleware。
  */
 import { Router } from 'express';
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
@@ -15,7 +14,7 @@ import {
   type WorkspaceMeta, type WsScope,
 } from '../tools/fileWorkspace.js';
 import { getSessionDir, markSessionDirty, type SessionKey } from '../sandbox/sessionSandbox.js';
-import { canonicalFuturePath, pathWithin } from '../sandbox/hostSandboxProtection.js';
+import { listConfined, readConfined, writeConfined, unlinkConfined } from '../sandbox/confinedFs.js';
 
 const router = Router();
 
@@ -78,51 +77,26 @@ async function isCloudStorageUp(userId: string, appId: string): Promise<boolean>
   return cloudStorageUp;
 }
 
-/** 解析会话内相对路径为本地绝对路径;越界(..)返回 null。只是字面判断 —— 真正落盘 / 读盘前还要过 insideWorkspace(软链)。 */
-function safeJoin(baseDir: string, p: string): string | null {
-  const abs = path.resolve(baseDir, './' + String(p || '').replace(/^\/+/, ''));
-  if (abs !== baseDir && !abs.startsWith(baseDir + path.sep)) return null;
-  return abs;
-}
-
-/**
- * 真实路径钳在会话工作区内(评审 A#7 / 设备能力方案 §6.6「只限该会话工作区、禁路径穿越」):工作区里的软链(agent 自己 ln -s 的、
- * 解压出来的)指向 ~/.forsion/auth.json,字面上在工作区里,readFile / writeFile 却跟着它读写到外面 —— 远端的下载 / 上传就成了任意读写。
- * 两侧都取 realpath(macOS 的 /tmp → /private/tmp 之类系统软链两边同规归一);目标不存在时解析最深已存在的祖先(软链的父目录照样抓得住)。
- * 残余:判完到读写之间换成软链的竞态(TOCTOU)不在这层管。
+/*
+ * 本地会话目录的读 / 列 / 写 / 删一律经 confinedFs(设备能力方案 §6.6「只限该会话工作区、禁路径穿越」;P1 K10a):
+ * 工作区里的软链(agent 自己 ln -s 的、解压 / clone 带出来的、docker 沙箱里种的宿主绝对路径)指向 ~/.ssh/id_rsa,
+ * 字面上在工作区里 —— 手机经隧道的下载 / 上传一跟随就成了任意读写。P0(评审 A#7)按 realpath 判了目标,
+ * confinedFs 补上:会话目录自身被换成软链(根锚定)、FIFO 挂死,并缩窄判定与打开之间的换链竞态(O_NOFOLLOW + 打开后
+ * dev/ino 复核、写入核验通过才截断)。竞态没有关上:并发换链赢了仍能越界读 / 写 / 删,残余见 confinedFs.ts 头注释。
  */
-async function insideWorkspace(baseDir: string, abs: string): Promise<boolean> {
-  const realBase = await fs.realpath(baseDir).catch(() => path.resolve(baseDir));
-  return pathWithin(canonicalFuturePath(abs), realBase);
-}
 
 async function localList(key: SessionKey): Promise<WorkspaceMeta[]> {
   const dir = await getSessionDir(key);
-  const out: WorkspaceMeta[] = [];
-  async function walk(rel: string): Promise<void> {
-    const abs = path.join(dir, rel);
-    const entries = await fs.readdir(abs, { withFileTypes: true }).catch(() => []);
-    for (const e of entries) {
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) await walk(r);
-      else if (e.isSymbolicLink() && !(await insideWorkspace(dir, path.join(dir, r)))) continue; // 指到工作区外的软链:不列(stat 会跟过去,大小 / 存在性都是外面的)
-      else {
-        const st = await fs.stat(path.join(dir, r)).catch(() => null);
-        if (st) out.push({ path: '/' + r, size: st.size, mimeType: mimeForName(e.name), updatedAt: st.mtimeMs });
-      }
-    }
-  }
-  await walk('');
-  return out;
+  return (await listConfined(dir)).map((e) => ({
+    path: '/' + e.rel, size: e.size, mimeType: mimeForName(path.basename(e.rel)), updatedAt: e.mtimeMs,
+  }));
 }
 
 async function localRead(key: SessionKey, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
   const dir = await getSessionDir(key);
-  const abs = safeJoin(dir, p);
-  if (!abs || !(await insideWorkspace(dir, abs))) return null;
-  const content = await fs.readFile(abs).catch(() => null);
+  const content = await readConfined(dir, p);
   if (!content) return null;
-  return { content, mimeType: mimeForName(path.basename(abs)) };
+  return { content, mimeType: mimeForName(path.basename(p)) };
 }
 
 // 列出某会话云端工作区文件（供 AI Studio 云模式 workspace 视图）。
@@ -191,14 +165,9 @@ router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, 
     if (await isCloudStorageUp(userId, r.appId)) {
       ok = await deleteWorkspaceFile(userId, r.appId, r.scope, p);
     } else {
-      const dir = await getSessionDir(r.key);
-      const abs = safeJoin(dir, p);
-      ok = false;
       // 父目录按真实路径钳(父目录是软链 → unlink 删的是外面的文件);末段是软链本身没关系,unlink 只删链接。
-      if (abs && await insideWorkspace(dir, path.dirname(abs))) {
-        ok = await fs.unlink(abs).then(() => true).catch(() => false);
-        if (ok) markSessionDirty(r.key);
-      }
+      ok = await unlinkConfined(await getSessionDir(r.key), String(p));
+      if (ok) markSessionDirty(r.key);
     }
     res.json({ ok });
   } catch (e: any) {
@@ -227,13 +196,7 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
           await writeFileRaw(userId, r.appId, r.scope, f.path, buf, f.mimeType);
         } else {
           // standalone:云存储不可用 → 写本地会话目录(与文件工具同一目录)。
-          const dir = await getSessionDir(r.key);
-          const abs = safeJoin(dir, f.path);
-          if (!abs || !(await insideWorkspace(dir, abs))) throw new Error('invalid path');
-          await fs.mkdir(path.dirname(abs), { recursive: true });
-          // mkdir 之后再判一次:recursive 会沿已存在的软链目录往下建。
-          if (!(await insideWorkspace(dir, abs))) throw new Error('invalid path');
-          await fs.writeFile(abs, buf);
+          await writeConfined(await getSessionDir(r.key), f.path, buf); // 越界 / 软链逃逸抛 'invalid path'
           markSessionDirty(r.key);
         }
         saved++;
