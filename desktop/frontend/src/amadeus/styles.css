@@ -4081,6 +4081,34 @@ body.amx-marquee-active * {
   translate: -50% 0;
 }
 
+/* 异步插入的占位(评审 G3-06):插件 slash / 建文件 / 选图片的结果回来之前,钉在唤起处、随编辑映射。
+   行内胶囊,外形沿用上面 Agent 胶囊的描边 / 圆角 / 字号 token;只记位置的锚(data-hidden)不占地方。 */
+.am-app .amx-pending-insert {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 3px 1px 8px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+  vertical-align: middle;
+  user-select: none;
+}
+.am-app .amx-pending-insert[data-hidden] { display: none; }
+.am-app .amx-pending-insert-spin {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.am-app .amx-pending-insert .btn.sm { border-radius: var(--radius-pill); }
+
 /* ── 正文 AI(评审 G3-07):目标淡底 + 预览面板。面板外壳走共享 `.ui-popover`(字体 / 描边 / 圆角 / 阴影),
    这里只管内容布局;色值只消费语义 token。 */
 .am-app .am-ai-target {

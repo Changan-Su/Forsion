@@ -71,6 +71,7 @@ import { reconcileTr, type ReconcileChange } from './reconcileDiff'
 import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
 import { AgentChangeCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
+import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
@@ -577,23 +578,47 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     return done
   }
 
-  /** 建文件类 slash 项的落点守卫:await 期间用户可能已切走(实例退休/换页)。v3 靠 blockId 三道闸,
-   *  统一实例只需一道 —— 编辑器还活着就还是同一篇(实例与路径同生共死,pipe.retired 会拆掉它)。 */
-  const insertAsync = (md: string): void => {
-    if (!apiRef.current) {
-      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
+  /** 异步 slash 项的锚(评审 G3-06,见 pendingInsert.ts):'/query' 消费掉之后**当场**在光标处钉住,结果回来插到那里 ——
+   *  不插在完成那一刻的光标处、不抢别的输入框的焦点、不在唤起处留空段。编辑器已拆 = null。
+   *  visible=false:只记位置不画占位(弹对话框问地址的那几项,对话框开着时画「进行中」是噪音)。 */
+  const pinPending = (label: string, visible = true): PendingAnchor | null => {
+    let a: PendingAnchor | null = null
+    getInstance()?.action((ctx) => { a = beginPending(ctx.get(editorViewCtx), label, visible) })
+    return a
+  }
+  const dropPending = (a: PendingAnchor | null): void => {
+    if (a) getInstance()?.action((ctx) => endPending(ctx.get(editorViewCtx), a.id))
+  }
+  /** 异步 slash 项的落点。await 期间用户可能已切走(实例退休/换页):v3 靠 blockId 三道闸,统一实例先看编辑器还在不在
+   *  (实例与路径同生共死,pipe.retired 会拆掉它),再看锚还在不在(那一行被删了 / 点了取消)。
+   *  fileMade:文件已经建好了(多维表 / 画板 / 子页面 / 图片)—— 落点没了要说清「文件在,只是没插进来」。 */
+  const insertAsync = (md: string, a: PendingAnchor | null, fileMade = true): void => {
+    if (a?.cancelled()) return
+    const lost = (): void => {
+      if (fileMade || !a) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
+      else toastPendingLost(a.label)
+    }
+    if (!apiRef.current || !a) {
+      lost()
       return
     }
-    insertMd(md)
+    let placed = false
+    getInstance()?.action((ctx) => {
+      const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
+      placed = insertAtPending(ctx.get(editorViewCtx), a.id, parsed?.childCount ? parsed.content : null)
+    })
+    if (!placed) lost()
   }
 
-  /** 新建 .fd 子文件(数据库/画板/笔记视图)→ 插 `![[base]]` 嵌入块。三处只差文件名与内容。 */
-  const createFdFile = async (name: string, bytes: Uint8Array, stripMd = false): Promise<void> => {
+  /** 新建 .fd 子文件(数据库/画板/笔记视图)→ 插 `![[base]]` 嵌入块。三处只差文件名与内容;锚由调用方在消费 '/query' 时钉好。 */
+  const createFdFile = async (name: string, bytes: Uint8Array, a: PendingAnchor | null, stripMd = false): Promise<void> => {
     try {
       const { base } = await amadeus.saveAttachment(path, name, bytes, { mode: 'vault', folder: fdDirOf(path) })
-      insertAsync(`![[${stripMd ? base.replace(/\.md$/i, '') : base}]]`) // Obsidian 惯例:嵌入链接省掉 .md
+      insertAsync(`![[${stripMd ? base.replace(/\.md$/i, '') : base}]]`, a) // Obsidian 惯例:嵌入链接省掉 .md
       void store.getState().syncFdChildren(path)
-    } catch { /* 保存失败静默跳过(v3 同款) */ }
+    } catch {
+      dropPending(a) // 保存失败静默跳过(v3 同款),锚撤掉
+    }
   }
 
   /** 移动端双列块面板的落点(真身)。登记/撤销由**宿主 UnifiedPage** 管(见那边的 stableApply):
@@ -634,19 +659,25 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     if (item.run) {
       // 插件注册的「先干活再插入」项。插件是 new Function 装载的第三方 JS,返回值一律当外部输入校验
       // (与 v3 同一套闸:非字符串会毒化文档,NUL/控制字符会污染笔记文件)。
+      const a = pinPending(item.label) // 「进行中…」占位 + 取消(G3-06)
       void (async () => {
         try {
           const md = await item.run!({ pagePath: path, folder: fdDirOf(path) })
-          if (md === '' || md == null) return
+          if (md === '' || md == null) {
+            dropPending(a)
+            return
+          }
           if (typeof md !== 'string') throw new Error(translate('unipage.plugin.notString', { type: typeof md }))
           if (md.length > 8192) throw new Error(translate('unipage.plugin.tooLong'))
           // 控制字符逐码点判(放行 \t \n):正则字面量写法会把真控制字节带进源文件。
           if (Array.from(md).some((c) => c.charCodeAt(0) < 32 && c !== String.fromCharCode(9) && c !== String.fromCharCode(10))) {
             throw new Error(translate('unipage.plugin.controlChars'))
           }
-          insertAsync(md)
+          insertAsync(md, a, false)
           void store.getState().syncFdChildren(path)
         } catch (e) {
+          dropPending(a)
+          if (a?.cancelled()) return // 用户已取消:结果与失败一并不提
           console.error('[plugin] slash item failed', e)
           window.dispatchEvent(new CustomEvent('amadeus:toast', {
             detail: { text: translate('unipage.plugin.failed', { label: item.label, err: e instanceof Error ? e.message : String(e) }), error: true },
@@ -662,13 +693,17 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       input.onchange = () => {
         const f = input.files?.[0]
         if (!f) return
+        // 对话框是模态的,选好文件这一刻光标还在唤起处:此刻钉锚(选文件对话框取消时不留占位)。
+        const a = pinPending(item.label)
         void (async () => {
           try {
             const bytes = new Uint8Array(await f.arrayBuffer())
             const { opts } = await getAttachmentPrefs()
             const { base } = await amadeus.saveAttachment(path, f.name || 'image.png', bytes, opts)
-            insertAsync(`![[${base}]]`) // 与拖入同形态:嵌入层渲染成图片块
-          } catch { /* 保存失败静默跳过 */ }
+            insertAsync(`![[${base}]]`, a) // 与拖入同形态:嵌入层渲染成图片块
+          } catch {
+            dropPending(a) // 保存失败静默跳过
+          }
         })()
       }
       input.click()
@@ -691,28 +726,32 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.page) {
       // 新建子页面(Notion /page):落本笔记的 .fd 子文件夹,插入 [[链接]] 随后打开。
+      const a = pinPending(item.label)
       void (async () => {
         try {
           const st = store.getState()
           const newPath = await st.createChildNote(path, translate('amadeus.default.note'))
-          insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`)
+          insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`, a)
           void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
-        } catch { /* 创建失败静默跳过 */ }
+        } catch {
+          dropPending(a) // 创建失败静默跳过
+        }
       })()
       return
     }
     if (item.scaffold === S.database) {
       const dbName = translate('amadeus.default.database')
-      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))))
+      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))), pinPending(item.label))
       return
     }
     if (item.scaffold === S.drawing) {
       // Obsidian Excalidraw 插件同款 .excalidraw.md(同一个库两边可互开);时间戳命名照抄它。
-      void createFdFile(`${stampedFileName(translate('unipage.file.drawing'))}.excalidraw.md`, new TextEncoder().encode(blankDrawing(BLANK_SCENE_JSON)), true)
+      void createFdFile(`${stampedFileName(translate('unipage.file.drawing'))}.excalidraw.md`, new TextEncoder().encode(blankDrawing(BLANK_SCENE_JSON)), pinPending(item.label), true)
       return
     }
     if (item.scaffold === S.noteview) {
       // 「笔记视图」(Bases 式,行即笔记):行文件夹与 .db 视图定义都落 .fd 子文件夹。
+      const a = pinPending(item.label)
       void (async () => {
         const fdDir = fdDirOf(path)
         let folderRel: string | null = null
@@ -721,9 +760,12 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
             folderRel = await amadeus.createFolder(fdDir, i === 1 ? translate('unipage.file.noteView') : translate('unipage.file.noteViewN', { n: i }))
           } catch { /* 撞名,试下一个 */ }
         }
-        if (folderRel === null) return
+        if (folderRel === null) {
+          dropPending(a)
+          return
+        }
         const viewName = translate('unipage.file.untitledView')
-        await createFdFile(`${viewName}.db`, new TextEncoder().encode(serializeDb(emptyNoteView(viewName, folderRel))))
+        await createFdFile(`${viewName}.db`, new TextEncoder().encode(serializeDb(emptyNoteView(viewName, folderRel))), a)
       })()
       return
     }
@@ -733,14 +775,17 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.bookmark) {
       // 整块 = 一行裸 URL → 嵌入层渲染为书签卡(og 元数据/YouTube 播放器);md 零私有语法。
+      const a = pinPending(item.label, false)
       void askString(translate('unipage.bookmark.title'), '', { label: translate('unipage.bookmark.label') }).then((raw) => {
         const url = raw?.trim()
-        if (url && /^https?:\/\/\S+$/i.test(url)) insertAsync(url)
+        if (url && /^https?:\/\/\S+$/i.test(url)) insertAsync(url, a, false)
+        else dropPending(a)
       })
       return
     }
     if (item.scaffold === S.embed) {
       // 跨笔记块嵌入:剪贴板里有块菜单复制的 `![[笔记#块]]` 就预填。
+      const a = pinPending(item.label, false)
       void (async () => {
         let prefill = ''
         try {
@@ -752,7 +797,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           confirmLabel: translate('unipage.embed.confirm'),
         })
         const target = raw?.trim().replace(/^!?\[\[/, '').replace(/\]\]$/, '').trim()
-        if (target) insertAsync(`![[${target}]]`)
+        if (target) insertAsync(`![[${target}]]`, a, false)
+        else dropPending(a)
       })()
       return
     }
@@ -1315,6 +1361,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
       ...createEmbedLayer({ path, readOnly }),
+      ...createPendingInsert(), // 异步 slash 项的锚与「进行中」占位(G3-06)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
       // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
       // 时间线只在画布模式被查询,顺序跨模式仍然成立)。

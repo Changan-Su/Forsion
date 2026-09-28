@@ -6,6 +6,9 @@
 //       一次工具写入只认领一次(之后同路径的别的改动不算 Tangu 的)。
 //   C = G3-07 正文生成式 AI:工具栏「AI ▾」/ `/ai` / 空行空格(缺省关、IME 守卫)→ 预览面板 → 替换 / 插入下方 / 插入 / 丢弃;
 //       确认前零写入、确认后一个事务写纯 md(可 Cmd+Z);插件 registerSelectionAction 的结果同样只进预览;ctx.tangu.complete 可用。
+//   D = G3-06 插件异步 slash 命令:唤起处钉锚 +「进行中… · 取消」占位 → 结果插到锚所在的块(空行原地替换、不留空段);
+//       期间挪去别段打字 / 去别的输入框打字 → 光标与焦点都不被拽走;焦点还在锚所在的行 → 光标跟到结果末尾;
+//       取消 → 结果丢弃;那一行被删 → 不插并提示;一步 Cmd+Z 撤掉整段结果。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -552,6 +555,130 @@ async function groupC(browser) {
   }
 }
 
+// ─────────────────────────────── G3-06 ───────────────────────────────
+const SLOWGEN = `
+ctx.registerSlashItem({ id: 'slow-gen', label: 'Slow Gen', group: 'T', keywords: 'slowgen',
+  run: () => new Promise((r) => setTimeout(() => r(window.__slowOut ?? 'GEN_OUT 第一行\\n\\n- 要点一\\n- 要点二\\n'), window.__slowMs ?? 1500)) })
+`
+/** 光标放到 text 之后(直驱 PM 选区)并聚焦。 */
+async function caretAfterText(page, text) {
+  await page.evaluate((text) => {
+    const view = window.__upage.probe.view()
+    let at = -1
+    view.state.doc.descendants((n, pos) => {
+      if (at >= 0) return false
+      if (n.isText) { const i = n.text.indexOf(text); if (i >= 0) { at = pos + i + text.length; return false } }
+      return true
+    })
+    let proto = Object.getPrototypeOf(view.state.selection)
+    while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+    view.focus()
+    view.dispatch(view.state.tr.setSelection(proto.constructor.near(view.state.doc.resolve(at))))
+  }, text)
+  await page.waitForTimeout(60)
+}
+/** 在「第一段文字。」后回车新起一行,打 /slowgen 回车选中(与用户同一条路)。 */
+async function pickSlow(page) {
+  await caretAfterText(page, '第一段文字。')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/slowgen', { delay: 15 })
+  await page.waitForTimeout(350)
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(250)
+}
+const chipText = (page) => page.evaluate(() => document.querySelector('.amx-pending-insert:not([data-hidden])')?.textContent ?? null)
+const caretPara = (page) => page.evaluate(() => { const v = window.__upage.probe.view(); const $f = v.state.selection.$from; return { para: $f.parent.textContent, off: $f.parentOffset } })
+const vault = (page) => page.evaluate(() => window.__upage.vault.get('Unified.md'))
+async function groupD(browser) {
+  const md = '# 标题\n\n第一段文字。\n\n第二段文字。\n\n第三段文字。\n'
+  const RESULT = '第一段文字。\n\nGEN_OUT 第一行\n\n- 要点一\n- 要点二\n\n第二段文字。'
+  {
+    const page = await open(browser, md)
+    await page.evaluate((code) => window.__ep.loadPlugin(code, { id: 'slow-gen' }), SLOWGEN)
+    await page.waitForTimeout(300)
+    await pickSlow(page)
+    const chip = await chipText(page)
+    await caretAfterText(page, '第三段')
+    await page.keyboard.type('别处')
+    await page.waitForTimeout(1800)
+    const c = await caretPara(page)
+    await page.keyboard.type('Q')
+    await page.waitForTimeout(1300)
+    const d = await vault(page)
+    check('D1 进行中占位钉在唤起处;期间挪到别段打字 → 结果插到唤起那行(不留空段)、光标不被拽走、接着打的字还在别段',
+      !!chip && chip.includes('Slow Gen') && d.includes(RESULT) && d.includes('第三段别处Q文字。') && c.para === '第三段别处文字。' && c.off === 5 && !(await chipText(page)),
+      JSON.stringify({ chip, c, d }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate((code) => window.__ep.loadPlugin(code, { id: 'slow-gen' }), SLOWGEN)
+    await page.evaluate(() => { const t = document.createElement('textarea'); t.id = 'fake-composer'; t.style.cssText = 'position:fixed;right:10px;bottom:10px;width:200px;height:60px;z-index:9999'; document.body.appendChild(t) })
+    await page.waitForTimeout(300)
+    await pickSlow(page)
+    await page.click('#fake-composer')
+    await page.keyboard.type('chat ')
+    await page.waitForTimeout(1800)
+    const active = await page.evaluate(() => document.activeElement?.id ?? '')
+    await page.keyboard.type('XYZ')
+    await page.waitForTimeout(1300)
+    const d = await vault(page)
+    const composer = await page.evaluate(() => document.getElementById('fake-composer').value)
+    check('D2 期间去别的输入框打字 → 完成时焦点不被抢回笔记,字留在输入框;结果照样插到唤起处',
+      active === 'fake-composer' && composer === 'chat XYZ' && !d.includes('XYZ') && d.includes(RESULT), JSON.stringify({ active, composer, d }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate((code) => window.__ep.loadPlugin(code, { id: 'slow-gen' }), SLOWGEN)
+    await page.waitForTimeout(300)
+    await pickSlow(page)
+    await page.waitForTimeout(1800) // 不挪光标:焦点仍在唤起那行
+    const c = await caretPara(page)
+    await page.keyboard.type('Z')
+    await page.waitForTimeout(1300)
+    const d1 = await vault(page)
+    await page.keyboard.press('Meta+z') // 撤掉 Z
+    await page.keyboard.press('Meta+z') // 再一步 = 整段结果
+    await page.waitForTimeout(1300)
+    const d2 = await vault(page)
+    check('D3 焦点还在唤起那行 → 光标跟到结果末尾,接着打的字接在后面;两步 Cmd+Z(Z、整段结果)撤回原样',
+      c.para === '要点二' && d1.includes('- 要点二Z') && !d2.includes('GEN_OUT') && !d2.includes('Z'), JSON.stringify({ c, d1, d2 }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate((code) => window.__ep.loadPlugin(code, { id: 'slow-gen' }), SLOWGEN)
+    await page.waitForTimeout(300)
+    await pickSlow(page)
+    await page.click('.amx-pending-insert .btn')
+    await page.waitForTimeout(100)
+    const gone = !(await chipText(page))
+    await page.waitForTimeout(1800)
+    const d = await vault(page)
+    check('D4 点「取消」→ 占位消失,结果丢弃不插', gone && !(d ?? '').includes('GEN_OUT'), JSON.stringify({ gone, d }))
+    await page.close()
+  }
+  {
+    const page = await open(browser, md)
+    await page.evaluate((code) => window.__ep.loadPlugin(code, { id: 'slow-gen' }), SLOWGEN)
+    await page.evaluate(() => { window.__lostToasts = []; window.addEventListener('amadeus:toast', (e) => window.__lostToasts.push(e.detail.text)) })
+    await page.waitForTimeout(300)
+    await pickSlow(page)
+    // 把唤起的那一整行删掉(连同锚)
+    await page.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const $f = v.state.selection.$from
+      v.dispatch(v.state.tr.delete($f.before(1), $f.after(1)))
+    })
+    await page.waitForTimeout(1800)
+    const d = await vault(page)
+    const t = await page.evaluate(() => window.__lostToasts)
+    check('D5 唤起那行被删 → 结果不插,提示一声', !(d ?? '').includes('GEN_OUT') && t.some((x) => x.includes('Slow Gen')), JSON.stringify({ d, t }))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
@@ -559,6 +686,7 @@ async function main() {
     if (!only || only.includes('A')) await groupA(browser)
     if (!only || only.includes('B')) await groupB(browser)
     if (!only || only.includes('C')) await groupC(browser)
+    if (!only || only.includes('D')) await groupD(browser)
   } finally {
     await browser.close()
   }
