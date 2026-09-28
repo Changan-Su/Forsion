@@ -32,6 +32,8 @@ import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTypedTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 import { tableKeyPlugins } from './tableKeys'
+import { commandsCtx } from '@milkdown/kit/core'
+import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
@@ -548,14 +550,15 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
 }
 
 /** 有选区时按成对符号 = **包裹**选中文字而不是替换掉它(AFFiNE 的 PAIRS 同款)。
- *  反引号直接套行内代码(md 里 `x` 就是行内代码,不必再走 mark);其余按字面成对包。
- *  包完保持选中,可以继续再包一层。没有选区时一律放行 —— 正常打字不受影响。 */
+ *  反引号 = 行内代码(I-09 / K-18b):与 ⌘E、工具栏 </> 走**同一条** toggleInlineCode 命令。
+ *  ⚠️ 别改回按字面插两个反引号 —— 字面 `x` 在编辑器里只是文字,落盘被转义成 \`x\`,永远成不了代码。
+ *  其余按字面成对包。包完保持选中,可以继续再包一层。没有选区时一律放行 —— 正常打字不受影响。 */
 const PAIRS: Record<string, string> = {
   '(': ')', '[': ']', '{': '}', '<': '>', '"': '"', "'": "'", '`': '`',
   '（': '）', '【': '】', '「': '」', '《': '》', '“': '”', '‘': '’',
 }
 const wrapSelectionPlugin = $prose(
-  () =>
+  (ctx) =>
     new Plugin({
       props: {
         handleTextInput: (view, from, to, text) => {
@@ -565,6 +568,7 @@ const wrapSelectionPlugin = $prose(
           if (!(sel instanceof TextSelection) || sel.empty) return false
           if (!sel.$from.sameParent(sel.$to)) return false // 跨块选区不包(会拆坏结构)
           if (sel.$from.parent.type.name === 'code_block') return false // 代码块里符号就是符号
+          if (text === '`' && view.state.schema.marks.inlineCode) return ctx.get(commandsCtx).call(toggleInlineCodeCommand.key)
           const tr = view.state.tr.insertText(close, to).insertText(text, from)
           tr.setSelection(TextSelection.create(tr.doc, from + 1, to + 1))
           view.dispatch(tr.scrollIntoView())

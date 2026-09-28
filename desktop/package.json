@@ -87,6 +87,7 @@
     "check:table": "node scripts/e2e-editor.cjs --check=unified-table",
     "check:unifiedsync": "node scripts/e2e-editor.cjs --check=unified-sync",
     "check:editorai": "node scripts/e2e-editor.cjs --check=editor-ai",
+    "check:menus": "node scripts/e2e-editor.cjs --check=editor-menus",
     "check:cloudgap": "node scripts/cloud-gap.check.cjs",
     "check:amadeusinteractions": "node scripts/e2e-editor.cjs --check=amadeus-interactions",
     "check:dashboard": "node scripts/e2e-editor.cjs --check=dashboard",

@@ -31,12 +31,13 @@ import { executeMoveBelowRow, executeMoveIntoCell, executePair, mintCardCopies }
 import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
+import { markMachineSlash } from '../blocks/markdown/machineSlash'
 import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
-  'blocklayer.addBelow': { zh: '在下方插入块', en: 'Add block below' },
+  'blocklayer.addBelow': { zh: '在下方插入块（按住 Alt 点击插到上方）', en: 'Add block below (Alt-click to add above)' },
   'blocklayer.cardGrab': { zh: '选中所在卡片，按住拖动整卡', en: 'Select card, hold to drag it' },
   'blocklayer.expandChildren': { zh: '展开子项', en: 'Expand children' },
   'blocklayer.foldChildren': { zh: '折叠子项', en: 'Collapse children' },
@@ -46,9 +47,33 @@ registerMessages({
   'blocklayer.phHeading': { zh: '标题 {n}', en: 'Heading {n}' },
 })
 
+/** ＋ 的落点:插什么、插在哪、光标(= `/` 之后)在哪(B-19 / B-19b)。
+ *  列表项 → 同级新项(待办项新项不带勾);列表整体(首项归外壳)→ 按它的首项算;其余 → 块前 / 块后一个段落。 */
+export function plusInsert(state: EditorState, node: ProseNode, pos: number, above: boolean): { at: number; node: ProseNode; caret: number } | null {
+  const { schema } = state
+  const para = schema.nodes.paragraph
+  if (!para) return null
+  const slashPara = para.create(null, schema.text('/'))
+  let itemPos: number | null = null
+  if (node.type.name === 'list_item') itemPos = pos
+  else if (/_list$/.test(node.type.name) && node.firstChild?.type.name === 'list_item') itemPos = pos + 1
+  const item = itemPos == null ? null : state.doc.nodeAt(itemPos)
+  if (item && itemPos != null) {
+    const attrs = { ...item.attrs, ...(item.attrs.checked != null ? { checked: false } : {}) }
+    const li = item.type.createAndFill(attrs, slashPara)
+    if (li) {
+      const at = above ? itemPos : itemPos + item.nodeSize
+      return { at, node: li, caret: at + 3 } // li 开 + 段开 + `/`
+    }
+  }
+  const at = above ? pos : pos + node.nodeSize
+  return { at, node: slashPara, caret: at + 2 } // 段开 + `/`
+}
+
 export interface BlockLayerHooks {
-  /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。 */
-  onMenu: (at: { x: number; y: number }) => void
+  /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。
+   *  keyboard:键盘打开的(聚焦 ⠿ 按 Enter / 空格 = detail 为 0 的 click)→ 宿主把焦点送进菜单(B-10)。 */
+  onMenu: (at: { x: number; y: number; keyboard?: boolean }) => void
   /** **整块**删掉了这些内容(块选中 Delete/Backspace)。宿主据此问「引用块牵着的磁盘文件也删吗」。
    *  剪切不发(搬家不是删除),逐字符编辑更不经过这里 —— 判据是结构性的,不靠启发式。
    *  调用时机在 dispatch **之后**:宿主要读删完的文档算「同一篇里还有没有别处引用」。 */
@@ -904,7 +929,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         drag.addEventListener('click', (e) => {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
-          hooks.onMenu({ x: r.left, y: r.bottom + 4 })
+          // 键盘激活(Enter / 空格)没有 mousedown,块还没被选上:这里补选,菜单才有目标。
+          if (e.detail === 0 && viewRef && activeRef) selectDragUnit(viewRef, activeRef)
+          hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: e.detail === 0 })
           // 焦点收回编辑器:mousedown 的浏览器默认行为把焦点给了 ⠿ 这个 <button>,不收回的话
           // 菜单一开,键盘就整片失效(块选着却 Cmd+C/Delete 无反应)。菜单是浮层,不吃焦点也照用。
           // ⚠️ 触屏上不收:focus 会弹安卓软键盘,把这个向上弹的浮层从手指底下顶走(见 touch.ts
@@ -1126,18 +1153,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         add.className = 'block-add'
         add.textContent = '＋'
         add.title = translate('blocklayer.addBelow')
+        // ＋(B-19,对标 Notion):插一个新块并当场打开块选择器(新块里先放一个 `/` 唤起 slash 菜单;
+        // Esc / 点空白关掉时 MarkdownBlock 把这个 `/` 删掉,见 machineSlash)。按住 Alt 点 = 插到上方。
+        // 列表项上点(B-19b)插的是同级新项 —— 此前往列表中间塞了个段落,列表被劈成两段、有序列表从 1 重新编号。
         add.addEventListener('click', (e) => {
           e.stopPropagation()
           const view = viewRef
           const a = activeRef
           if (!view || !a) return
-          const paragraph = view.state.schema.nodes.paragraph
-          if (!paragraph) return
-          const at = a.pos + a.node.nodeSize
-          let tr = view.state.tr.insert(at, paragraph.create())
-          tr = tr.setSelection(TextSelection.near(tr.doc.resolve(at + 1))).scrollIntoView()
+          const plan = plusInsert(view.state, a.node, a.pos, e.altKey)
+          if (!plan) return
+          view.focus() // 先聚焦:slash 插件只在编辑器持焦时报菜单
+          let tr = view.state.tr.insert(plan.at, plan.node)
+          tr = tr.setSelection(TextSelection.create(tr.doc, plan.caret)).scrollIntoView()
+          markMachineSlash(view, plan.caret)
           view.dispatch(tr)
-          view.focus()
           hide()
         })
 
@@ -1186,7 +1216,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           e.stopPropagation()
           if (!activeRef) return
           const r = cardGrab.getBoundingClientRect()
-          hooks.onMenu({ x: r.left, y: r.bottom + 4 })
+          hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: e.detail === 0 })
           if (!isCoarsePointer()) viewRef?.focus()
         })
 

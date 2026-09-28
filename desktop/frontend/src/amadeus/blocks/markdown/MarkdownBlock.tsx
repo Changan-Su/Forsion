@@ -61,7 +61,7 @@ import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
+import type { MarkType, Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -91,9 +91,11 @@ import { codeExitPlugin } from './codeExit'
 import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } from './linkFollow'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
-import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, posAtTextAnchor, slashRange, splitTail, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
-import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
-import { InlineToolbar, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
+import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
+import { takeMachineSlash } from './machineSlash'
+import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
+import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
+import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles } from 'lucide-react'
 import { readTangu } from '../../plugins/tanguSeam'
 import { OverlayPortal } from '../../lib/overlayPortal'
@@ -110,7 +112,7 @@ import { taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
-import { askString } from '../../components/askString'
+import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
@@ -172,6 +174,10 @@ registerMessages({
   'mdblock.slash.ai': { zh: 'AI 写作', en: 'AI writing' },
   // 弹框(askString)
   'mdblock.link.title': { zh: '插入链接', en: 'Insert link' },
+  'mdblock.link.editTitle': { zh: '编辑链接', en: 'Edit link' },
+  'mdblock.link.remove': { zh: '移除链接', en: 'Remove link' },
+  // 选区工具栏「转换为」做不成时的提示(I-19:此前点了静默无效,或在单元格里把表劈成两张)
+  'mdblock.turn.failed': { zh: '这里不能转换为「{kind}」', en: "Can't turn this into {kind} here" },
   'mdblock.link.label': { zh: '输入或粘贴地址（裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
   'mdblock.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
   'mdblock.bookmark.label': { zh: '粘贴链接地址（https:// 开头）；YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
@@ -268,8 +274,8 @@ interface BlockKeys {
 export interface SlashOps {
   /** 删掉光标前触发用的 '/';返回删后块是否为空。 */
   consume(): boolean
-  /** 删 '/' 并把当前块原地转换为前缀类型(光标原位、无重挂载)。 */
-  transform(trig: Trigger): void
+  /** 删 '/' 并把当前块原地转换为前缀类型(光标原位、无重挂载)。false = 结构不允许,文档没动(调用方提示,B-18)。 */
+  transform(trig: Trigger): boolean
 }
 
 /** 占位提示只在「聚焦中的空块」显示(Notion 同款;此前所有空块齐刷刷提示,实报扰视)。
@@ -1064,14 +1070,14 @@ export function MilkdownInner({
       .use(codeBlockPlugin()) // 语法高亮 + 语言/复制/折行工具条(lowlight,base.css .hljs-* 配色)
       .use(spellcheckPlugin) // 拼写检查开关 + 行内代码 / 公式不查(G4-07,见 ./spellcheck)
       .use(codeExitPlugin) // 行内代码右边界按 → 跳出(I-11,见 ./codeExit)
-      // 行内格式键位补齐(AFFiNE 六件套):预设只给了 Mod-B / Mod-I / Mod-E 与 Mod-Alt-X,
+      // 行内格式键位补齐(AFFiNE 六件套):预设只给了 Mod-B / Mod-I / Mod-E(行内代码)与 Mod-Alt-X,
       // 下划线(自有 mark)、Mod-Shift-S 删除线、Mod-K 链接三个一直没有键位。
-      // Mod-K 走与工具栏 🔗 完全同一条 editLink(选区已是链接=直接摘掉,空选区不弹框)。
+      // Mod-K 走与工具栏 🔗 完全同一条 editLink(碰到链接 = 预填编辑 / 移除;空选区 = 插一条新链接,I-10)。
       .use($prose((c) =>
         keymap({
           'Mod-u': () => { c.get(commandsCtx).call(toggleUnderlineCommand.key); return true },
           'Mod-Shift-s': () => { c.get(commandsCtx).call(toggleStrikethroughCommand.key); return true },
-          'Mod-k': () => { editLink(); return true },
+          'Mod-k': () => editLink(),
           // 粘贴为纯文本(评审 G4-08,Obsidian / Notion 同键):只取剪贴板的 text/plain,不带格式、不解析 HTML;
           // 走 PM 自己的纯文本粘贴(每行一段,代码块里原样)。mac 上 Cmd+Shift+V 原本什么都不发生;
           // Windows / Linux 的 Ctrl+Shift+V 原生粘贴又会被 markdown 剪贴板插件按 HTML 解析 —— 三端统一在这里接管。
@@ -1083,9 +1089,18 @@ export function MilkdownInner({
             return true
           },
           'Mod-Shift-h': toggleObsHighlight, // `==` 高亮切换(I-17;仓内与 darwin 默认菜单均无占用)
-          'Mod-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
-          'Mod-e': (state, dispatch) => setTextAlignment(state, dispatch, 'center'),
-          'Mod-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
+          // 选区工具栏的键盘入口(I-20,Google Docs / WAI 工具栏惯例 Alt+F10):焦点送进首钮,Esc 回编辑器。
+          'Alt-F10': () => {
+            const btn = document.querySelector<HTMLElement>('[data-testid="inline-toolbar"] .itb-row button')
+            if (!btn) return false
+            btn.focus()
+            return true
+          },
+          // 对齐 = ⌘⇧L / ⌘⇧E / ⌘⇧R(拍板 #2,I-09):⌘E 还给行内代码(预设 inlineCodeKeymap 的 Mod-e,
+          // Notion / AFFiNE 同键)。⚠️ 别再在这里绑 Mod-e —— 本表的键盖得过预设(当年居中就是这么把行内代码唯一的键吃掉的)。
+          'Mod-Shift-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
+          'Mod-Shift-e': (state, dispatch) => setTextAlignment(state, dispatch, 'center'),
+          'Mod-Shift-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
         }),
       ))
       // Tab 缩进(与 v4 blockLayer 共用 tabIndent.ts 的同一份阶梯):列表嵌套/首项视觉档、代码块两空格、
@@ -1126,12 +1141,14 @@ export function MilkdownInner({
         return emptyAfter
       },
       transform: (trig) => {
+        let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           const { $from, empty } = view.state.selection
-          applyTrigger(view, trig, empty ? slashRange($from) : null)
+          ok = applyTrigger(view, trig, empty ? slashRange($from) : null)
           view.focus()
         })
+        return ok
       },
     }
     return () => { if (slashOpsRef) slashOpsRef.current = null }
@@ -1384,29 +1401,33 @@ export function MilkdownInner({
       ctx.get(editorViewCtx).focus()
     })
   }
-  // 行内链接:先问地址,再把 link mark 套到当前选区上。
+  // 行内链接(⌘K / 工具栏 🔗,I-10):
+  //  · 选区或光标碰到已有链接 → 先扩到整条链接,弹框**预填**原地址;改了就换地址,「移除链接」= 去掉链接(对标 Notion)。
+  //  · 普通选区 → 问地址,套到选区上。
+  //  · 空选区、不在链接里 → 问地址,在光标处插一条链接(文字取主机名,同「粘贴为链接」—— 拿 URL 原文当文字
+  //    会被嵌入层当成裸 URL 升级成书签卡)。
   // ⚠️别改回 `runCmd(toggleLinkCommand.key)` —— 那个命令不带 payload 时 href 为 undefined,
   // 而 link schema 的 href 是必填 string,mark.create 直接抛 → 按钮点了「完全没反应」(用户实报)。
-  // 留空地址 = 去掉链接;javascript: 之类由 normalizeHref 挡下(笔记会被分享页独立渲染)。
-  const editLink = (): void => {
+  // javascript: 之类由 normalizeHref 挡下(笔记会被分享页独立渲染)。
+  const editLink = (): boolean => {
     const inst = getInstance()
-    if (!inst) return
+    if (!inst) return false
+    let handled = false
     inst.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const type = linkSchema.type(ctx)
-      const { from, to, empty } = view.state.selection
-      if (empty) return
-      // 选区已经是链接 → 直接取消链接,不弹框。PromptDialog 的空输入等同「取消」(拿不到
-      // 「确认了但留空」这个信号),所以去链接只能走这条无弹窗的路 —— 与 toggleLink 的语义也一致。
-      if (view.state.doc.rangeHasMark(from, to, type)) {
-        view.dispatch(view.state.tr.removeMark(from, to, type))
-        view.focus()
-        return
-      }
+      const { from, to, empty, $from } = view.state.selection
+      if (!$from.parent.isTextblock || $from.parent.type.spec.code) return // 代码块里没有链接:键放行
+      handled = true
+      const hit = linkExtent(view.state.doc, from, to, type)
       const docAtAsk = view.state.doc // 弹框期间文档可能被换掉(外部改文件回灌 / agent 写盘 / 云同步)
-      void askString(translate('mdblock.link.title'), '', { label: translate('mdblock.link.label') }).then((raw) => {
-        const href = raw === null ? null : normalizeHref(raw)
-        if (!href) return
+      const range = hit ?? { from, to, href: '' }
+      const ask = hit
+        ? askStringOrAlt(translate('mdblock.link.editTitle'), hit.href, { label: translate('mdblock.link.label'), altLabel: translate('mdblock.link.remove') })
+        : askString(translate('mdblock.link.title'), '', { label: translate('mdblock.link.label') })
+      void ask.then((raw) => {
+        const href = raw === null || raw === ASK_ALT ? null : normalizeHref(raw)
+        if (raw !== ASK_ALT && !href) return
         // ⚠️ 重新取实例:弹框期间这个块可能已重挂,闭包里的 inst 是个死实例。
         getInstance()?.action((c2) => {
           const v = c2.get(editorViewCtx)
@@ -1414,11 +1435,21 @@ export function MilkdownInner({
           // 也不能给错的文字加链接(更别说越界抛)。
           if (v.state.doc !== docAtAsk) return
           const t = linkSchema.type(c2)
-          v.dispatch(v.state.tr.removeMark(from, to, t).addMark(from, to, t.create({ href })))
+          if (raw === ASK_ALT) {
+            v.dispatch(v.state.tr.removeMark(range.from, range.to, t))
+          } else if (range.to > range.from) {
+            v.dispatch(v.state.tr.removeMark(range.from, range.to, t).addMark(range.from, range.to, t.create({ href })))
+          } else if (href) {
+            const label = hostLabel(href)
+            const tr = v.state.tr.insertText(label, range.from)
+            tr.addMark(range.from, range.from + label.length, t.create({ href }))
+            v.dispatch(tr.setSelection(TextSelection.create(tr.doc, range.from + label.length)).scrollIntoView())
+          }
           v.focus()
         })
       })
     })
+    return handled
   }
   const clearFormatting = (): void => {
     getInstance()?.action((ctx) => {
@@ -1455,10 +1486,13 @@ export function MilkdownInner({
   }
   /** 「转成代码块 / 公式」不是前缀型转换,走各自的整块重写。
    *  代码块在**跨块选区**下是 AFFiNE 的「合并成一个代码块」(逐块转会得到 N 个代码块)。 */
-  const turnIntoWrapped = (a: 'codeblock' | 'math'): void => {
+  const turnIntoWrapped = (a: 'codeblock' | 'math'): boolean => {
+    let ok = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const { state } = view
+      // 单元格里整块重写 = 把表格从这一格劈成两张(I-19);菜单已不列,这里再挡一道。
+      if (editContextOf(state.selection).tableCell) return
       const { $from, $to } = state.selection
       const from = $from.before($from.depth)
       const to = $to.after($to.depth)
@@ -1472,20 +1506,29 @@ export function MilkdownInner({
       tr.setSelection(TextSelection.near(tr.doc.resolve(from + 1)))
       view.dispatch(tr.scrollIntoView())
       view.focus()
+      ok = true
     })
+    return ok
+  }
+  /** 转换没做成 → 说一句(I-19:此前 applyTrigger 的 false 被吞掉,点了没反应)。 */
+  const turnFailed = (a: ToolbarAction): void => {
+    const key = TURN_LABEL_KEYS[a]
+    window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: key ? translate(key) : a }) } }))
   }
   const onToolbarAct = (a: ToolbarAction): void => {
     if (a === 'codeblock' || a === 'math') {
-      turnIntoWrapped(a)
+      if (!turnIntoWrapped(a)) turnFailed(a)
       return
     }
     const trig = TURN[a]
     if (trig) {
+      let ok = false
       getInstance()?.action((ctx) => {
         const view = ctx.get(editorViewCtx)
-        applyTrigger(view, trig, null) // consume=null:工具栏没有要删的触发符
+        ok = applyTrigger(view, trig, null) // consume=null:工具栏没有要删的触发符
         view.focus()
       })
+      if (!ok) turnFailed(a)
       return
     }
     const map: Partial<Record<ToolbarAction, () => void>> = {
@@ -1568,11 +1611,27 @@ export function MilkdownInner({
           top={slash.top}
           anchorTop={slash.anchorTop}
           hideKeys={unified ? UNIFIED_HIDDEN_SLASH : undefined}
+          ctx={slash.ctx}
           unified={unified}
           editorFocused={editorFocused}
-          onPick={(it) => { setSlash(null); onSlashPick(it) }}
+          onPick={(it) => {
+            setSlash(null)
+            getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), slash.from) }) // 选中了:标记作废
+            onSlashPick(it)
+          }}
           onClose={() => {
-            slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
+            // ＋ 替用户敲的 `/`(B-19):关菜单 = 不要这个选择器了 → 连查询一起删掉,不留残渣。
+            // 用户自己敲的 `/` 照旧留成字面,且同一个 '/' 不再弹(Esc 闩锁)。
+            let cleared = false
+            getInstance()?.action((ctx) => {
+              const view = ctx.get(editorViewCtx)
+              if (!takeMachineSlash(view, slash.from)) return
+              const { doc } = view.state
+              if (slash.from < 1 || slash.to > doc.content.size || doc.textBetween(slash.from - 1, slash.from) !== '/') return
+              view.dispatch(view.state.tr.delete(slash.from - 1, slash.to))
+              cleared = true
+            })
+            if (!cleared) slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
             setSlash(null)
           }}
         />
@@ -1595,10 +1654,21 @@ export function MilkdownInner({
           kind={toolbar.kind}
           active={toolbar.active}
           align={toolbar.align}
+          shape={toolbar.shape}
+          fg={toolbar.fg}
+          bg={toolbar.bg}
           onAct={onToolbarAct}
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}
-          onClose={() => setToolbar(null)}
+          onClose={() => {
+            setToolbar(null)
+            // Esc 关掉 = 这个选区不再弹,直到选区变了(否则焦点一回编辑器它就又冒出来)。
+            getInstance()?.action((ctx) => {
+              const v = ctx.get(editorViewCtx)
+              v.dispatch(v.state.tr.setMeta(toolbarDismissKey, true))
+            })
+          }}
+          onReturnFocus={() => getInstance()?.action((ctx) => ctx.get(editorViewCtx).focus())}
           onAsk={onAskTangu ? () => {
             setToolbar(null)
             getInstance()?.action((ctx) => onAskTangu(ctx.get(editorViewCtx)))
@@ -1738,7 +1808,7 @@ export function MarkdownBlock({
     // ⚠️ 插件项即使 scaffold 为空串也不能走这条:'' 在 PREFIX_TRIGGERS 里是「转成普通文本」。
     const prefix = item.run ? undefined : PREFIX_TRIGGERS[scaffold]
     if (prefix) {
-      slashOpsRef.current.transform(prefix)
+      if (!slashOpsRef.current.transform(prefix)) slashTurnFailed(item.label)
       return
     }
     // 其余类型:先在编辑器里消费掉触发 '/query'(返回删后是否空块),再各自处理。
@@ -2159,6 +2229,11 @@ export const SLASH_ITEMS: SlashSeed[] = [
  *   自己的 path 发 `amadeus:template-picker`,宿主 TemplatePicker 按 v4Path 走 insertMarkdown。) */
 const UNIFIED_HIDDEN_SLASH: ReadonlySet<string> = new Set<string>()
 
+/** 插件贡献点的文案:函数形态在**这一刻**求值(切语言即时跟上,B-20),字符串原样。 */
+export function textOf<T extends string | undefined>(v: T | (() => string)): T | string {
+  return typeof v === 'function' ? v() : v
+}
+
 /** 内置项 + 插件注册项的合并清单(桌面 slash 菜单与移动端块面板共用,插件新增项两处自动都有)。 */
 export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}): SlashItem[] {
   const { t } = useI18n()
@@ -2168,15 +2243,15 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
     ...SLASH_ITEMS.map(({ labelKey, groupKey, ...rest }) => ({ ...rest, label: t(labelKey), group: t(groupKey) })),
     ...pluginSlash.map(({ item }) => ({
       key: item.id,
-      label: item.label,
+      label: textOf(item.label), // 函数形态每次渲染求值(B-20)
       hint: item.hint ?? '',
       // 插件项走图标词表(见 components/icons 的 resolveIcon):写图标名 → 和内置项同一套 SVG;
       // 写 emoji/字形 → 原样画(老插件零改动)。兜底 '·' 只在插件压根没给 icon 时出现。
       icon: resolveIcon(item.icon, '·'),
-      group: item.group ?? t('mdblock.group.plugin'),
+      group: textOf(item.group) ?? t('mdblock.group.plugin'),
       scaffold: item.scaffold ?? '',
       run: item.run,
-      kw: `${item.keywords ?? ''} ${item.label}`,
+      kw: `${item.keywords ?? ''} ${textOf(item.label)}`,
     })),
   ]
   const ai = !!readTangu()?.complete
@@ -2220,6 +2295,35 @@ export interface PasteAs {
   left: number
   top: number
   anchorTop: number
+}
+
+/** 选区 / 光标碰到的链接的**完整**区间(I-10):同一文本块里相连且同地址的 link 片段算一条;
+ *  碰到几条就从第一条的头扩到最后一条的尾(并上选区本身)。空选区时光标在链接首尾也算碰到。
+ *  跨块选区 / 没碰到 → null。 */
+export function linkExtent(doc: ProseNode, from: number, to: number, type: MarkType): { from: number; to: number; href: string } | null {
+  const $from = doc.resolve(from)
+  if (!$from.sameParent(doc.resolve(to)) || !$from.parent.isTextblock) return null
+  const segs: Array<{ from: number; to: number; href: string }> = []
+  let pos = $from.start()
+  $from.parent.forEach((child) => {
+    const end = pos + child.nodeSize
+    const m = type.isInSet(child.marks)
+    if (m) {
+      const href = String(m.attrs.href ?? '')
+      const last = segs[segs.length - 1]
+      if (last && last.to === pos && last.href === href) last.to = end
+      else segs.push({ from: pos, to: end, href })
+    }
+    pos = end
+  })
+  const hits = segs.filter((s) => (from === to ? s.from <= from && from <= s.to : s.from < to && from < s.to))
+  if (!hits.length) return null
+  return { from: Math.min(from, hits[0].from), to: Math.max(to, hits[hits.length - 1].to), href: hits[0].href }
+}
+
+/** slash 的前缀型转换做不成(结构不允许)→ 说一句,'/query' 留着(B-18:此前静默无效)。 */
+export function slashTurnFailed(label: string): void {
+  window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
 }
 
 /** 链接 → 短标签(主机名,去 www.)。解析不了就原样。 */
@@ -2323,10 +2427,12 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, editorFocused, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
+  /** 触发点的编辑上下文:这里做不成的项不列(B-18,menuContext.slashItemApplies 单源)。 */
+  ctx?: EditContext
   unified?: boolean
   /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
   editorFocused?: () => boolean
@@ -2335,7 +2441,10 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, editorFocus
   const { t } = useI18n()
   const [active, setActive] = useState(0)
   const all = useAllSlashItems({ unified })
-  const allItems = useMemo(() => (hideKeys ? all.filter((it) => !hideKeys.has(it.key)) : all), [all, hideKeys])
+  const allItems = useMemo(
+    () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
+    [all, hideKeys, ctx],
+  )
 
   const q = query.trim().toLowerCase()
   // 有输入 → 按匹配度排序(label 与各关键词取最佳 fuzzy 分,降序);无输入 → 保持分组固定顺序。

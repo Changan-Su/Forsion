@@ -116,27 +116,29 @@ export const calloutBlocks: AmadeusPlugin = {
   setup(ctx) {
     // icon 一律写图标词表里的名字(不是 emoji):插件项和内置项在 slash 菜单里同一套 SVG。
     // 这三条也是新契约的样板 —— 外面照着写的人先看到的就是它们。
+    // label / group 传函数(B-20):渲染时才求值,切语言即时跟上;setup 里直接 translate() 会定格在启动语言
+    // (首次启动的 IP 语言校正还发生在 setup 之后)。
     ctx.registerSlashItem({
       id: 'callout-note',
-      label: translate('amadeusBuiltins.slash.note'),
+      label: () => translate('amadeusBuiltins.slash.note'),
       icon: 'callout-note',
-      group: translate('amadeusBuiltins.slash.group'),
+      group: () => translate('amadeusBuiltins.slash.group'),
       scaffold: '> [!note] ',
       keywords: 'callout note 提示 标注 biaozhu',
     })
     ctx.registerSlashItem({
       id: 'callout-info',
-      label: translate('amadeusBuiltins.slash.info'),
+      label: () => translate('amadeusBuiltins.slash.info'),
       icon: 'callout-info',
-      group: translate('amadeusBuiltins.slash.group'),
+      group: () => translate('amadeusBuiltins.slash.group'),
       scaffold: '> [!info] ',
       keywords: 'callout info 信息 xinxi',
     })
     ctx.registerSlashItem({
       id: 'callout-warn',
-      label: translate('amadeusBuiltins.slash.warn'),
+      label: () => translate('amadeusBuiltins.slash.warn'),
       icon: 'callout-warning',
-      group: translate('amadeusBuiltins.slash.group'),
+      group: () => translate('amadeusBuiltins.slash.group'),
       scaffold: '> [!warning] ',
       keywords: 'callout warning 警告 jinggao',
     })

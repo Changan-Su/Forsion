@@ -9,6 +9,18 @@ import { Selection, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory } from '@milkdown/kit/prose/history'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { registerMessages, translate } from '../../../i18n'
+
+// 选区工具栏「转换为」按钮上的当前块类型名(I-19:此前写死中文,英文界面照样显示「标题 2」)。
+registerMessages({
+  'blocklabel.text': { zh: '正文', en: 'Text' },
+  'blocklabel.heading': { zh: '标题 {n}', en: 'Heading {n}' },
+  'blocklabel.code': { zh: '代码', en: 'Code' },
+  'blocklabel.todo': { zh: '待办', en: 'To-do' },
+  'blocklabel.ordered': { zh: '有序列表', en: 'Numbered list' },
+  'blocklabel.bullet': { zh: '无序列表', en: 'Bulleted list' },
+  'blocklabel.quote': { zh: '引用', en: 'Quote' },
+})
 
 export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold' | 'code' | 'math'
 
@@ -132,12 +144,15 @@ export function triggerFromStructuralPrefix(source: string): Trigger | null {
   return null
 }
 
-/** 光标前最近的 '/'(slash 菜单触发符)→ 消费区间;找不到返回 null。 */
-export function slashRange($from: ResolvedPos): { from: number; to: number } | null {
+/** 光标前最近的 '/'(slash 菜单触发符)→ 消费区间;找不到返回 null。
+ *  B-17:行中触发 slash 必须先补一个空格(`段甲内容 /h2`),这个空格是**触发语法**的一部分 —— 一并删掉,
+ *  否则落盘成 `## 段甲内容 `。行内插入(keepSpace,如单元格里的 `[[`)要接着正文往下写,保留它。 */
+export function slashRange($from: ResolvedPos, opts?: { keepSpace?: boolean }): { from: number; to: number } | null {
   const seg = textBeforeCursor($from)
   const idx = seg.lastIndexOf('/')
   if (idx < 0) return null
-  return { from: $from.start() + idx, to: $from.pos }
+  const lead = !opts?.keepSpace && idx > 0 && /\s/.test(seg[idx - 1]) ? 1 : 0
+  return { from: $from.start() + idx - lead, to: $from.pos }
 }
 
 /**
@@ -232,14 +247,14 @@ export interface BlockNode {
  */
 export function blockLabel(chain: BlockNode[]): string {
   for (const n of chain) {
-    if (n.name === 'heading') return `标题 ${n.level ?? 1}`
-    if (n.name === 'code_block') return '代码'
-    if (n.name === 'list_item' && n.checked != null) return '待办'
-    if (n.name === 'ordered_list') return '有序列表'
-    if (n.name === 'bullet_list') return '无序列表'
-    if (n.name === 'blockquote') return '引用'
+    if (n.name === 'heading') return translate('blocklabel.heading', { n: String(n.level ?? 1) })
+    if (n.name === 'code_block') return translate('blocklabel.code')
+    if (n.name === 'list_item' && n.checked != null) return translate('blocklabel.todo')
+    if (n.name === 'ordered_list') return translate('blocklabel.ordered')
+    if (n.name === 'bullet_list') return translate('blocklabel.bullet')
+    if (n.name === 'blockquote') return translate('blocklabel.quote')
   }
-  return '正文'
+  return translate('blocklabel.text')
 }
 
 function findDepth($p: ResolvedPos, name: string): number | null {

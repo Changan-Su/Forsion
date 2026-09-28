@@ -303,7 +303,7 @@ function PlugViewHarness() {
         return {
           views: s.views.map((o) => ({ pluginId: o.pluginId, id: o.item.id, title: o.item.title })),
           commands: s.commands.map((o) => ({ id: o.item.id, title: o.item.title })),
-          slashItems: s.slashItems.map((o) => ({ id: o.item.id, label: o.item.label })),
+          slashItems: s.slashItems.map((o) => ({ id: o.item.id, label: typeof o.item.label === 'function' ? o.item.label() : o.item.label })),
           settings: s.settings.map((o) => ({ key: o.item.key, label: o.item.label, type: o.item.type })),
           statusItems: s.statusItems.map((o) => ({ id: o.item.id, text: o.item.text })),
           fileTypes: s.fileTypes.map((o) => ({ id: o.item.id, extensions: o.item.extensions })),
