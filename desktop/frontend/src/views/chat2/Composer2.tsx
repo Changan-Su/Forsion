@@ -210,6 +210,15 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
 
 export { fmtTokens } from './ContextUsagePop'
 
+/** 发出的正文:引用 token 行 + 引文 + 正文(上下文在前)。例外:/refine 必须留在最前 —— 引擎只认开头的 /refine
+ *  (isRefineInvocation);开着「自动引用当前笔记」时几乎每条都带引用行,前置会让 /refine 静默失效。 */
+export function composeOutgoing(refs: string, quoted: string, text: string): string {
+  // 前缀归一成小写:引擎检测大小写敏感,/Refine 会静默不触发(TUI 同口径)
+  if (/^\/refine(\s|$)/i.test(text)) text = '/refine' + text.slice('/refine'.length)
+  if (/^\/refine(\s|$)/.test(text) && (refs || quoted)) return `${text}\n\n${refs}${quoted}`.trimEnd()
+  return refs + quoted + text
+}
+
 /**
  * 输入框 autosize 的目标 style.height。**scrollHeight ≤ 0 = 元素当前没被布局**
  * (挂载时机处于 dockview 用 display:none 藏起的非激活面板 / 首启引导期隐藏的外壳里)——
@@ -458,7 +467,7 @@ export const Composer2: React.FC<{
     const msgs = sid ? st.messagesBySession[sid] || [] : []
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
     if (!lastUser) { st.toast(t('input.slash.nothingToRetry'), true); return }
-    st.regenerate(lastUser.id, sid)
+    await st.retry(sid) // 运行中排到本轮结束后,到时重跑那时的最后一条用户消息
   }
 
   // /export 高保真:经 REST 拉全量消息(含 tool_calls;内存 messagesBySession 只是渲染态切片),
@@ -1175,7 +1184,7 @@ export const Composer2: React.FC<{
     const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     const refs = allRefChips.length ? allRefChips.map((c) => c.token).join(' ') + '\n' : ''
-    const outgoing = refs + quoted + text
+    const outgoing = composeOutgoing(refs, quoted, text)
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
       return

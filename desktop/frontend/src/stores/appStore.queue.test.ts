@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-const service = vi.hoisted(() => ({ start: vi.fn(), steer: vi.fn(), compact: vi.fn() }))
+const service = vi.hoisted(() => ({ start: vi.fn(), steer: vi.fn(), compact: vi.fn(), del: vi.fn() }))
 vi.mock('../services/agentRunService', async (original) => ({
   ...await original<typeof import('../services/agentRunService')>(),
   startRun: service.start, steerRun: service.steer,
 }))
 vi.mock('../services/backendService', async (original) => ({
   ...await original<typeof import('../services/backendService')>(),
-  compactSession: service.compact,
+  compactSession: service.compact, deleteMessages: service.del,
 }))
 import { useApp } from './appStore'
 
@@ -62,7 +62,7 @@ describe('queued commands while a run is active', () => {
     await useApp.getState().compact('s') // 相邻重复点击只留一条
     await useApp.getState().send('/compact', [], undefined, undefined, undefined, 's') // 实时转写等调用方:正文恰好是 /compact 的普通消息
     expect(queued()).toEqual(['/compact', 'more work', '/compact', '/compact'])
-    expect((useApp.getState().steerPendingBySession.s || []).map((p) => !!p.compact)).toEqual([true, false, true, false])
+    expect((useApp.getState().steerPendingBySession.s || []).map((p) => p.kind)).toEqual(['compact', undefined, 'compact', undefined])
   })
 
   it('does not let a new message overtake a queued message whose startRun is still in flight', async () => {
@@ -104,6 +104,23 @@ describe('queued commands while a run is active', () => {
     await vi.advanceTimersByTimeAsync(25_000)
     expect(service.start).toHaveBeenCalledTimes(2)
     expect(service.start.mock.calls[1][1]).toMatchObject({ message: 'second' })
+  })
+
+  it('queues /retry while running and reruns the last user message once the run ends', async () => {
+    service.del.mockResolvedValue({ ok: true })
+    useApp.setState({ messagesBySession: { s: [
+      { id: 'u1', role: 'user', content: 'fix the bug', timestamp: 1, status: 'done' },
+      { id: 'a', role: 'assistant', content: 'working', timestamp: 2, status: 'streaming' },
+    ] } })
+    await useApp.getState().retry('s')
+    expect(queued()).toEqual(['/retry'])
+    expect(service.del).not.toHaveBeenCalled()
+    useApp.getState().reduceEvent('s', 'r', { current: 'a' }, { seq: 1, type: 'done', payload: { content: 'ok' } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.del).toHaveBeenCalledWith(expect.anything(), 's', ['u1', 'a'])
+    expect(service.start).toHaveBeenCalledOnce()
+    expect(service.start.mock.calls[0][1]).toMatchObject({ message: 'fix the bug' })
+    expect(queued()).toEqual([])
   })
 
   it('still steers plain messages when nothing is queued, but queues /refine', async () => {
