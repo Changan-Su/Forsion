@@ -34,7 +34,9 @@ import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
-import { isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
+import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
+import { runLocationsAvailable } from '../features/runtime'
+import { DeviceSessionSections } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
 import { homeTarget } from '../services/engine/targets'
@@ -92,7 +94,7 @@ function anchorOf(e: React.MouseEvent | React.KeyboardEvent): MenuAt {
 export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = {}) {
   const { t, locale } = useI18n()
   // ⚠️ 这段 store 映射照抄 SessionsView(同一批 props 要原样喂给 SidebarPane);只多取 Agent 轨道那几项。
-  const s = useApp(useShallow((state) => ({
+  const s0 = useApp(useShallow((state) => ({
     runningBySession: state.runningBySession,
     sessions: state.sessions,
     archivedSessions: state.archivedSessions,
@@ -130,6 +132,11 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     refreshTeams: state.refreshTeams,
     refreshSessions: state.refreshSessions,
   })))
+  // P1-K7a:本端的一切(项目组、私聊 / 团队轨道行、墓碑、活动时间)只看本端会话;在「我的电脑」上的会话(已注入的那几条)
+  // 归 DeviceSessionSections —— 否则 Mac 上的私聊会话会在手机上长出一条轨道行,Mac 路径长出本地项目组。
+  const homeSessions = useMemo(() => s0.sessions.filter(isHomeSession), [s0.sessions])
+  const homeArchived = useMemo(() => s0.archivedSessions.filter(isHomeSession), [s0.archivedSessions])
+  const s = useMemo(() => ({ ...s0, sessions: homeSessions, archivedSessions: homeArchived }), [s0, homeSessions, homeArchived])
   // 旧的持久化快照 / 未刷新前可能没有 teams:按空表渲染,不让一个 undefined 把整块侧栏交给 ErrorBoundary。
   const teams = Array.isArray(s.teams) ? s.teams : []
   const [teamEditor, setTeamEditor] = useState<{ team: TeamDef | null } | null>(null)
@@ -497,6 +504,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           activeWorkspaceKey={s.activeWorkspaceKey}
           onEnterWorkspace={(key) => s.setActiveWorkspaceKey(key)}
           sessionWorkspaceKeyOf={(session) => inOrbit(session) ? null : sessionWorkspaceKey(session, workspaces)}
+          deviceSections={runLocationsAvailable() && (filter === 'all' || filter === 'project') ? <DeviceSessionSections activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} /> : undefined}
         />
       </div>
 

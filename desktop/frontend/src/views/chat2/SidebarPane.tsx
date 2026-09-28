@@ -124,6 +124,8 @@ export interface SidebarPaneProps {
   onTogglePinned?: (entryKey: string) => void
   /** 用户显式进入一级条目时更新 Pin 区内的最近激活顺序;不写会话 updated_at。 */
   onActivateEntry?: (entryKey: string) => void
+  /** P1-K7a:「我的电脑」分组(DeviceSessionSections)。排在本端条目之后、归档区之前;两种排序、平铺都渲染。 */
+  deviceSections?: React.ReactNode
 }
 
 /** 会话最近活动时间(ms):updated_at 随每条助手消息落库刷新(引擎 sqlStateStore.finalizeAssistantMessage),解析不了 = 0。 */
@@ -507,6 +509,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                 </React.Fragment>
               )
         })}
+        {p.deviceSections}
       </div>
 
       {/* 「添加本地工作区」+「已归档」常驻侧栏底部(sticky footer),不随会话列表滚走。 */}
