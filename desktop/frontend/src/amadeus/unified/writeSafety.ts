@@ -104,36 +104,61 @@ export interface UnsavedDraft {
   /** 草稿基于的盘上版本指纹:恢复时盘上已不是它 = 草稿之后别处又写过,覆盖前要先保全盘上那版。 */
   base: string
   at: number
+  /** 存在哪个槽位(见 draftKey);null = 不分槽的那一格。读出来时才有,删 / 认领都按它找回原键。 */
+  slot?: string | null
 }
 
-const draftKey = (vaultRoot: string | null | undefined, path: string): string => `amadeus.unsavedDraft:${vaultRoot ?? ''}:${path}`
+// 槽位(评审 G1-02 返修):同一篇开在两个标签里、两边都有没落盘的字时被别处改名,两个实例各自把草稿存到新路径 ——
+// 只按路径做键的话后一份把前一份整个盖掉。槽位 = 实例所属的 leaf(改名后同一个 leaf 会在新路径重挂,认得回自己那份);
+// 不在面板里的实例(台架主实例 / 单列宿主)用不分槽的旧键,与此前落下的草稿兼容。`\u0000` 分隔:路径里不会有它。
+const draftBase = (vaultRoot: string | null | undefined, path: string): string => `amadeus.unsavedDraft:${vaultRoot ?? ''}:${path}`
+const draftKey = (vaultRoot: string | null | undefined, path: string, slot?: string | null): string =>
+  draftBase(vaultRoot, path) + (slot ? `\u0000${slot}` : '')
 
-export function stashDraft(vaultRoot: string | null | undefined, path: string, text: string, baseText: string): void {
+export function stashDraft(vaultRoot: string | null | undefined, path: string, text: string, baseText: string, slot?: string | null): void {
   try {
     const draft: UnsavedDraft = { text, base: textFingerprint(baseText), at: Date.now() }
-    localStorage.setItem(draftKey(vaultRoot, path), JSON.stringify(draft))
+    localStorage.setItem(draftKey(vaultRoot, path, slot), JSON.stringify(draft))
   } catch { /* 无痕 / 配额满 / 缩略图宿主:本机草稿只是兜底,拿不到不影响正常保存 */ }
 }
 
-export function readDraft(vaultRoot: string | null | undefined, path: string): UnsavedDraft | null {
+function parseDraft(raw: string | null, slot: string | null): UnsavedDraft | null {
+  if (!raw) return null
+  const d = JSON.parse(raw) as Partial<UnsavedDraft>
+  return typeof d.text === 'string' && typeof d.base === 'string' ? { text: d.text, base: d.base, at: Number(d.at) || 0, slot } : null
+}
+
+/** 读这篇的草稿:先认自己槽位的;没有就退到不分槽的那格,再退到别的槽位里最新的一份(那个标签已经关了 / 重启后
+ *  换了 leaf —— 草稿不能因为认不出主人就再也不提示)。 */
+export function readDraft(vaultRoot: string | null | undefined, path: string, slot?: string | null): UnsavedDraft | null {
   try {
-    const raw = localStorage.getItem(draftKey(vaultRoot, path))
-    if (!raw) return null
-    const d = JSON.parse(raw) as Partial<UnsavedDraft>
-    return typeof d.text === 'string' && typeof d.base === 'string' ? { text: d.text, base: d.base, at: Number(d.at) || 0 } : null
+    const own = slot ? parseDraft(localStorage.getItem(draftKey(vaultRoot, path, slot)), slot) : null
+    if (own) return own
+    const plain = parseDraft(localStorage.getItem(draftKey(vaultRoot, path)), null)
+    if (plain) return plain
+    const prefix = draftBase(vaultRoot, path) + '\u0000'
+    let best: UnsavedDraft | null = null
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (!k || !k.startsWith(prefix)) continue
+      const d = parseDraft(localStorage.getItem(k), k.slice(prefix.length))
+      if (d && (!best || d.at > best.at)) best = d
+    }
+    return best
   } catch {
     return null
   }
 }
 
-/** 删草稿。给了 `onlyIfText` 时只在存着的正是这份内容时才删 —— 别把上一次会话留下、用户还没决定的那份顺手删了。 */
-export function clearDraft(vaultRoot: string | null | undefined, path: string, onlyIfText?: string): void {
+/** 删草稿(slot 那一格)。给了 `onlyIfText` 时只在存着的正是这份内容时才删 —— 别把上一次会话留下、用户还没决定的那份顺手删了。 */
+export function clearDraft(vaultRoot: string | null | undefined, path: string, onlyIfText?: string, slot?: string | null): void {
   try {
+    const key = draftKey(vaultRoot, path, slot)
     if (onlyIfText != null) {
-      const d = readDraft(vaultRoot, path)
+      const d = parseDraft(localStorage.getItem(key), slot ?? null)
       if (!d || d.text !== onlyIfText) return
     }
-    localStorage.removeItem(draftKey(vaultRoot, path))
+    localStorage.removeItem(key)
   } catch { /* 同 stashDraft */ }
 }
 

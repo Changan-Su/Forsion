@@ -9,7 +9,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
@@ -35,7 +35,7 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
@@ -135,8 +135,10 @@ type BodyFocusReq = 'start' | 'end' | 'body-enter' | BodyCarry
 
 /** 标题回车的聚焦请求要跨「改名 → 实例随 key 重建」存活(重建清零一切组件态,只能挂模块级)。
  *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。
- *  at:没人认领的请求 10s 后作废 —— 否则下次打开同一篇时凭空执行一次(顶插空段、抢焦点)。 */
-let pendingBodyFocus: { path: string; req: BodyFocusReq; at: number } | null = null
+ *  at:没人认领的请求 10s 后作废 —— 否则下次打开同一篇时凭空执行一次(顶插空段、抢焦点)。
+ *  scope:发起改名的实例所属的 leaf(评审 G1-02 返修)。同一篇开在几个标签里时改名会让它们**全部**在新路径重挂,
+ *  只按路径认领的话谁先挂上谁拿走 —— 别的标签抢走发起标签的正文与选区(后台标签甚至凭空顶插一个空段)。 */
+let pendingBodyFocus: { path: string; scope: string | null; req: BodyFocusReq; at: number } | null = null
 
 const NOOP_KEYS = {
   insertAfter: () => {},
@@ -255,6 +257,12 @@ interface Pipe {
   /** 只读实例(公开分享页):writeNow / 生命周期 flush 在此短路。挂在 pipe 上而不是闭包读 prop ——
    *  writeFailures.test 把 writeNow 与 flush 两段源码切出来单独求值,闭包里的自由标识符会让它炸。 */
   readOnly: boolean
+  /** 本实例的草稿槽位(= 所属 leaf,见 writeSafety 的 draftKey;评审 G1-02 返修)。同样挂在 pipe 上(理由同 readOnly)。 */
+  slot: string | null
+  /** 同篇另一个实例替两边写的 fm 补丁(unifiedPatchFm 的 follow,G1-02 返修):pipe.fm 恰是它时,isPristine 不把 fm
+   *  这一半算成本实例的改动 —— 否则本实例卸载冲洗 / CAS 让位时会拿「旧正文 + 新 fm」抢着写,盖掉写者的字。
+   *  回灌采纳盘上版本、本实例写成功后清掉。 */
+  peerFm: string | null
 }
 
 interface HostApi {
@@ -884,7 +892,7 @@ export interface UnifiedHistory {
   redo: () => boolean
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, compact = false, readOnly = false, hardBreaks = false }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -903,6 +911,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 撤销 / 重做的出口(G2-05)。v4 不进 pageStore,宿主按 activePage 门控的 `myPs().undo()` 在这里是死键;
    *  宿主(NoteView)给本 leaf 自己的 ref,不按路径全局查找。卸载时清空。 */
   historyRef?: { current: UnifiedHistory | null }
+  /** 本 leaf 自己的文件写口(评审 G1-02):宿主的 OS 拖入 / 上传按钮直接递给**这个**实例(存附件 + 光标处插 `![[base]]`),
+   *  不按路径全局查找 —— 同篇双开时按路径找到的是另一个标签:指示线画在这边,文件却插进那边、随即被这边的写入盖掉。
+   *  返回 false = 本实例不接(只读 / 已退休)。卸载时清空。 */
+  filesRef?: { current: ((files: File[]) => boolean) | null }
   /** 只读实例(公开分享页 /share/<token>,2026-09-07):同一套渲染(块/分栏/卡片/画布/嵌入/chrome),
    *  但**一个字节都不写**:PM editable=false,writeNow/schedule/setFm/改名/生命周期 flush 全部短路,
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
@@ -915,6 +927,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
   const vaultRoot = scoped.getState().vaultRoot
+  /** 所属 leaf(不在面板里 = null):同篇多开时的实例身份 —— 草稿槽位、改名聚焦的认领、openNote 落点都认它(G1-02)。 */
+  const scope = useContext(PageScopeCtx)
+  const activeScope = useActivePageScope()
   // 源码模式是全局开关(`</>`):只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
   // 什么也不会落盘,切走即丢,等于假编辑(Codex 09-11 P1)。
   const globalMode = useUiOverlay((s) => s.editorMode)
@@ -924,9 +939,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerFm: null }
   }
   const pipe = pipeRef.current
+  /** 最近一次被用户用到的时刻(评审 G1-02):焦点 / 指针进入本实例、或所属 leaf 成为活动面板时记一笔。
+   *  lifecycle 按它给同路径实例排序 —— 按路径的操作(插模板 / 大纲 / 跳转 / 树行拖入 / fm 补丁)落到最近用过的那个。 */
+  const lastActive = useRef(0)
+  const touchActive = (): void => { lastActive.current = performance.now() }
+  useEffect(() => {
+    // 切标签只激活 leaf、未必把焦点给编辑器(命令面板插模板就是这个形态):活动面板本身也算「正在用」。
+    if (scope != null && scope === activeScope) touchActive()
+  }, [scope, activeScope])
   // 属性面板里还没失焦的草稿(C-02):落盘冲洗(卸载 / beforeunload / 换库 / 退出握手)先把它们提交进 pipe.fm。
   const [propDrafts] = useState(() => new Set<() => void>())
   const flushPropDrafts = (): void => { for (const f of [...propDrafts]) f() }
@@ -1166,7 +1189,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
   const [bodyFocus, setBodyFocus] = useState<BodyFocusReq | null>(() => {
     const p = pendingBodyFocus
-    if (p?.path === path) {
+    if (p?.path === path && p.scope === scope) {
       pendingBodyFocus = null
       return Date.now() - p.at < 10_000 ? p.req : null
     }
@@ -1373,7 +1396,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。 */
   const isPristine = (): boolean => {
     const base = splitFm(pipe.lastSaved)
-    if (base.fmText !== pipe.fm) return false
+    // 同篇另一个实例正替两边写的 fm 补丁(peerFm)不算本实例的改动(G1-02 返修,见 Pipe.peerFm)。
+    if (base.fmText !== pipe.fm && pipe.fm !== pipe.peerFm) return false
     if (base.body === pipe.body) return true
     if (layoutLineOf(pipe.fm) != null || canvasLineOf(pipe.fm) != null) return false
     const canon = hostApi.current?.canonical(base.body)
@@ -1399,7 +1423,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
     if (!pipe.retired) {
       pipe.stashed = composeFm(pipe.fm, pipe.body)
-      stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved)
+      stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved, pipe.slot)
     }
     if (!pipe.failed) {
       pipe.failed = true
@@ -1433,13 +1457,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
     // 只删**本实例存的**那份(别的会话留下、恢复条还在等用户决定的草稿不碰)。
     if (pipe.stashed != null && (written == null || pipe.stashed === written || composeFm(pipe.fm, pipe.body) === written)) {
-      clearDraft(vaultRoot, path, pipe.stashed)
+      clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
       pipe.stashed = null
     }
   }
 
   /** 写成功:收掉「未保存」;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
   const noteWriteOk = (written: string): void => {
+    pipe.peerFm = null // 自己写成功:盘上 fm 已是本实例的,别人的补丁标记作废
     settleUnsaved(written)
     announceUnifiedWrite(path, pipe)
   }
@@ -1666,6 +1691,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 结构键行变没变要在换 pipe.fm **之前**判(Codex P0-4)。
         const structChanged = layoutLineOf(fmText) !== layoutLineOf(pipe.fm) || canvasLineOf(fmText) !== canvasLineOf(pipe.fm)
         pipe.fm = fmText // fold 闭包现读 pipe.fm:此行必须先于 applyBody 的重 parse(advisor)
+        pipe.peerFm = null // 采纳了盘上版本:同篇写者替我们写的那笔已经在里面了
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
           pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
@@ -1722,7 +1748,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 就是一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。改名 IPC 窗口里打的字由 doRename 按新路径
       // 补写;本实例此前写失败存下的那份也一并清掉(只删自己存的,别的会话留的不碰)。
       if (pipe.retired) {
-        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed)
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
         pipe.stashed = null
         return
       }
@@ -1744,7 +1770,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // D-04:写是异步的,切走 / 关窗后未必来得及完成,也可能失败 —— 先同步把草稿存进本机,写成功再删
       // (noteWriteOk);下次打开同一篇若草稿 ≠ 盘上内容,提示恢复,绝不自动覆盖。
       pipe.stashed = text
-      stashDraft(vaultRoot, path, text, pipe.lastSaved)
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
       void writeNow()
     }
     const onUnload = (e: BeforeUnloadEvent): void => {
@@ -1802,6 +1828,21 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
+  /** OS 文件进本实例(存附件 + 光标处插 `![[base]]`)。只读 / 已退休 / 编辑器不在 = 不接(false),宿主据此不另找实例。 */
+  const insertFilesHere = (files: File[]): boolean => {
+    if (pipe.readOnly || pipe.retired || pipe.dead || !hostApi.current) return false
+    hostApi.current.insertFiles(files)
+    return true
+  }
+  // 本 leaf 自己的文件写口交给宿主(G1-02:拖入 / 上传不按路径全局找实例)。
+  useEffect(() => {
+    if (!filesRef) return
+    const f = (files: File[]): boolean => insertFilesHere(files)
+    filesRef.current = f
+    return () => { if (filesRef.current === f) filesRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesRef])
+
   // 生命周期登记(Codex P0):换库前 flushAllScopes 要等我们落盘;删除/改名/移动要能叫停本实例
   // (防抖写复活刚删/刚移走的文件)。
   useLayoutEffect(() => {
@@ -1809,6 +1850,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       path,
       owner: pipe, // 同窗同篇通知时排除自己(announceUnifiedWrite)
       peerWrote: () => reconcileNow(), // 同窗另一实例刚写盘:与外部改动同一条回灌路径
+      // ── 同篇多开的路由依据(G1-02):按路径的操作落到最近用过的实例;fm 补丁交给手里有待写的那个写。 ──
+      scope,
+      lastActive: () => lastActive.current,
+      dirty: () => {
+        if (pipe.readOnly || pipe.retired || pipe.dead) return false
+        syncFromEditor() // 防抖窗里的最后几击也算
+        return composeFm(pipe.fm, pipe.body) !== pipe.lastSaved && !isPristine()
+      },
       flush: (strict = false) => {
         if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
         syncFromEditor()
@@ -1819,18 +1868,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         return writeNow(strict)
       },
-      insertFiles: (files) => {
-        hostApi.current?.insertFiles(files)
-      },
+      insertFiles: (files) => insertFilesHere(files),
       // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
-      patchFm: (patch) => {
+      patchFm: (patch, follow = false) => {
         if (pipe.readOnly || pipe.retired || pipe.dead) return null
+        if (follow) {
+          // G1-02 返修:同篇另一个实例在写这一笔 —— 只并进本实例的 fm(chrome / 源码草稿跟上),不写;
+          // 记成 peerFm:写者落盘后本实例经 peerWrote 回灌对齐,期间卸载 / CAS 让位都不拿旧正文抢着写。
+          pipe.fm = patchFm(pipe.fm, patch)
+          pipe.peerFm = pipe.fm
+          setFmVer((v) => v + 1)
+          syncSrcDraft()
+          return Promise.resolve()
+        }
         setFm(patch)
         return pipe.chain // setFm 刚把这发写排上链:链尾 = 它落定(恒不 reject)
       },
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
-      insertMarkdown: (md, where) => (pipe.retired ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
       headings: () => {
@@ -1897,7 +1953,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         if (movedTo && !pipe.retired && !pipe.readOnly && !pipe.dead) {
           syncFromEditor()
           const text = composeFm(pipe.fm, pipe.body)
-          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved)
+          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
         }
         pipe.retired = true
         if (pipe.timer) {
@@ -1915,24 +1971,30 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // D-04 草稿恢复:上次卸载冲洗没写成(磁盘满 / 无权限 / 离线 / 窗口先关了)时存在本机的那份。
   // 只提示,**绝不自动覆盖**盘上内容;草稿 = 盘上内容(其实写成了)时静默删掉。
+  // 同篇多开时草稿按实例分槽(G1-02 返修):先认本 leaf 的那份,见 writeSafety.readDraft。
   const [draft, setDraft] = useState<UnsavedDraft | null>(() => {
     if (readOnly) return null
-    const d = readDraft(vaultRoot, path)
+    const d = readDraft(vaultRoot, path, pipe.slot)
     if (!d) return null
     if (d.text === (diskRaw ?? initial)) {
-      clearDraft(vaultRoot, path)
+      clearDraft(vaultRoot, path, undefined, d.slot)
       return null
     }
     return d
   })
   const discardDraft = (): void => {
-    clearDraft(vaultRoot, path)
+    if (draft) clearDraft(vaultRoot, path, undefined, draft.slot)
     setDraft(null)
   }
   const restoreDraft = (): void => {
     const d = draft
     setDraft(null)
     if (!d || readOnly || pipe.retired) return
+    // 别的槽位留下的(那个标签已关 / 重启换了 leaf):认领 = 挪进本实例的槽位,之后的删除 / 失败重存都按本槽走。
+    if ((d.slot ?? null) !== pipe.slot) {
+      clearDraft(vaultRoot, path, d.text, d.slot)
+      stashDraft(vaultRoot, path, d.text, pipe.lastSaved, pipe.slot)
+    }
     syncFromEditor()
     const disk = pipe.lastSaved
     const local = composeFm(pipe.fm, pipe.body)
@@ -2014,7 +2076,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
         if (text !== pipe.lastSaved) {
           // 补写失败不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。
-          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved); toastSaveFailed(newPath, e) })
+          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot); toastSaveFailed(newPath, e) })
         }
         // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
         // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;
@@ -2024,11 +2086,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const pending = bodyFocusRef.current
         const view = layer.getView()
         if (focusKind && pending != null && typeof pending !== 'object') {
-          pendingBodyFocus = { path: newPath, req: pending, at: Date.now() }
+          pendingBodyFocus = { path: newPath, scope, req: pending, at: Date.now() }
         } else if (view?.hasFocus()) {
           const carry: BodyCarry = { place: 'restore', body: writtenBody, doc: view.state.doc.toJSON(), anchor: view.state.selection.anchor, head: view.state.selection.head }
           outgoingCarry.current = carry
-          pendingBodyFocus = { path: newPath, req: carry, at: Date.now() }
+          pendingBodyFocus = { path: newPath, scope, req: carry, at: Date.now() }
         }
         retireUnifiedPath(path, 'file', newPath) // 别的标签开着同一篇:一并停写旧路径(它们未落盘的字存成新路径的草稿,G2-03)
         remapScopePaths(path, newPath, 'file')
@@ -2115,7 +2177,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         />
       )}
       {fullCanvas ? null : (
-      <div className="amx-doc unified-page" data-unified-path={path}>
+      <div className="amx-doc unified-page" data-unified-path={path} onFocusCapture={touchActive} onPointerDownCapture={touchActive}>
         <UnifiedTitle
           compact={compact}
           path={path}
@@ -2173,6 +2235,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           className="amx-source"
           value={srcDraft ?? srcText}
           spellCheck={false}
+          onFocus={touchActive}
           onChange={(e) => {
             const v = e.target.value
             setSrcDraft(v)
@@ -2191,7 +2254,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-bare
-          onFocusCapture={() => setFocusedBlockApply(stableApply)}
+          onFocusCapture={() => { touchActive(); setFocusedBlockApply(stableApply) }}
+          onPointerDownCapture={touchActive}
         >
           {/* 模式钮(AFFiNE 同位:页面右上)。整篇零画布数据时也照常显示 —— 画布是任意笔记随时
               可用的能力,不是某种文件类型的特权;点进去只是换视角,不写盘(见 toggleCanvas)。 */}

@@ -2096,6 +2096,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void } | null>(null)
   /** v4 统一页交出来的撤销 / 重做(G2-05:移动端胶囊的两颗键;v4 不设 activePage,pageStore 的 undo 够不着它)。 */
   const unifiedHistRef = useRef<UnifiedHistory | null>(null)
+  /** 本 leaf 的 v4 实例的文件写口(G1-02):拖入 / 上传直接交给它,不按路径全局找 —— 同篇双开时那会找到另一个标签。 */
+  const unifiedFilesRef = useRef<((files: File[]) => boolean) | null>(null)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
@@ -2378,9 +2380,10 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (!files.length) return
     e.preventDefault()
-    // unified 笔记不走 pageStore:文件经 lifecycle 递给 UnifiedPage(存附件+光标处插 ![[base]];
-    // 此前事件被 preventDefault 后静默吞掉,Codex 终审 P1)。
-    if (unifiedRoute && notePath && insertFilesForPath(notePath, files)) return
+    // unified 笔记不走 pageStore:文件递给**本 leaf** 的 UnifiedPage(存附件+光标处插 ![[base]];
+    // 此前事件被 preventDefault 后静默吞掉,Codex 终审 P1)。按路径找实例只作兜底(实例还没交出写口):
+    // 同篇双开时按路径找到的是另一个标签,指示线画在这边、文件插进那边(评审 G1-02)。
+    if (unifiedRoute && notePath && (unifiedFilesRef.current ? unifiedFilesRef.current(files) : insertFilesForPath(notePath, files))) return
     const page = myPs().activePage
     if (!page) return
     await importToPage(files, page) // 存到配置的附件位置 + 插入嵌入/链接(本地/云端/web 统一;失败与超限走 toast)
@@ -2454,7 +2457,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           const files = Array.from(e.currentTarget.files ?? [])
           e.currentTarget.value = ''
           if (!files.length) return
-          if (unifiedRoute && notePath && insertFilesForPath(notePath, files)) return // unified:经 lifecycle 递入
+          if (unifiedRoute && notePath && (unifiedFilesRef.current ? unifiedFilesRef.current(files) : insertFilesForPath(notePath, files))) return // unified:本 leaf 的实例(G1-02)
           const page = myPs().activePage
           if (page) void importToPage(files, page)
         }}
@@ -2559,6 +2562,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           diskRaw={unifiedRoute.diskRaw}
           onCanvasMode={setCanvasSeg}
           historyRef={unifiedHistRef}
+          filesRef={unifiedFilesRef}
           onRenamed={(np) => {
             leaf.setParams({ ...leaf.params, notePath: np })
             leaf.setTitle(baseName(np))

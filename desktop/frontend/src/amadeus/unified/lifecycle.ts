@@ -14,8 +14,9 @@ export interface UnifiedPipeHandle {
   /** 停写。movedTo = 这篇是被**挪走 / 改名**到了那里(删除 / 切号时不给):实例据此把还没落盘的字存成新路径的草稿
    *  (评审 G2-03),新路径的实例挂载时出「恢复草稿」条 —— 退休不许把它们静默丢掉。 */
   retire: (movedTo?: string) => void
-  /** OS 拖入/上传按钮的文件走这里进 unified(存附件 + 光标处插 `![[base]]`);可选。 */
-  insertFiles?: (files: File[]) => void
+  /** OS 拖入/上传按钮的文件走这里进 unified(存附件 + 光标处插 `![[base]]`);可选。
+   *  false = 本实例不接(只读 / 已退休 / 编辑器不在),路由接着问下一个同路径实例。 */
+  insertFiles?: (files: File[]) => boolean | void
   /** 当前正文(**不重新与编辑器同步**:上次保存那一刻的快照,≤800ms 陈旧,与只读面板的刷新
    *  节拍一致)。字数统计等只读面板用 —— v4 正文不进 pageStore,读 blocks 只会得空。 */
   bodyNow?: () => string
@@ -39,10 +40,19 @@ export interface UnifiedPipeHandle {
   /** frontmatter 补丁的实例写口(评审 G1-05):笔记视图 / 日历 / 图标 / `.fd` children 这类「改一个 fm 键」的写,
    *  笔记开着时交给实例自己改 pipe.fm、走它的单写者写盘管线 —— 外科写会被实例下一次击键用旧 fm 整篇写回。
    *  返回这次写盘的 Promise = 已接手(fm 读不懂时 fail-closed 什么都不写也算接手,不许退回外科写绕过它);
-   *  null = 本实例不接(只读 / 已退休 / 已卸载),调用方照旧外科写。补丁语义同 setFmExtraOnSource(undefined = 删键)。 */
-  patchFm?: (patch: Record<string, unknown>) => Promise<void> | null
+   *  null = 本实例不接(只读 / 已退休 / 已卸载),调用方照旧外科写。补丁语义同 setFmExtraOnSource(undefined = 删键)。
+   *  follow=true(评审 G1-02 返修):同篇另一个实例在写这笔,本实例只把补丁并进自己的 pipe.fm、**不写盘** ——
+   *  否则它手里的旧 fm 会在下一次保存时把新属性整篇写回去;这份 fm 也不算它自己的改动(见 UnifiedPage 的 peerFm)。 */
+  patchFm?: (patch: Record<string, unknown>, follow?: boolean) => Promise<void> | null
+  /** 手里有没有还没落盘的用户改动。同篇多开打 fm 补丁时由它负责写盘:它的全文(新 fm + 自己的字)是超集。 */
+  dirty?: () => boolean
   /** 登记者身份(实例私有的任意对象):announceUnifiedWrite 靠它把发起者自己排除在外。 */
   owner?: object
+  /** 所属 leaf(PageScopeCtx 的值;不在任何面板里 = null)。openNote 据此把「已开着这篇」落到最近用过的那个标签。 */
+  scope?: string | null
+  /** 最近一次被用户用到的时刻(焦点 / 指针进入本实例,或所属 leaf 成为活动面板);0 = 从未。
+   *  同篇多开时按路径的操作(插模板 / 大纲 / 跳转 / 拖入 / fm 补丁)都落到它最大的那个(评审 G1-02)。 */
+  lastActive?: () => number
   /** 同窗同路径的**另一个**实例刚把这篇写盘成功(G1-01):盘上已是它的新版,本实例去回灌
    *  (与外部改动同一条回灌路径:等打字静默、有未落盘编辑则按冲突策略处理)。 */
   peerWrote?: () => void
@@ -75,6 +85,21 @@ export function registerUnifiedPipe(h: UnifiedPipeHandle): () => void {
   }
 }
 
+/** path 上的实例,**最近用过的在前**(评审 G1-02)。此前一律 `for…of handles` 取第一个登记的:同篇双开时在 B 里
+ *  插模板,内容进了 A、焦点被抢到 A;大纲给的是 A 的标题;拖进 B 的文件插进 A、紧接着被 B 的写入盖掉。
+ *  Obsidian 的命令都作用于当前活动的 leaf —— 这里的「活动」由实例自己报(lastActive),同分(都没被用过)按登记序。 */
+function byRecency(path: string): UnifiedPipeHandle[] {
+  const hit: Array<{ h: UnifiedPipeHandle; at: number; i: number }> = []
+  let i = 0
+  for (const h of handles) if (h.path === path) hit.push({ h, at: h.lastActive?.() ?? 0, i: i++ })
+  return hit.sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.h)
+}
+
+/** path 上最近用过的那个实例所属的 leaf(没有实例 / 实例不在面板里 = null)。openNote 用它挑「已开着这篇」的标签。 */
+export function unifiedScopeFor(path: string): string | null {
+  return byRecency(path)[0]?.scope ?? null
+}
+
 /** 同篇多开(双标签 / 分屏 / Mini)的同窗通知(评审 G1-01):owner 刚把 path 写盘成功 → 其余同路径实例去回灌。
  *  跨窗那半由主进程负责(writeTextFile 成功后给**发起窗口以外**的窗口发 externalChange);同窗的实例共用一个
  *  渲染进程,主进程分不出来,只能在这里点名。不通知 = 另一个实例停在旧全文,下一次保存把这次写的整篇盖掉。 */
@@ -82,16 +107,23 @@ export function announceUnifiedWrite(path: string, owner: object): void {
   for (const h of [...handles]) if (h.path === path && h.owner !== owner) h.peerWrote?.()
 }
 
-/** 往 path 上开着的 v4 实例打 frontmatter 补丁(评审 G1-05)。有实例接手 → 返回它那发写盘的 Promise;
- *  没有(没开 / 只读 / 已退休)→ null,调用方照旧外科写(setPageFrontmatter)。同篇多开时交给第一个接手的,
- *  它写盘成功后 announceUnifiedWrite 让其余实例回灌。 */
+/** 往 path 上开着的 v4 实例打 frontmatter 补丁(评审 G1-05)。有实例接手 → 返回那发写盘的 Promise;
+ *  没有(没开 / 只读 / 已退休)→ null,调用方照旧外科写(setPageFrontmatter)。
+ *  同篇多开(评审 G1-02 返修):补丁并进**每一个**同路径实例,由一个实例写 —— 手里有未落盘改动的优先(它的全文
+ *  是超集;交给干净的那个写,脏的那个随后按冲突策略出一份多余的冲突副本),其次最近用过的。其余实例只并不写
+ *  (follow),写者落盘后经 announceUnifiedWrite 回灌对齐。此前只交给第一个登记的:另一个有待存正文时,它下一次
+ *  保存用旧 fm 整篇写回,新属性就没了。 */
 export function unifiedPatchFm(path: string, patch: Record<string, unknown>): Promise<void> | null {
-  for (const h of handles) {
-    if (h.path !== path || !h.patchFm) continue
-    const done = h.patchFm(patch)
-    if (done) return done
+  const hs = byRecency(path).filter((h) => h.patchFm)
+  hs.sort((a, b) => Number(!!b.dirty?.()) - Number(!!a.dirty?.())) // 稳定排序:脏的在前,同档仍按最近用过
+  let done: Promise<void> | null = null
+  const followers: UnifiedPipeHandle[] = []
+  for (const h of hs) {
+    if (done) followers.push(h)
+    else done = h.patchFm!(patch)
   }
-  return null
+  if (done) for (const h of followers) h.patchFm!(patch, true)
+  return done
 }
 
 /** 全部 unified 实例待写落盘(单实例失败不拖累别家)。 */
@@ -104,13 +136,11 @@ export function retireAllUnifiedScopes(): void {
   for (const handle of handles) handle.retire()
 }
 
-/** 把文件递给 path 上活着的 unified 实例(宿主的 OS 拖入/上传按钮用);没有实例 → false。 */
+/** 把文件递给 path 上活着的 unified 实例(侧栏树行拖入等「只知道路径」的入口用;编辑器自己的拖入 / 上传按钮
+ *  走本 leaf 的实例写口,不经这里);没有实例接 → false。同篇多开时落到最近用过的那个(G1-02)。 */
 export function insertFilesForPath(path: string, files: File[]): boolean {
-  for (const h of handles) {
-    if (h.path === path && h.insertFiles) {
-      h.insertFiles(files)
-      return true
-    }
+  for (const h of byRecency(path)) {
+    if (h.insertFiles && h.insertFiles(files) !== false) return true
   }
   return false
 }
@@ -140,32 +170,33 @@ export function hasUnifiedInstance(path: string): boolean {
 
 /** 只读面板问 path 上那篇的正文;没有 v4 实例 → null(调用方回落 v3 的 blocks)。 */
 export function unifiedBody(path: string): string | null {
-  for (const h of handles) if (h.path === path && h.bodyNow) return h.bodyNow()
+  for (const h of byRecency(path)) if (h.bodyNow) return h.bodyNow()
   return null
 }
 
 /** 只读面板问 path 上那篇的大纲;没有 v4 实例 → null(调用方回落 v3 的 manifest/blocks)。 */
 export function unifiedHeadings(path: string): Array<{ level: number; text: string; pos: number }> | null {
-  for (const h of handles) if (h.path === path && h.headings) return h.headings()
+  for (const h of byRecency(path)) if (h.headings) return h.headings()
   return null
 }
 
 /** 插件块表面问 path 上那篇的外来 frontmatter;没有 v4 实例 → null(调用方回落 v3 的 manifest)。 */
 export function unifiedFm(path: string): string | null {
-  for (const h of handles) if (h.path === path && h.fmNow) return h.fmNow()
+  for (const h of byRecency(path)) if (h.fmNow) return h.fmNow()
   return null
 }
 
-/** 插件块表面往 path 上那篇插一段 markdown;没有实例 / 实例已退休 → false。 */
+/** 插件块表面 / 模板往 path 上那篇插一段 markdown;没有实例 / 实例都不接(只读 / 已退休)→ false。
+ *  同篇多开时落到最近用过的那个(G1-02),它不接再问下一个。 */
 export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' | 'start' | 'end'): boolean {
-  for (const h of handles) if (h.path === path && h.insertMarkdown) return h.insertMarkdown(md, where)
+  for (const h of byRecency(path)) if (h.insertMarkdown?.(md, where)) return true
   return false
 }
 
 /** 块锚点击:让 path 上那篇把尾部挂着 `^id` 的块滚进视野。没有 v4 实例、或那篇里没有这个块 →
  *  false(调用方 openNoteAtBlock 据此重试几拍再放弃 —— 实例挂上但 doc 还空是常态)。 */
 export function unifiedRevealBlock(path: string, id: string, flash = false): boolean {
-  for (const h of handles) if (h.path === path && h.revealBlock) return h.revealBlock(id, flash)
+  for (const h of byRecency(path)) if (h.revealBlock) return h.revealBlock(id, flash)
   return false
 }
 
@@ -173,8 +204,8 @@ export function unifiedRevealBlock(path: string, id: string, flash = false): boo
  *  flash:落点闪一下(聊天里的 `[[笔记#标题]]` 引用条走这条 —— 那处没有常驻高亮,不闪等于零反馈)。
  *  大纲点击不传:那是用户自己在导航,知道自己点了哪条,不需要提醒。 */
 export function unifiedRevealHeading(path: string, index: number, text: string, flash = false): boolean {
-  for (const h of handles) {
-    if (h.path === path && h.revealHeading) {
+  for (const h of byRecency(path)) {
+    if (h.revealHeading) {
       h.revealHeading(index, text, flash)
       return true
     }
