@@ -1,4 +1,4 @@
-/** Real Electron Mini Panel contract: isolated backend/vault/plugins and real window motion.
+/** Real Electron Mini Panel contract: isolated backend/vault/plugins and real window geometry.
  * npm run build && npm run check:minicard. No physical input is sent to other applications. */
 const fs = require('fs'), os = require('os'), path = require('path')
 const { _electron: electron } = require('playwright-core')
@@ -137,29 +137,34 @@ async function main() {
     await mini.screenshot({ path: path.join(shots, 'new-note-dark.png') })
 
     await app.evaluate(({ screen, BrowserWindow }) => {
-      // This section isolates geometry; mini-auto.check.cjs covers real cross-process OS focus.
+      // This section isolates the manual window's own behavior; mini-auto.check.cjs covers real cross-process OS focus.
       globalThis.__miniOriginalFocusedWindow = BrowserWindow.getFocusedWindow
       BrowserWindow.getFocusedWindow = () => null
       const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')), area = screen.getPrimaryDisplay().workArea
       w.setPosition(area.x + 40, area.y + 40)
       globalThis.__miniCursor = { x: area.x + 430, y: area.y + 220 }; screen.getCursorScreenPoint = () => globalThis.__miniCursor
-      globalThis.__miniSamples = []; globalThis.__miniSampler = setInterval(() => globalThis.__miniSamples.push({ ...w.getBounds(), at: Date.now() }), 16)
+      globalThis.__miniIgnore = []; const set = w.setIgnoreMouseEvents.bind(w)
+      w.setIgnoreMouseEvents = (v) => { globalThis.__miniIgnore.push(v); set(v) }
     })
-    await pause(300)
+    const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')).getBounds())
+    const lastIgnore = () => app.evaluate(() => globalThis.__miniIgnore.at(-1))
+    const parked = await bounds()
     const signalTime = Date.now()
     const signal = { v: 1, active: true, updatedAt: signalTime, expiresAt: signalTime + 2500, helperPid: process.pid }
     fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify(signal)); await pause(600)
-    const movement = await app.evaluate(() => { clearInterval(globalThis.__miniSampler); return globalThis.__miniSamples })
-    check('real window follows through multiple linear positions', new Set(movement.map((b) => b.x)).size > 5)
-    check('no instantaneous position jump', movement.slice(1).every((b, i) => Math.hypot(b.x - movement[i].x, b.y - movement[i].y) <= 160))
+    await app.evaluate(() => { globalThis.__miniCursor.x += 240 }); await pause(250)
+    check('foreground Computer Use leaves Mini where the user put it', JSON.stringify(parked) === JSON.stringify(await bounds()))
+    check('clicks pass through the card while the pointer is elsewhere', await lastIgnore() === true)
+    await app.evaluate((_, b) => { globalThis.__miniCursor = { x: b.x + 100, y: b.y + 20 } }, parked); await pause(200)
+    check('the card is grabbable under the pointer', await lastIgnore() === false)
+    await app.evaluate(() => { globalThis.__miniCursor.x += 600 }); await pause(200)
+    check('leaving the card passes clicks through again', await lastIgnore() === true)
     fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify({ ...signal, active: false, updatedAt: Date.now(), expiresAt: Date.now() }))
     await pause(500)
-    const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')).getBounds())
-    const before = await bounds(); await app.evaluate(() => { globalThis.__miniCursor.x += 100 }); await pause(250)
-    check('completed/background calls stop following', JSON.stringify(before) === JSON.stringify(await bounds()))
+    check('hit testing restored after Computer Use, still in place', await lastIgnore() === false && JSON.stringify(parked) === JSON.stringify(await bounds()))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getFocusedWindow = globalThis.__miniOriginalFocusedWindow })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
-    check('hit testing restored after following', true); check('no renderer errors', errors.length === 0, JSON.stringify(errors))
+    check('no renderer errors', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${shots}`)
   } catch (e) {
     if (mini && !mini.isClosed()) { await mini.screenshot({ path: path.join(shots, 'failure.png') }).catch(() => {}); console.log(await mini.locator('body').innerText().catch(() => '')) }

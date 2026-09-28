@@ -72,6 +72,24 @@ describe('automatic Computer Use conversation panel', () => {
     state.context.runId = null; panel.refresh(); expect(panel.following()).toBe(false)
     panel.stop()
   })
+  it('asks to restore Forsion only when the owning run ends while the user is away', async () => {
+    const { state, panel, close, tick } = fixture()
+    state.focused = false; state.foreground = true; await tick()
+    state.foreground = false; state.context.runId = null; panel.refresh()
+    expect(close).toHaveBeenLastCalledWith(true)
+    state.context.runId = 'r2'; state.foreground = true; await tick()
+    state.context.runId = 'r3'; state.foreground = false; panel.refresh() // the next run replaces this one
+    expect(close).toHaveBeenLastCalledWith(true)
+    panel.stop()
+  })
+  it('never restores when the user came back, took the panel over, or the monitor stops', async () => {
+    const { state, panel, close, tick } = fixture()
+    state.focused = false; state.foreground = true; await tick()
+    state.focused = true; panel.refresh(); expect(close).toHaveBeenLastCalledWith(false)
+    state.focused = false; await tick(); panel.dismiss(); expect(close).toHaveBeenLastCalledWith()
+    state.context.runId = 'r2'; await tick(); panel.stop(); expect(close).toHaveBeenLastCalledWith()
+    expect(close.mock.calls.some((c) => c[0] === true)).toBe(false)
+  })
   it('does not resurrect a stopped controller after an in-flight read', async () => {
     vi.useFakeTimers()
     let resolve!: (active: boolean) => void

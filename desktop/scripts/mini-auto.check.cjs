@@ -72,7 +72,8 @@ async function main() {
   const stopInput = () => { clearInterval(heartbeat); heartbeat = null; fs.rmSync(path.join(temp, 'foreground.json'), { force: true }) }
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-      env: { ...process.env, TANGU_HOME: temp, TANGU_BACKEND_URL: backend.url, PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
+      // Focus semantics are the subject here (restore on run end), so opt out of harness-quiet windows.
+      env: { ...process.env, TANGU_HARNESS_QUIET: '0', TANGU_HOME: temp, TANGU_BACKEND_URL: backend.url, PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
     const win = await app.firstWindow(), errors = []
     app.on('window', (page) => page.on('pageerror', (e) => errors.push(e.message)))
     win.on('pageerror', (e) => errors.push(e.message))
@@ -145,22 +146,18 @@ async function main() {
       await pause(700)
       const lease = JSON.parse(fs.readFileSync(path.join(temp, 'foreground.json'), 'utf8'))
       check('real short-input lease expires while Mini keeps the current run visible', lease.expiresAt < Date.now() && !!await autoVisible())
-      await app.evaluate(({ BrowserWindow }) => {
-        const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1'))
-        globalThis.__nativeSamples = []
-        globalThis.__nativeTimer = setInterval(() => globalThis.__nativeSamples.push({ ...w.getBounds(), at: performance.now() }), 8)
-      })
+      const nativeBounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1')).getBounds())
+      const parked = await nativeBounds()
       await move(148); await pause(650)
-      const samples = await app.evaluate(() => { clearInterval(globalThis.__nativeTimer); return globalThis.__nativeSamples })
-      fs.writeFileSync(path.join(shots, 'native-motion.json'), JSON.stringify(samples))
-      const moving = samples.filter((p, i) => i && p.x !== samples[i - 1].x)
-      check('real mouse movement produces a visible window transition', moving.length >= 6 && moving.at(-1).at - moving[0].at >= 140)
+      check('real mouse movement leaves the parked Mini in place', JSON.stringify(parked) === JSON.stringify(await nativeBounds()))
       await mini.screenshot({ path: path.join(shots, 'native-current-conversation.png') })
       backend.emit(run, 'token', { delta: ' Real native input completed.' })
       await mini.getByText('Working in the foreground (r1). Real native input completed.', { exact: true }).waitFor()
       check('current conversation continues streaming after native input', true)
       backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0)
       check('run completion closes native-triggered Mini', true)
+      check('run completion returns focus to the Forsion main window', await until(() => app.evaluate(({ BrowserWindow }) => {
+        const w = BrowserWindow.getFocusedWindow(); return !!w && !w.webContents.getURL().includes('window=') })))
       check('no renderer errors', errors.length === 0)
       console.log(`SCREENSHOTS ${shots}\n${results.filter(Boolean).length}/${results.length} passed (real native helper)`)
       return
@@ -171,34 +168,30 @@ async function main() {
     check('opens current streaming conversation without ever opening manual Mini', true)
     check('automatic window never steals external app focus', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow() === null))
     await mini.screenshot({ path: path.join(shots, 'automatic-current-conversation.png') })
-    // Hold focus in the companion process, control only the cursor samples, and record real OS window positions.
-    await app.evaluate(({ screen }) => {
-      const area = screen.getPrimaryDisplay().workArea
-      globalThis.__miniMotionCursor = { x: area.x + 80, y: area.y + 80 }
-      screen.getCursorScreenPoint = () => globalThis.__miniMotionCursor
-    })
-    await pause(1000)
-    const move = async (dx) => {
-      await app.evaluate(({ BrowserWindow }, dx) => {
-        const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1'))
-        globalThis.__miniMotionSamples = [{ ...win.getBounds(), at: performance.now() }]
-        globalThis.__miniMotionCursor.x += dx
-        globalThis.__miniMotionTimer = setInterval(() => globalThis.__miniMotionSamples.push({ ...win.getBounds(), at: performance.now() }), 8)
-      }, dx)
-      await pause(650)
-      return app.evaluate(() => { clearInterval(globalThis.__miniMotionTimer); return globalThis.__miniMotionSamples })
-    }
-    const shortMove = await move(48)
-    fs.writeFileSync(path.join(shots, 'motion-short.json'), JSON.stringify(shortMove))
-    const moving = shortMove.filter((p, i) => i && p.x !== shortMove[i - 1].x)
-    const shortTransitionVisible = moving.length >= 6 && moving.at(-1).at - moving[0].at >= 140
+    const autoBounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1')).getBounds())
+    const parked = await autoBounds()
+    const area = await app.evaluate(({ screen }) => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea)
+    check('parks at the top-right of the work area', parked.x === area.x + area.width - parked.width - 24 && parked.y === area.y + 24)
+    // Hold focus in the companion process, control only the cursor samples, and record the real OS window position.
+    await app.evaluate(({ screen, BrowserWindow }, b) => {
+      const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1'))
+      globalThis.__miniCursor = { x: b.x - 400, y: b.y + 300 }
+      screen.getCursorScreenPoint = () => globalThis.__miniCursor
+      globalThis.__miniIgnore = []; const set = w.setIgnoreMouseEvents.bind(w)
+      w.setIgnoreMouseEvents = (v) => { globalThis.__miniIgnore.push(v); set(v) }
+    }, parked)
+    const lastIgnore = () => app.evaluate(() => globalThis.__miniIgnore.at(-1))
+    await app.evaluate(() => { globalThis.__miniCursor.x += 240 }); await pause(250)
+    check('pointer movement never moves the automatic Mini', JSON.stringify(parked) === JSON.stringify(await autoBounds()))
+    await app.evaluate((_, b) => { globalThis.__miniCursor = { x: b.x + 100, y: b.y + 20 } }, parked); await pause(200)
+    check('the card is grabbable under the pointer', await lastIgnore() === false)
+    await app.evaluate(() => { globalThis.__miniCursor.x -= 600 }); await pause(200)
+    check('elsewhere, clicks pass through to the app Computer Use is driving', await lastIgnore() === true)
+    // A real press on the header leaves Forsion active with the card itself key (not the main window), so
+    // hasForsionFocus() excludes it. Only real input reproduces that end state: app.focus() makes the main
+    // window key first. Verified with a real mouse drag on 2026-09-28 (see docs/customization/mini-panel-development.md).
     stopInput(); await pause(700)
     check('remains visible between foreground calls in the same run', !!await autoVisible())
-    const gapMove = await move(240)
-    fs.writeFileSync(path.join(shots, 'motion-between-calls.json'), JSON.stringify(gapMove))
-    console.log('MOTION', JSON.stringify({ shortFrames: moving.length, shortDurationMs: moving.at(-1)?.at - moving[0]?.at, betweenCallsPixels: gapMove.at(-1).x - gapMove[0].x }))
-    check('short cursor moves have a visible linear transition over at least 140ms', shortTransitionVisible)
-    check('the visible foreground conversation continues following between calls', gapMove.at(-1).x - gapMove[0].x === 240)
     backend.emit(run, 'token', { delta: ' Progress continues between calls.' })
     await mini.getByText('Working in the foreground (r1). Progress continues between calls.', { exact: true }).waitFor()
     check('same session continues streaming in the temporary window', true)
@@ -208,6 +201,9 @@ async function main() {
     await focusExternal(); startInput(); await until(autoVisible)
     backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0)
     check('run completion closes automatic Mini even while a helper lease remains', true)
+    check('run completion returns focus to the Forsion window the user started from', await until(() => app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getFocusedWindow(); return !!w && !w.webContents.getURL().includes('window=') })))
+    await win.screenshot({ path: path.join(shots, 'restored-main-window.png') })
     stopInput(); await focusMain()
     await win.evaluate(() => window.tangu.openMini({ spaceId: 'amadeus' }))
     const manual = await until(() => app.windows().find((w) => w.url().includes('window=mini') && !w.url().includes('transient=1')))
