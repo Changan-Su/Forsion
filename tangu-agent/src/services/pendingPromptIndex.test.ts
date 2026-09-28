@@ -2,7 +2,8 @@
  * 进程级待批索引(P1 · K3 §3.1)。真 SQLite(内存)+ 真登记表(approvals.ts / inquiries.ts),事件总线换成桩(不落库)。
  *   上架 / 下架 / 中止 → expired / 解析期间被兑现 → 静默丢弃 / 团队成员子 run → 团队会话 / 远程判定两路(审批的 origin、询问按 run 行
  *   + 中途 steer 染色)/ rev / sweepTerminal / S6(工具与模型上下文不 import 本模块)。
- * 负对照(实跑见红,记在 K3 交付报告):去掉 approvals.ts onAbort 里的 untrackPrompt → 「中止 → expired」一条红(条目泄漏)。
+ * 负对照(实跑见红,记在 K3 交付报告):去掉 approvals.ts onAbort 里的 untrackPrompt → 「中止 → expired」一条红(条目泄漏);
+ *   去掉 inquiries.ts onAbort 里的 untrackPrompt → 「询问(inquiry / plan)中止」两条红。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -92,6 +93,20 @@ describe('上架 / 下架', () => {
     await expect(decided).resolves.toEqual({ action: 'reject' });
     expect(removed()).toEqual([expect.objectContaining({ id: added()[0].item.id, outcome: 'expired' })]);
     expect(listPrompts()).toEqual([]);
+  });
+
+  it.each([['inquiry', undefined], ['plan', 'plan']] as const)('询问(%s)中止 → removed(expired),流与按会话计数都撤(S9:ask_user / 计划拍板同样不发 inquiry_result)', async (kind, payloadKind) => {
+    await addRun(`R-qab-${kind}`, `S-qab-${kind}`);
+    const ac = new AbortController();
+    const answered = requestInquiry(`R-qab-${kind}`, { question: '用哪个?', options: ['A'], allowFreeText: true, ...(payloadKind ? { kind: payloadKind } : {}) }, ac.signal);
+    await waitAdded(1);
+    expect(added()[0].item.kind).toBe(kind);
+    expect(sessionAttention()).toEqual([expect.objectContaining({ sessionId: `S-qab-${kind}`, inquiries: 1 })]);
+    ac.abort();
+    await answered;
+    expect(removed()).toEqual([expect.objectContaining({ id: added()[0].item.id, outcome: 'expired' })]);
+    expect(listPrompts()).toEqual([]);
+    expect(sessionAttention()).toEqual([]);
   });
 
   it('解析期间被兑现:静默丢弃(订阅者从没见过它 —— 不发 added,也不发 removed)', async () => {
