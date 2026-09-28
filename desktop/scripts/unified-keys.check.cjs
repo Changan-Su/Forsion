@@ -1,5 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
+// 波次 2 serial 包:K-19(标题里 Shift+Enter 同回车,不再落盘丢换行)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -553,6 +554,53 @@ async function main() {
       check('B13 标题被外部改名 → 该处记忆作废、不误折别处;列表项记忆照旧', h7 === '子项', h7)
       await pg3.close()
       await ctx.close()
+    }
+    if (want('K19')) {
+      // K19(评审 K-19):标题里 Shift+Enter 同回车 —— ATX 标题容不下换行,放行硬换行时 H3 及以下落盘成 `### 甲 乙`
+      //   (所见非所存),H1/H2 落 setext。现在:行中 = 从光标切出正文;行首 = 上方插空正文、标题整条保留;正文里仍是硬换行。
+      const at = (page, type, off) => page.evaluate(({ type, off }) => {
+        const v = window.__upage.probe.view()
+        let hit = null
+        v.state.doc.descendants((n, p) => { if (hit == null && n.type.name === type) { hit = p + 1 + off; return false } return hit == null })
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(hit))))
+        v.focus()
+      }, { type, off })
+      for (const level of [3, 2]) {
+        const page = await open(browser, `${'#'.repeat(level)} 甲乙\n\n正文。\n`)
+        await at(page, 'heading', 1)
+        await page.waitForTimeout(80)
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForTimeout(1300)
+        const s = await shape(page)
+        const w = await lastWrite(page)
+        check(`K19 H${level} 行中 Shift+Enter:切出正文,落盘不丢换行`, s === `heading${level}:"甲" / paragraph:"乙" / paragraph:"正文。"` && w === `${'#'.repeat(level)} 甲\n\n乙\n\n正文。\n`, `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '### 甲乙\n\n正文。\n')
+        await at(page, 'heading', 0)
+        await page.waitForTimeout(80)
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForTimeout(200)
+        const s = await shape(page)
+        check('K19 标题行首 Shift+Enter:上方插空正文,标题整条保留', s === 'paragraph:"" / heading3:"甲乙" / paragraph:"正文。"', s)
+        const para = await page.evaluate(() => {
+          const v = window.__upage.probe.view()
+          let hit = null
+          v.state.doc.descendants((n, p) => { if (hit == null && n.type.name === 'paragraph' && n.textContent === '正文。') hit = p + 2; return hit == null })
+          v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(hit))))
+          return hit
+        })
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForTimeout(200)
+        const br = await page.evaluate(() => {
+          let n = 0
+          window.__upage.probe.view().state.doc.descendants((c) => { if (c.type.name === 'hardbreak') n++; return true })
+          return n
+        })
+        check('K19 对照:正文里 Shift+Enter 仍是段内硬换行', br === 1 && para != null, `hardbreaks=${br}`)
+        await page.close()
+      }
     }
   } finally {
     await browser.close()
