@@ -907,6 +907,15 @@
 .am-app .milkdown .ProseMirror pre.amx-code {
   position: relative;
 }
+/* 横向滚动收进 <code>(R-27):pre 自己滚的话,绝对定位在 pre 上的工具条与行号栏跟着内容一起滚出视野
+   (长行横滚到头,工具条落到块外左边)。折叠态(限高、overflow:hidden)不动,照旧整块裁切。 */
+.am-app .milkdown .ProseMirror pre.amx-code:not(.amx-code-collapsed) {
+  overflow-x: visible;
+}
+.am-app .milkdown .ProseMirror pre.amx-code > code {
+  display: block;
+  overflow-x: auto;
+}
 .am-app .amx-code-tools {
   position: absolute;
   top: 6px;

@@ -1,6 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
-// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制);R-17(块公式多行)。
+// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制);R-17(块公式多行);R-27(代码块出口 / 自动配对 / 横滚工具条)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -1103,6 +1103,84 @@ async function main() {
         await page.waitForTimeout(200)
         const sl = await selInfo(page)
         check('R17 /code 后面还有块:光标留在新代码块里,不跑进下一段', sl.parent === 'code_block', JSON.stringify(sl))
+        await page.close()
+      }
+    }
+
+    // R-27:代码块打磨 —— 文末代码块 ↓ / → 出得去(后面还有块时不接管);Shift+回车 = 代码内换行;
+    //       括号 / 引号自动配对(可在设置里关);横向滚动后工具条仍在块内。
+    if (want('R27')) {
+      const TAIL = '段一\n\n```js\nlet x = 1\n```\n'
+      for (const key of ['ArrowDown', 'ArrowRight']) {
+        const page = await open(browser, TAIL)
+        await caretAtText(page, 'let x = 1')
+        await page.waitForTimeout(100)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(100)
+        await page.keyboard.type('Q')
+        await page.waitForTimeout(1300)
+        const w = await lastWrite(page)
+        check(`R27 文末代码块在末行按 ${key}:在后面新起一段,光标过去`, w === '段一\n\n```js\nlet x = 1\n```\n\nQ\n', JSON.stringify(w))
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n```js\nlet x = 1\n```\n\n段二\n')
+        await caretAtText(page, 'let x = 1')
+        await page.waitForTimeout(100)
+        await page.keyboard.press('ArrowDown')
+        await page.waitForTimeout(150)
+        const s1 = await shape(page)
+        check('R27 代码块后面还有块:↓ 不新建段(交回原生进下一块)', s1 === 'paragraph:"段一" / code_block:"let x = 1" / paragraph:"段二"', s1)
+        await page.close()
+      }
+      {
+        const page = await open(browser, TAIL)
+        await caretAtText(page, 'let x = 1')
+        await page.keyboard.press('Shift+Enter')
+        await page.keyboard.type('y')
+        await page.waitForTimeout(150)
+        const s1 = await shape(page)
+        check('R27 代码块里 Shift+回车 = 换行', s1 === 'paragraph:"段一" / code_block:"let x = 1\\ny"', s1)
+        await page.close()
+      }
+      {
+        const page = await open(browser, TAIL)
+        const code = () => page.evaluate(() => { let t = ''; window.__upage.probe.view().state.doc.descendants((n) => { if (n.type.name === 'code_block') t = n.textContent; return true }); return t })
+        await caretAtText(page, 'let x = 1')
+        await page.keyboard.type(' + f(')
+        const a = await code()
+        await page.keyboard.type('a)')
+        const b = await code()
+        await page.keyboard.type(' // don\'t [')
+        await page.keyboard.press('Backspace')
+        const c = await code()
+        check('R27 代码块自动配对:`(` 补 `)`、敲 `)` 跨过、单词后的引号不配、退格删空的一对',
+          a === 'let x = 1 + f()' && b === 'let x = 1 + f(a)' && c === "let x = 1 + f(a) // don't ", JSON.stringify({ a, b, c }))
+        await page.close()
+      }
+      {
+        const page = await open(browser, TAIL)
+        await page.evaluate(() => { localStorage.setItem('amadeus.notes.codeAutoPair', '0') })
+        await caretAtText(page, 'let x = 1')
+        await page.keyboard.type('(')
+        await page.waitForTimeout(100)
+        const t = await page.evaluate(() => { let t = ''; window.__upage.probe.view().state.doc.descendants((n) => { if (n.type.name === 'code_block') t = n.textContent; return true }); return t })
+        await page.evaluate(() => { localStorage.removeItem('amadeus.notes.codeAutoPair') })
+        check('R27 设置关掉自动配对后不补', t === 'let x = 1(', JSON.stringify(t))
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n```js\n' + 'const longLine = ' + 'x'.repeat(400) + '\n```\n')
+        const r = await page.evaluate((PM) => {
+          const pre = document.querySelector(PM + ' pre')
+          const code = pre.querySelector('code')
+          code.scrollLeft = 2000
+          pre.scrollLeft = 2000
+          const bar = pre.querySelector('.amx-code-tools').getBoundingClientRect()
+          const box = pre.getBoundingClientRect()
+          return { scrolled: code.scrollLeft, preScroll: pre.scrollLeft, barL: Math.round(bar.left), barR: Math.round(bar.right), preL: Math.round(box.left), preR: Math.round(box.right) }
+        }, PM)
+        check('R27 长行横向滚动后工具条仍在代码块内(滚动收进 <code>)', r.scrolled > 0 && r.preScroll === 0 && r.barL >= r.preL && r.barR <= r.preR, JSON.stringify(r))
         await page.close()
       }
     }

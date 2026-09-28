@@ -14,6 +14,7 @@ import { common, createLowlight } from 'lowlight'
 import { currentLocale, registerMessages, translate } from '../../../i18n'
 import { isShellLang, runInTerminal, stripPrompt } from '../../../builtins/runCommand'
 import { parseButtonBlock } from '../button/format'
+import { codeAutoPairBackspace, codeAutoPairInput } from './codeAutoPair'
 
 /** 工具条文案。⚠️ 按钮字面**必须短**(和中文的两字一样):工具条绝对定位盖在代码块右上,
  *  英文写长了(实测 "Line numbers"/"Collapse" 一套 375px)会盖住短代码块的水平中心,点进去
@@ -391,6 +392,11 @@ export function codeBlockPlugin() {
         decorations(state) {
           return codeKey.getState(state)?.decos ?? DecorationSet.empty
         },
+        // 括号 / 引号自动配对(R-27,本机开关,见 codeAutoPair.ts)。
+        handleTextInput: (view, from, to, text) => codeAutoPairInput(view, from, to, text),
+        handleKeyDown: (view, event) =>
+          event.key === 'Backspace' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.isComposing
+            ? codeAutoPairBackspace(view) : false,
       },
     })
   })

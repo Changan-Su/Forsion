@@ -601,6 +601,33 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
   }
 }
 
+/** 代码块是所在容器的最后一块(典型:文末的代码块)时,在最后一行按 ↓ / 在块尾按 → = 在它后面新起一段(R-27,
+ *  TipTap exitOnArrowDown 同款)。此前后面没有块可去,只有 Mod+Enter 能出去 —— 连按回车只会在代码里加空行。
+ *  后面还有块时不接管,交回原生纵向移动(进下一块)。 */
+function codeExit(dir: 'down' | 'right'): Command {
+  return (state, dispatch, view) => {
+    const { $from, empty } = state.selection
+    if (!empty || $from.parent.type.name !== 'code_block' || $from.depth < 1) return false
+    if (dir === 'down' ? !view?.endOfTextblock('down') : $from.parentOffset !== $from.parent.content.size) return false
+    const container = $from.node(-1)
+    if ($from.index(-1) !== container.childCount - 1) return false
+    const paragraph = state.schema.nodes.paragraph
+    const after = $from.after()
+    if (!paragraph || !container.canReplaceWith($from.index(-1) + 1, $from.index(-1) + 1, paragraph)) return false
+    if (!dispatch) return true
+    const tr = state.tr.insert(after, paragraph.create())
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView())
+    return true
+  }
+}
+
+/** 代码块里 Shift+回车 = 换行(与回车相同;此前是空操作 —— 硬换行进不了代码块)。 */
+const codeShiftEnter: Command = (state, dispatch) => {
+  if (state.selection.$from.parent.type.name !== 'code_block') return false
+  dispatch?.(state.tr.insertText('\n').scrollIntoView())
+  return true
+}
+
 /** 有选区时按成对符号 = **包裹**选中文字而不是替换掉它(AFFiNE 的 PAIRS 同款)。
  *  反引号 = 行内代码(I-09 / K-18b):与 ⌘E、工具栏 </> 走**同一条** toggleInlineCode 命令。
  *  ⚠️ 别改回按字面插两个反引号 —— 字面 `x` 在编辑器里只是文字,落盘被转义成 \`x\`,永远成不了代码。
@@ -711,7 +738,7 @@ export const keyboardPlugins: MilkdownPlugin[] = [
     keymap({
       Enter: enterCmd,
       'Mod-Enter': modEnterCmd,
-      'Shift-Enter': enterInDisplayMath, // 公式外交回 preset 的硬换行
+      'Shift-Enter': chain(codeShiftEnter, enterInDisplayMath), // 其余交回 preset 的硬换行
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
       Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
@@ -719,7 +746,8 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
       ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
       ArrowUp: arrowToAtom('up'),
-      ArrowDown: arrowToAtom('down'),
+      ArrowDown: chain(codeExit('down'), arrowToAtom('down')),
+      ArrowRight: codeExit('right'),
     }),
   ),
 ].flat()
