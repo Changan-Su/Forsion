@@ -48,6 +48,30 @@
   color: var(--text);
 }
 
+/* 替换行(C-18):条内两行,左侧 ›/⌄ 展开钮;选项钮 aria-pressed 即「开着」。 */
+.amx-findbar--replace { align-items: flex-start; }
+.amx-findbar-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.amx-findbar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.amx-findbar button.amx-findbar-expand { width: 16px; }
+.amx-findbar button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent-ink, #6c5ce7) 16%, transparent);
+  color: var(--text);
+}
+.amx-findbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+.amx-findbar input[aria-invalid='true'] { color: var(--danger); }
+
 /* 命中高亮:CSS 自定义高亮,不插 DOM 节点(见 findInPage.tsx 纪律 2)。
    ⚠️ `::highlight()` 只认颜色类属性 —— color / background-color / text-decoration /
    text-shadow / -webkit-text-*。老 `.amx-find-active` 那圈 outline + border-radius 表达不了,

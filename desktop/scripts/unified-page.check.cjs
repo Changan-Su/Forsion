@@ -1460,6 +1460,114 @@ async function main() {
     await pg.close()
   }
 
+  // P20b:页内查找替换(C-18)。UnifiedPage 注册 replace provider(所见即所得 → PM 事务;源码模式 → textarea 镜像 +
+  //  execCommand)。钉:单行选区预填查找词;大小写 / 正则开关改计数;替换当前后跳到下一条;全部替换 = 一步撤销;
+  //  嵌入卡里的命中查得到但不可替换;源码模式也能查能换、落盘带新文、原生撤销能撤回。
+  {
+    const seed = '# 替换页\n\napple 一号,Apple 二号。\n\n苹**果**三号,苹果四号,苹果五号。\n\n![[Embedded]]\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(600)
+    const q = (v) => pg.evaluate((v) => {
+      const inp = document.querySelector('.amx-findbar input')
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(inp, v)
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+    }, v).then(() => pg.waitForTimeout(300))
+    const r = (v) => pg.evaluate((v) => {
+      const inp = document.querySelector('.amx-findbar-replace')
+      if (!inp) return
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(inp, v)
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+    }, v).then(() => pg.waitForTimeout(100))
+    const st = () => pg.evaluate(() => {
+      const all = [...(CSS.highlights.get('amx-find') ?? [])]
+      const acts = [...document.querySelectorAll('.amx-findbar-act')]
+      return {
+        count: document.querySelector('.amx-findbar-count')?.textContent ?? '',
+        hits: all.length,
+        inMirror: all.filter((x) => !!x.startContainer.parentElement?.closest('.amx-find-mirror')).length,
+        canReplace: acts.length === 2 && acts.every((b) => !b.disabled),
+        rows: document.querySelectorAll('.amx-findbar-row').length,
+      }
+    })
+    const lastMd = () => pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    const pressOpt = (i) => pg.evaluate((i) => document.querySelectorAll('.amx-findbar-opt')[i]?.click(), i).then(() => pg.waitForTimeout(250))
+    const act = (i) => pg.evaluate((i) => document.querySelectorAll('.amx-findbar-act')[i]?.click(), i).then(() => pg.waitForTimeout(250))
+    // a:单行选区预填
+    await pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('二号')) at = pos + n.text.indexOf('二号'); return at < 0 })
+      const S = Object.getPrototypeOf(Object.getPrototypeOf(v.state.selection)).constructor
+      const TS = S.near(v.state.doc.resolve(at)).constructor
+      v.focus()
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at, at + 2)))
+    })
+    await pg.waitForTimeout(100)
+    await pg.evaluate(() => window.__openFind())
+    await pg.waitForTimeout(300)
+    const a = { prefill: await pg.inputValue('.amx-findbar input'), ...(await st()) }
+    // b:大小写
+    await q('apple')
+    const b1 = await st()
+    await pressOpt(0)
+    const b2 = await st()
+    await pressOpt(0)
+    // c:正则 + 替换当前(`$1` 展开)→ 跳到下一条;全部替换;一步撤销
+    await pressOpt(1)
+    await q('苹(.)')
+    const c1 = await st()
+    await pg.evaluate(() => document.querySelector('.amx-findbar-expand')?.click())
+    await pg.waitForTimeout(150)
+    await r('梨$1')
+    await act(0)
+    const c2 = await st()
+    await act(1)
+    await pg.waitForTimeout(1300)
+    const c3 = { ...(await st()), md: await lastMd() }
+    await pg.evaluate(() => window.__upage.probe.view().focus())
+    await pg.keyboard.press('Meta+z')
+    await pg.waitForTimeout(1300)
+    const c4 = await lastMd()
+    // e:嵌入卡里的命中:查得到、不可替换
+    await pg.evaluate(() => document.querySelector('.amx-findbar input').focus())
+    await pressOpt(1)
+    await q('被嵌入')
+    const e1 = await st()
+    // f:源码模式:镜像里查、替换落盘、原生撤销
+    await pg.evaluate(() => window.__upage.setEditorMode('source'))
+    await pg.waitForSelector('.amx-source', { timeout: 5000 })
+    await pg.waitForTimeout(400)
+    await q('二号')
+    const f1 = await st()
+    await r('贰号')
+    await act(1)
+    await pg.waitForTimeout(1300)
+    const f2 = { ta: await pg.evaluate(() => document.querySelector('.amx-source').value), md: await lastMd(), ...(await st()) }
+    await pg.evaluate(() => document.querySelector('.amx-source').focus())
+    await pg.keyboard.press('Meta+z')
+    await pg.waitForTimeout(1300)
+    const f3 = { ta: await pg.evaluate(() => document.querySelector('.amx-source').value), md: await lastMd() }
+    if (process.argv.includes('--shot')) {
+      await pg.evaluate(() => window.__upage.setEditorMode('wysiwyg'))
+      await pg.waitForTimeout(400)
+    }
+    record('P20b 页内查找替换:选区预填 + 大小写 / 正则 + 替换当前跳下一条 + 全部替换一步撤销 + 嵌入不可换 + 源码模式能换能撤',
+      a.prefill === '二号' && a.count === '1/1' &&
+        b1.count === '1/2' && b2.count === '1/1' &&
+        c1.count === '1/3' && c2.count === '1/2' && c3.count === '0' && c3.hits === 0 &&
+        c3.md.includes('梨果四号,梨果五号') && !c3.md.includes('苹果') &&
+        c4.includes('苹果四号,苹果五号') && !c4.includes('梨果四号') &&
+        e1.hits === 2 && !e1.canReplace &&
+        f1.hits === 1 && f1.inMirror === 1 && f1.canReplace &&
+        f2.ta.includes('Apple 贰号') && f2.md.includes('Apple 贰号') && f2.hits === 0 &&
+        f3.ta.includes('Apple 二号') && f3.md.includes('Apple 二号'),
+      JSON.stringify({ a, b1: b1.count, b2: b2.count, c1: c1.count, c2: c2.count, c3: { count: c3.count, hits: c3.hits, md: c3.md.slice(0, 80) }, c4: c4.slice(0, 80), e1, f1, f2: { ...f2, ta: f2.ta.slice(0, 60), md: f2.md.slice(0, 60) }, f3: { ta: f3.ta.slice(0, 60), md: f3.md.slice(0, 60) } }))
+    await pg.close()
+  }
+
   // P21:跨块文字拖选按真实字符范围呈现;块内选字也仍是原生高亮。
   {
     const seed = '甲段落文字。\n\n乙段落文字。\n\n丙段落文字。\n'
