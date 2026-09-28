@@ -6,7 +6,7 @@
  *   ⚠️ kind 缺席按 desktop:server 2.3.23 之前的名册不回 kind(生产今天就是这样),严格滤会把所有电脑一起滤掉。
  * - runOn:点一台电脑之后的流程 —— 懒登记本机 → 问那台电脑认不认这台手机(`GET /unit/remote-access`,经原生中继带票)
  *   → 需要就发起确认并每 2s 轮询(≤ 120s)→ 探一次引擎(`GET /engine/agent/sessions`,远端允许的基础档)→ 生效。
- *   生效 = 调注入的 select(ref);今天 UnitsSheet 里那一个 selectRunLocation 是空操作(TODO(K6-S2))。
+ *   生效 = 调注入的 select(ref);UnitsSheet 里那一个 selectRunLocation = K6-S2 的 setFocusTarget。
  * - removeThisPhone:「移除本机登记」—— 先切回云端(并等它生效)再移除,顺序由单测钉住(评审 P2)。
  */
 import type { UnitInfo } from '@/types'
@@ -92,7 +92,7 @@ export interface RunOnDeps {
   ensureSelf(): Promise<{ ok: true; unitId: string; name: string } | { ok: false; code: string }>
   /** 经 window.fetch(中继面由原生带票)。网络错抛出。 */
   fetchJson(url: string, init?: RequestInit): Promise<{ status: number; json: unknown }>
-  /** 生效:切运行位置。UnitsSheet 注入它那一个 selectRunLocation(今天空操作,TODO(K6-S2))。 */
+  /** 生效:切运行位置。UnitsSheet 注入它那一个 selectRunLocation(= setFocusTarget)。 */
   select(ref: TargetRef): void | Promise<void>
   sleep(ms: number): Promise<void>
   now(): number
@@ -200,9 +200,9 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
 }
 
 export interface RemoveDeps {
-  /** 当前运行位置(TODO(K6-S2):focusRef())。 */
+  /** 当前运行位置(= focusRef())。 */
   current(): TargetRef
-  /** 同 runOn 的 select:UnitsSheet 唯一的生效出口 selectRunLocation。K6-S2 之后它等切换(含重连)完成。 */
+  /** 同 runOn 的 select:UnitsSheet 唯一的生效出口 selectRunLocation;它等切换(含重连)完成。 */
   select(ref: TargetRef): void | Promise<void>
   /** window.tangu.unitForgetSelf:删本地身份 + DELETE 名册那一行。 */
   forget(): Promise<{ ok: boolean }>

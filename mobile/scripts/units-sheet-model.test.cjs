@@ -1,7 +1,7 @@
 /**
  * UnitsSheet「在哪运行」的纯模型单测 —— `npm run test:unitssheet`(mobile 目录,不用先 build)。
  * 钉三件:行模型(滤手机 / 本机、kind 缺席按电脑、状态与选中态)、runOn 流程(何时调 select、何时不调)、
- * 以及 UnitsSheet.tsx 里唯一的生效出口 selectRunLocation(今天空操作,TODO(K6-S2))。
+ * 以及 UnitsSheet.tsx 里唯一的生效出口 selectRunLocation(= K6-S2 的 setFocusTarget)。
  */
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -225,19 +225,20 @@ const access = (caller, remoteSessions = true) => ok({ remoteSessions, principal
     assert.deepEqual(order2, ['forget'])
   })
 
-  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef),今天空操作并标 TODO(K6-S2);runOn 与移除本机只注入它', async () => {
+  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef) = return setFocusTarget(ref)(K6-S2 整端切换);runOn 与移除本机只注入它', async () => {
     const tsx = fs.readFileSync(path.resolve(__dirname, '../src/UnitsSheet.tsx'), 'utf8')
-    const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): void \| Promise<void> \{([\s\S]*?)\n\}/g) || []
+    const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): Promise<void> \{([\s\S]*?)\n\}/g) || []
     assert.equal(defs.length, 1, '必须恰好一个 selectRunLocation 定义')
-    assert.match(defs[0], /\{\s*void ref\s*\}/, '今天必须是空操作(K6-S2 并行,集成时才接 setFocusTarget)')
-    const before = tsx.slice(Math.max(0, tsx.indexOf('function selectRunLocation') - 600), tsx.indexOf('function selectRunLocation'))
-    assert.match(before, /TODO\(K6-S2\)/)
+    assert.match(defs[0], /\{\s*return setFocusTarget\(ref\)\s*\}/, '生效 = 返回 setFocusTarget 的 Promise(移除本机要等它)')
     assert.equal((tsx.match(/select: selectRunLocation,/g) || []).length, 2, 'runOn 与 removeThisPhone 各注入一次')
     assert.match(tsx, /removeThisPhone\(\{/)
     assert.doesNotMatch(tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /unitForgetSelf\?\.\(\)[^\n]*\.then\(/, '移除不许绕过 removeThisPhone 直接调 unitForgetSelf')
-    // 不许绕过出口自己切位置(K8 的整端切换兜底已被 R-21 删除);注释里提到的不算
+    // 不许绕过出口自己切位置(K8 的整端切换兜底已被 R-21 删除):setFocusTarget 只在出口里出现一次;注释里提到的不算
     const code = tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-    for (const banned of [/setFocusTarget\(/, /setRunTarget\(/, /location\.reload\(/, /remoteCaller\s*=/]) assert.doesNotMatch(code, banned)
+    assert.equal((code.match(/setFocusTarget\(/g) || []).length, 1, 'setFocusTarget 只许在 selectRunLocation 里调')
+    for (const banned of [/setRunTarget\(/, /location\.reload\(/, /remoteCaller\s*=/]) assert.doesNotMatch(code, banned)
+    // 当前位置读整端焦点,不是写死云端
+    assert.match(code, /function currentRunLocation\(\): TargetRef \{\s*return focusRef\(\)\s*\}/)
     // 不许 import capacitor(web 手机形态复用本组件)
     assert.doesNotMatch(tsx, /from '@capacitor\//)
   })
