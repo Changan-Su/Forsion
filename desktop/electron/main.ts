@@ -47,6 +47,7 @@ import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
 import { createTray, refreshTrayMenu } from './tray'
 import { initMainLocale, mt, setMainLocale, UI_LOCALE_PREF_KEY } from './mainI18n'
+import { createApprovalDelivery } from './approvalDelivery' // P1-K3
 import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
 import { readThemesDir, seedDefaultThemes } from './themes'
@@ -809,6 +810,22 @@ let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null //
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+// P1-K3:远程来源 run 的待批 → 系统通知(点击打开会话,通知上不放「批准」);60s 没人答 → 经 unit-hub 投收件箱给手机。逻辑全在 approvalDelivery.ts。
+const approvalDelivery = createApprovalDelivery({
+  getEngine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
+  onEngineStatus: (cb) => backend.onStatus((st) => cb(st.state === 'ready')),
+  unitCreds: () => (unitHost?.status().connected && unitHostPairing
+    ? { cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '', unitId: unitHostPairing.unitId, secret: unitHostPairing.secret } : null),
+  t: mt,
+  notify: (o) => {
+    if (!Notification.isSupported()) return null
+    const n = new Notification({ title: o.title.slice(0, 200), body: o.body.slice(0, 300), timeoutType: 'never' })
+    n.show()
+    return { close: () => { try { n.close() } catch { /* 已收走 */ } }, onClick: (cb) => { n.on('click', cb) } }
+  },
+  openSession: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('approval:open', { sessionId }) },
+  log: (m) => console.log(m),
+})
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
 let unitTunnelPrefix = ''
 /** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,
@@ -3604,6 +3621,7 @@ app.whenReady().then(async () => {
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
+  if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
 
   // 启动即续期(2 周滑动窗口),且**必须先于 ensureBackend**:后端 token 走 env 快照,而本地端点鉴权
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
@@ -3662,6 +3680,7 @@ app.on('before-quit', (e) => {
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
+  approvalDelivery.stop() // P1-K3
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。

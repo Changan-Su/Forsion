@@ -72,6 +72,14 @@ const api = {
     ipcRenderer.on('inbox:open', listener)
     return () => ipcRenderer.removeListener('inbox:open', listener)
   },
+  // P1-K3:远程会话待批的系统通知被点击 → 主窗打开那条会话(main 进程 approvalDelivery → webContents.send('approval:open'))
+  onApprovalOpen: (cb: (p: { sessionId: string }) => void): (() => void) => {
+    const listener = (_e: unknown, p: { sessionId?: unknown } | null): void => {
+      if (typeof p?.sessionId === 'string' && p.sessionId) cb({ sessionId: p.sessionId })
+    }
+    ipcRenderer.on('approval:open', listener)
+    return () => ipcRenderer.removeListener('approval:open', listener)
+  },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
   unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
   /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(token 不进渲染层)。 */
@@ -481,6 +489,8 @@ const AGENT_KEYS = [
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
   'computerHistory', // 电脑历史同理:读者是 agent 工具与 Muse(主进程也只在 agentBackend 下建控制器)
   'reportRunningSessions', // 无 agent 后端就没有 run
+  // P1-K3
+  'onApprovalOpen', // 审批送达的通知只在有 agent 后端(本机引擎)的产品里发
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
