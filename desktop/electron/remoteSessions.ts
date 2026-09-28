@@ -27,7 +27,7 @@ import { defineMainMessages, mt } from './mainI18n'
 import { decideRemoteEngine, remoteEngineTier } from './remoteSessionGate'
 import type { ProxyCaller, UnitCaller, UnitKind } from './unitCaller'
 import {
-  normalizeCap, SECRET_STORE_INSECURE, type CapMode, type GateResult, type PendingView, type RemoteAccessStatus,
+  normalizeCap, REMOTE_PROMPT_TTL_MS, ROSTER_LOOKUP_TIMEOUT_MS, SECRET_STORE_INSECURE, type CapMode, type GateResult, type PendingView, type RemoteAccessStatus,
   type RemoteSessionsView, type TrustedView, type TrustReason, type TrustState,
 } from '../shared/remoteSessions'
 
@@ -35,7 +35,8 @@ export const REMOTE_SESSIONS_FILE = 'remote-sessions.json'
 
 const MAX_UNIT_ROWS = 64
 const DENY_COOLDOWN_MS = 10 * 60_000
-const PROMPT_TTL_MS = 2 * 60_000
+/** 弹框时限(查完名册才起算);与手机 runOn 的等待截止同源(shared/remoteSessions.ts,P1-KF)。 */
+const PROMPT_TTL_MS = REMOTE_PROMPT_TTL_MS
 /** 名册查不了:这么久之内不再去云端查(每次重试都打一次 /api/units 会吃掉全局每 IP 限流,G2)。 */
 const ROSTER_RETRY_MS = 30_000
 /** 弹框没人答(TTL 到):这么久之内不再弹(无人值守的电脑不被连着弹框、连着把主窗拉到前台)。 */
@@ -145,7 +146,7 @@ export async function lookupRosterUnit(
   try {
     const r = await (o.fetch ?? fetch)(`${o.base.replace(/\/+$/, '')}/api/units`, {
       headers: { Authorization: `Bearer ${o.token}` },
-      signal: AbortSignal.timeout(o.timeoutMs ?? 10_000),
+      signal: AbortSignal.timeout(o.timeoutMs ?? ROSTER_LOOKUP_TIMEOUT_MS),
     })
     if (!r.ok) return 'unreachable'
     const j = (await r.json()) as { units?: unknown }

@@ -13,7 +13,7 @@ import { useWorkspace } from '@lcl/engine'
 import { registerMessages, translate } from '../../i18n'
 import { engineFetch, routeSession } from '../../services/engine/targets'
 import { classify, classifyError, noteVerdict } from '../../services/engine/health'
-import { AGENT_APP_ID, currentClientId, unitFailureMessage } from '../../services/agentRunService'
+import { AGENT_APP_ID, currentClientId, noteExtra, unitFailureMessage } from '../../services/agentRunService'
 import { useApp } from '../../stores/appStore'
 import { windowKind } from '../../windowKind'
 
@@ -163,11 +163,12 @@ async function streamAside(sessionId: string, body: Record<string, unknown>, onE
     const raw = await r.text().catch(() => '')
     let detail = ''
     let code: string | undefined
-    try { const j = JSON.parse(raw); detail = String(j?.detail || ''); code = typeof j?.code === 'string' ? j.code : undefined } catch { /* 非 JSON = 老引擎没有这条路由(Express 的 Cannot POST 页) */ }
+    let j: unknown = null
+    try { j = JSON.parse(raw); detail = String((j as { detail?: unknown })?.detail || ''); const c = (j as { code?: unknown })?.code; code = typeof c === 'string' ? c : undefined } catch { /* 非 JSON = 老引擎没有这条路由(Express 的 Cannot POST 页) */ }
     if (t.via === 'unit') {
       const v = classify(r.status, { code })
-      noteVerdict(t.key, v, code ? { code } : {})
-      const msg = unitFailureMessage(t, v, code)
+      noteVerdict(t.key, v, noteExtra(j))
+      const msg = unitFailureMessage(t, v, code, j) // P1-KF:拒绝按 reason / state 分句
       if (msg && v !== 'fatal') throw new Error(msg)
     }
     throw new Error(detail || (r.status === 404 ? translate('btw.errUnsupported') : `HTTP ${r.status}`))

@@ -74,6 +74,12 @@
 - Read-only git commands such as `git status` now ask for approval when the workspace contains a planted, fake git directory. Before, an agent could use such a directory to run commands as you without any approval, and a remote session could use it to raise its own approval limit. Read-only git commands still run without approval in normal repositories, git worktrees, submodules and folders that are not in any repository.
 <!-- /P1-K10b -->
 
+<!-- P1-KF -->
+- **System notifications, prompts and the tray menu now use the app's language**. When the app picked Chinese from your system language or region without you choosing a language in Settings, remote session approval notifications, the "Remote session request" prompt and the tray menu could still show up in English (and the other way round). Before the Forsion window opens, for example in the tray menu right after launch, the last app language is used.
+- In the phone's "Run on" list, cases where that computer won't show a prompt at all (it isn't signed in to Forsion, it can't find this phone in its account, too many requests are waiting, nobody answered the last prompt, and so on) now say why right away, instead of showing "Allow this phone on "computer"" and waiting for two minutes. Only a computer that chose Don't allow shows "You can ask again in 10 minutes". If the prompt on the computer closes without an answer, the phone stops waiting and asks you to tap again. If a computer couldn't be reached earlier, tapping it again shows its current answer instead of staying on "Can't reach it right now". When the prompt on the computer times out, the phone says nobody answered instead of still asking you to allow it there.
+- When that computer refuses something while you run tasks on it from your phone or use its device page, the message also gives the actual reason instead of always saying it's waiting for that computer to allow this.
+<!-- /P1-KF -->
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.

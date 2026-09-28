@@ -177,6 +177,22 @@ describe('subscribeRunEvents × 终局', () => {
     }
   })
 
+  it('P1-KF:403 REMOTE_CALLER_UNCONFIRMED 带 reason → 终局,错误文案按 reason、健康格记下 state / reason(提示条据此出同一句)', async () => {
+    const { translate } = await import('../i18n')
+    const t = armUnit()!
+    router = (url) => (url.includes('/events')
+      ? { status: 403, body: JSON.stringify({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: 'x', state: 'denied', reason: 'roster-miss' }) }
+      : { status: 200, body: '{}' })
+    const caught = run.subscribeRunEvents(t, 'r1', () => {}).catch((e) => e)
+    await vi.advanceTimersByTimeAsync(60_000)
+    const e = await caught
+    expect(e.message).toBe(translate('unitpage.remoteCallerRosterMiss'))
+    expect(eventsCalls().length).toBe(1)
+    expect(H.healthOf(t.key)).toMatchObject({ state: 'refused', code: 'REMOTE_CALLER_UNCONFIRMED', refusal: { state: 'denied', reason: 'roster-miss' } })
+    expect(run.unitFailureMessage(t, 'refused', 'REMOTE_CALLER_UNCONFIRMED', { state: 'unconfirmed', reason: 'busy' })).toBe(translate('unitpage.remoteCallerBusy'))
+    expect(run.unitFailureMessage(t, 'refused', 'REMOTE_CALLER_UNCONFIRMED')).toBe(translate('unitpage.remoteCallerUnconfirmed')) // 只有码 = 旧口径
+  })
+
   it('原生桥取调用方头失败 → 失败关闭:请求不发,抛 CALLER_UNAVAILABLE', async () => {
     vi.stubGlobal('window', { tangu: { mobile: true, unitCallerHeaders: () => Promise.reject(new Error('keystore locked')) }, addEventListener: () => {}, removeEventListener: () => {} })
     T.installEngineHost({ cfg: () => ({ backendUrl: API, token: 'forsion-token', modelId: '' }), desktopConfig: () => ({ cloudApiBase: API }) })

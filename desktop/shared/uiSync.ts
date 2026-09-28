@@ -78,3 +78,14 @@ export function normalizeUiSync(raw: unknown): UiSyncPayload | null {
   const p = prefs(v.prefs)
   return t || p ? { theme: t, prefs: p } : null
 }
+
+// ── P1-KF:渲染层生效语言 → 主进程(托盘 / 系统通知 / 对话框的 mt() 跟它走)──────────────────────────────
+// 为什么不借 ui:sync 的 prefs['tangu_locale']:那是「用户手选」的持久键,② 系统语言 / ③ IP 区域缓存判出来的语言根本不写它,
+// 且任何字体 / 缩放变更的广播都带着它的 null —— 主进程拿它当语言源,中文界面(区域 = CN、系统英文)下弹的就是英文通知。
+// 这里报的是渲染层按 CLAUDE.md 四级链判完的**结论**(i18n.tsx currentLocale),主进程只认它。
+/** 渲染层 → 主进程:本窗生效界面语言(ipcRenderer.send,单向)。 */
+export const UI_LOCALE_CHANNEL = 'ui:locale'
+/** 载荷来自渲染层(插件也够得着 window.tangu):只认 'zh' | 'en',其余一律丢弃(不当成「跟随系统」)。 */
+export function normalizeUiLocale(v: unknown): 'zh' | 'en' | null {
+  return v === 'zh' || v === 'en' ? v : null
+}

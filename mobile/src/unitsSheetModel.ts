@@ -5,13 +5,17 @@
  * - runRows:只列 `kind === 'desktop'` 且不是本机的设备(手机没有引擎、也没有设备页;INTEGRATION R-28 把 K1 的滤手机并到这里)。
  *   ⚠️ kind 缺席按 desktop:server 2.3.23 之前的名册不回 kind(生产今天就是这样),严格滤会把所有电脑一起滤掉。
  * - runOn:点一台电脑之后的流程 —— 懒登记本机 → 问那台电脑认不认这台手机(`GET /unit/remote-access`,经原生中继带票)
- *   → 需要就发起确认并每 2s 轮询(≤ 120s)→ 探一次引擎(`GET /engine/agent/sessions`,远端允许的基础档)→ 生效。
+ *   → 需要就发起确认并每 2s 轮询(截止 = 那台查名册 + 弹框时限 + 余量,过了再核一次)→ 探一次引擎(`GET /engine/agent/sessions`,远端允许的基础档)→ 生效。
+ *   **reason 先于 state**(P1-KF):回包带 reason(严格档 / 名册缺失 / 那台没登录 / 没人答 / 排满 …)= 那台电脑上不会有弹框 ——
+ *   不发起确认、不进「请在 X 上允许」的轮询,直接按 reason 落到行上;轮询中弹框收了没回答(回 unconfirmed)也就此停下。
  *   生效 = 调注入的 select(ref);UnitsSheet 里那一个 selectRunLocation = K6-S2 的 setFocusTarget。
  * - removeThisPhone:「移除本机登记」—— 先切回云端(并等它生效)再移除,顺序由单测钉住(评审 P2)。
+ * - beginAttempt / noteAttempt / endAttempts:UnitsSheet 每行「探针 / 粘滞拒绝」两张表的唯一改法(P1-KF 评审):谁新听谁,
+ *   上一轮的「连不上」不许盖住这一轮那台电脑的真回答;没人在轮询时不留「请允许」。
  */
 import type { UnitInfo } from '@/types'
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
-import { deviceStatus, type DeviceStatus, type ProbeResult, type StickyRefusal } from '@/services/deviceStatus'
+import { describeDevice, isTrustReason, REMOTE_PROMPT_TTL_MS, RETRY_SOON_REASONS, ROSTER_LOOKUP_TIMEOUT_MS, type DeviceStatus, type ProbeResult, type RefusalDetail, type StickyRefusal, type TrustReason } from '@/services/deviceStatus'
 
 export interface RunRow {
   id: string
@@ -19,6 +23,8 @@ export interface RunRow {
   icon: string | null
   platform: string | null
   status: DeviceStatus
+  /** 决定 status 的那条拒绝的 state / reason(awaitingConfirm / denied / callerBlocked 的文案按它选,P1-KF)。 */
+  refusal?: RefusalDetail
   /** 设备自报「引擎在跑」(还没探过时的提示,不等于可用)。 */
   capsReady: boolean
   selected: boolean
@@ -37,19 +43,40 @@ export function runRows(
   sticky: Readonly<Record<string, StickyRefusal | undefined>> = {},
   now: number = Date.now(),
 ): RunRow[] {
-  return units.filter((u) => isRunnableUnit(u, selfId)).map((u) => ({
-    id: u.id,
-    name: u.name,
-    icon: u.icon ?? null,
-    platform: u.platform ?? null,
-    status: deviceStatus(u, probes[u.id] ?? null, sticky[u.id], now),
-    capsReady: !!(u.online && u.capsLive && u.caps?.engine === 'ready'),
-    selected: current.kind === 'unit' && current.unitId === u.id,
-  }))
+  return units.filter((u) => isRunnableUnit(u, selfId)).map((u) => {
+    const d = describeDevice(u, probes[u.id] ?? null, sticky[u.id], now)
+    return {
+      id: u.id,
+      name: u.name,
+      icon: u.icon ?? null,
+      platform: u.platform ?? null,
+      status: d.status,
+      ...(d.refusal ? { refusal: d.refusal } : {}),
+      capsReady: !!(u.online && u.capsLive && u.caps?.engine === 'ready'),
+      selected: current.kind === 'unit' && current.unitId === u.id,
+    }
+  })
 }
 
-/** 行上的状态文案键(unitm.*;devstatus.* 是 K7 的命名空间,这里不注册以免集成时撞键)。 */
-export function statusKey(row: Pick<RunRow, 'status' | 'capsReady'>, probing: boolean): string {
+/** reason → 行上文案键(P1-KF)。Record 键钉住 TrustReason 全集:新增 reason 不补这里就编不过。 */
+export const REASON_STATUS_KEYS: Record<TrustReason, string> = {
+  strict: 'unitm.reason.strict',
+  'never-prompts': 'unitm.reason.neverPrompts',
+  'not-signed-in': 'unitm.reason.notSignedIn',
+  'roster-miss': 'unitm.reason.rosterMiss',
+  'roster-unreachable': 'unitm.reason.rosterUnreachable',
+  'no-answer': 'unitm.reason.noAnswer',
+  busy: 'unitm.reason.busy',
+}
+
+/**
+ * 行上的状态文案键(unitm.*;devstatus.* 是 K7 的命名空间,这里不注册以免集成时撞键)。
+ * 拒绝类**先看 reason、再看 state**(P1-KF):带 reason = 那台电脑上不会弹框,绝不出「请在 X 上允许」;
+ * denied 才说「10 分钟后可再请求」(那是用户点了「不允许」之后的真实冷却),严格档 / 名册缺失不许诺它。
+ */
+export function statusKey(row: Pick<RunRow, 'status' | 'capsReady'> & { refusal?: RefusalDetail }, probing: boolean): string {
+  const reason = row.refusal?.reason
+  if (isTrustReason(reason) && (row.status === 'callerBlocked' || row.status === 'denied' || row.status === 'awaitingConfirm')) return REASON_STATUS_KEYS[reason]
   switch (row.status) {
     case 'checking':
       if (probing) return 'unitm.checking'
@@ -61,9 +88,23 @@ export function statusKey(row: Pick<RunRow, 'status' | 'capsReady'>, probing: bo
     case 'offline': return 'unitm.offline'
     case 'unreachable': return 'unitm.unreachable'
     case 'remoteOff': return 'unitm.remoteOff'
-    case 'awaitingConfirm': return 'unitm.confirmPending'
+    case 'awaitingConfirm': return row.refusal?.state === 'unconfirmed' ? 'unitm.confirmNotAsked' : 'unitm.confirmPending'
     case 'denied': return 'unitm.confirmDenied'
+    case 'callerBlocked': return 'unitm.confirmDenied' // 只在 reason 不认得时到这里(describeDevice 只在认得 reason 时给 callerBlocked)
   }
+}
+
+export type RowTone = '' | 'ok' | 'warn' | 'err'
+const TONE: Record<DeviceStatus, RowTone> = {
+  checking: '', ready: 'ok', starting: 'warn', engineStopped: 'warn', noEngine: 'err', offline: '',
+  unreachable: 'err', remoteOff: 'warn', awaitingConfirm: 'warn', denied: 'err', callerBlocked: 'err',
+}
+/** 行首状态点:callerBlocked 里「稍后再试就行」的几种(名册查不了 / 没人答 / 排满)是 warn,要那台电脑上先做点什么的是 err。 */
+export function rowTone(row: Pick<RunRow, 'status' | 'capsReady'> & { refusal?: RefusalDetail }, probing: boolean): RowTone {
+  if (row.status === 'checking') return !probing && row.capsReady ? 'ok' : ''
+  const reason = row.refusal?.reason
+  if (row.status === 'callerBlocked' && isTrustReason(reason) && RETRY_SOON_REASONS.has(reason)) return 'warn'
+  return TONE[row.status]
 }
 
 /**
@@ -101,13 +142,25 @@ export interface RunOnDeps {
 }
 
 export const CONFIRM_POLL_MS = 2000
-export const CONFIRM_TIMEOUT_MS = 120_000
+/**
+ * 等「允许」的截止(从拿到 pending 起算)= 那台电脑查名册的上限 + 弹框时限 + 5s 余量(P1-KF 评审 P2)。
+ * 原先是 120s:桌面查完名册(≤ 10s)才起 2 分钟的弹框计时,手机总是先放弃,停在「请在 X 上允许」挂 5 分钟 —— 而那个框几秒后就收了。
+ * 常量与桌面同源(shared/remoteSessions.ts)。排在别的框后面(队列 ≤ 3)的请求会更晚才弹:截止后的最后一次核对兜住它。
+ */
+export const CONFIRM_TIMEOUT_MS = ROSTER_LOOKUP_TIMEOUT_MS + REMOTE_PROMPT_TTL_MS + 5_000
+/** 过了截止再等这一拍、最后核一次:桌面的框多半刚到点收掉,拿它的 no-answer 落行,不带着「请允许」停下。 */
+export const CONFIRM_GRACE_MS = 3_000
 
-type AccessStatus = { remoteSessions?: boolean; caller?: string }
+type AccessStatus = { remoteSessions?: boolean; caller?: string; reason?: string }
 
 function failOf(status: number, json: unknown): ProbeResult {
-  const o = (json && typeof json === 'object' ? json : {}) as { code?: unknown; state?: unknown }
-  return { ok: false, status, ...(typeof o.code === 'string' ? { code: o.code } : {}), ...(typeof o.state === 'string' ? { state: o.state } : {}) }
+  const o = (json && typeof json === 'object' ? json : {}) as { code?: unknown; state?: unknown; reason?: unknown }
+  return {
+    ok: false, status,
+    ...(typeof o.code === 'string' ? { code: o.code } : {}),
+    ...(typeof o.state === 'string' ? { state: o.state } : {}),
+    ...(typeof o.reason === 'string' ? { reason: o.reason } : {}),
+  }
 }
 
 function callerCodeOf(json: unknown): string | null {
@@ -149,30 +202,41 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
   if (accessIssue) return { kind: 'phone', issue: accessIssue }
   if (access.status === 200) {
     let s = (access.json ?? {}) as AccessStatus
+    const RCU = 'REMOTE_CALLER_UNCONFIRMED'
+    /** 这份状态是不是已经说死了「这次跑不成」:开关关着 → 带 reason(不会弹框)→ 被拒。reason 先于 state(P1-KF)。 */
     const refusal = (st: AccessStatus): RunOnOutcome | null => {
       if (st.remoteSessions === false) return { kind: 'device', sticky: { code: 'REMOTE_SESSIONS_OFF', at: deps.now() } }
-      if (st.caller === 'denied') return { kind: 'device', sticky: { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'denied', at: deps.now() } }
+      if (st.caller !== 'trusted' && st.caller !== 'paired' && isTrustReason(st.reason)) {
+        return { kind: 'device', sticky: { code: RCU, ...(typeof st.caller === 'string' ? { state: st.caller } : {}), reason: st.reason, at: deps.now() } }
+      }
+      if (st.caller === 'denied') return { kind: 'device', sticky: { code: RCU, state: 'denied', at: deps.now() } }
       return null
     }
+    /** 那台电脑上此刻没有弹框、也没排上(没问过 / 弹框没等到回答就收了):不轮询,行上说「再点一次会去问」。 */
+    const notAsked = (): RunOnOutcome => ({ kind: 'device', sticky: { code: RCU, state: 'unconfirmed', at: deps.now() } })
     const r0 = refusal(s)
     if (r0) return r0
     if (s.caller === 'unconfirmed') {
       const req = await get('/unit/remote-access/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       if (aborted()) return { kind: 'cancelled' }
-      const reqIssue = req && phoneLevel(req)
+      if (req === null) return { kind: 'device', probe: { ok: false, status: 0 } }
+      const reqIssue = phoneLevel(req)
       if (reqIssue) return { kind: 'phone', issue: reqIssue }
-      if (req && req.status === 200) s = (req.json ?? {}) as AccessStatus
+      if (req.status !== 200) return { kind: 'device', probe: failOf(req.status, req.json) }
+      s = (req.json ?? {}) as AccessStatus
+      const r1 = refusal(s) // 排满(busy)只在这一拍知道 —— 在「请允许」之前判
+      if (r1) return r1
+      if (s.caller === 'unconfirmed') return notAsked() // 发起了也没排上(开关刚关 / 锁定 …):不会有弹框
     }
-    if (s.caller === 'pending' || s.caller === 'unconfirmed') {
-      const pending: StickyRefusal = { code: 'REMOTE_CALLER_UNCONFIRMED', state: 'pending', at: deps.now() }
+    if (s.caller === 'pending') {
+      const pending: StickyRefusal = { code: RCU, state: 'pending', at: deps.now() }
       deps.progress?.({ sticky: pending })
       const deadline = deps.now() + CONFIRM_TIMEOUT_MS
-      for (;;) {
-        const r = refusal(s)
-        if (r) return r
-        if (s.caller !== 'pending' && s.caller !== 'unconfirmed') break
-        if (deps.now() >= deadline) return { kind: 'device', sticky: { ...pending, at: deps.now() } }
-        await deps.sleep(CONFIRM_POLL_MS)
+      for (let last = false; ;) {
+        // 过了截止:宽限一拍、最后核一次,按那台电脑此刻的回答落行(评审 P2)—— 绝不带着「请允许」停下:
+        // 那条会在行上挂 5 分钟(STICKY_TTL_MS),人走到电脑前却没有框。
+        if (!last && deps.now() >= deadline) last = true
+        await deps.sleep(last ? CONFIRM_GRACE_MS : CONFIRM_POLL_MS)
         if (aborted()) return { kind: 'cancelled' }
         access = await get('/unit/remote-access')
         if (aborted()) return { kind: 'cancelled' }
@@ -181,6 +245,12 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
         if (pollIssue) return { kind: 'phone', issue: pollIssue }
         if (access.status !== 200) return { kind: 'device', probe: failOf(access.status, access.json) }
         s = (access.json ?? {}) as AccessStatus
+        const r = refusal(s) // 被拒 / 名册缺失(那台查完名册才知道)/ 没人答(弹框 2 分钟到点)
+        if (r) return r
+        if (s.caller === 'pending' && !last) continue
+        // 弹框收了、没有回答 → 别再转「请允许」;截止后还 pending(排在别的框后面)→ 不再等,行上说「点按再次请求」(再点会接着等)
+        if (s.caller === 'unconfirmed' || s.caller === 'pending') return notAsked()
+        break // trusted / paired
       }
     }
   } else if (access.status !== 404) {
@@ -197,6 +267,50 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
   deps.progress?.({ probe: { ok: true } })
   await deps.select({ kind: 'unit', unitId })
   return { kind: 'selected' }
+}
+
+/**
+ * UnitsSheet 每行的两张表:最近一次探针结果、最近一次拒绝(粘滞)。只经下面三个函数改(评审 P2)。
+ * 为什么要管:describeDevice 里**探针失败排在粘滞前面**(连不上时开关与信任无从谈起)—— 表里留着上一轮的
+ * `{ok:false,status:0}`,这一轮那台电脑明明回了 roster-miss / pending,行上照样是「暂时连不上」,「请允许」也永远出不来。
+ */
+export interface RowMarks {
+  probes: Readonly<Record<string, ProbeResult>>
+  sticky: Readonly<Record<string, StickyRefusal>>
+}
+export const NO_MARKS: RowMarks = { probes: {}, sticky: {} }
+
+function without<T>(m: Readonly<Record<string, T>>, id: string): Readonly<Record<string, T>> {
+  if (!Object.prototype.hasOwnProperty.call(m, id)) return m
+  const n = { ...m }
+  delete n[id]
+  return n
+}
+/** 「请允许」是**进行中**的标记(只在有流程在轮询时成立),不是拒绝:流程没了就收掉。 */
+function withoutPending(m: Readonly<Record<string, StickyRefusal>>): Readonly<Record<string, StickyRefusal>> {
+  const ids = Object.keys(m).filter((id) => m[id].state === 'pending')
+  return ids.reduce((acc, id) => without(acc, id), m)
+}
+
+/**
+ * 点一行 = 从零开始问这台电脑:清掉这一行上一轮的探针与粘滞(行上是「正在连接…」,等这一轮的回答);
+ * 别的行上的「请允许」也收掉 —— 点新一行时上一轮已被中止,没人在轮询了。
+ */
+export function beginAttempt(m: RowMarks, id: string): RowMarks {
+  return { probes: without(m.probes, id), sticky: withoutPending(without(m.sticky, id)) }
+}
+
+/** runOn 的过程 / 结果落到这一行:谁新听谁 —— 那台电脑的回答(粘滞)顶掉旧探针;探针(成功或失败)顶掉旧粘滞。 */
+export function noteAttempt(m: RowMarks, id: string, p: { probe?: ProbeResult; sticky?: StickyRefusal }): RowMarks {
+  if (p.sticky) return { probes: without(m.probes, id), sticky: { ...m.sticky, [id]: p.sticky } }
+  if (p.probe) return { probes: { ...m.probes, [id]: p.probe }, sticky: without(m.sticky, id) }
+  return m
+}
+
+/** 流程被收掉(弹层关了 / 选了云端):收掉所有「请允许」,拒绝与探针结果照留(5 分钟内再打开还看得到)。 */
+export function endAttempts(m: RowMarks): RowMarks {
+  const sticky = withoutPending(m.sticky)
+  return sticky === m.sticky ? m : { probes: m.probes, sticky }
 }
 
 export interface RemoveDeps {

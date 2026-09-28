@@ -8,12 +8,18 @@
  *    不合成 503、也不带任何调用方票头 —— 否则 K6-S2 的 check:enginetarget(驱动 mobile dev 构建打 unit 目标)全红;
  *  - 「打开设备界面」缺省折叠,展开后是 P0 那几行(不含手机);「本机」段在 web 路径显示「仅安卓 App」。
  *  - 出三张真实截图(中文亮 / 中文暗 / 英文亮)给人眼看(DESIGN §8)。
+ *  - P1-KF 拒绝矩阵(zh / en):K4 拒绝体的每种 reason / state 在行上的状态、文案、状态点;带 reason 的不发起确认、不出「请允许」、
+ *    不转圈、不切位置;denied(用户点了「不允许」)才说 10 分钟;轮询中才知道的名册缺失 / 弹框收了立刻停。另出几张拒绝态截图。
+ *    矩阵在同一页面上顺序跑(行上的表不清):先留下一条「连不上」(网络错 / 发起确认 500),下一例那台电脑的真回答
+ *    (reason / 轮询中的「请允许」)必须照出 —— 评审 P2:旧探针曾盖住后来的一切拒绝。
+ *  - 端口:缺省系统分配空闲端口;PORT_RUNON 指定时先核实没人占(别的会话常驻 5301–5307 / 5173 / 5199)。
  *
  * 跑法:npm run build && npm run e2e:runon。SHOT_DIR 指定截图目录(缺省系统临时目录)。
  * 机制照抄 units-entry.e2e.cjs(假 token 过登录闸,/api/** 缺省 abort,名册由 page.route 供给)。
  * ⚠️ 浏览器台架钉语言必须用 newContext({ locale })(chromium 的 --lang 无效,CLAUDE.md)。
  */
 const http = require('http')
+const net = require('net')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
@@ -23,8 +29,30 @@ const { chromium } = (() => {
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const PORT = Number(process.env.PORT_RUNON || 5286)
-const URL = `http://localhost:${PORT}/`
+// 端口(P1-KF):别的会话的 vite 常驻 5301–5307 / 5173 / 5199 —— 缺省取系统分配的空闲端口;PORT_RUNON 指定时先核实没人占,
+// 占了就起跑前报错(原先 vite --strictPort 起不来而 ping 打到别人的服务上照样 200 = 在别人的页面上跑出假结果)。
+let PORT = 0
+let URL = ''
+function portFree(port) {
+  return new Promise((res) => {
+    const srv = net.createServer()
+    srv.once('error', () => res(false))
+    srv.listen(port, () => srv.close(() => res(true)))
+  })
+}
+async function pickPort() {
+  if (process.env.PORT_RUNON) {
+    const p = Number(process.env.PORT_RUNON)
+    URL = `http://localhost:${p}/`
+    if (!(await portFree(p)) || (await ping())) throw new Error(`PORT_RUNON=${p} 已被占用(多半是别的会话的 vite)—— 换一个空闲端口,或不设 PORT_RUNON 让系统分配`)
+    return p
+  }
+  return new Promise((res, rej) => {
+    const srv = net.createServer()
+    srv.once('error', rej)
+    srv.listen(0, () => { const { port } = srv.address(); srv.close(() => res(port)) })
+  })
+}
 const SHOT_DIR = process.env.SHOT_DIR || os.tmpdir()
 const UNIT_LABELS = ['Forsion Unit 切换', 'Switch Forsion Unit']
 
@@ -274,8 +302,10 @@ async function simScenario(browser) {
     phone: document.querySelector('[data-this-phone] .us-self-text')?.textContent || '',
   }), READY)
   const seq = done.calls.join(' → ')
-  expect(/^GET \/unit\/remote-access → POST \/unit\/remote-access\/request → (GET \/unit\/remote-access → )+GET \/engine\/agent\/sessions$/.test(seq), '[sim] 流程:问信任 → 发起确认 → 每 2s 轮询 → 受信 → 探引擎', seq)
-  expect(/可用/.test(done.sub) && done.pressed === 'false' && done.home === 'true', '[sim] 探针通过后「可用」;生效是空操作(TODO K6-S2),当前仍如实是云端', JSON.stringify(done))
+  // 探引擎之后是 setFocusTarget 整端切过去的连接流量(/unit/config、/engine/health …),只钉到探引擎为止的前缀
+  expect(/^GET \/unit\/remote-access → POST \/unit\/remote-access\/request → (GET \/unit\/remote-access → )+GET \/engine\/agent\/sessions( → |$)/.test(seq), '[sim] 流程:问信任 → 发起确认 → 每 2s 轮询 → 受信 → 探引擎', seq)
+  // 集成后(K8 × K6-S2,de16ecb4)生效 = setFocusTarget:当前位置真的切到那台电脑(原断言「空操作、仍是云端」是 K8 单包时的实情)
+  expect(/可用/.test(done.sub) && done.pressed === 'true' && done.home === 'false', '[sim] 探针通过后「可用」,整端切到那台电脑(当前 = MacBook Pro)', JSON.stringify(done))
   expect(/已登记为「Pixel 9」/.test(done.phone), '[sim] 首次选电脑后本机段刷新为「已登记为「Pixel 9」」', done.phone)
   await page.evaluate(() => { const b = document.querySelector('[data-units-sheet] .us-body'); if (b) b.scrollTop = b.scrollHeight })
   await tap(page.locator('[data-this-phone] .us-btn.danger'))
@@ -319,12 +349,175 @@ async function simScenario(browser) {
   await ctx.close()
 }
 
+/**
+ * P1-KF · 拒绝矩阵(真页面 × 真 UnitsSheet × 真 runOn × 真 setFocusTarget;只有原生桥与中继面被替身):
+ * 每种 K4 拒绝体(reason 先于 state)在行上的状态 / 文案 / 状态点;带 reason 的一律不发起确认、不出「请在 X 上允许」、不转圈、
+ * 不切位置;没有 reason 的 denied 才说「10 分钟后可以再次请求」;轮询中才知道的名册缺失 / 弹框收了立刻停。zh / en 各跑一遍。
+ */
+const EXPECT = {
+  zh: {
+    pending: '请在「MacBook Pro」上允许这台手机',
+    unreachable: '暂时连不上，稍后重试',
+    denied: '「MacBook Pro」拒绝了这台手机，10 分钟后可以再次请求',
+    notAsked: '「MacBook Pro」还没有允许这台手机，点按再次请求',
+    remoteOff: '请在「MacBook Pro」上开启「允许远程会话」',
+    strict: '「MacBook Pro」只允许这类连接查看，不会再询问；请在那台电脑的「设置 › 远程会话」中允许',
+    'never-prompts': '「MacBook Pro」不会为这类连接弹框询问；请在那台电脑的「设置 › 远程会话」中允许',
+    'not-signed-in': '「MacBook Pro」没有登录 Forsion，请先在那台电脑上登录',
+    'roster-miss': '「MacBook Pro」的账号里找不到这台手机，请确认两台设备登录的是同一个账号',
+    'roster-unreachable': '「MacBook Pro」暂时无法核对这台手机，请稍后再试',
+    'no-answer': '「MacBook Pro」上没有人回应确认，请稍后再试',
+    busy: '「MacBook Pro」上待确认的请求太多，请稍后再试',
+  },
+  en: {
+    pending: 'Allow this phone on "MacBook Pro"',
+    unreachable: "Can't reach it right now. Try again shortly",
+    denied: '"MacBook Pro" declined this phone. You can ask again in 10 minutes',
+    notAsked: '"MacBook Pro" hasn\'t allowed this phone yet. Tap to ask again',
+    remoteOff: 'Turn on "Allow remote sessions" on "MacBook Pro"',
+    strict: '"MacBook Pro" only lets connections like this one view sessions and won\'t ask again. Allow it in Settings › Remote sessions there',
+    'never-prompts': '"MacBook Pro" doesn\'t ask for connections like this one. Allow it in Settings › Remote sessions there',
+    'not-signed-in': '"MacBook Pro" isn\'t signed in to Forsion. Sign in there first',
+    'roster-miss': '"MacBook Pro" can\'t find this phone in its account. Make sure both devices use the same account',
+    'roster-unreachable': '"MacBook Pro" can\'t check this phone right now. Try again shortly',
+    'no-answer': 'No one answered on "MacBook Pro". Try again in a minute',
+    busy: '"MacBook Pro" has too many requests waiting. Try again shortly',
+  },
+}
+const st = (caller, extra = {}) => ({ remoteSessions: true, principal: 'unit', caller, maxApprovalMode: 'auto-edit', ...extra })
+/** get:第 i 次 GET /unit/remote-access 的回包(越界取最后一个);post:POST …/request 的回包。 */
+const CASES = [
+  { name: 'denied(用户点了不允许)', get: [st('denied')], status: 'denied', text: 'denied', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: 'strict', get: [st('denied', { reason: 'strict' })], status: 'callerBlocked', reason: 'strict', text: 'strict', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: 'roster-miss', get: [st('denied', { reason: 'roster-miss' })], status: 'callerBlocked', reason: 'roster-miss', text: 'roster-miss', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: 'not-signed-in', get: [st('unconfirmed', { reason: 'not-signed-in' })], status: 'callerBlocked', reason: 'not-signed-in', text: 'not-signed-in', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: 'never-prompts', get: [st('unconfirmed', { reason: 'never-prompts' })], status: 'callerBlocked', reason: 'never-prompts', text: 'never-prompts', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: 'roster-unreachable', get: [st('unconfirmed', { reason: 'roster-unreachable' })], status: 'callerBlocked', reason: 'roster-unreachable', text: 'roster-unreachable', tone: 'warn', calls: ['GET /unit/remote-access'] },
+  { name: 'no-answer(冷却中)', get: [st('unconfirmed', { reason: 'no-answer' })], status: 'callerBlocked', reason: 'no-answer', text: 'no-answer', tone: 'warn', calls: ['GET /unit/remote-access'] },
+  { name: 'busy(发起那拍才知道)', get: [st('unconfirmed')], post: st('unconfirmed', { reason: 'busy' }), status: 'callerBlocked', reason: 'busy', text: 'busy', tone: 'warn', calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request'] },
+  { name: 'remote off', get: [st('unconfirmed', { remoteSessions: false })], status: 'remoteOff', text: 'remoteOff', tone: 'warn', calls: ['GET /unit/remote-access'] },
+  // 评审 P2:同一行上先留一条「连不上」,紧接着那台电脑的真回答必须照出(旧探针不许盖住 reason / 「请允许」)
+  { name: '网络错(留下一条连不上)', get: ['throw'], status: 'unreachable', text: 'unreachable', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: '连不上之后 → roster-miss', shot: 'after-blip-roster-miss', get: [st('denied', { reason: 'roster-miss' })], status: 'callerBlocked', reason: 'roster-miss', text: 'roster-miss', tone: 'err', calls: ['GET /unit/remote-access'] },
+  { name: '发起确认 500(留下一条连不上)', get: [st('unconfirmed')], post: { __status: 500, body: { detail: 'boom' } }, status: 'unreachable', text: 'unreachable', tone: 'err', calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request'] },
+  { name: '轮询中查完名册 → roster-miss', get: [st('unconfirmed'), st('denied', { reason: 'roster-miss' })], post: st('pending'), status: 'callerBlocked', reason: 'roster-miss', text: 'roster-miss', tone: 'err', sawPending: true, calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request', 'GET /unit/remote-access'] },
+  { name: '轮询中弹框收了没回答 → 还没问过', get: [st('unconfirmed'), st('unconfirmed')], post: st('pending'), status: 'awaitingConfirm', text: 'notAsked', tone: 'warn', sawPending: true, calls: ['GET /unit/remote-access', 'POST /unit/remote-access/request', 'GET /unit/remote-access'] },
+]
+
+async function refusalMatrix(browser, lang) {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true, locale: lang === 'zh' ? 'zh-CN' : 'en-US', colorScheme: 'light' })
+  await ctx.addInitScript((lang) => {
+    try {
+      localStorage.setItem('forsion_tangu_onboarding_done', '1')
+      localStorage.setItem('forsion_token', 'e2e-runon')
+      localStorage.setItem('tangu_locale', lang)
+      localStorage.setItem('forsion_theme_pref', 'light')
+    } catch { /* ignore */ }
+  }, lang)
+  const page = await ctx.newPage()
+  const tag = `[kf/${lang}]`
+  page.on('pageerror', (e) => fail(`${tag} 未捕获异常`, e.message))
+  await page.route('**/api/**', (r) => r.abort())
+  await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"u1","username":"e2e"}' }))
+  await page.route('**/api/units', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ROSTER) }))
+  const cdp = await ctx.newCDPSession(page)
+  const tap = async (locator) => {
+    const b = await locator.boundingBox()
+    if (!b) throw new Error(`目标不可见: ${locator}`)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + b.height / 2 }] })
+    await new Promise((r) => setTimeout(r, 60))
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await page.waitForTimeout(300)
+  }
+  await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+  await page.waitForTimeout(4000)
+  await page.evaluate(() => {
+    const sim = { calls: [], gets: [], post: null, i: 0, seen: [] }
+    window.__sim = sim
+    const t = window.tangu
+    t.unitSelf = async () => ({ registered: true, unitId: 'self-1', name: 'Pixel 9', relay: 'ready' })
+    t.unitEnsureSelf = async () => ({ ok: true, unitId: 'self-1', name: 'Pixel 9' })
+    const orig = window.fetch
+    const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } })
+    window.fetch = async (u, init) => {
+      const m = String(u).match(/\/units\/([^/]+)\/proxy(\/[^?]*)/)
+      if (!m) return orig(u, init)
+      const key = `${(init && init.method) || 'GET'} ${m[2]}`
+      sim.calls.push(key)
+      // 'throw' = 网络错(fetch 抛 TypeError);{__status, body} = 非 200 回包
+      const answer = (v) => { if (v === 'throw') throw new TypeError('Failed to fetch'); return v && v.__status ? json(v.body, v.__status) : json(v) }
+      if (key === 'GET /unit/remote-access') return answer(sim.gets[Math.min(sim.i++, sim.gets.length - 1)])
+      if (key === 'POST /unit/remote-access/request') return answer(sim.post || { remoteSessions: true, principal: 'unit', caller: 'pending', maxApprovalMode: 'auto-edit' })
+      if (key === 'GET /engine/agent/sessions') return json({ sessions: [] })
+      return json({ detail: 'not found' }, 404)
+    }
+  })
+  await tap(page.locator('.mb-topbar [aria-label="left panel"]'))
+  await page.waitForTimeout(600)
+  for (const label of UNIT_LABELS) {
+    const btn = page.locator(`.mb-drawer--left.open .mb-foot-row [aria-label="${label}"]`)
+    if (await btn.count()) { await tap(btn.first()); break }
+  }
+  await page.waitForSelector('[data-units-sheet]', { timeout: 5000 })
+  await page.waitForTimeout(500)
+  // 记下 READY 这一行出现过的每一句状态(抓「请允许」一闪而过)
+  await page.evaluate((id) => {
+    const seen = window.__sim.seen
+    const read = () => { const t = document.querySelector(`[data-run-row="${id}"] .us-row-sub`)?.textContent?.trim(); if (t && seen[seen.length - 1] !== t) seen.push(t) }
+    new MutationObserver(read).observe(document.querySelector('[data-units-sheet]'), { subtree: true, childList: true, characterData: true, attributes: true })
+    read()
+  }, READY)
+
+  const E = EXPECT[lang]
+  for (const c of CASES) {
+    await page.evaluate((c) => { Object.assign(window.__sim, { calls: [], gets: c.get, post: c.post || null, i: 0 }); window.__sim.seen.length = 0 }, c)
+    const t0 = Date.now()
+    await tap(page.locator(`[data-run-row="${READY}"]`))
+    // 等这一轮收工(aria-busy 消失),封顶 15s —— 带 reason 的本该一拍就停,不许空转 120s
+    for (let i = 0; i < 75; i++) {
+      if (!(await page.evaluate((id) => document.querySelector(`[data-run-row="${id}"]`)?.getAttribute('aria-busy') === 'true', READY))) break
+      await page.waitForTimeout(200)
+    }
+    const took = Date.now() - t0
+    const row = await page.evaluate((id) => {
+      const b = document.querySelector(`[data-run-row="${id}"]`)
+      return {
+        status: b?.getAttribute('data-status'), reason: b?.getAttribute('data-reason'), busy: b?.getAttribute('aria-busy'),
+        pressed: b?.getAttribute('aria-pressed'), home: document.querySelector('[data-run-row="home"]')?.getAttribute('aria-pressed'),
+        sub: b?.querySelector('.us-row-sub')?.textContent?.trim() || '', dot: b?.querySelector('.settings-status-dot')?.className || '',
+        calls: window.__sim.calls.slice(), seen: window.__sim.seen.slice(),
+      }
+    }, READY)
+    const want = E[c.text]
+    const okState = row.status === c.status && (row.reason || null) === (c.reason || null)
+    const okText = row.sub === want
+    const okIdle = row.busy !== 'true' && row.pressed === 'false' && row.home === 'true'
+    const okDot = row.dot.split(/\s+/).includes(c.tone)
+    const okCalls = JSON.stringify(row.calls) === JSON.stringify(c.calls)
+    const sawPending = row.seen.includes(E.pending)
+    const okPending = c.sawPending ? sawPending : !sawPending
+    const no10 = c.reason === 'strict' || c.reason === 'roster-miss' ? !/10\s*分钟|10 minutes/.test(row.sub) : true
+    expect(okState && okText && okIdle && okDot && okCalls && okPending && no10 && took < 12_000,
+      `${tag} ${c.name}:${c.status}${c.reason ? `/${c.reason}` : ''} · 「${want}」· 点 ${c.tone} · 不切位置、不转圈${c.sawPending ? '' : '、从未出现「请允许」'}(${took}ms)`,
+      JSON.stringify({ row, took }))
+    if (lang === 'zh' ? ['strict', 'roster-miss', 'denied(用户点了不允许)', 'busy(发起那拍才知道)', '连不上之后 → roster-miss'].includes(c.name) : c.name === 'strict') {
+      const shot = path.join(SHOT_DIR, `units-runon-kf-${lang}-${c.shot || c.name.replace(/[^a-z-]/gi, '') || 'case'}.png`)
+      await page.screenshot({ path: shot })
+      console.log(`screenshot → ${shot}`)
+    }
+  }
+  await ctx.close()
+}
+
 async function main() {
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
     process.exit(1)
   }
+  PORT = await pickPort()
+  URL = `http://localhost:${PORT}/`
+  console.log(`vite preview → ${URL}`)
   const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
   let previewErr = ''
   preview.stderr.on('data', (d) => { previewErr += String(d) })
@@ -332,13 +525,21 @@ async function main() {
   let browser = null
   try {
     let up = false
-    for (let i = 0; i < 40 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
+    let exited = null
+    preview.on('exit', (code) => { exited = code })
+    for (let i = 0; i < 40 && !up; i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (exited !== null) throw new Error(`vite preview 退出了(code=${exited},端口 ${PORT} 被占?)\n${previewErr.slice(-800)}`) // 别让 ping 打到别人的服务上
+      up = await ping()
+    }
     if (!up) throw new Error(`vite preview 没起来(${PORT} 被占?)\n${previewErr.slice(-800) || '(无 stderr)'}`)
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     await scenario(browser, { lang: 'zh', mode: 'light', shot: 'units-runon-zh-light.png', full: true })
     await scenario(browser, { lang: 'zh', mode: 'dark', shot: 'units-runon-zh-dark.png', full: false })
     await scenario(browser, { lang: 'en', mode: 'light', shot: 'units-runon-en-light.png', full: true })
     await simScenario(browser)
+    await refusalMatrix(browser, 'zh')
+    await refusalMatrix(browser, 'en')
   } catch (e) {
     fail('harness', e.message)
   } finally {

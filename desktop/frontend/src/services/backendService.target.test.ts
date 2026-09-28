@@ -170,6 +170,29 @@ describe('健康表只记「这台能不能用」:成功即 ready、会话级拒
   })
 })
 
+describe('P1-KF:手机打「我的电脑」建会话被拒 → 按 reason 先、state 后出人话(不说「正在等待确认」)', () => {
+  const RCU = 'REMOTE_CALLER_UNCONFIRMED'
+  it.each([
+    [{ state: 'denied', reason: 'strict' }, 'unitpage.remoteCallerStrict'],
+    [{ state: 'unconfirmed', reason: 'not-signed-in' }, 'unitpage.remoteCallerNotSignedIn'],
+    [{ state: 'denied', reason: 'roster-miss' }, 'unitpage.remoteCallerRosterMiss'],
+    [{ state: 'unconfirmed', reason: 'busy' }, 'unitpage.remoteCallerBusy'],
+    [{ state: 'unconfirmed' }, 'unitpage.remoteCallerNotAsked'],
+    [{ state: 'denied' }, 'unitpage.remoteCallerDenied'],
+    [{ state: 'pending' }, 'unitpage.remoteCallerUnconfirmed'],
+  ] as const)('%o → %s(zh / en)', async (extra, key) => {
+    const { setLocaleGlobal } = await import('../i18n')
+    router = (_url, method) => (method === 'POST' ? { status: 403, body: { code: RCU, detail: 'This caller has not been allowed on this device yet', ...extra } } : { status: 200, body: {} })
+    const t = T.focusTarget()
+    for (const lang of ['zh', 'en'] as const) {
+      setLocaleGlobal(lang)
+      try {
+        await expect(api.createSession(t, { title: 'x' })).rejects.toMatchObject({ status: 403, code: RCU, message: translateFor(lang, key) })
+      } finally { setLocaleGlobal('zh') }
+    }
+  })
+})
+
 describe('头像 / 项目图标的 blob 拉取也带目标键(§3.5 的 401 单一路径;评审 F5)', () => {
   it('unit → 第三参带 target;home → 与改造前一样不带', async () => {
     const t = T.focusTarget()

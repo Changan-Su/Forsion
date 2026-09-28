@@ -1542,6 +1542,8 @@ declare global {
       broadcastUi?(state: import('../../shared/uiSync').UiSyncPayload): void
       /** 本窗收到别处的界面变更 → 原样重放。返回取消订阅。 */
       onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
+      /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
+      reportUiLocale?(locale: 'zh' | 'en'): void
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void

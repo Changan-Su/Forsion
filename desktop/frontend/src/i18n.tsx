@@ -3812,9 +3812,19 @@ function broadcastLocale(l: Locale): void {
   if (_locale === l) return
   _locale = l
   broadcastPrefs() // 跨窗:设置浮窗切了语言,主窗不能等到重启才跟上
+  reportLocaleToHost(l)
   for (const cb of Array.from(localeSubs)) {
     try { cb(l) } catch (e) { console.error('[i18n] locale subscriber failed', e) }
   }
+}
+
+/**
+ * 把本窗**生效**语言报给宿主主进程(P1-KF):托盘、系统通知(远程审批)、原生对话框的文案只跟它走。
+ * 报的是四级链的结论,不是 localStorage 的手选键 —— ② 系统语言 / ③ IP 区域判出的语言不写那个键,主进程拿键当语言源
+ * 就会在中文界面下弹英文通知(K5 原接线的缺陷,见 electron/uiLocaleSync.ts)。桌面之外(web / 手机 / 设备页)没有这个接缝 = 不报。
+ */
+export function reportLocaleToHost(l: Locale = _locale): void {
+  try { window.tangu?.reportUiLocale?.(l) } catch { /* 无 preload / 非浏览器环境 */ }
 }
 /** 模块级切换(无 Provider 也成立:台架/非 React 宿主)。Provider 在时由它驱动 React 状态。 */
 export function setLocaleGlobal(l: Locale): void {
@@ -3835,6 +3845,9 @@ export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [])
 
   useEffect(() => { _setLocale = setLocale; _locale = locale; return () => { if (_setLocale === setLocale) _setLocale = null } }, [setLocale, locale])
+
+  // 挂载即报一次生效语言(之后的切换由 broadcastLocale 报):主进程在渲染层判完语言之前只有上次的缓存 / 系统语言可用。
+  useEffect(() => { reportLocaleToHost(locale) }, [locale])
 
   useEffect(() => {
     try { document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }

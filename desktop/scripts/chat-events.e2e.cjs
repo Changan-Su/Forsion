@@ -22,6 +22,11 @@ function check(name, ok, detail) {
   results.push({ name, ok })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
+/** 本机环境让这一条区分不了新旧实现(前提不成立):不算 PASS、也不算 FAIL,单独计数、结尾点名(P1-KF 评审)。 */
+function skip(name, detail) {
+  results.push({ name, ok: true, skipped: true })
+  console.log(`SKIP  ${name}${detail ? '  | ' + detail : ''}`)
+}
 
 const SESSION = {
   id: 's1', title: '端到端会话', summary: '', model_id: 'm1', archived: false, emoji: null,
@@ -816,6 +821,26 @@ async function main() {
     check('K3f 只为远程那条弹系统通知:标题带调用方设备名,正文带会话名与工具名,不含命令',
       k3n.length === 1 && k3n[0].title.includes('Pixel 9') && k3n[0].body.includes('手机发起的远程会话') && k3n[0].body.includes('run_bash') && !k3n[0].closed,
       JSON.stringify(k3n))
+    // P1-KF:系统通知跟**界面**语言(本台架 --lang=zh-CN = 渲染层 ② 判中文、从不写手选键),不跟主进程自己的系统语言。
+    // K5 原接线只读手选键 → 在非中文系统的机器上这里弹的是英文(P1-K3 修复报告实测)。
+    // ⚠️ 前提(评审 P2):主进程的系统首选语言(= mainI18n.fromSystem 的 langs[0])不是 zh*、界面也没手选中文 —— 否则旧接线
+    // (手选键 → 系统语言)同样出中文,这条绿了也证明不了什么 → 文案对时记 SKIP(未判定)并点名,文案错照样 FAIL。
+    const k3Sys = await app.evaluate(({ app: a }) => a.getPreferredSystemLanguages()).catch(() => null)
+    const k3Ui = await win.evaluate(() => ({ lang: document.documentElement.lang, pref: localStorage.getItem('tangu_locale') })).catch(() => null)
+    const k3fName = 'K3f′ 通知文案跟界面语言(中文界面 + 手选键为空):标题 =「Pixel 9 上的远程会话等你批准」,正文中文'
+    const k3fOk = k3n.length === 1 && k3n[0].title === 'Pixel 9 上的远程会话等你批准' && /^「手机发起的远程会话」请求使用 run_bash。点击查看。$/.test(k3n[0].body)
+    const k3fDetail = JSON.stringify({ note: k3n[0], systemLanguages: k3Sys, ui: k3Ui })
+    const k3fWhyNot = !Array.isArray(k3Sys) || !k3Sys.length ? '取不到主进程的系统语言'
+      : /^zh\b/i.test(String(k3Sys[0])) ? `主进程系统语言是 ${k3Sys[0]}:旧接线也回落中文`
+        : k3Ui?.pref === 'zh' ? '界面手选了中文:旧接线也读得到'
+          : null
+    if (!k3fOk || !k3fWhyNot) check(k3fName, k3fOk, k3fDetail)
+    else skip(`${k3fName} —— 未判定:${k3fWhyNot},本机上区分不了新旧实现(看 K3f″ 与 electron/uiLocaleSync.test.ts)`, k3fDetail)
+    // 接线半(不挑系统语言):渲染层把**生效**语言经 ui:locale 报给了主进程 → userData/ui-locale.json 落的是 zh(K5 旧接线从不写它)。
+    const k3UserData = await app.evaluate(({ app: a }) => a.getPath('userData')).catch(() => null) // 非打包版在 --user-data-dir 后面加了 -dev
+    let k3Seed = null
+    try { k3Seed = JSON.parse(fs.readFileSync(path.join(k3UserData, 'ui-locale.json'), 'utf8')) } catch { /* 没写 = 没报 */ }
+    check('K3f″ 渲染层把生效界面语言报给了主进程(userData/ui-locale.json = zh,下次启动窗口载入前也用它)', k3Seed?.locale === 'zh', JSON.stringify({ seed: k3Seed, userData: k3UserData }))
     // 真 macOS 通知截图(DESIGN §8 / 规格 §8「需要真机」):屏幕录制权限或通知权限不在时拿到的是没有横幅的桌面 —— 人工看图判定,不据此断言。
     if (process.platform === 'darwin' && process.env.K3_NOTIF_SHOT) {
       await win.waitForTimeout(1500)
@@ -920,7 +945,9 @@ async function main() {
   }
 
   const bad = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - bad.length}/${results.length} 通过`)
+  const skipped = results.filter((r) => r.skipped)
+  console.log(`\n${results.length - bad.length - skipped.length}/${results.length} 通过`)
+  if (skipped.length) console.log(`⚠️ ${skipped.length} 条未判定(SKIP,本机环境区分不了新旧实现,不算通过):\n${skipped.map((r) => `   - ${r.name}`).join('\n')}`)
   process.exit(bad.length ? 1 : 0)
 }
 

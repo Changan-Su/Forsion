@@ -38,3 +38,22 @@ describe('request() × LOCAL_ONLY', () => {
     expect(err.code).toBe('quota')
   })
 })
+
+// P1-KF:设备页(浏览器里打开的那台电脑的页面,home 目标 = /engine)同一口径 —— 拒绝体里的 reason 先于 state。
+describe('request() × REMOTE_CALLER_UNCONFIRMED(设备页)', () => {
+  it('带 reason → reason 那句(zh / en);没有 reason 的 pending 才是「等待确认」', async () => {
+    const { setLocaleGlobal } = await import('../i18n')
+    for (const lang of ['zh', 'en'] as const) {
+      setLocaleGlobal(lang)
+      try {
+        vi.mocked(authFetch).mockImplementation(() => json({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: 'x', state: 'denied', reason: 'strict' }, 403))
+        const err = await syncNow(cfg).catch((e) => e)
+        expect(err.message).toBe(translateFor(lang, 'unitpage.remoteCallerStrict'))
+        expect(err.code).toBe('REMOTE_CALLER_UNCONFIRMED')
+        vi.mocked(authFetch).mockImplementation(() => json({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: 'x', state: 'pending' }, 403))
+        expect((await syncNow(cfg).catch((e) => e)).message).toBe(translateFor(lang, 'unitpage.remoteCallerUnconfirmed'))
+      } finally { setLocaleGlobal('zh') }
+    }
+  })
+})
+

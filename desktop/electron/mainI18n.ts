@@ -2,9 +2,10 @@
  * 主进程 i18n 地基(P1-K5):主进程自己撰写的原生界面文案(对话框、系统通知、选择框标题、托盘)的唯一出口。
  *
  * 语言来源与渲染层同一结论,不在主进程另写一份判定(CLAUDE.md「界面语言自适应」):
- *   ① 渲染层落在 localStorage `tangu_locale` 的值(① 手选 / ③ IP 校正都写它)—— main 在主窗载入后读一次、
- *      之后经 ui:sync 转进来(setMainLocale);
- *   ② 没有这个键 = 界面跟随系统:系统首选语言 zh* → 中文,其余英文(与 tray 原规则、渲染层 ②④ 同口径)。
+ *   ① 渲染层**生效**语言(四级链判完的结论):LocaleProvider 挂载时与每次切换经 `ui:locale` 报上来,uiLocaleSync.ts 调
+ *      setMainLocale;窗口载入前用上次报来的缓存(userData/ui-locale.json)。
+ *      ⚠️ 不是 localStorage `tangu_locale`(P1-KF 修正 K5 原接线):那是手选键,② 系统 / ③ IP 区域判出的语言不写它;
+ *   ② 渲染层还没报过(首次运行、窗口载入前)= 系统首选语言 zh* → 中文,其余英文(与 tray 原规则同口径)。
  * 系统语言由调用方注入(initMainLocale),本模块不依赖 electron,vitest 直测。
  *
  * 文案规矩(与渲染层 registerMessages 同):
@@ -48,7 +49,8 @@ export function mainLocaleOverride(): MainLocale | null {
   return override
 }
 
-/** main 转进来的界面语言(主窗载入时读 localStorage、ui:sync 的 prefs)。'zh' | 'en' 之外的值(含 null)= 跟随系统。 */
+/** 渲染层的生效界面语言(uiLocaleSync.report / seed 喂入)。'zh' | 'en' 之外的值(含 null)= 跟随系统 ——
+ *  渲染层的报告入口 uiLocaleSync 只转 zh/en,不会用 null 把已对上的语言重置掉。 */
 export function setMainLocale(v: unknown): void {
   const next = v === 'zh' || v === 'en' ? v : null
   if (next === override) return

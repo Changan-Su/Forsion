@@ -68,10 +68,21 @@ export function classifyError(e: unknown): Verdict {
 }
 
 export type TargetHealthState = 'unknown' | 'ready' | 'offline' | 'engine-unavailable' | 'engine-auth' | 'rate-limited' | 'caller-unavailable' | 'refused' | 'gone'
+/** 拒绝体里的调用方状态(P1-KF):REMOTE_CALLER_UNCONFIRMED 的 `state` / `reason` —— 文案按 reason 先、state 后选(localOnly.remoteCallerMessage)。 */
+export type RefusalDetail = { state?: string; reason?: string }
 export type TargetHealth =
   | { state: 'unknown' | 'ready' }
-  | { state: 'offline' | 'engine-unavailable' | 'engine-auth' | 'rate-limited' | 'caller-unavailable' | 'refused'; since: number; retryAt?: number; code?: string }
+  | { state: 'offline' | 'engine-unavailable' | 'engine-auth' | 'rate-limited' | 'caller-unavailable' | 'refused'; since: number; retryAt?: number; code?: string; refusal?: RefusalDetail }
   | { state: 'gone' }
+
+/** 响应体 → 拒绝细节(只取字符串的 state / reason;都没有 = undefined)。 */
+export function refusalOf(body: unknown): RefusalDetail | undefined {
+  const b = (body && typeof body === 'object' ? body : {}) as { state?: unknown; reason?: unknown }
+  const out: RefusalDetail = {}
+  if (typeof b.state === 'string') out.state = b.state
+  if (typeof b.reason === 'string') out.reason = b.reason
+  return out.state || out.reason ? out : undefined
+}
 
 /** 终局态:等不回来,waitReady 直接拒;SSE / 轮询见它就收尾。不自动重试(R-32),手动出口是 targets.retryFocusTarget。 */
 export const TERMINAL_STATES: ReadonlySet<TargetHealthState> = new Set(['gone', 'caller-unavailable', 'engine-auth', 'refused'])
@@ -88,16 +99,22 @@ export function healthOf(key: TargetKey): TargetHealth {
   return useTargetHealth.getState().byKey[key] ?? UNKNOWN
 }
 
-/** 写一格健康状态。同态不重写 since(离线持续多久要准)。 */
+const sameDetail = (a: TargetHealth, b: TargetHealth): boolean => {
+  const ca = 'code' in a ? a.code : undefined, cb = 'code' in b ? b.code : undefined
+  const ra = 'refusal' in a ? a.refusal : undefined, rb = 'refusal' in b ? b.refusal : undefined
+  return ca === cb && ra?.state === rb?.state && ra?.reason === rb?.reason
+}
+
+/** 写一格健康状态。同态不重写 since(离线持续多久要准);同态但码 / 拒绝细节变了要重写(P1-KF:否则提示条停在旧原因的文案上)。 */
 export function noteHealth(key: TargetKey, h: TargetHealth): void {
   const cur = useTargetHealth.getState().byKey[key]
-  if (cur && cur.state === h.state && !('retryAt' in h && h.retryAt)) return
+  if (cur && cur.state === h.state && !('retryAt' in h && h.retryAt) && sameDetail(cur, h)) return
   const next = cur && cur.state === h.state && 'since' in cur && 'since' in h ? { ...h, since: cur.since } : h
   useTargetHealth.setState((s) => ({ byKey: { ...s.byKey, [key]: next } }))
 }
 
 /** 处置类别 → 健康状态(只有「关于这台引擎能不能用」的类别才写;local-only / too-large / fatal 是单条请求的事)。 */
-export function noteVerdict(key: TargetKey, v: Verdict, extra: { retryAt?: number; code?: string } = {}): void {
+export function noteVerdict(key: TargetKey, v: Verdict, extra: { retryAt?: number; code?: string; refusal?: RefusalDetail } = {}): void {
   const since = Date.now()
   switch (v) {
     case 'ok': noteHealth(key, { state: 'ready' }); return
@@ -142,11 +159,13 @@ async function bodyOf(r: Response): Promise<{ code?: unknown } | null> {
 export async function probeTarget(t: EngineTarget, signal?: AbortSignal): Promise<TargetHealth> {
   let v: Verdict
   let code: string | undefined
+  let refusal: RefusalDetail | undefined
   try {
     const r = await engineFetch(t, '/health', signal ? { signal } : {}, { timeoutMs: 15000 })
     const b = r.ok ? null : await bodyOf(r)
     v = classify(r.status, b)
     code = codeOf(b) || undefined
+    refusal = refusalOf(b)
     if (v === 'ok') {
       const p = await engineFetch(t, AUTH_PROBE_PATH, signal ? { signal } : {}, { timeoutMs: 15000 })
       const pb = p.ok ? null : await bodyOf(p)
@@ -154,6 +173,7 @@ export async function probeTarget(t: EngineTarget, signal?: AbortSignal): Promis
       // 401 = 这台引擎(或 hub)拒了凭据;其余非 2xx(403 / 404 / 5xx)不把连接判死(与 testConnection 同口径)
       v = pv === 'account-auth?' ? 'account-auth?' : pv === 'caller-unavailable' || pv === 'refused' || pv === 'gone' ? pv : 'ok'
       code = codeOf(pb) || undefined
+      refusal = refusalOf(pb)
     }
   } catch (e) {
     if (signal?.aborted) throw e
@@ -161,7 +181,7 @@ export async function probeTarget(t: EngineTarget, signal?: AbortSignal): Promis
     code = typeof (e as { code?: unknown })?.code === 'string' ? (e as { code: string }).code : undefined
   }
   if (v === 'account-auth?') noteHealth(t.key, { state: 'engine-auth', since: Date.now() })
-  else noteVerdict(t.key, v === 'transient' ? 'offline' : v, code ? { code } : {})
+  else noteVerdict(t.key, v === 'transient' ? 'offline' : v, { ...(code ? { code } : {}), ...(refusal ? { refusal } : {}) })
   return healthOf(t.key)
 }
 

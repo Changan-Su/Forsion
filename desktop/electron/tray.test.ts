@@ -35,7 +35,7 @@ describe('tray', () => {
       setTrayLocale('fr')
       expect(trayLang()).toBe('zh') // 非 zh/en = 没设 → 系统(mock 为 zh-Hans-CN)
       setTrayLocale('en')
-      setTrayLocale(null) // ui:sync 里的 null = 删键 = 回到跟随系统
+      setTrayLocale(null) // null = 回到跟随系统(渲染层的报告入口 uiLocaleSync 只转 zh/en,不会发 null)
       expect(trayLang()).toBe('zh')
     } finally {
       setTrayLocale(null)

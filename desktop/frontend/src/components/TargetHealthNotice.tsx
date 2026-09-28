@@ -73,7 +73,9 @@ export function TargetHealthNotice({ fallback }: { fallback?: ReactNode }) {
   if (health && MESSAGE_KEYS[health.state]) {
     state = health.state
     const code = 'code' in health ? health.code : undefined
-    text = remoteRefusalMessage(code) || t(MESSAGE_KEYS[health.state]!, { name: label })
+    // P1-KF:拒绝细节(REMOTE_CALLER_UNCONFIRMED 的 reason / state)一并交给本地化 —— 只凭码会一律说「正在等待确认」
+    const refusal = 'refusal' in health ? health.refusal : undefined
+    text = remoteRefusalMessage(code, refusal) || t(MESSAGE_KEYS[health.state]!, { name: label })
   } else if (connState === 'idle') {
     state = 'connecting'
     text = t('engine.target.connecting', { name: label })

@@ -22,8 +22,7 @@ import { useApp } from '@/stores/appStore'
 import type { UnitInfo } from '@/types'
 import { cloudApiBase, focusRef, onFocusChange, setFocusTarget } from '@/services/engine/targets'
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
-import type { DeviceStatus, ProbeResult, StickyRefusal } from '@/services/deviceStatus'
-import { isRunnableUnit, removeThisPhone, runOn, runRows, statusKey, type PhoneIssue, type RunRow } from './unitsSheetModel'
+import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunRow } from './unitsSheetModel'
 import './unitsSheet.css'
 
 /**
@@ -66,7 +65,17 @@ registerMessages({
   'unitm.offline': { zh: '离线', en: 'Offline' },
   'unitm.unreachable': { zh: '暂时连不上，稍后重试', en: "Can't reach it right now. Try again shortly" },
   'unitm.confirmPending': { zh: '请在「{name}」上允许这台手机', en: 'Allow this phone on "{name}"' },
-  'unitm.confirmDenied': { zh: '「{name}」拒绝了这台手机', en: '"{name}" declined this phone' },
+  // 只有用户在那台电脑上点了「不允许」才有 10 分钟冷却;带 reason 的拒绝(严格档 / 名册缺失 …)各用下面的 unitm.reason.*,不许诺它(P1-KF)
+  'unitm.confirmDenied': { zh: '「{name}」拒绝了这台手机，10 分钟后可以再次请求', en: '"{name}" declined this phone. You can ask again in 10 minutes' },
+  'unitm.confirmNotAsked': { zh: '「{name}」还没有允许这台手机，点按再次请求', en: '"{name}" hasn\'t allowed this phone yet. Tap to ask again' },
+  // P1-KF:拒绝体带 reason = 那台电脑上不会弹框 —— 按 reason 说出路,不说「请允许」(shared/remoteSessions.ts TrustReason)
+  'unitm.reason.strict': { zh: '「{name}」只允许这类连接查看，不会再询问；请在那台电脑的「设置 › 远程会话」中允许', en: '"{name}" only lets connections like this one view sessions and won\'t ask again. Allow it in Settings › Remote sessions there' },
+  'unitm.reason.neverPrompts': { zh: '「{name}」不会为这类连接弹框询问；请在那台电脑的「设置 › 远程会话」中允许', en: '"{name}" doesn\'t ask for connections like this one. Allow it in Settings › Remote sessions there' },
+  'unitm.reason.notSignedIn': { zh: '「{name}」没有登录 Forsion，请先在那台电脑上登录', en: '"{name}" isn\'t signed in to Forsion. Sign in there first' },
+  'unitm.reason.rosterMiss': { zh: '「{name}」的账号里找不到这台手机，请确认两台设备登录的是同一个账号', en: '"{name}" can\'t find this phone in its account. Make sure both devices use the same account' },
+  'unitm.reason.rosterUnreachable': { zh: '「{name}」暂时无法核对这台手机，请稍后再试', en: '"{name}" can\'t check this phone right now. Try again shortly' },
+  'unitm.reason.noAnswer': { zh: '「{name}」上没有人回应确认，请稍后再试', en: 'No one answered on "{name}". Try again in a minute' },
+  'unitm.reason.busy': { zh: '「{name}」上待确认的请求太多，请稍后再试', en: '"{name}" has too many requests waiting. Try again shortly' },
   'unitm.remoteOff': { zh: '请在「{name}」上开启「允许远程会话」', en: 'Turn on "Allow remote sessions" on "{name}"' },
   'unitm.callerUnavailable': { zh: '这台手机暂时无法证明自己的身份，请稍后重试', en: "This phone couldn't verify its identity. Try again later" },
   'unitm.callerUnsupported': { zh: '服务器版本过旧，暂不支持从手机运行', en: 'The server is too old to run from a phone' },
@@ -128,11 +137,6 @@ const rowIcon = (u: Pick<UnitInfo, 'icon' | 'platform'>): React.ReactNode => {
   return <Laptop size={18} />
 }
 
-const DOT: Record<DeviceStatus, '' | 'ok' | 'warn' | 'err'> = {
-  checking: '', ready: 'ok', starting: 'warn', engineStopped: 'warn', noEngine: 'err', offline: '',
-  unreachable: 'err', remoteOff: 'warn', awaitingConfirm: 'warn', denied: 'err',
-}
-
 type Self = { registered: boolean; unitId: string | null; name: string | null; relay?: 'ready' | 'unsupported' | 'native_only' }
 
 const ISSUE_KEY: Record<PhoneIssue, string> = {
@@ -150,8 +154,8 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   /** null=未登录(401);undefined=加载中。 */
   const [units, setUnits] = useState<UnitInfo[] | null | undefined>(undefined)
   const [self, setSelf] = useState<Self | null>(null)
-  const [probes, setProbes] = useState<Record<string, ProbeResult>>({})
-  const [sticky, setSticky] = useState<Record<string, StickyRefusal>>({})
+  // 每行的探针 / 粘滞拒绝:只经 beginAttempt / noteAttempt / endAttempts 改(谁新听谁,P1-KF 评审;组件关弹层时不卸载,表会留着)
+  const [marks, setMarks] = useState<RowMarks>(NO_MARKS)
   const [busy, setBusy] = useState<string | null>(null)
   const [issue, setIssue] = useState<PhoneIssue | null>(null)
   const [devicesOpen, setDevicesOpen] = useState(false)
@@ -178,7 +182,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       .then((r) => setUnits(r?.status === 200 ? ((r.json as { units?: UnitInfo[] } | null)?.units ?? []) : r?.status === 401 ? null : []))
       .catch(() => setUnits([]))
     loadSelf()
-    return () => { flight.current?.abort(); flight.current = null; setBusy(null) }
+    return () => { flight.current?.abort(); flight.current = null; setBusy(null); setMarks(endAttempts) } // 没人轮询了:不留「请允许」
   }, [open])
 
   // Android 系统返回:弹层开着时接管并关闭(同 SingleColumnHost 两个 sheet 的语义,事件可取消),
@@ -197,7 +201,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   if (!open) return null
 
   const current = currentRunLocation()
-  const rows: RunRow[] = runRows(units || [], self?.unitId ?? null, current, probes, sticky)
+  const rows: RunRow[] = runRows(units || [], self?.unitId ?? null, current, marks.probes, marks.sticky)
   const devices = (units || []).filter((u) => isRunnableUnit(u, self?.unitId ?? null))
 
   const pick = (row: RunRow): void => {
@@ -206,11 +210,10 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     flight.current = ac
     setBusy(row.id)
     setIssue(null)
-    const note = (p: { probe?: ProbeResult; sticky?: StickyRefusal }): void => {
+    setMarks((m) => beginAttempt(m, row.id)) // 上一轮的「连不上」不许盖住这一轮的回答(评审 P2)
+    const note = (p: Parameters<typeof noteAttempt>[2]): void => {
       if (ac.signal.aborted) return
-      if (p.probe) setProbes((m) => ({ ...m, [row.id]: p.probe! }))
-      if (p.sticky) setSticky((m) => ({ ...m, [row.id]: p.sticky! }))
-      else if (p.probe?.ok) setSticky((m) => { const n = { ...m }; delete n[row.id]; return n })
+      setMarks((m) => noteAttempt(m, row.id, p))
     }
     void runOn(cloudApiBase(), row.id, {
       ensureSelf: () => window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }),
@@ -238,6 +241,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     flight.current?.abort()
     flight.current = null
     setBusy(null)
+    setMarks(endAttempts)
     void selectRunLocation(HOME_REF)
   }
 
@@ -252,8 +256,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       select: selectRunLocation,
       forget: () => window.tangu?.unitForgetSelf?.() ?? Promise.resolve({ ok: false }),
     }).catch(() => ({ ok: false })).then(() => {
-      setProbes({})
-      setSticky({})
+      setMarks(NO_MARKS)
       loadSelf()
     })
   }
@@ -299,6 +302,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
                   className="mb-sheet-row us-row"
                   data-run-row={row.id}
                   data-status={row.status}
+                  data-reason={row.refusal?.reason}
                   aria-pressed={row.selected}
                   aria-disabled={dim || undefined}
                   aria-busy={probing || undefined}
@@ -308,7 +312,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
                   <span className="us-row-main">
                     <span className="us-row-title"><span className="us-row-name">{row.name}</span></span>
                     <span className="us-row-sub" role="status">
-                      <i className={`settings-status-dot ${row.status !== 'checking' ? DOT[row.status] : !probing && row.capsReady ? 'ok' : ''}`} aria-hidden />
+                      <i className={`settings-status-dot ${rowTone(row, probing)}`} aria-hidden />
                       <span>{t(statusKey(row, probing), { name: row.name })}</span>
                     </span>
                   </span>
