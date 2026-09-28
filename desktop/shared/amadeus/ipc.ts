@@ -48,6 +48,9 @@ export const IPC = {
   deleteTrashEntry: 'trash:delete',
   emptyTrash: 'trash:empty',
   pageIcons: 'vault:page-icons',
+  pageAliases: 'vault:page-aliases',
+  unlinkedMentions: 'vault:unlinked-mentions',
+  linkMention: 'vault:link-mention',
   fetchLinkMeta: 'web:link-meta',
   searchImages: 'web:search-images',
   structureChange: 'vault:structure-change',
@@ -369,12 +372,41 @@ export interface SearchHit {
   score: number
 }
 
+/** 反链 / 提及的一处命中(L-16)。line = 清洗文本(剥 fm 与注释)里的 1-based 行号,0 = 属性区;
+ *  text = 该行去掉 md 语法后的摘录(links.plainSnippet)。 */
+export interface BacklinkHit {
+  line: number
+  text: string
+}
+
 /** A note that links to the active page via a [[wikilink]]. */
 export interface BacklinkRef {
   path: string
   title: string
   /** The sentence/line containing the [[link]]. */
   snippet: string
+  /** 逐处命中(每行一条,属性区的链接 line=0)。缺 = 旧宿主(云端 / Unit 旧版)只给 snippet。 */
+  hits?: BacklinkHit[]
+}
+
+/** 未链接提及的一处:raw / occ / col / match 齐全才可一键链接(linkMention 按内容定位,同 patchMark);
+ *  缺 = 只展示(该行含字符引用,解码副本与原文列位对不上)。 */
+export interface MentionHit extends BacklinkHit {
+  /** 清洗文本里的原文整行(未解字符引用)。 */
+  raw?: string
+  /** 同文行序号(第几条内容等于 raw 的行,口径同 mdMarks.findMarkLine)。 */
+  occ?: number
+  /** 提及在 raw 里的起始列(UTF-16)。 */
+  col?: number
+  /** raw 里 [col, col+match.length) 的原文(大小写照原样)。 */
+  match?: string
+}
+
+/** 提到了本页标题 / 别名、却没加 [[ ]] 的笔记(L-16)。 */
+export interface UnlinkedMention {
+  path: string
+  title: string
+  hits: MentionHit[]
 }
 
 /** Where a dragged-in attachment is stored (from Tangu notes settings). */
@@ -579,6 +611,13 @@ export interface AmadeusApi {
   emptyTrash?(): Promise<void>
   /** 页面 emoji 图标表(fm icon: 键;可选:桌面索引提供,其余端优雅缺位)。 */
   pageIcons?(): Promise<Record<string, string>>
+  /** fm `aliases:` 表(path → 别名;只含设置了的)。`[[` 补全用(L-13);可选:缺位端补全不含别名。 */
+  pageAliases?(): Promise<Record<string, string[]>>
+  /** 提到 pagePath 的标题 / 别名、却没加 [[ ]] 的笔记(L-16);可选:缺位端反链面板不出这一区。 */
+  unlinkedMentions?(pagePath: string): Promise<UnlinkedMention[]>
+  /** 把一处未链接提及改写成 `[[inner]]`(按 raw+occ 定位行、再核 col/match,对不上 = false 不写;同 patchMark 的
+   *  行级写盘 + externalChange 广播)。可选:缺位端不出「链接」按钮。 */
+  linkMention?(pagePath: string, hit: { raw: string; occ: number; col: number; match: string }, inner: string): Promise<boolean>
   /** 抓取链接 og 元数据(书签卡;可选:桌面主进程实现,缺位端卡片降级纯链接)。 */
   fetchLinkMeta?(url: string): Promise<LinkMeta | null>
   /** 封面图搜索(Openverse 免 key;可选:桌面主进程实现,缺位端只留 URL/上传两来源)。 */

@@ -13,6 +13,7 @@ import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from './i18n'
 import { graphTopology } from '@amadeus/lib/localGraph'
+import { useWorkspace } from '@lcl/engine'
 
 registerMessages({
   'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
@@ -137,6 +138,22 @@ function highlight(snippet: string, q: string): ReactNode {
 
 // ─────────────────────────────── 标签(左栏 tab;#tag 计数 + 展开跳转) ───────────────────────────────
 
+/** 正文胶囊点击 → 标签视图定位到该标签(singleton 视图,经种子 store 解耦;n 自增以重触发同一标签)。L-14。 */
+export const useTagSeed = create<{ seed: { tag: string; n: number } | null; request(tag: string): void }>((set) => ({
+  seed: null,
+  request: (tag) => set((s) => ({ seed: { tag, n: (s.seed?.n ?? 0) + 1 } })),
+}))
+
+/** 打开(或聚焦)左栏标签视图并展开 tag(编辑器 `amadeus:open-tag` 事件的落点,见 amadeusOverlays)。 */
+export function openTagView(tag: string): void {
+  useTagSeed.getState().request(tag.replace(/^#/, ''))
+  const ws = useWorkspace.getState()
+  ws.showSideView('left', 'amadeus-tags')
+  const st = useWorkspace.getState()
+  const api = (st as unknown as { api?: { panels: Array<{ params?: Record<string, unknown> }> } }).api
+  if (st.leftVisible && !api?.panels.some((p) => p.params?.__type === 'amadeus-tags')) ws.openView('amadeus-tags', {}, 'left')
+}
+
 export function AmadeusTagsView() {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
@@ -144,6 +161,12 @@ export function AmadeusTagsView() {
   const [tags, setTags] = useState<TagCount[]>([])
   const [openTag, setOpenTag] = useState<string | null>(null)
   const [tagPages, setTagPages] = useState<string[]>([])
+  const seed = useTagSeed((s) => s.seed)
+  useEffect(() => { if (seed) setOpenTag(seed.tag) }, [seed])
+  // 定位的标签可能不在列表里(只有 `#work/urgent`,点的是父级 `#work`)→ 置顶补一行;列表按嵌套前缀查页面。
+  const shown: TagCount[] = openTag && !tags.some((tc) => tc.tag.toLowerCase() === openTag.toLowerCase())
+    ? [{ tag: openTag, count: tagPages.length }, ...tags]
+    : tags
 
   useEffect(() => {
     let live = true
@@ -163,14 +186,15 @@ export function AmadeusTagsView() {
       <div className="amx-panel-head">{t('amxpanel.tagsHead', { n: tags.length })}</div>
       {!vaultRoot ? (
         <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
-      ) : tags.length === 0 ? (
+      ) : shown.length === 0 ? (
         <div className="amx-panel-empty">{t('amxpanel.tagsEmpty')}</div>
       ) : (
         <div className="amx-list">
-          {tags.map((tc) => (
+          {shown.map((tc) => (
             <div key={tc.tag}>
               <button
                 className={`amx-list-item amx-tag${openTag === tc.tag ? ' active' : ''}`}
+                ref={openTag === tc.tag && seed ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                 onClick={() => setOpenTag((cur) => (cur === tc.tag ? null : tc.tag))}
               >
                 <span className="amx-tag-name">#{tc.tag}</span>

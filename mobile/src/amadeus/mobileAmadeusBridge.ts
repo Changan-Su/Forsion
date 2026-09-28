@@ -171,6 +171,8 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     reindex: async () => { await ensureVault(); await index.build() },
     listTags: async () => { await ensureVault(); return index.listTags() },
     pagesByTag: async (tag) => { await ensureVault(); return index.pagesByTag(tag) },
+    pageAliases: async () => { await ensureVault(); return index.pageAliases() },
+    unlinkedMentions: async (pagePath) => { await ensureVault(); return index.unlinkedMentions(pagePath) },
     resolveEmbed: async (target) => {
       await ensureVault()
       const hit = index.resolveBlock(target)

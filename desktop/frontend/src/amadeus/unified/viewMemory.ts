@@ -47,3 +47,19 @@ export function remapNoteViewMemory(vaultRoot: string | null | undefined, oldPat
   const oldId = noteMemoryId(vaultRoot, oldPath)
   if (docScroll.has(oldId)) docScroll.set(noteMemoryId(vaultRoot, newPath), docScroll.get(oldId)!)
 }
+
+const PROPS_OPEN_PREFIX = 'amx.propsOpen:'
+
+/** 属性区展开 / 折叠(评审 C-19):按**库**记(全库一个偏好,同 Obsidian 的全局开关),不写 md。未记过 = null。 */
+export function readPropsOpen(vaultRoot: string | null | undefined): boolean | null {
+  try {
+    const v = localStorage.getItem(`${PROPS_OPEN_PREFIX}${vaultRoot ?? ''}`)
+    return v === '1' ? true : v === '0' ? false : null
+  } catch {
+    return null
+  }
+}
+
+export function writePropsOpen(vaultRoot: string | null | undefined, open: boolean): void {
+  try { localStorage.setItem(`${PROPS_OPEN_PREFIX}${vaultRoot ?? ''}`, open ? '1' : '0') } catch { /* 私有模式:本次实例 state 仍然正确 */ }
+}

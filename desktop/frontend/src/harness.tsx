@@ -53,6 +53,9 @@ import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
+import { parseTags, stripForIndex } from '@amadeus-shared/links'
+import { noteFmMeta } from '@amadeus-shared/linkIndex'
+import { setRecentsProvider } from './amadeus/lib/recents'
 import { parseBody } from '@amadeus-shared/compiler/markers'
 import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from '@amadeus-shared/compiler/split'
 import { parseLayout } from '@amadeus-shared/compiler/manifest'
@@ -1658,6 +1661,29 @@ if (new URLSearchParams(location.search).has('dock')) {
   let switchUPage: ((path: string) => void) | null = null
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
+    // 标签 / 别名面(评审 L-14 `#` 补全、L-13 `[[` 别名候选):用与主进程索引同一份解析(正文 #标签 + fm tags / aliases),
+    // 由内存 vault 现算 —— 仪器往 `__upage.vault` 塞一篇带标签的笔记即可喂出候选。见 scripts/wiki-suggest.check.cjs。
+    listTags: () => {
+      const counts = new Map<string, { tag: string; count: number }>()
+      for (const [p, text] of vault) {
+        if (!p.endsWith('.md')) continue
+        const seen = new Set<string>()
+        for (const t of [...parseTags(stripForIndex(text)), ...noteFmMeta(text).tags]) {
+          const k = t.toLowerCase()
+          if (seen.has(k)) continue
+          seen.add(k)
+          const c = counts.get(k)
+          if (c) c.count++
+          else counts.set(k, { tag: t, count: 1 })
+        }
+      }
+      return Promise.resolve([...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)))
+    },
+    pageAliases: () => {
+      const out: Record<string, string[]> = {}
+      for (const [p, text] of vault) if (p.endsWith('.md')) { const a = noteFmMeta(text).aliases; if (a.length) out[p] = a }
+      return Promise.resolve(out)
+    },
     // 与桌面主进程同一份契约(fs/vaultHandlers 的 writeTextFile):带 base 且盘上指纹不符 → 不写、回现文;
     // 文件不在 = 无冲突;不带 base 回 undefined。写失败注入:`__upage.failWrites = n`(接下来 n 次写抛错,
     // Infinity = 一直失败)—— 早先这里静默吞掉第三个参数,CAS 与写失败两条路在台架里根本造不出来。
@@ -1758,6 +1784,20 @@ if (new URLSearchParams(location.search).has('dock')) {
     fire(path: string, text: string) {
       vault.set(path, text)
       for (const cb of listeners) cb(path)
+    },
+    /** 把一个侧栏视图挂在页面右侧(台架没有 dockview 侧栏;反链面板等观感自查用)。mod = '/src/…' 模块路径。 */
+    async mountSide(mod: string, name: string) {
+      const m = (await import(/* @vite-ignore */ mod)) as Record<string, () => React.ReactElement>
+      const el = document.createElement('div')
+      el.className = 'harness-side'
+      el.style.cssText = 'position:fixed;right:0;top:0;bottom:0;width:320px;border-left:1px solid var(--border,#ddd);background:var(--sidebar-bg,var(--bg,#fff));z-index:40'
+      document.body.appendChild(el)
+      const C = m[name]
+      createRoot(el).render(<C />)
+    },
+    /** 「最近打开」注入(生产由 amadeusPrefs 提供;`[[` / `@` 空查询按它排序,评审 L-13)。 */
+    setRecents(paths: string[]) {
+      setRecentsProvider(() => paths)
     },
     // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。
     setEditorMode(m: 'wysiwyg' | 'source') {

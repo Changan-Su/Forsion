@@ -2145,6 +2145,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         {!compact && <PropsDraftFlushContext.Provider value={propDrafts}><AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
           readOnly={readOnly}
+          notePath={path}
           onCommit={(yaml) => {
             pipe.fm = setForeignFm(pipe.fm, yaml)
             setFmVer((v) => v + 1)

@@ -52,6 +52,7 @@ const valueInputs = (): HTMLInputElement[] => [...host.querySelectorAll<HTMLInpu
 const keyInputs = (): HTMLInputElement[] => [...host.querySelectorAll<HTMLInputElement>('.amx-prop-row input.amx-prop-key')]
 
 beforeEach(() => {
+  localStorage.clear() // 展开状态按库记在本机(C-19):上一条用例点开的状态不许漏进下一条
   commits = []
   host = document.createElement('div')
   document.body.appendChild(host)
