@@ -1708,9 +1708,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
               if (node) {
                 unfoldOver(view, fd.pos + node.nodeSize) // 命中折叠标题:它的下缘在隐藏小节里,先展开
                 const doc = view.state.doc
+                // 下半区 = 块尾:偏置必须朝回(-1)。块尾那个位置在容器(列表 / callout / 表格)里没有文本位,
+                // 默认 +1 偏置会往前找到**下一块**的开头,saveFiles 按选区所在顶层块插在它后面 —— 线画在这块下沿,
+                // 文件却落到下一块之后(评审 G4-03)。朝回找落在本块最后一个文本位,插入点就是线所在处。
                 view.dispatch(view.state.tr.setSelection(node.isAtom
                   ? NodeSelection.create(doc, fd.pos)
-                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1))))
+                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1), fd.lower ? -1 : 1)))
               }
             } catch { /* 位置已失效 */ }
             return

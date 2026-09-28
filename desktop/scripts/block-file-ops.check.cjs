@@ -15,6 +15,8 @@
 //   B12 剪切整张卡 = 不问「磁盘文件也删吗」(与 B6 同一条:搬家不是删除)
 //   B13 卡片**正在编辑**时把文件拖到它身上 = 仍归舞台(文件是空间动作;让给 PM 会按光标插,落点撒谎)
 //   B14 上传在途被剪切+粘贴(锚换了)= 占位仍被换成引用,不会永远停在「上传中」
+//   B15 OS 文件拖到列表 / callout / 表格的**下半区**:线画在这块下沿,文件就插在这块之后(评审 G4-03:
+//       块尾位置的文本选区默认 +1 偏置找到了下一块,文件落在下一块之后);段落下半区与列表上半区作对照
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -468,6 +470,46 @@ async function main() {
       && b14.cards.length === 1 && b14.cards[0].includes('![[inflight.png]]') && !b14.cards.some((t) => t.includes('上传中')),
     JSON.stringify({ held: held14, ...clip14, ...b14 }))
   await p14.close()
+
+  // ── B15 文件拖到容器块下半区 = 插在这块之后(G4-03)──────────────────────────────
+  {
+    const SEED15 = '# 页\n\n首段文字。\n\n- 列表一\n- 列表二\n- 列表三\n\n> [!note] 卡\n> 卡内正文\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n中段文字。\n\n末段文字。\n'
+    const CASES = [
+      ['段落下半区(对照)', 'p', '首段文字', 'lower', 'paragraph:首段文字。'],
+      ['列表下半区', 'ul', '列表三', 'lower', 'bullet_list'],
+      ['callout 下半区', 'blockquote', '卡内正文', 'lower', 'blockquote'],
+      ['表格下半区', 'table', '1', 'lower', 'table'],
+      ['列表上半区(对照:上半区只往后插是设计)', 'ul', '列表一', 'upper', 'bullet_list'],
+    ]
+    for (const [label, sel, text, half, before] of CASES) {
+      const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
+      p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await p.goto(`${URL}?upage&upane&udrop&useed=${encodeURIComponent(SEED15)}`, { waitUntil: 'domcontentloaded' })
+      await p.waitForSelector(PM, { timeout: 20000 })
+      await p.waitForTimeout(400)
+      await stubAttachments(p)
+      await p.evaluate(({ sel, text, half }) => {
+        const pm = document.querySelector('.unified-body .ProseMirror')
+        const el = [...pm.querySelectorAll(sel)].find((x) => x.textContent.includes(text))
+        const r = el.getBoundingClientRect()
+        const x = r.left + 30
+        const y = half === 'upper' ? r.top + 3 : r.bottom - 3
+        const dt = new DataTransfer()
+        dt.items.add(new File([new Uint8Array([1])], 'shot.png', { type: 'image/png' }))
+        const at = document.elementFromPoint(x, y)
+        for (const t of ['dragenter', 'dragover', 'drop']) at.dispatchEvent(new DragEvent(t, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }))
+      }, { sel, text, half })
+      await p.waitForTimeout(500)
+      const top = await p.evaluate(() => {
+        const out = []
+        window.__upage.probe.view().state.doc.forEach((n) => out.push(n.type.name === 'paragraph' ? `paragraph:${n.textContent.replace(/\u200b/g, '')}` : n.type.name))
+        return out
+      })
+      const i = top.findIndex((x) => x.includes('shot.png'))
+      record(`B15 ${label} → 文件紧跟在 ${before} 之后`, i > 0 && top[i - 1] === before, JSON.stringify(top))
+      await p.close()
+    }
+  }
 
   await browser.close()
   const ok = results.filter(Boolean).length
