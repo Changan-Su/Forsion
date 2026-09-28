@@ -90,7 +90,11 @@ export interface VaultHandlerDependencies {
 
 /** 同一路径的文本写串行化(进程内)。CAS 的「读→比对→写」中间有两次 await,两个窗口的 invoke
  *  会交错在它们之间 —— 两边都比对通过、先写的那份被后写的静默盖掉,等于没做 CAS。非 CAS 的写也进同一条
- *  链,免得一发盲写插在别人的比对与落盘之间。引擎是另一个进程,不在这把锁里(它的改动走 watcher → 回灌)。 */
+ *  链,免得一发盲写插在别人的比对与落盘之间。引擎是另一个进程,不在这把锁里(它的改动走 watcher → 回灌)。
+ *  ⚠️ **同一篇 .md 的每一条读改写 / 写通道都得进这把锁,并且在锁内读**(Codex g3#2):setPageFrontmatter、patchMark、
+ *  改名引用重写这些「读全文 → 改一处 → 整篇写回」若在锁外,读到旧全文后编辑器的 CAS 写照样比对通过、回 ok:true,
+ *  随后旧正文连同补丁写回 → 编辑器刚落盘的新正文静默丢失。不可重入:只在最底层那段「读→改→写」上锁,
+ *  别把一个会再去拿锁的 helper 整个包进来。 */
 const textWriteChains = new Map<string, Promise<unknown>>()
 function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = textWriteChains.get(key) ?? Promise.resolve()
@@ -105,6 +109,13 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   const { vault, index, handle, rememberPage, notifyAll } = deps
   const logActivity = deps.logActivity ?? (() => {})
   const logNoteEdit = deps.logNoteEdit ?? (() => {})
+  /** 按 vault 相对路径拿同篇写锁(键 = 绝对路径,各种写法归一)。越界 / 无库时 absPath 会抛:那就不上锁直接跑,
+   *  fn 里照旧撞上同一个错误(或按原语义静默跳过)—— 行为与没加锁前逐字一致。 */
+  const withPathLock = <T>(rel: string, fn: () => Promise<T>): Promise<T> => {
+    let key: string
+    try { key = vault.absPath(rel) } catch { return fn() }
+    return withTextWriteLock(key, fn)
+  }
   handle(IPC.listPages, () => vault.listPages())
   handle(IPC.listFiles, () => vault.listFiles())
 
@@ -130,17 +141,18 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   handle(
     IPC.savePage,
-    async (_e, pagePath: string, manifest: PageManifest, contents: Record<string, string>) => {
-      const io = vault.pageIO(pagePath)
-      // 活动日志 note.edit:保存前后各读一次盘算行差(文件小,开销可忽略;失败不阻断保存)。
-      const oldText = await io.readFile(pageFileName(pagePath)).catch(() => '')
-      await savePage(io, pagePath, manifest, { contents })
-      await index.update(pagePath)
-      try {
-        const newText = await io.readFile(pageFileName(pagePath))
-        logNoteEdit(pagePath, String(oldText ?? ''), String(newText ?? ''))
-      } catch { /* 装饰性数据 */ }
-    },
+    async (_e, pagePath: string, manifest: PageManifest, contents: Record<string, string>) =>
+      withPathLock(pagePath, async () => {
+        const io = vault.pageIO(pagePath)
+        // 活动日志 note.edit:保存前后各读一次盘算行差(文件小,开销可忽略;失败不阻断保存)。
+        const oldText = await io.readFile(pageFileName(pagePath)).catch(() => '')
+        await savePage(io, pagePath, manifest, { contents })
+        await index.update(pagePath)
+        try {
+          const newText = await io.readFile(pageFileName(pagePath))
+          logNoteEdit(pagePath, String(oldText ?? ''), String(newText ?? ''))
+        } catch { /* 装饰性数据 */ }
+      }),
   )
 
   /** 改名/移动后的全库引用重写(renameDbFile 同款先例):快照「操作前」页面表,物理移动完成后
@@ -154,17 +166,20 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const before = [...pagesBefore].sort()
     const after = before.map((p) => pairs.get(p) ?? p).sort()
     for (const p of after) {
-      let raw: string
-      try {
-        raw = await fs.readFile(vault.absPath(p), 'utf8')
-      } catch {
-        continue
-      }
-      const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, { pairs, pagesBefore: before, pagesAfter: after })
-      if (next === raw) continue
-      await vault.writeTextFile(p, next)
-      await index.update(p)
-      notifyAll(IPC.externalChange, p)
+      const changed = await withPathLock(p, async () => {
+        let raw: string
+        try {
+          raw = await fs.readFile(vault.absPath(p), 'utf8')
+        } catch {
+          return false
+        }
+        const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, { pairs, pagesBefore: before, pagesAfter: after })
+        if (next === raw) return false
+        await vault.writeTextFile(p, next)
+        await index.update(p)
+        return true
+      })
+      if (changed) notifyAll(IPC.externalChange, p)
     }
   }
 
@@ -197,7 +212,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       if (await vault.pathExists(newPath)) throw new Error('目标页面已存在')
       // v3 is single-file: persist in-flight edits, then move the one .md.
       const pagesBefore = await vault.listPages() // 引用重写要的「操作前」快照,须在移动前取
-      await savePage(vault.pageIO(oldPath), oldPath, manifest, { contents })
+      await withPathLock(oldPath, () => savePage(vault.pageIO(oldPath), oldPath, manifest, { contents }))
       await vault.moveEntry(oldPath, newPath)
       await index.rename(oldPath, newPath)
       await rememberPage(newPath)
@@ -310,9 +325,8 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   // 必须走 writeTextFile 而非 saveVaultBytes:后者不记自写账本,而 .excalidraw.md 命中 watcher 的
   // `.md` 分支 → 每次自动保存都会被当成外部改动回弹。
-  handle(IPC.drawingWrite, async (_e, drawingPath: string, source: string) => {
-    await vault.writeTextFile(drawingPath, source)
-  })
+  handle(IPC.drawingWrite, (_e, drawingPath: string, source: string) =>
+    withPathLock(drawingPath, () => vault.writeTextFile(drawingPath, source)))
 
   // 通用 vault 文本读写(插件文件类型:ctx.app.readFile/writeFile)。读越界即 null;
   // 写同 drawingWrite 走 writeTextFile(记自写账本,插件保存不被 watcher 当外部改动回弹)。
@@ -326,7 +340,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   })
   handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string }) => {
     const base = typeof opts?.base === 'string' ? opts.base : null // create 是云桥的语义,本地写盘不区分
-    return withTextWriteLock(vault.absPath(filePath), async () => {
+    return withPathLock(filePath, async () => {
       if (base != null) {
         // 比对交换写(G1-01):盘上已不是调用方的基线 → 不写,把现文交回去(回灌 / 冲突副本由渲染层定)。
         // 文件不在 = 无冲突(与 dbWriteCas 同口径:删了再写 = 重建,不是覆盖别人)。
@@ -367,16 +381,18 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     return out
   })
 
-  handle(IPC.setPageFrontmatter, async (_e, pagePath: string, patch: Record<string, unknown>) => {
-    let raw: string
-    try {
-      raw = await fs.readFile(vault.absPath(pagePath), 'utf8')
-    } catch {
-      return // 笔记不在(已被删)→ 静默跳过
-    }
-    await vault.writeTextFile(pagePath, setFmExtraOnSource(raw, patch)) // 原子写 + 自写账本 → watcher 不回声
-    await index.update(pagePath)
-  })
+  // 读改写整段在同篇路径锁内(Codex g3#2):锁外读到的旧全文会把编辑器刚 CAS 写入的新正文整篇盖回去。
+  handle(IPC.setPageFrontmatter, (_e, pagePath: string, patch: Record<string, unknown>) =>
+    withPathLock(pagePath, async () => {
+      let raw: string
+      try {
+        raw = await fs.readFile(vault.absPath(pagePath), 'utf8')
+      } catch {
+        return // 笔记不在(已被删)→ 静默跳过
+      }
+      await vault.writeTextFile(pagePath, setFmExtraOnSource(raw, patch)) // 原子写 + 自写账本 → watcher 不回声
+      await index.update(pagePath)
+    }))
 
   handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {
     const dir = path.dirname(oldPath)
@@ -419,12 +435,16 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const rewrittenPages: string[] = []
     for (const p of await vault.listPages()) {
       const pRel = norm(p)
-      let raw: string
-      try { raw = await fs.readFile(vault.absPath(p), 'utf8') } catch { continue }
-      const next = rewriteDbRefs(raw, { oldRel, newBase: `${base}.db`, pageDir: path.posix.dirname(pRel) })
-      if (next !== raw) {
+      const changed = await withPathLock(p, async () => {
+        let raw: string
+        try { raw = await fs.readFile(vault.absPath(p), 'utf8') } catch { return false }
+        const next = rewriteDbRefs(raw, { oldRel, newBase: `${base}.db`, pageDir: path.posix.dirname(pRel) })
+        if (next === raw) return false
         await vault.writeTextFile(p, next)
         await index.update(p)
+        return true
+      })
+      if (changed) {
         notifyAll(IPC.externalChange, p)
         rewrittenPages.push(p)
       }
@@ -462,16 +482,21 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
    *  写盘 → 更索引 → externalChange 广播,与 propagateRenames / renameDbFile 同一条既有路子。 */
   handle(IPC.patchMark, async (_e, pagePath: string, raw: string, occ: number, next: string) => {
     if (!vault.isPagePath(pagePath)) return false
-    let text: string
-    try { text = await fs.readFile(vault.absPath(pagePath), 'utf8') } catch { return false }
-    const at = findMarkLine(text, raw, occ)
-    if (at < 0) return false
-    const eol = text.includes('\r\n') ? '\r\n' : '\n'
-    const lines = text.split(/\r?\n/)
-    if (lines[at] === next) return true // 幂等:拖回原位不写盘、不惊动打开着的编辑器
-    lines[at] = next
-    await writeVaultText(vault, index, pagePath, lines.join(eol))
-    notifyAll(IPC.externalChange, pagePath)
+    // 读改写在同篇路径锁内(Codex g3#2,同 setPageFrontmatter);广播放到锁外。
+    const wrote = await withPathLock(pagePath, async (): Promise<boolean | null> => {
+      let text: string
+      try { text = await fs.readFile(vault.absPath(pagePath), 'utf8') } catch { return false }
+      const at = findMarkLine(text, raw, occ)
+      if (at < 0) return false
+      const eol = text.includes('\r\n') ? '\r\n' : '\n'
+      const lines = text.split(/\r?\n/)
+      if (lines[at] === next) return null // 幂等:拖回原位不写盘、不惊动打开着的编辑器
+      lines[at] = next
+      await writeVaultText(vault, index, pagePath, lines.join(eol))
+      return true
+    })
+    if (wrote === false) return false
+    if (wrote) notifyAll(IPC.externalChange, pagePath)
     return true
   })
   handle(IPC.pagesByTag, (_e, tag: string) => index.pagesByTag(tag))

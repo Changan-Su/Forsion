@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { IPC } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 
 vi.mock('electron', () => ({ dialog: {} }))
 
@@ -35,7 +36,7 @@ async function setup() {
   })
   const write = (event: unknown, ...args: unknown[]) => handlers.get(IPC.writeTextFile)!(event, ...args)
   const disk = (rel: string) => fs.readFile(path.join(root, rel), 'utf8')
-  return { root, write, disk, peers }
+  return { root, write, disk, peers, vault, handlers }
 }
 
 describe('writeTextFile CAS(G1-01)', () => {
@@ -90,4 +91,65 @@ describe('writeTextFile CAS(G1-01)', () => {
     await h.write(sender, 'board.excalidraw.md', 'x') // 画板不是笔记
     expect(h.peers).toHaveLength(1)
   })
+})
+
+// Codex g3#2:CAS 的路径锁起初只包住 writeTextFile。Bases 属性写(setPageFrontmatter)、待办就地勾(patchMark)是同一篇
+// .md 的「读→改→写」:它读到旧全文,编辑器随即 CAS 写入新正文(比对通过、回 ok:true),它再把旧正文连同补丁写回 →
+// 新正文静默丢失,编辑器毫不知情。修法:同篇的读改写通道都进同一把路径锁,并且在锁内读。
+// 时序做法:拦住读改写通道的那一发写(按内容认),直到 CAS 那发落定或 150ms 超时 —— 未修时这正好把旧全文压在 CAS 之后。
+// 负对照(实跑过):摘掉 setPageFrontmatter / patchMark 的路径锁 → 对应两条红。
+describe('同篇读改写通道与 CAS 共用路径锁(Codex g3#2)', () => {
+  const V1 = '---\nstatus: todo\n---\n正文 v1\n- [ ] 任务 @2026-10-01\n'
+  const V2 = '---\nstatus: todo\n---\n正文 v2 编辑器刚写的\n- [ ] 任务 @2026-10-01\n'
+  type H = Awaited<ReturnType<typeof setup>>
+  const channels = [
+    {
+      name: 'setPageFrontmatter',
+      run: (h: H) => h.handlers.get(IPC.setPageFrontmatter)!(null, 'n.md', { status: 'done' }),
+      isPatchWrite: (t: string) => t.includes('status: done'),
+      applied: (t: string) => setFmExtraOnSource(t, { status: 'done' }),
+    },
+    {
+      name: 'patchMark',
+      run: (h: H) => h.handlers.get(IPC.patchMark)!(null, 'n.md', '- [ ] 任务 @2026-10-01', 0, '- [x] 任务 @2026-10-01'),
+      isPatchWrite: (t: string) => t.includes('- [x] 任务'),
+      applied: (t: string) => t.replace('- [ ] 任务', '- [x] 任务'),
+    },
+  ]
+
+  /** 拦住读改写通道的写:等 CAS 那发落定(或 150ms,修好后 CAS 在锁外排队、永远等不到)再放行。 */
+  const holdPatchWrite = (h: H, isPatchWrite: (t: string) => boolean, casSettled: () => Promise<unknown>) => {
+    const real = h.vault.writeTextFile.bind(h.vault)
+    vi.spyOn(h.vault, 'writeTextFile').mockImplementation(async (rel: string, text: string) => {
+      if (isPatchWrite(text)) await Promise.race([casSettled(), new Promise((r) => setTimeout(r, 150))])
+      return real(rel, text)
+    })
+  }
+
+  for (const ch of channels) {
+    it(`${ch.name} 先进、编辑器 CAS 后到:CAS 必须看见补丁后的盘面并拒写(不许回 ok 却被旧正文盖掉)`, async () => {
+      const h = await setup()
+      await fs.writeFile(path.join(h.root, 'n.md'), V1)
+      let cas: Promise<unknown> = Promise.resolve()
+      holdPatchWrite(h, ch.isPatchWrite, () => cas)
+      const patching = ch.run(h)
+      cas = h.write({ sender: 'w1' }, 'n.md', V2, { base: textFingerprint(V1) }) as Promise<unknown>
+      const [, res] = await Promise.all([patching, cas])
+      const disk = await h.disk('n.md')
+      expect(disk).toBe(ch.applied(V1)) // 补丁在
+      expect(res).toEqual({ ok: false, current: disk }) // 编辑器被告知盘上已变,回灌 / 冲突副本由渲染层接
+    })
+
+    it(`编辑器 CAS 先进、${ch.name} 后到:它必须在锁内读到新正文再打补丁(两边都在)`, async () => {
+      const h = await setup()
+      await fs.writeFile(path.join(h.root, 'n.md'), V1)
+      let cas: Promise<unknown> = Promise.resolve()
+      holdPatchWrite(h, ch.isPatchWrite, () => cas)
+      cas = h.write({ sender: 'w1' }, 'n.md', V2, { base: textFingerprint(V1) }) as Promise<unknown>
+      const patching = ch.run(h)
+      const [res] = await Promise.all([cas, patching])
+      expect(res).toEqual({ ok: true })
+      expect(await h.disk('n.md')).toBe(ch.applied(V2))
+    })
+  }
 })
