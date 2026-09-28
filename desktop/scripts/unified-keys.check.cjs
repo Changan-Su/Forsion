@@ -180,6 +180,72 @@ async function main() {
         await page.close()
       }
     }
+
+    // ── K-02:整块选中(NodeSelection)后打字不再把整块换掉。──
+    if (want('K02')) {
+      const cases = [
+        // [名, 种子, 光标所在 {type,nth,atStart}, 选块按键, 期望块选中的节点, 打的字, 期望结构]
+        ['↓ 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'code_block', 'kk',
+          'paragraph:"上段。" / code_block:"line1kk" / paragraph:"下段。"'],
+        ['↑ 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph', nth: 1, atStart: true }, 'ArrowUp', 'code_block', 'k',
+          'paragraph:"上段。" / code_block:"line1k" / paragraph:"下段。"'],
+        ['↓ 撞表格', '上段。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'table', 'k', null],
+        ['↓ 撞嵌入', '上段。\n\n![[Embedded]]\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'paragraph', 'k',
+          'paragraph:"上段。" / paragraph:"![[Embedded]]" / paragraph:"k" / paragraph:"下段。"'],
+        ['Esc 选段', '甲段很长的一段内容。\n\n乙段。\n', { type: 'paragraph' }, 'Escape', 'paragraph', 'k',
+          'paragraph:"甲段很长的一段内容。k" / paragraph:"乙段。"'],
+        ['Esc 选标题', '## 标题\n\n乙段。\n', { type: 'heading' }, 'Escape', 'heading', 'k',
+          'heading2:"标题k" / paragraph:"乙段。"'],
+      ]
+      for (const [name, md, at, key, selNode, typed, expect] of cases) {
+        const page = await open(browser, md)
+        await caretIn(page, at.type, at)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(120)
+        const s0 = await selInfo(page)
+        await page.keyboard.type(typed)
+        await page.waitForTimeout(1300)
+        const s = await shape(page)
+        const ok = expect ? s === expect : /table/.test(s) && s.includes(`"a${typed}"`) && s.includes('paragraph:"上段。"') && s.includes('paragraph:"下段。"')
+        check(`K02 ${name} → 块选中后打字:原块仍在,字落进合理位置`, s0.json === 'node' && s0.node === selNode && ok, `sel=${s0.json}:${s0.node} | ${s}`)
+        await page.close()
+      }
+      // 文末 `---` 生成分割线(输入规则把 hr 设成块选中)后接着打字 = 在 hr 之后起新段。
+      for (const rule of ['---', '*** ']) {
+        const page = await open(browser, '前段。\n')
+        await caretIn(page, 'paragraph')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type(rule)
+        await page.waitForTimeout(120)
+        const s0 = await selInfo(page)
+        await page.keyboard.type('X')
+        await page.waitForTimeout(1300)
+        const s = await shape(page)
+        check(`K02 文末 ${JSON.stringify(rule)} 生成分割线后打字:hr 仍在,字落在其后新段`, s === 'paragraph:"前段。" / hr / paragraph:"X"', `sel=${s0.json}:${s0.node} | ${s} | ${JSON.stringify(await lastWrite(page))}`)
+        await page.close()
+      }
+      // 不经 keydown 的插字(全角标点直出/表情面板/听写)与输入法组字:CDP 起真事件。
+      for (const [name, act] of [
+        ['insertText 全角标点', async (cdp) => { await cdp.send('Input.insertText', { text: '，' }) }],
+        ['输入法组字提交', async (cdp) => {
+          await cdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
+          await new Promise((r) => setTimeout(r, 80))
+          await cdp.send('Input.insertText', { text: '你' })
+        }],
+      ]) {
+        const page = await open(browser, '上段。\n\n```js\nline1\n```\n\n下段。\n')
+        const cdp = await page.context().newCDPSession(page)
+        await caretIn(page, 'paragraph')
+        await page.keyboard.press('ArrowDown')
+        await page.waitForTimeout(120)
+        const s0 = await selInfo(page)
+        await act(cdp)
+        await page.waitForTimeout(1300)
+        const s = await shape(page)
+        check(`K02 块选中代码块后 ${name}:代码块仍在,字进块尾,下一块不被拼进来`, s0.json === 'node' && /^paragraph:"上段。" \/ code_block:"line1(，|你)" \/ paragraph:"下段。"$/.test(s), `sel=${s0.json}:${s0.node} | ${s}`)
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }

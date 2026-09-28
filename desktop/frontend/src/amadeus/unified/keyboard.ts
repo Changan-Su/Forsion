@@ -21,7 +21,7 @@ import { $prose } from '@milkdown/kit/utils'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Plugin } from '@milkdown/kit/prose/state'
 import { liftListItem, splitListItem } from '@milkdown/kit/prose/schema-list'
-import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import type { Command, EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
@@ -463,7 +463,78 @@ const wrapSelectionPlugin = $prose(
     }),
 )
 
+// ── 整块选中时打字(K-02)────────────────────────────────────────────────────────
+
+/** 块选中(NodeSelection:↓/↑ 撞上代码块/表格/嵌入、Esc 选块、文末 `---` 生成的 hr)时,打出来的
+ *  字该落在哪。PM 的默认是「用输入替换选区」—— 整块被一个字替换并落盘,输入法组字开头的
+ *  deleteSelection 同样删块。块选中是「看着这个块」,不是「要换掉它」(Notion 同):
+ *   · 代码块 → 进块尾;表格 → 进首格(末尾);
+ *   · 嵌入/分割线等整块型、以及没有可写文字的叶子块 → 在其后新建一段;
+ *   · 文字块 / 容器(Esc 选中的段、标题、引用、callout、列表)→ 光标移到块内最后一处文字末尾。
+ *  行内原子(图片、行内公式)的 NodeSelection 不在此列,仍是编辑器通常的「选中即替换」。 */
+function typingTargetTr(state: EditorState): Transaction | null {
+  const sel = state.selection
+  if (!(sel instanceof NodeSelection) || !sel.node.isBlock) return null
+  const node = sel.node
+  const tr = state.tr
+  if (node.type.name === 'code_block') return tr.setSelection(TextSelection.create(tr.doc, sel.to - 1))
+  if (node.type.name === 'table') {
+    const first = Selection.near(tr.doc.resolve(sel.from + 1), 1)
+    if (!(first instanceof TextSelection) || first.from >= sel.to) return null
+    return tr.setSelection(TextSelection.create(tr.doc, first.$from.end()))
+  }
+  if (!isAtomBlock(node) && !node.isLeaf) {
+    const inside = Selection.near(tr.doc.resolve(sel.to - 1), -1)
+    if (inside instanceof TextSelection && inside.from > sel.from && inside.to < sel.to) return tr.setSelection(inside)
+  }
+  const paragraph = state.schema.nodes.paragraph
+  const $to = sel.$to
+  if (!paragraph || !$to.parent.canReplaceWith($to.index(), $to.index(), paragraph)) return null
+  tr.insert(sel.to, paragraph.create())
+  return tr.setSelection(TextSelection.create(tr.doc, sel.to + 1))
+}
+
+/** 在浏览器插字之前把块选中换成 typingTargetTr 的落点。三个入口缺一不可:
+ *  · keydown(可打印键 / 229 输入法处理中)—— 普通打字、输入法起组合前;
+ *  · compositionstart —— 不发 229 的输入法兜底(PM 自己的 compositionstart 见非空选区就 deleteSelection);
+ *  · beforeinput insertText —— 不经 keydown 的插字(全角标点直出、表情面板、听写):这里直接自己插,
+ *    不赌浏览器会不会在事件中途重读选区。 */
+const blockSelectionTypingPlugin = $prose(
+  () =>
+    new Plugin({
+      props: {
+        handleDOMEvents: {
+          keydown: (view, event) => {
+            if (!view.editable || event.metaKey || event.ctrlKey) return false
+            const printable = event.key.length === 1 || event.key === 'Process' || event.keyCode === 229
+            if (!printable) return false
+            const tr = typingTargetTr(view.state)
+            if (tr) view.dispatch(tr.scrollIntoView())
+            return false // 不吞键:浏览器随后在新光标处照常插字
+          },
+          compositionstart: (view) => {
+            if (!view.editable) return false
+            const tr = typingTargetTr(view.state)
+            if (tr) view.dispatch(tr)
+            return false
+          },
+          beforeinput: (view, event) => {
+            const e = event as InputEvent
+            if (!view.editable || e.inputType !== 'insertText' || !e.data) return false
+            const tr = typingTargetTr(view.state)
+            if (!tr) return false
+            e.preventDefault()
+            const { from, to } = tr.selection
+            view.dispatch(tr.insertText(e.data, from, to).scrollIntoView())
+            return true
+          },
+        },
+      },
+    }),
+)
+
 export const keyboardPlugins: MilkdownPlugin[] = [
+  blockSelectionTypingPlugin,
   wrapSelectionPlugin,
   $prose(() =>
     keymap({
