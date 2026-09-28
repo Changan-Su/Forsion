@@ -925,6 +925,20 @@ export interface ApprovalRequest {
   // P1-K1
   /** 远程会话发起的审批:来路 + 调用方设备(引擎只给远程污点 run 带;reducer 白名单清洗)。本机 run 没有。 */
   remote?: ApprovalRemote
+  // P1-K3
+  /** 受保护路径(凭据 / Forsion 本机配置):只能在执行设备本机批准,远端卡片只给「拒绝」(引擎对远端批准回 403 APPROVAL_LOCAL_ONLY)。 */
+  localOnly?: boolean
+  /** 谁答的(approval_result.by,reducer 白名单清洗):卡片收起时写「在 X 上」。旧引擎没有。 */
+  answeredBy?: AnswerBy
+}
+
+// P1-K3
+/** approval_result.by / inquiry_result.by:谁兑现了这张卡。remote = 带远程标记但来路不在契约内;callerUnit 只在隧道且验过调用方时有。
+ *  callerName 是登记者自选的不可信串,只作纯文本展示;可能清洗后为空(看 callerUnit 判「是不是已登记设备」)。 */
+export interface AnswerBy {
+  via: 'local' | 'tunnel' | 'p2p' | 'lan' | 'remote' | 'channel'
+  callerUnit?: string
+  callerName?: string
 }
 
 // P1-K1
@@ -958,6 +972,9 @@ export interface InquiryRequest {
   answer?: string
   /** 'plan'=计划审阅(渲染专属计划卡:批准 / 编辑后批准 / 打回);缺省=通用问答卡。 */
   kind?: 'plan'
+  // P1-K3
+  /** 谁答的(inquiry_result.by)。 */
+  answeredBy?: AnswerBy
 }
 
 /** sketch 工具画的对话内 HTML 卡片。载荷在 tool_call **参数**里(原样落 JSONB 不截断),
@@ -1465,6 +1482,9 @@ declare global {
       notify?(title: string, body: string): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
+      // P1-K3
+      /** 远程会话待批的系统通知被点击(主进程 approvalDelivery)→ 打开那条会话。仅桌面壳。 */
+      onApprovalOpen?(cb: (p: { sessionId: string }) => void): () => void
       // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ──
       /** 独立窗启动握手:pull 本窗待打开的初始视图(拖出时登记的 {type,params}[];重启已恢复布局则返回空)。 */
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>

@@ -33,13 +33,22 @@ export function localOnlyMessage(): string {
   return translate('unitpage.localOnly')
 }
 
+// P1-K3:受保护路径(凭据 / Forsion 本机配置)的审批只能在执行它的电脑上批准 —— 引擎对远端批准回 403 APPROVAL_LOCAL_ONLY
+// (运行中审批与收件箱里的异步审批同一个码)。拒绝照常可以。
+registerMessages({
+  'approval.localOnlyToast': { zh: '只能在执行它的电脑上批准这项操作', en: 'This can only be approved on the computer running it' },
+})
+export const APPROVAL_LOCAL_ONLY = 'APPROVAL_LOCAL_ONLY'
+
 const REFUSAL_KEYS: Record<string, string> = {
   [LOCAL_ONLY_CODE]: 'unitpage.localOnly',
   [REMOTE_CWD_FORBIDDEN]: 'unitpage.remoteCwd',
   [REMOTE_ARGS_OVERRIDE_FORBIDDEN]: 'unitpage.remoteArgsOverride',
+  // P1-K3
+  [APPROVAL_LOCAL_ONLY]: 'approval.localOnlyToast',
 }
 
-/** 远端拒绝码 → 本地化提示;不是这三种码 → null(调用方照旧用 detail / HTTP 状态)。 */
+/** 远端拒绝码 → 本地化提示;不是认得的码 → null(调用方照旧用 detail / HTTP 状态)。 */
 export function remoteRefusalMessage(code: unknown): string | null {
   const key = typeof code === 'string' && Object.prototype.hasOwnProperty.call(REFUSAL_KEYS, code) ? REFUSAL_KEYS[code] : null
   return key ? translate(key) : null
