@@ -9,6 +9,7 @@
 // K1 嵌入内按键不动文档 / K2 嵌入外按键照常生效(防修过头)/ K3 双击不进源码 / K4 丝滑光标下
 // 嵌入内控件仍有原生 caret / K5 负对照:同一页的编辑器本体仍是 transparent(自绘覆盖层接管)。
 // K6 切视图保住 React 实例/搜索 / K7 数据库只经显式入口编辑源码 / K8 v3 数据库不抢 Shift 选字。
+// K11 坏 JSON 的按钮块回落普通代码块、改好当场变回按钮(R-13)。
 // 用法:node scripts/e2e-editor.cjs --check=embed-inputs
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -276,6 +277,37 @@ async function main() {
       c.scOn && !transparent(c.search) && !transparent(c.formula), JSON.stringify(c))
     record('K5 负对照:同页编辑器本体仍是 transparent(自绘覆盖层接管)',
       c.scOn && transparent(c.editor), JSON.stringify({ scOn: c.scOn, editor: c.editor }))
+    await p.close()
+  }
+
+  // ── 按钮块(```forsion-button,embedLayer 接管的代码块)─────────────────────────────────────────────
+  const btnPage = async (md) => {
+    const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+    p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await p.goto(`${URL}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+    await p.waitForSelector(PM, { timeout: 20000 })
+    await p.waitForTimeout(800)
+    return p
+  }
+  // K11 JSON 写坏的按钮块(R-13):回落成普通代码块 —— 看得见源码、点进去能改,改好了当场变回按钮。
+  {
+    const p = await btnPage('段一\n\n```forsion-button\n{"v":1,"label":"坏的,少引号}\n```\n\n段尾\n')
+    const st = await p.evaluate((PM) => {
+      const pre = document.querySelector(PM + ' pre')
+      const r = pre.getBoundingClientRect()
+      return { h: Math.round(r.height), embed: !!pre.querySelector('.unified-embed'), text: pre.querySelector('code')?.innerText ?? '' }
+    }, PM)
+    record('K11 坏 JSON 的按钮块回落普通代码块:源码可见(不再整块隐身)', !st.embed && st.h > 30 && st.text.includes('坏的'), JSON.stringify(st))
+    // 就地把少的引号补上 → 当场渲染成按钮。
+    await p.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.type.name === 'code_block') { at = pos + 1 + n.textContent.indexOf('}'); return false } return true })
+      v.dispatch(v.state.tr.insertText('"', at))
+    })
+    await p.waitForTimeout(400)
+    const fixed = await p.evaluate((PM) => !!document.querySelector(PM + ' pre .amx-btnblock'), PM)
+    record('K11 源码改好后当场变回按钮', fixed)
     await p.close()
   }
 
