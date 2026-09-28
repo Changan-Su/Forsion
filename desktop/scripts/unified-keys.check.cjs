@@ -1,5 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
+// 波次 2 shell 包:K-16(mac ⌘↑/⌘↓ 越过代码块 / 嵌入到文首文末)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -899,6 +900,33 @@ async function main() {
         await page.waitForTimeout(200)
         const s = (await shape(page)).replace(/ \/ +/g, ' / ')
         check(`K22 ${name}`, s === expect && (selWant ? sel.node === selWant : sel.json === 'text'), `${s} | sel=${JSON.stringify(sel)}`)
+        await page.close()
+      }
+    }
+    // ── K-16:mac ⌘↑ / ⌘↓ 到文首 / 文末。原生做法在「文首是代码块 / 嵌入」「文末是嵌入」时原地不动(代码块首子节点是
+    //    contenteditable=false 工具条、嵌入首子节点是 widget)。嵌入 = 整块选中,代码块 = 光标进块首;普通段对照照旧到得了。
+    //    负对照:摘掉 docEdge 的 keymap 行 → 三条嵌入 / 代码块用例全红(已实跑)。
+    if (want('K16')) {
+      for (const [name, md, from, key, expect] of [
+        ['文首是代码块 ⌘↑ → 进代码块首', '```js\ncode\n```\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'code_block', from: 1 }],
+        ['文首是嵌入 ⌘↑ → 整块选中嵌入', '![[Embedded]]\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'node', node: 'paragraph', from: 0 }],
+        ['文末是嵌入 ⌘↓ → 整块选中嵌入', '甲段。\n\n乙段。\n\n![[Embedded]]\n', '甲段。', 'Meta+ArrowDown', { json: 'node', node: 'paragraph', from: 10 }],
+        ['对照:文首是普通段 ⌘↑ → 段首', '甲段。\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'paragraph', from: 1 }],
+      ]) {
+        const page = await open(browser, md)
+        // 真鼠标点到起点段末(原生 ⌘↑ 要浏览器自己的 DOM 选区在场;程序化放选区时对照组的原生移动不生效)
+        const at = await page.evaluate(([s, t]) => {
+          const p = [...document.querySelectorAll(s + ' > p')].find((x) => x.textContent.includes(t))
+          const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect()
+          return { x: b.right - 1, y: b.top + b.height / 2 }
+        }, [PM, from])
+        await page.mouse.click(at.x, at.y)
+        await page.waitForTimeout(200)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(150)
+        const sel = await selInfo(page)
+        const ok = Object.entries(expect).every(([k, v]) => sel[k] === v)
+        check(`K16 ${name}`, ok, JSON.stringify(sel))
         await page.close()
       }
     }
