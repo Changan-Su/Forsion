@@ -56,8 +56,9 @@ public class DownloadsPlugin extends Plugin {
     private static final String TAG = "ForsionDownloads";
     /** 与 JS 侧 NATIVE_DOWNLOAD_MAX_BYTES 同值(desktop/frontend/src/services/nativeDownload.ts)。 */
     static final long MAX_BYTES = 50L * 1024 * 1024;
-    /** 同时未完成的条目上限:JS 每次只开一条,超了说明有泄漏,拒掉而不是越积越多。 */
-    private static final int MAX_OPEN = 4;
+    /** 同时未完成的条目上限(同 UnitRelay.MAX_CONCURRENT):一次下载只开一条,但用户在大文件传着时连点几个下载键是正常的;
+     *  这里只防泄漏越积越多,别把正常连点拒成 busy。 */
+    private static final int MAX_OPEN = 16;
 
     private static final class Pending {
         final Uri uri;
