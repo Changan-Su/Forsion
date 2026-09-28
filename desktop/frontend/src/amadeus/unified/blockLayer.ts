@@ -1502,10 +1502,19 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             const t = e.target instanceof Element ? e.target : null
             const island = t?.closest('[contenteditable="false"]')
             const nonText = !!t && ((!!island && island !== view.dom && view.dom.contains(island)) || /^(IMG|VIDEO|AUDIO|HR|CANVAS|IFRAME)$/.test(t.tagName))
-            if (!nonText) return
-            const a = pickBlockAt(view, { x: e.clientX, y: e.clientY })
-            if (!a || !NodeSelection.isSelectable(a.node)) return
-            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, a.pos)))
+            // 表格单元格里、没拖选文字:系统菜单只剩「粘贴」,增删行列又得锚在指针下那一格 → 整表块菜单
+            // (表格区,K-10;Obsidian 表格右键同样给行列操作)。选了字照旧交给系统菜单(复制)。
+            const cellEl = view.state.selection.empty ? t?.closest('td, th') : null
+            let tablePos: number | null = null
+            if (cellEl && view.dom.contains(cellEl)) {
+              const $c = view.state.doc.resolve(view.posAtDOM(cellEl, 0))
+              for (let d = $c.depth; d > 0; d--) if ($c.node(d).type.spec.tableRole === 'table') { tablePos = $c.before(d); break }
+            }
+            if (!nonText && tablePos == null) return
+            const pos = tablePos ?? pickBlockAt(view, { x: e.clientX, y: e.clientY })?.pos
+            const node = pos == null ? null : view.state.doc.nodeAt(pos)
+            if (pos == null || !node || !NodeSelection.isSelectable(node)) return
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
           }
           e.preventDefault()
           view.focus()

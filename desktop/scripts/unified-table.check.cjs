@@ -118,6 +118,28 @@ async function rightClick(page, text, sel = 'td, th') {
   await page.waitForSelector('.unified-block-menu', { timeout: 3000 })
   return true
 }
+/** 块的 ⠿ 把手上右键出块菜单(评审 G4-08 起正文文字上的右键归系统菜单):悬停该块 → 把手出现 → 右键。 */
+async function gripRightClick(page, text, sel) {
+  const c = await page.evaluate(({ PM, text, sel }) => {
+    const el = [...document.querySelectorAll(`${PM} ${sel}`)].find((e) => e.textContent === text)
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + Math.min(12, r.width / 2), y: r.top + r.height / 2 }
+  }, { PM, text, sel })
+  if (!c) return false
+  await page.mouse.move(c.x, c.y, { steps: 2 })
+  await page.waitForTimeout(250)
+  const g = await page.evaluate(() => {
+    const el = document.querySelector('.unified-gutter[data-show="true"] .drag-handle')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  if (!g) return false
+  await page.mouse.click(g.x, g.y, { button: 'right' })
+  await page.waitForSelector('.unified-block-menu', { timeout: 3000 })
+  return true
+}
 const menu = (page) => page.evaluate(() => {
   const m = document.querySelector('.unified-block-menu')
   if (!m) return null
@@ -259,10 +281,10 @@ async function main() {
           && !m.labels.some((l) => /^(正文|标题 1|无序列表|引用|折叠)$/.test(l)) && m.labels.includes('卡片'), JSON.stringify(m))
         await closeMenu(page)
       }
-      // M2 右键段落:文字转换照旧、没有表格区(别把隐藏做过头)。
+      // M2 段落的块菜单(⠿ 右键;G4-08 起文字上右键归系统菜单):文字转换照旧、没有表格区(别把隐藏做过头)。
       {
         await load(page, T3)
-        await rightClick(page, '后段。', '> p')
+        await gripRightClick(page, '后段。', '> p')
         const m = await menu(page)
         check('M2 右键段落:「转换为」照旧,无表格区', m && m.labels.includes('正文') && m.labels.includes('标题 1') && m.ops.length === 0 && m.aligns.length === 0, JSON.stringify(m))
         await closeMenu(page)
