@@ -85,3 +85,48 @@ describe('waitForOutput resolve paths', () => {
     expect(Date.now() - t0).toBeLessThan(1000); // didn't wait out cap/idle
   });
 });
+
+// P1 · K2 §3.7:后台进程打来源标签,急停按标签 / runId 整组杀。
+import { killProcessesWhere, listTaggedProcesses, onProcessChange, processOriginOf } from '../src/tools/processRegistry.js';
+import { taintRunRemote, clearRunRemoteTaint } from '../src/services/remoteOrigin.js';
+
+describe('来源标签 + killProcessesWhere(P1-K2)', () => {
+  const alive = (pid: number | null): boolean => { try { process.kill(pid!, 0); return true; } catch { return false; } };
+
+  it('来源按 ctx 判:远程(起跑污点 / 中途染色)> 通道 > 无人值守 > 本机', () => {
+    expect(processOriginOf(undefined)).toBe('local');
+    expect(processOriginOf({ remote: { via: 'tunnel', marked: true } } as any)).toBe('remote');
+    taintRunRemote('R-proc', { via: 'p2p', marked: false });
+    expect(processOriginOf({ runId: 'R-proc' } as any)).toBe('remote');
+    clearRunRemoteTaint('R-proc');
+    expect(processOriginOf({ channelSession: true } as any)).toBe('channel');
+    expect(processOriginOf({ muse: true } as any)).toBe('unattended');
+    expect(processOriginOf({ automationOrigin: 't1' } as any)).toBe('unattended');
+    expect(processOriginOf({ runId: 'R-local' } as any)).toBe('local');
+  });
+
+  it('远程 ctx 起的进程带 origin/runId、进快照;杀组连孙进程一起死;本机进程不动', async () => {
+    const changes: number[] = [];
+    const off = onProcessChange(() => changes.push(1));
+    const remote = startBackgroundProcess(SID, 'sleep 30 & wait', CWD, { remote: { via: 'tunnel', marked: true }, runId: 'R-rem', cwd: CWD } as any);
+    const local = startOk('sleep 30');
+    if (typeof remote === 'string') throw new Error(remote);
+    expect(remote).toMatchObject({ origin: 'remote', runId: 'R-rem' });
+    expect(local.origin).toBe('local');
+    expect(listTaggedProcesses().map((p) => [p.id, p.origin, p.runId])).toEqual([[remote.id, 'remote', 'R-rem']]);
+    expect(changes.length).toBeGreaterThanOrEqual(2);
+    expect(killProcessesWhere((p) => p.origin !== 'local')).toBe(1);
+    await waitForOutput(remote, 0, { capMs: 5000 });
+    expect(remote.status).toBe('killed');
+    expect(alive(remote.pid)).toBe(false);
+    expect(local.status).toBe('running');
+    expect(alive(local.pid)).toBe(true);
+    expect(listTaggedProcesses()).toEqual([]);
+    // 按 runId 命中本机起、后被染色的 run 起的进程(它的 origin 仍是 local)
+    const tainted = startBackgroundProcess(SID, 'sleep 30', CWD, { runId: 'R-mid', cwd: CWD } as any);
+    if (typeof tainted === 'string') throw new Error(tainted);
+    expect(killProcessesWhere((p) => new Set(['R-mid']).has(p.runId || ''))).toBe(1);
+    expect(killProcessesWhere(() => { throw new Error('bad pred'); })).toBe(0); // 谓词抛 = 不杀
+    off();
+  }, 20_000);
+});

@@ -20,7 +20,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { getRawSection } from '../core/config.js';
 import { remoteCwdForbidden } from '../sandbox/hostSandboxProtection.js';
-import { noteRunTainted } from './remoteActivity.js'; // P1-K2:中途染色 → 活动登记表立刻按远程列出(函数级互引,模块求值期不互调)
 
 export type RemoteVia = 'tunnel' | 'p2p' | 'lan';
 export type RemoteCallerKind = 'phone' | 'desktop';
@@ -265,10 +264,17 @@ export function remoteManagementDenied(tool: string, action: unknown): string | 
 // 表项随 run 收尾由 agentLoop 清掉(clearRunRemoteTaint)—— 表长 ≤ 在飞 run 数,不做容量淘汰:
 // 按 FIFO 挤掉的若是仍在跑的 run,它就悄悄回到本机档位(Codex 评审)。
 const steeredRemote = new Map<string, RemoteInfo>();
+// P1-K2:首次染色的订阅者(活动登记表 remoteActivity.noteRunTainted:本机起的 run 被手机 steer 后立刻按远程列出)。
+// 用订阅而不是直接 import:remoteActivity → processRegistry → remoteOrigin 已是一条链,反向 import 成环(模块求值期 TDZ)。
+const taintListeners = new Set<(runId: string) => void>();
+export function onRunTainted(cb: (runId: string) => void): () => void {
+  taintListeners.add(cb);
+  return () => { taintListeners.delete(cb); };
+}
 export function taintRunRemote(runId: string, info: RemoteInfo): void {
   if (steeredRemote.has(runId)) return;
   steeredRemote.set(runId, info);
-  noteRunTainted(runId); // P1-K2
+  for (const cb of [...taintListeners]) { try { cb(runId); } catch { /* 订阅者的错误不影响染色 */ } } // P1-K2
 }
 export function clearRunRemoteTaint(runId: string): void {
   steeredRemote.delete(runId);

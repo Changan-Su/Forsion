@@ -20,7 +20,7 @@
  * ⚠️ 不进任何工具、不进模型上下文(方案 §6.4-4)。变更通知去抖 200ms,定时器 unref(不拖住测试进程与引擎退出)。
  */
 import { randomUUID } from 'node:crypto';
-import { effectiveRemote, remoteOf, type RemoteCallerKind, type RemoteVia } from './remoteOrigin.js';
+import { effectiveRemote, onRunTainted, remoteOf, type RemoteCallerKind, type RemoteVia } from './remoteOrigin.js';
 import { listPrompts, onPromptChange } from './pendingPromptIndex.js';
 import { remoteLockState, type RemoteLockState } from './remoteLock.js';
 import { listTaggedProcesses, onProcessChange, type ProcessOrigin } from '../tools/processRegistry.js';
@@ -134,7 +134,7 @@ export function unregisterRun(runId: string): void {
   if (runs.delete(runId)) notifyActivity();
 }
 
-/** remoteOrigin.taintRunRemote 首次染色时调:分类在快照时现算,这里只负责让订阅者及时看到。 */
+/** remoteOrigin.taintRunRemote 首次染色时回调(onRunTainted 订阅):分类在快照时现算,这里只负责让订阅者及时看到。 */
 export function noteRunTainted(runId: string): void {
   if (runs.has(runId)) notifyActivity();
 }
@@ -199,9 +199,11 @@ export function onActivityChange(cb: () => void): () => void {
   return () => { listeners.delete(cb); };
 }
 
-// 待批进出、后台进程起落都会改快照:订一次,永不退订(模块单例,与引擎同寿命)。
+// 待批进出、后台进程起落、中途染色都会改快照:订一次,永不退订(模块单例,与引擎同寿命)。
+// 依赖方向单向(本模块 → remoteOrigin / pendingPromptIndex / processRegistry,它们都不 import 本模块),模块求值期订阅安全。
 onPromptChange(() => notifyActivity());
 onProcessChange(() => notifyActivity());
+onRunTainted(noteRunTainted);
 
 export type { ProcessOrigin };
 

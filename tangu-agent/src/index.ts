@@ -14,6 +14,7 @@ import type { AppProfileOverride } from './seams/appProfile.js';
 import runsRouter from './routes/runs.js';
 import workspaceRouter from './routes/workspace.js';
 import approvalsRouter from './routes/approvals.js';
+import remoteRouter from './routes/remote.js'; // P1-K2 远程活动 / 急停 / 解锁(本机专用)
 import sessionsRouter from './routes/sessions.js';
 import modelsRouter from './routes/models.js';
 import visionRouter from './routes/vision.js';
@@ -103,6 +104,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(channelsRouter);
   dataRouter.use(inboxRouter);
   dataRouter.use(ttsRouter);
+  dataRouter.use(remoteRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {
     // 进程重启自愈:遗留 running 标 failed → 重新入队仍在飞的 run(顺序不可颠倒)。

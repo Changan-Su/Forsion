@@ -50,6 +50,7 @@ import { readDbOrNull } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { launchAutomationTriggers, launchDueSchedules, advanceSelfCursors } from './automation.js';
 import { drainAutomation } from './automationDrain.js';
+import { remoteLocked } from './remoteLock.js'; // P1-K2
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -705,6 +706,8 @@ let pendingKick = false;
  *  规则显示「已启用」却一次都不评估,用户零信号(H3)。 */
 let automationNotices: Record<string, string> = {};
 export function getAutomationNotices(): Record<string, string> { return automationNotices; }
+/** P1-K2:锁定期间整轮暂停的提示只打一次(每个锁定时段一次),解锁后复位。 */
+let lockPauseLogged = false;
 
 async function tick(): Promise<void> {
   // interval 与 kickMuse 的 setTimeout 会重叠(tick 内多处 await);重入=重复评估/重复起 run。
@@ -712,6 +715,15 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     if (!isLocal()) return;
+    // P1-K2(方案 §6.5):急停锁定了远程访问 → 盯任务规则、Agent 日程、Muse 周期整轮**推迟**(不丢:解锁后下一轮照常评估,
+    // 到期条目按 dueEntries 补跑)。急停的语义是「不是我在键盘前发起的一律停」;读不出锁 = 锁定。
+    let locked = true;
+    try { locked = remoteLocked(); } catch { locked = true; }
+    if (locked) {
+      if (!lockPauseLogged) { lockPauseLogged = true; log('remote lock on — Muse, watch rules and agent schedules paused until it is unlocked on this computer'); }
+      return;
+    }
+    lockPauseLogged = false;
     await loadMuseState(); // lastCycleAt 落盘值(只读一次):重启后心跳接着上次算,不再开机就跑
     await flushJournal(); // 上一周期若已收尾 → 记一行(run 终态会 kickMuse,所以通常紧跟着周期结束)
     // ── 盯任务规则评估(零 token 代码判定)。刻意放在 muse.enabled/activeHours 闸**之前**:
@@ -871,6 +883,9 @@ export function kickMuse(): void {
   kickTimer = setTimeout(() => { void tick(); }, 1500);
   (kickTimer as any).unref?.();
 }
+
+/** @internal 测试用:跑一轮巡检(P1-K2 锁定测试)。 */
+export const __museTickForTests = (): Promise<void> => tick();
 
 export function stopMuseSupervisor(): void {
   if (timer) { clearTimeout(timer); timer = null; }

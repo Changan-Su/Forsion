@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { configFile, tanguHome, forsionSharedDir, agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { getRawSection } from '../core/config.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
+import { REMOTE_LOCK_FILE_ENV } from '../services/remoteLock.js'; // P1-K2
 
 /** Resolve the nearest existing ancestor too, so a missing config under a home symlink is protected.
  *  A *dangling* symlink (its target does not exist yet) makes realpath fail, yet a write through it creates the target —
@@ -121,6 +122,10 @@ export function credentialPaths(): string[] {
   // Local Storage / Cookies(登录态)都在里面,整目录收。引擎不知道 Electron 的 userData,但宿主给的 FORSION_AMADEUS_CONFIG
   // 就住在 userData 里(backendManager.amadeusConfigPath),兄弟目录按同一个 appData 父目录推。
   out.push(...desktopUserDataDirs());
+  // P1-K2:远程锁文件(桌面主进程经 FORSION_REMOTE_LOCK_FILE 交来的绝对路径)。平时就在 userData 里、上面已整目录收;
+  // 这里再点名一次 —— 宿主没给 FORSION_AMADEUS_CONFIG(推不出 userData)时也收得住:远端写 / 删它 = 绕过急停锁。
+  const lockFile = process.env[REMOTE_LOCK_FILE_ENV];
+  if (lockFile && path.isAbsolute(lockFile)) out.push(lockFile);
   return withCanonical(out);
 }
 
