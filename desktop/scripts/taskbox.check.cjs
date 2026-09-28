@@ -5,6 +5,8 @@
 // 钉住的设计)照旧成立,这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
 // K8b(K-11):待办上 Mod+Enter 翻转勾选,普通列表仍拆项。
 // R10b / R10:Obsidian 空待办 `- [ ]` 读成空待办;空待办落盘 `- [ ] ` 而不是 `- [ ] <br />`。
+// AX1–AX6(P-08):读屏读得到勾选状态 —— 每个待办项有 role=checkbox + aria-checked(方框是 ::before,AX 树里原本只有
+//   listitem);键盘 / 鼠标翻转后状态跟上;读屏「激活」(程序派发 click)翻转并落盘;只读实例不翻转;名称跟界面语言。
 // 用法:npm run check:taskbox(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
 const os = require('os')
@@ -246,6 +248,67 @@ async function main() {
       await p3.close()
       check('R10 回车新建的空待办落盘 `- [ ] `(不是 `<br />`),重开仍是空待办',
         savedF.includes('- [ ] 待办一\n- [ ] \n') && !/<br/i.test(savedF) && f === ' :待办一 |  :', `${f}  saved=${JSON.stringify(savedF)}`)
+    }
+    // ── AX1–AX5:待办勾选状态的读屏语义(P-08)──────────────────────────────────────────
+    {
+      const page = await open(browser, '# T\n\n- [ ] 待办甲\n- [x] 待办乙\n\n末段。\n', '')
+      const cdp = await page.context().newCDPSession(page)
+      await cdp.send('Accessibility.enable')
+      /** 全页 AX 树里的 checkbox:[名称, 勾选态]。 */
+      const axBoxes = async () => {
+        const { nodes } = await cdp.send('Accessibility.getFullAXTree')
+        return nodes.filter((n) => n.role?.value === 'checkbox' && !n.ignored)
+          .map((n) => `${n.name?.value}=${(n.properties || []).find((q) => q.name === 'checked')?.value?.value}`)
+      }
+      const ax0 = await axBoxes()
+      check('AX1 每个待办在 AX 树里是 checkbox 且带勾选态(未勾 / 已勾)', ax0.join(',') === '完成=false,完成=true', JSON.stringify(ax0))
+      // 键盘翻转(K-11 的 Mod+Enter)→ 状态跟上
+      await page.evaluate(() => {
+        const v = window.__upage.probe.view()
+        let at = null
+        v.state.doc.descendants((n, p) => { if (at == null && n.isTextblock && n.textContent === '待办甲') at = p + 2; return at == null })
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+      })
+      await page.waitForTimeout(100)
+      await page.keyboard.press('Meta+Enter')
+      await page.waitForTimeout(200)
+      const ax1 = await axBoxes()
+      check('AX2 Mod+Enter 翻转后 AX 勾选态跟上', ax1.join(',') === '完成=true,完成=true', JSON.stringify(ax1))
+      // 读屏激活 = 程序派发 click(不走命中测试)→ 翻转并落盘
+      await page.evaluate((PM) => document.querySelectorAll(PM + ' [role=checkbox]')[1].click(), PM)
+      await page.waitForTimeout(1300)
+      const ax2 = await axBoxes()
+      const saved = await page.evaluate(() => (window.__upage.writes.at(-1) || {}).text || '')
+      check('AX3 读屏激活 checkbox → 翻转并落盘', ax2.join(',') === '完成=true,完成=false' && /\[x\] 待办甲\n[-*] \[ \] 待办乙/.test(saved), `${JSON.stringify(ax2)} saved=${JSON.stringify(saved)}`)
+      // 打字 / 新建待办:widget 不重复、不遗漏(增量维护)
+      await page.evaluate(() => {
+        const v = window.__upage.probe.view()
+        let at = null
+        v.state.doc.descendants((n, p) => { if (at == null && n.isTextblock && n.textContent === '待办乙') at = p + 1 + n.content.size; return at == null })
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+      })
+      await page.waitForTimeout(100)
+      await page.keyboard.type('续')
+      await page.keyboard.press('Enter')
+      await page.keyboard.type('丙')
+      await page.waitForTimeout(200)
+      const n = await page.evaluate((PM) => ({ boxes: document.querySelectorAll(PM + ' [role=checkbox]').length, tasks: document.querySelectorAll(PM + ' li[data-item-type="task"]').length }), PM)
+      check('AX4 打字 / 回车新建待办后 checkbox 与待办一一对应', n.boxes === 3 && n.tasks === 3, JSON.stringify(n))
+      await page.evaluate(() => window.__upage.setLocale('en'))
+      await page.waitForTimeout(200)
+      const en = await axBoxes()
+      await page.evaluate(() => window.__upage.setLocale('zh'))
+      check('AX5 名称跟界面语言(切英文 → Done)', en.length === 3 && en.every((x) => x.startsWith('Done=')), JSON.stringify(en))
+      await page.close()
+      // 只读实例(分享页形态):读屏激活不翻转、零写盘
+      const ro = await open(browser, '# T\n\n- [ ] 待办甲\n', '&uro')
+      await ro.evaluate((PM) => document.querySelector(PM + ' [role=checkbox]')?.click(), PM)
+      await ro.waitForTimeout(1000)
+      const roSt = await ro.evaluate((PM) => ({ checked: document.querySelector(PM + ' li[data-item-type="task"]')?.dataset.checked, box: document.querySelector(PM + ' [role=checkbox]')?.getAttribute('aria-checked'), writes: window.__upage.writes.length }), PM)
+      check('AX6 只读实例:checkbox 在、激活不翻转、零写盘', roSt.checked === 'false' && roSt.box === 'false' && roSt.writes === 0, JSON.stringify(roSt))
+      await ro.close()
     }
   } finally {
     await browser.close()
