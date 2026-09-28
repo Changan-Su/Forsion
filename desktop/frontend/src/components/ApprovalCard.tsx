@@ -25,6 +25,7 @@ registerMessages({
   },
   // P1-K1:审批卡来源行
   'approval.remote.caller': { zh: '来自远程会话 · {name}', en: 'From a remote session · {name}' },
+  'approval.remote.device': { zh: '来自远程会话 · 已登记设备', en: 'From a remote session · a registered device' },
   'approval.remote.account': { zh: '来自远程会话 · 账号下未识别的客户端', en: 'From a remote session · an unidentified client on your account' },
   'approval.remote.lan': { zh: '来自远程会话 · 局域网配对设备', en: 'From a remote session · a LAN-paired device' },
   'approval.remote.p2p': { zh: '来自远程会话 · 点对点直连', en: 'From a remote session · a peer-to-peer connection' },

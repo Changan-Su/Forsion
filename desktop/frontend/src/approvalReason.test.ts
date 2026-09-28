@@ -65,9 +65,19 @@ describe('审批来源 remote(P1 · K1 S12)', () => {
     expect(approvalRemoteText(undefined, t)).toBe('')
   })
 
-  it('五个来源文案 zh / en 成对,英文不含汉字,{name} 占位两边一致', async () => {
+  it('hub 验过的调用方名字清洗后为空(零宽 / 双向符号)→ 「已登记设备」,不说成「未识别的客户端」', () => {
+    const t = (k: string, v?: Record<string, unknown>): string => (v?.name ? `${k}:${v.name}` : k)
+    // 服务端 String.trim() 不剥零宽字符 → registered_name 非空;桌面 / 引擎 / 渲染层清洗后成了空串,名字一路被丢掉
+    const r = sanitizeApprovalRemote({ via: 'tunnel', callerUnit: UNIT, callerKind: 'phone', callerName: '\u200b\u200b' })
+    expect(r).toEqual({ via: 'tunnel', callerUnit: UNIT, callerKind: 'phone' })
+    expect(approvalRemoteText(r, t)).toBe('approval.remote.device')
+    expect(approvalRemoteText({ via: 'tunnel', callerUnit: UNIT, callerKind: 'desktop' }, t)).toBe('approval.remote.device')
+    expect(approvalRemoteText(sanitizeApprovalRemote({ via: 'tunnel', callerUnit: UNIT, callerKind: 'phone', callerName: '\u202e\u2066 \ufeff' }), t)).toBe('approval.remote.device')
+  })
+
+  it('六个来源文案 zh / en 成对,英文不含汉字,{name} 占位两边一致', async () => {
     await import('./components/ApprovalCard') // 文案在组件模块级 registerMessages
-    for (const k of ['approval.remote.caller', 'approval.remote.account', 'approval.remote.lan', 'approval.remote.p2p', 'approval.remote.unknown']) {
+    for (const k of ['approval.remote.caller', 'approval.remote.device', 'approval.remote.account', 'approval.remote.lan', 'approval.remote.p2p', 'approval.remote.unknown']) {
       const zh = translateFor('zh', k)
       const en = translateFor('en', k)
       expect(zh, k).not.toBe(k)

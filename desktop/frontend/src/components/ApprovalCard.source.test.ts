@@ -37,6 +37,13 @@ describe('ApprovalCard 来源行', () => {
     expect(rows[1].textContent).toBe(translateFor('zh', 'approval.why.mode', { mode: translateFor('zh', 'approval.mode.autoEdit') }))
   })
 
+  it('hub 验过的调用方、名字清洗后为空 → 「已登记设备」,不说成「未识别的客户端」', async () => {
+    await render({ ...base, remote: { via: 'tunnel', callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone' } })
+    expect(source()).toBe(translateFor('zh', 'approval.remote.device'))
+    expect(source()).toBe('来自远程会话 · 已登记设备')
+    expect(source()).not.toBe(translateFor('zh', 'approval.remote.account'))
+  })
+
   it('没有调用方 → 按来路;本机 run(无 remote)→ 不显示', async () => {
     await render({ ...base, remote: { via: 'tunnel' } })
     expect(source()).toBe(translateFor('zh', 'approval.remote.account'))

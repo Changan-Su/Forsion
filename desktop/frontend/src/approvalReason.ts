@@ -66,11 +66,14 @@ export function sanitizeApprovalRemote(raw: unknown): ApprovalRemote | undefined
   return out
 }
 
-/** 审批卡的来源行:有调用方名 → 「来自远程会话 · 名字」;否则按来路。remote 缺席(本机 run)→ ''(不显示)。
+/** 审批卡的来源行:hub 验过的调用方(callerUnit 在)→ 「来自远程会话 · 名字」,名字清洗后为空 → 「已登记设备」;
+ *  否则按来路(隧道无调用方 = 账号下未识别的客户端)。remote 缺席(本机 run)→ ''(不显示)。
+ *  判「是不是已验证设备」看 callerUnit 不看 callerName:登记名是自选串,可以只由零宽 / 双向符号组成 —— 服务端 trim()
+ *  留着它们,桌面 / 引擎 / 渲染层的清洗把它剥成空串,名字一路被丢掉;按名字判就把验过的设备说成了「未识别」。
  *  名字是不可信串:调用方只许放进 React 文本节点,不进 dangerouslySetInnerHTML。 */
 export function approvalRemoteText(r: ApprovalRemote | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
   if (!r) return ''
-  if (r.callerName) return t('approval.remote.caller', { name: r.callerName })
+  if (r.callerUnit) return r.callerName ? t('approval.remote.caller', { name: r.callerName }) : t('approval.remote.device')
   if (r.via === 'tunnel') return t('approval.remote.account')
   if (r.via === 'lan') return t('approval.remote.lan')
   if (r.via === 'p2p') return t('approval.remote.p2p')
