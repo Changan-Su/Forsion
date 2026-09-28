@@ -145,6 +145,23 @@ describe('RemoteSessionsSettings', () => {
     expect(q('[data-rs-fullauto-warn]')!.textContent).toContain('审批不再保证来自真人')
   })
 
+  it('P1-G5 方案 C:Linux / Windows 在上限档旁如实写明手机批准的命令能改本机 Forsion 设置;macOS 有写保护,不画', async () => {
+    await mount()
+    expect(q('[data-rs-shell-note]')).toBeNull()
+    await act(async () => root.unmount())
+    for (const [platform, needle] of [['linux', '仅工作区可写'], ['win32', '暂时没有能挡住这类修改的本地沙箱']] as const) {
+      ;(window.tangu as Record<string, unknown>).platform = platform
+      root = createRoot(host)
+      await mount()
+      const note = q('[data-rs-shell-note]')
+      expect(note?.getAttribute('data-rs-shell-note'), platform).toBe(platform)
+      expect(note!.textContent).toContain('远程会话最高审批档')
+      expect(note!.textContent).toContain(needle)
+      await act(async () => root.unmount())
+    }
+    root = createRoot(host)
+  })
+
   it('信任列表:账号行(迁移预置标注)+ 设备行(本机记下的名字)+ 等待确认;撤销调主进程;空态', async () => {
     view = makeView({
       trusted: [
