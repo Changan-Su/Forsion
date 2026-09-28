@@ -7,8 +7,8 @@ import { prepareHostCommand } from '../sandbox/hostSandbox.js';
 import { engineGitBlocked, gitExecutable, GIT_SCRUBBED_ENV } from './gitRepoPrograms.js';
 import { runBoundedProcess } from '../utils/boundedProcess.js';
 import type { ToolContext } from '../tools/toolTypes.js';
-/** remote / runId:远程污点 run 的 git 现场收集也要套写保护(macOS 宿主沙箱关时经 prepareHostCommand 包 Seatbelt)——
- *  被批准的远程命令能在工作区仓库摆 clean filter,引擎自己的 `git status` 会执行它(P1-G5 评审)。 */
+/** remote / runId:远程污点(prepareHostCommand 据此套写保护)。git 现场收集方案 B 起不看它 —— runGit 每条都 writeProtectShell
+ *  (被批准的远程命令能在工作区仓库摆 clean filter,引擎自己的 `git status` 会执行它;P1-G5 评审 → 方案 B)。 */
 export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal' | 'remote' | 'runId' | 'writeProtectShell'>;
 import { renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 
