@@ -94,8 +94,10 @@ const CASES = [
   { id: 'i17.kbd_nested_edited', bucket: V, md: `${M} 按 <kbd>a<kbd>b</kbd>c</kbd> 与 <kbd>K</kbd>\n` },
   { id: 'i17.sub_nested_in_strong_edited', bucket: V, md: `${M} x<sub>1 **<sub>2</sub>** 3</sub> 与 y<sup>2<sup>n</sup></sup>\n` },
   { id: 'i17.tags_upper_attr_edited', bucket: V, md: `${M} <KBD>Up</KBD> 与 <kbd class="k">A</kbd>\n` },
-  // `==` 装饰不碰存量 `<mark>`(拍板 #11)。裸 `<mark>` 被写成 `style="background:"` 是另一条(I-16e,不在本包),这里用带色的。
+  // `==` 装饰不碰存量 `<mark>`(拍板 #11)。
   { id: 'i17.mark_untouched_edited', bucket: V, md: `${M} some <mark style="background:#fef3a1">hi</mark> and ==hl== text\n` },
+  // I-16e:被编辑的块里的裸 `<mark>` 写回裸 `<mark>`(修前 `<mark style="background:">`,重开读不回来、高亮永久丢失)。
+  { id: 'i16e.bare_mark_edited', bucket: V, md: `${M} m: <mark>高亮</mark> 与 ==hl== 完\n` },
   { id: 'i17.highlight_list_quote_edited', bucket: V, md: `- ==项== ${M}\n\n> ==引用== 行\n` },
   { id: 'i13.explicit_autolink_edited', bucket: W, why: 'I-13:句中显式 `<url>` 与裸 URL 解析成同一个链接,编辑该块时统一落裸 URL(与整行 `<url>` 同一取舍,links.ts)', md: `${M} see <https://x.com/a> ok\n`, golden: `${M}Z see https://x.com/a ok\n` },
 
