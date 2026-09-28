@@ -370,6 +370,16 @@ export function focusStructuralPrefix(view: EditorView, deleteLast = false): boo
   if (!syncTextblockStartFromDOM(view)) return false
   const info = prefixInfo(view.state)
   if (!info) return false
+  // 空块的退格 = 一步脱壳成正文(K-20,Notion 同;再按一下才与上一块合并)。空块没有正文可「逐字改源码」,
+  // 走字面还原那条路要按 3–7 下(`- [ ]` 还会中途被重新渲染成 bullet)。非空块仍是 T28 的字面还原。
+  // 引用只在它整只就这一个空段时才脱壳;多段引用里的空段照旧走 K11 的字面化,不把引用劈成两半。
+  if (deleteLast && view.state.selection.$from.parent.content.size === 0) {
+    const $from = view.state.selection.$from
+    const qd = info.kind === 'quote' ? depthOf($from, 'blockquote') : null
+    if (info.kind !== 'quote' || (qd !== null && $from.node(qd).childCount === 1)) {
+      if (applyTrigger(view, { kind: 'text' }, null)) return true
+    }
+  }
   // 显式 openAt 既负责展开列表等结构，也保护标题 input 跨过 PM→input 的短暂焦点缝隙。
   view.dispatch(view.state.tr.setMeta(key, { openAt: info.widgetPos }))
   const input = view.dom.querySelector<HTMLInputElement>(

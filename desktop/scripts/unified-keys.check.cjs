@@ -761,6 +761,41 @@ async function main() {
         await page.close()
       }
     }
+
+    // K-20:空的待办 / 编号 / 列表 / 标题 / 引用,退格一下就脱壳成正文,第二下与上一块合并(Notion 同)。
+    //       非空块仍是 T28 的字面还原(对照)。
+    if (want('K20')) {
+      for (const [name, md, typed, one] of [
+        ['空列表项', '- 甲\n', '\n', 'bullet_list / list_item / paragraph:"甲" / paragraph:""'],
+        ['空待办', '- [ ] 甲\n', '\n', 'bullet_list / list_item[ ] / paragraph:"甲" / paragraph:""'],
+        ['空编号', '1. 甲\n', '\n', 'ordered_list / list_item / paragraph:"甲" / paragraph:""'],
+        ['空 H2', '甲\n', '\n## ', 'paragraph:"甲" / paragraph:""'],
+        ['空引用', '甲\n', '\n| ', 'paragraph:"甲" / paragraph:""'],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, '甲')
+        await typeSeq(page, typed)
+        await page.waitForTimeout(150)
+        const s0 = (await shape(page)).replace(/ \/ +/g, ' / ')
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const s1 = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const a1 = await page.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix'))
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const s2 = (await shape(page)).replace(/ \/ +/g, ' / ')
+        check(`K20 ${name}:退格一下转正文、两下并回上一块`, s1 === one && !a1 && s2 === one.replace(/ \/ paragraph:""$/, ''), `${s0} → ${s1} → ${s2}`)
+        await page.close()
+      }
+      const page = await open(browser, '前段。\n\n- 乙项\n')
+      await caretAtText(page, '乙项', 0)
+      await page.waitForTimeout(150)
+      await page.keyboard.press('Backspace')
+      await page.waitForTimeout(150)
+      const s = await shape(page)
+      check('K20 非空列表项行首退格仍是字面还原(T28 对照)', s === 'paragraph:"前段。" / paragraph:"-乙项"', s)
+      await page.close()
+    }
   } finally {
     await browser.close()
   }
