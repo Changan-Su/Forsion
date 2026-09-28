@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { parseFmEntries, fmEntriesToYaml, draftToCommit } from './amadeusProperties'
+import { patchYamlText } from '@amadeus-shared/db/pageFrontmatter'
 
 const FM = [
   'status: draft',
@@ -31,6 +32,12 @@ describe('属性面板模型:隐藏键经 commit 重建存活', () => {
     const round = parseYaml(out) as Record<string, unknown>
     expect(round.status).toBeUndefined()
     expect(round.canvas).toContain('"b1"')
+  })
+
+  it('行级提交(D-20):编辑别的键 → 隐藏的 canvas 行字节不变', () => {
+    const out = patchYamlText(FM, { status: 'done' })!
+    expect(out).toBe(FM.replace('status: draft', 'status: done'))
+    expect(patchYamlText(FM, { status: undefined })).toBe(FM.replace('status: draft\n', ''))
   })
 
   it('编译器保留键仍被剔除;全删返回空串', () => {

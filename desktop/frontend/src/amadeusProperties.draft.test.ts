@@ -240,3 +240,42 @@ describe('属性面板受控草稿(C-01)', () => {
     expect(commits).toEqual(['added: x\nstatus: todo\ncount: 9'])
   })
 })
+
+// D-20(评审 2026-09-27):提交是行级的 —— 只改被编辑的那一个键的行,别的键原文逐字;多行值用多行框,换行不被压扁。
+// 负对照:面板 commit 改回 fmEntriesToYaml 整块重建 → 前两例红。真浏览器版:评审探针 verify-integrity-4/props.cjs。
+describe('属性面板行级提交(D-20)', () => {
+  const FM = 'title: "Hello: world"\n# 注释\ntags: [alpha, beta]\ndesc: |\n  multi\n  line\nzip: 007\nversion: 1.10\nquoted: \'single\''
+
+  it('改一个值:别的键(注释、007、1.10、flow、多行块)逐字', () => {
+    render(FM)
+    openPanel()
+    const el = valueInputs().find((i) => i.value === 'single')!
+    act(() => { el.focus() })
+    typeInto(el, 'changed')
+    act(() => { el.blur() })
+    expect(commits).toEqual([FM.replace("quoted: 'single'", 'quoted: changed')])
+  })
+
+  it('改键名:只换键,值原文逐字', () => {
+    render(FM)
+    openPanel()
+    const key = keyInputs().find((i) => i.value === 'zip')!
+    act(() => { key.focus() })
+    typeInto(key, 'postcode')
+    act(() => { key.blur() })
+    expect(commits).toEqual([FM.replace('zip: 007', 'postcode: 007')])
+  })
+
+  it('多行字符串是多行框:白点零写;改一行换行照留', () => {
+    render(FM)
+    openPanel()
+    const ta = host.querySelector<HTMLTextAreaElement>('.amx-prop-row textarea.amx-prop-input')!
+    expect(ta.value).toBe('multi\nline\n')
+    focusBlur(ta)
+    expect(commits).toEqual([])
+    act(() => { ta.focus() })
+    typeInto(ta, 'multi\nline 2\n')
+    act(() => { ta.blur() })
+    expect(commits).toEqual([FM.replace('  line\n', '  line 2\n')])
+  })
+})

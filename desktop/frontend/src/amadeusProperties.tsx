@@ -1,11 +1,13 @@
 /** 笔记属性面板(Notion properties / Obsidian properties):编辑 frontmatter 里除 amadeus_* 外的键值。
- *  数据源 = manifest.fmExtra(编译器原文保留);面板编辑提交时经 yaml 重排(注释在此时丢失——
- *  只在源码模式改则逐字保留)。嵌套结构只读展示,请去源码模式编辑。
+ *  数据源 = manifest.fmExtra(编译器原文保留)。**提交是行级的**(评审 2026-09-27 D-20):改一个键 = 只重写那个键的
+ *  行(pageFrontmatter.patchYamlText / renameYamlKey),别的键的原文(`007`、`1.10`、20 位整数、`0x1F`、注释、
+ *  flow 写法、多行块)逐字不动;旧版整块 parse→stringify,改一个键就把别的键改值、注释丢光。多行字符串用多行框编辑,
+ *  换行不被单行框压扁。嵌套结构只读展示,请去源码模式编辑。
  *
  *  插件文件类型的 fm 键(如画布的 `canvas` 几何键,FileTypeContribution.fmKeys 声明):
- *  **只在展示层隐藏**,模型(entries)永远持全量 —— commit 走全量列表,隐藏键就结构性地
- *  不可能被抹掉。⚠️ 千万别改成「先 filter 再 commit」:那会让任意一次属性编辑静默删掉
- *  插件数据(毁档级,2026-08-14 评审 P0)。契约仪器:amadeusProperties.model.test.ts。
+ *  **只在展示层隐藏**,模型(entries)永远持全量 —— 行级提交根本不碰没改的键;退回整块重建时(文本解析不了,
+ *  entries 模式下不会发生)也走全量列表,隐藏键就结构性地不可能被抹掉。⚠️ 千万别改成「先 filter 再 commit」:那会让
+ *  任意一次属性编辑静默删掉插件数据(毁档级,2026-08-14 评审 P0)。契约仪器:amadeusProperties.model.test.ts。
  *  该不变式只覆盖 entries 模式;坏 YAML 的原文模式刻意全透明(行级剥离在坏 YAML 上不可靠),
  *  插件文件在原文模式顶部给警示行。
  *
@@ -26,6 +28,7 @@ import { Plus, X } from 'lucide-react'
 import { usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { matchFileType } from '@amadeus/plugins/pluginStore'
 import { askString } from '@amadeus/components/askString'
+import { patchYamlText, renameYamlKey } from '@amadeus-shared/db/pageFrontmatter'
 import { registerMessages, useI18n } from './i18n'
 
 registerMessages({
@@ -157,9 +160,10 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
     if (onCommit) onCommit(yaml)
     else scoped.getState().setFmExtra(yaml)
   }
-  /** ⚠️ 只许喂**全量** entries(含隐藏的插件键)—— 见文件头 P0 注。 */
-  const commit = (entries: Entry[]): void => {
-    commitYaml(fmEntriesToYaml(entries))
+  /** 行级提交(D-20):text = 只改了被编辑那个键的新全文;null(解析不了,entries 模式下不会)→ 退回整块重建。
+   *  ⚠️ fallback 只许喂**全量** entries(含隐藏的插件键)—— 见文件头 P0 注。 */
+  const commit = (text: string | null, fallback: Entry[]): void => {
+    commitYaml(text ?? fmEntriesToYaml(fallback))
   }
 
   const addProp = async (): Promise<void> => {
@@ -168,7 +172,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
     if (/^amadeus_/.test(name)) { window.alert(t('amprops.reservedKey')); return }
     if (hiddenKeys.has(name)) { window.alert(t('amprops.pluginManaged')); return }
     if (parsed.entries.some((e) => e.key === name)) return
-    commit([...parsed.entries, { key: name, value: '' }])
+    commit(patchYamlText(fmExtra, { [name]: '' }), [...parsed.entries, { key: name, value: '' }])
     setOpen(true)
   }
 
@@ -202,11 +206,11 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
                     || hiddenKeys.has(k)
                     || parsed.entries.some((x, j) => j !== e.idx && x.key === k)
                   if (!k || invalid) return
-                  commit(parsed.entries.map((x, j) => (j === e.idx ? { ...x, key: k } : x)))
+                  commit(renameYamlKey(fmExtra, e.key, k), parsed.entries.map((x, j) => (j === e.idx ? { ...x, key: k } : x)))
                 }}
               />
-              <ValueEditor value={e.value} onCommit={(v) => commit(parsed.entries.map((x, j) => (j === e.idx ? { ...x, value: v } : x)))} />
-              <button className="amx-prop-del" title={t('amprops.delete')} onClick={() => commit(parsed.entries.filter((_, j) => j !== e.idx))}><X size={12} /></button>
+              <ValueEditor value={e.value} onCommit={(v) => commit(patchYamlText(fmExtra, { [e.key]: v }), parsed.entries.map((x, j) => (j === e.idx ? { ...x, value: v } : x)))} />
+              <button className="amx-prop-del" title={t('amprops.delete')} onClick={() => commit(patchYamlText(fmExtra, { [e.key]: undefined }), parsed.entries.filter((_, j) => j !== e.idx))}><X size={12} /></button>
             </div>
           ))}
         </div>
@@ -301,28 +305,29 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
     return <DateValueInput value={value} onCommit={onCommit} />
   }
   if (typeof value === 'string' || value == null) {
-    return <TextValueInput current={value ?? ''} onCommit={onCommit} />
+    // 多行字符串(`desc: |` 之类)用多行框:单行框会把换行吃掉,一改就把整段压成一行(D-20)
+    return <TextValueInput current={value ?? ''} multiline={typeof value === 'string' && value.includes('\n')} onCommit={onCommit} />
   }
   return <span className="amx-prop-nested" title={t('amprops.nestedHint')}>{stringifyYaml(value).trimEnd()}</span>
 }
 
-/** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。 */
-function TextValueInput({ current, norm, onCommit }: { current: string; norm?: (s: string) => string; onCommit: (v: string) => void }) {
+/** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。multiline = 多行字符串,换成多行框(D-20)。 */
+function TextValueInput({ current, norm, multiline = false, onCommit }: { current: string; norm?: (s: string) => string; multiline?: boolean; onCommit: (v: string) => void }) {
   const { t } = useI18n()
   const f = useFieldDraft(current, 'conflict', norm)
-  return (
-    <input
-      className={`amx-prop-input${f.conflict ? ' amx-prop-conflict' : ''}`}
-      value={f.shown}
-      title={f.conflict ? t('amprops.conflict', { v: current }) : undefined}
-      onChange={(e) => f.change(e.target.value)}
-      onKeyDown={f.onEscape}
-      onBlur={() => {
-        const next = f.settle()
-        if (next !== null) onCommit(next)
-      }}
-    />
-  )
+  const props = {
+    className: `amx-prop-input${multiline ? ' amx-prop-multiline' : ''}${f.conflict ? ' amx-prop-conflict' : ''}`,
+    value: f.shown,
+    title: f.conflict ? t('amprops.conflict', { v: current }) : undefined,
+    onKeyDown: f.onEscape,
+    onBlur: () => {
+      const next = f.settle()
+      if (next !== null) onCommit(next)
+    },
+  }
+  return multiline
+    ? <textarea {...props} rows={Math.min(8, f.shown.replace(/\n$/, '').split('\n').length)} spellCheck={false} onChange={(e) => f.change(e.target.value)} />
+    : <input {...props} onChange={(e) => f.change(e.target.value)} />
 }
 
 /** 日期框:选中即提交(原语义)。受控显示 prop;只在键盘分段输入的「半成品」态(value 为 '')持草稿 ——
