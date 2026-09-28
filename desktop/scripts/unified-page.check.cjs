@@ -730,6 +730,51 @@ async function main() {
     await pg.close()
   }
 
+  // P12d:正文首行回标题(评审 K-24:标题 → 正文有,反方向没有 —— 首段首行按 ↑、段首按 ← 哪儿也去不了)。
+  //  a 首段折成多行:从最后一行起按 ↑,还没到第一行之前都在正文(按视觉行判),第一行再按 ↑ → 焦点进标题、光标在标题末尾,正文不变;
+  //  b 首段段首按 ← → 进标题;c 首块是列表时首行 ↑ 同样进标题;d 第二段首行 ↑ 只是回到上一段(不跳标题)。
+  //  负对照:摘掉 titleNav 插件 → a、b、c 红(已实跑)。
+  {
+    const longPara = '第一段文字很长很长,'.repeat(12)
+    const run = async (md, place, keys) => {
+      const pg = await browser.newPage({ locale: 'zh-CN' })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM, { timeout: 20000 })
+      await pg.waitForTimeout(400)
+      const pt = await pg.evaluate(([s, place]) => {
+        const el = document.querySelector(s).children[place.block]
+        const r = document.createRange(); r.selectNodeContents(el); const rs = [...r.getClientRects()]
+        const line = place.line === 'last' ? rs[rs.length - 1] : rs[0]
+        return { x: line.left + 30, y: line.top + line.height / 2, lines: new Set(rs.map((x) => Math.round(x.top))).size }
+      }, [PM, place])
+      await pg.mouse.click(pt.x, pt.y)
+      await pg.waitForTimeout(200)
+      const out = []
+      for (const k of (typeof keys === 'function' ? keys(pt.lines) : keys)) {
+        await pg.keyboard.press(k)
+        await pg.waitForTimeout(150)
+        out.push(await pg.evaluate(() => {
+          const t = document.querySelector('.amx-title-input')
+          const inTitle = document.activeElement === t
+          return { inTitle, caret: inTitle ? t.selectionStart : null, titleLen: t.value.length, sel: window.__upage.probe.view().state.selection.$from.parent.textContent.slice(0, 6) }
+        }))
+      }
+      const doc = await pg.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+      await pg.close()
+      return { out, doc, lines: pt.lines }
+    }
+    const a = await run(`${longPara}\n\n第二段。\n`, { block: 0, line: 'last' }, (n) => Array(n).fill('ArrowUp'))
+    const b = await run('第一段文字。\n\n第二段。\n', { block: 0, line: 'first' }, ['Meta+ArrowLeft', 'ArrowLeft'])
+    const c = await run('- 项一\n- 项二\n', { block: 0, line: 'first' }, ['ArrowUp'])
+    const d = await run('第一段文字。\n\n第二段。\n', { block: 1, line: 'first' }, ['ArrowUp'])
+    const aLast = a.out[a.out.length - 1]
+    record('P12d 正文首行 ↑ / 首段段首 ← 回标题(光标在标题末尾、正文不变);折行首段按视觉行判;非首块照常(K-24)',
+      a.lines >= 2 && a.out.slice(0, -1).every((x) => !x.inTitle) && aLast.inTitle && aLast.caret === aLast.titleLen && a.doc.startsWith('第一段文字很长') &&
+        b.out[1].inTitle && c.out[0].inTitle && !d.out[0].inTitle && d.out[0].sel.startsWith('第一段'),
+      JSON.stringify({ a: { lines: a.lines, out: a.out }, b: b.out, c: c.out, d: d.out }))
+  }
+
   // P13:Tab 缩进层(AFFiNE 对齐,md 可表示子集)。
   //  a 列表第二项 Tab=嵌套 / Shift-Tab=还原  b 列表后段落 Tab=收进最后一项
   //  c code_block 内 Tab=插两空格  d 无处可缩 Tab=吞掉(焦点绝不放走)

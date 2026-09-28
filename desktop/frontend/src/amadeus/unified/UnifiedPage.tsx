@@ -51,6 +51,7 @@ import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toast
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
+import { titleNavPlugins } from './titleNav'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
@@ -858,8 +859,9 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   onRename: (next: string, focusKind: 'enter' | 'move' | null) => Promise<boolean>
   /** 'enter' = 回车确定标题(首块非空段则顶插空白首行);'move' = 方向键滑入正文(只落光标不插行)。 */
   onEnterBody: (kind: 'enter' | 'move') => void
-  /** 新建流:挂载即聚焦标题(认领 pageStore 的一次性聚焦请求后由父级置真)。 */
-  focusSignal: boolean
+  /** 聚焦标题(光标落到末尾)的请求计数:新建流挂载即聚焦(认领 pageStore 的一次性请求)、正文首行按 ↑ / ← 回标题(K-24)
+   *  各加一;0 = 没有请求。计数而不是布尔:同一实例里可以反复触发。 */
+  focusSignal: number
 }): ReactElement {
   const { t } = useI18n()
   const spell = useNotesSpellcheck() // 标题与正文同一个拼写检查开关(G4-07)
@@ -1423,6 +1425,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...listFoldPlugins,
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       ...createStatsTicker(), // 状态栏字 / 词 / 选区计数的刷新节拍(C-22)
+      ...titleNavPlugins(() => titleUpRef.current()), // 正文首行 ↑ / 首段段首 ← 回标题(K-24)
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -2391,11 +2394,18 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // 新建流:createPageInFolder 落聚焦请求 → 挂载即聚焦标题(Notion 式先命名)。
   // 信号住模块级而非本 scope:新建的落点面板由 openNote 现算,创建时那份 store 未必是这一份。
-  const [titleFocus, setTitleFocus] = useState(false)
+  const [titleFocus, setTitleFocus] = useState(0)
   useEffect(() => {
-    if (claimTitleFocus(path)) setTitleFocus(true)
+    if (claimTitleFocus(path)) setTitleFocus((n) => n + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
+  /** 正文首行 ↑ / 首段段首 ← 回标题(K-24,titleNav 插件经它现读):画布满铺没有标题、只读标题不可编辑 → 不接。 */
+  const titleUpRef = useRef<() => boolean>(() => false)
+  titleUpRef.current = () => {
+    if (fullCanvas || readOnly) return false
+    setTitleFocus((n) => n + 1)
+    return true
+  }
 
   /** D-17「接着写」:新实例的编辑器建好、已聚焦到文首时调用。盘上正文就是旧实例写下的那份 → 旧 doc 原样接过来
    *  (含没进盘的顶插空段与重建窗口里打的字;多出的字随后走正常防抖保存落盘),再把选区放回原处。
