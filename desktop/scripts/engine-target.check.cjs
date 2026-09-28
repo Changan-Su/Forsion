@@ -248,8 +248,10 @@ async function main() {
       const s = window.__forsionStore.getState()
       return { ids: s.sessions.map((x) => x.id), conn: s.connState, models: s.modelsResp?.models?.map((m) => m.id), agents: s.agentDefs.map((a) => a.slug), homeDir: s.homeDir, ws: s.defaultWsDir, health: window.__forsionEngineTargets.health() }
     })
-    // S4(R-17):列表只拉本端,不把那台的整张列表并进 appStore.sessions(设备分组归 K7);焦点只管「新会话建在哪」
-    check('切焦点:会话列表仍只列本端(不并进那台的整张列表)', JSON.stringify(b.ids) === '["home-1"]' && !world.hub.seen.some((r) => r.url.includes('/engine/agent/sessions?archived')), JSON.stringify(b.ids))
+    // S4(R-17):列表只拉本端,不把那台的整张列表并进 appStore.sessions(设备分组归 K7);焦点只管「新会话建在哪」。
+    // P1-K7a 起手机侧栏的「我的电脑」分组会经隧道拉那台的列表(只进 deviceSessionsStore,打开哪条才注入哪条)—— 所以这里不再断言
+    // 「没有 /engine/agent/sessions 请求」,只断言 appStore.sessions 里没有那台自己的会话(mac-1)。
+    check('切焦点:会话列表仍只列本端(不并进那台的整张列表)', JSON.stringify(b.ids) === '["home-1"]', JSON.stringify(b.ids))
     check('切焦点:连上了,健康 ready', b.conn === 'ok' && b.health[`unit:${U}`]?.state === 'ready', `${b.conn} ${JSON.stringify(b.health)}`)
     check('切焦点:目录(模型 / Agent)是那台的', JSON.stringify(b.models) === '["mac-model"]' && b.agents.includes('mac-only'), `${JSON.stringify(b.models)} ${JSON.stringify(b.agents)}`)
     await page.waitForFunction(() => window.__forsionStore.getState().defaultWsDir === '/Users/studio/Forsion', null, { timeout: 10_000 }).catch(() => {})

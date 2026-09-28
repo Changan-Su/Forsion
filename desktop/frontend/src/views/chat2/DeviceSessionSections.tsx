@@ -83,11 +83,12 @@ export function useDeviceSessionsLive(): void {
   useEffect(() => {
     if (!runLocationsAvailable()) return
     const refresh = (): void => { void useDeviceSessions.getState().refresh() }
+    const tick = (): void => { void useDeviceSessions.getState().refresh({ periodic: true }) } // 定时的那一拍不重试终局态(R-32)
     refresh()
     let timer: ReturnType<typeof setInterval> | null = null
     const arm = (): void => {
       if (timer) { clearInterval(timer); timer = null }
-      if (typeof document === 'undefined' || document.visibilityState === 'visible') timer = setInterval(refresh, 30_000)
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') timer = setInterval(tick, 30_000)
     }
     const onVis = (): void => { if (document.visibilityState === 'visible') refresh(); arm() }
     arm()

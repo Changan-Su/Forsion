@@ -164,6 +164,19 @@ describe('per-device lists and status (D6)', () => {
     expect(statusOf(MAC)).toBe('unreachable')
   })
 
+  it('R-32: the periodic tick does not retry a computer whose last probe was terminal (caller identity); a user-driven refresh does', async () => {
+    roster = [unit(MAC)]
+    handler = () => Response.json({ code: 'CALLER_UNAVAILABLE' }, { status: 503 })
+    await S.useDeviceSessions.getState().refresh()
+    expect(calls).toHaveLength(1)
+    handler = () => Response.json({ sessions: [] })
+    await S.useDeviceSessions.getState().refresh({ force: true, periodic: true })
+    expect(calls).toHaveLength(1)
+    await S.useDeviceSessions.getState().refresh({ force: true })
+    expect(calls).toHaveLength(2)
+    expect(statusOf(MAC)).toBe('ready')
+  })
+
   it('refused create is sticky (remote sessions off shows even though listing is 200)', async () => {
     roster = [unit(MAC)]
     handler = () => Response.json({ sessions: [] })

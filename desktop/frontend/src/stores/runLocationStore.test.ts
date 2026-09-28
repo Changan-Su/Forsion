@@ -54,6 +54,7 @@ beforeEach(() => {
   D.useDeviceSessions.setState({ units: null, byUnit: {}, refreshedAt: 0, refresh: async () => {} })
   M.resetDeviceMarks()
   R.useRunLocation.setState({ draftSeq: 0, explicitSeq: null, reconciledSeq: null, explicitPending: false })
+  R.resetRunLocationForTests()
 })
 afterEach(() => { vi.unstubAllGlobals() })
 
@@ -117,6 +118,17 @@ describe('U3: the remembered pick applies to a new draft only when that computer
     await refreshed(unit())
     expect(R.rememberedRunLocation()).toEqual(MAC_REF)
     expect(T.focusRef()).toEqual(MAC_REF)
+  })
+})
+
+describe('does not fight focus changes it did not make', () => {
+  it('a direct setFocusTarget (e.g. device removed → home, or another caller) counts as chosen for that draft', async () => {
+    await R.setDraftLocation(MAC_REF, { explicit: true })
+    await refreshed(unit())
+    fakeApp.setState({ activeId: 's-open' })
+    await T.setFocusTarget({ kind: 'home' }) // 有会话开着:refocus 回到空白 = 新一代草稿,且这一代是「别人切的」
+    await refreshed(unit())
+    expect(T.focusRef()).toEqual({ kind: 'home' })
   })
 })
 

@@ -10,13 +10,14 @@
  *   - 每份新草稿(activeId 从某个会话回到空白)**对账一次**:记住的是某台电脑且它此刻 ready → 焦点切过去;否则 → 云端。
  *     状态还是 checking(名册 / 探针没回来)就等下一轮刷新再对。用户在这份草稿里亲手选过 → 不对账(亲手选的永远赢)。
  *   - 一份草稿最多自动切一次:refocus 会清草稿的项目 / 模型选择,不能随 30s 的刷新来回跳。
- * 没有「记住」的老用户(K8 时代焦点已落盘成某台电脑)→ 把那份焦点当作记忆迁过来。
+ * 没有「记住」的老用户(K8 时代焦点已落盘成某台电脑)→ 本页第一次对账时把那份焦点当作记忆迁过来(只这一次)。
+ * 不是对账切的焦点(亲手选、设备被移除时回落云端、别的代码直接 setFocusTarget)一律当作「这份草稿已经选定」,对账不跟它抢。
  *
  * 选择器本身(K8 的 UnitsSheet「在哪运行」,含首次确认流程)由宿主经 installRunLocationChooser 装进来;共享渲染层只画入口。
  */
 import { create } from 'zustand'
 import { forsionAccountId } from '../../../shared/forsionAccount'
-import { cloudApiBase, focusRef, sameRef, setFocusTarget } from '../services/engine/targets'
+import { cloudApiBase, focusRef, onFocusChange, sameRef, setFocusTarget } from '../services/engine/targets'
 import { formatRunLocation, HOME, parseRunLocation, type RunLocation } from '../services/runLocation'
 import { runLocationsAvailable } from '../features/runtime'
 import { useApp } from './appStore'
@@ -90,6 +91,11 @@ export async function setDraftLocation(loc: RunLocation, opts: { explicit: boole
  * 对账(见文件头 U3)。只在空白草稿、这份草稿没被亲手选过、也还没对过账时动;名册 / 状态还没到就等下一轮。
  * 返回 true = 这一轮对完了(切了或不必切)。
  */
+/** 本页是否已经做过「K8 时代落盘焦点 → 记忆」的迁移判断(只在第一次对账时做)。 */
+let migrationChecked = false
+/** 对账自己在切焦点(焦点订阅据此区分「对账切的」与「别人切的」)。 */
+let reconciling = false
+
 export function reconcileDraftLocation(): boolean {
   if (!runLocationsAvailable()) return false
   const st = useRunLocation.getState()
@@ -97,7 +103,10 @@ export function reconcileDraftLocation(): boolean {
   if (st.explicitPending || st.explicitSeq === st.draftSeq || st.reconciledSeq === st.draftSeq) return false
   const focus = focusRef()
   let wanted = rememberedRunLocation()
-  if (wanted === null && focus.kind === 'unit') { wanted = focus; remember(focus) } // K8 时代落盘的焦点 = 当时亲手选的
+  if (!migrationChecked) {
+    migrationChecked = true
+    if (wanted === null && focus.kind === 'unit') { wanted = focus; remember(focus) } // K8 时代落盘的焦点 = 当时亲手选的
+  }
   let want: RunLocation = HOME
   let name: string | null = null
   if (wanted?.kind === 'unit') {
@@ -110,9 +119,27 @@ export function reconcileDraftLocation(): boolean {
     }
   }
   useRunLocation.setState({ reconciledSeq: st.draftSeq })
-  if (!sameRef(want, focus)) void setFocusTarget(want, { name }).catch(() => {})
+  if (!sameRef(want, focus)) {
+    // 焦点订阅在 setFocusTarget 的同步段里触发:标记这一段是对账自己切的
+    reconciling = true
+    let p: Promise<void>
+    try { p = setFocusTarget(want, { name }) } finally { reconciling = false }
+    void p.catch(() => {})
+  }
   return true
 }
+
+/** @internal 测试用:重置本页的迁移判断。 */
+export function resetRunLocationForTests(): void {
+  migrationChecked = false
+}
+
+// 不是对账切的焦点 = 这份草稿已经选定(见文件头)。有会话开着时 refocus 会回到空白 = 新的一代草稿,所以记在下一代上。
+onFocusChange(() => {
+  if (reconciling) return
+  const st = useRunLocation.getState()
+  useRunLocation.setState({ explicitSeq: useApp.getState().activeId ? st.draftSeq + 1 : st.draftSeq })
+})
 
 /** 设备状态多新才能拿来直接对账(再旧就先刷新一轮,刷新完成的订阅再对):免得拿 30s 前的「离线」把刚上线的电脑判成不可用。 */
 export const RECONCILE_FRESH_MS = 10_000

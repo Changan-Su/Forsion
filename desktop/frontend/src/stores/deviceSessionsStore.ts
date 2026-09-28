@@ -22,6 +22,7 @@ import { bindSession, bindingConflict, engineFetch, isUnitIdShape, locationOf, n
 import { describeDevice, statusFromError, type DeviceStatus, type ProbeResult, type RefusalDetail } from '../services/deviceStatus'
 import { noteDeviceProbe, probeOfError, resetDeviceMarks, useDeviceMarks } from '../services/deviceMarks'
 import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
+import { classify } from '../services/engine/health'
 import { getSessionDetail, updateSession } from '../services/backendService'
 import { AGENT_APP_ID } from '../services/agentRunService'
 
@@ -50,7 +51,9 @@ interface DeviceSessionsState {
   /** 最近一次整轮刷新完成的时刻(runLocationStore 订阅它做「默认位置」的对账)。 */
   refreshedAt: number
   refreshRoster(): Promise<UnitInfo[] | null>
-  refresh(opts?: { force?: boolean }): Promise<void>
+  /** periodic = 前台 30s 的定时刷新:上次拉到的是终局态(调用方身份取不到 / 设备已移除 / 凭据被拒)的那台不再自动打(R-32),
+   *  等用户动作(开侧栏 / 回前台 / 开选择器)再试。 */
+  refresh(opts?: { force?: boolean; periodic?: boolean }): Promise<void>
   reset(): void
 }
 
@@ -122,7 +125,7 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
     const gen = get().gen
     const units = await get().refreshRoster()
     if (!units || gen !== get().gen) return
-    await Promise.all(units.map((u) => fetchDevice(u, gen, !!opts.force)))
+    await Promise.all(units.map((u) => fetchDevice(u, gen, !!opts.force, !!opts.periodic)))
     if (gen !== get().gen) return
     // 名册里没了的电脑:整段丢掉
     const keep = new Set(units.map((u) => u.id.toLowerCase()))
@@ -143,9 +146,10 @@ function patchEntry(unitId: string, patch: Partial<DeviceEntry>): void {
 }
 
 /** 拉一台的会话列表。离线 / 设备自报引擎没在跑(capsLive)→ 不拉、整段清空(D6:离线电脑的会话不可见)。 */
-async function fetchDevice(u: UnitInfo, gen: number, force: boolean): Promise<void> {
+async function fetchDevice(u: UnitInfo, gen: number, force: boolean, periodic = false): Promise<void> {
   const id = u.id.toLowerCase()
   const cur = useDeviceSessions.getState().byUnit[id]
+  if (periodic && terminalProbe(useDeviceMarks.getState().probes[id])) return // R-32:终局态不自动重试
   if (!u.online) { patchEntry(id, { sessions: [], loading: false }); return }
   if (u.capsLive && u.caps?.engine && u.caps.engine !== 'ready') { patchEntry(id, { sessions: [], loading: false }); return }
   if (!force && cur?.fetchedAt && Date.now() - cur.fetchedAt < DEVICE_LIST_FRESH_MS) return
@@ -178,6 +182,13 @@ async function fetchDevice(u: UnitInfo, gen: number, force: boolean): Promise<vo
     noteDeviceProbe(id, probe)
     patchEntry(id, { sessions: keepOnTransient(id, probe), fetchedAt: Date.now(), loading: false })
   }
+}
+
+/** 终局态(不会自己好,自动重试只是空耗 / 打扰):调用方身份取不到 / 验不过、设备已移除、凭据被拒。 */
+function terminalProbe(p: ProbeResult | undefined): boolean {
+  if (!p || p.ok) return false
+  const v = classify(p.status, { code: p.code })
+  return v === 'caller-unavailable' || v === 'gone' || v === 'account-auth?'
 }
 
 /** 拉失败时这台的行怎么办:只是暂时连不上(网络 / 超时 / 隧道 5xx)→ 留着上一份(状态照样显示「暂时连不上」,点开照常按绑定路由);
