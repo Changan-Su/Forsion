@@ -90,6 +90,9 @@ const CASES = [
   { id: 'i17.comment_multiline_edited', bucket: V, md: `%%\n${M} 多行注释\n%%\n\ntail\n` },
   { id: 'i17.kbd_edited', bucket: V, md: `${M} 按 <kbd>Cmd</kbd>+<kbd>K</kbd>\n` },
   { id: 'i17.subsup_edited', bucket: V, md: `${M} H<sub>2</sub>O 与 x<sup>2</sup>\n` },
+  // 同型嵌套的 kbd/sub/sup:整段不折叠(开合标签仍是原子),编辑同段别处不许把内层标签吞掉(Codex 复核)。
+  { id: 'i17.kbd_nested_edited', bucket: V, md: `${M} 按 <kbd>a<kbd>b</kbd>c</kbd> 与 <kbd>K</kbd>\n` },
+  { id: 'i17.sub_nested_in_strong_edited', bucket: V, md: `${M} x<sub>1 **<sub>2</sub>** 3</sub> 与 y<sup>2<sup>n</sup></sup>\n` },
   { id: 'i17.tags_upper_attr_edited', bucket: V, md: `${M} <KBD>Up</KBD> 与 <kbd class="k">A</kbd>\n` },
   // `==` 装饰不碰存量 `<mark>`(拍板 #11)。裸 `<mark>` 被写成 `style="background:"` 是另一条(I-16e,不在本包),这里用带色的。
   { id: 'i17.mark_untouched_edited', bucket: V, md: `${M} some <mark style="background:#fef3a1">hi</mark> and ==hl== text\n` },

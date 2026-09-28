@@ -8,7 +8,9 @@ describe('plainPaste', () => {
       expect(isPlainMultiline(t), t).toBe(true)
   })
   it('像 markdown 的保留 CommonMark 语义(块级或成对行内标记)', () => {
-    for (const t of ['- a\n- b', '1. a\n2. b', '# 标题\n正文', '> 引用\n续', '```\ncode\n```', '| a | b |\n|---|---|', 'a\n---', '**要点**第一行\n第二行', '见 [文档](https://x.com)\n下一行', '[[笔记]]\n下一行', '- [ ] 待办\n- [x] 完成'])
+    for (const t of ['- a\n- b', '1. a\n2. b', '# 标题\n正文', '> 引用\n续', '```\ncode\n```', '| a | b |\n|---|---|', 'a\n---', '**要点**第一行\n第二行', '见 [文档](https://x.com)\n下一行', '[[笔记]]\n下一行', '- [ ] 待办\n- [x] 完成',
+      // Codex 复核漏判的三类:无首尾 `|` 的 GFM 表格、缩进代码(4 空格 / Tab)、`%%` 注释(含跨行)
+      'Name | Age\n--- | ---\nAda | 37', 'a | b\n:-- | --:\n1 | 2', '    x = 1\n    y = 2', '说明\n\tcode', '%%\n注释\n%%', '可见 %%藏%% 字\n下一行'])
       expect(looksLikeMarkdown(t), t).toBe(true)
   })
   it('单行 / 已是一行一段的不处理(转换后重入即停)', () => {

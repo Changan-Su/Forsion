@@ -121,6 +121,22 @@ async function main() {
       const r = await pasteCase(browser, { 'text/plain': 'a\nb', 'text/html': '<meta charset="utf-8"><span>a b</span>' })
       check('PF6 带 text/html 的不走纯文本分支', r.out === 'ANCHOR\n\na b\n\ntail\n' && !r.errs.length, JSON.stringify(r))
     }
+    // PF7~PF9(Codex 复核):「像 markdown」漏判的三类必须走原 CommonMark —— 加倍换行会把结构拆散。
+    // PF7 无首尾 `|` 的 GFM 表格:仍是一张表(不是三段)
+    {
+      const r = await pasteCase(browser, { 'text/plain': 'Name | Age\n--- | ---\nAda | 37' })
+      check('PF7 无首尾 | 的表格照旧成表', r.blocks.filter((b) => b.startsWith('table')).length === 1 && !r.blocks.some((b) => b === 'paragraph:--- | ---') && !r.errs.length, JSON.stringify(r))
+    }
+    // PF8 四空格缩进代码:仍是一个代码块,行间不多空行
+    {
+      const r = await pasteCase(browser, { 'text/plain': '    x = 1\n    y = 2' })
+      check('PF8 缩进代码照旧成一个代码块', r.blocks.includes('code_block:x = 1\ny = 2') && !r.errs.length, JSON.stringify(r))
+    }
+    // PF9 跨行 `%%` 注释:仍在一段里(三段就配不上对了),落盘逐字
+    {
+      const r = await pasteCase(browser, { 'text/plain': '%%\n注释内容\n%%' })
+      check('PF9 跨行 %% 注释不拆段', r.out === 'ANCHOR\n\n%%\n注释内容\n%%\n\ntail\n' && !r.errs.length, JSON.stringify(r))
+    }
   } finally {
     await browser.close()
   }
