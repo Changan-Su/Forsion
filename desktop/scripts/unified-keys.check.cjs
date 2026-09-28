@@ -1,6 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
-// 波次 2 shell 包:K-16(mac ⌘↑/⌘↓ 越过代码块 / 嵌入到文首文末)。
+// 波次 2 shell 包:K-16(mac ⌘↑/⌘↓ 越过代码块 / 嵌入到文首文末);K-17(块选中态 Shift+↑↓ / Shift+点击按块扩选、Mod-Alt-/ 转换、Mod-]/[ 缩进)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -929,6 +929,71 @@ async function main() {
         check(`K16 ${name}`, ok, JSON.stringify(sel))
         await page.close()
       }
+    }
+    // ── K-17:块选中态的键盘。此前只有 Esc 两段式:Esc 选中块后 Shift+↓ 扩出来的是文字选区、Shift+点击只延伸字符;
+    //    「转换为」没有键盘入口;Mod-] / Mod-[ 对段落无效。负对照:摘掉 blockKbKeymap → a/b/c/d/e 全红(已实跑)。
+    if (want('K17')) {
+      const MD = '甲段。\n\n乙段。\n\n丙段。\n\n丁段。\n'
+      const blk = (page) => page.evaluate(() => {
+        const d = document.querySelector('.unified-body .ProseMirror')
+        const s = window.__upage.probe.view().state.selection
+        return { sel: s.toJSON().type, blocksel: d.getAttribute('data-blocksel'), selected: [...d.querySelectorAll('.amx-block-selected')].map((e) => e.textContent), node: s.node ? s.node.textContent : null }
+      })
+      // a:Esc 选中乙 → Shift+↓ 两块(乙丙,整块呈现)→ Shift+↑ 回单块 → Shift+↑ 向上扩(甲乙)
+      let page = await open(browser, MD)
+      await caretAtText(page, '乙段。')
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(100)
+      const a0 = await blk(page)
+      await page.keyboard.press('Shift+ArrowDown'); await page.waitForTimeout(100)
+      const a1 = await blk(page)
+      await page.keyboard.press('Shift+ArrowUp'); await page.waitForTimeout(100)
+      const a2 = await blk(page)
+      await page.keyboard.press('Shift+ArrowUp'); await page.waitForTimeout(100)
+      const a3 = await blk(page)
+      check('K17a Esc 选块后 Shift+↓/↑ 按整块扩选(下扩两块 → 收回单块 → 上扩两块)',
+        a0.sel === 'node' && a0.node === '乙段。' && a1.blocksel === 'true' && a1.selected.join('|') === '乙段。|丙段。' &&
+          a2.sel === 'node' && a2.node === '乙段。' && a3.blocksel === 'true' && a3.selected.join('|') === '甲段。|乙段。',
+        JSON.stringify({ a0, a1, a2, a3 }))
+      // b:块选后 Shift+点击丁 → 乙丙丁;接着 Delete 整批删掉
+      await page.keyboard.press('Escape'); await page.waitForTimeout(60)
+      await caretAtText(page, '乙段。')
+      await page.keyboard.press('Escape'); await page.waitForTimeout(100)
+      const at = await page.evaluate(() => { const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent === '丁段。'); const r = p.getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 } })
+      await page.keyboard.down('Shift'); await page.mouse.click(at.x, at.y); await page.keyboard.up('Shift')
+      await page.waitForTimeout(150)
+      const b1 = await blk(page)
+      await page.keyboard.press('Delete'); await page.waitForTimeout(150)
+      const b2 = await shape(page)
+      check('K17b 块选后 Shift+点击按整块延伸到点中的块,Delete 整批删',
+        b1.blocksel === 'true' && b1.selected.join('|') === '乙段。|丙段。|丁段。' && !b2.includes('乙段') && !b2.includes('丁段') && b2.includes('甲段'),
+        JSON.stringify({ b1, b2 }))
+      await page.close()
+      // c:Mod-Alt-/ 打开块菜单,焦点在「转换为」第一项;选「标题 1」即转换
+      page = await open(browser, MD)
+      await caretAtText(page, '丙段。')
+      await page.keyboard.press('Meta+Alt+Slash'); await page.waitForTimeout(250)
+      const c1 = await page.evaluate(() => ({ menu: !!document.querySelector('.unified-block-menu'), focused: document.activeElement?.textContent?.trim() ?? '' }))
+      await page.keyboard.press('ArrowDown'); await page.waitForTimeout(80)
+      await page.keyboard.press('Enter'); await page.waitForTimeout(250)
+      const c2 = await shape(page)
+      check('K17c Mod-Alt-/ 打开块菜单、焦点在「转换为」首项,↓ 回车转成标题 1',
+        c1.menu && c1.focused === '正文' && c2.includes('heading1:"丙段。"'), JSON.stringify({ c1, c2 }))
+      await page.close()
+      // d:Mod-] / Mod-[ 在段落上 = 缩进档 +1 / −1
+      page = await open(browser, MD)
+      await caretAtText(page, '丙段。')
+      await page.keyboard.press('Meta+BracketRight'); await page.waitForTimeout(150)
+      const d1 = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.attrs.indent)
+      await page.keyboard.press('Meta+BracketLeft'); await page.waitForTimeout(150)
+      const d2 = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.attrs.indent)
+      check('K17d Mod-] / Mod-[ 在段落上接缩进档', d1 === 1 && d2 === 0, JSON.stringify({ d1, d2 }))
+      // e:对照 —— 不在块模式时 Shift+↓ 仍是浏览器的文字扩选(不被块扩选劫持)
+      await caretAtText(page, '甲段。', 1)
+      await page.keyboard.press('Shift+ArrowDown'); await page.waitForTimeout(120)
+      const e1 = await blk(page)
+      check('K17e 对照:文字光标下 Shift+↓ 仍是文字选区', e1.sel === 'text' && e1.blocksel === null, JSON.stringify(e1))
+      await page.close()
     }
   } finally {
     await browser.close()

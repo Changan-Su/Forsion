@@ -1325,7 +1325,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   // cell:右键单元格打开时指针下的那一格(K-10 表格区的锚格;打开那一刻记下,浮层一出来就盖住那个点)。
-  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null; keyboard?: boolean } | null>(null)
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null; keyboard?: boolean; focus?: 'turnInto' } | null>(null)
   /** 菜单打开那一刻的目标(B-10):动作一律作用在它上面,不在点下去那一刻现读选区 ——
    *  此前菜单开着时按 ↓ 选区就挪到下一块,「删除」删掉的是别人。文档期间变了 → 不动手(fail closed)。 */
   const menuTarget = useRef<{ doc: ProseNode; sel: Selection } | null>(null)
@@ -1475,7 +1475,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       }
     }
     // 键盘打开的(聚焦 ⠿ 按 Enter)→ 焦点进首项;鼠标打开的不抢焦点(Cmd+C / Delete 仍直接作用于选中的块)。
-    if (blockMenu.keyboard) requestAnimationFrame(() => document.querySelector<HTMLElement>('.unified-block-menu button')?.focus())
+    // Mod-Alt-/(K-17)= 直奔「转换为」:焦点落在该区第一项(表格上没有文字类转换 → 退回首项)。
+    if (blockMenu.keyboard) requestAnimationFrame(() => {
+      const menu = document.querySelector<HTMLElement>('.unified-block-menu')
+      let el = blockMenu.focus === 'turnInto' ? menu?.querySelector('[data-sec="turnInto"]')?.nextElementSibling ?? null : null
+      while (el && el.tagName !== 'BUTTON') el = el.nextElementSibling
+      ;((el as HTMLElement | null) ?? menu?.querySelector<HTMLElement>('button'))?.focus()
+    })
     window.addEventListener('pointerdown', close, true)
     window.addEventListener('contextmenu', close, true)
     window.addEventListener('keydown', onKey, true)
@@ -2792,7 +2798,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <div className="ubm-sep" role="separator" />
               </>
             )}
-            <div className="ubm-label" role="presentation">{t('unipage.menu.turnInto')}</div>
+            <div className="ubm-label" role="presentation" data-sec="turnInto">{t('unipage.menu.turnInto')}</div>
             {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
             {!isTableSelected(layer.getView()) && (
               <>

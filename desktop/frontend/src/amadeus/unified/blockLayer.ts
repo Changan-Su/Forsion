@@ -15,7 +15,7 @@
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { findParent } from '@milkdown/kit/prose'
-import { keymap } from '@milkdown/kit/prose/keymap'
+import { keydownHandler, keymap } from '@milkdown/kit/prose/keymap'
 import { AllSelection, NodeSelection, TextSelection, Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
@@ -28,7 +28,7 @@ import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
 import { blockDragViews, imageDragParagraph, visualBlockElement } from '../blocks/markdown/imageDrag'
 import { executeMoveBelowRow, executeMoveIntoCell, executePair, mintCardCopies } from './columns'
-import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
+import { foldStateAt, foldedSectionAfter, isHiddenAt, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 import { markMachineSlash } from '../blocks/markdown/machineSlash'
@@ -73,7 +73,7 @@ export function plusInsert(state: EditorState, node: ProseNode, pos: number, abo
 export interface BlockLayerHooks {
   /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。
    *  keyboard:键盘打开的(聚焦 ⠿ 按 Enter / 空格 = detail 为 0 的 click)→ 宿主把焦点送进菜单(B-10)。 */
-  onMenu: (at: { x: number; y: number; keyboard?: boolean }) => void
+  onMenu: (at: { x: number; y: number; keyboard?: boolean; focus?: 'turnInto' }) => void
   /** **整块**删掉了这些内容(块选中 Delete/Backspace)。宿主据此问「引用块牵着的磁盘文件也删吗」。
    *  剪切不发(搬家不是删除),逐字符编辑更不经过这里 —— 判据是结构性的,不靠启发式。
    *  调用时机在 dispatch **之后**:宿主要读删完的文档算「同一篇里还有没有别处引用」。 */
@@ -2432,8 +2432,112 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     }),
   )
 
+  // ── 块选中态的键盘(评审 K-17)。Esc / ⠿ / 框选进了块模式之后,此前只有 Esc 两段式:Shift+↓ 扩出来的是文字选区,
+  //    Shift+点击只延伸字符。这里按**顶层块**(doc / 分栏 cell 的直接子,与 topRangeOf 同一容器口径)扩选:
+  //    锚块不动、头块一格一格走,单块回到 NodeSelection,多块 = 整块文字范围 + blockSelectionKey(与框选同一表示,
+  //    删除 / 复制 / 拖动 / 块菜单全走既有多块机器)。折叠标题藏起来的块跳过(随折叠标题整体进出)。
+  //    另:Mod-Alt-/ 打开块菜单并把焦点放在「转换为」第一项(Cmd+/ 被左侧栏占着);Mod-] / Mod-[ = 缩进 / 减少缩进
+  //    (段落接缩进档,与 Tab 同一套;代码块里不接,免得插空格)。
+  const TOP_CONTAINERS = ['doc', 'amadeusColumnCell']
+  const inBlockMode = (state: EditorState): boolean => {
+    const sel = state.selection
+    if (sel instanceof NodeSelection) return sel.node.isBlock
+    return sel instanceof TextSelection && !sel.empty && !!blockSelectionKey.getState(state)
+  }
+  /** pos 落在(或正好起于)哪个顶层块。 */
+  const topBlockOf = (doc: ProseNode, pos: number): { from: number; to: number } | null => {
+    const $p = doc.resolve(pos)
+    if (TOP_CONTAINERS.includes($p.parent.type.name)) {
+      const n = $p.nodeAfter
+      return n ? { from: pos, to: pos + n.nodeSize } : null
+    }
+    let d = $p.depth
+    while (d >= 1 && !TOP_CONTAINERS.includes($p.node(d - 1).type.name)) d--
+    return d >= 1 ? { from: $p.before(d), to: $p.after(d) } : null
+  }
+  const anchorHeadBlocks = (state: EditorState): { a: { from: number; to: number }; h: { from: number; to: number } } | null => {
+    const sel = state.selection
+    const doc = state.doc
+    const a = topBlockOf(doc, sel instanceof NodeSelection ? sel.from : sel.anchor)
+    const h = sel instanceof NodeSelection ? a : topBlockOf(doc, sel.head)
+    if (!a || !h || doc.resolve(a.from).parent !== doc.resolve(h.from).parent) return null
+    return { a, h }
+  }
+  /** 锚块到头块(含)整块选中:同一块 → NodeSelection;多块 → 整块文字范围(方向随头块)。 */
+  const selectBlockSpan = (state: EditorState, a: { from: number; to: number }, h: { from: number; to: number }): Transaction => {
+    const doc = state.doc
+    const one = a.from === h.from ? doc.nodeAt(a.from) : null
+    if (one && NodeSelection.isSelectable(one)) return state.tr.setSelection(NodeSelection.create(doc, a.from))
+    const down = h.from >= a.from
+    const $a = doc.resolve(down ? a.from + 1 : a.to - 1)
+    const $h = doc.resolve(down ? h.to - 1 : h.from + 1)
+    return state.tr.setSelection(TextSelection.between($a, $h)).setMeta(blockSelectionKey, true)
+  }
+  const extendBlocks = (dir: -1 | 1) => (state: EditorState, dispatch?: (tr: Transaction) => void): boolean => {
+    if (!inBlockMode(state)) return false
+    const ah = anchorHeadBlocks(state)
+    if (!ah) return false
+    const $h = state.doc.resolve(ah.h.from)
+    const parent = $h.parent
+    let i = $h.index() + dir
+    let at = dir > 0 ? ah.h.to : ah.h.from
+    // 折叠标题藏起来的块跳过
+    while (i >= 0 && i < parent.childCount) {
+      const size = parent.child(i).nodeSize
+      const from = dir > 0 ? at : at - size
+      if (isHiddenAt(state, from + 1) == null) {
+        dispatch?.(selectBlockSpan(state, ah.a, { from, to: from + size }).scrollIntoView())
+        return true
+      }
+      at = dir > 0 ? at + size : at - size
+      i += dir
+    }
+    return true // 到头了:吞键,不退回文字扩选(那会把块模式悄悄换成字符选区)
+  }
+  const inCode = (state: EditorState): boolean => state.selection.$from.parent.type.name === 'code_block'
+  const blockKbKeymap = $prose(() =>
+    new Plugin({
+      props: {
+        handleKeyDown: keydownHandler({
+          'Shift-ArrowDown': extendBlocks(1),
+          'Shift-ArrowUp': extendBlocks(-1),
+          'Mod-Alt-/': (state, dispatch, view) => {
+            if (!view || !view.editable || !dispatch) return false
+            // 菜单动作作用于块选区(与点 ⠿ 同):文字光标先按 Esc 的单位选中所在块。
+            if (!inBlockMode(state)) {
+              const at = escTargetPos(state)
+              if (at == null) return false
+              dispatch(state.tr.setSelection(NodeSelection.create(state.doc, at)))
+            }
+            const st = view.state
+            const dom = st.selection instanceof NodeSelection ? view.nodeDOM(st.selection.from) : null
+            const r = dom instanceof HTMLElement ? dom.getBoundingClientRect() : view.coordsAtPos(st.selection.from)
+            hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: true, focus: 'turnInto' })
+            return true
+          },
+          'Mod-]': (state, dispatch, view) => (inCode(state) ? false : tabIndent(state, dispatch, view, tabFoldHooks)),
+          'Mod-[': (state, dispatch) => (inCode(state) ? false : tabOutdent(state, dispatch)),
+        }),
+        handleDOMEvents: {
+          // Shift+点击:块模式下按顶层块延伸到点中的那块(文字选区照旧由浏览器延伸字符)。
+          mousedown: (view, e) => {
+            if (!e.shiftKey || e.button !== 0 || !view.editable || !inBlockMode(view.state)) return false
+            const hit = view.posAtCoords({ left: e.clientX, top: e.clientY })
+            const ah = anchorHeadBlocks(view.state)
+            const target = hit ? topBlockOf(view.state.doc, hit.pos) : null
+            if (!ah || !target || view.state.doc.resolve(target.from).parent !== view.state.doc.resolve(ah.a.from).parent) return false
+            e.preventDefault()
+            view.dispatch(selectBlockSpan(view.state, ah.a, target))
+            view.focus()
+            return true
+          },
+        },
+      },
+    }),
+  )
+
   return {
-    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, duplicateKeymap, keyboardPlugins].flat(),
+    plugins: [blockKbKeymap, handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, duplicateKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
     duplicate: (view) => duplicateBlocks(view.state, view.dispatch.bind(view), view),
