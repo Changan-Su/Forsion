@@ -71,6 +71,7 @@ import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
+import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
 
@@ -1098,6 +1099,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
     onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
+    // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
+    // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
+    // 只认输入区起的 run(派生 / 后台 run 不吃别人的上传);sandbox 会话也取走(它们有 list_files),只是不拼。
+    // input.message 本身不动:标题、/refine 判定、入站预算仍按用户原话。
+    const uploadRefs = input.origin === 'client' ? takeWorkspaceUploads(sessionId) : [];
+    const turnMessage = execMode === 'host' ? withUploadRefs(String(input.message || ''), uploadRefs) : String(input.message || '');
 
     // 群聊模式(Group Chat):≥2 个 Normal Agent 轮流发言 —— 走独立编排,不进下方单 agent 装载。
     // gate 在 capabilities.groupChat(host baseline 恒 true;云端 app 经 manifest opt-in)—— 纯编排无 host
@@ -1109,7 +1116,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await runGroupChat({
         runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig, remote,
         followSessionMode: !!modeSessionId,
-        message: input.message ? String(input.message) : '',
+        message: turnMessage,
         userMessageId: input.userMessageId,
         attachments,
         signal: ac.signal,
@@ -1177,11 +1184,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // user 消息在此（run 真正开始时）才落库——而非 POST 时——保证排队 run 的 user 消息时间戳
     // 排在上一个 run 的 assistant 之后，hydrate/显示顺序才正确。幂等（ON CONFLICT DO NOTHING）。
     // 纯附件消息（文本为空,如微信发图）也必须落库——否则附件随消息一起蒸发,模型永远看不到图。
-    if (input.userMessageId && (input.message || attachments.length)) {
+    if (input.userMessageId && (turnMessage || attachments.length)) {
       await deps().state.insertUserMessage({
         id: input.userMessageId,
         sessionId,
-        content: String(input.message || ''),
+        content: turnMessage,
         modelId,
         attachments: Array.isArray(attachments) && attachments.length ? attachments : null,
       });
@@ -1854,6 +1861,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           finalizedWithParked.set(finalizedId, { content: finalContent, reasoning: finalReasoning, toolCalls: [...allToolCalls], toolResults: [...allToolResults], displayFiles: files });
         }
       }
+      // 运行中追加的一句同样带上它之前刚上传的附件(appStore.send:先 upload 再 steer),拼在这一批的第一条上。
+      const steerUploads = execMode === 'host' ? takeWorkspaceUploads(sessionId) : [];
+      if (steerUploads.length && msgs[0]) msgs[0] = { ...msgs[0], content: withUploadRefs(msgs[0].content, steerUploads) };
       for (const m of msgs) {
         await deps().state.insertUserMessage({
           id: m.id, sessionId, content: m.content, modelId,

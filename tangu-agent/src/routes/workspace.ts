@@ -15,6 +15,7 @@ import {
 } from '../tools/fileWorkspace.js';
 import { getSessionDir, markSessionDirty, type SessionKey } from '../sandbox/sessionSandbox.js';
 import { listConfined, readConfined, writeConfined, unlinkConfined } from '../sandbox/confinedFs.js';
+import { noteWorkspaceUpload } from '../services/workspaceUploads.js';
 
 const router = Router();
 
@@ -196,8 +197,10 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
           await writeFileRaw(userId, r.appId, r.scope, f.path, buf, f.mimeType);
         } else {
           // standalone:云存储不可用 → 写本地会话目录(与文件工具同一目录)。
-          await writeConfined(await getSessionDir(r.key), f.path, buf); // 越界 / 软链逃逸抛 'invalid path'
+          const abs = await writeConfined(await getSessionDir(r.key), f.path, buf); // 越界 / 软链逃逸抛 'invalid path'
           markSessionDirty(r.key);
+          // 下一条 host 模式 run 把它的绝对路径拼进正文第一行(host 工具的 cwd 是工作区,不登记模型就不知道有附件;见 workspaceUploads.ts)
+          noteWorkspaceUpload(r.key.sessionId, abs);
         }
         saved++;
       } catch (e: any) {

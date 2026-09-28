@@ -80,6 +80,10 @@
 - When that computer refuses something while you run tasks on it from your phone or use its device page, the message also gives the actual reason instead of always saying it's waiting for that computer to allow this.
 <!-- /P1-KF -->
 
+<!-- P1-M1 -->
+- **Agents on your computer can now find files you attach from your phone (or the device page)**. The file already reached that computer, but in sessions that run in a folder on the computer the agent didn't know where it was and had to search the whole disk. Now the file's location on that computer is handed to the agent with your message, just like a file dragged in on the computer, and the agent reads it from there. When you reopen the session, a file tag for it shows at the start of the message. Small files picked with "Add › File" in sessions that run in a folder on the computer work the same way.
+<!-- /P1-M1 -->
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.

@@ -38,11 +38,12 @@
  *   K3  执行设备的 approvalDelivery(真模块)收到远程待批 → 系统通知(不含命令)→ 60s(快进)没人批投收件箱提醒(只带 sessionId/count/kinds)
  *       → 手机批完撤条目、关通知;反方向:电脑本机批 → approval_result.by = {via:local}。
  *   K8  本机登记后重开「在哪运行」:名册里确有这台手机(kind=phone)也不列出;老 server 名册不带 kind(按电脑算)时仍不列出(本机 id 过滤)。
- *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):① 手机附件落在引擎会话沙箱目录,host 模式的模型请求里找不到它的路径;
- *       ② 电脑本机批了之后,手机界面上看不到「在执行的电脑上」(托盘模式下卡答完即撤,结局行不带 by)。
+ *   M1A 附件可见:手机附件落在引擎会话沙箱目录,host 模式工具的 cwd 是工作区 —— 引擎把附件的绝对路径拼在本轮用户消息第一行
+ *       (桌面 fileChip 同格式);台架扮的模型**只从那一行**拿路径跑 run_bash(原 KNOWN-GAP ①,P1 · M1A 起判红)。
+ *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):② 电脑本机批了之后,手机界面上看不到「在执行的电脑上」(托盘模式下卡答完即撤,结局行不带 by)。
  *
  * 退出码:0 = 全绿且没有 KNOWN-GAP;1 = 有 FAIL;**2 = 断言全绿但还有 KNOWN-GAP —— M1 退出标准未达成**(汇总行写明)。
- *   别把「N/N 通过」当 M1 端到端证据:退出码 2 就是「管道通、但真模型打不开附件 / 手机看不到谁批的」。
+ *   别把「N/N 通过」当 M1 端到端证据:退出码 2 就是「管道通、但手机看不到谁批的」。
  *
  * 负对照(NEGCTL=…,须红):
  *   relay     模拟层照发但不带 X-Forsion-Caller(中继漏拦 / 头路径断)→ G1 那条红,且执行设备按「账号级未识别调用方」弹框;
@@ -159,17 +160,34 @@ function makeLlm(world) {
     }
     const bashId = mark === MARK ? 'call_k9_bash' : 'call_k9_bash2'
     if (mark && !since.includes(bashId)) {
-      // 第一轮:把附件转成大写写到它旁边。附件在引擎会话沙箱目录里 —— host 模式的模型本不知道这个路径(见 KNOWN-GAP),
-      // 这里由台架扮的模型直接知道(= 台架只证管道,不证模型能找到附件)。第二轮:随便一条要批的复合命令。
-      const cmd = mark === MARK
-        ? `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
-        : `ls '${world.sandboxDir}' && echo ${MARK2}`
+      // 第一轮:把附件转成大写写到它旁边。附件在引擎会话沙箱目录里,host 模式工具的 cwd 是工作区 —— 模型只能从本轮用户消息
+      // 第一行(引擎按桌面 fileChip 格式拼的附件绝对路径,P1 · M1A)知道它在哪;台架扮的模型**只从那里拿路径**。
+      // 那一行缺席(负对照 / 旧引擎)→ 退回台架自己 find(让下游审批 / 下载那几环照样可测),并记下 attachFromMessage=false 判红。
+      // 第二轮:随便一条要批的复合命令。
+      let cmd
+      if (mark === MARK) {
+        const p = attachPathIn(asked)
+        attachSeen.fromMessage = p
+        cmd = p
+          ? `f=${shq(p)} && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
+          : `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
+      } else cmd = `ls '${world.sandboxDir}' && echo ${MARK2}`
       return tool(bashId, 'run_bash', { command: cmd })
     }
     if (mark) return say(mark === MARK ? `已处理附件,产物 ${RESULT_NAME}(${MARK})。` : `已核对产物(${MARK2})。`)
     return say('ok')
   }
 }
+
+/** 本轮用户消息第一行里的附件路径(桌面 fileChip 格式:裸路径 / 含空白加引号,单空格连;见 tangu-agent services/workspaceUploads.ts)。 */
+function attachPathIn(userText) {
+  const first = String(userText || '').split('\n')[0]
+  const toks = (first.match(/"[^"]+"|\S+/g) || []).map((t) => (t.startsWith('"') ? t.slice(1, -1) : t))
+  return toks.find((t) => path.isAbsolute(t) && path.basename(t) === ATTACH_NAME) || null
+}
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`
+/** 台架扮的模型从消息里拿到的附件路径(null = 第一行没有 → 退回台架自己 find)。 */
+const attachSeen = { fromMessage: undefined }
 
 /** agents/** 下内容含 needle 的文件(相对 agents/ 的路径)。 */
 function filesContaining(root, needle) {
@@ -463,10 +481,18 @@ async function main() {
     const around = (c) => { const j = JSON.stringify(c.messages); const i = Math.max(j.indexOf(MARK), j.indexOf(MARK2)); return j.slice(Math.max(0, i - 160), i + 40).replace(/\\n/g, ' ') }
     info('G7:Muse 周期提示词里的远程会话原话(Muse 不带远程污点;见 openIssues)', museSeen.length ? `${museSeen.length} 次;例:…${around(museSeen[0])}…` : '没有')
 
-    // ── KNOWN-GAP:附件对 host 模式的模型不可见 ──
-    const blob = mainCalls[0] ? JSON.stringify(mainCalls[0].messages) : ''
-    const visible = blob.includes(ATTACH_NAME) || blob.includes(world.sandboxDir)
-    gap('host 模式的模型看得到手机发来的附件', visible, `模型第一轮请求里${visible ? '有' : '没有'}附件名 / 会话沙箱路径;附件实际落在 ${path.relative(world.out, world.sandboxDir)}/<hash>/${ATTACH_NAME},host 模式工具的 cwd = ${path.relative(world.out, world.workspace)}`)
+    // ── P1 · M1A(原 KNOWN-GAP ①):附件对 host 模式的模型可见 —— 引擎把会话沙箱里的绝对路径拼在本轮用户消息第一行,
+    //    台架扮的模型只从那一行拿路径(拿不到才退回自己 find,并在这里判红);路径须真在会话沙箱目录里、就是手机发的那份文件。
+    const firstUser = (c) => { const m = [...(c?.messages || [])].reverse().find((x) => x.role === 'user' && !text(x.content).includes('<approval_update>')); return text(m?.content) }
+    const seenPath = attachSeen.fromMessage || null
+    const realSandbox = fs.realpathSync(world.sandboxDir)
+    const inSandbox = !!seenPath && path.dirname(path.dirname(seenPath)) === realSandbox
+    let seenBody = null
+    try { seenBody = seenPath ? fs.readFileSync(seenPath, 'utf8') : null } catch { /* 读不到 = 不是那份文件 */ }
+    check('host 模式的模型看得到手机发来的附件:本轮用户消息第一行 = 会话沙箱里那份附件的绝对路径(模型只凭它跑 run_bash)',
+      inSandbox && seenBody === ATTACH_TEXT && !!mainCalls[0] && attachPathIn(firstUser(mainCalls[0])) === seenPath,
+      seenPath ? `${path.relative(fs.realpathSync(world.out), seenPath)}${inSandbox ? '' : ' ← 不在会话沙箱目录'}${seenBody === ATTACH_TEXT ? '' : ' ← 内容不是手机发的'};host 工具 cwd = ${path.relative(world.out, world.workspace)}`
+        : `本轮用户消息第一行没有附件路径(台架退回自己 find);首行:${JSON.stringify(firstUser(mainCalls[0]).split('\n')[0].slice(0, 120))}`)
 
     check('页面无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
     if (world.hub.ledger.unknown.length) info('hub 未实现的路由', JSON.stringify([...new Set(world.hub.ledger.unknown.map((x) => `${x.method} ${x.path}`))]))
