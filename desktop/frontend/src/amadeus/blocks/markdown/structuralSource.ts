@@ -10,7 +10,7 @@
 // 这样既不把源码伪造进 PM 文档导致序列化双份，也保留了逐字符编辑能力。
 import { $prose } from '@milkdown/kit/utils'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
-import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, Selection, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { applyTrigger, triggerFromStructuralPrefix } from './blockTriggers'
 import { registerMessages, translate } from '../../../i18n'
@@ -188,6 +188,39 @@ function commitPrefix(view: EditorView, input: HTMLInputElement, refocus: boolea
   }
 }
 
+/** 前缀 input 把退出键转交 PM 键位链期间为真:这时「行首 ←/退格 = 进入前缀」必须让路,
+ *  否则刚提交出去的按键又被 focusStructuralPrefix 接回 input,原地打转(K-08)。 */
+let forwardingOut = false
+
+function forwardKey(view: EditorView, event: KeyboardEvent): boolean {
+  forwardingOut = true
+  try {
+    return view.someProp('handleKeyDown', (f) => f(view, event)) ?? false
+  } finally {
+    forwardingOut = false
+  }
+}
+
+/** 前缀 input 的出口(K-08,Obsidian 第 0 列语义):先提交前缀(回到渲染态、光标落回正文行首),再把这一键
+ *  交给 PM —— 退格走 unified/keyboard 的退格链(标题一步降正文、列表脱壳…);←/↑ 先问键位链(↑ 撞分割线/
+ *  嵌入仍是块选中),没人接就落到上一文本块末尾;↓ 在块只有一行时去下一文本块行首,多行块只落回行首,
+ *  下一下 ↓ 由浏览器原生接着走。没有上/下一块时停在本行行首(已经回到渲染态,不再困在 input 里)。 */
+function leavePrefix(view: EditorView, input: HTMLInputElement, event: KeyboardEvent): void {
+  commitPrefix(view, input, true)
+  if (event.key === 'Backspace') {
+    forwardKey(view, event)
+    return
+  }
+  const dir = event.key === 'ArrowDown' ? 1 : -1
+  if (dir > 0 && !view.endOfTextblock('down')) return
+  if (forwardKey(view, event)) return
+  const { $from } = view.state.selection
+  if (!$from.parent.isTextblock) return
+  const edge = dir > 0 ? $from.after() : $from.before()
+  const target = Selection.findFrom(view.state.doc.resolve(edge), dir, true)
+  if (target) view.dispatch(view.state.tr.setSelection(target).scrollIntoView())
+}
+
 function prefixInput(view: EditorView, info: PrefixInfo): HTMLInputElement {
   const input = document.createElement('input')
   input.className = 'amx-struct-prefix'
@@ -222,6 +255,17 @@ function prefixInput(view: EditorView, info: PrefixInfo): HTMLInputElement {
 
   input.addEventListener('keydown', (event) => {
     event.stopPropagation()
+    const bare = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    const collapsed = input.selectionStart === input.selectionEnd
+    const atZero = collapsed && (input.selectionStart ?? 0) === 0
+    // 第 0 位的 ←/退格、任意位置的 ↑/↓ = 离开前缀(K-08)。原生 input 里这几下要么无处可去,要么只在
+    // 框内跳到头尾 —— 用户就困在这枚 input 里了。
+    if (bare && !event.isComposing && collapsed
+      && (((event.key === 'ArrowLeft' || event.key === 'Backspace') && atZero) || event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault()
+      leavePrefix(view, input, event)
+      return
+    }
     if (event.key === 'Escape') {
       event.preventDefault()
       input.value = input.dataset.original ?? info.source
@@ -322,6 +366,7 @@ function syncTextblockStartFromDOM(view: EditorView): boolean {
 
 /** 从正文行首进入结构标记；Backspace 入口可顺手删掉最后一个字符（通常是渲染边界空格）。 */
 export function focusStructuralPrefix(view: EditorView, deleteLast = false): boolean {
+  if (forwardingOut) return false
   if (!syncTextblockStartFromDOM(view)) return false
   const info = prefixInfo(view.state)
   if (!info) return false

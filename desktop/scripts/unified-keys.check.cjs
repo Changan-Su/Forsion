@@ -637,6 +637,39 @@ async function main() {
         await page.close()
       }
     }
+
+    // K-08:结构前缀 input 不再是键盘陷阱 —— 第 0 位 ←/退格、任意位置 ↑/↓ 都能离开。
+    if (want('K08')) {
+      const where = (page) => page.evaluate(() => {
+        const a = document.activeElement
+        const s = window.__upage.probe.view().state.selection
+        return a && a.classList.contains('amx-struct-prefix') ? `INPUT@${a.selectionStart}` : `PM ${s.$from.parent.type.name}:${s.$from.parent.textContent}@${s.$from.parentOffset}`
+      })
+      for (const [kind, line, text, bsExpect] of [
+        ['标题', '## 标题', '标题', 'paragraph:"前段。" / paragraph:"标题" / paragraph:"后段。"'],
+        ['列表', '- 列表项', '列表项', 'paragraph:"前段。" / paragraph:"列表项" / paragraph:"后段。"'],
+        ['待办', '- [ ] 待办', '待办', 'paragraph:"前段。" / paragraph:"待办" / paragraph:"后段。"'],
+        ['引用', '> 引用', '引用', null],
+      ]) {
+        const md = `前段。\n\n${line}\n\n后段。\n`
+        const got = {}
+        for (const [label, keys] of [['←', ['ArrowLeft', 'Meta+ArrowLeft', 'ArrowLeft']], ['↑', ['ArrowLeft', 'ArrowUp']], ['↓', ['ArrowLeft', 'Meta+ArrowLeft', 'ArrowDown']], ['退格', ['ArrowLeft', 'Meta+ArrowLeft', 'Backspace']]]) {
+          const page = await open(browser, md)
+          await caretAtText(page, text, 0)
+          await page.waitForTimeout(150)
+          const trail = []
+          for (const k of keys) { await page.keyboard.press(k); await page.waitForTimeout(90); trail.push(await where(page)) }
+          got[label] = { trail, doc: await shape(page) }
+          await page.close()
+        }
+        const inPrefix = (t) => t.startsWith('INPUT')
+        check(`K08 ${kind}前缀第 0 位 ← 回到上一段末`, inPrefix(got['←'].trail[1]) && got['←'].trail[2] === 'PM paragraph:前段。@3', JSON.stringify(got['←'].trail))
+        check(`K08 ${kind}前缀里 ↑ 回到上一段`, inPrefix(got['↑'].trail[0]) && got['↑'].trail[1].startsWith('PM paragraph:前段。@'), JSON.stringify(got['↑'].trail))
+        check(`K08 ${kind}前缀里 ↓ 去下一段行首`, got['↓'].trail[2] === 'PM paragraph:后段。@0', JSON.stringify(got['↓'].trail))
+        if (bsExpect) check(`K08 ${kind}前缀第 0 位退格 = 一步转正文(不困在 input)`, got['退格'].doc === bsExpect && !inPrefix(got['退格'].trail[2]), `${got['退格'].doc} | ${JSON.stringify(got['退格'].trail)}`)
+        else check(`K08 ${kind}前缀第 0 位退格离开 input`, !inPrefix(got['退格'].trail[2]), `${got['退格'].doc} | ${JSON.stringify(got['退格'].trail)}`)
+      }
+    }
   } finally {
     await browser.close()
   }
