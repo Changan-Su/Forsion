@@ -56,9 +56,9 @@ import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
-import { AmadeusPluginsTab } from './AmadeusPluginsTab'
+import { AmadeusPluginsTab, PluginSettingsView } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
+import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
 import { PanelNotice } from './PanelNotice'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
@@ -669,6 +669,11 @@ export const SettingsModal: React.FC<{
   const forsionNavItems: Array<[Tab, string]> = !((isDesktop || unitPage) && window.amadeus) ? []
     : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
       .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
+  // 首方内置包(Forsion Extend)挂进「Forsion 云端」的自绘子页:插件启用、面板声明了 category。设备页不挂(那边不是本机账号)。
+  const cloudViews = isDesktop && cloudAccount && !unitPage
+    ? amxSettingsViews.filter((o) => amxActiveIds.includes(o.pluginId) && isPlacedSettingsView(amxPlugins.find((pl) => pl.id === o.pluginId), o.item))
+    : []
+  const cloudViewKey = (o: { pluginId: string; item: { id: string } }): string => `fx:${o.pluginId}:${o.item.id}`
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
   useEffect(() => { if (tab === 'plugins') setTab('amadeus-plugins') }, [tab])
@@ -1159,6 +1164,8 @@ export const SettingsModal: React.FC<{
       ['f-account', t('settings.forsionCloud.account')],
       // 笔记在线同步整块都在 window.amadeusSync 后面:没这个能力就别挂栏目,否则点进去是白板。
       ...(window.amadeusSync ? [['f-notes', t('settings.forsionCloud.notes')] as [string, string]] : []),
+      // Extend 渲染半身自绘的子页(个人中心等),随 Extend 的 npm 版本更新
+      ...cloudViews.map((o) => [cloudViewKey(o), (typeof o.item.title === 'function' ? o.item.title() : o.item.title) || o.item.id] as [string, string]),
     ],
     sync: [
       // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走(一级页也按它门控)。
@@ -2131,6 +2138,10 @@ export const SettingsModal: React.FC<{
 
                   </>
                 )}
+
+                {tab === 'forsion' && activeSub.startsWith('fx:') && cloudViews.filter((o) => cloudViewKey(o) === activeSub).map((o) => (
+                  <PluginSettingsView key={activeSub} pluginId={o.pluginId} def={o.item} bare />
+                ))}
 
                 {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}
 
