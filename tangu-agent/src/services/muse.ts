@@ -43,6 +43,7 @@ import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
+import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
@@ -488,11 +489,12 @@ async function folderHint(folders: string[]): Promise<string> {
   return `\n\nYou are authorized to read the following local folders; explore them with read_file/list_dir (absolute paths):\n${lines.join('\n')}`;
 }
 
-async function recentSessionTitles(userId: string): Promise<string> {
+/** 最近会话标题。远端驱动过的会话不列(P1 · M1A,G7):手机发第一句就把它截成标题,远端原话会经这里进 Muse 的周期提示词。 */
+export async function recentSessionTitles(userId: string): Promise<string> {
   try {
     const rows = await query<any[]>(
-      `SELECT title FROM chat_sessions WHERE user_id = ? AND kind = 'user' AND archived = FALSE
-       ORDER BY updated_at DESC LIMIT 15`,
+      `SELECT s.title FROM chat_sessions s WHERE s.user_id = ? AND s.kind = 'user' AND s.archived = FALSE AND ${notRemoteTaintedSql('s')}
+       ORDER BY s.updated_at DESC LIMIT 15`,
       [userId],
     );
     const titles = (rows || []).map((r) => String(r.title || '').trim()).filter(Boolean);
@@ -569,7 +571,8 @@ async function recentActivityHint(userId: string): Promise<string> {
   }
 }
 
-/** 用户应用内活动尾部(数据源见 userActivity.ts;桌面埋点+agent.edit 双写)。失败 → 空串。 */
+/** 用户应用内活动尾部(数据源见 userActivity.ts;桌面埋点+agent.edit 双写)。失败 → 空串。
+ *  远程 run 写的行(remote=1)readActivityLines 缺省不给(P1 · M1A,G7:文件路径 / agent 名是远端给的串)。 */
 async function activityTailHint(): Promise<string> {
   try {
     const lines = await readActivityLines({ hours: 12, limit: 60 });
@@ -746,7 +749,9 @@ async function tick(): Promise<void> {
     try {
       const triggers = await loadTriggers();
       if (triggers.length) {
-        const activityLines = await readActivityLines({ hours: 24, limit: 500 });
+        // 盯任务规则照旧看远程 run 的行(includeRemote):event_seen 只拿用户自己写的 match 串比对、行文不进自动化 run 的提示词,
+        // 远端只能影响「什么时候触发」(M1A 报告残余一条)。
+        const activityLines = await readActivityLines({ hours: 24, limit: 500, includeRemote: true });
         // db_changed 的快照游标单独存文件(不进 triggers.json——那是全表规模的派生数据)。
         const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
         const r = await drainAutomation({

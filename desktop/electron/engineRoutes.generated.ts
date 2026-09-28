@@ -8,7 +8,7 @@ export type EngineRouteAccess = 'allow' | 'deny-remote' | 'unclassified'
 export interface EngineRoute { method: string; path: string; access: EngineRouteAccess; src: string; why: string }
 
 export const ENGINE_ROUTES: readonly EngineRoute[] = [
-  { method: 'GET', path: '/agent/agents', access: 'allow', src: 'routes/agents.ts', why: 'Agent roster' },
+  { method: 'GET', path: '/agent/agents', access: 'allow', src: 'routes/agents.ts', why: 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)' },
   { method: 'POST', path: '/agent/agents', access: 'deny-remote', src: 'routes/agents.ts', why: 'create Agent (design appendix C)' },
   { method: 'GET', path: '/agent/agents-meta', access: 'allow', src: 'routes/agents.ts', why: 'Agent roster meta' },
   { method: 'PUT', path: '/agent/agents-meta', access: 'deny-remote', src: 'routes/agents.ts', why: 'Agent roster meta write' },
@@ -168,7 +168,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/special/muse/feedback', access: 'deny-remote', src: 'routes/special.ts', why: 'appends to Muse LOG (memory write into an autonomous Agent)' },
   { method: 'GET', path: '/agent/special/muse/library', access: 'allow', src: 'routes/special.ts', why: 'Muse library' },
   { method: 'GET', path: '/agent/special/muse/library/file', access: 'allow', src: 'routes/special.ts', why: 'Muse library file (read-only, realpath-bounded to the Library)' },
-  { method: 'GET', path: '/agent/special/muse/status', access: 'allow', src: 'routes/special.ts', why: 'Muse status' },
+  { method: 'GET', path: '/agent/special/muse/status', access: 'allow', src: 'routes/special.ts', why: 'Muse status; remote callers get the fields the Muse view / Space read, no absolute paths, budgets or last error (P1-M1A projection)' },
   { method: 'GET', path: '/agent/special/muse/todos', access: 'allow', src: 'routes/special.ts', why: 'Muse todos' },
   { method: 'GET', path: '/agent/special/muse/todos/:id', access: 'allow', src: 'routes/special.ts', why: 'Muse todo' },
   { method: 'PATCH', path: '/agent/special/muse/todos/:id', access: 'allow', src: 'routes/special.ts', why: 'Muse todo status only (card landing / dismiss)' },

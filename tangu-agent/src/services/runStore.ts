@@ -69,11 +69,15 @@ async function emitRunTerminal(id: string, status: string): Promise<void> {
   if (cfg.muse) { runTerminalListener?.(); return; }
   const { appendActivityLine } = await import('./userActivity.js');
 
+  // 远程污点 run(远端起的 input.remote,或中途被染、已由 remoteTaint 落进 input.remoteTainted)的行带 remote=1:
+  // agent 名是远端请求里给的串,Muse 活动尾部 / read_activity 缺省不给(P1 · M1A)。盯任务规则照旧看得到(只影响触发时刻)。
+  const remote = !!(input && typeof input === 'object' && (input.remote || input.remoteTainted));
   await appendActivityLine('run.done', {
     agent: typeof cfg.agentSlug === 'string' ? cfg.agentSlug : undefined,
     s: String(run.session_id || '').slice(0, 6),
     status,
     o: typeof cfg.automationOrigin === 'string' ? cfg.automationOrigin : undefined,
+    remote: remote ? 1 : undefined,
   });
   runTerminalListener?.();
 }

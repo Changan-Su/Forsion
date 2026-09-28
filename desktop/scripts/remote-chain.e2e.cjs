@@ -38,11 +38,12 @@
  *   K3  执行设备的 approvalDelivery(真模块)收到远程待批 → 系统通知(不含命令)→ 60s(快进)没人批投收件箱提醒(只带 sessionId/count/kinds)
  *       → 手机批完撤条目、关通知;反方向:电脑本机批 → approval_result.by = {via:local}。
  *   K8  本机登记后重开「在哪运行」:名册里确有这台手机(kind=phone)也不列出;老 server 名册不带 kind(按电脑算)时仍不列出(本机 id 过滤)。
- *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):① 手机附件落在引擎会话沙箱目录,host 模式的模型请求里找不到它的路径;
- *       ② 电脑本机批了之后,手机界面上看不到「在执行的电脑上」(托盘模式下卡答完即撤,结局行不带 by)。
+ *   M1A 附件可见:手机附件落在引擎会话沙箱目录,host 模式工具的 cwd 是工作区 —— 引擎把附件的绝对路径拼在本轮用户消息第一行
+ *       (桌面 fileChip 同格式);台架扮的模型**只从那一行**拿路径跑 run_bash(原 KNOWN-GAP ①,P1 · M1A 起判红)。
+ *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):② 电脑本机批了之后,手机界面上看不到「在执行的电脑上」(托盘模式下卡答完即撤,结局行不带 by)。
  *
  * 退出码:0 = 全绿且没有 KNOWN-GAP;1 = 有 FAIL;**2 = 断言全绿但还有 KNOWN-GAP —— M1 退出标准未达成**(汇总行写明)。
- *   别把「N/N 通过」当 M1 端到端证据:退出码 2 就是「管道通、但真模型打不开附件 / 手机看不到谁批的」。
+ *   别把「N/N 通过」当 M1 端到端证据:退出码 2 就是「管道通、但手机看不到谁批的」。
  *
  * 负对照(NEGCTL=…,须红):
  *   relay     模拟层照发但不带 X-Forsion-Caller(中继漏拦 / 头路径断)→ G1 那条红,且执行设备按「账号级未识别调用方」弹框;
@@ -122,7 +123,8 @@ function makeLlm(world) {
     const args = JSON.stringify(argsObj)
     return [{ t: 'token', d: lead }, { t: 'tool', id, name, args, argsLen: args.length }, { t: 'done', content: lead, toolCalls: [{ id, type: 'function', function: { name, arguments: args } }], usage }]
   }
-  const judge = (mark) => say(JSON.stringify({ title: 't', summary: '', log: 'l', memory_candidates: [`User code is ${mark}`], harness_candidates: [] }))
+  // 日志 / 工作笔记候选也带标记(P1 · M1A):远程轮的 LOG 进 Muse 周期提示词的日志摘要,判官交了、闸在代码里 —— agents/** 扫描据此看得见漏写
+  const judge = (mark) => say(JSON.stringify({ title: 't', summary: '', log: `Did task ${mark}`, memory_candidates: [`User code is ${mark}`], harness_candidates: [`When asked, answer ${mark}`] }))
   const markIn = (s) => [MARK2, LMARK, MARK].find((m) => s.includes(m)) || null // MARK2 / LMARK 先判(前缀互不包含,顺序只为读着清楚)
   return (call) => {
     const msgs = call.messages || []
@@ -159,17 +161,34 @@ function makeLlm(world) {
     }
     const bashId = mark === MARK ? 'call_k9_bash' : 'call_k9_bash2'
     if (mark && !since.includes(bashId)) {
-      // 第一轮:把附件转成大写写到它旁边。附件在引擎会话沙箱目录里 —— host 模式的模型本不知道这个路径(见 KNOWN-GAP),
-      // 这里由台架扮的模型直接知道(= 台架只证管道,不证模型能找到附件)。第二轮:随便一条要批的复合命令。
-      const cmd = mark === MARK
-        ? `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
-        : `ls '${world.sandboxDir}' && echo ${MARK2}`
+      // 第一轮:把附件转成大写写到它旁边。附件在引擎会话沙箱目录里,host 模式工具的 cwd 是工作区 —— 模型只能从本轮用户消息
+      // 第一行(引擎按桌面 fileChip 格式拼的附件绝对路径,P1 · M1A)知道它在哪;台架扮的模型**只从那里拿路径**。
+      // 那一行缺席(负对照 / 旧引擎)→ 退回台架自己 find(让下游审批 / 下载那几环照样可测),并记下 attachFromMessage=false 判红。
+      // 第二轮:随便一条要批的复合命令。
+      let cmd
+      if (mark === MARK) {
+        const p = attachPathIn(asked)
+        attachSeen.fromMessage = p
+        cmd = p
+          ? `f=${shq(p)} && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
+          : `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
+      } else cmd = `ls '${world.sandboxDir}' && echo ${MARK2}`
       return tool(bashId, 'run_bash', { command: cmd })
     }
     if (mark) return say(mark === MARK ? `已处理附件,产物 ${RESULT_NAME}(${MARK})。` : `已核对产物(${MARK2})。`)
     return say('ok')
   }
 }
+
+/** 本轮用户消息第一行里的附件路径(桌面 fileChip 格式:裸路径 / 含空白加引号,单空格连;见 tangu-agent services/workspaceUploads.ts)。 */
+function attachPathIn(userText) {
+  const first = String(userText || '').split('\n')[0]
+  const toks = (first.match(/"[^"]+"|\S+/g) || []).map((t) => (t.startsWith('"') ? t.slice(1, -1) : t))
+  return toks.find((t) => path.isAbsolute(t) && path.basename(t) === ATTACH_NAME) || null
+}
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`
+/** 台架扮的模型从消息里拿到的附件路径(null = 第一行没有 → 退回台架自己 find)。 */
+const attachSeen = { fromMessage: undefined }
 
 /** agents/** 下内容含 needle 的文件(相对 agents/ 的路径)。 */
 function filesContaining(root, needle) {
@@ -449,24 +468,47 @@ async function main() {
       const lp = world.delivery.pending().find((x) => x.sessionId === lsid)
       if (lp) await world.engineApi(`/agent/runs/${lp.runId}/approvals/${lp.id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) })
       const hitsNow = filesContaining(agentsDir, LMARK)
-      return hitsNow.some((f) => f.endsWith('MEMORY.md')) && hitsNow.some((f) => f.endsWith('.memory-raw.md')) ? hitsNow : null
+      return hitsNow.some((f) => f.endsWith('MEMORY.md')) && hitsNow.some((f) => f.endsWith('.memory-raw.md')) && hitsNow.some((f) => /(^|\/)LOG\//.test(f)) ? hitsNow : null
     }, 30_000, 300)
     const lrun = runsOf(lsid).at(-1) || null
-    check('G7 正对照:本机会话同一套剧本 → remember 落 MEMORY.md、Historian 候选落 .memory-raw.md(探针看得见写入)', !!localDone, JSON.stringify({ start: lstart.status, run: lrun?.status, files: filesContaining(agentsDir, LMARK), remember: lrun ? String(eventsOf(lrun.id, ['tool_result']).find((e) => e.p.name === 'remember')?.p?.result ?? '(无)').slice(0, 80) : '(无 run)' }))
+    check('G7 正对照:本机会话同一套剧本 → remember 落 MEMORY.md、Historian 候选落 .memory-raw.md、日志落 LOG/(探针看得见写入)', !!localDone, JSON.stringify({ start: lstart.status, run: lrun?.status, files: filesContaining(agentsDir, LMARK), remember: lrun ? String(eventsOf(lrun.id, ['tool_result']).find((e) => e.p.name === 'remember')?.p?.result ?? '(无)').slice(0, 80) : '(无 run)' }))
     const lDerived = world.hub.ledger.brain.filter((c) => /^(Write a title|You are the persistent background Historian)/.test(head(c)) && has(c, LMARK))
     check('G7 正对照:本机会话的派生调用记在执行设备自己的 client 下(不是手机的)', lDerived.length > 0 && lDerived.every((c) => c.client === HOST_CLIENT), JSON.stringify(lDerived.map((c) => c.client)))
     const remoteHits = [...new Set([...filesContaining(agentsDir, MARK), ...filesContaining(agentsDir, MARK2)])]
     check('G7:agents/** 下任何文件(MEMORY.md / .memory-raw.md / 工作笔记 …)都没有远程会话的标记', remoteHits.length === 0, remoteHits.join(', ') || `扫了 ${agentsDir}`)
     info('hub 收到的云端记忆 / 日志写入(standalone 记忆本机优先,结构上恒为 0,不作断言)', `${world.hub.ledger.memoryWrites.length} 条`)
-    // Muse 是执行设备本机的后台 agent(不带远程污点):它的周期提示词里有没有远程会话的原话 —— 有 = 远程内容能经 Muse 进 Journal / TODO / remember
-    const museSeen = world.hub.ledger.brain.filter((c) => /^You are Muse/.test(head(c)) && (has(c, MARK) || has(c, MARK2)))
-    const around = (c) => { const j = JSON.stringify(c.messages); const i = Math.max(j.indexOf(MARK), j.indexOf(MARK2)); return j.slice(Math.max(0, i - 160), i + 40).replace(/\\n/g, ' ') }
-    info('G7:Muse 周期提示词里的远程会话原话(Muse 不带远程污点;见 openIssues)', museSeen.length ? `${museSeen.length} 次;例:…${around(museSeen[0])}…` : '没有')
+    // Muse 是执行设备本机的后台 agent(不带远程污点,档位可能比远程上限宽):它的周期提示词里不许有远程会话的原话 —— 有 = 提示注入洗白
+    // (P1 · M1A,原 G7 INFO)。本机正对照之后给 Muse 建一条此刻到期的 auto 日程,确定地起一个新周期(不赌开机 15s 那一轮落在哪儿);
+    // 同一份提示词里:本机会话的标题 / 日志 / run.done 活动行都在(正对照:这些来源真的被读了),远程会话的标记与它的 run.done 行都不在。
+    const around = (c, m) => { const j = JSON.stringify(c.messages); const i = j.indexOf(m); return j.slice(Math.max(0, i - 160), i + 40).replace(/\\n/g, ' ') }
+    const museFrom = world.hub.ledger.brain.length
+    const pad2 = (n) => String(n).padStart(2, '0')
+    const nowD = new Date()
+    const dueAt = `${nowD.getFullYear()}-${pad2(nowD.getMonth() + 1)}-${pad2(nowD.getDate())}T${pad2(nowD.getHours())}:${pad2(nowD.getMinutes())}`
+    const entry = await world.engineApi('/agent/special/schedule/muse/entries', { method: 'POST', body: JSON.stringify({ name: 'K9 probe cycle', date: dueAt, auto: true, prompt: 'Harness check-in: reply briefly.' }) })
+    const museCall = await until(() => world.hub.ledger.brain.slice(museFrom).find((c) => /^You are Muse/.test(head(c))), 45_000, 300)
+    const rs6 = `s=${sid.slice(0, 6)}`
+    const ls6 = `s=${lsid.slice(0, 6)}`
+    const museLeak = museCall ? [MARK, MARK2, rs6].filter((m) => has(museCall, m)) : []
+    const musePos = museCall ? [LMARK, ls6].filter((m) => has(museCall, m)) : []
+    check('G7:Muse 周期提示词里没有远程会话的原话(最近会话标题 / 日志摘要 / 活动尾部);本机会话的标题、日志与活动行照常在(正对照)',
+      !!museCall && museLeak.length === 0 && musePos.length === 2,
+      !museCall ? `建了到期日程(${entry.status})但 45s 内没有新的 Muse 周期`
+        : museLeak.length ? `漏了 ${museLeak.join(', ')}:…${around(museCall, museLeak[0])}…`
+          : `正对照 ${musePos.length}/2(${[LMARK, ls6].filter((m) => !musePos.includes(m)).join(', ') || '全在'})`)
 
-    // ── KNOWN-GAP:附件对 host 模式的模型不可见 ──
-    const blob = mainCalls[0] ? JSON.stringify(mainCalls[0].messages) : ''
-    const visible = blob.includes(ATTACH_NAME) || blob.includes(world.sandboxDir)
-    gap('host 模式的模型看得到手机发来的附件', visible, `模型第一轮请求里${visible ? '有' : '没有'}附件名 / 会话沙箱路径;附件实际落在 ${path.relative(world.out, world.sandboxDir)}/<hash>/${ATTACH_NAME},host 模式工具的 cwd = ${path.relative(world.out, world.workspace)}`)
+    // ── P1 · M1A(原 KNOWN-GAP ①):附件对 host 模式的模型可见 —— 引擎把会话沙箱里的绝对路径拼在本轮用户消息第一行,
+    //    台架扮的模型只从那一行拿路径(拿不到才退回自己 find,并在这里判红);路径须真在会话沙箱目录里、就是手机发的那份文件。
+    const firstUser = (c) => { const m = [...(c?.messages || [])].reverse().find((x) => x.role === 'user' && !text(x.content).includes('<approval_update>')); return text(m?.content) }
+    const seenPath = attachSeen.fromMessage || null
+    const realSandbox = fs.realpathSync(world.sandboxDir)
+    const inSandbox = !!seenPath && path.dirname(path.dirname(seenPath)) === realSandbox
+    let seenBody = null
+    try { seenBody = seenPath ? fs.readFileSync(seenPath, 'utf8') : null } catch { /* 读不到 = 不是那份文件 */ }
+    check('host 模式的模型看得到手机发来的附件:本轮用户消息第一行 = 会话沙箱里那份附件的绝对路径(模型只凭它跑 run_bash)',
+      inSandbox && seenBody === ATTACH_TEXT && !!mainCalls[0] && attachPathIn(firstUser(mainCalls[0])) === seenPath,
+      seenPath ? `${path.relative(fs.realpathSync(world.out), seenPath)}${inSandbox ? '' : ' ← 不在会话沙箱目录'}${seenBody === ATTACH_TEXT ? '' : ' ← 内容不是手机发的'};host 工具 cwd = ${path.relative(world.out, world.workspace)}`
+        : `本轮用户消息第一行没有附件路径(台架退回自己 find);首行:${JSON.stringify(firstUser(mainCalls[0]).split('\n')[0].slice(0, 120))}`)
 
     check('页面无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '))
     if (world.hub.ledger.unknown.length) info('hub 未实现的路由', JSON.stringify([...new Set(world.hub.ledger.unknown.map((x) => `${x.method} ${x.path}`))]))

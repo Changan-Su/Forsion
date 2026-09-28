@@ -92,9 +92,9 @@ const cloudConfigView = (h: UserHistorianConfig) => ({
  *   enabled ×2 —— appStore.refreshSpecialEnabled(手机焦点在「我的电脑」时点亮 Historian / Muse 入口);
  *   historian.everyRounds / muse.supervisorPollMinutes —— 设备页自动化 Space 详情卡的「触发」一栏。
  * remote:true 让设置页(设备页的 SpecialAgentsTab)改显示「只能在那台电脑上设置」;写入(POST)远端本就 deny-remote。
- * ⚠️ 投影只管这一条路由,不是「这些值远端都读不到」:GET /agent/special/muse/status(allow)照回 Muse 的权限档 mode、
- *    heartbeatMinutes、maxRestartsPerWindow、libraryDir 等,设备页 MuseView 渲染 mode;GET /agent/agents(allow)回 Muse 的
- *    完整定义(人格 / 指令 / approvalMode)。那两条要不要投影另议(K10b 报告 openIssues),别在这里改文案宣称已藏。
+ * ⚠️ 投影只管这一条路由:GET /agent/special/muse/status(allow)另有投影(remoteMuseStatusView:仍回 Muse 的权限档 mode 与
+ *    heartbeatMinutes —— MuseView 与 Muse Space 的 ctx.agent.status() 要用);GET /agent/agents(allow)另有投影(不回人格 / 指令,
+ *    审批档按远程上限钳后回)。
  * ⚠️ 新增字段先找到远端真用它的调用点,再改 test/specialConfigRemoteProjection.test.ts 的精确相等断言。
  */
 const remoteConfigView = (c: SpecialAgentsConfig) => ({
@@ -363,9 +363,28 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
   }
 });
 
-router.get('/agent/special/muse/status', authMiddleware, async (_req: AuthRequest, res) => {
+/**
+ * `GET /agent/special/muse/status` 对远程来源的投影(P1 · M1A,K10b openIssues)。只留渲染层远端调用点真读的字段:
+ *   enabled / mode / running / sleepUntil / sleepReason —— MuseView 的状态药丸与「休眠中」提示;
+ *   sessionId / running —— MuseView 取最近几条思考、自动化 Space 的「运行记录」;lastCycleAt —— 自动化详情卡「上次运行」;
+ *   spaceStamp —— Muse Space 按戳热重载(builtins/muse.tsx、MuseView → syncAgentSpace);
+ *   running / lastCycleAt / sleepUntil / sleepReason / mode / heartbeatMinutes / pendingApprovals —— Muse 自建 Space 的
+ *     ctx.agent.status() 契约(tanguProbe.museSelf;手机整端切到这台电脑时它的请求就打到这里)。
+ * 不回:libraryDir / spaceDir(本机绝对路径,渲染层没有读者)、hasModel、restartsThisWindow / maxRestartsPerWindow(次数预算)、
+ * lastError(可能带路径与上游错误原文)。remote:true 与 GET /agent/special/config 的投影同一口径。
+ * ⚠️ 新增字段先找到远端真用它的调用点,再改 test/remoteProjectionRoutes.test.ts 的精确相等断言。
+ */
+const remoteMuseStatusView = (s: Awaited<ReturnType<typeof museStatus>>) => ({
+  enabled: s.enabled, running: s.running, lastCycleAt: s.lastCycleAt, sessionId: s.sessionId,
+  mode: s.mode, heartbeatMinutes: s.heartbeatMinutes, pendingApprovals: s.pendingApprovals,
+  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason,
+});
+
+router.get('/agent/special/muse/status', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
+    // 头在就按远程(值不在契约内也算 —— 同 parseRemoteOrigin 的 fail-closed)
+    if (parseRemoteOrigin(req.headers)) { res.json({ status: remoteMuseStatusView(await museStatus()), remote: true }); return; }
     res.json({ status: await museStatus() });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'status failed' });
@@ -632,19 +651,28 @@ router.get('/agent/special/approvals/:id', authMiddleware, async (req: AuthReque
   }
 });
 
+/** 远端(x-forsion-remote)答异步审批时带的 note 一律丢掉(M1A 复审 P1):拒绝时 note 原样进该 Agent 的每日日志
+ *  (`[approval] rejected by user: … — note`),随后叫醒 Muse —— Muse 每周期先 read_log、专看 [approval] 行,普通 Agent 的 LOG
+ *  还经活动摘要进 Muse 周期提示词。等于远端写一条日志,而 log_event 与 POST /agent/log 对远端本就硬拒。批准时 note 只落行里,
+ *  同样不收(远端的决定照常生效,只是不带附言)。 */
+function remoteSafeNote(remote: boolean, note: unknown): string | undefined {
+  return remote ? undefined : (note as string | undefined); // 本机照旧原样传(decideApproval 自己 displayText 截断)
+}
+
 router.post('/agent/special/approvals/:id/approve', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   // 契约 C9:异步审批只有 approve / reject 两个动作(没有「总允许」);远端夹带 argsOverride → 400。
   if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
     // P1 · K3(方案 §6.3):排队的受保护路径写入(凭据 / ~/.forsion 配置)只在执行设备本机批准;远端只能拒绝(reject 不拦)。
-    if (parseRemoteOrigin(req.headers)) {
+    const remote = !!parseRemoteOrigin(req.headers);
+    if (remote) {
       const row = await getApproval(req.user!.userId, String(req.params.id || ''));
       let kind: unknown;
       try { kind = row?.reason ? JSON.parse(String(row.reason))?.kind : undefined; } catch { kind = undefined; }
       if (kind === 'protected') return res.status(403).json(APPROVAL_LOCAL_ONLY_BODY);
     }
-    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', req.body?.note);
+    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', remoteSafeNote(remote, req.body?.note));
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
     res.json({ ok: true, status: r.status, result: r.result });
   } catch (e: any) {
@@ -656,7 +684,7 @@ router.post('/agent/special/approvals/:id/reject', authMiddleware, async (req: A
   if (!ensureLocal(res)) return;
   if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
-    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'reject', 'user', req.body?.note);
+    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'reject', 'user', remoteSafeNote(!!parseRemoteOrigin(req.headers), req.body?.note));
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
     res.json({ ok: true, status: r.status });
   } catch (e: any) {

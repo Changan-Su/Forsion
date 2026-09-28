@@ -156,10 +156,11 @@ export async function mkdirConfined(root: string, rel: string, o: ConfinedFsOps 
 /**
  * 写根内文件(中间目录自动建;已存在则覆盖)。越界 / 软链逃逸(含悬空软链)抛 ConfinedPathError。
  * 末段是根内互指的软链 → 写到它指向的根内文件(与 P0 一致)。
+ * 返回写入位置的绝对路径(按根的真实路径拼,即 abs;调用方拿它告诉 host 模式的 run 文件在哪)。
  */
 export async function writeConfined(
   root: string, rel: string, data: Buffer | string, opts: { fs?: ConfinedFsOps } = {},
-): Promise<void> {
+): Promise<string> {
   const o = opts.fs ?? NODE_CONFINED_FS;
   const realRoot = await anchoredRoot(root, o);
   if (!realRoot) throw new ConfinedPathError();
@@ -192,7 +193,7 @@ export async function writeConfined(
       if (!(await sameFileInside(fh, abs, realRoot, o))) throw new ConfinedPathError();
       await fh.truncate(0);
       await fh.writeFile(data);
-      return;
+      return abs;
     } finally {
       await fh.close().catch(() => {});
     }

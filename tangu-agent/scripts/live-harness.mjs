@@ -38,11 +38,10 @@
  *   npm run live:harness -- --only estop                     # 急停 + 远程锁定(P1 · K2):远程 run 起后台 sleep 进程再等审批 → 台架写锁文件 + POST /agent/remote/estop →
  *                                                           #   run 终态 reason:'remote_estop'、后台进程已死、挂起审批被收(再批 410);再带远程头起 run → 423 REMOTE_LOCKED;本机 run 照常答;
  *                                                           #   写 lock:null + /agent/remote/unlock → 远程 run 又能起。负对照 = 改前的 dist(无 estop 路由 → 红)
- *   npm run live:harness -- --only remotesession             # 远程会话子集(P1 · K9):合成的手机调用方(同 remotecaller 的盖章头)经「隧道」上传附件进会话工作区、起 run、
- *                                                           #   run_bash 审批由远端答(by=tunnel)、结果落库。PASS 只认引擎契约(审批卡 callerUnit / approval_result.by / 消息读得回 / 附件落点);
- *                                                           #   全链路(真 unitWeb / hub / 手机页)见 desktop 的 check:remotechain。
- *                                                           #   加 --rs-probe 另跑探针腿:只给附件名,看 host 模式的模型找不找得到(不计 PASS)。⚠️ 探针腿的审批一律代拒,但模型仍能用
- *                                                           #   免批的只读捷径(ls / cat / grep -r、read_file / list_dir)在**本机**翻目录,输出随工具结果发给模型提供方 —— 所以缺省不跑
+ *   npm run live:harness -- --only remotesession             # 远程会话子集(P1 · K9 / M1A):合成的手机调用方(同 remotecaller 的盖章头)经「隧道」上传附件进会话工作区,
+ *                                                           #   附件腿只给文件名、要模型读出来(host 模式;引擎把附件绝对路径拼在本轮用户消息第一行,审批一律代拒),
+ *                                                           #   契约腿 run_bash 审批由远端答(by=tunnel)、结果落库。全链路(真 unitWeb / hub / 手机页)见 desktop 的 check:remotechain。
+ *                                                           #   ⚠️ 负对照(修复前的 dist)下模型找不到附件,会用免批的只读捷径(ls / cat / grep -r、read_file / list_dir)在**本机**翻目录
  *   npm run live:harness -- --only remoteclamp --remote-cap readonly    # C3(INTEGRATION §4.2):起引擎前经 K4 的新写入口(remoteSessions:setMaxApprovalMode IPC →
  *   npm run live:harness -- --only remoteclamp --remote-cap full-auto   #   desktop/scripts/lib/remote-cap-writer.cjs,真 lockedUpdateJson + withRemoteCap)设远程审批档上限;
  *                                                           #   remoteclamp 按这个上限判:readonly → 每张 run_bash 卡都是 readonly;full-auto → run_bash 免批跑完;verifyCommand 照样剥掉
@@ -110,8 +109,6 @@ const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
 const REMOTE_CAP = opt('remote-cap', process.env.TANGU_LIVE_REMOTE_CAP || '');
 if (REMOTE_CAP && !['readonly', 'auto-edit', 'full-auto'].includes(REMOTE_CAP)) { console.error(`--remote-cap 只收 readonly / auto-edit / full-auto,得到 ${REMOTE_CAP}`); process.exit(2); }
-// P1-K9 · remotesession 探针腿缺省不跑(会在本机执行免批只读命令,输出发给模型提供方);--rs-probe 显式开
-const RS_PROBE = argv.includes('--rs-probe') || process.env.TANGU_LIVE_RS_PROBE === '1';
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
 const COMPACTION_CFG = (() => { const raw = opt('compaction', ''); if (!raw) return null; try { const o = JSON.parse(raw); if (o && typeof o === 'object' && !Array.isArray(o)) return o; } catch { /* 落到下面 */ } console.error(`--compaction 须为 JSON 对象,得到 ${raw}`); process.exit(2); })();
 const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
@@ -565,6 +562,15 @@ const museFirstPrompts = async () => {
       FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all().map((x) => Number(x.p) || 0); // 0 = 这个周期还没有 usage;不滤,滤了周期序号会错位
   } finally { db.close(); }
 };
+/** 每个 Muse 周期的简报原文(input.ephemeralHint:代码拼的「最近会话标题 / 日志摘要 / 活动尾部 …」,不看模型;P1 · M1A 的 G7 判据)。 */
+const museCycleHints = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`SELECT json_extract(r.input, '$.ephemeralHint') AS h FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`)
+      .all().map((x) => String(x.h || ''));
+  } finally { db.close(); }
+};
 /** Muse 周期里加载 forsion-plugin 技能的次数(09-27:指令改成「只在要更多接口时才加载」,跨次比对用)。 */
 const museSkillLoads = async () => {
   const { default: Database } = await import('better-sqlite3');
@@ -1014,15 +1020,15 @@ try {
 
   // ── P1-K9 ── 远程会话子集(INTEGRATION §4 G1):手机经隧道的一轮会话 —— 附件进会话工作区、run_bash 审批由远端答、结果落库。
   // 合成的调用方头与 remotecaller 同(引擎是末跳;unitWeb 验签那半在 desktop 的 check:remotechain 里是真的)。上传 / 起 run / 答审批三跳都带远程头。
-  // 两腿,同一会话:
+  // 两腿,同一会话,**附件腿在前**(上传紧挨着它:引擎把上传登记给下一条输入区 run,见 services/workspaceUploads.ts):
+  //   (附件腿,P1 · M1A 起计 PASS)只告诉模型附件的文件名,要它读出来、第一行转大写回给我:附件落在引擎会话沙箱目录
+  //     (AGENT_SANDBOX_SESSION_DIR/<hash>),host 工具的 cwd 是工作区 —— 引擎把它的绝对路径拼在本轮用户消息第一行(桌面 fileChip 同格式)。
+  //     判据:回复里有大写后的代号。09-28 修复前首跑:模型连发 7 条要批的全盘 find(含 `find /` 撑到 120s 超时、翻 ~/Downloads ~/Desktop),
+  //     一次都没找到(K9 openIssues 的实测证据)。⚠️ 这条腿的审批**一律代拒**(K9 评审 P2):代批 = 在开发者真机上执行模型发起的命令;
+  //     有路径时模型用免批的 read_file 就够,被拒的命令原文照记进 detail。负对照 = 修复前的 dist(模型只能去猜路径 → 红)。
   //   (契约腿)让模型照抄一条命令(同 remotecaller,行为确定):PASS 只认引擎契约 —— ① 每张 run_bash 审批卡 remote = {via:tunnel, callerUnit: 这台手机};
   //     ② 每条 approval_result.by = {via:tunnel, callerUnit};③ 助手消息落库(GET messages 读得回原话);④ 附件落进了这个会话的沙箱目录。
-  //   (探针腿,不计 PASS)只告诉模型附件的文件名,看它在 host 模式下找不找得到:附件落在引擎会话沙箱目录(AGENT_SANDBOX_SESSION_DIR/<hash>),
-  //     host 工具的 cwd 是工作区,提示词里也没有它的路径 —— 09-28 首跑:模型连发 7 条要批的全盘 find(含 `find /` 撑到 120s 超时、翻
-  //     ~/Downloads ~/Desktop),一次都没找到,run 240s 超时。K9 openIssues 的实测证据;限时 120s,结果写进 detail。
-  //     ⚠️ 这条腿的审批**一律代拒**(K9 评审 P2):代批 = 在开发者真机上执行模型发起的全盘 find,目录清单随工具结果回传模型提供方、落进
-  //     report.md。判据只要「模型要跑什么」:被拒命令的原文就是证据(模型找不到附件 → 只能去猜路径)。
-  await scenario('remotesession', 'remotesession 远程会话:附件进会话工作区 + 远端答 run_bash 审批(by=tunnel)+ 结果落库', async () => {
+  await scenario('remotesession', 'remotesession 远程会话:附件进会话工作区且 host 模型读得到 + 远端答 run_bash 审批(by=tunnel)+ 结果落库', async () => {
     const unit = randomUUID();
     const tok = `RS${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const callerHdr = Buffer.from(JSON.stringify({ u: unit, k: 'phone', n: 'Live Pixel 手机', p: 'android', r: null }), 'utf8').toString('base64url');
@@ -1032,6 +1038,14 @@ try {
     const up = await api('/agent/workspace/upload', { method: 'POST', headers: H, body: JSON.stringify({ sessionId: sid, files: [{ path: attach, content: `code = ${tok}\nsecond line\n`, mimeType: 'text/plain' }] }) });
     const sandboxRoot = REMOTE_SESSION_SANDBOX;
     const landed = (() => { try { return readdirSync(sandboxRoot).filter((d) => existsSync(join(sandboxRoot, d, attach))).map((d) => join(sandboxRoot, d)); } catch { return []; } })();
+    // 附件腿(审批一律代拒)
+    const probe = await run(sid,
+      `I just attached a file named ${attach} to this conversation. Read it and reply with only its first line converted to uppercase.`,
+      120_000, {}, 'mobile/live-harness', () => 'reject', H, H);
+    const found = probe.content.includes(`CODE = ${tok}`);
+    const probeCmds = probe.approvalList.filter((a) => a.name === 'run_bash').map((a) => { try { return JSON.parse(a.args).command; } catch { return a.args; } });
+    const probeFree = probe.toolCalls.filter((n) => n !== 'run_bash'); // 免批调用(read_file / list_dir …)不经审批,照记下来
+    const probeRejected = probe.approvalResults.filter((r) => r.action === 'reject').length;
     // 契约腿
     const echo = `ECHO-${tok}`;
     const ev = await run(sid, `Run exactly this shell command with the run_bash tool: echo ${echo} && pwd\nThen reply with only the command output.`,
@@ -1042,28 +1056,21 @@ try {
     const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
     const lastA = [...msgs].reverse().find((m) => m.role === 'assistant' || m.role === 'model'); // 库里助手消息 role='model'
     const persisted = !ev.error && ev.done && !!lastA && String(lastA.content || '').includes(echo);
-    // 探针腿(同一会话;不计 PASS;缺省不跑,--rs-probe 开)
-    const probe = !RS_PROBE ? { content: '', error: null, approvalList: [], approvalResults: [], toolCalls: [], skipped: true } : await run(sid,
-      `I just attached a file named ${attach} to this conversation. Use the run_bash tool to print its contents converted to uppercase (for example with tr), then reply with only the first line of that uppercased output.`,
-      120_000, {}, 'mobile/live-harness', () => 'reject', H, H);
-    const found = probe.content.includes(`CODE = ${tok}`) || probe.content.includes(tok);
-    const probeCmds = probe.approvalList.filter((a) => a.name === 'run_bash').map((a) => { try { return JSON.parse(a.args).command; } catch { return a.args; } });
-    // 代拒之外,模型还能用免批的只读捷径(known-safe 单命令 / read_file / list_dir)自己找 —— 那些不经审批,照记下来
-    const probeFree = probe.toolCalls.filter((n) => n !== 'run_bash');
-    const probeRejected = probe.approvalResults.filter((r) => r.action === 'reject').length;
+    // 落库的附件腿用户消息第一行 = 引擎拼的附件路径(模型看到的就是它)
+    const firstUser = msgs.find((m) => m.role === 'user');
+    const refLine = String(firstUser?.content || '').split('\n')[0];
     try { rmSync(REMOTE_SESSION_SANDBOX, { recursive: true, force: true }); } catch { /* 引擎还占着也无妨,系统临时目录 */ }
     return {
-      ok: !ev.error && tagged && byOk && persisted && landed.length > 0,
+      ok: !ev.error && tagged && byOk && persisted && landed.length > 0 && found,
       inconclusive: !ev.error && bashAsks.length === 0,
       detail: ev.error || `上传 ${up?.saved ?? '?'}/${up?.total ?? '?'} 落在${landed.length ? ` 会话沙箱 ${landed[0]}` : '(没找到 ← 红)'}(host 工具 cwd = ${workspace});`
+        + `附件腿(审批一律代拒):模型${found ? '读到了附件' : '没读到附件 ← 红'}${probe.error ? `(${probe.error})` : ''};落库首行 ${refLine.endsWith(attach) ? '= 附件路径' : `${JSON.stringify(refLine.slice(0, 80))} ← 没有附件路径`};`
+        + `要批的 run_bash ${probeCmds.length} 条、代拒 ${probeRejected} 条${probeCmds.length ? `:${probeCmds.map((c) => String(c).slice(0, 70)).join(' ‖ ')}` : ''}${probeFree.length ? `;免批调用 ${probeFree.join(',')}` : ''};`
         + `契约腿:run_bash 审批 ${bashAsks.length} 次${bashAsks.length ? `(remote ${JSON.stringify(bashAsks[0].remote)})` : '(模型没调,不计绿)'}${tagged ? '' : ' ← 调用方不对 / 缺席'};`
         + `approval_result ${ev.approvalResults.length} 条${ev.approvalResults.length ? ` by ${JSON.stringify(ev.approvalResults[0].by)}` : ''}${byOk ? '' : ' ← by 不对 / 缺席'};`
-        + `消息落库 ${persisted ? '读得回' : '读不回 ← 红'};`
-        + (probe.skipped ? '探针腿未跑(--rs-probe 开;会在本机执行免批只读命令)'
-          : `探针腿(审批一律代拒):模型${found ? '找到了附件' : '没找到附件'}${probe.error ? `(${probe.error})` : ''},要批的 run_bash ${probeCmds.length} 条、代拒 ${probeRejected} 条:${probeCmds.map((c) => String(c).slice(0, 70)).join(' ‖ ')}`
-            + `${probeFree.length ? `;免批调用 ${probeFree.join(',')}` : ''}`)
+        + `消息落库 ${persisted ? '读得回' : '读不回 ← 红'}`
         + `${ev.approveError ? `;代批失败 ${ev.approveError}` : ''}`,
-      output: `${ev.content}\n--- 探针腿 ---\n${probe.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: [...ev.toolCalls, '|', ...probe.toolCalls],
+      output: `--- 附件腿 ---\n${probe.content}\n--- 契约腿 ---\n${ev.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: [...probe.toolCalls, '|', ...ev.toolCalls],
     };
   });
 
@@ -1682,6 +1689,16 @@ Then reply with only the command output.`,
   });
 
   await scenario('muse', `muse 心跳周期(${MUSE_MODE})`, async () => {
+    // P1 · M1A(K9 G7):Muse 起周期前先各留一段远程会话(经隧道头)与本机会话。远程那段的原话(标题里的 rmark)与它的 run.done 活动行
+    // (s=R…)不许进 Muse 的周期简报,本机那段的活动行(s=L…)照常在(正对照:活动尾部真的被读了)。判据读 state.db 里 Muse run 的
+    // input.ephemeralHint(代码拼的简报原文,不看模型);另查 Muse 的 Journal / todo / 回复里没有 rmark(模型没从别的路拿到)。
+    // 负对照 = 修复前的 dist(简报「最近会话标题」里就有 rmark → 红)。
+    const tag = Math.random().toString(36).slice(2, 7).toUpperCase();
+    const rmark = `MUSEREMOTE${tag}`;
+    const rsid = `R${tag}-live-muse-remote`;
+    const lsid = `L${tag}-live-muse-local`;
+    const seedR = await run(rsid, `${rmark} is my project codename; keep it in mind. Reply with just OK.`, 120_000, {}, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
+    const seedL = await run(lsid, `MUSELOCAL${tag} is my other codename. Reply with just OK.`, 120_000);
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
     const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s)); // 路由包一层 {status}
     const started = await until(async () => { const s = await status(); return s.running || s.lastCycleAt ? s : null; }, 120_000, 3000);
@@ -1759,8 +1776,15 @@ Then reply with only the command output.`,
     for (const t0 = Date.now(); Date.now() - t0 < 60_000; await sleep(2000)) { firsts = await museFirstPrompts().catch(() => []); if (firsts[1] > 0) break; }
     const [p1, p2] = firsts;
     const replayOk = !twoCycles || (!!(p1 && p2) && p2 <= p1 * 1.5); // 周期 2 没起另由 twoCycles 判红
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk; // 审批队列、开局上下文都是引擎真实状态,照判
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    const hints = await museCycleHints().catch(() => []);
+    const hintAll = hints.join('\n');
+    const hintLeak = [rmark, `s=${rsid.slice(0, 6)}`].filter((m) => hintAll.includes(m));
+    const hintPos = hintAll.includes(`s=${lsid.slice(0, 6)}`);
+    const saidLeak = [journal, museSays, JSON.stringify(todos)].some((t) => t.includes(rmark));
+    const g7 = !seedR.error && !seedL.error && hints.length > 0 && hintLeak.length === 0 && hintPos && !saidLeak;
+    const g7Text = `G7 远程会话${seedR.error ? `种子失败(${seedR.error})` : hintLeak.length ? `漏进周期简报 ${hintLeak.join(',')} ← 红` : '未进周期简报'}、本机活动行${hintPos ? '在' : '不在 ← 红(正对照)'}${saidLeak ? '、Muse 输出里出现了远程标记 ← 红' : ''}(简报 ${hints.length} 份)`;
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7; // 审批队列、开局上下文都是引擎真实状态,照判
+    return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,

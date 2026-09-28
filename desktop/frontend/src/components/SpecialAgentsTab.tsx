@@ -21,7 +21,7 @@ registerMessages({
   'specialUi.retry': { zh: '重新加载', en: 'Try again' },
   'specialUi.loadFailed': { zh: '暂时无法读取后台 Agent 设置。', en: 'Background agent settings could not be loaded.' },
   // P1-K10b:设备页的引擎是那台电脑,GET /agent/special/config 对远程来源只回开关与两个节奏值(提示词、授权文件夹、模型、时段、预算不回)。
-  // Muse 的权限档 / 心跳经 muse/status、人格经 /agent/agents 仍对远端可读 —— 这句文案只说「这页显示什么」,不宣称别处也藏了
+  // Muse 的权限档 / 心跳经 muse/status 仍对远端可读(MuseView 与 Muse Space 要用;P1-M1A 起那条也投影、/agent/agents 不再回人格)—— 这句文案只说「这页显示什么」,不宣称别处也藏了
   'specialUi.remoteOnly': { zh: '后台 Agent 只能在运行它们的那台电脑上设置。这里只显示它们是否开启。', en: 'Background agents can only be set up on the computer they run on. This page only shows whether they are on.' },
   'specialUi.advanced': { zh: '高级设置', en: 'Advanced settings' },
   'specialUi.memory': { zh: '记忆与进化', en: 'Memory and growth' },

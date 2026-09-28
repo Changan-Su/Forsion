@@ -118,7 +118,7 @@ describe('I1 远端 PATCH project_path → 会话盖远程标记', () => {
     expect((await rowOf('I1c')).cfg).toEqual({ remoteOrigin: first, thinkingLevel: 'low' });
   });
 
-  it('正对照:本机改路径、远端只改标题 / 归档、远端写回同一路径、远端清空路径 → 都不盖标记', async () => {
+  it('正对照:本机改路径、远端只改标题 / 归档、远端写回同一路径、远端清空路径 → 都不盖 remoteOrigin(改标题只盖 remoteContent)', async () => {
     const p = dir('I1d');
     await addSession('I1d', { agentSlug: 'a1' }, p);
     expect((await send('PATCH', '/agent/sessions/I1d', { project_path: dir('I1d-local-move') })).status).toBe(200);
@@ -128,7 +128,9 @@ describe('I1 远端 PATCH project_path → 会话盖远程标记', () => {
     expect((await send('PATCH', '/agent/sessions/I1d', { project_path: moved }, REMOTE_HDR)).status).toBe(200);
     expect((await send('PATCH', '/agent/sessions/I1d', { project_path: null }, REMOTE_HDR)).status).toBe(200);
     const row = await rowOf('I1d');
-    expect(row.cfg).toEqual({ agentSlug: 'a1' });
+    // 远端改标题从 M1A 复审起盖的是 remoteContent(标题是远端给的串,挡在 Muse / 召回外),**不是** remoteOrigin:D1 读范围不动
+    expect(row.cfg).toEqual({ agentSlug: 'a1', remoteContent: expect.objectContaining({ via: 'lan' }) });
+    expect(row.cfg.remoteOrigin).toBeUndefined();
     expect(row.path).toBeNull();
   });
 

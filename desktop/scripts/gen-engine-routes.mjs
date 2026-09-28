@@ -154,7 +154,7 @@ export const CLASSIFICATION = {
   'GET /agent/tools': [A, 'tool list'],
 
   // ── agents.ts ──
-  'GET /agent/agents': [A, 'Agent roster'],
+  'GET /agent/agents': [A, 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)'],
   'GET /agent/tool-catalog': [A, 'tool catalog'],
   'POST /agent/agents': [D, 'create Agent (design appendix C)'],
   'PATCH /agent/agents/:slug': [D, 'update Agent (design appendix C)'],
@@ -231,7 +231,7 @@ export const CLASSIFICATION = {
   'PATCH /agent/special/muse/todos/:id': [A, 'Muse todo status only (card landing / dismiss)'],
   'POST /agent/special/muse/todos/:id/approve': [A, 'approve a Muse todo (D1/D2)'],
   'POST /agent/special/muse/todos/inject': [D, 'creates persistent follow-up execution (design appendix C)'],
-  'GET /agent/special/muse/status': [A, 'Muse status'],
+  'GET /agent/special/muse/status': [A, 'Muse status; remote callers get the fields the Muse view / Space read, no absolute paths, budgets or last error (P1-M1A projection)'],
   'GET /agent/special/muse/triggers': [A, 'Muse triggers'],
   'DELETE /agent/special/muse/triggers/:id': [D, 'Muse trigger config'],
   'POST /agent/special/muse/triggers': [D, 'creates persistent follow-up execution (design appendix C)'],
