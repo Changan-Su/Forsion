@@ -35,7 +35,8 @@ const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const GENESIS = path.resolve(__dirname, '../..')
 const MOBILE = path.join(GENESIS, 'mobile')
-const PORT = 5303 // 避开 mobile 台架的 5274–5299
+// 避开 mobile 台架的 5274–5299;别的会话的 vite 可能占着 → ENGINE_TARGET_PORT 覆盖,占用时起跑前就报错(否则页面落到别人的服务上,只见 connState 等不到的假红)
+const PORT = Number(process.env.ENGINE_TARGET_PORT) || 5303
 const ORIGIN = `http://localhost:${PORT}`
 const U = '7f0e8a52-1b2c-4d3e-8f40-5a6b7c8d9e0f'
 const SHOT_DIR = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-enginetarget-'))
@@ -170,6 +171,7 @@ const ping = () => new Promise((res) => {
 })
 
 async function main() {
+  if (await ping()) throw new Error(`端口 ${PORT} 已有服务在应答(多半是别的会话的 vite)—— 换一个:ENGINE_TARGET_PORT=<空闲端口> npm run check:enginetarget`)
   const dist = buildDist()
   const world = await startWorld()
   const preview = spawn('npx', ['vite', 'preview', '--outDir', dist, '--port', String(PORT), '--strictPort'], {
