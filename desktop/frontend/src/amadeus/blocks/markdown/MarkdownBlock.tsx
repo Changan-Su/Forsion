@@ -101,6 +101,7 @@ import { askString } from '../../components/askString'
 import { linkInputRule, normalizeHref } from './linkHref'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
+import { unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions, editorExtensionGen, subscribeEditorExtensions } from '../../plugins/editorExtensions'
 import { registerMessages, translate, useI18n } from '../../../i18n'
@@ -196,18 +197,20 @@ export function stampedFileName(kind: string): string {
 /** 序列化输出 → 落盘 md 的统一规范化(**唯一入口,勿分叉**):
  *  新打的 [[链接]] 在重解析成 wikilink 节点前仍是纯文本,remark 会转义成 \[\[(索引抽不到,双链失联);
  *  math 纯文本的 _ * { } 被转义(x_i→x\_i);`> [!note]-` 的 `[` 被转义 Obsidian 不认;空段落落成 <br />。
+ *  行首 `#tag` 被转义成 `\#tag`(标签索引与 Obsidian 都不认,R-25;须在 unescapeMathSource 之前,见 tagEscape.ts)。
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))
 }
 /** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
  *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
  *  unescapeCalloutToken:切出来的那半段也可能带 callout 令牌;
+ *  unescapeTagAtLineStart:片段行首的 `#tag` 同样别带反斜杠(R-25);
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(markdown)))
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(markdown))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
