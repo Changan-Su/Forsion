@@ -562,6 +562,15 @@ const museFirstPrompts = async () => {
       FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all().map((x) => Number(x.p) || 0); // 0 = 这个周期还没有 usage;不滤,滤了周期序号会错位
   } finally { db.close(); }
 };
+/** 每个 Muse 周期的简报原文(input.ephemeralHint:代码拼的「最近会话标题 / 日志摘要 / 活动尾部 …」,不看模型;P1 · M1A 的 G7 判据)。 */
+const museCycleHints = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`SELECT json_extract(r.input, '$.ephemeralHint') AS h FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`)
+      .all().map((x) => String(x.h || ''));
+  } finally { db.close(); }
+};
 /** Muse 周期里加载 forsion-plugin 技能的次数(09-27:指令改成「只在要更多接口时才加载」,跨次比对用)。 */
 const museSkillLoads = async () => {
   const { default: Database } = await import('better-sqlite3');
@@ -1680,6 +1689,16 @@ Then reply with only the command output.`,
   });
 
   await scenario('muse', `muse 心跳周期(${MUSE_MODE})`, async () => {
+    // P1 · M1A(K9 G7):Muse 起周期前先各留一段远程会话(经隧道头)与本机会话。远程那段的原话(标题里的 rmark)与它的 run.done 活动行
+    // (s=R…)不许进 Muse 的周期简报,本机那段的活动行(s=L…)照常在(正对照:活动尾部真的被读了)。判据读 state.db 里 Muse run 的
+    // input.ephemeralHint(代码拼的简报原文,不看模型);另查 Muse 的 Journal / todo / 回复里没有 rmark(模型没从别的路拿到)。
+    // 负对照 = 修复前的 dist(简报「最近会话标题」里就有 rmark → 红)。
+    const tag = Math.random().toString(36).slice(2, 7).toUpperCase();
+    const rmark = `MUSEREMOTE${tag}`;
+    const rsid = `R${tag}-live-muse-remote`;
+    const lsid = `L${tag}-live-muse-local`;
+    const seedR = await run(rsid, `${rmark} is my project codename; keep it in mind. Reply with just OK.`, 120_000, {}, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
+    const seedL = await run(lsid, `MUSELOCAL${tag} is my other codename. Reply with just OK.`, 120_000);
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
     const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s)); // 路由包一层 {status}
     const started = await until(async () => { const s = await status(); return s.running || s.lastCycleAt ? s : null; }, 120_000, 3000);
@@ -1757,8 +1776,15 @@ Then reply with only the command output.`,
     for (const t0 = Date.now(); Date.now() - t0 < 60_000; await sleep(2000)) { firsts = await museFirstPrompts().catch(() => []); if (firsts[1] > 0) break; }
     const [p1, p2] = firsts;
     const replayOk = !twoCycles || (!!(p1 && p2) && p2 <= p1 * 1.5); // 周期 2 没起另由 twoCycles 判红
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk; // 审批队列、开局上下文都是引擎真实状态,照判
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    const hints = await museCycleHints().catch(() => []);
+    const hintAll = hints.join('\n');
+    const hintLeak = [rmark, `s=${rsid.slice(0, 6)}`].filter((m) => hintAll.includes(m));
+    const hintPos = hintAll.includes(`s=${lsid.slice(0, 6)}`);
+    const saidLeak = [journal, museSays, JSON.stringify(todos)].some((t) => t.includes(rmark));
+    const g7 = !seedR.error && !seedL.error && hints.length > 0 && hintLeak.length === 0 && hintPos && !saidLeak;
+    const g7Text = `G7 远程会话${seedR.error ? `种子失败(${seedR.error})` : hintLeak.length ? `漏进周期简报 ${hintLeak.join(',')} ← 红` : '未进周期简报'}、本机活动行${hintPos ? '在' : '不在 ← 红(正对照)'}${saidLeak ? '、Muse 输出里出现了远程标记 ← 红' : ''}(简报 ${hints.length} 份)`;
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7; // 审批队列、开局上下文都是引擎真实状态,照判
+    return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
