@@ -38,17 +38,19 @@ function findChromium() {
 // mobile 构建经 vite 别名吃进 desktop/frontend(src + public = publicDir)、desktop/shared、lcl、web/src/amadeus(mobile/vite.config.ts),
 // 裸包从各自的 node_modules 解析(desktop/frontend 里的 import 走 desktop 的锁文件)。渲染层改一行而台架还拿旧包跑 = 结论说的是别的代码
 // (评审 P1:缓存曾落在按用户共享的 os.tmpdir()/forsion-remotechain-dist,二十几个兄弟 worktree 共用一份、从不和源码比对)。
-// 戳 = GENESIS 绝对路径 + HEAD + 这些路径相对 HEAD 的 diff(含二进制)+ 未跟踪文件的内容;任一变了就重建。git 不可用 → 永不复用。
+// 戳 = GENESIS 绝对路径 + 这些路径在 HEAD 的树 / blob 哈希(只动别处的提交不触发重建)+ 相对 HEAD 的 diff(含二进制)+ 未跟踪文件的内容;
+// 任一变了就重建。git 不可用 → 永不复用。
 const STAMP_PATHS = ['mobile', 'desktop/frontend', 'desktop/shared', 'desktop/package.json', 'desktop/package-lock.json', 'lcl', 'web/src/amadeus']
 const STAMP_FILE = '.k9-stamp.json'
 const git = (args) => spawnSync('git', ['-C', GENESIS, ...args], { encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 })
 
 /** 当前源码的戳(sha256 hex);git 不可用 / 出错 → null(调用方按「不可复用」处理)。 */
 function phoneDistStamp() {
-  const head = git(['rev-parse', 'HEAD'])
-  if (head.status !== 0) return null
+  const trees = git(['ls-tree', 'HEAD', '--', ...STAMP_PATHS])
+  if (trees.status !== 0) return null
   const h = crypto.createHash('sha256')
-  h.update(`genesis=${GENESIS}\nhead=${head.stdout.toString().trim()}\norigin=${PHONE_ORIGIN}\nmode=development\n`)
+  h.update(`genesis=${GENESIS}\norigin=${PHONE_ORIGIN}\nmode=development\n`)
+  h.update(trees.stdout)
   const diff = git(['diff', 'HEAD', '--no-color', '--no-ext-diff', '--binary', '--', ...STAMP_PATHS])
   if (diff.status !== 0) return null
   h.update(diff.stdout)
