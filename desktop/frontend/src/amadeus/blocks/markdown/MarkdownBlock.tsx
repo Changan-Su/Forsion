@@ -559,6 +559,8 @@ export function MilkdownInner({
   // Esc 闩锁:记住被关掉的那个 '@' / '/' 锚点,同锚点不再弹(否则下一击键 plugin 又 report → 关不掉)。
   const mentionDismissedFrom = useRef<number | null>(null)
   const slashDismissedFrom = useRef<number | null>(null)
+  // `[[` 同款(L-21):此前唯独它没闩 —— Esc 关掉后下一击键 / 光标一动面板又弹,紧跟的回车把正文改写成 `[[候选]]`。
+  const wikiDismissedFrom = useRef<number | null>(null)
   // handleKeyDown 闭包只建一次读不到 state → 用 ref 镜像弹窗开启态,供 '/' 分支避让。
   const wikiOpenRef = useRef(false)
   const mentionOpenRef = useRef(false)
@@ -975,7 +977,17 @@ export function MilkdownInner({
       .use(wikilinkPlugin((name) => wikiRef.current(name), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
-      .use(wikiSuggestPlugin((q) => { wikiOpenRef.current = !!q; setWiki(q) }))
+      .use(wikiSuggestPlugin((q, blurred) => {
+        if (!q) {
+          if (!blurred) wikiDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(同 @,L-04)
+          wikiOpenRef.current = false
+          setWiki(null)
+          return
+        }
+        if (wikiDismissedFrom.current === q.from) { wikiOpenRef.current = false; setWiki(null); return } // Esc 关掉的同一个 `[[` 不再弹
+        wikiOpenRef.current = true
+        setWiki(q)
+      }))
       .use(mentionSuggestPlugin((q, blurred) => {
         if (!q) {
           if (!blurred) mentionDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(L-04)
@@ -1469,7 +1481,11 @@ export function MilkdownInner({
           getPageNames={mentionPageNames}
           getFiles={getFiles}
           onPick={pickWiki}
-          onClose={() => setWiki(null)}
+          onClose={() => {
+            wikiDismissedFrom.current = wiki.from // Esc:同一个 `[[` 不再弹(L-21);wikiOpenRef 一并复位,slash 不再被它压着
+            wikiOpenRef.current = false
+            setWiki(null)
+          }}
           editorFocused={editorFocused}
           sourcePath={attachmentPagePath}
         />

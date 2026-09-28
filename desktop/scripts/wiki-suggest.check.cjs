@@ -6,6 +6,7 @@
 //   L-08 输入法组字时 ↓/Enter 被面板抢走(拼音选词回车直接插入候选)—— 组字一律放行。
 //   L-13 [[ 空查询最近优先;`名#` 列标题、`名#^` 只列已有块 ID(`[[#` = 本篇);解析不到 / 带锚点不给「新建」;fm 别名是候选。
 //   L-14 正文 #标签 渲染成可点胶囊(光标行露源码)、点击发 amadeus:open-tag、`#` 补全(打字才弹、Esc 闩锁、代码里不弹)。
+//   L-21 `[[` 面板 Esc 闩锁:Esc 后接着打字 / 移光标不重弹,紧跟的回车不改写正文;删掉 `[[` 重打才解闩。
 //        合成 KeyboardEvent 的 isComposing 到不了页面,必须走 CDP Input.imeSetComposition 起真组合。
 // 用法:npm run check:wikisuggest(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/wiki-suggest.check.cjs
 //       ONLY=L-04 只跑某一节。
@@ -414,6 +415,41 @@ async function main() {
     await page.keyboard.type(' #wo', { delay: 30 })
     await page.waitForTimeout(250)
     check('L-14h 代码块里 # 不弹、不装饰', (await page.locator('.tag-suggest').count()) === 0 && (await page.locator(`${PM} .amx-tag-pill`).count()) === 0)
+    await page.close()
+  })
+
+  // ── L-21:`[[` 面板 Esc 闩锁(同 @ / / / #)—— 关掉的同一个 `[[` 继续打字 / 移光标都不重弹,回车不改写正文 ──
+  await tryTest('L-21', async () => {
+    let page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[Al', { delay: 30 })
+    await page.waitForTimeout(250)
+    const opened = await popupCount(page)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(150)
+    await page.keyboard.type('p', { delay: 30 })
+    await page.waitForTimeout(250)
+    check('L-21a Esc 后接着打字不重弹', opened === 1 && (await popupCount(page)) === 0, `opened=${opened} ${JSON.stringify(await items(page))}`)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(150)
+    const out = await saved(page)
+    check('L-21a 紧跟的回车不把 `Alp` 改写成 `[[Alpha]]`', typeof out === 'string' && out.includes('x [[Alp\n') && !out.includes('[[Alpha]]'), JSON.stringify(out))
+    await page.close()
+    page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[Alp', { delay: 30 })
+    await page.waitForTimeout(250)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(150)
+    await page.keyboard.press('ArrowLeft')
+    await page.waitForTimeout(250)
+    check('L-21b Esc 后只移光标不重弹', (await popupCount(page)) === 0)
+    // 触发真的没了(删掉 `[[`)再重打 → 闩锁解除,照常弹
+    await page.keyboard.press('End')
+    for (let i = 0; i < 5; i++) await page.keyboard.press('Backspace')
+    await page.keyboard.type('[[Be', { delay: 30 })
+    await page.waitForTimeout(250)
+    check('L-21c 删掉 `[[` 重打 → 照常弹', (await items(page))[0] === '*Beta', JSON.stringify(await items(page)))
     await page.close()
   })
 
