@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { blockLabel, canAutoTriggerFromBlock, matchTrigger, triggerFromStructuralPrefix } from './blockTriggers'
+import { setLocaleGlobal } from '../../../i18n'
 
 describe('matchTrigger(光标前文本 → 块触发)', () => {
   it('标题 1-6 级;7 个 # 不触发', () => {
@@ -73,6 +74,16 @@ describe('canAutoTriggerFromBlock(键盘前缀触发范围)', () => {
 const N = (name: string, extra: Record<string, unknown> = {}) => ({ name, ...extra })
 
 describe('blockLabel', () => {
+  it('跟随界面语言(I-19:此前写死中文,英文界面照样显示「标题 2」)', () => {
+    setLocaleGlobal('en')
+    try {
+      expect(blockLabel([N('heading', { level: 2 })])).toBe('Heading 2')
+      expect(blockLabel([N('paragraph'), N('list_item', { checked: false }), N('bullet_list')])).toBe('To-do')
+      expect(blockLabel([N('paragraph')])).toBe('Text')
+    } finally {
+      setLocaleGlobal('zh')
+    }
+  })
   it('普通段落 = 正文', () => expect(blockLabel([N('paragraph')])).toBe('正文'))
   it('标题带级别', () => expect(blockLabel([N('heading', { level: 3 })])).toBe('标题 3'))
   it('列表项先于列表被扫到,但自己没 checked 时继续外扫到列表类型', () =>

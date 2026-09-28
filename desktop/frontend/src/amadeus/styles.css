@@ -1547,6 +1547,8 @@ body.amx-marquee-active * {
   background: var(--menu-hover);
   color: var(--text);
 }
+/* A▾ 上的「A」染成选区当前的文字色 / 背景色(I-19);没有统一颜色时就是普通字色。 */
+.am-app .itb-color-cur { padding: 0 2px; border-radius: 2px; }
 .am-app .itb-color-head {
   font-size: var(--ui-font-caption, 11px);
   font-weight: 600;

@@ -89,9 +89,10 @@ import {
 import { wikilinkPlugin } from './wikilink'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
+import { editContextOf } from './menuContext'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
-import { InlineToolbar, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
+import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles } from 'lucide-react'
 import { readTangu } from '../../plugins/tanguSeam'
 import { OverlayPortal } from '../../lib/overlayPortal'
@@ -172,6 +173,8 @@ registerMessages({
   'mdblock.link.title': { zh: '插入链接', en: 'Insert link' },
   'mdblock.link.editTitle': { zh: '编辑链接', en: 'Edit link' },
   'mdblock.link.remove': { zh: '移除链接', en: 'Remove link' },
+  // 选区工具栏「转换为」做不成时的提示(I-19:此前点了静默无效,或在单元格里把表劈成两张)
+  'mdblock.turn.failed': { zh: '这里不能转换为「{kind}」', en: "Can't turn this into {kind} here" },
   'mdblock.link.label': { zh: '输入或粘贴地址（裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
   'mdblock.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
   'mdblock.bookmark.label': { zh: '粘贴链接地址（https:// 开头）；YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
@@ -1424,10 +1427,13 @@ export function MilkdownInner({
   }
   /** 「转成代码块 / 公式」不是前缀型转换,走各自的整块重写。
    *  代码块在**跨块选区**下是 AFFiNE 的「合并成一个代码块」(逐块转会得到 N 个代码块)。 */
-  const turnIntoWrapped = (a: 'codeblock' | 'math'): void => {
+  const turnIntoWrapped = (a: 'codeblock' | 'math'): boolean => {
+    let ok = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const { state } = view
+      // 单元格里整块重写 = 把表格从这一格劈成两张(I-19);菜单已不列,这里再挡一道。
+      if (editContextOf(state.selection).tableCell) return
       const { $from, $to } = state.selection
       const from = $from.before($from.depth)
       const to = $to.after($to.depth)
@@ -1441,20 +1447,29 @@ export function MilkdownInner({
       tr.setSelection(TextSelection.near(tr.doc.resolve(from + 1)))
       view.dispatch(tr.scrollIntoView())
       view.focus()
+      ok = true
     })
+    return ok
+  }
+  /** 转换没做成 → 说一句(I-19:此前 applyTrigger 的 false 被吞掉,点了没反应)。 */
+  const turnFailed = (a: ToolbarAction): void => {
+    const key = TURN_LABEL_KEYS[a]
+    window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: key ? translate(key) : a }) } }))
   }
   const onToolbarAct = (a: ToolbarAction): void => {
     if (a === 'codeblock' || a === 'math') {
-      turnIntoWrapped(a)
+      if (!turnIntoWrapped(a)) turnFailed(a)
       return
     }
     const trig = TURN[a]
     if (trig) {
+      let ok = false
       getInstance()?.action((ctx) => {
         const view = ctx.get(editorViewCtx)
-        applyTrigger(view, trig, null) // consume=null:工具栏没有要删的触发符
+        ok = applyTrigger(view, trig, null) // consume=null:工具栏没有要删的触发符
         view.focus()
       })
+      if (!ok) turnFailed(a)
       return
     }
     const map: Partial<Record<ToolbarAction, () => void>> = {
@@ -1560,6 +1575,9 @@ export function MilkdownInner({
           kind={toolbar.kind}
           active={toolbar.active}
           align={toolbar.align}
+          shape={toolbar.shape}
+          fg={toolbar.fg}
+          bg={toolbar.bg}
           onAct={onToolbarAct}
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}

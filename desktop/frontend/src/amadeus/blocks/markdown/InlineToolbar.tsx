@@ -5,6 +5,7 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { AlignCenter, AlignLeft, AlignRight } from 'lucide-react'
 import { OverlayAt } from '../../lib/clampMenu'
 import { registerMessages, useI18n } from '../../../i18n'
+import type { ToolbarShape } from './menuContext'
 
 // ⚠️ 文案一律经组件内的 `t()` 求值(useI18n),**不要**换成模块级 `translate()`:
 // 表格是模块作用域,模块级求值会把文案冻在加载时的语言上,切语言不再更新。
@@ -117,6 +118,9 @@ const BG_COLORS: Array<{ nameKey: string; v: string }> = [
   { nameKey: 'itb.color.pink', v: '#ffcece' },
   { nameKey: 'itb.color.grey', v: '#eaecef' },
 ]
+/** 缺省 = 全部露出(老调用方不传 shape 时的形态)。 */
+const FULL_SHAPE: ToolbarShape = { turnInto: true, format: true, link: true, color: true, align: true }
+
 const TURN_INTO: Array<{ k: ToolbarAction; labelKey: string }> = [
   { k: 'text', labelKey: 'itb.turn.text' },
   { k: 'h1', labelKey: 'itb.turn.h1' },
@@ -134,6 +138,8 @@ const TURN_INTO: Array<{ k: ToolbarAction; labelKey: string }> = [
   { k: 'codeblock', labelKey: 'itb.turn.codeblock' },
   { k: 'math', labelKey: 'itb.turn.math' },
 ]
+/** 「转换为」各项的文案键(宿主转换失败的提示里要说「转换为 X」)。 */
+export const TURN_LABEL_KEYS: Partial<Record<ToolbarAction, string>> = Object.fromEntries(TURN_INTO.map((it) => [it.k, it.labelKey]))
 
 export function InlineToolbar({
   left,
@@ -142,6 +148,9 @@ export function InlineToolbar({
   kind,
   active,
   align,
+  shape = FULL_SHAPE,
+  fg,
+  bg,
   onAct,
   onColor,
   onBg,
@@ -160,6 +169,11 @@ export function InlineToolbar({
   active?: string[]
   /** 当前块对齐；跨块且不一致时缺省，不误点亮任何一个。 */
   align?: 'left' | 'center' | 'right'
+  /** 这个上下文露哪几区(I-19,menuContext.toolbarShape 单源):代码块 / 单元格里不列点了无效或会劈表的按钮。 */
+  shape?: ToolbarShape
+  /** 选区处处相同的文字色 / 背景色:A▾ 上显示当前颜色。 */
+  fg?: string
+  bg?: string
   onAct: (a: ToolbarAction) => void
   onColor: (v: string) => void // '' = 清除文字色
   onBg: (v: string) => void // '' = 清除背景色
@@ -212,25 +226,40 @@ export function InlineToolbar({
             <span className="itb-sep" />
           </>
         )}
-        <button className="itb-btn itb-turn" title={t('itb.turnInto')} onMouseDown={down(() => setPanel(panel === 'turn' ? null : 'turn'))}>
-          {kind} ▾
-        </button>
-        <span className="itb-sep" />
-        <button className={`itb-btn${on('strong')}`} style={{ fontWeight: 700 }} title={t('itb.bold')} data-act="bold" onMouseDown={down(() => onAct('bold'))}>B</button>
-        <button className={`itb-btn${on('emphasis')}`} style={{ fontStyle: 'italic' }} title={t('itb.italic')} data-act="italic" onMouseDown={down(() => onAct('italic'))}>I</button>
-        <button className={`itb-btn${on('amadeusU')}`} style={{ textDecoration: 'underline' }} title={t('itb.underline')} data-act="underline" onMouseDown={down(() => onAct('underline'))}>U</button>
-        <button className={`itb-btn${on('strike_through')}`} style={{ textDecoration: 'line-through' }} title={t('itb.strike')} data-act="strike" onMouseDown={down(() => onAct('strike'))}>S</button>
-        <button className={`itb-btn${on('inlineCode')}`} title={t('itb.code')} data-act="code" onMouseDown={down(() => onAct('code'))}>&lt;/&gt;</button>
-        <button className="itb-btn" title={t('itb.link')} data-act="link" onMouseDown={down(() => onAct('link'))}>🔗</button>
-        <span className="itb-sep" />
-        <button className="itb-btn itb-color" title={t('itb.colorMenu')} onMouseDown={down(() => setPanel(panel === 'color' ? null : 'color'))}>
-          A ▾
-        </button>
+        {shape.turnInto && (
+          <>
+            <button className="itb-btn itb-turn" title={t('itb.turnInto')} onMouseDown={down(() => setPanel(panel === 'turn' ? null : 'turn'))}>
+              {kind} ▾
+            </button>
+            <span className="itb-sep" />
+          </>
+        )}
+        {shape.format && (
+          <>
+            <button className={`itb-btn${on('strong')}`} style={{ fontWeight: 700 }} title={t('itb.bold')} data-act="bold" onMouseDown={down(() => onAct('bold'))}>B</button>
+            <button className={`itb-btn${on('emphasis')}`} style={{ fontStyle: 'italic' }} title={t('itb.italic')} data-act="italic" onMouseDown={down(() => onAct('italic'))}>I</button>
+            <button className={`itb-btn${on('amadeusUnderline')}`} style={{ textDecoration: 'underline' }} title={t('itb.underline')} data-act="underline" onMouseDown={down(() => onAct('underline'))}>U</button>
+            <button className={`itb-btn${on('strike_through')}`} style={{ textDecoration: 'line-through' }} title={t('itb.strike')} data-act="strike" onMouseDown={down(() => onAct('strike'))}>S</button>
+            <button className={`itb-btn${on('inlineCode')}`} title={t('itb.code')} data-act="code" onMouseDown={down(() => onAct('code'))}>&lt;/&gt;</button>
+          </>
+        )}
+        {shape.link && <button className={`itb-btn${on('link')}`} title={t('itb.link')} data-act="link" onMouseDown={down(() => onAct('link'))}>🔗</button>}
+        {(shape.format || shape.link) && <span className="itb-sep" />}
+        {shape.color && (
+          // A 字本身染上选区的当前文字色 / 背景色(处处相同时;I-19:此前看不出选中的字是什么颜色)。
+          <button className="itb-btn itb-color" title={t('itb.colorMenu')} data-fg={fg || undefined} data-bg={bg || undefined} onMouseDown={down(() => setPanel(panel === 'color' ? null : 'color'))}>
+            <span className="itb-color-cur" style={{ color: fg || undefined, background: bg || undefined }}>A</span> ▾
+          </button>
+        )}
         <button className="itb-btn" title={t('itb.clear')} data-act="clear" onMouseDown={down(() => onAct('clear'))}>T×</button>
-        <span className="itb-sep" />
-        <button className={`itb-btn${align === 'left' ? ' on' : ''}`} title={t('itb.alignLeftTitle')} aria-label={t('itb.alignLeft')} data-act="alignLeft" onMouseDown={down(() => onAct('alignLeft'))}><AlignLeft size={14} /></button>
-        <button className={`itb-btn${align === 'center' ? ' on' : ''}`} title={t('itb.alignCenterTitle')} aria-label={t('itb.alignCenter')} data-act="alignCenter" onMouseDown={down(() => onAct('alignCenter'))}><AlignCenter size={14} /></button>
-        <button className={`itb-btn${align === 'right' ? ' on' : ''}`} title={t('itb.alignRightTitle')} aria-label={t('itb.alignRight')} data-act="alignRight" onMouseDown={down(() => onAct('alignRight'))}><AlignRight size={14} /></button>
+        {shape.align && (
+          <>
+            <span className="itb-sep" />
+            <button className={`itb-btn${align === 'left' ? ' on' : ''}`} title={t('itb.alignLeftTitle')} aria-label={t('itb.alignLeft')} data-act="alignLeft" onMouseDown={down(() => onAct('alignLeft'))}><AlignLeft size={14} /></button>
+            <button className={`itb-btn${align === 'center' ? ' on' : ''}`} title={t('itb.alignCenterTitle')} aria-label={t('itb.alignCenter')} data-act="alignCenter" onMouseDown={down(() => onAct('alignCenter'))}><AlignCenter size={14} /></button>
+            <button className={`itb-btn${align === 'right' ? ' on' : ''}`} title={t('itb.alignRightTitle')} aria-label={t('itb.alignRight')} data-act="alignRight" onMouseDown={down(() => onAct('alignRight'))}><AlignRight size={14} /></button>
+          </>
+        )}
       </div>
 
       {panel === 'turn' && (

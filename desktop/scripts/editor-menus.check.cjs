@@ -3,6 +3,8 @@
 //   I9   ⌘E = 行内代码(对齐改 ⌘⇧L/E/R);选区上敲反引号 = 行内代码,不是两个字面反引号(I-09 / K-18b)
 //   I10  ⌘K 碰到已有链接 = 扩到整条、预填原地址、可「移除链接」;空选区 = 插一条新链接(I-10)
 //   I12  选区工具栏在鼠标按住(拖选)期间不出、松手才出;向上拖选不被它挡住;键盘选区照旧即时出(I-12)
+//   I19  选区工具栏看上下文:代码块里只留「转换为 / 清除」;单元格里不列「转换为」与对齐;链接 / 下划线 / 颜色显示当前状态;
+//        转换做不成要么真转了、要么给提示,不许静默(I-19)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -96,6 +98,27 @@ const caretAt = (page, text, atStart = false) => page.evaluate(({ text, atStart 
 }, { text, atStart })
 /** 等一个选择器出现;超时返回 false(不抛:一格红不该中断后面的组)。 */
 const waitSel = (page, sel, timeout = 3000) => page.waitForSelector(sel, { timeout }).then(() => true, () => false)
+/** 工具栏现状:露了哪些 data-act、哪些亮着、有没有「转换为」/ 颜色钮。 */
+const toolbar = (page) => page.evaluate(() => {
+  const tb = document.querySelector('[data-testid=inline-toolbar]')
+  if (!tb) return null
+  const acts = [...tb.querySelectorAll('.itb-row [data-act]')]
+  return {
+    acts: acts.map((b) => b.dataset.act),
+    on: acts.filter((b) => b.classList.contains('on')).map((b) => b.dataset.act),
+    turn: !!tb.querySelector('.itb-turn'),
+    kind: tb.querySelector('.itb-turn')?.textContent.trim() ?? null,
+    color: !!tb.querySelector('.itb-color'),
+    fg: tb.querySelector('.itb-color')?.dataset.fg ?? null,
+  }
+})
+/** 收集 amadeus:toast(台架不挂宿主的 toast 浮层,直接听事件)。 */
+const listenToasts = (page) => page.evaluate(() => {
+  if (window.__toasts) return
+  window.__toasts = []
+  window.addEventListener('amadeus:toast', (e) => window.__toasts.push(e.detail?.text ?? ''))
+})
+const toasts = (page) => page.evaluate(() => (window.__toasts || []).splice(0))
 const topBlocks = (page) => page.evaluate(() => {
   const o = []
   window.__upage.probe.view().state.doc.forEach((n) => o.push(`${n.type.name}:${JSON.stringify(n.textContent)}`))
@@ -201,6 +224,50 @@ async function main() {
       await page.keyboard.press('Shift+ArrowLeft')
       await page.waitForTimeout(200)
       check('I12b Shift+← 选区:工具栏即时出现', (await page.locator('[data-testid=inline-toolbar]').count()) === 1)
+    }
+
+    if (want('I19')) {
+      await listenToasts(page)
+      // I19a 代码块里:只留「转换为」+「清除」。
+      {
+        await load(page, '```js\nconst a = 1\n```\n\n后段\n')
+        await selectText(page, 'const')
+        await page.waitForTimeout(200)
+        const tb = await toolbar(page)
+        check('I19a 代码块里只露「转换为」与「清除」', tb && tb.turn && tb.acts.join(',') === 'clear' && !tb.color, JSON.stringify(tb))
+        // 转换做不成(代码块 → 无序列表,list_item 首子不收代码块)要么真转了,要么给一句提示 —— 不许静默无效。
+        await toasts(page)
+        const before = await topBlocks(page)
+        await page.locator('.inline-toolbar .itb-turn').dispatchEvent('mousedown')
+        await page.waitForTimeout(150)
+        await page.locator('.inline-toolbar .itb-menu-item', { hasText: '无序列表' }).dispatchEvent('mousedown')
+        await page.waitForTimeout(300)
+        const after = await topBlocks(page)
+        const ts = await toasts(page)
+        check('I19a 转换做不成不静默(文档变了,或有提示)', after !== before || ts.some((x) => /不能转换为/.test(x)), JSON.stringify({ changed: after !== before, ts }))
+      }
+      // I19b 单元格里:不列「转换为」和段落对齐,格式与链接照常。
+      {
+        await load(page, '| h1 | h2 |\n| --- | --- |\n| 单元 | 格子 |\n')
+        await selectText(page, '单元')
+        await page.waitForTimeout(200)
+        const tb = await toolbar(page)
+        check('I19b 单元格里不列「转换为」与对齐', tb && !tb.turn && !tb.acts.some((a) => /^align/.test(a)) && tb.acts.includes('bold') && tb.acts.includes('link'), JSON.stringify(tb))
+      }
+      // I19c 当前状态:链接 🔗 亮、下划线 U 亮、文字色显示在 A▾ 上。
+      {
+        await load(page, '[链接](https://a.com) 与 <u>下划</u> 和 <span style="color:#c62222">红字</span>\n')
+        await selectText(page, '链接')
+        await page.waitForTimeout(200)
+        const a = await toolbar(page)
+        await selectText(page, '下划')
+        await page.waitForTimeout(200)
+        const b = await toolbar(page)
+        await selectText(page, '红字')
+        await page.waitForTimeout(200)
+        const c = await toolbar(page)
+        check('I19c 链接 / 下划线亮、A▾ 显示当前文字色', a?.on.includes('link') && b?.on.includes('underline') && c?.fg === '#c62222', JSON.stringify({ a: a?.on, b: b?.on, fg: c?.fg }))
+      }
     }
 
     await page.close()

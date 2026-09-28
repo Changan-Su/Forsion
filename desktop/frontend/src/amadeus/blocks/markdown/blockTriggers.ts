@@ -8,6 +8,18 @@ import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Selection, type Transaction } from '@milkdown/kit/prose/state'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { registerMessages, translate } from '../../../i18n'
+
+// 选区工具栏「转换为」按钮上的当前块类型名(I-19:此前写死中文,英文界面照样显示「标题 2」)。
+registerMessages({
+  'blocklabel.text': { zh: '正文', en: 'Text' },
+  'blocklabel.heading': { zh: '标题 {n}', en: 'Heading {n}' },
+  'blocklabel.code': { zh: '代码', en: 'Code' },
+  'blocklabel.todo': { zh: '待办', en: 'To-do' },
+  'blocklabel.ordered': { zh: '有序列表', en: 'Numbered list' },
+  'blocklabel.bullet': { zh: '无序列表', en: 'Bulleted list' },
+  'blocklabel.quote': { zh: '引用', en: 'Quote' },
+})
 
 export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold' | 'code' | 'math'
 
@@ -187,14 +199,14 @@ export interface BlockNode {
  */
 export function blockLabel(chain: BlockNode[]): string {
   for (const n of chain) {
-    if (n.name === 'heading') return `标题 ${n.level ?? 1}`
-    if (n.name === 'code_block') return '代码'
-    if (n.name === 'list_item' && n.checked != null) return '待办'
-    if (n.name === 'ordered_list') return '有序列表'
-    if (n.name === 'bullet_list') return '无序列表'
-    if (n.name === 'blockquote') return '引用'
+    if (n.name === 'heading') return translate('blocklabel.heading', { n: String(n.level ?? 1) })
+    if (n.name === 'code_block') return translate('blocklabel.code')
+    if (n.name === 'list_item' && n.checked != null) return translate('blocklabel.todo')
+    if (n.name === 'ordered_list') return translate('blocklabel.ordered')
+    if (n.name === 'bullet_list') return translate('blocklabel.bullet')
+    if (n.name === 'blockquote') return translate('blocklabel.quote')
   }
-  return '正文'
+  return translate('blocklabel.text')
 }
 
 function findDepth($p: ResolvedPos, name: string): number | null {

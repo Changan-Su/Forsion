@@ -8,6 +8,7 @@ import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { blockLabel, type BlockNode } from './blockTriggers'
+import { editContextOf, toolbarShape, type ToolbarShape } from './menuContext'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
@@ -221,6 +222,11 @@ export interface SelRect {
   active: string[]
   /** 选区覆盖文本块的共同对齐；不一致时缺省。 */
   align?: 'left' | 'center' | 'right'
+  /** 这个上下文里工具栏该露哪几区(I-19:代码块 / 单元格里不列点了无效或会劈表的按钮,见 menuContext)。 */
+  shape: ToolbarShape
+  /** 选区**处处相同**的文字色 / 背景色(A▾ 按钮据此显示当前颜色);不一致或没有 = 缺省。 */
+  fg?: string
+  bg?: string
 }
 /** 选中的是不是「一张图」—— 两种形态都算:md 图片节点(NodeSelection),以及 `![[pic.png|200]]`
  *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
@@ -269,7 +275,8 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
             // 全覆盖判定:rangeHasMark 是「有没有一处带」,这里要的是「是不是处处都带」——
             // 逐个文本片段问,任一片段没有即不算激活。
             const active: string[] = []
-            for (const name of ['strong', 'emphasis', 'inlineCode', 'strike_through', 'amadeusU']) {
+            // ⚠️ 下划线的 **mark** 名是 amadeusUnderline(amadeusU 是 mdast 节点名 —— 用它查 schema 恒查不到,U 从来不亮)。
+            for (const name of ['strong', 'emphasis', 'inlineCode', 'strike_through', 'amadeusUnderline', 'link']) {
               const type = view.state.schema.marks[name]
               if (!type) continue
               let all = true
@@ -291,7 +298,18 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               aligns.add($from.parent.attrs.align === 'center' || $from.parent.attrs.align === 'right' ? $from.parent.attrs.align : 'left')
             }
             const align = aligns.size === 1 ? [...aligns][0] as 'left' | 'center' | 'right' : undefined
-            report({ from, to, active, align, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
+            // 颜色:每个文本片段都带同一个值才算(半段红半段默认 = 不显示当前色)。
+            const uniform = (mark: string, attr: string): string | undefined => {
+              const type = view.state.schema.marks[mark]
+              if (!type) return undefined
+              const vals = new Set<string>()
+              doc.nodesBetween(from, to, (node) => {
+                if (node.isText) vals.add(String(type.isInSet(node.marks)?.attrs[attr] ?? ''))
+                return true
+              })
+              return vals.size === 1 ? [...vals][0] || undefined : undefined
+            }
+            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
     }
     return new Plugin({
       props: {
