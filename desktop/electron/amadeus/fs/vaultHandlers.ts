@@ -344,8 +344,15 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       if (base != null) {
         // 比对交换写(G1-01):盘上已不是调用方的基线 → 不写,把现文交回去(回灌 / 冲突副本由渲染层定)。
         // 文件不在 = 无冲突(与 dbWriteCas 同口径:删了再写 = 重建,不是覆盖别人)。
+        // ⚠️ 只有 ENOENT 才算「不在」(Codex g3#4):文件读不了(EACCES / EIO / EISDIR…)而目录可写时,原子 rename
+        //    照样盖得掉它 —— 基线没验证就丢了盘上版本。其余读错原样抛出:渲染层按写失败处理(提示 + 退避重试)。
         let cur: string | null = null
-        try { cur = await fs.readFile(vault.absPath(filePath), 'utf8') } catch { cur = null }
+        try {
+          cur = await fs.readFile(vault.absPath(filePath), 'utf8')
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw err
+          cur = null
+        }
         if (cur != null && textFingerprint(cur) !== base) return { ok: false as const, current: cur }
       }
       // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话

@@ -66,6 +66,29 @@ describe('writeTextFile CAS(G1-01)', () => {
     expect(await h.disk('gone.md')).toBe('reborn')
   })
 
+  // Codex g3#4:只有 ENOENT 才算「文件不在」。文件本身读不了(权限 / I/O 错误)而目录仍可写时,原子 rename
+  // 照样能把它盖掉 —— 基线没验证就丢了盘上版本。其余读错一律拒写(抛给渲染层,走写失败提示 + 退避重试)。
+  // 负对照(实跑过):改回 `catch { cur = null }` → 本条红。
+  it('读盘失败但不是 ENOENT(EACCES / EIO)→ 拒写抛错,盘上原文一个字节不动;不带 base 的盲写不读盘、照旧写', async () => {
+    const h = await setup()
+    const abs = path.join(h.root, 'locked.md')
+    await fs.writeFile(abs, 'precious')
+    const realRead = fs.readFile.bind(fs)
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) => {
+      if (String(p) === abs) return Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+      return (realRead as (...a: unknown[]) => Promise<unknown>)(p, ...rest)
+    }) as typeof fs.readFile)
+    try {
+      await expect(h.write({ sender: 'w1' }, 'locked.md', 'clobber', { base: textFingerprint('precious') })).rejects.toThrow(/EACCES/)
+      expect(await realRead(abs, 'utf8')).toBe('precious')
+      expect(h.peers).toEqual([]) // 没写就不通知
+      await h.write(null, 'locked.md', 'blind') // 不带 base = 从前的盲写语义,不读盘
+      expect(await realRead(abs, 'utf8')).toBe('blind')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('两个窗口同基线并发 CAS:只有一个写得进去,另一个拿到对方的内容(不许交错成双双成功)', async () => {
     const h = await setup()
     await fs.writeFile(path.join(h.root, 'race.md'), 'base')
