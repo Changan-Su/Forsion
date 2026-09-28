@@ -20,6 +20,7 @@ import type { ToolProvider } from './toolRegistry.js';
 import { checkReadPath, checkWritePath } from './fsPolicy.js';
 import { citeHitFor, citeHowFor, citeRefFor, docxText, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
 import { amadeusVaultPath } from './builtin/amadeus.js';
+import { contentFingerprint, noteAgentWrite, noteRead, readFingerprint } from './readState.js';
 
 const READ_MAX_CHARS = 100_000;
 const READ_MAX_LINES = 2000;
@@ -329,6 +330,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       // 光在 description 里教格式,模型会自己缩写路径/丢括号。vault 内的 .md 教标题锚(笔记打开在
       // Milkdown 编辑器里,行号无处落地;标题走大纲跳转);其余一律行号锚(GitHub #L 约定)。
       const ref = citeRefFor(abs, vaultRootOrNull(), path.sep);
+      noteRead(ctx, abs, buf); // G3-02:write_file 整篇覆盖前据此判断「读后盘上有没有被改过」
       const text = buf.toString('utf-8');
       // 块锚 `^abc` 只在文件里**真的有**的时候才教:那是 Obsidian 的格式,只有从那边导入的笔记
       // 才带,本仓自己一行都不产 —— 无条件教 = 教出一堆点不动的死锚(教了模型就会用)。
@@ -351,7 +353,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       function: {
         name: 'write_file',
         description: 'Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). ' +
-          'Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.',
+          'Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. ' +
+          'If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.',
         parameters: {
           type: 'object',
           properties: {
@@ -367,12 +370,31 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const guard = checkWritePath(ctx, abs);
       if (guard.hardDeny) return `Error: ${guard.reason}`;
       const content = String(args.content ?? '');
+      // G3-02:模型读过这个文件、之后盘上又变了(用户在编辑器里接着写 / 审批卡挂着时继续改 / 别的会话落盘)
+      // → 它手里是旧快照,整篇覆盖会静默抹掉那些改动。拒写,让它重读后在现状上改。没读过 = 不设闸;
+      // 读后被删 = 新建,放行。检查与写同在写锁里(编辑器写盘不经这把锁,残留的窗口只有这两步之间)。
+      const known = readFingerprint(ctx, abs);
+      if (known !== undefined) {
+        let cur: Buffer | null = null;
+        try {
+          cur = await hostSandboxFs(ctx).readFile(abs);
+        } catch (e: any) {
+          // 沙箱 helper 把 errno 折进了 message(没有 .code),两种形态都认
+          const gone = e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || /\b(ENOENT|ENOTDIR)\b/.test(String(e?.message || ''));
+          if (!gone) return `Error: could not verify ${relDisplay(ctx, abs)} before overwriting it: ${e?.message || e}`;
+        }
+        if (cur && contentFingerprint(cur) !== known) {
+          return `Error: ${relDisplay(ctx, abs)} has changed on disk since you last read it (the user or another process edited it). Nothing was written — overwriting it now would discard those changes. ` +
+            'Call read_file on it again, then redo your change on top of its current content (for a partial change prefer edit_file / multi_edit / apply_patch).';
+        }
+      }
       try {
         await hostSandboxFs(ctx).mkdir(path.dirname(abs), { recursive: true });
         await hostSandboxFs(ctx).writeFile(abs, content, 'utf-8');
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }
+      noteAgentWrite(ctx, abs, content); // 整篇是模型自己给的,它就是模型眼里的现状
       return `wrote ${relDisplay(ctx, abs)} (${content.length} chars)`;
     }),
   },
@@ -428,6 +450,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }
+      noteAgentWrite(ctx, abs, next, text); // 读后指纹跟上自己的改动(改前视图已过期则保持过期)
       return `edited ${relDisplay(ctx, abs)}`;
     }),
   },
@@ -536,6 +559,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }
+      noteAgentWrite(ctx, abs, next, text);
       return `applied ${edits.length} edit(s) to ${relDisplay(ctx, abs)}`;
     }),
   },

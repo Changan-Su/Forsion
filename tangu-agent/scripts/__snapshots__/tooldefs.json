@@ -3245,7 +3245,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4180,7 +4180,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6291,7 +6291,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7226,7 +7226,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8142,7 +8142,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.",
         "parameters": {
           "type": "object",
           "properties": {

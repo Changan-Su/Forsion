@@ -190,6 +190,10 @@ export const linkWithRefSchema = linkSchema.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)
   return {
     ...base,
+    // 链接末端不延续(I-04):preset 缺省 inclusive,在 `[文字](url)|` 后面接着打的字被并进链接,
+    // 落盘成 `[文字 后文](url)`。Notion/Obsidian 在链接末尾打的都是普通文字。键盘($pos.marks())、
+    // 纯文本粘贴、输入法(compositionstart 的 markCursor 分支)都认这一个标志。仪器:linkInclusive.test.ts、check:linkcard L 组。
+    inclusive: false,
     attrs: { ...(base.attrs ?? {}), ref: { default: null } },
     parseDOM: [{
       tag: 'a[href]',

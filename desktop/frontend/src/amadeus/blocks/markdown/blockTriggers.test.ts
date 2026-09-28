@@ -61,6 +61,13 @@ describe('canAutoTriggerFromBlock(键盘前缀触发范围)', () => {
     expect(canAutoTriggerFromBlock('heading', { kind: 'bullet' })).toBe(true)
     expect(canAutoTriggerFromBlock('heading', { kind: 'heading', level: 2 })).toBe(true)
   })
+  it('代码块里任何前缀都不触发(K-03:`# comment` 不能把整块变 H1)', () => {
+    for (const trig of ['#', '>', '|', '-', '1.', '[]', '$$', '```js']) {
+      const t = matchTrigger(trig)
+      expect(t).not.toBeNull()
+      expect(canAutoTriggerFromBlock('code_block', t!)).toBe(false)
+    }
+  })
 })
 
 const N = (name: string, extra: Record<string, unknown> = {}) => ({ name, ...extra })

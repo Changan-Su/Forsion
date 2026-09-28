@@ -51,11 +51,12 @@ import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
 import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
+import { serializeForSave } from './verbatim'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
-import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
@@ -93,14 +94,16 @@ import { getRecentPages } from '../../lib/recents'
 import { fdDirOf } from '../../lib/fd'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
+import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { askString } from '../../components/askString'
-import { linkInputRule, normalizeHref } from './linkHref'
+import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
+import { unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions, editorExtensionGen, subscribeEditorExtensions } from '../../plugins/editorExtensions'
 import { registerMessages, translate, useI18n } from '../../../i18n'
@@ -196,18 +199,26 @@ export function stampedFileName(kind: string): string {
 /** 序列化输出 → 落盘 md 的统一规范化(**唯一入口,勿分叉**):
  *  新打的 [[链接]] 在重解析成 wikilink 节点前仍是纯文本,remark 会转义成 \[\[(索引抽不到,双链失联);
  *  math 纯文本的 _ * { } 被转义(x_i→x\_i);`> [!note]-` 的 `[` 被转义 Obsidian 不认;空段落落成 <br />。
+ *  行首 `#tag` 被转义成 `\#tag`(标签索引与 Obsidian 都不认,R-25;须在 unescapeMathSource 之前,见 tagEscape.ts)。
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))
+}
+/** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
+ *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
+ *  「只是规范化了一下」就会被判成用户改动,回灌时凭空出冲突副本。 */
+export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
+  return serializeForSave(ctx, doc, normalizeSerializedMd)
 }
 /** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
  *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
  *  unescapeCalloutToken:切出来的那半段也可能带 callout 令牌;
+ *  unescapeTagAtLineStart:片段行首的 `#tag` 同样别带反斜杠(R-25);
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(markdown)))
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(markdown))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
@@ -511,6 +522,8 @@ export function MilkdownInner({
   saveFilesRef.current = saveFiles
   const wikiRef = useRef(onOpenWiki)
   wikiRef.current = onOpenWiki
+  const pageNamesRef = useRef(getPageNames)
+  pageNamesRef.current = getPageNames
   const resolvedRef = useRef<(n: string) => boolean>(() => true)
   resolvedRef.current = isWikiResolved ?? (() => true)
   const iconRef = useRef<(n: string) => string | undefined>(() => undefined)
@@ -832,9 +845,19 @@ export function MilkdownInner({
     // 点链接就打开(同 Obsidian 实时预览)。contenteditable 里 Chromium **不会**自己导航,
     // 不接这一手 `[文字](url)` 就只是个蓝字。window.open 会被主进程 setWindowOpenHandler 截住、
     // 回投给渲染层的外链路由(内置浏览器 / 系统浏览器);web 端就是开新页 —— 三端一个写法。
+    // ⚠️ 按 hrefKind 分流(L-07):库内笔记 `[t](笔记.md)` 走与 `[[ ]]` 同一条打开路径,不许补成 `https://笔记.md`;
+    //    附件路径不在这儿开 —— 容器(amadeusViews 的 onClick)用 openAttachment 开。handleClick 是 PM 在 mouseup 里调的,
+    //    这里 preventDefault 标不到随后的 click 事件,两边只能靠同一份判据各开各的,否则一次点击开两回。
     const handleLinkClick = (_view: EditorView, _pos: number, event: MouseEvent): boolean => {
       const a = (event.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null
       if (!a || !a.getAttribute('href')) return false
+      const kind = hrefKind(a.getAttribute('href') as string)
+      if (kind === 'file') return false
+      if (kind === 'note') {
+        event.preventDefault()
+        wikiRef.current(noteLinkTarget(a.getAttribute('href') as string, pagePathRef.current, pageNamesRef.current()))
+        return true
+      }
       const href = normalizeHref(a.getAttribute('href') as string)
       if (!href) return false
       event.preventDefault()
@@ -858,10 +881,18 @@ export function MilkdownInner({
           handleClick: handleLinkClick,
           clipboardTextSerializer,
         }))
-        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
-          if (!ready.current || readOnly) return
-          onChange(normalizeSerializedMd(markdown))
-        })
+        // v4 统一实例吃 doc 自己序列化(serializeUnified 要在序列化期间挂逐字计划,markdownUpdated 给的是裸序列化结果)。
+        if (unified) {
+          ctx.get(listenerCtx).updated((lctx, doc) => {
+            if (!ready.current || readOnly) return
+            onChange(serializeUnified(lctx, doc))
+          })
+        } else {
+          ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+            if (!ready.current || readOnly) return
+            onChange(normalizeSerializedMd(markdown))
+          })
+        }
       })
       // 段落缩进档(Tab):preset 的**原位替换**版(paragraph schema 换扩展、位置不动)。
       // 追加 .use 会把 paragraph 挪到节点序尾部 → heading 成缺省块类型,新块全变 H1(栽过)。
@@ -901,9 +932,9 @@ export function MilkdownInner({
       .use(wikilinkPlugin((name) => wikiRef.current(name), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q) => { wikiOpenRef.current = !!q; setWiki(q) }))
-      .use(mentionSuggestPlugin((q) => {
+      .use(mentionSuggestPlugin((q, blurred) => {
         if (!q) {
-          mentionDismissedFrom.current = null
+          if (!blurred) mentionDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(L-04)
           mentionOpenRef.current = false
           setMention(null)
           return
@@ -914,10 +945,10 @@ export function MilkdownInner({
       }))
       // '/' 命令菜单:query 驻留文档(同 @/[[),字符不被吞、空格自动关成字面文本。注册在
       // wiki/mention 之后 —— 好让它们的 *OpenRef 已就绪,slash 在它们开着时让位(避免叠开两个菜单)。
-      .use(slashSuggestPlugin((q) => {
+      .use(slashSuggestPlugin((q, blurred) => {
         if (!slashOpsRef) return // 整篇宿主(PlainMarkdownEditor)不启用 slash,'/' 恒字面
-        // 触发真的没了(无 '/' 或 query 非法)→ 清 Esc 闩锁 + 关菜单。
-        if (!q) { slashDismissedFrom.current = null; setSlash(null); return }
+        // 触发真的没了(无 '/' 或 query 非法)→ 清 Esc 闩锁 + 关菜单;失焦(blurred)只关菜单、闩锁留着(L-04)。
+        if (!q) { if (!blurred) slashDismissedFrom.current = null; setSlash(null); return }
         // 让位([[ / @ 弹窗开着):只藏菜单,**绝不动闩锁** —— slash 触发其实还在,若在此清闩,
         // 用户「'/' → Esc → 打 [[ → 退格」会让被 Esc 掉的同一个 '/' 重新弹出(Codex 实现审查)。
         if (wikiOpenRef.current || mentionOpenRef.current) { setSlash(null); return }
@@ -1158,11 +1189,29 @@ export function MilkdownInner({
       const editor = getInstance()
       editor?.action((ctx) => {
         const view = ctx.get(editorViewCtx)
-        view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
+        const { doc } = view.state
+        if (w.closeAt !== undefined && doc.textBetween(w.closeAt, Math.min(w.closeAt + 2, doc.content.size)) === ']]') {
+          // 在已闭合链接里改目标名(L-02):只替换 [from, closeAt),保留原 `#锚点`/`|别名` 与 `]]`,光标落到 `]]` 之后。
+          const inner = retargetWikiInner(doc.textBetween(w.to, w.closeAt, undefined, '￼'), name)
+          const tr = view.state.tr.insertText(inner, w.from, w.closeAt)
+          view.dispatch(tr.setSelection(TextSelection.create(tr.doc, w.from + inner.length + 2)))
+        } else {
+          view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
+        }
         view.focus()
       })
     }
     setWiki(null)
+  }
+
+  /** 补全面板(WikiSuggest / SlashMenu)的按键只在本编辑器持焦时拦(L-04):失焦后别处输入框的
+   *  ↑↓/Enter/Tab 一个都不许吞。插件侧失焦即关是第一道,这是提交窗口里的第二道。 */
+  const editorFocused = (): boolean => {
+    let focused = false
+    getInstance()?.action((ctx) => {
+      focused = ctx.get(editorViewCtx).hasFocus()
+    })
+    return focused
   }
 
   // @ 提及:把 "@query"(含 @ 本身)整体替换成 [[name]] 双链。
@@ -1345,6 +1394,7 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickWiki}
           onClose={() => setWiki(null)}
+          editorFocused={editorFocused}
         />
       )}
       {!wiki && mention && !readOnly && (
@@ -1357,6 +1407,7 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickMention}
           onPickRaw={pickMentionRaw}
+          editorFocused={editorFocused}
           dates
           allowCreate={false}
           onClose={() => {
@@ -1374,6 +1425,7 @@ export function MilkdownInner({
           anchorTop={slash.anchorTop}
           hideKeys={unified ? UNIFIED_HIDDEN_SLASH : undefined}
           unified={unified}
+          editorFocused={editorFocused}
           onPick={(it) => { setSlash(null); onSlashPick(it) }}
           onClose={() => {
             slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
@@ -2110,11 +2162,13 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, editorFocused, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
   unified?: boolean
+  /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
+  editorFocused?: () => boolean
   onPick: (it: SlashItem) => void; onClose: () => void
 }) {
   const { t } = useI18n()
@@ -2146,6 +2200,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onC
       // IME 组字中:一律放行给输入法(拼音选词是 Enter、候选是空格,绝不能被菜单抢走)。
       // key==='Process'/keyCode===229 覆盖 isComposing 尚未置位的首帧(AFFiNE 同款守卫)。
       if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
+      if (editorFocused && !editorFocused()) return // 焦点在别处(标题框/聊天框):不劫持(L-04)
       const bareArrow = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey // Mod+Shift+↑↓=块重排,别吞
       if (e.key === 'Escape') {
         stop(e)
@@ -2167,7 +2222,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onC
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [items, active, onPick, onClose])
+  }, [items, active, onPick, onClose, editorFocused])
 
   const renderItem = (it: SlashItem, i: number) => (
     <button
@@ -2203,7 +2258,8 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, onPick, onC
   return (
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
-      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop}>
+      {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
+      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
         {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
         <div className="slash-scroll">
           {q

@@ -235,7 +235,7 @@ export function refDecodable(cp: number): boolean {
 const NUMERIC_REF = /&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));/g
 
 /** 一行里行内代码(`` ` `` 串到同长 `` ` `` 串)之外的段交给 fn;没配上对的反引号按字面处理。 */
-function outsideCodeSpans(line: string, fn: (seg: string) => string): string {
+export function outsideCodeSpans(line: string, fn: (seg: string) => string): string {
   let out = ''
   let last = 0
   let i = 0

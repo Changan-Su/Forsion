@@ -37,8 +37,12 @@ export interface Trigger {
  * 标题正文允许以编号开头（例如 `1. 背景`）。若标题已经由 `### ` 等前缀设好，随后输入
  * `1. `，应保留为标题文字，而不是悄悄把整行降级成有序列表。只收窄这一种自动触发；
  * 普通段落的编号列表、标题里的其他前缀，以及斜杠菜单/工具栏的显式转换仍走 applyTrigger。
+ *
+ * 代码块里一律不触发(K-03):`# comment`、`> x`、`$$` 在代码里就是代码字面。空格入口
+ * (MarkdownBlock handleKeyDown)与回车入口(unified/keyboard enterRunsTrigger)都经过这里。
  */
 export function canAutoTriggerFromBlock(blockType: string, trig: Trigger): boolean {
+  if (blockType === 'code_block') return false
   return blockType !== 'heading' || trig.kind !== 'ordered'
 }
 
@@ -230,11 +234,16 @@ function liftOutOfWrappers(tr: Transaction, pos: number, names: string[]): numbe
 /**
  * 单事务应用块级转换:先删 consume 区间(触发符),再把光标所在文本块原地转成目标类型。
  * 成功 dispatch 返回 true;结构不允许(如列表项里设标题)返回 false 且不动文档。
+ *
+ * `extend`(仅 heading/text 分支):dispatch 前把后续改动并进**同一个事务**,pos = 被转换文本块里
+ * 映射后的位置。调用方要接着改这个块时必须走它,不能 dispatch 之后再读 selection —— 别的插件的
+ * appendTransaction(如标题折叠的光标矫正)可能已把光标挪走(K-04),而且两笔事务要撤销两次。
  */
 export function applyTrigger(
   view: EditorView,
   trig: Trigger,
-  consume: { from: number; to: number } | null
+  consume: { from: number; to: number } | null,
+  extend?: (tr: Transaction, pos: number) => void,
 ): boolean {
   const { state } = view
   const { schema } = state
@@ -284,6 +293,7 @@ export function applyTrigger(
     const idx = $blk.index(-1)
     if (!$blk.node(-1).canReplaceWith(idx, idx + 1, target)) return false
     tr.setBlockType($blk.before(), $blk.after(), target, trig.kind === 'heading' ? { level: trig.level ?? 1 } : undefined)
+    extend?.(tr, pos)
     view.dispatch(tr.scrollIntoView())
     return true
   }

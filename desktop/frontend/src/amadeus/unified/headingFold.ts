@@ -173,7 +173,7 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
         key: headingFoldKey,
         state: {
           init: () => ({ folded: [], decos: DecorationSet.empty }),
-          apply: (tr, prev) => {
+          apply: (tr, prev, oldState) => {
             let folded = prev.folded
             if (tr.docChanged)
               // deleted 不等于真删:setBlockType/setNodeMarkup 整节点替换也报 deleted(Codex P2),
@@ -194,11 +194,24 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
               tr.mapping.maps[tr.mapping.maps.length - 1].forEach((_from, _to, newFrom, newTo) => { if (newTo > newFrom) dropped.push([newFrom, newTo]) })
               folded = folded.filter((p) => !hiddenRanges(tr.doc, [p]).some((rg) => dropped.some(([a, b]) => a < rg.after && b > rg.start)))
             }
+            // 编辑把光标**所在的块**并进了折叠区(K-04:折叠节后面的标题行首退格降成正文、`### ` 把下一节
+            // 降成子级……)= 展开那一节,而不是让下面的 appendTransaction 把光标弹回上一个标题 —— 弹走之后
+            // 调用方再读 selection 就会改错块(`## ##第一章`),用户这一行也凭空消失在折叠区里。
+            // 只认「编辑前光标本来看得见」:光标本就在隐藏区(程序化落点)仍交给 appendTransaction 矫正。
+            let pulledIn: number[] = []
+            if (tr.docChanged && tr.selection.empty && folded.length) {
+              const was = oldState.selection
+              const wasHidden = was.empty && hiddenRanges(oldState.doc, prev.folded).some((rg) => was.from > rg.start && was.from < rg.after)
+              const head = tr.selection.from
+              if (!wasHidden) pulledIn = folded.filter((p) => hiddenRanges(tr.doc, [p]).some((rg) => head > rg.start && head < rg.after))
+            }
             const meta = tr.getMeta(headingFoldKey) as { toggle?: number } | undefined
             if (meta?.toggle != null) {
               const p = meta.toggle
               folded = folded.includes(p) ? folded.filter((x) => x !== p) : [...folded, p]
             }
+            // 同一事务里显式 toggle 的锚以 toggle 为准(enterFoldedHeading 自己就带展开 meta)。
+            if (pulledIn.length) folded = folded.filter((p) => p === meta?.toggle || !pulledIn.includes(p))
             // 只留「仍是顶层标题且小节非空」的锚(标题转段落=展开;小节被外部编辑掏空=展开,
             // 否则空小节留幽灵态,后续在标题下新打的内容会被旧状态当场隐藏 —— Codex P2)。
             folded = [...new Set(folded)].filter((p) => {

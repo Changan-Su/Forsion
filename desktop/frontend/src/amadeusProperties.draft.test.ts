@@ -13,7 +13,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import * as React from 'react'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { AmadeusPropertiesPanel } from './amadeusProperties'
+import { AmadeusPropertiesPanel, PropsDraftFlushContext } from './amadeusProperties'
 
 vi.mock('./amadeus/api', () => ({ amadeus: {} }))
 const g = globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean; React: typeof React }
@@ -238,5 +238,150 @@ describe('属性面板受控草稿(C-01)', () => {
     expect(valueInputs()[2].value).toBe('9')
     act(() => { valueInputs()[2].blur() })
     expect(commits).toEqual(['added: x\nstatus: todo\ncount: 9'])
+  })
+})
+
+// D-20(评审 2026-09-27):提交是行级的 —— 只改被编辑的那一个键的行,别的键原文逐字;多行值用多行框,换行不被压扁。
+// 负对照:面板 commit 改回 fmEntriesToYaml 整块重建 → 前两例红。真浏览器版:评审探针 verify-integrity-4/props.cjs。
+describe('属性面板行级提交(D-20)', () => {
+  const FM = 'title: "Hello: world"\n# 注释\ntags: [alpha, beta]\ndesc: |\n  multi\n  line\nzip: 007\nversion: 1.10\nquoted: \'single\''
+
+  it('改一个值:别的键(注释、007、1.10、flow、多行块)逐字', () => {
+    render(FM)
+    openPanel()
+    const el = valueInputs().find((i) => i.value === 'single')!
+    act(() => { el.focus() })
+    typeInto(el, 'changed')
+    act(() => { el.blur() })
+    expect(commits).toEqual([FM.replace("quoted: 'single'", 'quoted: changed')])
+  })
+
+  it('改键名:只换键,值原文逐字', () => {
+    render(FM)
+    openPanel()
+    const key = keyInputs().find((i) => i.value === 'zip')!
+    act(() => { key.focus() })
+    typeInto(key, 'postcode')
+    act(() => { key.blur() })
+    expect(commits).toEqual([FM.replace('zip: 007', 'postcode: 007')])
+  })
+
+  it('多行字符串是多行框:白点零写;改一行换行照留', () => {
+    render(FM)
+    openPanel()
+    const ta = host.querySelector<HTMLTextAreaElement>('.amx-prop-row textarea.amx-prop-input')!
+    expect(ta.value).toBe('multi\nline\n')
+    focusBlur(ta)
+    expect(commits).toEqual([])
+    act(() => { ta.focus() })
+    typeInto(ta, 'multi\nline 2\n')
+    act(() => { ta.blur() })
+    expect(commits).toEqual([FM.replace('  line\n', '  line 2\n')])
+  })
+})
+
+// C-02(评审 2026-09-27 P1):值框/键名框只在失焦时提交 —— 键盘导航换篇(卸载:React 不给已脱离的节点派 onBlur)、
+// beforeunload / 换库 / 退出握手时正在打的字丢了。宿主(UnifiedPage)提供 PropsDraftFlushContext:卸载与宿主冲洗都提交草稿。
+// 负对照:useFieldDraft 的 useLayoutEffect 冲洗摘掉 → 「卸载」「宿主冲洗」两例红。真浏览器版:unified-page.check PR7。
+describe('草稿冲洗(C-02)', () => {
+  let flushers: Set<() => void>
+  const renderHosted = (fm: string): void => {
+    act(() => { root!.render(createElement(PropsDraftFlushContext.Provider, { value: flushers }, createElement(Panel, { fmExtra: fm, onCommit }))) })
+  }
+  const unmountAll = (): void => { act(() => { root!.render(createElement('div')) }) }
+  beforeEach(() => { flushers = new Set() })
+
+  it('聚焦打字中被卸载(换篇 / 关标签)→ 草稿提交一次', () => {
+    renderHosted('status: todo\ncount: 3')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, 'todo卸载前')
+    unmountAll()
+    expect(commits).toEqual(['status: todo卸载前\ncount: 3'])
+    expect(flushers.size).toBe(0)
+  })
+
+  it('卸载冲洗基于此刻的 fm:别处刚改的别的键不被旧快照改回去', () => {
+    renderHosted('status: todo\ncount: 3')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, 'doing')
+    renderHosted('count: 9') // 别处删了 status、改了 count → 本行卸载
+    expect(commits).toEqual(['count: 9\nstatus: doing'])
+  })
+
+  it('宿主冲洗(beforeunload / 换库):提交但草稿留在框里;再失焦不重复写;改回原值还能再提交', () => {
+    renderHosted('status: todo\ncount: 3')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, 'todoX')
+    act(() => { for (const f of flushers) f() })
+    expect(commits).toEqual(['status: todoX\ncount: 3'])
+    renderHosted('status: todoX\ncount: 3') // 宿主写盘后 prop 跟上
+    expect(valueInputs()[0].value).toBe('todoX')
+    expect(valueInputs()[0].classList.contains('amx-prop-conflict')).toBe(false)
+    act(() => { valueInputs()[0].blur() })
+    expect(commits).toHaveLength(1)
+    // 冲洗后改回最初的值:基线已挪到冲洗值,照样提交
+    commits = []
+    act(() => { valueInputs()[0].focus() })
+    typeInto(valueInputs()[0], 'todoX2')
+    act(() => { for (const f of flushers) f() })
+    renderHosted('status: todoX2\ncount: 3')
+    typeInto(valueInputs()[0], 'todoX')
+    act(() => { valueInputs()[0].blur() })
+    expect(commits).toEqual(['status: todoX2\ncount: 3', 'status: todoX\ncount: 3'])
+  })
+
+  it('失焦提交后紧跟卸载 → 只提交一次', () => {
+    renderHosted('status: todo')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, 'done')
+    act(() => { el.blur() })
+    unmountAll()
+    expect(commits).toEqual(['status: done'])
+  })
+
+  it('键名框同样冲洗;没打字的框卸载零提交', () => {
+    renderHosted('status: todo\ncount: 3')
+    openPanel()
+    const key = keyInputs()[1]
+    act(() => { key.focus() })
+    typeInto(key, 'total')
+    unmountAll()
+    expect(commits).toEqual(['status: todo\ntotal: 3'])
+  })
+
+  it('不提供登记处(v3 PageView:store 先换篇后卸载行)→ 卸载不冲洗', () => {
+    render('status: todo')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, 'done')
+    unmountAll()
+    expect(commits).toEqual([])
+  })
+
+  it('单行框回车 = 失焦提交(键盘离开);输入法组合中的回车(选词)不算;多行框回车照常换行', () => {
+    render('status: todo\ndesc: |\n  a\n  b')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, 'todo选')
+    act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true })) })
+    expect(commits).toEqual([])
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => { el.dispatchEvent(enter) })
+    expect(commits).toEqual(['status: todo选\ndesc: |\n  a\n  b'])
+    expect(enter.defaultPrevented).toBe(true)
+    const ta = host.querySelector<HTMLTextAreaElement>('.amx-prop-row textarea.amx-prop-input')!
+    const enterTa = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => { ta.dispatchEvent(enterTa) })
+    expect(enterTa.defaultPrevented).toBe(false)
   })
 })

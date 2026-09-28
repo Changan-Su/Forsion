@@ -48,14 +48,32 @@ function foreignParseable(foreign: string): boolean {
 }
 
 /** 整体替换外来键区(属性面板提交 YAML 文本);amadeus_* 行原样保留。
- *  提交的外来 YAML 本身合法、原块也合法,拼上保留行却解析不了 → 原样返回(fail-closed,见 keepIfYamlBroke)。 */
+ *  提交的外来 YAML 本身合法、原块也合法,拼上保留行却解析不了 → 原样返回(fail-closed,见 keepIfYamlBroke)。
+ *  **原位替换优先**(D-20):属性面板提交的文本只改了被编辑的那个键(pageFrontmatter.patchYamlText 行级),外来区在块里
+ *  是连续一段时就地换掉这一段 —— 栅栏、保留行的位置、块首尾空行、CRLF 全部逐字;换完核对外来区 === 提交文本、保留行
+ *  不变,对不上(保留行与外来键交错、罕见写法)才走下面的整块重组。 */
 export function setForeignFm(fmText: string, foreignYaml: string): string {
+  const inPlace = replaceForeignInPlace(fmText, foreignYaml)
+  if (inPlace !== null) return keepIfYamlBroke(fmText, inPlace)
   const { bom } = fmInner(fmText)
   const amadeusLines = extractAmadeusLines(fmText)
   const y = foreignYaml.replace(/\n+$/, '')
   if (!amadeusLines.length && !y.trim()) return bom
   const out = bom + ['---', ...amadeusLines, ...(y.trim() ? [y] : []), '---', ''].join('\n')
   return yamlParses(y) ? keepIfYamlBroke(fmText, out) : out // 提交的就是坏 YAML(原文模式修到一半)= 用户自己的字,照写
+}
+
+function replaceForeignInPlace(fmText: string, foreignYaml: string): string | null {
+  const old = foreignFmText(fmText)
+  const y = foreignYaml.replace(/(?:\r?\n)+$/, '')
+  if (!old || !y.trim()) return null // 首个键 / 删到空:交给整块重组(生块 / 撤块)
+  if (y === old) return fmText
+  const i = fmText.indexOf(old)
+  const end = i + old.length
+  // 必须是整行对齐、唯一的一段(保留行里碰巧含同样文字 / 外来区被保留行隔开 → 不冒险)
+  if (i <= 0 || fmText[i - 1] !== '\n' || !/^\r?\n/.test(fmText.slice(end)) || fmText.indexOf(old, i + 1) >= 0) return null
+  const out = fmText.slice(0, i) + y + fmText.slice(end)
+  return foreignFmText(out) === y && extractAmadeusLines(out).join('\n') === extractAmadeusLines(fmText).join('\n') ? out : null
 }
 
 function yamlParses(s: string): boolean {

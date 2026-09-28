@@ -111,6 +111,29 @@ g.fetch = async (input: any, init: any = {}) => {
     emit({ seq: vaultSeq, type: 'page', op: 'write', path: b.path, newPath: null, fileSeq: seq, origin: { client, actor: 'u' } })
     return json(200, { seq, hash: '' })
   }
+  // 改名 / 移动(服务端 vaultService.moveFile:不改内容、不改文件 seq,事件带 newPath;G2-03 的 M 组用)。
+  if (p.endsWith('/move') && method === 'POST') {
+    const b = JSON.parse(init.body)
+    const f = files.get(b.from)
+    if (!f) return json(404, { detail: 'file not found' })
+    if (files.has(b.to)) return json(409, { code: 'EXISTS' })
+    files.delete(b.from)
+    files.set(b.to, { content: f.content, seq: f.seq })
+    vaultSeq++
+    log.push(`MOVE ${b.from} -> ${b.to}`)
+    emit({ seq: vaultSeq, type: 'page', op: 'move', path: b.from, newPath: b.to, fileSeq: f.seq, origin: { client, actor: 'u' } })
+    return json(200, { path: b.to, seq: f.seq })
+  }
+  if (p.endsWith('/folders/rename') && method === 'POST') {
+    const b = JSON.parse(init.body)
+    const dir = String(b.path)
+    const to = [...dir.split('/').slice(0, -1), b.newName].join('/')
+    for (const [k, v] of [...files]) if (k.startsWith(`${dir}/`)) { files.delete(k); files.set(`${to}/${k.slice(dir.length + 1)}`, v) }
+    vaultSeq++
+    log.push(`RENAME-FOLDER ${dir} -> ${to}`)
+    emit({ seq: vaultSeq, type: 'folder', op: 'rename-folder', path: dir, newPath: to, origin: { client, actor: 'u' } })
+    return json(200, { path: to })
+  }
   return json(404, { detail: `unmocked ${method} ${p}` })
 }
 
@@ -306,6 +329,32 @@ export async function run(): Promise<Result[]> {
       check('G13 新文件带 base → 建成、{ ok:true }', JSON.stringify(res) === JSON.stringify({ ok: true }) && files.get('fresh.md')?.content === 'hello\n',
         `res=${JSON.stringify(res)} log=${JSON.stringify(log)}`)
     }
+  }
+  // ⑤ 别处改名(评审 G2-03):桥把 SSE 的 move / rename-folder 转成 onPathGone(root 与 restoreVault 给的库根逐字相同,
+  //    pageStore 据此退休旧路径的 v4 实例、标签改指新路径)。本端自己发起的改名不转(本端早已自己改指)。
+  //    负对照(实跑过):摘掉 onPageMoved / onFolderMoved 里的 firePathGone → M1、M3 红。
+  {
+    type Gone = { from: string; kind: string; to: string | null; root: string }
+    reset({ 'A.md': 'base\n', 'docs/D.md': 'd\n' })
+    const X = mk(); const B = mk()
+    const infoB = await B.restoreVault(); await X.restoreVault()
+    await sleep(30)
+    const goneB: Gone[] = []
+    const goneX: Gone[] = []
+    B.onPathGone((e: Gone) => goneB.push(e))
+    X.onPathGone((e: Gone) => goneX.push(e))
+    await X.readTextFile('A.md')
+    const np = await X.renamePageFile('A.md', 'C')
+    await sleep(50)
+    check('M1 别处改名 → 本端 onPathGone {from,to,kind:file},root 与 restoreVault 的库根相同',
+      np === 'C.md' && JSON.stringify(goneB) === JSON.stringify([{ from: 'A.md', kind: 'file', to: 'C.md', root: infoB.root }]),
+      `np=${np} goneB=${JSON.stringify(goneB)} root=${infoB.root}`)
+    check('M2 自己发起的改名 → 本端不再收到 onPathGone(已自己改指)', goneX.length === 0, `goneX=${JSON.stringify(goneX)}`)
+    goneB.length = 0
+    await X.renameFolder('docs', 'notes')
+    await sleep(50)
+    check('M3 别处给文件夹改名 → onPathGone {kind:prefix}', JSON.stringify(goneB) === JSON.stringify([{ from: 'docs', kind: 'prefix', to: 'notes', root: infoB.root }]),
+      `goneB=${JSON.stringify(goneB)} log=${JSON.stringify(log)}`)
   }
   for (const s of FakeES.all) s.close()
   return results

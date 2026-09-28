@@ -349,6 +349,11 @@ interface WidgetEntry {
   dom: HTMLElement
   text: string
   render: (kind: EmbedKind) => void
+  /** 此刻握着 dom 的 PM widget 视图数(toDOM +1 / destroy −1)。同 key 的嵌入挪了位置(上方删段、
+   *  移块、外部换序)时 PM 会**新建**一个 widget 视图 —— toDOM 从这里取回同一个 dom —— 再销毁旧的;
+   *  旧的 destroy 若无条件 unmount,新视图手里就是一个 React 根已卸的空壳(高 0,打字也不自愈,P-02)。
+   *  所以 root 的寿命跟内容身份(dkey)走,归零才卸。 */
+  refs: number
 }
 
 // 数据库视图名是配置,不是组件身份。把 |视图名 放进 key 会让每次切视图卸载整张表,
@@ -395,11 +400,11 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
             pos + 1,
             (view) => {
               const cached = roots.get(dkey)
-              if (cached && cached.dom.isConnected === false) {
-                // PM 复用 key 但 DOM 已摘除过:重挂同一棵
+              if (cached) {
+                // 同一内容身份换了个 widget 视图(嵌入被挪位 / PM 重建父节点):交回同一棵,记一笔持有。
+                cached.refs++
                 return cached.dom
               }
-              if (cached) return cached.dom
               const dom = document.createElement('div')
               dom.className = 'unified-embed'
               dom.contentEditable = 'false'
@@ -499,7 +504,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 v.focus()
               })
               dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
-              roots.set(dkey, { root, dom, text: node.textContent, render })
+              roots.set(dkey, { root, dom, text: node.textContent, render, refs: 1 })
               return dom
             },
             {
@@ -519,8 +524,15 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
               destroy: () => {
                 const entry = roots.get(dkey)
                 if (!entry) return
-                roots.delete(dkey)
-                queueMicrotask(() => entry.root.unmount()) // PM 渲染周期内不许同步 unmount
+                entry.refs--
+                if (entry.refs > 0) return // 新位置上的 widget 视图还握着这棵(P-02)
+                // 归零也先别急着删:同一次更新里 PM 可能「先拆旧、后建新」,新视图的 toDOM 要能取回
+                // 同一棵。PM 渲染周期内本来也不许同步 unmount —— 推到微任务再复核一遍。
+                queueMicrotask(() => {
+                  if (entry.refs > 0 || roots.get(dkey) !== entry) return
+                  roots.delete(dkey)
+                  entry.root.unmount()
+                })
               },
             },
           ),

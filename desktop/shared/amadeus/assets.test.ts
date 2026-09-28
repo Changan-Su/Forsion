@@ -78,3 +78,41 @@ describe('往返稳定 + 账目', () => {
     expect(toDisplayMarkdown(damaged, '')).toBe(damaged) // 原样穿过 = 之后仍会被 remark 当文本转义
   })
 })
+
+// I-15(评审 2026-09-27 P1):代码块 / 行内代码里的 `![](路径)` 被当资源引用改写 —— 显示成协议地址、复制代码拿到
+// 内部地址,落盘按解码→编码不对称写回(`%E5%9B%BE` → `图`、`<a.png>` → `%3Ca.png%3E`)。
+// 真浏览器那一半:评审探针 verify-inline-3/v15-codeasset.cjs / v15b.cjs。
+// 负对照:toDisplayMarkdown 改回全文 `md.replace(IMG_RE, …)` → 「代码逐字」两格红。
+describe('代码里的图片语法逐字(I-15)', () => {
+  const CODE = '写法:`![图](img/a.png)` 即可\n\n```md\n![截图](shots/b%20c.png)\n![编码](%E5%9B%BE.png)\n![尖](<a.png>)\n```\n\n末段\n'
+
+  it('围栏代码与行内代码:显示侧不换成协议 URL', () => {
+    const d = toDisplayMarkdown(CODE, 'notes')
+    expect(d).toBe(CODE)
+    expect(d).not.toContain('amadeus-asset')
+  })
+
+  it('往返逐字(display → stored)', () => {
+    expect(toStoredMarkdown(toDisplayMarkdown(CODE, 'notes'), 'notes')).toBe(CODE)
+    // 列表项里的围栏(编辑器把列表首个代码块写成 `* ```…`)同样跳过
+    const listFence = '* ```md\n  ![x](%E5%9B%BE.png)\n  ```\n'
+    expect(toStoredMarkdown(toDisplayMarkdown(listFence, ''), '')).toBe(listFence)
+  })
+
+  it('代码外照常换;同一行里代码内外各一个只换外面那个', () => {
+    const d = toDisplayMarkdown('![a](x.png) 与 `![b](y.png)`\n', '')
+    expect(d).toBe(`![a](${toAssetUrl('x.png')}) 与 \`![b](y.png)\`\n`)
+  })
+
+  it('代码外的尖括号目标:括号是语法 —— 显示解析到真文件,落盘写成合法的百分号形态', () => {
+    const d = toDisplayMarkdown('![尖](<a.png>)\n\n![空](<a b.png> "t")\n', 'n')
+    expect(d).toBe(`![尖](${toAssetUrl('n/a.png')})\n\n![空](${toAssetUrl('n/a b.png')} "t")\n`)
+    expect(toStoredMarkdown(d, 'n')).toBe('![尖](a.png)\n\n![空](a%20b.png "t")\n')
+    expect(toDisplayMarkdown('![](<>)\n', '')).toBe('![](<>)\n') // 空目标不碰
+    expect(toDisplayMarkdown('![](<https://x.y/a b.png>)\n', '')).toBe('![](<https://x.y/a b.png>)\n') // 外链不碰
+  })
+
+  it('落盘侧仍是全文安全网:代码里残留的协议 URL 也换回相对路径,绝不漏到盘上', () => {
+    expect(toStoredMarkdown('```\n' + disp('a.png') + '\n```\n', '')).toBe('```\n![](a.png)\n```\n')
+  })
+})

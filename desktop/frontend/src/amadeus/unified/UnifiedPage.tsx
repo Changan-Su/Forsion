@@ -17,6 +17,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
 import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
@@ -24,7 +25,7 @@ import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
-  DbLinkPicker, MilkdownInner, normalizeSerializedMd, stampedFileName,
+  DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -46,15 +47,17 @@ import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
 import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
+import { revealBlockAtTop } from './revealScroll'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
-import { AmadeusPropertiesPanel } from '../../amadeusProperties'
+import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
+import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
 import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
@@ -62,9 +65,11 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
+import { reconcileTr } from './reconcileDiff'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
+import { noteLinkTarget } from '../blocks/markdown/linkHref'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
@@ -114,9 +119,24 @@ registerMessages({
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
 
+/** 改名重建时的「接着写」(评审 D-17):旧实例的 doc 与选区原样交给新实例,**不重做**一遍「进入正文」。
+ *  标题回车的 body-enter 在旧实例里已经执行过(顶插了空段、光标落进去、可能已经打了字);新实例若再执行一次,
+ *  首块非空就又顶插一个空段 —— 落盘成 `SECOND\n\nfirst`、跨重建打的字劈成两段并颠倒。 */
+interface BodyCarry {
+  place: 'restore'
+  /** 旧实例写进新路径的正文(= 新实例读盘应得的那份)。对不上 = 期间盘上被别处改过:只按位置落光标,不接 doc。 */
+  body: string
+  /** 旧实例的 doc(JSON)。含没进盘的东西(回车顶插的空段序列化后读回来就没了)与重建窗口里刚打的字。 */
+  doc: unknown
+  anchor: number
+  head: number
+}
+type BodyFocusReq = 'start' | 'end' | 'body-enter' | BodyCarry
+
 /** 标题回车的聚焦请求要跨「改名 → 实例随 key 重建」存活(重建清零一切组件态,只能挂模块级)。
- *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。 */
-let pendingBodyFocus: { path: string; place: 'start' | 'body-enter' } | null = null
+ *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。
+ *  at:没人认领的请求 10s 后作废 —— 否则下次打开同一篇时凭空执行一次(顶插空段、抢焦点)。 */
+let pendingBodyFocus: { path: string; req: BodyFocusReq; at: number } | null = null
 
 const NOOP_KEYS = {
   insertAfter: () => {},
@@ -127,8 +147,6 @@ const NOOP_KEYS = {
   selfFocus: () => {},
 }
 
-/** 顶层子节点级最小差异替换:首尾相同段跳过,只替换中间不同的范围。
- *  选区在范围外由 PM 映射自动保持;在范围内钳到边界。整文替换是它的退化情形。 */
 /** 存一个 OS 文件为附件 → 磁盘形态的引用 md(`![[base]]`);失败 null。
  *  正文粘贴/拖入(saveFiles)与画布落卡(CanvasStage.saveFile)共用这一份。 */
 async function saveOneFile(page: string, f: File): Promise<string | null> {
@@ -186,25 +204,12 @@ function flashCiteTip(r: DOMRect): void {
   citeTip = { el, timer: window.setTimeout(dropCiteTip, 1400), arm, off }
 }
 
+/** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
+ *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
+ *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
 function applyMinimalDiff(view: EditorView, next: ProseNode): void {
-  const cur = view.state.doc
-  if (next.eq(cur)) return
-  let start = 0
-  const maxStart = Math.min(cur.childCount, next.childCount)
-  while (start < maxStart && cur.child(start).eq(next.child(start))) start++
-  let endCur = cur.childCount
-  let endNext = next.childCount
-  while (endCur > start && endNext > start && cur.child(endCur - 1).eq(next.child(endNext - 1))) {
-    endCur--
-    endNext--
-  }
-  let from = 0
-  for (let i = 0; i < start; i++) from += cur.child(i).nodeSize
-  let to = from
-  for (let i = start; i < endCur; i++) to += cur.child(i).nodeSize
-  const repl: ProseNode[] = []
-  for (let i = start; i < endNext; i++) repl.push(next.child(i))
-  view.dispatch(view.state.tr.replaceWith(from, to, repl))
+  const tr = reconcileTr(view.state, next)
+  if (tr) view.dispatch(tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
@@ -326,6 +331,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
           applyMinimalDiff(view, doc as ProseNode)
+          adoptOrigins(view.state.doc, doc as ProseNode) // D-18:保留下来的块改记到新盘上文本的来源
           ok = true
           if (probe) probe.reconciled = ((probe.reconciled as number) ?? 0) + 1
         })
@@ -335,9 +341,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         let out: string | null = null
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
-          const serializer = ctx.get(serializerCtx)
-          // 必须与 markdownUpdated 监听器同一条规范化链(Codex 终审 P0:绕过=把 \[\[ 持久化成死链)。
-          out = toStoredMarkdown(normalizeSerializedMd(serializer(view.state.doc)), pageDir)
+          // 必须与监听器同一条落盘链(Codex 终审 P0:绕过=把 \[\[ 持久化成死链;D-18:逐字回填也在这条链上)。
+          out = toStoredMarkdown(serializeUnified(ctx, view.state.doc), pageDir)
         })
         return out
       },
@@ -346,7 +351,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         getInstance()?.action((ctx) => {
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
-          out = toStoredMarkdown(normalizeSerializedMd(ctx.get(serializerCtx)(doc as ProseNode)), pageDir)
+          out = toStoredMarkdown(serializeUnified(ctx, doc as ProseNode), pageDir) // 与落盘同口径(见 serializeUnified 注)
         })
         return out
       },
@@ -873,7 +878,13 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   )
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false, readOnly = false, hardBreaks = false }: {
+/** 本实例的撤销 / 重做入口(宿主的非键盘按钮用,如移动端胶囊;返回是否真退/进了一步)。 */
+export interface UnifiedHistory {
+  undo: () => boolean
+  redo: () => boolean
+}
+
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -889,6 +900,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  改由宿主(NoteView)把它放进底栏胶囊的「⋯」。交给**父组件**而不是全局槽:结构上就是同一篇
    *  笔记,旧写法「uiOverlay 单槽 + 路径比对」栽过的那三条歧路(见 CanvasModeSeg 顶注)一条都不沾。 */
   onCanvasMode?: (s: { on: boolean; toggle: () => void } | null) => void
+  /** 撤销 / 重做的出口(G2-05)。v4 不进 pageStore,宿主按 activePage 门控的 `myPs().undo()` 在这里是死键;
+   *  宿主(NoteView)给本 leaf 自己的 ref,不按路径全局查找。卸载时清空。 */
+  historyRef?: { current: UnifiedHistory | null }
   /** 只读实例(公开分享页 /share/<token>,2026-09-07):同一套渲染(块/分栏/卡片/画布/嵌入/chrome),
    *  但**一个字节都不写**:PM editable=false,writeNow/schedule/setFm/改名/生命周期 flush 全部短路,
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
@@ -913,6 +927,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
+  // 属性面板里还没失焦的草稿(C-02):落盘冲洗(卸载 / beforeunload / 换库 / 退出握手)先把它们提交进 pipe.fm。
+  const [propDrafts] = useState(() => new Set<() => void>())
+  const flushPropDrafts = (): void => { for (const f of [...propDrafts]) f() }
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
   const [editorKey, setEditorKey] = useState(0) // 源码 → 可视切回时重建编辑器(正文可能被改)
 
@@ -1011,6 +1028,23 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current() })
     return () => onCanvasMode?.(null)
   }, [canvasOn, onCanvasMode])
+  /** 画布舞台的统一撤销仲裁(CanvasStage 经 histStepRef 交上来,与它的 Cmd+Z 捕获同一个 histStep)。 */
+  const stageHist = useRef<((dir: 'undo' | 'redo') => boolean) | null>(null)
+  // 撤销 / 重做交给宿主:与键盘**同路** —— 画布态走舞台仲裁(canvasStage 的 onKeyDownCapture),
+  // 文档态走 PM history(milkdown history keymap 的同一对命令)。只读实例没有可退的东西。
+  useEffect(() => {
+    if (!historyRef) return
+    const step = (dir: 'undo' | 'redo'): boolean => {
+      if (pipe.readOnly) return false
+      if (canvasModeRef.current && stageHist.current) return stageHist.current(dir)
+      const v = layer.getView()
+      return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
+    }
+    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo') }
+    historyRef.current = h
+    return () => { if (historyRef.current === h) historyRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyRef])
   /** 白板元素落盘。cards 的真源是 doc(deriveCanvasJson 派生),**elements 的真源是磁盘那行** ——
    *  所以这一支不经 deriveFmFromDoc,直接换掉 canvas 行里的 elements 键、其余字段逐字保留。
    *  ⚠️ 那行读不懂时(手改坏的 JSON)当面说、什么都不写:withElements 会逐字返回原行,
@@ -1130,14 +1164,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }, [canvasOn])
 
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
-  const [bodyFocus, setBodyFocus] = useState<'start' | 'end' | 'body-enter' | null>(() => {
-    if (pendingBodyFocus?.path === path) {
-      const place = pendingBodyFocus.place
+  const [bodyFocus, setBodyFocus] = useState<BodyFocusReq | null>(() => {
+    const p = pendingBodyFocus
+    if (p?.path === path) {
       pendingBodyFocus = null
-      return place
+      return Date.now() - p.at < 10_000 ? p.req : null
     }
     return null
   })
+  /** 事件里同步读「进入正文」是否已被执行(doRename 在 await 之后才看它)。 */
+  const bodyFocusRef = useRef(bodyFocus)
+  bodyFocusRef.current = bodyFocus
+  /** 本实例交给改名后新实例的「接着写」(卸载那一刻再刷一次 doc / 选区,重建窗口里打的字一并带过去)。 */
+  const outgoingCarry = useRef<BodyCarry | null>(null)
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
@@ -1675,6 +1714,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   useEffect(() => {
     const flush = (): void => {
       syncFromEditor()
+      flushPropDrafts()
       if (pipe.timer) clearTimeout(pipe.timer)
       pipe.timer = null
       if (pipe.readOnly) return
@@ -1721,6 +1761,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       pipe.dead = true
       window.removeEventListener('beforeunload', onUnload)
       flush()
+      // D-17:改名后交给新实例的「接着写」按**卸载这一刻**的 doc / 选区刷新(新实例在渲染期已拿到同一个对象,
+      // 它的编辑器异步建好后才读)—— 改名 IPC 到重建之间打进旧实例的字不随旧实例一起消失。
+      // 放在 flush 外面:writeFailures.test 把 flush 的源码单独切出来求值,不往里加自由标识符。
+      const carry = outgoingCarry.current
+      const v = layer.getView()
+      if (carry && v) {
+        carry.doc = v.state.doc.toJSON()
+        carry.anchor = v.state.selection.anchor
+        carry.head = v.state.selection.head
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
@@ -1762,6 +1812,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       flush: (strict = false) => {
         if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
         syncFromEditor()
+        flushPropDrafts()
         if (pipe.timer) {
           clearTimeout(pipe.timer)
           pipe.timer = null
@@ -1770,6 +1821,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       },
       insertFiles: (files) => {
         hostApi.current?.insertFiles(files)
+      },
+      // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
+      patchFm: (patch) => {
+        if (pipe.readOnly || pipe.retired || pipe.dead) return null
+        setFm(patch)
+        return pipe.chain // setFm 刚把这发写排上链:链尾 = 它落定(恒不 reject)
       },
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
@@ -1788,13 +1845,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const hs = docHeadings(v.state.doc)
         const h = hs[index]?.text === text ? hs[index] : hs.find((x) => x.text === text)
         if (!h) return
-        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(h.pos + 1))).scrollIntoView())
+        // C-03:**先 focus 再放选区**,滚动显式做(revealBlockAtTop:贴顶、让开顶栏)。原来先 dispatch
+        // scrollIntoView 再 focus —— PM 只在 DOM 选区已在编辑器里时才滚,刚打开 / 焦点在标题框时首击不动;
+        // 而且那是最小滚动,往下跳贴视口底、往上跳被 sticky 顶栏盖住。
         v.focus()
-        // 引用条落点闪一下 —— 覆盖片走 flashCiteTip(为什么不能直接给标题节点加类,见那边的注释)。
-        // 位置同步读:dispatch 里的 scrollIntoView 是同步做完的,此刻的 rect 就是最终位置。
-        if (!flash) return
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(h.pos + 1))))
         const el = v.nodeDOM(h.pos)
-        if (el instanceof HTMLElement) flashCiteTip(el.getBoundingClientRect())
+        if (!(el instanceof HTMLElement)) return
+        revealBlockAtTop(el)
+        // 引用条落点闪一下 —— 覆盖片走 flashCiteTip(为什么不能直接给标题节点加类,见那边的注释)。
+        // 位置同步读:上面的滚动是同步写 scrollTop,此刻的 rect 就是最终位置。
+        if (flash) flashCiteTip(el.getBoundingClientRect())
       },
       revealBlock: (id, flash) => {
         const v = layer.getView()
@@ -1816,17 +1877,28 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         //    它紧贴目标内容,总比跳到别人家里强。文档首行就是光杆锚时同理。
         if (isLoneBlockId(blocks[idx].text) && idx > 0 && blocks[idx - 1].parent === blocks[idx].parent) idx -= 1
         const pos = blocks[idx].pos
-        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(pos + 1))).scrollIntoView())
+        // 先 focus、再放选区、显式贴顶滚动 —— 理由同 revealHeading(C-03)。
         v.focus()
-        // 位置同步读:dispatch 里的 scrollIntoView 是同步做完的,此刻的 rect 就是最终位置(同标题锚)。
-        if (flash) {
-          const el = v.nodeDOM(pos)
-          if (el instanceof HTMLElement) flashCiteTip(el.getBoundingClientRect())
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(pos + 1))))
+        const el = v.nodeDOM(pos)
+        if (el instanceof HTMLElement) {
+          revealBlockAtTop(el)
+          // 位置同步读:滚动是同步写 scrollTop,此刻的 rect 就是最终位置(同标题锚)。
+          if (flash) flashCiteTip(el.getBoundingClientRect())
         }
         return true
       },
-      retire: () => {
+      retire: (movedTo) => {
         dropCiteTip() // 视图退休时把还挂着的落点覆盖片撤掉(它住在 body 上,不随组件卸载)
+        // 被挪走 / 改名(评审 G2-03:别处改名经 onPathGone → remapScopePaths 到这里;本端树上移动同理):退休之后
+        // 本实例一个字都不再写,还没落盘的字先**同步**存成新路径的草稿 —— 标签随后改指新路径,新实例挂载即出
+        // 「恢复草稿」条,恢复时 0a 的流程负责保全盘上那版(基线对不上先落冲突副本)。不做异步交接写:新实例挂载就
+        // 读盘,两边会赛跑。本实例自己发起的改名(doRename)先置 retired 并自己补写新路径,这里不重复。
+        if (movedTo && !pipe.retired && !pipe.readOnly && !pipe.dead) {
+          syncFromEditor()
+          const text = composeFm(pipe.fm, pipe.body)
+          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved)
+        }
         pipe.retired = true
         if (pipe.timer) {
           clearTimeout(pipe.timer)
@@ -1904,6 +1976,27 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
+  /** D-17「接着写」:新实例的编辑器建好、已聚焦到文首时调用。盘上正文就是旧实例写下的那份 → 旧 doc 原样接过来
+   *  (含没进盘的顶插空段与重建窗口里打的字;多出的字随后走正常防抖保存落盘),再把选区放回原处。
+   *  不进撤销栈:这不是一次编辑,是同一次编辑会话跨重建的延续。 */
+  const continueFrom = (c: BodyCarry): void => {
+    const view = layer.getView()
+    if (!view) return
+    let tr = view.state.tr
+    if (pipe.body === c.body) {
+      try {
+        const prev = view.state.schema.nodeFromJSON(c.doc)
+        if (!prev.eq(tr.doc)) tr = tr.replaceWith(0, tr.doc.content.size, prev.content)
+      } catch { /* schema 对不上(插件启停换了 schema)→ 只按位置落光标 */ }
+    }
+    const max = tr.doc.content.size
+    const at = (n: number) => tr.doc.resolve(Math.max(0, Math.min(n, max)))
+    try {
+      tr = tr.setSelection(TextSelection.between(at(c.anchor), at(c.head)))
+    } catch { /* 落不进合法文字位就留在文首 */ }
+    view.dispatch(tr.setMeta('addToHistory', false).scrollIntoView())
+  }
+
   const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null): Promise<boolean> => {
     if (readOnly) return false
     try {
@@ -1918,15 +2011,29 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // IPC await 期间可能又打了字(200ms 监听窗)→ 补写前再拉平一次(Codex 终审 P0)。
         syncFromEditor()
         const text = composeFm(pipe.fm, pipe.body)
-        if (text !== pipe.lastSaved) await amadeus.writeTextFile(newPath, text).catch(() => {})
-        retireUnifiedPath(path) // 别的标签开着同一篇:一并停写旧路径
+        const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
+        if (text !== pipe.lastSaved) {
+          // 补写失败不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。
+          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved); toastSaveFailed(newPath, e) })
+        }
+        // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
+        // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;
+        // 已经执行过、光标在正文里 →「接着写」(旧 doc + 选区),绝不再执行一遍。
+        // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
+        // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文);点走 blur 的改名只在光标确在正文里时续上。
+        const pending = bodyFocusRef.current
+        const view = layer.getView()
+        if (focusKind && pending != null && typeof pending !== 'object') {
+          pendingBodyFocus = { path: newPath, req: pending, at: Date.now() }
+        } else if (view?.hasFocus()) {
+          const carry: BodyCarry = { place: 'restore', body: writtenBody, doc: view.state.doc.toJSON(), anchor: view.state.selection.anchor, head: view.state.selection.head }
+          outgoingCarry.current = carry
+          pendingBodyFocus = { path: newPath, req: carry, at: Date.now() }
+        }
+        retireUnifiedPath(path, 'file', newPath) // 别的标签开着同一篇:一并停写旧路径(它们未落盘的字存成新路径的草稿,G2-03)
         remapScopePaths(path, newPath, 'file')
         await cascadeFdAfterRename(path, newPath)
         void usePageStore.getState().refreshPages()
-        // 回车/方向键触发的改名:聚焦请求跨重建带给新实例(点走 blur 的改名 focusKind=null,不抢焦点)。
-        // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
-        // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文)。
-        if (focusKind) pendingBodyFocus = { path: newPath, place: focusKind === 'enter' ? 'body-enter' : 'start' }
         onRenamed?.(newPath)
       }
       return true
@@ -2021,7 +2128,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           onEnterBody={(kind) => setBodyFocus(kind === 'enter' ? 'body-enter' : 'start')}
           focusSignal={titleFocus}
         />
-        {!compact && <AmadeusPropertiesPanel
+        {!compact && <PropsDraftFlushContext.Provider value={propDrafts}><AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
           readOnly={readOnly}
           onCommit={(yaml) => {
@@ -2031,7 +2138,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             pipe.pending = true
             void writeNow()
           }}
-        />}
+        /></PropsDraftFlushContext.Provider>}
         {/* 写盘状态条(D-04):写失败 → 常驻「未保存」+ 立即重试;上次没写成的草稿 → 恢复 / 丢弃。
             样式复用全局 `.mk-notice` 提示条(base.css),本处只在 amadeus-host.css 里改宽度与外距。 */}
         {!readOnly && saveFailed && (
@@ -2102,6 +2209,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             onTree={setCanvasTree}
             onMain={setCanvasMain}
             timeline={undoTimeline}
+            histStepRef={stageHist}
             saveFile={(f) => saveOneFile(path, f)}
             // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
@@ -2133,8 +2241,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 apiRef={hostApi}
                 probe={probe}
                 extraPlugins={editorPlugins}
-                focusPlace={bodyFocus}
-                onFocused={() => setBodyFocus(null)}
+                focusPlace={bodyFocus != null && typeof bodyFocus === 'object' ? 'start' : bodyFocus}
+                onFocused={() => {
+                  if (bodyFocus != null && typeof bodyFocus === 'object') continueFrom(bodyFocus)
+                  setBodyFocus(null)
+                }}
                 onCard={makeCard}
                 readOnly={readOnly}
               />
@@ -2143,7 +2254,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
         </div>
       )}
-      <LinkHoverCard getView={() => layer.getView()} />
+      <LinkHoverCard
+        getView={() => layer.getView()}
+        onOpenNote={(href) => void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)}
+      />
       {lightbox && (
         <OverlayPortal>
           <div className="amx-lightbox" onClick={() => setLightbox(null)} role="presentation">
@@ -2151,7 +2265,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           </div>
         </OverlayPortal>
       )}
-      {blockMenu && (
+      {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
+      {blockMenu && !readOnly && (
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
             <div className="ubm-label">{t('unipage.menu.turnInto')}</div>

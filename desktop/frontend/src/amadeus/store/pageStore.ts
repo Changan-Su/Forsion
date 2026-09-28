@@ -23,7 +23,7 @@ import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
-import { flushUnifiedScopes, retireUnifiedPath } from '../unified/lifecycle'
+import { flushUnifiedScopes, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
@@ -796,7 +796,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(pagePath, patch)
+        await (unifiedPatchFm(pagePath, patch) ?? amadeus.setPageFrontmatter?.(pagePath, patch))
       }
     },
 
@@ -807,7 +807,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(pagePath, patch)
+        await (unifiedPatchFm(pagePath, patch) ?? amadeus.setPageFrontmatter?.(pagePath, patch))
       }
     },
 
@@ -826,7 +826,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(pagePath, patch)
+        await (unifiedPatchFm(pagePath, patch) ?? amadeus.setPageFrontmatter?.(pagePath, patch))
       }
     },
 
@@ -994,7 +994,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(parentNotePath, patch) // ?. 容忍旧 preload 缺位(漂移可自愈)
+        await (unifiedPatchFm(parentNotePath, patch) ?? amadeus.setPageFrontmatter?.(parentNotePath, patch)) // ?. 容忍旧 preload 缺位(漂移可自愈)
       }
     },
 
@@ -1644,7 +1644,8 @@ async function flushFileStores(strict = false): Promise<void> {
 export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'prefix'): void {
   if (oldP === newP) return
   // 退休与路径广播必须是同一个入口的职责,否则笔记视图等调用者只 remap、漏停旧的 unified 写管线。
-  retireUnifiedPath(oldP, kind)
+  // 带上新路径:实例把还没落盘的字存成新路径的草稿(评审 G2-03 —— 别处改名经 onPathGone 进这里,不许静默丢字)。
+  retireUnifiedPath(oldP, kind, newP)
   const hit = (a: string): boolean => (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`))
   const to = (a: string): string => (kind === 'file' ? newP : newP + a.slice(oldP.length))
   for (const s of stores.values()) {
