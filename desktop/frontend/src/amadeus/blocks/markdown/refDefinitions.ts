@@ -8,11 +8,14 @@
 //  · 定义 → 可见、可编辑的**字面段落**:正文 = 原文切片,原文另记在段落的 `raw` attr。落盘时段落没被动过
 //    (无 mark、无缩进/对齐、正文 === 原文)就原样写回原文;动过就按普通段落写(`\[…]` 转义,仍是那行字,不再是定义)。
 //    相邻行的多个定义合成**一个**段落(否则落盘时段落之间插空行);合成段落带 position,blankLineRemark 靠它算空行。
-//  · `[text][label]` / `[text][]` / `[text]` → link mark 带 `ref`(引用形 + label + 当时的 url + 定义原文首行),照常渲染成链接;
-//    落盘时写回引用形**当且仅当**:url 没改(链接卡没改地址)、且**正在序列化的这份文档**里还有一个没被动过的定义段落,
-//    该 label 的首个定义就是当初那一行(CommonMark 首个定义生效)。否则退成行内链接 —— 引用形离开定义就是一串
-//    字面 `[a][1]`,URL 从文件里消失(评审返修 D-12-orphan-ref:跨笔记粘贴、删掉定义行、结构化复制给外部应用、
-//    改了定义行,四条路都会把引用变孤儿)。collapsed / shortcut 的文字被改,mdast-util-to-markdown 自己会退成 full 形。
+//  · `[text][label]` / `[text][]` / `[text]` → link mark 带 `ref`(引用形 + label + 当时的 url),照常渲染成链接;
+//    落盘时写回引用形**当且仅当**:**正在序列化的这份文档**里,该 label 的首个定义(CommonMark 首个生效;只数没被动过的
+//    定义段落)**解析出来**的地址 + 标题,与这个链接此刻的 href + title 相同 —— 即「重开后还是这个链接」。否则退成行内链接:
+//    引用形离开定义就是一串字面 `[a][1]`,URL 从文件里消失(评审返修 D-12-orphan-ref:跨笔记粘贴、删掉定义行、结构化复制
+//    给外部应用、改了定义行,四条路都会把引用变孤儿);剩下的同名定义指向别处也不行(评审返修 D-12-prefix-collision:
+//    原先拿定义原文首行 startsWith 比,`/docs` 是 `/docs/v2` 的前缀、地址写在下一行时首行都是 `[1]:`,都会放行 → 重开指向别处)。
+//    比的是解析结果不是原文:定义原文用独立的 remark-parse 再解析一遍,与重开时同一套 micromark 规则。
+//    collapsed / shortcut 的文字被改,mdast-util-to-markdown 自己会退成 full 形。
 //    「正在序列化的文档」由 doc 节点的序列化器在进出时登记(docWithRefScope)—— 剪贴板 / 切块序列化的是切片文档,
 //    不能拿编辑器里那份 state.doc 判断。
 //  · `![alt][label]` 仍按 preset 转成行内图片(取舍:图片引用罕见,逐字要再扩 image schema,不值当)。
@@ -24,6 +27,8 @@ import { nodesCtx } from '@milkdown/kit/core'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { docSchema, linkAttr, linkSchema } from '@milkdown/kit/preset/commonmark'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
 
 // mdast 是动态形状的 AST,这层统一按 any 处理(同 softBreak.ts / marks.ts)。
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -34,11 +39,8 @@ export interface LinkRef {
   referenceType: 'full' | 'collapsed' | 'shortcut'
   /** 原文里的 label(`[a][Label]` 的 `Label`;collapsed / shortcut 就是链接文字本身)。 */
   label: string
-  /** 解析当时定义给的地址:落盘时 href 仍是它 → 写回引用形。 */
+  /** 解析当时定义给的地址(链接卡改了地址 → 不再写引用形)。 */
   url: string
-  /** 当初那条定义的原文首行(`[1]: http://x "T"`):落盘时文档里该 label 的首个定义仍以它开头,才写回引用形。
-   *  可选:旧剪贴板里的 data-md-ref 没有它,那时只按 label 判断。 */
-  def?: string
 }
 
 /** 同 mdast-util-definitions:按大写后的 identifier 匹配,CommonMark 首个优先。 */
@@ -119,8 +121,7 @@ export function literalizeReferences(tree: MdNode, source: string): void {
       if (k?.type === 'linkReference') {
         const def = defs.get(clean(k.identifier))
         if (!def) { const tmp = { children: k.children ?? [] }; walk(tmp); out.push(...tmp.children); continue } // 防御:micromark 只给有定义的 label 出引用
-        const defLine = (sliceOf(def, source) ?? rebuild(def)).split('\n')[0].trimStart()
-        const ref: LinkRef = { referenceType: k.referenceType, label: String(k.label ?? k.identifier), url: def.url, def: defLine }
+        const ref: LinkRef = { referenceType: k.referenceType, label: String(k.label ?? k.identifier), url: def.url }
         const link = { type: 'link', url: def.url, title: def.title ?? null, children: k.children ?? [], position: k.position, data: { amadeusRef: ref } }
         walk(link)
         out.push(link)
@@ -168,34 +169,48 @@ export const literalRawFromDom = (v: string | null): string | null => (v != null
 
 /** 正在序列化的那份文档(doc 节点序列化器进出时登记,可重入);null = 序列化的不是整份文档。 */
 let serializeRoot: PMNode | null = null
-/** 每份文档:label → 该 label 首个定义那一行(从 `[` 起)。只认没被动过的定义段落 —— 动过的落盘是转义字面,不再是定义。 */
-const defIndex = new WeakMap<PMNode, Map<string, string>>()
-function firstDefinitions(root: PMNode): Map<string, string> {
+/** 定义原文的独立解析器:只要 CommonMark 核心的 definition(不挂 Milkdown 的插件链,定义不会再被字面化)。 */
+const defParser = unified().use(remarkParse)
+interface DefTarget { url: string; title: string | null }
+/** 每份文档:label → 该 label 首个定义解析出的地址 + 标题。只认没被动过的定义段落 —— 动过的落盘是转义字面,不再是定义。 */
+const defIndex = new WeakMap<PMNode, Map<string, DefTarget>>()
+function firstDefinitions(root: PMNode): Map<string, DefTarget> {
   let idx = defIndex.get(root)
   if (idx) return idx
-  const found = new Map<string, string>()
-  root.descendants((node) => {
+  // 按文档序拼成若干块逐块解析。v3 宿主(softBreakRemark)把多行定义拆成了相邻几段、每段一行原文:
+  // 紧挨着上一段、且首行不是 `[label]:` 的,是上一条定义的续行(下一行的地址 / 标题 / 跨行 label),接回同一块。
+  const chunks: string[] = []
+  let prev: { parent: PMNode; index: number } | null = null
+  root.descendants((node, _pos, parent, index) => {
     if (node.type.name !== 'paragraph') return true
     const raw = pristineRaw(node)
-    if (raw != null) {
-      for (const line of raw.split('\n')) {
-        const m = DEF_START.exec(line)
-        const label = m ? normLabel(m[2]) : ''
-        if (label && !found.has(label)) found.set(label, line.slice(line.indexOf(m![1])))
-      }
+    if (raw != null && parent) {
+      const cont = prev != null && prev.parent === parent && prev.index === index - 1 && !DEF_START.test(raw.split('\n')[0])
+      if (cont) chunks[chunks.length - 1] += '\n' + raw
+      else chunks.push(raw)
+      prev = { parent, index }
     }
     return false
   })
+  const found = new Map<string, DefTarget>()
+  const collect = (n: MdNode): void => {
+    if (n?.type === 'definition') {
+      const label = normLabel(String(n.label ?? n.identifier ?? ''))
+      if (label && !found.has(label)) found.set(label, { url: String(n.url ?? ''), title: n.title ?? null })
+    }
+    for (const c of n?.children ?? []) collect(c)
+  }
+  for (const chunk of chunks) collect(defParser.parse(chunk))
   idx = found
   defIndex.set(root, idx)
   return idx
 }
 
-/** 引用形写回去之后还解析得回同一个地址吗:这份文档里该 label 的首个定义就是当初那一行。 */
-function refStillDefined(ref: LinkRef): boolean {
+/** 引用形写回去之后重开还是这个链接吗:这份文档里该 label 的首个定义解析出的地址 + 标题,与链接此刻的一致。 */
+function refStillDefined(ref: LinkRef, href: unknown, title: unknown): boolean {
   if (!serializeRoot) return false
-  const line = firstDefinitions(serializeRoot).get(normLabel(ref.label))
-  return line != null && (ref.def == null || line.startsWith(ref.def))
+  const def = firstDefinitions(serializeRoot).get(normLabel(ref.label))
+  return def != null && def.url === href && def.title === (title ?? null)
 }
 
 /** preset 的 doc 节点原样注册,只把 toMarkdown 包一层:进出时登记「正在序列化的文档」(见顶注)。
@@ -225,7 +240,7 @@ const parseRef = (v: string | null): LinkRef | null => {
   try {
     const r = JSON.parse(v)
     return r && typeof r.label === 'string' && typeof r.url === 'string'
-      ? { referenceType: r.referenceType, label: r.label, url: r.url, ...(typeof r.def === 'string' ? { def: r.def } : {}) }
+      ? { referenceType: r.referenceType, label: r.label, url: r.url }
       : null
   } catch { return null }
 }
@@ -261,7 +276,7 @@ export const linkWithRefSchema = linkSchema.extendSchema((prev) => (ctx) => {
       match: base.toMarkdown.match,
       runner: (state, mark, node) => {
         const ref = mark.attrs.ref as LinkRef | null
-        if (ref && ref.url === mark.attrs.href && refStillDefined(ref)) {
+        if (ref && ref.url === mark.attrs.href && refStillDefined(ref, mark.attrs.href, mark.attrs.title)) {
           state.withMark(mark, 'linkReference', undefined, { identifier: ref.label, label: ref.label, referenceType: ref.referenceType })
           return
         }

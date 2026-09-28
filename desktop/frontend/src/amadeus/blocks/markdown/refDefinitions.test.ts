@@ -173,6 +173,80 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
     } finally { await b.destroy() }
   })
 
+  // 评审返修 D-12-prefix-collision:剩下那条定义的地址以原地址**开头**(/docs → /docs/v2),旧的 startsWith 判定放行,
+  // 引用形写回后重开指向 /docs/v2。同一个动作不能因为「谁是谁的前缀」给出两种结果。
+  /** 删掉正文含 needle 的第一段,返回落盘与重开后的 href|title 列表。 */
+  const deleteDef = async (md: string, needle: string): Promise<{ out: string; hrefs: string[] }> => {
+    const b = await bootEditor(md)
+    let out = ''
+    try {
+      let hit: { pos: number; size: number } | null = null
+      b.view.state.doc.descendants((n, pos) => {
+        if (!hit && n.type.name === 'paragraph' && n.textContent.includes(needle)) hit = { pos, size: n.nodeSize }
+        return !hit
+      })
+      if (!hit) throw new Error(`no paragraph ${needle}`)
+      const { pos, size } = hit as { pos: number; size: number }
+      b.view.dispatch(b.view.state.tr.delete(pos, pos + size))
+      out = b.md()
+    } finally { await b.destroy() }
+    const r = await bootEditor(out)
+    const hrefs: string[] = []
+    try {
+      r.view.state.doc.descendants((n) => { for (const m of n.marks) if (m.type.name === 'link') hrefs.push(`${m.attrs.href}|${m.attrs.title ?? ''}`) })
+    } finally { await r.destroy() }
+    return { out, hrefs }
+  }
+
+  it.each([
+    ['剩下那条的地址以原地址开头(/docs → /docs/v2)',
+      'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n', '[1]: http://x.example/docs',
+      'see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs/v2\n', 'http://x.example/docs|'],
+    ['地址写在下一行(首行都是 `[1]:`)',
+      'see [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n', 'first.example',
+      'see [a](http://first.example) here\n\n[1]:\n  http://second.example\n', 'http://first.example|'],
+    ['只差下一行的标题',
+      'see [a][1] here\n\n[1]: http://x.example\n  "T"\n\n[1]: http://x.example\n', '"T"',
+      'see [a](http://x.example "T") here\n\n[1]: http://x.example\n', 'http://x.example|T'],
+    ['剩下那条与原定义逐字相同 → 照旧写引用形',
+      'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs\n', '[1]: http://x.example/docs',
+      'see [a][1] here\n\n[1]: http://x.example/docs\n', 'http://x.example/docs|'],
+  ])('删掉同名定义的第一条:%s', async (_label, md, del, want, href) => {
+    const { out, hrefs } = await deleteDef(md, del)
+    expect(out).toBe(want)
+    expect(hrefs).toEqual([href]) // 重开后链接仍指向删之前那个地址(标题也一样)
+  })
+
+  it('定义都还在(同名前缀地址 / 地址或标题写在下一行 / 缩进 / 行尾空白):逐字往返,照旧写引用形(v3 宿主拆行后也一样)', async () => {
+    for (const md of [
+      'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n',
+      'see [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n',
+      'see [a][1] here\n\n[1]: http://x.example\n  "T"\n',
+      'see [a][1] here\n\n  [1]: http://x.example\n  "T"\n',
+      'see [a][x y] here\n\n[x\ny]: http://e.example\n',
+      'see [a][1] here\n\n[1]: http://x.example   \n',
+      '> see [a][1]\n>\n> [1]: http://q.example\n> "T"\n',
+    ]) {
+      expect(await roundTrip(md)).toBe(md)
+      expect(await roundTrip(md, { v3: true })).toBe(md)
+    }
+  })
+
+  it('链接卡只改了标题 → 退成带新标题的行内链接(引用形重开会拿回旧标题)', async () => {
+    const b = await bootEditor('see [a][1]\n\n[1]: http://example.com "Old"\n')
+    try {
+      const { state } = b.view
+      const link = state.schema.marks.link
+      let from = -1, to = -1, attrs: Record<string, unknown> = {}
+      state.doc.descendants((n, pos) => {
+        const m = n.marks.find((x) => x.type === link)
+        if (m && from < 0) { from = pos; to = pos + n.nodeSize; attrs = m.attrs }
+      })
+      b.view.dispatch(state.tr.removeMark(from, to, link).addMark(from, to, link.create({ ...attrs, title: 'New' })))
+      expect(b.md()).toBe('see [a](http://example.com "New")\n\n[1]: http://example.com "Old"\n')
+    } finally { await b.destroy() }
+  })
+
   it('定义还在(大小写 / 空白不同的 label 也认):照旧写引用形', async () => {
     for (const md of ['see [a][Foo  Bar] ok\n\n[foo bar]: http://x.example\n', '* [a][1]\n\n> [1]: http://q.example\n']) {
       expect(await roundTrip(md)).toBe(md)

@@ -17,6 +17,8 @@
 //   pending   已知未修、归别的波次/包(D-18/D-05/R-25 → 0b;D-01 → 0a 另一包)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
 // 另:任何桶打开即写盘、或命中 forbid(比「没修」更坏的形态),一律红。
+// 编辑用例(EDITS,verbatim 桶):动作不是「首段敲字」而是删掉某一段,golden = 删后落盘;重开后链接 href 必须还是删之前那个,
+//   第二轮敲字逐字(D-12 返修:删掉同名定义的第一条,引用形只在剩下的首个定义解析出同一地址时写回)。
 //
 // 用法:npm run check:rtcorpus(自带起停 vite;worktree 里设 HARNESS_URL 指到自己的端口)
 //      node scripts/e2e-editor.cjs --check=rtcorpus --only=d06   只跑 id 含 d06 的
@@ -121,6 +123,9 @@ const CASES = [
   // 定义下一行紧跟正文:落盘时两段之间补一个空行(与 `text\n# h` 同一类块间 join,D-18 / 0b);定义行本身必须还在。
   { id: 'd12.def_then_text', bucket: P, why: 'D-18(0b):块间补空行', md: `${M}\n\n[a]: x\ntext\n`, require: /\n\[a\]: x\n/ },
   { id: 'd12.def_escapes', bucket: V, md: `${M}\n\n[a_b]: https://x.com/a_b*c "t_1"\n\n[k]: <https://x.com/y z>\n` },
+  // 同名定义(首个生效):剩下那条以原地址为前缀 / 地址写在下一行 —— 都还在时照旧逐字(删掉第一条见 EDITS)。
+  { id: 'd12.dup_def_prefix', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
+  { id: 'd12.dup_def_dest_next_line', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n` },
 
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },
@@ -138,6 +143,19 @@ const ENTRIES = [
   { id: 'entry.fire', kind: 'fire' },
   { id: 'entry.switch', kind: 'switch' },
   { id: 'entry.paste', kind: 'paste' },
+]
+
+// ── D-12 返修(评审阻断 D-12-prefix-collision):删掉同名定义的第一条。旧判定拿定义原文首行 startsWith 比:
+// `/docs` 是 `/docs/v2` 的前缀、地址写在下一行(首行都是 `[1]:`)都会放行,引用形写回后重开指向剩下那条。
+// del = 删掉正文含它的第一段;href = 删之前 / 重开后链接都必须是它。
+const EDITS = [
+  { id: 'd12.del_first_def_prefix', md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`, del: 'x.example/docs',
+    golden: `${M}\n\nsee [a](http://x.example/docs) here\n\n[1]: http://x.example/docs/v2\n`, href: 'http://x.example/docs' },
+  { id: 'd12.del_first_def_dest_next_line', md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n`, del: 'first.example',
+    golden: `${M}\n\nsee [a](http://first.example) here\n\n[1]:\n  http://second.example\n`, href: 'http://first.example' },
+  // 对照:剩下那条与原定义一模一样 → 引用形照旧(不能一刀切全退行内)。
+  { id: 'd12.del_first_def_identical', md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs\n`, del: 'x.example/docs',
+    golden: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n`, href: 'http://x.example/docs' },
 ]
 
 function lineDiff(a, b) {
@@ -255,6 +273,44 @@ async function runEntry(browser, e) {
   return { id: e.id, bucket: V, rounds: [{ out, want }], openWrites: [quiet], errs }
 }
 
+const hrefsOf = (page) => page.evaluate((s) => [...document.querySelectorAll(s + ' a[href]')].map((a) => a.getAttribute('href')).join(' '), PM)
+
+async function runEdit(browser, e) {
+  const errs = []
+  const r = { id: e.id, bucket: V, rounds: [], openWrites: [], errs }
+  let page = await open(browser, e.md, errs)
+  r.openWrites.push(await writeCount(page))
+  const before = await hrefsOf(page)
+  if (before !== e.href) errs.push(`打开时链接 href=${JSON.stringify(before)},期望 ${e.href}`)
+  const w0 = await writeCount(page)
+  const deleted = await page.evaluate((needle) => {
+    const view = window.__upage.probe.view()
+    let hit = null
+    view.state.doc.descendants((n, pos) => {
+      if (!hit && n.type.name === 'paragraph' && n.textContent.includes(needle)) hit = { pos, size: n.nodeSize }
+      return !hit
+    })
+    if (!hit) return false
+    view.dispatch(view.state.tr.delete(hit.pos, hit.pos + hit.size))
+    return true
+  }, e.del)
+  for (let t = 0; deleted && t < 60 && (await writeCount(page)) === w0; t++) await page.waitForTimeout(100)
+  await page.waitForTimeout(400)
+  const out = deleted ? await lastWrite(page) : null
+  await page.close()
+  r.rounds.push({ out, want: e.golden, note: deleted ? undefined : `找不到含 ${e.del} 的段落` })
+  if (out != null) {
+    page = await open(browser, out, errs)
+    r.openWrites.push(await writeCount(page))
+    const after = await hrefsOf(page)
+    if (after !== e.href) errs.push(`重开后链接 href=${JSON.stringify(after)},删之前是 ${e.href}(重开指向别处)`)
+    const two = await typeAndSave(page, M, 'Y')
+    await page.close()
+    r.rounds.push({ out: two.out, want: out.replace(M, M + 'Y'), note: two.note })
+  }
+  return r
+}
+
 async function pool(items, n, fn) {
   const out = new Array(items.length)
   let next = 0
@@ -266,8 +322,8 @@ async function pool(items, n, fn) {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const cases = [...CASES, ...ENTRIES.map((e) => ({ ...e, bucket: V }))].filter((c) => !ONLY || c.id.includes(ONLY))
-  const results = await pool(cases, Number(process.env.RTCORPUS_JOBS || 4), (c) => (c.kind ? runEntry(browser, c) : runCase(browser, c)))
+  const cases = [...CASES, ...ENTRIES.map((e) => ({ ...e, bucket: V })), ...EDITS.map((e) => ({ ...e, kind: 'edit', bucket: V }))].filter((c) => !ONLY || c.id.includes(ONLY))
+  const results = await pool(cases, Number(process.env.RTCORPUS_JOBS || 4), (c) => (c.kind === 'edit' ? runEdit(browser, c) : c.kind ? runEntry(browser, c) : runCase(browser, c)))
   await browser.close()
 
   let red = 0
