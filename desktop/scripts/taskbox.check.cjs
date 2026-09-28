@@ -4,6 +4,7 @@
 // 块矩形之外的留白(块间缝/两侧余白)维持立即起框。「从行尾留白拉框选」(selection-display.check
 // 钉住的设计)照旧成立,这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
 // K8b(K-11):待办上 Mod+Enter 翻转勾选,普通列表仍拆项。
+// R10b / R10:Obsidian 空待办 `- [ ]` 读成空待办;空待办落盘 `- [ ] ` 而不是 `- [ ] <br />`。
 // 用法:npm run check:taskbox(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
 const os = require('os')
@@ -219,6 +220,32 @@ async function main() {
       const d = await items(pg)
       check('K8b 待办下的普通子项:只拆子项,外层待办勾选态不动', d.endsWith(' :父待办 | -:子项 | -:'), d)
       await pg.close()
+
+      // R10b / R10(评审 2026-09-27):Obsidian 的空待办 `- [ ]` / `- [x]`(`[ ]` 后没字)GFM 读成字面 `[ ]`;
+      //   回车新建的空待办落盘成 `- [ ] <br />`。现在:读成空待办;空待办落盘 `- [ ] `,重开仍是空待办。
+      const last = (p) => p.evaluate(() => (window.__upage.writes.at(-1) || {}).text || '')
+      const p1 = await open(browser, '# T\n\n- [ ]\n- [x]\n- [ ] 有字\n\n尾段\n', '')
+      const e = await items(p1)
+      await place(p1, '有字', 2)
+      await p1.waitForTimeout(150)
+      await p1.keyboard.type('Q')
+      await p1.waitForTimeout(1300)
+      const savedE = await last(p1)
+      await p1.close()
+      check('R10b Obsidian 空待办 `- [ ]` / `- [x]` 读成空待办;编辑同一只列表落盘不带 `\\[`',
+        e === ' : | x: |  :有字' && savedE.includes('- [ ] \n- [x] \n- [ ] 有字Q\n') && !savedE.includes('\\['), `${e}  saved=${JSON.stringify(savedE)}`)
+      const p2 = await open(browser, '# T\n\n- [ ] 待办一\n\n尾段\n', '')
+      await place(p2, '待办一', 3)
+      await p2.waitForTimeout(150)
+      await p2.keyboard.press('Enter')
+      await p2.waitForTimeout(1300)
+      const savedF = await last(p2)
+      await p2.close()
+      const p3 = await open(browser, savedF, '')
+      const f = await items(p3)
+      await p3.close()
+      check('R10 回车新建的空待办落盘 `- [ ] `(不是 `<br />`),重开仍是空待办',
+        savedF.includes('- [ ] 待办一\n- [ ] \n') && !/<br/i.test(savedF) && f === ' :待办一 |  :', `${f}  saved=${JSON.stringify(savedF)}`)
     }
   } finally {
     await browser.close()

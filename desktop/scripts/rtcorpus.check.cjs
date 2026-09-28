@@ -107,6 +107,9 @@ const CASES = [
   { id: 'd05.edit_plus_nested_star', bucket: V, md: `+ ${M}\n  * b\n+ c\n` },
   { id: 'd05.edit_loose', bucket: V, md: `- ${M}\n\n- b\n` },
   { id: 'd05.edit_nested_ordered', bucket: V, md: `1. ${M}\n   1. y\n2. z\n` },
+  // R-10b / R-10:Obsidian 空待办(`[ ]` 后没字)读成空待办,被编辑的列表里写回 `- [ ] `(修前读成字面 `[ ]`、写成 `- \[ ]`)。
+  { id: 'r10b.empty_tasks_edited', bucket: V, md: `- [ ] ${M}\n- [ ] \n- [x] \n\ntail\n` },
+  { id: 'r10b.empty_task_nospace_edited', bucket: W, why: 'R-10:空待办统一写成 Obsidian 的 `- [ ] `(被编辑的列表里没尾随空格的也补上)', md: `- [ ] ${M}\n- [ ]\n- [x]\n`, golden: `- [ ] ${M}Z\n- [ ] \n- [x] \n` },
   { id: 'd05.edit_upper_X', bucket: W, why: '附录 A D-05:被编辑的列表里 `[X]`→`[x]` 仍是规范化', md: `- [X] ${M}\n- [ ] b\n`, golden: `- [x] ${M}Z\n- [ ] b\n` },
 
   // ── D-06:行内 / 单元格 / 列表项里的 `<br>`(verify-rich-1/br.cjs、verify-keyboard-1/v01-br.cjs、d06_br.cjs)──
