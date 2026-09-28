@@ -37,6 +37,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'PUT', path: '/agent/user-profile', access: 'deny-remote', src: 'routes/agents.ts', why: 'user profile write (design appendix C)' },
   { method: 'GET', path: '/agent/approval-rules', access: 'deny-remote', src: 'routes/approvals.ts', why: 'approval rules are local policy' },
   { method: 'PUT', path: '/agent/approval-rules', access: 'deny-remote', src: 'routes/approvals.ts', why: 'approval rules are local policy' },
+  { method: 'GET', path: '/agent/approvals/pending', access: 'allow', src: 'routes/approvals.ts', why: 'per-session pending counts for the session-list badge (no ids / previews)' },
+  { method: 'GET', path: '/agent/approvals/stream', access: 'deny-remote', src: 'routes/approvals.ts', why: 'engine-wide pending approval feed for the host main process only' },
   { method: 'POST', path: '/agent/runs/:runId/approvals/:approvalId', access: 'allow', src: 'routes/approvals.ts', why: 'answer an approval (D1: remote approval allowed; bound to its run by P0 ②)' },
   { method: 'POST', path: '/agent/runs/:runId/captures/:shotId', access: 'allow', src: 'routes/approvals.ts', why: 'Agent Desk capture upload for a run (shotId bound to run, P0 ②)' },
   { method: 'POST', path: '/agent/runs/:runId/inquiries/:inquiryId', access: 'allow', src: 'routes/approvals.ts', why: 'answer an inquiry (D1)' },

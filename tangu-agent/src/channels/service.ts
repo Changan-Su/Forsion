@@ -14,7 +14,7 @@ import { deps } from '../seams/runtime.js';
 import { createRun } from '../services/runStore.js';
 import { abortRun, enqueueRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
-import { resolveApproval } from '../services/approvals.js';
+import { approvalLocalOnly, resolveApproval } from '../services/approvals.js';
 import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
@@ -71,7 +71,8 @@ export class ChannelService {
   private readonly hostClientTag?: string;
   private readonly activeRunsByPeer = new Map<string, string>();
   // 通道内审批:peer → 当前待批操作(收到 approval_request 时登记;用户回「批准/拒绝」时取用)。
-  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string }>();
+  /** approvalRunId = 审批条目所属的 run(团队成员的审批经团队 run 转发,payload.runId 是成员子 run);runId = 通道自己起的那条(等回复用)。 */
+  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string; approvalRunId?: string }>();
   // typing 指示:peer → 周期性重发「正在输入」的定时器(run 期间开启,出回复时关闭)。
   private readonly typingTimers = new Map<string, ReturnType<typeof setInterval>>();
   // 挂起的 waitForRunReply 强制结束器:stop()/服务重载时把所有等待中的回复 settle 掉,避免泄漏。
@@ -280,13 +281,18 @@ export class ChannelService {
     const pendingApproval = this.pendingApprovalByPeer.get(key);
     if (pendingApproval) {
       if (/^(批准|同意|确认|可以|好的?|是的?|yes|y|ok|approve|👍)$/i.test(text)) {
+        // P1 · K3(方案 §6.3):受保护路径(凭据 / ~/.forsion 配置)的审批只在执行设备本机批准。**不删**待批登记:
+        // 用户在通道里仍可回「拒绝」,或回电脑上批。通道没有语言设置 → 双语同一条。
+        if (approvalLocalOnly(pendingApproval.approvalId, pendingApproval.approvalRunId ?? pendingApproval.runId) === true) {
+          return '此操作涉及受保护的配置,只能在电脑上批准;回复「拒绝」可取消。\nThis touches protected configuration and can only be approved on the computer. Reply "reject" to cancel.';
+        }
         this.pendingApprovalByPeer.delete(key);
-        const ok = resolveApproval(pendingApproval.approvalId, { action: 'approve' });
+        const ok = resolveApproval(pendingApproval.approvalId, { action: 'approve' }, undefined, { via: 'channel' });
         return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.peerId, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
       }
       if (/^(拒绝|不同意|不行|否|不|no|n|reject)$/i.test(text)) {
         this.pendingApprovalByPeer.delete(key);
-        const ok = resolveApproval(pendingApproval.approvalId, { action: 'reject' });
+        const ok = resolveApproval(pendingApproval.approvalId, { action: 'reject' }, undefined, { via: 'channel' });
         return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.peerId, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
       }
     }
@@ -302,7 +308,7 @@ export class ChannelService {
 
     // 上一个待批操作未处理就发来新任务 → 视为放弃,拒绝旧审批,避免旧 run 永久挂起等审批。
     const stale = this.pendingApprovalByPeer.get(key);
-    if (stale) { resolveApproval(stale.approvalId, { action: 'reject' }); this.pendingApprovalByPeer.delete(key); }
+    if (stale) { resolveApproval(stale.approvalId, { action: 'reject' }, undefined, { via: 'channel' }); this.pendingApprovalByPeer.delete(key); }
 
     const runId = uuidv4();
     const assistantMessageId = uuidv4();
@@ -417,7 +423,7 @@ export class ChannelService {
         if (ev.type === 'approval_request') {
           const approvalId = String(ev.payload?.approvalId || '');
           const preview = String(ev.payload?.preview || ev.payload?.name || '操作');
-          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview, agentSlug });
+          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview, agentSlug, approvalRunId: String(ev.payload?.runId || runId) });
           deliver(`⚠️ 需要你批准这个操作:\n${preview}\n\n回复「批准」执行,「拒绝」取消,或「停止」结束任务。`);
           close(false); // 退订(用户回「批准」时会新建一次等待重新订阅);保留 run + 待批登记
           return;

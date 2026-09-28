@@ -54,6 +54,7 @@ import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, ensureEntry, 
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
+import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -603,6 +604,13 @@ router.post('/agent/special/approvals/:id/approve', authMiddleware, async (req: 
   // 契约 C9:异步审批只有 approve / reject 两个动作(没有「总允许」);远端夹带 argsOverride → 400。
   if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
+    // P1 · K3(方案 §6.3):排队的受保护路径写入(凭据 / ~/.forsion 配置)只在执行设备本机批准;远端只能拒绝(reject 不拦)。
+    if (parseRemoteOrigin(req.headers)) {
+      const row = await getApproval(req.user!.userId, String(req.params.id || ''));
+      let kind: unknown;
+      try { kind = row?.reason ? JSON.parse(String(row.reason))?.kind : undefined; } catch { kind = undefined; }
+      if (kind === 'protected') return res.status(403).json(APPROVAL_LOCAL_ONLY_BODY);
+    }
     const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', req.body?.note);
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
     res.json({ ok: true, status: r.status, result: r.result });

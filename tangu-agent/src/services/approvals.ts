@@ -27,6 +27,8 @@ import { USER_BROWSER_ACTIONS, userBrowserBound } from '../tools/builtin/browser
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
+import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
+export type { AnswerBy } from './pendingPromptIndex.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
@@ -49,6 +51,8 @@ export interface ParkedApproval {
 interface Pending {
   runId: string;
   resolve: (d: ApprovalDecision) => void;
+  /** reason.kind==='protected'(P1 · K3):只有执行设备本机能批准,远端只能拒绝(方案 §6.3)。 */
+  localOnly: boolean;
 }
 
 const pending = new Map<string, Pending>(); // approvalId -> resolver
@@ -164,14 +168,18 @@ function requestApprovalNow(
 ): Promise<ApprovalDecision> {
   if (signal?.aborted) return Promise.resolve({ action: 'reject' });
   const approvalId = nextApprovalId();
+  // P1 · K3:受保护路径的审批只在执行设备本机批准 —— 兑现路由 / 异步审批 / 通道据此拒远端「批准」,卡片据此不给远端批准键。
+  const localOnly = reason?.kind === 'protected';
   return new Promise<ApprovalDecision>((resolve) => {
     const onAbort = (): void => {
       pending.delete(approvalId);
+      untrackPrompt(approvalId, 'expired'); // 中止分支不发 approval_result:索引(通知 / 角标)要在这里撤,否则残留
       resolve({ action: 'reject' });
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     pending.set(approvalId, {
       runId,
+      localOnly,
       resolve: (d) => {
         if (signal) signal.removeEventListener('abort', onAbort);
         resolve(d);
@@ -184,8 +192,10 @@ function requestApprovalNow(
       preview,
       ...(reason ? { reason } : {}), // 旧客户端忽略未知字段;preview 一个字都没动(它是越界警示的唯一载体)
       ...(origin ? { remote: remoteApprovalPayload(origin) } : {}), // 远程污点 run 才带(P1 · K1);旧客户端忽略
+      ...(localOnly ? { localOnly: true } : {}), // P1 · K3;旧客户端忽略
       toolCallId: call.id, // 客户端据此把审批挂回对应的工具卡(挂起的调用在卡上显示「等你批准」)
     });
+    trackPrompt({ id: approvalId, kind: 'approval', runId, tool: call.function.name, localOnly, origin });
   });
 }
 
@@ -195,15 +205,32 @@ function requestApprovalNow(
  * —— 桌面引擎所有 run 都属于 'local',不比对 = 拿任意 run 的 URL 兑现任意 run 的审批。
  * 进程内调用方(TUI / 通道)拿的是自己订阅的那条 run 事件流里的 id,可不传。
  */
-export function resolveApproval(approvalId: string, decision: ApprovalDecision, runId?: string): boolean {
+export function resolveApproval(approvalId: string, decision: ApprovalDecision, runId?: string, by?: AnswerBy): boolean {
   const p = pending.get(approvalId);
   // runId 不匹配 → 一律当作「不在等待」,不泄露它是否存在。
   if (!p || (runId !== undefined && p.runId !== runId)) return false;
   pending.delete(approvalId);
   p.resolve(decision);
+  // 谁答的(P1 · K3):先答先得的另一端据此把卡收起成「已在 X 上批准」。进程内调用方(TUI)不传 = 本机。
+  const answeredBy: AnswerBy = by ?? { via: 'local' };
   // 广播审批结果:SSE 回放/多端订阅者据此知道该审批已被消化(TUI 忽略未知事件类型,零影响)。
-  void publish(p.runId, 'approval_result', { approvalId, action: decision.action });
+  void publish(p.runId, 'approval_result', { approvalId, action: decision.action, by: answeredBy });
+  untrackPrompt(approvalId, decision.action === 'reject' ? 'rejected' : 'approved', answeredBy);
   return true;
+}
+
+/** 受保护路径的审批只能在执行设备本机批准(方案 §6.3,P1 · K3);远端(隧道 / P2P / 局域网 / 设备页)仍可拒绝。
+ *  兑现路由与异步审批(special.ts)共用同一个 403 回包。 */
+export const APPROVAL_LOCAL_ONLY_BODY = {
+  code: 'APPROVAL_LOCAL_ONLY',
+  detail: 'This action touches protected configuration or credentials and can only be approved on the computer running it. You can still reject it here.',
+} as const;
+
+/** 这条审批是不是只能在本机批准(受保护路径,P1 · K3)。null = 不在等 / 不属于这条 run(与兑现路由的 410 同口径,不泄露存在性)。 */
+export function approvalLocalOnly(approvalId: string, runId: string): boolean | null {
+  const p = pending.get(approvalId);
+  if (!p || p.runId !== runId) return null;
+  return p.localOnly;
 }
 
 export function isAlwaysAllowed(sessionId: string, toolName: string): boolean {
