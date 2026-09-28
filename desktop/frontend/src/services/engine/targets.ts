@@ -80,8 +80,11 @@ function bearerHeaders(token: string, json: boolean): Record<string, string> {
     : { Authorization: `Bearer ${token}` }
 }
 
+/** 一份引擎连接(基址 + 令牌)。本端宿主当前那份在 appStore.cfg,由 homeTarget() 现读;别的来源走 connectionTarget。 */
+export interface EngineConnection { backendUrl: string; token: string }
+
 /** 整份 cfg → home 目标(按调用的快照:读的是传进来那份 cfg)。token 在发请求那一刻从这份 cfg 读。 */
-function fromLegacy(cfg: LegacyCfg): EngineTarget {
+function fromLegacy(cfg: EngineConnection): EngineTarget {
   return mintTarget({
     key: 'home',
     ref: HOME_REF,
@@ -90,6 +93,16 @@ function fromLegacy(cfg: LegacyCfg): EngineTarget {
     unitBase: null,
     headers: async (json = true): Promise<Record<string, string>> => bearerHeaders(cfg.token, json),
   })
+}
+
+/**
+ * 显式目标:一份**不是**本端宿主当前配置的引擎连接 —— 设置页外部连接表单现拼的地址、引导 / 重启后刚从主进程读到的配置、
+ * 经 tanguSeam 的 waitBackend() 现取的主进程配置(那些模块与 appStore 有 import 环,所在窗口也未必装了引擎宿主)。
+ * home 键、按调用的快照(base / token 取自传入那份;头与改造前 `headers(cfg.token)` 同形同序)。
+ * 本端当前那份一律用 homeTarget()(活目标)。棘轮 R4 钉住只许在白名单文件里调(engineTargetGuard.test.ts)。
+ */
+export function connectionTarget<C extends EngineConnection>(conn: C): EngineTarget { // 泛型:整份配置 / 带 modelId 的字面量原样收
+  return fromLegacy(conn)
 }
 
 /** 服务函数入口:已是目标就原样用,老调用点传来的 cfg 折成 home 目标(Phase A)。 */
