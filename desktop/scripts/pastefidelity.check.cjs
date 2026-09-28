@@ -1,4 +1,4 @@
-// 粘贴保真仪器(check:pastefidelity,评审 2026-09-27 §6 规划名;本轮先装 D-10,D-13 等后续条目往这里加)。
+// 粘贴保真仪器(check:pastefidelity,评审 2026-09-27 §6 规划名):D-10(PF1–PF9)、D-13(PF10–PF14)。
 //
 // D-10(拍板 #12):剪贴板只有 text/plain、不像 markdown 的多行文本 → **一行一段**(单个 `\n` 升成段落);
 // 像 markdown 的照旧走 CommonMark(紧凑列表不许变 loose、硬折行的 markdown 段落不许拆行);代码块内粘贴不变;
@@ -136,6 +136,44 @@ async function main() {
     {
       const r = await pasteCase(browser, { 'text/plain': '%%\n注释内容\n%%' })
       check('PF9 跨行 %% 注释不拆段', r.out === 'ANCHOR\n\n%%\n注释内容\n%%\n\ntail\n' && !r.errs.length, JSON.stringify(r))
+    }
+    // ── D-13:单行纯文本粘进一段已有文字的中间 —— 解析出块结构的逐字插入,只有行内标记的照常解析、首尾空白补回 ──
+    const mid = (text, seed = 'ANCHOR\n\nsee TAIL\n', anchor = 'see ') => pasteCase(browser, { 'text/plain': text }, seed, anchor, false)
+    {
+      const r = await mid(' world ', 'ANCHOR\n\nhelloTAIL\n', 'hello')
+      check('PF10 句中粘 ` world `:首尾空格不被吃', r.out === 'ANCHOR\n\nhello world TAIL\n' && !r.errs.length, JSON.stringify(r))
+    }
+    for (const [id, text, want] of [
+      ['PF11', '2024. A good year', 'see 2024. A good yearTAIL'],
+      ['PF11b', '- 2 cups', 'see - 2 cupsTAIL'],
+      ['PF11c', '# Title words', 'see # Title wordsTAIL'],
+      ['PF11d', '> quoted', 'see > quotedTAIL'],
+    ]) {
+      const r = await mid(text)
+      check(`${id} 句中粘 ${JSON.stringify(text)}:行首标记原样留在句中`, r.out === `ANCHOR\n\n${want}\n` && r.blocks.join('|') === `paragraph:ANCHOR|paragraph:${want}` && !r.errs.length, JSON.stringify(r))
+    }
+    {
+      const r = await mid(' **粗** ')
+      check('PF12 对照:句中粘行内标记照常成格式(首尾空白也补回)', r.out === 'ANCHOR\n\nsee  **粗** TAIL\n' && !r.errs.length, JSON.stringify(r))
+    }
+    {
+      const r = await pasteCase(browser, { 'text/plain': '- 2 cups' })
+      check('PF13 对照:空段落里粘 `- 2 cups` 照旧转列表(同 Obsidian)', r.blocks.includes('bullet_list:2 cups') && !r.errs.length, JSON.stringify(r))
+    }
+    {
+      // ⌘⇧V:PM 在 keydown 里记 Shift(input.shiftKey),合成 paste 时按住 Shift 即同一状态。
+      const errs = []
+      const page = await open(browser, 'ANCHOR\n\ntail\n', errs)
+      await caretAfter(page, 'ANCHOR')
+      await page.keyboard.press('Enter')
+      const w0 = await writeCount(page)
+      await page.keyboard.down('Shift')
+      // 只有 text/plain(终端 / 纯文本来源):带 HTML 时 PM 自己按 Shift 出纯文本切片、Milkdown 照收,只有这一形态会被当 markdown 解析。
+      await paste(page, { 'text/plain': '**粗** 与 - x' })
+      await page.keyboard.up('Shift')
+      const out = await settle(page, w0)
+      await page.close()
+      check('PF14 ⌘⇧V 逐字粘贴(只有 text/plain):不解析 markdown', out === 'ANCHOR\n\n\\*\\*粗\\*\\* 与 - x\n\ntail\n' && !errs.length, JSON.stringify({ out, errs }))
     }
   } finally {
     await browser.close()

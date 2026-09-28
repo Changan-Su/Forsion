@@ -62,7 +62,7 @@ import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
+import { Fragment, Slice, type Node as ProseNode } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -111,7 +111,7 @@ import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { askString } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
-import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
+import { isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
@@ -849,14 +849,62 @@ export function MilkdownInner({
         if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
       }
+      // 纯文本逐字(D-13):⌘⇧V / Ctrl+Shift+V(「粘贴并匹配样式」)—— PM 自己记着按键时的 Shift(input.shiftKey,
+      // 它的 plain 粘贴同一个判据),Milkdown 的剪贴板插件不看它、照样当 markdown 解析。这里接住:原文逐字,多行一行一段。
+      const plain = event.clipboardData?.getData('text/plain') ?? ''
+      const html = event.clipboardData?.getData('text/html') ?? ''
+      const inCode = !!sel.$from.parent.type.spec.code
+      if (unified && plain && !inCode && (view as unknown as { input?: { shiftKey?: boolean } }).input?.shiftKey) {
+        event.preventDefault()
+        const lines = plain.replace(/\r\n?/g, '\n').split('\n')
+        const paragraph = view.state.schema.nodes.paragraph
+        if (lines.length === 1 || !paragraph) {
+          view.dispatch(view.state.tr.insertText(lines.join(' ')).scrollIntoView().setMeta('uiEvent', 'paste'))
+        } else {
+          const frag = Fragment.from(lines.map((l) => paragraph.create(null, l ? view.state.schema.text(l) : null)))
+          view.dispatch(view.state.tr.replaceSelection(new Slice(frag, 1, 1)).scrollIntoView().setMeta('uiEvent', 'paste'))
+        }
+        return true
+      }
+      // 单行纯文本粘进一段已有文字的中间(D-13,见 ./plainPaste singleLinePasteMode):解析出块结构(`2024. `、`- `、`# `…)
+      // 在句中不成立 → 原文逐字;只是行内标记 → 照常解析,首尾空白原样补回(解析会吃掉 ` world ` 的空格)。
+      // 空段落里粘贴照旧转结构(与 Obsidian 同),不进这一支。
+      const $f = sel.$from
+      const $t = sel.$to
+      if (
+        unified && plain && !html && !inCode && !/[\r\n]/.test(plain) && $f.sameParent($t) && $f.parent.isTextblock &&
+        ($f.parentOffset > 0 || $t.parentOffset < $t.parent.content.size)
+      ) {
+        let parsed: ProseNode | null = null
+        getInstance()?.action((c) => { parsed = (c.get(parserCtx)(plain) as ProseNode | undefined) ?? null })
+        const doc = parsed as ProseNode | null
+        if (doc) {
+          const top: string[] = []
+          doc.forEach((n) => { top.push(n.type.name) })
+          const mode = singleLinePasteMode(plain, top)
+          if (mode === 'literal') {
+            event.preventDefault()
+            view.dispatch(view.state.tr.insertText(plain).scrollIntoView().setMeta('uiEvent', 'paste'))
+            return true
+          }
+          if (mode === 'inline-ws') {
+            event.preventDefault()
+            const { schema } = view.state
+            const lead = /^\s*/.exec(plain)![0]
+            const trail = /\s*$/.exec(plain)![0]
+            const nodes: ProseNode[] = []
+            if (lead) nodes.push(schema.text(lead))
+            doc.firstChild!.forEach((n) => { nodes.push(n) })
+            if (trail) nodes.push(schema.text(trail))
+            view.dispatch(view.state.tr.replaceSelection(new Slice(Fragment.from(nodes), 0, 0)).scrollIntoView().setMeta('uiEvent', 'paste'))
+            return true
+          }
+        }
+      }
       // 纯文本多行(D-10,拍板 #12):只有 text/plain、不像 markdown → 一行一段,再交回同一条 markdown 粘贴管线
       // (Milkdown clipboard 从 clipboardData 取 text/plain → parserCtx)。转换后已无单个 `\n`,重入本函数不会再进这一支。
       // 代码块内不动(那里 `\n` 就是代码的换行)。见 ./plainPaste。
-      const plain = event.clipboardData?.getData('text/plain') ?? ''
-      if (
-        unified && plain && !event.clipboardData?.getData('text/html') &&
-        !sel.$from.parent.type.spec.code && isPlainMultiline(plain)
-      ) {
+      if (unified && plain && !html && !inCode && isPlainMultiline(plain)) {
         const dt = new DataTransfer()
         dt.setData('text/plain', plainLinesToParagraphs(plain))
         event.preventDefault()
