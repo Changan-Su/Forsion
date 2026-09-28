@@ -8,27 +8,17 @@
 //  · 定义 → 可见、可编辑的**字面段落**:正文 = 原文切片,原文另记在段落的 `raw` attr。落盘时段落没被动过
 //    (无 mark、无缩进/对齐、正文 === 原文)就原样写回原文;动过就按普通段落写(`\[…]` 转义,仍是那行字,不再是定义)。
 //    相邻行的多个定义合成**一个**段落(否则落盘时段落之间插空行);合成段落带 position,blankLineRemark 靠它算空行。
-//  · `[text][label]` / `[text][]` / `[text]` → link mark 带 `ref`(引用形 + label + 当时的 url),照常渲染成链接;
-//    落盘时写回引用形**当且仅当**:**正在序列化的这份文档**里,该 label 的首个定义(CommonMark 首个生效;只数没被动过的
-//    定义段落)**解析出来**的地址 + 标题,与这个链接此刻的 href + title 相同 —— 即「重开后还是这个链接」。否则退成行内链接:
-//    引用形离开定义就是一串字面 `[a][1]`,URL 从文件里消失(评审返修 D-12-orphan-ref:跨笔记粘贴、删掉定义行、结构化复制
-//    给外部应用、改了定义行,四条路都会把引用变孤儿);剩下的同名定义指向别处也不行(评审返修 D-12-prefix-collision:
-//    原先拿定义原文首行 startsWith 比,`/docs` 是 `/docs/v2` 的前缀、地址写在下一行时首行都是 `[1]:`,都会放行 → 重开指向别处)。
-//    比的是解析结果不是原文:定义原文用独立的 remark-parse 再解析一遍,与重开时同一套 micromark 规则。
-//    collapsed / shortcut 的文字被改,mdast-util-to-markdown 自己会退成 full 形。
-//    「正在序列化的文档」由 doc 节点的序列化器在进出时登记(docWithRefScope)—— 剪贴板 / 切块序列化的是切片文档,
-//    不能拿编辑器里那份 state.doc 判断。
+//  · `[text][label]` / `[text][]` / `[text]` → link mark(带 `ref` 记下原引用形,供粘贴链路带回),照常渲染成链接;
+//    落盘**一律写成行内链接** `[text](url)`(= origin/main 行为,URL 永不丢)。曾尝试写回引用形,但要保证「重开还是这个链接」
+//    的边界太多(同名定义首个生效、转义/实体标签、v3 懒续行、跨笔记粘贴、删定义行),两轮对抗评审仍有反例,已放弃。
 //  · `![alt][label]` 仍按 preset 转成行内图片(取舍:图片引用罕见,逐字要再扩 image schema,不值当)。
 // ⚠️ 不能直接从 preset 里摘掉 remark-inline-links:剩下的 definition / linkReference 没有 schema → parserMatchError 白屏。
 //    所以这里**自己**建定义表、同一趟把引用也处理掉 —— 只转定义不转引用,它开头 definitions(tree) 找不到定义,引用原样留下,一样白屏。
 // 仪器:npm run check:rtcorpus(d12.* / entry.*)、refDefinitions.test.ts。
 import { $remark } from '@milkdown/kit/utils'
-import { nodesCtx } from '@milkdown/kit/core'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { docSchema, linkAttr, linkSchema } from '@milkdown/kit/preset/commonmark'
+import { linkAttr, linkSchema } from '@milkdown/kit/preset/commonmark'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
-import { unified } from 'unified'
-import remarkParse from 'remark-parse'
 
 // mdast 是动态形状的 AST,这层统一按 any 处理(同 softBreak.ts / marks.ts)。
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -159,81 +149,11 @@ export function pristineRaw(node: PMNode): string | null {
   return plain && displayForm(node.textContent) === displayForm(raw) ? raw : null
 }
 
-/** 同 mdast normalizeIdentifier:空白折叠、首尾去空、大小写不敏感。 */
-const normLabel = (v: string): string => v.replace(/[\t\n\r ]+/g, ' ').replace(/^ | $/g, '').toLowerCase().toUpperCase()
 /** 一行定义的开头:≤3 格缩进 + `[label]:`(label 里不许有未转义的方括号,同 CommonMark)。 */
 const DEF_START = /^[ \t]{0,3}(\[((?:[^\\[\]]|\\[\s\S])+)\]:)/
 
 /** 外来的定义原文(剪贴板 HTML 的 data-md-raw):首行得是定义的样子才收(这份原文会不经转义写进 .md)。 */
 export const literalRawFromDom = (v: string | null): string | null => (v != null && DEF_START.test(v.split('\n')[0]) ? v : null)
-
-/** 正在序列化的那份文档(doc 节点序列化器进出时登记,可重入);null = 序列化的不是整份文档。 */
-let serializeRoot: PMNode | null = null
-/** 定义原文的独立解析器:只要 CommonMark 核心的 definition(不挂 Milkdown 的插件链,定义不会再被字面化)。 */
-const defParser = unified().use(remarkParse)
-interface DefTarget { url: string; title: string | null }
-/** 每份文档:label → 该 label 首个定义解析出的地址 + 标题。只认没被动过的定义段落 —— 动过的落盘是转义字面,不再是定义。 */
-const defIndex = new WeakMap<PMNode, Map<string, DefTarget>>()
-function firstDefinitions(root: PMNode): Map<string, DefTarget> {
-  let idx = defIndex.get(root)
-  if (idx) return idx
-  // 按文档序拼成若干块逐块解析。v3 宿主(softBreakRemark)把多行定义拆成了相邻几段、每段一行原文:
-  // 紧挨着上一段、且首行不是 `[label]:` 的,是上一条定义的续行(下一行的地址 / 标题 / 跨行 label),接回同一块。
-  const chunks: string[] = []
-  let prev: { parent: PMNode; index: number } | null = null
-  root.descendants((node, _pos, parent, index) => {
-    if (node.type.name !== 'paragraph') return true
-    const raw = pristineRaw(node)
-    if (raw != null && parent) {
-      const cont = prev != null && prev.parent === parent && prev.index === index - 1 && !DEF_START.test(raw.split('\n')[0])
-      if (cont) chunks[chunks.length - 1] += '\n' + raw
-      else chunks.push(raw)
-      prev = { parent, index }
-    }
-    return false
-  })
-  const found = new Map<string, DefTarget>()
-  const collect = (n: MdNode): void => {
-    if (n?.type === 'definition') {
-      const label = normLabel(String(n.label ?? n.identifier ?? ''))
-      if (label && !found.has(label)) found.set(label, { url: String(n.url ?? ''), title: n.title ?? null })
-    }
-    for (const c of n?.children ?? []) collect(c)
-  }
-  for (const chunk of chunks) collect(defParser.parse(chunk))
-  idx = found
-  defIndex.set(root, idx)
-  return idx
-}
-
-/** 引用形写回去之后重开还是这个链接吗:这份文档里该 label 的首个定义解析出的地址 + 标题,与链接此刻的一致。 */
-function refStillDefined(ref: LinkRef, href: unknown, title: unknown): boolean {
-  if (!serializeRoot) return false
-  const def = firstDefinitions(serializeRoot).get(normLabel(ref.label))
-  return def != null && def.url === href && def.title === (title ?? null)
-}
-
-/** preset 的 doc 节点原样注册,只把 toMarkdown 包一层:进出时登记「正在序列化的文档」(见顶注)。
- *  挂法:commonmarkWithIndent 里**原位替换** docSchema(追加 .use 会让同名节点 filter+append 挪到节点序尾部)。 */
-export const docWithRefScope: MilkdownPlugin = (ctx) => async () => {
-  const cleanup = await docSchema(ctx)()
-  ctx.update(nodesCtx, (ns) => ns.map(([id, spec]) => {
-    if (id !== 'doc') return [id, spec]
-    const base = spec.toMarkdown
-    return [id, {
-      ...spec,
-      toMarkdown: {
-        match: base.match,
-        runner: (state, node) => {
-          const prev = serializeRoot
-          serializeRoot = node
-          try { return base.runner(state, node) } finally { serializeRoot = prev }
-        },
-      },
-    }]
-  }))
-  return cleanup as () => void // $node 恒返回卸载函数(撤掉 nodesCtx 里的 doc)
-}
 
 const parseRef = (v: string | null): LinkRef | null => {
   if (!v) return null
@@ -275,11 +195,8 @@ export const linkWithRefSchema = linkSchema.extendSchema((prev) => (ctx) => {
     toMarkdown: {
       match: base.toMarkdown.match,
       runner: (state, mark, node) => {
-        const ref = mark.attrs.ref as LinkRef | null
-        if (ref && ref.url === mark.attrs.href && refStillDefined(ref, mark.attrs.href, mark.attrs.title)) {
-          state.withMark(mark, 'linkReference', undefined, { identifier: ref.label, label: ref.label, referenceType: ref.referenceType })
-          return
-        }
+        // 引用形不写回,一律退成行内链接(= origin/main 行为,URL 永不丢)。写回引用形要保证「重开还是这个链接」,
+        // 边界太多(同名定义、转义标签、v3 懒续行、跨笔记粘贴),两轮返修仍有反例,收益不抵风险 —— 定义行本身照旧逐字保留。
         return base.toMarkdown.runner(state, mark, node)
       },
     },

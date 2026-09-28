@@ -117,15 +117,18 @@ const CASES = [
   { id: 'd12.cn_label_line', bucket: V, md: `${M}\n\n会议记录\n\n[重要]: 明天开会\n\n[TODO]: 回复邮件\n\n结尾\n`, visible: '[重要]: 明天开会' },
   { id: 'd12.en_label', bucket: V, md: `${M}\n\nnotes\n\n[Note]: remember-this\n` },
   { id: 'd12.unused_defs', bucket: V, md: `${M}\n\ntext\n\n[bookmark]: https://example.com\n[other]: https://other.com "t"\n` },
-  { id: 'd12.reflink', bucket: V, md: `${M}\n\nsee [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n` },
+  { id: 'd12.reflink', bucket: W, why: 'D-12 取舍:引用式链接落盘写成行内链接(URL 不丢),定义行逐字保留', md: `${M}\n\nsee [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n`,
+    golden: `${M}Z\n\nsee [a](http://example.com "Title") and [b](http://x.y) and [c](/c)\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n` },
   { id: 'd12.def_in_quote', bucket: V, md: `${M}\n\n> 引文\n>\n> [ref]: https://q.example\n` },
   { id: 'd12.def_multiline_in_list', bucket: V, md: `${M}\n\n* [a]: http://x.example\n  "title"\n` },
   // 定义下一行紧跟正文:落盘时两段之间补一个空行(与 `text\n# h` 同一类块间 join,D-18 / 0b);定义行本身必须还在。
   { id: 'd12.def_then_text', bucket: P, why: 'D-18(0b):块间补空行', md: `${M}\n\n[a]: x\ntext\n`, require: /\n\[a\]: x\n/ },
   { id: 'd12.def_escapes', bucket: V, md: `${M}\n\n[a_b]: https://x.com/a_b*c "t_1"\n\n[k]: <https://x.com/y z>\n` },
   // 同名定义(首个生效):剩下那条以原地址为前缀 / 地址写在下一行 —— 都还在时照旧逐字(删掉第一条见 EDITS)。
-  { id: 'd12.dup_def_prefix', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
-  { id: 'd12.dup_def_dest_next_line', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n` },
+  { id: 'd12.dup_def_prefix', bucket: W, why: 'D-12 取舍:引用式链接落盘写成行内链接(URL 不丢),定义行逐字保留', md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`,
+    golden: `${M}Z\n\nsee [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
+  { id: 'd12.dup_def_dest_next_line', bucket: W, why: 'D-12 取舍:引用式链接落盘写成行内链接(URL 不丢),定义行逐字保留', md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n`,
+    golden: `${M}Z\n\nsee [a](http://first.example) here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n` },
 
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },
@@ -145,17 +148,15 @@ const ENTRIES = [
   { id: 'entry.paste', kind: 'paste' },
 ]
 
-// ── D-12 返修(评审阻断 D-12-prefix-collision):删掉同名定义的第一条。旧判定拿定义原文首行 startsWith 比:
-// `/docs` 是 `/docs/v2` 的前缀、地址写在下一行(首行都是 `[1]:`)都会放行,引用形写回后重开指向剩下那条。
+// ── D-12:删掉同名定义的第一条 —— 落盘成带原地址的行内链接,重开不指向剩下那条。
 // del = 删掉正文含它的第一段;href = 删之前 / 重开后链接都必须是它。
 const EDITS = [
   { id: 'd12.del_first_def_prefix', md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`, del: 'x.example/docs',
     golden: `${M}\n\nsee [a](http://x.example/docs) here\n\n[1]: http://x.example/docs/v2\n`, href: 'http://x.example/docs' },
   { id: 'd12.del_first_def_dest_next_line', md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n`, del: 'first.example',
     golden: `${M}\n\nsee [a](http://first.example) here\n\n[1]:\n  http://second.example\n`, href: 'http://first.example' },
-  // 对照:剩下那条与原定义一模一样 → 引用形照旧(不能一刀切全退行内)。
   { id: 'd12.del_first_def_identical', md: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs\n`, del: 'x.example/docs',
-    golden: `${M}\n\nsee [a][1] here\n\n[1]: http://x.example/docs\n`, href: 'http://x.example/docs' },
+    golden: `${M}\n\nsee [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n`, href: 'http://x.example/docs' },
 ]
 
 function lineDiff(a, b) {

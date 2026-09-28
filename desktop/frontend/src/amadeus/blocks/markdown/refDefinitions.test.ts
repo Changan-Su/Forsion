@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 //
-// D-12:链接定义行 / `[标签]: 值` 中文行打开看不见、编辑后从磁盘删掉;`[a][1]` 被改写成行内链接(评审 2026-09-27)。
+// D-12:链接定义行 / `[标签]: 值` 中文行打开看不见、编辑后从磁盘删掉(评审 2026-09-27)。定义行逐字保留;
+// 引用式链接落盘一律写成行内链接(= origin/main 行为,URL 不丢;写回引用形已放弃,见 refDefinitions.ts 顶注)。
 // 真 Milkdown(生产装配,见 parseFidelity.testkit.ts)。真浏览器那一半:npm run check:rtcorpus 的 d12.* / entry.*。
 import { describe, expect, it } from 'vitest'
 import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model'
@@ -18,8 +19,9 @@ describe('定义行 / 引用式链接逐字往返', () => {
     ['图片引用与链接引用同在(不白屏)', '![pic][1] and [t][1]\n\n[1]: http://x.y/p.png\n'],
   ])('%s', async (label, md) => {
     const out = await roundTrip(md)
-    // 图片引用照旧转行内图片(取舍,见 refDefinitions.ts 顶注),其余逐字。
-    if (label.startsWith('图片引用')) expect(out).toBe('![pic](http://x.y/p.png) and [t][1]\n\n[1]: http://x.y/p.png\n')
+    // 定义行逐字;引用(含图片引用)落盘成行内形式。
+    if (label.startsWith('图片引用')) expect(out).toBe('![pic](http://x.y/p.png) and [t](http://x.y/p.png)\n\n[1]: http://x.y/p.png\n')
+    else if (label.startsWith('full')) expect(out).toBe('see [a](http://example.com "Title") and [b](http://x.y) and [c](/c)\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n')
     else expect(out).toBe(md)
   })
 
@@ -86,7 +88,7 @@ describe('定义行 / 引用式链接逐字往返', () => {
     } finally { await b.destroy() }
   })
 
-  it('粘贴链路(md → PM → DOM → parseSlice)保留定义原文与引用形', async () => {
+  it('粘贴链路(md → PM → DOM → parseSlice)保留定义原文,引用落成行内链接', async () => {
     const md = 'see [a][1]\n\n[1]: http://example.com "T"\n'
     const b = await bootEditor('x\n')
     try {
@@ -94,13 +96,12 @@ describe('定义行 / 引用式链接逐字往返', () => {
       const dom = DOMSerializer.fromSchema(schema).serializeFragment(b.parse(md).content)
       const slice = DOMParser.fromSchema(schema).parseSlice(dom)
       b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
-      expect(b.md()).toBe(md)
+      expect(b.md()).toBe('see [a](http://example.com "T")\n\n[1]: http://example.com "T"\n')
     } finally { await b.destroy() }
   })
 })
 
-// 评审返修 D-12-orphan-ref:引用形 `[a][1]` 只有在「正在写的这份文档」里还有那条定义时才写回;
-// 否则退成行内链接 —— 不然文件里只剩一串字面 `[a][1]`,URL 没了。四条真实路径各一例,外加同名定义的「首个生效」。
+// 引用离开定义的四条真实路径 + 同名定义「首个生效」:落盘都是带**原地址**的行内链接,重开仍指向原地址。
 describe('引用离开定义 → 退行内链接,URL 不丢', () => {
   const A = 'see [a][1] here\n\n[1]: http://example.com "T"\n'
   /** 找第一个正文以 prefix 开头的段落。 */
@@ -147,8 +148,7 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
       // 同 clipboardTextSerializer:切片内容 → topNodeType.createAndFill → 宿主序列化器 → normalizeFragmentMd
       const doc = state.schema.topNodeType.createAndFill(undefined, state.doc.slice(list, list + size).content)!
       expect(normalizeFragmentMd(b.serialize(doc)).trim()).toBe('* 看 [a](http://example.com) 吧')
-      // 整份文档照旧写引用形(定义还在)
-      expect(b.md()).toBe('* 看 [a][1] 吧\n\n[1]: http://example.com\n')
+      expect(b.md()).toBe('* 看 [a](http://example.com) 吧\n\n[1]: http://example.com\n')
     } finally { await b.destroy() }
   })
 
@@ -198,6 +198,16 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
     return { out, hrefs }
   }
 
+  /** 打开后所有链接的 href|title。 */
+  const hrefsOf = async (md: string): Promise<string[]> => {
+    const r = await bootEditor(md)
+    const hrefs: string[] = []
+    try {
+      r.view.state.doc.descendants((n) => { for (const m of n.marks) if (m.type.name === 'link') hrefs.push(`${m.attrs.href}|${m.attrs.title ?? ''}`) })
+    } finally { await r.destroy() }
+    return hrefs
+  }
+
   it.each([
     ['剩下那条的地址以原地址开头(/docs → /docs/v2)',
       'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n', '[1]: http://x.example/docs',
@@ -208,16 +218,16 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
     ['只差下一行的标题',
       'see [a][1] here\n\n[1]: http://x.example\n  "T"\n\n[1]: http://x.example\n', '"T"',
       'see [a](http://x.example "T") here\n\n[1]: http://x.example\n', 'http://x.example|T'],
-    ['剩下那条与原定义逐字相同 → 照旧写引用形',
+    ['剩下那条与原定义逐字相同',
       'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs\n', '[1]: http://x.example/docs',
-      'see [a][1] here\n\n[1]: http://x.example/docs\n', 'http://x.example/docs|'],
+      'see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n', 'http://x.example/docs|'],
   ])('删掉同名定义的第一条:%s', async (_label, md, del, want, href) => {
     const { out, hrefs } = await deleteDef(md, del)
     expect(out).toBe(want)
     expect(hrefs).toEqual([href]) // 重开后链接仍指向删之前那个地址(标题也一样)
   })
 
-  it('定义都还在(同名前缀地址 / 地址或标题写在下一行 / 缩进 / 行尾空白):逐字往返,照旧写引用形(v3 宿主拆行后也一样)', async () => {
+  it('定义都还在(同名前缀地址 / 地址或标题写在下一行 / 缩进 / 行尾空白):定义逐字,引用成行内且地址不变(v3 宿主拆行后也一样)', async () => {
     for (const md of [
       'see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n',
       'see [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n',
@@ -227,8 +237,13 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
       'see [a][1] here\n\n[1]: http://x.example   \n',
       '> see [a][1]\n>\n> [1]: http://q.example\n> "T"\n',
     ]) {
-      expect(await roundTrip(md)).toBe(md)
-      expect(await roundTrip(md, { v3: true })).toBe(md)
+      const before = await hrefsOf(md)
+      for (const out of [await roundTrip(md), await roundTrip(md, { v3: true })]) {
+        const [head, ...rest] = out.split('\n')
+        expect(rest.join('\n')).toBe(md.split('\n').slice(1).join('\n')) // 引用只在首行,其余(定义)逐字
+        expect(head).not.toMatch(/\]\[/)
+        expect(await hrefsOf(out)).toEqual(before)
+      }
     }
   })
 
@@ -247,10 +262,9 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
     } finally { await b.destroy() }
   })
 
-  it('定义还在(大小写 / 空白不同的 label 也认):照旧写引用形', async () => {
-    for (const md of ['see [a][Foo  Bar] ok\n\n[foo bar]: http://x.example\n', '* [a][1]\n\n> [1]: http://q.example\n']) {
-      expect(await roundTrip(md)).toBe(md)
-    }
+  it('大小写 / 空白不同的 label 也认:引用成行内链接,地址取对', async () => {
+    expect(await roundTrip('see [a][Foo  Bar] ok\n\n[foo bar]: http://x.example\n')).toBe('see [a](http://x.example) ok\n\n[foo bar]: http://x.example\n')
+    expect(await roundTrip('* [a][1]\n\n> [1]: http://q.example\n')).toBe('* [a](http://q.example)\n\n> [1]: http://q.example\n')
   })
 })
 
