@@ -131,9 +131,10 @@ export async function flushUnifiedScopes(strict = false): Promise<void> {
   await Promise.all([...handles].map((h) => strict ? h.flush(true) : h.flush().catch(() => {})))
 }
 
-/** path 上的实例待写先落盘(换实例前用:锁定页面 = 按新 key 重挂,新实例要读到旧实例刚打的字,C-07)。 */
-export async function flushUnifiedPath(path: string): Promise<void> {
-  await Promise.all([...handles].filter((h) => h.path === path).map((h) => h.flush().catch(() => {})))
+/** path 上的实例待写先落盘(换实例前用:锁定页面 = 按新 key 重挂,新实例要读到旧实例刚打的字,C-07)。
+ *  strict:写失败就 reject(调用方据此不换实例 —— 非严格冲洗把失败吞进保存链照常返回,旧实例一卸载退避重试也没了)。 */
+export async function flushUnifiedPath(path: string, strict = false): Promise<void> {
+  await Promise.all([...handles].filter((h) => h.path === path).map((h) => (strict ? h.flush(true) : h.flush().catch(() => {}))))
 }
 
 /** Account changes retire every cloud editor before its vault root can change. */

@@ -16,8 +16,8 @@ import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
-import { flushUnifiedPath } from '@amadeus/unified/lifecycle'
-import { onNoteLockChange, readNoteLocked, writeNoteLocked } from '@amadeus/unified/viewMemory'
+import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
+import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
@@ -2240,11 +2240,14 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 编辑器实例身份 = 库根 + 路径:切侧后同路径的判定即使仍是 unified 也必须换实例(旧实例持有旧库正文)。
   const routeRoot = route && route.forPath === notePath ? route.root ?? '' : ''
 
-  // 锁定页面(C-07):锁定态进 UnifiedPage 的 key(pipe.readOnly 只在首次渲染写入)。**换实例前先落盘、再按盘上现文重挂** ——
-  // 路由里的 initial 是打开那一刻读的,直接换 key 等于把几分钟前的正文当基线交给新实例:解锁后赶在挂载补读之前打一个字,
-  // 就走「本地胜」拿旧全文盖掉盘上新版。切到别的笔记时不走这一套(新路径本来就重读、重挂),直接取它自己的锁定态。
+  // 锁定页面(C-07):锁定态进 UnifiedPage 的 key(pipe.readOnly 只在首次渲染写入)。**换实例前先严格落盘、再读到盘上现文**
+  // (noteLock.readForRemount)—— 路由里的 initial 是打开那一刻读的,直接换 key 等于把几分钟前的正文当基线交给新实例;
+  // 落盘或重读失败(Codex 复核 P1)就保留当前实例、不切锁定态,提示重试。切到别的笔记时不走这一套(新路径本来就重读、
+  // 重挂),直接取它自己的锁定态。发起切换的一方(⋯ 菜单 / 解锁键)在 switchNoteLock 里先验过同样两步才写锁定态;
+  // 这里接的是它写下之后(或别的窗口切了之后)本标签自己的换实例。
   const lockWanted = useNoteLocked(vaultRoot, notePath)
   const [lockApplied, setLockApplied] = useState<{ path: string | null; on: boolean }>({ path: notePath, on: lockWanted })
+  const [lockTick, setLockTick] = useState(0)
   const lockOn = lockApplied.path === notePath ? lockApplied.on : lockWanted
   useEffect(() => {
     if (lockApplied.path !== notePath) {
@@ -2254,18 +2257,20 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (lockApplied.on === lockWanted || !notePath) return
     let alive = true
     void (async () => {
-      await flushUnifiedPath(notePath)
-      const raw = await amadeus.readTextFile(notePath).catch(() => null)
+      const r = await readForRemount(notePath)
       if (!alive) return
-      if (raw != null) {
-        const decision = routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString())
-        if (decision.editor === 'unified') setRoute((r) => (r && r.forPath === notePath ? { ...r, decision } : r))
+      if (!r.ok) {
+        toastLockFailed(notePath, lockWanted, r.reason, () => setLockTick((n) => n + 1))
+        return
       }
+      const decision = routeNote(notePath, r.raw, upgradeV4Enabled(), new Date().toISOString())
+      if (decision.editor === 'unified') setRoute((cur) => (cur && cur.forPath === notePath ? { ...cur, decision } : cur))
       setLockApplied({ path: notePath, on: lockWanted })
     })()
     return () => { alive = false }
-  }, [lockWanted, lockApplied, notePath])
-  const toggleLock = (): void => { if (notePath) writeNoteLocked(vaultRoot, notePath, !lockWanted) }
+  }, [lockWanted, lockApplied, notePath, lockTick])
+  // 以本标签**实际显示的**锁定态为准切换(另一个标签刚切了、本标签还没换过来时,点的就是眼前看到的那个状态)。
+  const toggleLock = (): void => { if (notePath) void switchNoteLock(vaultRoot, notePath, !lockOn) }
 
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
   // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
@@ -2587,7 +2592,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           </button>
           <button onClick={() => { void amadeus.revealInFileManager(barPath); setNoteMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
           {unifiedRoute && (
-            <button onClick={() => { setNoteMenu(null); toggleLock() }}><LockIcon size={13} /> {lockWanted ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage')}</button>
+            <button onClick={() => { setNoteMenu(null); toggleLock() }}><LockIcon size={13} /> {lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage')}</button>
           )}
           <button className="danger" onClick={() => { const p = barPath; setNoteMenu(null); void deleteNoteFlow(p, myPs) }}>
             <Trash2 size={13} /> {t('amxv.menu.deleteNote')}
@@ -2702,7 +2707,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
           ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
-          ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockWanted ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockWanted, run: toggleLock }] : []),
+          ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn'), on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),

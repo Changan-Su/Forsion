@@ -42,7 +42,8 @@ import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, use
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
-import { onNoteLockChange, readNoteLocked, writeNoteLocked } from './amadeus/unified/viewMemory'
+import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
+import { switchNoteLock } from './amadeus/unified/noteLock'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
@@ -1747,8 +1748,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     unmountB() { unmountB?.(); unmountB = null },
     /** 生产 lifecycle 模块(按路径路由的 insertMarkdown / flush 等,仪器直调;与 UnifiedPage 同一模块实例)。 */
     lifecycle: null as unknown,
-    /** `&ulock`:锁 / 解锁主实例那篇(与生产 ⋯ 菜单同一个写口,C-07)。 */
-    setLocked(on: boolean, path = 'Unified.md') { writeNoteLocked(null, path, on) },
+    /** `&ulock`:锁 / 解锁主实例那篇(与生产 ⋯ 菜单同一个动作 switchNoteLock:先严格落盘 + 重读,失败不切,C-07)。 */
+    setLocked(on: boolean, path = 'Unified.md') { return switchNoteLock(null, path, on) },
     /** 生产 pageStore(仪器直调它的 fm 写口:setPageIcon / syncFdChildren,评审 G1-05)。 */
     pageStore: usePageStore,
     /** 生产的改名 / 挪走收尾(pageStore.onPathGone 收到别处改名时调的就是它;评审 G2-03 仪器)。标签改指由仪器接着
@@ -1849,7 +1850,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             filesRef={filesRef}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
             readOnly={new URLSearchParams(location.search).has('uro') || locked}
-            onUnlock={locked ? () => writeNoteLocked(null, st.path, false) : undefined}
+            onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}

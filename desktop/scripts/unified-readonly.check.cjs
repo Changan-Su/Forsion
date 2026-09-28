@@ -4,7 +4,8 @@
 // 至少 8 条必须转红,证明这些断言真的量到了「只读」而不是恒真。
 // K 组(评审 C-07 锁定页面,`&ulock` = amadeusViews 宿主一半的镜像):锁定 → 同一套只读实例 + 锁定条与解锁键、
 // 打字零写盘、外部改动照常回灌;解锁 → 按盘上现文重挂成可编辑,接着打的字与外部那段一起落盘、零冲突副本;
-// 锁定态是本机记忆,重开仍锁着。负对照不跑 K 组(它量的是锁定切换,不是 &uro)。
+// 锁定态是本机记忆,重开仍锁着;K5/K6(Codex 复核 P1)换实例前的落盘 / 重读失败 → 不切锁定态、保留当前实例
+// (没落盘的字还在、还会重试)、出带「重试」的 error 提示,重试成功才锁上。负对照不跑 K 组(它量的是锁定切换,不是 &uro)。
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -213,6 +214,10 @@ async function main() {
 async function groupLock(browser) {
   const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  await page.addInitScript(() => {
+    window.__toasts = []
+    window.addEventListener('amadeus:toast', (e) => window.__toasts.push(e.detail))
+  })
   const url = `${URL}?upage&upane&ulock&useed=${encodeURIComponent('# 锁定\n\n第一段。\n\n第二段。\n')}`
   await page.goto(url, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.unified-body .ProseMirror p', { timeout: 20000 })
@@ -280,6 +285,38 @@ async function groupLock(browser) {
   await page.waitForTimeout(400)
   const s5 = await state()
   check('K4 锁定是本机记忆:重开仍锁着', s5.editable === 'false' && s5.bar, JSON.stringify(s5))
+
+  // K5:写不进去时锁定 → 不切、实例留着(字在、还会重试)、error 提示带「重试」;恢复后点重试才锁上且字已落盘
+  await page.evaluate(() => { localStorage.clear(); window.__upage.setLocked(false) })
+  await page.goto(url, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('.unified-body .ProseMirror p', { timeout: 20000 })
+  await page.waitForTimeout(400)
+  await page.evaluate(() => { window.__upage.failWrites = Infinity; window.__toasts = [] })
+  await endOf('第二段。')
+  await page.keyboard.type('丁')
+  const ok5 = await page.evaluate(() => window.__upage.setLocked(true))
+  await page.waitForTimeout(600)
+  const s6 = await state()
+  const t5 = await page.evaluate(() => window.__toasts.filter((t) => t.level === 'error' && t.action).map((t) => t.text))
+  const stored5 = await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('amx.noteLocked:')))
+  await page.evaluate(() => { window.__upage.failWrites = 0 })
+  await page.evaluate(() => window.__toasts.filter((t) => t.level === 'error' && t.action).pop()?.action.run())
+  await page.waitForSelector('[data-lock="on"]', { timeout: 5000 }).catch(() => {})
+  await page.waitForTimeout(300)
+  const s7 = await state()
+  check('K5 写不进去时锁定:不切、实例留着(字还在)、error 提示带「重试」;恢复后重试才锁上且字已落盘',
+    ok5 === false && s6.editable === 'true' && !s6.bar && s6.text.includes('丁') && !stored5 && t5.length >= 1
+      && s7.editable === 'false' && s7.bar && (await disk()).includes('第二段。丁'),
+    JSON.stringify({ ok5, s6, t5, stored5, s7, d: await disk() }))
+
+  // K6:读不到盘上现文时解锁 → 不切(仍锁着)、提示重试
+  const real = await page.evaluate(() => { window.__realRead = window.amadeus.readTextFile; window.amadeus.readTextFile = () => Promise.resolve(null); window.__toasts = []; return true })
+  const ok6 = await page.evaluate(() => window.__upage.setLocked(false))
+  await page.waitForTimeout(400)
+  const s8 = await state()
+  const t6 = await page.evaluate(() => window.__toasts.filter((t) => t.level === 'error' && t.action).length)
+  await page.evaluate(() => { window.amadeus.readTextFile = window.__realRead })
+  check('K6 读不到现文时解锁:不切(仍锁着)、提示重试', real && ok6 === false && s8.editable === 'false' && s8.bar && t6 >= 1, JSON.stringify({ ok6, s8, t6 }))
   await page.evaluate(() => localStorage.clear())
   await page.close()
 }
