@@ -509,8 +509,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 但判官读的最近 30 条里就有远端原话,只看「轮」会把远程轮刚跳过的内容原样收回去。会话里有过远程 run(input.remote /
     // remoteTainted)、远端建 / 改过项目路径(remoteOrigin)或远端改过标题(remoteContent)→ 此后每一轮都按远程处理。
     // 取舍:这类会话从此与带 remoteOrigin 的会话一样,不再自动写 LOG / 记忆候选 / 工作笔记候选、不拉辅助讨论;标题 / 摘要照常。
-    const remoteRound = historianRoundRemote(sk, opts?.runRemote) || (await sessionRemoteTainted(sessionId));
-    if (remoteRound) log(`第 ${roundN} 轮来自远端设备或会话经远端驱动过,本轮不写长期记忆`);
+    const roundRemote = historianRoundRemote(sk, opts?.runRemote);
+    const remoteRound = roundRemote || (await sessionRemoteTainted(sessionId));
+    // 两句日志分开写(desktop check:remotechain 按第一句的原文认「远程轮」)
+    if (roundRemote) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
+    else if (remoteRound) log(`第 ${roundN} 轮所在会话经远端驱动过(远程 run / 远端改过标题),本轮不写长期记忆`);
     const memoryDue = due && !remoteRound;
     const logDue = due && !remoteRound;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
