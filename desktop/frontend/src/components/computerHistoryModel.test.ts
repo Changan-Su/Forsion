@@ -3,8 +3,8 @@ import { __dictSnapshot } from '../i18n'
 import './computerHistoryMessages'
 import type { ComputerHistorySession, ComputerHistoryStatus } from '../../../shared/computerHistory'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, hoursSinceLocalMidnight, needsHelperSetup, normalizeBundleId,
-  normalizeDomain, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost,
+  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, needsHelperSetup, normalizeBundleId,
+  normalizeDomain, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost, dayRange, dayStartAgo,
 } from './computerHistoryModel'
 
 const MIN = 60_000
@@ -51,9 +51,11 @@ describe('computerHistoryModel', () => {
     }
   })
 
-  it('预览只要今天:recent() 的小时数 = 零点到现在,下限 1 分钟', () => {
-    expect(hoursSinceLocalMidnight(at(15, 30))).toBeCloseTo(15.5)
-    expect(hoursSinceLocalMidnight(at(0, 0))).toBeCloseTo(1 / 60)
+  it('按天回看:今天读零点到现在,往前的读整天到次日零点;下限 1 分钟', () => {
+    expect(dayRange(at(15, 30), 0)).toEqual({ hours: expect.closeTo(15.5), end: at(15, 30) })
+    expect(dayRange(at(0, 0), 0).hours).toBeCloseTo(1 / 60)
+    expect(dayStartAgo(at(15, 30), 2)).toBe(at(0, 0, -2))
+    expect(dayRange(at(15, 30), 2)).toEqual({ hours: 24, end: at(0, 0, -1) })
   })
 
   it('时间线:按本地钟点 20 分钟分段,跨段按重叠拆,排除的只进图标行,新的在前', () => {
@@ -67,8 +69,10 @@ describe('computerHistoryModel', () => {
       s(at(11, 25), at(11, 40), 'Code', 'main.ts'), // 恰好收在 11:40,不溢进下一段
       s(at(11, 5), at(11, 8), 'Secret'), // 排除:无标题
       s(at(11, 9), at(11, 9), 'Finder', 'Downloads'), // 零时长也露面
-    ], now)
-    expect(blocks.map((b) => b.start)).toEqual([at(11, 20), at(11), at(0)])
+      s(at(23, 50), at(0, 30, 1), 'Late', 'tomorrow'), // 跨到明天:只算今天 23:40 段那 10 分钟
+    ], startOfLocalDay(now))
+    expect(blocks.map((b) => b.start)).toEqual([at(23, 40), at(11, 20), at(11), at(0)])
+    blocks.shift()
     expect(blocks[0].items.map((i) => i.title)).toEqual(['main.ts', 'Docs'])
     expect(blocks[1].items).toEqual([
       { app: 'Chrome', bundleId: 'id.Chrome', title: 'Docs', host: 'docs.example.com' },

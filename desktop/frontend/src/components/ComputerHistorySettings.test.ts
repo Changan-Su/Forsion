@@ -116,6 +116,26 @@ async function click(label: string) {
 const text = (): string => host.textContent ?? ''
 
 describe('ComputerHistorySettings', () => {
+  it('按天回看:选昨天 → 读昨天整天,只画昨天的段;空的一天说「这一天没有记录」', async () => {
+    await mount()
+    const sel = host.querySelector<HTMLSelectElement>('select.ch-day')!
+    expect([...sel.options].map((o) => o.textContent).slice(0, 2)).toEqual(['今天', '昨天'])
+    expect(sel.options).toHaveLength(7) // = keepDays
+    const pick = async (v: string): Promise<void> => {
+      await act(async () => { sel.value = v; sel.dispatchEvent(new Event('change', { bubbles: true })) })
+    }
+    await pick('1')
+    const yStart = new Date(2026, 8, 26).getTime()
+    expect(api.recent).toHaveBeenLastCalledWith(24, yStart + 24 * 60 * MIN)
+    const rows = [...host.querySelectorAll('.ch-block')].map((li) => li.textContent)
+    expect(rows).toHaveLength(3) // 夹具里昨天只有 13:00–14:00 的 Mail → 13:40 / 13:20 / 13:00 三段;今天的两段不画
+    expect(rows[0]).toContain('13:40')
+    expect(rows.every((r) => r!.includes('Yesterday'))).toBe(true)
+    api.recent.mockResolvedValueOnce([])
+    await pick('3')
+    expect(text()).toContain('这一天没有记录')
+  })
+
   it('读状态、订阅推送,卸载时退订;预览只列今天且不露输入的文字', async () => {
     await mount(true)
     expect(api.get).toHaveBeenCalled()
@@ -134,7 +154,7 @@ describe('ComputerHistorySettings', () => {
     expect(host.querySelectorAll('.ch-block')[1].querySelector('.ch-app-icon--letter')?.textContent).toBe('S') // 取不到图标 → 首字母
     expect(text()).not.toContain('Yesterday')
     expect(text()).not.toContain('secret draft')
-    expect(api.recent).toHaveBeenLastCalledWith(15) // 只读零点到现在(NOW = 15:00),不多读昨天的文件
+    expect(api.recent).toHaveBeenLastCalledWith(15, NOW) // 只读零点到现在(NOW = 15:00),不多读昨天的文件
     await act(async () => pushChanged!(makeView({ status: 'disconnected' })))
     expect(host.querySelector('[data-ch-status]')?.getAttribute('data-ch-status')).toBe('disconnected')
     expect(text()).toContain('正在自动重连')

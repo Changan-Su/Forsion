@@ -1220,10 +1220,11 @@ export class ComputerHistory {
     this.refresh()
   }
 
-  /** 最近 hours 小时的折叠会话,新的在前。 */
-  async recent(hours: number): Promise<ComputerHistorySession[]> {
+  /** end 之前 hours 小时的折叠会话,新的在前(end 缺省 = 现在,不许超过现在;设置页按天回看传当天的次日零点)。 */
+  async recent(hours: number, end?: number): Promise<ComputerHistorySession[]> {
     const h = Number.isFinite(hours) ? Math.min(COMPUTER_HISTORY_KEEP_DAYS * 24, Math.max(1 / 60, hours)) : 24
-    const to = this.now(), from = to - h * 3_600_000
+    const now = this.now()
+    const to = end !== undefined && Number.isFinite(end) ? Math.min(now, end) : now, from = to - h * 3_600_000
     const events = [...await this.store.readRange(from, to), ...this.buffer.filter((e) => e.t >= from && e.t <= to)]
     events.sort((a, b) => a.t - b.t)
     return foldSessions(events).reverse().slice(0, 500)
@@ -1607,7 +1608,7 @@ export function registerComputerHistoryIpc(ch: ComputerHistory, isTrustedSender:
     return ch.clear(o.all === true ? { all: true } : { sinceMs: Number(o.sinceMs) })
   })
   handle('setExclude', (ex) => ch.setExclude(ex))
-  handle('recent', (hours) => ch.recent(Number(hours)))
+  handle('recent', (hours, end) => ch.recent(Number(hours), end == null ? undefined : Number(end)))
   handle('recentApps', () => ch.recentApps())
   handle('appIcons', (ids) => appIconDataUrls(ids))
   handle('reveal', () => ch.reveal())

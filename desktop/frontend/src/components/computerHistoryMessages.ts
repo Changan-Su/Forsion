@@ -104,9 +104,13 @@ registerMessages({
   },
   'computerHistory.reveal': { zh: '在访达中显示', en: 'Show in Finder' },
 
-  'computerHistory.recent.title': { zh: '今天的记录', en: 'Today' },
+  'computerHistory.recent.title': { zh: '活动记录', en: 'Activity' },
   'computerHistory.recent.hint': { zh: '每 20 分钟一段，窗口和 App 按停留时长排列，新的在前。', en: 'Grouped into 20-minute blocks, with windows and apps ordered by time spent. Newest first.' },
   'computerHistory.recent.empty': { zh: '今天还没有记录。', en: 'Nothing recorded today.' },
+  'computerHistory.recent.emptyDay': { zh: '这一天没有记录。', en: 'Nothing recorded on this day.' },
+  'computerHistory.day.label': { zh: '查看哪一天', en: 'Day to show' },
+  'computerHistory.day.today': { zh: '今天', en: 'Today' },
+  'computerHistory.day.yesterday': { zh: '昨天', en: 'Yesterday' },
   'computerHistory.recent.refresh': { zh: '刷新', en: 'Refresh' },
 
   'computerHistory.apps.title': { zh: '排除的 App', en: 'Excluded apps' },

@@ -52,6 +52,9 @@ const sessions: ComputerHistorySession[] = empty ? [] : [
   { start: at(9), end: at(7), app: '微信', bundleId: 'com.tencent.xinWeChat', title: '微信', typed: [] },
   { start: at(33), end: at(30), app: 'Finder', bundleId: 'com.apple.finder', title: 'Downloads', typed: [] },
   { start: at(95), end: at(93), app: '1Password', bundleId: 'com.1password.1password', typed: [] }, // 排除的 App:只有图标
+  // 昨天(按天回看):下午一段文档 + 浏览器
+  { start: dayStart - 9 * 60 * MIN, end: dayStart - 8.5 * 60 * MIN, app: 'Microsoft Word', bundleId: 'com.microsoft.Word', title: '周报 09-27.docx', typed: [] },
+  { start: dayStart - 8.5 * 60 * MIN, end: dayStart - 8.3 * 60 * MIN, app: 'Google Chrome', bundleId: 'com.google.Chrome', title: 'Forsion Admin', url: 'https://admin.forsion.net/users', typed: [] },
 ]
 const recentApps = empty ? [] : [
   { name: 'Visual Studio Code', bundleId: 'com.microsoft.VSCode' },
@@ -73,7 +76,7 @@ const computerHistory: ComputerHistoryApi = {
   resume: async () => { pausedUntil = null; current = 'recording'; return push() },
   clear: async () => view(),
   setExclude: async (next) => { exclude = next; return push() },
-  recent: async () => sessions,
+  recent: async (hours, end = Date.now()) => sessions.filter((s) => s.end >= end - hours * 60 * MIN && s.start < end),
   recentApps: async () => recentApps,
   // 台架拿不到真图标:两枚色块代表「取到了」,其余走首字母兜底
   appIcons: async (ids) => Object.fromEntries(ids.map((id) => [id, FAKE_ICONS[id] ?? null])),

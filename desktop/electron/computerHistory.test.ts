@@ -590,6 +590,8 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(readState(root)).toMatchObject({ v: 1, enabled: true, pausedUntil: null, status: 'recording', platform: 'darwin' })
     expect(mode(path.join(root, 'state.json'))).toBe(0o600)
     expect((await ch.recent(1)).map((s) => s.title)).toEqual(['Docs'])
+    expect(await ch.recent(1, t - 60_000)).toEqual([]) // 按天回看:end 在事件之前 → 读不到
+    expect((await ch.recent(1, t + 3_600_000)).map((s) => s.title)).toEqual(['Docs']) // end 超过现在按现在算
     expect(await ch.recentApps()).toEqual([safari])
   })
 

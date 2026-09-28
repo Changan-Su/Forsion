@@ -441,6 +441,14 @@ async function mainPhase(stub) {
     }, 8_000)
     check('T14c 时间线的 App 图标是各自的真图标(img,互不相同,非首字母兜底)', !!realIcons && new Set(realIcons).size === realIcons.length,
       { imgs: realIcons?.length ?? 0, distinct: new Set(realIcons || []).size, letters: await sp.locator('.ch-app-icon--letter').allInnerTexts().catch(() => []) })
+    // 按天回看:事件都在今天 → 选昨天读到空、换回今天又回来(走真主进程 recent(hours, end))
+    const daySel = sp.locator('.ch-page select.ch-day')
+    await daySel.selectOption('1')
+    const yEmpty = await until(async () => (await sp.locator('.ch-block').count()) === 0 && (await sp.locator('.ch-page').innerText()).includes('这一天没有记录'), 4_000)
+    await daySel.selectOption('0')
+    const backToday = await until(async () => (await sp.locator('.ch-app').count()) >= 3, 4_000)
+    check('T14d 按天回看:选「昨天」→ 这一天没有记录;换回「今天」时间线回来', !!yEmpty && !!backToday,
+      { options: await daySel.locator('option').allInnerTexts().catch(() => []), blocks: await sp.locator('.ch-block').count() })
     await shots(sp, 'zh-light-recording')
     note('[zh-light-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-block-time'))?.ratio, host: (await contrastOf(sp, '.ch-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
 

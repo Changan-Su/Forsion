@@ -115,8 +115,8 @@ export interface ComputerHistoryApi {
   /** sinceMs:删 t >= sinceMs 的事件;all:全删。 */
   clear(opts: { sinceMs?: number; all?: boolean }): Promise<ComputerHistoryView>
   setExclude(exclude: ComputerHistoryExclude): Promise<ComputerHistoryView>
-  /** 最近 hours 小时的折叠会话(新的在前),设置页预览用。 */
-  recent(hours: number): Promise<ComputerHistorySession[]>
+  /** end(缺省 = 现在)之前 hours 小时的折叠会话(新的在前),设置页时间线用。 */
+  recent(hours: number, end?: number): Promise<ComputerHistorySession[]>
   /** 最近见过的 App(给「排除 App」选择器),按最近出现排序。 */
   recentApps(): Promise<Array<{ name: string; bundleId: string }>>
   /** bundle id → App 图标 dataURL(找不到为 null),时间线的图标行用。 */

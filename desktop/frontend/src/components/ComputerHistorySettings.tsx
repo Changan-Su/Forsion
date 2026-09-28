@@ -12,12 +12,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Ban, FolderOpen, Globe2, History, Loader2, MousePointer2, Play, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
 import type { ComputerHistoryApi, ComputerHistoryExclude, ComputerHistorySession, ComputerHistoryView } from '../../../shared/computerHistory'
 import { useI18n } from '../i18n'
-import { formatTime } from '../format/time'
+import { formatLongDate, formatTime } from '../format/time'
 import { ipcErrorText } from '../ipcError'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, hoursSinceLocalMidnight, needsHelperSetup, normalizeBundleId,
+  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, dayRange, dayStartAgo, needsHelperSetup, normalizeBundleId,
   normalizeDomain, historyBlocks, pauseArg, statusTone, type ClearChoice,
 } from './computerHistoryModel'
 import './computerHistoryMessages'
@@ -49,6 +49,10 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const [sessions, setSessions] = useState<ComputerHistorySession[]>([])
   const [recentApps, setRecentApps] = useState<Array<{ name: string; bundleId: string }>>([])
   const [icons, setIcons] = useState<Record<string, string | null>>({})
+  /** 时间线看往回第几天(0 = 今天)。day = 下拉框选的;sessionsDay = 手上 sessions 属于哪天(切换瞬间两者不同,按后者画)。 */
+  const [day, setDay] = useState(0)
+  const [sessionsDay, setSessionsDay] = useState(0)
+  const dayRef = useRef(0)
   const [recentError, setRecentError] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState<ClearChoice | null>(null)
   const [cleared, setCleared] = useState(false)
@@ -96,10 +100,13 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   const loadRecent = useCallback(async (): Promise<void> => {
     if (!api) return
     const seq = ++recentSeq.current
+    const offset = dayRef.current
+    const { hours, end } = dayRange(Date.now(), offset)
     try {
-      const [list, apps] = await Promise.all([api.recent(hoursSinceLocalMidnight(Date.now())), api.recentApps()])
+      const [list, apps] = await Promise.all([api.recent(hours, end), api.recentApps()])
       if (!alive.current || seq !== recentSeq.current) return
       setSessions(list)
+      setSessionsDay(offset)
       setRecentApps(apps)
       setRecentError(null)
       // 图标后到:不挡列表,取不到就一直是首字母方块(主进程有缓存,重复刷新不再查 Spotlight)
@@ -186,7 +193,14 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   for (const a of recentApps) appNames.set(a.bundleId, a.name)
   const appName = (bundleId: string): string => appNames.get(bundleId) || bundleId
   const addableApps = recentApps.filter((a) => !exclude.apps.includes(a.bundleId))
-  const blocks = historyBlocks(sessions, now)
+  const blocks = historyBlocks(sessions, dayStartAgo(now, sessionsDay))
+  const pickDay = (offset: number): void => {
+    dayRef.current = offset
+    setDay(offset)
+    void loadRecent()
+  }
+  const dayLabel = (offset: number): string =>
+    offset === 0 ? t('computerHistory.day.today') : offset === 1 ? t('computerHistory.day.yesterday') : formatLongDate(dayStartAgo(now, offset))
 
   /** 清除 / 改排除表会让主进程重订阅:权限卡正在更新 / 重启助手时锁住(见文件头 ⚠️)。 */
   const locked = !!busy || permissionBusy
@@ -334,11 +348,16 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
         icon={<History size={16} />}
         title={t('computerHistory.recent.title')}
         description={t('computerHistory.recent.hint')}
-        actions={<button type="button" className="btn ghost sm" onClick={() => void loadRecent()}><RefreshCw size={13} aria-hidden="true" />{t('computerHistory.recent.refresh')}</button>}
+        actions={<div className="ch-day-row">
+          <select className="ch-day" aria-label={t('computerHistory.day.label')} value={day} onChange={(e) => pickDay(Number(e.target.value))}>
+            {Array.from({ length: view.keepDays }, (_, i) => <option key={i} value={i}>{dayLabel(i)}</option>)}
+          </select>
+          <button type="button" className="btn ghost sm" onClick={() => void loadRecent()}><RefreshCw size={13} aria-hidden="true" />{t('computerHistory.recent.refresh')}</button>
+        </div>}
       >
         {recentError !== null && <p className="ch-field-error ch-recent-error" role="alert">{t('computerHistory.actionFailed', { error: recentError })}</p>}
         {blocks.length === 0
-          ? <div className="settings-empty-row">{t('computerHistory.recent.empty')}</div>
+          ? <div className="settings-empty-row">{sessionsDay === 0 ? t('computerHistory.recent.empty') : t('computerHistory.recent.emptyDay')}</div>
           : <ol className="ch-timeline">
               {blocks.map((b) => {
                 const [head, ...rest] = b.items

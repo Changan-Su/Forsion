@@ -35,6 +35,9 @@
 
 /* 今天的时间线(对标 ChatGPT 的 Computer history,不调模型):钟点 | 竖线 + 圆点 | 标题(停留最久的窗口)/ 其余窗口 / App 图标行。 */
 .ch-timeline { list-style: none; margin: 0; padding: 6px 0; }
+/* 面板头的日期下拉:与旁边的「刷新」(.btn.sm)同高同字号,描边同按钮。 */
+.ch-day-row { display: flex; align-items: center; gap: 6px; }
+.ch-day-row > .ch-day { padding: 4px 8px; border-color: var(--overlay-strong); font-size: var(--ui-font-meta, 12px); }
 .ch-block { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 12px; padding: 0 15px; }
 .ch-block-time { padding-top: 10px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; text-align: right; }
 .ch-block-body { position: relative; min-width: 0; padding: 8px 0 14px 18px; border-left: var(--border-width) solid var(--border); }

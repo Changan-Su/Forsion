@@ -74,9 +74,18 @@ export function clockLabel(at: number, now: number): string {
   return startOfLocalDay(at) === startOfLocalDay(now) ? formatTime(at) : formatDateTime(at)
 }
 
-/** 预览只读今天:recent() 要的小时数 = 本地零点到现在(主进程按小时读文件并折叠,多要的只会被丢掉;下限 1 分钟同主进程)。 */
-export function hoursSinceLocalMidnight(now: number): number {
-  return Math.max(1 / 60, (now - startOfLocalDay(now)) / HOUR)
+/** 往回第 offset 天(0 = 今天)的本地零点。按日历减天,夏令时那天也落在 00:00(不能减 24h)。 */
+export function dayStartAgo(now: number, offset: number): number {
+  const d = new Date(now)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() - offset)
+  return d.getTime()
+}
+
+/** 时间线看第 offset 天时 recent() 的参数:今天 = 零点到现在;往前的 = 整天,读到次日零点(下限 1 分钟同主进程)。 */
+export function dayRange(now: number, offset: number): { hours: number; end: number } {
+  const end = offset === 0 ? now : dayStartAgo(now, offset - 1)
+  return { hours: Math.max(1 / 60, (end - dayStartAgo(now, offset)) / HOUR), end }
 }
 
 export const BLOCK_MS = 20 * MINUTE
@@ -89,16 +98,18 @@ export interface HistoryBlock {
 }
 
 /**
- * 今天的会话 → 按本地钟点对齐的 20 分钟段(15:00 / 15:20 / 15:40…),新的在前。跨段的会话按重叠时长拆给每一段;
- * 零时长的一闪而过也记 1ms,保证它的 App 露个图标。排除的会话没有标题,只进图标行。
+ * dayStart 那一天的会话 → 按本地钟点对齐的 20 分钟段(15:00 / 15:20 / 15:40…),新的在前。跨段的会话按重叠时长拆给每一段,
+ * 跨午夜的只算落在这一天的那截;零时长的一闪而过也记 1ms,保证它的 App 露个图标。排除的会话没有标题,只进图标行。
  */
-export function historyBlocks(sessions: ComputerHistorySession[], now: number, blockMs = BLOCK_MS): HistoryBlock[] {
-  const dayStart = startOfLocalDay(now)
+export function historyBlocks(sessions: ComputerHistorySession[], dayStart: number, blockMs = BLOCK_MS): HistoryBlock[] {
+  const next = new Date(dayStart)
+  next.setDate(next.getDate() + 1)
+  const dayEnd = next.getTime()
   type Acc = { apps: Map<string, { name: string; bundleId?: string; ms: number }>; items: Map<string, HistoryBlock['items'][number] & { ms: number }> }
   const acc = new Map<number, Acc>()
   for (const s of sessions) {
-    if (s.end < dayStart) continue
-    const from = Math.max(s.start, dayStart), to = Math.max(from, s.end)
+    if (s.end < dayStart || s.start >= dayEnd) continue
+    const from = Math.max(s.start, dayStart), to = Math.min(dayEnd, Math.max(from, s.end))
     const appKey = s.bundleId || s.app
     const first = dayStart + Math.floor((from - dayStart) / blockMs) * blockMs
     // 恰好结束在段界上的不溢进下一段(b < to);零时长的只落在自己那段(b === first)
