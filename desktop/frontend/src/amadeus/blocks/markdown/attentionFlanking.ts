@@ -308,9 +308,25 @@ const handleRoot = (node: any, parent: unknown, state: any, info: any): string =
   return defaultHandlers.root(node, parent as any, state, info)
 }
 
-/** attention mark 的落盘 handler(+ root 预处理)。测试直接吃这个对象,与生产同一份。 */
+/** L-09b:milkdown 自带的 text handler(`remarkHandlers.text`)对「以空白结尾、不含 `*` `_` `\\`」的文本**整段跳过
+ *  safe 转义**原样输出 —— 表格单元格文本以空格结尾(`c1 A | B `)时 `|` 不转义,重开单元格被拆开;段首 `#` / `>` /
+ *  `1.`、行内 `<b>` 之类同理裸写,重开变结构。它跳过 safe 是为了不把尾随空白编成 `&#x20;`(打字中每次防抖保存都会落
+ *  这种垢),所以只改这条直通分支:正文照常过 safe(`after` = 尾随空白的首字,转义判据与整段一致),尾随空白原样接回。
+ *  其余文本与 milkdown 原版同口径(`encode: []`)。 */
+const handleText = (node: any, _parent: unknown, state: any, info: any): string => {
+  const value = String(node.value ?? '')
+  if (/^[^*_\\]*\s+$/.test(value)) {
+    const body = value.replace(/\s+$/, '')
+    const tail = value.slice(body.length)
+    return (body ? state.safe(body, { ...info, after: tail[0], encode: [] }) : '') + tail
+  }
+  return state.safe(value, { ...info, encode: [] })
+}
+
+/** attention mark 的落盘 handler(+ root 预处理 + text 直通分支的转义修正)。测试直接吃这个对象,与生产同一份。 */
 export const attentionHandlers = {
   root: handleRoot,
+  text: handleText,
   delete: handleDelete,
   strong: handleStrong,
   emphasis: handleEmphasis,
