@@ -2,10 +2,12 @@
  *  + 悬停工具条(语言选择 / 复制 / 折行,NodeView 挂在 <code> 之外)。配色复用 base.css 既有 .hljs-* 主题 token。
  *  语言即 fence info(```py)= code_block 节点 attrs.language,改语言 = setNodeMarkup(落盘 md 原生);
  *  折行是会话视图态(不进 md),位置经事务映射保持贴同一块。
- *  块编辑器一块一 doc,doc 极小 → 每次变更全量重高亮,无需缓存。 */
+ *  高亮装饰住在**插件 state** 里增量维护(评审 P-03):v4 整篇一个实例,旧写法「每次 state 更新全量重跑 lowlight」
+ *  在 10 个 40 行代码块的笔记里每按一次方向键都要 ~9ms。现在纯选区事务原样复用;改文档时先映射旧集合,
+ *  只重算被改动碰到的代码块(见 remapDecos)。 */
 import { $prose } from '@milkdown/kit/utils'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView, NodeView, ViewMutationRecord } from '@milkdown/kit/prose/view'
 import { common, createLowlight } from 'lowlight'
@@ -50,12 +52,19 @@ interface HastText { type: 'text'; value: string }
 interface HastElement { type: 'element'; children?: HastAny[]; properties?: { className?: string[] } }
 type HastAny = HastText | HastElement
 
+/** lowlight 实际跑了几次(check:editorperf 的 P3 读它:块外打字必须是 0 次,见 remapDecos)。 */
+let highlightRuns = 0
+export function codeHighlightRuns(): number {
+  return highlightRuns
+}
+
 /** hast 树 → 按文本偏移的 class 区间(不认识的语言/解析失败 = 无高亮,绝不炸)。 */
 function tokenRanges(code: string, lang: string): TokenRange[] {
   if (!code || !lang) return []
   let children: HastAny[]
   try {
     if (!lowlight.registered(lang)) return []
+    highlightRuns++
     children = lowlight.highlight(lang, code).children as HastAny[]
   } catch {
     return []
@@ -79,11 +88,71 @@ function tokenRanges(code: string, lang: string): TokenRange[] {
 const codeKey = new PluginKey<CodeUi>('amx-code-block')
 
 /** 三个视图开关都是**会话态**:切页/重开即复位。AFFiNE 那边是持久化块属性(code-model.ts),
- *  我们不往纯 md 里加 amadeus_* 键,这是刻意的偏差。 */
+ *  我们不往纯 md 里加 amadeus_* 键,这是刻意的偏差。decos = 当前文档的高亮 + 块级 class(增量维护)。 */
 interface CodeUi {
   wrapped: Set<number>
   lineno: Set<number>
   collapsed: Set<number>
+  decos: DecorationSet
+}
+
+/** 一个代码块的全部装饰:块级 class(折行 / 行号 / 折叠)+ lowlight 的逐 token class。 */
+function blockDecos(node: ProseNode, pos: number, ui: Omit<CodeUi, 'decos'>): Decoration[] {
+  const lang = String((node.attrs as { language?: string }).language ?? '').trim()
+  const isWrap = ui.wrapped.has(pos)
+  const isNo = ui.lineno.has(pos) && !isWrap // 折行时行号必然错位(软换行没有自己的号),互斥
+  const isCollapsed = ui.collapsed.has(pos)
+  const out = [Decoration.node(pos, pos + node.nodeSize, {
+    class: `amx-code${isWrap ? ' amx-code-wrap' : ''}${isNo ? ' amx-code-lineno' : ''}${isCollapsed ? ' amx-code-collapsed' : ''}`,
+    ...(isNo ? { 'data-lines': String(node.textContent.split('\n').length) } : {}),
+  })]
+  for (const t of tokenRanges(node.textContent, lang)) out.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
+  return out
+}
+
+function allDecos(doc: ProseNode, ui: Omit<CodeUi, 'decos'>): DecorationSet {
+  const decos: Decoration[] = []
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'code_block') return true
+    decos.push(...blockDecos(node, pos, ui))
+    return false
+  })
+  return decos.length ? DecorationSet.create(doc, decos) : DecorationSet.empty
+}
+
+/** 改文档的事务:映射旧集合,只重算被改动碰到的代码块。
+ *  「碰到」= 每一步的改动区间(映射到最终文档)两侧各放宽 1 —— 块边界上的合并 / 拆分也算碰到。
+ *  被碰到的**非代码**文本块也要清一遍:代码块转成段落(setBlockType)时,块级装饰随边界被删而掉,
+ *  但逐 token 的 inline 装饰会跟着文字映射进新段落,不清就是一段普通文字挂着高亮色。
+ *  ⚠️ 删的时候只删**完全落在该块之内**的装饰:DecorationSet.find 会把恰好在边界上结束的相邻代码块的
+ *  块级装饰也捞出来,照单全删就把邻居的 `amx-code` 弄丢了。 */
+function remapDecos(prev: DecorationSet, tr: Transaction, ui: Omit<CodeUi, 'decos'>): DecorationSet {
+  let set = prev.map(tr.mapping, tr.doc)
+  const size = tr.doc.content.size
+  const code = new Map<number, ProseNode>()
+  const text: Array<[number, number]> = []
+  tr.mapping.maps.forEach((map, i) => {
+    const rest = tr.mapping.slice(i + 1)
+    map.forEach((_os, _oe, ns, ne) => {
+      const from = Math.max(0, rest.map(ns, -1) - 1)
+      const to = Math.min(size, rest.map(ne, 1) + 1)
+      tr.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.type.name === 'code_block') { code.set(pos, node); return false }
+        if (node.isTextblock) { text.push([pos, pos + node.nodeSize]); return false }
+        return true
+      })
+    })
+  })
+  const inside = (from: number, to: number): Decoration[] => set.find(from, to).filter((d) => d.from >= from && d.to <= to)
+  for (const [from, to] of text) {
+    const stale = inside(from, to)
+    if (stale.length) set = set.remove(stale)
+  }
+  for (const [pos, node] of code) {
+    const end = pos + node.nodeSize
+    set = set.remove(inside(pos, end)).add(tr.doc, blockDecos(node, pos, ui))
+  }
+  return set
 }
 /** 语言选择的「最近使用」:同一次会话里选过的语言排到列表最前(AFFiNE 同款手感)。 */
 const recentLangs: string[] = []
@@ -278,8 +347,12 @@ export function codeBlockPlugin() {
       key: codeKey,
       view: () => ({ update: () => { for (const v of views) v.sync() } }),
       state: {
-        init: () => ({ wrapped: new Set<number>(), lineno: new Set<number>(), collapsed: new Set<number>() }),
+        init: (_config, state) => {
+          const ui = { wrapped: new Set<number>(), lineno: new Set<number>(), collapsed: new Set<number>() }
+          return { ...ui, decos: allDecos(state.doc, ui) }
+        },
         apply(tr, v) {
+          // 纯选区 / 不相干的 meta:原样复用(同一个对象 —— PM 比 DecorationSet 身份,零重绘)。
           if (!tr.docChanged && !tr.getMeta(codeKey)) return v
           const wrapped = new Set([...v.wrapped].map((p) => tr.mapping.map(p)))
           const lineno = new Set([...v.lineno].map((p) => tr.mapping.map(p)))
@@ -290,7 +363,10 @@ export function codeBlockPlugin() {
             if (set.has(meta.toggle)) set.delete(meta.toggle)
             else set.add(meta.toggle)
           }
-          return { wrapped, lineno, collapsed }
+          const ui = { wrapped, lineno, collapsed }
+          // 视图态开关(折行 / 行号 / 折叠)很少按,全量重建最稳;其余改文档的事务走增量映射。
+          const decos = meta?.toggle != null ? allDecos(tr.doc, ui) : remapDecos(v.decos, tr, ui)
+          return { ...ui, decos }
         },
       },
       props: {
@@ -303,27 +379,7 @@ export function codeBlockPlugin() {
           },
         },
         decorations(state) {
-          const decos: Decoration[] = []
-          const ui = codeKey.getState(state)
-          const wrapped = ui?.wrapped ?? new Set<number>()
-          const lineno = ui?.lineno ?? new Set<number>()
-          const collapsed = ui?.collapsed ?? new Set<number>()
-          state.doc.descendants((node, pos) => {
-            if (node.type.name !== 'code_block') return true
-            const lang = String((node.attrs as { language?: string }).language ?? '').trim()
-            const isWrap = wrapped.has(pos)
-            const isNo = lineno.has(pos) && !isWrap // 折行时行号必然错位(软换行没有自己的号),互斥
-            const isCollapsed = collapsed.has(pos)
-            decos.push(Decoration.node(pos, pos + node.nodeSize, {
-              class: `amx-code${isWrap ? ' amx-code-wrap' : ''}${isNo ? ' amx-code-lineno' : ''}${isCollapsed ? ' amx-code-collapsed' : ''}`,
-              ...(isNo ? { 'data-lines': String(node.textContent.split('\n').length) } : {}),
-            }))
-            for (const t of tokenRanges(node.textContent, lang)) {
-              decos.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
-            }
-            return false
-          })
-          return decos.length ? DecorationSet.create(state.doc, decos) : DecorationSet.empty
+          return codeKey.getState(state)?.decos ?? DecorationSet.empty
         },
       },
     })

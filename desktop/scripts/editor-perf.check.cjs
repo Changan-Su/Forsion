@@ -8,8 +8,8 @@
 //     负对照:verbatim.ts 的 planVerbatim 恒回 null → 回到整篇 remark,这一格变红。
 //  P4 公式 / 双链 / 行内图片:在文首打字,下游 widget 一个都不重建(每键移除的渲染节点 = 0);
 //     widget 里取位置的地方(点公式进源码、data-src-from、点图片选中源码)仍指向打字之后的新位置。
-//  P3 代码块高亮:纯选区事务复用同一份 DecorationSet(身份不变,不重跑 lowlight);文首打字每键装饰耗时
-//     报告 + 宽余量护栏;在块内 / 块外 / 删行 / 改语言 / 新插一块之后,高亮与重新打开同一份 md 逐 span 一致。
+//  P3 代码块高亮:纯选区事务复用同一份 DecorationSet(身份不变,不重跑 lowlight);块外打字 lowlight 零次、
+//     块内打字只重算那一块(计数);在块内 / 块外 / 删行 / 改语言 / 删块 / 插块之后,高亮与重开同一份 md 逐 span 一致。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
 
@@ -38,6 +38,8 @@ const record = (name, ok, detail) => {
 async function openDoc(browser, md, file = 'Doc.md') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  // 资源计时缓冲默认 250 条,dev 下几百个模块早溢出 —— P3 靠它找「应用实际加载的那个」codeBlock.ts。
+  await p.addInitScript(() => performance.setResourceTimingBufferSize(10000))
   await p.goto(`${URL}?upage&useed=${encodeURIComponent('# s\n\nx\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await p.waitForSelector(PM, { timeout: 120000 })
   await switchTo(p, md, file)
@@ -217,12 +219,41 @@ async function p3(browser) {
   const sel = await p.evaluate(() => { const c = window.__cb; const r = { calls: c.calls, uniq: new Set(c.sets).size, ms: c.ms }; window.__cb = { sets: [], ms: 0, calls: 0 }; return r })
   record('P3a 纯选区事务复用同一份代码块 DecorationSet(10 次方向键,身份不变)', sel.calls >= 10 && sel.uniq === 1,
     `calls=${sel.calls} uniqueSets=${sel.uniq} decoMs=${sel.ms.toFixed(1)}`)
-  // 文首打字:每键装饰耗时(报告;护栏留 10 倍余量)
+  // 文首打字 / 块内打字:lowlight 实际跑了几次(计数,不看墙钟;codeBlock.ts 的 codeHighlightRuns,
+  // 与编辑器同一个模块实例)。dispatch 耗时只报告。
+  // ⚠️ 必须 import **应用实际加载的那个 URL**:vite 给热更过的模块带 `?t=`,裸路径会拿到另一个模块实例(计数恒 0)。
+  const runs = () => p.evaluate(async () => {
+    const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/amadeus\/blocks\/markdown\/codeBlock\.ts(\?|$)/.test(n))
+    if (!url) return NaN
+    const m = await import(url)
+    return typeof m.codeHighlightRuns === 'function' ? m.codeHighlightRuns() : NaN
+  })
+  const typeTen = async () => {
+    await p.evaluate(() => {
+      window.__disp = []
+      const v = window.__upage.probe.view()
+      if (!v.__wrapped) { const orig = v.dispatch.bind(v); v.dispatch = (tr) => { const t = performance.now(); orig(tr); if (tr.docChanged) window.__disp.push(performance.now() - t) }; v.__wrapped = true }
+    })
+    for (const ch of 'abcdefghij') { await p.keyboard.type(ch); await p.waitForTimeout(30) }
+    return p.evaluate(() => { const d = [...window.__disp].sort((a, b) => a - b); return d[Math.floor(d.length / 2)] })
+  }
   await caretEndOf(p, '开头段落。')
-  for (const ch of 'abcdefghij') { await p.keyboard.type(ch); await p.waitForTimeout(30) }
-  const typed = await p.evaluate(() => { const c = window.__cb; const r = { calls: c.calls, ms: c.ms }; window.__cb = { sets: [], ms: 0, calls: 0 }; return r })
-  record('P3b 块外打字不重算代码块高亮(10 键装饰总耗时 < 20ms;评审时 ~70ms)', typed.ms < 20,
-    `calls=${typed.calls} decoMs=${typed.ms.toFixed(1)} perKey=${(typed.ms / Math.max(1, typed.calls)).toFixed(2)}ms`)
+  const r0 = await runs()
+  const outP50 = await typeTen()
+  const r1 = await runs()
+  await p.evaluate(() => { // 光标放进第 1 个代码块首行末尾
+    const v = window.__upage.probe.view()
+    let at = -1
+    v.state.doc.descendants((n, pos) => { if (at < 0 && n.type.name === 'code_block') at = pos + 1 + n.textContent.indexOf('\n'); return at < 0 })
+    v.focus()
+    v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.create(v.state.doc, at)))
+  })
+  const inP50 = await typeTen()
+  const r2 = await runs()
+  record('P3b 块外打 10 字 lowlight 零次;块内打 10 字只重算那一块(= 10 次;评审时每键全部 10 块)',
+    r1 - r0 === 0 && r2 - r1 === 10,
+    `outside=${r1 - r0}次 inside=${r2 - r1}次 dispatch p50 块外=${outP50?.toFixed(1)}ms 块内=${inP50?.toFixed(1)}ms`)
+  await p.evaluate(() => { window.__cb = { sets: [], ms: 0, calls: 0 } })
   // 正确性:块内打字 / 删行 / 改语言 / 新插一块 / 视图态开关 之后,与重开同一份 md 逐 span 一致
   const ops = await p.evaluate(() => {
     const v = window.__upage.probe.view()
@@ -244,13 +275,18 @@ async function p3(browser) {
     v.dispatch(v.state.tr.delete(b.pos, b.pos + b.n.nodeSize))
     const cb = v.state.schema.nodes.code_block
     v.dispatch(v.state.tr.insert(v.state.doc.child(0).nodeSize, cb.create({ language: 'javascript' }, v.state.schema.text('function f(a) { return a + 1 }'))))
-    // 5 块内逐字打字(每字一笔,走映射路径)
+    // 5 转成段落(setBlockType):逐 token 的装饰会跟着文字映射进段落,必须清掉
+    b = blocks()[5]
+    v.dispatch(v.state.tr.setBlockType(b.pos + 1, b.pos + 1, v.state.schema.nodes.paragraph))
+    // 6 块内逐字打字(每字一笔,走映射路径)
     b = blocks()[0]
     let at = b.pos + 1 + b.n.textContent.length
     for (const ch of '\nif (x) { return null }') { v.dispatch(v.state.tr.insertText(ch, at)); at++ }
     v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, 1)))
     return blocks().length
   })
+  // ⚠️ 残留高亮要在按视图态开关**之前**量:开关走全量重建,会把残留顺手抹掉(测不到增量路径)。
+  const strayA = await p.evaluate(() => [...document.querySelectorAll('.unified-body .ProseMirror [class*="hljs-"]')].filter((e) => !e.closest('pre')).length)
   // 视图态开关:折行第 2 块,再在块外打字 —— 类名不能丢
   await p.evaluate(() => { const btn = [...document.querySelectorAll('.unified-body .ProseMirror pre')][1].querySelector('.amx-code-btn:nth-of-type(2)'); btn?.click() })
   await caretEndOf(p, '开头段落。abcdefghij')
@@ -263,8 +299,9 @@ async function p3(browser) {
   const sigB = await codeSig(p)
   await p.close()
   const diff = sigA.findIndex((s, i) => s !== sigB[i])
-  record('P3c 块内打字 / 删行 / 改语言 / 删块 / 插块之后,高亮与重开同一份 md 逐 span 一致;折行态不丢', ops === sigA.length && sigA.length === sigB.length && diff === -1 && wrapKept,
-    `blocks=${sigA.length}/${sigB.length} firstDiff=${diff}${diff >= 0 ? ` A=${sigA[diff].slice(0, 120)} B=${sigB[diff]?.slice(0, 120)}` : ''} wrapKept=${wrapKept}`)
+  record('P3c 块内打字 / 删行 / 改语言 / 删块 / 插块 / 转段落之后,高亮与重开同一份 md 逐 span 一致;段落里不残留高亮;折行态不丢',
+    ops === sigA.length && sigA.length === sigB.length && diff === -1 && strayA === 0 && wrapKept,
+    `blocks=${sigA.length}/${sigB.length} firstDiff=${diff}${diff >= 0 ? ` A=${sigA[diff].slice(0, 120)} B=${sigB[diff]?.slice(0, 120)}` : ''} stray=${strayA} wrapKept=${wrapKept}`)
 }
 
 async function main() {
