@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState, type ReactElement } from 'react';
-import { Box, Static, useApp, useStdin } from 'ink';
+import { Box, Static, Text, useApp, useStdin } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -37,8 +37,7 @@ import { ApprovalPrompt } from './components/ApprovalPrompt.js';
 import { InquiryPrompt } from './components/InquiryPrompt.js';
 import type { TuiConfig } from './config.js';
 import type { ApprovalMode } from './types.js';
-
-const RUN_AFFECTING = new Set(['/new', '/resume', '/retry', '/compact', '/branch', '/edit', '/delete', '/refine']);
+import { mustQueue, drainQueue } from './runQueue.js';
 
 /** 群聊结束原因 → 中文。 */
 function groupReason(r: string): string {
@@ -87,10 +86,14 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
-  const busyRef = useRef(state.busy);
-  busyRef.current = state.busy;
 
   const activeRunId = useRef<string | null>(null);
+  /** 运行中 / 压缩中发的消息与命令排在这里,本轮结束(完成 / 出错 / Esc 中止)或压缩完成后按先后执行(见 runQueue.ts)。 */
+  const [queue, setQueueState] = useState<string[]>([]);
+  const queueRef = useRef<string[]>([]);
+  const setQueue = (q: string[]): void => { queueRef.current = q; setQueueState(q); };
+  const compactingRef = useRef(false);
+  const drainingRef = useRef(false);
   const unsubRef = useRef<null | (() => void)>(null);
   const pendingText = useRef('');
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -282,11 +285,13 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         flushNow();
         teardownRun();
         dispatch({ type: 'DONE' });
+        setTimeout(() => void runQueued(), 0);
         break;
       case 'error':
         flushNow();
         teardownRun();
         dispatch({ type: 'ERROR', msg: String(p.error || 'error'), aborted: !!p.aborted });
+        setTimeout(() => void runQueued(), 0); // 中止 / 出错也照跑排队项(与桌面同口径:显式排的、/queue clear 可清)
         break;
     }
   };
@@ -332,6 +337,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       .catch((e: any) => {
         teardownRun();
         dispatch({ type: 'ERROR', msg: e?.message || String(e) });
+        setTimeout(() => void runQueued(), 0); // 起 run 失败不会有 done/error 事件,自己接着取队
       });
   };
 
@@ -366,11 +372,6 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     const raw = (sp >= 0 ? line.slice(0, sp) : line).toLowerCase();
     const cmd = canonicalCommandName(raw); // /effort → /think 之类的别名归一
     const rest = sp >= 0 ? line.slice(sp + 1).trim() : '';
-
-    if (busyRef.current && RUN_AFFECTING.has(cmd)) {
-      notice('运行中，请先 Esc 中止', 'warn');
-      return;
-    }
 
     switch (cmd) {
       case '/help': {
@@ -706,7 +707,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         await deleteLastExchange(sessionIdRef.current);
         const { items } = await loadSessionItems(sessionIdRef.current, 1);
         dispatch({ type: 'RESET_SESSION', items });
-        void submit(edited.trim());
+        await sendNow(edited.trim());
         return;
       }
       case '/delete': {
@@ -852,7 +853,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       case '/retry': {
         const items = stateRef.current.items;
         const lastU = [...items].reverse().find((it) => it.kind === 'user');
-        if (lastU && lastU.kind === 'user') void submit(lastU.text);
+        if (lastU && lastU.kind === 'user') await sendNow(lastU.text);
         else notice('没有可重试的消息', 'warn');
         return;
       }
@@ -874,6 +875,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           return;
         }
         notice(rest ? `正在压缩上下文(关注:${rest})…` : '正在压缩上下文…');
+        compactingRef.current = true; // 压缩期间新发的消息排队,压完再发(不与检查点写入并发起 run)
         // 旋钮与自动压缩同一契约:当前 Agent 的 [compaction] 表 > config.json > 缺省
         void (async () => {
           const def = cfgRef.current.activeAgentSlug ? await getAgent(cfgRef.current.activeAgentSlug).catch(() => null) : null;
@@ -886,13 +888,24 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
               ? notice(`已压缩：折叠 ${r.summarizedCount ?? 0} 条消息为摘要，后续对话从此精简续接。`)
               : notice(`无需压缩：${r.reason || '没有可压缩的内容'}`, 'warn'),
           )
-          .catch((e: any) => notice(`压缩失败：${e?.message || e}`, 'error'));
+          .catch((e: any) => notice(`压缩失败：${e?.message || e}`, 'error'))
+          .finally(() => { compactingRef.current = false; void runQueued(); });
+        return;
+      case '/queue':
+        if (rest === 'clear') {
+          notice(queueRef.current.length ? `已清空排队的 ${queueRef.current.length} 条` : '队列是空的');
+          setQueue([]);
+        } else {
+          notice(queueRef.current.length
+            ? `排队中（本轮结束后依次执行；/queue clear 清空）：\n${queueRef.current.map((q, i) => `  ${i + 1}. ${q}`).join('\n')}`
+            : '队列是空的：运行中发送的消息与 /compact 等命令会排到本轮结束后执行');
+        }
         return;
       default: {
         // 内置没命中 → 查用户自定义命令（~/.tangu/commands/*.md）：展开成普通消息发出去。
         const custom = getCustomCommand(cmd);
         if (custom) {
-          void submit(expandCustomCommand(custom, rest));
+          await sendNow(expandCustomCommand(custom, rest));
           return;
         }
         notice(`未知命令：${cmd}（/help 看全部）`, 'error');
@@ -901,17 +914,8 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     }
   };
 
-  const submit = async (text: string): Promise<void> => {
-    const t = text.trim();
-    if (!t) return;
-    if (t.startsWith('/')) {
-      void runSlash(t);
-      return;
-    }
-    if (busyRef.current) {
-      notice('运行中…按 Esc 中止后再发送', 'warn');
-      return;
-    }
+  /** 发一条普通消息(不过排队判定:排队的出队、/retry、/edit、自定义命令展开都走这里,免得被自己重新排到队尾)。 */
+  const sendNow = async (text: string): Promise<void> => {
     if (!cfgRef.current.model) {
       notice('未设置模型：先用 /model <id> 选择（/model 查看可用，支持 <provider>/<model>）', 'warn');
       return;
@@ -919,6 +923,40 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     dispatch({ type: 'ADD_USER', text });
     const msg = await augmentMentions(text);
     startRun(msg);
+  };
+
+  const submit = async (text: string, fromQueue = false): Promise<void> => {
+    const t = text.trim();
+    if (!t) return;
+    // 出队进行中也算忙:出队那条在读 @文件(await)时 run 还没起,别让新消息抢跑、把它挤掉(startRun 见 run 在跑会静默返回)
+    if (!fromQueue && mustQueue(t, !!activeRunId.current || compactingRef.current || drainingRef.current, queueRef.current.length)) {
+      setQueue([...queueRef.current, t]);
+      void runQueued(); // 空闲却有队(上一条没起来)时顺带重试队首
+      return;
+    }
+    if (t.startsWith('/')) {
+      await runSlash(t);
+      return;
+    }
+    await sendNow(t);
+  };
+
+  /** 空闲时按先后执行排队项;起了 run / 开始压缩就停,等它收尾再来。 */
+  const runQueued = async (): Promise<void> => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    try {
+      await drainQueue({
+        idle: () => !activeRunId.current && !compactingRef.current,
+        take: () => {
+          const [next, ...rest] = queueRef.current;
+          if (next !== undefined) setQueue(rest);
+          return next;
+        },
+      }, (line) => submit(line, true), (line, e: any) => notice(`排队项执行失败：${line}（${e?.message || e}）`, 'error'));
+    } finally {
+      drainingRef.current = false;
+    }
   };
 
   const abortActive = (): void => {
@@ -940,6 +978,9 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         ctxPct={cfg.model ? (state.usage.lastPrompt / effectiveContextWindowInfo(cfg.model).tokens) * 100 : 0}
         busy={state.busy}
       />
+      {queue.length ? (
+        <Text dimColor>{`⏳ 排队 ${queue.length} 条，本轮结束后依次执行（/queue 查看 · /queue clear 清空）：${queue.map((q) => (q.length > 24 ? `${q.slice(0, 24)}…` : q)).join(' · ')}`}</Text>
+      ) : null}
       {state.approval ? (
         <ApprovalPrompt
           approval={state.approval}

@@ -232,6 +232,15 @@ async function startStubEngine(data = {}) {
     state,
     /** 给下一次 run 排剧本。 */
     script: (events) => queue.push(events),
+    /** 让一条 `__hold` 挂住的 run 按给定事件收尾(缺省 = 正常 done)。run 不在挂住态返回 false。 */
+    finish: (runId, events = [{ type: 'done', payload: {} }]) => {
+      const o = open.get(runId)
+      if (!o) return false
+      for (const e of events) o.res.write(`data: ${JSON.stringify({ seq: ++o.seq, type: e.type, payload: e.payload || {} })}\n\n`)
+      o.res.end()
+      open.delete(runId)
+      return true
+    },
     close: () => { for (const o of open.values()) { try { o.res.end() } catch { /* ignore */ } } server.close(); },
   };
 }
