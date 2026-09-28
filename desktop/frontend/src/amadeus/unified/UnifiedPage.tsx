@@ -69,6 +69,7 @@ import { reconcileTr } from './reconcileDiff'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
+import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { noteLinkTarget } from '../blocks/markdown/linkHref'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
@@ -1179,13 +1180,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const outgoingCarry = useRef<BodyCarry | null>(null)
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
-  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
+  // cell:右键单元格打开时指针下的那一格(K-10 表格区的锚格;打开那一刻记下,浮层一出来就盖住那个点)。
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null } | null>(null)
   const onBlocksDeletedRef = useRef<(content: Fragment) => void>(() => {})
   // 文档模式卡片拖拽的层级上下文(2026-08-31)。layer 是 useMemo([]) 的终身单例,而 pipe 随
   // path 换新 —— 闭包必须经 ref 现读(与 onBlocksDeletedRef 同一条纪律),否则捏着首篇的 fm。
   const cardDragCtxRef = useRef<{ tree: () => Record<string, unknown>; detach: (anchors: string[]) => void; minted: (anchors: string[]) => void }>({ tree: () => ({}), detach: () => {}, minted: () => {} })
   const layer = useMemo(() => createBlockLayer({
-    onMenu: (at) => setBlockMenu(at),
+    onMenu: (at) => setBlockMenu({ ...at, cell: tableCellAtPoint(layer.getView(), at.x, at.y) }),
     onBlocksDeleted: (content) => onBlocksDeletedRef.current(content),
     canvasTree: () => cardDragCtxRef.current.tree(),
     onCardDetach: (anchors) => cardDragCtxRef.current.detach(anchors),
@@ -2270,15 +2272,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
             <div className="ubm-label">{t('unipage.menu.turnInto')}</div>
-            <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
-            <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> {t('unipage.menu.bullet')}</button>
-            <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
-            <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
-            <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
-            <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+            {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
+            {!isTableSelected(layer.getView()) && (
+              <>
+                <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
+                <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> {t('unipage.menu.bullet')}</button>
+                <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
+                <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
+                <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
+                <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+              </>
+            )}
             {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
             {(() => {
               const view = layer.getView()
@@ -2295,6 +2302,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 </button>
               )
             })()}
+            {isTableSelected(layer.getView()) && (
+              <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
+            )}
             <div className="ubm-sep" />
             <button onClick={() => withSelectedNode((view, sel) => {
               splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
