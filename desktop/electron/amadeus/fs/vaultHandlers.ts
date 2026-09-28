@@ -67,6 +67,13 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
   [IPC.saveAsset]: () => [IPC.structureChange],
 }
 
+/** 比对交换写被拒(带 base 的 writeTextFile / dbWriteCas 回 `{ ok:false }`)= 什么都没写:派发口据此**不发**
+ *  VAULT_WRITE_EVENTS 映射的回灌事件 —— 发了就是叫别的编辑器 / 设备去重读一份没变过的盘面(收口 N-9)。
+ *  三个派发口共用这一份判据:ipc.ts 的 handle 与 vaultFace.call、unit/localVault 的 call。 */
+export function casRejected(channel: string, result: unknown): boolean {
+  return (channel === IPC.dbWriteCas || channel === IPC.writeTextFile) && (result as { ok?: unknown } | null | undefined)?.ok === false
+}
+
 export interface VaultHandlerDependencies {
   vault: VaultManager
   index: VaultIndex

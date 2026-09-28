@@ -96,3 +96,29 @@ it.each([
   expect(remote).toEqual([{ channel: IPC.fileChange, payload: file, origin: 'host' }])
   expect(env.sent).toEqual([])
 })
+
+// 收口 N-9:带 base 的 writeTextFile 与 dbWriteCas 是比对交换写 —— 被拒(`{ ok:false }`)= 什么都没写,不许叫别的
+// 编辑器 / 设备回灌(同 unit/localVault 的派发口)。两个派发口都量:RPC 起源(vaultFace.call)与渲染层起源(ipcMain handle)。
+it('CAS 被拒(过期 base 的 writeTextFile / 过期版本的 dbWriteCas)= 没写:两个派发口都不发回灌事件', async () => {
+  const { IPC } = await import('@amadeus-shared/ipc')
+  expect(await runtime.vaultFace.call(IPC.writeTextFile, ['A.md', '# A\n\nstale phone\n', { base: 'stale-fingerprint' }], 'phone-1')).toMatchObject({ ok: false, current: '# A\n\nbase\n' })
+  expect(await invoke(IPC.writeTextFile, 'A.md', '# A\n\nstale desktop\n', { base: 'stale-fingerprint' })).toMatchObject({ ok: false, current: '# A\n\nbase\n' })
+  expect(await fs.readFile(path.join(local, 'A.md'), 'utf8')).toBe('# A\n\nbase\n')
+  expect(remote).toEqual([])
+  expect(env.sent).toEqual([])
+
+  const { emptyDb } = await import('@amadeus-shared/db/schema')
+  await invoke(IPC.dbWrite, 'T.db', emptyDb('T'))
+  const saved = await invoke(IPC.dbRead, '', 'T.db') as { status: string; data: unknown; version: string }
+  expect(saved.status).toBe('ok')
+  remote.length = 0
+  env.sent.length = 0
+  expect(await runtime.vaultFace.call(IPC.dbWriteCas, ['T.db', saved.data, 'stale-version'], 'phone-1')).toMatchObject({ ok: false })
+  expect(await invoke(IPC.dbWriteCas, 'T.db', saved.data, 'stale-version')).toMatchObject({ ok: false })
+
+  expect(remote).toEqual([])
+  expect(env.sent).toEqual([])
+  // 对照:版本对得上的 CAS 写照常广播(判据只拦被拒的那种)
+  expect(await runtime.vaultFace.call(IPC.dbWriteCas, ['T.db', saved.data, saved.version], 'phone-1')).toMatchObject({ ok: true })
+  expect(remote).toEqual([{ channel: IPC.dbChange, payload: 'T.db', origin: 'phone-1' }])
+})

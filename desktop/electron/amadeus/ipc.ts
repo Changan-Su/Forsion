@@ -8,7 +8,7 @@ import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, PLUGIN_CAP
 import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
-import { registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
+import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
 export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
@@ -237,7 +237,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       try {
         const r = await operation
         if (mayBind && r) rendererRoots.set(e.sender.id, (r as { root: string }).root)
-        const ev = VAULT_WRITE_EVENTS[channel]?.(a, isPagePath)
+        const ev = casRejected(channel, r) ? undefined : VAULT_WRITE_EVENTS[channel]?.(a, isPagePath) // 被拒的 CAS 没写,不叫人回灌
         if (ev) emitRemote(ev[0], ev[1], 'host')
         return r
       } finally { pendingVaultWrites.delete(operation) }
@@ -1623,7 +1623,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         try {
           const r = await operation
           if (mayBind && r) remoteRoots.set(key, (r as { root: string }).root)
-          const ev = VAULT_WRITE_EVENTS[channel]?.(args, isPagePath)
+          const ev = casRejected(channel, r) ? undefined : VAULT_WRITE_EVENTS[channel]?.(args, isPagePath) // 同上
           if (ev) {
             notifyWindows(ev[0], ev[1])
             emitRemote(ev[0], ev[1], origin ?? null)

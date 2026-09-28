@@ -9,7 +9,7 @@ import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from '../desktop/electron/amadeus/fs/vaultManager'
 import { VaultIndex } from '../desktop/electron/amadeus/fs/vaultIndex'
 import { VaultWatcher } from '../desktop/electron/amadeus/fs/watcher'
-import { registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from '../desktop/electron/amadeus/fs/vaultHandlers'
+import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from '../desktop/electron/amadeus/fs/vaultHandlers'
 import { fetchLinkMeta, searchImages } from '../desktop/electron/amadeus/linkMeta'
 
 export interface LocalVaultOptions {
@@ -146,8 +146,7 @@ export async function createLocalVault(options: LocalVaultOptions): Promise<Loca
       const event = VAULT_WRITE_EVENTS[channel]?.(args, (rel) => vault.isPagePath(rel))
       // A failed CAS did not write; it must not prompt another editor to reload.
       // writeTextFile with a base is a CAS too, and page writes now map to externalChange (editors reload on it).
-      const casRejected = (channel === IPC.dbWriteCas || channel === IPC.writeTextFile) && (result as { ok?: boolean } | undefined)?.ok === false
-      if (event && !casRejected) emit(event[0], event[1], origin ?? null)
+      if (event && !casRejected(channel, result)) emit(event[0], event[1], origin ?? null)
       return result
     }),
     root: () => closed ? null : root,
