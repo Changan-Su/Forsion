@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { startUnitWeb, type UnitWebHandle } from './unitWeb'
+import { decideRemoteEngine, remoteEngineTier } from './remoteSessionGate' // P1-K4
 import { buildUnitScopeGuard, openUnitHostFile, type UnitScopeGuard } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 
@@ -108,6 +109,12 @@ beforeAll(async () => {
   source = createUnitSessionRoots({ engine: local, registry, ttlMs: 0, home }) // ttl 0:每次现拉,15s 缓存不许掩盖 PATCH;home = 临时家目录(种子按它认应用数据区)
   const env = { home }
   web = await startUnitWeb({
+    // P1-K4:「允许远程会话」开着(局域网配对 = paired,会话档放行);本测钉的是 hostfile 读范围,不是会话档闸(那在 unitWeb.test)
+    remoteAccess: {
+      gateEngine: (q) => decideRemoteEngine(remoteEngineTier(q.method, q.path), true, q.caller, 'trusted'),
+      status: () => ({ remoteSessions: true, principal: 'lan', caller: 'paired', maxApprovalMode: 'auto-edit' }),
+      request: async () => ({ remoteSessions: true, principal: 'lan', caller: 'paired', maxApprovalMode: 'auto-edit' }),
+    },
     getEngine: seedGatedEngine(local, source),
     confirmPair: async () => false,
     pairedDevices: { list: () => [{ id: 'd', name: 'lan', tokenHash: createHash('sha256').update(LAN_TOKEN).digest('hex'), createdAt: 0 }], add: async () => {} },
