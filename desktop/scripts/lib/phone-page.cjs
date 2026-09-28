@@ -135,13 +135,13 @@ function capacitorInit({ token }) {
  * 起浏览器、装原生桥、打开手机页、等 connState ok。
  * @returns {{ browser, ctx, page, tap, pageErrors }}
  */
-async function openPhonePage({ world, native, locale = 'zh-CN' }) {
+async function openPhonePage({ world, native, locale = 'zh-CN', colorScheme = 'light' }) {
   const browser = await chromium.launch({
     executablePath: findChromium(), headless: true,
     proxy: { server: `http://127.0.0.1:${world.hub.port}` },
     args: ['--no-sandbox', `--unsafely-treat-insecure-origin-as-secure=${PHONE_ORIGIN}`],
   })
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true, locale })
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true, locale, colorScheme })
   const page = await ctx.newPage()
   const pageErrors = []
   page.on('pageerror', (e) => pageErrors.push(e.message))

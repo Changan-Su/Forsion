@@ -21,7 +21,7 @@
  *   执行设备 K4 首次确认框(台架先不答:截图 + 趁机经中继打一次 POST /engine/agent/runs,须 403)→ 允许 → 探引擎 → 整端切过去)
  *   → 关掉再开两次 UnitsSheet(名册里有这台手机 / 老 server 名册不带 kind)→ 输入区「添加 › 文件」发附件 + 一句话 → 引擎(假模型)要 run_bash
  *   → 审批卡(远端只读、来源行 = 本机登记名)→ 手机上点批准 → run 跑完 → 第二轮:模型先 remember(远端须硬拒)再 run_bash,电脑本机批
- *   → 下载产物(服务层 downloadWorkspaceFile,经 dev 构建的 window.__forsionEngineTargets 调;手机上没有列出远端会话沙箱的 UI 入口)
+ *   → 手机聊天流结局行写明「在执行的电脑上(电脑名)」(M1B)→ 右侧栏「工作区」›「本会话的文件」(远端会话沙箱)点产物的下载键(M1B)
  *   → 本机正对照会话(同一套假模型,本机起 run)。
  *
  * 断言(节选):
@@ -36,10 +36,13 @@
  *       记忆候选、远程 run 的 remember 须被硬拒,agents/** 下任何文件都不许出现远程会话的标记;**正对照**:本机会话同一套剧本 → remember
  *       落 MEMORY.md、判官候选落 .memory-raw.md(证明探针看得见写入);run 行归属本机引擎用户、agent = 默认 agent。
  *   K3  执行设备的 approvalDelivery(真模块)收到远程待批 → 系统通知(不含命令)→ 60s(快进)没人批投收件箱提醒(只带 sessionId/count/kinds)
- *       → 手机批完撤条目、关通知;反方向:电脑本机批 → approval_result.by = {via:local}。
+ *       → 手机批完撤条目、关通知;反方向:电脑本机批 → approval_result.by = {via:local},手机聊天流的结局行写「在执行的电脑上(K9 Studio Mac)」、
+ *       手机自己批的那行不写(M1B)。
+ *   K8  等电脑确认的这段时间,UnitsSheet「本机」一行已写登记名(ensureSelf 之后即刷新,M1B)。
+ *   M1B 手机右侧栏「工作区」列出远端会话沙箱的文件(附件 + 产物),点行尾下载键 → 下载内容 = 产物;列表 / 下载都经中继带手机的票。
  *   K8  本机登记后重开「在哪运行」:名册里确有这台手机(kind=phone)也不列出;老 server 名册不带 kind(按电脑算)时仍不列出(本机 id 过滤)。
- *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):① 手机附件落在引擎会话沙箱目录,host 模式的模型请求里找不到它的路径;
- *       ② 电脑本机批了之后,手机界面上看不到「在执行的电脑上」(托盘模式下卡答完即撤,结局行不带 by)。
+ *   KNOWN-GAP(缺省只报告,REMOTECHAIN_STRICT=1 时判红):① 手机附件落在引擎会话沙箱目录,host 模式的模型请求里找不到它的路径。
+ *       (原 ② 「电脑本机批了之后手机上看不到谁批的」已由 M1B 补上,改为 check。)
  *
  * 退出码:0 = 全绿且没有 KNOWN-GAP;1 = 有 FAIL;**2 = 断言全绿但还有 KNOWN-GAP —— M1 退出标准未达成**(汇总行写明)。
  *   别把「N/N 通过」当 M1 端到端证据:退出码 2 就是「管道通、但真模型打不开附件 / 手机看不到谁批的」。
@@ -53,7 +56,8 @@
  * 前置:cd tangu-agent && npm run build(引擎 dist)。mobile 构建按源码戳缓存(scripts/lib/phone-page.cjs:GENESIS 路径 + HEAD + 相关路径的
  *   diff / 未跟踪文件;缺省目录按 worktree 分开),源码一变就现构建(约 1–2 分钟);REMOTECHAIN_DIST=<目录> 换缓存位置(照样比戳),
  *   REMOTECHAIN_REUSE_DIST=1 不比戳硬复用(打 WARN)。戳的自测:node scripts/lib/phone-dist-stamp.selftest.cjs。
- *   截图落 SHOT_DIR(缺省临时目录);世界的产物目录判红时留下,否则删掉(REMOTECHAIN_KEEP=1 一律留)。
+ *   截图落 SHOT_DIR(缺省临时目录),文件名带 <zh|en>-<light|dark>;手机页语言 / 明暗:REMOTECHAIN_LOCALE=en-US、REMOTECHAIN_SCHEME=dark。
+ *   世界的产物目录判红时留下,否则删掉(REMOTECHAIN_KEEP=1 一律留)。
  * 端口:全部 listen(0);浏览器以 HTTP 代理方式把 http://phone-hub.test 指到假 hub,不占固定端口,不碰别的会话的 vite。
  */
 'use strict'
@@ -69,6 +73,10 @@ const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const NEGCTL = process.env.NEGCTL || ''
 const STRICT = process.env.REMOTECHAIN_STRICT === '1'
+// 手机页的界面语言 / 明暗(截图用;执行设备主进程恒 zh)。缺省 zh-CN / light
+const LOCALE = process.env.REMOTECHAIN_LOCALE || 'zh-CN'
+const SCHEME = process.env.REMOTECHAIN_SCHEME === 'dark' ? 'dark' : 'light'
+const SHOT_TAG = `${LOCALE.startsWith('zh') ? 'zh' : 'en'}-${SCHEME}`
 const SHOT_DIR = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-remotechain-shots-'))
 // server 仓:显式 FORSION_SERVER_DIR;否则 worktree 布局(.worktrees/<genesis-wt> 旁的 p0-server-roster)或单仓布局(Forsion/server)
 const SERVER_DIR = process.env.FORSION_SERVER_DIR || [path.resolve(GENESIS, '../p0-server-roster'), path.resolve(GENESIS, '../server')]
@@ -81,6 +89,7 @@ const ATTACH_NAME = `k9-attach-${MARK.toLowerCase()}.txt`
 const ATTACH_TEXT = `hello from the phone ${MARK}\nsecond line\n`
 const RESULT_NAME = 'k9-result.txt'
 const PHONE_NAME = 'K9 Pixel'
+const DESKTOP_NAME = 'K9 Studio Mac' // = remote-world 缺省的执行设备名(名册 name;手机「在哪运行」据此设焦点展示名)
 const RENAMED = 'Renamed phone' // R-25:登记之后用户在名册里给手机改的名字
 const HOST_CLIENT = 'desktop/9.9.9-k9' // = remote-world 给引擎的 TANGU_HOST_CLIENT
 
@@ -227,7 +236,7 @@ async function main() {
 
   let browser = null
   try {
-    const opened = await openPhonePage({ world, native })
+    const opened = await openPhonePage({ world, native, locale: LOCALE, colorScheme: SCHEME })
     browser = opened.browser
     const { page, tap, pageErrors } = opened
     const boot = await page.evaluate(() => ({ native: window.Capacitor?.isNativePlatform?.() }))
@@ -249,7 +258,12 @@ async function main() {
     const c0 = world.confirms[0]
     check('K4 首次确认 + R-25:执行设备弹框,名字取名册登记名「K9 Pixel」而不是改过的名字', world.confirms.length === 1 && c0.message.includes(PHONE_NAME) && !`${c0.message}${c0.detail}`.includes(RENAMED) && /Phone|手机/.test(c0.detail), JSON.stringify(world.confirms.map((c) => c.message)))
     check('确认前手机显示「请在那台电脑上允许」(awaitingConfirm)', waiting?.status === 'awaitingConfirm', JSON.stringify(waiting))
-    await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-awaiting-confirm.png') })
+    // K8(M1B):等电脑确认的这段时间,「本机」一行应已写登记名 —— ensureSelf 刚登记过;修前要等 runOn 整个结束(电脑上点了允许)才刷新
+    const selfSel = '[data-units-sheet] [data-this-phone] .us-self-text'
+    await page.waitForFunction(([sel, name]) => (document.querySelector(sel)?.textContent || '').includes(name), [selfSel, PHONE_NAME], { timeout: 5000 }).catch(() => {})
+    const selfText = await page.evaluate((sel) => document.querySelector(sel)?.textContent ?? null, selfSel)
+    check('K8:等电脑确认时「本机」一行已写登记名「K9 Pixel」(ensureSelf 之后即刷新,不再是「尚未登记」)', !!selfText && selfText.includes(PHONE_NAME) && !/尚未登记|Not registered/.test(selfText), selfText)
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-awaiting-confirm-${SHOT_TAG}.png`) })
     // 确认框还开着:经中继起 run → 执行设备的会话闸须拒(403 REMOTE_CALLER_UNCONFIRMED,state pending);hub 那侧确认这条带着手机的票
     const ledgerAt = world.hub.ledger.proxy.length
     const pre = await relayed(page, '/engine/agent/runs', tryStartRun)
@@ -284,7 +298,7 @@ async function main() {
 
     // ── C. 发附件 + 一句话(真 UI:添加 › 文件 → 系统文件选择器)──
     await compose(page, `把附件转成大写 ${MARK}`, { name: ATTACH_NAME, mimeType: 'text/plain', buffer: Buffer.from(ATTACH_TEXT) })
-    await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-compose.png') })
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-compose-${SHOT_TAG}.png`) })
     await page.keyboard.press('Enter')
 
     // ── D. 审批卡(远端只读、来源行)→ 手机上批准 ──
@@ -302,8 +316,8 @@ async function main() {
     })
     check('run_bash 审批卡到手机:远端只读(无改命令框、无「总允许」)', !!card && !card.edit && card.readonly && card.buttons.length === 2, JSON.stringify(card))
     check('审批卡来源行 = 远程会话 · 登记名「K9 Pixel」、不是改过的名字(K1 + R-25:hub → unitHost → unitWeb → 引擎一路带到)', !!card && card.source.includes(PHONE_NAME) && !card.source.includes(RENAMED), card?.source)
-    await page.addStyleTag({ content: '.ach-toast{display:none!important}' })
-    await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-approval.png') })
+    await page.addStyleTag({ content: '.ach-toast,.ntf-wrap{display:none!important}' })
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-approval-${SHOT_TAG}.png`) })
     // K3 执行设备侧:approvalDelivery 从引擎 /agent/approvals/stream 收到这条远程待批 → 系统通知(不含命令);60s(快进)没人批 → 投收件箱提醒
     const sid0 = await page.evaluate(() => window.__forsionStore.getState().activeId)
     await until(() => world.delivery.pending().some((x) => x.sessionId === sid0), 6000, 150)
@@ -323,7 +337,7 @@ async function main() {
     const st = await page.evaluate(() => { const s = window.__forsionStore.getState(); return { sid: s.activeId, msgs: (s.messagesBySession[s.activeId] || []).map((m) => ({ role: m.role, st: m.status, c: String(m.content).slice(0, 80) })) } })
     check('K3:手机批完 → 电脑的待批条目撤掉、系统通知关掉', !world.delivery.pending().some((x) => x.sessionId === st.sid) && !!note?.closed, JSON.stringify({ left: world.delivery.pending().length, closed: note?.closed }))
     check('run 在那台电脑上跑完、结果回到手机', st.msgs.some((m) => m.role === 'assistant' && m.st === 'done' && m.c.includes(MARK)), JSON.stringify(st.msgs))
-    await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-done.png') })
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-done-${SHOT_TAG}.png`) })
 
     // 引擎侧的账:run 行、事件
     const sid = st.sid
@@ -347,17 +361,21 @@ async function main() {
     const localAns = pend2 ? await world.engineApi(`/agent/runs/${pend2.runId}/approvals/${pend2.id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }) : null
     check('电脑本机批准(无远程头,本机令牌)被引擎接受', localAns?.status === 200, JSON.stringify(localAns))
     await page.waitForFunction((m) => { const s = window.__forsionStore.getState(); return (s.messagesBySession[s.activeId] || []).some((x) => x.role === 'assistant' && x.status === 'done' && x.content.includes(m)) }, MARK2, { timeout: 45_000 }).catch(() => {})
-    await page.waitForSelector('.approval-card.resolved [data-answered-by], .t2-apv-update', { timeout: 10_000 }).catch(() => {})
-    // K3 规格:手机上的卡写「在执行的电脑上」。托盘模式(approval_tray,各端恒开)下卡只在待批时挂在托盘里,答完即撤;聊天流里留下的是
-    // <approval_update> 结局行 —— 两处都找,哪处写了谁批的都算。都没有 = 「谁批的」在手机界面上不可见(KNOWN-GAP)
+    await page.waitForSelector('.t2-apv-update [data-answered-by]', { timeout: 10_000 }).catch(() => {})
+    // K3 规格:手机上写「在执行的电脑上」。托盘模式(approval_tray,各端恒开)下卡只在待批时挂在托盘里,答完即撤;聊天流里留下的是
+    // <approval_update> 结局行(每张一行)—— 「谁批的」写在那一行上(渲染层按 approval_result.by 补,不进给模型看的回灌正文)。
+    // 第一行是手机自己批的(本页就是答复方 → 不写),最后一行是电脑本机批的(→「在执行的电脑上(K9 Studio Mac)」)。
     const answered = await page.evaluate(() => ({
       cards: [...document.querySelectorAll('.approval-card.resolved [data-answered-by]')].map((e) => (e.textContent || '').trim()),
-      updates: [...document.querySelectorAll('.t2-apv-update')].map((e) => (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90)),
+      // 「在哪批的」是紧跟在那一行后面的说明行([data-answered-by]);没有 = 本页自己答的 / 本机会话
+      rows: [...document.querySelectorAll('.t2-apv-update-row')].map((r) => { const n = r.nextElementSibling; return { by: n?.matches('[data-answered-by]') ? (n.textContent || '').trim() : '', text: (r.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90) } }),
     }))
-    gap('K3 反方向:手机上写明「在执行的电脑上」批的', [...answered.cards, ...answered.updates].some((x) => x.includes('在执行的电脑上')),
-      `结局可见处:resolved 卡 ${answered.cards.length} 张 ${JSON.stringify(answered.cards)};聊天流结局行 ${JSON.stringify(answered.updates)}`)
+    const hostRow = answered.rows.at(-1)
+    check('K3 反方向:手机聊天流结局行写明「在执行的电脑上(K9 Studio Mac)」批的', !!hostRow && /在执行的电脑上|on the host computer/.test(hostRow.by) && hostRow.by.includes(DESKTOP_NAME),
+      `结局行 ${JSON.stringify(answered.rows)};resolved 卡 ${JSON.stringify(answered.cards)}`)
+    check('K3:手机自己批的那一行不写「在哪答的」(本页就是答复方)', answered.rows.length >= 2 && answered.rows[0].by === '', JSON.stringify(answered.rows.map((r) => r.by)))
     const upd = page.locator('.t2-apv-update').last()
-    if (await upd.count()) { await upd.scrollIntoViewIfNeeded().catch(() => {}); await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-answered-on-host.png') }) }
+    if (await upd.count()) { await upd.scrollIntoViewIfNeeded().catch(() => {}); await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-answered-on-host-${SHOT_TAG}.png`) }) }
     const run2 = runsOf(st.sid).at(-1) || null
     const ev2 = run2 ? eventsOf(run2.id, ['approval_result', 'tool_result']) : []
     const byLocal = ev2.filter((e) => e.type === 'approval_result').at(-1)?.p?.by ?? null
@@ -368,33 +386,35 @@ async function main() {
     if (rememberOffered) check('G7:远程 run 调 remember → 硬拒(Remote sessions cannot … long-term memory)', !!remRes && remRes.isError === true && /Remote sessions cannot/.test(String(remRes.result)), JSON.stringify(remRes && { isError: remRes.isError, result: String(remRes.result).slice(0, 140) }))
     else check('G7:远程 run 的工具面里没有 remember(同样写不进长期记忆)', !remRes, JSON.stringify(remRes))
 
-    // ── F. 下载产物:服务层 downloadWorkspaceFile(按会话路由目标 → 头 → 中继 → blob 保存)——
-    //    手机上没有列出远端会话沙箱的 UI 入口(右侧栏「工作区」列的是 host 工作区,见 openIssues),所以台架经 dev 构建的
-    //    window.__forsionEngineTargets.downloadWorkspaceFile 调**同一个**函数,不自己拼 URL。
+    // ── F. 下载产物(真 UI):手机右侧栏「工作区」→「本会话的文件」组(远端会话沙箱:附件 / 产物,经 /engine/agent/workspace/list)
+    //    → 点产物行尾的下载键 → downloadWorkspaceFile 按会话路由到那台电脑 → 中继带手机的票 → blob 保存。
     for (let i = 0; i < 4 && !(await page.locator('.mb-drawer--right.open').count()); i++) { await tap(page.locator('.mb-topbar [aria-label="right panel"]')).catch(() => {}); await sleep(700) }
     const drawer = page.locator('.mb-drawer--right.open')
     const views = await drawer.locator('select.mb-drawer-select option').evaluateAll((os) => os.map((o) => ({ v: o.value, t: o.textContent }))).catch(() => [])
     const wsOpt = views.find((o) => /工作区|Workspace/.test(o.t || ''))
-    if (wsOpt) { await drawer.locator('select.mb-drawer-select').selectOption(wsOpt.v); await sleep(1500) }
-    const listed = await drawer.locator(`text=${RESULT_NAME}`).first().isVisible({ timeout: 4000 }).catch(() => false)
-    await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-workspace.png') })
-    info('手机右侧栏「工作区」里列没列出这个会话的沙箱产物', `${listed ? '列出了' : '没列出'};抽屉视图 ${JSON.stringify(views.map((o) => o.t))}`)
-    await closeOverlays(page)
+    if (wsOpt) await drawer.locator('select.mb-drawer-select').selectOption(wsOpt.v)
+    const group = drawer.locator('[data-ws-scope="session"]')
+    await group.locator(`[data-ws-file="/${RESULT_NAME}"]`).first().waitFor({ timeout: 10_000 }).catch(() => {})
+    const sessFiles = await group.locator('[data-ws-file]').evaluateAll((els) => els.map((e) => e.getAttribute('data-ws-file'))).catch(() => [])
+    check('手机右侧栏「工作区」列出远端会话沙箱的文件(手机发的附件 + run_bash 的产物)', sessFiles.includes(`/${RESULT_NAME}`) && sessFiles.some((p) => p.endsWith(ATTACH_NAME)),
+      `本会话的文件 ${JSON.stringify(sessFiles)};抽屉视图 ${JSON.stringify(views.map((o) => o.t))}`)
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-workspace-${SHOT_TAG}.png`) })
     const want = ATTACH_TEXT.toUpperCase()
     const dlAt = world.hub.ledger.proxy.length
     const dlEvent = page.waitForEvent('download', { timeout: 15_000 }).catch(() => null)
-    const svcErr = await page.evaluate(async ({ s, p }) => {
-      const hook = window.__forsionEngineTargets?.downloadWorkspaceFile
-      if (typeof hook !== 'function') return 'window.__forsionEngineTargets.downloadWorkspaceFile 不存在(非 dev 构建?)'
-      try { await hook(s, p); return null } catch (e) { return String(e?.message || e) }
-    }, { s: sid, p: `/${RESULT_NAME}` })
-    const d = await dlEvent
+    const dlBtn = group.locator(`[data-ws-file="/${RESULT_NAME}"] [data-download]`).first()
+    const hasBtn = (await dlBtn.count()) > 0
+    if (hasBtn) await tap(dlBtn)
+    const d = hasBtn ? await dlEvent : null
     let downloaded = null
     if (d) { const p = await d.path().catch(() => null); if (p) downloaded = fs.readFileSync(p, 'utf8') }
     const dlReq = world.hub.ledger.proxy.slice(dlAt).find((x) => /^\/engine\/agent\/workspace\/download\?/.test(x.path))
-    check('下载产物(服务层 downloadWorkspaceFile → 按会话路由到那台电脑 → 中继带手机的票)= 附件经 run_bash 处理后的内容',
-      !svcErr && downloaded === want && !!dlReq && dlReq.unit === world.DESKTOP_UNIT && dlReq.callerUnit === phoneUnit,
-      JSON.stringify({ svcErr, got: downloaded === null ? null : String(downloaded).slice(0, 60), req: dlReq && { unit: dlReq.unit === world.DESKTOP_UNIT ? '那台电脑' : dlReq.unit, caller: dlReq.callerUnit === phoneUnit ? '手机' : dlReq.callerUnit, path: dlReq.path.slice(0, 90) } }))
+    check('下载产物(手机 UI:工作区 › 本会话的文件 › 下载 → 按会话路由到那台电脑 → 中继带手机的票)= 附件经 run_bash 处理后的内容',
+      hasBtn && downloaded === want && !!dlReq && dlReq.unit === world.DESKTOP_UNIT && dlReq.callerUnit === phoneUnit,
+      JSON.stringify({ button: hasBtn, file: d?.suggestedFilename?.() ?? null, got: downloaded === null ? null : String(downloaded).slice(0, 60), req: dlReq && { unit: dlReq.unit === world.DESKTOP_UNIT ? '那台电脑' : dlReq.unit, caller: dlReq.callerUnit === phoneUnit ? '手机' : dlReq.callerUnit, path: dlReq.path.slice(0, 90) } }))
+    const listReq = world.hub.ledger.proxy.find((x) => /^\/engine\/agent\/workspace\/list\?/.test(x.path) && x.path.includes(sid))
+    check('列表请求经中继发往那台电脑、带手机的票(/engine/agent/workspace/list?sessionId=本会话)', !!listReq && listReq.unit === world.DESKTOP_UNIT && listReq.callerUnit === phoneUnit, JSON.stringify(listReq && { unit: listReq.unit === world.DESKTOP_UNIT, caller: listReq.callerUnit === phoneUnit }))
+    await closeOverlays(page)
 
     // ── G1:发往 unit 目标的中继语法面请求全部带有效调用方票 ──
     const relayRe = /^\/(engine($|[/?])|unit\/remote-access($|\/request$))/
