@@ -2,6 +2,8 @@ package com.forsion.tangu;
 
 import android.content.Context;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
@@ -113,15 +115,18 @@ public class UnitPlugin extends Plugin {
                 tokens.invalidate();
             }
         }, log);
-        // Bridge 在 Plugin.load() 之前就绪;onPageStarted 在 UI 线程,cancelAll 只翻标记、断开交给后台线程。
-        getBridge().addWebViewListener(new WebViewListener() {
+        // onPageStarted 在 UI 线程,cancelAll 只翻标记、断开交给后台线程。
+        // ⚠️ 不能在 load() 里直接 addWebViewListener:Capacitor 7.6 的 Bridge.Builder.create() 先 new Bridge(…)(插件 load() 在构造里跑),
+        //    之后才 setWebViewListeners(builder 的表)整张替换 —— load() 里加的监听静默失效,①③ 两道防线从没生效过(DownloadsPlugin 模拟器实测)。
+        //    挪到主线程下一拍,那时 create() 已返回、表不会再被换。
+        new Handler(Looper.getMainLooper()).post(() -> getBridge().addWebViewListener(new WebViewListener() {
             @Override
             public void onPageStarted(WebView webView) {
                 pageGen.incrementAndGet();
                 int n = relay.cancelAll();
                 if (n > 0) Log.i(TAG, "[relay] page (re)load: cancelled " + n + " in-flight relayed request(s)");
             }
-        });
+        }));
     }
 
     @PluginMethod

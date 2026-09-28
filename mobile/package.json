@@ -16,6 +16,7 @@
     "test:unitrelay": "node scripts/unit-relay.test.cjs",
     "test:unitbridge": "node scripts/unit-bridge.test.cjs",
     "test:unitssheet": "node scripts/units-sheet-model.test.cjs",
+    "test:savedl": "node scripts/save-download.test.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
@@ -29,7 +30,8 @@
     "e2e:update": "node scripts/update-remind.e2e.cjs",
     "e2e:attachsave": "node scripts/attachment-save.e2e.cjs",
     "e2e:runon": "node scripts/units-runon.e2e.cjs",
-    "emu:unitrelay": "node scripts/unit-relay-emu.cjs"
+    "emu:unitrelay": "node scripts/unit-relay-emu.cjs",
+    "emu:savedl": "node scripts/save-download-emu.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",
