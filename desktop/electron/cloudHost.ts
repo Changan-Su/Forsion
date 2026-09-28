@@ -62,10 +62,11 @@ export interface CloudHost {
   accountBackendState(): Promise<string | null>
   /** 账号变更串行队列;commit / clear 不自带排队,调用方用它包一层(与今天 runAuthTransition(…withPreparedAccount) 同构)。 */
   accountTransition<T>(fn: () => Promise<T>): Promise<T>
-  /** 换成这份凭据:握手 → 停同步 → 写 cloudUrl → 写 auth.json → 引擎重启 → 设备互联 → 起同步 → 广播 auth:changed。assertCurrent 抛错即中止。 */
-  accountCommit(creds: Creds, assertCurrent?: () => void): Promise<void>
-  /** 清 token(保留 cloudUrl / model),链同上;不做任何 HTTP(服务端吊销由调用方自己发)。 */
-  accountClear(assertCurrent?: () => void): Promise<void>
+  /** 换成这份凭据:握手 → 停同步 → 写 cloudUrl → 写 auth.json → 引擎重启 → 设备互联 → 起同步 → 广播 auth:changed。assertCurrent 抛错即中止;
+   *  onCommitPoint 在最后一次 assertCurrent 通过、写 auth.json 之前同步调一次(Extend 的记账 / 忘账号 / 清缓存 / 发吊销都放这里,握手失败一样不发生)。 */
+  accountCommit(creds: Creds, assertCurrent?: () => void, onCommitPoint?: () => void): Promise<void>
+  /** 清 token(保留 cloudUrl / model),链同上;不做任何 HTTP(服务端吊销由调用方在 onCommitPoint 里自己发)。 */
+  accountClear(assertCurrent?: () => void, onCommitPoint?: () => void): Promise<void>
   /** 只换 auth.json 不重启(滑动续期),并同步 watcher 的去重快照。 */
   writeCreds(patch: Partial<Creds>): void
   /** auth.json 被别的来源改了(终端 tangu login / logout、手改):watcher 在走传播链之前先调它。 */

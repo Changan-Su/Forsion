@@ -24,10 +24,11 @@ function* walk(dir: string): Generator<string> {
 
 function hostChannels(): Set<string> {
   const out = new Set<string>()
-  const re = /ipcMain\.(?:handle|on)\(\s*'([^']+)'/g
+  // 单双引号字面量都认;计算出来的通道名(amadeus/ipc.ts 的 handle() 包装、SYNC_IPC 常量)靠下面显式补入 —— 新加一种包装注册就来这里登记
+  const re = /ipcMain\.(?:handle|on)\(\s*(['"])([^'"]+)\1/g
   for (const file of walk(ROOT)) {
     const src = readFileSync(file, 'utf8')
-    for (const m of src.matchAll(re)) out.add(m[1])
+    for (const m of src.matchAll(re)) out.add(m[2])
   }
   for (const v of Object.values(SYNC_IPC)) out.add(String(v))
   return out

@@ -2022,8 +2022,8 @@ app.whenReady().then(async () => {
       // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
       accountBackendState: async () => (PRODUCT.agentBackend && (await loadConfig()).mode === 'managed' ? backend.getStatus().state : null),
       accountTransition: (fn) => accountCore.transition(fn),
-      accountCommit: (creds, assertCurrent) => accountCore.commit(creds, assertCurrent),
-      accountClear: (assertCurrent) => accountCore.clear(assertCurrent),
+      accountCommit: (creds, assertCurrent, onCommitPoint) => accountCore.commit(creds, assertCurrent, onCommitPoint),
+      accountClear: (assertCurrent, onCommitPoint) => accountCore.clear(assertCurrent, onCommitPoint),
       writeCreds: (patch) => accountCore.writeCreds(patch),
       onExternalCredsChange: (cb) => accountCore.onExternalChange(cb),
       setTokenRefresher: (fn) => accountCore.setRefresher(fn),

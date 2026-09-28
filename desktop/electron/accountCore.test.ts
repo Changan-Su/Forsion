@@ -57,6 +57,23 @@ describe('accountCore', () => {
     expect(h.deps.broadcast).toHaveBeenLastCalledWith('auth:changed', { loggedIn: true })
   })
 
+  it('onCommitPoint:握手 + 停同步之后、写 auth.json 之前调一次;握手失败 / assertCurrent 抛错都不调(Extend 的记账 / 忘账号 / 吊销挂在这里)', async () => {
+    const h = harness()
+    await h.core.transition(() => h.core.commit({ cloudUrl: b.cloudUrl!, token: b.token! }, undefined, () => h.order.push('commit-point')))
+    expect(h.order).toEqual(['flush', 'stop', 'config', 'commit-point', 'write', 'backend', 'unit', 'restart', 'auth:changed'])
+    const h2 = harness()
+    await h2.core.transition(() => h2.core.clear(undefined, () => h2.order.push('commit-point')))
+    expect(h2.order).toEqual(['flush', 'stop', 'commit-point', 'write', 'backend', 'unit', 'restart', 'auth:changed'])
+    const h3 = harness({ prepareFails: true })
+    const hook = vi.fn()
+    await expect(h3.core.transition(() => h3.core.clear(undefined, hook))).rejects.toThrow()
+    expect(hook).not.toHaveBeenCalled()
+    const h4 = harness()
+    await expect(h4.core.transition(() => h4.core.commit({ cloudUrl: b.cloudUrl!, token: b.token! }, () => { if (h4.order.includes('config')) throw new Error('cancelled') }, hook))).rejects.toThrow('cancelled')
+    expect(hook).not.toHaveBeenCalled()
+    expect(h4.creds()).toEqual(a)
+  })
+
   it('clear:只删 token(留 cloudUrl / model),链同 commit(没有 config 写)', async () => {
     const h = harness()
     await h.core.transition(() => h.core.clear())

@@ -49,10 +49,12 @@ export interface AccountCoreDeps {
 export interface AccountCore {
   /** 串行队列:同一时刻只跑一条账号变更链。 */
   transition<T>(fn: () => Promise<T>): Promise<T>
-  /** 换成这份凭据(握手 → 停同步 → 写 cloudUrl → 写 auth.json → 引擎重启 → 设备互联 → 起同步 → 广播)。assertCurrent 在三处关口调用,抛错即中止。 */
-  commit(creds: Creds, assertCurrent?: () => void): Promise<void>
+  /** 换成这份凭据(握手 → 停同步 → 写 cloudUrl → 写 auth.json → 引擎重启 → 设备互联 → 起同步 → 广播)。assertCurrent 在三处关口调用,抛错即中止;
+   *  onCommitPoint 在最后一次 assertCurrent 通过、写 auth.json 之前同步调一次 —— Extend 把「记多账号 / 忘账号 / 取消在途登录 / 清缓存 / 发吊销」
+   *  放在这里,与搬迁前 withPreparedAccount 回调里的位置相同:握手失败就一样都不发生。 */
+  commit(creds: Creds, assertCurrent?: () => void, onCommitPoint?: () => void): Promise<void>
   /** 清 token(保留 cloudUrl / model),链同上。 */
-  clear(assertCurrent?: () => void): Promise<void>
+  clear(assertCurrent?: () => void, onCommitPoint?: () => void): Promise<void>
   /** 只换文件不重启(滑动续期),并同步 watcher 的去重快照。 */
   writeCreds(patch: Partial<Creds>): void
   onExternalChange(cb: (change: ExternalCredsChange) => void): void
@@ -107,7 +109,7 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
   return {
     transition: runAuthTransition,
     currentAuthKey,
-    async commit(creds, assertCurrent = () => {}) {
+    async commit(creds, assertCurrent = () => {}, onCommitPoint?: () => void) {
       assertCurrent()
       await withPreparedAccount(async () => {
         assertCurrent()
@@ -115,6 +117,7 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
         // keeps using the old active credential's endpoint while this write is pending.
         await d.saveConfig({ cloudUrl: creds.cloudUrl })
         assertCurrent()
+        onCommitPoint?.()
         d.saveCreds({ ...d.loadCreds(), ...creds })
         updateLastAuth()
         const stored = await d.loadConfig()
@@ -122,10 +125,11 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
         void d.refreshUnitHost()
       })
     },
-    async clear(assertCurrent = () => {}) {
+    async clear(assertCurrent = () => {}, onCommitPoint?: () => void) {
       assertCurrent()
       await withPreparedAccount(async () => {
         assertCurrent()
+        onCommitPoint?.()
         const c = d.loadCreds()
         delete c.token // 登出:只清 token(保留 cloudUrl/model 记忆)
         d.saveCreds(c)
