@@ -112,6 +112,8 @@ registerMessages({
   // 持久配置读回前外部连接表单只读(Codex H1-1):此时表单里可能是托管后端的临时地址 / 令牌。
   'settingsmodal.external.cfgLoading': { zh: '正在读取已保存的连接配置…', en: 'Loading the saved connection settings…' },
   'settingsmodal.external.cfgFailed': { zh: '读不到已保存的连接配置，暂不能修改：{error}', en: 'Couldn\'t load the saved connection settings, so they can\'t be changed yet: {error}' },
+  // 已登录时云端地址跟随账号(主进程 loadConfig 以账号的 cloudUrl 覆盖,token 绝不发往别的服务器),这里只读。
+  'settingsmodal.cloudUrl.lockedHint': { zh: '该地址跟随已登录的账号，无法在此修改。要连接其他服务器，请先退出登录。', en: 'This address follows the signed-in account and can\'t be changed here. To connect to a different server, sign out first.' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -1847,6 +1849,12 @@ export const SettingsModal: React.FC<{
                           <button className="btn primary sm" onClick={() => void doForsionLogin()} disabled={loggingIn}>
                             {loggingIn ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />} {authSt?.loggedIn && authSt?.tokenValid === false ? t('settings.forsion.relogin') : t('settings.forsion.login')}
                           </button>
+                          {/* 过期 token 仍锁着云端地址;给出退出入口,换服务器才有路可走。 */}
+                          {authSt?.loggedIn && authSt?.tokenValid === false && (
+                            <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => void doForsionLogout()} disabled={loggingIn}>
+                              <LogOut size={12} /> {t('settings.forsion.logout')}
+                            </button>
+                          )}
                           {device && (
                             <div style={{ marginTop: 10 }}>
                               <QrImage value={device.url} />
@@ -1869,22 +1877,27 @@ export const SettingsModal: React.FC<{
                       <div className="field" data-setting-anchor="cloud-url">
                         <label><Globe2 size={11} style={{ verticalAlign: -1 }} /> {t('settings.forsion.cloudUrlLabel')}</label>
                         <div className="settings-inline-row">
-                          {/* cloudUrl 是 managedKey(写 = 重启后端 + 重建 unit host):保留显式保存,不做失焦提交。 */}
+                          {/* cloudUrl 是 managedKey(写 = 重启后端 + 重建 unit host):保留显式保存,不做失焦提交。
+                              有账号 token(loggedIn,含已过期)时主进程恒以账号地址覆盖 → 只读显示落盘值(不显示登录前残留的草稿),
+                              否则「保存」会静默回弹(09-28 用户报「改不了云端地址」)。 */}
                           <input
                             type="text"
-                            value={stored.cloudUrl}
+                            value={authSt?.loggedIn ? savedCfg?.cloudUrl ?? '' : stored.cloudUrl}
+                            readOnly={!!authSt?.loggedIn}
                             onChange={(e) => edit({ cloudUrl: e.target.value })}
                             placeholder="https://api.forsion.net"
                           />
-                          <button
-                            className="btn primary sm"
-                            onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
-                          >
-                            {t('settings.forsion.save')}
-                          </button>
+                          {!authSt?.loggedIn && (
+                            <button
+                              className="btn primary sm"
+                              onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
+                            >
+                              {t('settings.forsion.save')}
+                            </button>
+                          )}
                         </div>
                         {commitErrorHint('cloudUrl')}
-                        <div className="hint">{t('settings.forsion.cloudUrlHint')}</div>
+                        <div className="hint">{t(authSt?.loggedIn ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}</div>
                       </div>
                     )}
 

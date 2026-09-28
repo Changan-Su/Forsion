@@ -156,3 +156,34 @@ it('H1-2 选目录写盘失败后改填路径:绑着旧目录的「重试」当�
   expect(input.value).toBe('/ws/typed-new')
   expect(panel.querySelector('[data-commit-error="defaultWorkspaceDir"]'), '改了路径后旧目录的「重试」仍挂着:点它会把 /ws/picked-old 写回').toBeNull()
 })
+
+/** 已登录时主进程 loadConfig 恒以账号的 cloudUrl 覆盖(token 绝不发往别的服务器):地址框只读、无「保存」,提示先退出登录。
+ *  09-28 用户报「改不了云端地址」—— 以前可编辑可保存,保存后静默回弹。 */
+const openForsion = async (loggedIn: boolean): Promise<HTMLElement> => {
+  getConfig.mockResolvedValue({ ...saved, cloudUrl: 'https://acct.example' })
+  Object.assign(window.tangu!, { forsionLogin: vi.fn(), authStatus: vi.fn().mockResolvedValue({ loggedIn, tokenValid: true }) })
+  await act(async () => root.render(React.createElement(LocaleProvider, {
+    children: React.createElement(SettingsModal, { ...props, open: true, initialTab: 'forsion', cfg: managedCfg, flatOn: false, onFlatChange: vi.fn(), glassOn: true, onClose: vi.fn(), onConfigChange, onGlassChange: vi.fn(), onReconnect } as any),
+  })))
+  const field = host.querySelector<HTMLElement>('[data-setting-anchor="cloud-url"]')
+  expect(field, '找不到云端地址字段(Forsion 子页没打开?)').not.toBeNull()
+  return field!
+}
+const saveIn = (field: HTMLElement) => [...field.querySelectorAll('button')].find((b) => b.textContent?.includes(translate('settings.forsion.save')))
+
+it('已登录:云端地址只读、显示账号地址、无保存按钮,提示先退出登录', async () => {
+  const field = await openForsion(true)
+  const input = field.querySelector('input')!
+  expect(input.readOnly).toBe(true)
+  expect(input.value).toBe('https://acct.example')
+  expect(saveIn(field)).toBeUndefined()
+  expect(field.textContent).toContain(translate('settingsmodal.cloudUrl.lockedHint'))
+  expect(setConfig).not.toHaveBeenCalled()
+})
+
+it('未登录(负对照):云端地址可编辑、有保存按钮', async () => {
+  const field = await openForsion(false)
+  expect(field.querySelector('input')!.readOnly).toBe(false)
+  expect(saveIn(field)).toBeDefined()
+  expect(field.textContent).not.toContain(translate('settingsmodal.cloudUrl.lockedHint'))
+})
