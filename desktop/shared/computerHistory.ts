@@ -119,6 +119,8 @@ export interface ComputerHistoryApi {
   recent(hours: number, end?: number): Promise<ComputerHistorySession[]>
   /** 最近见过的 App(给「排除 App」选择器),按最近出现排序。 */
   recentApps(): Promise<Array<{ name: string; bundleId: string }>>
+  /** 有记录的日子(本地日期 YYYY-MM-DD,新的在前),时间线的日期下拉只列这些。 */
+  days(): Promise<string[]>
   /** bundle id → App 图标 dataURL(找不到为 null),时间线的图标行用。 */
   appIcons(bundleIds: string[]): Promise<Record<string, string | null>>
   reveal(): Promise<void>

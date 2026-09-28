@@ -19,7 +19,7 @@ import net from 'node:net'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, createReadStream, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
@@ -408,6 +408,16 @@ export class ComputerHistoryStore {
 
   private async dayFiles(): Promise<string[]> {
     try { return (await readdir(this.eventsDir)).filter((f) => DAY_FILE_RE.test(f)).sort() } catch { return [] }
+  }
+
+  /** 盘上有事件的日子(YYYY-MM-DD);清除后剩下的空文件不算。 */
+  async days(): Promise<string[]> {
+    const out: string[] = []
+    for (const f of await this.dayFiles()) {
+      const size = await stat(path.join(this.eventsDir, f)).then((s) => s.size, () => 0)
+      if (size > 0) out.push(f.slice(0, 10))
+    }
+    return out
   }
 
   /** 保留期:删整天都早于 now - keepDays 的日文件 + 崩溃留下的重写临时文件;截止时刻落在其中的那天按事件时间原子重写,
@@ -1230,6 +1240,13 @@ export class ComputerHistory {
     return foldSessions(events).reverse().slice(0, 500)
   }
 
+  /** 有记录的日子(本地日期 YYYY-MM-DD,新的在前):盘上的 + 缓冲里还没落盘的。设置页的日期下拉只列这些。 */
+  async days(): Promise<string[]> {
+    const set = new Set(await this.store.days())
+    for (const e of this.buffer) set.add(localDay(e.t))
+    return [...set].sort().reverse()
+  }
+
   /** 最近见过的 App(新的在前)。事件流喂内存表;盘上只在首次(或清除后)有界地补一次,设置页反复打开不再扫盘。 */
   async recentApps(): Promise<Array<{ name: string; bundleId: string }>> {
     if (!this.seenAppsSeeded) {
@@ -1610,6 +1627,7 @@ export function registerComputerHistoryIpc(ch: ComputerHistory, isTrustedSender:
   handle('setExclude', (ex) => ch.setExclude(ex))
   handle('recent', (hours, end) => ch.recent(Number(hours), end == null ? undefined : Number(end)))
   handle('recentApps', () => ch.recentApps())
+  handle('days', () => ch.days())
   handle('appIcons', (ids) => appIconDataUrls(ids))
   handle('reveal', () => ch.reveal())
 }

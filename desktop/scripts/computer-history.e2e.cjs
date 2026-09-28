@@ -441,14 +441,26 @@ async function mainPhase(stub) {
     }, 8_000)
     check('T14c 时间线的 App 图标是各自的真图标(img,互不相同,非首字母兜底)', !!realIcons && new Set(realIcons).size === realIcons.length,
       { imgs: realIcons?.length ?? 0, distinct: new Set(realIcons || []).size, letters: await sp.locator('.ch-app-icon--letter').allInnerTexts().catch(() => []) })
-    // 按天回看:事件都在今天 → 选昨天读到空、换回今天又回来(走真主进程 recent(hours, end))
+    // 按天回看:临时 home 里只有今天 → 下拉只列「今天」;补一份昨天 10:00 的日文件(同主进程落盘格式)后刷新,
+    // 下拉多出「昨天」(主进程 days()),选它只画昨天那段(recent(hours, end)),换回今天时间线回来
     const daySel = sp.locator('.ch-page select.ch-day')
+    const opts0 = await daySel.locator('option').allInnerTexts().catch(() => [])
+    const y = new Date(); y.setDate(y.getDate() - 1); y.setHours(10, 0, 0, 0)
+    const yFile = path.join(eventsDir, `${localDay(y.getTime())}.jsonl`)
+    fs.writeFileSync(yFile, [
+      { t: y.getTime(), kind: 'app', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, title: 'E2E_YESTERDAY_NOTE' },
+      { t: y.getTime() + 5 * 60_000, kind: 'app', app: { name: 'Finder', bundleId: 'com.apple.finder' }, title: 'Downloads' },
+    ].map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 })
+    await sp.locator('.ch-page').getByRole('button', { name: L.zh.refresh, exact: true }).first().click()
+    const opts1 = await until(async () => { const o = await daySel.locator('option').allInnerTexts().catch(() => []); return o.length === 2 ? o : null }, 4_000)
     await daySel.selectOption('1')
-    const yEmpty = await until(async () => (await sp.locator('.ch-block').count()) === 0 && (await sp.locator('.ch-page').innerText()).includes('这一天没有记录'), 4_000)
+    const yShown = await until(async () => { const t = await sp.locator('.ch-timeline').innerText().catch(() => ''); return t.includes('E2E_YESTERDAY_NOTE') && !t.includes('example.com') ? t : null }, 4_000)
     await daySel.selectOption('0')
     const backToday = await until(async () => (await sp.locator('.ch-app').count()) >= 3, 4_000)
-    check('T14d 按天回看:选「昨天」→ 这一天没有记录;换回「今天」时间线回来', !!yEmpty && !!backToday,
-      { options: await daySel.locator('option').allInnerTexts().catch(() => []), blocks: await sp.locator('.ch-block').count() })
+    fs.rmSync(yFile) // 后面的清除 / 落盘断言按「只有今天」写的
+    check('T14d 按天回看:只列有记录的日子;补上昨天后多出「昨天」,选它只画昨天,换回今天时间线回来',
+      opts0.length === 1 && opts0[0] === '今天' && !!opts1 && opts1[1] === '昨天' && !!yShown && !!backToday,
+      { opts0, opts1, yShown: !!yShown, backToday: !!backToday })
     await shots(sp, 'zh-light-recording')
     note('[zh-light-recording] 预览时间 / 主机名(text-faint)对比度', JSON.stringify({ time: (await contrastOf(sp, '.ch-block-time'))?.ratio, host: (await contrastOf(sp, '.ch-host'))?.ratio, hint: (await contrastOf(sp, '.ch-page .settings-control-list .settings-row-description, .ch-page .settings-control-list small, .ch-page .settings-control-list p'))?.ratio }))
 

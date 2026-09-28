@@ -40,6 +40,7 @@ const api = {
   recent: vi.fn<ComputerHistoryApi['recent']>(),
   recentApps: vi.fn<ComputerHistoryApi['recentApps']>(),
   appIcons: vi.fn<ComputerHistoryApi['appIcons']>(),
+  days: vi.fn<ComputerHistoryApi['days']>(),
   reveal: vi.fn<ComputerHistoryApi['reveal']>(),
   onChanged: vi.fn<ComputerHistoryApi['onChanged']>(),
 }
@@ -75,6 +76,7 @@ beforeEach(() => {
   api.recent.mockReset().mockResolvedValue(sessions)
   api.recentApps.mockReset().mockResolvedValue([{ name: 'Safari', bundleId: 'com.apple.Safari' }, { name: 'Health', bundleId: 'com.apple.Health' }])
   api.appIcons.mockReset().mockResolvedValue({ 'com.apple.Notes': 'data:image/png;base64,AAAA', 'com.apple.Safari': null })
+  api.days.mockReset().mockResolvedValue(['2026-09-27', '2026-09-26', '2026-09-24'])
   api.reveal.mockReset().mockResolvedValue(undefined)
   unsubscribe.mockReset()
   api.onChanged.mockReset().mockImplementation((cb) => { pushChanged = cb; return unsubscribe })
@@ -119,8 +121,9 @@ describe('ComputerHistorySettings', () => {
   it('按天回看:选昨天 → 读昨天整天,只画昨天的段;空的一天说「这一天没有记录」', async () => {
     await mount()
     const sel = host.querySelector<HTMLSelectElement>('select.ch-day')!
+    // 只列有记录的日子:今天 / 昨天 / 9-24(9-25 没记录,不列)
+    expect([...sel.options].map((o) => o.value)).toEqual(['0', '1', '3'])
     expect([...sel.options].map((o) => o.textContent).slice(0, 2)).toEqual(['今天', '昨天'])
-    expect(sel.options).toHaveLength(7) // = keepDays
     const pick = async (v: string): Promise<void> => {
       await act(async () => { sel.value = v; sel.dispatchEvent(new Event('change', { bubbles: true })) })
     }

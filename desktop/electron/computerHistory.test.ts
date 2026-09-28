@@ -61,6 +61,16 @@ describe('ComputerHistoryStore', () => {
 
   const evLine = (t: number): string => `${JSON.stringify({ t, kind: 'app', app: { name: 'X', bundleId: 'x' } })}\n`
 
+  it('有记录的日子:只算非空的日文件(清除后留下的空文件不算),临时文件不算', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    await store.ensureRoot()
+    writeFileSync(path.join(store.eventsDir, '2026-09-26.jsonl'), evLine(at(2026, 9, 26, 10)))
+    writeFileSync(path.join(store.eventsDir, '2026-09-25.jsonl'), '')
+    writeFileSync(path.join(store.eventsDir, '2026-09-27.jsonl.1-x.tmp'), 'half')
+    expect(await store.days()).toEqual(['2026-09-26'])
+  })
+
   it('保留期:整天早于 now-7d 的日文件与残留 .tmp 删掉;截止那天按事件时间重写,只留 t >= now-7d(creview F)', async () => {
     const root = tmpRoot()
     const store = new ComputerHistoryStore(root)
@@ -591,6 +601,7 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(mode(path.join(root, 'state.json'))).toBe(0o600)
     expect((await ch.recent(1)).map((s) => s.title)).toEqual(['Docs'])
     expect(await ch.recent(1, t - 60_000)).toEqual([]) // 按天回看:end 在事件之前 → 读不到
+    expect(await ch.days()).toEqual([localDay(t)])
     expect((await ch.recent(1, t + 3_600_000)).map((s) => s.title)).toEqual(['Docs']) // end 超过现在按现在算
     expect(await ch.recentApps()).toEqual([safari])
   })

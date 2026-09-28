@@ -17,7 +17,7 @@ import { ipcErrorText } from '../ipcError'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, dayRange, dayStartAgo, needsHelperSetup, normalizeBundleId,
+  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, dayOptions, dayRange, dayStartAgo, needsHelperSetup, normalizeBundleId,
   normalizeDomain, historyBlocks, pauseArg, statusTone, type ClearChoice,
 } from './computerHistoryModel'
 import './computerHistoryMessages'
@@ -52,6 +52,8 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
   /** 时间线看往回第几天(0 = 今天)。day = 下拉框选的;sessionsDay = 手上 sessions 属于哪天(切换瞬间两者不同,按后者画)。 */
   const [day, setDay] = useState(0)
   const [sessionsDay, setSessionsDay] = useState(0)
+  /** 有记录的日子(YYYY-MM-DD):下拉只列这些。 */
+  const [days, setDays] = useState<string[]>([])
   const dayRef = useRef(0)
   const [recentError, setRecentError] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState<ClearChoice | null>(null)
@@ -103,10 +105,11 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
     const offset = dayRef.current
     const { hours, end } = dayRange(Date.now(), offset)
     try {
-      const [list, apps] = await Promise.all([api.recent(hours, end), api.recentApps()])
+      const [list, apps, recorded] = await Promise.all([api.recent(hours, end), api.recentApps(), api.days()])
       if (!alive.current || seq !== recentSeq.current) return
       setSessions(list)
       setSessionsDay(offset)
+      setDays(recorded)
       setRecentApps(apps)
       setRecentError(null)
       // 图标后到:不挡列表,取不到就一直是首字母方块(主进程有缓存,重复刷新不再查 Spotlight)
@@ -350,7 +353,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
         description={t('computerHistory.recent.hint')}
         actions={<div className="ch-day-row">
           <select className="ch-day" aria-label={t('computerHistory.day.label')} value={day} onChange={(e) => pickDay(Number(e.target.value))}>
-            {Array.from({ length: view.keepDays }, (_, i) => <option key={i} value={i}>{dayLabel(i)}</option>)}
+            {dayOptions(now, view.keepDays, days, day).map((i) => <option key={i} value={i}>{dayLabel(i)}</option>)}
           </select>
           <button type="button" className="btn ghost sm" onClick={() => void loadRecent()}><RefreshCw size={13} aria-hidden="true" />{t('computerHistory.recent.refresh')}</button>
         </div>}

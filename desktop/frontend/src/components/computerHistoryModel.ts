@@ -82,6 +82,18 @@ export function dayStartAgo(now: number, offset: number): number {
   return d.getTime()
 }
 
+/** 本地日期键 YYYY-MM-DD(与主进程日文件名同口径)。 */
+export function localDayKey(t: number): string {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** 日期下拉列哪几天(往回的天数):今天恒在;更早的只列有记录的;正选着的那天也留着(清除后不至于选中项凭空消失)。 */
+export function dayOptions(now: number, keepDays: number, days: readonly string[], selected: number): number[] {
+  const has = new Set(days)
+  return Array.from({ length: keepDays }, (_, i) => i).filter((i) => i === 0 || i === selected || has.has(localDayKey(dayStartAgo(now, i))))
+}
+
 /** 时间线看第 offset 天时 recent() 的参数:今天 = 零点到现在;往前的 = 整天,读到次日零点(下限 1 分钟同主进程)。 */
 export function dayRange(now: number, offset: number): { hours: number; end: number } {
   const end = offset === 0 ? now : dayStartAgo(now, offset - 1)

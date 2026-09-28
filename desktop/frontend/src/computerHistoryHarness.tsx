@@ -78,6 +78,7 @@ const computerHistory: ComputerHistoryApi = {
   setExclude: async (next) => { exclude = next; return push() },
   recent: async (hours, end = Date.now()) => sessions.filter((s) => s.end >= end - hours * 60 * MIN && s.start < end),
   recentApps: async () => recentApps,
+  days: async () => [...new Set(sessions.map((s) => { const d = new Date(s.start); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }))].sort().reverse(),
   // 台架拿不到真图标:两枚色块代表「取到了」,其余走首字母兜底
   appIcons: async (ids) => Object.fromEntries(ids.map((id) => [id, FAKE_ICONS[id] ?? null])),
   reveal: async () => {},

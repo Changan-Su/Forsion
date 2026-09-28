@@ -4,7 +4,7 @@ import './computerHistoryMessages'
 import type { ComputerHistorySession, ComputerHistoryStatus } from '../../../shared/computerHistory'
 import {
   CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, clearArg, clockLabel, needsHelperSetup, normalizeBundleId,
-  normalizeDomain, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost, dayRange, dayStartAgo,
+  normalizeDomain, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost, dayOptions, dayRange, dayStartAgo, localDayKey,
 } from './computerHistoryModel'
 
 const MIN = 60_000
@@ -56,6 +56,15 @@ describe('computerHistoryModel', () => {
     expect(dayRange(at(0, 0), 0).hours).toBeCloseTo(1 / 60)
     expect(dayStartAgo(at(15, 30), 2)).toBe(at(0, 0, -2))
     expect(dayRange(at(15, 30), 2)).toEqual({ hours: 24, end: at(0, 0, -1) })
+  })
+
+  it('日期下拉只列有记录的日子:今天恒在,正选着的也留着', () => {
+    const now = at(15)
+    expect(localDayKey(now)).toBe('2026-09-27')
+    const days = ['2026-09-27', '2026-09-25', '2026-09-10'] // 9/10 超出 7 天,不列
+    expect(dayOptions(now, 7, days, 0)).toEqual([0, 2])
+    expect(dayOptions(now, 7, [], 0)).toEqual([0]) // 今天还没记录也列
+    expect(dayOptions(now, 7, days, 4)).toEqual([0, 2, 4]) // 选着的那天清空了,选项还在
   })
 
   it('时间线:按本地钟点 20 分钟分段,跨段按重叠拆,排除的只进图标行,新的在前', () => {

@@ -37,6 +37,7 @@ const api = {
     setExclude: (exclude) => ipcRenderer.invoke('computerHistory:setExclude', exclude),
     recent: (hours, end) => ipcRenderer.invoke('computerHistory:recent', hours, end),
     recentApps: () => ipcRenderer.invoke('computerHistory:recentApps'),
+    days: () => ipcRenderer.invoke('computerHistory:days'),
     appIcons: (bundleIds) => ipcRenderer.invoke('computerHistory:appIcons', bundleIds),
     reveal: () => ipcRenderer.invoke('computerHistory:reveal'),
     onChanged: (cb) => {
