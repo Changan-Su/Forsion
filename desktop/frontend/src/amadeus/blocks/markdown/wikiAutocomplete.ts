@@ -8,6 +8,7 @@ import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { blockLabel, type BlockNode } from './blockTriggers'
 import { registerMessages, translate } from '../../../i18n'
+import { AT_BLOCKED_BEFORE } from '@amadeus-shared/mdMarks'
 
 registerMessages({
   'wikiac.multiBlocks': { zh: '多个块', en: 'Multiple blocks' },
@@ -162,7 +163,8 @@ export function slashSuggestPlugin(report: SuggestReport) {
 }
 
 /** Same shape for an in-progress "@" mention (Notion 式提及页面):
- *  triggers when "@" sits at line start or after whitespace; aborts on brackets/newline
+ *  triggers unless "@" follows an ASCII email-ish char (AT_BLOCKED_BEFORE, shared with mdMarks —
+ *  so `开会@明天` / `请联系@Me` trigger, `foo@bar` doesn't; L-18 / 拍板 #18); aborts on brackets/newline
  *  or an over-long query (an "@" far behind the caret is prose, not a mention).
  *  `from` = position just after "@" — the picker replaces [from-1, to) with "[[name]]". */
 export function mentionSuggestPlugin(report: SuggestReport) {
@@ -181,7 +183,8 @@ export function mentionSuggestPlugin(report: SuggestReport) {
             const at = before.lastIndexOf('@')
             if (at < 0) return report(null)
             if (inCode(view.state, $head.start() + at, selection.head)) return report(null)
-            if (at > 0 && !/\s/.test(before[at - 1])) return report(null) // 邮箱等:@ 前非空白不触发
+            // 邮箱 / 词中 `@`:前一个字是 ASCII 邮箱字符才不触发;汉字、中文标点之后照弹(与 mdMarks 标记解析同一个字符类)
+            if (at > 0 && AT_BLOCKED_BEFORE.test(before[at - 1])) return report(null)
             const q = before.slice(at + 1)
             // 空格(含 nbsp)/换行/方括号/'￼' → 退出提及语义,留成字面文本(同 slash)。空格这条是
             // 用户实报:`@张三 你好` 整句被当成提及查询,面板赖着不走 → Enter 被它劫持,换不了行。

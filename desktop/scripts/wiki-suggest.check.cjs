@@ -6,6 +6,7 @@
 //   L-08 输入法组字时 ↓/Enter 被面板抢走(拼音选词回车直接插入候选)—— 组字一律放行。
 //   L-13 [[ 空查询最近优先;`名#` 列标题、`名#^` 只列已有块 ID(`[[#` = 本篇);解析不到 / 带锚点不给「新建」;fm 别名是候选。
 //   L-14 正文 #标签 渲染成可点胶囊(光标行露源码)、点击发 amadeus:open-tag、`#` 补全(打字才弹、Esc 闩锁、代码里不弹)。
+//   L-18 汉字 / 中文标点紧挨 `@` 照弹提及面板,ASCII 邮箱形态(`mail@Me`)不弹(拍板 #18,与 mdMarks 同一个字符类)。
 //   L-21 `[[` 面板 Esc 闩锁:Esc 后接着打字 / 移光标不重弹,紧跟的回车不改写正文;删掉 `[[` 重打才解闩。
 //        合成 KeyboardEvent 的 isComposing 到不了页面,必须走 CDP Input.imeSetComposition 起真组合。
 // 用法:npm run check:wikisuggest(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/wiki-suggest.check.cjs
@@ -416,6 +417,26 @@ async function main() {
     await page.waitForTimeout(250)
     check('L-14h 代码块里 # 不弹、不装饰', (await page.locator('.tag-suggest').count()) === 0 && (await page.locator(`${PM} .amx-tag-pill`).count()) === 0)
     await page.close()
+  })
+
+  // ── L-18(拍板 #18):汉字 / 中文标点紧挨 `@` 照弹提及面板;ASCII 邮箱形态不弹(与 mdMarks 标记解析同一个字符类)──
+  await tryTest('L-18', async () => {
+    const shownAfter = async (prefix) => {
+      const page = await open(browser, '# T\n\nx\n', ['Alpha.md', 'Meeting Notes.md', 'Unified.md'])
+      await clickEnd(page, `${PM} > p`)
+      await page.keyboard.type(prefix, { delay: 30 })
+      await page.keyboard.type('@Me', { delay: 30 })
+      await page.waitForTimeout(250)
+      const r = await items(page)
+      await page.close()
+      return r
+    }
+    const cjk = await shownAfter('请联系')
+    check('L-18a `请联系@Me` 弹提及面板', cjk.some((x) => x.includes('Meeting Notes')), JSON.stringify(cjk))
+    const punct = await shownAfter('请联系：')
+    check('L-18b `请联系：@Me`(中文标点后)弹提及面板', punct.some((x) => x.includes('Meeting Notes')), JSON.stringify(punct))
+    const mail = await shownAfter(' mail')
+    check('L-18c `mail@Me`(ASCII 邮箱形态)不弹', mail.length === 0, JSON.stringify(mail))
   })
 
   // ── L-21:`[[` 面板 Esc 闩锁(同 @ / / / #)—— 关掉的同一个 `[[` 继续打字 / 移光标都不重弹,回车不改写正文 ──

@@ -9,8 +9,9 @@
  * 日期串与 calendarDate 列的落盘编码**逐字相同**(@amadeus-shared/db/calDate)——
  * 下游的分桶 / 排序 / 人类可读格式化全部零适配复用,别在这里另造一套编码。
  *
- * 触发判据与编辑器的 `mentionSuggestPlugin` 同源:`@` 必须在**行首或空白之后**,
- * 所以 `foo@bar.com`、`a@b` 不会被误当标记。围栏代码块内一律不算。
+ * 触发判据与编辑器的 `mentionSuggestPlugin` 同源(AT_BLOCKED_BEFORE):`@` 前面**不是 ASCII 邮箱本地部分的字符**
+ * 就算 —— 行首、空白、汉字、中文标点之后都行(`开会@2026-09-01`,拍板 #18 / L-18),
+ * 只有 `foo@bar.com`、`a@b` 这种 ASCII 邮箱形态不会被误当标记。围栏代码块内一律不算。
  *
  * 去向(前两条互斥,提醒叠加在任意一条之上):
  *   `- [ ] 交周报 @2026-09-01`   → 待办列表(TodoListView)
@@ -64,9 +65,12 @@ const FENCE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/
 const LEAD_RE = /^\s*(?:>\s*)*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)?/
 
 const SIDE = String.raw`\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?`
-/** `(前导空白)@[remind:]<起[/止]>`,后面必须是空白、行尾或收尾标点。 */
+/** `@` 紧挨在这些字符后面 = ASCII 邮箱 / 词中 `@`(`foo@bar.com`、`a@b`),**不**触发 —— 标记解析与编辑器的
+ *  `@` 补全闸共用这一个字符类(拍板 #18:两处必须同步改,只放开补全会造出解析不认的「标记」)。 */
+export const AT_BLOCKED_BEFORE = /[A-Za-z0-9._%+-]/
+/** `@[remind:]<起[/止]>`,前面不是 AT_BLOCKED_BEFORE,后面必须是空白、行尾或收尾标点。 */
 const MARK_RE = new RegExp(
-  String.raw`(?:^|\s)@(remind:)?(${SIDE}(?:/${SIDE})?)(?=$|[\s,;.。，、；)）\]】!?！？])`,
+  String.raw`(?<!${AT_BLOCKED_BEFORE.source})@(remind:)?(${SIDE}(?:/${SIDE})?)(?=$|[\s,;.。，、；)）\]】!?！？])`,
   'g',
 )
 
