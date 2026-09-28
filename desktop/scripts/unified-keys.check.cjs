@@ -86,6 +86,16 @@ const caretAtText = (page, text, off = null) => page.evaluate(({ text, off }) =>
   v.focus()
   return hit
 }, { text, off })
+/** 落盘 → 切走 → 切回(整实例按 key 重挂,initial = 盘上那份),返回重开后的结构(enter-semantics cycle() 同法)。 */
+async function reopenShape(page) {
+  await page.evaluate(() => window.__upage.probe.flush?.())
+  await page.waitForTimeout(300)
+  await page.evaluate(() => window.__upage.switchFile('Other.md', '# 别处\n'))
+  await page.waitForTimeout(600)
+  await page.evaluate(() => window.__upage.switchFile('Unified.md'))
+  await page.waitForTimeout(900)
+  return shape(page)
+}
 const lastWrite = (page) => page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : null })
 async function typeSeq(page, seq) {
   for (const ch of seq) {
@@ -795,6 +805,26 @@ async function main() {
       const s = await shape(page)
       check('K20 非空列表项行首退格仍是字面还原(T28 对照)', s === 'paragraph:"前段。" / paragraph:"-乙项"', s)
       await page.close()
+    }
+
+    // K-20b:段落里的字面 `- ` / `1. ` 等(删字符删出来的)落盘必须转义,重开仍是段落,不变成空列表。
+    //        根因在 milkdown 的 text handler(以空白结尾的文本整段跳过转义),修在 textSafe.ts。
+    if (want('K20b')) {
+      for (const [name, md, text, want20b] of [
+        ['`\\- ab` 退两格', '甲段。\n\n\\- ab\n', '- ab', /^paragraph:"甲段。" \/ paragraph:"-"$/],
+        ['`1\\. ab` 退两格', '甲段。\n\n1\\. ab\n', '1. ab', /^paragraph:"甲段。" \/ paragraph:"1\."$/],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text)
+        await page.waitForTimeout(150)
+        await page.keyboard.press('Backspace')
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(300)
+        const s0 = await shape(page)
+        const s1 = await reopenShape(page)
+        check(`K20b ${name}:编辑器里是段落,重开仍是段落`, /paragraph:"(-|1\.) "$/.test(s0) && want20b.test(s1), `${s0} → 重开 ${s1}`)
+        await page.close()
+      }
     }
   } finally {
     await browser.close()
