@@ -14,9 +14,12 @@
  *
  * 断言:切焦点 → 会话列表 / 目录换成那台的、家目录取那台的;新会话建在那台且是 host 执行、没有整对象 PUT;
  *      run 的 SSE 走隧道前缀;审批卡远端只读(无改命令框、无「总允许」)、批准打到那台;
- *      断线 → 连接态提示「不在线」、恢复后按 fromSeq 续订、不把消息标错;切回本端 → 列表回来;
+ *      断线 → 连接态提示「不在线」、恢复后按 fromSeq 续订、不把消息标错;
+ *      **空闲时**断线(没有在飞的 run,只有轮询撞上)→ 恢复后不点重试也回 ready、提示消失、带外消息照到(评审 F1);
+ *      切回本端 → 列表回来;离开一台离线的电脑后不再经 hub 探它(评审 F2);
+ *      调用方身份取不到(终局)→ 不自动重试,但提示条给「重试」,点了就连上(评审 F3);
  *      每条隧道请求都带 Bearer、不带 x-forsion-remote*、URL 不含 token=。
- * 截图(自己看):已切到那台电脑的对话 / 远端只读审批卡 / 不在线提示,落 SHOT_DIR 或临时目录。
+ * 截图(自己看):已切到那台电脑的对话 / 远端只读审批卡 / 不在线提示 / 终局态的「重试」,落 SHOT_DIR 或临时目录。
  *
  * 用法:cd desktop && npm run check:enginetarget
  *   ENGINE_TARGET_DIST=<目录>  复用已有的 dev 风味构建(缺省在临时目录现构建,约 1 分钟)
@@ -84,7 +87,8 @@ async function startWorld() {
     override: archivedEmpty,
   })
 
-  const hub = { offline: false, seen: [], streams: new Set() }
+  // callerDown:模拟 K8 中继换不到调用方票(合成 503 CALLER_UNAVAILABLE,请求没到那台);终局态,渲染层不得自动重试
+  const hub = { offline: false, callerDown: false, seen: [], streams: new Set() }
   const unitPrefix = `/api/units/${U}/proxy`
   const forward = (req, res, base, subPath) => {
     const target = new URL(subPath, base)
@@ -124,6 +128,7 @@ async function startWorld() {
     if (p.startsWith('/api/units/') && !p.startsWith(`/api/units/${U}/`)) return json(res, 404, { code: 'UNIT_NOT_FOUND', detail: 'Unit not found' })
     if (p.startsWith(unitPrefix)) {
       if (hub.offline) return json(res, 503, { code: 'UNIT_OFFLINE', detail: 'Unit offline' })
+      if (hub.callerDown && p.startsWith(`${unitPrefix}/engine`)) return json(res, 503, { code: 'CALLER_UNAVAILABLE', detail: 'Caller token unavailable' })
       const rest = p.slice(unitPrefix.length)
       if (rest === '/unit/config') return json(res, 200, { config: { homeDir: '/Users/studio', defaultWorkspaceDir: '/Users/studio/Forsion' } })
       if (rest === '/unit/hostfile') return json(res, 200, { mimeType: 'image/png', content: PNG_B64, size: 68 })
@@ -292,6 +297,25 @@ async function main() {
     await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 10_000 }).catch(() => {})
     check('恢复后连接态提示消失', !(await page.$('.t2-target-health')))
 
+    // ── D2. 空闲时断线(评审 F1)──
+    // 上面那段恢复靠的是 SSE 暂停时挂着的等待者;这里没有在飞的 run,只有 12s 一次的轮询撞上 503 —— 原先健康写成离线后
+    // 再没人探,轮询(不健康时暂停)永久停摆,「恢复后会自动继续」是假的,那台本机新打的消息也再不会到手机。
+    await page.waitForFunction(() => { const s = window.__forsionStore.getState(); return !s.runningBySession[s.activeId] }, null, { timeout: 10_000 }).catch(() => {})
+    world.setOffline(true)
+    await page.waitForSelector('.t2-target-health[data-target-health="offline"]', { timeout: 35_000 }).catch(() => {})
+    const idleOff = await st(() => ({ h: window.__forsionEngineTargets.health(), run: (() => { const s = window.__forsionStore.getState(); return !!s.runningBySession[s.activeId] })() }))
+    check('空闲断线:没有在飞的 run,轮询撞上 → 出「不在线」提示', !idleOff.run && idleOff.h[`unit:${U}`]?.state === 'offline' && !!(await page.$('.t2-target-health[data-target-health="offline"]')), JSON.stringify(idleOff))
+    world.setOffline(false)
+    const idleBackAt = Date.now()
+    await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 45_000 }).catch(() => {})
+    const idleHealth = await st(() => window.__forsionEngineTargets.health())
+    check('空闲断线恢复:不点重试、不发消息,健康自己回 ready、提示消失', !(await page.$('.t2-target-health')) && idleHealth[`unit:${U}`]?.state === 'ready', `${Math.round((Date.now() - idleBackAt) / 1000)}s ${JSON.stringify(idleHealth)}`)
+    world.mac.state.messages.push({ id: 'oob-1', role: 'user', content: '在 Mac 本机打的一句', created_at: new Date().toISOString() })
+    await page.waitForFunction(() => { const s = window.__forsionStore.getState(); return (s.messagesBySession[s.activeId] || []).some((m) => m.id === 'oob-1') }, null, { timeout: 30_000 }).catch(() => {})
+    const oob = await st(() => { const s = window.__forsionStore.getState(); return (s.messagesBySession[s.activeId] || []).some((m) => m.id === 'oob-1') })
+    const idlePolls = world.hub.seen.filter((r) => r.at > idleBackAt && /\/messages\?/.test(r.url)).length
+    check('空闲断线恢复:轮询续上,那台本机新打的消息自己到手机', oob && idlePolls > 0, `oob=${oob} polls=${idlePolls}`)
+
     // ── E. 切回本端 ──
     await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
     await page.waitForFunction(() => window.__forsionStore.getState().sessions.some((s) => s.id === 'home-1'), null, { timeout: 20_000 }).catch(() => {})
@@ -329,6 +353,50 @@ async function main() {
     await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 5_000 }).catch(() => {})
     check('自动恢复后连接态提示消失', !(await page.$('.t2-target-health')))
     await page.evaluate(() => { try { localStorage.setItem('forsion_theme', 'light') } catch { /* ignore */ } })
+    await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
+
+    // ── E3. 离开一台离线的电脑后不再经 hub 探它(评审 F2)──
+    // connect 失败时挂的等待者原先不带中止信号:切回本端后探针环照转(退避封顶 30s,回前台 / 联网再加探),手机开一夜 = 一夜空探。
+    world.setOffline(true)
+    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'err', null, { timeout: 20_000 }).catch(() => {})
+    await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
+    const leftAt = Date.now()
+    await sleep(6500) // 越过 2s + 4s 两档退避
+    const stray = world.hub.seen.filter((r) => r.at > leftAt && r.url.startsWith(`/api/units/${U}/`))
+    const leftHealth = await st(() => window.__forsionEngineTargets.health())
+    check('离开离线的那台:不再经 hub 探它,健康表不留旧的离线格', stray.length === 0 && !leftHealth[`unit:${U}`], `${stray.map((r) => r.url.replace(`/api/units/${U}/proxy`, '')).join(',')} ${JSON.stringify(leftHealth)}`)
+    world.setOffline(false)
+
+    // ── E4. 终局态(调用方身份取不到)不自动重试,但提示条给「重试」(评审 F3)──
+    world.hub.callerDown = true
+    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'err', null, { timeout: 20_000 }).catch(() => {})
+    await page.waitForSelector('.t2-target-health[data-target-health="caller-unavailable"]', { timeout: 8_000 }).catch(() => {})
+    if (!(await page.$('.t2-target-health'))) {
+      // 换焦点清了 activeId,移动端可能停在主页:同 E2,从主页输入框进对话视图(输入框禁用,不会真发出去)
+      const ta4 = page.locator('.t2c-ta').first()
+      if (await ta4.count()) { await ta4.click().catch(() => {}); await ta4.fill('身份取不到时打的字').catch(() => {}); await page.keyboard.press('Enter').catch(() => {}) }
+      await page.waitForSelector('.t2-target-health[data-target-health="caller-unavailable"]', { timeout: 10_000 }).catch(() => {})
+    }
+    const callerNotice = await page.evaluate(() => { const n = document.querySelector('.t2-target-health'); return n ? { state: n.getAttribute('data-target-health'), text: n.textContent, retry: !!n.querySelector('button') } : null })
+    check('身份取不到:提示条说清楚、给「重试」', callerNotice?.state === 'caller-unavailable' && callerNotice.retry, JSON.stringify(callerNotice))
+    await page.addStyleTag({ content: '.ach-toast{display:none!important}' })
+    await page.screenshot({ path: path.join(SHOT_DIR, 'enginetarget-caller-retry.png') })
+    const cbox = await page.locator('.t2c-card').last().boundingBox().catch(() => null)
+    if (cbox) await page.screenshot({ path: path.join(SHOT_DIR, 'enginetarget-caller-retry-composer.png'), clip: { x: 0, y: Math.max(0, cbox.y - 12), width: 390, height: Math.min(844 - Math.max(0, cbox.y - 12), cbox.height + 24) } })
+    world.hub.callerDown = false // 换票的抖动过去了
+    const callerOkAt = Date.now()
+    await sleep(4500)
+    const autoTried = world.hub.seen.filter((r) => r.at > callerOkAt && r.url.startsWith(`/api/units/${U}/proxy/engine`)).length
+    const stillErr = await st(() => window.__forsionStore.getState().connState)
+    check('终局态不自动重试(R-32):恢复了也不自己打那台', autoTried === 0 && stillErr === 'err', `requests=${autoTried} conn=${stillErr}`)
+    const retryBtn = page.locator('.t2-target-health button').first()
+    if (await retryBtn.count()) await retryBtn.click()
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok', null, { timeout: 15_000 }).catch(() => {})
+    await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 5_000 }).catch(() => {})
+    const retried = await page.evaluate((u) => ({ conn: window.__forsionStore.getState().connState, h: window.__forsionEngineTargets.health()[`unit:${u}`]?.state }), U)
+    check('点「重试」→ 连上、健康 ready、提示消失', retried.conn === 'ok' && retried.h === 'ready' && !(await page.$('.t2-target-health')), JSON.stringify(retried))
     await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
 
     // ── F. 隧道请求的不变量 ──
