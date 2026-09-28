@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, promises as fs, rmSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { PRODUCT_SIDECAR } from '../shared/products'
 import { detectKind, ensureProduct, getProduct, isProductId, scanProducts, updateProduct } from './productsRegistry'
+import { dirIdentity } from './dirIdentity'
+
+const reg = (root: string) => ({ root, dir: dirIdentity(root)! })
 
 let home: string
 let root: string // 托管根(~/Forsion/Project 的替身)
@@ -13,6 +16,7 @@ beforeEach(async () => {
   await fs.mkdir(root)
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(home, { recursive: true, force: true })
 })
 
@@ -25,8 +29,27 @@ async function project(name: string, files: Record<string, string> = {}): Promis
   }
   return dir
 }
-const sidecarFile = (dir: string): string => path.join(dir, PRODUCT_SIDECAR)
+/** 身份文件现在的位置:`<项目>/.tangu/.forsion-product.json`(根目录 / `.forsion/` 是兼容读的旧位置)。 */
+const sidecarFile = (dir: string): string => path.join(dir, '.tangu', PRODUCT_SIDECAR)
+/** 测试里手写身份文件:`.tangu/` 可能还没有。 */
+const writeSidecarFile = async (dir: string, content: string): Promise<void> => {
+  await fs.mkdir(path.join(dir, '.tangu'), { recursive: true })
+  await fs.writeFile(sidecarFile(dir), content)
+}
+const copySidecar = async (from: string, to: string): Promise<void> => writeSidecarFile(to, await fs.readFile(sidecarFile(from), 'utf8'))
 const sidecarOf = async (dir: string): Promise<Record<string, unknown>> => JSON.parse(await fs.readFile(sidecarFile(dir), 'utf8'))
+/** 第一次原子写落盘(rename)之后,把 dir 换成另一个目录(原目录改名、占着 inode,路径上新建一个空的)。 */
+function swapAfterFirstWrite(dir: string): void {
+  const real = fs.rename.bind(fs)
+  let swapped = false
+  vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    await real(from, to)
+    if (swapped) return
+    swapped = true
+    await real(dir, `${dir}-moved`)
+    await fs.mkdir(dir)
+  })
+}
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
 
 /** 本机的卷是不是大小写不敏感(macOS APFS / NTFS 默认是,APFS 也能格成敏感的)。 */
@@ -90,7 +113,7 @@ describe('产物身份(sidecar)', () => {
   it('version ≥ 1 的 sidecar 保住身份,只有解析不了 / 没 id 的才重铸', async () => {
     const dir = await project('v2', { 'index.html': 'x' })
     const first = await ensureProduct(root, dir)
-    await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...(await sidecarOf(dir)), version: 2, future: 'keep' }, null, 2))
+    await writeSidecarFile(dir, JSON.stringify({ ...(await sidecarOf(dir)), version: 2, future: 'keep' }, null, 2))
     const before = (await fs.stat(sidecarFile(dir))).mtimeMs
 
     const listed = (await scanProducts(root)).find((p) => p.root === dir)!
@@ -104,7 +127,7 @@ describe('产物身份(sidecar)', () => {
 
     // version 不是数 / < 1 = 身份不齐,照旧重铸
     const zero = await project('v0', { 'index.html': 'x' })
-    await fs.writeFile(sidecarFile(zero), JSON.stringify({ version: 0, id: 'p_0123456789ab', createdAt: 1 }))
+    await writeSidecarFile(zero, JSON.stringify({ version: 0, id: 'p_0123456789ab', createdAt: 1 }))
     const minted = (await scanProducts(root)).find((p) => p.root === zero)!
     expect(minted.id).not.toBe('p_0123456789ab')
     expect(await sidecarOf(zero)).toMatchObject({ version: 1, id: minted.id })
@@ -277,7 +300,7 @@ describe('containment', () => {
       const dir = await project('escape-read', { 'index.html': 'x' })
       await fs.symlink(loot, path.join(dir, 'pub'))
       // 克隆 / 下载来的模板可以自带 sidecar —— 这条路从来不经过 updateProduct
-      await fs.writeFile(sidecarFile(dir), JSON.stringify({ version: 1, id: 'p_aaaaaaaaaaaa', createdAt: 1, entry: 'pub/loot.html' }))
+      await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_aaaaaaaaaaaa', createdAt: 1, entry: 'pub/loot.html' }))
 
       const product = (await scanProducts(root)).find((p) => p.root === dir)!
       expect(product.id).toBe('p_aaaaaaaaaaaa') // 身份是齐的,不该被重铸
@@ -293,7 +316,7 @@ describe('复制来的项目', () => {
     const first = await ensureProduct(root, original)
     await sleep(40) // 拉开目录 birthtime
     const copy = await project('alpha', { 'index.html': 'x' })
-    await fs.copyFile(sidecarFile(original), sidecarFile(copy)) // 访达里整个复制 = 连 id/createdAt 一起复制
+    await copySidecar(original, copy) // 访达里整个复制 = 连 id/createdAt 一起复制
 
     const list = await scanProducts(root)
     const zeta = list.find((p) => p.name === 'zeta')!
@@ -312,10 +335,228 @@ describe('复制来的项目', () => {
   })
 })
 
+describe('外部造物(原地加入)', () => {
+  async function outside(name: string, files: Record<string, string> = {}): Promise<string> {
+    const dir = path.join(home, 'elsewhere', name)
+    await fs.mkdir(dir, { recursive: true })
+    for (const [relative, content] of Object.entries(files)) await fs.writeFile(path.join(dir, relative), content)
+    return dir
+  }
+
+  it('只有传进来的(宿主已登记的)才列出;身份写进它自己的 sidecar,标成 external', async () => {
+    const ext = await outside('app', { 'index.html': 'x' })
+    await project('managed', { 'index.html': 'y' })
+    expect((await scanProducts(root)).map((p) => p.name)).toEqual(['managed']) // 没登记:文件夹里有没有 sidecar 都不算
+    const list = await scanProducts(root, [reg(ext)])
+    const app = list.find((p) => p.name === 'app')!
+    expect(app).toMatchObject({ root: ext, kind: 'web', entry: 'index.html', external: true })
+    expect(list.find((p) => p.name === 'managed')!.external).toBeUndefined()
+    expect((await sidecarOf(ext)).id).toBe(app.id)
+    expect((await ensureProduct(root, ext, [reg(ext)])).id).toBe(app.id)
+    expect(await getProduct(root, app.id, [reg(ext)])).toMatchObject({ root: ext })
+    expect(await getProduct(root, app.id)).toBeNull() // 不在登记表里就解不到
+    await expect(ensureProduct(root, ext)).rejects.toThrow() // 未登记的根外目录照旧拒绝
+  })
+
+  it('⚠️补身份写到一半目录被换了 → 后面那份不往替换进来的目录里写(每写一份核一次目录身份),这一轮也不列', async () => {
+    const ext = await outside('swap-index', { 'index.html': 'x' })
+    await fs.writeFile(path.join(ext, PRODUCT_SIDECAR), 'not json {')
+    await writeSidecarFile(ext, 'not json {')
+    const entry = reg(ext)
+    swapAfterFirstWrite(ext)
+    expect((await scanProducts(root, [entry])).some((p) => p.name === 'swap-index')).toBe(false)
+    expect(await fs.readdir(ext)).toEqual([])
+  })
+
+  it('⚠️改名写到一半目录被换了 → 后面那份不往替换进来的目录里写,整个调用失败(不给替换进来的目录出摘要)', async () => {
+    const ext = await outside('swap-update', { 'index.html': 'x' })
+    const sc = JSON.stringify({ version: 1, id: 'p_111111111111', createdAt: 1 })
+    await fs.writeFile(path.join(ext, PRODUCT_SIDECAR), sc)
+    await writeSidecarFile(ext, sc)
+    const entry = reg(ext)
+    swapAfterFirstWrite(ext)
+    await expect(updateProduct(root, 'p_111111111111', { name: 'Renamed' }, [entry])).rejects.toThrow(/changed/)
+    expect(await fs.readdir(ext)).toEqual([])
+    expect(JSON.parse(await fs.readFile(path.join(`${ext}-moved`, PRODUCT_SIDECAR), 'utf8')).name).toBe('Renamed')
+  })
+
+  it('托管根还没建也照样列出外部造物', async () => {
+    const ext = await outside('solo', { 'index.html': 'x' })
+    await fs.rm(root, { recursive: true, force: true })
+    expect((await scanProducts(root, [reg(ext)])).map((p) => p.name)).toEqual(['solo'])
+    expect((await ensureProduct(root, ext, [reg(ext)])).name).toBe('solo')
+  })
+
+  it('复制到别处再加入的同 id:托管的老项目留着 id,外部的新副本重铸;改名写回外部 sidecar', async () => {
+    const original = await project('orig', { 'index.html': 'x' })
+    const first = await ensureProduct(root, original)
+    await sleep(40)
+    const copy = await outside('copy', { 'index.html': 'x' })
+    await copySidecar(original, copy)
+    const list = await scanProducts(root, [reg(copy)])
+    expect(list.find((p) => p.name === 'orig')!.id).toBe(first.id)
+    const copied = list.find((p) => p.name === 'copy')!
+    expect(copied.id).not.toBe(first.id)
+    const renamed = await updateProduct(root, copied.id, { name: 'My copy' }, [reg(copy)])
+    expect(renamed).toMatchObject({ name: 'My copy', external: true })
+    expect((await sidecarOf(copy)).name).toBe('My copy')
+  })
+
+  it('⚠️登记之后路径上换成了别的目录 → 不收,也不往替换进来的目录里写 sidecar', async () => {
+    const ext = await outside('swap', { 'index.html': 'x' })
+    const entry = reg(ext)
+    await fs.rename(ext, `${ext}-moved`) // 原目录还在(改了名、占着 inode),路径上新建的一定是另一个身份
+    await fs.mkdir(ext); await fs.writeFile(path.join(ext, 'index.html'), 'evil')
+    expect((await scanProducts(root, [entry])).some((p) => p.name === 'swap')).toBe(false)
+    expect(existsSync(sidecarFile(ext))).toBe(false)
+    await expect(ensureProduct(root, ext, [entry])).rejects.toThrow()
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('托管根读不了(权限)→ 托管的那部分没了,外部造物照样列出', async () => {
+    const ext = await outside('still', { 'index.html': 'x' })
+    await project('hidden', { 'index.html': 'y' })
+    await fs.chmod(root, 0o000)
+    try { expect((await scanProducts(root, [reg(ext)])).map((p) => p.name)).toEqual(['still']) } finally { await fs.chmod(root, 0o755) }
+  })
+
+  it('登记表里混进托管根里面的路径 → 不重复列出', async () => {
+    const inner = await project('inner', { 'index.html': 'x' })
+    expect((await scanProducts(root, [reg(inner)])).filter((p) => p.name === 'inner')).toHaveLength(1)
+  })
+})
+
+describe('身份文件的位置', () => {
+  it('老版本放在根目录 / .forsion/ 的身份照认、原地不动(老版本只认根目录那份,搬走它老版本会重铸 id);改名写回原位置', async () => {
+    const a = await project('legacy-root', { 'index.html': 'x' })
+    await fs.writeFile(path.join(a, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_0123456789ab', createdAt: 1, name: 'Root one' }))
+    const b = await project('legacy-forsion', { 'index.html': 'x' })
+    await fs.mkdir(path.join(b, '.forsion'))
+    await fs.writeFile(path.join(b, '.forsion', PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_abcdefabcdef', createdAt: 1 }))
+    const list = await scanProducts(root)
+    expect(list.find((p) => p.name === 'Root one')!.id).toBe('p_0123456789ab')
+    expect(list.find((p) => p.name === 'legacy-forsion')!.id).toBe('p_abcdefabcdef')
+    expect(existsSync(path.join(a, '.tangu'))).toBe(false) // 没搬
+    expect(existsSync(path.join(a, PRODUCT_SIDECAR)) && existsSync(path.join(b, '.forsion', PRODUCT_SIDECAR))).toBe(true) // 没删
+    await updateProduct(root, 'p_0123456789ab', { name: 'Renamed' })
+    expect(JSON.parse(await fs.readFile(path.join(a, PRODUCT_SIDECAR), 'utf8'))).toMatchObject({ id: 'p_0123456789ab', name: 'Renamed' })
+    expect(existsSync(path.join(a, '.tangu'))).toBe(false)
+  })
+
+  it('旧位置的身份文件坏了 → 就地重铸(不在 .tangu/ 另铸一份,老版本读到的是同一个)', async () => {
+    const dir = await project('broken-root', { 'index.html': 'x' })
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), 'not json {')
+    const p = (await scanProducts(root)).find((x) => x.name === 'broken-root')!
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8')).id).toBe(p.id)
+    expect(existsSync(path.join(dir, '.tangu'))).toBe(false)
+  })
+
+  it('根目录与 .tangu/ 各有一个不同的身份(装回老版本时它在根目录另铸了一个)→ 以根目录那份为准(老版本只认它),.tangu/ 那份同步成同一个;只有 .tangu/ 的不往根目录添文件', async () => {
+    const dir = await project('diverged', { 'index.html': 'x' })
+    await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_aaaaaaaaaaaa', createdAt: 1 }))
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_bbbbbbbbbbbb', createdAt: 2 }))
+    expect((await scanProducts(root)).find((x) => x.name === 'diverged')!.id).toBe('p_bbbbbbbbbbbb')
+    expect((await sidecarOf(dir)).id).toBe('p_bbbbbbbbbbbb')
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8')).id).toBe('p_bbbbbbbbbbbb')
+    const fresh = await project('only-tangu', { 'index.html': 'x' })
+    await scanProducts(root)
+    expect(existsSync(path.join(fresh, PRODUCT_SIDECAR))).toBe(false)
+  })
+
+  it('⚠️别的项目的 .tangu/ 被整个拷进老项目(模板、技能、AGENTS.md 常这么搬)→ 老项目照旧是自己,拷来的那份同步回它;源项目的 id 不受牵连', async () => {
+    const q = await project('old-q', { 'index.html': 'x' }) // 先建 = 目录更老:按 .tangu/ 优先的读法,它会抢走源项目的 id
+    await fs.writeFile(path.join(q, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_cccccccccccc', createdAt: 1 }))
+    const src = await project('source', { 'index.html': 'x' })
+    const pid = (await scanProducts(root)).find((x) => x.name === 'source')!.id
+    await copySidecar(src, q)
+    const list = await scanProducts(root)
+    expect(list.find((x) => x.name === 'old-q')!.id).toBe('p_cccccccccccc')
+    expect(list.find((x) => x.name === 'source')!.id).toBe(pid)
+    expect(JSON.parse(await fs.readFile(path.join(q, PRODUCT_SIDECAR), 'utf8')).id).toBe('p_cccccccccccc')
+    expect((await sidecarOf(q)).id).toBe('p_cccccccccccc')
+    expect((await sidecarOf(src)).id).toBe(pid)
+  })
+
+  it('访达复制一个两处都有身份的项目(根目录 + .tangu/,同一个 id)→ 副本重铸,两处都换成新 id;原件不动', async () => {
+    const sc = JSON.stringify({ version: 1, id: 'p_dddddddddddd', createdAt: 1 })
+    const original = await project('both-a-orig', { 'index.html': 'x' })
+    await fs.writeFile(path.join(original, PRODUCT_SIDECAR), sc)
+    await writeSidecarFile(original, sc)
+    const copy = await project('both-b-copy', { 'index.html': 'x' })
+    await fs.writeFile(path.join(copy, PRODUCT_SIDECAR), sc)
+    await writeSidecarFile(copy, sc)
+    const list = await scanProducts(root)
+    const cid = list.find((x) => x.name === 'both-b-copy')!.id
+    expect(list.find((x) => x.name === 'both-a-orig')!.id).toBe('p_dddddddddddd')
+    expect(cid).not.toBe('p_dddddddddddd')
+    expect(JSON.parse(await fs.readFile(path.join(copy, PRODUCT_SIDECAR), 'utf8')).id).toBe(cid)
+    expect((await sidecarOf(copy)).id).toBe(cid)
+    expect(JSON.parse(await fs.readFile(path.join(original, PRODUCT_SIDECAR), 'utf8')).id).toBe('p_dddddddddddd')
+  })
+
+  it('根目录那份坏了、.tangu/ 有身份 → 用 .tangu/ 的并把根目录修成同一个(老版本不会另铸);同一次索引里的改名两处都写,不被修好的根目录盖回去', async () => {
+    const dir = await project('broken-root-2', { 'index.html': 'x' })
+    await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_eeeeeeeeeeee', createdAt: 1 }))
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), 'not json {')
+    await updateProduct(root, 'p_eeeeeeeeeeee', { name: 'Renamed' }) // 修根目录与改名落在同一次索引里
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8'))).toMatchObject({ id: 'p_eeeeeeeeeeee', name: 'Renamed' })
+    expect((await scanProducts(root)).find((x) => x.id === 'p_eeeeeeeeeeee')!.name).toBe('Renamed')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('根目录那份坏了又修不好(没写权限)→ 这一行不列:交出 .tangu/ 的 id 的话,老版本读根目录迟早另铸一个;权限回来就修好照常列', async () => {
+    const dir = await project('stuck-root', { 'index.html': 'x' })
+    await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_222222222222', createdAt: 1 }))
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), 'not json {')
+    await fs.chmod(dir, 0o555)
+    try { expect((await scanProducts(root)).some((p) => p.id === 'p_222222222222')).toBe(false) } finally { await fs.chmod(dir, 0o755) }
+    expect((await scanProducts(root)).some((p) => p.id === 'p_222222222222')).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('改名时靠后的副本写不进(没写权限)→ 照样算改成了(读序第一份已写好),只告警', async () => {
+    const dir = await project('stuck-copy', { 'index.html': 'x' })
+    const sc = JSON.stringify({ version: 1, id: 'p_333333333333', createdAt: 1 })
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), sc)
+    await writeSidecarFile(dir, sc)
+    await fs.chmod(path.join(dir, '.tangu'), 0o555)
+    try {
+      await expect(updateProduct(root, 'p_333333333333', { name: 'Renamed' })).resolves.toMatchObject({ name: 'Renamed' })
+    } finally { await fs.chmod(path.join(dir, '.tangu'), 0o755) }
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8')).name).toBe('Renamed')
+  })
+
+  it.skipIf(process.platform === 'win32')('.forsion 是软链、根目录的身份文件是软链 → 都不读、不写穿;只在 .tangu/ 铸新的', async () => {
+    const target = path.join(home, 'planted'); await fs.mkdir(target)
+    const planted = JSON.stringify({ version: 1, id: 'p_444444444444', createdAt: 1 })
+    await fs.writeFile(path.join(target, PRODUCT_SIDECAR), planted)
+    const dir = await project('links', { 'index.html': 'x' })
+    await fs.symlink(target, path.join(dir, '.forsion'))
+    await fs.symlink(path.join(target, PRODUCT_SIDECAR), path.join(dir, PRODUCT_SIDECAR))
+    const p = (await scanProducts(root)).find((x) => x.name === 'links')!
+    expect(p.id).not.toBe('p_444444444444')
+    expect((await sidecarOf(dir)).id).toBe(p.id)
+    expect(await fs.readFile(path.join(target, PRODUCT_SIDECAR), 'utf8')).toBe(planted)
+    expect((await fs.lstat(path.join(dir, PRODUCT_SIDECAR))).isSymbolicLink()).toBe(true)
+  })
+
+  it('新铸的身份只写进 .tangu/;.tangu 是软链(克隆来的仓可以自带 .tangu -> 别处)→ 不从那里读、不往那里写', async () => {
+    const fresh = await project('fresh', { 'index.html': 'x' })
+    await scanProducts(root)
+    expect(existsSync(sidecarFile(fresh))).toBe(true)
+    expect(existsSync(path.join(fresh, PRODUCT_SIDECAR))).toBe(false)
+    const target = path.join(home, 'link-target'); await fs.mkdir(target)
+    await fs.writeFile(path.join(target, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_ffffffffffff', createdAt: 1 }))
+    const linked = await project('linked', { 'index.html': 'x' })
+    await fs.symlink(target, path.join(linked, '.tangu'))
+    const list = await scanProducts(root)
+    expect(list.some((p) => p.id === 'p_ffffffffffff')).toBe(false) // 没跟着软链去读别处的身份
+    expect(list.some((p) => p.name === 'linked')).toBe(false)       // 写不了身份 = 不列(同只读盘)
+    expect(await fs.readdir(target)).toEqual([PRODUCT_SIDECAR])      // 也没往别处写
+  })
+})
+
 describe('坏 sidecar 与未知字段', () => {
   it('坏掉的 sidecar 当作没有,重铸而不抛', async () => {
     const dir = await project('corrupt', { 'index.html': 'x' })
-    await fs.writeFile(sidecarFile(dir), 'not json {')
+    await writeSidecarFile(dir, 'not json {')
     const list = await scanProducts(root)
     expect(list).toHaveLength(1)
     expect(isProductId(list[0].id)).toBe(true)
@@ -323,7 +564,7 @@ describe('坏 sidecar 与未知字段', () => {
 
     // 能解析但身份不合格(id 形状不对)→ 同样重铸,其余字段留着
     const bad = await project('bad-id', { 'index.html': 'x' })
-    await fs.writeFile(sidecarFile(bad), JSON.stringify({ version: 1, id: 'nope', createdAt: 1, name: 'Kept', custom: { keep: 'me' } }))
+    await writeSidecarFile(bad, JSON.stringify({ version: 1, id: 'nope', createdAt: 1, name: 'Kept', custom: { keep: 'me' } }))
     const second = (await scanProducts(root)).find((p) => p.root === bad)!
     expect(isProductId(second.id)).toBe(true)
     expect(second.name).toBe('Kept')
@@ -333,7 +574,7 @@ describe('坏 sidecar 与未知字段', () => {
   it('重写时保留未知字段', async () => {
     const dir = await project('extra', { 'index.html': 'x' })
     const product = await ensureProduct(root, dir)
-    await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...(await sidecarOf(dir)), futureField: { a: 1 }, note: 'keep me' }))
+    await writeSidecarFile(dir, JSON.stringify({ ...(await sidecarOf(dir)), futureField: { a: 1 }, note: 'keep me' }))
     await updateProduct(root, product.id, { name: 'Renamed' })
     expect(await sidecarOf(dir)).toMatchObject({ id: product.id, name: 'Renamed', futureField: { a: 1 }, note: 'keep me' })
   })
@@ -347,10 +588,10 @@ describe('坏 sidecar 与未知字段', () => {
     const rtl = String.fromCharCode(0x202e) // U+202E,双向覆写
     const bad: unknown[] = [`report${rtl}gnp.lnk`, `bad${String.fromCharCode(1)}name`, '   ', 'x'.repeat(101), 42, null]
     for (const name of bad) {
-      await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...base, name }))
+      await writeSidecarFile(dir, JSON.stringify({ ...base, name }))
       expect((await getProduct(root, id))?.name).toBe('folder-name')
     }
-    await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...base, name: '  好名字 Good  ' }))
+    await writeSidecarFile(dir, JSON.stringify({ ...base, name: '  好名字 Good  ' }))
     expect((await getProduct(root, id))?.name).toBe('好名字 Good') // 合格的照常用,并且 trim
   })
 })
@@ -453,6 +694,6 @@ describe('边界', () => {
     expect(listed).toHaveLength(1)
     expect(listed[0].id).toBe(ensured.id)
     expect((await sidecarOf(dir)).id).toBe(ensured.id)
-    expect((await fs.readdir(dir)).filter((n) => n.startsWith(PRODUCT_SIDECAR))).toEqual([PRODUCT_SIDECAR]) // 没留下 tmp
+    expect((await fs.readdir(path.join(dir, '.tangu'))).filter((n) => n.startsWith(PRODUCT_SIDECAR))).toEqual([PRODUCT_SIDECAR]) // 没留下 tmp
   })
 })

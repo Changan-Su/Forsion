@@ -38,12 +38,17 @@ registerMessages({
   'artificial.action.reveal': { zh: '在文件管理器中显示', en: 'Show in folder' },
   'artificial.action.rename': { zh: '重命名', en: 'Rename' },
   'artificial.action.trash': { zh: '移到废纸篓', en: 'Move to trash' },
+  'artificial.action.remove': { zh: '从造物移除', en: 'Remove from Creations' },
   'artificial.action.more': { zh: '更多操作 · {name}', en: 'More actions for {name}' },
   'artificial.rename.title': { zh: '重命名作品', en: 'Rename creation' },
   'artificial.rename.label': { zh: '只改显示名称，不动项目文件夹', en: 'Changes the display name only; the project folder keeps its name' },
   'artificial.trash.confirm': {
     zh: '把「{name}」移到系统废纸篓？整个项目文件夹都会被移走，之后可以从废纸篓里找回。',
     en: 'Move “{name}” to the system trash? The whole project folder goes with it, and you can restore it from the trash.',
+  },
+  'artificial.remove.confirm': {
+    zh: '把「{name}」从造物里移除？文件夹会留在原处，不会被删除。',
+    en: 'Remove “{name}” from Creations? The folder stays where it is and is not deleted.',
   },
   // 落盘产物命名:作品名清洗完为空时,桌面快捷方式用的文件名(跟随当前界面语言)。
   'artificial.shortcut.fallbackName': { zh: 'Forsion 应用', en: 'Forsion app' },

@@ -3,12 +3,14 @@
  * 而不是靠翻聊天记录猜进度。拼进尾部 user 消息(与 /skill 指令同通道,不动 system 前缀字节,
  * 前缀缓存只失效最短尾巴),不落库不上屏,纯 harness 脚手架。
  */
-import { existsSync } from 'node:fs';
 import { prepareHostCommand } from '../sandbox/hostSandbox.js';
 import { runBoundedProcess } from '../utils/boundedProcess.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal'>;
 import { renderTodos, type TodoItem } from '../tools/builtin/todo.js';
+import { gitSettings } from './gitSettings.js';
+import { GIT_SCRUBBED_ENV, READ_ONLY_GIT_ARGS, gitExecutable } from './gitExec.js';
+import { untrustedRisks } from './gitTrust.js';
 
 /** todo 现场段:有未完项才注入(全完成/空单=null,别拿旧清单占 token)。 */
 export function renderTodoState(todos: TodoItem[]): string | null {
@@ -64,8 +66,6 @@ export async function runVerifyCommand(command: string, cwd?: string, signal?: A
 const GIT_TIMEOUT_MS = 800;
 const GIT_STATUS_MAX_LINES = 20; // ponytail: 大仓 status 截断到 20 行 + 计数,模型要全量自己跑 git status
 
-/** 这几个环境变量会把 git 整个指到别的仓去(GIT_DIR 泄进来时 `-C cwd` 形同虚设);仓永远只由 -C 决定,一律剥掉(同 desktop gitHistory.ts)。 */
-const GIT_SCRUBBED_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_NAMESPACE'];
 
 export interface GitRunResult { code: number; stdout: string; stderr: string; reason?: 'aborted' | 'timeout' | 'output-limit' | 'spawn-error' }
 
@@ -73,15 +73,7 @@ export interface GitRunResult { code: number; stdout: string; stderr: string; re
  *  固定前缀:不分页、不跑 fsmonitor / 钩子 / 外部 diff、不验签也不调 gpg —— 外来仓的 `.git/config` 能借这几处执行任意程序。
  *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
 export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
-  // Apple's /usr/bin/git shim can start xcodebuild for each private sandbox cache.
-  // These fixed native developer-tool locations avoid an unsandboxed xcrun probe.
-  const executable = process.platform === 'darwin'
-    ? ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git'].find(existsSync) || 'git'
-    : 'git';
-  const prepared = prepareHostCommand({ ...ctx, cwd }, [
-    executable, '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-    '-c', 'diff.external=', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-C', cwd, ...args,
-  ]);
+  const prepared = prepareHostCommand({ ...ctx, cwd }, [gitExecutable(), ...READ_ONLY_GIT_ARGS, '-C', cwd, ...args]);
   try {
     const env: NodeJS.ProcessEnv = { ...(prepared.options.env ?? process.env), GIT_TERMINAL_PROMPT: '0' };
     for (const key of GIT_SCRUBBED_ENV) delete env[key];
@@ -99,23 +91,42 @@ async function git(cwd: string, args: string[], ctx?: RuntimeExecContext): Promi
   return result.stdout.trim();
 }
 
+/** 用户在「设置 → Git」里定的偏好。只在 git 仓里才有意义,所以挂在这一段;agent 自己建分支 / 写提交时照做。 */
+export function gitPreferenceLines(): string {
+  const s = gitSettings();
+  const lines: string[] = [];
+  if (s.branchPrefix) lines.push(`- When you choose a branch name yourself, start it with "${s.branchPrefix}". Use a branch name the user gives exactly as given.`);
+  if (s.commitInstructions) lines.push(`- Commit message instructions:\n${s.commitInstructions}`);
+  return lines.length ? `user git preferences (Settings → Git). They are not a request to create branches or commits; apply them only when the user asks you to:\n${lines.join('\n')}` : '';
+}
+
 /** git 现场段(host 会话专用):分支 + 脏文件摘要 + 最近提交。非 git 仓 / 无 git / 超时 → null 静默跳过。 */
 export async function collectGitState(cwd?: string, ctx?: RuntimeExecContext): Promise<string | null> {
   if (!cwd) return null;
   try {
     const branch = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], ctx);
+    // status 读工作区时会跑仓库自带的过滤器:未经用户信任就不读(gitTrust;每个 run 开头自动跑,没有人点过任何东西)
+    const blocked = await untrustedRisks(cwd, 'read').catch(() => ({ commonDir: '', risks: ['config (unreadable)'] }));
     const [status, log] = await Promise.all([
-      git(cwd, ['status', '--porcelain'], ctx),
+      blocked ? Promise.resolve(null) : git(cwd, ['status', '--porcelain'], ctx),
       git(cwd, ['log', '--oneline', '-3'], ctx).catch(() => ''),
     ]);
+    if (status === null) {
+      const prefs = gitPreferenceLines();
+      return '[Git state]\n' + `branch: ${branch}\n` +
+        `working tree: not read — this repository's own git config would run programs (${blocked!.risks.slice(0, 3).join(', ')}) and the user has not trusted it in Project details` +
+        (log ? `\nrecent commits:\n${log}` : '') + (prefs ? `\n${prefs}` : '');
+    }
     const statusLines = status ? status.split('\n').filter(Boolean) : [];
     const shown = statusLines.slice(0, GIT_STATUS_MAX_LINES).join('\n');
     const more = statusLines.length > GIT_STATUS_MAX_LINES ? `\n… and ${statusLines.length - GIT_STATUS_MAX_LINES} more` : '';
+    const prefs = gitPreferenceLines();
     return (
       '[Git state]\n' +
       `branch: ${branch}\n` +
       (statusLines.length ? `dirty files (${statusLines.length}):\n${shown}${more}` : 'working tree clean') +
-      (log ? `\nrecent commits:\n${log}` : '')
+      (log ? `\nrecent commits:\n${log}` : '') +
+      (prefs ? `\n${prefs}` : '')
     );
   } catch {
     return null;

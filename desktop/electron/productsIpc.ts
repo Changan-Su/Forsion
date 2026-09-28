@@ -12,9 +12,11 @@ import { PRODUCT_NO_WEB_ENTRY, type GitPanelStatus, type ProductKind, type Produ
 import { ensureProduct, getProduct, isProductId, scanProducts, updateProduct } from './productsRegistry'
 import { createProductShortcut } from './productShortcut'
 import { isDevLoaded, readDevLoads, setDevLoad } from './devLoadStore'
-import { allowExternalLaunch, gitOwners, isExternalLaunchAllowed, revokeExternalLaunch } from './productTrust'
+import { addExternalCreation, allowExternalLaunch, externalCreationFor, externalCreations, gitOwners, isExternalLaunchAllowed, removeExternalCreation, revokeExternalLaunch } from './productTrust'
 import { commitGitVersion, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import { serveProductRoot, servePathRoot, setPreviewPersistence, type PreviewPersistedState } from './codePreview'
+import { AdoptError, checkAdoptable, createCreationDir } from './productAdopt'
+import { dirIdentity } from './dirIdentity'
 
 export interface ProductsIpcDeps {
   ipcMain: IpcMain
@@ -74,11 +76,12 @@ export function isDirectChild(projectsRoot: string, real: string): boolean {
   } catch { return false }
 }
 
-export async function previewOriginFor(projectsRoot: string, dir: string): Promise<{ origin: string; token: string; base: string }> {
+/** homeDir 给了就连本机原地加入的外部造物一起认(稳定源同样跨重启;按目录身份认,不比路径字符串)。 */
+export async function previewOriginFor(projectsRoot: string, dir: string, homeDir?: string): Promise<{ origin: string; token: string; base: string }> {
   const real = realpathSync(dir)
   try {
-    if (isDirectChild(projectsRoot, real)) {
-      const product = await ensureProduct(projectsRoot, real)
+    if (isDirectChild(projectsRoot, real) || (homeDir && externalCreationFor(homeDir, real))) {
+      const product = await ensureProduct(projectsRoot, real, homeDir ? externalCreations(homeDir) : [])
       return await serveProductRoot(product.id, product.root)
     }
   } catch { /* 根不存在 / sidecar 写不了 → 退回一次性源,预览照常 */ }
@@ -90,9 +93,11 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     if (!d.isTrustedSender(e)) throw new Error('forbidden')
     return fn(...args)
   }
+  /** 本机原地加入的外部造物(宿主侧登记,路径还在且目录身份对得上的才算)。每次现读:登记表很小,别留两份状态。 */
+  const externals = () => externalCreations(d.homeDir())
   const product = async (id: unknown) => {
     if (!isProductId(id)) throw new Error('invalid product id')
-    const p = await getProduct(d.projectsRoot(), id)
+    const p = await getProduct(d.projectsRoot(), id, externals())
     if (!p) throw new Error('product not found')
     return p
   }
@@ -102,8 +107,9 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     if (!(await fs.stat(real)).isDirectory()) throw new Error('project root is not a directory')
     return real
   }
-  /** 托管根的直接子目录才允许宿主写 git(init / add -A / restore);根外导入的目录只读。 */
+  /** 托管根的直接子目录 / 原地加入的外部造物才允许宿主写 git;别的目录只读。 */
   const managed = (real: string): boolean => isDirectChild(d.projectsRoot(), real)
+  const where = (real: string): 'managed' | 'external' | null => (managed(real) ? 'managed' : externalCreationFor(d.homeDir(), real) ? 'external' : null)
   // owners = 「这个仓是 Forsion 建的」的宿主侧登记处(nonce);只看 .git 里的标记文件是可伪造的(见 gitHistory.GitOwners)。
   const git = () => ({ env: d.env(), owners: gitOwners(d.homeDir()) })
   /** devLoad 叠加:授权住在宿主家目录(devLoadStore),不在不可信的项目 sidecar 里。只有插件产物才可能为 true。 */
@@ -120,17 +126,21 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
 
   d.ipcMain.handle('products:list', guard(async () => {
     const loads = readDevLoads(d.homeDir())
-    return (await scanProducts(d.projectsRoot())).map((p) => withDevLoad(p, loads))
+    return (await scanProducts(d.projectsRoot(), externals())).map((p) => withDevLoad(p, loads))
   }))
-  d.ipcMain.handle('products:get', guard(async (id: unknown) => (isProductId(id) ? withDevLoad(await getProduct(d.projectsRoot(), id)) : null)))
+  d.ipcMain.handle('products:get', guard(async (id: unknown) => (isProductId(id) ? withDevLoad(await getProduct(d.projectsRoot(), id, externals())) : null)))
   d.ipcMain.handle('products:ensure', guard(async (dir: unknown) => {
     const real = await dirArg(dir)
-    return managed(real) ? withDevLoad(await ensureProduct(d.projectsRoot(), real)) : null // 根外项目不是产物(方案 §3.3)
+    return where(real) ? withDevLoad(await ensureProduct(d.projectsRoot(), real, externals())) : null // 不是造物的目录不铸身份
+  }))
+  // 这个目录是不是造物(托管根的直接子目录 / 原地加入的外部文件夹)。只读,绝不铸身份 —— 渲染层每轮跑完、每次打开详情都会问。
+  d.ipcMain.handle('products:isCreation', guard(async (dir: unknown) => {
+    try { return !!where(await dirArg(dir)) } catch { return false }
   }))
   d.ipcMain.handle('products:update', guard(async (id: unknown, patch: { name?: string; entry?: string | null; kind?: ProductKind; devLoad?: boolean }) => {
     const p = await product(id)
     const { devLoad, ...rest } = patch ?? {}
-    const next = await updateProduct(d.projectsRoot(), p.id, rest)
+    const next = await updateProduct(d.projectsRoot(), p.id, rest, externals())
     // 「在 Forsion 中加载」= 授权这个目录的代码以插件权限执行。**这里是全应用唯一的写口**(用户在 Sandbox 面板点按钮
     // → 可信 sender 的 IPC);只认真插件项目,且把授权钉在此刻的真实根上(见 devLoadStore 头注)。
     if (devLoad !== undefined) {
@@ -168,41 +178,88 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
   // 「一串形态合法但不存在的 id 各开一个空窗口」。应用内点开不走这里。
   d.ipcMain.handle('products:externalLaunchAllowed', guard(async (id: unknown) => {
     if (!isProductId(id)) return false
-    const p = await getProduct(d.projectsRoot(), id).catch(() => null)
+    const p = await getProduct(d.projectsRoot(), id, externals()).catch(() => null)
     return !!p && p.kind === 'web' && !!p.entry && isExternalLaunchAllowed(d.homeDir(), p)
   }))
-  // 删除 = 移入系统回收站(可恢复)。目录来自注册表重解,不吃渲染层路径。
-  d.ipcMain.handle('products:trash', guard(async (id: unknown) => {
+  // 「进造物」(09-27):在托管根建一个新作品文件夹;或把已有的文件夹**原地**加入(不复制、不移动),都当场铸身份再回摘要。
+  //   源目录可能来自聊天里模型写的作品卡:渲染层先按字符串限定在会话工作目录内,productAdopt 再按真实路径过一遍目录闸。
+  //   可预期的失败按结果回 { ok:false, code, detail }(IPC 抛错只带得过 message,code 会丢),渲染层按 code 本地化。
+  d.ipcMain.handle('products:create', guard(async (name: unknown) => {
+    if (typeof name !== 'string') throw new Error('invalid name')
+    const made = await createCreationDir(d.projectsRoot(), name)
+    // 身份登记失败 = 半个作品(有目录没身份):删掉刚建的空目录再报错
+    try { return { dir: made.dir, name: made.name, product: withDevLoad(await ensureProduct(d.projectsRoot(), made.dir, externals())) } }
+    catch (e) { await fs.rm(made.dir, { recursive: true, force: true }).catch(() => {}); throw e }
+  }))
+  // within = 源必须在里面的目录(作品卡:会话工作目录;PROJECT 详情:项目目录本身),strict = 不能就是它(默认工作区)。
+  // 登记住在宿主家目录(productTrust),身份 sidecar 写进文件夹;登记之后铸身份失败(只读盘)就撤回登记,不留半个造物。
+  d.ipcMain.handle('products:register', guard(async (source: unknown, within: unknown, strict: unknown) => {
+    if (typeof source !== 'string' || typeof within !== 'string') throw new Error('invalid arguments')
+    try {
+      const listed = externals()
+      const { real, managed: inRoot } = await checkAdoptable(d.projectsRoot(), source, { within, strict: strict === true, externals: listed })
+      const already = inRoot || !!externalCreationFor(d.homeDir(), real)
+      if (!already) addExternalCreation(d.homeDir(), real)
+      try {
+        const p = withDevLoad(await ensureProduct(d.projectsRoot(), real, externals()))
+        return { ok: true as const, dir: p.root, name: p.name, product: p }
+      } catch (e) {
+        if (!already) removeExternalCreation(d.homeDir(), real)
+        throw e
+      }
+    } catch (e) {
+      if (e instanceof AdoptError) return { ok: false as const, code: e.code, detail: e.detail }
+      throw e
+    }
+  }))
+  // 删除 = 移入系统回收站(可恢复);原地加入的外部造物 = 只取消登记,文件夹一个字节都不动。目录来自注册表重解,不吃渲染层路径。
+  // expect = 用户在确认框里同意的那件事:action('trash' 移进废纸篓 / 'unregister' 只从造物移除,渲染层按卡片上的 external 选的文案)
+  // + dirId(卡片列出时那个目录的身份)。宿主按 id 重解时情况变了 —— 外部文件夹被挪进托管根或反过来、同一个 id 落到了另一个文件夹 ——
+  // 一律拒绝:别让用户确认的是一件事(那个目录)、宿主做的是另一件。
+  d.ipcMain.handle('products:trash', guard(async (id: unknown, expect: unknown) => {
     const p = await product(id)
+    const want = expect as { action?: unknown; dirId?: unknown } | null
+    const now = dirIdentity(p.root)
+    if (!want || want.action !== (p.external ? 'unregister' : 'trash') || !now || want.dirId !== `${now.dev}:${now.ino}`) throw new Error('This creation changed; refresh and try again')
     // 先撤权再删:开发副本的授权不撤,回收站里的代码下次启动照样以插件权限加载(目录被「放回原处」就更是了);
     // 已加载的实例也得当场全窗拆掉。
     const grant = readDevLoads(d.homeDir())[p.id]
     if (grant) { setDevLoad(d.homeDir(), p, false); d.broadcast('plugins:devChanged', { pluginIds: [grant.pluginId, p.pluginId].filter((x): x is string => !!x) }) }
     revokeExternalLaunch(d.homeDir(), p.id)
+    // sidecar 故意留着:重新加入时还是同一个产物 id → 预览稳定源与其中的本地数据都接得上。它只是身份,不是授权。
+    if (p.external) { removeExternalCreation(d.homeDir(), p.root); return { ok: true, unregistered: true } }
     await d.trashItem(p.root)
     return { ok: true }
   }))
 
   // ── Coding Studio 的 git 版本(只给有 git 的用户;没有 → 面板显示安装建议)──
+  // 外部造物(用户自己的文件夹)还没有我方的仓:手动保存第一个版本才建(auto=false);建好之后才每轮自动存。
   d.ipcMain.handle('codeStudio:gitStatus', guard(async (root: unknown): Promise<GitPanelStatus> => {
     const real = await dirArg(root)
     const status = await gitHistoryStatus(real, git())
-    return { ...status, writable: status.available && managed(real) && (status.state === 'none' || status.state === 'owned') }
+    const w = where(real)
+    const writable = status.available && !!w && (status.state === 'none' || status.state === 'owned')
+    return { ...status, writable, auto: writable && (w === 'managed' || status.state === 'owned') }
   }))
   d.ipcMain.handle('codeStudio:gitVersions', guard(async (root: unknown) => listGitVersions(await dirArg(root), git())))
   // 提交标题写下就不可变、且直接显示在 History 面板 → 兜底名 / 备份名 / 「恢复到」前缀由渲染层按当前语言传入
   // (gitHistory 里逐个按标题口径清洗;缺省回落英文)。
   d.ipcMain.handle('codeStudio:gitCommit', guard(async (root: unknown, input: { name?: unknown; auto?: unknown; untitled?: unknown }) => {
     const real = await dirArg(root)
-    if (!managed(real)) throw new Error('read-only repository')
+    const w = where(real)
+    if (!w) throw new Error('read-only repository')
+    // 自动存版绝不替用户在他自己的文件夹里 git init:还不是我方仓 → null(= 这轮没存,不是失败,调用方本来就这么处理)
+    if (w === 'external' && input?.auto === true && (await gitHistoryStatus(real, git())).state !== 'owned') return null
     return commitGitVersion(real, {
       name: typeof input?.name === 'string' ? input.name : '', auto: input?.auto === true,
       labels: { untitled: label(input?.untitled) },
+      // 上面查到的「是我方仓」到提交队列里可能已经变了(.git 被挪走):外部造物的自动提交在队列里也绝不 init
+      noInit: w === 'external' && input?.auto === true,
     }, git())
   }))
   d.ipcMain.handle('codeStudio:gitRestore', guard(async (root: unknown, id: unknown, labels?: { backup?: unknown; restorePrefix?: unknown }) => {
     const real = await dirArg(root)
-    if (!managed(real)) throw new Error('read-only repository')
+    if (!where(real)) throw new Error('read-only repository')
     if (typeof id !== 'string') throw new Error('invalid version id')
     return restoreGitVersion(real, id, git(), { backup: label(labels?.backup), restorePrefix: label(labels?.restorePrefix) })
   }))

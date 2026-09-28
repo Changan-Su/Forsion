@@ -693,6 +693,20 @@ export interface GitSummary {
   changesTotal?: number
   commits?: GitCommitInfo[]
   remote?: string | null
+  /** 远端个数(没有 origin、只有一个远端时也能推)。 */
+  remotes?: number
+  /** 仓库自带会执行程序的配置项与钩子;空 = 没有。 */
+  configRisks?: string[]
+  /** 用户在面板上信任过这个仓的配置。 */
+  trusted?: boolean
+  /** 读工作区会跑仓库自带的过滤器且未信任 → 这次没读改动(changes 为空不代表干净)。 */
+  changesUnread?: boolean
+}
+/** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
+export interface GitSettings {
+  branchPrefix: string
+  commitInstructions: string
+  forceWithLease: boolean
 }
 export interface ProjectContext {
   cwd: string
@@ -1315,7 +1329,15 @@ declare global {
       productsServe?(id: string): Promise<{ origin: string; url: string; product: ProductSummary }>
       /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
       productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
-      productsTrash?(id: string): Promise<{ ok: boolean }>
+      /** 托管根里的 = 移进废纸篓;原地加入的外部造物 = 只取消登记(unregistered),文件夹不动。
+       *  expect = 用户在确认框里同意的那件事(动作 + 卡片列出时那个目录的身份);宿主重解后对不上(期间被挪过 / 换过)就拒绝,得刷新后重新确认。 */
+      productsTrash?(id: string, expect: { action: 'trash' | 'unregister'; dirId?: string }): Promise<{ ok: boolean; unregistered?: boolean }>
+      /** 在造物的托管根里建一个新作品文件夹(名字宿主清洗 + 撞名接序号)。 */
+      productsCreate?(name: string): Promise<{ dir: string; name: string; product: ProductSummary }>
+      /** 原地加入造物(不复制、不移动)。within:源的真实路径必须在它里面(strict = 不能就是它本身)。 */
+      productsRegister?(source: string, within: string, strict: boolean): Promise<{ ok: true; dir: string; name: string; product: ProductSummary } | { ok: false; code: 'invalid_source' | 'forbidden_source' | 'outside' | 'nested'; detail?: string }>
+      /** 这个目录是不是造物(托管根的直接子目录 / 原地加入的外部文件夹);只读,不铸身份。 */
+      productsIsCreation?(dir: string): Promise<boolean>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void

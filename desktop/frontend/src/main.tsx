@@ -17,6 +17,7 @@ import { MiniRoot } from './MiniRoot'
 import { FloatingRoot } from './FloatingRoot'
 import { installMultiWindow } from './multiWindow'
 import { installKeepAwakeReport } from './keepAwakeReport'
+import { installCreationAutoVersion } from './creationAutoVersion'
 import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
 import { applyUiFonts } from './uiFont'
@@ -69,6 +70,8 @@ try {
   installMultiWindow()
   // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
   installKeepAwakeReport()
+  // 造物里的项目:不管在哪个 Space 跑的 agent,一轮跑完宿主都存一版(git 版本历史)。
+  installCreationAutoVersion()
   // 丝滑光标(默认关;设置→外观开关)。
   installSmoothCaret()
   // 视口滚动锁:页面本身永不该滚;滚起来就弹回去(见 viewportLock.ts 的病理与实测)。

@@ -68,6 +68,7 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   { name: '/retry', key: 'retry', zh: '重跑上一条用户消息', en: 'Re-run the last user message', surfaces: ['tui', 'desktop'] },
   { name: '/edit', key: 'edit', zh: '编辑最近一条消息并重跑（$EDITOR）', en: 'Edit the last message and re-run ($EDITOR)', surfaces: ['tui'] },
   { name: '/delete', key: 'delete', zh: '删除最近一轮对话', en: 'Delete the last turn', surfaces: ['tui'] },
+  { name: '/queue', key: 'queue', arg: '[clear]', zh: '查看排队项：运行中发的消息与 /compact 等命令排到本轮结束后依次执行（/queue clear 清空）', en: 'Show queued items: messages and commands like /compact sent while running run in order after this turn (/queue clear to empty)', surfaces: ['tui'] },
   { name: '/stop', key: 'stop', zh: '停止当前运行', en: 'Stop the current run', surfaces: ['desktop'] },
 
   // ── 运行配置 ──────────────────────────────────────────────────────────

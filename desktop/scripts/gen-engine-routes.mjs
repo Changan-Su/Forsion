@@ -201,6 +201,16 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/icon': [D, 'project icon write'],
   'GET /agent/project-context/icon': [A, 'project icon'],
   'DELETE /agent/project-context/icon': [D, 'project icon write'],
+  // PROJECT 详情「Git」页:写仓库、跑提交钩子、信任仓库自带的可执行配置、带凭据推送 —— 只许本机
+  'POST /agent/project-context/git/init': [D, 'git repository write'],
+  'POST /agent/project-context/git/trust': [D, 'trusts repo-provided executable git config'],
+  'POST /agent/project-context/git/commit': [D, 'git commit (runs repository hooks)'],
+  'POST /agent/project-context/git/branch': [D, 'git repository write'],
+  'POST /agent/project-context/git/push': [D, 'git push with local credentials'],
+  'POST /agent/project-context/git/pending': [D, 'may run trusted repo filters (trust=true)'],
+  'POST /agent/project-context/git/message': [D, 'spends model quota; may run trusted repo filters'],
+  'GET /agent/git-settings': [A, 'read Settings → Git'],
+  'PUT /agent/git-settings': [D, 'engine config.json write'],
 
   // ── plugins.ts —— 除渲染助手外整组本机 ──
   'GET /agent/plugins': [D, 'engine plugins are local-only'],
