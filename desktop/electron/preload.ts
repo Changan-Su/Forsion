@@ -7,6 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
+import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
@@ -73,12 +74,12 @@ const api = {
     return () => ipcRenderer.removeListener('inbox:open', listener)
   },
   // P1-K3:远程会话待批的系统通知被点击 → 主窗打开那条会话(main 进程 approvalDelivery → webContents.send('approval:open'))
-  onApprovalOpen: (cb: (p: { sessionId: string }) => void): (() => void) => {
+  onApprovalOpen: (cb: (p: ApprovalOpenPayload) => void): (() => void) => {
     const listener = (_e: unknown, p: { sessionId?: unknown } | null): void => {
       if (typeof p?.sessionId === 'string' && p.sessionId) cb({ sessionId: p.sessionId })
     }
-    ipcRenderer.on('approval:open', listener)
-    return () => ipcRenderer.removeListener('approval:open', listener)
+    ipcRenderer.on(APPROVAL_OPEN_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(APPROVAL_OPEN_CHANNEL, listener)
   },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
   unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),

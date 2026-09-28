@@ -8,7 +8,7 @@
  *   bodyOf 改用 preview → S5 红;escalate 去掉「按剩下最老一条重新计时」→ 「A 先答、B 才等 10s」红。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { createApprovalDelivery, ESCALATE_AFTER_MS, ESCALATE_COOLDOWN_MS, RENOTIFY_AFTER_MS, type ApprovalDeliveryDeps, type PendingPromptWire } from './approvalDelivery'
+import { createApprovalDelivery, engineFromBackend, ESCALATE_AFTER_MS, ESCALATE_COOLDOWN_MS, RENOTIFY_AFTER_MS, type ApprovalDeliveryDeps, type PendingPromptWire } from './approvalDelivery'
 import { mtFor } from './mainI18n'
 
 const SID = '9f40ad71-5e6c-4d8f-9021-3c4d5e6f7081'
@@ -364,5 +364,64 @@ describe('投收件箱', () => {
     h.last().push({ type: 'added', rev: 'b:2', item: item({ remote: null }) }); await flush()
     await h.c.advance(ESCALATE_AFTER_MS * 3)
     expect(h.posts).toEqual([])
+  })
+})
+
+describe('engineFromBackend(main.ts 的引擎接线)', () => {
+  function fakeBackend() {
+    let st: { state: string; url: string | null } = { state: 'stopped', url: null }
+    const cbs = new Set<(s: { state: string }) => void>()
+    return {
+      b: {
+        getStatus: () => st,
+        getToken: () => 'engine-local-tok',
+        onStatus: (cb: (s: { state: string }) => void) => { cbs.add(cb); return () => { cbs.delete(cb) } },
+      },
+      set: (next: typeof st) => { st = next; for (const cb of [...cbs]) cb(next) },
+      listeners: () => cbs.size,
+    }
+  }
+
+  it('只有 ready 才给地址(启动中 / 崩了 / 停了 → null = idle);令牌恒为本机引擎令牌;onStatus 二值化、可退订', () => {
+    const f = fakeBackend()
+    const e = engineFromBackend(f.b)
+    expect(e.getEngine()).toEqual({ url: null, token: 'engine-local-tok' })
+    const seen: boolean[] = []
+    const off = e.onEngineStatus((r) => seen.push(r))
+    f.set({ state: 'starting', url: null })
+    f.set({ state: 'ready', url: 'http://127.0.0.1:4555' })
+    expect(e.getEngine()).toEqual({ url: 'http://127.0.0.1:4555', token: 'engine-local-tok' })
+    f.set({ state: 'crashed', url: 'http://127.0.0.1:4555' }) // 非 ready 就算还留着 url 也不用
+    expect(e.getEngine().url).toBeNull()
+    expect(seen).toEqual([false, true, false])
+    off()
+    expect(f.listeners()).toBe(0)
+  })
+
+  it('接进 createApprovalDelivery:引擎没就绪不连;ready 事件一来就订 {url}/agent/approvals/stream,带本机引擎令牌', async () => {
+    const f = fakeBackend()
+    const urls: string[] = []
+    const auths: string[] = []
+    const d = createApprovalDelivery({
+      ...engineFromBackend(f.b),
+      unitCreds: () => null,
+      t: (k) => k,
+      notify: () => null,
+      openSession: () => {},
+      log: () => {},
+      fetch: (async (url: string, init: RequestInit = {}) => {
+        urls.push(url)
+        auths.push((init.headers as Record<string, string>).Authorization)
+        return new Response(new ReadableStream({ start() { /* 挂住 */ } }), { status: 200 })
+      }) as unknown as typeof fetch,
+    })
+    d.start()
+    await flush()
+    expect(urls).toEqual([])
+    f.set({ state: 'ready', url: 'http://127.0.0.1:4555' })
+    await flush()
+    expect(urls).toEqual(['http://127.0.0.1:4555/agent/approvals/stream'])
+    expect(auths).toEqual(['Bearer engine-local-tok'])
+    d.stop()
   })
 })

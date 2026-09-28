@@ -47,7 +47,8 @@ import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
 import { createTray, refreshTrayMenu } from './tray'
 import { initMainLocale, mt, setMainLocale, UI_LOCALE_PREF_KEY } from './mainI18n'
-import { createApprovalDelivery } from './approvalDelivery' // P1-K3
+import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
+import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
 import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
 import { readThemesDir, seedDefaultThemes } from './themes'
@@ -811,21 +812,28 @@ let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 // P1-K3:远程来源 run 的待批 → 系统通知(点击打开会话,通知上不放「批准」);60s 没人答 → 经 unit-hub 投收件箱给手机。逻辑全在 approvalDelivery.ts。
+// e2e 钩子双闸(非打包 + 显式 FORSION_E2E_APPROVAL_DELIVERY=1,同 FORSION_UNIT_AUTO_PAIR 口径;打包版 isPackaged 恒 true → 天然失效):
+// chat-events 台架是外部模式(桩引擎),这条订阅本该 idle —— 钩子让它改订 TANGU_BACKEND_URL,并把真 Notification 挂到
+// globalThis.__forsionE2E,台架据此读 pending()、在真通知上 emit('click') 走完「点击 → approval:open → 打开会话」整链。
+const approvalE2E = !app.isPackaged && process.env.FORSION_E2E_APPROVAL_DELIVERY === '1' && process.env.TANGU_BACKEND_URL
+  ? { engineUrl: process.env.TANGU_BACKEND_URL, notifications: [] as Array<{ n: Notification; closed: boolean }> } : null
 const approvalDelivery = createApprovalDelivery({
-  getEngine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
-  onEngineStatus: (cb) => backend.onStatus((st) => cb(st.state === 'ready')),
+  ...(approvalE2E ? { getEngine: () => ({ url: approvalE2E.engineUrl, token: '' }), onEngineStatus: () => () => {} } : engineFromBackend(backend)),
   unitCreds: () => (unitHost?.status().connected && unitHostPairing
     ? { cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '', unitId: unitHostPairing.unitId, secret: unitHostPairing.secret } : null),
   t: mt,
   notify: (o) => {
     if (!Notification.isSupported()) return null
     const n = new Notification({ title: o.title.slice(0, 200), body: o.body.slice(0, 300), timeoutType: 'never' })
+    const rec = { n, closed: false }
+    approvalE2E?.notifications.push(rec)
     n.show()
-    return { close: () => { try { n.close() } catch { /* 已收走 */ } }, onClick: (cb) => { n.on('click', cb) } }
+    return { close: () => { rec.closed = true; try { n.close() } catch { /* 已收走 */ } }, onClick: (cb) => { n.on('click', cb) } }
   },
-  openSession: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('approval:open', { sessionId }) },
+  openSession: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
   log: (m) => console.log(m),
 })
+if (approvalE2E) (globalThis as Record<string, unknown>).__forsionE2E = { approvalDelivery, notifications: approvalE2E.notifications }
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
 let unitTunnelPrefix = ''
 /** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,

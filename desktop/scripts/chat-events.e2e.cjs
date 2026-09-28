@@ -11,6 +11,7 @@
  */
 const fs = require('fs')
 const os = require('os')
+const { execFileSync } = require('child_process')
 const path = require('path')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
@@ -84,7 +85,8 @@ async function main() {
     // -ApplePersistenceIgnoreState:强杀过的 Electron 下次启动先弹「重新打开窗口」模态框,firstWindow 等不到(台架纪律)
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
+    // FORSION_E2E_APPROVAL_DELIVERY:主进程 approvalDelivery 的 e2e 钩子(双闸,仅非打包):外部模式下改订桩的待批流、暴露 pending() 与真通知(场景 K3e–h)
+    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_E2E_APPROVAL_DELIVERY: '1' },
   })
 
   try {
@@ -795,6 +797,51 @@ async function main() {
     const gone = await win.evaluate(() => ({ trays: document.querySelectorAll('[data-approval-tray]').length, text: document.body.innerText.includes('部署完成') }))
     check('K3d 另一端先答(approval_result.by)→ 卡离开托盘、run 接着跑完;本端没发任何兑现请求',
       gone.trays === 0 && gone.text && !stub.seen.approvals.some((a) => a.approvalId === 'k3a'), JSON.stringify(gone))
+
+    // ── 场景 K3e–h(主进程送达整链,评审补):桩的 /agent/approvals/stream 上架一条远程 + 一条本机待批 →
+    //    主进程 approvalDelivery(钩子改订桩)只为远程那条弹**真** Electron 系统通知;在那个真通知对象上 emit('click')
+    //    → main.ts openSession → approval:open → preload → bootstrap 订阅 → openSessionFromApproval:从收件箱 Space 切回 Tangu、
+    //    打开那条会话;对方先答(removed)→ 通知关。缺哪一环(main.ts 闭包 / 门控 / 频道名 / 渲染层订阅)这里都红。
+    const k3Pending = () => app.evaluate(() => (globalThis.__forsionE2E?.approvalDelivery.pending() || []).map((i) => i.id)).catch(() => [])
+    const k3Notes = () => app.evaluate(() => (globalThis.__forsionE2E?.notifications || []).map((r) => ({ title: r.n.title, body: r.n.body, closed: r.closed }))).catch(() => [])
+    const k3Now = new Date().toISOString()
+    stub.pushPrompt({ id: 'apv_k3e_remote', kind: 'approval', runId: 'r-k3e', sessionId: 's2', sessionTitle: '手机发起的远程会话', tool: 'run_bash', localOnly: false,
+      remote: { via: 'tunnel', callerUnit: K3_UNIT, callerKind: 'phone', callerName: 'Pixel 9' }, createdAt: k3Now })
+    stub.pushPrompt({ id: 'apv_k3e_local', kind: 'approval', runId: 'r-k3e-l', sessionId: 's1', sessionTitle: '端到端会话', tool: 'write_file', localOnly: false, remote: null, createdAt: k3Now })
+    let k3ids = []
+    for (let i = 0; i < 40 && k3ids.length < 2; i++) { k3ids = await k3Pending(); if (k3ids.length < 2) await win.waitForTimeout(250) }
+    check('K3e 主进程订到本机待批流:远程、本机两条都进了 approvalDelivery.pending()',
+      k3ids.includes('apv_k3e_remote') && k3ids.includes('apv_k3e_local'), JSON.stringify(k3ids) + ` streams=${stub.seen.promptStreams || 0}`)
+    const k3n = await k3Notes()
+    check('K3f 只为远程那条弹系统通知:标题带调用方设备名,正文带会话名与工具名,不含命令',
+      k3n.length === 1 && k3n[0].title.includes('Pixel 9') && k3n[0].body.includes('手机发起的远程会话') && k3n[0].body.includes('run_bash') && !k3n[0].closed,
+      JSON.stringify(k3n))
+    // 真 macOS 通知截图(DESIGN §8 / 规格 §8「需要真机」):屏幕录制权限或通知权限不在时拿到的是没有横幅的桌面 —— 人工看图判定,不据此断言。
+    if (process.platform === 'darwin' && process.env.K3_NOTIF_SHOT) {
+      await win.waitForTimeout(1500)
+      try { execFileSync('screencapture', ['-x', process.env.K3_NOTIF_SHOT]) } catch (e) { console.log(`(screencapture 失败:${e.message})`) }
+    }
+    // 先离开 Tangu Space(收件箱 Space 没有聊天主区),点通知应当切回来
+    const inboxSlot = win.locator('.rb-slot[data-id="space:inbox"] .rb-space').first()
+    if (await inboxSlot.count().catch(() => 0)) await inboxSlot.click().catch(() => {})
+    await win.waitForTimeout(1200)
+    const activeS2 = () => win.evaluate(() => {
+      const row = [...document.querySelectorAll('.t2s-srow.active')].find((r) => (r.textContent || '').includes('手机发起的远程会话'))
+      return !!row && !!row.offsetParent
+    }).catch(() => false)
+    const k3Before = await activeS2()
+    await app.evaluate(() => { const list = globalThis.__forsionE2E?.notifications || []; list[list.length - 1]?.n.emit('click') })
+    let k3Opened = false
+    for (let i = 0; i < 30 && !k3Opened; i++) { await win.waitForTimeout(300); k3Opened = await activeS2() }
+    check('K3g 点系统通知 → approval:open → 切回 Tangu Space 并打开那条会话', !k3Before && k3Opened, `before=${k3Before} after=${k3Opened}`)
+    await win.screenshot({ path: process.env.K3_OPENED_SHOT || '/tmp/k3-notification-opened.png' }).catch(() => {})
+    stub.removePrompt('apv_k3e_remote', 'approved', { via: 'tunnel', callerUnit: K3_UNIT, callerName: 'Pixel 9' })
+    let k3Closed = false
+    for (let i = 0; i < 20 && !k3Closed; i++) { await win.waitForTimeout(250); k3Closed = (await k3Notes())[0]?.closed === true }
+    check('K3h 对方先答(流里 removed)→ 系统通知收回', k3Closed && !(await k3Pending()).includes('apv_k3e_remote'), '')
+    stub.removePrompt('apv_k3e_local', 'rejected')
+    await win.locator('.t2s-srow', { hasText: '端到端会话' }).first().click().catch(() => {}) // 后面的场景在第一个会话里跑
+    await win.waitForTimeout(1200)
 
     // ── 场景 E:custom 规则编辑器(H2)。此前这套规则只能手写 config.json。
     // 钉三件:入口只在选了 custom 时出现 / 打开时把服务端已有规则读进来 / 保存发出的 PUT 是编辑后的内容。

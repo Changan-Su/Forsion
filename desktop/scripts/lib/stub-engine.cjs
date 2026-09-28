@@ -53,7 +53,12 @@ async function startStubEngine(data = {}) {
     // P1-K3:GET /agent/approvals/pending 的会话计数(会话列表「等你处理」点);改完调 setPending() 换 rev。
     pendingSessions: data.pendingSessions || [],
     pendingRev: 'stub:0',
+    // P1-K3:GET /agent/approvals/stream 的条目(与引擎 routes/approvals.ts wireOf 同形:不含 preview / 参数);pushPrompt / removePrompt 改。
+    prompts: data.prompts || [],
   };
+  const promptStreams = new Set(); // 挂着的 /agent/approvals/stream 响应
+  let promptSeq = 0;
+  const promptFrame = (f) => { for (const r of promptStreams) { try { r.write(`data: ${JSON.stringify(f)}\n\n`) } catch { /* 已断 */ } } };
   const runs = new Map(); // runId -> events
   const open = new Map(); // runId -> 挂住的 SSE 响应(等审批/询问)
 
@@ -162,6 +167,17 @@ async function startStubEngine(data = {}) {
       if (u.searchParams.get('rev') === state.pendingRev) return json({ rev: state.pendingRev, unchanged: true });
       return json({ rev: state.pendingRev, sessions: state.pendingSessions });
     }
+    // P1-K3:本机待批流(桌面主进程 approvalDelivery 订阅):快照 → added / removed;15s 一次 `: hb`(对方 45s 读空闲看门狗)。
+    if (p === '/agent/approvals/stream' && req.method === 'GET') {
+      seen.promptStreams = (seen.promptStreams || 0) + 1;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      const hb = setInterval(() => { try { res.write(': hb\n\n') } catch { /* 已断 */ } }, 15_000);
+      promptStreams.add(res);
+      req.on('close', () => { clearInterval(hb); promptStreams.delete(res); });
+      res.write(': open\n\n');
+      res.write(`data: ${JSON.stringify({ type: 'snapshot', rev: `stub-p:${promptSeq}`, items: state.prompts })}\n\n`);
+      return;
+    }
     if (/^\/agent\/runs\/[^/]+\/approvals\/[^/]+$/.test(p)) {
       const b = await body();
       seen.approvals.push({ approvalId: p.split('/').pop(), runId: p.split('/')[3], ...b });
@@ -243,7 +259,19 @@ async function startStubEngine(data = {}) {
     script: (events) => queue.push(events),
     /** P1-K3:换一份待批计数(rev 随之前进,客户端下一轮拉到整份)。 */
     setPending: (sessions) => { state.pendingSessions = sessions; state.pendingRev = `stub:${Number(state.pendingRev.split(':')[1]) + 1}`; },
-    close: () => { for (const o of open.values()) { try { o.res.end() } catch { /* ignore */ } } server.close(); },
+    /** P1-K3:待批流上架一条(item 与 wireOf 同形),推 added 帧。 */
+    pushPrompt: (item) => { state.prompts = [...state.prompts, item]; promptFrame({ type: 'added', rev: `stub-p:${++promptSeq}`, item }); },
+    /** P1-K3:待批流下架一条(对方先答 / 中止),推 removed 帧。 */
+    removePrompt: (id, outcome = 'approved', by) => {
+      const it = state.prompts.find((x) => x.id === id);
+      state.prompts = state.prompts.filter((x) => x.id !== id);
+      promptFrame({ type: 'removed', rev: `stub-p:${++promptSeq}`, id, sessionId: it?.sessionId || '', outcome, ...(by ? { by } : {}) });
+    },
+    close: () => {
+      for (const o of open.values()) { try { o.res.end() } catch { /* ignore */ } }
+      for (const r of promptStreams) { try { r.end() } catch { /* ignore */ } }
+      server.close();
+    },
   };
 }
 

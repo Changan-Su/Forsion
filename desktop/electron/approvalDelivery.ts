@@ -75,6 +75,22 @@ export interface ApprovalDelivery {
   pending(): PendingPromptWire[]
 }
 
+/** main.ts 的引擎接线(抽出来单测):只有托管引擎 ready 才给地址 —— 外部模式 / 启动中 / 崩了一律 null = idle
+ *  (远程会话只在托管模式可用);onStatus 二值化成 ready ↔ 非 ready。 */
+export function engineFromBackend(b: {
+  getStatus(): { state: string; url: string | null }
+  getToken(): string
+  onStatus(cb: (st: { state: string }) => void): () => void
+}): Pick<ApprovalDeliveryDeps, 'getEngine' | 'onEngineStatus'> {
+  return {
+    getEngine: () => {
+      const st = b.getStatus()
+      return { url: st.state === 'ready' ? st.url : null, token: b.getToken() }
+    },
+    onEngineStatus: (cb) => b.onStatus((st) => cb(st.state === 'ready')),
+  }
+}
+
 /** 远程待批多久没人答就投收件箱。 */
 export const ESCALATE_AFTER_MS = 60_000
 /** 同一会话两次投递的最小间隔。 */
