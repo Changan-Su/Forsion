@@ -40,6 +40,16 @@ describe('locked 包的渲染半身跟主进程开关走', () => {
     expect(usePluginStore.getState().activeIds).not.toContain('forsion-extend')
   })
 
+  it('别的窗口拨了开关(storage 事件 → syncDisabledPreferences):locked 包不跟着拆装、也不把「开」写回 localStorage', async () => {
+    env.sources = [src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false })]
+    await usePluginStore.getState().loadExternal()
+    expect(usePluginStore.getState().activeIds).toContain('forsion-extend')
+    localStorage.setItem(DISABLED_KEY, JSON.stringify(['forsion-extend'])) // 设置浮窗那边 disable() 写下的
+    usePluginStore.getState().syncDisabledPreferences()
+    expect(disabledNow()).toContain('forsion-extend')
+    expect(usePluginStore.getState().activeIds).toContain('forsion-extend')
+  })
+
   it('对照:普通插件照旧认 localStorage 的「关」', async () => {
     localStorage.setItem(DISABLED_KEY, JSON.stringify(['third']))
     usePluginStore.getState().syncDisabledPreferences()

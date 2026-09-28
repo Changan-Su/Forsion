@@ -68,10 +68,12 @@ export function remainingPercent(
   remainingValue: unknown,
   usedPercentValue: unknown,
 ): number | null {
-  const limit = Number(limitValue)
+  // null / 空串按缺失算:Number(null) === 0 会把「没给 remaining」当成剩 0、走不到下面的已用百分比回退(与 Extend quota.ts 的 toNum 同口径)
+  const num = (v: unknown): number => (v == null || v === '' ? NaN : Number(v))
+  const limit = num(limitValue)
   if (!Number.isFinite(limit) || limit < 0) return null // -1 = unlimited
   if (limit === 0) return 0
-  const remaining = Number(remainingValue)
+  const remaining = num(remainingValue)
   if (Number.isFinite(remaining)) return Math.max(0, Math.min(100, (remaining / limit) * 100))
   // 兼容只返回旧 percent 字段的宿主；percent 的语义是「已用」。
   const usedPercent = Number(usedPercentValue)

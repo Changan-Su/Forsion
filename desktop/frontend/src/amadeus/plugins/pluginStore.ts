@@ -1570,8 +1570,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     syncDisabledPreferences() {
       const disabledIds = readDisabled()
       set({ disabledIds })
-      for (const id of [...get().activeIds]) if (disabledIds.includes(id)) teardown(id)
-      for (const plugin of get().plugins) if (plugin.locked || !disabledIds.includes(plugin.id)) applyPref(plugin.id)
+      // locked 包(Forsion Extend)的开关在主进程(bundleOff),不跟 localStorage:别的窗口(设置浮窗就是另一个窗口)拨了它,
+      // 本窗口按自己手里旧的 bundleOff 先拆再装、再把「开」写回 localStorage,两窗来回翻。它的开关到重启才生效,本窗口不跟着拆装。
+      const locked = new Set(get().plugins.filter((p) => p.locked).map((p) => p.id))
+      for (const id of [...get().activeIds]) if (disabledIds.includes(id) && !locked.has(id)) teardown(id)
+      for (const plugin of get().plugins) if (!plugin.locked && !disabledIds.includes(plugin.id)) applyPref(plugin.id)
     },
 
     toggle(id) {
