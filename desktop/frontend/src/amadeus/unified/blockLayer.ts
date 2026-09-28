@@ -1384,6 +1384,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const onCtxMenu = (e: MouseEvent): void => {
           const view = viewRef
           if (!view) return
+          // 只读实例(分享页/收件箱/Muse 预览)不接管右键:原生菜单(复制/查词)照旧,编辑块菜单
+          // 不出现 —— 与 show() 不给把手同一口径(B-02:此前菜单里的「删除/转换」真的会改文档)。
+          if (!view.editable) return
           const a = pickBlockAt(view, { x: e.clientX, y: e.clientY })
           if (!a || !NodeSelection.isSelectable(a.node)) return
           e.preventDefault()
