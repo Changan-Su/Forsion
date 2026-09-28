@@ -50,6 +50,8 @@ import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { findEmbedBlock } from './shareBridge'
+import { propagateNoteRenames } from '@amadeus-shared/propagateNoteRenames'
+import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
 import { createCloudHttp, is404, is409, HttpError } from './cloudHttp'
 import { startCloudEvents } from './cloudEvents'
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
@@ -684,10 +686,44 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     }
   }
 
+  // ---- 改名 / 移动之后的全库 [[链接]] 重写(评审 G2-04;桌面 = 主进程 vaultHandlers.propagateRenames)----
+  // 三端行为此前不一致:桌面改名会重写引用,web 只做纯移动 → 所有引用断链、点进去新建一篇空笔记。
+  // 判定照 shared/rewriteNoteRefs;写走本桥自己的比对交换写(writeTextFile + base,与编辑器同一条 per-path 队列,
+  // 盘上刚被编辑器 / 别的设备写过就按现文重算,不盲盖)。自己写的 SSE 被回声抑制吃掉 → 开着这些笔记的编辑器
+  // 由这里 fireExternal 叫它们回灌(桌面那边是 notifyAll(externalChange))。没能改写的 → 提示,绝不静默吞。
+  // ⚠️ 必须在 rename/move 的队列任务**之外**调用:任务占着新旧路径的 key,里面再 writeTextFile(newPath) = 自锁。
+  // ponytail: 全库逐篇 GET(无批量读端点),与桌面「朴素全库读扫」同一量级;嫌慢的正解是服务端 /move 带 rewriteLinks。
+  const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[]): Promise<void> => {
+    const res = await propagateNoteRenames(
+      {
+        read: async (p) => {
+          try {
+            return (await getFile(p)).content
+          } catch (e) {
+            if (is404(e)) return null
+            throw e
+          }
+        },
+        write: (p, text, base) => bridge.writeTextFile(p, text, { base }),
+      },
+      pairs,
+      pagesBefore,
+    )
+    for (const p of res.rewritten) fireExternal(p)
+    toastRenameRewriteFailed(res.failed.map((f) => f.path))
+  }
+  /** 文件夹改名 / 移动 → 树下每一页一对 old→new(引用重写按页粒度进行,同桌面 folderPairs)。 */
+  const folderPairs = (pages: string[], oldFolder: string, newFolder: string): Record<string, string> => {
+    const pre = `${oldFolder}/`
+    const out: Record<string, string> = {}
+    for (const p of pages) if (p.startsWith(pre)) out[p] = `${newFolder}/${p.slice(pre.length)}`
+    return out
+  }
+
   // ===========================================================================
   // AmadeusApi 实现
   // ===========================================================================
-  return {
+  const bridge: AmadeusApi = {
     openVault: () => openCloud(),
     restoreVault: () => openCloud(),
 
@@ -772,8 +808,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       })
     },
 
-    renamePage: (oldPath, newName, manifest: PageManifest, contents) =>
-      enqueue(
+    renamePage: (oldPath, newName, manifest: PageManifest, contents) => {
+      let pagesBefore: string[] | null = null // 引用重写要的「操作前」页表(G2-04),须在移动前取
+      return enqueue(
         // 新旧两个 key 都占位;新名要先算 —— 与任务体内保持同一清洗逻辑。
         [oldPath, sanitizedSiblingPath(oldPath, newName, '页面名不能为空')],
         async () => {
@@ -783,6 +820,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             return { newPath: oldPath, page: await fetchAndParse(oldPath) }
           }
           const tree = await fetchTree(true)
+          pagesBefore = tree.pages
           if (allTreePaths(tree).includes(newPath) || tree.folders.includes(newPath)) throw new Error('目标页面已存在')
           // v3 单文件:先把在途编辑落到旧路径(重命名是显式用户动作 → force,桌面同款「无条件落盘再移动」)。
           const content = compile(manifest, contents)
@@ -797,10 +835,15 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           migrateSeq(oldPath, newPath, moved.seq)
           invalidateTree()
           rememberPage(newPath)
-          const page = await fetchAndParse(newPath)
-          return { newPath, page }
+          return { newPath, page: null as LoadedPage | null }
         },
-      ),
+      ).then(async (r) => {
+        if (r.page) return { newPath: r.newPath, page: r.page }
+        // 先重写再取页(桌面同序):自链接的改写也进返回值。队列任务之外调用(见 propagateRenames 注释)。
+        if (pagesBefore) await propagateRenames({ [oldPath]: r.newPath }, pagesBefore)
+        return { newPath: r.newPath, page: await fetchAndParse(r.newPath) }
+      })
+    },
 
     // 外部改动 reconcile:v3 单文件,重载即是全部(服务端即真源)。
     reconcilePage: async (pagePath) => {
@@ -950,13 +993,15 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         invalidateTree()
       }),
 
-    movePage: (pagePath, destFolder) =>
-      enqueue([pagePath], async () => {
+    movePage: (pagePath, destFolder) => {
+      let pagesBefore: string[] | null = null // G2-04 引用重写的「操作前」页表(只有笔记才要)
+      return enqueue([pagePath], async () => {
         await ensureVault()
         const fileName = pageFileName(pagePath)
         const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
         const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
         if (newPath === pagePath) return pagePath
+        if (newPath.endsWith('.md')) pagesBefore = (await fetchTree(true)).pages
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: pagePath, to: newPath })
@@ -968,7 +1013,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         invalidateTree()
         if (newPath.endsWith('.md')) rememberPage(newPath)
         return newPath
-      }),
+      }).then(async (newPath) => {
+        if (newPath !== pagePath && pagesBefore) await propagateRenames({ [pagePath]: newPath }, pagesBefore)
+        return newPath
+      })
+    },
 
     createFolder: async (parentFolder, name) => {
       await ensureVault()
@@ -992,6 +1041,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const parent = dirnamePosix(folderPath)
       const newPath = parent ? `${parent}/${clean}` : clean
       if (newPath === folderPath) return folderPath
+      const pagesBefore = (await fetchTree(true)).pages // G2-04 引用重写的「操作前」页表
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: folderPath, newName: clean })
@@ -1004,6 +1054,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         rememberPage(`${r.path}${lastLoadedPage.slice(folderPath.length)}`)
       }
       invalidateTree()
+      await propagateRenames(folderPairs(pagesBefore, folderPath, r.path), pagesBefore)
       return r.path
     },
 
@@ -1023,6 +1074,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
       if (dst === src || dst.startsWith(`${src}/`)) throw new Error('不能移动到自身内部')
+      const pagesBefore = (await fetchTree(true)).pages // G2-04 引用重写的「操作前」页表
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: dst })
@@ -1035,6 +1087,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         rememberPage(`${r.path}${lastLoadedPage.slice(src.length)}`)
       }
       invalidateTree()
+      await propagateRenames(folderPairs(pagesBefore, src, r.path), pagesBefore)
       return r.path
     },
 
@@ -1423,11 +1476,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }),
 
     // 同目录纯重命名(不落 v3、外来 .md 不被收编 —— move 是纯移动,服务端不重写内容)。
-    renamePageFile: (oldPath, newBaseName) =>
-      enqueue([oldPath, sanitizedSiblingPath(oldPath, newBaseName, '笔记名不能为空')], async () => {
+    renamePageFile: (oldPath, newBaseName) => {
+      let pagesBefore: string[] | null = null // G2-04 引用重写的「操作前」页表,须在移动前取
+      return enqueue([oldPath, sanitizedSiblingPath(oldPath, newBaseName, '笔记名不能为空')], async () => {
         await ensureVault()
         const newPath = sanitizedSiblingPath(oldPath, newBaseName, '笔记名不能为空')
         if (newPath === oldPath) return oldPath
+        pagesBefore = (await fetchTree(true)).pages
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })
@@ -1438,7 +1493,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         migrateSeq(oldPath, newPath, moved.seq)
         invalidateTree()
         return newPath
-      }),
+      }).then(async (newPath) => {
+        // 队列任务之外调用:任务占着 [oldPath, newPath],里面 writeTextFile(newPath) 会自锁(见 propagateRenames)。
+        if (newPath !== oldPath && pagesBefore) await propagateRenames({ [oldPath]: newPath }, pagesBefore)
+        return newPath
+      })
+    },
 
     // ponytail: 云端只做移动(服务端 move 保文件 id);桌面版的 title 同步 + 全库引用重写暂缺,
     // 裸名 ![[库名]] 引用靠服务端 basename 兜底仍可解析,带路径引用会断 —— 要补齐做服务端 renameDb 端点。
@@ -1464,6 +1524,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         return { newPath, rewrittenPages: [] }
       }),
   }
+  return bridge
 }
 
 /** 同目录改名的路径清洗(镜像 electron ipc.ts:剥路径分隔符、去 .md 后缀、空名报错)。 */
