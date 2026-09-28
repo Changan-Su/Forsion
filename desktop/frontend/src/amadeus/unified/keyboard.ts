@@ -235,6 +235,48 @@ const enterKeepIndent: Command = (state, dispatch) => {
   return true
 }
 
+/** 已勾选待办上回车:新项一律**未勾选**(K-07,Notion/Obsidian 同)。PM 的 splitListItem 行中拆分走
+ *  node.copy()、行尾拆分不传 itemAttrs 时也复制原项 —— 两条都会把 checked:true 带给新项。这里照常用它拆,
+ *  再把**空出来的那一项**改回未勾选;嵌套项同理(只看最内层)。空项回车仍由 enterEmptyListItem 脱出。
+ *  「空出来的那一项」通常是光标所在的新项;唯一例外是非空项的行首回车 —— 文字整条跟着光标下移,
+ *  上面留下的空项才是新的,已完成的那条内容不能因为多了一行就被翻回未完成。这一格直接在上方插一个
+ *  未勾选的空项(结果与 splitListItem 相同)。
+ *  ⚠️ 插完要把 DOM 选区原样重设一次:Chrome 在「光标所在节点之前插入兄弟节点」后,Selection 对象报告的
+ *  位置(仍在原文字行首)与真正插字的位置(上面那个新空项)分叉 —— 实测紧接着打的字落进上面的空项。
+ *  PM 自己对这类问题(源码注释 #710/#973)只在光标所在节点被改写时才强制重设,这一格漏了。 */
+const enterTaskItem: Command = (state, dispatch, view) => {
+  const { $from, empty } = state.selection
+  const li = listItemDepth($from)
+  if (li == null || $from.node(li).attrs.checked !== true) return false
+  const listItem = state.schema.nodes.list_item
+  if (!listItem) return false
+  if (empty && li === $from.depth - 1 && $from.index(li) === 0 && $from.parentOffset === 0 && $from.parent.content.size > 0) {
+    const fresh = listItem.createAndFill({ ...$from.node(li).attrs, checked: false })
+    if (!fresh) return false
+    if (!dispatch) return true
+    dispatch(state.tr.insert($from.before(li), fresh).scrollIntoView())
+    const sel = view ? (view.root as Document).getSelection?.() : null
+    if (sel && sel.rangeCount) {
+      const range = sel.getRangeAt(0)
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }
+    return true
+  }
+  if (!dispatch) return splitListItem(listItem)(state)
+  let out: Transaction | null = null
+  if (!splitListItem(listItem)(state, (t) => { out = t })) return false
+  const tr = out as Transaction | null
+  if (!tr) return false
+  const $n = tr.selection.$from
+  const nli = listItemDepth($n)
+  if (nli != null && $n.node(nli).attrs.checked === true) {
+    tr.setNodeMarkup($n.before(nli), undefined, { ...$n.node(nli).attrs, checked: false })
+  }
+  dispatch(tr)
+  return true
+}
+
 const enterCmd: Command = chain(
   enterFoldedHeading,
   enterHeadingToParagraph,
@@ -243,6 +285,7 @@ const enterCmd: Command = chain(
   enterEmptyListItem,
   enterFoldedListItem,
   enterSplitIntoChild,
+  enterTaskItem,
   enterKeepIndent,
 )
 

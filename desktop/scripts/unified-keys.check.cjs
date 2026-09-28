@@ -42,7 +42,7 @@ const shape = (page) => page.evaluate(() => {
   const v = window.__upage.probe.view()
   const out = []
   const walk = (n, depth) => n.forEach((c) => {
-    let label = c.type.name + (c.type.name === 'heading' ? c.attrs.level : '')
+    let label = c.type.name + (c.type.name === 'heading' ? c.attrs.level : '') + (c.attrs.checked != null ? (c.attrs.checked ? '[x]' : '[ ]') : '')
     if (c.isTextblock) out.push('  '.repeat(depth) + label + ':' + JSON.stringify(c.textContent))
     else if (c.isLeaf) out.push('  '.repeat(depth) + label)
     else { out.push('  '.repeat(depth) + label); walk(c, depth + 1) }
@@ -68,6 +68,24 @@ const caretIn = (page, type, { nth = 0, atStart = false } = {}) => page.evaluate
   v.focus()
   return hit
 }, { type, nth, atStart })
+/** 光标放进第一个含 text 的文本块:偏移 = text 在块内的起点 + off(缺省 = text 末尾)。 */
+const caretAtText = (page, text, off = null) => page.evaluate(({ text, off }) => {
+  const v = window.__upage.probe.view()
+  let hit = null
+  v.state.doc.descendants((n, p) => {
+    if (hit != null) return false
+    if (n.isTextblock && n.textContent.includes(text)) {
+      const i = n.textContent.indexOf(text)
+      hit = p + 1 + i + (off == null ? text.length : off)
+      return false
+    }
+    return true
+  })
+  const S = v.state.selection.constructor
+  v.dispatch(v.state.tr.setSelection(S.near(v.state.doc.resolve(hit))))
+  v.focus()
+  return hit
+}, { text, off })
 const lastWrite = (page) => page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : null })
 async function typeSeq(page, seq) {
   for (const ch of seq) {
@@ -553,6 +571,39 @@ async function main() {
       check('B13 标题被外部改名 → 该处记忆作废、不误折别处;列表项记忆照旧', h7 === '子项', h7)
       await pg3.close()
       await ctx.close()
+    }
+
+    // ── 波次 2 keys 包 ──────────────────────────────────────────────────────────────
+    // K-07:已勾选待办上回车,新项一律未勾选(行尾 / 行中 / 嵌套);行首回车时文字随光标下移,
+    //       已完成的那条仍勾着,上面空出的新项不勾。
+    if (want('K07')) {
+      for (const [name, md, text, off, expect, disk] of [
+        ['行尾', '- [x] 已完成\n- [ ] 未完成\n', '已完成', null,
+          'bullet_list / list_item[x] / paragraph:"已完成" / list_item[ ] / paragraph:"X" / list_item[ ] / paragraph:"未完成"',
+          /^- \[x\] 已完成\n- \[ \] X\n- \[ \] 未完成\n$/],
+        ['行中拆分', '- [x] 甲乙\n', '甲乙', 1, 'bullet_list / list_item[x] / paragraph:"甲" / list_item[ ] / paragraph:"X乙"',
+          /^- \[x\] 甲\n- \[ \] X乙\n$/],
+        ['嵌套项行尾', '- [ ] 父\n    - [x] 子已完成\n', '子已完成', null,
+          'bullet_list / list_item[ ] / paragraph:"父" / bullet_list / list_item[x] / paragraph:"子已完成" / list_item[ ] / paragraph:"X"',
+          /^- \[ \] 父\n {2}- \[x\] 子已完成\n {2}- \[ \] X\n$/],
+        // 行首回车 = 上方新空项(enter-semantics B1),光标随文字留在原项;已完成的内容仍勾着。
+        // 同时钉住「紧接着打的字落在原项」—— Chrome 在光标节点前插兄弟后会把字插进上面的空项(见 enterTaskItem)。
+        ['行首', '- [x] 甲乙\n', '甲乙', 0, 'bullet_list / list_item[ ] / paragraph:"" / list_item[x] / paragraph:"X甲乙"',
+          /^- \[ \][^\n]*\n- \[x\] X甲乙\n$/],
+        ['未勾选对照', '- [ ] 未完\n', '未完', null, 'bullet_list / list_item[ ] / paragraph:"未完" / list_item[ ] / paragraph:"X"',
+          /^- \[ \] 未完\n- \[ \] X\n$/],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text, off)
+        await page.waitForTimeout(120)
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('X')
+        await page.waitForTimeout(1300)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const w = await lastWrite(page)
+        check(`K07 已勾选待办${name}回车:新项未勾选`, s === expect && disk.test(w || ''), `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
     }
   } finally {
     await browser.close()
