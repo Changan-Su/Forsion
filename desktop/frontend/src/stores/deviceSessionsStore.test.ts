@@ -101,6 +101,21 @@ describe('roster', () => {
   })
 })
 
+describe('phone not registered yet (K8: registration only happens when you first pick a computer)', () => {
+  it('lists nothing through the relay (no lazy registration); ready caps still read as online', async () => {
+    vi.stubGlobal('window', { tangu: { mobile: true, cloudWeb: true, unitsList: async () => ({ status: 200, json: { units: roster } }), unitSelf: async () => ({ registered: false, unitId: null, name: null }) } })
+    roster = [unit(MAC)]
+    await S.useDeviceSessions.getState().refresh()
+    expect(calls).toHaveLength(0)
+    expect(S.useDeviceSessions.getState().selfRegistered).toBe(false)
+    expect(statusOf(MAC)).toBe('ready')
+    roster = [unit(MAC, { caps: { engine: 'stopped' } })]
+    await S.useDeviceSessions.getState().refresh({ force: true })
+    expect(statusOf(MAC)).toBe('engineStopped')
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('per-device lists and status (D6)', () => {
   it('lists a ready computer through the proxy, newest first, with limit and app_id', async () => {
     roster = [unit(MAC)]

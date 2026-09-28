@@ -19,7 +19,7 @@ import { useApp } from './appStore'
 import { openSession } from '../sessionNav'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { bindSession, bindingConflict, engineFetch, isUnitIdShape, locationOf, noteUnitName, sameRef, targetForRef, withLocation } from '../services/engine/targets'
-import { describeDevice, statusFromError, type DeviceStatus, type ProbeResult, type RefusalDetail } from '../services/deviceStatus'
+import { capsSaysReady, describeDevice, statusFromError, type DeviceStatus, type ProbeResult, type RefusalDetail } from '../services/deviceStatus'
 import { noteDeviceProbe, probeOfError, resetDeviceMarks, useDeviceMarks } from '../services/deviceMarks'
 import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { classify } from '../services/engine/health'
@@ -50,6 +50,9 @@ interface DeviceSessionsState {
   byUnit: Record<string, DeviceEntry>
   /** 最近一次整轮刷新完成的时刻(runLocationStore 订阅它做「默认位置」的对账)。 */
   refreshedAt: number
+  /** 这台手机有没有登记成设备(K8 原生身份):false = 还没登记 → 不经中继拉任何一台的会话(那会触发懒登记,而 K8 承诺
+   *  「登记只在你第一次选电脑时发生」);null = 这一端没有这个概念(桌面 / 没有原生身份的 web 手机形态)。 */
+  selfRegistered: boolean | null
   refreshRoster(): Promise<UnitInfo[] | null>
   /** periodic = 前台 30s 的定时刷新:上次拉到的是终局态(调用方身份取不到 / 设备已移除 / 凭据被拒)的那台不再自动打(R-32),
    *  等用户动作(开侧栏 / 回前台 / 开选择器)再试。 */
@@ -59,17 +62,19 @@ interface DeviceSessionsState {
 
 const EMPTY_ENTRY: DeviceEntry = { sessions: [], fetchedAt: null, loading: false }
 
-/** 本机的设备 id(手机 = 原生身份;桌面 = unitHost 配对)。拿不到 = null(名册里就不排除任何一台)。 */
-async function selfUnitId(): Promise<string | null> {
-  try {
-    const s = await window.tangu?.unitSelf?.()
-    if (s?.unitId) return s.unitId.toLowerCase()
-  } catch { /* 没有原生身份 */ }
+/** 本机的设备 id 与登记状态(手机 = 原生身份;桌面 = unitHost 配对)。id 拿不到 = null(名册里就不排除任何一台)。 */
+async function selfInfo(): Promise<{ id: string | null; registered: boolean | null }> {
+  if (typeof window.tangu?.unitSelf === 'function') {
+    try {
+      const s = await window.tangu.unitSelf()
+      return { id: s?.unitId ? s.unitId.toLowerCase() : null, registered: !!s?.registered }
+    } catch { /* 读不到原生身份:按未知处理 */ }
+  }
   try {
     const h = await window.tangu?.unitHostStatus?.()
-    if (h?.unitId) return h.unitId.toLowerCase()
+    if (h?.unitId) return { id: h.unitId.toLowerCase(), registered: null }
   } catch { /* 不是桌面 */ }
-  return null
+  return { id: null, registered: null }
 }
 
 /** 名册行 → 只留能跑会话的电脑(kind 缺席 = 老名册 = 电脑;手机没有引擎)、不是本机、id 形状对。 */
@@ -102,6 +107,7 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
   units: null,
   byUnit: {},
   refreshedAt: 0,
+  selfRegistered: null,
 
   refreshRoster: async () => {
     if (!rosterAvailable() || !window.tangu?.unitsList) return null
@@ -113,10 +119,11 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
     } catch { /* 名册拉不到:保留上一份 */ }
     if (gen !== get().gen) return null
     if (!listed) return get().units
-    const units = runnableDesktops(listed, await selfUnitId())
+    const self = await selfInfo()
+    const units = runnableDesktops(listed, self.id)
     if (gen !== get().gen) return null
     for (const u of units) noteUnitName(unitRef(u.id), u.name)
-    set({ units })
+    set({ units, selfRegistered: self.registered })
     return units
   },
 
@@ -135,7 +142,7 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
   },
 
   reset: () => {
-    set((s) => ({ gen: s.gen + 1, units: null, byUnit: {}, refreshedAt: 0 }))
+    set((s) => ({ gen: s.gen + 1, units: null, byUnit: {}, refreshedAt: 0, selfRegistered: null }))
     resetDeviceMarks()
   },
 }))
@@ -151,6 +158,8 @@ async function fetchDevice(u: UnitInfo, gen: number, force: boolean, periodic = 
   const cur = useDeviceSessions.getState().byUnit[id]
   if (periodic && terminalProbe(useDeviceMarks.getState().probes[id])) return // R-32:终局态不自动重试
   if (!u.online) { patchEntry(id, { sessions: [], loading: false }); return }
+  // 手机还没登记:不经中继打任何一台(会触发懒登记);组头只按名册显示,行 = 空(见 statusOfUnit / 分组的提示)
+  if (useDeviceSessions.getState().selfRegistered === false) { patchEntry(id, { sessions: [], loading: false }); return }
   if (u.capsLive && u.caps?.engine && u.caps.engine !== 'ready') { patchEntry(id, { sessions: [], loading: false }); return }
   if (!force && cur?.fetchedAt && Date.now() - cur.fetchedAt < DEVICE_LIST_FRESH_MS) return
   const t = targetForRef(unitRef(id))
@@ -220,7 +229,10 @@ function syncInjected(): void {
 export function statusOfUnit(u: UnitInfo, now = Date.now()): { status: DeviceStatus; refusal?: RefusalDetail } {
   const m = useDeviceMarks.getState()
   const id = u.id.toLowerCase()
-  return describeDevice(u, m.probes[id] ?? null, m.sticky[id] ?? null, now)
+  const d = describeDevice(u, m.probes[id] ?? null, m.sticky[id] ?? null, now)
+  // 手机还没登记、没探过:按名册自报的引擎态显示(同 K8 弹层的 capsReady),不显示永远的「正在连接」
+  if (d.status === 'checking' && useDeviceSessions.getState().selfRegistered === false && capsSaysReady(u)) return { status: 'ready' }
+  return d
 }
 
 /** 按 id 找名册里的电脑(没拉过 / 不在名册 → null)。 */

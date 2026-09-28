@@ -51,6 +51,7 @@ registerMessages({
   'devstatus.long.callerBlocked': { zh: '那台电脑不允许这台手机运行会话，请在它的「设置 › 远程会话」中调整', en: "That computer doesn't let this phone run sessions. Change it in Settings › Remote sessions there" },
   'sidebar.device.label': { zh: '{name} 上的会话', en: 'Sessions on {name}' },
   'sidebar.device.empty': { zh: '还没有会话', en: 'No sessions yet' },
+  'sidebar.device.pickFirst': { zh: '在「在哪运行」里选过这台电脑后，这里会显示它的会话', en: 'Pick this computer under Run on to see its sessions here' },
   'sidebar.device.menu': { zh: '更多操作', en: 'More actions' },
 })
 
@@ -120,6 +121,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   useDeviceMarks((s) => s.probes)
   useDeviceMarks((s) => s.sticky)
   const injected = useApp((s) => s.sessions)
+  const selfRegistered = useDeviceSessions((s) => s.selfRegistered)
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renaming, setRenaming] = useState<{ unitId: string; id: string } | null>(null)
@@ -225,7 +227,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
                     )}
                   </SidebarRow>
                 ))}
-                {status === 'ready' && !rows.length && <div className="t2d-empty">{t('sidebar.device.empty')}</div>}
+                {status === 'ready' && !rows.length && <div className="t2d-empty">{t(selfRegistered === false ? 'sidebar.device.pickFirst' : 'sidebar.device.empty')}</div>}
               </div>
             </AnimatedCollapse>
           </div>

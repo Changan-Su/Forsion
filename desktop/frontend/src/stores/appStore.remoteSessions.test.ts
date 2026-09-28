@@ -119,7 +119,7 @@ describe('② creating on a computer: the draft never carries phone-local keys (
       newChatWs: { key: '/Users/mac/proj', name: 'proj', kind: 'local', path: '/Users/mac/proj' },
       newChatCfg: { engineId: 'claude-code', engineModelId: 'x', verifyCommand: 'npm test', extraRoots: ['/phone/docs'], soloAgentSlug: 'a', teamSlug: 't', workspaceProject: 'Tangu' } as any,
     })
-    await useApp.getState().send('hi')
+    await useApp.getState().send('hi', [])
     const post = calls.find((c) => c.method === 'POST' && c.url === `${UNIT}/agent/sessions`)
     expect(post).toBeTruthy()
     const init = JSON.parse(post!.body!).agent_config
@@ -157,7 +157,7 @@ describe('③ sending in a Mac session: the run carries no phone Amadeus root / 
       configBySession: { 's-mac': { execMode: 'host', cwd: '/Users/mac/proj' } },
       activeId: 's-mac',
     })
-    await useApp.getState().send('hello', undefined, undefined, undefined, undefined, 's-mac')
+    await useApp.getState().send('hello', [], undefined, undefined, undefined, 's-mac')
     const run = calls.find((c) => c.method === 'POST' && c.url === `${UNIT}/agent/runs`)
     expect(run).toBeTruthy()
     const cfg = JSON.parse(run!.body!).agent_config
@@ -178,7 +178,7 @@ describe('④ refused create on a computer', () => {
       return { status: 200, body: {} }
     }
     useApp.setState({ newChatWs: { key: '/Users/mac/proj', name: 'proj', kind: 'local', path: '/Users/mac/proj' } })
-    expect(await useApp.getState().send('hi')).toBe(false)
+    expect(await useApp.getState().send('hi', [])).toBe(false)
     const sticky = useDeviceMarks.getState().sticky[U]
     expect(sticky?.code).toBe('REMOTE_SESSIONS_OFF')
     expect(describeDevice({ online: true, caps: { engine: 'ready' }, capsLive: true }, { ok: true }, sticky).status).toBe('remoteOff')
