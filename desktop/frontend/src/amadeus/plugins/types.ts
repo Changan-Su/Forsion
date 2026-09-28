@@ -756,10 +756,35 @@ export interface PluginAccount {
   subscribe(listener: (status: PluginAccountStatus) => void): () => void
 }
 
+/** An entry in the note editor's selection toolbar "AI ▾" menu (2026-09-28+, review G3-07).
+ *
+ * Shown under a "Plugins" heading when the user has text selected in a v4 note. `run` receives the
+ * selection and returns the markdown to propose; the host shows it in the **same preview panel** as the
+ * built-in AI actions (Replace / Insert below / Discard) — nothing is written to the note until the user
+ * confirms, so a plugin can never silently rewrite a note. Return '' to propose nothing. Typical body:
+ * `return (await ctx.tangu.complete({ prompt: 'Turn this into a checklist', selection: cx.markdown })).text`.
+ * The host validates the return value like slash `run` (string, no control characters). */
+export interface SelectionActionContribution {
+  id: string
+  /** Menu label (already in the user's language — pick with `ctx.getLocale?.()` if you ship both). */
+  title: string
+  run(cx: {
+    /** Plain text of the selection. */
+    text: string
+    /** The selection serialized as markdown (keeps bold, links, list markers…). */
+    markdown: string
+    /** Vault-relative path of the note. */
+    pagePath: string
+  }): string | Promise<string>
+}
+
 export interface PluginContext {
   account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
+  /** Add an entry to the selection toolbar's "AI ▾" menu (see SelectionActionContribution). The result goes
+   *  through the host's preview + confirm, never straight into the note. Revoked on disable / reload. */
+  registerSelectionAction(action: SelectionActionContribution): void
   registerCommand(command: CommandContribution): void
   registerTheme(theme: ThemeContribution): void
   /** Contribute a font to 设置 → 外观 → 字体. Returns a disposer; the host also revokes it on
@@ -935,6 +960,13 @@ export interface PluginContext {
      *  - 返回 `{ ok:false, error }` 而不抛:Agent 不存在、后端没连上、送出失败。
      *  旧宿主没有:`ctx.tangu?.startChat?.(…)`,缺席时插件自己退化(把提示词复制到剪贴板之类)。 */
     startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string }): Promise<import('./tanguSeam').TanguStartChatResult>
+    /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
+     *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
+     *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
+     *  不当指令)。`onDelta` 流式回调;`signal` 可取消。模型缺省 = 主区聊天当前模型。返回的是**待插入的 markdown**,
+     *  写进笔记请走 `registerSelectionAction`(宿主预览确认)或 slash `run`,别绕过用户直接写盘。
+     *  插件被停用时在飞的请求会被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.complete?.(…)`。 */
+    complete?(req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }>
   }
   /** Agent Desk 伴随面(2026-09-19+,**只在有 Agent Desk 的宿主上存在** —— 桌面 Tangu;web / 移动端 / 纯 Amadeus 壳
    *  整个没有 `ctx.desk`)。往聊天右侧的 Agent Desk 挂一块自绘区域,典型用法是跟着 agent 状态做反应的形象。

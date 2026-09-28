@@ -53,7 +53,13 @@ registerMessages({
   'itb.turn.math': { zh: '公式', en: 'Equation' },
   'itb.askTangu': { zh: '问 Tangu', en: 'Ask Tangu' },
   'itb.askTanguTitle': { zh: '把选中的文字带到侧栏对话里问', en: 'Ask about the selection in the side chat' },
+  'itb.ai': { zh: 'AI', en: 'AI' },
+  'itb.aiTitle': { zh: '用 AI 改写选中的文字（先预览，确认后才写入）', en: 'Rewrite the selection with AI (preview first, nothing is written until you confirm)' },
+  'itb.aiPlugins': { zh: '插件', en: 'Plugins' },
 })
+
+/** 「AI ▾」菜单的一项(评审 G3-07):宿主给好当前语言的文案;plugin = 插件经 registerSelectionAction 注册的。 */
+export interface ToolbarAiItem { id: string; label: string; plugin?: boolean }
 
 export type ToolbarAction =
   | 'bold'
@@ -141,6 +147,7 @@ export function InlineToolbar({
   onBg,
   onClose,
   onAsk,
+  ai,
 }: {
   left: number
   /** 选区行上沿(视口 px) */
@@ -159,9 +166,11 @@ export function InlineToolbar({
   onClose: () => void
   /** 「问 Tangu」(评审 G3-04):宿主有侧栏对话时才传;不传 = 不出这个按钮(v3 块 / 整篇宿主 / 无对话的产品)。 */
   onAsk?: () => void
+  /** 「AI ▾」(评审 G3-07):宿主能做正文 AI 时才传;选中一项交给宿主开预览面板。不传 = 不出按钮。 */
+  ai?: { items: ToolbarAiItem[]; onPick: (id: string) => void }
 }) {
   const { t } = useI18n()
-  const [panel, setPanel] = useState<'color' | 'turn' | null>(null)
+  const [panel, setPanel] = useState<'color' | 'turn' | 'ai' | null>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -194,6 +203,12 @@ export function InlineToolbar({
         {onAsk && (
           <>
             <button className="itb-btn itb-ask" title={t('itb.askTanguTitle')} data-act="ask" onMouseDown={down(onAsk)}>{t('itb.askTangu')}</button>
+            {!ai && <span className="itb-sep" />}
+          </>
+        )}
+        {ai && (
+          <>
+            <button className="itb-btn itb-ask" title={t('itb.aiTitle')} data-act="ai" onMouseDown={down(() => setPanel(panel === 'ai' ? null : 'ai'))}>{t('itb.ai')} ▾</button>
             <span className="itb-sep" />
           </>
         )}
@@ -231,6 +246,18 @@ export function InlineToolbar({
             >
               {t(item.labelKey)}
             </button>
+          ))}
+        </div>
+      )}
+
+      {panel === 'ai' && ai && (
+        <div className="itb-panel itb-ai-menu" role="menu" data-testid="itb-ai-menu">
+          {ai.items.filter((it) => !it.plugin).map((it) => (
+            <button key={it.id} className="itb-menu-item" role="menuitem" data-ai={it.id} onMouseDown={down(() => { setPanel(null); ai.onPick(it.id) })}>{it.label}</button>
+          ))}
+          {ai.items.some((it) => it.plugin) && <div className="itb-color-head">{t('itb.aiPlugins')}</div>}
+          {ai.items.filter((it) => it.plugin).map((it) => (
+            <button key={it.id} className="itb-menu-item" role="menuitem" data-ai={it.id} onMouseDown={down(() => { setPanel(null); ai.onPick(it.id) })}>{it.label}</button>
           ))}
         </div>
       )}

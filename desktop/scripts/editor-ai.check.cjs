@@ -3,7 +3,10 @@
 //       宿主没有侧栏对话(探针缺 askInChat)时两处入口都不出现。
 //   B = G3-03 Agent 改了打开着的笔记:归属账本认出是 Tangu 写的 → 装饰 + 胶囊「修改了 N 处 · 逐处查看 · 全部撤回 · 保留」;
 //       别人改的照旧静默回灌;装饰不落盘;「全部撤回」= 一次用户写入(走 CAS 保存、可 Cmd+Z)、跳过用户改过的那处;「保留」零写入。
-// 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。
+//   C = G3-07 正文生成式 AI:工具栏「AI ▾」/ `/ai` / 空行空格(缺省关、IME 守卫)→ 预览面板 → 替换 / 插入下方 / 插入 / 丢弃;
+//       确认前零写入、确认后一个事务写纯 md(可 Cmd+Z);插件 registerSelectionAction 的结果同样只进预览;ctx.tangu.complete 可用。
+// 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
+// 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
 const os = require('os')
@@ -33,6 +36,8 @@ function check(name, ok, detail) {
 async function open(browser, md, flags = '') {
   const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
   page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+  // 按资源条目找模块 URL(见 installProbe)—— 缺省缓冲只有 250 条,dev 模式模块多,晚加载的会被挤掉。
+  await page.addInitScript(() => performance.setResourceTimingBufferSize(100000))
   await page.goto(`${URL}?upage${flags}&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await page.waitForSelector(PM, { timeout: 120000 })
   await page.waitForTimeout(400)
@@ -41,8 +46,8 @@ async function open(browser, md, flags = '') {
 
 /** 装台架假探针(生产在 installEngine 里、早于任何渲染;这里装完补一次同路径 switchFile 让页面按新探针重渲)。
  *  ask=false 模拟「装了探针但没有侧栏对话」(automation-only 档案)。 */
-async function installProbe(page, { ask = true } = {}) {
-  await page.evaluate(async (ask) => {
+async function installProbe(page, { ask = true, complete = false } = {}) {
+  await page.evaluate(async ({ ask, complete }) => {
     // ⚠️ 取页面实际加载的那个 URL:dev 期间改过的模块带 `?t=<HMR 时间戳>`,裸路径 import 会拿到**另一份**模块实例。
     const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/plugins\/tanguSeam\.ts(\?|$)/.test(n))
     const m = await import(url || '/src/amadeus/plugins/tanguSeam.ts')
@@ -53,9 +58,24 @@ async function installProbe(page, { ask = true } = {}) {
       activeSpace: () => 'amadeus',
       subscribe: () => () => {},
       ...(ask ? { askInChat: (text) => window.__asked.push(text) } : {}),
+      ...(complete ? {
+        complete: async (req, opts) => {
+          window.__aiReqs.push(req)
+          if (window.__aiFail) throw new Error(window.__aiFail)
+          const out = window.__aiReply
+          for (const piece of out.match(/[\s\S]{1,4}/g) || []) {
+            await new Promise((r) => setTimeout(r, 25))
+            if (opts?.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+            opts?.onDelta?.(piece)
+          }
+          return { text: out, toolCallText: false }
+        },
+      } : {}),
     })
+    window.__aiReqs = []
+    window.__aiReply = 'Better text.'
     window.__upage.switchFile('Unified.md')
-  }, ask)
+  }, { ask, complete })
   await page.waitForTimeout(300)
 }
 
@@ -291,12 +311,218 @@ async function groupB(browser) {
   }
 }
 
+const panel = (page) => page.evaluate(() => {
+  const el = document.querySelector('[data-testid="inline-ai-panel"]')
+  return el ? { phase: el.getAttribute('data-phase'), preview: el.querySelector('[data-testid="inline-ai-preview"]')?.textContent ?? null, acts: [...el.querySelectorAll('button[data-act]')].map((b) => b.getAttribute('data-act')) } : null
+})
+async function waitPhase(page, phase, ms = 4000) {
+  const t0 = Date.now()
+  while (Date.now() - t0 < ms) {
+    const p = await panel(page)
+    if (p && p.phase === phase) return p
+    await page.waitForTimeout(60)
+  }
+  return panel(page)
+}
+const docText = (page) => page.evaluate(() => { const out = []; window.__upage.probe.view().state.doc.forEach((n) => out.push(n.textContent)); return out })
+async function pickAi(page, id) {
+  await page.click('[data-testid="inline-toolbar"] [data-act="ai"]')
+  await page.waitForTimeout(150)
+  const items = await page.evaluate(() => [...document.querySelectorAll('[data-testid="itb-ai-menu"] [data-ai]')].map((b) => b.getAttribute('data-ai')))
+  const b = await page.$(`[data-testid="itb-ai-menu"] [data-ai="${id}"]`)
+  if (b) {
+    await b.scrollIntoViewIfNeeded() // 菜单有 max-height,插件组在内置动作之后,可能要滚一下
+    const box = await b.boundingBox()
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  }
+  await page.waitForTimeout(150)
+  return items
+}
+
+async function groupC(browser) {
+  const md = '# 周报\n\n完成了登录页改版，写得不太好。\n\n第二段保持不动。\n'
+  // C1 宿主做不了正文 AI(探针缺 complete):工具栏没有「AI ▾」
+  {
+    const page = await open(browser, md)
+    await installProbe(page)
+    await selectText(page, '写得不太好')
+    const tb = await toolbarActs(page)
+    check('C1 探针缺 complete:工具栏没有「AI ▾」', tb.includes('ask') && !tb.includes('ai'), tb.join(','))
+    await page.close()
+  }
+  // C2-C3 AI ▾ → 润色 → 预览(确认前零写入)→ 替换:并进原段落、一次写入、Cmd+Z 回到原文
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await selectText(page, '写得不太好')
+    const tb = await toolbarActs(page)
+    const items = await pickAi(page, 'improve')
+    const p1 = await waitPhase(page, 'done')
+    const req = await page.evaluate(() => window.__aiReqs[0])
+    const w0 = await page.evaluate(() => window.__upage.writes.length)
+    const target = await page.evaluate((PM) => document.querySelector(PM + ' .am-ai-target')?.textContent ?? null, PM)
+    check('C2a 工具栏有「AI ▾」且排在「问 Tangu」之后;菜单含全部内置动作', tb[0] === 'ask' && tb[1] === 'ai' && ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom'].every((a) => items.includes(a)), `${tb.slice(0, 3).join(',')} | ${items.join(',')}`)
+    check('C2b 请求:action=improve、选区、前后文、标题', req && req.action === 'improve' && req.selection === '写得不太好' && /完成了登录页改版/.test(req.before || '') && /第二段/.test(req.after || '') && req.title === 'Unified', JSON.stringify(req))
+    check('C2c 预览完成、给「替换 / 插入下方 / 丢弃」,目标有淡底,确认前零写入', p1 && p1.phase === 'done' && p1.preview === 'Better text.' && ['replace', 'below', 'discard'].every((a) => p1.acts.includes(a)) && target === '写得不太好' && w0 === 0, JSON.stringify({ p1, target, w0 }))
+    await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
+    await page.waitForTimeout(1500)
+    const st = await page.evaluate(() => ({ writes: window.__upage.writes.length, disk: window.__upage.vault.get('Unified.md'), panel: !!document.querySelector('[data-testid="inline-ai-panel"]'), target: !!document.querySelector('.am-ai-target') }))
+    check('C3a 替换:并进原段落(不劈段)、恰好一次写入、落盘纯 md', st.writes === 1 && st.disk === '# 周报\n\n完成了登录页改版，Better text.。\n\n第二段保持不动。\n' && !st.panel && !st.target, JSON.stringify(st))
+    await page.keyboard.press('Meta+z')
+    await page.waitForTimeout(1500)
+    const disk2 = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+    check('C3b 写入是普通用户编辑:Cmd+Z 回到原文', disk2 === md, JSON.stringify(disk2))
+    await page.close()
+  }
+  // C4 丢弃:文档不动、零写入、淡底收掉;C5 插入下方:新段落在原段之后
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await selectText(page, '写得不太好')
+    await pickAi(page, 'shorter')
+    await waitPhase(page, 'done')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(1300)
+    const st = await page.evaluate(() => ({ writes: window.__upage.writes.length, panel: !!document.querySelector('[data-testid="inline-ai-panel"]'), target: !!document.querySelector('.am-ai-target') }))
+    check('C4 Esc 丢弃:零写入、面板与淡底都收掉', st.writes === 0 && !st.panel && !st.target, JSON.stringify(st))
+    // 丢弃后原选区还在(同 Notion);在它上面按下拖动是浏览器原生拖文字,不是重新选 —— 先把光标收起来。
+    await page.evaluate(() => { const v = window.__upage.probe.view(); v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.atEnd(v.state.doc))) })
+    await page.waitForTimeout(100)
+    await selectText(page, '写得不太好')
+    await page.evaluate(() => { window.__aiReply = '补充的一段。' })
+    await pickAi(page, 'longer')
+    await waitPhase(page, 'done')
+    await page.click('[data-testid="inline-ai-panel"] [data-act="below"]')
+    await page.waitForTimeout(1500)
+    const d = await docText(page)
+    check('C5 插入下方:原段不动,新段落紧跟其后', JSON.stringify(d) === JSON.stringify(['周报', '完成了登录页改版，写得不太好。', '补充的一段。', '第二段保持不动。']), JSON.stringify(d))
+    await page.close()
+  }
+  // C6 `/ai`:首项就是 AI(G3-09),回车开面板先问指令 → 生成 → 回车插入;空行被结果替换,落盘纯 md
+  {
+    const page = await open(browser, '# 周报\n\n第一段。\n')
+    await installProbe(page, { complete: true })
+    await page.evaluate(() => { window.__aiReply = '## 下周计划\n\n- 推进支付模块\n- 周三前提测' })
+    await page.evaluate(() => {
+      const v = window.__upage.probe.view()
+      v.focus()
+      v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.atEnd(v.state.doc)))
+    })
+    await page.waitForTimeout(100)
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('/ai', { delay: 20 })
+    await page.waitForTimeout(400)
+    const first = await page.evaluate(() => document.querySelector('.slash-menu [role="menuitem"] .slash-label')?.textContent ?? null)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(300)
+    const p0 = await panel(page)
+    await page.keyboard.type('写下周计划', { delay: 10 })
+    await page.keyboard.press('Enter')
+    const p1 = await waitPhase(page, 'done')
+    const req = await page.evaluate(() => window.__aiReqs[0])
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(1500)
+    const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+    check('C6a `/ai` 首项是 AI,回车开面板(先问一句)', first === 'AI 写作' && p0 && p0.phase === 'ask', `${first} ${JSON.stringify(p0)}`)
+    check('C6b 请求:custom + 指令、无选区、带前文', req && req.action === 'custom' && req.instruction === '写下周计划' && !req.selection && /第一段/.test(req.before || ''), JSON.stringify(req))
+    check('C6c 回车 = 插入:空行被结果替换,落盘纯 md(无残留 /ai)', p1?.phase === 'done' && disk.replace(/\n$/, '') === '# 周报\n\n第一段。\n\n## 下周计划\n\n- 推进支付模块\n- 周三前提测', JSON.stringify(disk))
+    await page.close()
+  }
+  // C7 空行按空格:缺省关(照常打空格);打开后空行空格开面板;输入法组字中的空格不唤起
+  {
+    const page = await open(browser, '# 周报\n\n第一段。\n')
+    await installProbe(page, { complete: true })
+    const toEmptyLine = async () => {
+      await page.evaluate(() => {
+        const v = window.__upage.probe.view()
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.atEnd(v.state.doc)))
+      })
+      await page.waitForTimeout(80)
+      await page.keyboard.press('Enter')
+      await page.waitForTimeout(80)
+    }
+    await toEmptyLine()
+    await page.keyboard.press(' ')
+    await page.waitForTimeout(300)
+    const off = await panel(page)
+    await page.evaluate(async () => {
+      const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/lib\/aiSpaceTrigger\.ts(\?|$)/.test(n))
+      const m = await import(url || '/src/amadeus/lib/aiSpaceTrigger.ts')
+      m.setAiSpaceTriggerEnabled(true)
+    })
+    await toEmptyLine()
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
+    await page.waitForTimeout(80)
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 })
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 })
+    await page.waitForTimeout(200)
+    const ime = await panel(page)
+    await cdp.send('Input.insertText', { text: '你' })
+    await page.waitForTimeout(200)
+    await toEmptyLine()
+    await page.keyboard.press(' ')
+    await page.waitForTimeout(300)
+    const on = await panel(page)
+    const text = await docText(page)
+    check('C7a 缺省关:空行空格照常,不开面板', off == null, JSON.stringify(off))
+    check('C7b 组字中的空格不唤起(输入法守卫)', ime == null && text.includes('你'), `${JSON.stringify(ime)} ${JSON.stringify(text)}`)
+    check('C7c 打开后:空行空格开面板(先问一句),空格没进正文', on && on.phase === 'ask' && text[text.length - 1] === '', `${JSON.stringify(on)} ${JSON.stringify(text)}`)
+    await page.evaluate(async () => {
+      const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/lib\/aiSpaceTrigger\.ts(\?|$)/.test(n))
+      const m = await import(url || '/src/amadeus/lib/aiSpaceTrigger.ts')
+      m.setAiSpaceTriggerEnabled(false)
+    })
+    await page.close()
+  }
+  // C8 插件:registerSelectionAction 进「AI ▾」的插件组,结果只进预览;ctx.tangu.complete 可用(走宿主探针)
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await page.evaluate(() => {
+      window.__ep.loadPlugin(`
+        window.__plugComplete = typeof ctx.tangu?.complete
+        ctx.registerSelectionAction({ id: 'shout', title: '大声说', run: async (cx) => {
+          const r = await ctx.tangu.complete({ prompt: 'shout it', selection: cx.markdown })
+          return '**' + cx.text + '**' + r.text
+        } })
+      `, { id: 'ai-harness' })
+    })
+    await page.waitForTimeout(200)
+    await selectText(page, '写得不太好')
+    const items = await pickAi(page, 'plugin:ai-harness:shout')
+    const p = await waitPhase(page, 'done')
+    const w0 = await page.evaluate(() => window.__upage.writes.length)
+    const req = await page.evaluate(() => window.__aiReqs.at(-1))
+    if (await page.$('[data-testid="inline-ai-panel"] [data-act="replace"]')) await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
+    await page.waitForTimeout(1500)
+    const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+    check('C8a 插件项出现在「AI ▾」、ctx.tangu.complete 已注入并走宿主探针(action=custom)', items.includes('plugin:ai-harness:shout') && (await page.evaluate(() => window.__plugComplete)) === 'function' && req?.action === 'custom' && req?.instruction === 'shout it', `${items.join(',')} ${JSON.stringify(req)}`)
+    check('C8b 插件结果只进预览,确认前零写入;替换后落盘', p?.preview === '**写得不太好**Better text.' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
+    await page.close()
+  }
+  // C9 出错:面板给错误 + 重试,文档不动
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await page.evaluate(() => { window.__aiFail = 'AI 额度已用尽' })
+    await selectText(page, '写得不太好')
+    await pickAi(page, 'fix')
+    const p = await waitPhase(page, 'error')
+    const err = await page.evaluate(() => document.querySelector('[data-testid="inline-ai-panel"] .am-ai-error')?.textContent ?? null)
+    check('C9 出错:给错误原文 + 重试 / 丢弃,零写入', p?.phase === 'error' && err === 'AI 额度已用尽' && p.acts.includes('retry') && (await page.evaluate(() => window.__upage.writes.length)) === 0, JSON.stringify({ p, err }))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
   try {
     if (!only || only.includes('A')) await groupA(browser)
     if (!only || only.includes('B')) await groupB(browser)
+    if (!only || only.includes('C')) await groupC(browser)
   } finally {
     await browser.close()
   }

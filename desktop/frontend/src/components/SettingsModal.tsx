@@ -87,6 +87,7 @@ import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
+import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { ipcErrorText } from '../ipcError'
@@ -350,6 +351,7 @@ export const SettingsModal: React.FC<{
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
+  const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
   const [canvasOverviewZ, setCanvasOverviewZ] = useState<number>(canvasOverviewZoom)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
@@ -1994,6 +1996,7 @@ export const SettingsModal: React.FC<{
                         <SettingsRow label={t('settings.notes.previewLabel')} description={t('settings.notes.previewHint')} control={<SettingsSwitch checked={stored.notesImportPreview !== false} onChange={(on) => void window.tangu!.setConfig({ notesImportPreview: on }).then(setStored)} label={t('settings.notes.previewLabel')} />} />
                         <SettingsRow label={t('settings.notes.upgradeV4Label')} description={t('settings.notes.upgradeV4Hint')} control={<SettingsSwitch checked={stored.notesUpgradeV4 !== false} onChange={(on) => { setUpgradeV4Enabled(on); void window.tangu!.setConfig({ notesUpgradeV4: on }).then(setStored) }} label={t('settings.notes.upgradeV4Label')} />} />
                         <SettingsRow label={t('settings.notes.wikiFilesLabel')} description={t('settings.notes.wikiFilesHint')} control={<SettingsSwitch checked={stored.notesWikiIncludeFiles !== false} onChange={(on) => { setWikiFilesEnabled(on); void window.tangu!.setConfig({ notesWikiIncludeFiles: on }).then(setStored) }} label={t('settings.notes.wikiFilesLabel')} />} />
+                        <SettingsRow label={t('settings.notes.aiSpaceLabel')} description={t('settings.notes.aiSpaceHint')} control={<SettingsSwitch checked={aiSpaceTrigger} onChange={(on) => { setAiSpaceTrigger(on); setAiSpaceTriggerEnabled(on) }} label={t('settings.notes.aiSpaceLabel')} />} />
                         <SettingsRow
                           label={t('settings.notes.canvasDoubleClickFocusLabel')}
                           description={t('settings.notes.canvasDoubleClickFocusHint')}
