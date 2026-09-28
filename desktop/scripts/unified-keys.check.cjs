@@ -1,6 +1,6 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
-// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制)。
+// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制);R-17(块公式多行)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -1056,6 +1056,53 @@ async function main() {
         const v = await view(page), s = await selInfo(page)
         const selOk = how === 'esc' ? s.json === 'node' && s.node === 'heading' : s.json === 'text'
         check(`B04 ${name}`, v === want && selOk, `${v} | sel=${JSON.stringify(s)}`)
+        await page.close()
+      }
+    }
+
+    // R-17:块公式 `$$…$$` 里回车 / Shift+回车 = 公式内换行(段落里的软换行,落盘裸换行),不拆段、不写 `\` 硬换行;
+    //       磁盘上原有的多行公式行末回车同样;/math 光标落在两对 `$$` 之间,/code 后面还有块时光标留在代码块里。
+    if (want('R17')) {
+      const blocks = (page) => page.evaluate((PM) => document.querySelectorAll(PM + ' .math-rendered--block').length, PM)
+      for (const key of ['Enter', 'Shift+Enter']) {
+        const page = await open(browser, '段一\n\n$$\na = b\n$$\n\n段尾\n')
+        await caretAtText(page, 'a = b')
+        await page.keyboard.press(key)
+        await page.keyboard.type('c = d')
+        await caretAtText(page, '段尾')
+        await page.waitForTimeout(1300)
+        const s = await shape(page), w = await lastWrite(page), n = await blocks(page)
+        check(`R17 盘上多行公式行末 ${key}:仍是同一段公式、落盘裸换行、照常渲染`, s === 'paragraph:"段一" / paragraph:"$$\\na = b\\nc = d\\n$$" / paragraph:"段尾"' && w === '段一\n\n$$\na = b\nc = d\n$$\n\n段尾\n' && n === 1, `${s} | ${JSON.stringify(w)} | blocks=${n}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n段尾\n')
+        await caretAtText(page, '段一')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('/math')
+        await page.waitForTimeout(300)
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(200)
+        const at = await page.evaluate(() => { const $f = window.__upage.probe.view().state.selection.$from; return { t: $f.parent.textContent, off: $f.parentOffset } })
+        await page.keyboard.type('x')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('y')
+        await caretAtText(page, '段尾')
+        await page.waitForTimeout(1300)
+        const w = await lastWrite(page)
+        check('R17 /math:光标落在两对 `$$` 之间,接着回车就是公式内换行', at.t === '$$  $$' && at.off === 3 && w === '段一\n\n$$ x\ny $$\n\n段尾\n', `${JSON.stringify(at)} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n段尾\n')
+        await caretAtText(page, '段一')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('/code')
+        await page.waitForTimeout(300)
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(200)
+        const sl = await selInfo(page)
+        check('R17 /code 后面还有块:光标留在新代码块里,不跑进下一段', sl.parent === 'code_block', JSON.stringify(sl))
         await page.close()
       }
     }

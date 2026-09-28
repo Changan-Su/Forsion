@@ -35,6 +35,7 @@ import { tableKeyPlugins } from './tableKeys'
 import { commandsCtx } from '@milkdown/kit/core'
 import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
+import { buildBlockString } from '../blocks/markdown/mathLivePreview'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -289,10 +290,42 @@ const enterTaskItem: Command = (state, dispatch, view) => {
   return true
 }
 
+/** 块公式 `$$…$$` 里按回车 / Shift+回车 = 公式内换行(R-17)。公式在文档里是段落纯文本,实况预览只在**一个文本块内**
+ *  配对 `$$`:回车拆段 = 公式被劈成两半、不再渲染(磁盘上原有的多行公式在行末回车也一样);Shift+回车给的是硬换行,
+ *  落盘成 `\` + 换行,混进 LaTeX 成了控制符。这里插 isInline 的 hardbreak —— 与 remark-line-break 读回来的软换行同形,
+ *  落盘就是裸换行,重开照样是同一段里的多行公式。
+ *  配对口径与 scanMath 的块级分支一致(`$$$` 不起手、代码文本已抹空),只是**空骨架 `$$  $$` 也算** —— `/math`、`$$`+空格
+ *  刚插出来的就是它,第一下回车就得是换行。未闭合的 `$$` 不算(还在打字,回车照常拆段)。 */
+const displayMathSpans = (s: string): Array<[number, number]> => {
+  const out: Array<[number, number]> = []
+  for (let i = 0; ;) {
+    const o = s.indexOf('$$', i)
+    if (o < 0) break
+    if (s[o + 2] === '$') { i = o + 3; continue }
+    const c = s.indexOf('$$', o + 2)
+    if (c < 0) break
+    out.push([o, c + 2])
+    i = c + 2
+  }
+  return out
+}
+const enterInDisplayMath: Command = (state, dispatch) => {
+  const { $from, $to } = state.selection
+  if (!$from.sameParent($to) || !$from.parent.isTextblock || $from.parent.type.spec.code) return false
+  const br = state.schema.nodes.hardbreak
+  if (!br || !$from.parent.textContent.includes('$$')) return false
+  const a = $from.parentOffset
+  const b = $to.parentOffset
+  if (!displayMathSpans(buildBlockString($from.parent)).some(([o, c]) => a >= o + 2 && b <= c - 2)) return false
+  dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+  return true
+}
+
 const enterCmd: Command = chain(
   enterFoldedHeading,
   enterHeadingToParagraph,
   enterOnBlockSelection,
+  enterInDisplayMath,
   enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
   enterEmptyListItem,
   enterFoldedListItem,
@@ -659,6 +692,7 @@ export const keyboardPlugins: MilkdownPlugin[] = [
     keymap({
       Enter: enterCmd,
       'Mod-Enter': modEnterCmd,
+      'Shift-Enter': enterInDisplayMath, // 公式外交回 preset 的硬换行
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
       Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),

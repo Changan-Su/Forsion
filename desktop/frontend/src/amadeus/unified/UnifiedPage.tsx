@@ -558,7 +558,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
    *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
    *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor'): boolean => {
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: { caretBack?: number }): boolean => {
     let done = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
@@ -575,9 +575,12 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       let d = $from.depth
       while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(d - 1).type.name)) d--
       if (d < 1) return
-      /** 落点 = 插入内容的末尾(v3 的 requestSelfFocus('end') 同位):near() 会自己找最近的合法文字位。 */
+      /** 落点 = 插入内容的末尾(v3 的 requestSelfFocus('end') 同位),**向前**找文字位(R-17:向后找会在
+       *  「后面还有块」时落进下一块 —— /code 插完光标跑到下面那段里)。caretBack = 再往回退几格(/math 落在 `$$ | $$`)。 */
       const land = (tr: Transaction, end: number): void => {
-        tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size))))
+        const at = TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size)), -1)
+        const back = opts?.caretBack ?? 0
+        tr.setSelection(back && at.$from.parentOffset >= back ? TextSelection.create(tr.doc, at.from - back) : at)
       }
       // 列表项 / 引用(callout)里的**空行**(B-07):就在这一行原地换成要插的块。此前一律按「整个顶层块空不空」判,
       // 容器永远非空 → 插到整只列表 / 引用之后,原处留下 `-`、`- [ ] <br />`、`>` 空项残渣,callout 里的代码块跑到外面。
@@ -801,7 +804,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       return
     }
     // 整块型(代码/表格/分隔线/公式/[[/按钮):scaffold 本身就是要插的 markdown。
-    insertMd(item.scaffold)
+    // 公式骨架 `$$  $$`:光标落在两对 `$$` 之间(R-17),而不是行尾 —— 否则插完还得往回挪三格才能开写。
+    insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
   }
   applySlashRef.current = applySlash // 交出去的是恒等身份 stableApply,真身逐渲染刷新
 
