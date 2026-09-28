@@ -4,6 +4,7 @@
  *  - 重写走桥自己的比对交换写:写前盘上被别人改过(409)→ 按现文重算再写,对方的字不丢
  *  - 改写过的笔记 fireExternal(自己写的 SSE 被回声抑制吃掉,开着它的编辑器只能靠这一声回灌)
  *  - 写不进去 → 提示(amadeus:toast,error 级),不静默吞
+ *  - (复核 P1)读完之后那篇被别处删了 / 挪进 .trash → 不重建原路径、不另存 recovered,记入失败提示(路径已变)
  * 假服务端按 server/microserver/amadeus 的契约建模:文件 seq 逐文件自增、baseSeq 不符 409 带现文;move 保 seq。
  * 负对照(实跑过):摘掉 renamePageFile 的 `.then(propagateRenames)` → 第 1 条红(A.md 原样、零重写 PUT)。
  */
@@ -22,6 +23,7 @@ const puts: string[] = []
 const toasts: Array<{ text: string; level?: string }> = []
 let beforePut: (path: string) => void = () => {}
 let failPut: (path: string) => boolean = () => false
+let afterGet: (path: string) => void = () => {}
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status })
 const folders = (): string[] => {
@@ -44,6 +46,7 @@ beforeEach(() => {
   files.clear(); puts.length = 0; toasts.length = 0
   beforePut = () => {}
   failPut = () => false
+  afterGet = () => {}
   const data = new Map<string, string>()
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => data.get(k) ?? null,
@@ -79,6 +82,7 @@ beforeEach(() => {
     if (p.endsWith('/file')) {
       const path = url.searchParams.get('path') ?? ''
       const f = files.get(path)
+      afterGet(path)
       return f ? json({ path, kind: 'page', content: f.content, seq: f.seq, hash: 'h', updatedAt: '' }) : json({ detail: 'not found' }, 404)
     }
     if (p.endsWith('/move')) {
@@ -159,6 +163,26 @@ describe('cloud bridge: rename / move rewrites [[links]] vault-wide (G2-04)', ()
     await bridge.renamePageFile('docs/B.md', 'C')
     expect(files.get('notes/A.md')!.content).toBe('x [[C]]\n')
     expect(puts).toEqual(['notes/A.md'])
+  })
+
+  it('复核 P1:读完之后那篇被别处挪进 .trash → 不按旧路径重建、不另存 recovered,点名提示', async () => {
+    seed({ 'notes/A.md': 'x [[B]]\n', 'B.md': 'b\n' })
+    const { bridge } = await boot()
+    let moved = false
+    afterGet = (p) => {
+      if (p !== 'notes/A.md' || moved) return
+      moved = true // 重写刚读完这篇,别的设备把它扔进了回收站
+      const f = files.get('notes/A.md')!
+      files.delete('notes/A.md')
+      files.set('.trash/A.md', f)
+    }
+    await bridge.renamePageFile('B.md', 'C')
+    expect(moved).toBe(true)
+    expect(files.has('notes/A.md')).toBe(false)
+    expect([...files.keys()].filter((k) => /recovered/.test(k))).toEqual([])
+    expect(puts).toEqual([])
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].text).toContain('A')
   })
 
   it('写不进去 → error 级提示点名那篇,不静默吞;改名本身照常生效', async () => {

@@ -688,11 +688,36 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- 改名 / 移动之后的全库 [[链接]] 重写(评审 G2-04;桌面 = 主进程 vaultHandlers.propagateRenames)----
   // 三端行为此前不一致:桌面改名会重写引用,web 只做纯移动 → 所有引用断链、点进去新建一篇空笔记。
-  // 判定照 shared/rewriteNoteRefs;写走本桥自己的比对交换写(writeTextFile + base,与编辑器同一条 per-path 队列,
-  // 盘上刚被编辑器 / 别的设备写过就按现文重算,不盲盖)。自己写的 SSE 被回声抑制吃掉 → 开着这些笔记的编辑器
+  // 判定照 shared/rewriteNoteRefs;写走下面的 updateExisting(比对交换 + 只更新已存在的文件,与编辑器同一条
+  // per-path 队列,盘上刚被编辑器 / 别的设备写过就按现文重算,不盲盖)。自己写的 SSE 被回声抑制吃掉 → 开着这些笔记的编辑器
   // 由这里 fireExternal 叫它们回灌(桌面那边是 notifyAll(externalChange))。没能改写的 → 提示,绝不静默吞。
   // ⚠️ 必须在 rename/move 的队列任务**之外**调用:任务占着新旧路径的 key,里面再 writeTextFile(newPath) = 自锁。
   // ponytail: 全库逐篇 GET(无批量读端点),与桌面「朴素全库读扫」同一量级;嫌慢的正解是服务端 /move 带 rewriteLinks。
+  /** 传播专用写口(G2-04 复核 P1):**只更新已存在的文件**的比对交换写。不能借 writeTextFile —— 读完之后那篇被别处
+   *  删了 / 挪进 .trash,SSE 的 forgetSeq 清掉状态后它按 baseSeq 0 把原路径重建,或走 recovered 另存,还记成「改写成功」。
+   *  这里现取现比:不在了 → 'gone'(路径已变,记入失败清单);内容不是读到的那版 → 交回现文重算;
+   *  PUT 恒带取到的 seq(>0,服务端对不存在的路径只会 409 不会创建),409 就回头重取。 */
+  const updateExisting = (p: string, text: string, base: string): Promise<TextWriteResult | 'gone'> =>
+    enqueue([p], async () => {
+      await ensureVault()
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let f: FileDto
+        try {
+          f = await getFile(p)
+        } catch (e) {
+          if (is404(e)) return 'gone' as const
+          throw e
+        }
+        if (textFingerprint(f.content) !== base) return { ok: false as const, current: f.content }
+        try {
+          await putFile(p, text, f.seq)
+          return { ok: true as const }
+        } catch (e) {
+          if (!is409(e)) throw e // 取完之后别处抢先写了 / 删了:回头重取(删了就是 'gone')
+        }
+      }
+      throw new Error('conflict')
+    })
   const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[]): Promise<void> => {
     const res = await propagateNoteRenames(
       {
@@ -704,7 +729,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             throw e
           }
         },
-        write: (p, text, base) => bridge.writeTextFile(p, text, { base }),
+        write: updateExisting,
       },
       pairs,
       pagesBefore,
@@ -723,7 +748,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // ===========================================================================
   // AmadeusApi 实现
   // ===========================================================================
-  const bridge: AmadeusApi = {
+  return {
     openVault: () => openCloud(),
     restoreVault: () => openCloud(),
 
@@ -1525,7 +1550,6 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         return { newPath, rewrittenPages: [] }
       }),
   }
-  return bridge
 }
 
 /** 同目录改名的路径清洗(镜像 electron ipc.ts:剥路径分隔符、去 .md 后缀、空名报错)。 */
