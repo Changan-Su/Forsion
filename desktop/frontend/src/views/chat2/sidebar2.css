@@ -227,6 +227,16 @@
 .t2sf-file .t2sf-fic { color: var(--text-faint, var(--text-muted)); }
 .t2sf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sf-size { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+/* 行尾动作(M1B:远端会话「本会话的文件」的下载键)。触屏没有右键 / 悬浮 → 常显;度量与色阶同 .t2s-group-add,
+   负外边距把 24px 点击区吃进行的上下内边距,行高不变。 */
+.t2sf-row-act {
+  width: 24px; height: 24px; margin: -3px -2px -3px 0;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border: none; background: transparent; color: var(--text-faint, var(--text-muted));
+  border-radius: var(--radius-sm, 6px); cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.t2sf-row-act:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
 .t2sf-loading { font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); padding: 2.5px 6px; }
 /* 左 30px 不是间距而是对齐常量(= 缩进基准 14 + 图标列偏移 16),与同槽 .t2sf-loading 的内联值一致。 */
 .t2sf-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); padding: 3px 6px 3px 30px; }
