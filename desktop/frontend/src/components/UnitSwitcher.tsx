@@ -29,6 +29,9 @@ import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, useI18n } from '../i18n'
 import { ipcErrorText } from '../ipcError'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
+import { remoteSessionsApi } from '../services/remoteSessionsApi' // P1-K4
+import { SECRET_STORE_INSECURE, type RemoteSessionsView } from '../../../shared/remoteSessions' // P1-K4
+import './remoteSessionsCopy' // P1-K4
 import type { UnitInfo, UnitPairedDevice } from '../types'
 import '../styles/unitSwitcher.css'
 
@@ -146,6 +149,16 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   /** LAN 探针结果(菜单每次展开时重探;true = 该设备的 lanUrl 此刻可达)。 */
   const [lanOk, setLanOk] = useState<Record<string, boolean>>({})
   const [ctxMenu, setCtxMenu] = useState<{ u: UnitInfo; x: number; y: number } | null>(null)
+  /** P1-K4:「允许远程会话」子开关的视图(主进程推送 remoteSessions:changed;没有这座桥的端 = null,不画那一行)。 */
+  const [remoteView, setRemoteView] = useState<RemoteSessionsView | null>(null)
+  useEffect(() => {
+    const api = remoteSessionsApi()
+    if (!api) return
+    let live = true
+    void api.get().then((v) => { if (live) setRemoteView(v) }).catch(() => {})
+    const off = api.onChanged((v) => { if (live) setRemoteView(v) })
+    return () => { live = false; off() }
+  }, [])
 
   // 原 VaultSideSwitch 桌面分支负责的 vaultSide 初始化,随胶囊迁到这里。
   useEffect(() => { if (window.amadeusSync) void initSide() }, [initSide])
@@ -270,6 +283,21 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     })
   }
 
+  /** P1-K4:子开关只在本机改(主进程 IPC 校验发送方);设备凭据没加密时主进程拒绝,提示换成本地化那句。 */
+  const toggleRemoteSessions = (): void => {
+    const api = remoteSessionsApi()
+    if (!api || !remoteView) return
+    guard(async () => {
+      try {
+        setRemoteView(await api.setEnabled(!(remoteView.enabled && remoteView.permitted)))
+      } catch (e) {
+        const msg = ipcErrorText(e)
+        say(msg.includes(SECRET_STORE_INSECURE) ? t('remoteSessions.insecure') : t('remoteSessions.actionFailed', { error: msg }))
+      }
+    })
+  }
+  const remoteOn = !!remoteView && remoteView.enabled && remoteView.permitted
+
   const removePaired = (d: UnitPairedDevice): void => {
     guard(async () => {
       await window.tangu?.unitsPairedRemove?.(d.id)
@@ -368,6 +396,19 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               </button>
               {/* P1-K5:设备凭据降级 / 锁定提示(只在互联开着时才问状态 —— 问状态会判定钥匙串等级) */}
               {hostEnabled && <SecretStorageNotice onChange={() => { void refresh() }} />}
+              {/* P1-K4:父开关 → K5 提示 → 远程会话子开关(INTEGRATION §2.2 脚部顺序);设备凭据没加密时置灰(K5 提示在上面说明原因) */}
+              {hostEnabled && remoteView && (
+                <div className="unitsw-subrow">
+                  <button className="unitsw-hosttoggle unitsw-subtoggle" onClick={toggleRemoteSessions} data-on={remoteOn || undefined}
+                    disabled={!remoteView.permitted} role="switch" aria-checked={remoteOn} data-unitsw-remote="">
+                    <span className="unitsw-foot-label">{t('remoteSessions.switch')}</span>
+                    <span className="unitsw-switch" aria-hidden />
+                  </button>
+                  <button className="unitsw-sublink" onClick={() => { setOpen(false); useApp.getState().openSettings('remote-sessions') }} data-unitsw-remote-settings="">
+                    {t('remoteSessions.openSettings')} ›
+                  </button>
+                </div>
+              )}
               {hostEnabled && (
                 <div className="unitsw-foot-hint">
                   {host?.lanUrl ? t('unit.lanAddr', { addr: host.lanUrl }) : host?.connected ? t('unit.hostConnected') : t('unit.hostStarting')}

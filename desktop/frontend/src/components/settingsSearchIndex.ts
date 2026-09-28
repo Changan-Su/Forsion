@@ -55,6 +55,10 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },
   { id: 'agent-browser', tab: 'browser', anchor: 'agent-browser', labelKey: 'settings.browser.agentBrowser', keywords: '浏览器 browser chrome', needs: ['stored'] },
+  // P1-K4:设置 › 远程会话(只在有主进程 API 的本机列,tab 门控即可)
+  { id: 'remote-sessions-switch', tab: 'remote-sessions', anchor: 'remote-sessions-switch', labelKey: 'remoteSessions.switch', keywords: '远程会话 手机 远程 允许 remote session phone allow' },
+  { id: 'remote-approval-cap', tab: 'remote-sessions', anchor: 'remote-approval-cap', labelKey: 'remoteSessions.cap', keywords: '远程审批档 全自动 审批 remote approval full auto' },
+  { id: 'remote-trusted-devices', tab: 'remote-sessions', anchor: 'remote-trusted-devices', labelKey: 'remoteSessions.trusted', keywords: '信任设备 已允许 撤销 trusted allowed devices revoke' },
   { id: 'computer-history', tab: 'computer-history', anchor: 'computer-history', labelKey: 'settingsmodal.tab.computerHistory', keywords: '电脑历史 活动记录 隐私 排除 暂停 computer history activity privacy recording exclude pause' },
   { id: 'mcp-server', tab: 'advanced', sub: 'a-mcp', labelKey: 'settings.sub.mcpServer', keywords: '对外 端点 endpoint mcp' },
   { id: 'reset-layout', tab: 'advanced', sub: 'a-ui', anchor: 'reset-layout', labelKey: 'settingsmodal.advanced.resetLayout', keywords: '布局 恢复 layout reset' },

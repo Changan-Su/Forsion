@@ -7,6 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
+import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
@@ -91,6 +92,18 @@ const api = {
   secretStorageRetry: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:retry'),
   secretStorageResetUnitPairing: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:resetUnitPairing'),
   secretStorageRelaunch: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:relaunch'),
+  // P1-K4 ── 「允许远程会话」开关 / 信任列表 / 远程会话最高审批档(只在本机改;主进程校验发送方)──
+  remoteSessions: {
+    get: () => ipcRenderer.invoke('remoteSessions:get'),
+    setEnabled: (on) => ipcRenderer.invoke('remoteSessions:setEnabled', on),
+    setMaxApprovalMode: (mode) => ipcRenderer.invoke('remoteSessions:setMaxApprovalMode', mode),
+    revoke: (principal) => ipcRenderer.invoke('remoteSessions:revoke', principal),
+    onChanged: (cb) => {
+      const listener = (_e: unknown, view: RemoteSessionsView): void => cb(view)
+      ipcRenderer.on('remoteSessions:changed', listener)
+      return () => ipcRenderer.removeListener('remoteSessions:changed', listener)
+    },
+  } satisfies RemoteSessionsApi,
   // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
@@ -478,6 +491,8 @@ const AGENT_KEYS = [
   'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
   // P1-K5
   'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
+  // P1-K4
+  'remoteSessions', // 远程会话开关 / 信任 / 审批档上限:只对 agent 后端的 /engine 有意义
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
   'computerHistory', // 电脑历史同理:读者是 agent 工具与 Muse(主进程也只在 agentBackend 下建控制器)
   'reportRunningSessions', // 无 agent 后端就没有 run

@@ -597,7 +597,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     // 只回调用方自己的状态,永不回信任列表;同 /engine 的 authInfo → resolveCaller → callerOf(断言验不过 403,不降级)。
     if ((path === '/unit/remote-access' && req.method === 'GET') || (path === '/unit/remote-access/request' && req.method === 'POST')) {
       const info = authInfo(req)
-      if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      if (!info.ok) { json(res, 401, { detail: 'Not paired', code: 'UNPAIRED' }); return }
       const rc = resolveCaller(req, info)
       if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
       const caller = callerOf(info.via, pairInfo(info), rc.caller)

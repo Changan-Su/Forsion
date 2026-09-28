@@ -124,3 +124,12 @@
 /* 无 Shell 形态(harness / 极端兜底):没有 .shell-work 可 portal → fixed 覆盖,贴 ribbon 缺省宽。
  * 用「父级不是 .shell-work」判形态,portal 正身(.shell-work > .unitrs)不受此条影响。 */
 :not(.shell-work) > .unitrs { position: fixed; left: 44px; }
+
+/* P1-K4 「允许远程会话」子开关(父开关 → K5 提示 → 本行):标签缩进到父开关标签的左缘(9px 内距 + 7px 状态点 + 8px 间距),
+ * 右侧「设置 ›」深链到 设置 › 远程会话。设备凭据没加密时置灰(原因在上面的 K5 提示里)。 */
+.unitsw-subrow { display: flex; align-items: center; gap: 2px; }
+.unitsw-hosttoggle.unitsw-subtoggle { flex: 1; min-width: 0; padding-left: 24px; }
+.unitsw-hosttoggle.unitsw-subtoggle:disabled { cursor: not-allowed; opacity: .48; }
+.unitsw-hosttoggle.unitsw-subtoggle:disabled:hover { background: transparent; }
+.unitsw-sublink { flex: none; padding: 4px 7px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); white-space: nowrap; cursor: pointer; }
+.unitsw-sublink:hover { background: var(--overlay-light); color: var(--text-muted); }

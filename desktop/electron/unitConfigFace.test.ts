@@ -5,6 +5,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { startUnitWeb, type UnitWebDeps } from './unitWeb'
 import { UNIT_CONFIG_RO, UNIT_CONFIG_RW, unitConfigFace } from './unitConfigFace'
 import { UNIT_PREFERENCE_KEYS } from '../shared/unitPreferences'
@@ -14,6 +16,15 @@ describe('unitConfigFace:审批档远端只读', () => {
     expect(UNIT_CONFIG_RW).not.toContain('lastApprovalMode')
     expect(UNIT_CONFIG_RO).toContain('lastApprovalMode')
     for (const k of UNIT_PREFERENCE_KEYS) if (k !== 'lastApprovalMode') expect(UNIT_CONFIG_RW, k).toContain(k)
+  })
+
+  it('P1-K4:远程会话开关 / 审批档上限 / 信任列表的键不在三张表里;设备页垫片也碰不到 remoteSessions', () => {
+    for (const k of ['remoteSessionsEnabled', 'remoteSessions', 'remote', 'maxApprovalMode', 'unitHostEnabled']) {
+      expect(UNIT_PREFERENCE_KEYS as readonly string[], k).not.toContain(k)
+      expect(UNIT_CONFIG_RW, k).not.toContain(k)
+      expect(UNIT_CONFIG_RO, k).not.toContain(k)
+    }
+    expect(readFileSync(join(__dirname, '../../web/src/unitShim.ts'), 'utf8')).not.toMatch(/remoteSessions|maxApprovalMode/)
   })
 
   it('远端 PUT /unit/config 改不动 lastApprovalMode(也改不动连接键),普通偏好照常写回;GET 仍能读到审批档', async () => {
@@ -59,6 +70,10 @@ describe('unitConfigFace:审批档远端只读', () => {
       const got = ((await (await fetch(base, { headers: auth })).json()) as { config: Record<string, unknown> }).config
       expect(got).toMatchObject({ lastApprovalMode: 'readonly', modelId: 'm2', homeDir: '/home/me' })
       expect(got.token).toBeUndefined()
+      // P1-K4:远端想借配置面打开远程会话 / 抬高远程审批档上限 —— 一个字节都不落盘
+      saved.length = 0
+      await fetch(base, { method: 'PUT', headers: auth, body: JSON.stringify({ remoteSessionsEnabled: true, remote: { maxApprovalMode: 'full-auto' }, maxApprovalMode: 'full-auto' }) })
+      expect(saved).toEqual([])
     } finally {
       await web.close()
     }

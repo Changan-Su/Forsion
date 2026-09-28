@@ -1,0 +1,87 @@
+/*
+ * 设置 › 远程会话(RemoteSessionsSettings)。外壳复用 base.css 的 .settings-panel / .settings-control-row / .settings-choice-grid,
+ * 这里只补页内结构;选择器一律挂 .rs-* 前缀,不覆盖 base.css 的同名规则(DESIGN §7.2)。
+ * 字号只用 --ui-font-* 六档;按钮 / 徽标的描边是形状(DESIGN §5),不加阴影。
+ */
+.rs-alert {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-light);
+  color: var(--danger);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* 面板内的说明段:与面板头的正文同一左缘(15px),比描述再退一级颜色。 */
+.rs-note,
+.rs-scope {
+  margin: 0;
+  padding: 0 15px 12px;
+  color: var(--text-faint);
+  font-size: var(--ui-font-caption, 11px);
+  line-height: 1.5;
+}
+.rs-note { color: var(--text-light); }
+.rs-scope { padding-top: 11px; border-top: var(--border-width) solid var(--border); }
+.rs-secrets .secnotice.secnotice-inpanel { margin: 0 15px 12px; }
+
+/* 三档单选:一行三张卡(窄栏改单列,见文件末尾断点)。 */
+.settings-choice-grid.rs-cap-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* 选全自动前的就地确认 / 选定后的常驻警示:同电脑历史清除确认的语汇(染色面 + 圆角,不描边)。 */
+.rs-confirm,
+.rs-warn {
+  display: flex;
+  gap: 10px 14px;
+  margin: 0 15px 15px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-light);
+}
+.rs-confirm { flex-wrap: wrap; align-items: flex-end; }
+.rs-confirm > div:first-child { flex: 1 1 280px; min-width: 0; }
+.rs-warn { align-items: flex-start; color: var(--danger); }
+.rs-warn > svg { flex: 0 0 auto; margin-top: 1px; }
+.rs-confirm strong,
+.rs-warn strong { display: block; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 620; }
+/* 正文用 --text-light:--text-muted 压在染色条上暗色到不了 4.5:1(电脑历史同意条实测过)。 */
+.rs-confirm p,
+.rs-warn p { margin: 3px 0 0; color: var(--text-light); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.rs-ack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--text);
+  font-size: var(--ui-font-meta, 12px);
+  cursor: pointer;
+}
+.rs-ack > input { margin: 0; }
+.rs-confirm-actions { display: flex; gap: 6px; margin-left: auto; }
+.rs-confirm-actions .btn { white-space: nowrap; }
+
+/* 信任列表:行首图标 + 名字(长名字省略),说明里时间单独一行。 */
+.rs-row-title { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; }
+.rs-row-title > svg { flex: 0 0 auto; color: var(--text-faint); }
+.rs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-meta { display: block; margin-top: 2px; }
+.rs-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: var(--border-width) solid var(--overlay-medium);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px);
+  white-space: nowrap;
+}
+
+/* 对齐(放文件末尾,DESIGN §7.2):面板头的动作(开关)与下方行里的控件同一右缘 —— base.css 给带动作的头 10px 右距,行是 15px。 */
+.rs-page .settings-panel-head--actions { padding-right: 15px; }
+
+@media (max-width: 820px) {
+  .settings-choice-grid.rs-cap-grid { grid-template-columns: minmax(0, 1fr); }
+}

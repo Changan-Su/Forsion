@@ -9,6 +9,7 @@
  *   REMOTE_ARGS_OVERRIDE_FORBIDDEN —— 远端答审批时改了参数(400)。
  */
 import { registerMessages, translate } from '../i18n'
+import { REMOTE_CALLER_UNCONFIRMED, REMOTE_SESSIONS_OFF } from '../../../shared/remoteSessions' // P1-K4
 
 registerMessages({
   'unitpage.localOnly': {
@@ -25,6 +26,22 @@ registerMessages({
   },
 })
 
+// P1-K4 ── 「允许远程会话」的会话档闸(unitWeb /engine,码见 shared/remoteSessions.ts):开关关 / 调用方还没在那台电脑上被允许。
+registerMessages({
+  'unitpage.remoteSessionsOff': {
+    zh: '那台电脑没有开启远程会话。可以查看、回答审批和停止任务；要在上面运行任务，请在那台电脑的「设置 › 远程会话」中开启。',
+    en: 'Remote sessions are turned off on that computer. You can still view, answer approvals and stop tasks. To run tasks there, turn on Settings › Remote sessions on that computer.',
+  },
+  'unitpage.remoteCallerUnconfirmed': {
+    zh: '正在等待那台电脑确认。请在那台电脑上点「允许」后再试。',
+    en: 'Waiting for that computer to allow this. Choose Allow there, then try again.',
+  },
+  'unitpage.remoteCallerDenied': {
+    zh: '那台电脑拒绝了这次远程会话请求，10 分钟后可以再次请求。',
+    en: 'That computer declined this remote session request. You can ask again in 10 minutes.',
+  },
+})
+
 export const LOCAL_ONLY_CODE = 'LOCAL_ONLY'
 export const REMOTE_CWD_FORBIDDEN = 'REMOTE_CWD_FORBIDDEN'
 export const REMOTE_ARGS_OVERRIDE_FORBIDDEN = 'REMOTE_ARGS_OVERRIDE_FORBIDDEN'
@@ -37,9 +54,12 @@ const REFUSAL_KEYS: Record<string, string> = {
   [LOCAL_ONLY_CODE]: 'unitpage.localOnly',
   [REMOTE_CWD_FORBIDDEN]: 'unitpage.remoteCwd',
   [REMOTE_ARGS_OVERRIDE_FORBIDDEN]: 'unitpage.remoteArgsOverride',
+  // P1-K4
+  [REMOTE_SESSIONS_OFF]: 'unitpage.remoteSessionsOff',
+  [REMOTE_CALLER_UNCONFIRMED]: 'unitpage.remoteCallerUnconfirmed',
 }
 
-/** 远端拒绝码 → 本地化提示;不是这三种码 → null(调用方照旧用 detail / HTTP 状态)。 */
+/** 远端拒绝码 → 本地化提示;不认得的码 → null(调用方照旧用 detail / HTTP 状态)。 */
 export function remoteRefusalMessage(code: unknown): string | null {
   const key = typeof code === 'string' && Object.prototype.hasOwnProperty.call(REFUSAL_KEYS, code) ? REFUSAL_KEYS[code] : null
   return key ? translate(key) : null
@@ -54,7 +74,7 @@ export async function httpErrorMessage(r: Response): Promise<{ message: string; 
   let j: { code?: unknown; detail?: unknown } | null = null
   try { j = text ? JSON.parse(text) : null } catch { /* 非 JSON */ }
   const code = typeof j?.code === 'string' ? j.code : undefined
-  const mapped = remoteRefusalMessage(code)
+  const mapped = code === REMOTE_CALLER_UNCONFIRMED && (j as { state?: unknown })?.state === 'denied' ? translate('unitpage.remoteCallerDenied') : remoteRefusalMessage(code) // P1-K4:被拒另有一句
   if (mapped) return { message: mapped, code }
   if (typeof j?.detail === 'string' && j.detail) return { message: j.detail, ...(code ? { code } : {}) }
   return { message: text || `HTTP ${r.status}`, ...(code ? { code } : {}) }
