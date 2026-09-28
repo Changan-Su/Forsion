@@ -321,7 +321,13 @@ async function main() {
     check('深色主题下同样出提示', !!(await page.$('.t2-target-health[data-target-health="offline"]')))
     const ph = await page.locator('.t2c-ta').first().getAttribute('placeholder').catch(() => null)
     check('没连上时输入框占位说「等那台连上」(不是本端的「先在设置里连接后端」)', /Studio Mac/.test(ph || ''), String(ph))
+    // 提示说了「恢复连接后会自动继续」:那台回来后必须**不点重试**就自己连上(健康探针退避 ≤ 30s)
     world.setOffline(false)
+    await page.waitForFunction(() => { const s = window.__forsionStore.getState(); return s.connState === 'ok' && s.sessions.some((x) => x.id === 'mac-1') }, null, { timeout: 45_000 }).catch(() => {})
+    const healed = await st(() => ({ conn: window.__forsionStore.getState().connState, ids: window.__forsionStore.getState().sessions.map((s) => s.id) }))
+    check('那台回来后不点重试也自己连上(开机离线 → 自动恢复)', healed.conn === 'ok' && healed.ids.includes('mac-1'), JSON.stringify(healed))
+    await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 5_000 }).catch(() => {})
+    check('自动恢复后连接态提示消失', !(await page.$('.t2-target-health')))
     await page.evaluate(() => { try { localStorage.setItem('forsion_theme', 'light') } catch { /* ignore */ } })
     await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
 

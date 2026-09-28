@@ -237,6 +237,23 @@ describe('setFocusTarget(S2 整端切换)', () => {
     expect(T.targetForRef({ kind: 'unit', unitId: U })).toBeNull()
   })
 
+  it('切过去时那台不在线(可恢复)→ 不点重试,探针转好后自动重连(提示说的「恢复后会自动继续」得是真的)', async () => {
+    let online = false
+    router = (url) => {
+      if (url.startsWith(`${API}/units/`) && !online) return { status: 503, body: { code: 'UNIT_OFFLINE', detail: 'Unit offline' } }
+      if (url.endsWith('/health')) return { status: 200, body: { ok: true } }
+      if (url.startsWith(UNIT) && url.includes('/agent/sessions?archived=false')) return { status: 200, body: { sessions: [sessionRec('mac-1')] } }
+      if (url.includes('/agent/sessions?archived')) return { status: 200, body: { sessions: [] } }
+      return { status: 200, body: {} }
+    }
+    await T.setFocusTarget({ kind: 'unit', unitId: U })
+    expect(useApp.getState().connState).toBe('err')
+    expect(H.healthOf(`unit:${U}`).state).toBe('offline')
+    online = true
+    await vi.waitFor(() => expect(useApp.getState().connState).toBe('ok'), { timeout: 8000, interval: 100 })
+    expect(useApp.getState().sessions.map((s) => s.id)).toEqual(['mac-1'])
+  }, 15_000)
+
   it('设备不在账号下(404 UNIT_NOT_FOUND)→ 提示并切回本端', async () => {
     router = (url) => {
       if (url.startsWith(UNIT)) return { status: 404, body: { code: 'UNIT_NOT_FOUND', detail: 'Unit not found' } }

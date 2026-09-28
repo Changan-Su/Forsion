@@ -17,7 +17,7 @@ import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_
 import * as api from '../services/backendService'
 import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
-import { healthOf, noteHealth, probeTarget, resetHealth, useTargetHealth } from '../services/engine/health'
+import { healthOf, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
 import { ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
 import { unitHostProfile } from '../services/engine/hostFs'
 import '../services/engine/messages'
@@ -1792,6 +1792,14 @@ export const useApp = create<AppState>((set, get) => ({
       if (onUnit && r.verdict === 'gone') {
         get().toast(`${t('engine.target.gone')} · ${t('engine.target.fallbackHome')}`, true)
         void setFocusTarget(HOME_REF).catch(() => {})
+      }
+      // 可恢复的(不在线 / 引擎没起 / 限流 / 网关 5xx):提示说了「恢复连接后会自动继续」就得真的自己连回去 ——
+      // 等这台的健康探针转好(退避探 /health,回前台 / 网络恢复会提前探)再 connect 一次;期间换了焦点 / 又有新的 connect 就作废。
+      if (onUnit && (r.verdict === 'offline' || r.verdict === 'engine-unavailable' || r.verdict === 'rate-limited' || r.verdict === 'transient')) {
+        const key = focusKey()
+        void waitReady(key).then(() => {
+          if (latest() && focusRef().kind === 'unit' && focusKey() === key) void get().connect(get().cfg)
+        }).catch(() => { /* 终局(设备移除 / 身份 / 拒绝)由提示条说明,不自动重连 */ })
       }
       return
     }
