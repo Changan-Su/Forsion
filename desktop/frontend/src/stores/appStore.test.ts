@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '../types'
 import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
 import { useApp, recordToUi, withAmadeusWorkspace, lockSessionMove, unlockSessionMove, type AppState } from './appStore'
+import { agentEditing, resetAgentWriteLedger } from './agentWriteLedger'
 import { usePageStore } from '../amadeus/store/pageStore'
 import '../i18n.generated'
 import { translationValues } from '../i18n'
@@ -213,6 +214,22 @@ describe('appStore.reduceEvent', () => {
     const list = useApp.getState().messagesBySession.s1
     expect(list.length).toBe(1)
     expect(list[0]).toMatchObject({ content: '老引擎的正文', status: 'done', agentId: 'xyra' })
+  })
+
+  it('写类工具的目标路径流出来就登记「Tangu 正在改这篇」,结果回来即撤(评审 G3-05)', () => {
+    resetAgentWriteLedger()
+    const ref = { current: 'a1' } as { current: string }
+    const emit = (type: string, payload: Record<string, unknown> = {}) => {
+      useApp.getState().reduceEvent('s1', 'r1', ref as never, { seq: 1, type, payload } as AgentRunEvent)
+    }
+    emit('tool_stream', { id: 'w1', name: 'write_file', delta: '{"path":"/vault/No' })
+    expect(agentEditing('/vault/Note.md')).toBe(false) // 路径还没流完:不登记半截路径
+    emit('tool_stream', { id: 'w1', name: 'write_file', delta: 'te.md","content":"# T' })
+    expect(agentEditing('/vault/Note.md')).toBe(true)
+    emit('tool_call', { id: 'w1', name: 'write_file', arguments: '{"path":"/vault/Note.md","content":"# T\\n"}' })
+    expect(agentEditing('/vault/Note.md')).toBe(true)
+    emit('tool_result', { id: 'w1', result: 'ok' })
+    expect(agentEditing('/vault/Note.md')).toBe(false)
   })
 
   it('覆盖消息、工具、审批、询问、计划、群聊、用量、转向及子聊天事件', () => {

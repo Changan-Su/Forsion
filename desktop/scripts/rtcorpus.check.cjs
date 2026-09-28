@@ -14,7 +14,7 @@
 //   whitelist 评审附录 A / 拍板表里认定的既定规范化,断言「恰好规范成这个样子」,第二轮必须逐字。红 = exit 1。
 //   stable    首轮允许偏离(修前就有的一次性丢失,另记在残余风险里),但**第二轮必须逐字**(相对首轮落盘)——
 //             专抓「越存越多」(R-01 返修:读写两侧认公式不一致,反斜杠每存翻一倍,首轮看不出)。红 = exit 1。
-//   pending   已知未修、归别的波次/包(R-25 → 0b;R-01 余项 / D-11)。按逐字断言但只记 XFAIL,
+//   pending   已知未修、归别的波次/包(波次 2 起暂空:D-11 / R-01 余项 / D-01 / D-05 均已挪进 verbatim)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
 //             ⚠️ D-18(0b)起**未编辑的顶层块逐字写回原文**:病在序列化器里的条目,EDITHERE 要和病灶放在**同一块**
 //             (`${M} …`),否则逐字回填直接绕过序列化、XPASS 却什么都没修。附录 A 的规范化同理(*_edited 条目)。
@@ -71,7 +71,7 @@ const CASES = [
   { id: 'd18.snake', bucket: V, md: `${M}\n\nsnake_case_var and 5 * 3\n` },
   { id: 'd18.mark_html', bucket: V, md: `${M}\n\nsome <mark>hi</mark> text\n` },
   { id: 'd18.no_trailing_nl', bucket: V, md: `${M}\n\nlast` },
-  { id: 'd18.bom', bucket: P, why: 'D-01(0a 另一包:BOM)', md: `\uFEFF${M}\n\npara\n` },
+  { id: 'd18.bom', bucket: V, why: 'D-01(0a 已修:BOM 归 fm 侧逐字)', md: `\uFEFF${M}\n\npara\n` },
   { id: 'd18.task_upper_X', bucket: V, md: `${M}\n\n- [X] Done\n` },
   // 附录 A 认定的规范化对**被编辑的块**照旧适用(未编辑的块见上面逐字的同名条目)。
   { id: 'd18.emph_underscore_edited', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);强调符统一 `*`(attentionFlanking.ts)', md: `_emph_ and __strong__ ${M}\n`, golden: `*emph* and **strong** ${M}Z\n` }, // 标记放句尾:紧跟光标的空格会被 I-06 换成 NBSP(另一包)
@@ -94,10 +94,17 @@ const CASES = [
   { id: 'i17.kbd_nested_edited', bucket: V, md: `${M} 按 <kbd>a<kbd>b</kbd>c</kbd> 与 <kbd>K</kbd>\n` },
   { id: 'i17.sub_nested_in_strong_edited', bucket: V, md: `${M} x<sub>1 **<sub>2</sub>** 3</sub> 与 y<sup>2<sup>n</sup></sup>\n` },
   { id: 'i17.tags_upper_attr_edited', bucket: V, md: `${M} <KBD>Up</KBD> 与 <kbd class="k">A</kbd>\n` },
-  // `==` 装饰不碰存量 `<mark>`(拍板 #11)。裸 `<mark>` 被写成 `style="background:"` 是另一条(I-16e,不在本包),这里用带色的。
+  // `==` 装饰不碰存量 `<mark>`(拍板 #11)。
   { id: 'i17.mark_untouched_edited', bucket: V, md: `${M} some <mark style="background:#fef3a1">hi</mark> and ==hl== text\n` },
+  // I-16e:被编辑的块里的裸 `<mark>` 写回裸 `<mark>`(修前 `<mark style="background:">`,重开读不回来、高亮永久丢失)。
+  { id: 'i16e.bare_mark_edited', bucket: V, md: `${M} m: <mark>高亮</mark> 与 ==hl== 完\n` },
   { id: 'i17.highlight_list_quote_edited', bucket: V, md: `- ==项== ${M}\n\n> ==引用== 行\n` },
   { id: 'i13.explicit_autolink_edited', bucket: W, why: 'I-13:句中显式 `<url>` 与裸 URL 解析成同一个链接,编辑该块时统一落裸 URL(与整行 `<url>` 同一取舍,links.ts)', md: `${M} see <https://x.com/a> ok\n`, golden: `${M}Z see https://x.com/a ok\n` },
+
+  // ── D-19:纯 CRLF 的笔记按原行尾写回(修前第一次编辑整篇转 LF;多键 fm 的 CRLF/LF 混杂已由 V-01 修掉)──
+  { id: 'd19.crlf_body', bucket: V, md: `${M}\r\n\r\npara one\r\n\r\n- a\r\n- b\r\n` },
+  { id: 'd19.crlf_fm_multi', bucket: V, md: `---\r\ntitle: Hello\r\ntags: [a, b]\r\nstatus: draft\r\n---\r\n${M}\r\n\r\npara one\r\n` },
+  { id: 'd19.crlf_edit_in_list', bucket: V, md: `intro\r\n\r\n- ${M}\r\n- b\r\n\r\n| A | B |\r\n|---|---|\r\n| 1 | 2 |\r\n` },
 
   // ── D-05:编辑**列表里**的字 —— 整只列表重新序列化,列表符与紧凑度必须沿用原文(拍板 #17:记住原标记、写回沿用)──
   { id: 'd05.edit_in_list', bucket: V, md: `- ${M}\n- b\n  - c\n\ntail\n` },
@@ -105,6 +112,9 @@ const CASES = [
   { id: 'd05.edit_plus_nested_star', bucket: V, md: `+ ${M}\n  * b\n+ c\n` },
   { id: 'd05.edit_loose', bucket: V, md: `- ${M}\n\n- b\n` },
   { id: 'd05.edit_nested_ordered', bucket: V, md: `1. ${M}\n   1. y\n2. z\n` },
+  // R-10b / R-10:Obsidian 空待办(`[ ]` 后没字)读成空待办,被编辑的列表里写回 `- [ ] `(修前读成字面 `[ ]`、写成 `- \[ ]`)。
+  { id: 'r10b.empty_tasks_edited', bucket: V, md: `- [ ] ${M}\n- [ ] \n- [x] \n\ntail\n` },
+  { id: 'r10b.empty_task_nospace_edited', bucket: W, why: 'R-10:空待办统一写成 Obsidian 的 `- [ ] `(被编辑的列表里没尾随空格的也补上)', md: `- [ ] ${M}\n- [ ]\n- [x]\n`, golden: `- [ ] ${M}Z\n- [ ] \n- [x] \n` },
   { id: 'd05.edit_upper_X', bucket: W, why: '附录 A D-05:被编辑的列表里 `[X]`→`[x]` 仍是规范化', md: `- [X] ${M}\n- [ ] b\n`, golden: `- [x] ${M}Z\n- [ ] b\n` },
 
   // ── D-06:行内 / 单元格 / 列表项里的 `<br>`(verify-rich-1/br.cjs、verify-keyboard-1/v01-br.cjs、d06_br.cjs)──
@@ -132,7 +142,7 @@ const CASES = [
   // 行内公式里的 `\$`:scanMath 见 `$` 就收、不认 `\$`(mathLivePreview 顶注 ponytail),落盘侧认不出这个跨度;
   // 解析侧补了反斜杠就会越存越多,所以两侧都不认、维持旧行为 —— 要逐字得连 scanMath / unescapeMathSource 一起改。
   // 放进被编辑的块:未编辑的块 D-18 起逐字写回,病只剩在「被编辑、要重新序列化」的块里。
-  { id: 'r01.inline_dollar', bucket: P, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)', md: `${M} price $\\$5$ here\n`, forbid: /\\\\\$/ },
+  { id: 'r01.inline_dollar', bucket: V, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)—— D-11 起 `\\$` 按用户转义逐字写回', md: `${M} price $\\$5$ here\n`, forbid: /\\\\\$/ },
   { id: 'r01.punct_mix', bucket: V, md: `${M}\n\n$a\\,b \\| c \\% d \\# e \\_ f \\{g\\}$ 尾\n` },
   { id: 'r01.set_matrix_cn', bucket: V, md: `${M}\n\n集合 $\\{a,b\\}$ 与 $\\begin{matrix}1 \\\\ 2\\end{matrix}$ 尾\n` },
   { id: 'r01.single_line_display', bucket: V, md: `${M}\n\nseed\n\n$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$\n\nafter\n` },
@@ -141,7 +151,7 @@ const CASES = [
   { id: 'r01.control_cmds', bucket: V, md: `${M}\n\n$x_i + \\sum_{k} a*b$ ok\n\n$$\n\\frac{a}{b} + \\alpha_{1}\n$$\n` },
   { id: 'r01.escape_outside_math', bucket: V, why: '公式外的转义不许被补回(对照)', md: `${M}\n\nliteral \\*not em\\* and \\_x\\_ and $\\{y\\}$\n` },
   // 被转义的 `$` 不当定界符 —— 这条的旧病是 D-11(转义被剥,0b),但**绝不能**被本修复变成 `\\$x\\$`。
-  { id: 'r01.escaped_dollars', bucket: P, why: 'D-11:转义被剥(被编辑的块;未编辑的块 D-18 起逐字)', md: `${M} not math: \\$x\\$ ok\n`, forbid: /\\\\\$/ },
+  { id: 'r01.escaped_dollars', bucket: V, why: 'D-11 已修:用户的转义逐字写回', md: `${M} not math: \\$x\\$ ok\n`, forbid: /\\\\\$/, visible: '$x$' },
   // R-01 返修(评审阻断 R-01-growth):行内代码 / 链接地址里的 `$`、粗体里的货币挨着公式 —— 返修前每存一次反斜杠翻一倍。
   // 两侧现按同一份原文认公式:这些行里的公式可能认不出(首轮反斜杠一次性丢掉 = 修前行为),但第二轮必须逐字。
   { id: 'r01.grow_code_dollar', bucket: S, md: `${M}\n\n用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
@@ -170,11 +180,21 @@ const CASES = [
   { id: 'd12.dup_def_prefix_edited', bucket: W, why: 'D-12 取舍:被编辑的块里引用式链接写成行内链接(首个定义生效)', md: `${M} see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`,
     golden: `${M}Z see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
 
+  // ── D-11:用户写的反斜杠转义(verify-integrity-2/d11d12.cjs)—— 病在序列化器里,EDITHERE 与病灶同块 ──
+  // 修前:被编辑的块里转义被剥 —— `\#x` 进标签索引、`\[\[x\]\]` 变真双链、`\=\=` / `\%\%` 在 Obsidian 里成高亮 / 注释;
+  // 打开时编辑器也把它们渲染成双链 / 高亮(visible 看的就是字面还在)。
+  { id: 'd11.tag_edited', bucket: V, md: `${M} not a tag: \\#notatag and C\\# code\n` },
+  { id: 'd11.tag_line_start_edited', bucket: V, md: `\\#notatag ${M}\n` },
+  { id: 'd11.wiki_edited', bucket: V, md: `${M} literal \\[\\[not a link\\]\\] here\n`, visible: '[[not a link]]' },
+  { id: 'd11.hl_cmt_edited', bucket: V, md: `${M} literal \\=\\=not hl\\=\\= and \\%\\%not cmt\\%\\%\n`, visible: '==not hl== and %%not cmt%%' },
+  { id: 'd11.star_edited', bucket: V, md: `${M} literal \\*not em\\* and \\_x\\_ and 1\\. mid\n` },
+  { id: 'd11.in_strong_link_edited', bucket: V, md: `${M} **a\\#b** 与 [x\\]y](http://e.x) 与 C:\\\\\\#\n` },
+
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },
   { id: 'tags.heading', bucket: V, md: `${M}\n\n# 标题\n` },
   { id: 'tags.lineStart', bucket: V, why: 'R-25(0b 已修):行首 `#tag` 曾被转义成 `\\#tag`', md: `${M}\n\n#tag 与 #嵌套/标签 正文\n` },
-  { id: 'tags.listItem', bucket: P, why: 'D-05(0b):紧凑 `-` 列表被改写(行首 `#` 的转义已由 R-25 修掉)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
+  { id: 'tags.listItem', bucket: V, why: 'D-05(0b 已修):紧凑 `-` 列表原样(行首 `#` 的转义已由 R-25 修掉)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
   { id: 'tags.quote', bucket: V, why: 'R-25(0b 已修)', md: `${M}\n\n> #idea 想法\n` },
   { id: 'tags.onlyTag', bucket: V, why: 'R-25(0b 已修)', md: `${M}\n\n#tag\n` },
 ]

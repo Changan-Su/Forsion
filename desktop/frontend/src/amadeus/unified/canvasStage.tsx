@@ -31,7 +31,7 @@ import { zoomOf } from '@lcl/engine'
 // 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
 // dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
 import {
-  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, NUDGE, PRESS_SLOP, TOUCH_SLOP,
+  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, PRESS_SLOP, TOUCH_SLOP, nudgeStep,
   CanvasChrome, CanvasMiniMap as KitMiniMap, gridLayerStyle, recallViewport, rememberViewport, resizeBox, snapGrid,
   type MiniItem, type ResizeEdge, type Viewport,
 } from './canvasKit'
@@ -49,6 +49,7 @@ import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnab
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
+import { noteMemoryId } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
 
 registerMessages({
@@ -111,6 +112,9 @@ function hintTarget(target: HTMLElement, clientX: number): boolean {
 /** 元素的文字键与弹窗抬头:连线=label、Frame=title、其余=text。四处调用共用,别再各写一遍三元。 */
 const textKeyOf = (el: El): 'text' | 'label' | 'title' => (el.kind === 'connector' ? 'label' : el.kind === 'frame' ? 'title' : 'text')
 const textTitleOf = (el: El): string => translate(el.kind === 'connector' ? 'canvasstage.textTitle.connector' : el.kind === 'frame' ? 'canvasstage.textTitle.frame' : 'canvasstage.textTitle.element')
+/** 卡片落位 / 避让用的形状障碍:**Frame 不算**(V-02)。Frame 是容器 —— 在框里双击 / 用卡片工具建卡、
+ *  Tab 长子节点、认亲吸附、编辑增高推开邻卡,都不该把卡当碰撞弹到框外(拖进框本来就不弹,两条路口径一致)。 */
+const solidShapeBoxes = (elements: unknown): ElBox[] => [...shapeBoxes(safeElements(elements).filter((e) => e.kind !== 'frame'), null).values()]
 
 export type { Viewport }
 
@@ -361,6 +365,8 @@ function CanvasMiniMap({
 
 export interface CanvasStageProps {
   path: string
+  /** 所在智库根:视口记忆的键 = noteMemoryId(库, path)(V-15;只按相对 path 作键,两个库的同名笔记会串)。 */
+  vaultRoot?: string | null
   active: boolean
   getView: () => EditorView | null
   /** 主卡几何(舞台坐标)。 */
@@ -404,12 +410,14 @@ export interface CanvasStageProps {
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
   const { t } = useI18n()
-  const [vp, setVp] = useState<Viewport>(() => recallViewport(path) ?? { x: 0, y: 0, z: 1 })
+  /** 会话级视口记忆的键(V-15):库 + 路径,与文档滚动 / 模式记忆同一个口径(viewMemory 顶注)。 */
+  const vpKey = noteMemoryId(vaultRoot, path)
+  const [vp, setVp] = useState<Viewport>(() => recallViewport(vpKey) ?? { x: 0, y: 0, z: 1 })
   const vpRef = useRef(vp)
   vpRef.current = vp
   /** 本机画布 chrome 偏好：默认显示，HUD 开关即时生效并跨页面/重启记忆，不写进笔记。 */
@@ -635,10 +643,12 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   // ⚠️「这次要不要自动 fit」必须在**渲染期**定,不能留到 effect 里查 viewports ——
   //   下面那个存视口的 effect 声明在前、也就先跑,查的时候 viewports 里早就有本页了,
   //   自动 fit 于是永远不触发:实测现象是打开画布只看得见主卡,卡片全在视野外(截图才发现的)。
-  const shouldFit = useRef(!recallViewport(path))
+  const shouldFit = useRef(!recallViewport(vpKey))
+  // ⚠️ 只在**画布态**记(V-15):舞台在文档模式也常驻挂着,不 gate 的话以文档模式打开一篇就先存下
+  //    初始的 {0,0,1},下次再挂载时 recall 命中 → shouldFit=false → 进画布停在原点、再也不自动适应。
   useEffect(() => {
-    rememberViewport(path, vp)
-  }, [path, vp])
+    if (active) rememberViewport(vpKey, vp)
+  }, [vpKey, vp, active])
   /** Canvas 的 viewport 走 transform，不会触发 selectionchange / scroll。编辑态下必须在 DOM 提交后、
    *  浏览器绘制前把 body 下的丝滑 caret 硬同步到新 Range；否则它只能靠 100ms 轮询追手。 */
   useLayoutEffect(() => {
@@ -879,7 +889,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     if (!host || !view) return
     // ⚠️ 白板元素也算内容。只量卡片和主卡的话,右边的形状/连线会被裁在舞台外 —— 几何断言全绿,
     //    截图一看就露(DESIGN.md §8 说的就是这种)。
-    const boxes = [...host.querySelectorAll('.amx-ucard, .amx-el-shape, .amx-el-conn, .amx-el-label'), view.dom].map((el) => (el as HTMLElement).getBoundingClientRect())
+    // Frame 连同它悬在框外上沿的标题条也算(V-03):缩略图一直算它,这里漏了 —— 只有 Frame 的区域
+    // 开卷 / 点「适应内容」都整片落在视野外。
+    const boxes = [...host.querySelectorAll('.amx-ucard, .amx-el-shape, .amx-el-frame, .amx-el-frame-bar, .amx-el-conn, .amx-el-label'), view.dom].map((el) => (el as HTMLElement).getBoundingClientRect())
     if (!boxes.length) return
     const { x, y, z } = vpRef.current
     const hr = host.getBoundingClientRect()
@@ -924,6 +936,35 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const z = vpRef.current.z
     setVp({ z, x: r.width / u / 2 - worldX * z, y: r.height / u / 2 - worldY * z })
   }, [stopFocusMotion])
+
+  /** 只读实例的复制:先把 PM 的选区对齐到原生选区,再让 PM 的 copy 处理器序列化(V-16)。
+   *  只读 PM 只在原生选区**两端都在编辑器内**时才同步选区(prosemirror-view hasSelection);三击选段时
+   *  Chromium 把焦点端放到下一块开头 —— 卡是文末那块时就落在编辑器外,PM 的选区停在上一次(比如双击选的那个词),
+   *  Cmd+C 复制出来的是旧词。这里捕获期(先于 PM 挂在 view.dom 上的处理器)把原生区间夹进编辑器、换成 PM 选区。
+   *  舞台根在文档模式也常驻包着编辑器,所以两种模式都生效。 */
+  useEffect(() => {
+    const host = hostRef.current
+    if (!readOnly || !host) return
+    const onCopy = (): void => {
+      const view = cbRef.current.getView()
+      const ds = document.getSelection()
+      if (!view || !ds || ds.isCollapsed || !ds.rangeCount) return
+      const r = ds.getRangeAt(0)
+      const inView = (n: Node): boolean => view.dom.contains(n.nodeType === 3 ? n.parentNode : n)
+      const a = inView(r.startContainer)
+      const b = inView(r.endContainer)
+      if (!a && !b) return
+      try {
+        const doc = view.state.doc
+        const from = a ? view.posAtDOM(r.startContainer, r.startOffset) : 0
+        const to = b ? view.posAtDOM(r.endContainer, r.endOffset) : doc.content.size
+        const sel = TextSelection.between(doc.resolve(Math.min(from, to)), doc.resolve(Math.max(from, to)))
+        if (!sel.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(sel))
+      } catch { /* 算不出位置就交给 PM 原样处理 */ }
+    }
+    host.addEventListener('copy', onCopy, true)
+    return () => host.removeEventListener('copy', onCopy, true)
+  }, [readOnly])
 
   /** 页内查找的「露出命中」钩子。画布拿 transform 当视口,滚动 API 一律够不着(实测:Chromium
    *  连试都不试 —— `.amx-stage` 是 overflow:hidden,scrollTop 纹丝不动、零 scroll 事件),
@@ -1022,7 +1063,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // 新卡也走与拖拽同源的“最近无碰撞位置”。过去工具点击/双击/回车只照搬调用点，右侧已经
     // 塞满时仍会把卡叠上去；先用空卡的保守高度占位，真实高度在挂载后还会由编辑避让继续兜底。
     const seed: ElBox = { x, y, w: CARD_W, h: 80 }
-    const obstacles = [...boxesNow(null).values()]
+    const obstacles = [...measureCards(hostRef.current).values(), ...solidShapeBoxes(cbRef.current.elements)]
+    const mainBox = measureMain(hostRef.current)
+    if (mainBox) obstacles.push(mainBox)
     const push = resolveCardRepulsion([seed], obstacles)
     const px = x + push.x
     const py = y + push.y
@@ -1184,7 +1227,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         : allNodes.filter((a) => typeof treeNow[a] !== 'string' || !treeNow[a])
     const peerBoxes = peers.map((a) => nodeBox(a)).filter(Boolean) as ElBox[]
     const center = basis.x + basis.w / 2
-    const obstacles = [...boxesNow(null).values()]
+    const obstacles = [...measureCards(hostRef.current).values(), ...solidShapeBoxes(cbRef.current.elements)]
+    const mainBox = measureMain(hostRef.current)
+    if (mainBox) obstacles.push(mainBox)
     const GAP_X = 80
     const GAP_Y = 32
     let best: { x: number; y: number; score: number } | null = null
@@ -1259,7 +1304,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const obstacles: ElBox[] = [...boxes].filter(([a]) => !sourceSet.has(a)).map(([, b]) => b)
     const mainBox = measureMain(hostRef.current)
     if (mainBox) obstacles.push(mainBox)
-    for (const b of shapeBoxes(safeElements(cbRef.current.elements), null).values()) obstacles.push(b)
+    obstacles.push(...solidShapeBoxes(cbRef.current.elements))
     const push = resolveCardRepulsion(movingBoxes, obstacles, { x: baseDx, y: baseDy })
     const dx = baseDx + push.x
     const dy = baseDy + push.y
@@ -1816,7 +1861,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         const obstacles: ElBox[] = [...mutable].filter(([a]) => a !== anchor).map(([, b]) => b)
         const mainBox = measureMain(host)
         if (mainBox && fixedId !== MAIN_KEY) obstacles.push(mainBox)
-        for (const b of shapeBoxes(safeElements(cbRef.current.elements), null).values()) obstacles.push(b)
+        obstacles.push(...solidShapeBoxes(cbRef.current.elements))
         const intent = {
           x: box.x + box.w / 2 - (fixed.x + fixed.w / 2),
           y: box.y + box.h / 2 - (fixed.y + fixed.h / 2),
@@ -1927,6 +1972,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
      *  ghost/重测最早下一次提交才追上；拆成两路会稳定落后一个事件(C34 实测 14×9px)。 */
     const selectionPosition = (box: Pick<ElBox, 'x' | 'y'>, includeSize = false): string =>
       `left:${box.x}px!important;top:${box.y}px!important;${includeSize && 'w' in box && 'h' in box ? `width:${box.w}px!important;height:${box.h}px!important;` : ''}`
+    /** 手势 live 期间藏起 ⠿/+ 把手(V-12)。按下时 preventDefault 抑制了兼容 mouse 事件,blockLayer 的悬停追踪
+     *  整段收不到任何事件,把手就停在按下前的那个块旁边,悬在空白画布上。与几何同一张样式表:松手 clearDragRule 即复原。 */
+    const hideGutter = `.amx-stage[data-amx-dragscope="${scope}"] .unified-gutter{visibility:hidden!important;pointer-events:none!important}`
     const setDragRule = (
       rules: Array<{ anchor: string; decl: string; selection: Pick<ElBox, 'x' | 'y'> }>,
       mainSelection?: Pick<ElBox, 'x' | 'y'>,
@@ -1938,6 +1986,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${anchor}"]{${selectionPosition(rule.selection)}}`)
       }
       if (mainSelection) css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-main-sel]{${selectionPosition(mainSelection)}}`)
+      css.push(hideGutter)
       dragCss.textContent = css.join('\n')
     }
     const setSizeRule = (key: string, decl: string, selection: ElBox): void => {
@@ -1947,9 +1996,11 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       const selected = key === MAIN_KEY
         ? `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-main-sel]{${selectionPosition(selection, true)}}`
         : `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${CSS.escape(key)}"]{${selectionPosition(selection, true)}}`
-      dragCss.textContent = `${target}\n${selected}`
+      dragCss.textContent = `${target}\n${selected}\n${hideGutter}`
     }
-    const LIFT = 'cursor:grabbing;opacity:.94;box-shadow:0 12px 32px rgb(0 0 0 / 24%);' // shadow-contract: interaction (drag lift)
+    // z-index:1(V-10):卡片同为 absolute、按文档序叠放,不抬的话拖着的卡会钻到文档序靠后的卡底下(再叠上
+    // relatedFocus 的 0.44 透明度,像两段字糊在一起)。只抬 1 档:认亲高亮(z 2/3)与关系线仍须画在它上面。
+    const LIFT = 'cursor:grabbing;opacity:.94;box-shadow:0 12px 32px rgb(0 0 0 / 24%);z-index:1;' // shadow-contract: interaction (drag lift)
     const clearDragRule = (): void => { dragCss.textContent = '' }
     const stopRepelMotion = (): void => {
       cancelAnimationFrame(repelRaf)
@@ -2094,6 +2145,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     //    所以双指一成立就把在途的 drag 整笔作废(cancel 语义,不落笔),并在**全部手指抬起前**
     //    一概不进单指逻辑。编辑态不动:视口 transform 不惊动 PM,捏合时正在编辑的卡照常编辑。
     const touchPts = new Map<number, { x: number; y: number }>()
+    /** 只读舞台上一次鼠标按下(V-16 连击判定):双击 / 三击落在正文上时放行给原生选字。 */
+    let roLastDown: { t: number; x: number; y: number } | null = null
     let pinch: { d0: number; z0: number; sx: number; sy: number; ids: string } | null = null
     let pressTimer = 0
     let pressAt: { x: number; y: number } | null = null
@@ -2230,6 +2283,16 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       // 分享页里的双链就点不动了 —— 与下面 CARD_CTL 那条「必须在 preventDefault 之前放行」同一个坑。
       if (readOnlyRef.current) {
         if (target.closest(`${CARD_CTL}, .wikilink`)) return
+        // 连击(双击 / 三击)落在正文上 = 选字(V-16,Notion 公开页可以选中复制):这一下不 preventDefault、不起平移,
+        // 浏览器照常派发 mousedown,原生按词 / 按段选中,随后 Cmd+C 复制。单击(含按住拖)仍是平移 ——
+        // 第一下已被上面吞掉并起了零位移的平移,所以「拖卡 = 平移」一格不变(unified-readonly 钉着)。
+        // 只认鼠标:触屏双击另有缩放 / 长按选字的系统语义,不在这里改。
+        // 连击判据与浏览器自己的点击计数同口径(间隔 < 500ms、位移 < 6px 就接着数,不封顶):只有计数 ≥ 2 的那几下放行,
+        // 浏览器派发的 mousedown 带的正是同一个计数,原生按词 / 按段选中。
+        const now = performance.now()
+        const prev = roLastDown
+        roLastDown = e.pointerType === 'mouse' ? { t: now, x: e.clientX, y: e.clientY } : null
+        if (prev && now - prev.t < 500 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 6 && target.closest('.ProseMirror')) return
         e.preventDefault()
         drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y }
         capture(e.pointerId)
@@ -3269,6 +3332,15 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       histStep(e.shiftKey ? 'redo' : 'undo')
       return
     }
+    // Mod+Y = 重做(V-18,Windows 的标准重做键;文档模式里 PM 的 history keymap 本来就认)。画布态同样走时间线 ——
+    // 只拦 z 的话,舞台上按它什么都不做,卡内编辑时又被 PM 直接吃掉、绕开统一时间线(之后舞台的 Cmd+Z 次序错乱)。
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'y' || e.key === 'Y')) {
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      e.stopPropagation()
+      histStep('redo')
+      return
+    }
     if (e.key !== 'Escape') return
     const cur = editingRef.current
     if (!cur || !t.closest('.ProseMirror')) return
@@ -3349,12 +3421,15 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
     if (e.key.startsWith('Arrow')) {
       e.preventDefault()
-      const step = e.shiftKey ? 1 : NUDGE
+      // 步长与仪表盘共用 canvasKit 的 nudgeStep(V-11):开吸附 = 一格,否则 8 / Shift = 32。
+      const step = nudgeStep(snapRef.current, e.shiftKey)
       const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
       const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
       if (!dx && !dy) return
       const view = getView()
-      const anchors = sel.filter((k) => k.startsWith('c:')).map(keyId)
+      // 选中的 Frame 连辖域一起走(V-11,与拖标题条同一个 expandFrames):修前只挪框,框里的卡 / 形状留在原地。
+      const moving = expandFrames(sel)
+      const anchors = moving.filter((k) => k.startsWith('c:')).map(keyId)
       if (view && anchors.length) {
         const boxes = measureCards(hostRef.current)
         setCardAttrs(view, new Map(anchors.map((a) => {
@@ -3364,8 +3439,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         onCommit()
       }
       // 元素 + 主卡合成一笔;还牵着卡片(上面那笔 PM)时并成 'pair'(与拖拽落笔同一口径)。
-      const ids = new Set(sel.filter((k) => k.startsWith('e:')).map(keyId))
-      const m = sel.includes(MAIN_KEY) ? { ...main, x: Math.round(main.x + dx), y: Math.round(main.y + dy) } : undefined
+      const ids = new Set(moving.filter((k) => k.startsWith('e:')).map(keyId))
+      const m = moving.includes(MAIN_KEY) ? { ...main, x: Math.round(main.x + dx), y: Math.round(main.y + dy) } : undefined
       if (ids.size || m) {
         writeFm({
           ...(ids.size ? { e: moveElements(rawList(elements), ids, dx, dy) } : {}),

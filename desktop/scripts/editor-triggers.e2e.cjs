@@ -314,7 +314,8 @@ async function main() {
     await p.close()
   })
 
-  // T14c:划选工具栏可改左/中/右，对齐标记可往返；Word 同款 Mod-L/E/R 快捷键。
+  // T14c:划选工具栏可改左/中/右，对齐标记可往返；对齐键 = Mod-Shift-L/E/R(拍板 #2,I-09),
+  //       ⌘E 还给行内代码(Notion / AFFiNE 同键;此前 ⌘E 被绑成居中,行内代码一个键都没有)。
   await tryTest('T14c', async () => {
     const p = await freshPage()
     const pm = p.locator('.md-block .ProseMirror').first()
@@ -327,20 +328,36 @@ async function main() {
     const centerDom = await pm.locator('p[data-align="center"]').count()
     const centerMd = await mdOf(p)
     check('T14c 划选工具栏“居中”立即生效并落 Markdown 标记', centerDom === 1 && /data-amadeus-align="center"/.test(centerMd), `md=${JSON.stringify(centerMd)}`)
-    await p.keyboard.press('Meta+r')
+    await p.keyboard.press('Meta+Shift+r')
     await p.waitForTimeout(350)
     const rightDom = await pm.locator('p[data-align="right"]').count()
     const rightMd = await mdOf(p)
-    check('T14c Word 快捷键 Mod-R 切右对齐', rightDom === 1 && /data-amadeus-align="right"/.test(rightMd), `md=${JSON.stringify(rightMd)}`)
+    check('T14c 快捷键 Mod-Shift-R 切右对齐', rightDom === 1 && /data-amadeus-align="right"/.test(rightMd), `md=${JSON.stringify(rightMd)}`)
     await p.close()
+
+    // ⌘E = 行内代码,不再动对齐(I-09)。
+    const e = await freshPage('调用 fetchData 函数')
+    const epm = e.locator('.md-block .ProseMirror').first()
+    await epm.click()
+    await e.evaluate(() => {
+      const t = document.querySelector('.md-block .ProseMirror p').firstChild
+      const r = document.createRange(); r.setStart(t, 3); r.setEnd(t, 12)
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r)
+    })
+    await e.waitForTimeout(250)
+    await e.keyboard.press('Meta+e')
+    await e.waitForTimeout(350)
+    const codeMd = await mdOf(e)
+    check('T14c ⌘E = 行内代码(不居中)', /调用 `fetchData` 函数/.test(codeMd) && !/data-amadeus-align/.test(codeMd), `md=${JSON.stringify(codeMd)}`)
+    await e.close()
 
     const q = await freshPage(rightMd)
     check('T14c 关闭重开后右对齐仍在', (await q.locator('.md-block .ProseMirror p[data-align="right"]').count()) === 1)
     await q.locator('.md-block .ProseMirror').first().click()
-    await q.keyboard.press('Meta+l')
+    await q.keyboard.press('Meta+Shift+l')
     await q.waitForTimeout(350)
     const leftMd = await mdOf(q)
-    check('T14c Mod-L 恢复左对齐并清除持久化标记', !/data-amadeus-align=/.test(leftMd), `md=${JSON.stringify(leftMd)}`)
+    check('T14c Mod-Shift-L 恢复左对齐并清除持久化标记', !/data-amadeus-align=/.test(leftMd), `md=${JSON.stringify(leftMd)}`)
     await q.close()
   })
 
@@ -1041,15 +1058,17 @@ async function main() {
     const md = (await mdOf(p)).trim()
     check('T36 裸域名自动补 https:// 并写成 markdown 链接', md === '[点这里](https://forsion.net/docs)', `md=${JSON.stringify(md)}`)
     check('T36 渲染成可点的 <a>', (await p.locator('.md-block .ProseMirror a[href="https://forsion.net/docs"]').count()) === 1)
-    // 再点一次 = 取消链接(空输入等同取消,拿不到「确认了但留空」,故去链接走无弹窗路径)
+    // 已是链接时再点 = 编辑:弹框预填原地址,「移除链接」才去掉(I-10;此前再点一下不问就直接摘掉)。
     await p.locator('.md-block .ProseMirror').first().click()
     await p.keyboard.press('End')
     for (let i = 0; i < 3; i++) await p.keyboard.press('Shift+ArrowLeft')
     await p.waitForTimeout(400)
     await p.locator('.inline-toolbar [data-act="link"]').dispatchEvent('mousedown')
+    await p.waitForTimeout(300)
+    check('T36 已是链接时再点 = 弹框预填原地址', (await p.locator('.dialog-input').count()) === 1 && (await p.inputValue('.dialog-input')) === 'https://forsion.net/docs')
+    await p.locator('.dialog-btn[data-alt]').click()
     await p.waitForTimeout(600)
-    check('T36 已是链接时再点 = 去链接(不再弹框)', (await p.locator('.dialog-input').count()) === 0)
-    check('T36 去链接后回到纯文本', (await mdOf(p)).trim() === '点这里', `md=${JSON.stringify(await mdOf(p))}`)
+    check('T36「移除链接」后回到纯文本', (await mdOf(p)).trim() === '点这里', `md=${JSON.stringify(await mdOf(p))}`)
     await p.close()
 
     // javascript: 一律拒绝 —— 笔记会被分享页独立渲染,这是个真 XSS 面。

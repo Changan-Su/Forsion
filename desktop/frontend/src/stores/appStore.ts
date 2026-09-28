@@ -32,7 +32,7 @@ import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { finishRunStats, stepRunStats, type RunStats } from './runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
-import { noteAgentWriteEnd, noteAgentWriteStart } from './agentWriteLedger'
+import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
@@ -1088,6 +1088,17 @@ export const useApp = create<AppState>((set, get) => ({
         })
         // Agent Desk 直播:编辑参数还在流式生成就上台(state 只动上台/路径就位两次,内容 LivePane 自己订)。
         if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name))) get().deskLiveSync(sessionId, assistantId, String(pl.id), String(pl.name))
+        // 「Tangu 正在改这篇」(评审 G3-05):目标路径一完整流出来就登记进归属账本的提示区(不参与归属认领),
+        // 打开着这篇的编辑器据此挂一个不阻塞的胶囊。登记过就不再每个 delta 重扫参数。
+        if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name)) && !agentWriteKnown(String(pl.id))) {
+          const ev = (get().messagesBySession[sessionId] || []).find((m) => m.id === assistantId)?.toolEvents?.find((tt) => tt.id === pl.id)
+          const raw = extractStreamingString(ev?.arguments || '', 'path')
+          if (raw?.done) {
+            const cfg = get().configBySession[sessionId] || {}
+            const abs = resolveDeskPath(raw.value, cfg.cwd || get().sessions.find((x) => x.id === sessionId)?.project_path || undefined)
+            if (abs) noteAgentWriteLive(String(pl.id), abs)
+          }
+        }
         break
       case 'tool_call':
         if (pl.name === 'generate_image') { track('image.generate'); act('image.generate') }

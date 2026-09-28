@@ -12,7 +12,25 @@ registerMessages({
   'agentchg.keep': { zh: '保留', en: 'Keep' },
   'agentchg.label': { zh: 'Tangu 对这篇笔记的改动', en: "Tangu's changes to this note" },
   'agentchg.skipped': { zh: '有 {n} 处你已改过，保留了你的版本，没有撤回', en: 'Skipped {n} you had already edited; your version was kept' },
+  'agentchg.live': { zh: 'Tangu 正在修改这篇笔记', en: 'Tangu is editing this note' },
+  'agentchg.liveHint': {
+    zh: '可以接着写；改动撞上时保留你的版本，Tangu 的另存为副本',
+    en: 'Keep writing — if edits overlap, yours are kept and Tangu’s are saved as a copy',
+  },
 })
+
+/** 「Tangu 正在修改这篇笔记」(评审 G3-05):写类工具的参数在流式生成 / 工具已发出还没回结果时挂着。只是告知,不拦编辑 ——
+ *  撞上了按既定策略(本地胜 + 冲突副本 + 点名 Tangu 的提示)处理。外形复用改动胶囊。 */
+export function AgentLiveCapsule(): ReactElement {
+  const { t } = useI18n()
+  return (
+    <div className="am-agent-capsule is-live" role="status" aria-live="polite" data-testid="agent-live-capsule">
+      <span className="amx-pending-insert-spin" aria-hidden />
+      <span className="am-agent-capsule-text">{t('agentchg.live')}</span>
+      <span className="am-agent-capsule-hint">{t('agentchg.liveHint')}</span>
+    </div>
+  )
+}
 
 export function AgentChangeCapsule({ count, index, onReview, onRevert, onKeep }: {
   count: number

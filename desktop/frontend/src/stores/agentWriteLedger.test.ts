@@ -1,7 +1,7 @@
 // 归属账本(评审 G3-03 + Codex 复核 P0):写类工具在途 / 刚成功才算「Tangu 写的」;失败立即撤销;每次写入只认领一次;
 // 带完整内容 / new_string 的写入要核得上盘上正文;路径口径统一;中止的调用有上限。
 import { beforeEach, describe, expect, it } from 'vitest'
-import { AGENT_WRITE_GRACE_MS, AGENT_WRITE_OPEN_MAX_MS, claimAgentWrite, noteAgentWriteEnd, noteAgentWriteStart, resetAgentWriteLedger } from './agentWriteLedger'
+import { AGENT_EDITING_MAX_MS, AGENT_WRITE_GRACE_MS, AGENT_WRITE_OPEN_MAX_MS, agentEditing, claimAgentWrite, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart, resetAgentWriteLedger, subscribeAgentWrites } from './agentWriteLedger'
 import { agentWriteChecks, agentWriteTargets } from './deskPlan'
 
 describe('agentWriteLedger', () => {
@@ -60,6 +60,43 @@ describe('agentWriteChecks', () => {
     expect(agentWriteChecks('edit_file', JSON.stringify({ path: 'a.md', old_string: 'x', new_string: 'y' }), '/v')).toEqual([{ path: '/v/a.md', includes: ['y'] }])
     expect(agentWriteChecks('multi_edit', JSON.stringify({ path: 'a.md', edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: 'd' }] }), '/v')).toEqual([{ path: '/v/a.md', includes: ['b', 'd'] }])
     expect(agentWriteChecks('apply_patch', JSON.stringify({ patch: '*** Update File: a.md\n' }), '/v')).toEqual([{ path: '/v/a.md' }])
+  })
+})
+
+describe('agentEditing(评审 G3-05:「Tangu 正在改这篇」提示)', () => {
+  beforeEach(() => resetAgentWriteLedger())
+
+  it('流式阶段登记即提示;tool_call 接手仍提示;结果回来(成功 / 失败)即撤', () => {
+    const seen: number[] = []
+    const off = subscribeAgentWrites(() => seen.push(1))
+    noteAgentWriteLive('s1', '/v//a.md/', 0)
+    expect(agentEditing('/v/a.md', 10)).toBe(true)
+    expect(agentEditing('/v/b.md', 10)).toBe(false)
+    noteAgentWriteStart('s1', [{ path: '/v/a.md', full: 'x' }], 20)
+    expect(agentEditing('/v/a.md', 30)).toBe(true)
+    noteAgentWriteEnd('s1', true, 40)
+    expect(agentEditing('/v/a.md', 41)).toBe(false)
+    noteAgentWriteLive('s2', '/v/a.md', 50)
+    noteAgentWriteEnd('s2', false, 60)
+    expect(agentEditing('/v/a.md', 61)).toBe(false)
+    expect(seen.length).toBeGreaterThanOrEqual(5)
+    off()
+  })
+
+  it('流式登记不参与归属认领:只有 tool_call 带来的完整内容才核得上(Codex P0 ③ 不被绕开)', () => {
+    noteAgentWriteLive('s3', '/v/a.md', 0)
+    expect(claimAgentWrite('/v/a.md', 'anything', 5)).toBe(false)
+    noteAgentWriteStart('s3', [{ path: '/v/a.md', full: 'agent body' }], 6)
+    expect(claimAgentWrite('/v/a.md', 'someone else', 7)).toBe(false)
+    expect(claimAgentWrite('/v/a.md', 'agent body', 8)).toBe(true)
+  })
+
+  it('中止的写入(收不到 tool_call / tool_result)过了提示窗口就不再提示', () => {
+    noteAgentWriteLive('s4', '/v/a.md', 0)
+    noteAgentWriteStart('s5', ['/v/b.md'], 0)
+    expect(agentEditing('/v/a.md', AGENT_EDITING_MAX_MS)).toBe(true)
+    expect(agentEditing('/v/a.md', AGENT_EDITING_MAX_MS + 1)).toBe(false)
+    expect(agentEditing('/v/b.md', AGENT_EDITING_MAX_MS + 1)).toBe(false)
   })
 })
 

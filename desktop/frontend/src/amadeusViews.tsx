@@ -21,7 +21,7 @@ import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
 import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
-import { useUiOverlay } from './amadeusOverlayStore'
+import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
@@ -2112,8 +2112,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const loadError = usePageStore((s) => s.error)
   // 插件文件类型也占用全局 activePage(单活页模型)→ 认领时须能认出「这不是笔记」,见下面的 useEffect。
   const pluginFileTypes = usePluginStore((s) => s.fileTypes)
-  // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state。
-  const mode = useUiOverlay((s) => s.editorMode)
+  // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state;按本 leaf 记(评审 C-08)。
+  const mode = useUiOverlay((s) => editorModeOf(s, leaf.id))
   const [dragging, setDragging] = useState(false)
   // 兜底收虚线框:拖拽在别处松手 / Esc 取消 / 拖出窗口,本容器的 dragleave 未必来得及。
   useEffect(() => {
@@ -2575,7 +2575,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           )}
           <button
             className="amx-mode-btn"
-            onClick={() => useUiOverlay.getState().toggleEditorMode()}
+            onClick={() => useUiOverlay.getState().toggleEditorMode(leaf.id)}
             title={mode === 'source' ? t('amxv.toVisualLong') : t('amxv.toSource')}
           >
             {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
@@ -2724,7 +2724,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         indent={canvasSeg ? (dir) => { unifiedHistRef.current?.indent?.(dir) } : null}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
-          { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },
+          { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode(leaf.id) },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
           ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),

@@ -7,6 +7,7 @@
 // 只有悬停右上角 `</>` 显式打开。复制事件另补桌面原生附件 flavor,外部 App 能直接粘文件。
 import { $prose } from '@milkdown/kit/utils'
 import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
+import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
@@ -17,6 +18,11 @@ import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
+/** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
+export const IS_MAC_PLATFORM = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
+
+/** 打开双链的回调:newTab = ⌘/Ctrl+点击、中键(L-11),或「在新标签页打开光标处链接」命令。 */
+export type WikiOpen = (name: string, opts?: { newTab?: boolean }) => void
 
 /** `![[pic.png|200]]` 的图片形态(前面必须紧挨着 `!`);不是图片嵌入 → null。 */
 function imageEmbed(inner: string, bang: boolean): { url: string; width?: number; name: string } | null {
@@ -26,6 +32,34 @@ function imageEmbed(inner: string, bang: boolean): { url: string; width?: number
   if (!IMG_EXT_RE.test(p)) return null
   const w = size?.trim()
   return { url: toAssetUrl(p), width: w && /^\d+$/.test(w) ? Number(w) : undefined, name: p }
+}
+
+/** 点击 / 「打开光标处链接」交给 openWikiLink 的那一串(两处同源,L-20)。要保留的 subpath:PDF 页码 `#page=` /
+ *  媒体时刻 `#t=` 原样交(据此跳页 / 起播);笔记锚点交「笔记#锚点」(别名剥掉),openWikiLink 拆开后打开并定位。
+ *  linkTarget 会把 `#…` 砍掉 —— 不走这里就是锚点静默蒸发(打开的永远是文首 / 0 秒)。 */
+export function wikiOpenArg(inner: string): string {
+  if (isPdfLinkInner(inner) || parseMediaLinkInner(inner)) return inner
+  const split = splitLinkInner(inner)
+  return split?.subpath ? `${split.target}#${split.subpath}` : linkTarget(inner)
+}
+
+/** 文本块里块内偏移 offset 处的 `[[…]]`(光标在里面或贴着两端)→ 它的 openWikiLink 参数;图片嵌入不算链接。
+ *  代码块 / 行内代码里的不算(buildBlockString 把行内代码抹成空格,代码块由调用方挡)。 */
+export function wikiOpenArgAt(block: ProseNode, offset: number): string | null {
+  const s = buildBlockString(block)
+  if (s.indexOf('[[') === -1) return null
+  let edge: string | null = null
+  WIKILINK_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = WIKILINK_RE.exec(s))) {
+    const from = m.index
+    const to = m.index + m[0].length
+    if (offset < from || offset > to) continue
+    if (imageEmbed(m[1], from > 0 && s[from - 1] === '!')) continue
+    if (offset > from && offset < to) return wikiOpenArg(m[1])
+    edge ??= wikiOpenArg(m[1])
+  }
+  return edge
 }
 
 interface WikiState { focus: boolean; sourceFrom: number | null }
@@ -51,7 +85,7 @@ function displayLabel(inner: string, anchor: { target: string; subpath: string }
 
 function buildDecorations(
   state: EditorState,
-  onOpen: (name: string) => void,
+  onOpen: WikiOpen,
   isResolved: (name: string) => boolean,
   iconOf?: (name: string) => string | undefined,
 ): DecorationSet {
@@ -99,19 +133,25 @@ function buildDecorations(
       // 普通双链仍是「光标进入即源码」;图片是难源码编辑块,只有 `</>` 显式开门。
       if ((!img && onActiveLine) || (img && onActiveLine && sourceFrom === from)) continue
       if (img) {
+        const len = spTo - spFrom
         decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
         decos.push(
           Decoration.widget(
             from,
-            (view) => {
+            (view, getPos) => {
               // 包一层 span:`<img>` 是空元素,挂不了「查看源码」按钮(按钮须是子节点才好定位)。
               const wrap = document.createElement('span')
               wrap.className = 'wiki-inline-img-wrap'
               wrap.contentEditable = 'false'
               // ⚠️ 位置戳在 DOM 上:选中态由插件的 view.update 就地同步(见 syncPicked),
               // **绝不能**把 picked 写进装饰 key —— 那样一点击就换一份 DOM,后果见下面 key 处的注释。
-              wrap.dataset.srcFrom = String(from)
-              wrap.dataset.srcTo = String(to)
+              // key 也不带位置(P-04):同一份 DOM 会跨位置复用,戳记由 syncPicked 按 getPos 每次事务刷新。
+              stampSrc(wrap, getPos, len)
+              /** 本 widget 此刻的源码区间(复用后 from/to 已过期,一律现算)。 */
+              const span = (): { from: number; to: number } | null => {
+                const at = getPos()
+                return at == null ? null : { from: at, to: at + len }
+              }
               const el = document.createElement('img')
               el.className = 'wiki-inline-img'
               el.src = img.url
@@ -125,9 +165,11 @@ function buildDecorations(
               // 例外:独占一段的图片在统一编辑器里可以按住直接拖走整块,那次按下不能 preventDefault
               // (否则原生拖拽起不来),选中也挪到 click(见 imageDrag.ts)。
               const select = (): void => {
+                const at = span()
+                if (!at) return
                 const tr = standalone
-                  ? view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
-                  : view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to))
+                  ? view.state.tr.setSelection(NodeSelection.create(view.state.doc, at.from - 1)) // 独占一段:widget 在段首,段落 = at-1
+                  : view.state.tr.setSelection(TextSelection.create(view.state.doc, at.from, at.to))
                 view.dispatch(tr)
                 view.focus()
               }
@@ -139,8 +181,10 @@ function buildDecorations(
                 select()
               })
               attachSourceButton(wrap, view, () => {
-                const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(from + 1, view.state.doc.content.size)))
-                tr.setMeta(wikiKey, { sourceFrom: from })
+                const at = span()
+                if (!at) return
+                const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(at.from + 1, view.state.doc.content.size)))
+                tr.setMeta(wikiKey, { sourceFrom: at.from })
                 view.dispatch(tr)
                 view.focus()
               }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
@@ -151,7 +195,9 @@ function buildDecorations(
             // 公共祖先 `<p>`(实测 elementFromPoint 同样返回 P)—— 于是 wrap 上的 preventDefault
             // 轮不到执行,原生「选词」把选区撑过块边界、图片当场让位给源码,双击看大图一起落空。
             // 选中态改由 syncPicked 在 view.update 里就地打/摘属性,DOM 全程同一个节点。
-            { side: -1, ignoreSelection: true, key: `i${from}:${m![0]}` },
+            // key 也不带位置(P-04):带 from 的话上方打一个字,下游每张图都换 DOM、重新加载;standalone 进 key ——
+            // 它决定点击选段落还是选源码,闭包里捕获的是构建那一刻的值。
+            { side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}` },
           ),
         )
         continue
@@ -165,34 +211,44 @@ function buildDecorations(
       const label = displayLabel(m[1], anchor)
       const ok = anchor && !anchor.target ? true : isResolved(target)
       const emoji = ok && target ? iconOf?.(target) : undefined // 目标笔记的 emoji 图标,渲染在链接文字前
-      // 点击要保留的 subpath(m 是循环变量,须逐条捕获,勿在闭包里读 m):PDF 页码 `#page=` / 媒体时刻 `#t=`
-      // 原样交给 openWikiLink(据此跳页 / 起播);笔记锚点交「笔记#锚点」(别名剥掉),openWikiLink 拆开后
-      // 打开并定位。linkTarget 会把 `#…` 砍掉 —— 不走这里就是锚点静默蒸发(打开的永远是文首 / 0 秒)。
-      const openArg = fileAnchor ? m[1] : anchor ? `${anchor.target}#${anchor.subpath}` : target
+      // 点击要交给 openWikiLink 的串(m 是循环变量,须逐条捕获,勿在闭包里读 m;口径见 wikiOpenArg,与键盘跟随同源)。
+      const openArg = wikiOpenArg(m[1])
       decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
       decos.push(
         Decoration.widget(
           from,
-          () => {
+          (_view, getPos) => {
             const el = document.createElement('span')
             el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡虚线,点击询问创建
+            el.setAttribute('role', 'link') // 读屏认得是链接(L-20;键盘跟随走 Alt+Enter,不给 tabindex —— 焦点留在正文里)
             el.setAttribute('data-wiki', target)
-            el.dataset.srcFrom = String(from)
-            el.dataset.srcTo = String(to)
+            stampSrc(el, getPos, spTo - spFrom)
             if (emoji) {
               const ic = document.createElement('span')
               ic.className = 'wikilink-emoji' // inline-block 逃逸下划线传播(text-decoration 子元素关不掉)
               ic.textContent = emoji
               el.append(ic, label)
             } else el.textContent = label
+            // 按键分流(L-11):只有无修饰键的左键原地跳转;⌘/Ctrl+左键、中键 → 新标签页;
+            // 右键(含 mac 的 Ctrl+点击)不跳转 —— 同样 preventDefault(不落光标,免得这一行当场露出 `[[源码]]`),
+            // contextmenu 照常冒出系统菜单(下面拦住块层,见 contextmenu 那条)。Shift / Alt+左键放行给编辑器(扩选 / 落光标)。
             el.addEventListener('mousedown', (e) => {
+              const ctxGesture = e.button === 2 || (IS_MAC_PLATFORM && e.button === 0 && e.ctrlKey)
+              if (ctxGesture) { e.preventDefault(); return }
+              if (e.button === 1) { e.preventDefault(); onOpen(openArg, { newTab: true }); return }
+              if (e.button !== 0 || e.shiftKey || e.altKey) return
               e.preventDefault() // 不落光标、不进编辑态 → 直接跳转
-              onOpen(openArg)
+              onOpen(openArg, (IS_MAC_PLATFORM ? e.metaKey : e.ctrlKey) ? { newTab: true } : undefined)
             })
+            // 正文文字上右键 = 系统菜单(W2 右键规则):部件 DOM 带 contenteditable=false(PM 给 widget 加的),
+            // 块层的右键分类会把它当「非文字块件」弹块菜单 —— 在这里止住冒泡,系统菜单照出(不 preventDefault)。
+            el.addEventListener('contextmenu', (e) => e.stopPropagation())
             return el
           },
           // key 带解析态与 emoji:同 key 的 widget DOM 会被 ProseMirror 复用,状态翻转必须换 key 才会重建。
-          { side: -1, ignoreSelection: true, key: `w${from}:${m[0]}:${ok ? 1 : 0}:${emoji ?? ''}` },
+          // ⚠️ key **不带位置**(评审 P-04):带 from 的话在上方打一个字,下游 240 条双链每键整批重建。
+          //    闭包里只留与位置无关的东西(openArg / label);位置戳由 stampSrc + syncPicked 现算。
+          { side: -1, ignoreSelection: true, key: `w:${m[0]}:${ok ? 1 : 0}:${emoji ?? ''}` },
         ),
       )
     }
@@ -206,9 +262,23 @@ function buildDecorations(
  *  双击就此失灵(长注释见 buildDecorations 里 key 那一处)。 */
 const handles = new WeakMap<HTMLElement, () => void>()
 const marked = new WeakMap<EditorView, HTMLElement>()
+/** widget DOM → 取自己当前位置的函数 + 源码长度。key 不带位置,DOM 会跨位置复用(P-04),
+ *  所以 data-src-from/to 不能在构建时定死:syncPicked 每次事务先按它刷新,再拿来比选区。 */
+const srcOf = new WeakMap<HTMLElement, { getPos: () => number | undefined; len: number }>()
+function stampSrc(el: HTMLElement, getPos: () => number | undefined, len: number): void {
+  srcOf.set(el, { getPos, len })
+  const at = getPos()
+  if (at == null) return
+  el.dataset.srcFrom = String(at)
+  el.dataset.srcTo = String(at + len)
+}
 function syncPicked(view: EditorView): void {
   const { from, to } = view.state.selection
   const focus = wikiKey.getState(view.state)?.focus ?? false
+  for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
+    const s = srcOf.get(el)
+    if (s) stampSrc(el, s.getPos, s.len)
+  }
   // widget 的源码段被 display:none 藏住,浏览器原生 ::selection 涂不到渲染后的链接/图片。
   // 就地标记相交的 widget,只给它本身反馈,不把所在段落整块染色。
   for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
@@ -283,7 +353,7 @@ function adjacentPlainWiki(view: EditorView, dir: 'up' | 'down'): number | null 
 }
 
 export function wikilinkPlugin(
-  onOpen: (name: string) => void,
+  onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
   iconOf?: (name: string) => string | undefined,
 ) {
@@ -292,7 +362,7 @@ export function wikilinkPlugin(
       new Plugin<WikiState>({
         key: wikiKey,
         // 选中态就地同步:widget 的 DOM 全程不换(见 key 处的注释),所以「选中环 + 缩放把手」
-        // 只能在这里按当前选区打/摘。位置从 dataset 读 —— 位置一变 key 就变、DOM 本来就会重建。
+        // 只能在这里按当前选区打/摘。位置从 dataset 读 —— key 不带位置,DOM 跨位置复用,dataset 由 syncPicked 先刷新。
         view: () => ({ update: syncPicked }),
         state: {
           init: () => ({ focus: false, sourceFrom: null }),

@@ -13,11 +13,15 @@
 //   LC5 页面滚动 → 卡片收起(fixed 坐标是悬停那一刻的,滚走了不能钉在原处)
 //   L1~L5 链接末尾接着输入不并进链接(I-04):键盘 / 输入规则现场成链 / 交界处 / CDP 输入法 / 粘贴
 //   M1~M3 本地 md 链接(L-07):点击走库内打开(不补 https)、悬停卡「打开」同路、键入落盘逐字
+//   LK1~LK5 卡片动作作用于整条链接(I-07):`[**粗**普通](url)` 悬停半条也改 / 摘 / 删整条;只改地址不丢 code / 斜体 / 粗体
+//   HP1 双链悬停预览按链接所在笔记就近解析同名笔记(L-10):预览的就是点击会打开的那篇
+//   NT1~NT5 双链 / 库内 md 链接按鼠标键分流(L-11):右键不跳转不弹块菜单;中键、⌘(非 mac 为 Ctrl)+点击 → 新标签页
+//   FL1~FL6 打开光标处链接(L-20):Alt+Enter 跟随 / Alt+Shift+Enter 新标签页;不在链接上不吞键;命令面板那条作用于最近聚焦的编辑器
 //   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
 //          全角标点收尾成链、落盘 `<url>`(裸写会把 `。后` 吞进地址);ASCII 句末标点留在链接外;行内代码 / 字母后不成链
 //
 // 用法:node scripts/e2e-editor.cjs --check=linkcard(或 npm run check:linkcard)
-//      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
+//      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html;ONLY=LK 只跑某几组
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
 
@@ -374,16 +378,252 @@ async function bareUrlTyping(browser) {
   await p.close()
 }
 
+// ── LK 组(I-07):卡片的「编辑 / 移除 / 删除」作用于**整条**链接,不是悬停到的那一段;只改地址不丢 code / 斜体 / 粗体 ──
+// 药在 unified/linkCard.tsx 的 linkRangeAt(沿同一个 link mark 扩到相邻行内节点)与 rewrite(只改地址 = removeMark/addMark)。
+async function wholeLink(browser) {
+  /** 真鼠标悬停到 needle 那几个字上(DOM Range 取真实矩形),等 500ms 出卡。 */
+  const hoverOn = async (p, needle) => {
+    const pt = await p.evaluate(({ PM, needle }) => {
+      const w = document.createTreeWalker(document.querySelector(PM), NodeFilter.SHOW_TEXT)
+      while (w.nextNode()) {
+        const n = w.currentNode
+        const i = n.data.indexOf(needle)
+        if (i >= 0) { const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + needle.length); const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }
+      }
+      return null
+    }, { PM, needle })
+    await p.mouse.move(5, 5)
+    await p.waitForTimeout(100)
+    await p.mouse.move(pt.x, pt.y, { steps: 3 })
+    await p.waitForTimeout(900)
+  }
+  const cardBtn = (p, label) => p.evaluate((label) => { const b = [...document.querySelectorAll('.amx-linkcard button')].find((x) => x.textContent === label); if (!b) return false; b.click(); return true }, label)
+  const body = async (p) => { await p.waitForTimeout(1400); return ((await lastWrite(p)) || '').split('\n').filter(Boolean).slice(1).join(' | ') }
+  /** 首段文档模型:每个文本节点 `文字[mark,…]`,link 带地址。断言看模型而不是 md 串 —— 序列化器把外层格式
+   *  放在链接外面(`[**粗**普通](u)` 重写成 `**[粗](u)**[普通](u)`,同一个 link mark、语义不变),那是另一回事。 */
+  const para = (p) => p.evaluate(() => {
+    const out = []
+    const v = window.__upage.probe.view()
+    let first = null
+    v.state.doc.forEach((n) => { if (!first && n.type.name === 'paragraph') first = n })
+    first.forEach((n) => { if (n.isText) out.push(`${n.text}[${n.marks.map((m) => m.type.name === 'link' ? `link:${m.attrs.href}` : m.type.name).join(',')}]`) })
+    return out.join(' ')
+  })
+  /** 开编辑面板 → (可选)改文字 / 改地址 → 保存,返回 [面板里初始的两个值, 落盘正文, 首段模型]。 */
+  const editVia = async (md, needle, { text, href }) => {
+    const p = await open(browser, md, '')
+    await hoverOn(p, needle)
+    await cardBtn(p, '编辑')
+    await p.waitForTimeout(250)
+    const ins = await p.$$('.amx-linkedit input')
+    const init = ins.length === 2 ? [await ins[0].inputValue(), await ins[1].inputValue()] : null
+    if (init && text != null) await ins[0].fill(text)
+    if (init && href != null) await ins[1].fill(href)
+    await p.evaluate(() => document.querySelector('.amx-linkedit button.primary')?.click())
+    const out = await body(p)
+    const doc = await para(p)
+    await p.close()
+    return { init, out, doc }
+  }
+  const MIX = '# T\n\nalpha [**粗**普通](https://example.com) omega\n'
+  let r = await editVia(MIX, '普通', { href: 'https://new.com' })
+  check('LK1 悬停半条:编辑框里是整条链接的文字', JSON.stringify(r.init) === JSON.stringify(['粗普通', 'https://example.com']), JSON.stringify(r.init))
+  check('LK2 悬停半条只改地址:整条换地址(不劈成新旧两条)、粗体留着',
+    r.doc === 'alpha [] 粗[strong,link:https://new.com] 普通[link:https://new.com]  omega[]' && !r.out.includes('example.com'), JSON.stringify(r))
+  for (const [needle, label, want] of [['普通', '移除链接', 'alpha **粗**普通 omega'], ['粗', '删除', 'alpha  omega']]) {
+    const p = await open(browser, MIX, '')
+    await hoverOn(p, needle)
+    await cardBtn(p, label)
+    const out = await body(p)
+    check(`LK3 悬停「${needle}」点「${label}」:作用于整条`, out === want, JSON.stringify(out))
+    await p.close()
+  }
+  r = await editVia('# T\n\nsee [`useEffect`](https://a.dev/x) now\n', 'useEffect', { href: 'https://b.dev/y' })
+  check('LK4 只改地址不丢行内代码', r.out === 'see [`useEffect`](https://b.dev/y) now', JSON.stringify(r))
+  r = await editVia('# T\n\nsee [*斜体链接*](https://a.dev/x) now\n', '斜体链接', { href: 'https://b.dev/y' })
+  check('LK4 只改地址不丢斜体', r.doc.includes('斜体链接[emphasis,link:https://b.dev/y]') && !r.out.includes('a.dev'), JSON.stringify(r))
+  r = await editVia('# T\n\nsee [**全粗**](https://a.dev/x) now\n', '全粗', { text: '新名' })
+  check('LK5 改文字:整条都有的格式(粗体)留着', r.doc.includes('新名[strong,link:https://a.dev/x]'), JSON.stringify(r))
+}
+
+// ── HP 组(L-10):双链悬停预览按**链接所在笔记**就近解析 —— 同名笔记 a/Note、b/Note,在 b/Src 里悬停 [[Note]]
+// 预览的必须是 b/Note(= 点击打开的那篇)。药在 MarkdownBlock 钉的 data-amx-src 与 WikiHoverPreview 的读法。
+// 台架没挂 AmadeusOverlays:照生产把 WikiHoverPreview 挂进页面(用 app 自己那份 react / react-dom 模块)。
+async function hoverPreview(browser) {
+  const p = await open(browser, '# T\n\nx\n', '')
+  await p.evaluate(() => window.__upage.switchFile('b/Src.md', '# Src\n\n链接 [[Note]] 结束\n\n尾\n'))
+  await p.waitForTimeout(800)
+  await p.evaluate(async () => {
+    window.__pageStore.setState({ pages: ['a/Note.md', 'b/Note.md', 'b/Src.md'], files: [] })
+    window.__readReq = []
+    window.amadeus.readPage = (path) => {
+      window.__readReq.push(path)
+      return Promise.resolve({ manifest: { root: { children: [{ columns: [{ children: [{ ref: 'b1' }] }] }] } }, blocks: { b1: { content: 'PREVIEW OF ' + path } } })
+    }
+    const urls = performance.getEntriesByType('resource').map((e) => e.name)
+    const React = await import(urls.find((n) => /deps\/react\.js/.test(n)))
+    const RDC = await import(urls.find((n) => /deps\/react-dom_client\.js/.test(n)))
+    const hoverUrl = urls.find((n) => /\/src\/amadeus\/components\/WikiHoverPreview\.tsx/.test(n)) || '/src/amadeus/components/WikiHoverPreview.tsx'
+    const { WikiHoverPreview } = await import(hoverUrl)
+    const host = document.createElement('div')
+    host.className = 'amadeus-root am-app'
+    document.body.appendChild(host)
+    ;(RDC.createRoot || RDC.default.createRoot)(host).render((React.createElement || React.default.createElement)(WikiHoverPreview))
+  })
+  // 光标挪到别的段,让链接那行渲染成双链部件
+  const tail = await (await p.$(`${PM} > p:last-of-type`)).boundingBox()
+  await p.mouse.click(tail.x + tail.width - 2, tail.y + tail.height / 2)
+  await p.waitForTimeout(300)
+  const w = await p.evaluate((s) => { const e = document.querySelector(s + ' .wikilink[data-wiki]'); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, PM)
+  if (!w) { check('HP 前置 [[Note]] 渲染成双链部件', false); await p.close(); return }
+  await p.mouse.move(5, 5)
+  await p.mouse.move(w.x, w.y, { steps: 3 })
+  await p.waitForTimeout(1000)
+  const got = await p.evaluate(() => ({ req: window.__readReq, body: document.querySelector('.amx-hoverprev-body')?.textContent ?? null }))
+  check('HP1 同名笔记:悬停预览读的是链接所在目录那篇(b/Note.md)', JSON.stringify(got.req) === '["b/Note.md"]' && /PREVIEW OF b\/Note\.md/.test(got.body || ''), JSON.stringify(got))
+  await p.close()
+}
+
+// ── NT 组(L-11):链接按鼠标键分流 —— 无修饰左键原地开;⌘(非 mac 为 Ctrl)+左键、中键 → 新标签页(openWikiLink 第三参
+// {newTab:true});右键(含 mac 的 Ctrl+点击)不跳转、不弹块菜单、不吞系统菜单。双链部件与库内 md 链接两种都测。
+// 药在 wikilink.ts 部件的 mousedown / contextmenu 与 MarkdownBlock.handleLinkClick;store 那半在 pageStore.wikiNewTab.test。
+async function newTabClicks(browser) {
+  const p = await open(browser, '# T\n\n链接 [[Alpha]] 与 [读我](Note.md) 结束\n\n尾段\n', '')
+  await p.evaluate(() => {
+    window.__pageStore.setState({ pages: ['Alpha.md', 'Note.md', 'Unified.md'], files: [] })
+    window.__opened = []
+    window.__pageStore.setState({ openWikiLink: (n, src, o) => { window.__opened.push({ n, newTab: !!(o && o.newTab) }) } })
+    window.__wopen = []
+    window.open = (u) => { window.__wopen.push(u); return null }
+    window.addEventListener('contextmenu', (e) => { window.__ctxEv = e }, true)
+  })
+  const isMac = await p.evaluate(() => /Mac/.test(navigator.platform))
+  const tail = await (await p.$(`${PM} > p:last-of-type`)).boundingBox()
+  const at = async (sel) => {
+    await p.mouse.click(tail.x + tail.width - 2, tail.y + tail.height / 2) // 光标离开链接那行:双链渲染成部件
+    await p.waitForTimeout(200)
+    return p.evaluate((q) => { const e = document.querySelector(q); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } }, sel)
+  }
+  const got = async (fn) => {
+    const [o0, w0] = await p.evaluate(() => [window.__opened.length, window.__wopen.length])
+    await p.evaluate(() => { window.__ctxEv = null })
+    await fn()
+    await p.waitForTimeout(250)
+    const r = await p.evaluate(([o0, w0]) => ({
+      opened: window.__opened.slice(o0), wopen: window.__wopen.slice(w0),
+      ctxPrevented: window.__ctxEv ? window.__ctxEv.defaultPrevented : null,
+      menu: document.querySelectorAll('.unified-block-menu').length,
+      nodeSel: window.__upage.probe.view().state.selection.toJSON().type === 'node',
+    }), [o0, w0])
+    await p.keyboard.press('Escape')
+    return r
+  }
+  for (const [label, sel, name] of [['双链', `${PM} .wikilink[data-wiki]`, 'Alpha'], ['md 笔记链接', `${PM} a[href="Note.md"]`, 'Note.md']]) {
+    let pt = await at(sel)
+    if (!pt) { check(`NT 前置 ${label} 可点`, false); continue }
+    let r = await got(() => p.mouse.click(pt.x, pt.y, { button: 'right' }))
+    check(`NT1 ${label} 右键:不跳转、不弹块菜单、系统菜单不被吞`, r.opened.length === 0 && r.wopen.length === 0 && r.menu === 0 && !r.nodeSel && r.ctxPrevented === false, JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(() => p.mouse.click(pt.x, pt.y, { button: 'middle' }))
+    check(`NT2 ${label} 中键 → 新标签页`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: true }]), JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(async () => { await p.keyboard.down('Meta'); await p.mouse.click(pt.x, pt.y); await p.keyboard.up('Meta') })
+    check(`NT3 ${label} ⌘+点击 → ${isMac ? '新标签页' : '(非 mac:不是 Mod,原地开)'}`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: isMac }]), JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(async () => { await p.keyboard.down('Control'); await p.mouse.click(pt.x, pt.y); await p.keyboard.up('Control') })
+    check(`NT4 ${label} Ctrl+点击 → ${isMac ? '(mac 右键手势)不跳转' : '新标签页'}`, JSON.stringify(r.opened) === JSON.stringify(isMac ? [] : [{ n: name, newTab: true }]), JSON.stringify(r))
+    pt = await at(sel)
+    r = await got(() => p.mouse.click(pt.x, pt.y))
+    check(`NT5 ${label} 无修饰左键 → 原地开(不带 newTab)`, JSON.stringify(r.opened) === JSON.stringify([{ n: name, newTab: false }]), JSON.stringify(r))
+  }
+  check('NT 零写盘', (await writeCount(p)) === 0)
+  await p.close()
+}
+
+// ── FL 组(L-20):「打开光标处链接」—— 光标在 `[[…]]` / md 链接上按 Alt+Enter 跟随、Alt+Shift+Enter 新标签页;
+// 不在链接上不吞键、不改文档;命令面板那条(焦点已离开正文)作用在最近聚焦的编辑器上。
+// 药在 blocks/markdown/linkFollow.ts + MarkdownBlock.handleKeyDown;命令定义在 unified/linkCommands.ts。
+async function followAtCursor(browser) {
+  const seed = '# T\n\nsee [[Alpha#Sec|al]] and [ext](https://example.com) and [读我](Note.md) end\n\nplain line\n'
+  const p = await open(browser, seed, '')
+  await p.evaluate(() => {
+    window.__pageStore.setState({ pages: ['Alpha.md', 'Note.md', 'Unified.md'], files: [] })
+    window.__opened = []
+    window.__pageStore.setState({ openWikiLink: (n, src, o) => { window.__opened.push({ n, newTab: !!(o && o.newTab) }) } })
+    window.__wopen = []
+    window.open = (u) => { window.__wopen.push(u); return null }
+  })
+  /** 光标放进含 needle 的文字里(needle 之后第 k 个字),直接设 PM 选区再等一帧(别撞 selectionchange 竞态)。 */
+  const caretIn = (needle, k) => p.evaluate(([needle, k]) => {
+    const view = window.__upage.probe.view()
+    let at = -1
+    view.state.doc.descendants((n, pos) => {
+      if (at < 0 && n.isText && n.text.includes(needle)) at = pos + n.text.indexOf(needle) + k
+      return at < 0
+    })
+    let proto = Object.getPrototypeOf(view.state.selection)
+    while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+    view.focus()
+    view.dispatch(view.state.tr.setSelection(proto.constructor.near(view.state.doc.resolve(at))))
+    return at >= 0
+  }, [needle, k]).then(async (ok) => { await p.waitForTimeout(120); return ok })
+  const got = async (fn) => {
+    const [o0, w0, d0] = await p.evaluate(() => [window.__opened.length, window.__wopen.length, window.__upage.probe.view().state.doc.textContent])
+    await fn()
+    await p.waitForTimeout(250)
+    return p.evaluate(([o0, w0, d0]) => ({ opened: window.__opened.slice(o0), wopen: window.__wopen.slice(w0), docSame: window.__upage.probe.view().state.doc.textContent === d0 }), [o0, w0, d0])
+  }
+  let ok = await caretIn('Alpha', 2)
+  let r = await got(() => p.keyboard.press('Alt+Enter'))
+  check('FL1 光标在 [[Alpha#Sec|al]] 里 Alt+Enter → 跟随(带锚点、剥别名)', ok && JSON.stringify(r.opened) === '[{"n":"Alpha#Sec","newTab":false}]' && r.docSame, JSON.stringify(r))
+  ok = await caretIn('Alpha', 2)
+  r = await got(() => p.keyboard.press('Alt+Shift+Enter'))
+  check('FL2 Alt+Shift+Enter → 新标签页', ok && JSON.stringify(r.opened) === '[{"n":"Alpha#Sec","newTab":true}]' && r.docSame, JSON.stringify(r))
+  ok = await caretIn('ext', 1)
+  r = await got(() => p.keyboard.press('Alt+Enter'))
+  check('FL3 光标在外链 [ext](…) 上 Alt+Enter → 开外链', ok && JSON.stringify(r.wopen) === '["https://example.com"]' && r.opened.length === 0, JSON.stringify(r))
+  ok = await caretIn('读我', 1)
+  r = await got(() => p.keyboard.press('Alt+Enter'))
+  check('FL4 光标在库内 md 链接 [读我](Note.md) 上 Alt+Enter → 库内打开', ok && JSON.stringify(r.opened) === '[{"n":"Note.md","newTab":false}]', JSON.stringify(r))
+  ok = await caretIn('plain', 2)
+  r = await got(() => p.keyboard.press('Alt+Enter'))
+  check('FL5 光标不在链接上:什么都不开、文档不变', ok && r.opened.length === 0 && r.wopen.length === 0 && r.docSame, JSON.stringify(r))
+  // 命令面板那条:焦点离开正文(点标题框)后执行命令,作用在最近聚焦的编辑器光标处
+  ok = await caretIn('Alpha', 2)
+  await p.click('.amx-title-input')
+  await p.waitForTimeout(150)
+  r = await got(() => p.evaluate(async () => {
+    const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/unified\/linkCommands\.ts/.test(n)) || '/src/amadeus/unified/linkCommands.ts'
+    const { LINK_COMMANDS } = await import(url)
+    window.__titles = LINK_COMMANDS.map((c) => (typeof c.title === 'function' ? c.title() : c.title))
+    await LINK_COMMANDS.find((c) => c.id === 'amadeus-follow-link').run()
+  }))
+  const titles = await p.evaluate(() => window.__titles)
+  check('FL6 命令面板执行「打开光标处链接」(焦点不在正文)→ 最近聚焦编辑器的光标处', ok && JSON.stringify(r.opened) === '[{"n":"Alpha#Sec","newTab":false}]', JSON.stringify({ r, titles }))
+  check('FL6 命令标题按语言求值(title 是函数)', JSON.stringify(titles) === JSON.stringify(['打开光标处链接', '在新标签页打开光标处链接']), JSON.stringify(titles))
+  check('FL 零写盘', (await writeCount(p)) === 0)
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
   const long = '# T\n\n' + Array.from({ length: 40 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
-  await shell(browser, '?upage 短文', short, '')
-  await shell(browser, '&upane 长文', long, '&upane')
-  await scrollCloses(browser)
-  await typingAfterLink(browser)
-  await mdLinks(browser)
-  await bareUrlTyping(browser)
+  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP / NT / FL
+  const only = process.env.ONLY ? process.env.ONLY.split(',') : null
+  const want = (g) => !only || only.includes(g)
+  if (want('LC')) {
+    await shell(browser, '?upage 短文', short, '')
+    await shell(browser, '&upane 长文', long, '&upane')
+    await scrollCloses(browser)
+  }
+  if (want('L')) await typingAfterLink(browser)
+  if (want('M')) await mdLinks(browser)
+  if (want('AU')) await bareUrlTyping(browser)
+  if (want('LK')) await wholeLink(browser)
+  if (want('HP')) await hoverPreview(browser)
+  if (want('NT')) await newTabClicks(browser)
+  if (want('FL')) await followAtCursor(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

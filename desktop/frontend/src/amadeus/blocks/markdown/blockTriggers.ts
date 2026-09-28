@@ -6,8 +6,21 @@
 // 同级重打幂等;已在列表项内时 -/1./[] 改父列表类型/勾选态,不再嵌套包一层。
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Selection, type Transaction } from '@milkdown/kit/prose/state'
+import { closeHistory } from '@milkdown/kit/prose/history'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { registerMessages, translate } from '../../../i18n'
+
+// 选区工具栏「转换为」按钮上的当前块类型名(I-19:此前写死中文,英文界面照样显示「标题 2」)。
+registerMessages({
+  'blocklabel.text': { zh: '正文', en: 'Text' },
+  'blocklabel.heading': { zh: '标题 {n}', en: 'Heading {n}' },
+  'blocklabel.code': { zh: '代码', en: 'Code' },
+  'blocklabel.todo': { zh: '待办', en: 'To-do' },
+  'blocklabel.ordered': { zh: '有序列表', en: 'Numbered list' },
+  'blocklabel.bullet': { zh: '无序列表', en: 'Bulleted list' },
+  'blocklabel.quote': { zh: '引用', en: 'Quote' },
+})
 
 export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold' | 'code' | 'math'
 
@@ -29,6 +42,8 @@ export interface Trigger {
   checked?: boolean
   /** code 专用:围栏后的语言(```py → 'py');空串 = 纯文本。 */
   lang?: string
+  /** quote 专用:包好之后与紧邻的前/后 blockquote 合回一只(K-12,见 triggerAtCursor)。 */
+  rejoin?: boolean
 }
 
 /**
@@ -51,9 +66,20 @@ export function textBeforeCursor($from: ResolvedPos): string {
   return $from.parent.textBetween(0, $from.parentOffset, undefined, '￼')
 }
 
+/** 中文输入法直接出的全角标点 → 半角触发符(K-14):`【】`/`》`/`｜`/`···`/`￥￥`/`＃`。
+ *  `、`(顿号,中文键盘上反斜杠那颗键)故意不映射。逐字一对一换算,长度不变 —— 消费区间照旧按原文算。 */
+const FULLWIDTH_TRIGGER: Record<string, string> = { '【': '[', '】': ']', '》': '>', '｜': '|', '·': '`', '￥': '$', '＃': '#' }
+
+/** 只有**整行恰好就是触发符**时才换算(matchTrigger 的正则全是整串锚定,换完不命中就等于没换);
+ *  `1。` 单独限定成「纯数字 + 句号」,正文里的句号一概不碰。 */
+function halfWidthTrigger(b: string): string {
+  if (/^\d{1,9}。$/.test(b)) return `${b.slice(0, -1)}.`
+  return b.replace(/[【】》｜·￥＃]/g, (c) => FULLWIDTH_TRIGGER[c] ?? c)
+}
+
 /** 识别「光标前文本恰好是行首触发符」(空格尚未落字时调用;消费长度 = before.length)。 */
 export function matchTrigger(before: string): Trigger | null {
-  const b = before.replace(/\u00A0/g, ' ') // 行尾空格在 contenteditable 中是 nbsp("[ ]" 的空格即是)
+  const b = halfWidthTrigger(before.replace(/\u00A0/g, ' ')) // 行尾空格在 contenteditable 中是 nbsp("[ ]" 的空格即是)
   let m: RegExpExecArray | null
   if ((m = /^(#{1,6})$/.exec(b))) return { kind: 'heading', level: m[1].length }
   if (/^[-*+]$/.test(b)) return { kind: 'bullet' }
@@ -72,6 +98,37 @@ export function matchTrigger(before: string): Trigger | null {
 }
 
 /**
+ * 键盘入口(行首触发符 + 空格 / 回车)用的判定:matchTrigger 之外再看**光标之后**有没有内容。
+ *
+ * `>` = 折叠是给**空行起新块**定的键位(07-29)。光标后面已经有字 = 这是在给现成的一行补 `>`,最常见的
+ * 来路正是 K11 的字面化:callout/引用首段行首退格 → 得到字面 `>[!note] 标题`,补回空格想还原。按折叠处理
+ * 会把它包成一只新的折叠块(或包成独立引用、与后文的正文断开),往返不可逆(K-12 / K-12d)。
+ * 拍板 #5:不回退 K11,只修可逆性 —— 这种情况按引用处理,并与紧邻的 blockquote 合回一只。
+ * slash 菜单「折叠」走 applyTrigger 直调,不经这里,照旧是折叠。
+ */
+export function triggerAtCursor($from: ResolvedPos): Trigger | null {
+  const trig = matchTrigger(textBeforeCursor($from))
+  if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
+  return trig
+}
+
+/**
+ * 键盘触发(行首触发符 + 空格 / 回车)专用的 applyTrigger:触发符与转换之间断开撤销分组(K-21)。
+ * `typed` = 触发键本身要落的字(空格入口传 ' ',回车入口不传):先作为一次**真实插入**,再断开分组做转换
+ * —— 撤销一下回到字面 `# `(Notion 同),而不是连 `#` 带空格一起没了(快打)或只剩 `#`(慢打)。
+ * 转换之后也断开一次,紧接着打的正文自成一组,撤销时先撤字、再撤格式。
+ * 返回值 = 这一键是否已被处理:空格已经插进去了就算转换失败也是 true(等同浏览器默认插空格)。
+ */
+export function applyTypedTrigger(view: EditorView, trig: Trigger, typed?: string): boolean {
+  const start = view.state.selection.$from.start()
+  if (typed) view.dispatch(view.state.tr.insertText(typed))
+  view.dispatch(closeHistory(view.state.tr))
+  const ok = applyTrigger(view, trig, { from: start, to: view.state.selection.from })
+  view.dispatch(closeHistory(view.state.tr))
+  return ok || !!typed
+}
+
+/**
  * 实况预览里露出的完整行首源码 → 块类型。
  * 与 matchTrigger 的区别是这里包含「触发转换所需的尾随空格」，因此删掉任意关键字符后就不再
  * 命中，调用方会把残余源码还原成普通文本。这个空格是 Obsidian 式“渲染/源码”边界。
@@ -87,12 +144,15 @@ export function triggerFromStructuralPrefix(source: string): Trigger | null {
   return null
 }
 
-/** 光标前最近的 '/'(slash 菜单触发符)→ 消费区间;找不到返回 null。 */
-export function slashRange($from: ResolvedPos): { from: number; to: number } | null {
+/** 光标前最近的 '/'(slash 菜单触发符)→ 消费区间;找不到返回 null。
+ *  B-17:行中触发 slash 必须先补一个空格(`段甲内容 /h2`),这个空格是**触发语法**的一部分 —— 一并删掉,
+ *  否则落盘成 `## 段甲内容 `。行内插入(keepSpace,如单元格里的 `[[`)要接着正文往下写,保留它。 */
+export function slashRange($from: ResolvedPos, opts?: { keepSpace?: boolean }): { from: number; to: number } | null {
   const seg = textBeforeCursor($from)
   const idx = seg.lastIndexOf('/')
   if (idx < 0) return null
-  return { from: $from.start() + idx, to: $from.pos }
+  const lead = !opts?.keepSpace && idx > 0 && /\s/.test(seg[idx - 1]) ? 1 : 0
+  return { from: $from.start() + idx - lead, to: $from.pos }
 }
 
 /**
@@ -187,14 +247,14 @@ export interface BlockNode {
  */
 export function blockLabel(chain: BlockNode[]): string {
   for (const n of chain) {
-    if (n.name === 'heading') return `标题 ${n.level ?? 1}`
-    if (n.name === 'code_block') return '代码'
-    if (n.name === 'list_item' && n.checked != null) return '待办'
-    if (n.name === 'ordered_list') return '有序列表'
-    if (n.name === 'bullet_list') return '无序列表'
-    if (n.name === 'blockquote') return '引用'
+    if (n.name === 'heading') return translate('blocklabel.heading', { n: String(n.level ?? 1) })
+    if (n.name === 'code_block') return translate('blocklabel.code')
+    if (n.name === 'list_item' && n.checked != null) return translate('blocklabel.todo')
+    if (n.name === 'ordered_list') return translate('blocklabel.ordered')
+    if (n.name === 'bullet_list') return translate('blocklabel.bullet')
+    if (n.name === 'blockquote') return translate('blocklabel.quote')
   }
-  return '正文'
+  return translate('blocklabel.text')
 }
 
 function findDepth($p: ResolvedPos, name: string): number | null {
@@ -357,6 +417,16 @@ export function applyTrigger(
       tr.wrap(range, wrap)
       pos = tr.mapping.slice(n).map(pos) // wrap 插了容器开标签,位置整体后移
       $blk = tr.doc.resolve(pos)
+      if (trig.rejoin) {
+        // 与紧邻的 blockquote 合回一只(K-12):先并后面的(不影响前面的位置),再并前面的。
+        const d = findDepth($blk, 'blockquote')
+        if (d !== null) {
+          const end = $blk.after(d)
+          if (tr.doc.resolve(end).nodeAfter?.type === blockquote && canJoin(tr.doc, end)) tr.join(end)
+          const start = $blk.before(d)
+          if (tr.doc.resolve(start).nodeBefore?.type === blockquote && canJoin(tr.doc, start)) tr.join(start)
+        }
+      }
     } // 已在引用内:幂等,只消费触发符。
     // 折叠:在首行行首补 `[!fold]- ` 令牌(已经是 callout 就不重复补,重打幂等)。
     if (trig.kind === 'fold' && !CALLOUT_HEAD_RE.test($blk.parent.textContent)) {
@@ -389,6 +459,50 @@ export function applyTrigger(
   // 紧邻的前一个同类列表 → 并入(与内置 wrappingInputRule 同款)。
   const nb = tr.doc.resolve(range.start).nodeBefore
   if (nb && nb.type === listType && canJoin(tr.doc, range.start)) tr.join(range.start)
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+/**
+ * 代码块的「转换为」(R-23,评审 2026-09-27)。applyTrigger 按文本块走,对代码块全不对:正文 / 标题的 setBlockType
+ * 把代码里的换行压成空格;列表类在代码块上 findWrapping 失败 → 静默无效;折叠把 `[!fold]-` 插进代码首行。
+ * 这里按行拆:正文 / 标题 → 每行一块(空行 = 空段落);列表类 → 每行一项(空行跳过,全空给一个空项);
+ * 引用 → 整块包进引用(`> ```js` 是合法形态);折叠 → 包进 `> [!fold]-` 折叠 callout(令牌是 callout 首段,不进代码)。
+ * 其余(code / math)或 schema 不允许 → false,调用方照旧。pos = 代码块节点起点。都能撤销(一个事务)。
+ */
+export function codeBlockTurnInto(view: EditorView, pos: number, trig: Trigger): boolean {
+  const { state } = view
+  const node = state.doc.nodeAt(pos)
+  if (!node || !node.type.spec.code) return false
+  const { schema } = state
+  const { paragraph, heading, blockquote, bullet_list: bulletList, ordered_list: orderedList, list_item: listItem } = schema.nodes
+  if (!paragraph) return false
+  const lines = node.textContent.split('\n')
+  const para = (l: string): ProseNode => paragraph.create(null, l ? schema.text(l) : null)
+  let blocks: ProseNode[]
+  if (trig.kind === 'text' || trig.kind === 'heading') {
+    if (trig.kind === 'heading' && !heading) return false
+    blocks = lines.map((l) => (trig.kind === 'heading' && l ? heading.create({ level: trig.level ?? 1 }, schema.text(l)) : para(l)))
+  } else if (trig.kind === 'bullet' || trig.kind === 'ordered' || trig.kind === 'task') {
+    const listType = trig.kind === 'ordered' ? orderedList : bulletList
+    if (!listType || !listItem) return false
+    const attrs = trig.kind === 'task' ? { checked: trig.checked ?? false } : null
+    const texts = lines.filter((l) => l.trim())
+    const items = (texts.length ? texts : ['']).map((l) => listItem.create(attrs, para(l)))
+    blocks = [listType.create(trig.kind === 'ordered' ? { order: trig.order ?? 1 } : null, items)]
+  } else if (trig.kind === 'quote' || trig.kind === 'fold') {
+    if (!blockquote) return false
+    blocks = [blockquote.create(null, trig.kind === 'fold' ? [paragraph.create(null, schema.text(FOLD_TOKEN)), node] : [node])]
+  } else {
+    return false
+  }
+  const tr = state.tr
+  try {
+    tr.replaceWith(pos, pos + node.nodeSize, blocks)
+  } catch {
+    return false // 所在容器收不下这些块(schema 拒绝):不动
+  }
+  tr.setSelection(Selection.near(tr.doc.resolve(Math.min(pos + 1, tr.doc.content.size))))
   view.dispatch(tr.scrollIntoView())
   return true
 }

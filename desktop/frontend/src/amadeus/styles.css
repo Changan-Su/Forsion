@@ -1547,6 +1547,8 @@ body.amx-marquee-active * {
   background: var(--menu-hover);
   color: var(--text);
 }
+/* A▾ 上的「A」染成选区当前的文字色 / 背景色(I-19);没有统一颜色时就是普通字色。 */
+.am-app .itb-color-cur { padding: 0 2px; border-radius: 2px; }
 .am-app .itb-color-head {
   font-size: var(--ui-font-caption, 11px);
   font-weight: 600;
@@ -1726,6 +1728,10 @@ body.amx-marquee-active * {
 /* 空结构行进入字面 Markdown 前缀后，`- ` / `## ` 已经承担行首内容；继续画空行提示会与
    input 完全重叠，把真实前缀遮掉（原生列表 marker 此时又已让位，看起来就只剩一条空行）。 */
 .am-app .milkdown .ProseMirror .is-empty:has(.amx-struct-prefix)::before {
+  content: none;
+}
+/* 异步插入的占位钉在空行里(评审 G3-06):空行提示别从占位胶囊底下漏出来。 */
+.am-app .milkdown .ProseMirror .is-empty:has(.amx-pending-insert)::before {
   content: none;
 }
 
@@ -2341,6 +2347,8 @@ body.amx-marquee-active * {
   border-color: var(--danger, #e5484d);
   color: var(--on-danger, #fff);
 }
+/* 次要出口(如编辑链接的「移除链接」)靠左,与取消/确定分开。 */
+.am-app .dialog-btn[data-alt] { margin-right: auto; }
 
 /* ── Theme picker ─────────────────────────────────────────── */
 .am-app .sidebar {
@@ -3013,6 +3021,9 @@ body.amx-marquee-active * {
   background: var(--border);
   margin: 3px 4px;
 }
+/* 块菜单里置灰但仍可悬停看原因的项(aria-disabled,B-05:多选时的「移到新列」)。 */
+.am-app .unified-block-menu button[aria-disabled='true'] { opacity: 0.4; cursor: default; }
+.am-app .unified-block-menu button[aria-disabled='true']:hover { background: transparent; }
 /* 块菜单里的当前态(表格区的列对齐,K-10):勾放末列(DESIGN §3 菜单几何:状态置于末列)。 */
 .ubm-check {
   margin-left: auto;
@@ -4070,6 +4081,9 @@ body.amx-marquee-active * {
 }
 .am-app .am-agent-capsule > svg { flex: 0 0 auto; color: var(--green); }
 .am-app .am-agent-capsule-text { font-weight: 500; white-space: nowrap; }
+.am-app .am-agent-capsule-hint { color: var(--text-muted); padding-right: 6px; }
+/* 「正在修改」与「修改了 N 处」可能同时在(一次写完、下一次又开始):两条都是 sticky 底边,错开一层不叠在一起。 */
+.am-app .am-agent-capsule.is-live { bottom: 60px; }
 .am-app .am-agent-capsule-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
 .am-app .am-agent-capsule .btn.sm { border-radius: var(--radius-pill); }
 /* 画布底边正中是舞台的元素工具条:胶囊抬到它上方,别压住。 */
@@ -4080,6 +4094,35 @@ body.amx-marquee-active * {
   margin: 0;
   translate: -50% 0;
 }
+.am-app .amx-canvas .am-agent-capsule.is-live { bottom: 116px; }
+
+/* 异步插入的占位(评审 G3-06):插件 slash / 建文件 / 选图片的结果回来之前,钉在唤起处、随编辑映射。
+   行内胶囊,外形沿用上面 Agent 胶囊的描边 / 圆角 / 字号 token;只记位置的锚(data-hidden)不占地方。 */
+.am-app .amx-pending-insert {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 3px 1px 8px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+  vertical-align: middle;
+  user-select: none;
+}
+.am-app .amx-pending-insert[data-hidden] { display: none; }
+.am-app .amx-pending-insert-spin {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.am-app .amx-pending-insert .btn.sm { border-radius: var(--radius-pill); }
 
 /* ── 正文 AI(评审 G3-07):目标淡底 + 预览面板。面板外壳走共享 `.ui-popover`(字体 / 描边 / 圆角 / 阴影),
    这里只管内容布局;色值只消费语义 token。 */

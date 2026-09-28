@@ -60,7 +60,7 @@ describe('粘贴:外来颜色丢弃(D-09)', () => {
     expect(await paste('<span style="background-color: rgb(255, 255, 0);">web highlighted</span>')).toBe('web highlighted\n')
   })
   it('外来 <mark> 保留高亮语义、丢外来底色', async () => {
-    // 只看 mark attrs:无色 `<mark>` 落盘被补成 `style="background:"` 是 D-18(rtcorpus d18.mark_html,另案)
+    // 只看 mark attrs(无色 `<mark>` 的落盘形态见文末 I-16e 那组)
     const b = await boot()
     const slice = DOMParser.fromSchema(b.view.state.schema).parseSlice(html('<mark style="background: rgb(1, 2, 3)">hl</mark>'))
     const marks: Array<{ name: string; bg: unknown }> = []
@@ -102,5 +102,19 @@ describe('toDOM:存量里被旧版写成 rgb() 的色板色也认回语义名(�
     expect(dom.querySelector('span[style*="color"]')?.getAttribute('data-hlc')).toBe('red')
     expect(dom.querySelector('mark')?.getAttribute('data-hl')).toBe('yellow')
     expect(b.md(b.view.state.doc)).toBe('<span style="color:rgb(198, 34, 34)">a</span> <mark style="background:rgb(254, 243, 161)">b</mark>\n')
+  })
+})
+
+describe('裸 <mark> 往返(I-16e)', () => {
+  // 修前:无色高亮序列化成 `<mark style="background:">`,读侧 openTag 要求颜色值非空 → 重开退成字面,高亮永久丢失。
+  it('读进来是无色高亮,写回仍是裸 <mark>;重开还是高亮', async () => {
+    const b = await boot('m: <mark>高亮</mark> 完\n')
+    const out = b.md(b.view.state.doc)
+    expect(out).toBe('m: <mark>高亮</mark> 完\n')
+    await ed?.destroy()
+    const c = await boot(out)
+    const marks: string[] = []
+    c.view.state.doc.descendants((n) => { for (const m of n.marks) marks.push(`${m.type.name}:${String(m.attrs.bg)}`) })
+    expect(marks).toEqual(['amadeusBg:'])
   })
 })

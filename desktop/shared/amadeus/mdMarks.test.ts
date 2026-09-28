@@ -46,9 +46,19 @@ describe('parseMdMarks', () => {
     expect(parse(`开会 @${D}讨论方案`)).toEqual([])
   })
 
-  it('负对照:@ 前非空白不触发(邮箱 / 词中 @)', () => {
+  it('负对照:@ 紧挨 ASCII 邮箱字符不触发(邮箱 / 词中 @)', () => {
     expect(parse(`寄给 foo@${D} 看看`)).toEqual([])
     expect(parse(`a@${DT}`)).toEqual([])
+    expect(parse(`v2@${D}\nx.y@${D}\na_b@${D}\nc-d@${D}\ne+f@${D}\n9@${D}`)).toEqual([])
+  })
+
+  it('L-18(拍板 #18):汉字 / 中文标点紧挨 @ 照样是标记,摘完不粘字', () => {
+    expect(parse(`开会@${D}`).map((m) => [m.text, m.due])).toEqual([['开会', D]])
+    expect(parse(`- [ ] 交周报@${DT}`).map((m) => [m.text, m.due, m.isTask])).toEqual([['交周报', DT, true]])
+    expect(parse(`截止：@${D}，别忘`).map((m) => [m.text, m.due])).toEqual([['截止： ，别忘', D]])
+    expect(parse(`吃药@remind:${DT}`)[0]).toMatchObject({ text: '吃药', remind: DT })
+    // 回写:只换标记本身,紧挨的汉字一个不动
+    expect(withDue(`开会@${D}`, '2026-10-02')).toBe('开会@2026-10-02')
   })
 
   it('负对照:日期形状不对不触发', () => {

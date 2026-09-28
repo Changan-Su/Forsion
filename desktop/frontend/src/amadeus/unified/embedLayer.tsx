@@ -304,7 +304,7 @@ function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePa
           focusPlace={null}
           onFocused={noop}
           requestSelfFocus={noop}
-          onOpenWiki={(name) => openWikiLink(name, embed.owner)}
+          onOpenWiki={(name, o) => openWikiLink(name, embed.owner, o)}
           getPageNames={() => pages}
         />
       ) : (
@@ -610,8 +610,14 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         return {
           destroy: () => {
             viewRef = null
-            for (const [, e] of roots) queueMicrotask(() => e.root.unmount())
-            roots.clear()
+            // 插件表原地重配(评审 G1-06:插件扩展启停)时 PM 会拆掉**全部**插件视图再同步建回来,而嵌入 widget 的 DOM
+            // 原样留在文档里(装饰没变,PM 复用它们)—— 此刻无条件卸 React 根,每个嵌入都成了空壳。推到微任务再看:
+            // 同一个插件实例已经建回了视图 = 只是重配,根照旧用;没人接手 = 编辑器真拆了,再卸。
+            queueMicrotask(() => {
+              if (viewRef) return
+              for (const [, e] of roots) e.root.unmount()
+              roots.clear()
+            })
           },
         }
       },

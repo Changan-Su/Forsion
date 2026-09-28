@@ -9,8 +9,10 @@
  *    原地替换,「首块填进空块」的语义在那边免费拿到)。 */
 import { amadeus } from '@amadeus/api'
 import { noteOf, usePageStore } from '@amadeus/store/pageStore'
-import { unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
+import { unifiedFmNow, unifiedInsertMarkdown, unifiedPatchFm } from '@amadeus/unified/lifecycle'
 import { BLOCK_MARKER_RE } from '@amadeus-shared/compiler/markers'
+import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
+import { templateFmPatch } from './amadeusTemplateFm'
 import { openNote } from './amadeusNav'
 import type { TemplateCtx } from './amadeusOverlayStore'
 import { dailyNotePath, dailyTemplatePath, parseObsidianCfg, substituteTemplateVars, type ObsidianDailyCfg, type ObsidianTemplatesCfg } from '@amadeus/lib/templateVars'
@@ -33,6 +35,14 @@ async function obsidianCfg<T extends object>(name: string): Promise<Partial<T>> 
 function substitute(content: string, targetPath: string, cfg: Partial<ObsidianTemplatesCfg>): string {
   const title = (targetPath.split('/').pop() ?? '').replace(/\.md$/i, '')
   return substituteTemplateVars(content, { title, dateFormat: cfg.dateFormat, timeFormat: cfg.timeFormat, locale: currentLocale() })
+}
+
+/** 值里的字符串逐个替换变量(列表 / 嵌套对象递归);其它类型原样。 */
+function substituteValue(v: unknown, targetPath: string, cfg: Partial<ObsidianTemplatesCfg>): unknown {
+  if (typeof v === 'string') return substitute(v, targetPath, cfg)
+  if (Array.isArray(v)) return v.map((x) => substituteValue(x, targetPath, cfg))
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, substituteValue(x, targetPath, cfg)]))
+  return v
 }
 
 /** 模板文件的块内容(按布局顺序摊平,已替换变量)。
@@ -65,19 +75,48 @@ async function insertIntoUnified(path: string, md: string, tries = 60): Promise<
   return false
 }
 
+/** 模板 fm 并进 v4 笔记(G4-09):经实例的 fm 写口 unifiedPatchFm(与属性面板同一条外科写、单写者管线);
+ *  目标已有的键不覆盖,tags / aliases 取并集(templateFmPatch)。与 insertIntoUnified 同理等实例就绪(只有 fm、
+ *  没有正文的模板不经过那一步等待)。没有要改的也算成功。 */
+async function patchIntoUnified(path: string, tplFm: Record<string, unknown>, tries = 60): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    const cur = unifiedFmNow(path)
+    if (cur != null) {
+      const patch = templateFmPatch(tplFm, parseFmObject(cur))
+      if (!patch) return true
+      const done = unifiedPatchFm(path, patch)
+      if (done) {
+        await done
+        return true
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return false
+}
+
 /** 把模板插进目标笔记。ctx.v4Path 在场 = 统一实例路由;否则走 v3 的块坐标。 */
 export async function insertTemplate(templatePath: string, ctx: TemplateCtx): Promise<void> {
   const [page, cfg] = await Promise.all([amadeus.readPage(templatePath), obsidianCfg<ObsidianTemplatesCfg>('templates')])
   const target = ctx.v4Path ?? noteOf(ps()) ?? ''
   const contents = templateBlocks(page, target, cfg)
-  if (!contents.length) return
+  // 模板自带的 frontmatter(G4-09):此前整段丢弃。v4 经实例的 fm 写口(unifiedPatchFm,与属性面板同一条外科写)合并。
+  // fm 值里的变量与正文同一套规则替换(G4-10 templateVars:`{{date:fmt}}`、大小写 / 空白容忍、templates.json 缺省格式)。
+  const tplFm = page.manifest.fmExtra ? (substituteValue(parseFmObject(page.manifest.fmExtra), target, cfg) as Record<string, unknown>) : {}
+  if (!contents.length && !Object.keys(tplFm).length) return
   if (ctx.v4Path) {
     // 块之间空行分隔 = 与 compile() 写盘时的段落间距同形,插进去按原样重新分块呈现。
-    if (!(await insertIntoUnified(ctx.v4Path, contents.join('\n\n')))) {
+    if (contents.length && !(await insertIntoUnified(ctx.v4Path, contents.join('\n\n')))) {
       console.warn(`[amadeus] 模板插入失败:${ctx.v4Path} 上没有能收字的统一实例`)
+      return
+    }
+    if (Object.keys(tplFm).length && !(await patchIntoUnified(ctx.v4Path, tplFm))) {
+      console.warn(`[amadeus] 模板属性未写入:${ctx.v4Path} 上没有能收 fm 的统一实例`)
     }
     return
   }
+  // ponytail: v3 块编辑器路径不合并模板 fm(v4「打开即升」后只剩旧宿主在用)。
+  if (!contents.length) return
   const st = ps()
   let rest = contents
   if (ctx.emptyBlock && ctx.afterId) {

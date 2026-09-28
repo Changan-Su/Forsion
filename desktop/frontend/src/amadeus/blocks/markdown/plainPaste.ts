@@ -48,3 +48,18 @@ export function droppedTextMarkdown(text: string, plain: boolean): string | null
 export function isPlainMultiline(text: string): boolean {
   return /(?<!\n)\n(?!\n)/.test(text.replace(/\r\n?/g, '\n').trim()) && !looksLikeMarkdown(text)
 }
+
+// ── 单行纯文本粘进一段已有文字的中间(D-13,评审 2026-09-27)────────────────────────────────────────────
+// 原先一律当 markdown 解析:` world ` 首尾空格被吃成 `helloworld`;`2024. A good year` 被解析成「从 2024 起的有序列表」,
+// 行内插入时丢掉 `2024.`;`- 2 cups`、`# 标题`、`> 引文` 同理丢掉行首标记。Obsidian 逐字插入。
+// 口径(不是一律 insertText —— 句中粘 `**粗**`、`[文字](url)` 仍要成格式):
+//  · 解析出来是**单个段落**(只有行内标记)→ 照常走解析;首尾空白另外原样补回(解析会吃掉它们)。
+//  · 解析出别的块结构(列表 / 标题 / 引用 / 分割线 / 代码…)→ 在一段文字中间没法成立 → 原文逐字插入。
+//  · 空段落里粘贴不归这里(转结构与 Obsidian 一致),调用方判。
+export type SingleLinePaste = 'default' | 'literal' | 'inline-ws'
+
+/** 单行文本粘进非空文本块时的处理方式。parsedTop = 解析结果顶层块的类型名(按序)。 */
+export function singleLinePasteMode(raw: string, parsedTop: readonly string[]): SingleLinePaste {
+  if (parsedTop.length !== 1 || parsedTop[0] !== 'paragraph') return 'literal'
+  return raw.trim() !== raw ? 'inline-ws' : 'default'
+}

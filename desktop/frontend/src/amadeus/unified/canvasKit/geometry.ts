@@ -16,6 +16,9 @@ export const MIN_Z = 0.25
 export const MAX_Z = 2.5
 /** 方向键微移一步(不吸附时)。 */
 export const NUDGE = 8
+/** 方向键微移的步长 —— 画布与仪表盘**同一份**(V-11:两边分叉过,画布是 8 / Shift=1、不看吸附)。
+ *  开点阵吸附 = 一格;否则 Shift = 4 倍,缺省 NUDGE。 */
+export const nudgeStep = (snap: boolean, shift: boolean): number => (snap ? GRID_STEP : shift ? NUDGE * 4 : NUDGE)
 /** 指针一次都没真正移动过(纯点击)的判据,**舞台单位**。 */
 export const CLICK_SLOP = 3
 /** 触屏版同一道闸,**屏幕像素** —— 进 onDown 时才 ÷(z × 页面 zoom)换算成舞台单位。

@@ -21,9 +21,10 @@ export interface NoteRenamePlan {
   pagesAfter: readonly string[]
 }
 
-/** inner 拆成笔记名 + 尾巴:笔记名止于第一个 `#` 或 `|`(与 linkTarget 的语义一致)。 */
+/** inner 拆成笔记名 + 尾巴:笔记名止于第一个 `#`、`|` 或表格里的 `\|`(与 linkTarget 的语义一致,L-09);
+ *  尾巴原样接回 —— 表格里的 `\|别名` 改名后仍是 `\|别名`,不许把单元格拆开。 */
 const splitInner = (inner: string): { note: string; suffix: string } => {
-  const cut = inner.search(/[#|]/)
+  const cut = inner.search(/\\\||[#|]/)
   return cut < 0 ? { note: inner, suffix: '' } : { note: inner.slice(0, cut), suffix: inner.slice(cut) }
 }
 

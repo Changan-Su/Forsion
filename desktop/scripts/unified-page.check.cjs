@@ -547,16 +547,21 @@ async function main() {
     )
     await p7c.close()
 
-    // P8:＋ 在下方插入段落并聚焦(打字直接落新段)。
+    // P8:＋ 在下方插入新块并当场打开块选择器(新块里是 ＋ 替用户敲的 `/`,B-19);Esc 关菜单把 `/` 删掉,
+    //     打字直接落进新段。
     await hoverBlock(p7, `${PM} > p`)
     await p7.click('.unified-gutter .block-add')
+    await p7.waitForTimeout(250)
+    const p8menu = await p7.locator('.slash-menu').count()
+    await p7.keyboard.press('Escape')
+    await p7.waitForTimeout(150)
     await p7.keyboard.type('新插入段')
     await p7.waitForTimeout(200)
     const p8 = await p7.evaluate((s) => {
       const ps = [...document.querySelector(s).querySelectorAll(':scope > p')].map((x) => x.textContent)
       return ps
     }, PM)
-    record('P8 ＋ 插入下方段落并聚焦', p8[0] === '段一。' && p8[1] === '新插入段', JSON.stringify(p8))
+    record('P8 ＋ 插入下方新块、开 slash 菜单,Esc 清掉 `/` 后打字进新段', p8menu === 1 && p8[0] === '段一。' && p8[1] === '新插入段', JSON.stringify({ p8menu, p8 }))
 
     // P9:点 ⠿ → 菜单;转换为标题 2;再点 ⠿ → 删除。
     await hoverBlock(p7, `${PM} > p`) // 段一
@@ -576,6 +581,48 @@ async function main() {
       menu: !!document.querySelector('.unified-block-menu'),
     }), PM)
     record('P9 把手菜单:转换为 H2 + 删除', !!p9a?.endsWith('段一。') && !p9b.h2 && !p9b.menu, JSON.stringify({ p9a, p9b }))
+
+    // P9c(R-23):代码块「转换为」按行拆,不把换行压成空格;列表类不再静默无效;折叠 = 包进 `> [!fold]-`,令牌不进代码首行。
+    {
+      const CODE = '段一\n\n```js\nline1\nline2\n```\n\n段尾\n'
+      const turn = async (label) => {
+        const pg = await browser.newPage({ locale: 'zh-CN' })
+        pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+        await pg.goto(`${URL}?upage&useed=${encodeURIComponent(CODE)}`, { waitUntil: 'domcontentloaded' })
+        await pg.waitForSelector(`${PM} pre`, { timeout: 20000 })
+        await pg.waitForTimeout(400)
+        await hoverBlock(pg, `${PM} > pre`)
+        await pg.click('.unified-gutter .drag-handle')
+        await pg.waitForSelector('.unified-block-menu', { timeout: 3000 })
+        await pg.locator('.unified-block-menu button', { hasText: label }).first().click()
+        await pg.waitForTimeout(1300)
+        const saved = await pg.evaluate(() => (window.__upage.writes.at(-1) || {}).text || null)
+        const shape = () => pg.evaluate(() => {
+          const o = []
+          const walk = (n) => n.forEach((c) => { o.push(c.type.name + (c.attrs.level || '') + (c.isTextblock ? ':' + JSON.stringify(c.textContent) : '')); if (!c.isTextblock && !c.isLeaf) walk(c) })
+          walk(window.__upage.probe.view().state.doc)
+          return o.join(' / ')
+        })
+        const now = await shape()
+        let reopened = null
+        if (saved) {
+          await pg.evaluate((t) => window.__upage.switchFile('Other.md', t), saved)
+          await pg.waitForTimeout(700)
+          reopened = await shape()
+        }
+        await pg.close()
+        return { saved, now, reopened }
+      }
+      const tx = await turn('正文')
+      record('P9c 代码块 → 正文:按行拆成段落,换行不压成空格', tx.saved === '段一\n\nline1\n\nline2\n\n段尾\n', JSON.stringify(tx))
+      const h1 = await turn('标题 1')
+      record('P9c 代码块 → 标题 1:每行一个标题', h1.saved === '段一\n\n# line1\n\n# line2\n\n段尾\n', JSON.stringify(h1))
+      const ul = await turn('无序列表')
+      record('P9c 代码块 → 无序列表:每行一项(修前静默无效)', /\n[-*] line1\n[-*] line2\n/.test(ul.saved || ''), JSON.stringify(ul))
+      const fd = await turn('折叠')
+      record('P9c 代码块 → 折叠:包进 `> [!fold]-`,令牌不进代码首行,重开仍是 callout 里的代码块',
+        /> \[!fold\]-\n/.test(fd.saved || '') && !/\[!fold\]-line1/.test(fd.saved || '') && /blockquote \/ paragraph:"\[!fold\]-" \/ code_block:"line1\\nline2"/.test(fd.reopened || ''), JSON.stringify(fd))
+    }
 
     // P10:Esc 两段(文字 → 块选中 → 回文字);列表项内 Esc 选中整个 list_item。
     // 各步之间 150ms 落定:click → PM 经 selectionchange **异步**同步选区,0ms 后立刻 Esc
