@@ -2714,6 +2714,41 @@ body.amx-marquee-active * {
 .math-src-hidden { display: none; }
 /* 双链实况(见 blocks/markdown/wikilink.ts):离行时隐藏 [[ ]] 源码、就地渲染成链接;在行时露源码可编辑。 */
 .wikilink-src-hidden { display: none; }
+/* Obsidian 行内语法实况(见 blocks/markdown/obsidianInline.ts):`==高亮==` / `%%注释%%` 是纯文本 + 装饰。
+   光标不在该处时定界符 / 整条注释藏起来;高亮底与无色 <mark> 同一档(上方 .ProseMirror mark),不另起色板。 */
+.amx-obs-hidden { display: none; }
+.am-app .ProseMirror .amx-obs-hl {
+  background: color-mix(in srgb, var(--primary, var(--accent)) 18%, transparent);
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.am-app .ProseMirror .amx-obs-delim,
+.am-app .ProseMirror .amx-obs-cmt { color: var(--text-muted); }
+.am-app .ProseMirror .amx-obs-cmt-badge {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 4px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  line-height: 1.4;
+  vertical-align: 0.1em;
+  cursor: text;
+  user-select: none;
+}
+/* <kbd>(marks.ts kbdSchema):与命令面板底栏的键帽同一套 token,字号随正文。 */
+.am-app .ProseMirror kbd {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm, 6px);
+  padding: 0 4px;
+}
 /* 行内 `![[pic.png]]`:混在文字里的图片嵌入(整块只有它一条时走块级 embed,见 BlockHost)。
    照 Obsidian 的观感:原尺寸随行排版、只限宽不限高;`|200` 写死的宽度由 inline style 接管。 */
 .wiki-inline-img {

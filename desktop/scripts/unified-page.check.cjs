@@ -959,6 +959,85 @@ async function main() {
     await pg.close()
   }
 
+  // P14e:Obsidian 行内语法实况(I-17,拍板 #11)。`==高亮==` / `%%注释%%` 是纯文本 + 装饰(obsidianInline.ts):
+  //   光标不在那处 → 定界符 / 整条注释藏起来(注释留一枚徽章);光标碰到 → 露源码可编辑。<kbd>/<sub>/<sup> 是可编辑 mark
+  //   (不再是开合两个 contenteditable=false 原子)。行内代码与 `===` 不误伤;打开零写盘;⌘⇧H 切换 `==`。
+  {
+    const seed = '# T\n\nhl: x ==高亮== y\n\ncmt: 文字 %%注释%% 结尾\n\n%%\n多行注释\n%%\n\nkbd: 按 <kbd>Cmd</kbd> 与 H<sub>2</sub>O x<sup>2</sup>\n\ncode: `==不是==` 与 a === b\n\n末段文字\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    /** 段落可见文字(innerText 不含 display:none)+ 各装饰 / 标签计数。 */
+    const look = () => pg.evaluate((s) => {
+      const ps = [...document.querySelector(s).querySelectorAll(':scope > p')]
+      const txt = (k) => (ps.find((p) => p.textContent.startsWith(k)) || { innerText: '' }).innerText
+      return {
+        hl: txt('hl:'), cmt: txt('cmt:'), code: txt('code:'),
+        hlText: [...document.querySelectorAll(s + ' .amx-obs-hl')].map((e) => e.textContent),
+        delims: document.querySelectorAll(s + ' .amx-obs-delim').length,
+        badges: document.querySelectorAll(s + ' .amx-obs-cmt-badge').length,
+        multiHidden: !ps.some((p) => p.innerText.includes('多行注释')),
+        kbd: [...document.querySelectorAll(s + ' kbd')].map((e) => e.textContent).join(','),
+        sub: document.querySelectorAll(s + ' sub').length, sup: document.querySelectorAll(s + ' sup').length,
+        atoms: document.querySelectorAll(s + ' [data-type="html"]').length,
+      }
+    }, PM)
+    const caretIn = (needle, off) => pg.evaluate(([needle, off]) => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes(needle)) at = pos + n.text.indexOf(needle) + off; return at < 0 })
+      let proto = Object.getPrototypeOf(v.state.selection)
+      while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+      v.focus()
+      const TS = proto.constructor.near(v.state.doc.resolve(at)).constructor // Selection.near 给的是 TextSelection
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at)))
+    }, [needle, off])
+    const a = await look()
+    const w0 = await pg.evaluate(() => window.__upage.writes.length)
+    // b:光标进高亮 → 定界符露出
+    await caretIn('高亮', 1)
+    await pg.waitForTimeout(150)
+    const b = await look()
+    // c:点注释徽章 → 光标进注释、源码露出
+    const badge = await pg.evaluate((s) => { const e = document.querySelector(s + ' .amx-obs-cmt-badge'); const r = e?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null }, PM)
+    if (badge) await pg.mouse.click(badge.x, badge.y)
+    await pg.waitForTimeout(150)
+    const c = await look()
+    const w1 = await pg.evaluate(() => window.__upage.writes.length)
+    // d:<kbd> 里打字 = 可编辑 mark
+    await caretIn('Cmd', 2)
+    await pg.keyboard.type('X')
+    // e:⌘⇧H 包成 `==末段==`,再按一次摘掉
+    const selectWord = () => pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('末段')) at = pos + n.text.indexOf('末段'); return at < 0 })
+      let proto = Object.getPrototypeOf(v.state.selection)
+      while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+      v.focus()
+      const TS = proto.constructor.near(v.state.doc.resolve(at)).constructor
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at, at + 2)))
+    })
+    await selectWord()
+    await pg.keyboard.press('Meta+Shift+h')
+    await pg.waitForTimeout(1400)
+    const md1 = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    await pg.keyboard.press('Meta+Shift+h')
+    await pg.waitForTimeout(1400)
+    const md2 = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    record('P14e Obsidian 行内语法实况:==/%% 离开渲染、光标进入露源码;kbd/sub/sup 可编辑;代码与 === 不误伤;⌘⇧H 切换',
+      a.hl === 'hl: x 高亮 y' && a.hlText.join() === '高亮' && a.delims === 0 && a.badges === 2 && a.multiHidden && !a.cmt.includes('注释') &&
+        a.code.includes('==不是==') && a.code.includes('a === b') &&
+        a.kbd === 'Cmd' && a.sub === 1 && a.sup === 1 && a.atoms === 0 &&
+        b.delims === 2 && b.hl.includes('==高亮==') &&
+        c.cmt.includes('%%注释%%') && c.badges === 1 && w0 === 0 && w1 === 0 &&
+        md1.includes('<kbd>CmXd</kbd>') && md1.includes('\n==末段==文字\n') && md2.includes('\n末段文字\n') && md2.includes('hl: x ==高亮== y') && md2.includes('%%\n多行注释\n%%'),
+      JSON.stringify({ a, b: { hl: b.hl, delims: b.delims }, c: { cmt: c.cmt, badges: c.badges }, w0, w1, md1: md1.slice(-80), md2: md2.slice(-40) }))
+    await pg.close()
+  }
+
   // P15:真实鼠标路径下把手可达(真机回归 2026-08-13 第4振:把手悬在 .milkdown 左缘之外,
   // hover 追踪挂 container 的话指针一穿越容器边界 mouseleave 就藏把手 —— 必须挂 pane 级
   // .unified-body。合成事件直打 gutter 的其余检查绕过了这条路径,只有真 mouse.move 能抓)。
