@@ -15,6 +15,7 @@ import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
+import { nativeSaveDownload, saveResponseNative } from './nativeDownload'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -987,7 +988,9 @@ export const workspaceDownloadUrl = (cfg: EngineArg, sessionId: string, path: st
   return targetCaps(t).directAssetUrl ? downloadUrlOf(t, sessionId, path, project) : null
 }
 
-/** 下载工作区文件(fetch 带 Bearer → blob → 触发保存)。 */
+/** 下载工作区文件(fetch 带 Bearer → blob → 触发保存)。
+ *  安卓 App(P1-DL):WebView 里 `<a download>` 是哑弹 → 有 window.tangu.saveDownload 就交原生存进「下载」并 toast 实际文件名;
+ *  那条路上限 50 MB,超了抛本地化错误(见 services/nativeDownload.ts)。 */
 export async function downloadWorkspaceFile(cfg: EngineArg, sessionId: string, path: string, project?: string): Promise<void> {
   const t = S(cfg, sessionId)
   const url = downloadUrlOf(t, sessionId, path, project)
@@ -995,10 +998,13 @@ export async function downloadWorkspaceFile(cfg: EngineArg, sessionId: string, p
   const o = fetchOpts(t)
   const r = await (o ? authFetch(url, init, o) : authFetch(url, init))
   if (!r.ok) throw new Error(translate('backendsvc.downloadFailed', { status: r.status }))
+  const name = path.split('/').filter(Boolean).pop() || 'file'
+  const save = nativeSaveDownload()
+  if (save) { await saveResponseNative(save, name, r); return }
   const blob = await r.blob()
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
-  a.download = path.split('/').filter(Boolean).pop() || 'file'
+  a.download = name
   a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 5000)
 }

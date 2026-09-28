@@ -10,6 +10,7 @@ import type { PreviewTarget, PreviewData } from './WorkspaceFilePreview'
 import { b64ToBytes, iconForFile } from '../services/fileKinds'
 import * as api from '../services/backendService'
 import { hostFsForSession } from '../services/engine/hostFs'
+import { notifyApp } from '../stores/notificationStore'
 
 type ExecMode = 'host' | 'sandbox' | undefined
 
@@ -47,7 +48,8 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
       ? (execMode === 'host'
           // 设备页无 revealHostPath:undefined 藏掉下载位,免留静默哑弹
           ? (window.tangu?.revealHostPath ? () => { void window.tangu?.revealHostPath?.(f.path!) } : undefined)
-          : () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path!).catch(() => {}) })
+          // 失败要看得见(P1-DL):手机上原生存「下载」会因超限 / 系统版本被拒,吞掉 = 点了没反应
+          : () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path!).catch((err) => notifyApp({ text: err?.message || String(err), level: 'error' })) })
       : undefined,
   }
 }

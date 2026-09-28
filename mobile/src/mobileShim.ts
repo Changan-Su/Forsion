@@ -23,6 +23,8 @@ import { isNewer } from '../../desktop/shared/updateVersion'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
+import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
+import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
 
 const TOKEN_KEY = 'forsion_token'
 // 本机偏好(默认模型 / 生图模型 / 上次审批档与思考档…)。移动端没有引擎的 ~/.tangu/config.json,
@@ -279,6 +281,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     unitSelf: unit.unitSelf,
     unitEnsureSelf: unit.unitEnsureSelf,
     unitForgetSelf: unit.unitForgetSelf,
+    // P1-DL 存到系统「下载」:Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。只装 native 路径 ——
+    // web(dev / preview)是真浏览器,缺席 → 调用方回落 <a download>(见 services/nativeDownload.ts)。
+    saveDownload: native ? createSaveDownload(registerPlugin<ForsionDownloadsPlugin>('ForsionDownloads'), { maxBytes: NATIVE_DOWNLOAD_MAX_BYTES }) : undefined,
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })

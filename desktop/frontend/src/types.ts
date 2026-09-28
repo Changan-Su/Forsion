@@ -1293,6 +1293,11 @@ declare global {
       unitEnsureSelf?(): Promise<{ ok: true; unitId: string; name: string } | { ok: false; code: string }>
       /** 删本机条目并尽力从名册移除;之后各电脑对这台手机的授权都失效(按 unit id 认)。 */
       unitForgetSelf?(): Promise<{ ok: boolean }>
+      // P1-DL ── 安卓 App 把字节存进系统公共「下载」(MediaStore.Downloads,Android 10+,原生 DownloadsPlugin 分块写)。
+      // 只有 mobileShim 的 native 路径注入;desktop / web / 移动端 dev 缺席 → 调用方回落 `<a download>`(见 services/nativeDownload.ts)。
+      // 回的 name 是 MediaStore 实际落下的显示名(同名去重成 `x (1).txt`)。上限 50 MB;reject 的 code:
+      // too_large / unsupported_os(Android 8–9)/ busy / not_found / bad_request / io。
+      saveDownload?(name: string, mime: string, data: Blob): Promise<{ name: string }>
       // P1-K5 ── 设备凭据存储状态(SecretStorageNotice;远程会话开关按它置灰)──
       secretStorageStatus?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       secretStorageRetry?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
