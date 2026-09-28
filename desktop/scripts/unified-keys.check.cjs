@@ -712,6 +712,31 @@ async function main() {
       check('K12 空行 `> ` 仍是折叠(07-29 键位)', /blockquote \/ +paragraph:"\[!fold\]-X"/.test(s), s)
       await page.close()
     }
+
+    // K-13:按 Obsidian 习惯逐字敲 `> [!note] 标题` 得到 note callout,不是 `[!fold]-\[!note] 标题`。
+    if (want('K13')) {
+      for (const [name, typed, expect, disk, viaCdp] of [
+        ['`> [!note] 标题`', '> [!note] 标题', 'paragraph:"[!note] 标题"', '> [!note] 标题\n', false],
+        ['`> [!note]- 标题`(收起)', '> [!note]- 标题', 'paragraph:"[!note]- 标题"', '> [!note]- 标题\n', false],
+        ['输入法逐字提交 `> [!tip] 甲`', '> [!tip] 甲', 'paragraph:"[!tip] 甲"', '> [!tip] 甲\n', true],
+        ['`> 标题` 对照(仍是折叠)', '> 标题', 'paragraph:"[!fold]-标题"', '> [!fold]-标题\n', false],
+      ]) {
+        const page = await open(browser, '前段。\n')
+        const cdp = viaCdp ? await page.context().newCDPSession(page) : null
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        for (const ch of typed) {
+          if (cdp && ch !== ' ' && ch !== '>') await cdp.send('Input.insertText', { text: ch })
+          else await page.keyboard.type(ch)
+          await page.waitForTimeout(40)
+        }
+        await page.waitForTimeout(1300)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const w = await lastWrite(page)
+        check(`K13 ${name}`, s === `paragraph:"前段。" / blockquote / ${expect}` && w === `前段。\n\n${disk}`, `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }

@@ -10,6 +10,7 @@ import type { EditorState } from '@milkdown/kit/prose/state'
 import type { ResolvedPos, Node as PMNode } from '@milkdown/kit/prose/model'
 import { registerMessages, translate } from '../../../i18n'
 import { splitParagraph } from './softBreak'
+import { FOLD_TOKEN } from './blockTriggers'
 
 registerMessages({
   'mdcallout.expand': { zh: '展开', en: 'Expand' },
@@ -399,6 +400,22 @@ export function calloutPlugin() {
             // '-' → '+' 等长替换:光标位置不受映射影响,后续 keymap 拿到的就是展开后的 state。
             view.dispatch(view.state.tr.insertText('+', c.markerPos, c.markerPos + 1))
             return false
+          },
+          /** 按 Obsidian 习惯逐字敲 `> [!note] 标题`(K-13):`> ` 已按折叠键位写下 `[!fold]-`,接着敲出的
+           *  `[!x]` 就是用户要的类型令牌 —— 它一成形就替掉那枚自动令牌,否则落成 `[!fold]-\[!note] 标题`。
+           *  只在打字(含输入法提交)完成 `]` 的那一下判,不改 `>` 键位。 */
+          handleTextInput(view, from, to, text) {
+            if (!text.includes(']')) return false
+            const { state } = view
+            const $f = state.doc.resolve(from)
+            if (!$f.parent.isTextblock || $f.depth < 2 || !$f.sameParent(state.doc.resolve(to))) return false
+            if ($f.node(-1).type.name !== 'blockquote' || $f.index(-1) !== 0) return false
+            const start = $f.start()
+            const para = $f.parent
+            const next = para.textBetween(0, from - start, undefined, '\ufffc') + text + para.textBetween(to - start, para.content.size, undefined, '\ufffc')
+            if (!next.startsWith(FOLD_TOKEN) || !CALLOUT_RE.test(next.slice(FOLD_TOKEN.length))) return false
+            view.dispatch(state.tr.insertText(text, from, to).delete(start, start + FOLD_TOKEN.length).scrollIntoView())
+            return true
           },
           /** 折叠标题单击编辑；有色标注标题仍切折叠。源码态都按普通文本定位。 */
           handleClick(view, pos) {
