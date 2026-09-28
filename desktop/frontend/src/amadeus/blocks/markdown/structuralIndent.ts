@@ -11,7 +11,7 @@ import { listBullet } from './listFormat'
 
 const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
-type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number; amadeusBullet?: string }; ordered?: boolean; spread?: boolean; start?: number }
+type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number; amadeusIndentLine?: number; amadeusBullet?: string }; ordered?: boolean; spread?: boolean; start?: number }
 const MARKER = /^<!-- amadeus-indent:([1-8]) -->$/
 const MARKED_TYPES = new Set(['heading', 'blockquote', 'list'])
 
@@ -25,7 +25,14 @@ function restoreMarkers(node: MdNode): void {
     const html = marker.type === 'paragraph' && marker.children?.length === 1 ? marker.children[0] : marker
     const match = html.type === 'html' && typeof html.value === 'string' ? MARKER.exec(html.value.trim()) : null
     if (match && next && MARKED_TYPES.has(next.type)) {
-      next.data = { ...next.data, amadeusIndent: Number(match[1]) }
+      // amadeusIndentLine:标记在源文里的起始行号 —— 空行还原(softBreak.ts 的 restoreBlankParagraphs)按它算块前空行,
+      // 否则标记自己那一行 + 写侧标记后的空行被当成「空段落」,每存一次多一个空段落(越存越多)。
+      const start = (html as { position?: { start?: { line?: number } } }).position?.start
+      next.data = {
+        ...next.data,
+        amadeusIndent: Number(match[1]),
+        ...(typeof start?.line === 'number' ? { amadeusIndentLine: start.line } : {}),
+      }
       children.splice(i, 1)
       i--
       continue
