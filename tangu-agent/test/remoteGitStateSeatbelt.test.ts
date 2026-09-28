@@ -112,7 +112,7 @@ async function runToSettled(extra: Record<string, unknown>): Promise<any> {
 const textOf = (m: any): string => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''));
 const lastUser = (payload: any): string => textOf([...(payload.messages as any[])].reverse().find((m) => m.role === 'user'));
 
-describe.skipIf(!seatbelt)('远程污点 run 的 git 现场收集套写保护(macOS,宿主沙箱关)', () => {
+describe.skipIf(!seatbelt)('远程污点 run 的 git 现场收集套写保护(macOS,宿主沙箱关)', { timeout: 30_000 }, () => {
   it('① 远程 run:git 现场照常注入,仓库里摆的 clean filter 改不动 config.json', async () => {
     const run = await runToSettled({ remote: REMOTE });
     expect(run.status).toBe('done');

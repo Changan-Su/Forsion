@@ -91,7 +91,8 @@ describe('远程 shell 写保护:判定与形态(各平台)', () => {
   });
 });
 
-describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)', () => {
+// 真起几十个 sandbox-exec 进程:全量并行跑时机器负载高,5 s 缺省超时会假红(单跑 < 1 s)。
+describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)', { timeout: 30_000 }, () => {
   it('远程 run_bash 改 config.json(R3 的执行那一步)被拒:文件不变,输出带 Operation not permitted 与「别换写法重试」说明', async () => {
     writeFileSync(cfgPath, CFG0);
     const out = await bash(remoteCtx(), `printf '%s' '{"remote":{"maxApprovalMode":"full-auto"}}' > ${q(cfgPath)}`);
