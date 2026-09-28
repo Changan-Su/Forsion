@@ -820,7 +820,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             return { newPath: oldPath, page: await fetchAndParse(oldPath) }
           }
           const tree = await fetchTree(true)
-          pagesBefore = tree.pages
+          pagesBefore = tree.pages.filter(visiblePath) // 点目录(.trash 等)与桌面 listPages 同样不算:否则裸名链接会被解析到回收站那份
           if (allTreePaths(tree).includes(newPath) || tree.folders.includes(newPath)) throw new Error('目标页面已存在')
           // v3 单文件:先把在途编辑落到旧路径(重命名是显式用户动作 → force,桌面同款「无条件落盘再移动」)。
           const content = compile(manifest, contents)
@@ -959,7 +959,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // (shareBridge.findEmbedBlock 是它的镜像),其余(`^块`、嵌套链、带格式标题)走 shared/noteEmbed。
       // 解析不到才退回服务端(`|` 已剥),保留它对老目标形态的兜底。
       const { note, subpath } = splitNoteEmbed(target)
-      const pages = [...(await fetchTree()).pages].sort()
+      // 点目录(.trash / .amadeus)不参与解析,与桌面索引、listPages 同一把尺子 —— 否则删了再建的同名笔记会嵌到回收站那份。
+      const pages = (await fetchTree()).pages.filter(visiblePath).sort()
       const owner = note ? resolvePageName(note, pages, sourcePath) : sourcePath && pages.includes(sourcePath) ? sourcePath : null
       if (owner) {
         let raw: string | null = null
@@ -1001,7 +1002,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
         const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
         if (newPath === pagePath) return pagePath
-        if (newPath.endsWith('.md')) pagesBefore = (await fetchTree(true)).pages
+        if (newPath.endsWith('.md')) pagesBefore = (await fetchTree(true)).pages.filter(visiblePath)
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: pagePath, to: newPath })
@@ -1041,7 +1042,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const parent = dirnamePosix(folderPath)
       const newPath = parent ? `${parent}/${clean}` : clean
       if (newPath === folderPath) return folderPath
-      const pagesBefore = (await fetchTree(true)).pages // G2-04 引用重写的「操作前」页表
+      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePath) // G2-04 引用重写的「操作前」页表(点目录不算)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: folderPath, newName: clean })
@@ -1074,7 +1075,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
       if (dst === src || dst.startsWith(`${src}/`)) throw new Error('不能移动到自身内部')
-      const pagesBefore = (await fetchTree(true)).pages // G2-04 引用重写的「操作前」页表
+      const pagesBefore = (await fetchTree(true)).pages.filter(visiblePath) // G2-04 引用重写的「操作前」页表(点目录不算)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: dst })
@@ -1482,7 +1483,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         await ensureVault()
         const newPath = sanitizedSiblingPath(oldPath, newBaseName, '笔记名不能为空')
         if (newPath === oldPath) return oldPath
-        pagesBefore = (await fetchTree(true)).pages
+        pagesBefore = (await fetchTree(true)).pages.filter(visiblePath)
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })

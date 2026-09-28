@@ -153,6 +153,14 @@ describe('cloud bridge: rename / move rewrites [[links]] vault-wide (G2-04)', ()
     expect(toasts).toEqual([])
   })
 
+  it('回收站(.trash)里的同名笔记不参与解析:跨目录裸名 [[B]] 照样跟着 docs/B 改名', async () => {
+    seed({ 'notes/A.md': 'x [[B]]\n', 'docs/B.md': 'b\n', '.trash/B.md': 'old b\n' })
+    const { bridge } = await boot()
+    await bridge.renamePageFile('docs/B.md', 'C')
+    expect(files.get('notes/A.md')!.content).toBe('x [[C]]\n')
+    expect(puts).toEqual(['notes/A.md'])
+  })
+
   it('写不进去 → error 级提示点名那篇,不静默吞;改名本身照常生效', async () => {
     seed({ 'A.md': 'x [[B]]\n', 'K.md': 'k [[B]]\n', 'B.md': 'b\n' })
     const { bridge } = await boot()
@@ -163,5 +171,21 @@ describe('cloud bridge: rename / move rewrites [[links]] vault-wide (G2-04)', ()
     expect(toasts).toHaveLength(1)
     expect(toasts[0].level).toBe('error')
     expect(toasts[0].text).toContain('K')
+  })
+})
+
+describe('cloud bridge: resolveEmbed(L-15 客户端就近解析 + 切片)', () => {
+  it('按源笔记就近解析、跳过回收站、`#标题` / `#^块` / `|x` 在本端切', async () => {
+    seed({
+      'notes/Host.md': '![[Foo]]\n',
+      'notes/Foo.md': '# Foo\n\n## Sec\n\n小节正文。\n\n一段话 ^abc\n',
+      'docs/Bar.md': 'live bar\n',
+      '.trash/Bar.md': 'trashed bar\n',
+    })
+    const { bridge } = await boot()
+    expect((await bridge.resolveEmbed('Foo|300', 'notes/Host.md'))?.owner).toBe('notes/Foo.md')
+    expect(await bridge.resolveEmbed('Foo#Sec', 'notes/Host.md')).toEqual({ owner: 'notes/Foo.md', content: '## Sec\n\n小节正文。\n\n一段话 ^abc', type: 'markdown' })
+    expect((await bridge.resolveEmbed('Foo#^abc', 'notes/Host.md'))?.content).toBe('一段话')
+    expect(await bridge.resolveEmbed('Bar', 'notes/Host.md')).toEqual({ owner: 'docs/Bar.md', content: 'live bar\n', type: 'markdown' })
   })
 })
