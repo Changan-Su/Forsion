@@ -5,7 +5,8 @@
  *  - 渲染层起源(本机编辑器写,ipcMain handle)→ Unit 设备页的 SSE(vaultFace.onEvent)。
  * v4 笔记只走 `writeTextFile` 落盘,而 UnifiedPage 只听 externalChange(onExternalChange)——
  * 映射成 fileChange 就只进插件 watchFile,开着的编辑器永不回灌,下一击键把远端改动整篇盖掉。
- * 非笔记文件(插件片段 .js、画板、插件自定义 `.md` 文件类型)保持 fileChange:watchFile 的契约是「非 .md 页面」。
+ * 非笔记文件(按 isPagePath:插件片段 .js、画板、插件自定义 `.md` 文件类型)保持 fileChange,进插件 watchFile。
+ * (与 watcher 的分流不同:watcher 对一切 .md 都发 externalChange、只有非 .md 发 fileChange。)
  */
 import { promises as fs } from 'node:fs'
 import path from 'node:path'

@@ -41,7 +41,9 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
   [IPC.setPageFrontmatter]: (a) => [IPC.externalChange, a[0]],
   // v4 笔记唯一的落盘通道就是它,而开着的 UnifiedPage 只听 externalChange:映射成 fileChange = 只进插件
   // watchFile,Unit 另一端写的改动本机编辑器永不回灌、下一击键整篇盖掉;反方向同理(评审 G1-04)。
-  // 非笔记文件照旧 fileChange —— watchFile 的契约是「非 .md 页面」,与 watcher 的分流一致。
+  // 非笔记文件(按 isPagePath:插件片段、画板、插件自定义的 `.md` 文件类型)照旧 fileChange,进插件 watchFile。
+  // ⚠️ 这与 watcher 的分流**不一样**:watcher 对一切 .md(含 .excalidraw.md / 插件 .mindmap.md)都发 externalChange,
+  //    只有非 .md 才发 fileChange;这里按笔记判据分,插件自定义 .md 类型走 fileChange。
   [IPC.writeTextFile]: (a, isPagePath) => [typeof a[0] === 'string' && isPagePath(a[0]) ? IPC.externalChange : IPC.fileChange, a[0]],
   [IPC.drawingWrite]: (a) => [IPC.fileChange, a[0]],
   [IPC.saveVaultBytes]: (a) => [IPC.fileChange, a[0]],

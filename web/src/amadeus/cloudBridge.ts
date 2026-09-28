@@ -425,7 +425,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       clientId,
       knownSeq: (p) => seqMap.get(p),
       lastLoadedPage: () => lastLoadedPage,
-      // 兜底补课(服务端 reset)连开着的 v4 笔记一起回灌:它们只经 readTextFile 打开,从不设 lastLoadedPage(评审 G2-01)。
+      // 兜底补课(服务端 reset)连开着的 v4 笔记一起回灌:它们主要经 readTextFile 打开,不保证设 lastLoadedPage
+      // (web 原地分支会设,移动端单列导航 / 分屏其余实例不设;评审 G2-01)。
       openPages: unifiedPaths,
       onPageChange: (p) => { pageCache.delete(p); fireExternal(p) },
       onDbChange: (p) => fireDb(p),

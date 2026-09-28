@@ -157,7 +157,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
       backoff = 1000
       if (hadSession) {
         // 断线补课:结构刷一次 + 开着的笔记逐篇走既有回灌(掉线期间的事件丢了,Unit SSE 没有 seq 可重放)。
-        // v4 笔记只经 readTextFile 打开、从不设 lastLoadedPage —— 只补它 = 开着的 v4 编辑器漏补,
+        // v4 笔记主要经 readTextFile 打开、不保证设 lastLoadedPage(同 cloudBridge)—— 只补它 = 开着的 v4 编辑器漏补,
         // 下一击键把掉线期间 B 侧的改动整篇盖掉(评审 G1-04)。开着哪些以 unified 登记处为准。
         for (const cb of [...structCbs]) cb()
         for (const p of new Set([lastLoadedPage, ...unifiedPaths()])) if (p) fire(extCbs, p)

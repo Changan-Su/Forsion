@@ -6,8 +6,9 @@
  *   页面/.db 内容事件,结构事件永不抑制(设计要求;树刷新有 300ms 防抖 + 树缓存去重兜底);
  * - 断线补课:重连带 `?since=<已收到的最大 seq>`,服务端在 hello 之后按序重放缺口里的 change(与在线时同一条
  *   处理路径,开着的哪篇笔记都能收到自己那条);重放窗口不够(日志被剪)→ 服务端发 reset → 兜底:结构刷新 +
- *   开着的笔记逐篇 external-change(lastLoadedPage ∪ openPages:v4 笔记只经 readTextFile 打开,从不设
- *   lastLoadedPage —— 只补它就漏补 v4,下一击键 409 后强写,盖掉别处的修改;评审 G2-01)。
+ *   开着的笔记逐篇 external-change(lastLoadedPage ∪ openPages:v4 笔记主要经 readTextFile 打开,**不保证**设
+ *   lastLoadedPage(web 原地打开那条分支会设;移动端单列导航、分屏里的其余实例都不设)—— 只补它就漏补 v4,
+ *   下一击键 409 后强写,盖掉别处的修改;评审 G2-01)。
  *   首连不带 since(restoreVault 刚拉过全量树),hello 只记起点。
  *
  * change 事件体(与服务端约定,宽容解析):{ path?, seq?, op?/kind?, origin?: { client? } }。

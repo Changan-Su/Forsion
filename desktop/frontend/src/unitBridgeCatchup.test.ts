@@ -1,8 +1,8 @@
 /**
  * Unit 设备页桥(web/src/amadeus/unitBridge.ts)断线补课要认 v4 笔记(评审 G1-04 远端那半)。
  * Unit 的 SSE 没有 seq、断线期间的事件无从重放,补课只能「凡开着的笔记都回灌一遍」。
- * 旧写法只 fire lastLoadedPage —— 那是 v3 loadPage 设的;v4 笔记只走 readTextFile,从不设它
- * (设了反而会把资源 URL 基准与「上次打开」弄乱,不许在 readTextFile 里记)。开着的 v4 实例以
+ * 旧写法只 fire lastLoadedPage —— 那是 v3 loadPage 设的;v4 笔记主要走 readTextFile,不保证设它(web 原地分支
+ * 会设,其余路径不设;也不许在 readTextFile 里补记:会把资源 URL 基准与「上次打开」弄乱)。开着的 v4 实例以
  * unified 生命周期登记处为准(lifecycle.unifiedPaths)。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'

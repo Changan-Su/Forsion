@@ -103,8 +103,9 @@ export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file'
   }
 }
 
-/** 当前挂着 unified 实例的全部路径(去重)。宿主桥断线补课用(评审 G1-04 / G2-01):v4 笔记只经
- *  readTextFile 打开,从不设桥的 lastLoadedPage,重连后「凡开着的都回灌一遍」只能从这里取。 */
+/** 当前挂着 unified 实例的全部路径(去重)。宿主桥断线补课用(评审 G1-04 / G2-01):v4 笔记主要经
+ *  readTextFile 打开,不保证设桥的 lastLoadedPage(web 原地分支会设,移动端单列导航 / 分屏其余实例不设),
+ *  重连后「凡开着的都回灌一遍」只能从这里取。 */
 export function unifiedPaths(): string[] {
   return [...new Set([...handles].map((h) => h.path))]
 }
