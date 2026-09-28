@@ -95,6 +95,17 @@ describe('queued commands while a run is active', () => {
     expect(queued()).toEqual(['second', 'third'])
   })
 
+  it('releases the dispatch lock if a queued startRun hangs, so the queue is not wedged', async () => {
+    service.start.mockImplementationOnce(() => new Promise(() => {})) // 永不返回
+    useApp.setState({ steerPendingBySession: { s: [{ id: 'q1', text: 'first', localOnly: true }, { id: 'q2', text: 'second', localOnly: true }] } })
+    useApp.getState().reduceEvent('s', 'r', { current: 'a' }, { seq: 1, type: 'done', payload: { content: 'ok' } })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(service.start).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(service.start).toHaveBeenCalledTimes(2)
+    expect(service.start.mock.calls[1][1]).toMatchObject({ message: 'second' })
+  })
+
   it('still steers plain messages when nothing is queued, but queues /refine', async () => {
     await useApp.getState().send('look here', [], undefined, undefined, undefined, 's')
     expect(service.steer).toHaveBeenCalledOnce()

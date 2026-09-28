@@ -3422,7 +3422,8 @@ type SetFn = (fn: (s: AppState) => Partial<AppState>) => void
 export type QueueItem = { id: string; text: string; attachments?: Attachment[]; localOnly?: boolean; compact?: boolean; focus?: string }
 
 /** drainQueued 发出的 send 还在途(startRun 未回,running 还没置上)的会话:这段时间新来的也得排队,不许抢跑。 */
-const queueDispatching = new Set<string>()
+const queueDispatching = new Map<string, object>()
+const QUEUE_DISPATCH_VALVE_MS = 30_000
 
 /** 新来的消息 / 命令是否必须排队:队里已有排队项、压缩中、或排队消息正在发出。 */
 function queueBusy(st: AppState, sessionId: string): boolean {
@@ -3447,11 +3448,17 @@ function drainQueued(get: () => AppState, set: SetFn, sessionId: string): void {
   if (!item) return
   set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== item.id) } }))
   if (item.compact) { void get().compact(sessionId, item.focus, true); return }
-  queueDispatching.add(sessionId)
+  const token = {}
+  const release = (): boolean => queueDispatching.get(sessionId) === token && queueDispatching.delete(sessionId)
+  queueDispatching.set(sessionId, token)
+  // ponytail: startRun 没有超时;挂死的一次请求不许把整条队卡住 —— 30s 未回就放开闸接着取(不中止它,
+  // 晚到的成功照常接上;引擎按会话串行 run)。要更紧就给 startRun 加 opt-in timeoutMs。
+  const valve = setTimeout(() => { if (release()) drainQueued(get, set, sessionId) }, QUEUE_DISPATCH_VALVE_MS)
   void get().send(item.text, item.attachments || [], undefined, undefined, undefined, sessionId, true)
     .catch(() => false)
     .then((ok) => {
-      queueDispatching.delete(sessionId)
+      clearTimeout(valve)
+      release()
       // 没发出去(网络 / 额度;send 已 toast):放回队首,后面的不越过它。下一次发送 / 压缩会连它一起重试,也可 × 掉。
       if (!ok) queueAfterRun(set, sessionId, { text: item.text, attachments: item.attachments }, true)
       // 发出去了:run 已起,endRun 再取下一条;这里再 drain 一次只为兜住「在途期间 run 已经结束」
