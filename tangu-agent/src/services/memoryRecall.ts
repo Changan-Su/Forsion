@@ -160,7 +160,7 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
     try {
       history = await searchSessions({ userId: input.userId, appId: input.appId,
         toolScope: sessionToolScope(input.agentSlug), terms, limit: 3, matchAny: true,
-        excludeSessionId: input.excludeSessionId, excludeSessionsWithTool: input.hideSessionsWithTool, excludeRemoteSessions: input.hideRemoteSessions, signal: input.signal,
+        excludeSessionId: input.excludeSessionId, excludeSessionsWithTool: input.hideSessionsWithTool, ...(input.hideRemoteSessions ? { excludeRemoteSessions: true } : {}), signal: input.signal,
         candidateLimit: MEMORY_RECALL_HISTORY_SESSIONS, messagesPerSession: MEMORY_RECALL_HISTORY_MESSAGES,
         messageChars: MEMORY_RECALL_HISTORY_MESSAGE_CHARS });
     } catch (e: any) {

@@ -85,7 +85,7 @@ export const readSessionProvider: ToolProvider = {
           // 与 search_sessions 同一道:过不了电脑历史门禁的 run 读不到调过 read_computer_history 的会话(按「无此会话」答)
           excludeSessionsWithTool: computerHistoryRecallHide(ctx.profile ?? deps().profile, ctx),
           // 无人值守 / 通道 run 不吃远端驱动过的会话(P1 · M1A,G7;见 remoteTaint.remoteRecallHide)
-          excludeRemoteSessions: remoteRecallHide(ctx),
+          ...(remoteRecallHide(ctx) ? { excludeRemoteSessions: true } : {}),
           signal: ctx.signal,
         });
         ctx.signal?.throwIfAborted();

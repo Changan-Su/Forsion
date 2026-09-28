@@ -108,7 +108,7 @@ export const searchSessionsProvider: ToolProvider = {
           // 本 run 过不了电脑历史门禁 → 调过 read_computer_history 的会话不给搜(否则关掉 / 通道里照样能翻出复述过的内容)
           excludeSessionsWithTool: computerHistoryRecallHide(ctx.profile ?? deps().profile, ctx),
           // 无人值守 / 通道 run 不吃远端驱动过的会话(P1 · M1A,G7;见 remoteTaint.remoteRecallHide)
-          excludeRemoteSessions: remoteRecallHide(ctx),
+          ...(remoteRecallHide(ctx) ? { excludeRemoteSessions: true } : {}),
           signal: ctx.signal,
         });
 

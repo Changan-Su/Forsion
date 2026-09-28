@@ -13,6 +13,7 @@
  * ⚠️ 这不是授权依据(引擎唯一认的污点仍是 run.input.remote / effectiveRemote);只决定「远端内容能不能自动流进别处」。
  */
 import { getDbType, query } from '../core/db.js';
+import { deps } from '../seams/runtime.js';
 import { effectiveRemote, onRunTainted, type RemoteInfo } from './remoteOrigin.js';
 
 /** 「会话 alias 没有远程污点」的 SQL 谓词(无参数)。坏 JSON 的 agent_config 按有污点算(fail-closed:藏起来比放进去安全)。 */
@@ -23,7 +24,8 @@ export function notRemoteTaintedSql(alias = 's'): string {
       + ` OR EXISTS (SELECT 1 FROM agent_runs rt WHERE rt.session_id = ${alias}.id AND rt.input IS NOT NULL AND json_valid(rt.input)`
       + ` AND (json_type(rt.input, '$.remote') IS NOT NULL OR json_type(rt.input, '$.remoteTainted') IS NOT NULL)))`;
   }
-  // PG:jsonb 的 `?` 运算符会被 query() 当占位符换成 $n,改用 -> IS NOT NULL
+  // PG:只为方言对称保留 —— 调用方都按 hostExec 门控(远程污点只存在于本机引擎,本机引擎是 sqlite),这一支目前没有执行者、也没有测试。
+  // jsonb 的 `?` 运算符会被 query() 当占位符换成 $n,改用 -> IS NOT NULL
   return `NOT ((jsonb_typeof(${cfg}) = 'object' AND (${cfg} -> 'remoteOrigin') IS NOT NULL)`
     + ` OR EXISTS (SELECT 1 FROM agent_runs rt WHERE rt.session_id = ${alias}.id AND jsonb_typeof(rt.input) = 'object'`
     + ` AND ((rt.input -> 'remote') IS NOT NULL OR (rt.input -> 'remoteTainted') IS NOT NULL)))`;
@@ -34,8 +36,11 @@ export function notRemoteTaintedSql(alias = 's'): string {
  * 无人值守(Muse / 自动化)与通道 run → 藏(没人看着,Muse 的档还可能比远程上限宽);本机交互 run → 不藏:那是用户在场时模型显式去翻
  * 历史,结果是工具结果(数据),与读网页同一类风险 —— 列为残余,不在这里拦。自动召回(不经任何人点头)另在 agentLoop 对一切无污点 run 藏。
  */
-export function remoteRecallHide(ctx: { remote?: RemoteInfo; runId?: string; runOrigin?: string; muse?: boolean }): boolean {
-  if (effectiveRemote(ctx)) return false;
+export function remoteRecallHide(ctx: { remote?: RemoteInfo; runId?: string; runOrigin?: string; muse?: boolean; profile?: { capabilities?: { hostExec?: boolean } } }): boolean {
+  // 远程污点只存在于本机引擎(hostExec);云端 / thin worker 恒不藏(请求里也就不带这个键)
+  let hostExec = false;
+  try { hostExec = !!(ctx.profile ?? deps().profile)?.capabilities?.hostExec; } catch { /* 未装配 → 按云端 */ }
+  if (!hostExec || effectiveRemote(ctx)) return false;
   return ctx.muse === true || ctx.runOrigin === 'unattended' || ctx.runOrigin === 'channel';
 }
 

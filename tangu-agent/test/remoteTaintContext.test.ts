@@ -127,6 +127,8 @@ describe('检索 / 读会话', () => {
     expect(remoteRecallHide({ runOrigin: 'channel' })).toBe(true);
     expect(remoteRecallHide({ runOrigin: 'local' })).toBe(false);
     expect(remoteRecallHide({ runOrigin: 'unattended', remote: { via: 'tunnel', marked: true } })).toBe(false);
+    // 云端 / thin worker(无 hostExec):远程污点不存在,恒不藏(请求里也不带这个键)
+    expect(remoteRecallHide({ muse: true, profile: { capabilities: { hostExec: false } } })).toBe(false);
   });
 });
 

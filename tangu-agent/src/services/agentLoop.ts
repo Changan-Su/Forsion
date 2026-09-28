@@ -1385,7 +1385,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       });
       // 远端驱动过的会话(remoteTaint.ts)不自动召回进本机无污点的 run:召回片段不经任何人点头就进上下文,与「远程轮不写长期记忆」同一条规矩
       // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
-      const hideRemoteSessions = !effectiveRemote({ remote, runId });
+      // 远程污点只存在于本机引擎(hostExec):云端 / thin worker 不带这个键,免得 PG 谓词与网关路由为一个恒空的集合跑一遍。
+      const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
       const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       if (volatilePlacement === 'system') {
