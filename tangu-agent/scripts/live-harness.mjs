@@ -29,7 +29,7 @@
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only agentapproval             # 审批档只归用户(09-27):模型被要求把一个 agent 调成完全放行,manage_agent 不收 approval_mode、用户设的只读原样保留;改 manage_agent / manage-agents-guide 后跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
- *   npm run live:harness -- --only parked                    # 审批挂起(09-27 审批托盘):要批的调用挂起、真模型先干别的且不重试,收尾后才批 → 按原参数执行、结局回灌再收尾;改 approvals park / agentLoop 挂起兑现 / parkedToolResult 措辞后跑
+ *   npm run live:harness -- --only parked                    # 审批挂起(09-27 审批托盘):要批的调用挂起、真模型先干别的且不重试(任务故意不写 First/Then,见场景注释),收尾后才批 → 按原参数执行、结局回灌再收尾;改 approvals park / agentLoop 挂起兑现 / parkedToolResult 措辞后跑
  *   npm run live:harness -- --only remoteclamp               # 远程来源钳制(09-27,设备能力 MCP 方案 P0 ④):带 x-forsion-remote 起 run、agent_config 给 full-auto + verifyCommand,
  *                                                           #   run_bash 须弹审批(auto-edit 上限)、verifyCommand 绝不执行;改 remoteOrigin / 审批闸 / runs 路由后跑。负对照 = 修复前的 dist 跑(须红)
  *   npm run live:harness -- --only remotecwd                 # 远程 cwd / 家目录启动项(09-27,契约 C8):远程起 run 带 cwd=家目录须 400 REMOTE_CWD_FORBIDDEN;
@@ -678,6 +678,7 @@ async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150
   const ev = { runId, toolCalls: [], toolResults: [], approvals: [], awaiting: 0, approvedAtMs: null, approvedOnAwaiting: false, beforeApprove: null, content: '', done: false, error: null, wallMs: 0 };
   const pending = [];
   let awaitingSeen = false;
+  let turn = 0; // 模型调用序号:usage 帧在每次模型调用返回后、执行工具之前发,工具调用据此标出自己属于哪一轮
   const approveNext = async (onAwaiting) => {
     const p = pending.shift();
     if (!p) return;
@@ -702,7 +703,8 @@ async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150
           if (!line.startsWith('data:')) continue;
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
-          if (e.type === 'tool_call') ev.toolCalls.push({ id: p.id, name: p.name, args: String(p.arguments || '').slice(0, 400), atMs: Date.now() - t0 });
+          if (e.type === 'usage') turn += 1;
+          else if (e.type === 'tool_call') ev.toolCalls.push({ id: p.id, name: p.name, args: String(p.arguments || '').slice(0, 400), atMs: Date.now() - t0, turn });
           else if (e.type === 'tool_result') ev.toolResults.push({ id: p.id, name: p.name, parked: !!p.parked, isError: !!p.isError, result: String(p.result || '').slice(0, 1500), atMs: Date.now() - t0 });
           else if (e.type === 'approval_request') { ev.approvals.push({ approvalId: p.approvalId, name: p.name, toolCallId: p.toolCallId, args: String(p.arguments || '').slice(0, 400) }); pending.push(p); }
           else if (e.type === 'status' && p.phase === 'awaiting_approval') { ev.awaiting += 1; awaitingSeen = true; await approveNext(true); awaitingSeen = false; }
@@ -921,6 +923,11 @@ try {
   // ── parked(09-27,opt-in):审批托盘 run 的挂起语义。真模型要满足:① 被挂起的调用不重试(整场只有一张审批、一次 run_bash)
   // ② 挂起期间把不依赖它的活干完(批之前 notes.md 已写好)③ 没别的可干就收尾 —— 引擎报 awaiting_approval 才批
   // ④ 批后按**原参数**执行(stamp.txt 内容 = 命令里的戳)⑤ <approval_update> 落库、run 正常 done。
+  // 任务里**不许写 First / Then**(09-28):占位只承诺「列举顺序不是依赖」,用户明说「先…再…」是显式排序,模型照做是对的
+  // (原话「批准后我会按顺序完成」);再改占位去压它 = 教模型无视用户排序,「先备份再删」跟着破。旧写法的红几乎全栽在这(见 09-27 / 09-28 日志)。
+  // 旁支任务故意是「先读 side.txt(随机内容)再写 notes.md」两步:只写一个文件时模型常把 run_bash 与 write_file 同一轮发出
+  // (实测 5/5),write_file 在读到占位之前就执行了,措辞改成「等批准」也照绿 —— 场景没牙。读→写把写入推到读到占位之后的那一轮。
+  // 模型仍可能先单独读、再把 run_bash 与 write_file 同一轮发出:行为照样达标、按 PASS 计,但占位措辞没受检 → 标未判定。
   await scenario('parked', 'parked 审批挂起不打断 agent', async () => {
     if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: '只在 host 形态有审批' };
     const dir = join(workspace, `parked-${Date.now()}`);
@@ -928,11 +935,14 @@ try {
     const stampTok = `PARKED-${randomUUID().slice(0, 8)}`;
     const stampFile = join(dir, 'stamp.txt');
     const sideFile = join(dir, 'notes.md');
+    const srcFile = join(dir, 'side.txt');
+    const sideTok = `SIDE-${randomUUID().slice(0, 8)}`;
+    writeFileSync(srcFile, `${sideTok}\n`);
     const sid = `live-parked-${Date.now()}`;
     const ev = await runParked(sid,
       `Two independent tasks in ${dir}:\n` +
-      `1. First, run exactly this shell command with run_bash: echo ${stampTok} > ${stampFile}\n` +
-      `2. Then create ${sideFile} containing the single line SIDE-DONE.\n` +
+      `1. Run exactly this shell command with run_bash: echo ${stampTok} > ${stampFile}\n` +
+      `2. Read ${srcFile} and write its single line into a new file ${sideFile}.\n` +
       'When both are done, tell me in one line what each file contains.',
       { onBeforeApprove: () => ({ side: existsSync(sideFile) ? readFileSync(sideFile, 'utf8').trim() : null, stamp: existsSync(stampFile) }) });
     const bashCalls = ev.toolCalls.filter((c) => c.name === 'run_bash');
@@ -947,23 +957,26 @@ try {
       oneApproval: ev.approvals.length === 1 && ev.approvals[0].name === 'run_bash',
       noRetry: bashCalls.length === 1,
       parkedPlaceholder: !!parkedRes,
-      sideBeforeApprove: ev.beforeApprove?.side === 'SIDE-DONE' && ev.beforeApprove?.stamp === false,
+      sideBeforeApprove: ev.beforeApprove?.side === sideTok && ev.beforeApprove?.stamp === false,
       approvedAtFinishGate: ev.approvedOnAwaiting,
       ranOriginalArgs: stampNow === stampTok,
       updatePersisted: updates.length === 1 && String(updates[0].content).includes('[approved] run_bash'),
       resultPutBack: !!savedBash && !savedBash.parked && !String(savedBash.content || '').includes("Waiting for the user's approval"),
       done: ev.done && !ev.error,
     };
-    const mentions = ev.content.includes(stampTok) || ev.content.includes('SIDE-DONE');
+    const mentions = ev.content.includes(stampTok) || ev.content.includes(sideTok);
+    const sideCall = ev.toolCalls.find((c) => c.name === 'write_file' || (c.name === 'run_bash' && c.id !== bashId));
+    const sameTurn = !!sideCall && !!bashCalls[0] && sideCall.turn === bashCalls[0].turn;
     const bad = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
     return {
-      ok: !bad.length, inconclusive: !bad.length && !mentions,
+      ok: !bad.length, inconclusive: !bad.length && (!mentions || sameTurn),
       detail: ev.error || (bad.length ? `未过:${bad.join(',')}` : '全过') +
+        `${sameTurn ? ';⚠️notes.md 与 run_bash 同一轮发出(占位措辞未受检)' : !sideCall ? '' : ev.approvedAtMs != null && sideCall.atMs > ev.approvedAtMs ? ';notes.md 批后才写' : ';notes.md 在读到占位之后的一轮写'}` +
         `;审批 ${ev.approvals.length} 张 / run_bash ${bashCalls.length} 次;批前现场 ${JSON.stringify(ev.beforeApprove)};` +
         `${ev.approvedOnAwaiting ? '收尾闸门等拍板时批' : '⚠️没等到 awaiting_approval(兜底批)'};stamp=${stampNow};回灌 ${updates.length} 条;` +
         `终稿${mentions ? '提到了结局' : '没提结局(不计红,读原话)'}`,
       // 时间线拼进 output(report.md 逐场景打印 output):看得出「挂起 → 先干别的 → 收尾 → 批 → 执行」的真实先后
-      output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name}`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms approve` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
+      output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name} (turn ${c.turn})`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms approve` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
       toolCalls: ev.toolCalls.map((c) => c.name),
     };
   });
