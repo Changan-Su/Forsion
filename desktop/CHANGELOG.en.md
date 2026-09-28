@@ -31,6 +31,12 @@
 <!-- P1-K10a -->
 - The session workspace (the files panel, attachments you send and artifacts you download, including when you use this computer remotely from the device page or your phone) only reads and writes files inside the workspace: shortcuts (symlinks) that point outside it are never listed, downloaded or written through, even when the whole session folder has been replaced by one, and a named pipe in the workspace no longer makes requests hang. Workspaces synced to the cloud skip such shortcuts too when pulling attachments and sending artifacts back.
 
+<!-- P1-K6 -->
+- **On your phone, Tangu can now run entirely on one of your computers** (that computer needs "Allow other devices to connect" turned on). After you switch, the session list, Agents and models are the ones on that computer, new chats run in its real folders (in its default workspace unless you pick another), and approvals, progress and artifacts come back to the phone through the Forsion cloud. Settings, the inbox and automations stay on the phone. Your choice is remembered the next time you open the app.
+- When that computer is offline, its Forsion engine isn't running, it rejects the connection, or it can't confirm this device, a notice above the input box says which one. A task that was running while the connection dropped isn't marked as failed, and it picks up where it left off once the computer is back.
+- While running on another computer, approvals can only be approved or rejected as is, and hard-deleting sessions, rewinding messages, restoring code checkpoints and external engines aren't available. Image thumbnails load through the relay, and attachments are limited to about 9 MB per send.
+<!-- /P1-K6 -->
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.
