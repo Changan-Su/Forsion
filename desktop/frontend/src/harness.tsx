@@ -1658,7 +1658,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   vault.set('Embedded.md', EMBED_MD)
   const writes: Array<{ path: string; text: string }> = []
   /** 被 CAS 拒掉的写(评审 G1-01 仪器):{path, text(想写的), current(盘上的)} —— 没落盘,不进 writes。 */
-  const casRejects: Array<{ path: string; text: string; current: string }> = []
+  const casRejects: Array<{ path: string; text: string; current: string | null }> = []
   const listeners = new Set<(p: string) => void>()
   let switchUPage: ((path: string) => void) | null = null
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
@@ -1689,13 +1689,20 @@ if (new URLSearchParams(location.search).has('dock')) {
     // 与桌面主进程同一份契约(fs/vaultHandlers 的 writeTextFile):带 base 且盘上指纹不符 → 不写、回现文;
     // 文件不在 = 无冲突;不带 base 回 undefined。写失败注入:`__upage.failWrites = n`(接下来 n 次写抛错,
     // Infinity = 一直失败)—— 早先这里静默吞掉第三个参数,CAS 与写失败两条路在台架里根本造不出来。
-    writeTextFile: (p: string, text: string, opts?: { base?: string }) => {
-      const api = (window as unknown as { __upage?: { failWrites?: number } }).__upage
+    // 带 base 而文件已不在 → 拒写、current:null(同主进程,Codex 复核 inst P0-2:不重建被删的旧路径)。
+    // `__upage.casDelayMs = n`:写到达「主进程」前先在路上走 n ms(已发出的 IPC)—— 仪器在这段里删文件,造「在途写 × 别处删除」。
+    writeTextFile: async (p: string, text: string, opts?: { base?: string }) => {
+      const api = (window as unknown as { __upage?: { failWrites?: number; casDelayMs?: number } }).__upage
       if (api && (api.failWrites ?? 0) > 0) {
         api.failWrites = (api.failWrites ?? 0) - 1
         return Promise.reject(new Error('EACCES: permission denied (harness)'))
       }
+      if ((api?.casDelayMs ?? 0) > 0) await new Promise((r) => setTimeout(r, api!.casDelayMs))
       const cur = vault.get(p)
+      if (typeof opts?.base === 'string' && cur == null) {
+        casRejects.push({ path: p, text, current: null })
+        return { ok: false as const, current: null }
+      }
       if (typeof opts?.base === 'string' && cur != null && textFingerprint(cur) !== opts.base) {
         casRejects.push({ path: p, text, current: cur })
         return Promise.resolve({ ok: false, current: cur })
@@ -1767,6 +1774,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writes,
     casRejects,
     failWrites: 0,
+    casDelayMs: 0,
     writeLagMs: 0,
     probe: upageProbe,
     probe2: upageProbe2,

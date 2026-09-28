@@ -55,8 +55,9 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     void tail.then(() => { if (pathChains.get(key) === tail) pathChains.delete(key) })
     return run
   }
-  /** base 缺省 = 老语义(无条件写,返回 void)。文件不在 = 无冲突(同桌面)—— 除非 existingOnly(改名重写专用):
-   *  目标已不在 → 'gone',绝不把别处刚删 / 挪走的笔记按旧路径重建。 */
+  /** base 缺省 = 老语义(无条件写,返回 void,可新建)。带 base 而文件已不在 → 不写、{ ok:false, current:null }(同桌面,
+   *  Codex 复核 inst P0-2:base 是读到过的那版,没了 = 写发出后被删 / 挪走,照写就重建幽灵文件);existingOnly(改名重写专用)
+   *  → 'gone'。 */
   const writeText = (p: string, text: string, opts?: { base?: string; existingOnly?: boolean }): Promise<void | TextWriteResult | 'gone'> =>
     withPathLock(p, async () => {
       await ensureVault()
@@ -64,6 +65,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       if (base != null || opts?.existingOnly) {
         const exists = await vault.pathExists(p)
         if (!exists && opts?.existingOnly) return 'gone' as const
+        if (!exists && base != null) return { ok: false as const, current: null }
         const cur = exists ? await vault.readTextAbs(vault.absPath(p)) : null
         if (base != null && cur != null && textFingerprint(cur) !== base) return { ok: false as const, current: cur }
       }

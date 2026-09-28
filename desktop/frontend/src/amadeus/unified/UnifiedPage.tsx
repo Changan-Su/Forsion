@@ -283,6 +283,9 @@ interface Pipe {
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
+  /** 写的时候发现文件已经没了(CAS 回 current:null,Codex 复核 inst P0-2)而退休时,已另存进副本的那份全文;null = 没发生过。
+   *  删除通知到之前用户还可能接着打字 —— 退休 / 卸载时比对它,多出来的再另存一份,不许静默丢。 */
+  gone?: string | null
   /** 本实例是否**真渲染过**分栏行:layout 剥除(解散语义)只许在此后发生 —— layout 形状合法
    *  但因缺锚/错位没折叠成功时,首次编辑绝不能顺手把结构键抹掉(Codex 终审 P0)。 */
   sawRows: boolean
@@ -1799,6 +1802,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     toastRescued(path, copy)
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
+  /** 文件没了之后(pipe.gone)用户又打的字:退休 / 卸载时再另存一份(内容不同 = 新副本,前一份是它的子集)。 */
+  const rescueMore = (): void => {
+    if (pipe.gone == null || pipe.readOnly) return
+    syncFromEditor()
+    const text = composeFm(pipe.fm, pipe.body)
+    if (text === pipe.gone) return
+    pipe.gone = text
+    void rescueGone(text)
+  }
+  /** 同上,带兜底:副本也写不进去 → 本机草稿(旧路径上,持久;宁可多一份可能用不上的草稿也不丢字)+ 剪贴板提示。 */
+  const rescueGone = async (text: string): Promise<void> => {
+    try {
+      await rescueUnsaved(text)
+    } catch {
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+      toastGoneUnsaved(path, text)
+    }
+  }
 
   /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
   const noteWriteFailed = (error: unknown): void => {
@@ -1877,12 +1898,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           if (strict) throw error
           return // 普通自动保存:退避重试 / 恢复信号 / 下一次编辑 / 卸载再试。
         }
-        if (res && res.ok === false) {
+        if (res && res.ok === false && res.current == null) {
+          // 文件已经不在了(Codex 复核 inst P0-2:这发写发出之后被别处删除 / 挪走,删除通知还在路上)。宿主没写,本实例也
+          // 再不许写这个路径(会重建幽灵文件):退休,没落盘的全文另存为冲突副本并提示。删除通知随后到 retire 时见已退休就不重复。
+          if (!pipe.retired) {
+            pipe.retired = true
+            pipe.pending = false
+            syncFromEditor()
+            pipe.gone = composeFm(pipe.fm, pipe.body)
+            await rescueGone(pipe.gone)
+          }
+          return
+        }
+        if (res && res.ok === false && res.current != null) {
           // CAS 拒写:盘上已不是本实例的基线 —— 同篇的另一个实例 / 窗口,或外部写者刚写过。
           const cur = fromDisk(res.current)
           pipe.eol = cur.eol
-          res = { ...res, current: cur.text }
-          if (res.current === text) {
+          const current = cur.text
+          if (current === text) {
             pipe.lastSaved = text // 殊途同归:别人写的正是这份
             continue
           }
@@ -1901,8 +1934,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             return
           }
           // 本地胜(拍板 #6):盘上那版登记为待保全,换基线再写一轮 —— 循环开头先落副本。
-          pipe.unpreserved = res.current
-          pipe.lastSaved = res.current
+          pipe.unpreserved = current
+          pipe.lastSaved = current
           continue
         }
         pipe.lastSaved = text
@@ -2142,6 +2175,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 就是一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。改名 IPC 窗口里打的字由 doRename 按新路径
       // 补写;本实例此前写失败存下的那份也一并清掉(只删自己存的,别的会话留的不碰)。
       if (pipe.retired) {
+        if (pipe.gone != null) rescueMore() // 写时发现文件已没了(P0-2)之后又打的字:另存,不许随卸载丢掉
         if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
         pipe.stashed = null
         return
@@ -2426,9 +2460,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           if (text !== pipe.lastSaved && !isPristine()) {
             if (movedTo) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
             else if ((scoped.getState().vaultRoot ?? null) !== (vaultRoot ?? null)) stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
-            else void rescueUnsaved(text).catch(() => toastGoneUnsaved(path, text))
+            else void rescueGone(text)
           }
-        }
+        } else if (pipe.retired && pipe.gone != null) rescueMore() // 写时已发现文件没了、之后又打了字
         pipe.retired = true
         if (pipe.timer) {
           clearTimeout(pipe.timer)

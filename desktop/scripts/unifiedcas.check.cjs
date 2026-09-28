@@ -30,6 +30,8 @@
 //      要么落盘、要么进冲突副本,绝不静默消失;新属性与写者的字同理
 //   H7 草稿槽位的归属(Codex 复核 P1):B 还开着时它槽里的草稿不许被 A 读到(A 重挂不出恢复条);
 //      主人已不在的孤槽照旧提示给 A,A 丢弃只删那一格,B 的草稿原样留着
+//  W 组(Codex 复核 inst P0-2,在途 CAS 写 × 别处删除):写已发出(`__upage.casDelayMs` 造在途)、随后文件被删而删除通知还没到 ——
+//   W1 旧路径不被重建;没落盘的全文另存为冲突副本、提示点名副本;之后接着打的字不写旧路径,删除通知随后到(retire)时把它们另存一份
 //  V 组(评审 G2-08,离场即时落盘):打字后(防抖窗内)visibilitychange→hidden / pagehide / freeze / Cordova pause / 窗口失焦
 //   → 150ms 内落盘(不等 800ms);V6 盘上被悄悄改过(无回灌通知)时隐藏 → 走 CAS:盘上那版进冲突副本、本地版落盘,绝不裸写;
 //   V7 失焦节流:1s 内第二次失焦不重复写;V8 没有改动时隐藏 → 零写
@@ -829,10 +831,40 @@ async function groupV(browser) {
   }
 }
 
+// ─────────────────────────────── P0-2 ───────────────────────────────
+async function groupW(browser) {
+  const p = await open(browser, '# 标题\n\n第一段。\n')
+  await typeIn(p, 0, '第一段。', '在途的字')
+  await p.evaluate(() => { window.__upage.casDelayMs = 400 })
+  const flushing = p.evaluate(() => window.__upage.probe.flush().catch((e) => String(e))) // 立即发出这发写(防抖到点同理)
+  await wait(100)
+  await p.evaluate(() => window.__upage.vault.delete('Unified.md')) // 写还在路上,别处把文件删了(删除通知未到)
+  await flushing
+  await wait(600)
+  const r1 = {
+    disk: await disk(p),
+    rejects: await p.evaluate(() => window.__upage.casRejects.map((x) => x.current)),
+    copies: await copies(p),
+    toasts: (await toasts(p)).filter((t) => t.level === 'error').map((t) => t.text),
+  }
+  await p.evaluate(() => { window.__upage.casDelayMs = 0 })
+  await typeIn(p, 0, '在途的字', '又打')
+  await wait(1500)
+  await p.evaluate(() => window.__upage.lifecycle.retireUnifiedPath('Unified.md')) // 删除通知这时才到
+  await wait(600)
+  const r2 = { disk: await disk(p), copies: (await copies(p)).map(([, v]) => v), toasts: (await toasts(p)).filter((t) => t.level === 'error').length }
+  record('W1 在途 CAS 写撞上别处删除 → 旧路径不重建;全文另存副本、提示点名副本;之后接着打的字不写旧路径,删除通知到时另存一份(不静默丢)',
+    r1.disk == null && r1.rejects.includes(null) && r1.copies.length === 1 && r1.copies[0][1].includes('第一段。在途的字') &&
+      r1.toasts.length === 1 && r1.toasts[0].includes(r1.copies[0][0].replace(/\.md$/, '')) &&
+      r2.disk == null && r2.copies.length === 2 && r2.copies.some((v) => v.includes('第一段。在途的字又打')) && r2.toasts === 2,
+    JSON.stringify({ r1, r2 }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV, W: groupW }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()
