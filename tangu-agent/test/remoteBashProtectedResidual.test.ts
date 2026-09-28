@@ -84,7 +84,8 @@ afterAll(() => {
   for (const d of [root, ws]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
 });
 
-describe('§6.8 残余:远程污点 run 经 run_bash 写保护路径(宿主沙箱关)', () => {
+// 命令是 POSIX shell 语法(printf + 单引号 + 重定向),Windows 的 cmd.exe 跑不了 —— 同 workspaceConfinementRoutes 的 POSIX 口径
+describe.skipIf(process.platform === 'win32')('§6.8 残余:远程污点 run 经 run_bash 写保护路径(宿主沙箱关)', () => {
   it('形态核对:config.json 在共享域(桌面 ~/.forsion/config.json 的位置),上限档从这里现读', () => {
     expect(cfgPath).toBe(join(root, 'config.json'));
     writeCap('auto-edit');
