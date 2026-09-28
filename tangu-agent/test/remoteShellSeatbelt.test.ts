@@ -17,6 +17,7 @@ import { prepareHostCommand, hostSandboxBackend, remoteShellSeatbeltApplies } fr
 import { renderRemoteShellProfile, ciRegexLiteral, RemoteShellProtectionError } from '../src/sandbox/remoteShellSeatbelt.js';
 import { remoteShellWriteDenySpec } from '../src/sandbox/hostSandboxProtection.js';
 import { taintRunRemote, clearRunRemoteTaint } from '../src/services/remoteOrigin.js';
+import { collectGitState } from '../src/services/runtimeContext.js';
 import { configFile } from '../src/core/tanguHome.js';
 import type { ToolContext } from '../src/tools/toolTypes.js';
 
@@ -200,6 +201,25 @@ describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)',
     const out = await bash(remoteCtx(), `/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true`);
     expect(out).toMatch(/sandbox_apply/);
     expect(out).toMatch(/--disable-sandbox/);
+  });
+
+  // ⚠️ 残余钉(不是期望行为,修了就该翻过来):方案 A 刻意不拒 `.git`(远程 run 要能 commit / init / clone),于是被批准的远程命令能在
+  // 工作区仓库里摆 clean filter;引擎自己在每个 host run 开头收集 git 现场(runtimeContext.collectGitState → runGit)时不带远程污点、
+  // 不套这层,`git status` 会执行它 —— runGit 的固定前缀关了 fsmonitor / hooks / 外部 diff / gpg,没关 filter。
+  it('残余:远程命令摆进仓库的 clean filter,被引擎下一次收集 git 现场(不套写保护)执行', async () => {
+    const repo = join(base, 'filter-repo');
+    mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    writeFileSync(join(repo, 'f.txt'), 'a');
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'f.txt'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'i'], { cwd: repo });
+    writeFileSync(cfgPath, CFG0);
+    writeFileSync(join(repo, 'payload.sh'), `cp /dev/null ${q(cfgPath)}; cat\n`); // 远程 run 用 write_file 在工作区里就能写
+    const plant = await bash(remoteCtx({ cwd: repo }), `git config filter.x.clean ${q(`sh ${join(repo, 'payload.sh')}`)} && printf '* filter=x\\n' > .gitattributes && sleep 1 && printf b > f.txt`);
+    expect(plant).toMatch(/exit_code: 0/); // 写保护之内:.git/config 与工作区都可写
+    expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+    await collectGitState(repo, { cwd: repo, execMode: 'host' });
+    expect(readFileSync(cfgPath, 'utf8')).toBe(''); // 被执行了:config.json 被清空
   });
 
   it('git fsmonitor 的子进程继承同一个 profile(R5 执行面的最小复现)', async () => {
