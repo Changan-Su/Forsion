@@ -295,7 +295,9 @@ async function groupD(browser) {
     const p = await open(browser, MD)
     await p.evaluate(() => { window.__upage.writeLagMs = 1500 })
     await typeIn(p, 0, 'CCC', ' local')
-    await wait(1000) // 防抖 800ms 已到:写已落盘、ack 还在路上
+    // 前置条件:写已落盘、ack 还在路上(writeLagMs 1500)。轮询盘上出现 'CCC local'(照 L1),不靠固定等待 ——
+    // 高负载下防抖 800ms + 落盘可能晚于 1s,固定 wait(1000) 读到的是写之前的盘面,前置条件假红(收口 N-7)。
+    await p.waitForFunction(() => (window.__upage.vault.get('Unified.md') || '').includes('CCC local'), null, { timeout: 5000 }).catch(() => {})
     const inflight = await p.evaluate(() => window.__upage.vault.get('Unified.md'))
     await p.keyboard.type(' more')
     await p.evaluate(() => window.__upage.fire('Unified.md', window.__upage.vault.get('Unified.md')))

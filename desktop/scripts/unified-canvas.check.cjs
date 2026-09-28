@@ -940,6 +940,12 @@ async function main() {
   await p77d.waitForTimeout(350)
   await p77d.click('.amx-ucard[data-anchor="k1"] p')
   await p77d.keyboard.press('End')
+  // 等选区真落定在卡片段尾再取基准(收口 N-7):高负载下 click/End 还没生效就读,基准是 pos=1,整条假红。
+  await p77d.waitForFunction(() => {
+    const v = window.__upage.probe.view()
+    const $f = v?.state.selection.$from
+    return !!v && v.hasFocus() && $f.parent.textContent.includes('光标应该跟随') && $f.parentOffset === $f.parent.content.size
+  }, null, { timeout: 5000 }).catch(() => {})
   const beforeCaret77 = await p77d.evaluate(() => window.__upage.probe.view().state.selection.from)
   await p77d.click('.amx-modeseg button:nth-child(3)')
   await p77d.waitForTimeout(650)
