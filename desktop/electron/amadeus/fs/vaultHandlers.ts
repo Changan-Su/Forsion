@@ -389,7 +389,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   })
 
   // 读改写整段在同篇路径锁内(Codex g3#2):锁外读到的旧全文会把编辑器刚 CAS 写入的新正文整篇盖回去。
-  handle(IPC.setPageFrontmatter, (_e, pagePath: string, patch: Record<string, unknown>) =>
+  handle(IPC.setPageFrontmatter, (e, pagePath: string, patch: Record<string, unknown>) =>
     withPathLock(pagePath, async () => {
       let raw: string
       try {
@@ -397,8 +397,14 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       } catch {
         return // 笔记不在(已被删)→ 静默跳过
       }
-      await vault.writeTextFile(pagePath, setFmExtraOnSource(raw, patch)) // 原子写 + 自写账本 → watcher 不回声
+      const next = setFmExtraOnSource(raw, patch)
+      if (next === raw) return
+      await vault.writeTextFile(pagePath, next) // 原子写 + 自写账本 → watcher 不回声
       await index.update(pagePath)
+      // 评审 G1-05:自写账本把 watcher 的回声压掉了,别的窗口开着这篇的 v4 实例就停在旧 fm,下一次击键把刚改的属性
+      // 整篇写回旧值。与 writeTextFile 同口径补发给发起窗口以外的窗口;发起窗口自己的实例由渲染层直接走实例的 fm
+      // 写口(lifecycle.unifiedPatchFm),根本不走到这条外科写。
+      if (e != null && vault.isPagePath(pagePath)) deps.notifyPeers?.(e, IPC.externalChange, pagePath)
     }))
 
   handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {

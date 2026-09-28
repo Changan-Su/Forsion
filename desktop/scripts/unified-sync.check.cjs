@@ -220,7 +220,44 @@ async function groupD(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD }
+// ─────────────────────────────── G1-05 ───────────────────────────────
+const errToasts = (p) => p.evaluate(() => window.__toasts.filter((t) => t.level === 'error' || t.level === 'warning'))
+const fmNow = (p) => p.evaluate(() => window.__upage.probe.fmState().fm)
+async function groupF(browser) {
+  const seed = '---\nstatus: todo\n---\n\n# 标题\n\n第一段。\n'
+  {
+    const p = await open(browser, seed)
+    await p.evaluate(() => window.__upage.pageStore.getState().setPageIcon('Unified.md', '🔥'))
+    await wait(600)
+    const d1 = await disk(p)
+    const fm1 = await fmNow(p)
+    record('F1 笔记开着时改图标(store 的 fm 写口)→ 实例接手:盘上与实例 fm 都是新值、零冲突副本',
+      /icon: 🔥/.test(d1) && /icon: 🔥/.test(fm1) && d1.includes('status: todo') && (await copies(p)).length === 0, JSON.stringify({ d1, fm1 }))
+    await p.evaluate(() => window.__upage.pageStore.getState().setPageCoverY('Unified.md', 30))
+    await wait(400)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('x')
+    await wait(1600)
+    const d2 = await disk(p)
+    record('F2 接着在正文打一个字 → 新 fm(icon / cover_y)不被旧 fm 写回,零副本零提示',
+      /icon: 🔥/.test(d2) && /cover_y: 30/.test(d2) && d2.includes('第一段。x') && (await copies(p)).length === 0 && (await errToasts(p)).length === 0, JSON.stringify({ d2, toasts: await errToasts(p) }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('abc')
+    await p.evaluate(() => window.__upage.pageStore.getState().setPageIcon('Unified.md', '🌊')) // 防抖窗内
+    await p.keyboard.type('def')
+    await wait(1800)
+    const d = await disk(p)
+    record('F3 打字中外科写 fm → 本地的字与新 fm 都在盘上,零冲突副本零提示',
+      /icon: 🌊/.test(d) && d.includes('第一段。abcdef') && (await copies(p)).length === 0 && (await errToasts(p)).length === 0, JSON.stringify({ d, copies: await copies(p), toasts: await errToasts(p) }))
+    await p.close()
+  }
+}
+
+const GROUPS = { K: groupK, D: groupD, F: groupF }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

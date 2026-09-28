@@ -1757,6 +1757,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       insertFiles: (files) => {
         hostApi.current?.insertFiles(files)
       },
+      // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
+      patchFm: (patch) => {
+        if (pipe.readOnly || pipe.retired || pipe.dead) return null
+        setFm(patch)
+        return pipe.chain // setFm 刚把这发写排上链:链尾 = 它落定(恒不 reject)
+      },
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
       insertMarkdown: (md, where) => (pipe.retired ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),

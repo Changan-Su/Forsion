@@ -23,7 +23,7 @@ import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
-import { flushUnifiedScopes, retireUnifiedPath } from '../unified/lifecycle'
+import { flushUnifiedScopes, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
@@ -796,7 +796,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(pagePath, patch)
+        await (unifiedPatchFm(pagePath, patch) ?? amadeus.setPageFrontmatter?.(pagePath, patch))
       }
     },
 
@@ -807,7 +807,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(pagePath, patch)
+        await (unifiedPatchFm(pagePath, patch) ?? amadeus.setPageFrontmatter?.(pagePath, patch))
       }
     },
 
@@ -826,7 +826,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(pagePath, patch)
+        await (unifiedPatchFm(pagePath, patch) ?? amadeus.setPageFrontmatter?.(pagePath, patch))
       }
     },
 
@@ -994,7 +994,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const next = patchFmExtraText(manifest.fmExtra ?? '', patch)
         if (next !== null && next !== (manifest.fmExtra ?? '')) get().setFmExtra(next)
       } else {
-        await amadeus.setPageFrontmatter?.(parentNotePath, patch) // ?. 容忍旧 preload 缺位(漂移可自愈)
+        await (unifiedPatchFm(parentNotePath, patch) ?? amadeus.setPageFrontmatter?.(parentNotePath, patch)) // ?. 容忍旧 preload 缺位(漂移可自愈)
       }
     },
 
