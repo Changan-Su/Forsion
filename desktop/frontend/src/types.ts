@@ -191,7 +191,8 @@ export interface MuseLibraryEntry { path: string; size: number; mtime: number; d
 export interface SpecialAgentsConfig { historian: HistorianConfig; muse: MuseConfig }
 // P1-K10b
 /** 引擎给**远程来源**(手机经隧道 / 设备页 / 局域网 / P2P)的 GET /agent/special/config 投影(`remote: true`):只有开关与两个节奏值,
- *  提示词 / 授权文件夹 / 权限档 / 心跳时段 / 预算都留在那台电脑上。整份 SpecialAgentsConfig 结构上也满足它 —— 只读这几个字段的调用点用它。 */
+ *  提示词、授权文件夹、模型、活跃时段、预算、通知 / 升级对象这条路由都不回(Muse 的权限档 / 心跳另经 muse/status 可读)。
+ *  整份 SpecialAgentsConfig 结构上也满足它 —— 只读这几个字段的调用点用它。 */
 export interface SpecialAgentsSummary {
   historian: Pick<HistorianConfig, 'enabled' | 'everyRounds'>
   muse: Pick<MuseConfig, 'enabled' | 'supervisorPollMinutes'>

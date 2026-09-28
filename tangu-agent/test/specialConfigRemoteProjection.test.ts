@@ -4,6 +4,7 @@
  *
  * 这条路由远端是 allow(渲染层的鉴权探针 AUTH_PROBE_PATH 就是它),P0 起远端可以整份读走 Historian / Muse 配置:
  * 自定义提示词、Muse 授权文件夹(本机绝对路径)、权限档、心跳 / 运行时段、预算、升级对象、模型……
+ * (投影只管这一条:Muse 的权限档 / 心跳 / 次数预算另经 GET /agent/special/muse/status、人格经 GET /agent/agents 对远端可读,不在本测试范围。)
  * 投影只留**渲染层远端调用点真用得到的**四个字段,逐个对到调用点:
  *   historian.enabled / muse.enabled —— appStore.refreshSpecialEnabled(手机焦点在「我的电脑」时点亮 Historian / Muse 入口);
  *   historian.everyRounds / muse.supervisorPollMinutes —— 设备页自动化 Space 详情卡的「触发」一栏(AutomationDetailView)。
