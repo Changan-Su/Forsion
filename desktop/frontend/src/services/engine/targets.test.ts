@@ -542,7 +542,7 @@ describe('S2 · unit 目标与焦点', () => {
     expect(T.locationOf('m1')).toEqual({ kind: 'home' })
   })
 
-  it('S4 · 读盘之前的第一条新绑定不会盖掉盘上那些(先读后写);上限 500 条,淘汰最久没绑的,重绑刷新次序', () => {
+  it('S4 · 读盘之前的第一条新绑定不会盖掉盘上那些(先读后写);落盘上限 500 条,淘汰最久没绑的,重绑刷新次序;内存路由表本页内不删', () => {
     phone()
     store.set(bindingsKey, JSON.stringify({ old1: `unit:${U}`, old2: `unit:${U2}` }))
     T.clearSessionBindings() // 内存空、还没读盘
@@ -558,6 +558,10 @@ describe('S2 · unit 目标与焦点', () => {
     expect(saved.length).toBe(T.MAX_SESSION_BINDINGS)
     expect(saved.includes('s1')).toBe(false)
     expect(saved.slice(-2)).toEqual(['s0', 'overflow'])
+    // 只裁落盘那份:本页内 s1 照旧绑在那台(开着的会话不会中途改道 home);刷新读盘后才回到 home
+    expect(T.locationOf('s1')).toEqual({ kind: 'unit', unitId: U })
+    expect(T.targetForSession('s1').key).toBe(`unit:${U}`)
+    T.clearSessionBindings()
     expect(T.locationOf('s1')).toEqual({ kind: 'home' })
   })
 

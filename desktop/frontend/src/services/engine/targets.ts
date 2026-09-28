@@ -330,8 +330,9 @@ function ensureBindingsLoaded(): string | null {
 /** 只落 unit 条(home = 缺省,不必存),超过上限淘汰最旧的。拿不到账号身份 → 只活在内存。 */
 function persistBindings(): void {
   const key = ensureBindingsLoaded()
+  // 上限只裁**落盘那份**:内存路由表在本页内一条不删 —— 删了,一条早绑、此刻还开着的会话会悄悄改道 home
+  // (设备报回的子会话行能把表灌满,一台设备就能挤掉另一台的绑定;S4 评审 P2)。代价:本页绑满 500 条以上时内存略大,刷新即回到 500。
   const units = [...sessionTargets].filter(([, k]) => k !== 'home')
-  for (let i = 0; i < units.length - MAX_SESSION_BINDINGS; i++) sessionTargets.delete(units[i][0])
   if (!key) return
   try {
     localStorage.setItem(key, JSON.stringify(Object.fromEntries(units.slice(-MAX_SESSION_BINDINGS))))
