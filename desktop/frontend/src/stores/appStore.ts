@@ -15,6 +15,7 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
+import { installEngineHost } from '../services/engine/targets'
 import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleUltra } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
@@ -3306,6 +3307,9 @@ export const useApp = create<AppState>((set, get) => ({
   setDetailWsKey: (k) => set({ detailWsKey: k }),
   setActiveSpecial: (k) => set({ activeSpecial: k }),
 }))
+
+// P1-K6:引擎目标解析层读本端连接配置的唯一接缝(homeTarget / knownTargets / cloudApiBase 每次现读)。
+installEngineHost({ cfg: () => useApp.getState().cfg, desktopConfig: () => useApp.getState().desktopConfig })
 
 /** steer 被引擎受理后的等待区落位(Codex 评审 #1):turn_boundary 走 SSE,可能抢在 POST 响应之前
  *  到达——消息已上屏、或 run 已易主/终结时**不进等待区**(否则 chip 永久残留,run 终结还会把已

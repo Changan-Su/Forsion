@@ -10,7 +10,7 @@
  * 类型经 `import type` 引自 backendService(仅类型、编译期擦除,无运行时循环依赖)。
  */
 import type { InboxMessage, InboxFilter } from './backendService'
-import type { TanguDesktopConfig } from '../types'
+import { asTarget, type EngineArg } from './engine/targets'
 
 const KEY = 'tangu_inbox_msgs'
 
@@ -101,14 +101,17 @@ export const localInbox = {
   },
 
   /** = pullInbox。拉云端可达的 /brain/inbox/broadcasts(JWT,零 server 改)upsert 进本地。 */
-  async pull(cfg: TanguDesktopConfig): Promise<{ pulled: boolean; added: number; detail?: string }> {
-    const base = (cfg.backendUrl || '').replace(/\/$/, '')
-    if (!base || !cfg.token) return { pulled: false, added: 0, detail: 'no backend/token' }
+  async pull(cfg: EngineArg): Promise<{ pulled: boolean; added: number; detail?: string }> {
+    // 移动端的 home 目标就是云网关,它的鉴权头即 forsion_token(P1-K6:不再直读 cfg.token)。
+    const t = asTarget(cfg)
+    const base = (t.base || '').replace(/\/$/, '')
+    const auth = (await t.headers(false)).Authorization || ''
+    if (!base || !/^Bearer \S/.test(auth)) return { pulled: false, added: 0, detail: 'no backend/token' }
     const cursor = broadcastCursor(loadAll())
     const url = `${base}/brain/inbox/broadcasts${cursor ? `?since=${encodeURIComponent(cursor)}` : ''}`
     let data: { broadcasts?: Array<{ id: string; title: string; body: string; created_at: string }> }
     try {
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${cfg.token}` } })
+      const r = await fetch(url, { headers: { Authorization: auth } })
       if (!r.ok) return { pulled: false, added: 0, detail: `broadcasts ${r.status}` }
       data = await r.json()
     } catch (e: any) { return { pulled: false, added: 0, detail: e?.message || 'network' } }
