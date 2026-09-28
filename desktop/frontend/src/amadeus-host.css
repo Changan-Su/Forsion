@@ -658,11 +658,11 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-props .amx-prop-conflict,
 .amx-props .amx-prop-conflict:hover,
 .amx-props .amx-prop-conflict:focus {
-  background: color-mix(in srgb, var(--warn, #b26b00) 12%, transparent);
-  border-color: var(--warn, #b26b00);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-color: var(--warning);
 }
 /* 值框本身无边框(border:none):补一圈零模糊内环(描边不是高程,见 DESIGN §7.6);原文框靠上面的 border-color。 */
-.amx-props input.amx-prop-conflict { box-shadow: inset 0 0 0 1px var(--warn, #b26b00); }
+.amx-props input.amx-prop-conflict { box-shadow: inset 0 0 0 1px var(--warning); }
 
 /* ── 拖拽分栏投放区:静止时零宽(保 Obsidian 左对齐),拖拽中(.stack[data-dnd])绝对定位浮进
  *    48px 页边距 → 无内容位移,拖到行两侧边缘即可裂出新列(与 styles.css 的 [data-over] 高亮配合)。 ── */
@@ -708,7 +708,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
   background: var(--accent-light, rgba(108, 92, 231, 0.14)); color: var(--text); font-variant-numeric: tabular-nums;
 }
 .am-app .embed-media-warn {
-  flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--warn, #b26b00);
+  flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--warning);
 }
 .am-app .embed-media-foot {
   display: flex; align-items: center; gap: 8px; padding: 5px 10px;

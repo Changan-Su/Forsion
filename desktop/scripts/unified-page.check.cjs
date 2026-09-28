@@ -339,7 +339,8 @@ async function main() {
 
     // PR6 收口 N-3:放弃草稿不进撤销栈,所以 Esc 只在单行框**标着冲突**时放弃。
     //  a 值框没冲突:Esc 不清草稿、原样冒泡到 document(不吞),失焦照常落盘;
-    //  b 坏 YAML 原文框冲突中:Esc 不清多行草稿;真 Cmd+Z 撤回到原样再失焦 → 零写入、显示别处的版本(提示文案承诺的路径)。
+    //  b 坏 YAML 原文框冲突中:Esc 不清多行草稿;真 Cmd+Z 撤回到原样再失焦 → 零写入、显示别处的版本(提示文案承诺的路径);
+    //    撤回到原样那一刻冲突样式/提示随之撤掉(N-6 / E5:此时失焦的结果是外部值胜出,提示不许说反)。
     // 负对照(实跑):onEscape 判据改回 `draft === null` → a 红;原文框接回 onEscape → b 红。
     {
       const pa = await openProps(SEED)
@@ -377,7 +378,7 @@ async function main() {
       await pb.close()
       record('PR6 Esc 只在单行框冲突时放弃:无冲突值框 Esc 留草稿+冒泡+失焦落盘;原文框冲突中 Esc 留多行草稿,Cmd+Z 撤回后失焦零写入、采用别处版本(N-3)',
         a.afterEsc === 'todoABC' && JSON.stringify(a.escSeen) === '[false]' && a.dw === 1 && a.line === 'status: todoABC' &&
-          b.during.conflict && b.esc.includes('extra: 修复中的一大段') && b.undone.v === 'status: [未闭合\nnote: 旧A' &&
+          b.during.conflict && b.esc.includes('extra: 修复中的一大段') && b.undone.v === 'status: [未闭合\nnote: 旧A' && !b.undone.conflict &&
           b.dw === 0 && b.shown === 'status: [未闭合\nnote: 外部B' && b.disk.includes('note: 外部B'),
         JSON.stringify({ a, b }))
     }

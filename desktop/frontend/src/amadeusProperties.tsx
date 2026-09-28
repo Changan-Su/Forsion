@@ -85,12 +85,15 @@ export function draftToCommit(draft: string | null, base: string, current: strin
 }
 
 /** 受控草稿:draft=null → 显示 current(外部改动即时可见);第一击键记下 base。
- *  conflict = 有草稿且同一字段在编辑期间被别处改了(current 已离开 base)。
- *  escDiscards:'conflict' = 只有冲突时 Esc 才放弃草稿(单行框);'never' = Esc 从不放弃(原文框,见文件头 N-3)。 */
-function useFieldDraft(current: string, escDiscards: 'conflict' | 'never' = 'conflict') {
+ *  conflict = 有草稿、同一字段在编辑期间被别处改了(current 已离开 base),**且失焦真会拿草稿盖掉它** ——
+ *  与 draftToCommit 同一判据:草稿(归一后)等于 base 或 current 时失焦零写入、外部值胜出,这时再标冲突、
+ *  提示「失焦后以你的输入为准」就和结果相反(收口 N-6 / E5)。
+ *  escDiscards:'conflict' = 只有冲突时 Esc 才放弃草稿(单行框);'never' = Esc 从不放弃(原文框,见文件头 N-3)。
+ *  norm:比较前的归一(数字框 / 键名框去首尾空白),冲突判据与失焦提交共用。 */
+function useFieldDraft(current: string, escDiscards: 'conflict' | 'never' = 'conflict', norm: (s: string) => string = (s) => s) {
   const [draft, setDraft] = useState<string | null>(null)
   const [base, setBase] = useState(current)
-  const conflict = draft !== null && current !== base && draft !== current
+  const conflict = draft !== null && current !== base && draftToCommit(draft, base, current, norm) !== null
   return {
     shown: draft ?? current,
     conflict,
@@ -99,7 +102,7 @@ function useFieldDraft(current: string, escDiscards: 'conflict' | 'never' = 'con
       setDraft(v)
     },
     /** 失焦收口:草稿一律清掉(之后显示回到 prop),返回需要提交的文本或 null。 */
-    settle: (norm?: (s: string) => string): string | null => {
+    settle: (): string | null => {
       setDraft(null)
       return draftToCommit(draft, base, current, norm)
     },
@@ -243,7 +246,7 @@ function RawFmEditor({ text, readOnly, onCommit }: { text: string; readOnly: boo
 
 /** 键名框:受控草稿;失焦只在真改了时交给 onRename(校验不过 = 草稿已清,自然回显原名)。 */
 function KeyNameInput({ name, onRename }: { name: string; onRename: (k: string) => void }) {
-  const f = useFieldDraft(name)
+  const f = useFieldDraft(name, 'conflict', (s) => s.trim())
   return (
     <input
       className="amx-prop-key"
@@ -251,7 +254,7 @@ function KeyNameInput({ name, onRename }: { name: string; onRename: (k: string) 
       onChange={(e) => f.change(e.target.value)}
       onKeyDown={f.onEscape}
       onBlur={() => {
-        const k = f.settle((s) => s.trim())
+        const k = f.settle()
         if (k !== null) onRename(k)
       }}
     />
@@ -305,7 +308,7 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
 /** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。 */
 function TextValueInput({ current, norm, onCommit }: { current: string; norm?: (s: string) => string; onCommit: (v: string) => void }) {
   const { t } = useI18n()
-  const f = useFieldDraft(current)
+  const f = useFieldDraft(current, 'conflict', norm)
   return (
     <input
       className={`amx-prop-input${f.conflict ? ' amx-prop-conflict' : ''}`}
@@ -314,7 +317,7 @@ function TextValueInput({ current, norm, onCommit }: { current: string; norm?: (
       onChange={(e) => f.change(e.target.value)}
       onKeyDown={f.onEscape}
       onBlur={() => {
-        const next = f.settle(norm)
+        const next = f.settle()
         if (next !== null) onCommit(next)
       }}
     />

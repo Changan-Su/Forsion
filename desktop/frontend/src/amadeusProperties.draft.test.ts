@@ -101,10 +101,29 @@ describe('属性面板受控草稿(C-01)', () => {
     act(() => { el.focus() })
     typeInto(el, 'todoX')
     render('status: done')
+    expect(el.classList.contains('amx-prop-conflict')).toBe(true)
     typeInto(el, 'todo')
+    // 收口 N-6 / E5:改回原值 = 失焦零写入、外部值胜出 —— 不许再挂冲突样式与「失焦后以你的输入为准」的提示
+    expect(el.classList.contains('amx-prop-conflict')).toBe(false)
+    expect(el.title).toBe('')
     act(() => { el.blur() })
     expect(commits).toEqual([])
     expect(valueInputs()[0].value).toBe('done')
+  })
+
+  it('数字框按归一判冲突:改回原值(带空白)不标冲突、失焦零提交(E5)', () => {
+    render('count: 3')
+    openPanel()
+    const el = valueInputs()[0]
+    act(() => { el.focus() })
+    typeInto(el, '39')
+    render('count: 7')
+    expect(el.classList.contains('amx-prop-conflict')).toBe(true)
+    typeInto(el, ' 3 ')
+    expect(el.classList.contains('amx-prop-conflict')).toBe(false)
+    act(() => { el.blur() })
+    expect(commits).toEqual([])
+    expect(valueInputs()[0].value).toBe('7')
   })
 
   it('打字中同字段被外部改了 → 草稿保留+冲突标记;Esc 放弃 → 显示外部值、失焦零提交', () => {
