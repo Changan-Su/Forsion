@@ -46,6 +46,7 @@ import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
 import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
+import { revealBlockAtTop } from './revealScroll'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
@@ -1788,13 +1789,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const hs = docHeadings(v.state.doc)
         const h = hs[index]?.text === text ? hs[index] : hs.find((x) => x.text === text)
         if (!h) return
-        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(h.pos + 1))).scrollIntoView())
+        // C-03:**先 focus 再放选区**,滚动显式做(revealBlockAtTop:贴顶、让开顶栏)。原来先 dispatch
+        // scrollIntoView 再 focus —— PM 只在 DOM 选区已在编辑器里时才滚,刚打开 / 焦点在标题框时首击不动;
+        // 而且那是最小滚动,往下跳贴视口底、往上跳被 sticky 顶栏盖住。
         v.focus()
-        // 引用条落点闪一下 —— 覆盖片走 flashCiteTip(为什么不能直接给标题节点加类,见那边的注释)。
-        // 位置同步读:dispatch 里的 scrollIntoView 是同步做完的,此刻的 rect 就是最终位置。
-        if (!flash) return
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(h.pos + 1))))
         const el = v.nodeDOM(h.pos)
-        if (el instanceof HTMLElement) flashCiteTip(el.getBoundingClientRect())
+        if (!(el instanceof HTMLElement)) return
+        revealBlockAtTop(el)
+        // 引用条落点闪一下 —— 覆盖片走 flashCiteTip(为什么不能直接给标题节点加类,见那边的注释)。
+        // 位置同步读:上面的滚动是同步写 scrollTop,此刻的 rect 就是最终位置。
+        if (flash) flashCiteTip(el.getBoundingClientRect())
       },
       revealBlock: (id, flash) => {
         const v = layer.getView()
@@ -1816,12 +1821,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         //    它紧贴目标内容,总比跳到别人家里强。文档首行就是光杆锚时同理。
         if (isLoneBlockId(blocks[idx].text) && idx > 0 && blocks[idx - 1].parent === blocks[idx].parent) idx -= 1
         const pos = blocks[idx].pos
-        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(pos + 1))).scrollIntoView())
+        // 先 focus、再放选区、显式贴顶滚动 —— 理由同 revealHeading(C-03)。
         v.focus()
-        // 位置同步读:dispatch 里的 scrollIntoView 是同步做完的,此刻的 rect 就是最终位置(同标题锚)。
-        if (flash) {
-          const el = v.nodeDOM(pos)
-          if (el instanceof HTMLElement) flashCiteTip(el.getBoundingClientRect())
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(pos + 1))))
+        const el = v.nodeDOM(pos)
+        if (el instanceof HTMLElement) {
+          revealBlockAtTop(el)
+          // 位置同步读:滚动是同步写 scrollTop,此刻的 rect 就是最终位置(同标题锚)。
+          if (flash) flashCiteTip(el.getBoundingClientRect())
         }
         return true
       },

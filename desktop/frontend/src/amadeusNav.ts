@@ -126,10 +126,11 @@ export async function openNoteAtHeading(path: string, heading: string): Promise<
       const hit = findHeadingIndex(hs, heading)
       if (hit >= 0) {
         unifiedRevealHeading(path, hit, hs[hit].text)
-        // ⚠️ 编辑器刚挂载的头几百毫秒布局未稳:标题列表已齐(doc 解析完)但 PM scrollIntoView
-        // 按未测量的坐标算 = 原地不动(e2e 探针实测:立即 reveal 不滚、600ms 后 reveal 正常)。
-        // 补一跳:reveal 幂等,已在视口时第二跳视觉上是 no-op。e2e:filecite F7 钉这条。
-        // 落点提醒动画只挂在**补跳**这一次:首跳可能压根没滚(布局未稳),那时闪也闪在屏幕外;
+        // 补一跳(600ms 后):当年「立即 reveal 不滚、600ms 后正常」的真因不是布局未稳,而是 reveal 先
+        // dispatch scrollIntoView 再 focus —— PM 只在 DOM 选区已在编辑器里时才滚(C-03 已改为先 focus、
+        // 显式贴顶滚动,首跳即生效)。补跳留着兜真正的晚到布局:目标上方的嵌入 / 图片异步撑高会把落点
+        // 顶下去。reveal 幂等,落点没漂时第二跳视觉上是 no-op。e2e:filecite F7 钉这条。
+        // 落点提醒动画只挂在**补跳**这一次:首跳之后落点还可能被晚到布局顶走,那时闪也闪在别处;
         // 两次都闪则是「闪到一半重来」的抖动。代价是反馈晚 600ms,换来必定闪在用户眼前。
         setTimeout(() => unifiedRevealHeading(path, hit, hs[hit].text, true), 600)
       }
@@ -151,8 +152,8 @@ export async function openNoteAtBlock(path: string, blockId: string): Promise<vo
     // 一次调用同时回答「实例挂上了吗」与「这篇里有没有这个块」—— 两种 false 都该再等一拍
     // (编辑器刚挂载时 doc 常常还是空的,与 openNoteAtHeading 轮询 headings 同一个理由)。
     if (unifiedRevealBlock(path, blockId)) {
-      // 补跳同标题锚:头几百毫秒布局未稳,立即 reveal 按未测量坐标算 = 原地不动;
-      // 落点提醒动画只挂在补跳这一次(首跳可能压根没滚,那时闪也闪在屏幕外)。
+      // 补跳同标题锚:兜目标上方晚到的布局(嵌入 / 图片异步撑高);首跳本身已即时生效(C-03)。
+      // 落点提醒动画只挂在补跳这一次(首跳之后落点还可能漂)。
       setTimeout(() => unifiedRevealBlock(path, blockId, true), 600)
       return
     }
