@@ -36,7 +36,7 @@ registerMessages({
 
 export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean }>
 
-export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, run, onApply, onClose }: {
+export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, run, onApply, onClose, editorEl }: {
   /** 视口坐标:目标末尾下方(y)/ 目标起点上方(anchorTop);下方放不下时翻上去(同工具栏)。 */
   x: number
   y: number
@@ -50,6 +50,8 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   run: InlineAiRun
   onApply: (how: AiApply, text: string) => void
   onClose: () => void
+  /** 目标所在编辑器的根:焦点在它里面时 Enter / Esc 归面板管(见下方键盘闸)。 */
+  editorEl?: HTMLElement | null
 }): ReactElement {
   const { t } = useI18n()
   const [phase, setPhase] = useState<'ask' | 'running' | 'done' | 'error'>(askFirst ? 'ask' : 'running')
@@ -61,6 +63,9 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   const acc = useRef('')
   const lastInstruction = useRef<string | undefined>(undefined)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const editorRef = useRef(editorEl)
+  editorRef.current = editorEl
 
   const start = (instr: string | undefined): void => {
     ac.current?.abort()
@@ -106,17 +111,25 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
 
   const primary: AiApply = hasSelection ? 'replace' : 'insert'
   // Esc = 丢弃(任何阶段);预览完成后 Enter = 主动作。捕获期拦,别让它们落进编辑器(Enter 会插一个换行)。
-  // 组字中一律放行(输入法的 Enter 是上屏)。
+  // 组字中一律放行(输入法的 Enter 是上屏)。⚠️ 只在焦点「归这块面板管」时接管:在本编辑器里、面板容器上、或没有焦点
+  // (body)。面板不自动关 —— 用户可能转头去侧栏聊天框 / 搜索框 / 属性框打字,那里的回车若被这里抢走,
+  // 会把 AI 结果写进笔记、消息却没发出去。面板里的按钮聚焦时让按钮自己响应回车(Tab 到「丢弃」按回车不能变成替换)。
+  const ownsFocus = (forEnter: boolean): boolean => {
+    const a = document.activeElement as HTMLElement | null
+    if (!a || a === document.body || a === document.documentElement) return true
+    if (panelRef.current?.contains(a)) return !forEnter || a === panelRef.current
+    return !!editorRef.current?.contains(a)
+  }
   const keyRef = useRef({ phase, text, primary })
   keyRef.current = { phase, text, primary }
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.isComposing || e.keyCode === 229) return
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && ownsFocus(false)) {
         e.preventDefault()
         e.stopPropagation()
         onClose()
-      } else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && keyRef.current.phase === 'done') {
+      } else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && keyRef.current.phase === 'done' && ownsFocus(true)) {
         e.preventDefault()
         e.stopPropagation()
         onApply(keyRef.current.primary, keyRef.current.text)
@@ -127,7 +140,7 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   }, [onClose, onApply])
 
   return (
-    <OverlayAt className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} prefer="below" role="dialog" aria-label={t('inlineai.label')} data-testid="inline-ai-panel" data-phase={phase}>
+    <OverlayAt innerRef={(el) => { panelRef.current = el }} className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} prefer="below" role="dialog" aria-label={t('inlineai.label')} data-testid="inline-ai-panel" data-phase={phase}>
       <div className="am-ai-head">
         <Sparkles size={14} aria-hidden />
         <span className="am-ai-title">{title}</span>

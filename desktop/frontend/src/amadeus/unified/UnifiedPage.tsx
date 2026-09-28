@@ -2453,6 +2453,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             run={runAi(aiPanel)}
             onApply={applyAi}
             onClose={closeAi}
+            editorEl={bodyRef.current}
           />
         </OverlayPortal>
       )}

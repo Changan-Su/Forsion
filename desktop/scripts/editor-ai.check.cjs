@@ -502,6 +502,26 @@ async function groupC(browser) {
     check('C8b 插件结果只进预览,确认前零写入;替换后落盘', p?.preview === '**写得不太好**Better text.' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
     await page.close()
   }
+  // C10 预览停着时,焦点在别处的输入框(侧栏聊天 / 搜索 / 属性框)里按回车 / Esc:归那个输入框,面板不接管、零写入
+  {
+    const page = await open(browser, md)
+    await installProbe(page, { complete: true })
+    await selectText(page, '写得不太好')
+    await pickAi(page, 'improve')
+    await waitPhase(page, 'done')
+    await page.evaluate(() => {
+      const ta = document.createElement('textarea')
+      ta.id = 'elsewhere'
+      document.body.appendChild(ta)
+      ta.focus()
+    })
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(1300)
+    const st = await page.evaluate(() => ({ writes: window.__upage.writes.length, panel: document.querySelector('[data-testid="inline-ai-panel"]')?.getAttribute('data-phase') ?? null, ta: document.getElementById('elsewhere').value }))
+    check('C10 别处输入框里的回车 / Esc 不被面板抢走:面板仍在、零写入、回车进了那个输入框', st.writes === 0 && st.panel === 'done' && st.ta === '\n', JSON.stringify(st))
+    await page.close()
+  }
   // C9 出错:面板给错误 + 重试,文档不动
   {
     const page = await open(browser, md)
