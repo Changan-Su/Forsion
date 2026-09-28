@@ -14,7 +14,7 @@
 //   whitelist 评审附录 A / 拍板表里认定的既定规范化,断言「恰好规范成这个样子」,第二轮必须逐字。红 = exit 1。
 //   stable    首轮允许偏离(修前就有的一次性丢失,另记在残余风险里),但**第二轮必须逐字**(相对首轮落盘)——
 //             专抓「越存越多」(R-01 返修:读写两侧认公式不一致,反斜杠每存翻一倍,首轮看不出)。红 = exit 1。
-//   pending   已知未修、归别的波次/包(D-11 / R-01 余项已挪进 verbatim)。按逐字断言但只记 XFAIL,
+//   pending   已知未修、归别的波次/包(波次 2 起暂空:D-11 / R-01 余项 / D-01 / D-05 均已挪进 verbatim)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
 //             ⚠️ D-18(0b)起**未编辑的顶层块逐字写回原文**:病在序列化器里的条目,EDITHERE 要和病灶放在**同一块**
 //             (`${M} …`),否则逐字回填直接绕过序列化、XPASS 却什么都没修。附录 A 的规范化同理(*_edited 条目)。
@@ -71,7 +71,7 @@ const CASES = [
   { id: 'd18.snake', bucket: V, md: `${M}\n\nsnake_case_var and 5 * 3\n` },
   { id: 'd18.mark_html', bucket: V, md: `${M}\n\nsome <mark>hi</mark> text\n` },
   { id: 'd18.no_trailing_nl', bucket: V, md: `${M}\n\nlast` },
-  { id: 'd18.bom', bucket: P, why: 'D-01(0a 另一包:BOM)', md: `\uFEFF${M}\n\npara\n` },
+  { id: 'd18.bom', bucket: V, why: 'D-01(0a 已修:BOM 归 fm 侧逐字)', md: `\uFEFF${M}\n\npara\n` },
   { id: 'd18.task_upper_X', bucket: V, md: `${M}\n\n- [X] Done\n` },
   // 附录 A 认定的规范化对**被编辑的块**照旧适用(未编辑的块见上面逐字的同名条目)。
   { id: 'd18.emph_underscore_edited', bucket: W, why: '附录 A I-16:`_it_`→`*it*`(09-18 拍板);强调符统一 `*`(attentionFlanking.ts)', md: `_emph_ and __strong__ ${M}\n`, golden: `*emph* and **strong** ${M}Z\n` }, // 标记放句尾:紧跟光标的空格会被 I-06 换成 NBSP(另一包)
@@ -189,7 +189,7 @@ const CASES = [
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },
   { id: 'tags.heading', bucket: V, md: `${M}\n\n# 标题\n` },
   { id: 'tags.lineStart', bucket: V, why: 'R-25(0b 已修):行首 `#tag` 曾被转义成 `\\#tag`', md: `${M}\n\n#tag 与 #嵌套/标签 正文\n` },
-  { id: 'tags.listItem', bucket: P, why: 'D-05(0b):紧凑 `-` 列表被改写(行首 `#` 的转义已由 R-25 修掉)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
+  { id: 'tags.listItem', bucket: V, why: 'D-05(0b 已修):紧凑 `-` 列表原样(行首 `#` 的转义已由 R-25 修掉)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
   { id: 'tags.quote', bucket: V, why: 'R-25(0b 已修)', md: `${M}\n\n> #idea 想法\n` },
   { id: 'tags.onlyTag', bucket: V, why: 'R-25(0b 已修)', md: `${M}\n\n#tag\n` },
 ]
