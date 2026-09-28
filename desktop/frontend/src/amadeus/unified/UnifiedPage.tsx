@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -66,7 +66,18 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
-import { reconcileTr } from './reconcileDiff'
+import { reconcileTr, type ReconcileChange } from './reconcileDiff'
+import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
+import { AgentChangeCapsule } from './AgentChangeCapsule'
+import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
+import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
+import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
+import type { TanguInlineAction } from '../plugins/tanguSeam'
+import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
+import { agentWroteRecently } from '../../stores/agentWriteLedger'
+import { askTanguQuote } from './askTangu'
+import { readTangu } from '../plugins/tanguSeam'
+import { usePluginStore } from '../plugins/pluginStore'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
@@ -210,9 +221,11 @@ function flashCiteTip(r: DOMRect): void {
 /** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
  *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
  *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
-function applyMinimalDiff(view: EditorView, next: ProseNode): void {
-  const tr = reconcileTr(view.state, next)
-  if (tr) view.dispatch(tr)
+function applyMinimalDiff(view: EditorView, next: ProseNode, agent = false): void {
+  // agent = 这次外部改动是 Tangu 写的(G3-03):顺带交出每一处改动(新区间 + 旧片段),打标给 agentChanges 画出来。
+  const changes: ReconcileChange[] = []
+  const tr = reconcileTr(view.state, next, agent ? changes : undefined)
+  if (tr) view.dispatch(agent ? markAgentChanges(tr, view.state.doc, changes) : tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
@@ -261,8 +274,9 @@ interface Pipe {
 }
 
 interface HostApi {
-  /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。 */
-  applyBody: (stored: string) => boolean
+  /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
+   *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
+  applyBody: (stored: string, agent?: boolean) => boolean
   /** 当前 doc 立即序列化为 stored md(编辑器未挂载 = null)。flush 路径必用:listener 的
    *  markdownUpdated 有 200ms 防抖,pipe.body 可能落后最后几击(Codex A4:快打字后立刻
    *  改名/关页,不强制序列化就丢字)。 */
@@ -293,7 +307,7 @@ interface HostApi {
   revealSelection: () => void
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
   path: string
   pageDir: string
   body: string
@@ -314,6 +328,12 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onCard: (view: EditorView) => void
   /** 只读:PM `editable=false`、不挂键盘/粘贴/slash/工具栏(MilkdownInner 同一道门)。 */
   readOnly?: boolean
+  /** 选区工具栏「问 Tangu」(G3-04);缺 = 宿主没有侧栏对话,不出按钮。 */
+  onAskTangu?: (view: EditorView) => void
+  /** 选区工具栏「AI ▾」(G3-07);缺 = 宿主做不了正文 AI。 */
+  aiMenu?: { items: ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
+  /** `/ai`(G3-07):消费掉 '/ai' 之后在光标处开 AI 面板。 */
+  onAiPrompt?: (view: EditorView) => void
 }): ReactElement {
   const [, getInstance] = useInstance()
   const store = useScopedPageStore()
@@ -324,16 +344,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   finalFlushRef.current = { onFinalFlush, skipFinalFlush }
   const onCardRef = useRef(onCard)
   onCardRef.current = onCard
+  const onAiPromptRef = useRef(onAiPrompt)
+  onAiPromptRef.current = onAiPrompt
   useEffect(() => {
     apiRef.current = {
       applySlashItem: (it) => applySlashRef.current(it),
-      applyBody: (stored) => {
+      applyBody: (stored, agent) => {
         let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
-          applyMinimalDiff(view, doc as ProseNode)
+          applyMinimalDiff(view, doc as ProseNode, agent)
           adoptOrigins(view.state.doc, doc as ProseNode) // D-18:保留下来的块改记到新盘上文本的来源
           ok = true
           if (probe) probe.reconciled = ((probe.reconciled as number) ?? 0) + 1
@@ -589,6 +611,11 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       getInstance()?.action((ctx) => onCardRef.current(ctx.get(editorViewCtx)))
       return
     }
+    if (item.scaffold === S.ai) {
+      // `/ai`(G3-07):'/ai' 已被 consume 掉,光标留在原处 → 宿主在这里开 AI 面板(先问一句指令,留空 = 续写)。
+      getInstance()?.action((ctx) => onAiPromptRef.current?.(ctx.get(editorViewCtx)))
+      return
+    }
     if (item.run) {
       // 插件注册的「先干活再插入」项。插件是 new Function 装载的第三方 JS,返回值一律当外部输入校验
       // (与 v3 同一套闸:非字符串会毒化文档,NUL/控制字符会污染笔记文件)。
@@ -744,6 +771,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         attachmentPagePath={path}
         extraPlugins={extraPlugins}
         readOnly={readOnly}
+        onAskTangu={onAskTangu}
+        aiMenu={aiMenu}
       />
       {dbPick && (
         <OverlayPortal><DbLinkPicker
@@ -1230,6 +1259,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 折叠本机记忆的键(B-13):插件是稳定引用,智库 / 路径经 ref 现读。 */
   const foldWhere = useRef({ vaultRoot, path })
   foldWhere.current = { vaultRoot, path }
+  // 正文 AI(G3-07):入口可用性与空格唤起的回调经 ref 现读(editorPlugins 只建一次)。
+  const canAiRef = useRef(false)
+  const aiSpaceRef = useRef<(view: EditorView) => void>(() => {})
+  // Agent 改动呈现(G3-03):插件状态 → 胶囊的 N / 当前第几处。回调经 ref 现读(editorPlugins 只建一次)。
+  const [agentView, setAgentView] = useState<{ count: number; index: number }>({ count: 0, index: 0 })
+  const agentStateRef = useRef<(st: AgentChangesState) => void>(() => {})
+  agentStateRef.current = (st) => {
+    const index = st.current == null ? 0 : st.changes.findIndex((c) => c.id === st.current) + 1
+    setAgentView((v) => (v.count === st.changes.length && v.index === index ? v : { count: st.changes.length, index }))
+  }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -1260,6 +1299,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createCardActiveDeco(),
       // 文档模式的层级缩进档位(同一份 pipe.fm 闭包;tree 变了要补一笔空事务推醒,见下面的 effect)。
       ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
+      // Tangu 改了这篇 → 装饰 + 胶囊(G3-03)。装饰与旧片段只在插件状态里,不进序列化。
+      ...createAgentChanges(agentStateRef),
+      // 正文 AI(G3-07):目标区间随编辑映射 + 空行按空格唤起(缺省关、IME 守卫,见 inlineAi.ts)。
+      ...createInlineAi({ spaceTrigger: () => aiSpaceTriggerEnabled() && canAiRef.current, onSpace: aiSpaceRef }),
       ...headingFoldPlugins,
       ...listFoldPlugins,
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
@@ -1316,6 +1359,123 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (r) multi(view, r)
     else if (view.state.selection instanceof NodeSelection) single(view, view.state.selection)
     view.focus()
+  }
+  /** 「问 Tangu」(评审 G3-04):选区 / 块的文字 + 最近标题的锚点交给侧栏对话(挂成引用,不发送)。
+   *  笔记一个字不动 —— 不铸 `^id`,锚点只到标题(askTangu.ts)。入口只在宿主给了 askInChat(= 注册了侧栏
+   *  对话)时出现:纯 Amadeus 壳、automation-only 档案、台架都不给,不画一个点了没反应的按钮。 */
+  const canAskTangu = !readOnly && !!readTangu()?.askInChat
+  const askTangu = (view: EditorView, from: number, to: number): void => {
+    const quote = askTanguQuote(view.state.doc, from, to, path)
+    if (quote) readTangu()?.askInChat?.(quote)
+  }
+  // ── 正文 AI(评审 G3-07,拍板 #13)───────────────────────────────────────────────
+  // 入口:选区工具栏「AI ▾」(内置动作 + 插件 registerSelectionAction)、`/ai`、空行按空格(缺省关)。不进右键菜单。
+  // 宿主能做才出现(探针给了 complete);结果先进 InlineAiPanel 预览,确认后才写(applyAiResult:一个事务、纯 md)。
+  const canAi = !readOnly && !!readTangu()?.complete
+  canAiRef.current = canAi
+  const pluginSelActions = usePluginStore((s) => s.selectionActions)
+  const [aiPanel, setAiPanel] = useState<null | { key: number; x: number; y: number; top: number; title: string; hasSelection: boolean; askFirst: boolean; action: TanguInlineAction | 'prompt'; plugin?: string }>(null)
+  const AI_ACTIONS: TanguInlineAction[] = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom']
+  const aiMenuItems: ToolbarAiItem[] = [
+    ...AI_ACTIONS.map((a) => ({ id: a, label: t(`inlineai.action.${a}`) })),
+    ...pluginSelActions.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}`, label: o.item.title, plugin: true })),
+  ]
+  /** 开面板:记目标区间(选区 / 光标一点),面板贴在目标下方。kind = 内置动作 / `plugin:<插件>:<项>` / 'prompt'(光标处先问一句)。 */
+  const openAi = (view: EditorView, kind: string): void => {
+    if (!canAi) return
+    const sel = view.state.selection
+    const cursor = kind === 'prompt'
+    const from = cursor ? sel.head : sel.from
+    const to = cursor ? sel.head : sel.to
+    if (!cursor && to <= from) return
+    setAiTarget(view, from, to)
+    const a = view.coordsAtPos(from)
+    const b = view.coordsAtPos(to)
+    const plugin = kind.startsWith('plugin:') ? kind.slice('plugin:'.length) : undefined
+    const action = (plugin || cursor ? (cursor ? 'prompt' : 'custom') : kind) as TanguInlineAction | 'prompt'
+    const title = plugin
+      ? (pluginSelActions.find((o) => `${o.pluginId}:${o.item.id}` === plugin)?.item.title ?? t('inlineai.label'))
+      : cursor ? t('inlineai.label') : t(`inlineai.action.${kind}`)
+    setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin })
+  }
+  aiSpaceRef.current = (view) => openAi(view, 'prompt')
+  /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
+  const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal) => {
+    const view = layer.getView()
+    const target = view ? aiTargetOf(view) : null
+    if (!view || !target) throw new Error(translate('unipage.toast.insertPointLost'))
+    const selMd = target.to > target.from
+      ? (hostApi.current?.serializeMd(view.state.doc.slice(target.from, target.to).content) ?? target.text)
+      : ''
+    if (panel.plugin) {
+      const owned = usePluginStore.getState().selectionActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin)
+      if (!owned) throw new Error(translate('unipage.toast.insertPointLost'))
+      const md = await owned.item.run({ text: target.text, markdown: selMd, pagePath: path })
+      if (md == null || md === '') return { text: '' }
+      if (typeof md !== 'string') throw new Error(translate('unipage.plugin.notString', { type: typeof md }))
+      if (Array.from(md).some((c) => c.charCodeAt(0) < 32 && c !== String.fromCharCode(9) && c !== String.fromCharCode(10))) {
+        throw new Error(translate('unipage.plugin.controlChars'))
+      }
+      return { text: md }
+    }
+    const probe = readTangu()
+    if (!probe?.complete) throw new Error(translate('inlineai.unavailable'))
+    const { before, after } = aiContextOf(view.state.doc, target.from, target.to)
+    const action: TanguInlineAction = panel.action === 'prompt' ? (instruction ? 'custom' : 'continue') : panel.action
+    return probe.complete({
+      action,
+      ...(instruction ? { instruction } : {}),
+      ...(selMd ? { selection: selMd } : {}),
+      ...(before ? { before } : {}),
+      ...(after ? { after } : {}),
+      title: path.split('/').pop()!.replace(/\.md$/i, ''),
+      ...(action === 'translate' ? { language: translateTargetOf(target.text) } : {}),
+    }, { signal, onDelta })
+  }
+  const closeAi = (): void => {
+    setAiPanel(null)
+    const view = layer.getView()
+    if (!view) return
+    clearAiTarget(view)
+    view.focus()
+  }
+  /** 确认写入:结果按 markdown 经本编辑器的 parser 解析,一个事务落进文档(普通用户编辑:进撤销栈、走防抖 + CAS 保存)。 */
+  const applyAi = (how: AiApply, text: string): void => {
+    const view = layer.getView()
+    const target = view ? aiTargetOf(view) : null
+    const content = hostApi.current?.parseMd(text)
+    setAiPanel(null)
+    if (!view || !target || !content) {
+      if (view) clearAiTarget(view)
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
+      return
+    }
+    const used = applyAiResult(view, target, content, how)
+    view.focus()
+    syncFromEditor()
+    schedule()
+    if (how === 'replace' && used === 'below') {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('inlineai.targetChanged') } }))
+    }
+  }
+  /** 胶囊「逐处查看」:停到下一处(循环),把那一处滚到阅读位置(装饰带 data-agent-change,定位与大纲跳转同一套)。 */
+  const onAgentReview = (): void => {
+    const view = layer.getView()
+    if (!view) return
+    const c = nextAgentChange(view)
+    const el = c ? bodyRef.current?.querySelector(`[data-agent-change="${c.id}"]`) : null
+    if (el instanceof HTMLElement) revealBlockAtTop(el, 48)
+  }
+  /** 胶囊「全部撤回」:一次普通的用户编辑(进撤销栈),照常走防抖 + CAS 保存链。用户已改过的那几处不撤。 */
+  const onAgentRevert = (): void => {
+    const view = layer.getView()
+    if (!view) return
+    const { skipped } = revertAgentChanges(view)
+    syncFromEditor()
+    schedule()
+    if (skipped) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('agentchg.skipped', { n: String(skipped) }) } }))
+    }
   }
   const turnInto = (trig: Trigger): void => withSelectedNode((view, sel) => {
     // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
@@ -1683,7 +1843,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
           pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
-          if (hostApi.current?.applyBody(body)) {
+          // 归属(G3-03):写类工具在途或刚结束、目标就是这篇 → 按 Tangu 的改动画出来(胶囊 + 装饰)。
+          // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
+          const agent = !pipe.readOnly && agentWroteRecently(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path)
+          if (hostApi.current?.applyBody(body, agent)) {
             pipe.body = body
           } else {
             pipe.body = body
@@ -2287,10 +2450,22 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 }}
                 onCard={makeCard}
                 readOnly={readOnly}
+                onAskTangu={canAskTangu ? (view) => askTangu(view, view.state.selection.from, view.state.selection.to) : undefined}
+                aiMenu={canAi ? { items: aiMenuItems, onPick: (id, view) => openAi(view, id) } : undefined}
+                onAiPrompt={canAi ? (view) => openAi(view, 'prompt') : undefined}
               />
             </MilkdownProvider>
           </CanvasStage>
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
+          {!readOnly && agentView.count > 0 && (
+            <AgentChangeCapsule
+              count={agentView.count}
+              index={agentView.index}
+              onReview={onAgentReview}
+              onRevert={onAgentRevert}
+              onKeep={() => { const v = layer.getView(); if (v) keepAgentChanges(v) }}
+            />
+          )}
         </div>
       )}
       <LinkHoverCard
@@ -2304,10 +2479,45 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           </div>
         </OverlayPortal>
       )}
+      {aiPanel && canAi && (
+        <OverlayPortal>
+          <InlineAiPanel
+            key={aiPanel.key}
+            x={aiPanel.x}
+            y={aiPanel.y}
+            anchorTop={aiPanel.top}
+            title={aiPanel.title}
+            hasSelection={aiPanel.hasSelection}
+            askFirst={aiPanel.askFirst}
+            run={runAi(aiPanel)}
+            onApply={applyAi}
+            onClose={closeAi}
+            editorEl={bodyRef.current}
+          />
+        </OverlayPortal>
+      )}
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
+            {canAskTangu && (
+              <>
+                {/* 块级 AI 入口排首位(Notion ⋮⋮ 的 Ask AI 同位)。不走 withBlocks:那条收尾会把焦点拽回编辑器,
+                    而这里焦点该留给侧栏输入框(引用落地后它自己 focus)。 */}
+                <button data-act="ask" onClick={() => {
+                  setBlockMenu(null)
+                  const view = layer.getView()
+                  if (!view) return
+                  const r = layer.topRangeOf(view)
+                  const sel = view.state.selection
+                  if (r) askTangu(view, r.from, r.to)
+                  else if (sel instanceof NodeSelection) askTangu(view, sel.from, sel.to)
+                }}>
+                  <MessageSquarePlus size={13} /> {t('unipage.menu.askTangu')}
+                </button>
+                <div className="ubm-sep" />
+              </>
+            )}
             <div className="ubm-label">{t('unipage.menu.turnInto')}</div>
             {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
             {!isTableSelected(layer.getView()) && (

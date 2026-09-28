@@ -20,6 +20,9 @@ import { activeChatModelId, stickyDefaults, useApp, type AppState } from './stor
 import { agentStatusOf, statusKey } from './stores/agentStatus'
 import type { TanguDesktopConfig } from './types'
 import { getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
+import { hasNativeFeature } from './features/runtime'
+import { quoteInChatPanel } from './views/chat2/chatPanelQuote'
+import { completeInline } from './services/inlineAi'
 
 function readActiveModel(): TanguModelInfo | null {
   const s = useApp.getState()
@@ -291,6 +294,11 @@ export function installTanguProbe(): void {
     subscribeAgentStatus,
     startChat,
     agentSelf: (slug) => (slug === 'muse' ? museSelf() : null),
+    // 编辑器「问 Tangu」(G3-04):只在注册了 chat-panel 的宿主上给(与 features/tangu.tsx 同一个谓词)。
+    // automation-only 档案也会装本探针(bootstrapEngine),那里没有侧栏对话 → 方法缺席,编辑器不出入口。
+    ...(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {}),
+    // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
+    complete: (req, opts) => completeInline(req, readActiveModel()?.id ?? null, opts),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

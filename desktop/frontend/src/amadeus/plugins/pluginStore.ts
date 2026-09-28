@@ -57,6 +57,7 @@ import type {
   SettingsViewContribution,
   ReadinessContribution,
   SlashContribution,
+  SelectionActionContribution,
   StatusItemContribution,
   ThemeContribution,
   ViewContribution,
@@ -124,6 +125,8 @@ interface PluginState {
   /** Runtime: plugins whose setup() has run. */
   activeIds: string[]
   slashItems: Owned<SlashContribution>[]
+  /** 选区工具栏「AI ▾」里的插件项(G3-07);结果一律走宿主预览确认。 */
+  selectionActions: Owned<SelectionActionContribution>[]
   commands: Owned<CommandContribution>[]
   themes: Owned<ThemeContribution>[]
   panels: Owned<PanelContribution>[]
@@ -914,6 +917,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
       },
     } : undefined,
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
+    registerSelectionAction: (action) => {
+      if (!ctxAlive) return
+      if (!action || typeof action.id !== 'string' || typeof action.title !== 'string' || typeof action.run !== 'function') {
+        console.warn(`[amadeus] 插件 ${pluginId} 的 registerSelectionAction 缺 id / title / run,已忽略`)
+        return
+      }
+      set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
+    },
     registerCommand: (command) =>
       set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),
     registerTheme: (theme) => {
@@ -1302,6 +1313,37 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   },
                 }
               : {}),
+            // 一次性补全(G3-07):探针给得出才注入。插件停用 → 在飞请求中止并 reject(tanguUnsubs 随停用统一收)。
+            ...(readTangu()?.complete
+              ? {
+                  complete: async (req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }> => {
+                    if (!ctxAlive) throw new Error('plugin disabled')
+                    const probe = readTangu()
+                    if (!probe?.complete) throw new Error('complete is not available on this host')
+                    const prompt = typeof req?.prompt === 'string' ? req.prompt.trim() : ''
+                    if (!prompt) throw new Error('ctx.tangu.complete: prompt is required')
+                    const ac = new AbortController()
+                    const stop = (): void => { ac.abort(); tanguUnsubs.delete(stop) }
+                    tanguUnsubs.add(stop)
+                    const outer = req.signal
+                    const onOuter = (): void => ac.abort()
+                    outer?.addEventListener('abort', onOuter)
+                    if (outer?.aborted) ac.abort()
+                    try {
+                      const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+                      const r = await probe.complete({ action: 'custom', instruction: prompt, selection: str(req.selection), before: str(req.before), after: str(req.after) }, {
+                        signal: ac.signal,
+                        onDelta: (d) => { if (ctxAlive) { try { req.onDelta?.(d) } catch { /* 插件回调抛错不打断流 */ } } },
+                      })
+                      if (!ctxAlive) throw new Error('plugin disabled')
+                      return { text: r.text }
+                    } finally {
+                      outer?.removeEventListener('abort', onOuter)
+                      tanguUnsubs.delete(stop)
+                    }
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -1389,6 +1431,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     set((s) => ({
       activeIds: s.activeIds.filter((x) => x !== id),
       slashItems: s.slashItems.filter((o) => o.pluginId !== id),
+      selectionActions: s.selectionActions.filter((o) => o.pluginId !== id),
       commands: s.commands.filter((o) => o.pluginId !== id),
       themes: s.themes.filter((o) => o.pluginId !== id),
       panels: s.panels.filter((o) => o.pluginId !== id),
@@ -1415,6 +1458,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     disabledIds: [],
     activeIds: [],
     slashItems: [],
+    selectionActions: [],
     commands: [],
     themes: [],
     panels: [],
@@ -1472,6 +1516,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         lastEnsure.delete(id) // 抛错前可能已调过 ensure:没激活的插件不该留着一条等重放的记录
         set((s) => ({
           slashItems: s.slashItems.filter((o) => o.pluginId !== id),
+          selectionActions: s.selectionActions.filter((o) => o.pluginId !== id),
           commands: s.commands.filter((o) => o.pluginId !== id),
           themes: s.themes.filter((o) => o.pluginId !== id),
           panels: s.panels.filter((o) => o.pluginId !== id),

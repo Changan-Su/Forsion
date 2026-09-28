@@ -87,7 +87,9 @@ import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
-import { InlineToolbar, type ToolbarAction } from './InlineToolbar'
+import { InlineToolbar, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
+import { Sparkles } from 'lucide-react'
+import { readTangu } from '../../plugins/tanguSeam'
 import { OverlayPortal } from '../../lib/overlayPortal'
 import { OverlayAt } from '../../lib/clampMenu'
 import { getRecentPages } from '../../lib/recents'
@@ -158,6 +160,7 @@ registerMessages({
   'mdblock.slash.embed': { zh: '嵌入块引用', en: 'Embed block' },
   'mdblock.slash.bookmark': { zh: '书签', en: 'Bookmark' },
   'mdblock.slash.button': { zh: '按钮', en: 'Button' },
+  'mdblock.slash.ai': { zh: 'AI 写作', en: 'AI writing' },
   // 弹框(askString)
   'mdblock.link.title': { zh: '插入链接', en: 'Insert link' },
   'mdblock.link.label': { zh: '输入或粘贴地址（裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
@@ -233,6 +236,8 @@ const COLUMN_SENTINEL = '\u0000__amadeus_column__'
 const DATABASE_SENTINEL = '\u0000__amadeus_database__'
 const DRAWING_SENTINEL = '\u0000__amadeus_drawing__'
 const CARD_SENTINEL = '\u0000__amadeus_card__'
+/** `/ai`(评审 G3-07):v4 统一实例开正文 AI 面板(UnifiedPage.applySlash 接)。 */
+const AI_SENTINEL = '\u0000__amadeus_ai__'
 
 const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
@@ -478,6 +483,8 @@ export function MilkdownInner({
   unified = false,
   attachmentPagePath,
   extraPlugins,
+  onAskTangu,
+  aiMenu,
 }: {
   initial: string
   onChange: (md: string) => void
@@ -512,6 +519,10 @@ export function MilkdownInner({
   attachmentPagePath?: string
   /** 宿主追加的 Milkdown 插件(UnifiedPage 的块交互层等)。⚠️ 须传稳定引用:编辑器只建一次。 */
   extraPlugins?: MilkdownPlugin[]
+  /** 选区工具栏的「问 Tangu」(评审 G3-04):宿主有侧栏对话才传,拿到的是当前 view(选区现读)。缺 = 不出按钮。 */
+  onAskTangu?: (view: EditorView) => void
+  /** 选区工具栏「AI ▾」(评审 G3-07):宿主能做正文 AI 才传;选中一项交回宿主(带当前 view)开预览面板。 */
+  aiMenu?: { items: ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
 }) {
   const ready = useRef(false)
   const pagePathRef = useRef(attachmentPagePath)
@@ -1494,6 +1505,17 @@ export function MilkdownInner({
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}
           onClose={() => setToolbar(null)}
+          onAsk={onAskTangu ? () => {
+            setToolbar(null)
+            getInstance()?.action((ctx) => onAskTangu(ctx.get(editorViewCtx)))
+          } : undefined}
+          ai={aiMenu ? {
+            items: aiMenu.items,
+            onPick: (id) => {
+              setToolbar(null)
+              getInstance()?.action((ctx) => aiMenu.onPick(id, ctx.get(editorViewCtx)))
+            },
+          } : undefined}
         />
       )}
       </OverlayPortal>
@@ -1953,6 +1975,8 @@ export interface SlashItem {
   kw: string
   /** 只有 v4 统一实例具备的结构动作（例如 Canvas 卡片）；v3 编辑器与移动端块面板不露出。 */
   unifiedOnly?: boolean
+  /** 要宿主能做正文 AI(探针给了 complete)才露出(G3-07 的 `/ai`);纯 Amadeus 壳 / 台架缺省不给。 */
+  needsAi?: boolean
 }
 
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
@@ -1974,6 +1998,7 @@ export const SLASH_SENTINELS = {
   noteview: NOTEVIEW_SENTINEL,
   page: PAGE_SENTINEL,
   card: CARD_SENTINEL,
+  ai: AI_SENTINEL,
 } as const
 
 // 前缀型 scaffold → 块转换(slash 选中时经 SlashOps.transform 在编辑器内单事务完成,绝不新建块)。
@@ -1996,6 +2021,8 @@ export const PREFIX_TRIGGERS: Record<string, Trigger> = {
 /** 可插入块的**唯一真源**。移动端的双列块面板(amadeusViews.AmxBlockPicker)与桌面 slash 菜单
  *  共吃这一份 —— 别在别处再手写一张清单,否则新块类型只在其中一处露出。 */
 export const SLASH_ITEMS: SlashSeed[] = [
+  // AI 排首位(Notion 的 /ai 同位);kw 里的 `ai` 精确命中 +10 分,`/ai` 不再被拼音模糊匹配到代码块(G3-09)。
+  { key: 'ai', labelKey: 'mdblock.slash.ai', hint: 'AI', icon: <Sparkles width="1em" height="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.basic', scaffold: AI_SENTINEL, kw: 'ai 人工智能 写作 xiezuo 续写 xuxie 生成 tangu ask 问', unifiedOnly: true, needsAi: true },
   { key: 'text', labelKey: 'mdblock.slash.text', hint: '', icon: <TextIcon />, groupKey: 'mdblock.group.basic', scaffold: '', kw: 'text 文本 paragraph zhengwen 正文' },
   { key: 'h1', labelKey: 'mdblock.slash.h1', hint: '#', icon: <Heading1Icon />, groupKey: 'mdblock.group.basic', scaffold: '# ', kw: 'h1 heading 标题 biaoti title 大标题' },
   { key: 'h2', labelKey: 'mdblock.slash.h2', hint: '##', icon: <Heading2Icon />, groupKey: 'mdblock.group.basic', scaffold: '## ', kw: 'h2 heading 标题 biaoti 中标题' },
@@ -2058,7 +2085,8 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
       kw: `${item.keywords ?? ''} ${item.label}`,
     })),
   ]
-  return unified ? all : all.filter((it) => !it.unifiedOnly)
+  const ai = !!readTangu()?.complete
+  return all.filter((it) => (unified || !it.unifiedOnly) && (ai || !it.needsAi))
 }
 
 /** 「最后一个获得过焦点的块」的 applySlash —— 移动端双列块面板的落点。

@@ -77,6 +77,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/inbox/pull', access: 'allow', src: 'routes/inbox.ts', why: 'pull cloud broadcasts' },
   { method: 'POST', path: '/agent/inbox/read-all', access: 'allow', src: 'routes/inbox.ts', why: 'mark all read' },
   { method: 'GET', path: '/agent/inbox/unread-count', access: 'allow', src: 'routes/inbox.ts', why: 'inbox badge' },
+  { method: 'POST', path: '/agent/inline', access: 'allow', src: 'routes/inline.ts', why: 'inline writing completion for the note editor (no tools, nothing persisted; same shape as aside)' },
   { method: 'GET', path: '/agent/log', access: 'allow', src: 'routes/memory.ts', why: 'read daily log' },
   { method: 'POST', path: '/agent/log', access: 'deny-remote', src: 'routes/memory.ts', why: 'memory log write' },
   { method: 'GET', path: '/agent/memory', access: 'allow', src: 'routes/memory.ts', why: 'read memory' },

@@ -92,6 +92,8 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/:id/timeline': [A, 'session timeline'],
   'POST /agent/sessions/:id/compact': [A, 'compact a session'],
   'POST /agent/sessions/:id/aside': [A, 'btw aside (taint propagates, C5)'],
+  // ── inline.ts:正文生成式 AI(G3-07)──
+  'POST /agent/inline': [A, 'inline writing completion for the note editor (no tools, nothing persisted; same shape as aside)'],
   'GET /agent/sessions/:id/checkpoints': [A, 'list code checkpoints'],
   'POST /agent/sessions/:id/checkpoints/restore': [D, 'restores host files from checkpoints (design appendix C)'],
   'GET /agent/compaction': [A, 'read compaction settings'],
