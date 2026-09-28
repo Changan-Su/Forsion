@@ -1943,6 +1943,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
      *  ghost/重测最早下一次提交才追上；拆成两路会稳定落后一个事件(C34 实测 14×9px)。 */
     const selectionPosition = (box: Pick<ElBox, 'x' | 'y'>, includeSize = false): string =>
       `left:${box.x}px!important;top:${box.y}px!important;${includeSize && 'w' in box && 'h' in box ? `width:${box.w}px!important;height:${box.h}px!important;` : ''}`
+    /** 手势 live 期间藏起 ⠿/+ 把手(V-12)。按下时 preventDefault 抑制了兼容 mouse 事件,blockLayer 的悬停追踪
+     *  整段收不到任何事件,把手就停在按下前的那个块旁边,悬在空白画布上。与几何同一张样式表:松手 clearDragRule 即复原。 */
+    const hideGutter = `.amx-stage[data-amx-dragscope="${scope}"] .unified-gutter{visibility:hidden!important;pointer-events:none!important}`
     const setDragRule = (
       rules: Array<{ anchor: string; decl: string; selection: Pick<ElBox, 'x' | 'y'> }>,
       mainSelection?: Pick<ElBox, 'x' | 'y'>,
@@ -1954,6 +1957,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${anchor}"]{${selectionPosition(rule.selection)}}`)
       }
       if (mainSelection) css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-main-sel]{${selectionPosition(mainSelection)}}`)
+      css.push(hideGutter)
       dragCss.textContent = css.join('\n')
     }
     const setSizeRule = (key: string, decl: string, selection: ElBox): void => {
@@ -1963,7 +1967,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       const selected = key === MAIN_KEY
         ? `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-main-sel]{${selectionPosition(selection, true)}}`
         : `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${CSS.escape(key)}"]{${selectionPosition(selection, true)}}`
-      dragCss.textContent = `${target}\n${selected}`
+      dragCss.textContent = `${target}\n${selected}\n${hideGutter}`
     }
     // z-index:1(V-10):卡片同为 absolute、按文档序叠放,不抬的话拖着的卡会钻到文档序靠后的卡底下(再叠上
     // relatedFocus 的 0.44 透明度,像两段字糊在一起)。只抬 1 档:认亲高亮(z 2/3)与关系线仍须画在它上面。

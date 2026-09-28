@@ -90,6 +90,7 @@
 //   C94 开卷自动适应与「适应内容」把 Frame(连同框外上沿的标题条)框进视野(V-03)
 //   C95 画布视口的会话记忆按「库 + 路径」作键、只在画布态记(V-15)
 //   C96 拖动中的卡压在文档序靠后的卡上面(V-10)
+//   C97 拖卡途中 ⠿/+ 把手隐藏(不悬在原位的空白画布上),松手后悬停照常出现(V-12)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -410,6 +411,36 @@ async function wave2(browser) {
   const ctl96 = await top96('k2', 'k1')
   record('C96 拖动中的卡浮在最上层:文档序靠前的 k1 拖到 k2 上 = k1 在上(对照:k2 拖到 k1 上 = k2 在上)',
     up96 === 'k1' && ctl96 === 'k2', JSON.stringify({ k1OverK2: up96, k2OverK1: ctl96 }))
+
+  // ── C97 拖卡途中藏起 ⠿/+ 把手(V-12)──────────────────────────────────────────────
+  //  修前:悬停卡内文字 → 把手出现;按住卡拖走,pointerdown 的 preventDefault 抑制了兼容 mouse 事件,
+  //  blockLayer 的悬停追踪整段收不到事件 → 把手停在原位,悬在空白画布上。现在 live 期间由同一张拖拽样式表藏起。
+  const p97 = await open(browser, SEED96)
+  await p97.waitForTimeout(700)
+  const gut97 = () => p97.evaluate(() => {
+    const el = document.querySelector('.unified-gutter')
+    if (!el) return null
+    const cs = getComputedStyle(el)
+    return { show: el.dataset.show, visible: el.dataset.show === 'true' && cs.visibility === 'visible' && +cs.opacity > 0 }
+  })
+  const t97 = await p97.evaluate(() => { const e = document.querySelector('.amx-ucard[data-anchor="k1"] p').getBoundingClientRect(); return { x: e.left + 20, y: e.top + e.height / 2 } })
+  await p97.mouse.move(t97.x - 5, t97.y); await p97.mouse.move(t97.x, t97.y)
+  await p97.waitForTimeout(400)
+  const hover97 = await gut97()
+  await p97.mouse.down()
+  for (let i = 1; i <= 12; i++) await p97.mouse.move(t97.x + 20 * i, t97.y + 25 * i)
+  await p97.waitForTimeout(250)
+  const mid97 = await gut97()
+  await p97.mouse.up()
+  await p97.waitForTimeout(400)
+  // 松手后悬停另一张卡的文字:把手照常出现(隐藏规则随拖拽样式表一起清掉了)
+  const t97b = await p97.evaluate(() => { const e = document.querySelector('.amx-ucard[data-anchor="k2"] p').getBoundingClientRect(); return { x: e.left + 20, y: e.top + e.height / 2 } })
+  await p97.mouse.move(t97b.x - 5, t97b.y); await p97.mouse.move(t97b.x, t97b.y)
+  await p97.waitForTimeout(400)
+  const after97 = await gut97()
+  await p97.close()
+  record('C97 拖卡途中 ⠿/+ 把手隐藏;松手后悬停别的块照常出现',
+    hover97?.visible === true && mid97?.visible === false && after97?.visible === true, JSON.stringify({ hover97, mid97, after97 }))
 }
 
 async function main() {
