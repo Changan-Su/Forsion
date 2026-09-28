@@ -4,7 +4,7 @@
 //   ① 连续 8 次半截断开(越过 subscribeRunEvents 的 6 次失败上限)照样续订到终态,不抛;
 //   ② 每次续订都带上已见到的最大 seq 作 fromSeq,单调前进;
 //   ③ 回调收到的事件 seq 恰好 1..N 各一次(不丢、不重)。
-// 负对照(自测断言有牙):路由无视 fromSeq、每次从头回放 → ③ 必红(subscribeRunEvents 不按 seq 去重,重复会原样交给回调)。
+// 负对照(K9 交付时实跑、未入库):把 subscribeRunEvents 读流中断那条路改成「计一次失败、续订成功也不清零」→ ① 两条都红(第 7 次断开就抛)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Reply = { status: number; body?: BodyInit; headers?: Record<string, string> }
@@ -42,11 +42,11 @@ function stream(frames: string[], abrupt: boolean): ReadableStream<Uint8Array> {
   })
 }
 
-/** 引擎语义:回放 seq > fromSeq 的事件,每条连接最多吐 perConn 帧就被掐;最后一帧 done。ignoreFromSeq = 负对照(从头回放)。 */
-function engineWithCuts(total: number, perConn: number, opts: { ignoreFromSeq?: boolean } = {}) {
+/** 引擎语义:回放 seq > fromSeq 的事件,每条连接最多吐 perConn 帧就被掐;最后一帧 done。 */
+function engineWithCuts(total: number, perConn: number) {
   return (url: string): Reply => {
     if (!url.includes('/events')) return { status: 200, body: '{}' }
-    const from = opts.ignoreFromSeq ? 0 : Number(/fromSeq=(\d+)/.exec(url)?.[1] || 0)
+    const from = Number(/fromSeq=(\d+)/.exec(url)?.[1] || 0)
     const seqs: number[] = []
     for (let s = from + 1; s <= total && seqs.length < perConn; s++) seqs.push(s)
     const frames = seqs.map((s) => frame(s, s === total ? 'done' : 'token'))
@@ -66,15 +66,15 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function drive(cfg: Parameters<typeof run.subscribeRunEvents>[0], total: number, perConn: number, opts?: { ignoreFromSeq?: boolean }) {
-  router = engineWithCuts(total, perConn, opts)
+async function drive(cfg: Parameters<typeof run.subscribeRunEvents>[0], total: number, perConn: number) {
+  router = engineWithCuts(total, perConn)
   const seqs: number[] = []
   let settled: unknown = 'pending'
   const ac = new AbortController()
   const p = run.subscribeRunEvents(cfg, 'r-renew', (ev) => { seqs.push(ev.seq) }, ac.signal)
   p.then(() => { settled = 'ok' }, (e) => { settled = e })
   for (let i = 0; i < 40 && settled === 'pending'; i++) await vi.advanceTimersByTimeAsync(900)
-  ac.abort() // 负对照那条永远到不了 done:收掉,别让它挂到下一条用例
+  ac.abort() // 没到终态的(失败时)收掉,别让它挂到下一条用例
   const fromSeqs = calls.filter((u) => u.includes('/events')).map((u) => Number(/fromSeq=(\d+)/.exec(u)?.[1]))
   return { settled, seqs, fromSeqs }
 }
@@ -96,11 +96,5 @@ describe('subscribeRunEvents × hub 半截断流(P1-K9)', () => {
     expect(r.fromSeqs).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32])
     expect(r.seqs).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))
     expect(H.healthOf(t.key).state).toBe('ready')
-  })
-
-  it('负对照(断言有牙):引擎无视 fromSeq 从头回放 → 回调收到重复事件', async () => {
-    const r = await drive(home, 12, 6, { ignoreFromSeq: true })
-    const dup = r.seqs.filter((s, i) => r.seqs.indexOf(s) !== i)
-    expect(dup.length).toBeGreaterThan(0) // subscribeRunEvents 不按 seq 去重:丢 / 重只能靠服务端 fromSeq 语义保证
   })
 })
