@@ -80,6 +80,8 @@ export class EngineGitSkipped extends Error {
  *     sandbox-exec 缺失 / 名单渲不出 → prepareHostCommand 抛错,这一条不跑,绝不裸跑。
  *   · Linux / Windows 没有这一层:仓库配了前缀中和不了的程序(filter / include / …,见 engineGitBlocked)→ 抛 EngineGitSkipped,不跑。
  *  两种「不跑」都是**抛**:collectGitState 吞成 null,projectContext 吞成 available:false。
+ *  --no-optional-locks:`git status` 不顺手刷新写回 index —— 800 ms 超时 SIGKILL 掉正在写 index 的 git 会留下 index.lock,
+ *  用户自己的下一条 git 就报「Another git process seems to be running」(方案 B 测延迟时在高负载下实际撞上过)。
  *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
 export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
   if (process.platform !== 'darwin' && engineGitBlocked(cwd)) throw new EngineGitSkipped('the repository configures programs git would run (filter, include, …) and this platform has no write-protection sandbox');
@@ -87,7 +89,7 @@ export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecConte
   // These fixed native developer-tool locations avoid an unsandboxed xcrun probe.
   const executable = gitExecutable();
   const prepared = prepareHostCommand({ ...ctx, cwd, writeProtectShell: true }, [
-    executable, '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+    executable, '--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
     '-c', 'diff.external=', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-C', cwd, ...args,
   ]);
   try {
