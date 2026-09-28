@@ -21,6 +21,7 @@ import type { DbFile, DbRow } from '@amadeus-shared/db/schema'
 import type { DbCellMeta } from './DatabaseEmbed'
 
 vi.mock('../../api', () => ({ amadeus: {} }))
+await import('./DatabaseEmbed') // 收集阶段先转译整张模块图(~350 个):放进用例体里,首次转译的耗时算进 5s 用例超时,机器一忙(本机多会话负载 40+)就假红;CI 上一直是绿的
 const g = globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean; React: typeof React }
 g.IS_REACT_ACT_ENVIRONMENT = true
 g.React = React
