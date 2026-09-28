@@ -35,6 +35,15 @@ registerMessages({
     zh: '「全自动」下，远程会话里的命令不再逐条询问。Agent 能以你的身份读写这台电脑上未被硬性保护的文件、调用本机接口，甚至可能替你批准它自己的请求。只在你完全信任所有已允许的设备并了解风险时使用。',
     en: "With Full auto, commands in remote sessions are no longer checked one by one. The Agent can read and write any file on this computer that isn't hard-protected, call local services as you, and could even approve its own requests. Use it only if you fully trust every allowed device and understand the risk.",
   },
+  // P1 · G5 方案 C:Linux / Windows 上远程会话的命令没有 macOS 那层写保护(Seatbelt),如实告知。Windows 连宿主沙箱都没有,不许写「打开沙箱就能挡住」。
+  'remoteSessions.shellNote.linux': {
+    zh: '在 Linux 上，你在手机或其他设备上批准的命令可以修改这台电脑上的 Forsion 设置，包括这里的远程会话最高审批档，而命令本身未必看得出来。把「设置 › 常规 › 本机运行环境 › 本地命令与文件沙箱」设为「仅工作区可写」（需要 bubblewrap）可以挡住这类修改。',
+    en: 'On Linux, a command you approve on your phone or another device can change Forsion settings on this computer, including the highest approval mode for remote sessions set here, and the command may not make that obvious. Setting Settings › General › Local runtime › Local command and file sandbox to "Workspace writes only" (requires bubblewrap) prevents this.',
+  },
+  'remoteSessions.shellNote.win': {
+    zh: '在 Windows 上，你在手机或其他设备上批准的命令可以修改这台电脑上的 Forsion 设置，包括这里的远程会话最高审批档，而命令本身未必看得出来。Windows 暂时没有能挡住这类修改的本地沙箱，请只批准你看得懂的命令。',
+    en: "On Windows, a command you approve on your phone or another device can change Forsion settings on this computer, including the highest approval mode for remote sessions set here, and the command may not make that obvious. Windows doesn't have a local sandbox that prevents this yet, so only approve commands you understand.",
+  },
   'remoteSessions.fullAutoAck': { zh: '我了解风险', en: 'I understand the risk' },
   'remoteSessions.fullAutoConfirm': { zh: '改为全自动', en: 'Switch to Full auto' },
   'remoteSessions.cancel': { zh: '取消', en: 'Cancel' },

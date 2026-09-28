@@ -118,6 +118,9 @@ export function RemoteSessionsSettings(): React.ReactNode {
   /** 账号条目弹框开着时只画那条待确认行,不再画「允许」行(两条说的是同一件事)。 */
   const accountPending = view.pending.some((p) => p.principal === 'account')
   const allowAccount = (): void => { void act('allowAccount', (a) => a.allowAccount()) }
+  // P1 · G5:macOS 上远程会话的命令有写保护(Seatbelt);Linux / Windows 没有,在上限档旁如实写明(方案 C)
+  const platform = (() => { try { return window.tangu?.platform } catch { return undefined } })()
+  const shellNoteKey = platform === 'linux' ? 'remoteSessions.shellNote.linux' : platform === 'win32' ? 'remoteSessions.shellNote.win' : null
   const kindLabel = (k: 'phone' | 'desktop' | undefined): string => t(k === 'phone' ? 'remoteSessions.kind.phone' : 'remoteSessions.kind.desktop')
 
   return (
@@ -152,6 +155,7 @@ export function RemoteSessionsSettings(): React.ReactNode {
             )
           })}
         </div>
+        {shellNoteKey && <p className="rs-note" data-rs-shell-note={platform}>{t(shellNoteKey)}</p>}
         {confirmFullAuto && (
           <div className="rs-confirm" role="group" aria-label={t('remoteSessions.fullAutoTitle')} data-rs-fullauto-confirm="">
             <div>

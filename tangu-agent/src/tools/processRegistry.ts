@@ -8,7 +8,8 @@
  */
 import type { ChildProcess } from 'node:child_process';
 import type { ToolContext } from './toolTypes.js';
-import { spawnHostShell, hostSandboxEnabled, hostSandboxScopeKey } from '../sandbox/hostSandbox.js';
+import { spawnHostShell, hostSandboxEnabled, hostSandboxScopeKey, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
+import { RemoteShellProtectionError } from '../sandbox/remoteShellSeatbelt.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 
 /** P1 · K2:后台进程的来源(= 起它的 run 的分类,见 services/remoteActivity.ts runCategory)。急停按它杀:
@@ -37,6 +38,8 @@ export interface BackgroundProcess {
   runId?: string;
   /** P1 · K2:起它那一刻的来源标签(之后不变)。 */
   origin: ProcessOrigin;
+  /** P1 · G5:起它时套了远程 shell 写保护(macOS,宿主沙箱关 + 远程污点)。没套的进程不收远程 run 的 stdin。 */
+  remoteSeatbelt?: boolean;
 }
 
 /**
@@ -121,9 +124,12 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
   }
   const id = `bg_${Date.now().toString(36)}_${++seq}`;
   let child: ChildProcess;
+  let remoteSeatbelt = false;
   try {
+    remoteSeatbelt = remoteShellSeatbeltApplies(ctx);
     child = spawnHostShell(ctx || { cwd }, command);
   } catch (e: any) {
+    if (e instanceof RemoteShellProtectionError) return `Error: ${e.message}`;
     return `Error: spawn failed: ${e?.message || e}`;
   }
   const p: BackgroundProcess = {
@@ -134,6 +140,7 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     sandboxScope: hostSandboxScopeKey(ctx || { cwd }),
     ...(ctx?.runId ? { runId: ctx.runId } : {}),
     origin: processOriginOf(ctx),
+    ...(remoteSeatbelt ? { remoteSeatbelt } : {}),
   };
   child.stdout?.on('data', (d) => append(p, d.toString()));
   child.stderr?.on('data', (d) => append(p, d.toString()));
@@ -231,6 +238,11 @@ export function writeStdin(sessionId: string, id: string, data: string, appendNe
   if (p.status !== 'running' || !p.child) return `Error: 进程 ${id} 已结束(status=${p.status}),无法写入`;
   if (ctx && hostSandboxEnabled(ctx) && p.sandboxScope !== hostSandboxScopeKey(ctx)) {
     return 'Error: this process was started with a different host sandbox policy or workspace; start a new process before sending input';
+  }
+  // P1 · G5:本机 run 起的 shell / REPL 没套远程写保护 —— 远程污点 run(含中途被 steer 染上的)往它的 stdin 写命令 = 绕过写保护。
+  // Ctrl-C 只是中断,照旧放行。
+  if (data !== CTRL_C && remoteShellSeatbeltApplies(ctx) && !p.remoteSeatbelt) {
+    return `Error: process ${id} was started outside the remote-session write protection on this computer, so a remote session cannot send it input. Start a new process from this session with run_background instead.`;
   }
   if (data === CTRL_C) {
     const child = p.child;

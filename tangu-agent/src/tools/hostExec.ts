@@ -8,7 +8,8 @@
  * 破坏性操作（run_bash / write_file / edit_file）由 agentLoop 在执行前经审批闸门把关
  * （见 services/approvals.ts）；本文件只管「真去做」，不含审批逻辑。
  */
-import { spawnHostShell, hostSandboxEnabled } from '../sandbox/hostSandbox.js';
+import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
+import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
 import { hostShellName, hostShellQuoting } from './shellPrompt.js';
 import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
 import { promises as fs } from 'node:fs';
@@ -164,7 +165,7 @@ function runBash(
   signal?: AbortSignal,
   timeoutMs = BASH_TIMEOUT_MS,
   ctx?: ToolContext,
-): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean; aborted: boolean }> {
+): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean; aborted: boolean; refused?: string }> {
   return new Promise((resolve) => {
     if (signal?.aborted) { resolve({ stdout: '', stderr: '', code: -1, timedOut: false, aborted: true }); return; }
     // detached:true → 子进程自成进程组(pgid=child.pid);超时/中止时杀「整组」,连带它 fork 出的孙进程
@@ -174,6 +175,8 @@ function runBash(
     try {
       child = spawnHostShell(ctx || { cwd }, command);
     } catch (e: any) {
+      // 远程写保护起不来(P1 · G5):命令没跑,按工具错误回给模型(失败即关)
+      if (e instanceof RemoteShellProtectionError) { resolve({ stdout: '', stderr: '', code: -1, timedOut: false, aborted: false, refused: e.message }); return; }
       resolve({ stdout: '', stderr: `[spawn error] ${e?.message || e}`, code: -1, timedOut: false, aborted: false });
       return;
     }
@@ -255,7 +258,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const cwd = ctx.cwd || process.cwd();
       const timeout = Number.isFinite(Number(args.timeout_ms)) && Number(args.timeout_ms) > 0 ? Number(args.timeout_ms) : BASH_TIMEOUT_MS;
       const started = Date.now();
+      const wrapped = remoteShellSeatbeltApplies(ctx); // 与 spawnHostShell 同一判定(同一时刻现查 steer 染色)
       const r = await runBash(command, cwd, ctx.signal, timeout, ctx);
+      if (r.refused) return `Error: ${r.refused}`;
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
       if (r.stderr) out += `stderr:\n${r.stderr}\n`;
@@ -264,6 +269,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (r.stdout.length >= BASH_OUTPUT_CAP || r.stderr.length >= BASH_OUTPUT_CAP) {
         out += `[stream capture capped at ${BASH_OUTPUT_CAP} chars per stream]\n`;
       }
+      const notes = wrapped ? remoteShellNotes(r.stderr) : '';
+      if (notes) out += `${notes}\n`;
       out += `exit_code: ${r.code} | wall_time: ${((Date.now() - started) / 1000).toFixed(1)}s`;
       if (r.timedOut) {
         out += ` (timed out after ${timeout}ms; process group killed)`;
