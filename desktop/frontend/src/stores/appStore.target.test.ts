@@ -166,10 +166,10 @@ describe('setFocusTarget(S2 整端切换)', () => {
     expect(newChatModelId(useApp.getState())).toBe('mac-model')
     // 收件箱(home 类)仍打 home
     const api = await import('../services/backendService')
-    await api.listInbox(useApp.getState().cfg).catch(() => {})
+    await api.listInbox(T.homeTarget()).catch(() => {})
     expect(calls.filter((c) => c.url.includes('/agent/inbox')).every((c) => !c.url.startsWith(`${API}/units/`))).toBe(true)
-    // 会话类老调用点(传整份 cfg)跟着会话走
-    await api.listMessages(useApp.getState().cfg, 'mac-1').catch(() => {})
+    // 会话类按会话所在的目标发(S3:调用点传 targetForSession(sid))
+    await api.listMessages(T.targetForSession('mac-1'), 'mac-1').catch(() => {})
     expect(calls.some((c) => c.url.startsWith(`${UNIT}/agent/sessions/mac-1/messages`))).toBe(true)
     // unit 的请求带目标键(401 分流)
     expect(calls.filter((c) => c.url.startsWith(UNIT)).every((c) => (c.opts as { target?: string })?.target === `unit:${U}`)).toBe(true)

@@ -56,7 +56,7 @@ describe('subscribeRunEvents × 429(负对照:改造前 4xx 一律抛)', () => {
       return n === 1 ? { status: 429, body: '{"detail":"Too many requests"}', headers: { 'Retry-After': '3' } } : { status: 200, body: sse({ seq: 1, type: 'done' }) }
     }
     const got: string[] = []
-    const p = run.subscribeRunEvents(home, 'r1', (ev) => got.push(ev.type))
+    const p = run.subscribeRunEvents(T.focusTarget(), 'r1', (ev) => got.push(ev.type))
     let settled: unknown = 'pending'
     p.then(() => { settled = 'ok' }, (e) => { settled = e })
     await vi.advanceTimersByTimeAsync(2000)
@@ -224,7 +224,7 @@ describe('subscribeRunEvents × 终局', () => {
 describe('home 目标的 5xx 行为不变', () => {
   it('502 连续 → 重试 6 次后抛(约 21s),不走探针', async () => {
     router = (url) => (url.includes('/events') ? { status: 502, body: '' } : { status: 200, body: '{}' })
-    const caught = run.subscribeRunEvents(home, 'r1', () => {}).catch((e) => e)
+    const caught = run.subscribeRunEvents(T.focusTarget(), 'r1', () => {}).catch((e) => e)
     await vi.advanceTimersByTimeAsync(30_000)
     expect(await caught).toBeInstanceOf(Error)
     expect(eventsCalls().length).toBe(7)
@@ -234,7 +234,7 @@ describe('home 目标的 5xx 行为不变', () => {
 
   it('home 的 401 照旧直接抛', async () => {
     router = () => ({ status: 401, body: '{"detail":"Unauthorized"}' })
-    const caught = run.subscribeRunEvents(home, 'r1', () => {}).catch((e) => e)
+    const caught = run.subscribeRunEvents(T.focusTarget(), 'r1', () => {}).catch((e) => e)
     await vi.advanceTimersByTimeAsync(10)
     expect(await caught).toBeInstanceOf(Error)
     expect(eventsCalls().length).toBe(1)

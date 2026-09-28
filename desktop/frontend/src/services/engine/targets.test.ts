@@ -12,9 +12,9 @@ const cfg = { backendUrl: 'http://127.0.0.1:4100/', token: 'engine-token', model
 beforeEach(() => { authFetch.mockClear(); T.clearSessionBindings(); T.resetFocusForTests() })
 afterEach(() => { vi.unstubAllGlobals() })
 
-describe('legacy cfg → home 目标(Phase A,行为逐字不变)', () => {
+describe('connectionTarget:显式连接 → home 键目标(与改造前的 headers(cfg.token) 逐字同形)', () => {
   it('base 原样沿用 cfg.backendUrl(连尾斜杠都不削),鉴权头与改造前同形同序', async () => {
-    const t = T.asTarget(cfg)
+    const t = T.connectionTarget(cfg)
     expect(t.key).toBe('home')
     expect(t.ref).toEqual({ kind: 'home' })
     expect(t.base).toBe('http://127.0.0.1:4100/')
@@ -23,11 +23,6 @@ describe('legacy cfg → home 目标(Phase A,行为逐字不变)', () => {
     expect(Object.entries(h)).toEqual([['Content-Type', 'application/json'], ['Authorization', 'Bearer engine-token']])
     expect(await t.headers()).toEqual(h) // 缺省 = json
     expect(await t.headers(false)).toEqual({ Authorization: 'Bearer engine-token' })
-  })
-
-  it('已是目标就原样返回(不二次包装)', () => {
-    const t = T.asTarget(cfg)
-    expect(T.asTarget(t)).toBe(t)
   })
 
   it.each([
@@ -39,7 +34,7 @@ describe('legacy cfg → home 目标(Phase A,行为逐字不变)', () => {
     [{ tangu: { unitPage: true, cloudWeb: true } }, 'unitPage'],
   ])('来路按端现算 %j → %s', (win, via) => {
     if (win) vi.stubGlobal('window', win)
-    expect(T.asTarget(cfg).via).toBe(via)
+    expect(T.connectionTarget(cfg).via).toBe(via)
   })
 
   it('C1:目标的鉴权头只可能含 Authorization / Content-Type / Accept / X-Forsion-Caller', async () => {
@@ -47,7 +42,7 @@ describe('legacy cfg → home 目标(Phase A,行为逐字不变)', () => {
     for (const win of [undefined, { tangu: { cloudWeb: true } }, { tangu: { mobile: true, cloudWeb: true } }, { tangu: { unitPage: true } }]) {
       if (win) vi.stubGlobal('window', win)
       for (const json of [true, false]) {
-        for (const k of Object.keys(await T.asTarget(cfg).headers(json))) expect(allowed.has(k), k).toBe(true)
+        for (const k of Object.keys(await T.connectionTarget(cfg).headers(json))) expect(allowed.has(k), k).toBe(true)
       }
       vi.unstubAllGlobals()
     }
@@ -56,7 +51,7 @@ describe('legacy cfg → home 目标(Phase A,行为逐字不变)', () => {
 
 describe('品牌(运行期)', () => {
   it('只认 mintTarget 铸出来的对象;同形的伪造品不算', () => {
-    const real = T.asTarget(cfg)
+    const real = T.connectionTarget(cfg)
     expect(T.isEngineTarget(real)).toBe(true)
     expect(T.isEngineTarget({ ...real })).toBe(false)
     expect(T.isEngineTarget(null)).toBe(false)
@@ -117,7 +112,7 @@ describe('homeTarget / knownTargets', () => {
 
 describe('engineFetch 出口闸', () => {
   it('拼 base+path,带目标的鉴权头;GET 不带 Content-Type;timeoutMs 透传', async () => {
-    const t = T.asTarget({ backendUrl: 'http://127.0.0.1:9', token: 'tk', modelId: '' })
+    const t = T.connectionTarget({ backendUrl: 'http://127.0.0.1:9', token: 'tk', modelId: '' })
     await T.engineFetch(t, '/agent/approvals/pending?rev=3', {}, { timeoutMs: 5000 })
     const [url, init, opts] = authFetch.mock.calls[0] as [string, RequestInit, unknown]
     expect(url).toBe('http://127.0.0.1:9/agent/approvals/pending?rev=3')
@@ -126,14 +121,14 @@ describe('engineFetch 出口闸', () => {
   })
 
   it('字符串 body → 带 JSON Content-Type;不传超时 = 不设超时', async () => {
-    await T.engineFetch(T.asTarget(cfg), '/agent/x', { method: 'POST', body: '{}' })
+    await T.engineFetch(T.connectionTarget(cfg), '/agent/x', { method: 'POST', body: '{}' })
     const [, init, opts] = authFetch.mock.calls[0] as [string, RequestInit, unknown]
     expect(init.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer engine-token' })
     expect(opts).toBeUndefined()
   })
 
   it('C1:调用方的 Authorization 与 x-forsion-remote* 一律丢弃,只放行 Content-Type / Accept', async () => {
-    await T.engineFetch(T.asTarget(cfg), '/agent/approvals/stream', {
+    await T.engineFetch(T.connectionTarget(cfg), '/agent/approvals/stream', {
       headers: {
         Authorization: 'Bearer stolen', 'x-forsion-remote': '1', 'X-Forsion-Remote-Caller': 'abc',
         'X-Unit-Caller': 'v1.x.y', Accept: 'text/event-stream', 'content-type': 'text/plain',
@@ -166,7 +161,7 @@ describe('engineFetch 出口闸', () => {
   ])(
     'base %j 下拒发 %j(解析后必须仍落在目标基址之下,否则 Bearer 会被送到别的主机 / 接口)',
     async (backendUrl, path) => {
-      await expect(T.engineFetch(T.asTarget({ backendUrl, token: 'tk', modelId: '' }), path)).rejects.toThrow(TypeError)
+      await expect(T.engineFetch(T.connectionTarget({ backendUrl, token: 'tk', modelId: '' }), path)).rejects.toThrow(TypeError)
       expect(authFetch).not.toHaveBeenCalled()
     },
   )
@@ -178,18 +173,18 @@ describe('engineFetch 出口闸', () => {
     [UNIT_SHAPED, '/agent/./x', `${UNIT_SHAPED}/agent/./x`], // 不出基址的点段照发(URL 原样交给 authFetch)
     [UNIT_SHAPED, '/', `${UNIT_SHAPED}/`],
   ])('base %j + %j 照发 → %j', async (backendUrl, path, want) => {
-    await T.engineFetch(T.asTarget({ backendUrl, token: 'tk', modelId: '' }), path)
+    await T.engineFetch(T.connectionTarget({ backendUrl, token: 'tk', modelId: '' }), path)
     expect(authFetch.mock.calls[0][0]).toBe(want)
   })
 
   it('伪造的目标拒发', async () => {
-    const forged = { ...T.asTarget(cfg) } as unknown as Parameters<typeof T.engineFetch>[0]
+    const forged = { ...T.connectionTarget(cfg) } as unknown as Parameters<typeof T.engineFetch>[0]
     await expect(T.engineFetch(forged, '/agent/x')).rejects.toThrow(/not minted/)
     expect(authFetch).not.toHaveBeenCalled()
   })
 
   it('生成的 URL 永不带 token=(凭据只走头)', async () => {
-    await T.engineFetch(T.asTarget(cfg), '/agent/sessions')
+    await T.engineFetch(T.connectionTarget(cfg), '/agent/sessions')
     expect(String(authFetch.mock.calls[0][0])).not.toMatch(/token=/)
   })
 })
@@ -444,17 +439,5 @@ describe('S2 · unit 目标与焦点', () => {
     await T.setFocusTarget({ kind: 'unit', unitId: U })
     expect(T.focusRef().kind).toBe('unit')
     expect([...store.keys()].filter((k) => k.startsWith('forsion_engine_focus:'))).toEqual([])
-  })
-
-  it('routeSession:焦点在 home / 传来的不是本端 cfg → 与改造前一样折成 home;否则走会话所在的目标', async () => {
-    phone()
-    const home = { backendUrl: API, token: JWT, modelId: '' }
-    expect(T.routeSession(home, 's').key).toBe('home')
-    await T.setFocusTarget({ kind: 'unit', unitId: U })
-    expect(T.routeSession(home, 's').key).toBe(`unit:${U}`)
-    // 设置页外部连接表单现拼的地址:不是本端 cfg,不被改道
-    expect(T.routeSession({ backendUrl: 'http://10.0.0.2:4100', token: 't', modelId: '' }, 's').base).toBe('http://10.0.0.2:4100')
-    const explicit = T.homeTarget()
-    expect(T.routeSession(explicit, 's')).toBe(explicit) // 已是目标:原样
   })
 })

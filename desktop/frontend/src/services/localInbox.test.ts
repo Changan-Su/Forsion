@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./engine/targets', () => ({
   cloudApiBase: () => 'https://api.forsion.test/api',
-  asTarget: () => ({ headers: async () => ({ Authorization: 'Bearer phone-token' }) }),
 }))
+/** 移动端 home 目标的替身:凭据只经目标鉴权头取(P1-K6 S3:pull 收目标,不再收整份 cfg)。 */
+const phoneHome = { headers: async () => ({ Authorization: 'Bearer phone-token' }) } as any
 
 import { localInbox } from './localInbox'
 
@@ -38,7 +39,7 @@ describe('localInbox.pull × thread / expires_at', () => {
       { id: 'b1', title: '有 Agent 在等你处理', body: 'x', created_at: '2026-09-28 10:00:00.000001', thread: THREAD, expires_at: utc(Date.now() + 24 * 3600_000) },
       { id: 'b2', title: 'plain', body: 'y', created_at: '2026-09-28 10:00:00.000002', expires_at: 'tomorrow', thread: 'x'.repeat(5000) },
     ])
-    expect(await localInbox.pull({} as any)).toEqual({ pulled: true, added: 2 })
+    expect(await localInbox.pull(phoneHome)).toEqual({ pulled: true, added: 2 })
     expect(f.mock.calls[0][0]).toBe('https://api.forsion.test/api/brain/inbox/broadcasts')
     const rows = await localInbox.list('all')
     const b1 = rows.find((r) => r.origin_broadcast_id === 'b1')!
@@ -54,7 +55,7 @@ describe('localInbox.pull × thread / expires_at', () => {
       { id: 'old', title: 'expired reminder', body: '', created_at: '2026-09-27 10:00:00.000001', thread: THREAD, expires_at: utc(Date.now() - 60_000) },
       { id: 'new', title: 'fresh', body: '', created_at: '2026-09-28 10:00:00.000001', expires_at: utc(Date.now() + 3600_000) },
     ])
-    await localInbox.pull({} as any)
+    await localInbox.pull(phoneHome)
     expect(await localInbox.unreadCount()).toMatchObject({ count: 1 })
     expect((await localInbox.list('all')).map((m) => m.origin_broadcast_id)).toEqual(['new'])
     expect((await localInbox.list('archived')).map((m) => m.origin_broadcast_id)).toEqual(['old'])

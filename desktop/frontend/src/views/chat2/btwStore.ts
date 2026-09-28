@@ -11,7 +11,7 @@
 import { create } from 'zustand'
 import { useWorkspace } from '@lcl/engine'
 import { registerMessages, translate } from '../../i18n'
-import { engineFetch, routeSession } from '../../services/engine/targets'
+import { engineFetch, targetForSession } from '../../services/engine/targets'
 import { classify, classifyError, noteVerdict } from '../../services/engine/health'
 import { AGENT_APP_ID, currentClientId, noteExtra, unitFailureMessage } from '../../services/agentRunService'
 import { useApp } from '../../stores/appStore'
@@ -142,9 +142,9 @@ const readableError = (raw: string): string => (/token_quota_exceeded/i.test(raw
 type AsideEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean } | { type: 'error'; error?: string }
 
 async function streamAside(sessionId: string, body: Record<string, unknown>, onEvent: (ev: AsideEvent) => void, signal: AbortSignal): Promise<void> {
-  // P1-K6 S2:旁聊按会话所在的目标发(焦点在「我的电脑」时走 hub 隧道);经解析层,不再自拼 URL / 鉴权头。
+  // P1-K6:旁聊按会话所在的目标发(那台是「我的电脑」时走 hub 隧道);经解析层,不再自拼 URL / 鉴权头。
   // 一次性流,不做续订:unit 离线 / 引擎没起 / 设备被移除直接给人话(engine.target.*)。
-  const t = routeSession(useApp.getState().cfg, sessionId)
+  const t = targetForSession(sessionId)
   let r: Response
   try {
     r = await engineFetch(t, `/agent/sessions/${encodeURIComponent(sessionId)}/aside`, {

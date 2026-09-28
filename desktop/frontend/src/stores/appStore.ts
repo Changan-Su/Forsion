@@ -15,7 +15,7 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, sameRef, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type EngineArg, type TargetKey, type TargetRef, homeTarget, connectionKey } from '../services/engine/targets'
+import { clearSessionBindings, focusName, focusRef, focusTarget, installEngineHost, restoreFocus, sameRef, setFocusTarget, targetKeyOf, targetForSession, HOME_REF, type TargetKey, type TargetRef, homeTarget, connectionKey } from '../services/engine/targets'
 import { capsForRef } from '../services/engine/targetCaps'
 import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
 import { ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'

@@ -18,7 +18,8 @@
  * 用法(在 Genesis/desktop 下):
  *   node scripts/engine-target-codemod.cjs            改写源码(不含测试)
  *   node scripts/engine-target-codemod.cjs --dry      只报告
- *   node scripts/engine-target-codemod.cjs --tests    只改测试文件:一律包成 connectionTarget(<原实参>)(测试里的 cfg 是夹具)
+ *   node scripts/engine-target-codemod.cjs --tests    只改测试文件:测试里的 cfg 是夹具 → 包成 connectionTarget(<原实参>);
+ *                                                     例外:文件里 installEngineHost(...) 过(夹具就是宿主那份,测的是路由)→ 按源码规则解析
  *   node scripts/engine-target-codemod.cjs --check    有剩余的旧式调用点就退出 1(不改文件)
  */
 'use strict'
@@ -145,7 +146,7 @@ function main() {
         const name = sym.name
         const where = `${r}:${sf.getLineAndCharacterOfPosition(call.getStart(sf)).line + 1}`
         legacyLeft++
-        if (TESTS) { addEdit(sf, a0, `connectionTarget(${a0.getText(sf)})`, 'connectionTarget'); stats.adhoc++; return }
+        if (TESTS && !/\binstallEngineHost\(/.test(sf.text)) { addEdit(sf, a0, `connectionTarget(${a0.getText(sf)})`, 'connectionTarget'); stats.adhoc++; return }
         if (ts.isObjectLiteralExpression(a0) || ADHOC_FILES.has(r)) { addEdit(sf, a0, `connectionTarget(${a0.getText(sf)})`, 'connectionTarget'); stats.adhoc++; return }
         if (ts.isBinaryExpression(a0) || ts.isConditionalExpression(a0)) { manual.push(`${where} ${name}(${a0.getText(sf)}, …) —— 实参来源不定(可能不是本端 cfg),人工判`); return }
         if (RUN_SCOPED.has(name)) { manual.push(`${where} ${name}(…) —— run 类,会话 id 不在实参里:改成 targetForSession(<会话 id>)`); return }

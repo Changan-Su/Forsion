@@ -3,11 +3,9 @@
  * 规格:docs/ToBeImproved/设备能力MCP_P1规格_2026-09-28/K6-session-engine-binding.md §3.4;
  * 裁决以 INTEGRATION.md §1(R-14 / R-15 / R-16 / R-19 / R-20)为准。
  *
- * S0(本步)只有 home 一个目标,且**行为逐字不变**:
- *   - 服务函数的参数改为 `EngineArg = EngineTarget | LegacyCfg`;传整份 cfg 的老调用点由 asTarget 折成
- *     home 目标,base = cfg.backendUrl 原样(不削尾斜杠)、鉴权头与以前同形同序、token 现取。
+ * S0:只有 home 一个目标,且**行为逐字不变**(服务函数一度收 `EngineTarget | 整份 cfg` 的兼容联合,S3 删掉):
  *   - knownTargets() = [home];engineFetch 是给 K3 等消费方的通用出口。homeTarget() 是**活目标**(同一个对象,
- *     base / via / 鉴权头每次访问现读宿主配置),可以跨重连长期持有;asTarget(cfg) 是按调用的快照。
+ *     base / via / 鉴权头每次访问现读宿主配置),可以跨重连长期持有;connectionTarget(conn) 是按调用的快照。
  *   - 会话绑定表只在内存(S4 起持久化);bindSession 先到先得、永不改绑(R-16),withLocation 是往
  *     appStore.sessions 插记录时唯一的打标入口(R-15)。
  * S1:cloudApiBase()(云端 API 基址,含 /api)与引擎基址分家 —— 凡是打 Forsion 云端 API 的读者(登录态、额度、
@@ -16,6 +14,10 @@
  *     (unit 目标 = `${cloudApiBase()}/units/<id>/proxy/engine`,经 hub 隧道);只有**目录 + 会话类**请求跟焦点走,
  *     设置 / 管理 / 收件箱恒打 home(K6 待定 2 的缺省)。targetForSession(sid) 在 S2 恒 = 焦点(R-19;S4 起改为
  *     绑定 ?? home)。桌面主窗口与设备页永不提供远端目标(targetForRef(unit) === null,K6 U1 缺省)。
+ * S3(签名收口):引擎服务函数(backendService / agentRunService)**只收 EngineTarget**。调用点由
+ *     desktop/scripts/engine-target-codemod.cjs 机械改成 homeTarget() / targetForSession(sid) / focusTarget() /
+ *     connectionTarget(conn),`api.fn(get().cfg)` 编译失败(brand.typecheck.ts);源码棘轮(engineTargetGuard.test.ts)
+ *     钉住 `.backendUrl` 读、自拼 `/agent/` URL、铸造与 connectionTarget 只许出现在白名单里。
  */
 import type { SessionRecord, StoredDesktopConfig, TanguDesktopConfig } from '../../types'
 import { create } from 'zustand'
@@ -30,14 +32,6 @@ export type { EngineTarget, TargetKey, TargetRef, TargetVia } from './target'
 export { HOME_REF, isEngineTarget, isTargetKey, sameRef, targetKeyOf } from './target'
 export { isHomeSession } from '../../types'
 export { cloudApiBaseOf } from './cloudBase'
-
-/**
- * @deprecated 两阶段迁移的 Phase A 兼容口(K6-S0):服务函数暂时仍收整份 cfg。S3 codemod 把调用点改成
- * `homeTarget()` / `targetForSession(sid)` 后删除,届时 `api.fn(get().cfg)` 直接编译失败。新代码别再传它。
- */
-export type LegacyCfg = TanguDesktopConfig
-/** 引擎服务函数的目标参数。 */
-export type EngineArg = EngineTarget | LegacyCfg
 
 // ── 宿主接缝:本端连接配置由 appStore 在模块求值时装一次(避免 targets ↔ appStore 循环依赖)──
 export interface EngineHost {
@@ -83,8 +77,8 @@ function bearerHeaders(token: string, json: boolean): Record<string, string> {
 /** 一份引擎连接(基址 + 令牌)。本端宿主当前那份在 appStore.cfg,由 homeTarget() 现读;别的来源走 connectionTarget。 */
 export interface EngineConnection { backendUrl: string; token: string }
 
-/** 整份 cfg → home 目标(按调用的快照:读的是传进来那份 cfg)。token 在发请求那一刻从这份 cfg 读。 */
-function fromLegacy(cfg: EngineConnection): EngineTarget {
+/** 一份连接 → home 键的目标(按调用的快照:读的是传进来那份)。token 在发请求那一刻从这份读。 */
+function fromConnection(cfg: EngineConnection): EngineTarget {
   return mintTarget({
     key: 'home',
     ref: HOME_REF,
@@ -102,7 +96,7 @@ function fromLegacy(cfg: EngineConnection): EngineTarget {
  * 本端当前那份一律用 homeTarget()(活目标)。棘轮 R4 钉住只许在白名单文件里调(engineTargetGuard.test.ts)。
  */
 export function connectionTarget<C extends EngineConnection>(conn: C): EngineTarget { // 泛型:整份配置 / 带 modelId 的字面量原样收
-  return fromLegacy(conn)
+  return fromConnection(conn)
 }
 
 /**
@@ -112,26 +106,6 @@ export function connectionTarget<C extends EngineConnection>(conn: C): EngineTar
  */
 export function connectionKey(conn: EngineConnection, digest: (token: string) => string = (x) => x): string {
   return JSON.stringify([conn.backendUrl.replace(/\/+$/, ''), conn.token ? digest(conn.token) : ''])
-}
-
-/** 服务函数入口:已是目标就原样用,老调用点传来的 cfg 折成 home 目标(Phase A)。 */
-export function asTarget(arg: EngineArg): EngineTarget {
-  return isEngineTarget(arg) ? arg : fromLegacy(arg)
-}
-
-/**
- * **会话类**服务函数的目标(S2,§3.3 的 session 类:listMessages / 工作区 / run 事件流 / 审批兑现……)。
- * - 已是目标 → 原样用;
- * - 焦点在 home,或传来的 cfg 不是本端那份(设置页外部连接表单现拼的地址)→ 与改造前逐字一样折成 home;
- * - 焦点在 unit 且传来的是本端 cfg(老调用点 `api.fn(get().cfg, sid)`)→ 会话所在的目标(S2 恒 = 焦点,R-19)。
- * 这样 20 来个会话作用域视图(InlineFiles / RightPanel / FilesPanel / ChildChatPanel……)不用改调用点就跟着会话走;
- * 目录类(target 类)函数**不**走这里 —— 管理面板也调它们,那些必须留在 home,由调用点(appStore)显式传焦点。
- * S3 codemod 把调用点改成显式 targetForSession(sid) 后,本函数随 LegacyCfg 一起删。
- */
-export function routeSession(arg: EngineArg, sid?: string): EngineTarget {
-  if (isEngineTarget(arg)) return arg
-  if (focusRef().kind === 'home' || !host || arg.backendUrl !== host.cfg().backendUrl) return fromLegacy(arg)
-  return targetForSession(sid)
 }
 
 function requireHost(): EngineHost {
