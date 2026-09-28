@@ -186,11 +186,11 @@ describe('P1-K3 ApprovalCard × localOnly / answeredBy', () => {
     await renderReq(done({ via: 'local' }, 's7'))
     expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byHost')}`)
     // M1B:手机把整端切到那台电脑(焦点 = unit,带名册名)→ 写上电脑名
-    useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name: 'K9 Studio Mac' })
+    await act(async () => { useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name: 'K9 Studio Mac' }) })
     try {
       await renderReq(done({ via: 'local' }, 's8'))
       expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byHostNamed', { device: 'K9 Studio Mac' })}`)
-    } finally { resetFocusForTests() }
+    } finally { await act(async () => { resetFocusForTests() }) }
   })
 
   it('本页就是答复方 → 不写后缀(自己点的不用告诉自己)', async () => {
