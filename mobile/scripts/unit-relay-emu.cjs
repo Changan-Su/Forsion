@@ -75,6 +75,7 @@ const server = http.createServer(async (req, res) => {
   const user = userOf(req.headers.authorization)
   if (p === '/api/auth/me') return user ? send(200, { id: user, username: user }) : send(401, { detail: 'no' })
   if (p === '/api/auth/refresh') return send(401, { detail: 'emu: no refresh' })
+  if (p === '/api/agent/sessions') return send(200, { sessions: [] }) // 云端 home 引擎的会话列表(截图里别挂加载失败的 toast)
   if (!user) return send(401, { detail: 'no token' })
   if (p === '/api/units' && req.method === 'GET') {
     return send(200, { units: [{ id: TARGET, name: 'Emu Mac', platform: 'darwin', icon: null, online: true, kind: 'desktop', capsLive: true, caps: { engine: 'ready', tools: [] } }] })
@@ -176,6 +177,8 @@ async function boot() {
   for (let i = 0; i < 30; i++) {
     try {
       await evaluate(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(TOKEN_A)} }).then(() => 'ok')`)
+      // 首启引导是全屏覆盖层,台架一律当老用户(截图里别盖着它)
+      await evaluate(`localStorage.setItem('forsion_tangu_onboarding_done', '1'), 'ok'`)
       await sleep(1500)
       if (adb('shell', `run-as ${PKG} cat shared_prefs/CapacitorStorage.xml`).includes('forsion_token')) break
     } catch (e) { if (process.env.EMU_DEBUG) console.log('  boot: token step', String(e.message || e).slice(0, 160)) }
@@ -317,6 +320,34 @@ async function run() {
   check(`S1:${secrets.length} 个 secret / 票在 shared_prefs、localStorage、Preferences、logcat 里一个都没有`, secrets.length >= 5 && leaks.length === 0, leaks)
   check('S1:logcat 里没有任何 fuc1. 票形串', !/fuc1\.[A-Za-z0-9_-]{8,}/.test(dumpLog), (dumpLog.match(/.{0,60}fuc1\..{0,20}/) || [])[0])
   await evaluate(`Capacitor.Plugins.Preferences.remove({ key: 'k8probe' }).then(() => 'ok')`)
+
+  // ⑫ 真界面走一遍:UnitsSheet 点「Emu Mac」→ runOn 经原生中继问信任、探引擎(两条都该带票)→ 行变「可用」
+  const hitsBefore = proxy.length
+  const opened = await js(`
+    document.querySelector('.mb-topbar [aria-label="left panel"]')?.click()
+    await new Promise((r) => setTimeout(r, 600))
+    const btn = [...document.querySelectorAll('.mb-foot-row .mb-icon-btn')].find((b) => /Forsion Unit/.test(b.getAttribute('aria-label') || ''))
+    btn?.click()
+    for (let i = 0; i < 30 && !document.querySelector('[data-run-row="${TARGET}"]'); i++) await new Promise((r) => setTimeout(r, 200))
+    const row = document.querySelector('[data-run-row="${TARGET}"]')
+    row?.click()
+    return !!row`)
+  let sub = ''
+  for (let i = 0; i < 40; i++) {
+    await sleep(250)
+    sub = await js(`return document.querySelector('[data-run-row="${TARGET}"]')?.getAttribute('data-status') || ''`)
+    if (sub === 'ready') break
+  }
+  const sheetHits = proxy.slice(hitsBefore)
+  const byPath = (p) => sheetHits.filter((x) => x.path === p)
+  check('真界面:UnitsSheet 点电脑 → 经中继 GET /unit/remote-access 与 GET /engine/agent/sessions,两条都带票 → 行状态 ready',
+    opened && sub === 'ready' && byPath('/unit/remote-access').length === 1 && byPath('/engine/agent/sessions').length === 1 && sheetHits.every((x) => !!x.caller),
+    { opened, sub, sheetHits })
+  if (process.env.SHOT_DIR) {
+    const shot = path.join(process.env.SHOT_DIR, 'units-runon-emulator.png')
+    require('node:fs').writeFileSync(shot, execFileSync(path.join(sdk, 'platform-tools/adb'), [...(SERIAL ? ['-s', SERIAL] : []), 'exec-out', 'screencap', '-p'], { maxBuffer: 64 * 1024 * 1024 }))
+    console.log(`screenshot → ${shot}`)
+  }
 }
 
 ;(async () => {
