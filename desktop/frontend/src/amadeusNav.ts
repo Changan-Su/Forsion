@@ -4,7 +4,7 @@
 import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
-import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText } from '@amadeus/unified/lifecycle'
+import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
 import { findHeadingIndex } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
@@ -82,7 +82,15 @@ export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey
     else await waitForActive(path)
     return
   }
-  const hit = editors.find((p) => p.params?.notePath === path)
+  // 同一篇开在几个标签里(评审 G1-02):落到当前活动的那个,其次最近用过的(实例自报)、再其次各组的前台标签 ——
+  // 此前恒取第一个,于是「打开已开着的笔记」总把人拽回最早那个标签,跳转 / 大纲随后也作用在它身上。
+  const hits = editors.filter((p) => p.params?.notePath === path)
+  const activeId = ws.api ? activeMainPanel(ws.api)?.id : undefined
+  const recentScope = hits.length > 1 ? unifiedScopeFor(path) : null
+  const hit = hits.find((p) => p.id === activeId)
+    ?? hits.find((p) => p.id === recentScope)
+    ?? hits.find((p) => ws.mainTabs?.some((t) => t.id === p.id && t.front))
+    ?? hits[0]
   // ⚠️ newTab 要**先于**「已开着就激活」判定:⌘/Ctrl 点击的语义是「再开一个标签」,
   //    目标恰好已经开着时如果只是切过去,用户按了修饰键却什么新东西都没得到(Codex 评审实证)。
   if (hit && !opts?.newTab) {

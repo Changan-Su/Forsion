@@ -204,6 +204,7 @@ class CodeBlockView implements NodeView {
     private readonly onDestroy: () => void,
   ) {
     this.dom = document.createElement('pre')
+    this.dom.spellcheck = false // 代码不做拼写检查(G4-07):<code> 继承它,整篇开关管不到这里
     this.contentDOM = document.createElement('code')
     this.dom.appendChild(this.contentDOM)
     this.sync()

@@ -2224,7 +2224,17 @@ async function main() {
   // 卡内**块级** NodeSelection(⠿ 右键=blockLayer 设块级选中,文档模式的真实路径)光标作用域仍
   // 在卡里 → 约束框必须还在(Codex 评审 2026-08-18 晚:修前 NodeSelection 分支只认整卡,恰好在
   // 搬/删块时框消失)。`.ProseMirror-selectednode` 同时在场 = 真的设上了块级选中,防空转假绿。
-  await p45.mouse.click(cpt45.x, cpt45.y, { button: 'right' })
+  // ⚠️ 2026-09-28 起(评审 G4-08 / B-09)正文文字上的右键交给系统菜单、不再改成块选,块级选中改由 ⠿ 把手右键设:
+  //    悬停卡内段落 → 把手出现 → 右键它(按下即选中所在块,同一条真实路径)。
+  await p45.mouse.move(cpt45.x, cpt45.y, { steps: 2 })
+  await p45.waitForTimeout(250)
+  const grip45 = await p45.evaluate(() => {
+    const el = document.querySelector('.unified-gutter[data-show="true"] .drag-handle')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  if (grip45) await p45.mouse.click(grip45.x, grip45.y, { button: 'right' })
   await p45.waitForTimeout(250)
   const blockSel45 = await p45.evaluate(() => ({
     active: !!document.querySelector('.amx-ucard.amx-card-active'),

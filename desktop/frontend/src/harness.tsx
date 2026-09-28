@@ -41,7 +41,9 @@ import { presentDockedExtension } from '@lcl/engine/dockviewStore'
 import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
-import { usePageStore, pageStoreFor, remapScopePaths } from './amadeus/store/pageStore'
+import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
+import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
+import { switchNoteLock } from './amadeus/unified/noteLock'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
@@ -1772,6 +1774,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     unmountB() { unmountB?.(); unmountB = null },
     /** 生产 lifecycle 模块(按路径路由的 insertMarkdown / flush 等,仪器直调;与 UnifiedPage 同一模块实例)。 */
     lifecycle: null as unknown,
+    /** `&ulock`:锁 / 解锁主实例那篇(与生产 ⋯ 菜单同一个动作 switchNoteLock:先严格落盘 + 重读,失败不切,C-07)。 */
+    setLocked(on: boolean, path = 'Unified.md') { return switchNoteLock(null, path, on) },
     /** 生产 pageStore(仪器直调它的 fm 写口:setPageIcon / syncFdChildren,评审 G1-05)。 */
     pageStore: usePageStore,
     /** 生产的改名 / 挪走收尾(pageStore.onPathGone 收到别处改名时调的就是它;评审 G2-03 仪器)。标签改指由仪器接着
@@ -1830,13 +1834,35 @@ if (new URLSearchParams(location.search).has('dock')) {
     function UPageHost({ file, probe = upageProbe }: { file?: string; probe?: Record<string, unknown> }): React.ReactElement {
       const [st, setSt] = useState<{ path: string; initial: string; diskRaw?: string; block?: true }>(() => routeOf(file ?? 'Unified.md', vault.get(file ?? 'Unified.md') ?? seedMd))
       useEffect(() => {
-        if (probe !== upageProbe) return // `&udual` 的第二实例不接 switchFile(那条只驱动主实例)
+        // `&udual` 的第二实例不接 switchFile(那条只驱动主实例);它照生产 amadeusViews 的样子听「路径没了」广播改指
+        // (别处改名 / 本端另一个标签行内改名 → remapScopePaths → onNotePathGone,评审 G1-02 仪器)。
+        if (probe !== upageProbe) {
+          return onNotePathGone((from, kind, to) => {
+            if (kind === 'file' && to) setSt((cur) => (cur.path === from ? { path: to, initial: vault.get(to) ?? '' } : cur))
+          })
+        }
         switchUPage = (next) => {
           usePageStore.getState().setActiveNotePath(next)
           setSt({ path: next, initial: vault.get(next) ?? '' })
         }
         return () => { switchUPage = null }
       }, [])
+      // `&udrop`:宿主级 OS 文件拖入(镜像 amadeusViews EditorScope 的 onDrop):文件递给**本宿主**的实例写口(filesRef),
+      // 不按路径找实例(评审 G1-02)。opt-in:别的仪器里合成的文件拖放不该突然开始插上传占位。
+      const filesRef = useRef<((files: File[]) => boolean) | null>(null)
+      const hostDrop = new URLSearchParams(location.search).has('udrop')
+      // `&ulock`:锁定页面(评审 C-07)的宿主一半,镜像 amadeusViews:锁定态存本机、进 key 触发重挂,换实例时按盘上
+      // 现文重挂(生产先 flush 再重读路由;台架的写是同步落 vault 的,直接重读)。仪器:unified-readonly 的 K 组。
+      const ulock = new URLSearchParams(location.search).has('ulock')
+      const [, bumpLock] = useState(0)
+      useEffect(() => {
+        if (!ulock) return
+        return onNoteLockChange(() => {
+          setSt((cur) => ({ path: cur.path, initial: vault.get(cur.path) ?? '' }))
+          bumpLock((n) => n + 1)
+        })
+      }, [ulock])
+      const locked = ulock && readNoteLocked(null, st.path)
       // ⚠️ `&udelay` = **顶栏晚于编辑器到场**的时序(用户 2026-08-18 实报:开机还原到一篇 md 笔记时
       //    胶囊必不显示,点过别的笔记才出来)。生产里顶栏整块挂在 `barPath` 这道门后面,而 barPath
       //    要等一次异步分类才落定 —— 也就是说**插槽可能比 UnifiedPage 晚出现**。默认壳是两者同时到,
@@ -1855,16 +1881,27 @@ if (new URLSearchParams(location.search).has('dock')) {
               <button className="amx-mode-btn" type="button">⋯</button>
             </div>
           )}
-          {st.block ? <div data-uroute="block" /> : <UnifiedPage
-            key={st.path}
+          {st.block ? <div data-uroute="block" /> : <div
+            style={{ display: 'contents' }}
+            onDragOver={hostDrop ? (e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault() } : undefined}
+            onDrop={hostDrop ? (e) => {
+              const files = Array.from(e.dataTransfer?.files ?? [])
+              if (!files.length) return
+              e.preventDefault()
+              filesRef.current?.(files)
+            } : undefined}
+          ><UnifiedPage
+            key={`${st.path}${locked ? ':locked' : ''}`}
             path={st.path}
             initial={st.initial}
             diskRaw={st.diskRaw}
             probe={probe}
+            filesRef={filesRef}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
-            readOnly={new URLSearchParams(location.search).has('uro')}
+            readOnly={new URLSearchParams(location.search).has('uro') || locked}
+            onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
-          />}
+          /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
           <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
         </>
@@ -1928,7 +1965,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       hostB.style.cssText = 'max-width:720px;margin:40px auto;padding:16px;border-top:2px solid #8884'
       document.body.appendChild(hostB)
       const rootB = createRoot(hostB)
-      rootB.render(<UPageHost probe={upageProbe2} />)
+      // B 挂在自己的面板作用域里(生产里每个标签一个 leaf):同篇多开的实例身份(草稿槽位 / 改名聚焦认领)靠它区分,评审 G1-02。
+      rootB.render(<PageScopeCtx.Provider value="harness-B"><UPageHost probe={upageProbe2} /></PageScopeCtx.Provider>)
       unmountB = () => rootB.unmount()
     }
     createRoot(document.getElementById('root')!).render(
