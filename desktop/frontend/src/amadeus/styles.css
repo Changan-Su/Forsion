@@ -1728,6 +1728,10 @@ body.amx-marquee-active * {
 .am-app .milkdown .ProseMirror .is-empty:has(.amx-struct-prefix)::before {
   content: none;
 }
+/* 异步插入的占位钉在空行里(评审 G3-06):空行提示别从占位胶囊底下漏出来。 */
+.am-app .milkdown .ProseMirror .is-empty:has(.amx-pending-insert)::before {
+  content: none;
+}
 
 /* ── Command palette (quick switch / search) ─────────────── */
 .am-app .cmd-overlay {
@@ -4071,6 +4075,8 @@ body.amx-marquee-active * {
 .am-app .am-agent-capsule > svg { flex: 0 0 auto; color: var(--green); }
 .am-app .am-agent-capsule-text { font-weight: 500; white-space: nowrap; }
 .am-app .am-agent-capsule-hint { color: var(--text-muted); padding-right: 6px; }
+/* 「正在修改」与「修改了 N 处」可能同时在(一次写完、下一次又开始):两条都是 sticky 底边,错开一层不叠在一起。 */
+.am-app .am-agent-capsule.is-live { bottom: 60px; }
 .am-app .am-agent-capsule-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
 .am-app .am-agent-capsule .btn.sm { border-radius: var(--radius-pill); }
 /* 画布底边正中是舞台的元素工具条:胶囊抬到它上方,别压住。 */
@@ -4081,6 +4087,7 @@ body.amx-marquee-active * {
   margin: 0;
   translate: -50% 0;
 }
+.am-app .amx-canvas .am-agent-capsule.is-live { bottom: 116px; }
 
 /* 异步插入的占位(评审 G3-06):插件 slash / 建文件 / 选图片的结果回来之前,钉在唤起处、随编辑映射。
    行内胶囊,外形沿用上面 Agent 胶囊的描边 / 圆角 / 字号 token;只记位置的锚(data-hidden)不占地方。 */

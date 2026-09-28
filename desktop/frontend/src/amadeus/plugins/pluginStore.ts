@@ -1428,7 +1428,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
     unregisterPluginAchievements(id)
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
-    clearEditorExtensions(id) // 代次 +1 → 已建好的编辑器重建,当场摘掉这个插件的 PM 插件
+    clearEditorExtensions(id) // 代次 +1 → 已建好的编辑器原地重配(G1-06),当场摘掉这个插件的 PM 插件
     set((s) => ({
       activeIds: s.activeIds.filter((x) => x !== id),
       slashItems: s.slashItems.filter((o) => o.pluginId !== id),

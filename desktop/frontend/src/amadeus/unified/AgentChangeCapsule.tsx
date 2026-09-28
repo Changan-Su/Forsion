@@ -24,7 +24,7 @@ registerMessages({
 export function AgentLiveCapsule(): ReactElement {
   const { t } = useI18n()
   return (
-    <div className="am-agent-capsule" role="status" aria-live="polite" data-testid="agent-live-capsule">
+    <div className="am-agent-capsule is-live" role="status" aria-live="polite" data-testid="agent-live-capsule">
       <span className="amx-pending-insert-spin" aria-hidden />
       <span className="am-agent-capsule-text">{t('agentchg.live')}</span>
       <span className="am-agent-capsule-hint">{t('agentchg.liveHint')}</span>
