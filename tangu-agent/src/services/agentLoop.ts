@@ -2102,15 +2102,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)
         return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || '用户拒绝了该操作。');
       }
-      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText);
+      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect);
     };
     // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
     const withArgsOverride = (effCall: ToolCall, d: ApprovalDecision): ToolCall => (d.argsOverride
       ? { ...effCall, function: { ...effCall.function, arguments: JSON.stringify(d.argsOverride) } }
       : effCall);
     // 放行之后的执行段:执行 → 封顶 → tool_result → PostToolUse。常规调用与「挂起后被批准」的调用共用这一条路。
-    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string): Promise<ExecutedToolCall> => {
-      const result = await executeTool(execCall, toolCtx);
+    // writeProtect:闸门按 known-safe 放行的 git 读命令(没人看过卡)→ 这一次在写拒绝 profile 里跑(G5 方案 B,macOS、宿主沙箱关)。
+    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean): Promise<ExecutedToolCall> => {
+      const result = await executeTool(execCall, writeProtect ? { ...toolCtx, writeProtectShell: true } : toolCtx);
       // 入列硬帽(写入即定型,append-only):各工具自有更小的帽,这里兜未封顶路径
       // (host list_dir 大目录、custom provider 等),保证单条结果不可能把上下文炸穿。
       const capped = capToolResult(result.result);

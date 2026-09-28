@@ -43,6 +43,10 @@ export interface ToolContext {
    *  子代理随 parentCtx 展开继承。run 中途被远端 steer 染色的见 services/remoteOrigin.effectiveRemote。
    *  设备页的 client 同样自报 desktop/…,本机专属数据面(read_computer_history)也据此(effectiveRemote)拒。 */
   remote?: import('../services/remoteOrigin.js').RemoteInfo;
+  /** G5 方案 B:这一次起的进程在 macOS、宿主沙箱关时也套写拒绝 profile(同远程 shell 那层),哪怕 run 不带远程污点。
+   *  两处设它:引擎自己的 git(runGit,每次都设)与审批闸按 known-safe 放行的 `git` 读命令(decision.writeProtect,逐次设在副本上)。
+   *  不落库、不跨调用;宿主沙箱开时沿用那一档自己的 profile。 */
+  writeProtectShell?: boolean;
   /** 本次 run 的 AppProfile(接缝①):工具门禁 isEnabledFor 据此过滤。缺省回退 deps().profile。 */
   profile?: AppProfile;
   /** delegate 子代理深度(0/缺省=主 loop,1=子代理内)。深度 ≥1 时 delegate 工具不可见,防递归裂变。 */

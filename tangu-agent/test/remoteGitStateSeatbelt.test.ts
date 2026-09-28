@@ -5,9 +5,13 @@
  *
  * 真 agentLoop(内存 SQLite、fake brain 抓 wire)× 真 git × 真 sandbox-exec,只在 darwin 上跑(别的平台没有这层,是方案 C)。
  *   ① 远程 run:git 现场照常注入(证明 collectGitState 真跑了、filter 真被调用),config.json 字节不变;
- *   ② 本机 run:照旧不套(本机行为逐字不变)—— filter 被执行、config.json 被清空。这是**残余钉**:本机 / 项目详情面板那一半
- *      是待拍板项(docs/remote-bash-protected-paths.md「git filter 残余」),修了就该翻过来。
- * 负对照:把 agentLoop 里 collectGitState 的 ctx 去掉 `remote, runId` → ①红(实跑见 P1-G5 评审修复交付报告)。
+ *   ② 本机 run:方案 B 起同样套(runGit 每一条都 writeProtectShell)—— git 现场照常注入、config.json 不变。
+ *      原先这里是「本机不套、config.json 被清空」的残余钉,方案 B 落地时翻转(docs/remote-bash-protected-paths.md「方案 B」)。
+ *   ③ 本机 run 里模型免审批跑的 `git status`(known-safe):闸门给 writeProtect,执行套同一个 profile。filter 定义放在全局配置
+ *      (分类器只看仓库级配置,全局那份照 git-lfs 的惯例放行),仓库里只有 .gitattributes —— 于是它仍是 known-safe、不弹卡,
+ *      能改动 config.json 的只剩执行这一层。
+ * 负对照:把 agentLoop 里 collectGitState 的 ctx 去掉 `remote, runId` → ①红(P1-G5);runGit 去掉 writeProtectShell → ①②红;
+ *   agentLoop.runApprovedCall 不传 writeProtect → ③红(方案 B 交付报告)。
  * 跑:cd tangu-agent && npx vitest run test/remoteGitStateSeatbelt.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -39,6 +43,7 @@ let base: string;
 let repo: string;
 let cfgPath: string;
 let llmPayloads: any[];
+let nextToolCalls: any[] | null = null; // ③:第一轮让模型调一次工具
 
 beforeAll(async () => {
   for (const k of ENV_KEYS) prevEnv[k] = process.env[k];
@@ -58,6 +63,9 @@ beforeAll(async () => {
       buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })) }),
       streamProviderCompletion: async (o: any) => {
         llmPayloads.push(o.payload);
+        const calls = nextToolCalls;
+        nextToolCalls = null;
+        if (calls) return { content: '', reasoning: '', toolCalls: calls, usage: { prompt_tokens: 10, completion_tokens: 5 }, finishReason: 'tool_calls' };
         return { content: 'ok', reasoning: '', toolCalls: [], usage: { prompt_tokens: 10, completion_tokens: 5 }, finishReason: 'stop' };
       },
     },
@@ -92,13 +100,13 @@ beforeEach(() => {
 });
 
 let seq = 0;
-async function runToSettled(extra: Record<string, unknown>): Promise<any> {
+async function runToSettled(extra: Record<string, unknown>, cwd = repo): Promise<any> {
   const sid = `G5-GIT-${++seq}`;
   const id = `R-${sid}`;
   await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES (?, ?, 'tangu', 't', 'm1', 'user')`, [sid, USER]);
   await createRun({
     id, sessionId: sid, userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `A-${id}`,
-    input: { message: 'hi', userMessageId: `U-${id}`, attachments: [], agentConfig: { execMode: 'host', cwd: repo }, origin: 'client', ...extra },
+    input: { message: 'hi', userMessageId: `U-${id}`, attachments: [], agentConfig: { execMode: 'host', cwd }, origin: 'client', ...extra },
   });
   enqueueRun(sid, id);
   const t0 = Date.now();
@@ -122,10 +130,45 @@ describe.skipIf(!seatbelt)('远程污点 run 的 git 现场收集套写保护(ma
     expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
   });
 
-  it('② 残余钉 —— 本机 run 不套(行为逐字不变):同一个 filter 被引擎执行,config.json 被清空', async () => {
+  it('② 本机 run(方案 B):git 现场照常注入,同一个 filter 也改不动 config.json(原残余钉,已翻转)', async () => {
     const run = await runToSettled({});
     expect(run.status).toBe('done');
-    expect(lastUser(llmPayloads[0])).toContain('[Git state]');
+    const user = lastUser(llmPayloads[0]);
+    expect(user).toContain('[Git state]');
+    expect(user).toContain('f.txt');
+    expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+  });
+
+  it('③ 本机 run 里免审批的 `git status`(known-safe):不弹卡、照常出结果,执行套写保护,全局配置里的 filter 改不动 config.json', async () => {
+    // 仓库级配置干净(分类器照旧放行);filter 定义在全局配置里,仓库只有 .gitattributes —— 能挡住它的只剩执行那一层
+    const repo2 = join(base, 'ws2');
+    mkdirSync(repo2, { recursive: true });
+    const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo2 });
+    git('init', '-q');
+    writeFileSync(join(repo2, 'g.txt'), 'a');
+    git('add', 'g.txt');
+    git('commit', '-qm', 'i');
+    writeFileSync(join(repo2, '.gitattributes'), '* filter=g\n');
+    const globalCfg = join(base, 'global.gitconfig');
+    writeFileSync(globalCfg, `[filter "g"]\n\tclean = sh ${join(repo, 'payload.sh')}\n`);
+    writeFileSync(join(repo2, 'g.txt'), 'b');
+    const t = new Date(Date.now() - 60_000);
+    utimesSync(join(repo2, 'g.txt'), t, t);
+    // 对照:不套时这条链是真的(git status 执行全局 filter → config.json 被清空)
+    execFileSync('git', ['status', '--porcelain'], { cwd: repo2, env: { ...process.env, GIT_CONFIG_GLOBAL: globalCfg } });
     expect(readFileSync(cfgPath, 'utf8')).toBe('');
+    writeFileSync(cfgPath, CFG0);
+    writeFileSync(join(repo2, 'g.txt'), 'c');
+    utimesSync(join(repo2, 'g.txt'), t, t);
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    try {
+      nextToolCalls = [{ id: 'gs1', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command: 'git status --porcelain' }) } }];
+      const run = await runToSettled({}, repo2); // 缺省 auto-edit:不是 known-safe 就会停在审批卡上等人,这里 20 s 超时即红
+      expect(run.status).toBe('done');
+      const toolMsg = textOf([...(llmPayloads[1]?.messages as any[] ?? [])].reverse().find((m) => m.role === 'tool'));
+      expect(toolMsg).toMatch(/g\.txt/);
+      expect(toolMsg).toMatch(/exit_code: 0/);
+      expect(readFileSync(cfgPath, 'utf8')).toBe(CFG0);
+    } finally { process.env.GIT_CONFIG_GLOBAL = '/dev/null'; nextToolCalls = null; }
   });
 });
