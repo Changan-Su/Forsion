@@ -1254,6 +1254,15 @@ declare global {
       unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
+      // P1-K8 ── 手机本机作为 Unit(调用方)的身份:只在移动端 mobileShim 注入(web 路径回「仅安卓 App」)。
+      // 远端引擎请求的调用方票由原生中继透明附加(window.fetch 前置),票与凭据永不进 JS;中继模式下
+      // 刻意没有 unitCallerHeaders(INTEGRATION R-05,那是桥模式的接缝)。relay:'unsupported' = 原生缺席或
+      // 启动断言 cloudApiBase ≠ 原生 apiBase,中继面上的请求一律合成 503 CALLER_UNSUPPORTED。
+      unitSelf?(): Promise<{ registered: boolean; unitId: string | null; name: string | null; relay?: 'ready' | 'unsupported' }>
+      /** 懒登记:没登记过才登记(kind='phone');失败 code:native_only / caller_unsupported / not_signed_in / no_api_base / network / server_<status> / storage。 */
+      unitEnsureSelf?(): Promise<{ ok: true; unitId: string; name: string } | { ok: false; code: string }>
+      /** 删本机条目并尽力从名册移除;之后各电脑对这台手机的授权都失效(按 unit id 认)。 */
+      unitForgetSelf?(): Promise<{ ok: boolean }>
       // P1-K5 ── 设备凭据存储状态(SecretStorageNotice;远程会话开关按它置灰)──
       secretStorageStatus?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       secretStorageRetry?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
