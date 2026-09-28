@@ -1920,7 +1920,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         syncFromEditor()
         const text = composeFm(pipe.fm, pipe.body)
         if (text !== pipe.lastSaved) await amadeus.writeTextFile(newPath, text).catch(() => {})
-        retireUnifiedPath(path) // 别的标签开着同一篇:一并停写旧路径
+        retireUnifiedPath(path, 'file', newPath) // 别的标签开着同一篇:一并停写旧路径(它们未落盘的字存成新路径的草稿,G2-03)
         remapScopePaths(path, newPath, 'file')
         await cascadeFdAfterRename(path, newPath)
         void usePageStore.getState().refreshPages()
