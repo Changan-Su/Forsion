@@ -108,6 +108,10 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       else if (results[i - dateCands.length]) onPick(linkInner(results[i - dateCands.length]))
     }
     const onKey = (e: KeyboardEvent): void => {
+      // IME 组字中一律放行(L-08):拼音选词就是 ↓ / Enter,被面板抢走就成了「回车直接插入候选」。
+      // `【【` 转成 `[[` 之后用户多半还在中文输入法下,这是高频路径。Process/229 覆盖 isComposing
+      // 尚未置位的首帧(同 SlashMenu / PasteAsMenu)。
+      if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return
       if (editorFocused && !editorFocused()) return // 焦点已在编辑器之外:放行(L-04)
       if (e.key === 'ArrowDown') {
         e.preventDefault()

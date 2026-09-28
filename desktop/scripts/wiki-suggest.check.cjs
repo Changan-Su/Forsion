@@ -273,6 +273,40 @@ async function main() {
     await page.close()
   })
 
+  // ── L-08:输入法组字中 ↓ / Enter 放行给输入法,不被面板抢走 ──
+  // 合成键的 isComposing 到不了页面:CDP imeSetComposition 起真组合,再派 keyCode 229 的 ↓ / Enter。
+  await tryTest('L-08', async () => {
+    const PAGES8 = ['Alpha.md', 'Alpine.md', 'Unified.md']
+    const imeRun = async (trigger) => {
+      const page = await open(browser, '# T\n\nx\n', PAGES8)
+      await clickEnd(page, `${PM} > p`)
+      await page.keyboard.type(trigger, { delay: 20 })
+      await page.waitForTimeout(250)
+      const opened = await popupCount(page)
+      const s = await page.context().newCDPSession(page)
+      await s.send('Input.imeSetComposition', { text: 'ha', selectionStart: 2, selectionEnd: 2 })
+      await page.waitForTimeout(250)
+      const k = async (key) => {
+        await s.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code: key, windowsVirtualKeyCode: 229 })
+        await s.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: 229 })
+        await page.waitForTimeout(150)
+      }
+      const composing = await items(page)
+      await k('ArrowDown')
+      const afterDown = await items(page)
+      await k('Enter')
+      await page.waitForTimeout(150)
+      const doc = await docText(page)
+      await page.close()
+      return { opened, composing, afterDown, doc }
+    }
+    let r = await imeRun(' [[Al')
+    check('L-08a [[ 组字中 ↓ 不移动面板高亮', r.opened === 1 && r.afterDown.length > 0 && r.afterDown[0].startsWith('*'), `${JSON.stringify(r.composing)} → ${JSON.stringify(r.afterDown)}`)
+    check('L-08a [[ 组字中 Enter 不插入候选', !r.doc.includes(']]'), JSON.stringify(r.doc))
+    r = await imeRun(' @Al')
+    check('L-08b @ 组字中 Enter 不插入候选', r.opened === 1 && !r.doc.includes('[['), JSON.stringify(r.doc))
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()
