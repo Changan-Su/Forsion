@@ -376,3 +376,28 @@ describe('相邻 run 编码的边角(三轮评审)', () => {
     void want
   })
 })
+
+// L-09b:milkdown 的 text handler 对「以空白结尾、不含 * _ \」的文本整段跳过 safe(`bare` 即它)。
+// 表格单元格以空格结尾时 `|` 不转义 → 重开被拆成两格;段首 `#` / `1.` 同理裸写 → 重开变结构。
+describe('text 直通分支照样转义(L-09b)', () => {
+  const cell = (...inline: unknown[]) => ({ type: 'tableCell', children: inline })
+  const table = (v: string) => ({ type: 'root', children: [{ type: 'table', align: [null, null], children: [
+    { type: 'tableRow', children: [cell(T('a')), cell(T('b'))] },
+    { type: 'tableRow', children: [cell(T(v)), cell(T('x'))] },
+  ] }] }) as any
+  const cellsOf = (s: string): number => ((parse.parse(s).children[0] as any).children[1].children.length)
+  it('单元格文本以空格结尾且含 |:转义,重读仍是两格(修前拆成三格)', () => {
+    for (const v of ['c1 A | B ', 'c1 [[Alpha|别名]] ']) {
+      const s = md.stringify(table(v))
+      expect(s).toContain('\\|')
+      expect(cellsOf(s)).toBe(2)
+      expect(cellsOf(bare.stringify(table(v)))).toBe(3) // 对照:milkdown 原样即是病
+    }
+  })
+  it('段首 # / 1. 带尾随空格:转义,不变结构;尾随空白原样(不编 &#x20;)', () => {
+    expect(md.stringify(doc(T('# x ')))).toBe('\\# x \n')
+    expect(md.stringify(doc(T('2024. A good year ')))).toBe('2024\\. A good year \n')
+    expect(md.stringify(doc(T('ab ')))).toBe('ab \n')
+    expect(md.stringify(doc(T('a '), N('strong', T('b'))))).toBe('a **b**\n')
+  })
+})

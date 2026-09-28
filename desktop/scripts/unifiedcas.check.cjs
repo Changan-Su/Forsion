@@ -190,10 +190,11 @@ async function groupC(browser) {
     await p.close()
   }
   // C2:本实例没有用户改动(只是编辑器把 __粗__ 规范化成 **粗**)。
-  // D-18 起未编辑的块逐字写回,LF 源打开后 flush 已不再产生规范化写;用 CRLF 源(逐字对含 CR 的来源整体关闭,
+  // D-18 起未编辑的块逐字写回,LF 源打开后 flush 已不再产生规范化写;用**行尾混杂**的源(逐字对含 CR 的来源整体关闭,
   // 统一写成 LF)造出「只是规范化」的那一发写,CAS 拒写 → isPristine → 让位回灌这条路径照旧要钉住。
+  // ⚠️ 不能再用纯 CRLF:D-19 起纯 CRLF 在磁盘边界归一成 LF、写回还原,逐字照常生效,flush 不再有规范化写。
   {
-    const p = await open(browser, '# T\r\n\r\n__粗__ 与 _斜_\r\n')
+    const p = await open(browser, '# T\r\n\r\n__粗__ 与 _斜_\n')
     const X = '# T\n\n__粗__ 与 _斜_ 别处追加\n'
     await p.evaluate((X) => window.__upage.vault.set('Unified.md', X), X)
     await p.evaluate(() => window.__upage.probe.flush()) // 规范化写:syncFromEditor 让 body ≠ 基线

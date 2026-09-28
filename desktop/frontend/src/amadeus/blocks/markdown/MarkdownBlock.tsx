@@ -56,12 +56,13 @@ import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './pa
 import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { serializeForSave } from './verbatim'
+import { restoreEscapeSentinels } from './literalEscape'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { MarkType, Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
+import { Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -108,13 +109,13 @@ import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
-import { taskCheckboxPlugin } from './taskList'
+import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
-import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
+import { isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
@@ -224,7 +225,8 @@ export function stampedFileName(kind: string): string {
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))))
+  // restoreEscapeSentinels 必须在最后:用户写的转义(D-11)以占位穿过上面这串反转义,再换回 `\`(见 ./literalEscape)。
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
  *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
@@ -239,7 +241,7 @@ export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown)))))
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown))))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
@@ -740,7 +742,8 @@ export function MilkdownInner({
      * 「ul>li>p>text」这种单链也判成 isPureText,同样退化成纯文本 —— 单行待办正好落进它的盲区。
      */
     const clipboardTextSerializer = (slice: Slice, view: EditorView): string => {
-      const plain = (): string => slice.content.textBetween(0, slice.content.size, '\n')
+      // 块与块之间空一行(D-14):单个 `\n` 贴到 markdown 编辑器里是软换行,两段就并成了一段。
+      const plain = (): string => slice.content.textBetween(0, slice.content.size, '\n\n')
       // 整张图片被选中(NodeSelection)→ 纯文本 flavor 给字面 markdown。默认的 textBetween 对
       // image 这种无文本叶子返回**空串**:编辑器内粘贴靠 text/html 没事,复制到聊天框/别的编辑器
       // 却是一片空白。`![[…]]` 那条形态本来就是文本、一直给字面源码,两边口径得一致。
@@ -757,15 +760,23 @@ export function MilkdownInner({
         const src = String(onlyImage.attrs.src ?? '')
         return `![${String(onlyImage.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src})`
       }
-      const { $from, $to } = view.state.selection
-      const whole = $from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size
+      const sel = view.state.selection
+      const { $from, $to } = sel
+      // 结构化(带 markdown)的三种:整块选中(NodeSelection —— `$from.parentOffset` 是相对外层的,旧判据对它恒假,
+      // 块选中复制退化成纯文字,D-14 / B-06)、跨块选区(从段落中间选到待办,`- [ ]` 不许丢)、恰好盖住整个文本块。
+      const whole = sel instanceof NodeSelection || !$from.sameParent($to) ||
+        ($from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size)
       if (!whole) return plain()
       // 只看 firstChild 不够:「从一个段落一直选到下面的待办」时首块是段落,会退回纯文本、
       // 把后面那条的 `- [ ]` 丢掉(Codex 复审)。只要**任意一个**顶层块不是普通段落就走 markdown。
       let structured = false
       slice.content.forEach((n) => { if (n.type.name !== 'paragraph') structured = true })
       if (!structured) return plain()
-      const doc = view.state.schema.topNodeType.createAndFill(undefined, slice.content)
+      // 块选中的列表项(Esc 选中 / ⠿):切片里是光秃秃的 list_item,doc 收不下 —— 套回它所在的那只列表。
+      const content = sel instanceof NodeSelection && sel.node.type.name === 'list_item' && /_list$/.test($from.parent.type.name)
+        ? Fragment.from($from.parent.type.create($from.parent.attrs, slice.content))
+        : slice.content
+      const doc = view.state.schema.topNodeType.createAndFill(undefined, content)
       if (!doc) return plain()
       // 复制分栏内容(v4 unified)时剥锚注释行:锚脱离本文件的 amadeus_layout 就是散标记,
       // 贴到别处只会污染目标(规范:锚随文件,不随剪贴板)。v3 编辑器内永远不出现标记,零影响。
@@ -781,7 +792,13 @@ export function MilkdownInner({
         return !structural
       })
       // 纯文本给人看:关掉 attention 边界编码(`**注意：**&#x540E;面` 贴进微信就是乱码,见 withoutBoundaryRefs)。
-      let out = withoutBoundaryRefs(() => serialize(doc))
+      // 与落盘同一条规范化(D-14):片段那条(normalizeFragmentMd)不还原 `\[\[`,多块复制时双链被转义成 `\[\[x]]`。
+      // 从裸序列化出发只过一次 —— 叠在 serialize() 的片段规范化上,公式反转义会跑两遍。
+      let out = withoutBoundaryRefs(() => {
+        let raw = ''
+        getInstance()?.action((c) => { raw = c.get(serializerCtx)(doc) })
+        return normalizeSerializedMd(raw)
+      })
       if (structural) out = out.replace(/^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->[ \t]*\n?/gm, '')
       // entitiesToTabs:缩进段落序列化出的 &#9; 归一成字面制表符,外部应用不见实体垃圾(评审 P2)。
       const md = entitiesToTabs(out)
@@ -868,14 +885,62 @@ export function MilkdownInner({
         if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
       }
+      // 纯文本逐字(D-13):⌘⇧V / Ctrl+Shift+V(「粘贴并匹配样式」)—— PM 自己记着按键时的 Shift(input.shiftKey,
+      // 它的 plain 粘贴同一个判据),Milkdown 的剪贴板插件不看它、照样当 markdown 解析。这里接住:原文逐字,多行一行一段。
+      const plain = event.clipboardData?.getData('text/plain') ?? ''
+      const html = event.clipboardData?.getData('text/html') ?? ''
+      const inCode = !!sel.$from.parent.type.spec.code
+      if (unified && plain && !inCode && (view as unknown as { input?: { shiftKey?: boolean } }).input?.shiftKey) {
+        event.preventDefault()
+        const lines = plain.replace(/\r\n?/g, '\n').split('\n')
+        const paragraph = view.state.schema.nodes.paragraph
+        if (lines.length === 1 || !paragraph) {
+          view.dispatch(view.state.tr.insertText(lines.join(' ')).scrollIntoView().setMeta('uiEvent', 'paste'))
+        } else {
+          const frag = Fragment.from(lines.map((l) => paragraph.create(null, l ? view.state.schema.text(l) : null)))
+          view.dispatch(view.state.tr.replaceSelection(new Slice(frag, 1, 1)).scrollIntoView().setMeta('uiEvent', 'paste'))
+        }
+        return true
+      }
+      // 单行纯文本粘进一段已有文字的中间(D-13,见 ./plainPaste singleLinePasteMode):解析出块结构(`2024. `、`- `、`# `…)
+      // 在句中不成立 → 原文逐字;只是行内标记 → 照常解析,首尾空白原样补回(解析会吃掉 ` world ` 的空格)。
+      // 空段落里粘贴照旧转结构(与 Obsidian 同),不进这一支。
+      const $f = sel.$from
+      const $t = sel.$to
+      if (
+        unified && plain && !html && !inCode && !/[\r\n]/.test(plain) && $f.sameParent($t) && $f.parent.isTextblock &&
+        ($f.parentOffset > 0 || $t.parentOffset < $t.parent.content.size)
+      ) {
+        let parsed: ProseNode | null = null
+        getInstance()?.action((c) => { parsed = (c.get(parserCtx)(plain) as ProseNode | undefined) ?? null })
+        const doc = parsed as ProseNode | null
+        if (doc) {
+          const top: string[] = []
+          doc.forEach((n) => { top.push(n.type.name) })
+          const mode = singleLinePasteMode(plain, top)
+          if (mode === 'literal') {
+            event.preventDefault()
+            view.dispatch(view.state.tr.insertText(plain).scrollIntoView().setMeta('uiEvent', 'paste'))
+            return true
+          }
+          if (mode === 'inline-ws') {
+            event.preventDefault()
+            const { schema } = view.state
+            const lead = /^\s*/.exec(plain)![0]
+            const trail = /\s*$/.exec(plain)![0]
+            const nodes: ProseNode[] = []
+            if (lead) nodes.push(schema.text(lead))
+            doc.firstChild!.forEach((n) => { nodes.push(n) })
+            if (trail) nodes.push(schema.text(trail))
+            view.dispatch(view.state.tr.replaceSelection(new Slice(Fragment.from(nodes), 0, 0)).scrollIntoView().setMeta('uiEvent', 'paste'))
+            return true
+          }
+        }
+      }
       // 纯文本多行(D-10,拍板 #12):只有 text/plain、不像 markdown → 一行一段,再交回同一条 markdown 粘贴管线
       // (Milkdown clipboard 从 clipboardData 取 text/plain → parserCtx)。转换后已无单个 `\n`,重入本函数不会再进这一支。
       // 代码块内不动(那里 `\n` 就是代码的换行)。见 ./plainPaste。
-      const plain = event.clipboardData?.getData('text/plain') ?? ''
-      if (
-        unified && plain && !event.clipboardData?.getData('text/html') &&
-        !sel.$from.parent.type.spec.code && isPlainMultiline(plain)
-      ) {
+      if (unified && plain && !html && !inCode && isPlainMultiline(plain)) {
         const dt = new DataTransfer()
         dt.setData('text/plain', plainLinesToParagraphs(plain))
         event.preventDefault()
@@ -980,6 +1045,7 @@ export function MilkdownInner({
       .use(commonmarkWithIndent)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
+      .use(emptyTaskRemark) // Obsidian 的空待办 `- [ ]`:GFM 读成字面 `[ ]`,这里补认成空待办(R-10b,见 ./taskList)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。

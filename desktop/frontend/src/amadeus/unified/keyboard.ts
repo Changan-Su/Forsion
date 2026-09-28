@@ -658,6 +658,9 @@ export const keyboardPlugins: MilkdownPlugin[] = [
   $prose(() =>
     keymap({
       Enter: enterCmd,
+      // 标题里的 Shift+Enter 同回车(K-19):ATX 标题容不下换行,放行硬换行 = H3 及以下落盘成 `### 甲 乙`、所见非所存。
+      // 不在标题里返回 false,照旧交给 preset 的硬换行(段内换行);表格格内的 Shift+Enter 由排在前面的 tableKeyPlugins 先接。
+      'Shift-Enter': enterHeadingToParagraph,
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,

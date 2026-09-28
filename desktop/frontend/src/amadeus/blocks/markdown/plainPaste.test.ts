@@ -1,6 +1,6 @@
 // D-10(拍板 #12)纯文本多行粘贴的判定与转换。接线(真 paste 事件 → 一行一段 → 落盘)在台架:npm run check:pastefidelity。
 import { describe, expect, it } from 'vitest'
-import { isPlainMultiline, looksLikeMarkdown, plainLinesToParagraphs } from './plainPaste'
+import { isPlainMultiline, looksLikeMarkdown, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 
 describe('plainPaste', () => {
   it('地址 / 终端输出 / 纯文本邮件 = 纯文本多行', () => {
@@ -21,5 +21,15 @@ describe('plainPaste', () => {
   it('单个 \\n → 段落分隔;已有空行与 CRLF', () => {
     expect(plainLinesToParagraphs('a\nb\n\nc')).toBe('a\n\nb\n\nc')
     expect(plainLinesToParagraphs('a\r\nb\rc')).toBe('a\n\nb\n\nc')
+  })
+})
+
+describe('singleLinePasteMode(D-13:单行粘进一段已有文字的中间)', () => {
+  it('解析出块结构 → 原文逐字;单段落 → 照常解析;首尾空白 → 补回', () => {
+    expect(singleLinePasteMode('2024. A good year', ['ordered_list'])).toBe('literal')
+    expect(singleLinePasteMode('# 标题', ['heading'])).toBe('literal')
+    expect(singleLinePasteMode('**粗**', ['paragraph'])).toBe('default')
+    expect(singleLinePasteMode(' world ', ['paragraph'])).toBe('inline-ws')
+    expect(singleLinePasteMode('a', [])).toBe('literal')
   })
 })

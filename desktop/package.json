@@ -76,6 +76,7 @@
     "check:cjk": "node scripts/e2e-editor.cjs --check=cjk-flanking",
     "check:linkcard": "node scripts/e2e-editor.cjs --check=linkcard",
     "check:pastefidelity": "node scripts/e2e-editor.cjs --check=pastefidelity",
+    "check:templatefm": "node scripts/e2e-editor.cjs --check=template-fm",
     "check:enter": "node scripts/e2e-editor.cjs --check=enter-semantics",
     "check:caretmerge": "node scripts/e2e-editor.cjs --check=caret-merge",
     "check:canvascaret": "node scripts/e2e-editor.cjs --check=canvas-caret",

@@ -23,7 +23,8 @@
 //  · 到 EOF 的围栏 / HTML 块(可能没闭合):后面接了新块就不逐字,否则新内容重开后被吞进代码块。
 //  · 跨段边界相邻的两只同类列表(逐字的那只不参与 to-markdown 的换符交替,会并成一只)、列表后紧跟的缩进代码
 //    (会被吸进列表项)、挪到正文首行的 `---` 分割线(拍板 #16:文首 `---` 会被当 frontmatter 栅栏)。
-//  · 源文含 CR(CRLF 文件):逐字切片会造成混合换行,整份来源关掉逐字(= 今天的行为,统一写成 LF)。
+//  · 源文含 CR:逐字切片会造成混合换行,整份来源关掉逐字(统一写成 LF)。纯 CRLF 的笔记到不了这里 —— UnifiedPage 在
+//    磁盘边界已归一成 LF、写盘再还原(D-19,unified/eol.ts);剩下的只有行尾混杂的文件。
 // 仪器:npm run check:rtcorpus(真浏览器,pending 桶里的 D-18 项)、verbatim.test.ts(含「逐字输出与规范输出
 // 重解析结构相等」的 fuzz —— 证明拼接绝不改变今天写出去的语义)。
 import { config, remarkStringifyOptionsCtx, serializerCtx } from '@milkdown/kit/core'

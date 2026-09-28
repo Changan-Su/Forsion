@@ -1,6 +1,6 @@
 /** unescapeWikiOutsideFences:还原 remark 对 [[ 的转义,但代码围栏内逐字保留。 */
 import { describe, it, expect } from 'vitest'
-import { decodeCharRefs, resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from './links'
+import { decodeCharRefs, linkTarget, parseWikiLinks, resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from './links'
 
 describe('unescapeWikiOutsideFences', () => {
   it('围栏外的 \\[\\[ 还原为 [[(含 !\\[\\[ 嵌入)', () => {
@@ -213,5 +213,14 @@ describe('存盘还原 × 围栏配对(09-18)', () => {
     const md = [W, '```', 'x \\[\\[in]]', '```', W].join('\r\n')
     expect(unescapeWikiOutsideFences(md).split('\r\n')).toEqual(['去 [[目标页]] 看 https\\://a.com', '```', 'x \\[\\[in]]', '```', '去 [[目标页]] 看 https\\://a.com'])
     expect(decodeCharRefs(['```', '&#x41;', '```', '&#x42;'].join('\r\n'))).toBe(['```', '&#x41;', '```', 'B'].join('\r\n'))
+  })
+})
+
+describe('表格里的别名 `\\|`(L-09)', () => {
+  it('linkTarget / parseWikiLinks 认 `\\|` 为别名分隔(此前取成 `X\\`,反链不计)', () => {
+    expect(linkTarget('Alpha\\|别名')).toBe('Alpha')
+    expect(linkTarget('Alpha#标题\\|别名')).toBe('Alpha')
+    expect(linkTarget('Alpha|别名')).toBe('Alpha')
+    expect(parseWikiLinks('| c1 [[Alpha\\|别名]] | x |\n')).toEqual(['Alpha'])
   })
 })
