@@ -3316,7 +3316,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // 按住空格 = 临时抓手(V-05)。「选中卡按空格进编辑」挪到**松开**时判(见上面 keyup 那个 effect):
     // 修前在第一下 keydown 就进编辑、焦点落进 PM,之后自动重复的 keydown 全被写成空格落盘。
     // 重复 keydown 一律吞掉;无选中时也吞(舞台外层的滚动容器不许被空格翻页)。
-    if (e.code === 'Space' && !mod) {
+    // 焦点在 HUD / 工具栏按钮上:空格归按钮本身(键盘用户按下它),不进抓手。
+    if (e.code === 'Space' && !mod && !(e.target as Element | null)?.closest?.('button')) {
       e.preventDefault()
       if (!e.repeat && !spaceRef.current.held) {
         spaceRef.current = { held: true, used: false }
