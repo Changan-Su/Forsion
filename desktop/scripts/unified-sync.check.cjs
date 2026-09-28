@@ -30,6 +30,11 @@
 //  M 组(评审 C-08,源码 / 可视按 leaf 记):`&udual` 同窗两个标签 A / B ——
 //   M1 A 切源码 → B 不跟着切、B 的编辑器不被动重建(DOM 还是同一个)、B 切换前打的字仍可 Cmd+Z 撤掉
 //   M2 本机记忆:刷新后 A 仍是源码、B 仍是可视;M3 B 自己切源码只动 B
+//  S 组(评审 C-06,源码 ↔ 可视切换保住滚动 / 光标 / 撤销;`&upane` 长文):
+//   S1 可视 → 源码:textarea 光标落在同一处、焦点跟过去、光标在视口里的高度不变
+//   S2 源码 → 可视:编辑器还是同一个(没重建)、光标回原处、滚动回原位,切换前打的字 Cmd+Z 撤得掉(屏上、盘上)
+//   S3 源码里的改动回可视后是一步可撤的编辑:第一下 Cmd+Z 只撤源码里打的,第二下撤可视里打的
+//   S4 切换前 200ms 内打的字不丢(listener 防抖窗)· S5 源码模式里外部改动照常回灌到 textarea,回可视后编辑器是新内容、零冲突副本
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -564,6 +569,116 @@ async function groupM(browser) {
   await p.close()
 }
 
+// ─────────────────────────────── C-06 ───────────────────────────────
+const LONG = '# 文首\n\n' + Array.from({ length: 80 }, (_, i) => `第 ${i} 段填充文字。`).join('\n\n') + '\n'
+const para40 = (p) => p.evaluate(() => { const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => x.textContent.startsWith('第 40 段')); return el ? el.textContent : null })
+const modeTo = async (p, m) => {
+  await p.evaluate((m) => window.__upage.setEditorMode(m), m)
+  await p.waitForFunction((m) => (m === 'source') === !!document.querySelector('textarea.amx-source'), m, { timeout: 10000 })
+  await wait(400)
+}
+const viewState = (p) => p.evaluate(() => {
+  const pane = document.querySelector('.amx-pane')
+  const ta = document.querySelector('textarea.amx-source')
+  const v = window.__upage.probe.view()
+  const out = { scroll: Math.round(pane.scrollTop), active: document.activeElement?.tagName }
+  if (ta) {
+    out.taLine = ta.value.slice(0, ta.selectionStart).split('\n').pop()
+  } else if (v) {
+    const $h = v.state.selection.$head
+    out.pmPara = $h.parent.textContent
+    out.pmOff = $h.parentOffset
+    out.caretY = Math.round(v.coordsAtPos(v.state.selection.head).top - pane.getBoundingClientRect().top)
+  }
+  return out
+})
+async function openLong(browser) {
+  const p = await open(browser, LONG, '&upane')
+  await p.evaluate(() => { const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => x.textContent.startsWith('第 40 段')); el.scrollIntoView({ block: 'center' }) })
+  await wait(200)
+  await caretAfter(p, '第 40 段填充文字。')
+  return p
+}
+async function groupS(browser) {
+  {
+    const p = await openLong(browser)
+    await p.keyboard.type('追加ABC')
+    await wait(1300)
+    await p.evaluate((s) => { document.querySelector(s).__stag = 'S0' }, PM)
+    const v0 = await viewState(p)
+    await modeTo(p, 'source')
+    const s1 = await p.evaluate(() => {
+      const ta = document.querySelector('textarea.amx-source')
+      const pane = document.querySelector('.amx-pane')
+      // 镜像量 textarea 光标高度(与生产 modeRelay 同法,独立实现)
+      const cs = getComputedStyle(ta), d = document.createElement('div')
+      for (const k of ['boxSizing', 'width', 'padding', 'border', 'font', 'letterSpacing', 'lineHeight', 'whiteSpace', 'wordBreak', 'overflowWrap', 'tabSize']) d.style[k] = cs[k]
+      d.style.position = 'absolute'; d.style.visibility = 'hidden'; d.style.whiteSpace = 'pre-wrap'
+      d.textContent = ta.value.slice(0, ta.selectionStart); const m = document.createElement('span'); m.textContent = '.'; d.appendChild(m); document.body.appendChild(d)
+      const y = ta.getBoundingClientRect().top + m.offsetTop - pane.getBoundingClientRect().top; d.remove()
+      return { line: ta.value.slice(0, ta.selectionStart).split('\n').pop(), focus: document.activeElement === ta, y: Math.round(y) }
+    })
+    record('S1 可视 → 源码:光标落在同一处、焦点跟过去、光标在视口里的高度不变(±40px)',
+      s1.line === '第 40 段填充文字。追加ABC' && s1.focus && Math.abs(s1.y - v0.caretY) <= 40, JSON.stringify({ v0, s1 }))
+    await modeTo(p, 'wysiwyg')
+    const v2 = await viewState(p)
+    const same = await p.evaluate((s) => document.querySelector(s).__stag === 'S0', PM)
+    await p.keyboard.press('Meta+z')
+    await wait(1300)
+    const undone = { screen: await para40(p), disk: (await disk(p)).includes('追加ABC') }
+    record('S2 源码 → 可视:没重建、光标回原处、滚动回原位,切换前打的字 Cmd+Z 撤得掉',
+      same && v2.pmPara === '第 40 段填充文字。追加ABC' && v2.pmOff === v2.pmPara.length && Math.abs(v2.scroll - v0.scroll) <= 40 && v2.active === 'DIV' &&
+        undone.screen === '第 40 段填充文字。' && !undone.disk, JSON.stringify({ v0, v2, same, undone }))
+    await p.close()
+  }
+  {
+    const p = await openLong(browser)
+    await p.keyboard.type('可视打')
+    await wait(1300)
+    await modeTo(p, 'source')
+    await p.keyboard.type('SRC') // 焦点已在 textarea、光标在「可视打」之后
+    await wait(1300)
+    await modeTo(p, 'wysiwyg')
+    const a0 = await para40(p)
+    await p.keyboard.press('Meta+z')
+    await wait(200)
+    const a1 = await para40(p)
+    await p.keyboard.press('Meta+z')
+    await wait(1300)
+    const a2 = await para40(p)
+    const d = await disk(p)
+    record('S3 源码里的改动回可视后是一步可撤的编辑:第一下只撤源码里打的,第二下撤可视里打的',
+      a0 === '第 40 段填充文字。可视打SRC' && a1 === '第 40 段填充文字。可视打' && a2 === '第 40 段填充文字。' && d.includes('第 40 段填充文字。\n'), JSON.stringify({ a0, a1, a2 }))
+    await p.close()
+  }
+  {
+    const p = await openLong(browser)
+    await p.keyboard.type('QQ')
+    await p.evaluate(() => window.__upage.setEditorMode('source')) // 不等防抖,当拍就切
+    await p.waitForSelector('textarea.amx-source')
+    await wait(300)
+    const ta = await p.evaluate(() => document.querySelector('textarea.amx-source').value.includes('第 40 段填充文字。QQ'))
+    await modeTo(p, 'wysiwyg')
+    await wait(1200)
+    record('S4 切换前 200ms 内打的字不丢:textarea 里有、回可视后盘上也有', ta && (await disk(p)).includes('第 40 段填充文字。QQ') && (await para40(p)) === '第 40 段填充文字。QQ', JSON.stringify({ ta }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    await modeTo(p, 'source')
+    await p.evaluate(() => window.__upage.fire('Unified.md', '# 标题\n\n第一段 外部改的。\n\n第二段。\n'))
+    await wait(1200)
+    const ta = await p.evaluate(() => document.querySelector('textarea.amx-source').value)
+    await modeTo(p, 'wysiwyg')
+    await wait(900)
+    const txt = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    record('S5 源码模式里外部改动照常回灌到 textarea,回可视后编辑器是新内容、零写盘零冲突副本',
+      ta.includes('第一段 外部改的。') && txt.includes('第一段 外部改的。') && (await copies(p)).length === 0 && (await p.evaluate(() => window.__upage.writes.length)) === 0,
+      JSON.stringify({ ta, txt }))
+    await p.close()
+  }
+}
+
 // ─────────────────────────────── D-17 ───────────────────────────────
 /** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
 async function titleEnter(p, delay) {
@@ -614,7 +729,7 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) }, M: groupM }
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) }, M: groupM, S: groupS }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

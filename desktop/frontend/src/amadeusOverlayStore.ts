@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { captureFromDom, setModeCursor } from '@amadeus/lib/modeCursor'
 import { activePageScope } from '@amadeus/store/pageStore'
+import { runModeCapture } from '@amadeus/unified/modeRelay'
 
 /** 模板插入上下文。两条路由二选一(发起方是谁就带谁的坐标):
  *  - v3 块编辑器:`afterId` 插到这个块之后;`emptyBlock` = 光标块为空 → 首个模板块直接填入它。
@@ -73,6 +74,7 @@ export const useUiOverlay = create<UiOverlayState>((set, get) => ({
     const cur = editorModeOf(get(), key)
     if (cur === mode) return
     if (cur === 'wysiwyg') setModeCursor(captureFromDom(), key)
+    runModeCapture(key, mode) // v4 统一实例的光标 / 视口 / 最后几击(评审 C-06,见 unified/modeRelay)
     const modes = { ...get().modes }
     delete modes[key]
     if (mode === 'source') modes[key] = 'source' // 重新插入 = 排到最近,封顶时先丢最老的
