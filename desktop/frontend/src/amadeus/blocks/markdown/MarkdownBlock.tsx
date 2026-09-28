@@ -975,6 +975,16 @@ export function MilkdownInner({
           'Mod-u': () => { c.get(commandsCtx).call(toggleUnderlineCommand.key); return true },
           'Mod-Shift-s': () => { c.get(commandsCtx).call(toggleStrikethroughCommand.key); return true },
           'Mod-k': () => { editLink(); return true },
+          // 粘贴为纯文本(评审 G4-08,Obsidian / Notion 同键):只取剪贴板的 text/plain,不带格式、不解析 HTML;
+          // 走 PM 自己的纯文本粘贴(每行一段,代码块里原样)。mac 上 Cmd+Shift+V 原本什么都不发生;
+          // Windows / Linux 的 Ctrl+Shift+V 原生粘贴又会被 markdown 剪贴板插件按 HTML 解析 —— 三端统一在这里接管。
+          'Mod-Shift-v': (_state, _dispatch, view) => {
+            if (!view?.editable || !navigator.clipboard?.readText) return false
+            void navigator.clipboard.readText()
+              .then((text) => { if (text && !view.isDestroyed) view.pasteText(text) })
+              .catch(() => { /* 读不到剪贴板(权限 / 非安全上下文):这一下就当没按 */ })
+            return true
+          },
           'Mod-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
           'Mod-e': (state, dispatch) => setTextAlignment(state, dispatch, 'center'),
           'Mod-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),

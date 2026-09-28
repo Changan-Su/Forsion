@@ -1471,21 +1471,51 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         editorView.dom.addEventListener('keydown', onKeyDown)
 
-        // 右键块 → 选中 + 同一份 ⠿ 菜单(v3 BlockHost onCtxMenu 对位;审计缺口 #11)。
+        // 右键 → 块菜单,只在「已经是块」的地方接管(评审 G4-08 / B-09):右键落在已选中的块上(点 ⠿ 选中的
+        // NodeSelection、框选 / 缩进子树的整块选区),或落在非文字的块件上(图片 / 嵌入卡 / 分割线这类
+        // contenteditable=false 的东西 —— 那里没有文字可剪可查,系统菜单给不了什么),才出 ⠿ 同一份菜单
+        // (v3 BlockHost onCtxMenu 的手感保留);**文字上的右键交给系统菜单**(剪切 / 复制 / 粘贴 / 拼写建议 / 查询,
+        // Electron 主进程的 editContextMenu)—— 此前一律把文字选区换成整块、吞掉原生菜单,拖选了几个字想复制
+        // 却只能拿到块菜单。把手上的右键见 gutter 那条。
         const onCtxMenu = (e: MouseEvent): void => {
           const view = viewRef
           if (!view) return
           // 只读实例(分享页/收件箱/Muse 预览)不接管右键:原生菜单(复制/查词)照旧,编辑块菜单
           // 不出现 —— 与 show() 不给把手同一口径(B-02:此前菜单里的「删除/转换」真的会改文档)。
           if (!view.editable) return
-          const a = pickBlockAt(view, { x: e.clientX, y: e.clientY })
-          if (!a || !NodeSelection.isSelectable(a.node)) return
+          const sel = view.state.selection
+          const range = sel instanceof NodeSelection
+            ? { from: sel.from, to: sel.to }
+            : blockSelectionKey.getState(view.state) ? topRangeOf(view) : null
+          let onSelected = false
+          if (range) {
+            const selDom = sel instanceof NodeSelection ? view.nodeDOM(sel.from) : null
+            const at = view.posAtCoords({ left: e.clientX, top: e.clientY })
+            onSelected = (selDom instanceof Node && e.target instanceof Node && selDom.contains(e.target))
+              || (!!at && at.pos >= range.from && at.pos <= range.to)
+          }
+          if (!onSelected) {
+            const t = e.target instanceof Element ? e.target : null
+            const island = t?.closest('[contenteditable="false"]')
+            const nonText = !!t && ((!!island && island !== view.dom && view.dom.contains(island)) || /^(IMG|VIDEO|AUDIO|HR|CANVAS|IFRAME)$/.test(t.tagName))
+            if (!nonText) return
+            const a = pickBlockAt(view, { x: e.clientX, y: e.clientY })
+            if (!a || !NodeSelection.isSelectable(a.node)) return
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, a.pos)))
+          }
           e.preventDefault()
-          view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, a.pos)))
           view.focus()
           hooks.onMenu({ x: e.clientX, y: e.clientY })
         }
         editorView.dom.addEventListener('contextmenu', onCtxMenu)
+        // 把手区域(⠿ / ＋ / 折叠钮)上的右键 = 这一块的块菜单:右键的 mousedown 已经走 selectDragUnit 把块选好了。
+        content.addEventListener('contextmenu', (e) => {
+          const view = viewRef
+          if (!view || !view.editable || !activeRef) return
+          e.preventDefault()
+          if (!isCoarsePointer()) view.focus()
+          hooks.onMenu({ x: e.clientX, y: e.clientY })
+        })
 
         // 滚动即藏(定位只在 pointermove 时算,滚动中把手会原地漂着不动)。
         const onScroll = (): void => {
