@@ -1213,6 +1213,11 @@ const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
   ? process.env.TANGU_HARNESS_QUIET === '1'
   : typeof (globalThis as { __playwright_run?: unknown }).__playwright_run === 'function'
 
+// 台架跳过 macOS「重新打开窗口」询问:台架与 dev 共用 com.github.Electron,它崩过后 AppKit 在 -[NSApplication run] →
+// _handleAEOpenEvent 里弹 NSAlert 模态框,ready 永不来 → 台架零输出挂死(09-27 多会话同时中招)。注册域只在内存、不落盘;
+// AppKit 在主脚本同步段之后才读这个键(09-28 注入探针实证,仪器 npm run check:persistignore)。
+if (QUIET_WINDOWS && process.platform === 'darwin') systemPreferences.registerDefaults({ ApplePersistenceIgnoreState: true })
+
 function present(win: BrowserWindow): void {
   if (QUIET_WINDOWS) win.showInactive()
   else { win.show(); win.focus() }
