@@ -277,10 +277,18 @@ function refOfKey(key: TargetKey): TargetRef {
   return key === 'home' ? HOME_REF : Object.freeze({ kind: 'unit' as const, unitId: key.slice('unit:'.length) })
 }
 
+/** 绑定键按 (云端基址, 令牌) 记一份:locationOf 在渲染 / 每条请求上都会走到,别每次都解一遍 JWT。 */
+let bindingsKeyMemo: { input: string; key: string | null } | null = null
 function bindingsStorageKey(): string | null {
   if (!host) return null
-  const id = forsionAccountId(cloudApiBase(), host.cfg().token || '')
-  return id ? `${BINDINGS_KEY_PREFIX}${id}` : null
+  const api = cloudApiBase()
+  const token = host.cfg().token || ''
+  const input = `${api}\n${token}`
+  if (bindingsKeyMemo?.input !== input) {
+    const id = forsionAccountId(api, token)
+    bindingsKeyMemo = { input, key: id ? `${BINDINGS_KEY_PREFIX}${id}` : null }
+  }
+  return bindingsKeyMemo.key
 }
 
 /** 读盘上这个账号的绑定(不可信:逐条过 isTargetKey + 设备 id 形状;home 条不存,读到也丢)。 */
