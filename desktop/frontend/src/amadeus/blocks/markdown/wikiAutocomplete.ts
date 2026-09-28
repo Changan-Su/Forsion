@@ -17,8 +17,37 @@ registerMessages({
  *  中文输入法下打 `[` 得先切回英文键盘 —— 不给这条,双链在中文写作里天然多两次切换。
  *  换完由既有的 wikiSuggestPlugin 照常接管(它只认半角,不必改)。 */
 export const fullWidthWikiRule = $inputRule(
-  () => new InputRule(/【【$/, (state, _match, start, end) => state.tr.insertText('[[', start, end)),
+  // inCodeMark:false —— 行内代码里的【【是字面(代码块本来就不跑输入规则),同 L-03。
+  () => new InputRule(/【【$/, (state, _match, start, end) => state.tr.insertText('[[', start, end), { inCodeMark: false }),
 )
+
+/** 触发串([[ / @ / '/')到光标这一段落在代码里:代码块,或带 code 标记(行内代码)的文字。
+ *  代码里这些字符恒字面(`if [[ -f x ]]`、Java 的 `@Test`、路径里的 `/`),弹面板还会劫持
+ *  Enter/Tab(L-03)。判的是**触发串本身**而不只是光标处的 marks:光标刚出行内代码、`[[` 却在里面也算。 */
+function inCode(state: EditorState, from: number, to: number): boolean {
+  if (state.selection.$head.parent.type.spec.code) return true
+  let hit = false
+  state.doc.nodesBetween(from, to, (n) => {
+    if (n.isInline && n.marks.some((m) => m.type.spec.code)) hit = true
+  })
+  return hit
+}
+
+/** 补全上报回调。`blurred` = 因编辑器失焦而关(L-04):调用方只藏面板、**不清 Esc 闩锁** ——
+ *  失焦再回来,被 Esc 掉的同一个 `@` / `/` 不该重弹。 */
+export type SuggestReport = (q: WikiQuery | null, blurred?: boolean) => void
+
+/** 失焦即关(L-04):面板在 window 捕获阶段拦 ↑↓/Enter/Tab,编辑器不持焦时还挂着,就会劫持
+ *  标题框、侧栏聊天框等别处输入框的按键(甚至把 Enter 变成往正文插链接、把焦点拽回正文)。
+ *  update 里的 hasFocus 闸管「失焦后的任何事务」,这里的 blur 管「失焦本身不派事务」的情形。 */
+const closeOnBlur = (report: SuggestReport) => ({
+  handleDOMEvents: {
+    blur: () => {
+      report(null, true)
+      return false
+    },
+  },
+})
 
 export interface WikiQuery {
   /** Text typed after the opening "[[". */
@@ -32,14 +61,19 @@ export interface WikiQuery {
   top: number
   /** 光标行上沿(视口 px):下方放不下时菜单翻到这条线之上,不盖住正在打字的行。 */
   anchorTop: number
+  /** 仅 [[:光标所在链接**已闭合**时,收尾 `]]` 的文档位置 —— 选中候选只替换目标名这一段
+   *  (见 wikiRetarget),不再插入第二个 `]]`。缺省 = 新写的未闭合链接。 */
+  closeAt?: number
 }
 
-export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
+export function wikiSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
       new Plugin({
+        props: closeOnBlur(report),
         view: () => ({
           update(view, prevState) {
+            if (!view.hasFocus()) return report(null, true)
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head
@@ -49,6 +83,7 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             if (open < 0) return report(null)
             const q = before.slice(open + 2)
             if (/[\]\n]/.test(q)) return report(null) // the [[ was closed or aborted
+            if (inCode(view.state, $head.start() + open, selection.head)) return report(null)
             // ⚠️ 光标**后面**已经有配对的 `]]` = 这条双链早就写完了。这种情况下**只有用户真的在里面
             // 打字才补全,单纯移动光标不弹**:
             //  · 不加这道闸 → 「↑ 从下一行走进 [[某笔记]] 那一行」会当场弹出候选面板,而面板要吃掉
@@ -62,6 +97,9 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             const nextOpen = line.indexOf('[[')
             const closed = close >= 0 && (nextOpen < 0 || close < nextOpen)
             if (closed && (!prevState || prevState.doc.eq(view.state.doc))) return report(null)
+            // 已闭合链接里光标已越过目标名(在 `#锚点` / `|别名` 里打字)→ 不给目标候选,
+            // 否则选中会拿页面名盖掉用户正在改的锚点/别名(L-02)。
+            if (closed && /[#|]/.test(q)) return report(null)
             const from = $head.start() + open + 2
             const to = selection.head
             let coords: { left: number; top: number; bottom: number }
@@ -70,7 +108,9 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             } catch {
               return report(null)
             }
-            report({ query: q, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
+            // textBetween 的 leaf 占位是 1 字符 = 1 位置,块内偏移与文档位置一一对应。
+            const closeAt = closed ? to + close : undefined
+            report({ query: q, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top, closeAt })
           },
         }),
       }),
@@ -84,12 +124,14 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
  *  to the editor and never get swallowed, and typing a space just leaves "/foo " as literal
  *  text (the menu vanishes). `from` = position just after "/"; the picker deletes the
  *  "/query" range via slashRange (blockTriggers) before applying the item. */
-export function slashSuggestPlugin(report: (q: WikiQuery | null) => void) {
+export function slashSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
       new Plugin({
+        props: closeOnBlur(report),
         view: () => ({
           update(view) {
+            if (!view.hasFocus()) return report(null, true)
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head
@@ -98,6 +140,7 @@ export function slashSuggestPlugin(report: (q: WikiQuery | null) => void) {
             const before = $head.parent.textBetween(0, $head.parentOffset, undefined, '￼')
             const slash = before.lastIndexOf('/')
             if (slash < 0) return report(null)
+            if (inCode(view.state, $head.start() + slash, selection.head)) return report(null) // 行内代码同理
             if (slash > 0 && !/\s/.test(before[slash - 1])) return report(null) // 词中的 '/'(TCP/IP、路径)不触发
             const q = before.slice(slash + 1)
             // 空格(含 nbsp)/换行/']' → 关菜单留字面;'￼' = 行内图片/公式 leaf 占位,命中即关
@@ -122,12 +165,14 @@ export function slashSuggestPlugin(report: (q: WikiQuery | null) => void) {
  *  triggers when "@" sits at line start or after whitespace; aborts on brackets/newline
  *  or an over-long query (an "@" far behind the caret is prose, not a mention).
  *  `from` = position just after "@" — the picker replaces [from-1, to) with "[[name]]". */
-export function mentionSuggestPlugin(report: (q: WikiQuery | null) => void) {
+export function mentionSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
       new Plugin({
+        props: closeOnBlur(report),
         view: () => ({
           update(view) {
+            if (!view.hasFocus()) return report(null, true)
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head
@@ -135,6 +180,7 @@ export function mentionSuggestPlugin(report: (q: WikiQuery | null) => void) {
             const before = $head.parent.textBetween(0, $head.parentOffset, undefined, '￼')
             const at = before.lastIndexOf('@')
             if (at < 0) return report(null)
+            if (inCode(view.state, $head.start() + at, selection.head)) return report(null)
             if (at > 0 && !/\s/.test(before[at - 1])) return report(null) // 邮箱等:@ 前非空白不触发
             const q = before.slice(at + 1)
             // 空格(含 nbsp)/换行/方括号/'￼' → 退出提及语义,留成字面文本(同 slash)。空格这条是
