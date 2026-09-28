@@ -14,6 +14,8 @@
 //   B15  块菜单「复制标题链接」(`[[笔记#标题]]`)/「复制块链接」(只给已有 `^id` 的块)/「移动到…」(追加到目标末尾再删源);
 //        /embed 说明不再指向 v4 没有的「复制嵌入引用」(B-15)
 //   B17  为触发 slash 补的那个空格不留在转换结果里(`段甲内容 /h2` → `## 段甲内容`)(B-17 只修这半)
+//   B18  不适用就不列:单元格里 `/` 不开菜单(一项都做不成);列表项里 slash 不列「分栏 / 卡片」;
+//        块菜单「移到新列」只对顶层单块列出(B-18)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -571,6 +573,50 @@ async function main() {
       const todo = await run('todo')
       const code = await run('code', '代码块')
       check('B17 slash 转换 / 插入后不留尾空格', h2.open && h2.md === '## 段甲内容\n\n段乙。\n' && /^\* \[ \] 段甲内容\n/.test(todo.md || '') && /^段甲内容\n\n```/.test(code.md || ''), JSON.stringify({ h2: h2.md, todo: todo.md, code: code.md }))
+    }
+
+    if (want('B18')) {
+      const slashLabels = () => page.evaluate(() => [...document.querySelectorAll('.slash-menu .slash-item .slash-label')].map((x) => x.textContent.trim()))
+      // B18a 单元格里 `/h1`:不开菜单,留成字面(此前列出来点了静默无效 / 插到表外)。
+      {
+        await load(page, '| a | b |\n| --- | --- |\n| 格一 | 格二 |\n\n段尾。\n')
+        await caretAt(page, '格一')
+        await page.keyboard.type(' /h1')
+        await page.waitForTimeout(300)
+        const menu = await page.locator('.slash-menu').count()
+        check('B18a 单元格里 `/` 不开 slash 菜单', menu === 0, JSON.stringify({ menu }))
+      }
+      // B18b 列表项里 slash 不列「分栏 / 卡片」;顶层段落照常列。
+      {
+        await load(page, '- 项一\n- 项二\n\n顶层段\n')
+        await caretAt(page, '项二')
+        await page.keyboard.type(' /')
+        await waitSel(page, '.slash-menu')
+        const inList = await slashLabels()
+        await page.keyboard.press('Escape')
+        await caretAt(page, '顶层段')
+        await page.keyboard.type(' /')
+        await waitSel(page, '.slash-menu')
+        const top = await slashLabels()
+        await page.keyboard.press('Escape')
+        check('B18b 列表项里不列「分栏 / 卡片」,顶层段落列', !inList.includes('分栏') && !inList.includes('卡片') && inList.includes('标题 1') && top.includes('分栏') && top.includes('卡片'), JSON.stringify({ inList: inList.length, top: top.length, listHas: inList.filter((x) => /分栏|卡片/.test(x)) }))
+      }
+      // B18c 块菜单:列表项(非首项)不列「移到新列」,顶层段落列。
+      {
+        await load(page, '- 项一\n- 项二\n- 项三\n\n顶层段\n')
+        const r = await page.evaluate((PM) => { const li = [...document.querySelectorAll(`${PM} li`)].find((x) => x.textContent.trim() === '项二'); const b = li.getBoundingClientRect(); return { x: b.x, y: b.y, h: b.height } }, PM)
+        await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+        await page.waitForTimeout(260)
+        const h = await page.evaluate(() => { const el = document.querySelector('.unified-gutter[data-show="true"] .drag-handle'); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + Math.min(10, b.height / 2) } })
+        if (h) await page.mouse.click(h.x, h.y)
+        const open1 = await waitSel(page, '.unified-block-menu')
+        const li = await page.evaluate(() => [...document.querySelectorAll('.unified-block-menu button')].map((b) => b.textContent.trim()))
+        await page.keyboard.press('Escape')
+        const open2 = await openHandleMenu(page, '顶层段')
+        const para = await page.evaluate(() => [...document.querySelectorAll('.unified-block-menu button')].map((b) => b.textContent.trim()))
+        await page.keyboard.press('Escape')
+        check('B18c 列表项不列「移到新列」,顶层段落列', open1 && open2 && !li.includes('移到新列') && li.includes('删除') && para.includes('移到新列'), JSON.stringify({ li: li.includes('移到新列'), para: para.includes('移到新列') }))
+      }
     }
 
     await page.close()

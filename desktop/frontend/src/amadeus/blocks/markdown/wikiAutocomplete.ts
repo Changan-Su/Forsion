@@ -8,7 +8,7 @@ import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin, PluginKey, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { blockLabel, type BlockNode } from './blockTriggers'
-import { editContextOf, toolbarShape, type ToolbarShape } from './menuContext'
+import { editContextAt, editContextOf, slashAvailable, toolbarShape, type EditContext, type ToolbarShape } from './menuContext'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
@@ -66,6 +66,8 @@ export interface WikiQuery {
   /** 仅 [[:光标所在链接**已闭合**时,收尾 `]]` 的文档位置 —— 选中候选只替换目标名这一段
    *  (见 wikiRetarget),不再插入第二个 `]]`。缺省 = 新写的未闭合链接。 */
   closeAt?: number
+  /** 仅 slash:触发点的编辑上下文(菜单据此只列这里做得成的项,B-18)。 */
+  ctx?: EditContext
 }
 
 export function wikiSuggestPlugin(report: SuggestReport) {
@@ -139,6 +141,8 @@ export function slashSuggestPlugin(report: SuggestReport) {
             const $head = selection.$head
             if (!$head.parent.isTextblock) return report(null)
             if ($head.parent.type.name === 'code_block') return report(null) // 代码块内 '/' 恒字面(路径/正则/注释)
+            const ctx = editContextAt($head)
+            if (!slashAvailable(ctx)) return report(null) // 单元格里一项都做不成(B-18),'/' 恒字面
             const before = $head.parent.textBetween(0, $head.parentOffset, undefined, '￼')
             const slash = before.lastIndexOf('/')
             if (slash < 0) return report(null)
@@ -156,7 +160,7 @@ export function slashSuggestPlugin(report: SuggestReport) {
             } catch {
               return report(null)
             }
-            report({ query: q, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
+            report({ query: q, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top, ctx })
           },
         }),
       }),

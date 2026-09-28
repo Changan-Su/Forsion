@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Schema } from '@milkdown/kit/prose/model'
-import { editContextAt, toolbarShape } from './menuContext'
+import { editContextAt, slashAvailable, slashItemApplies, toolbarShape } from './menuContext'
 
 // 最小 schema:只要祖先链上的名字 / tableRole / code 与生产一致即可(menuContext 只看这些)。
 const schema = new Schema({
@@ -55,3 +55,27 @@ describe('editContextAt / toolbarShape(I-19:工具栏按上下文露按钮)', ()
     expect(c.topLevel).toBe(false)
   })
 })
+
+describe('slashAvailable / slashItemApplies(B-18:不适用就不列)', () => {
+  const d = doc.create(null, [
+    p.create(null, t('top')),
+    code.create(null, t('code')),
+    ul.create(null, [li.create(null, [p.create(null, t('item'))])]),
+    table.create(null, [tr.create(null, [td.create(null, [p.create(null, t('cell'))])])]),
+  ])
+  const at = (s: string) => editContextAt(d.resolve(posOf(d, s)))
+  it('代码块、单元格里 slash 不开;段落、列表项里开', () => {
+    expect(slashAvailable(at('code'))).toBe(false)
+    expect(slashAvailable(at('cell'))).toBe(false)
+    expect(slashAvailable(at('top'))).toBe(true)
+    expect(slashAvailable(at('item'))).toBe(true)
+  })
+  it('分栏只在顶层列;卡片不在列表项里列;其余照列', () => {
+    expect(slashItemApplies('columns', at('top'))).toBe(true)
+    expect(slashItemApplies('columns', at('item'))).toBe(false)
+    expect(slashItemApplies('card', at('item'))).toBe(false)
+    expect(slashItemApplies('card', at('top'))).toBe(true)
+    expect(slashItemApplies('h1', at('item'))).toBe(true)
+  })
+})
+

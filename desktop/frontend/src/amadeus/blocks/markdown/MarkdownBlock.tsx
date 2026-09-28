@@ -89,7 +89,7 @@ import {
 import { wikilinkPlugin } from './wikilink'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
-import { editContextOf } from './menuContext'
+import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
@@ -271,8 +271,8 @@ interface BlockKeys {
 export interface SlashOps {
   /** 删掉光标前触发用的 '/';返回删后块是否为空。 */
   consume(): boolean
-  /** 删 '/' 并把当前块原地转换为前缀类型(光标原位、无重挂载)。 */
-  transform(trig: Trigger): void
+  /** 删 '/' 并把当前块原地转换为前缀类型(光标原位、无重挂载)。false = 结构不允许,文档没动(调用方提示,B-18)。 */
+  transform(trig: Trigger): boolean
 }
 
 /** 占位提示只在「聚焦中的空块」显示(Notion 同款;此前所有空块齐刷刷提示,实报扰视)。
@@ -1091,12 +1091,14 @@ export function MilkdownInner({
         return emptyAfter
       },
       transform: (trig) => {
+        let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           const { $from, empty } = view.state.selection
-          applyTrigger(view, trig, empty ? slashRange($from) : null)
+          ok = applyTrigger(view, trig, empty ? slashRange($from) : null)
           view.focus()
         })
+        return ok
       },
     }
     return () => { if (slashOpsRef) slashOpsRef.current = null }
@@ -1555,6 +1557,7 @@ export function MilkdownInner({
           top={slash.top}
           anchorTop={slash.anchorTop}
           hideKeys={unified ? UNIFIED_HIDDEN_SLASH : undefined}
+          ctx={slash.ctx}
           unified={unified}
           editorFocused={editorFocused}
           onPick={(it) => { setSlash(null); onSlashPick(it) }}
@@ -1736,7 +1739,7 @@ export function MarkdownBlock({
     // ⚠️ 插件项即使 scaffold 为空串也不能走这条:'' 在 PREFIX_TRIGGERS 里是「转成普通文本」。
     const prefix = item.run ? undefined : PREFIX_TRIGGERS[scaffold]
     if (prefix) {
-      slashOpsRef.current.transform(prefix)
+      if (!slashOpsRef.current.transform(prefix)) slashTurnFailed(item.label)
       return
     }
     // 其余类型:先在编辑器里消费掉触发 '/query'(返回删后是否空块),再各自处理。
@@ -2244,6 +2247,11 @@ export function linkExtent(doc: ProseNode, from: number, to: number, type: MarkT
   return { from: Math.min(from, hits[0].from), to: Math.max(to, hits[hits.length - 1].to), href: hits[0].href }
 }
 
+/** slash 的前缀型转换做不成(结构不允许)→ 说一句,'/query' 留着(B-18:此前静默无效)。 */
+export function slashTurnFailed(label: string): void {
+  window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
+}
+
 /** 链接 → 短标签(主机名,去 www.)。解析不了就原样。 */
 export function hostLabel(url: string): string {
   try {
@@ -2345,10 +2353,12 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, editorFocused, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
+  /** 触发点的编辑上下文:这里做不成的项不列(B-18,menuContext.slashItemApplies 单源)。 */
+  ctx?: EditContext
   unified?: boolean
   /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
   editorFocused?: () => boolean
@@ -2357,7 +2367,10 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, unified, editorFocus
   const { t } = useI18n()
   const [active, setActive] = useState(0)
   const all = useAllSlashItems({ unified })
-  const allItems = useMemo(() => (hideKeys ? all.filter((it) => !hideKeys.has(it.key)) : all), [all, hideKeys])
+  const allItems = useMemo(
+    () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
+    [all, hideKeys, ctx],
+  )
 
   const q = query.trim().toLowerCase()
   // 有输入 → 按匹配度排序(label 与各关键词取最佳 fuzzy 分,降序);无输入 → 保持分组固定顺序。

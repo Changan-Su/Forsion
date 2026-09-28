@@ -26,7 +26,7 @@ import { getAttachmentPrefs } from '../lib/attachments'
 import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
-  PREFIX_TRIGGERS, SLASH_SENTINELS, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
+  PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -60,6 +60,7 @@ import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
+import { columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
@@ -619,7 +620,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     if (!ops) return // fail closed:实例刚重挂/已销毁时不执行,免得删不掉的 '/query' 留成残渣
     const prefix = item.run ? undefined : PREFIX_TRIGGERS[item.scaffold]
     if (prefix) {
-      ops.transform(prefix)
+      if (!ops.transform(prefix)) slashTurnFailed(item.label)
       return
     }
     ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
@@ -2764,7 +2765,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               }}>
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
               </button>
-            ) : (
+            ) : layer.getView() && columnSplitApplies(layer.getView()!.state.selection) && (
+              // 只对顶层单块列出(B-18):列表项 / 分栏里 / 卡片里点了 splitToColumn 静默拒绝。
               <button role="menuitem" tabIndex={-1} data-act="toNewColumn" onClick={() => withSelectedNode((view, sel) => {
                 splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
               })}>
