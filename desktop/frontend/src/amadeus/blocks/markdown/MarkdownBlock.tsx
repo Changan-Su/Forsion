@@ -51,11 +51,12 @@ import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
 import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
+import { serializeForSave } from './verbatim'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
-import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
@@ -200,6 +201,12 @@ export function stampedFileName(kind: string): string {
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
   return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))
+}
+/** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
+ *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
+ *  「只是规范化了一下」就会被判成用户改动,回灌时凭空出冲突副本。 */
+export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
+  return serializeForSave(ctx, doc, normalizeSerializedMd)
 }
 /** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
  *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
@@ -858,10 +865,18 @@ export function MilkdownInner({
           handleClick: handleLinkClick,
           clipboardTextSerializer,
         }))
-        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
-          if (!ready.current || readOnly) return
-          onChange(normalizeSerializedMd(markdown))
-        })
+        // v4 统一实例吃 doc 自己序列化(serializeUnified 要在序列化期间挂逐字计划,markdownUpdated 给的是裸序列化结果)。
+        if (unified) {
+          ctx.get(listenerCtx).updated((lctx, doc) => {
+            if (!ready.current || readOnly) return
+            onChange(serializeUnified(lctx, doc))
+          })
+        } else {
+          ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+            if (!ready.current || readOnly) return
+            onChange(normalizeSerializedMd(markdown))
+          })
+        }
       })
       // 段落缩进档(Tab):preset 的**原位替换**版(paragraph schema 换扩展、位置不动)。
       // 追加 .use 会把 paragraph 挪到节点序尾部 → heading 成缺省块类型,新块全变 H1(栽过)。

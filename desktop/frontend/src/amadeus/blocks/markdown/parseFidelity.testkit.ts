@@ -12,12 +12,14 @@ import { cjkFriendlyRemark } from './cjkFriendly'
 import { attentionSerializer } from './attentionFlanking'
 import { blankLineRemark, softBreakRemark } from './softBreak'
 import { calloutTitleRemark } from './callout'
-import { normalizeSerializedMd } from './MarkdownBlock'
+import { normalizeSerializedMd, serializeUnified } from './MarkdownBlock'
 
 export interface Booted {
   view: EditorView
   /** 当前文档按落盘口径序列化(含 normalizeSerializedMd)。 */
   md(): string
+  /** v4 整篇落盘口径(D-18:未编辑的顶层块逐字回填,见 ./verbatim)。 */
+  saved(): string
   /** 用同一条解析链解析一段 md(粘贴 / 回灌 / 切换文件走的也是 parserCtx)。 */
   parse(md: string): PMNode
   /** 宿主 serializerCtx 的**原始**输出(不经 normalizeSerializedMd):切块 / 剪贴板那条路径自己再规范化。 */
@@ -46,6 +48,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): 
   return {
     view,
     md: () => ed.action((ctx) => normalizeSerializedMd(ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc))),
+    saved: () => ed.action((ctx) => serializeUnified(ctx, ctx.get(editorViewCtx).state.doc)),
     parse: (md) => ed.action((ctx) => ctx.get(parserCtx)(md)) as PMNode,
     serialize: (node) => ed.action((ctx) => ctx.get(serializerCtx)(node)),
     destroy: async () => { await ed.destroy(); root.remove() },

@@ -21,6 +21,7 @@ import { mathEscapeRemark } from './mathLivePreview'
 import { linkWithRefSchema, literalRawFromDom, pristineRaw, refDefinitionsRemark } from './refDefinitions'
 import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
 import { listFormatPlugins } from './listFormat'
+import { verbatimDocSchema, verbatimPlugins } from './verbatim'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -182,7 +183,8 @@ const PARSE_FIDELITY = [
   ...refDefinitionsRemark, // D-12:定义行 → 字面段落、引用 → 带 ref 的链接(须在 remark-inline-links 之前,它会删定义)
 ]
 const presetWithReplacements = commonmark.map((p) =>
-  (p as unknown) === (paragraphSchema.node as unknown) ? paragraphIndentSchema.node
+  (p as unknown) === (docSchema as unknown) ? verbatimDocSchema // D-18:未编辑的顶层块逐字落盘(./verbatim)
+  : (p as unknown) === (paragraphSchema.node as unknown) ? paragraphIndentSchema.node
   : (p as unknown) === (paragraphSchema.ctx as unknown) ? paragraphIndentSchema.ctx
   : (p as unknown) === (headingSchema.node as unknown) ? headingAlignmentSchema.node
   : (p as unknown) === (headingSchema.ctx as unknown) ? headingAlignmentSchema.ctx
@@ -203,6 +205,7 @@ export const commonmarkWithIndent = [
   ...presetWithReplacements.flatMap((p) =>
     (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p]),
   ...listFormatPlugins, // D-05:列表 spread 收布尔 + 原列表符写回沿用(./listFormat)
+  ...verbatimPlugins, // D-18:源文印章 + 逐字占位 handler(./verbatim)
 ]
 
 /** 缩进档的适用面:列表项/引用块的**任意深度祖先**内一律不适用 —— 列表是 sink/lift 的地盘;

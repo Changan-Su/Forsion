@@ -24,7 +24,7 @@ import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
-  DbLinkPicker, MilkdownInner, normalizeSerializedMd, stampedFileName,
+  DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -55,6 +55,7 @@ import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
+import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
 import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
@@ -326,6 +327,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
           applyMinimalDiff(view, doc as ProseNode)
+          adoptOrigins(view.state.doc, doc as ProseNode) // D-18:保留下来的块改记到新盘上文本的来源
           ok = true
           if (probe) probe.reconciled = ((probe.reconciled as number) ?? 0) + 1
         })
@@ -335,9 +337,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         let out: string | null = null
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
-          const serializer = ctx.get(serializerCtx)
-          // 必须与 markdownUpdated 监听器同一条规范化链(Codex 终审 P0:绕过=把 \[\[ 持久化成死链)。
-          out = toStoredMarkdown(normalizeSerializedMd(serializer(view.state.doc)), pageDir)
+          // 必须与监听器同一条落盘链(Codex 终审 P0:绕过=把 \[\[ 持久化成死链;D-18:逐字回填也在这条链上)。
+          out = toStoredMarkdown(serializeUnified(ctx, view.state.doc), pageDir)
         })
         return out
       },
@@ -346,7 +347,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         getInstance()?.action((ctx) => {
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
-          out = toStoredMarkdown(normalizeSerializedMd(ctx.get(serializerCtx)(doc as ProseNode)), pageDir)
+          out = toStoredMarkdown(serializeUnified(ctx, doc as ProseNode), pageDir) // 与落盘同口径(见 serializeUnified 注)
         })
         return out
       },
