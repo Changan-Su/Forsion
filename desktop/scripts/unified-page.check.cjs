@@ -443,6 +443,43 @@ async function main() {
       record('PR8 属性面板行级提交:改 status 只动那一行(注释/007/1.10/flow/多行块逐字),多行值白点零写(D-20)',
         dwWhite === 0 && out === FM8.replace('status: todo', 'status: todoX'), JSON.stringify({ dwWhite, out }))
     }
+
+    // PR9 C-19(评审 2026-09-27):新增属性先选类型 → 落盘为对应 YAML 类型(别的键 `007` 与正文逐字,仍是行级提交);
+    //  新增后焦点在新行的值框;换篇再回来仍展开(按库记在本机);值里的 [[x]] 渲染成双链。
+    //  负对照在 amadeusProperties.c19.test.ts 实跑(addProp 写 '' / 展开态回局部 state → 红)。
+    {
+      const FM9 = '---\nzip: 007\nrelated: "[[Beta]]"\n---\n# T\n\n正文。\n'
+      const pg = await openProps(FM9)
+      const addTyped = async (key, type) => {
+        await pg.click('.amx-props-add')
+        await pg.waitForTimeout(150)
+        await pg.keyboard.type(key)
+        await pg.selectOption('.amx-prop-new select', type)
+        await pg.click('.amx-prop-new input.amx-prop-key')
+        await pg.keyboard.press('Enter')
+        await pg.waitForTimeout(400)
+        return pg.evaluate(() => { const a = document.activeElement; return `${a?.closest('.amx-prop-row')?.dataset.key}|${a?.tagName}.${a?.className}|${a?.type}` })
+      }
+      const fN = await addTyped('n', 'number')
+      await pg.keyboard.press('Meta+A')
+      await pg.keyboard.type('5')
+      await pg.keyboard.press('Enter')
+      const fD = await addTyped('done', 'checkbox')
+      await pg.waitForTimeout(1200)
+      const out = await disk(pg)
+      const links = await pg.evaluate(() => [...document.querySelectorAll('.amx-prop-link')].map((e) => e.textContent))
+      await pg.evaluate(() => window.__upage.switchFile('Other.md', '---\nx: 1\n---\n# 另一篇\n'))
+      await pg.waitForTimeout(900)
+      await pg.evaluate(() => window.__upage.switchFile('Unified.md'))
+      await pg.waitForSelector(PM)
+      await pg.waitForTimeout(900)
+      const stillOpen = await pg.evaluate(() => !!document.querySelector('.amx-props-rows'))
+      await pg.close()
+      record('PR9 属性新增先选类型 → n: 5 / done: false 落盘为数字 / 布尔,007 与正文逐字;焦点进值框;换篇回来仍展开;[[x]] 值成双链(C-19)',
+        out === FM9.replace('related: "[[Beta]]"\n', 'related: "[[Beta]]"\nn: 5\ndone: false\n') &&
+          fN.startsWith('n|INPUT.amx-prop-input') && fD === 'done|INPUT.amx-prop-check|checkbox' && JSON.stringify(links) === '["Beta"]' && stillOpen,
+        JSON.stringify({ out, fN, fD, links, stillOpen }))
+    }
   }
 
   // ── P7-P11:块交互层(blockLayer.ts:⠿/＋/菜单/块选中/拖拽)────────────────────

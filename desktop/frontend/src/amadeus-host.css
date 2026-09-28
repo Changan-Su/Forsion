@@ -676,6 +676,20 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-chip-x { display: inline-flex; border: none; background: transparent; color: var(--text-faint); cursor: pointer; padding: 0; }
 .amx-chip-x:hover { color: var(--danger, #e5484d); }
 .amx-prop-chips input { flex: 1; min-width: 60px; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); }
+/* 新增属性行(C-19):键名 + 类型选择 + ✓ ×(常显,不像删除键那样悬停才亮)。 */
+.amx-prop-type {
+  flex: 0 0 auto; align-self: center; border: 1px solid var(--border); outline: none; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 2px 4px; border-radius: var(--radius-sm, 6px);
+}
+.amx-prop-type:focus-visible { border-color: var(--accent-ink, var(--border)); }
+.amx-prop-new .amx-prop-new-btn { opacity: 1; }
+.amx-prop-new .amx-prop-new-btn:first-of-type:hover { color: var(--accent-ink, var(--text)); }
+/* 值里的 [[x]]:展示态渲染成双链(点链接跳转、点空白处进编辑)。 */
+.amx-prop-links { cursor: text; white-space: pre-wrap; }
+.amx-prop-link {
+  color: var(--accent-ink); cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--accent-ink) 45%, transparent);
+}
 .amx-props-raw {
   display: block; width: 100%; min-height: 80px; margin-top: 4px; resize: vertical;
   border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); outline: none;
