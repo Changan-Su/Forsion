@@ -9,7 +9,7 @@ import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { normalizeHref } from '../blocks/markdown/linkHref'
+import { hrefKind, normalizeHref } from '../blocks/markdown/linkHref'
 
 const OPEN_DELAY = 500
 const CLOSE_DELAY = 250
@@ -51,7 +51,11 @@ function rangeOfLink(view: EditorView, el: HTMLElement): { from: number; to: num
   return from === to ? null : { from, to }
 }
 
-export function LinkHoverCard({ getView }: { getView: () => EditorView | null }): ReactElement | null {
+export function LinkHoverCard({ getView, onOpenNote }: {
+  getView: () => EditorView | null
+  /** 库内笔记链接 `[t](笔记.md)` 的打开(与编辑器点击同路,L-07);不给就退回 window.open。 */
+  onOpenNote?: (href: string) => void
+}): ReactElement | null {
   const [hover, setHover] = useState<Hover | null>(null)
   const [edit, setEdit] = useState<{ from: number; to: number; text: string; href: string } | null>(null)
   const openT = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -111,6 +115,14 @@ export function LinkHoverCard({ getView }: { getView: () => EditorView | null })
     }
   }, [getView])
 
+  // 卡片是 fixed + 悬停那一刻的视口坐标:页面一滚,链接走了卡片还钉在原处 —— 滚动即收(编辑面板居中,不受影响)。
+  useEffect(() => {
+    if (!hover || edit) return
+    const close = (): void => setHover(null)
+    document.addEventListener('scroll', close, true)
+    return () => document.removeEventListener('scroll', close, true)
+  }, [hover, edit])
+
   /** 改写选定链接:href=null 表示只摘掉链接(留文字);text 变了就整段替换文字。
    *  ⚠️ from/to 是悬停那一刻的快照:开着卡片期间可能有外部回灌/协同事务改过文档,动手前**重新校验**
    *  这段范围还带不带 link mark,不对就放弃 —— 宁可什么都不做,也不能改错一段文字。 */
@@ -138,10 +150,34 @@ export function LinkHoverCard({ getView }: { getView: () => EditorView | null })
   }
 
   if (edit) {
+    const canSave = !!normalizeHref(edit.href) && !!edit.text.trim()
+    const close = (): void => {
+      setEdit(null)
+      setHover(null)
+      getView()?.focus()
+    }
     return (
       <OverlayPortal>
         <div className="amx-linkedit-backdrop" onMouseDown={() => setEdit(null)} role="presentation" />
         <OverlayAt className="amx-linkedit" x={window.innerWidth / 2} y={Math.round(window.innerHeight * 0.3)} center>
+          {/* form:两个输入框里按 Enter 即保存;Esc 取消(键盘用户此前只能靠鼠标点按钮)。 */}
+          <form
+            className="amx-linkedit-form"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const href = normalizeHref(edit.href)
+              if (!href || !edit.text.trim()) return
+              rewrite(edit.from, edit.to, edit.text, href)
+              setEdit(null)
+              setHover(null)
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return
+              e.preventDefault()
+              e.stopPropagation()
+              close()
+            }}
+          >
           <label>
             文字
             <input
@@ -156,21 +192,12 @@ export function LinkHoverCard({ getView }: { getView: () => EditorView | null })
             <input value={edit.href} onChange={(e) => setEdit({ ...edit, href: e.target.value })} />
           </label>
           <div className="amx-linkedit-row">
-            <button onClick={() => setEdit(null)}>取消</button>
-            <button
-              className="primary"
-              disabled={!normalizeHref(edit.href) || !edit.text.trim()}
-              onClick={() => {
-                const href = normalizeHref(edit.href)
-                if (!href) return
-                rewrite(edit.from, edit.to, edit.text, href)
-                setEdit(null)
-                setHover(null)
-              }}
-            >
+            <button type="button" onClick={close}>取消</button>
+            <button type="submit" className="primary" disabled={!canSave}>
               保存
             </button>
           </div>
+          </form>
         </OverlayAt>
       </OverlayPortal>
     )
@@ -198,7 +225,16 @@ export function LinkHoverCard({ getView }: { getView: () => EditorView | null })
           closeT.current = setTimeout(() => setHover(null), CLOSE_DELAY)
         }}
       >
-        <button className="amx-linkcard-host" title={hover.href} onClick={() => window.open(hover.href, '_blank', 'noopener')}>
+        <button
+          className="amx-linkcard-host"
+          title={hover.href}
+          onClick={() => {
+            if (onOpenNote && hrefKind(hover.href) === 'note') {
+              setHover(null)
+              onOpenNote(hover.href)
+            } else window.open(hover.href, '_blank', 'noopener')
+          }}
+        >
           {host}
         </button>
         <span className="amx-linkcard-sep" />

@@ -98,7 +98,7 @@ import { taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { askString } from '../../components/askString'
-import { linkInputRule, normalizeHref } from './linkHref'
+import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
@@ -511,6 +511,8 @@ export function MilkdownInner({
   saveFilesRef.current = saveFiles
   const wikiRef = useRef(onOpenWiki)
   wikiRef.current = onOpenWiki
+  const pageNamesRef = useRef(getPageNames)
+  pageNamesRef.current = getPageNames
   const resolvedRef = useRef<(n: string) => boolean>(() => true)
   resolvedRef.current = isWikiResolved ?? (() => true)
   const iconRef = useRef<(n: string) => string | undefined>(() => undefined)
@@ -832,9 +834,19 @@ export function MilkdownInner({
     // 点链接就打开(同 Obsidian 实时预览)。contenteditable 里 Chromium **不会**自己导航,
     // 不接这一手 `[文字](url)` 就只是个蓝字。window.open 会被主进程 setWindowOpenHandler 截住、
     // 回投给渲染层的外链路由(内置浏览器 / 系统浏览器);web 端就是开新页 —— 三端一个写法。
+    // ⚠️ 按 hrefKind 分流(L-07):库内笔记 `[t](笔记.md)` 走与 `[[ ]]` 同一条打开路径,不许补成 `https://笔记.md`;
+    //    附件路径不在这儿开 —— 容器(amadeusViews 的 onClick)用 openAttachment 开。handleClick 是 PM 在 mouseup 里调的,
+    //    这里 preventDefault 标不到随后的 click 事件,两边只能靠同一份判据各开各的,否则一次点击开两回。
     const handleLinkClick = (_view: EditorView, _pos: number, event: MouseEvent): boolean => {
       const a = (event.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null
       if (!a || !a.getAttribute('href')) return false
+      const kind = hrefKind(a.getAttribute('href') as string)
+      if (kind === 'file') return false
+      if (kind === 'note') {
+        event.preventDefault()
+        wikiRef.current(noteLinkTarget(a.getAttribute('href') as string, pagePathRef.current, pageNamesRef.current()))
+        return true
+      }
       const href = normalizeHref(a.getAttribute('href') as string)
       if (!href) return false
       event.preventDefault()

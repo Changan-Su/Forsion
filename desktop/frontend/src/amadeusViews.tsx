@@ -58,6 +58,7 @@ import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
 // 移动端块面板的清单与落点(与桌面 slash 菜单同一份真源,见 MarkdownBlock)。
 import { useAllSlashItems, getFocusedBlockApply, type SlashItem } from '@amadeus/blocks/markdown/MarkdownBlock'
+import { hrefKind } from '@amadeus/blocks/markdown/linkHref'
 import { CloudVaultPanel } from './components/CloudVaultPanel'
 import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
@@ -2401,7 +2402,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     const a = (e.target as HTMLElement).closest('a')
     if (!a || a.classList.contains('wikilink')) return
     const href = a.getAttribute('href') || ''
-    if (!href || /^(https?:|mailto:|amadeus-asset:|#)/i.test(href)) return
+    // 只接附件:外链(含裸域名)与库内笔记 `[t](笔记.md)` 由编辑器自己开 —— 同一份判据(hrefKind),否则一次点击开两回(L-07)。
+    if (!href || hrefKind(href) !== 'file') return
     e.preventDefault()
     const page = myPs().activePage ?? barPath // unified 笔记 activePage 恒空(审计:附件点击死路)
     if (page) void amadeus.openAttachment(page, href)

@@ -696,6 +696,13 @@
   line-height: 1.6;
   color: var(--text);
   caret-color: var(--primary);
+  /* ProseMirror 的硬性要求(prosemirror-view/style/prosemirror.css 同款,我们没引那份表)。
+     white-space 缺省 normal 时浏览器把连续/行尾空格塌掉,PM 只好用 U+00A0 撑住 → 空格以 NBSP 落盘;
+     `@明天` 回车后的空格被塌掉吃掉 → `@2026-09-28讨论` 标记失效(I-06)。break-spaces 让行尾空格占位、光标跟得上。 */
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  word-wrap: break-word;
+  font-variant-ligatures: none;
 }
 .am-app .milkdown .ProseMirror > *:first-child {
   margin-top: 0;
@@ -3063,6 +3070,10 @@ body.amx-marquee-active * {
 
 /* 链接悬停卡片(500ms 出 / 250ms 收)与双框编辑面板。 */
 .am-app .amx-linkcard {
+  /* ⚠️ fixed 必须写在这里:OverlayAt(lcl/engine/menuAnchor.tsx)只给视口坐标 left/top,定位方式归浮层自己的类。
+     漏了它 = 静态流排到 .am-app 末尾,卡片落到页底、鼠标一挪过去就收(I-05,仪器 check:linkcard)。 */
+  position: fixed;
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -3088,6 +3099,7 @@ body.amx-marquee-active * {
 .am-app .amx-linkcard-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .am-app .amx-linkedit-backdrop { position: fixed; inset: 0; z-index: 119; }
 .am-app .amx-linkedit {
+  position: fixed; /* 同上:没有定位 z-index 不生效,面板被自己 z119 的遮罩盖住,一点输入框就关(I-05) */
   z-index: 120;
   display: flex;
   flex-direction: column;
@@ -3099,6 +3111,7 @@ body.amx-marquee-active * {
   border: 1px solid var(--border);
   box-shadow: var(--card-shadow);
 }
+.am-app .amx-linkedit-form { display: contents; } /* form 只为 Enter 提交,不参与布局 */
 .am-app .amx-linkedit label { display: flex; flex-direction: column; gap: 4px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .am-app .amx-linkedit input {
   padding: 6px 8px;

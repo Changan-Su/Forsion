@@ -21,10 +21,11 @@ import { $remark } from '@milkdown/kit/utils'
 import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 
-/** 两个 parseOnly 合一(都只往 `data().micromarkExtensions` 推扩展)。单测直接吃这个,与生产同一份。 */
+/** 两个 parseOnly 合一(都只往 `data().micromarkExtensions` 推扩展)。单测直接吃这个,与生产同一份。
+ *  删除线只认 `~~`(I-03,拍板 #1):本扩展与 remark-gfm 都得 singleTilde:false —— 这边返回 nok 会落到 gfm 那条,见 anchoredMarkRules.ts。 */
 export function remarkCjkFriendlyParse(this: unknown): void {
   remarkCjkFriendly.call(this)
-  remarkCjkFriendlyStrikethrough.call(this)
+  remarkCjkFriendlyStrikethrough.call(this, { singleTilde: false })
 }
 
 /** 挂进编辑器:`.use(cjkFriendlyRemark)`,紧跟 `.use(gfm)`。 */
