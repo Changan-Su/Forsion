@@ -4,7 +4,8 @@
  * 钉的东西:
  *  - 名册里的手机不出现、kind 缺席的老桌面照样出现(按电脑);每台电脑一行、状态文案按 deviceStatus 口径;
  *  - web 路径没有原生身份:弹层一开就挂「仅在 Forsion 安卓 App 中可用」横幅;点电脑也只得到这条,**一个 /proxy/ 请求都不发**;
- *  - 中继面上的请求在 web 路径同样失败关闭:页面里直接 fetch 远端引擎 → 503 CALLER_UNSUPPORTED,网络上零请求;
+ *  - web 路径**不装中继**(K8 §3.4;评审 P2):页面里直接 fetch 远端引擎照旧走原 fetch(同 Genesis web,账号级未识别调用方),
+ *    不合成 503、也不带任何调用方票头 —— 否则 K6-S2 的 check:enginetarget(驱动 mobile dev 构建打 unit 目标)全红;
  *  - 「打开设备界面」缺省折叠,展开后是 P0 那几行(不含手机);「本机」段在 web 路径显示「仅安卓 App」。
  *  - 出三张真实截图(中文亮 / 中文暗 / 英文亮)给人眼看(DESIGN §8)。
  *
@@ -93,7 +94,8 @@ async function scenario(browser, { lang, mode, shot, full }) {
   }, { lang, mode })
   const page = await ctx.newPage()
   const proxyHits = []
-  page.on('request', (r) => { if (/\/units\/[^/]+\/proxy\//.test(r.url())) proxyHits.push(r.url()) })
+  const proxyHeaders = []
+  page.on('request', (r) => { if (/\/units\/[^/]+\/proxy\//.test(r.url())) { proxyHits.push(r.url()); proxyHeaders.push(r.headers()) } })
   page.on('pageerror', (e) => fail(`[${lang}/${mode}] 未捕获异常`, e.message))
   await page.route('**/api/**', (r) => r.abort())
   await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"u1","username":"e2e"}' }))
@@ -163,14 +165,14 @@ async function scenario(browser, { lang, mode, shot, full }) {
     const after = await page.evaluate(() => document.querySelector('[data-phone-issue]')?.getAttribute('data-phone-issue') || null)
     expect(after === 'nativeOnly' && proxyHits.length === 0, `${tag} 点电脑 → 仍是 nativeOnly、零 /proxy/ 请求`, JSON.stringify({ after, proxyHits }))
 
-    // 中继面在 web 路径同样失败关闭:直接 fetch 远端引擎 → 合成 503 CALLER_UNSUPPORTED,网络上零请求
+    // web 路径不装中继:直接 fetch 远端引擎 → 交给原 fetch 真发出去(本台架 /api/** 缺省 abort → TypeError),不合成 503、不带票头
     const direct = await page.evaluate(async (id) => {
-      const r = await fetch(`${location.origin}/api/units/${id}/proxy/engine/agent/sessions`)
-      return { status: r.status, body: await r.json().catch(() => null) }
+      try { const r = await fetch(`${location.origin}/api/units/${id}/proxy/engine/agent/sessions`); return { status: r.status, body: await r.text().catch(() => null) } } catch (e) { return { threw: e.name } }
     }, READY)
-    expect(direct.status === 503 && direct.body?.code === 'CALLER_UNSUPPORTED' && proxyHits.length === 0, `${tag} web 路径 fetch 远端引擎 → 503 CALLER_UNSUPPORTED,零网络请求`, JSON.stringify({ direct, proxyHits }))
-    const bad = await page.evaluate(async (id) => { try { await fetch(`${location.origin}/api/units/${id}/proxy/engine/../unit/mcp`); return 'sent' } catch (e) { return e.name } }, READY)
-    expect(bad === 'TypeError' && proxyHits.length === 0, `${tag} 语法不过的中继面 URL → TypeError,零网络请求`, JSON.stringify({ bad, proxyHits }))
+    const sent = proxyHits.filter((u) => u.endsWith('/proxy/engine/agent/sessions'))
+    const ticketHeaders = proxyHeaders.filter((h) => Object.keys(h).some((k) => /^x-forsion-caller$/i.test(k)))
+    expect(direct.threw === 'TypeError' && sent.length === 1 && ticketHeaders.length === 0,
+      `${tag} web 路径不装中继:fetch 远端引擎交给原 fetch(真发出去、不合成 503、不带调用方票头)`, JSON.stringify({ direct, proxyHits, ticketHeaders }))
   }
 
   const shotPath = path.join(SHOT_DIR, shot)
@@ -287,6 +289,33 @@ async function simScenario(browser) {
   await page.waitForTimeout(500)
   const gone = await page.evaluate(() => ({ forgot: !!window.__sim.forgot, phone: document.querySelector('[data-this-phone] .us-self-text')?.textContent || '' }))
   expect(gone.forgot && /尚未登记/.test(gone.phone), '[sim] 确认移除 → unitForgetSelf 被调、本机回「尚未登记」', JSON.stringify(gone))
+
+  // 评审 P1:失败按原因分横幅 —— 登记途中断网 → 「连不上」(不是「无法证明身份」);中继合成的 401 → 「登录已失效」
+  await page.evaluate(() => { window.tangu.unitEnsureSelf = async () => ({ ok: false, code: 'network' }) })
+  await page.evaluate(() => { const b = document.querySelector('[data-units-sheet] .us-body'); if (b) b.scrollTop = 0 })
+  await tap(page.locator(`[data-run-row="${READY}"]`))
+  await page.waitForTimeout(500)
+  const net = await page.evaluate(() => ({ issue: document.querySelector('[data-phone-issue]')?.getAttribute('data-phone-issue') || null, text: document.querySelector('[data-phone-issue]')?.textContent || '' }))
+  expect(net.issue === 'network' && /连不上 Forsion/.test(net.text), '[sim] 登记途中断网 → 横幅「暂时连不上 Forsion」,不是「无法证明身份」', JSON.stringify(net))
+  await page.screenshot({ path: path.join(SHOT_DIR, 'units-runon-sim-network.png') })
+  console.log(`screenshot → ${path.join(SHOT_DIR, 'units-runon-sim-network.png')}`)
+  await page.evaluate(() => {
+    window.tangu.unitEnsureSelf = async () => ({ ok: true, unitId: 'self-1', name: 'Pixel 9' })
+    const orig = window.fetch
+    window.fetch = async (u, init) => (/\/proxy\/unit\/remote-access$/.test(String(u))
+      ? new Response(JSON.stringify({ detail: 'Invalid or expired token' }), { status: 401, headers: { 'Content-Type': 'application/json' } })
+      : orig(u, init))
+  })
+  await tap(page.locator(`[data-run-row="${READY}"]`))
+  await page.waitForTimeout(500)
+  const auth = await page.evaluate((id) => ({
+    issue: document.querySelector('[data-phone-issue]')?.getAttribute('data-phone-issue') || null,
+    text: document.querySelector('[data-phone-issue]')?.textContent || '',
+    row: document.querySelector(`[data-run-row="${id}"]`)?.getAttribute('data-status') || '',
+  }), READY)
+  expect(auth.issue === 'signedOut' && /登录已失效/.test(auth.text), '[sim] 中继合成的 401 → 横幅「登录已失效」,不记到这台电脑头上', JSON.stringify(auth))
+  await page.screenshot({ path: path.join(SHOT_DIR, 'units-runon-sim-signedout.png') })
+  console.log(`screenshot → ${path.join(SHOT_DIR, 'units-runon-sim-signedout.png')}`)
   await ctx.close()
 }
 

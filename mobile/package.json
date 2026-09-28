@@ -14,6 +14,7 @@
     "test:liveisland": "node scripts/live-island.test.cjs",
     "test:relaypaths": "node scripts/relay-paths.test.cjs",
     "test:unitrelay": "node scripts/unit-relay.test.cjs",
+    "test:unitbridge": "node scripts/unit-bridge.test.cjs",
     "test:unitssheet": "node scripts/units-sheet-model.test.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",

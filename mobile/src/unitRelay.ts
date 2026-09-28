@@ -10,13 +10,17 @@
  *   - 只接 relayPaths.parseRelayUrl 判为 relay 的 URL;判为 reject 的失败关闭(TypeError,一个字节都不发);其余返回 null 交回原 fetch;
  *   - 只把 content-type / accept 两个头交给原生(JS 递来的 Authorization、x-forsion-* 一律丢;原生再按白名单重建一遍);
  *   - 响应逐块进 ReadableStream(SSE 不攒包);AbortSignal / reader.cancel() → 原生 cancel;
- *   - 取不到身份(`caller_unavailable`)或服务器 / 构建不支持(`caller_unsupported`)时**合成**
- *     `503 {code:'CALLER_UNAVAILABLE' | 'CALLER_UNSUPPORTED'}`:让渲染层走统一的拒绝面(K6 classify 的 caller-unavailable 类),
- *     不当网络错无限重试,更不降级成匿名请求。
+ *   - 换不到调用方票时**一律不发请求**(失败关闭),按原因交给渲染层(原生侧 UnitError.relayCode 归类,评审 P1):
+ *       · `network`(断网 / 网关 5xx / 429,含换票、懒登记、自愈途中)→ TypeError('Failed to fetch'):K6 当离线暂停,网络回来就续;
+ *       · `auth_expired`(server 对 forsion_token 回 401)→ **合成 401**(同 hub 的 401 体,无 code):渲染层复检账号 / 重新登录;
+ *       · `caller_unsupported`(老 server / 构建)与 `caller_unavailable`(明确拒绝)→ **合成**
+ *         `503 {code:'CALLER_UNSUPPORTED' | 'CALLER_UNAVAILABLE'}`:K6 classify 的 caller-unavailable 类(终局),不无限重试。
+ *     原先短暂失败也合成 503 CALLER_UNAVAILABLE —— 一次断网就把目标永久判死。
+ *   - 只在 native 路径装(K8 §3.4):mobile 的 web dev / preview 没有原生身份,那条路照 Genesis web 的口径走原 fetch(unitBridge.ts)。
  */
 import { parseRelayUrl } from './relayPaths'
 
-export type RelayErrorCode = 'relay_busy' | 'bad_path' | 'caller_unavailable' | 'caller_unsupported' | 'network' | 'too_large'
+export type RelayErrorCode = 'relay_busy' | 'bad_path' | 'caller_unavailable' | 'caller_unsupported' | 'auth_expired' | 'network' | 'too_large'
 
 /** 原生 → JS 的逐条消息(UnitPlugin.request 的 keepAlive 回调)。 */
 export type RelayMsg =
@@ -82,6 +86,14 @@ function b64ToBytes(b64: string): Uint8Array {
   return out
 }
 
+/**
+ * forsion_token 被 server 拒了(原生换票 / 登记撞 401):合成与 hub 一样的 401(无 code —— K6 classify 把无 code 的 401
+ * 判成 account-auth?,复检账号;绝不能带 CALLER_* / UNIT_CALLER_* 码,那会被判成终局的身份问题)。
+ */
+export function authExpired(): Response {
+  return new Response(JSON.stringify({ detail: 'Invalid or expired token' }), { status: 401, headers: { 'Content-Type': 'application/json' } })
+}
+
 /** 合成的失败关闭响应(英文 detail;渲染层按 code 本地化)。 */
 export function callerRefusal(kind: 'unavailable' | 'unsupported', message?: string): Response {
   const code = kind === 'unavailable' ? 'CALLER_UNAVAILABLE' : 'CALLER_UNSUPPORTED'
@@ -100,9 +112,9 @@ function urlOf(input: RequestInfo | URL): string | null {
 
 /**
  * 造一个 fetch 前置判定器:返回 null = 不是中继 URL(调用方走原 fetch);否则返回这次请求的 Promise<Response>。
- * native 为 null(web 路径 / 插件缺席)时,中继面上的请求一律合成 503 CALLER_UNSUPPORTED —— 同样失败关闭。
+ * 只在 native 路径造(unitBridge.ts);opts.state() 不是 ready(原生缺席 / 启动断言不成立)时中继面一律合成 503 CALLER_UNSUPPORTED。
  */
-export function createRelayFetch(native: RelayNative | null, apiBase: string, opts: RelayOptions):
+export function createRelayFetch(native: RelayNative, apiBase: string, opts: RelayOptions):
   (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | null {
   return (input, init) => {
     const url = urlOf(input)
@@ -114,7 +126,7 @@ export function createRelayFetch(native: RelayNative | null, apiBase: string, op
   }
 }
 
-async function send(native: RelayNative | null, opts: RelayOptions, unitId: string, path: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+async function send(native: RelayNative, opts: RelayOptions, unitId: string, path: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const req = typeof input === 'object' && !(typeof URL !== 'undefined' && input instanceof URL) ? (input as Request) : null
   const signal: AbortSignal | undefined = init?.signal ?? req?.signal ?? undefined
   if (signal?.aborted) throw abortError()
@@ -138,9 +150,9 @@ async function send(native: RelayNative | null, opts: RelayOptions, unitId: stri
   }
   if (body !== undefined && (method === 'GET' || method === 'HEAD')) throw new TypeError('unit relay: GET/HEAD cannot carry a body')
 
-  const state = native ? await opts.state() : 'unsupported'
+  const state = await opts.state()
   if (signal?.aborted) throw abortError()
-  if (!native || state !== 'ready') return callerRefusal('unsupported')
+  if (state !== 'ready') return callerRefusal('unsupported')
 
   const id = newId()
   return new Promise<Response>((resolve, reject) => {
@@ -168,6 +180,7 @@ async function send(native: RelayNative | null, opts: RelayOptions, unitId: stri
       if (!headSent) {
         if (code === 'caller_unavailable') resolve(callerRefusal('unavailable'))
         else if (code === 'caller_unsupported') resolve(callerRefusal('unsupported'))
+        else if (code === 'auth_expired') resolve(authExpired())
         else reject(netError(code, message))
       } else {
         try { controller?.error(netError(code, message)) } catch { /* 已关 */ }

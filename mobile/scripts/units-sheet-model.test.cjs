@@ -15,7 +15,7 @@ const src = buildSync({
 }).outputFiles[0].text
 const mod = { exports: {} }
 new Function('module', 'exports', 'require', src)(mod, mod.exports, require)
-const { runRows, statusKey, runOn, isRunnableUnit, phoneIssueOfCode, CONFIRM_POLL_MS, CONFIRM_TIMEOUT_MS } = mod.exports
+const { runRows, statusKey, runOn, isRunnableUnit, phoneIssueOfCode, removeThisPhone, CONFIRM_POLL_MS, CONFIRM_TIMEOUT_MS } = mod.exports
 
 const fails = []
 const check = async (name, fn) => {
@@ -98,7 +98,16 @@ const access = (caller, remoteSessions = true) => ok({ remoteSessions, principal
     assert.equal(d.fetched.length, 0)
     assert.equal(d.selected.length, 0)
     assert.equal(phoneIssueOfCode('caller_unsupported'), 'callerUnsupported')
-    assert.equal(phoneIssueOfCode('network'), 'callerUnavailable')
+  })
+
+  await check('4b 评审 P1:本机登记失败按原因分横幅 —— 断网 / 5xx / 限流是 network,token 被拒是 signedOut,只有明确拒绝才是 callerUnavailable', async () => {
+    for (const c of ['network', 'server_500', 'server_502', 'server_503', 'server_429']) assert.equal(phoneIssueOfCode(c), 'network', c)
+    for (const c of ['server_401', 'auth_expired', 'not_signed_in']) assert.equal(phoneIssueOfCode(c), 'signedOut', c)
+    for (const c of ['caller_unavailable', 'CALLER_UNAVAILABLE', 'storage', 'server_403', 'no_api_base']) assert.equal(phoneIssueOfCode(c), 'callerUnavailable', c)
+    assert.equal(phoneIssueOfCode('server_5000'), 'callerUnavailable', '只认三位状态码')
+    const d = deps({}, { ensureSelf: async () => ({ ok: false, code: 'network' }) })
+    assert.deepEqual(await runOn(API, DESK, d), { kind: 'phone', issue: 'network' })
+    assert.equal(d.fetched.length, 0)
   })
 
   await check('5 runOn:老桌面(remote-access 404)→ 探引擎 200 → 生效一次,ref = {kind:unit, unitId}', async () => {
@@ -176,6 +185,14 @@ const access = (caller, remoteSessions = true) => ok({ remoteSessions, principal
     assert.equal(d.selected.length + d2.selected.length, 0)
   })
 
+  await check('13b runOn:中继合成的 401(换票撞 401 = forsion_token 被拒)→ 手机级 signedOut 横幅,不记到这台电脑头上', async () => {
+    const d = deps({ 'GET /unit/remote-access': { status: 401, json: { detail: 'Invalid or expired token' } } })
+    assert.deepEqual(await runOn(API, DESK, d), { kind: 'phone', issue: 'signedOut' })
+    const d2 = deps({ 'GET /unit/remote-access': access('trusted'), 'GET /engine/agent/sessions': { status: 401, json: null } })
+    assert.deepEqual(await runOn(API, DESK, d2), { kind: 'phone', issue: 'signedOut' })
+    assert.equal(d.selected.length + d2.selected.length, 0)
+  })
+
   await check('14 runOn:网络错 → 设备探针 status 0(unreachable),不生效', async () => {
     const d = deps({ 'GET /unit/remote-access': 'throw' })
     assert.deepEqual(await runOn(API, DESK, d), { kind: 'device', probe: { ok: false, status: 0 } })
@@ -190,14 +207,34 @@ const access = (caller, remoteSessions = true) => ok({ remoteSessions, principal
     assert.ok(n <= 2)
   })
 
-  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef),今天空操作并标 TODO(K6-S2);runOn 只注入它', async () => {
+  await check('15b 评审 P2:移除本机 —— 当前在某台电脑上时先切回云端并**等它生效**,再移除;在云端时不多切一次', async () => {
+    const order = []
+    let release
+    const pending = removeThisPhone({
+      current: () => ({ kind: 'unit', unitId: DESK }),
+      select: (ref) => { order.push(`select:${ref.kind}`); return new Promise((r) => { release = r }) },
+      forget: async () => { order.push('forget'); return { ok: true } },
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    assert.deepEqual(order, ['select:home'], '切换还没生效就移除了(移除途中的轮询 / SSE 重连会撞 403 → 悄悄重新登记)')
+    release()
+    assert.deepEqual(await pending, { ok: true })
+    assert.deepEqual(order, ['select:home', 'forget'])
+    const order2 = []
+    await removeThisPhone({ current: () => HOME, select: () => { order2.push('select') }, forget: async () => { order2.push('forget'); return { ok: true } } })
+    assert.deepEqual(order2, ['forget'])
+  })
+
+  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef),今天空操作并标 TODO(K6-S2);runOn 与移除本机只注入它', async () => {
     const tsx = fs.readFileSync(path.resolve(__dirname, '../src/UnitsSheet.tsx'), 'utf8')
-    const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): void \{([\s\S]*?)\n\}/g) || []
+    const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): void \| Promise<void> \{([\s\S]*?)\n\}/g) || []
     assert.equal(defs.length, 1, '必须恰好一个 selectRunLocation 定义')
     assert.match(defs[0], /\{\s*void ref\s*\}/, '今天必须是空操作(K6-S2 并行,集成时才接 setFocusTarget)')
     const before = tsx.slice(Math.max(0, tsx.indexOf('function selectRunLocation') - 600), tsx.indexOf('function selectRunLocation'))
     assert.match(before, /TODO\(K6-S2\)/)
-    assert.match(tsx, /select: selectRunLocation,/)
+    assert.equal((tsx.match(/select: selectRunLocation,/g) || []).length, 2, 'runOn 与 removeThisPhone 各注入一次')
+    assert.match(tsx, /removeThisPhone\(\{/)
+    assert.doesNotMatch(tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /unitForgetSelf\?\.\(\)[^\n]*\.then\(/, '移除不许绕过 removeThisPhone 直接调 unitForgetSelf')
     // 不许绕过出口自己切位置(K8 的整端切换兜底已被 R-21 删除);注释里提到的不算
     const code = tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     for (const banned of [/setFocusTarget\(/, /setRunTarget\(/, /location\.reload\(/, /remoteCaller\s*=/]) assert.doesNotMatch(code, banned)

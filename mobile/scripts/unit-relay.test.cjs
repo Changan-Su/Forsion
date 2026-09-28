@@ -195,7 +195,7 @@ const check = async (name, fn) => {
     await assert.rejects(r.text(), (e) => e instanceof TypeError && e.cause?.code === 'too_large')
   })
 
-  await check('11 S4 失败关闭:caller_unavailable / caller_unsupported 在 head 前 → 合成 503 JSON,不当网络错', async () => {
+  await check('11 S4 失败关闭:明确拒绝(caller_unavailable / caller_unsupported)在 head 前 → 合成 503 JSON(终局),不当网络错', async () => {
     for (const [code, want] of [['caller_unavailable', 'CALLER_UNAVAILABLE'], ['caller_unsupported', 'CALLER_UNSUPPORTED']]) {
       const f = createRelayFetch(makeNative(API, { request: (o, cb) => { cb({ type: 'error', code }); return Promise.resolve('x') } }), API, ready)
       const r = await f(`${API}/units/${U}/proxy/engine/agent/sessions`)
@@ -204,7 +204,20 @@ const check = async (name, fn) => {
     }
   })
 
-  await check('12 中继不可用(apiBase 断言失败 / web 路径)→ 503 CALLER_UNSUPPORTED,原生与 hub 都零请求', async () => {
+  await check('11b 评审 P1:换票撞 401 → 合成 401(同 hub、无 code:K6 判 account-auth? 去复检账号,不是终局的身份问题)', async () => {
+    const f = createRelayFetch(makeNative(API, { request: (o, cb) => { cb({ type: 'error', code: 'auth_expired' }); return Promise.resolve('x') } }), API, ready)
+    const r = await f(`${API}/units/${U}/proxy/engine/agent/sessions`)
+    assert.equal(r.status, 401)
+    const body = await r.json()
+    assert.equal(body.code, undefined, '401 不许带码(带 CALLER_* 会被判成终局)')
+  })
+
+  await check('11c 评审 P1:换票 / 登记途中断网或 5xx(原生归 network)→ TypeError(Failed to fetch),不合成 503(那是终局)', async () => {
+    const f = createRelayFetch(makeNative(API, { request: (o, cb) => { cb({ type: 'error', code: 'network', message: 'caller-token → 503' }); return Promise.resolve('x') } }), API, ready)
+    await assert.rejects(f(`${API}/units/${U}/proxy/engine/agent/events`), (e) => e instanceof TypeError && e.message === 'Failed to fetch' && e.cause?.code === 'network')
+  })
+
+  await check('12 中继不可用(apiBase 断言失败 / 原生缺席)→ 503 CALLER_UNSUPPORTED,原生与 hub 都零请求', async () => {
     hits.length = 0
     const nat = makeNative(API)
     const f = createRelayFetch(nat, API, { state: async () => 'unsupported' })
@@ -212,8 +225,6 @@ const check = async (name, fn) => {
     assert.equal(r.status, 503)
     assert.equal((await r.json()).code, 'CALLER_UNSUPPORTED')
     assert.equal(nat.calls.length, 0)
-    const web = createRelayFetch(null, API, ready)
-    assert.equal((await (await web(`${API}/units/${U}/proxy/unit/remote-access`)).json()).code, 'CALLER_UNSUPPORTED')
     assert.equal(hits.length, 0)
   })
 

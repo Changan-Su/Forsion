@@ -6,6 +6,7 @@
 import { resolve } from 'path'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { nativeApiOrigin } from './src/nativeApiBase'
 
 const DESKTOP_SRC = resolve(__dirname, '../desktop/frontend/src')
 const HERE = resolve(__dirname, 'src')
@@ -36,13 +37,13 @@ function engineSwap(): Plugin {
  * 原生侧(UnitPlugin:手机 Unit 身份与远端引擎中继)自取的 API 基址:构建时写进产物根的 `forsion-native.json`,
  * cap sync 后落在 APK 的 `assets/public/forsion-native.json`,原生用 AssetManager 读 —— 绝不经 JS 传入
  * (JS 能指定地址,就能让原生把调用方票连同请求发往任意主机)。
- * ⚠️ 规则必须与 src/capacitorAuth.ts 的 native 分支 apiOrigin()/apiBase() 逐字一致
- *    (VITE_API_ORIGIN 覆盖,缺省生产网关,去一个尾斜杠,再拼 /api);改一边必须改另一边。
- *    mobileShim 启动时还会断言 cloudApiBase() === 原生 apiBase,不等则中继标记不可用(失败关闭)。
+ * 规则与 src/capacitorAuth.ts 的 native 分支 apiOrigin()/apiBase() 共用 src/nativeApiBase.ts(再拼 /api);
+ * mobileShim 启动时还会断言 cloudApiBase() === 原生 apiBase,不等则中继标记不可用(失败关闭)。
+ * 仪器:scripts/unit-bridge.test.cjs 按 VITE_API_ORIGIN 表比对本函数与 apiBase() 的产出(所以这里 export)。
  * ⚠️ 与 origin/feat/phone-control(-t2) 的同名插件同源(K8 §7:先合者带进来,后合者删重复)。
  */
-function nativeConfig(apiOriginEnv: string | undefined): Plugin {
-  const apiBase = String(apiOriginEnv || 'https://api.forsion.net').replace(/\/$/, '') + '/api'
+export function nativeConfig(apiOriginEnv: string | undefined): Plugin {
+  const apiBase = nativeApiOrigin(apiOriginEnv) + '/api'
   return {
     name: 'mobile-native-config',
     apply: 'build',

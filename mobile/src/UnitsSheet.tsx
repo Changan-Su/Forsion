@@ -23,15 +23,16 @@ import type { UnitInfo } from '@/types'
 import { cloudApiBase } from '@/services/engine/targets'
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
 import type { DeviceStatus, ProbeResult, StickyRefusal } from '@/services/deviceStatus'
-import { isRunnableUnit, runOn, runRows, statusKey, type PhoneIssue, type RunRow } from './unitsSheetModel'
+import { isRunnableUnit, removeThisPhone, runOn, runRows, statusKey, type PhoneIssue, type RunRow } from './unitsSheetModel'
 import './unitsSheet.css'
 
 /**
  * 「在哪运行」生效 —— 整个弹层只有这一个出口(单测钉住:scripts/units-sheet-model.test.cjs)。
- * TODO(K6-S2):setFocusTarget(ref)(K6-S2 与本包并行,集成时补这一行);K7 之后改 setDraftLocation(ref, { explicit: true })(INTEGRATION R-21)。
+ * TODO(K6-S2):return setFocusTarget(ref)(K6-S2 与本包并行,集成时补这一行;返回它的 Promise —— 「移除本机」要等切回云端
+ * 真正生效后才删身份,见 unitsSheetModel.removeThisPhone);K7 之后改 setDraftLocation(ref, { explicit: true })(INTEGRATION R-21)。
  * 今天是空操作:请求仍发往云端,所以 currentRunLocation 也如实恒为云端,界面不假装已经切过去。
  */
-export function selectRunLocation(ref: TargetRef): void {
+export function selectRunLocation(ref: TargetRef): void | Promise<void> {
   void ref
 }
 
@@ -70,6 +71,8 @@ registerMessages({
   'unitm.remoteOff': { zh: '请在「{name}」上开启「允许远程会话」', en: 'Turn on "Allow remote sessions" on "{name}"' },
   'unitm.callerUnavailable': { zh: '这台手机暂时无法证明自己的身份，请稍后重试', en: "This phone couldn't verify its identity. Try again later" },
   'unitm.callerUnsupported': { zh: '服务器版本过旧，暂不支持从手机运行', en: 'The server is too old to run from a phone' },
+  'unitm.network': { zh: '暂时连不上 Forsion，请检查网络后重试', en: "Can't reach Forsion right now. Check your connection and try again" },
+  'unitm.signedOut': { zh: '登录已失效，请重新登录后再试', en: 'Your sign-in has expired. Sign in again and retry' },
   'unitm.nativeOnly': { zh: '仅在 Forsion 安卓 App 中可用', en: 'Only available in the Forsion Android app' },
   'unitm.openScreen': { zh: '打开设备界面', en: 'Open device screen' },
   'unitm.thisPhone': { zh: '本机', en: 'This phone' },
@@ -137,6 +140,8 @@ const ISSUE_KEY: Record<PhoneIssue, string> = {
   nativeOnly: 'unitm.nativeOnly',
   callerUnavailable: 'unitm.callerUnavailable',
   callerUnsupported: 'unitm.callerUnsupported',
+  network: 'unitm.network',
+  signedOut: 'unitm.signedOut',
 }
 
 export function MobileUnitsSheet(): React.ReactElement | null {
@@ -230,13 +235,20 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     flight.current?.abort()
     flight.current = null
     setBusy(null)
-    selectRunLocation(HOME_REF)
+    void selectRunLocation(HOME_REF)
   }
 
+  // 移除本机:先收掉在途的「点电脑」流程(它可能在移除之后才 select 那台电脑),再切回云端并等它生效,最后才删身份(评审 P2)。
   const forget = (): void => {
     setConfirmForget(false)
-    void (window.tangu?.unitForgetSelf?.() ?? Promise.resolve({ ok: false })).then(() => {
-      if (currentRunLocation().kind === 'unit') selectRunLocation(HOME_REF) // 当前目标是某台电脑 → 切回云端
+    flight.current?.abort()
+    flight.current = null
+    setBusy(null)
+    void removeThisPhone({
+      current: currentRunLocation,
+      select: selectRunLocation,
+      forget: () => window.tangu?.unitForgetSelf?.() ?? Promise.resolve({ ok: false }),
+    }).catch(() => ({ ok: false })).then(() => {
       setProbes({})
       setSticky({})
       loadSelf()

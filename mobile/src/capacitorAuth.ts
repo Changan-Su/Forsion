@@ -9,6 +9,7 @@ import { Capacitor } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { Preferences } from '@capacitor/preferences'
+import { nativeApiOrigin } from './nativeApiBase'
 
 const TOKEN_KEY = 'forsion_token'
 
@@ -24,18 +25,16 @@ export async function clearStoredToken(): Promise<void> {
   try { await Preferences.remove({ key: TOKEN_KEY }) } catch { /* ignore */ }
 }
 
-/** 生产网关。native 下 location.origin=https://localhost 永远不可能同源,缺省必须烤死生产地址。 */
-const PROD_ORIGIN = 'https://api.forsion.net'
-
 /**
- * Forsion 网关源:VITE_API_ORIGIN 覆盖(dev/自托管);native 缺省=生产,web(dev/preview)缺省=同源走代理。
- * ⚠️ native 分支的规则在 vite.config.ts 的 nativeConfig() 里还有一份(构建期写 forsion-native.json 给原生
- *    UnitPlugin 用),两处必须同步改;mobileShim 启动时断言两者相等,不等则手机中继失败关闭(P1-K8)。
+ * Forsion 网关源:VITE_API_ORIGIN 覆盖(dev/自托管);native 缺省=生产(location.origin=https://localhost 永远不可能同源,
+ * 必须烤死生产地址),web(dev/preview)缺省=同源走代理。
+ * native 分支与 vite.config.ts 的 nativeConfig()(构建期写 forsion-native.json 给原生 UnitPlugin)共用 nativeApiOrigin
+ * 这一份规则;mobileShim 启动时还断言两者相等,不等则手机中继失败关闭(P1-K8)。
  */
 export function apiOrigin(): string {
   const explicit = import.meta.env.VITE_API_ORIGIN
-  if (explicit) return String(explicit).replace(/\/$/, '')
-  return isNative() ? PROD_ORIGIN : location.origin
+  if (isNative()) return nativeApiOrigin(explicit)
+  return explicit ? String(explicit).replace(/\/$/, '') : location.origin
 }
 
 /** /api 基址。 */

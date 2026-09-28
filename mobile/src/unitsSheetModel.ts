@@ -7,9 +7,10 @@
  * - runOn:点一台电脑之后的流程 —— 懒登记本机 → 问那台电脑认不认这台手机(`GET /unit/remote-access`,经原生中继带票)
  *   → 需要就发起确认并每 2s 轮询(≤ 120s)→ 探一次引擎(`GET /engine/agent/sessions`,远端允许的基础档)→ 生效。
  *   生效 = 调注入的 select(ref);今天 UnitsSheet 里那一个 selectRunLocation 是空操作(TODO(K6-S2))。
+ * - removeThisPhone:「移除本机登记」—— 先切回云端(并等它生效)再移除,顺序由单测钉住(评审 P2)。
  */
 import type { UnitInfo } from '@/types'
-import type { TargetRef } from '@/services/engine/target'
+import { HOME_REF, type TargetRef } from '@/services/engine/target'
 import { deviceStatus, type DeviceStatus, type ProbeResult, type StickyRefusal } from '@/services/deviceStatus'
 
 export interface RunRow {
@@ -65,12 +66,19 @@ export function statusKey(row: Pick<RunRow, 'status' | 'capsReady'>, probing: bo
   }
 }
 
-/** 这台手机自身的状况(不是某台电脑的):显示成弹层上方的一条横幅。 */
-export type PhoneIssue = 'nativeOnly' | 'callerUnavailable' | 'callerUnsupported'
+/**
+ * 这台手机自身的状况(不是某台电脑的):显示成弹层上方的一条横幅。
+ * 按原因分(评审 P1):短暂失败(断网 / 5xx / 限流)是 network(稍后重试就好)、forsion_token 被拒是 signedOut(重新登录),
+ * 只有明确的拒绝才是 callerUnavailable —— 原先断网也显示「这台手机无法证明自己的身份」,文不对题。
+ */
+export type PhoneIssue = 'nativeOnly' | 'callerUnavailable' | 'callerUnsupported' | 'network' | 'signedOut'
 
+/** ensureRegistered 的 reject code(原生 UnitError)/ 中继合成的 CALLER_* 码 → 横幅。 */
 export function phoneIssueOfCode(code: string | undefined | null): PhoneIssue {
   if (code === 'native_only') return 'nativeOnly'
   if (code === 'caller_unsupported' || code === 'CALLER_UNSUPPORTED') return 'callerUnsupported'
+  if (code === 'network' || code === 'server_429' || (typeof code === 'string' && /^server_5\d\d$/.test(code))) return 'network'
+  if (code === 'auth_expired' || code === 'server_401' || code === 'not_signed_in') return 'signedOut'
   return 'callerUnavailable'
 }
 
@@ -85,7 +93,7 @@ export interface RunOnDeps {
   /** 经 window.fetch(中继面由原生带票)。网络错抛出。 */
   fetchJson(url: string, init?: RequestInit): Promise<{ status: number; json: unknown }>
   /** 生效:切运行位置。UnitsSheet 注入它那一个 selectRunLocation(今天空操作,TODO(K6-S2))。 */
-  select(ref: TargetRef): void
+  select(ref: TargetRef): void | Promise<void>
   sleep(ms: number): Promise<void>
   now(): number
   /** 过程中的状态更新(等待确认时显示「请在 X 上允许这台手机」)。 */
@@ -108,6 +116,17 @@ function callerCodeOf(json: unknown): string | null {
 }
 
 /**
+ * 这一步的回包是不是「手机自己的问题」(换哪台电脑都一样):中继合成的 503 CALLER_* 与 401(forsion_token 被 hub 拒 ——
+ * 中继换票撞 401 时合成的也是它)。是 → 横幅,不记到这台电脑头上。
+ */
+function phoneLevel(r: { status: number; json: unknown }): PhoneIssue | null {
+  const c = callerCodeOf(r.json)
+  if (c) return phoneIssueOfCode(c)
+  if (r.status === 401) return 'signedOut'
+  return null
+}
+
+/**
  * 点一台电脑。signal 中止(弹层关了 / 点了别的)→ cancelled,不调 select。
  * 任何一步拿到中继合成的 503 CALLER_* → 手机级横幅(换哪台电脑都一样),不记到这台电脑头上。
  */
@@ -126,7 +145,8 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
   let access = await get('/unit/remote-access')
   if (aborted()) return { kind: 'cancelled' }
   if (access === null) return { kind: 'device', probe: { ok: false, status: 0 } }
-  if (callerCodeOf(access.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(access.json)) }
+  const accessIssue = phoneLevel(access)
+  if (accessIssue) return { kind: 'phone', issue: accessIssue }
   if (access.status === 200) {
     let s = (access.json ?? {}) as AccessStatus
     const refusal = (st: AccessStatus): RunOnOutcome | null => {
@@ -139,7 +159,8 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
     if (s.caller === 'unconfirmed') {
       const req = await get('/unit/remote-access/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       if (aborted()) return { kind: 'cancelled' }
-      if (req && callerCodeOf(req.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(req.json)) }
+      const reqIssue = req && phoneLevel(req)
+      if (reqIssue) return { kind: 'phone', issue: reqIssue }
       if (req && req.status === 200) s = (req.json ?? {}) as AccessStatus
     }
     if (s.caller === 'pending' || s.caller === 'unconfirmed') {
@@ -156,7 +177,8 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
         access = await get('/unit/remote-access')
         if (aborted()) return { kind: 'cancelled' }
         if (access === null) return { kind: 'device', probe: { ok: false, status: 0 } }
-        if (callerCodeOf(access.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(access.json)) }
+        const pollIssue = phoneLevel(access)
+        if (pollIssue) return { kind: 'phone', issue: pollIssue }
         if (access.status !== 200) return { kind: 'device', probe: failOf(access.status, access.json) }
         s = (access.json ?? {}) as AccessStatus
       }
@@ -169,9 +191,29 @@ export async function runOn(apiBase: string, unitId: string, deps: RunOnDeps, si
   const probe = await get('/engine/agent/sessions')
   if (aborted()) return { kind: 'cancelled' }
   if (probe === null) return { kind: 'device', probe: { ok: false, status: 0 } }
-  if (callerCodeOf(probe.json)) return { kind: 'phone', issue: phoneIssueOfCode(callerCodeOf(probe.json)) }
+  const probeIssue = phoneLevel(probe)
+  if (probeIssue) return { kind: 'phone', issue: probeIssue }
   if (probe.status < 200 || probe.status >= 300) return { kind: 'device', probe: failOf(probe.status, probe.json) }
   deps.progress?.({ probe: { ok: true } })
-  deps.select({ kind: 'unit', unitId })
+  await deps.select({ kind: 'unit', unitId })
   return { kind: 'selected' }
+}
+
+export interface RemoveDeps {
+  /** 当前运行位置(TODO(K6-S2):focusRef())。 */
+  current(): TargetRef
+  /** 同 runOn 的 select:UnitsSheet 唯一的生效出口 selectRunLocation。K6-S2 之后它等切换(含重连)完成。 */
+  select(ref: TargetRef): void | Promise<void>
+  /** window.tangu.unitForgetSelf:删本地身份 + DELETE 名册那一行。 */
+  forget(): Promise<{ ok: boolean }>
+}
+
+/**
+ * 「移除本机登记」(评审 P2):**先**切回云端并等它生效,**再**移除。反过来的话,移除途中那台电脑的轮询 / SSE 重连还经中继发着,
+ * 撞 403(那行没了、票作废)→ 原生强制换票 → 懒登记 → 悄悄登记出一个新身份,电脑上刚被撤销就又弹「允许这台手机?」。
+ * (原生另有一道闩:移除后懒登记与自愈一律拒绝,直到下一次显式登记 —— 两道都在。)
+ */
+export async function removeThisPhone(deps: RemoveDeps): Promise<{ ok: boolean }> {
+  if (deps.current().kind === 'unit') await deps.select(HOME_REF)
+  return deps.forget()
 }
