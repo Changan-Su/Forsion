@@ -3291,6 +3291,15 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       histStep(e.shiftKey ? 'redo' : 'undo')
       return
     }
+    // Mod+Y = 重做(V-18,Windows 的标准重做键;文档模式里 PM 的 history keymap 本来就认)。画布态同样走时间线 ——
+    // 只拦 z 的话,舞台上按它什么都不做,卡内编辑时又被 PM 直接吃掉、绕开统一时间线(之后舞台的 Cmd+Z 次序错乱)。
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'y' || e.key === 'Y')) {
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      e.stopPropagation()
+      histStep('redo')
+      return
+    }
     if (e.key !== 'Escape') return
     const cur = editingRef.current
     if (!cur || !t.closest('.ProseMirror')) return

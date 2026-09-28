@@ -92,6 +92,7 @@
 //   C96 拖动中的卡压在文档序靠后的卡上面(V-10)
 //   C97 拖卡途中 ⠿/+ 把手隐藏(不悬在原位的空白画布上),松手后悬停照常出现(V-12)
 //   C98 方向键微移:选中 Frame 连辖域一起走;步长与仪表盘同一个 nudgeStep(吸附开 = 一格,关 = 8 / Shift 32)(V-11)
+//   C99 Mod+Y = 重做,舞台焦点与卡内编辑都走统一时间线(V-18)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -484,6 +485,67 @@ async function wave2(browser) {
     frameOk, JSON.stringify({ before: a98, after: b98 }))
   record('C98b 方向键步长与仪表盘同一个 nudgeStep:吸附开 24(Shift 同),关 8 / Shift 32',
     on1 === 24 && on2 === 24 && off1 === 8 && off2 === 32, steps98.join(' '))
+
+  // ── C99 Mod+Y 重做走统一时间线(V-18)────────────────────────────────────────────────
+  //  修前:捕获期只拦 z —— ① 舞台焦点下 Mod+Y 什么都不做;② 卡内编辑时 Mod+Y 被 PM 的 history keymap 直接吃掉,
+  //  重做了、时间线却不知道,之后在舞台按 Cmd+Z 退的是更早的形状挪动,不是刚重做回来的字。
+  const SEED99 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}],"elements":[{"id":"s1","type":"shape","shape":"rect","x":0,"y":300,"w":200,"h":120}]}',
+    '---', '', '# 重做', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const MOD99 = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const p99 = await open(browser, SEED99)
+  await p99.waitForTimeout(800)
+  const st99 = async () => {
+    const cv = await cvOf(p99)
+    return {
+      k1: (cv?.cards ?? []).find((c) => c.ref === 'k1')?.x,
+      s1: (cv?.elements ?? []).find((e) => e.id === 's1')?.x,
+      sy: (cv?.elements ?? []).find((e) => e.id === 's1')?.y,
+      text: await p99.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k1"]').textContent.trim()),
+    }
+  }
+  const k99 = await p99.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  const s99 = await p99.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s1"]').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 20 } })
+  // ① 舞台焦点:卡 → 形状各挪一下,两次撤销,Mod+Y 按时序重放(先卡)
+  await p99.mouse.click(k99.x, k99.y); await p99.keyboard.press('ArrowRight'); await p99.waitForTimeout(200)
+  await p99.mouse.click(s99.x, s99.y); await p99.keyboard.press('ArrowRight'); await p99.waitForTimeout(200)
+  const moved99 = await st99()
+  await p99.keyboard.press(`${MOD99}+z`); await p99.keyboard.press(`${MOD99}+z`); await p99.waitForTimeout(300)
+  const undone99 = await st99()
+  await p99.keyboard.press(`${MOD99}+y`); await p99.waitForTimeout(300)
+  const redo1 = await st99()
+  await p99.keyboard.press(`${MOD99}+y`); await p99.waitForTimeout(300)
+  const redo2 = await st99()
+  // ② 卡内编辑(与 ① 的结果无关:先挪一下形状,让时间线顶上恒有一格 'fm'):打字 → Esc → 舞台 Cmd+Z 退掉字 →
+  //    再进卡 Mod+Y 重做回来 → Esc → 舞台 Cmd+Z 必须退的是这段字,不是那一下形状挪动
+  const s99b = await p99.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s1"]').getBoundingClientRect(); return { x: r.left + 20, y: r.top + 20 } })
+  await p99.mouse.click(s99b.x, s99b.y); await p99.keyboard.press('ArrowDown'); await p99.waitForTimeout(250)
+  const b0 = await st99()
+  const k99b = await p99.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  await p99.mouse.click(k99b.x, k99b.y); await p99.waitForTimeout(150)
+  await p99.keyboard.press('Space'); await p99.waitForTimeout(300)
+  const inPm99a = await p99.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+  await p99.keyboard.type('XY'); await p99.waitForTimeout(300)
+  await p99.keyboard.press('Escape'); await p99.waitForTimeout(200)
+  await p99.keyboard.press(`${MOD99}+z`); await p99.waitForTimeout(300)
+  const b1 = await st99()
+  await p99.keyboard.press('Space'); await p99.waitForTimeout(300)
+  const inPm99 = await p99.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+  await p99.keyboard.press(`${MOD99}+y`); await p99.waitForTimeout(300)
+  const b2 = await st99()
+  await p99.keyboard.press('Escape'); await p99.waitForTimeout(200)
+  await p99.keyboard.press(`${MOD99}+z`); await p99.waitForTimeout(300)
+  const b3 = await st99()
+  await p99.close()
+  record('C99a 舞台焦点 Mod+Y = 重做,按时序重放(先卡后形状)',
+    moved99.k1 > 480 && moved99.s1 > 0 && undone99.k1 === 480 && undone99.s1 === 0
+      && redo1.k1 === moved99.k1 && redo1.s1 === 0 && redo2.k1 === moved99.k1 && redo2.s1 === moved99.s1,
+    JSON.stringify({ moved99, undone99, redo1, redo2 }))
+  record('C99b 卡内编辑 Mod+Y 也走时间线:重做回来的字,回舞台 Cmd+Z 退的正是它(形状不动)',
+    inPm99a && inPm99 && b1.text === '卡 K1' && b2.text === '卡 K1XY' && b3.text === '卡 K1' && JSON.stringify(b3.sy) === JSON.stringify(b0.sy),
+    JSON.stringify({ b0, b1, b2, b3, inPm99a, inPm99 }))
 }
 
 async function main() {
