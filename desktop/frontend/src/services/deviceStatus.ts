@@ -22,7 +22,7 @@
 import type { UnitInfo } from '../types'
 import { isTrustReason } from '../../../shared/remoteSessions'
 // 手机弹层(K8)/ 选择器(K7)按 reason 选文案要用到;从这里转出,消费方不必另找 shared 的相对路径。
-export { isTrustReason, RETRY_SOON_REASONS, type TrustReason } from '../../../shared/remoteSessions'
+export { isTrustReason, REMOTE_PROMPT_TTL_MS, RETRY_SOON_REASONS, ROSTER_LOOKUP_TIMEOUT_MS, type TrustReason } from '../../../shared/remoteSessions'
 
 export type DeviceStatus =
   | 'checking'

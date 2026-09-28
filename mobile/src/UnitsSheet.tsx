@@ -22,8 +22,7 @@ import { useApp } from '@/stores/appStore'
 import type { UnitInfo } from '@/types'
 import { cloudApiBase, focusRef, onFocusChange, setFocusTarget } from '@/services/engine/targets'
 import { HOME_REF, type TargetRef } from '@/services/engine/target'
-import type { ProbeResult, StickyRefusal } from '@/services/deviceStatus'
-import { isRunnableUnit, removeThisPhone, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RunRow } from './unitsSheetModel'
+import { beginAttempt, endAttempts, isRunnableUnit, noteAttempt, NO_MARKS, removeThisPhone, rowTone, runOn, runRows, statusKey, type PhoneIssue, type RowMarks, type RunRow } from './unitsSheetModel'
 import './unitsSheet.css'
 
 /**
@@ -155,8 +154,8 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   /** null=未登录(401);undefined=加载中。 */
   const [units, setUnits] = useState<UnitInfo[] | null | undefined>(undefined)
   const [self, setSelf] = useState<Self | null>(null)
-  const [probes, setProbes] = useState<Record<string, ProbeResult>>({})
-  const [sticky, setSticky] = useState<Record<string, StickyRefusal>>({})
+  // 每行的探针 / 粘滞拒绝:只经 beginAttempt / noteAttempt / endAttempts 改(谁新听谁,P1-KF 评审;组件关弹层时不卸载,表会留着)
+  const [marks, setMarks] = useState<RowMarks>(NO_MARKS)
   const [busy, setBusy] = useState<string | null>(null)
   const [issue, setIssue] = useState<PhoneIssue | null>(null)
   const [devicesOpen, setDevicesOpen] = useState(false)
@@ -183,7 +182,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       .then((r) => setUnits(r?.status === 200 ? ((r.json as { units?: UnitInfo[] } | null)?.units ?? []) : r?.status === 401 ? null : []))
       .catch(() => setUnits([]))
     loadSelf()
-    return () => { flight.current?.abort(); flight.current = null; setBusy(null) }
+    return () => { flight.current?.abort(); flight.current = null; setBusy(null); setMarks(endAttempts) } // 没人轮询了:不留「请允许」
   }, [open])
 
   // Android 系统返回:弹层开着时接管并关闭(同 SingleColumnHost 两个 sheet 的语义,事件可取消),
@@ -202,7 +201,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
   if (!open) return null
 
   const current = currentRunLocation()
-  const rows: RunRow[] = runRows(units || [], self?.unitId ?? null, current, probes, sticky)
+  const rows: RunRow[] = runRows(units || [], self?.unitId ?? null, current, marks.probes, marks.sticky)
   const devices = (units || []).filter((u) => isRunnableUnit(u, self?.unitId ?? null))
 
   const pick = (row: RunRow): void => {
@@ -211,11 +210,10 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     flight.current = ac
     setBusy(row.id)
     setIssue(null)
-    const note = (p: { probe?: ProbeResult; sticky?: StickyRefusal }): void => {
+    setMarks((m) => beginAttempt(m, row.id)) // 上一轮的「连不上」不许盖住这一轮的回答(评审 P2)
+    const note = (p: Parameters<typeof noteAttempt>[2]): void => {
       if (ac.signal.aborted) return
-      if (p.probe) setProbes((m) => ({ ...m, [row.id]: p.probe! }))
-      if (p.sticky) setSticky((m) => ({ ...m, [row.id]: p.sticky! }))
-      else if (p.probe?.ok) setSticky((m) => { const n = { ...m }; delete n[row.id]; return n })
+      setMarks((m) => noteAttempt(m, row.id, p))
     }
     void runOn(cloudApiBase(), row.id, {
       ensureSelf: () => window.tangu?.unitEnsureSelf?.() ?? Promise.resolve({ ok: false as const, code: 'native_only' }),
@@ -243,6 +241,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
     flight.current?.abort()
     flight.current = null
     setBusy(null)
+    setMarks(endAttempts)
     void selectRunLocation(HOME_REF)
   }
 
@@ -257,8 +256,7 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       select: selectRunLocation,
       forget: () => window.tangu?.unitForgetSelf?.() ?? Promise.resolve({ ok: false }),
     }).catch(() => ({ ok: false })).then(() => {
-      setProbes({})
-      setSticky({})
+      setMarks(NO_MARKS)
       loadSelf()
     })
   }

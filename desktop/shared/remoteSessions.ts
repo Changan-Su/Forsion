@@ -57,6 +57,14 @@ export function isTrustReason(v: unknown): v is TrustReason {
 /** 稍后再试就可能弹框的几种(冷却 ≤ 1 分钟 / 排满);其余要那台电脑上的人先做点什么(登录 / 同账号 / 在设置里允许)。 */
 export const RETRY_SOON_REASONS: ReadonlySet<TrustReason> = new Set<TrustReason>(['roster-unreachable', 'no-answer', 'busy'])
 
+/**
+ * 确认框的时序(P1-KF 评审):主进程 remoteSessions.ts 与手机 runOn 的等待截止**同源**。
+ * 执行设备先查名册(≤ ROSTER_LOOKUP_TIMEOUT_MS),查完才弹框并起 REMOTE_PROMPT_TTL_MS 的计时 —— 到点没人答 → reason no-answer。
+ * 手机从拿到 pending 起等,截止必须晚于「查名册 + 弹框时限」,否则会先于桌面放弃、把一个已经收掉的框当成「请允许」挂着。
+ */
+export const REMOTE_PROMPT_TTL_MS = 2 * 60_000
+export const ROSTER_LOOKUP_TIMEOUT_MS = 10_000
+
 export type GateBody = { code: RemoteGateCode; detail: string; state?: TrustState; reason?: TrustReason }
 export type GateResult = { ok: true } | { ok: false; status: 403; body: GateBody }
 
