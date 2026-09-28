@@ -10,7 +10,7 @@ import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
-import { attachSourceButton } from './sourceToggle'
+import { attachSourceButton, revealSource } from './sourceToggle'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
@@ -105,8 +105,10 @@ function katexInto(el: HTMLElement, latex: string, display: boolean): void {
   }
 }
 
-/** 离行渲染(点击回到源码可编辑)。preview=true → 作「本行实况预览」:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在下方,不拦鼠标(光标已在源码)。 */
-function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: number, preview = false): HTMLElement {
+/** 离行渲染(点击回到源码可编辑)。preview=true → 作「本行实况预览」:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在下方,不拦鼠标(光标已在源码)。
+ *  srcFrom 是**取值函数**(widget 的 getPos):装饰 key 不带位置(P-04),上方一打字 PM 就原样复用这份 DOM,
+ *  构建时捕获的数字会指向旧位置 —— 点公式 / `</>` 时现算。 */
+function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: () => number | undefined, preview = false): HTMLElement {
   if (preview) {
     const wrap = document.createElement(display ? 'div' : 'span')
     wrap.className = display ? 'math-preview math-preview--block' : 'math-preview math-preview--inline'
@@ -121,12 +123,15 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
   el.className = display ? 'math-rendered math-rendered--block' : 'math-rendered'
   el.contentEditable = 'false'
   katexInto(el, latex, display)
-  attachSourceButton(el, view, srcFrom, !display) // 悬停浮现的 `</>`:点它进源码(点公式本身同样进,这只是看得见的入口)
+  // 悬停浮现的 `</>`:点它进源码(点公式本身同样进,这只是看得见的入口)
+  attachSourceButton(el, view, () => { const at = srcFrom(); if (at != null) revealSource(view, at) }, !display)
   // 点渲染结果 → 把光标塞进源码(srcFrom+1,即开 `$` 之后)并置焦,该行随即露出源码可编辑。
   el.addEventListener('mousedown', (e) => {
     if (!view.editable) return // 只读视图:点公式不进入编辑态(否则会闪出源码)
     e.preventDefault()
-    const pos = Math.min(srcFrom + 1, view.state.doc.content.size)
+    const at = srcFrom()
+    if (at == null) return
+    const pos = Math.min(at + 1, view.state.doc.content.size)
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).setMeta(mathKey, { focus: true }))
     view.focus()
   })
@@ -307,10 +312,10 @@ function buildDecorations(state: EditorState): DecorationSet {
       if (onActiveLine) {
         // 本行 → 源码保持可编辑,同时给一个实况预览:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在源码下方。
         const anchor = sp.display ? cs + sp.to : cs + sp.from
-        decos.push(Decoration.widget(anchor, (v) => renderMath(v, sp.latex, sp.display, cs + sp.from, true), {
+        decos.push(Decoration.widget(anchor, (v, getPos) => renderMath(v, sp.latex, sp.display, getPos, true), {
           side: sp.display ? 1 : -1,
           ignoreSelection: true,
-          key: `p${cs + sp.from}:${sp.display ? 'b' : 'i'}:${sp.latex}`,
+          key: `p:${sp.display ? 'b' : 'i'}:${sp.latex}`, // 不带位置(P-04):预览不读位置,内容相同即可复用
         }))
         continue
       }
@@ -318,10 +323,12 @@ function buildDecorations(state: EditorState): DecorationSet {
       const to = cs + sp.to
       const { latex, display } = sp
       decos.push(Decoration.inline(from, to, { class: 'math-src-hidden' }))
-      decos.push(Decoration.widget(from, (v) => renderMath(v, latex, display, from), {
+      // ⚠️ key **不带位置**(评审 P-04):带上 from 的话,文首打一个字,下游每个公式的 key 都变,PM 把它们
+      //    整批销毁重建、逐个重跑 KaTeX(120 个公式每键 ~78ms)。位置改由 widget 的 getPos 在点击时现算。
+      decos.push(Decoration.widget(from, (v, getPos) => renderMath(v, latex, display, getPos), {
         side: -1,
         ignoreSelection: true,
-        key: `m${from}:${display ? 'b' : 'i'}:${latex}`,
+        key: `m:${display ? 'b' : 'i'}:${latex}`,
       }))
     }
     return false // 不深入内联
