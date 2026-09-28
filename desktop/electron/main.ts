@@ -2035,7 +2035,7 @@ app.whenReady().then(async () => {
   migrateEngineData() // 两层布局:顶层引擎条目 → ~/.forsion/tangu/ + ~/.tangu 软链改指(dev 家同法;须在 backend spawn/读盘之前)
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
   await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
-  // P1-K5:主进程文案(mt)的系统语言来源(界面覆盖值之后由 did-finish-load / ui:sync 转进来)。托盘、对话框都在这之后才建。
+  // P1-K5:主进程文案(mt)的系统语言来源(界面语言之后由渲染层经 ui:locale 报上来,P1-KF)。托盘、对话框都在这之后才建。
   initMainLocale({ systemLanguages: () => app.getPreferredSystemLanguages() })
   uiLocale.seed() // P1-KF:窗口载入前(托盘、启动期的通知 / 对话框)先用上次渲染层报来的界面语言;首次运行才回落系统语言
   // P1-K5:设备凭据(配对 / external token)迁出明文 shell 配置、进 safeStorage。必须是 configQueue 的第一个使用者:
