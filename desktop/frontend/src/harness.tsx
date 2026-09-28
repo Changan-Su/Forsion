@@ -715,19 +715,23 @@ if (new URLSearchParams(location.search).has('dock')) {
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
       unitsPairedList: async () => (cfg.unitHostEnabled ? [{ id: 'p1', name: '客厅 iPad', createdAt: 1 }] : []),
       unitsPairedRemove: async () => ({ ok: true }),
-      // P1-K5 &secrets=plaintext|locked:设备凭据降级 / 锁定态(SecretStorageNotice 截图用);缺省 = 正常(不渲染)。重试 → 恢复正常。
+      // P1-K5 &secrets=plaintext|locked|restart:设备凭据降级 / 锁定 / 要重启态(SecretStorageNotice 截图用);缺省 = 正常(不渲染)。
+      // 重试 / 重新登记 / 重启 → 恢复正常。restart = macOS 钥匙串被拒绝(这次运行拿不到系统加密)。
       ...(() => {
         const mode = new URLSearchParams(location.search).get('secrets')
         let st = mode === 'plaintext'
-          ? { level: 'plaintext', backend: 'basic_text', locked: [], lastError: null }
+          ? { level: 'plaintext', backend: 'basic_text', locked: [], restartRequired: false, lastError: null }
           : mode === 'locked'
-            ? { level: 'os', backend: 'keychain', locked: ['unitPairing'], lastError: 'decrypt-failed' }
-            : { level: 'os', backend: 'keychain', locked: [], lastError: null }
-        const ok = { level: 'os', backend: 'keychain', locked: [], lastError: null }
+            ? { level: 'os', backend: 'keychain', locked: ['unitPairing'], restartRequired: false, lastError: 'decrypt-failed' }
+            : mode === 'restart'
+              ? { level: 'unavailable', backend: 'keychain', locked: ['unitPairing'], restartRequired: true, lastError: 'os-crypto-unavailable' }
+              : { level: 'os', backend: 'keychain', locked: [], restartRequired: false, lastError: null }
+        const ok = { level: 'os', backend: 'keychain', locked: [], restartRequired: false, lastError: null }
         return {
           secretStorageStatus: async () => st,
           secretStorageRetry: async () => (st = ok),
           secretStorageResetUnitPairing: async () => (st = ok),
+          secretStorageRelaunch: async () => (st = ok),
         }
       })(),
       // LAN 探针桩:MacBook Air 的直连地址可达,别的一律探不通。

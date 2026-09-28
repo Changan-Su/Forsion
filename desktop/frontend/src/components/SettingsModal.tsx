@@ -96,6 +96,7 @@ import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry }
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
+import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import './settingsModal.css'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
@@ -1657,6 +1658,8 @@ export const SettingsModal: React.FC<{
                             placeholder={t('settings.external.tokenPlaceholder')}
                           />
                         </div>
+                        {/* P1-K5:已落盘为外部连接时,保存的 token 读不出来(钥匙串拒绝 / 被重置)/ 系统加密不可用 → 这里说清楚并给重试 / 重启 */}
+                        {isDesktop && mode === 'external' && <SecretStorageNotice slot="externalToken" />}
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <button className="btn ghost sm" onClick={test} disabled={testing || connCfgPending}>
                             {testing ? <Loader2 size={13} className="spin" /> : null} {t('settings.btn.testConnection')}
