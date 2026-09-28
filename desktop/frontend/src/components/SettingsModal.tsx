@@ -861,6 +861,8 @@ export const SettingsModal: React.FC<{
     }
   }, [p.open, isDesktop])
 
+  // 有账号 token(含已过期)时主进程恒以账号的 cloudUrl 覆盖:地址框只读,登录 / 重新登录也只走落盘值,不走看不见的残留草稿。
+  const cloudUrlLocked = !!authSt?.loggedIn
   const doForsionLogin = async (accountId?: string): Promise<void> => {
     if (!window.tangu?.forsionLogin) return
     if (authBusy.current) return
@@ -874,7 +876,7 @@ export const SettingsModal: React.FC<{
     try {
       const r = accountId
         ? await window.tangu.forsionSwitchAccount!(accountId)
-        : await window.tangu.forsionLogin(stored?.cloudUrl || undefined)
+        : await window.tangu.forsionLogin((cloudUrlLocked ? savedCfg?.cloudUrl : stored?.cloudUrl) || undefined)
       if (action !== authAction.current) return
       setStored((s) => (s ? { ...s, cloudUrl: r.cloudUrl } : s))
       refreshAuth()
@@ -1878,16 +1880,15 @@ export const SettingsModal: React.FC<{
                         <label><Globe2 size={11} style={{ verticalAlign: -1 }} /> {t('settings.forsion.cloudUrlLabel')}</label>
                         <div className="settings-inline-row">
                           {/* cloudUrl 是 managedKey(写 = 重启后端 + 重建 unit host):保留显式保存,不做失焦提交。
-                              有账号 token(loggedIn,含已过期)时主进程恒以账号地址覆盖 → 只读显示落盘值(不显示登录前残留的草稿),
-                              否则「保存」会静默回弹(09-28 用户报「改不了云端地址」)。 */}
+                              cloudUrlLocked 时只读显示落盘值,否则「保存」会静默回弹(09-28 用户报「改不了云端地址」)。 */}
                           <input
                             type="text"
-                            value={authSt?.loggedIn ? savedCfg?.cloudUrl ?? '' : stored.cloudUrl}
-                            readOnly={!!authSt?.loggedIn}
+                            value={cloudUrlLocked ? savedCfg?.cloudUrl ?? '' : stored.cloudUrl}
+                            readOnly={cloudUrlLocked}
                             onChange={(e) => edit({ cloudUrl: e.target.value })}
                             placeholder="https://api.forsion.net"
                           />
-                          {!authSt?.loggedIn && (
+                          {!cloudUrlLocked && (
                             <button
                               className="btn primary sm"
                               onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
@@ -1897,7 +1898,7 @@ export const SettingsModal: React.FC<{
                           )}
                         </div>
                         {commitErrorHint('cloudUrl')}
-                        <div className="hint">{t(authSt?.loggedIn ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}</div>
+                        <div className="hint">{t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}</div>
                       </div>
                     )}
 

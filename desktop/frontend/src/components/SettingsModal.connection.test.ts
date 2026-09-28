@@ -159,9 +159,9 @@ it('H1-2 选目录写盘失败后改填路径:绑着旧目录的「重试」当�
 
 /** 已登录时主进程 loadConfig 恒以账号的 cloudUrl 覆盖(token 绝不发往别的服务器):地址框只读、无「保存」,提示先退出登录。
  *  09-28 用户报「改不了云端地址」—— 以前可编辑可保存,保存后静默回弹。 */
-const openForsion = async (loggedIn: boolean): Promise<HTMLElement> => {
+const openForsion = async (loggedIn: boolean, tokenValid = true): Promise<HTMLElement> => {
   getConfig.mockResolvedValue({ ...saved, cloudUrl: 'https://acct.example' })
-  Object.assign(window.tangu!, { forsionLogin: vi.fn(), authStatus: vi.fn().mockResolvedValue({ loggedIn, tokenValid: true }) })
+  Object.assign(window.tangu!, { forsionLogin: vi.fn().mockResolvedValue({ cloudUrl: 'https://acct.example' }), forsionLogout: vi.fn(), authStatus: vi.fn().mockResolvedValue({ loggedIn, tokenValid }) })
   await act(async () => root.render(React.createElement(LocaleProvider, {
     children: React.createElement(SettingsModal, { ...props, open: true, initialTab: 'forsion', cfg: managedCfg, flatOn: false, onFlatChange: vi.fn(), glassOn: true, onClose: vi.fn(), onConfigChange, onGlassChange: vi.fn(), onReconnect } as any),
   })))
@@ -186,4 +186,14 @@ it('未登录(负对照):云端地址可编辑、有保存按钮', async () => {
   expect(field.querySelector('input')!.readOnly).toBe(false)
   expect(saveIn(field)).toBeDefined()
   expect(field.textContent).not.toContain(translate('settingsmodal.cloudUrl.lockedHint'))
+})
+
+it('token 已过期:地址照样只读(主进程仍按 token 覆盖),账号栏给出退出入口;重新登录走账号地址', async () => {
+  const field = await openForsion(true, false)
+  expect(field.querySelector('input')!.readOnly).toBe(true)
+  const account = host.querySelector<HTMLElement>('[data-setting-anchor="forsion-account"]')!
+  const buttons = [...account.querySelectorAll('button')]
+  expect(buttons.find((b) => b.textContent?.includes(translate('settings.forsion.logout'))), '过期态没有退出按钮:锁着地址却无路可走').toBeDefined()
+  await act(async () => buttons.find((b) => b.textContent?.includes(translate('settings.forsion.relogin')))!.click())
+  expect(window.tangu!.forsionLogin).toHaveBeenCalledWith('https://acct.example')
 })
