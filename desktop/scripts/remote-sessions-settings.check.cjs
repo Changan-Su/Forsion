@@ -1,6 +1,7 @@
 /**
  * 设置 ·「远程会话」页(P1 · K4):真组件 + 生产 CSS,Chromium 里点一遍(桩 window.tangu.remoteSessions,不连主进程)。
  * 覆盖:各状态 × 深浅色 × zh/en 无横向溢出、长设备名省略不撑宽;父开关关 / 设备凭据未加密时开关置灰;
+ *   「本账号的浏览器与网页版」三态(已允许 → 撤销 = 严格档 → 在这里允许;还没允许;本机没登录)—— 评审 P1/P2;
  *   选全自动先就地确认(没勾「我了解风险」不写)、确认后常驻警示;警示 / 确认条正文对比度 ≥ 4.5(深浅色);窄栏三档变单列。
  * 截图落 $TMPDIR/forsion-remote-sessions-settings/*.png(交付前自己看)。
  * Run: node scripts/e2e-editor.cjs --check=remote-sessions-settings   (worktree 里加 HARNESS_URL=http://localhost:<port>/harness.html)
@@ -75,6 +76,8 @@ async function main() {
     ['light-nohost', 'state=nohost'], ['light-insecure', 'state=insecure'], ['dark-insecure-en', 'state=insecure&dark&lang=en'],
     ['light-fullauto', 'state=fullauto'], ['dark-fullauto', 'state=fullauto&dark'], ['light-fullauto-en', 'state=fullauto&lang=en'],
     ['light-empty', 'state=empty'], ['light-off', 'state=off'],
+    ['light-strict', 'state=strict'], ['dark-strict', 'state=strict&dark'], ['light-strict-en', 'state=strict&lang=en'], ['dark-strict-en', 'state=strict&dark&lang=en'],
+    ['light-empty-en', 'state=empty&lang=en'], ['light-signedout', 'state=signedout'], ['dark-signedout-en', 'state=signedout&dark&lang=en'],
   ]) {
     await open(query)
     const o = await overflow()
@@ -94,6 +97,28 @@ async function main() {
   check('设备凭据未加密:开关显示关且置灰,挂 K5 提示', await page.locator('[data-setting-anchor="remote-sessions-switch"] [role="switch"]').isDisabled()
     && (await page.locator('[data-setting-anchor="remote-sessions-switch"] [role="switch"]').getAttribute('aria-checked')) === 'false'
     && (await page.locator('[data-secrets="plaintext"]').count()) === 1)
+
+  // 「本账号的浏览器与网页版」:撤销 → 严格档行(写明不再弹框)+「允许」→ 回到已允许(评审 P1:撤销 = D8 严格档,不是「下次再弹」)
+  await open('state=on')
+  await page.locator('[data-rs-revoke="account"]').click()
+  await page.locator('[data-rs-allow-account="strict"]').waitFor({ timeout: 3000 })
+  const strictText = await page.locator('[data-setting-anchor="remote-trusted-devices"]').textContent()
+  check('撤销账号条目 → 严格档行:写明只能查看 / 答审批 / 停止、不再弹框,可在这里允许', strictText.includes('已撤销') && strictText.includes('不会再弹框询问')
+    && (await page.evaluate(() => window.__rs.view().accountEntry)) === 'strict', strictText)
+  const rowGeo = await page.evaluate(() => {
+    const btn = document.querySelector('[data-rs-allow-account]').getBoundingClientRect()
+    const rev = document.querySelector('[data-rs-revoke]').getBoundingClientRect()
+    return { btnRight: Math.round(btn.right), revRight: Math.round(rev.right) }
+  })
+  check('「允许」与设备行的「撤销」同一右缘', Math.abs(rowGeo.btnRight - rowGeo.revRight) <= 1, rowGeo)
+  await page.locator('[data-rs-allow-account]').click()
+  await page.locator('[data-rs-revoke="account"]').waitFor({ timeout: 3000 })
+  check('在设置里点「允许」→ 回到已允许(撤销键回来)', (await page.evaluate(() => window.__rs.view().accountEntry)) === 'trusted')
+  await open('state=empty')
+  check('还没允许:账号行带「允许」,说明写 P2P 只能在这里允许', (await page.locator('[data-rs-allow-account="none"]').count()) === 1
+    && (await page.locator('[data-setting-anchor="remote-trusted-devices"]').textContent()).includes('P2P 连接不会弹框'))
+  await open('state=signedout')
+  check('本机没登录:不画账号行,如实说明', (await page.locator('[data-rs-allow-account]').count()) === 0 && (await page.locator('[data-rs-signed-out]').count()) === 1)
 
   // 长设备名(窄栏里放不下):省略号,不撑宽
   await page.setViewportSize({ width: 520, height: 1300 })

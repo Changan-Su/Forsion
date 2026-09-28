@@ -11,7 +11,8 @@
  *   R2 设置 › 远程会话:开关开、「本账号的浏览器与网页版」标注「更新时自动允许」;截图 zh
  *   R3 关开关 → 盘上 enabled=false;再开 → true(IPC 落盘)
  *   R4 选全自动:勾「我了解风险」确认 → config.json 只多 remote.maxApprovalMode=full-auto,其他段原样;常驻警示
- *   R5 撤销账号行 → 盘上 trusted=[]
+ *   R5 撤销账号行 → 盘上 trusted=[] + accountStrict 记下当前账号(D8 严格档,评审 P1);行变「已撤销」+「允许」
+ *   R5b 点「允许」(真 preload remoteSessions.allowAccount → IPC)→ 盘上账号行回来、accountStrict 清空
  *   R6 config:get(渲染层能读到的整份配置)里没有远程会话的开关 / 信任 / 审批档
  *   R7 设备切换器脚部:父开关下出现子开关,与设置页同一状态;截图
  * 负对照:把 main.ts 里 `void remoteSessions.init()` 那行删掉再 build → R1 红(文件不出现)、R2 挂在加载态。
@@ -121,6 +122,14 @@ async function main() {
     await fl.locator('[data-rs-revoke="account"]').click()
     const revoked = await waitFor(() => readRs()?.trusted?.length === 0)
     check('R5 撤销「本账号的浏览器与网页版」→ 盘上 trusted=[]', revoked && (await fl.locator('[data-rs-revoke="account"]').count()) === 0, readRs())
+    const strictOk = await waitFor(() => readRs()?.accountStrict?.length === 1 && typeof readRs().accountStrict[0].accountId === 'string')
+    await fl.locator('[data-rs-allow-account="strict"]').waitFor({ timeout: 5000 })
+    check('R5 撤销 = D8 严格档:盘上 accountStrict 记下当前账号,行变「已撤销」+「允许」', strictOk
+      && (await fl.locator('[data-setting-anchor="remote-trusted-devices"]').textContent()).includes('不会再弹框询问'), readRs())
+    await fl.screenshot({ path: path.join(shots, 'electron-remote-sessions-strict.png') })
+    await fl.locator('[data-rs-allow-account]').click()
+    const reallowed = await waitFor(() => readRs()?.accountStrict?.length === 0 && readRs()?.trusted?.some((r) => r.principal === 'account' && !r.preconfirmed))
+    check('R5b 设置里点「允许」→ 真 IPC allowAccount:盘上账号行回来、严格档清空', reallowed && await fl.locator('[data-rs-revoke="account"]').isVisible(), readRs())
 
     // R7 设备切换器子开关
     await mainWin.bringToFront()
