@@ -9,6 +9,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
 import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
+import { UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
@@ -402,6 +403,8 @@ const api = {
     ipcRenderer.on('ui:sync', listener)
     return () => ipcRenderer.removeListener('ui:sync', listener)
   },
+  // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
+  reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>

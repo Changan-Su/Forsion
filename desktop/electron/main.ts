@@ -7,7 +7,7 @@ import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } f
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
-import { normalizeUiSync } from '../shared/uiSync'
+import { normalizeUiSync, UI_LOCALE_CHANNEL } from '../shared/uiSync'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -46,7 +46,8 @@ import { waitForAccountRenderers } from './accountTransition'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
 import { createTray, refreshTrayMenu } from './tray'
-import { initMainLocale, mt, setMainLocale, UI_LOCALE_PREF_KEY } from './mainI18n'
+import { initMainLocale, mt } from './mainI18n'
+import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
 import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
@@ -839,6 +840,8 @@ let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null //
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+// P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
+const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
 // P1-K3:远程来源 run 的待批 → 系统通知(点击打开会话,通知上不放「批准」);60s 没人答 → 经 unit-hub 投收件箱给手机。逻辑全在 approvalDelivery.ts。
 // e2e 钩子双闸(非打包 + 显式 FORSION_E2E_APPROVAL_DELIVERY=1,同 FORSION_UNIT_AUTO_PAIR 口径;打包版 isPackaged 恒 true → 天然失效):
 // chat-events 台架是外部模式(桩引擎),这条订阅本该 idle —— 钩子让它改订 TANGU_BACKEND_URL,并把真 Notification 挂到
@@ -1421,13 +1424,9 @@ function createWindow(): void {
     deepLinkReady = false; mainPanelReady = false
     miniSession = { sessionId: null, runId: null }; miniAutoPanel?.refresh()
   })
-  // 主进程文案(托盘 / 对话框 / 通知,mainI18n)跟随界面语言:渲染层把结论落在 localStorage 这一个键(① 手选 / ③ IP 校正都写它;
-  // 没写 = 跟随系统,mainI18n 的回落同口径)。只读不判,不在主进程另写一份语言判定;之后的切换经 ui:sync 转进来。
-  const localeWc = mainWindow.webContents
-  localeWc.on('did-finish-load', () => {
-    const read = `(() => { try { return localStorage.getItem(${JSON.stringify(UI_LOCALE_PREF_KEY)}) } catch { return null } })()`
-    localeWc.executeJavaScript(read, false).then(setMainLocale, () => {})
-  })
+  // 主进程文案(托盘 / 对话框 / 通知,mainI18n)跟随界面语言:由渲染层挂载时与每次切换经 ui:locale 报上来的**生效**语言喂入
+  // (P1-KF,见 uiLocaleSync.ts)。这里刻意不再读 localStorage `tangu_locale`:那是「手选」键,② 系统 / ③ IP 判出的语言不写它,
+  // 读到 null 还会把渲染层已报上来的语言重置回系统。
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -2038,6 +2037,7 @@ app.whenReady().then(async () => {
   await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
   // P1-K5:主进程文案(mt)的系统语言来源(界面覆盖值之后由 did-finish-load / ui:sync 转进来)。托盘、对话框都在这之后才建。
   initMainLocale({ systemLanguages: () => app.getPreferredSystemLanguages() })
+  uiLocale.seed() // P1-KF:窗口载入前(托盘、启动期的通知 / 对话框)先用上次渲染层报来的界面语言;首次运行才回落系统语言
   // P1-K5:设备凭据(配对 / external token)迁出明文 shell 配置、进 safeStorage。必须是 configQueue 的第一个使用者:
   // loadConfig 要等它(external token 从这里解密),排在它前面的队列任务若调 loadConfig 就会互等。
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
@@ -3520,10 +3520,16 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return
     const state = normalizeUiSync(raw)
     if (!state) return
-    if (state.prefs && UI_LOCALE_PREF_KEY in state.prefs) setMainLocale(state.prefs[UI_LOCALE_PREF_KEY]) // 主进程文案(托盘 / 对话框 / 通知)跟着切语言
+    // ⚠️ 不从 prefs['tangu_locale'] 取主进程语言(P1-KF):那是手选键,任何字体 / 缩放广播都带着它的 null → 曾把中文界面的主进程文案重置成系统英文。
+    // 语言走下面的 ui:locale(发方窗口自己切语言时 i18n.tsx 会报;收方重放后也会再报一次同值,主进程同值不动)。
     for (const w of BrowserWindow.getAllWindows()) {
       if (w.webContents !== e.sender && !w.webContents.isDestroyed()) w.webContents.send('ui:sync', state)
     }
+  })
+  // P1-KF:渲染层的生效界面语言(四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框 / 远程会话确认框,全走 mt())。
+  ipcMain.on(UI_LOCALE_CHANNEL, (e, v: unknown) => {
+    if (!isTrustedSender(e)) return
+    uiLocale.report(v)
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),
