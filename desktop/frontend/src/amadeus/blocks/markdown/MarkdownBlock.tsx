@@ -56,6 +56,7 @@ import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './pa
 import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { serializeForSave } from './verbatim'
+import { restoreEscapeSentinels } from './literalEscape'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
@@ -216,7 +217,8 @@ export function stampedFileName(kind: string): string {
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))))
+  // restoreEscapeSentinels 必须在最后:用户写的转义(D-11)以占位穿过上面这串反转义,再换回 `\`(见 ./literalEscape)。
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
  *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
@@ -231,7 +233,7 @@ export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown)))))
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown))))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'

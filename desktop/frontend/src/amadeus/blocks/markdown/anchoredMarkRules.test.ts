@@ -26,7 +26,11 @@ const caretToEnd = (view: EditorView): void => {
 function firstPara(view: EditorView): { text: string; marked: string[] } {
   const p = view.state.doc.firstChild!
   const marked: string[] = []
-  p.forEach((n) => { if (n.isText && n.marks.length) marked.push(`${n.marks.map((m) => m.type.name).join('+')}:${n.text}`) })
+  // amadeusEscaped 是「源文里带反斜杠」的记账 mark(D-11,./literalEscape),不是格式,不计。
+  p.forEach((n) => {
+    const ms = n.isText ? n.marks.filter((m) => m.type.name !== 'amadeusEscaped') : []
+    if (ms.length) marked.push(`${ms.map((m) => m.type.name).join('+')}:${n.text}`)
+  })
   return { text: p.textContent, marked }
 }
 

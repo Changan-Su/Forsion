@@ -74,7 +74,10 @@ export function buildBlockString(block: PMNode): string {
     if (child.isText) {
       const isCode = child.marks.some((m) => m.type.name === 'code' || m.type.name === 'inlineCode')
       const text = child.text ?? ''
-      s += isCode ? ' '.repeat(text.length) : text
+      // 用户转义过的定界符(`\[\[`、`\$`、`\=\=`、`\%\%`、`\#`,D-11 的 amadeusEscaped mark)不参与匹配:换成占位,
+      // 双链 / 公式 / 高亮注释 / 标签胶囊一处全认。只换定界符 —— 双链名里被转义的 `_` / `|` 照常属于链接名。
+      const escaped = !isCode && child.marks.some((m) => m.type.name === 'amadeusEscaped')
+      s += isCode ? ' '.repeat(text.length) : escaped ? text.replace(/[[\]$=%#]/g, '\u0002') : text
     } else if (BREAK_NAMES.has(child.type.name)) {
       s += '\n'
     } else {
@@ -195,6 +198,8 @@ export function unescapeMathSource(md: string): string {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type MdNode = any
 const ESCAPES = 'amadeusEscapes'
+/** 公式体之外的转义:text.value 里的下标(已计入公式补回的反斜杠)。literalEscape.ts 据此拆出转义字面(D-11)。 */
+export const LITERAL_ESCAPES = 'amadeusLiteralEscapes'
 
 /** 默认 characterEscapeValue 出口(onexitdata)的照抄 + 记下 [value 下标, 源串偏移]。 */
 const escapeRecorder = {
@@ -256,15 +261,18 @@ export function restoreMathEscapes(tree: MdNode, source: string): void {
     if (delims.some((i) => escapedDollar.has(i))) continue
     bodies.push([toSource(sp.from + dl - 1) + 1, toSource(sp.to - dl)])
   }
-  if (!bodies.length) return
   texts.forEach((n, i) => {
     const ks: number[] = []
+    const lit: number[] = []
     for (const [k, at] of recs[i]) {
       if (bodies.some(([from, to]) => at - 1 >= from && at < to)) ks.push(k)
+      else lit.push(k)
     }
     let v: string = n.value
-    for (const k of ks.sort((a, b) => b - a)) v = v.slice(0, k) + '\\' + v.slice(k)
+    for (const k of [...ks].sort((a, b) => b - a)) v = v.slice(0, k) + '\\' + v.slice(k)
     n.value = v
+    // 公式外的转义留给 literalEscape.ts(D-11):下标顺移公式里补回的反斜杠数。
+    if (lit.length) (n.data ||= {})[LITERAL_ESCAPES] = lit.map((k) => k + ks.filter((x) => x < k).length)
   })
 }
 

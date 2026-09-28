@@ -14,7 +14,7 @@
 //   whitelist 评审附录 A / 拍板表里认定的既定规范化,断言「恰好规范成这个样子」,第二轮必须逐字。红 = exit 1。
 //   stable    首轮允许偏离(修前就有的一次性丢失,另记在残余风险里),但**第二轮必须逐字**(相对首轮落盘)——
 //             专抓「越存越多」(R-01 返修:读写两侧认公式不一致,反斜杠每存翻一倍,首轮看不出)。红 = exit 1。
-//   pending   已知未修、归别的波次/包(R-25 → 0b;R-01 余项 / D-11)。按逐字断言但只记 XFAIL,
+//   pending   已知未修、归别的波次/包(D-11 / R-01 余项已挪进 verbatim)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
 //             ⚠️ D-18(0b)起**未编辑的顶层块逐字写回原文**:病在序列化器里的条目,EDITHERE 要和病灶放在**同一块**
 //             (`${M} …`),否则逐字回填直接绕过序列化、XPASS 却什么都没修。附录 A 的规范化同理(*_edited 条目)。
@@ -137,7 +137,7 @@ const CASES = [
   // 行内公式里的 `\$`:scanMath 见 `$` 就收、不认 `\$`(mathLivePreview 顶注 ponytail),落盘侧认不出这个跨度;
   // 解析侧补了反斜杠就会越存越多,所以两侧都不认、维持旧行为 —— 要逐字得连 scanMath / unescapeMathSource 一起改。
   // 放进被编辑的块:未编辑的块 D-18 起逐字写回,病只剩在「被编辑、要重新序列化」的块里。
-  { id: 'r01.inline_dollar', bucket: P, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)', md: `${M} price $\\$5$ here\n`, forbid: /\\\\\$/ },
+  { id: 'r01.inline_dollar', bucket: V, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)—— D-11 起 `\\$` 按用户转义逐字写回', md: `${M} price $\\$5$ here\n`, forbid: /\\\\\$/ },
   { id: 'r01.punct_mix', bucket: V, md: `${M}\n\n$a\\,b \\| c \\% d \\# e \\_ f \\{g\\}$ 尾\n` },
   { id: 'r01.set_matrix_cn', bucket: V, md: `${M}\n\n集合 $\\{a,b\\}$ 与 $\\begin{matrix}1 \\\\ 2\\end{matrix}$ 尾\n` },
   { id: 'r01.single_line_display', bucket: V, md: `${M}\n\nseed\n\n$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$\n\nafter\n` },
@@ -146,7 +146,7 @@ const CASES = [
   { id: 'r01.control_cmds', bucket: V, md: `${M}\n\n$x_i + \\sum_{k} a*b$ ok\n\n$$\n\\frac{a}{b} + \\alpha_{1}\n$$\n` },
   { id: 'r01.escape_outside_math', bucket: V, why: '公式外的转义不许被补回(对照)', md: `${M}\n\nliteral \\*not em\\* and \\_x\\_ and $\\{y\\}$\n` },
   // 被转义的 `$` 不当定界符 —— 这条的旧病是 D-11(转义被剥,0b),但**绝不能**被本修复变成 `\\$x\\$`。
-  { id: 'r01.escaped_dollars', bucket: P, why: 'D-11:转义被剥(被编辑的块;未编辑的块 D-18 起逐字)', md: `${M} not math: \\$x\\$ ok\n`, forbid: /\\\\\$/ },
+  { id: 'r01.escaped_dollars', bucket: V, why: 'D-11 已修:用户的转义逐字写回', md: `${M} not math: \\$x\\$ ok\n`, forbid: /\\\\\$/, visible: '$x$' },
   // R-01 返修(评审阻断 R-01-growth):行内代码 / 链接地址里的 `$`、粗体里的货币挨着公式 —— 返修前每存一次反斜杠翻一倍。
   // 两侧现按同一份原文认公式:这些行里的公式可能认不出(首轮反斜杠一次性丢掉 = 修前行为),但第二轮必须逐字。
   { id: 'r01.grow_code_dollar', bucket: S, md: `${M}\n\n用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
@@ -174,6 +174,16 @@ const CASES = [
   { id: 'd12.dup_def_dest_next_line', bucket: V, md: `${M}\n\nsee [a][1] here\n\n[1]:\n  http://first.example\n\n[1]:\n  http://second.example\n` },
   { id: 'd12.dup_def_prefix_edited', bucket: W, why: 'D-12 取舍:被编辑的块里引用式链接写成行内链接(首个定义生效)', md: `${M} see [a][1] here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n`,
     golden: `${M}Z see [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n\n[1]: http://x.example/docs/v2\n` },
+
+  // ── D-11:用户写的反斜杠转义(verify-integrity-2/d11d12.cjs)—— 病在序列化器里,EDITHERE 与病灶同块 ──
+  // 修前:被编辑的块里转义被剥 —— `\#x` 进标签索引、`\[\[x\]\]` 变真双链、`\=\=` / `\%\%` 在 Obsidian 里成高亮 / 注释;
+  // 打开时编辑器也把它们渲染成双链 / 高亮(visible 看的就是字面还在)。
+  { id: 'd11.tag_edited', bucket: V, md: `${M} not a tag: \\#notatag and C\\# code\n` },
+  { id: 'd11.tag_line_start_edited', bucket: V, md: `\\#notatag ${M}\n` },
+  { id: 'd11.wiki_edited', bucket: V, md: `${M} literal \\[\\[not a link\\]\\] here\n`, visible: '[[not a link]]' },
+  { id: 'd11.hl_cmt_edited', bucket: V, md: `${M} literal \\=\\=not hl\\=\\= and \\%\\%not cmt\\%\\%\n`, visible: '==not hl== and %%not cmt%%' },
+  { id: 'd11.star_edited', bucket: V, md: `${M} literal \\*not em\\* and \\_x\\_ and 1\\. mid\n` },
+  { id: 'd11.in_strong_link_edited', bucket: V, md: `${M} **a\\#b** 与 [x\\]y](http://e.x) 与 C:\\\\\\#\n` },
 
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },
