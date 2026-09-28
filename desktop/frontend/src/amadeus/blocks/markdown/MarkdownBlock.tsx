@@ -89,7 +89,7 @@ import {
 import { wikilinkPlugin } from './wikilink'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
-import { applyTrigger, canAutoTriggerFromBlock, posAtTextAnchor, slashRange, splitTail, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
+import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, posAtTextAnchor, slashRange, splitTail, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles } from 'lucide-react'
@@ -603,8 +603,7 @@ export function MilkdownInner({
       // 唯一例外:标题正文允许以 `1. ` 开头；这里保留字面文字，不自动降成有序列表。
       if (event.key === ' ' && sel.empty && !event.metaKey && !event.ctrlKey && !event.altKey) {
         const trig = triggerAtCursor(sel.$from)
-        if (trig && canAutoTriggerFromBlock(sel.$from.parent.type.name, trig)
-          && applyTrigger(view, trig, { from: sel.$from.start(), to: sel.$from.pos })) {
+        if (trig && canAutoTriggerFromBlock(sel.$from.parent.type.name, trig) && applyTypedTrigger(view, trig, ' ')) {
           event.preventDefault()
           return true
         }

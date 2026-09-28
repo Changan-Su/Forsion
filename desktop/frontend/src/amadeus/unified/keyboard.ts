@@ -29,7 +29,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed } from './embedLayer'
 import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
-import { applyTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
+import { applyTypedTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 import { tableKeyPlugins } from './tableKeys'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
@@ -148,7 +148,7 @@ const enterRunsTrigger: Command = (state, dispatch, view) => {
   if (!empty || !view || !dispatch) return false
   const trig = triggerAtCursor($from)
   if (!trig || !canAutoTriggerFromBlock($from.parent.type.name, trig)) return false
-  return applyTrigger(view, trig, { from: $from.start(), to: $from.pos })
+  return applyTypedTrigger(view, trig) // 撤销一下回到字面触发符(K-21)
 }
 
 // 故意不接管「引用内回车 = 软换行」:AFFiNE 那样落到 md 是 `> a\\\n> b`(反斜杠续行),

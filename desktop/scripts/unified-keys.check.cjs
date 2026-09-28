@@ -826,6 +826,57 @@ async function main() {
         await page.close()
       }
     }
+
+    // K-21:撤销自动格式回到字面触发符(Notion 同):快打 `# ` 撤一下 = `# `、再撤 = 空行;回车入口 `#⏎` 撤一下 = `#`。
+    //       撤回来的字面 `# ` 落盘后重开仍是段落(依赖 K-20b 的 textSafe)。
+    if (want('K21')) {
+      const last = async (page) => (await shape(page)).split(' / ').slice(1).join(' / ')
+      for (const [name, typed, lit] of [['`# `', '# ', 'paragraph:"# "'], ['`- `', '- ', 'paragraph:"- "'], ['`1. `', '1. ', 'paragraph:"1. "']]) {
+        const page = await open(browser, '前段。\n')
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(700) // 与回车那组隔开
+        await page.keyboard.type(typed)
+        await page.waitForTimeout(100)
+        const after = await last(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(150)
+        const u1 = await last(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(150)
+        const u2 = await last(page)
+        check(`K21 快打 ${name} 后撤销:一下回到字面、两下回到空行`, !/^paragraph/.test(after) && u1 === lit && u2 === 'paragraph:""', `${after} → ${u1} → ${u2}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '前段。\n')
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(700)
+        await page.keyboard.type('#')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(100)
+        const after = await last(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(150)
+        const u1 = await last(page)
+        check('K21 回车入口 `#⏎` 后撤销一下 = 字面 `#`', after === 'heading1:""' && u1 === 'paragraph:"#"', `${after} → ${u1}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '前段。\n')
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(700)
+        await page.keyboard.type('# ')
+        await page.waitForTimeout(100)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(200)
+        const s = await reopenShape(page)
+        check('K21 撤回来的字面 `# ` 落盘重开仍是段落', s === 'paragraph:"前段。" / paragraph:"#"', s)
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }

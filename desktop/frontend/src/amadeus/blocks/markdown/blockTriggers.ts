@@ -6,6 +6,7 @@
 // 同级重打幂等;已在列表项内时 -/1./[] 改父列表类型/勾选态,不再嵌套包一层。
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Selection, type Transaction } from '@milkdown/kit/prose/state'
+import { closeHistory } from '@milkdown/kit/prose/history'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
 
@@ -97,6 +98,22 @@ export function triggerAtCursor($from: ResolvedPos): Trigger | null {
   const trig = matchTrigger(textBeforeCursor($from))
   if (trig?.kind === 'fold' && $from.parentOffset < $from.parent.content.size) return { kind: 'quote', rejoin: true }
   return trig
+}
+
+/**
+ * 键盘触发(行首触发符 + 空格 / 回车)专用的 applyTrigger:触发符与转换之间断开撤销分组(K-21)。
+ * `typed` = 触发键本身要落的字(空格入口传 ' ',回车入口不传):先作为一次**真实插入**,再断开分组做转换
+ * —— 撤销一下回到字面 `# `(Notion 同),而不是连 `#` 带空格一起没了(快打)或只剩 `#`(慢打)。
+ * 转换之后也断开一次,紧接着打的正文自成一组,撤销时先撤字、再撤格式。
+ * 返回值 = 这一键是否已被处理:空格已经插进去了就算转换失败也是 true(等同浏览器默认插空格)。
+ */
+export function applyTypedTrigger(view: EditorView, trig: Trigger, typed?: string): boolean {
+  const start = view.state.selection.$from.start()
+  if (typed) view.dispatch(view.state.tr.insertText(typed))
+  view.dispatch(closeHistory(view.state.tr))
+  const ok = applyTrigger(view, trig, { from: start, to: view.state.selection.from })
+  view.dispatch(closeHistory(view.state.tr))
+  return ok || !!typed
 }
 
 /**
