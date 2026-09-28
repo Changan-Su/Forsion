@@ -6,6 +6,21 @@
 
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin } from '@milkdown/kit/prose/state'
+import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
+
+/** 翻转 `pos` 所在**最内层**列表项的勾选态;该项不是待办(checked == null)返回 null。
+ *  鼠标点方框与键盘 Mod+Enter(unified/keyboard.ts,K-11)共用这一份 —— 只认最内层,
+ *  普通子项里按键不会越级翻转外层待办。 */
+export function toggleTaskTr(state: EditorState, pos: number): Transaction | null {
+  const $at = state.doc.resolve(pos)
+  for (let d = $at.depth; d >= 0; d--) {
+    const node = $at.node(d)
+    if (node.type.name !== 'list_item') continue
+    if (node.attrs.checked == null) return null
+    return state.tr.setNodeMarkup($at.before(d), undefined, { ...node.attrs, checked: !node.attrs.checked })
+  }
+  return null
+}
 
 export function taskCheckboxPlugin() {
   return $prose(
@@ -21,21 +36,10 @@ export function taskCheckboxPlugin() {
             // Only toggle when the click lands in the checkbox gutter (left of the content box).
             const rect = li.getBoundingClientRect()
             if (event.clientX - rect.left > 2) return false
-            const at = view.posAtDOM(li, 0)
-            const $at = view.state.doc.resolve(at)
-            for (let d = $at.depth; d >= 0; d--) {
-              const node = $at.node(d)
-              if (node.type.name === 'list_item' && node.attrs.checked != null) {
-                view.dispatch(
-                  view.state.tr.setNodeMarkup($at.before(d), undefined, {
-                    ...node.attrs,
-                    checked: !node.attrs.checked,
-                  }),
-                )
-                return true
-              }
-            }
-            return false
+            const tr = toggleTaskTr(view.state, view.posAtDOM(li, 0))
+            if (!tr) return false
+            view.dispatch(tr)
+            return true
           },
         },
       }),

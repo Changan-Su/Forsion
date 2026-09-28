@@ -763,7 +763,7 @@ There are three kinds of Enter — do not mix them up:
 |---|---|
 | `Enter` | Starts a new paragraph. In a heading, the left half stays a heading and the right half becomes body text; a folded heading expands first, then starts body text below it |
 | `Shift + Enter` | A line break inside the same paragraph — no new paragraph |
-| `⌘/Ctrl + Enter` | Inside a quote = a line break within the quote; inside a list = same as Enter, it splits the item; everywhere else = a new empty paragraph below, without splitting the current text |
+| `⌘/Ctrl + Enter` | Inside a to-do = check or uncheck it; inside a quote = a line break within the quote; inside any other list = same as Enter, it splits the item; everywhere else = a new empty paragraph below, without splitting the current text |
 | `Tab` | Indents the paragraph one level; inserts two spaces inside a code block (a multi-line selection is indented line by line); moves to the next cell in a table; sinks a list item |
 | `Shift + Tab` | The reverse of the above |
 | `Backspace` at line start | First outdents one level; at the left margin it follows a ladder: a non-empty heading drops to body text in one step → the list or quote wrapper comes off → the block merges into the one above |
@@ -876,7 +876,7 @@ Two things happen with a live selection that are worth knowing before they surpr
 
 Two more caret-level details:
 
-- A to-do's checkbox is drawn in the padding to the left of the list, and only a click in that gutter toggles it. A click even slightly to the right lands in the text and does nothing.
+- A to-do's checkbox is drawn in the padding to the left of the list, and only a click in that gutter toggles it. A click even slightly to the right lands in the text and does nothing. From the keyboard, put the caret in the to-do and press `⌘/Ctrl + Enter`.
 - An empty block the caret is sitting in shows a grey hint: a plain paragraph says "Type '/' for commands", a heading names its own level as "Heading {n}". The hint is suppressed inside quotes, callouts and code blocks.
 
 Wrapping with paired characters and tiered select-all both need "Upgrade legacy notes to v4 plain Markdown on open" under Settings → Workspace → Notes to stay on (it is on by default).

@@ -3,6 +3,7 @@
 // 光标落到段首、Shift+点击塌成光标、三击选不中整段。现在:按下不拦,拖动 >4px 才转成框选;
 // 块矩形之外的留白(块间缝/两侧余白)维持立即起框。「从行尾留白拉框选」(selection-display.check
 // 钉住的设计)照旧成立,这里另外验框完之后 Backspace 删的就是框住的块(PM 与 DOM 选区一致)。
+// K8b(K-11):待办上 Mod+Enter 翻转勾选,普通列表仍拆项。
 // 用法:npm run check:taskbox(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
 const os = require('os')
@@ -167,6 +168,57 @@ async function main() {
         check(`[${shell}] 块间缝按下仍立即起框,点一下落光标`, inGap && immediate && s.type === 'text' && s.from === s.to, JSON.stringify({ inGap, immediate, s }))
         await pg.close()
       }
+    }
+    // K8b(K-11,拍板 #3):待办上 Mod+Enter = 翻转勾选(与点方框同一个 toggleTaskTr),不新建项;
+    //   普通列表仍拆项;普通子项在待办下面时只认最内层(不越级翻外层待办)。光标经 PM 放好再等一帧按键。
+    {
+      const place = (pg, text, off) => pg.evaluate(({ text, off }) => {
+        const v = window.__upage.probe.view()
+        let at = null
+        v.state.doc.descendants((n, p) => {
+          if (at != null) return false
+          if (n.isTextblock && n.textContent === text) { at = p + 1 + off; return false }
+          return true
+        })
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+      }, { text, off })
+      const items = (pg) => pg.evaluate(() => {
+        const out = []
+        window.__upage.probe.view().state.doc.descendants((n) => {
+          if (n.type.name === 'list_item') out.push(`${n.attrs.checked == null ? '-' : n.attrs.checked ? 'x' : ' '}:${n.firstChild.textContent}`)
+          return true
+        })
+        return out.join(' | ')
+      })
+      const pg = await open(browser, '# T\n\n- [ ] 待办一\n- [ ] 待办二\n\n- 普通项\n\n- [ ] 父待办\n    - 子项\n', '')
+      await place(pg, '待办一', 1)
+      await pg.waitForTimeout(150)
+      const sel0 = await sel(pg)
+      await pg.keyboard.press('Meta+Enter')
+      await pg.waitForTimeout(1300)
+      const a = await items(pg)
+      const savedA = await pg.evaluate(() => (window.__upage.writes.at(-1) || {}).text || '')
+      const selA = await sel(pg)
+      check('K8b 待办上 Mod+Enter 翻转勾选并落盘,不新建项、光标不动',
+        a.startsWith('x:待办一 |  :待办二 | -:普通项') && /[-*] \[x\] 待办一/.test(savedA) && selA.type === 'text' && selA.from === sel0.from, `${a}  sel=${JSON.stringify(selA)}`)
+      await pg.keyboard.press('Meta+Enter')
+      await pg.waitForTimeout(200)
+      const b = await items(pg)
+      check('K8b 再按一次 Mod+Enter 取消勾选', b.startsWith(' :待办一 |  :待办二'), b)
+      await place(pg, '普通项', 1)
+      await pg.waitForTimeout(150)
+      await pg.keyboard.press('Meta+Enter')
+      await pg.waitForTimeout(200)
+      const c = await items(pg)
+      check('K8b 普通列表 Mod+Enter 仍拆项', c.includes('-:普 | -:通项'), c)
+      await place(pg, '子项', 2)
+      await pg.waitForTimeout(150)
+      await pg.keyboard.press('Meta+Enter')
+      await pg.waitForTimeout(200)
+      const d = await items(pg)
+      check('K8b 待办下的普通子项:只拆子项,外层待办勾选态不动', d.endsWith(' :父待办 | -:子项 | -:'), d)
+      await pg.close()
     }
   } finally {
     await browser.close()

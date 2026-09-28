@@ -31,6 +31,7 @@ import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
+import { toggleTaskTr } from '../blocks/markdown/taskList'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -244,10 +245,21 @@ const enterCmd: Command = chain(
   enterKeepIndent,
 )
 
-/** Mod+Enter:引用内 = 块内换行;列表内 = 等同回车(拆项);其余 = 下方直接新建空段落(不拆分文本)。 */
+/** Mod+Enter:待办内 = 翻转勾选;引用内 = 块内换行;列表内 = 等同回车(拆项);其余 = 下方直接新建空段落(不拆分文本)。
+ *  待办那条是拍板 #3(K-11,对齐 Notion 的 Cmd+Enter):此前唯一的键盘路径是 ← ← Shift+← x Enter,
+ *  几乎无从发现。只认**最内层**列表项是待办(与鼠标点方框同一个 toggleTaskTr);普通列表照旧拆项,
+ *  Mod-L 仍是左对齐(不跟 Obsidian 抢那颗键)。待办包在引用/callout 里时,离光标更近的那层赢。 */
 const modEnterCmd: Command = (state, dispatch) => {
   const { $from } = state.selection
-  if (blockquoteDepth($from) != null) {
+  const li = listItemDepth($from)
+  const bq = blockquoteDepth($from)
+  if (li != null && (bq == null || li > bq) && $from.node(li).attrs.checked != null) {
+    const tr = toggleTaskTr(state, $from.pos)
+    if (!tr) return false
+    dispatch?.(tr.scrollIntoView())
+    return true
+  }
+  if (bq != null) {
     const br = state.schema.nodes.hardbreak
     if (!br) return false
     dispatch?.(state.tr.replaceSelectionWith(br.create(), false).scrollIntoView())
