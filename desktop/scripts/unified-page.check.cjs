@@ -547,16 +547,21 @@ async function main() {
     )
     await p7c.close()
 
-    // P8:＋ 在下方插入段落并聚焦(打字直接落新段)。
+    // P8:＋ 在下方插入新块并当场打开块选择器(新块里是 ＋ 替用户敲的 `/`,B-19);Esc 关菜单把 `/` 删掉,
+    //     打字直接落进新段。
     await hoverBlock(p7, `${PM} > p`)
     await p7.click('.unified-gutter .block-add')
+    await p7.waitForTimeout(250)
+    const p8menu = await p7.locator('.slash-menu').count()
+    await p7.keyboard.press('Escape')
+    await p7.waitForTimeout(150)
     await p7.keyboard.type('新插入段')
     await p7.waitForTimeout(200)
     const p8 = await p7.evaluate((s) => {
       const ps = [...document.querySelector(s).querySelectorAll(':scope > p')].map((x) => x.textContent)
       return ps
     }, PM)
-    record('P8 ＋ 插入下方段落并聚焦', p8[0] === '段一。' && p8[1] === '新插入段', JSON.stringify(p8))
+    record('P8 ＋ 插入下方新块、开 slash 菜单,Esc 清掉 `/` 后打字进新段', p8menu === 1 && p8[0] === '段一。' && p8[1] === '新插入段', JSON.stringify({ p8menu, p8 }))
 
     // P9:点 ⠿ → 菜单;转换为标题 2;再点 ⠿ → 删除。
     await hoverBlock(p7, `${PM} > p`) // 段一

@@ -31,12 +31,13 @@ import { executeMoveBelowRow, executeMoveIntoCell, executePair, mintCardCopies }
 import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
+import { markMachineSlash } from '../blocks/markdown/machineSlash'
 import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
-  'blocklayer.addBelow': { zh: '在下方插入块', en: 'Add block below' },
+  'blocklayer.addBelow': { zh: '在下方插入块（按住 Alt 点击插到上方）', en: 'Add block below (Alt-click to add above)' },
   'blocklayer.cardGrab': { zh: '选中所在卡片，按住拖动整卡', en: 'Select card, hold to drag it' },
   'blocklayer.expandChildren': { zh: '展开子项', en: 'Expand children' },
   'blocklayer.foldChildren': { zh: '折叠子项', en: 'Collapse children' },
@@ -45,6 +46,29 @@ registerMessages({
   'blocklayer.phParagraph': { zh: "输入 '/' 唤起命令", en: "Type '/' for commands" },
   'blocklayer.phHeading': { zh: '标题 {n}', en: 'Heading {n}' },
 })
+
+/** ＋ 的落点:插什么、插在哪、光标(= `/` 之后)在哪(B-19 / B-19b)。
+ *  列表项 → 同级新项(待办项新项不带勾);列表整体(首项归外壳)→ 按它的首项算;其余 → 块前 / 块后一个段落。 */
+export function plusInsert(state: EditorState, node: ProseNode, pos: number, above: boolean): { at: number; node: ProseNode; caret: number } | null {
+  const { schema } = state
+  const para = schema.nodes.paragraph
+  if (!para) return null
+  const slashPara = para.create(null, schema.text('/'))
+  let itemPos: number | null = null
+  if (node.type.name === 'list_item') itemPos = pos
+  else if (/_list$/.test(node.type.name) && node.firstChild?.type.name === 'list_item') itemPos = pos + 1
+  const item = itemPos == null ? null : state.doc.nodeAt(itemPos)
+  if (item && itemPos != null) {
+    const attrs = { ...item.attrs, ...(item.attrs.checked != null ? { checked: false } : {}) }
+    const li = item.type.createAndFill(attrs, slashPara)
+    if (li) {
+      const at = above ? itemPos : itemPos + item.nodeSize
+      return { at, node: li, caret: at + 3 } // li 开 + 段开 + `/`
+    }
+  }
+  const at = above ? pos : pos + node.nodeSize
+  return { at, node: slashPara, caret: at + 2 } // 段开 + `/`
+}
 
 export interface BlockLayerHooks {
   /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。
@@ -1129,18 +1153,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         add.className = 'block-add'
         add.textContent = '＋'
         add.title = translate('blocklayer.addBelow')
+        // ＋(B-19,对标 Notion):插一个新块并当场打开块选择器(新块里先放一个 `/` 唤起 slash 菜单;
+        // Esc / 点空白关掉时 MarkdownBlock 把这个 `/` 删掉,见 machineSlash)。按住 Alt 点 = 插到上方。
+        // 列表项上点(B-19b)插的是同级新项 —— 此前往列表中间塞了个段落,列表被劈成两段、有序列表从 1 重新编号。
         add.addEventListener('click', (e) => {
           e.stopPropagation()
           const view = viewRef
           const a = activeRef
           if (!view || !a) return
-          const paragraph = view.state.schema.nodes.paragraph
-          if (!paragraph) return
-          const at = a.pos + a.node.nodeSize
-          let tr = view.state.tr.insert(at, paragraph.create())
-          tr = tr.setSelection(TextSelection.near(tr.doc.resolve(at + 1))).scrollIntoView()
+          const plan = plusInsert(view.state, a.node, a.pos, e.altKey)
+          if (!plan) return
+          view.focus() // 先聚焦:slash 插件只在编辑器持焦时报菜单
+          let tr = view.state.tr.insert(plan.at, plan.node)
+          tr = tr.setSelection(TextSelection.create(tr.doc, plan.caret)).scrollIntoView()
+          markMachineSlash(view, plan.caret)
           view.dispatch(tr)
-          view.focus()
           hide()
         })
 

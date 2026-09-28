@@ -16,6 +16,7 @@
 //   B17  为触发 slash 补的那个空格不留在转换结果里(`段甲内容 /h2` → `## 段甲内容`)(B-17 只修这半)
 //   B18  不适用就不列:单元格里 `/` 不开菜单(一项都做不成);列表项里 slash 不列「分栏 / 卡片」;
 //        块菜单「移到新列」只对顶层单块列出(B-18)
+//   B19  ＋ 插新块并当场开 slash 菜单,Esc 把 ＋ 敲的 `/` 删干净;Alt+点 = 插到上方;列表项上点 = 同级新项、列表不劈(B-19 / B-19b)
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -616,6 +617,72 @@ async function main() {
         const para = await page.evaluate(() => [...document.querySelectorAll('.unified-block-menu button')].map((b) => b.textContent.trim()))
         await page.keyboard.press('Escape')
         check('B18c 列表项不列「移到新列」,顶层段落列', open1 && open2 && !li.includes('移到新列') && li.includes('删除') && para.includes('移到新列'), JSON.stringify({ li: li.includes('移到新列'), para: para.includes('移到新列') }))
+      }
+    }
+
+    if (want('B19')) {
+      /** 悬停 prefix 那一块(sel 缺省 = 顶层块;列表项传 'li')→ 点 ＋(可带 Alt)。 */
+      const clickPlus = async (prefix, { alt = false, sel = ':scope > *' } = {}) => {
+        const r = await page.evaluate(({ PM, prefix, sel }) => {
+          const el = [...document.querySelector(PM).querySelectorAll(sel)].find((x) => x.firstElementChild ? x.firstElementChild.textContent.trim().startsWith(prefix) : x.textContent.trim().startsWith(prefix))
+          if (!el) return null
+          const b = el.getBoundingClientRect()
+          return { x: b.x, y: b.y, h: b.height }
+        }, { PM, prefix, sel })
+        if (!r) return false
+        await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+        await page.waitForTimeout(260)
+        const a = await page.evaluate(() => { const el = document.querySelector('.unified-gutter[data-show="true"] .block-add'); if (!el || getComputedStyle(el).display === 'none') return null; const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } })
+        if (!a) return false
+        if (alt) await page.keyboard.down('Alt') // mouse.click 不收 modifiers,修饰键得真按住
+        await page.mouse.click(a.x, a.y)
+        if (alt) await page.keyboard.up('Alt')
+        await page.waitForTimeout(250)
+        return true
+      }
+      // B19a ＋ → 下方新块 + slash 菜单开;Esc → `/` 删掉,留一个空段,接着打字落在新段。
+      {
+        const nm = await load(page, '段甲。\n\n段乙。\n')
+        const ok = await clickPlus('段甲')
+        const menu = await waitSel(page, '.slash-menu', 1500)
+        const mid = await shape(page)
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(150)
+        const after = await shape(page)
+        await page.keyboard.type('新段')
+        const md = await mdOf(page, nm)
+        check('B19a ＋ 开 slash 菜单;Esc 清掉 `/`;接着打字进新段', ok && menu && mid.join(' / ') === '段甲。 / / / 段乙。' && after.join(' / ') === '段甲。 /  / 段乙。' && md === '段甲。\n\n新段\n\n段乙。\n', JSON.stringify({ mid, after, md }))
+      }
+      // B19b ＋ 后直接选 slash 项 = 新块就是那一类(标题 1)。
+      {
+        const nm = await load(page, '段甲。\n\n段乙。\n')
+        await clickPlus('段甲')
+        await waitSel(page, '.slash-menu', 1500)
+        await page.keyboard.type('h1')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('新标题')
+        const md = await mdOf(page, nm)
+        check('B19b ＋ → 选「标题 1」→ 新块是标题', md === '段甲。\n\n# 新标题\n\n段乙。\n', JSON.stringify(md))
+      }
+      // B19c Alt+＋ = 插到上方。
+      {
+        const nm = await load(page, '段甲。\n\n段乙。\n')
+        await clickPlus('段乙', { alt: true })
+        await waitSel(page, '.slash-menu', 1500)
+        await page.keyboard.press('Escape')
+        await page.keyboard.type('上方')
+        const md = await mdOf(page, nm)
+        check('B19c Alt+点 ＋ = 插到上方', md === '段甲。\n\n上方\n\n段乙。\n', JSON.stringify(md))
+      }
+      // B19d 有序列表非末项上点 ＋ → 同级新项,列表不劈、编号连续。
+      {
+        const nm = await load(page, '1. 项一\n2. 项二\n3. 项三\n\n段尾。\n')
+        const ok = await clickPlus('项二', { sel: 'li' })
+        await waitSel(page, '.slash-menu', 1500)
+        await page.keyboard.press('Escape')
+        await page.keyboard.type('新项')
+        const md = await mdOf(page, nm)
+        check('B19d 列表项上 ＋ = 同级新项(不劈列表)', ok && md === '1. 项一\n2. 项二\n3. 新项\n4. 项三\n\n段尾。\n', JSON.stringify(md))
       }
     }
 

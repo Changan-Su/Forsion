@@ -90,6 +90,7 @@ import { wikilinkPlugin } from './wikilink'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
+import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
@@ -1560,9 +1561,24 @@ export function MilkdownInner({
           ctx={slash.ctx}
           unified={unified}
           editorFocused={editorFocused}
-          onPick={(it) => { setSlash(null); onSlashPick(it) }}
+          onPick={(it) => {
+            setSlash(null)
+            getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), slash.from) }) // 选中了:标记作废
+            onSlashPick(it)
+          }}
           onClose={() => {
-            slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
+            // ＋ 替用户敲的 `/`(B-19):关菜单 = 不要这个选择器了 → 连查询一起删掉,不留残渣。
+            // 用户自己敲的 `/` 照旧留成字面,且同一个 '/' 不再弹(Esc 闩锁)。
+            let cleared = false
+            getInstance()?.action((ctx) => {
+              const view = ctx.get(editorViewCtx)
+              if (!takeMachineSlash(view, slash.from)) return
+              const { doc } = view.state
+              if (slash.from < 1 || slash.to > doc.content.size || doc.textBetween(slash.from - 1, slash.from) !== '/') return
+              view.dispatch(view.state.tr.delete(slash.from - 1, slash.to))
+              cleared = true
+            })
+            if (!cleared) slashDismissedFrom.current = slash.from // Esc:同一 '/' 不再弹(留成字面文本)
             setSlash(null)
           }}
         />
