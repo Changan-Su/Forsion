@@ -67,6 +67,8 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
+import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
+import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
@@ -568,6 +570,32 @@ const keepAwake = createKeepAwake({
   stop: (id) => powerSaveBlocker.stop(id),
 })
 
+// P1-K4 ── 「允许远程会话」开关 / 调用方首次本机确认 / 远程会话最高审批档(electron/remoteSessions.ts)。
+// 只管 unitWeb 的 /engine(G9);开关与信任落 userData/remote-sessions.json,审批档只写 config.json 的 remote.maxApprovalMode。
+// init 在 deviceSecrets.init 之后(K5 门控要有状态);K2 合入时 isLocked 改接 remoteSafety(R-26)。
+const remoteSessions = createRemoteSessions({
+  file: () => join(app.getPath('userData'), REMOTE_SESSIONS_FILE),
+  unitHostEnabled: async () => (await readShellConfig()).unitHostEnabled === true,
+  readCap: async () => normalizeCap((await readHomeConfig()).remote?.maxApprovalMode),
+  writeCap: (m) => configQueue(() => updateHomeConfig((home) => withRemoteCap(home, m))),
+  accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+  lookupUnit: async (unitId) => lookupRosterUnit({ base: (await loadConfig()).cloudUrl, token: loadTanguCreds().token || '' }, unitId),
+  confirm: async (opts, signal) => {
+    showMainWindow()
+    // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环 → unitWeb / 引擎代理全挂;拿不到窗就不弹
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+    if (!win) return null
+    const r = await dialog.showMessageBox(win, { ...opts, signal })
+    return signal.aborted ? null : r.response === 0
+  },
+  permitted: () => deviceSecrets.remoteSessionsPermitted(),
+  isLocked: () => false,
+  onChanged: (view) => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('remoteSessions:changed', view)
+  },
+  log: (m) => console.log(m),
+})
+
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
   let cur: Partial<TanguStoredConfig> = {}
   try { cur = JSON.parse(await readFile(configPath(), 'utf8')) } catch { /* 无文件 → 空 */ }
@@ -981,6 +1009,7 @@ async function doRefreshUnitHost(): Promise<void> {
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
   if (unitHost) { unitHost.stop(); unitHost = null }
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
+  remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
   if (!stored.unitHostEnabled) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
@@ -1117,9 +1146,11 @@ async function doRefreshUnitHost(): Promise<void> {
       return existsSync(dev) ? dev : null
     },
     log: (m: string) => console.log(m),
+    remoteAccess: remoteSessions.gate, // P1-K4:会话档闸(同步;K2 的 remoteLock 放在相邻一行)
   }
   // 配对名单在队列里现读,别用开头那份快照:上面几处 await 期间用户可能刚撤销了设备,旧快照会把它重新放行
   unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
+  await remoteSessions.ready // P1-K4:迁移读完再开门(之前闸本就 fail closed,这里只为首个请求拿到真状态)
   try {
     // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
     const want = stored.unitWebPort || 8791
@@ -1985,6 +2016,8 @@ app.whenReady().then(async () => {
   // P1-K5:设备凭据(配对 / external token)迁出明文 shell 配置、进 safeStorage。必须是 configQueue 的第一个使用者:
   // loadConfig 要等它(external token 从这里解密),排在它前面的队列任务若调 loadConfig 就会互等。
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
+  void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
+  deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
@@ -2110,6 +2143,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('config:get', () => effectiveConfig())
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
+  registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
     // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
@@ -3056,7 +3090,7 @@ app.whenReady().then(async () => {
         await chWipe?.afterWipe()
       }
       if (opts?.desktop) {
-        for (const f of ['tangu-desktop-config.json', 'amadeus-config.json']) {
+        for (const f of ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE]) { // P1-K4:remote-sessions.json(重置远程会话开关与信任)
           await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
         }
         await deviceSecrets.wipe().catch(() => {}) // P1-K5:device-secrets.json(配对 / external token)

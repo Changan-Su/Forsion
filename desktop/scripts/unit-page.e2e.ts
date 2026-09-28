@@ -17,6 +17,7 @@ import { chromium } from 'playwright-core'
 import { IPC } from '../shared/amadeus/ipc'
 import { createRequire } from 'node:module'
 import { startUnitWeb, type PairedDevice } from '../electron/unitWeb'
+import { createRemoteSessions } from '../electron/remoteSessions' // P1-K4:真闸(开关 + 会话档),文件与名册换内存
 import type { VaultFace } from '../electron/amadeus/ipc'
 
 // 可编剧假引擎(聊天面 e2e 共用):第 10 步的审批卡要一条真 run 的事件流(approval_request + 挂住)。
@@ -113,7 +114,20 @@ async function main(): Promise<void> {
     if (ch === IPC.savePage) for (const s of vaultSubs) s(IPC.externalChange, args[0], origin ?? null)
     return r
   }
+  // P1-K4:两台 unitWeb 都挂真的远程会话闸(同一个控制器;局域网配对 = paired,开关开即会话档)。
+  // 第 10 步末尾把开关关掉:已有审批卡仍能批(基础档),新发消息出本地化「远程会话未开启」(会话档)。
+  let rsDisk: string | null = JSON.stringify({ v: 1, enabled: true, migratedFromUnitHost: false, trusted: [] })
+  const remoteSessions = createRemoteSessions({
+    file: () => '/e2e/remote-sessions.json',
+    unitHostEnabled: async () => true,
+    readCap: async () => 'auto-edit', writeCap: async () => {},
+    accountId: () => null, lookupUnit: async () => 'unreachable', confirm: async () => null,
+    permitted: () => true, isLocked: () => false, onChanged: () => {}, log: () => {},
+    readFile: async () => rsDisk, writeFile: async (_f, d) => { rsDisk = JSON.stringify(d) },
+  })
+  await remoteSessions.init()
   const handle = await startUnitWeb({
+    remoteAccess: remoteSessions.gate,
     getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN', remoteMark: 'E2E_REMOTE_MARK' }),
     confirmPair: async (info) => { pairCode = info.code; return true }, // B 侧自动点「允许」
     pairedDevices: { list: () => paired, add: async (d) => { paired.push(d) } },
@@ -301,6 +315,7 @@ async function main(): Promise<void> {
     })
     const paired2: PairedDevice[] = []
     const handle2 = await startUnitWeb({
+      remoteAccess: remoteSessions.gate,
       getEngine: () => ({ url: stub.url, token: 'ENGINE_TOKEN', remoteMark: 'E2E_REMOTE_MARK' }),
       confirmPair: async () => true,
       pairedDevices: { list: () => paired2, add: async (d) => { paired2.push(d) } },
@@ -334,6 +349,7 @@ async function main(): Promise<void> {
       await ta.fill('跑一下构建')
       await apage.keyboard.press('Enter')
       await apage.waitForSelector('.approval-card', { timeout: 20000 })
+      check('P1-K4 闸开:设备页起 run 成功(POST /agent/runs 到达引擎)', stub.seen.runs.length === 1, `runs=${stub.seen.runs.length}`)
       const card = await apage.evaluate(() => {
         const c = document.querySelector('.approval-card')!
         return {
@@ -358,12 +374,40 @@ async function main(): Promise<void> {
       check('审批被引擎拒绝 → 本地化原因上屏(不再静默吞掉)', toast.includes('远程连接下不能修改审批的参数'), toast.slice(0, 200))
       await apage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-approval.png') })
       // 放行后再点:发出去的是原样批准,不带 argsOverride
+      // P1-K4:点之前在执行设备上关掉「允许远程会话」—— 答审批属基础档,照常送达
+      await remoteSessions.setEnabled(false)
       refuse = false
       await apage.locator('.approval-card .approval-actions .btn.primary').click()
       for (let i = 0; i < 20 && !stub.seen.approvals.length; i++) await apage.waitForTimeout(250)
       const sent = stub.seen.approvals[0] || {}
       check('批准原样发出:action=approve、不带 argsOverride', sent.action === 'approve' && sent.argsOverride === undefined, JSON.stringify(sent))
+      check('P1-K4 闸关:已有审批卡照样能批(答审批 = 基础档)', stub.seen.approvals.length === 1)
       await apage.close()
+
+      // 11 P1-K4 闸关:新开一个设备页发消息 → 403 REMOTE_SESSIONS_OFF → 本地化提示上屏,run 进不了引擎
+      const opage = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'zh-CN' })
+      await skipOnboarding(opage)
+      await opage.goto(`http://unit-e2e.test:${handle2.port}`, { waitUntil: 'domcontentloaded' })
+      await opage.waitForSelector('.rb', { timeout: 45000 })
+      await opage.locator('.rb [title="Tangu"], .rb [aria-label="Tangu"]').first().click()
+      await opage.waitForTimeout(1200)
+      if (!(await opage.locator('.t2s-srow').count())) { await opage.click('.dv-edge-left').catch(() => {}); await opage.waitForTimeout(700) }
+      await opage.locator('.t2s-srow', { hasText: '远程审批会话' }).first().click()
+      const ota = opage.locator('.t2c-ta').first()
+      for (let i = 0; i < 40 && !(await ota.isEnabled().catch(() => false)); i++) await opage.waitForTimeout(500)
+      const runsBefore = stub.seen.runs.length
+      await ota.click()
+      await ota.fill('开关关着再发一句')
+      await opage.keyboard.press('Enter')
+      let offToast = ''
+      for (let i = 0; i < 20 && !offToast.includes('那台电脑没有开启远程会话'); i++) {
+        await opage.waitForTimeout(250)
+        offToast = await opage.evaluate(() => [...document.querySelectorAll('.ntf')].map((n) => n.textContent || '').join(' | '))
+      }
+      check('P1-K4 闸关:设备页发消息出本地化「那台电脑没有开启远程会话」提示', offToast.includes('那台电脑没有开启远程会话'), offToast.slice(0, 200))
+      check('P1-K4 闸关:run 一条都没进引擎', stub.seen.runs.length === runsBefore, `runs=${stub.seen.runs.length}`)
+      await opage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-remote-sessions-off.png') })
+      await opage.close()
     } finally {
       await handle2.close()
       stub.close()

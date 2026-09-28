@@ -114,6 +114,8 @@ async function main() {
     })
     check('菜单整体在视口内', geo.l >= 0 && geo.t >= 0 && geo.r <= geo.iw && geo.b <= geo.ih, JSON.stringify(geo))
 
+    // P1-K4 评审:互联关着时切换器不主动取远程会话视图(取视图 = 主进程问 K5 设备凭据状态 = macOS 可能碰钥匙串)
+    check('互联关着:切换器没取远程会话视图', (await page.evaluate(() => window.__rsGets)) === 0, await page.evaluate(() => window.__rsGets))
     // 脚部:开互联 → 直连地址 + 已配对回收面(先截「开着互联」那张全家福)
     await page.evaluate(() => {
       const btn = document.querySelector('.unitsw-hosttoggle')
@@ -129,6 +131,33 @@ async function main() {
     check('脚部显示本机直连地址', foot.hint.includes('192.168.1.5:8791'), foot.hint)
     check('已配对设备列表 + 可回收', foot.paired.includes('客厅 iPad') && foot.removable, JSON.stringify(foot.paired))
 
+    // P1-K4:父开关 → K5 提示 → 「允许远程会话」子开关 + 「设置 ›」深链(INTEGRATION §2.2 脚部顺序)
+    await page.waitForSelector('[data-unitsw-remote]', { timeout: 5000 })
+    check('互联一开:切换器重取一次视图(拿到真 permitted)', (await page.evaluate(() => window.__rsGets)) >= 1, await page.evaluate(() => window.__rsGets))
+    const sub = await page.evaluate(() => {
+      const foot = document.querySelector('.unitsw-foot')
+      const order = Array.from(foot.children).map((el) => (el.matches('.unitsw-hosttoggle') ? 'host' : el.matches('.secnotice') ? 'secrets' : el.matches('.unitsw-subrow') ? 'remote' : el.matches('.unitsw-foot-hint') ? 'hint' : el.className))
+      const host = document.querySelector('.unitsw-hosttoggle .unitsw-foot-label').getBoundingClientRect()
+      const hostSw = document.querySelector('.unitsw-hosttoggle .unitsw-switch').getBoundingClientRect()
+      const label = document.querySelector('.unitsw-subrow .unitsw-foot-label')
+      const sw = document.querySelector('[data-unitsw-remote] .unitsw-switch').getBoundingClientRect()
+      return { order, on: document.querySelector('[data-unitsw-remote]').getAttribute('aria-checked'), text: label.textContent,
+        dx: Math.round(label.getBoundingClientRect().left - host.left), dr: Math.round(sw.right - hostSw.right) }
+    })
+    check('脚部顺序:父开关 → 远程会话子开关 → 直连地址(K5 提示在两者之间,正常态不渲染)', sub.order.slice(0, 3).join(',') === 'host,remote,hint', JSON.stringify(sub.order))
+    check('子开关:文案「允许远程会话」、缺省开;标签与父开关标签左缘对齐、开关与父开关右缘对齐', sub.text === '允许远程会话' && sub.on === 'true' && Math.abs(sub.dx) <= 1 && Math.abs(sub.dr) <= 1, JSON.stringify(sub))
+    // 整行可点(同父开关)
+    await page.click('.unitsw-subrow .unitsw-foot-label')
+    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'false', null, { timeout: 3000 })
+    await page.click('.unitsw-subrow .unitsw-foot-label')
+    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'true', null, { timeout: 3000 })
+    await page.click('[data-unitsw-remote]')
+    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'false', null, { timeout: 3000 })
+    check('点子开关 → 关(走 remoteSessions.setEnabled)', true)
+    await page.click('[data-unitsw-remote]')
+    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'true', null, { timeout: 3000 })
+
+    await page.mouse.move(700, 600) // 别把悬停底色截进交付图
     await page.waitForTimeout(350) // 开关 background/transform 有 150ms 过渡,别把起始帧截进交付图
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-expanded.png') })
 
@@ -249,6 +278,33 @@ async function main() {
     }))
     check('折叠态只显图标', !collapsed.name && collapsed.icon, JSON.stringify(collapsed))
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-collapsed.png') })
+
+    // P1-K4:「设置 ›」深链到 设置 › 远程会话(菜单随之收起)
+    await page.evaluate(() => { window.__rb.setState({ expanded: true }) })
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('[data-unitsw-remote-settings]', { timeout: 5000 })
+    await page.click('[data-unitsw-remote-settings]')
+    await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 3000 })
+    const tab = await page.evaluate(() => window.__forsionStore?.getState().settingsTab ?? null)
+    check('「设置 ›」→ 打开 设置 › 远程会话', tab === 'remote-sessions', String(tab))
+
+    // P1-K4:设备凭据没加密(K5 plaintext)→ K5 提示夹在父开关与子开关之间,子开关置灰
+    await page.goto(`${URL}&secrets=plaintext`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.rb-head .unitsw-pill', { timeout: 20000 })
+    await page.evaluate(() => { window.__rb.setState({ expanded: true }) })
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    await page.evaluate(() => document.querySelector('.unitsw-hosttoggle').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await page.waitForSelector('[data-unitsw-remote]', { timeout: 5000 })
+    await page.waitForSelector('.unitsw-foot .secnotice', { timeout: 5000 })
+    const locked = await page.evaluate(() => ({
+      order: Array.from(document.querySelector('.unitsw-foot').children).map((el) => (el.matches('.unitsw-hosttoggle') ? 'host' : el.matches('.secnotice') ? 'secrets' : el.matches('.unitsw-subrow') ? 'remote' : el.className)).slice(0, 3),
+      disabled: document.querySelector('[data-unitsw-remote]').disabled,
+      on: document.querySelector('[data-unitsw-remote]').getAttribute('aria-checked'),
+    }))
+    check('设备凭据未加密:父开关 → K5 提示 → 子开关(置灰、显示关)', locked.order.join(',') === 'host,secrets,remote' && locked.disabled && locked.on === 'false', JSON.stringify(locked))
+    await page.waitForTimeout(350)
+    await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-remote-locked.png') })
   } finally {
     await browser.close()
     if (vite) vite.kill()

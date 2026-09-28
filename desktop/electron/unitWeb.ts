@@ -29,7 +29,9 @@ import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { PRODUCT, type ProductProfile } from './product'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
-import { encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller } from './unitCaller'
+import { callerOf, encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
+import { baseTierOnly } from './remoteSessionGate' // P1-K4
+import type { GateResult, RemoteAccessStatus } from '../shared/remoteSessions' // P1-K4
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
 
@@ -186,6 +188,14 @@ export interface UnitWebDeps {
   /** 本地 vault 面(registerAmadeusIpc 返回;懒取 —— unitWeb 可能先于它起)。null = /vault/* 回 503。 */
   vault: () => VaultFace | null
   log: (m: string) => void
+  // P1-K4 ── 「允许远程会话」会话档闸(remoteSessions.ts 的 gate;INTEGRATION R-07:同步,绝不等弹框)。
+  //   缺省且非 ownerProjection → /engine 只放基础档(fail closed),/unit/remote-access 回「未开启」。
+  //   只管 /engine(G9):/unit/host*、/vault/* 维持 P0 现状。
+  remoteAccess?: {
+    gateEngine: (q: { method: string; path: string; via: UnitIngress | null; caller: UnitCaller }) => GateResult
+    status: (caller: UnitCaller) => RemoteAccessStatus
+    request: (caller: UnitCaller) => Promise<RemoteAccessStatus>
+  }
 }
 
 export interface UnitWebHandle {
@@ -283,6 +293,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     return { ok: hit, pairHash: hit ? h : null, via: hit ? 'lan' : null }
   }
   const authed = (req: http.IncomingMessage): boolean => authInfo(req).ok
+  /** 局域网来路命中的配对记录(K4:paired 调用方的 pairId / 名字);隧道 / P2P 恒 null。 */
+  const pairInfo = (info: { pairHash: string | null }): { pairId: string; name: string } | null => {
+    if (!info.pairHash) return null
+    const d = deps.pairedDevices.list().find((x) => x.tokenHash === info.pairHash)
+    return d ? { pairId: d.id, name: d.name } : null
+  }
 
   /**
    * 调用方断言(P1 · K1,INTEGRATION §1.2):**每个请求只调一次** —— 验过即消费重放表,第二次调必回失败。
@@ -577,6 +593,22 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       json(res, 200, { config: await deps.writeConfig(patch && typeof patch === 'object' ? patch : {}) })
       return
     }
+    // P1-K4 ── 调用方看自己的远程会话状态 / 主动请求本机确认(手机「选在这台电脑上运行」先拿到「等待确认」)。
+    // 只回调用方自己的状态,永不回信任列表;同 /engine 的 authInfo → resolveCaller → callerOf(断言验不过 403,不降级)。
+    if ((path === '/unit/remote-access' && req.method === 'GET') || (path === '/unit/remote-access/request' && req.method === 'POST')) {
+      const info = authInfo(req)
+      if (!info.ok) { json(res, 401, { detail: 'Not paired', code: 'UNPAIRED' }); return }
+      const rc = resolveCaller(req, info)
+      if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
+      const caller = callerOf(info.via, pairInfo(info), rc.caller)
+      const ra = deps.remoteAccess
+      if (!ra) { // 没有闸 = 只有基础档(fail closed),如实报「未开启」
+        json(res, 200, { remoteSessions: false, principal: caller.kind === 'paired' ? 'lan' : caller.kind, caller: caller.kind === 'paired' ? 'paired' : 'unconfirmed', maxApprovalMode: 'auto-edit' } satisfies RemoteAccessStatus)
+        return
+      }
+      json(res, 200, path === '/unit/remote-access' ? ra.status(caller) : await ra.request(caller))
+      return
+    }
     // /engine 分支的次序由 INTEGRATION §2.3 钉死(K1 → K4 → K2 按此插入,不自行调序):
     // 鉴权 → 投影主人直通 → 路径规整 → 允许清单 → 调用方断言(K1)→ 急停锁定(K2)→ 会话档闸(K4)→ 反代。
     if (path === '/engine' || path.startsWith('/engine/')) {
@@ -592,9 +624,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const rc = resolveCaller(req, info) // K1:每请求只调一次(重放表一次性消费)
       if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
       // K2 插在这里:if (deps.remoteLock?.() && !lockedEngineAllowed(method, target.path)) { json(res, 423, REMOTE_LOCKED_BODY); return }
-      // K4 插在这里:const caller = callerOf(info.via, pairInfo(info), rc.caller)(unitCaller.ts)
-      //   const g = deps.remoteAccess ? deps.remoteAccess.gateEngine({ method, path: target.path, via: info.via, caller }) : baseTierOnly(method, target.path)
-      //   if (!g.ok) { json(res, g.status, g.body); return }
+      const caller = callerOf(info.via, pairInfo(info), rc.caller) // K4:会话档闸(同步;缺省只放基础档)
+      const g = deps.remoteAccess ? deps.remoteAccess.gateEngine({ method, path: target.path, via: info.via, caller }) : baseTierOnly(method, target.path)
+      if (!g.ok) { json(res, g.status, g.body); return }
       proxyEngine(req, res, target.path + target.query, info.via, rc.caller)
       return
     }

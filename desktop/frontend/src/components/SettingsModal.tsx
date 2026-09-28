@@ -8,7 +8,7 @@ import { ErrorBoundary } from './ErrorBoundary'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
@@ -70,6 +70,7 @@ import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
+import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -205,7 +206,7 @@ registerMessages({
   'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'computer-history' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'remote-sessions' | 'computer-history' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
 export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
@@ -231,6 +232,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   permissions: <MonitorCog size={14} />,
+  'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
   'computer-history': <History size={14} />,
   developer: <Bug size={14} />,
   about: <Info size={14} />,
@@ -415,6 +417,8 @@ export const SettingsModal: React.FC<{
     ['statusbar', t('settings.tab.statusbar')],
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
+    ...(remoteSessionsApi() ? ([['remote-sessions', t('remoteSessions.tab')]] as Array<[Tab, string]>) : []),
     // 不按 darwin 门控:非 mac 也列出来,页内说明「目前仅支持 macOS」,免得用户找不到入口。
     ...(computerHistoryApi() ? ([['computer-history', t('settingsmodal.tab.computerHistory')]] as Array<[Tab, string]>) : []),
     ...((isDesktop || cloudWeb) && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
@@ -1077,6 +1081,7 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
+    'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
     developer: 'settings.page.developerDescription',
     about: 'settings.page.aboutDescription',
@@ -1181,7 +1186,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1505,6 +1510,7 @@ export const SettingsModal: React.FC<{
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
+                {tab === 'remote-sessions' && <RemoteSessionsSettings />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {/* 基本(U-14):用户常改的两项放第一屏;后端技术项挪到「连接」。 */}
                 {tab === 'general' && activeSub === 'g-basic' && isDesktop && stored && (

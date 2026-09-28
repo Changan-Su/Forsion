@@ -709,7 +709,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     w.tangu = {
       ...(w.tangu ?? {}),
       getConfig: async () => ({ ...cfg }),
-      setConfig: async (patch: Record<string, unknown>) => Object.assign(cfg, patch),
+      // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
+      setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
       unitsList: async () => ({ status: 200, json: { units } }),
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
@@ -734,6 +735,30 @@ if (new URLSearchParams(location.search).has('dock')) {
           secretStorageRetry: async () => (st = ok),
           secretStorageResetUnitPairing: async () => (st = ok),
           secretStorageRelaunch: async () => (st = ok),
+        }
+      })(),
+      // P1-K4:「允许远程会话」子开关桩(父开关跟 cfg.unitHostEnabled;&secrets=plaintext|locked|restart 时设备凭据不允许 → 置灰)。
+      remoteSessions: (() => {
+        const secretsMode = new URLSearchParams(location.search).get('secrets')
+        let enabled = true
+        const listeners = new Set<(v: unknown) => void>()
+        // 同真主进程:父开关关着不问 K5(permitted=null = 未知)
+        const view = () => ({ hostEnabled: cfg.unitHostEnabled === true, enabled, permitted: cfg.unitHostEnabled === true ? !secretsMode : null, maxApprovalMode: 'auto-edit', trusted: [], pending: [], accountEntry: 'none' })
+        const push = () => { const v = view(); for (const cb of listeners) cb(v); return v }
+        ;(window as unknown as { __rsPush: () => unknown }).__rsPush = push
+        const w2 = window as unknown as { __rsGets: number }
+        w2.__rsGets = 0 // unit-switcher.check:互联关着时切换器不许主动取视图(取 = 主进程问 K5 = 可能碰钥匙串)
+        return {
+          get: async () => { w2.__rsGets++; return view() },
+          setEnabled: async (on: boolean) => {
+            if (on && secretsMode) throw new Error("Error invoking remote method 'remoteSessions:setEnabled': Error: secret-store-insecure")
+            enabled = on
+            return push()
+          },
+          setMaxApprovalMode: async () => view(),
+          revoke: async () => view(),
+          allowAccount: async () => view(),
+          onChanged: (cb: (v: unknown) => void) => { listeners.add(cb); return () => { listeners.delete(cb) } },
         }
       })(),
       // LAN 探针桩:MacBook Air 的直连地址可达,别的一律探不通。

@@ -18,7 +18,10 @@ import type { VaultFace } from './amadeus/ipc'
 import { startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairedDevice, type UnitWebDeps } from './unitWeb'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { PRODUCT } from './product'
-import { signProxyCaller, type ProxyCaller } from './unitCaller'
+import { signProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
+import { decideRemoteEngine, remoteEngineTier } from './remoteSessionGate' // P1-K4
+import { createRemoteSessions } from './remoteSessions' // P1-K4:真控制器(零 electron,文件 / 名册 / 弹框换内存)
+import type { RemoteAccessStatus, TrustState } from '../shared/remoteSessions' // P1-K4
 
 type Seen = { method: string; path: string; auth: string; body: string; headers: http.IncomingHttpHeaders }
 function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Seen[]; close(): void }> {
@@ -199,7 +202,7 @@ describe('unitWeb', () => {
   })
 
   it('/engine 反代:未配对 401;配对后盖引擎 token + 请求体直通;内部密钥(loopback)豁免', async () => {
-    const b = await boot()
+    const b = await boot(null, undefined, undefined, { remoteAccess: fakeGate({ enabled: true }).gate }) // P1-K4:起 run 是会话档,要开关开
     try {
       expect((await fetch(`${b.base}/engine/agent/runs`, { method: 'POST', body: '{}' })).status).toBe(401)
       const req = await (await fetch(`${b.base}/unit/pair/request`, { method: 'POST', body: JSON.stringify({ name: 'A' }) })).json() as any
@@ -721,6 +724,207 @@ describe('unitWeb', () => {
       b.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
       expect((await raw(b.base, 'GET', '/engine/agent/sessions', { Authorization: `Bearer ${ownerToken}`, 'x-unit-caller': assertion(b.handle.proxyCallerKey) })).status).toBe(200)
       expect(b.engine.seen.at(-1)!.headers['x-forsion-remote-caller']).toBeUndefined()
+    } finally { b.close() }
+  })
+
+  // ── P1 · K4:会话档闸(remoteAccess)与 /unit/remote-access ────────────────────────────────
+  /** 假闸:按真判定函数 decideRemoteEngine 走(开关 + 按主体的信任表),记下每次被问到的调用方。 */
+  function fakeGate(o: { enabled: boolean; trust?: Record<string, TrustState> }) {
+    const calls: Array<{ method: string; path: string; via: string | null; caller: UnitCaller }> = []
+    const requested: UnitCaller[] = []
+    const keyOf = (c: UnitCaller): string => (c.kind === 'unit' ? `unit:${c.caller.unit}` : c.kind === 'p2p' ? 'account' : c.kind)
+    const trustOf = (c: UnitCaller): TrustState => o.trust?.[keyOf(c)] ?? 'unconfirmed'
+    const status = (c: UnitCaller): RemoteAccessStatus => ({
+      remoteSessions: o.enabled,
+      principal: c.kind === 'paired' ? 'lan' : c.kind,
+      caller: c.kind === 'paired' ? 'paired' : trustOf(c),
+      maxApprovalMode: 'auto-edit',
+    })
+    const gate: NonNullable<UnitWebDeps['remoteAccess']> = {
+      gateEngine: (q) => {
+        calls.push(q)
+        const g = decideRemoteEngine(remoteEngineTier(q.method, q.path), o.enabled, q.caller, q.caller.kind === 'paired' ? null : trustOf(q.caller))
+        if (!g.ok && g.body.code === 'REMOTE_CALLER_UNCONFIRMED' && q.caller.kind !== 'p2p') requested.push(q.caller)
+        return g
+      },
+      status,
+      request: async (c) => { if (o.enabled && (c.kind === 'unit' || c.kind === 'account')) requested.push(c); return status(c) },
+    }
+    return { gate, calls, requested, o }
+  }
+
+  it('K4 负对照 #1:开关关 → 隧道 POST /engine/agent/runs 403 REMOTE_SESSIONS_OFF 且到不了引擎;查看 / 答审批 / 答询问 / 停止 / 截图回传照常', async () => {
+    const g = fakeGate({ enabled: false })
+    const b = await boot(null, undefined, undefined, { remoteAccess: g.gate })
+    try {
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret, 'Content-Type': 'application/json' }
+      const before = b.engine.seen.length
+      const r = await raw(b.base, 'POST', '/engine/agent/runs', tunnel)
+      expect(r.status).toBe(403)
+      expect(JSON.parse(r.body).code).toBe('REMOTE_SESSIONS_OFF')
+      expect(b.engine.seen.length).toBe(before)
+      for (const [method, path] of [
+        ['GET', '/engine/agent/sessions'],
+        ['POST', '/engine/agent/runs/r1/approvals/a1'],
+        ['POST', '/engine/agent/runs/r1/inquiries/q1'],
+        ['POST', '/engine/agent/runs/r1/abort'],
+        ['POST', '/engine/agent/runs/r1/captures/s1'],
+        ['POST', '/engine/agent/special/approvals/x1/approve'],
+        ['PATCH', '/engine/agent/inbox/m1'],
+      ] as const) {
+        expect((await raw(b.base, method, path, tunnel)).status, `${method} ${path}`).toBe(200)
+      }
+      // 会话档的其余入口同样挡住:steer、建会话、改会话配置、上传附件、把 Muse TODO 交给 Muse 执行
+      for (const [method, path] of [
+        ['POST', '/engine/agent/runs/r1/steer'],
+        ['POST', '/engine/agent/sessions'],
+        ['PATCH', '/engine/agent/sessions/s1/config'],
+        ['POST', '/engine/agent/workspace/upload'],
+        ['POST', '/engine/agent/special/muse/todos/t1/approve'],
+      ] as const) {
+        const x = await raw(b.base, method, path, tunnel)
+        expect(x.status, `${method} ${path}`).toBe(403)
+        expect(JSON.parse(x.body).code).toBe('REMOTE_SESSIONS_OFF')
+      }
+      // 本机专属路由仍是 P0 的 LOCAL_ONLY(新闸只对 allow 行判,不改 deny 的口径)
+      expect(JSON.parse((await raw(b.base, 'POST', '/engine/agent/plugins/install', tunnel)).body).code).toBe('LOCAL_ONLY')
+      expect(g.calls.every((c) => c.path.startsWith('/agent/'))).toBe(true)
+    } finally { b.close() }
+  })
+
+  it('K4 开关开:局域网配对放行;未识别隧道(account)与未受信设备同样 403 REMOTE_CALLER_UNCONFIRMED 并触发一次本机确认;受信后放行', async () => {
+    const g = fakeGate({ enabled: true })
+    const b = await boot(null, undefined, undefined, { remoteAccess: g.gate })
+    try {
+      const token = await pairUp(b)
+      const lan = await raw(b.base, 'POST', '/engine/agent/runs', { Authorization: `Bearer ${token}` })
+      expect(lan.status).toBe(200)
+      const lanCaller = g.calls.at(-1)!.caller
+      expect(lanCaller.kind).toBe('paired')
+      expect((lanCaller as { pairId: string }).pairId).toBe(b.paired[0].id) // 按 pairHash 查回配对记录
+      // 未识别隧道 = account
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      const acc = await raw(b.base, 'POST', '/engine/agent/runs', tunnel)
+      expect(acc.status).toBe(403)
+      expect(JSON.parse(acc.body)).toMatchObject({ code: 'REMOTE_CALLER_UNCONFIRMED', state: 'unconfirmed' })
+      expect(g.requested.map((c) => c.kind)).toEqual(['account'])
+      // 已登记设备 + 有效断言,未受信:同一个 403(INV-MONO:没断言的待遇不优于未受信设备)
+      const dev = await raw(b.base, 'POST', '/engine/agent/runs', { ...tunnel, 'x-unit-caller': assertion(b.handle.proxyCallerKey, { method: 'POST', target: '/engine/agent/runs' }) })
+      expect(dev.status).toBe(403)
+      expect(JSON.parse(dev.body)).toEqual(JSON.parse(acc.body))
+      expect(g.requested.at(-1)).toMatchObject({ kind: 'unit', caller: { unit: PHONE.unit } })
+      // P2P 跟随 account 条目,且不自己触发确认
+      const p2p = await raw(b.base, 'POST', '/engine/agent/runs', { 'x-unit-p2p': b.handle.p2pSecret })
+      expect(p2p.status).toBe(403)
+      expect(g.calls.at(-1)!.caller.kind).toBe('p2p')
+      expect(g.requested.length).toBe(2)
+      // 受信后放行;P2P 跟着 account 放行
+      g.o.trust = { account: 'trusted', [`unit:${PHONE.unit}`]: 'trusted' }
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(200)
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', { ...tunnel, 'x-unit-caller': assertion(b.handle.proxyCallerKey, { method: 'POST', target: '/engine/agent/runs' }) })).status).toBe(200)
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', { 'x-unit-p2p': b.handle.p2pSecret })).status).toBe(200)
+      // 撤销 account = D8 严格档:浏览器只剩基础档
+      g.o.trust = { [`unit:${PHONE.unit}`]: 'trusted' }
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(403)
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', tunnel)).status).toBe(200)
+    } finally { b.close() }
+  })
+
+  it('K4 × 真控制器(评审 P1/P2):撤销「本账号的浏览器与网页版」→ 隧道无断言与 P2P 的 HTTP 403 带 reason=strict、不再弹框;还没允许时 P2P 报 never-prompts;/unit/remote-access 如实报 reason', async () => {
+    let disk: string | null = JSON.stringify({ v: 1, enabled: true, migratedFromUnitHost: false, trusted: [{ principal: 'account', accountId: 'acc-1', confirmedAt: 1 }] })
+    let prompts = 0
+    const rs = createRemoteSessions({
+      file: () => '/t/remote-sessions.json', unitHostEnabled: async () => true,
+      readCap: async () => 'auto-edit', writeCap: async () => {},
+      accountId: () => 'acc-1', lookupUnit: async () => 'unreachable', confirm: async () => { prompts++; return null },
+      permitted: () => true, isLocked: () => false, onChanged: () => {}, log: () => {},
+      readFile: async () => disk, writeFile: async (_f, d) => { disk = JSON.stringify(d) },
+    })
+    await rs.init()
+    const b = await boot(null, undefined, undefined, { remoteAccess: rs.gate })
+    try {
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      const p2p = { 'x-unit-p2p': b.handle.p2pSecret }
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(200)
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', p2p)).status).toBe(200)
+      await rs.revoke('account')
+      const before = b.engine.seen.length
+      for (const h of [tunnel, p2p]) {
+        const r = await raw(b.base, 'POST', '/engine/agent/runs', h)
+        expect(r.status).toBe(403)
+        expect(JSON.parse(r.body)).toMatchObject({ code: 'REMOTE_CALLER_UNCONFIRMED', state: 'denied', reason: 'strict' })
+        expect(JSON.parse((await raw(b.base, 'POST', '/unit/remote-access/request', h)).body)).toMatchObject({ caller: 'denied', reason: 'strict' })
+      }
+      expect(b.engine.seen.length).toBe(before) // run 进不了引擎
+      expect((await raw(b.base, 'POST', '/engine/agent/runs/r1/approvals/a1', tunnel)).status).toBe(200) // 基础档照常
+      await new Promise((r) => setTimeout(r, 20))
+      expect(prompts).toBe(0) // 严格档:一个弹框都没有
+      // 本机设置里重新允许 → 放行
+      await rs.allowAccount()
+      expect((await raw(b.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(200)
+      // 换成「还没允许」的新文件:P2P 如实报 never-prompts(不是「在等确认」)
+      disk = JSON.stringify({ v: 1, enabled: true, migratedFromUnitHost: false, trusted: [] })
+      const fresh = createRemoteSessions({
+        file: () => '/t/remote-sessions.json', unitHostEnabled: async () => true,
+        readCap: async () => 'auto-edit', writeCap: async () => {},
+        accountId: () => 'acc-1', lookupUnit: async () => 'unreachable', confirm: async () => null,
+        permitted: () => true, isLocked: () => false, onChanged: () => {}, log: () => {},
+        readFile: async () => disk, writeFile: async (_f, d) => { disk = JSON.stringify(d) },
+      })
+      await fresh.init()
+      const c = await boot(null, undefined, undefined, { remoteAccess: fresh.gate })
+      try {
+        const r = await raw(c.base, 'POST', '/engine/agent/runs', { 'x-unit-p2p': c.handle.p2pSecret })
+        expect(JSON.parse(r.body)).toMatchObject({ code: 'REMOTE_CALLER_UNCONFIRMED', state: 'unconfirmed', reason: 'never-prompts' })
+        expect(JSON.parse((await raw(c.base, 'GET', '/unit/remote-access', { 'x-unit-p2p': c.handle.p2pSecret })).body))
+          .toEqual({ remoteSessions: true, principal: 'p2p', caller: 'unconfirmed', reason: 'never-prompts', maxApprovalMode: 'auto-edit' })
+      } finally { c.close() }
+    } finally { b.close() }
+  })
+
+  it('K4 remoteAccess 缺省 → 只放基础档(fail closed);便携 Unit 的工作区主人直通不变', async () => {
+    const b = await boot()
+    try {
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      const r = await raw(b.base, 'POST', '/engine/agent/runs', tunnel)
+      expect(r.status).toBe(403)
+      expect(JSON.parse(r.body).code).toBe('REMOTE_SESSIONS_OFF')
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', tunnel)).status).toBe(200)
+      expect((await raw(b.base, 'POST', '/engine/agent/runs/r1/approvals/a1', tunnel)).status).toBe(200)
+      const st = (await (await fetch(`${b.base}/unit/remote-access`, { headers: tunnel })).json()) as RemoteAccessStatus
+      expect(st).toEqual({ remoteSessions: false, principal: 'account', caller: 'unconfirmed', maxApprovalMode: 'auto-edit' })
+    } finally { b.close() }
+    const ownerToken = 'owner-access-key-k4'
+    const o = await boot(null, undefined, undefined, { projection: { mode: 'local', basePath: '/', product: PRODUCT } })
+    try {
+      o.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
+      expect((await raw(o.base, 'POST', '/engine/agent/runs', { Authorization: `Bearer ${ownerToken}` })).status).toBe(200)
+    } finally { o.close() }
+  })
+
+  it('K4 /unit/remote-access:未鉴权 401;只回调用方自己的状态;POST …/request 只为 unit / account 触发;坏断言 403', async () => {
+    const g = fakeGate({ enabled: true, trust: { [`unit:${PHONE.unit}`]: 'trusted' } })
+    const b = await boot(null, undefined, undefined, { remoteAccess: g.gate })
+    try {
+      expect((await fetch(`${b.base}/unit/remote-access`)).status).toBe(401)
+      expect((await fetch(`${b.base}/unit/remote-access/request`, { method: 'POST' })).status).toBe(401)
+      const tunnel = { 'x-unit-internal': b.handle.internalSecret }
+      const mine = JSON.parse((await raw(b.base, 'GET', '/unit/remote-access', { ...tunnel, 'x-unit-caller': assertion(b.handle.proxyCallerKey, { target: '/unit/remote-access' }) })).body)
+      expect(mine).toEqual({ remoteSessions: true, principal: 'unit', caller: 'trusted', maxApprovalMode: 'auto-edit' })
+      expect(Object.keys(mine).sort()).toEqual(['caller', 'maxApprovalMode', 'principal', 'remoteSessions']) // 不回信任列表
+      const acc = JSON.parse((await raw(b.base, 'GET', '/unit/remote-access', tunnel)).body)
+      expect(acc).toMatchObject({ principal: 'account', caller: 'unconfirmed' })
+      const token = await pairUp(b)
+      expect(JSON.parse((await raw(b.base, 'GET', '/unit/remote-access', { Authorization: `Bearer ${token}` })).body)).toMatchObject({ principal: 'lan', caller: 'paired' })
+      expect(g.requested.length).toBe(0) // GET 不触发确认
+      await raw(b.base, 'POST', '/unit/remote-access/request', tunnel)
+      await raw(b.base, 'POST', '/unit/remote-access/request', { Authorization: `Bearer ${token}` })
+      expect(g.requested.map((c) => c.kind)).toEqual(['account'])
+      // 断言验不过 → 403 BAD_CALLER_ASSERTION,不降级成 account
+      const bad = await raw(b.base, 'POST', '/unit/remote-access/request', { ...tunnel, 'x-unit-caller': 'v1.nope.nope' })
+      expect(bad.status).toBe(403)
+      expect(JSON.parse(bad.body).code).toBe('BAD_CALLER_ASSERTION')
+      expect(g.requested.length).toBe(1)
     } finally { b.close() }
   })
 })

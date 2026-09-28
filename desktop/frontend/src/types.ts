@@ -1261,6 +1261,8 @@ declare global {
       secretStorageResetUnitPairing?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       /** 只在 restartRequired 时放行:重启 Forsion(进程内的重试救不回钥匙串被拒绝)。 */
       secretStorageRelaunch?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      // P1-K4 ── 「允许远程会话」开关 / 信任列表 / 远程会话最高审批档(主进程 electron/remoteSessions.ts;设备页 / web / 手机没有)──
+      remoteSessions?: import('../../shared/remoteSessions').RemoteSessionsApi
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>
