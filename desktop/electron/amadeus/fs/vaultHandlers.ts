@@ -344,17 +344,19 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     return withPathLock(filePath, async () => {
       if (base != null) {
         // 比对交换写(G1-01):盘上已不是调用方的基线 → 不写,把现文交回去(回灌 / 冲突副本由渲染层定)。
-        // 文件不在 = 无冲突(与 dbWriteCas 同口径:删了再写 = 重建,不是覆盖别人)。
+        // 文件不在(ENOENT)也拒写、current:null(Codex 复核 inst P0-2):base 是调用方**读到过的**那版的指纹 = 它以为文件在;
+        // 此刻没了 = 写发出之后被别处删除 / 挪走,照写就把旧路径重建出来(幽灵文件)。渲染层据此另存副本并提示。
+        // 真新建不带 base(冲突副本 / 改名后补写 / 插件文件都是这样),不受影响。
         // ⚠️ 只有 ENOENT 才算「不在」(Codex g3#4):文件读不了(EACCES / EIO / EISDIR…)而目录可写时,原子 rename
         //    照样盖得掉它 —— 基线没验证就丢了盘上版本。其余读错原样抛出:渲染层按写失败处理(提示 + 退避重试)。
-        let cur: string | null = null
+        let cur: string
         try {
           cur = await fs.readFile(vault.absPath(filePath), 'utf8')
         } catch (err) {
           if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw err
-          cur = null
+          return { ok: false as const, current: null }
         }
-        if (cur != null && textFingerprint(cur) !== base) return { ok: false as const, current: cur }
+        if (textFingerprint(cur) !== base) return { ok: false as const, current: cur }
       }
       // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
       //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
