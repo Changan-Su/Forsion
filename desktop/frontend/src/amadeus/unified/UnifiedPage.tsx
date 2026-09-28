@@ -54,6 +54,7 @@ import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
+import { claimCanvasToggle, releaseCanvasToggle } from './canvasToggleCommand'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
@@ -995,7 +996,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 最近一次被用户用到的时刻(评审 G1-02):焦点 / 指针进入本实例、或所属 leaf 成为活动面板时记一笔。
    *  lifecycle 按它给同路径实例排序 —— 按路径的操作(插模板 / 大纲 / 跳转 / 树行拖入 / fm 补丁)落到最近用过的那个。 */
   const lastActive = useRef(0)
-  const touchActive = (): void => { lastActive.current = performance.now() }
+  /** 「切换文档 / 画布」命令(V-20)的落点:与 lastActive 同一个时机认领(最近用过的那一篇)。恒等身份,真身在下面随渲染刷新。 */
+  const canvasToggleImpl = useRef<(() => void) | null>(null)
+  const canvasToggleCmd = useRef((): void => { canvasToggleImpl.current?.() }).current
+  const touchActive = (): void => { lastActive.current = performance.now(); claimCanvasToggle(canvasToggleCmd) }
   useEffect(() => {
     // 切标签只激活 leaf、未必把焦点给编辑器(命令面板插模板就是这个形态):活动面板本身也算「正在用」。
     if (scope != null && scope === activeScope) touchActive()
@@ -1085,6 +1089,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }
   const toggleCanvasRef = useRef(toggleCanvas)
   toggleCanvasRef.current = toggleCanvas
+  // 源码模式没有胶囊(见下方 CanvasSegPortal 的门),命令同口径空操作。
+  canvasToggleImpl.current = mode === 'source' ? null : () => toggleCanvasRef.current()
+  useEffect(() => {
+    claimCanvasToggle(canvasToggleCmd) // 新开一篇不点正文也能用(同 setFocusedBlockApply 的挂载登记)
+    return () => releaseCanvasToggle(canvasToggleCmd)
+  }, [canvasToggleCmd])
 
   /** 移动端「+」双列块面板的落点登记。v3 由每个 MarkdownBlock 在 onFocusCapture 里登记自己,
    *  v4 整页只有一个编辑器 —— 但**不能只在挂载时登记**:dockview 会把非活动面板一起挂着,

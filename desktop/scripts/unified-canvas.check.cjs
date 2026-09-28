@@ -93,6 +93,7 @@
 //   C97 拖卡途中 ⠿/+ 把手隐藏(不悬在原位的空白画布上),松手后悬停照常出现(V-12)
 //   C98 方向键微移:选中 Frame 连辖域一起走;步长与仪表盘同一个 nudgeStep(吸附开 = 一格,关 = 8 / Shift 32)(V-11)
 //   C99 Mod+Y = 重做,舞台焦点与卡内编辑都走统一时间线(V-18)
+//   C100 「切换文档 / 画布」命令:落到本篇、与胶囊同一个 toggle(记忆模式、不写盘);源码模式空操作(V-20)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -546,6 +547,32 @@ async function wave2(browser) {
   record('C99b 卡内编辑 Mod+Y 也走时间线:重做回来的字,回舞台 Cmd+Z 退的正是它(形状不动)',
     inPm99a && inPm99 && b1.text === '卡 K1' && b2.text === '卡 K1XY' && b3.text === '卡 K1' && JSON.stringify(b3.sy) === JSON.stringify(b0.sy),
     JSON.stringify({ b0, b1, b2, b3, inPm99a, inPm99 }))
+
+  // ── C100 文档 / 画布切换命令(V-20)─────────────────────────────────────────────────
+  //  修前只有顶栏胶囊一个入口。命令模块(canvasToggleCommand)开机进 Amadeus 命令集;这里直接跑它的 run,
+  //  量「落点 = 本篇 + 与胶囊同一个 toggle」:切到画布、再切回文档,模式记忆跟着写、盘上零写入(未物化的笔记);
+  //  源码模式下没有胶囊,命令同口径空操作。
+  const p100 = await open(browser, '# 命令切换\n\n正文一段。\n')
+  await p100.waitForTimeout(600)
+  const runCmd = () => importLive(p100, '/src/amadeus/unified/canvasToggleCommand.ts', '(m) => { m.CANVAS_COMMANDS[0].run(); return m.CANVAS_COMMANDS[0].id }')
+  const inC100 = () => p100.evaluate(() => { const st = document.querySelector('.amx-stage'); return !!st && !st.classList.contains('amx-stage-off') })
+  const mode100 = () => p100.evaluate(() => { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k?.startsWith('amx.noteSurfaceMode:') && k.includes('Unified.md')) return localStorage.getItem(k) } return null })
+  const c0 = await inC100()
+  const id100 = await runCmd(); await p100.waitForTimeout(500)
+  const c1 = await inC100()
+  const m1 = await mode100()
+  await runCmd(); await p100.waitForTimeout(500)
+  const c2 = await inC100()
+  const m2 = await mode100()
+  await p100.evaluate(() => window.__upage.setEditorMode('source')); await p100.waitForTimeout(500)
+  await runCmd(); await p100.waitForTimeout(400)
+  await p100.evaluate(() => window.__upage.setEditorMode('wysiwyg')); await p100.waitForTimeout(500)
+  const c3 = await inC100() // 切回可视后仍是文档模式 = 源码模式里那一下没有翻面
+  const w100 = await p100.evaluate(() => window.__upage.writes.length)
+  await p100.close()
+  record('C100 「切换文档 / 画布」命令落到本篇:文档 → 画布 → 文档,模式记忆跟着写、零写盘;源码模式空操作',
+    id100 === 'amadeus-toggle-canvas' && !c0 && c1 && m1 === 'canvas' && !c2 && m2 === 'doc' && !c3 && w100 === 0,
+    JSON.stringify({ id100, c0, c1, m1, c2, m2, c3, w100 }))
 }
 
 async function main() {
