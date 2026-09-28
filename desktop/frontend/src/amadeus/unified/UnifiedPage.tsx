@@ -204,7 +204,10 @@ function applyMinimalDiff(view: EditorView, next: ProseNode): void {
   for (let i = start; i < endCur; i++) to += cur.child(i).nodeSize
   const repl: ProseNode[] = []
   for (let i = start; i < endNext; i++) repl.push(next.child(i))
-  view.dispatch(view.state.tr.replaceWith(from, to, repl))
+  // K-05(用户拍板 #7):回灌是别人的改动,**不进撤销栈** —— 否则 Cmd+Z 撤掉的是外部那次写入、800ms 后再写盘盖掉对端。
+  // PM history 会把本地已有的撤销步骤按这次替换的 mapping rebase,不清空撤销栈(同 MarkdownBlock / canvasStage 的外部同步)。
+  // 恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。
+  view.dispatch(view.state.tr.replaceWith(from, to, repl).setMeta('addToHistory', false))
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
