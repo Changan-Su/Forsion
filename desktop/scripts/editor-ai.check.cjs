@@ -1,6 +1,8 @@
 // 编辑器内 AI(评审 2026-09-27 §3.12,波次 1 · 拍板 #13)的真浏览器仪器。一组一条:
 //   A = G3-04「问 Tangu」:选区工具栏 / ⠿ 块菜单 → 选区文字 + 标题锚点交给侧栏对话;笔记零写入、不铸 ^id;
 //       宿主没有侧栏对话(探针缺 askInChat)时两处入口都不出现。
+//   B = G3-03 Agent 改了打开着的笔记:归属账本认出是 Tangu 写的 → 装饰 + 胶囊「修改了 N 处 · 逐处查看 · 全部撤回 · 保留」;
+//       别人改的照旧静默回灌;装饰不落盘;「全部撤回」= 一次用户写入(走 CAS 保存、可 Cmd+Z)、跳过用户改过的那处;「保留」零写入。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 const fs = require('fs')
@@ -176,11 +178,125 @@ async function groupA(browser) {
   }
 }
 
+/** 页面实际加载的某个源码模块(dev 期间改过的带 `?t=`,裸路径 import 会拿到另一份实例)。 */
+const MOD = `async (re, fallback) => {
+  const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => new RegExp(re).test(n))
+  return import(url || fallback)
+}`
+
+/** 在账本里记一笔「Tangu 正在写 Unified.md」(生产由 appStore 在写类工具的 tool_call 上记)。 */
+async function noteAgentWrite(page, id = 'call-1') {
+  await page.evaluate(async ({ MOD, id }) => {
+    const load = eval(MOD)
+    const m = await load('/src/stores/agentWriteLedger\\.ts(\\?|$)', '/src/stores/agentWriteLedger.ts')
+    const root = window.__upage.pageStore.getState().vaultRoot
+    m.noteAgentWriteStart(id, [root ? `${root.replace(/[\\/]+$/, '')}/Unified.md` : 'Unified.md'])
+  }, { MOD, id })
+}
+const capsule = (page) => page.evaluate(() => {
+  const el = document.querySelector('[data-testid="agent-change-capsule"]')
+  return el ? el.textContent : null
+})
+const marks = (page) => page.evaluate((PM) => [...document.querySelectorAll(PM + ' .am-agent-change')].map((e) => e.textContent).join('|'), PM)
+async function clickCapsule(page, act) {
+  await page.click(`[data-testid="agent-change-capsule"] [data-act="${act}"]`)
+  await page.waitForTimeout(200)
+}
+
+async function groupB(browser) {
+  const base = '# 文档\n\n第一段原文。\n\n第二段原文。\n\n第三段原文。\n'
+  const agentMd = '# 文档\n\n第一段 AGENT 改过。\n\n第二段原文。\n\n第三段 AGENT 也改了。\n'
+  // B1 不是 Tangu 写的(账本里没有):照旧静默回灌,无胶囊无装饰
+  {
+    const page = await open(browser, base)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd)
+    await page.waitForTimeout(900)
+    const st = { cap: await capsule(page), marks: await marks(page), text: await page.evaluate((PM) => document.querySelector(PM).innerText, PM) }
+    check('B1 非 Tangu 的外部改动:照旧回灌,无胶囊无装饰', st.cap == null && !st.marks && st.text.includes('第一段 AGENT 改过'), JSON.stringify(st))
+    await page.close()
+  }
+  // B2-B4 Tangu 写的:装饰 + 胶囊;逐处查看;全部撤回 = 一次写入、盘上回到原文、可 Cmd+Z
+  {
+    const page = await open(browser, base)
+    await noteAgentWrite(page)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd)
+    await page.waitForTimeout(900)
+    const cap = await capsule(page)
+    const mk = await marks(page)
+    const w0 = await page.evaluate(() => window.__upage.writes.length)
+    check('B2a 胶囊出现且 N=2', cap != null && /2/.test(cap) && /Tangu/.test(cap), String(cap))
+    check('B2b 两处改动都有装饰,只盖改过的字', mk === ' AGENT 改过| AGENT 也改了', mk)
+    check('B2c 回灌本身零写入(装饰 / 旧片段不落盘)', w0 === 0, `writes=${w0}`)
+    await clickCapsule(page, 'review')
+    const cur = await page.evaluate((PM) => document.querySelector(PM + ' .am-agent-change.is-current')?.textContent ?? null, PM)
+    const cap2 = await capsule(page)
+    check('B3 逐处查看:停在第 1 处并加深,按钮变成 1/2', cur === ' AGENT 改过' && /1\/2/.test(cap2 || ''), `${cur} | ${cap2}`)
+    await clickCapsule(page, 'revert')
+    await page.waitForTimeout(1500)
+    const st = await page.evaluate((PM) => ({
+      writes: window.__upage.writes.length,
+      disk: window.__upage.vault.get('Unified.md'),
+      cas: window.__upage.casRejects.length,
+      cap: !!document.querySelector('[data-testid="agent-change-capsule"]'),
+      marks: document.querySelectorAll(PM + ' .am-agent-change').length,
+    }), PM)
+    check('B4a 全部撤回:恰好一次写入,盘上回到 Agent 改之前的原文', st.writes === 1 && st.disk === base && st.cas === 0, JSON.stringify({ writes: st.writes, cas: st.cas, disk: st.disk }))
+    check('B4b 撤回后胶囊与装饰都收掉', !st.cap && st.marks === 0, JSON.stringify(st))
+    // 撤回是一次普通用户编辑:Cmd+Z 撤掉撤回(回到 Agent 的版本)
+    await page.click(PM)
+    await page.keyboard.press('Meta+z')
+    await page.waitForTimeout(1500)
+    const disk2 = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+    check('B4c 撤回进撤销栈:Cmd+Z 回到 Agent 版本并落盘', disk2 === agentMd, JSON.stringify(disk2))
+    await page.close()
+  }
+  // B5 保留:只清标记,零写入
+  {
+    const page = await open(browser, base)
+    await noteAgentWrite(page)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd)
+    await page.waitForTimeout(900)
+    const had = await capsule(page)
+    await clickCapsule(page, 'keep')
+    await page.waitForTimeout(1300)
+    const st = await page.evaluate((PM) => ({ writes: window.__upage.writes.length, cap: !!document.querySelector('[data-testid="agent-change-capsule"]'), marks: document.querySelectorAll(PM + ' .am-agent-change').length, disk: window.__upage.vault.get('Unified.md') }), PM)
+    check('B5 保留:标记全清、零写入、盘上仍是 Agent 版本', had != null && !st.cap && st.marks === 0 && st.writes === 0 && st.disk === agentMd, JSON.stringify(st))
+    await page.close()
+  }
+  // B6 用户改过其中一处 → 全部撤回跳过它(不拿旧片段盖掉用户的字),另一处照撤,并提示跳过了几处
+  {
+    const page = await open(browser, base)
+    await page.evaluate(() => { window.__toasts = []; window.addEventListener('amadeus:toast', (e) => window.__toasts.push(e.detail)) })
+    await noteAgentWrite(page)
+    await page.evaluate((t) => window.__upage.fire('Unified.md', t), agentMd)
+    await page.waitForTimeout(900)
+    // 光标放进第一处改动的中间(「AGENT」之后),打一个字
+    await page.evaluate((PM) => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('AGENT 改过')) at = pos + n.text.indexOf('AGENT') + 5; return at < 0 })
+      v.focus()
+      v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+    }, PM)
+    await page.waitForTimeout(100)
+    await page.keyboard.type('X')
+    await page.waitForTimeout(1400)
+    await clickCapsule(page, 'revert')
+    await page.waitForTimeout(1500)
+    const st = await page.evaluate(() => ({ disk: window.__upage.vault.get('Unified.md'), toasts: window.__toasts.map((t) => t.text) }))
+    check('B6 用户改过的那处不撤、另一处照撤、提示跳过 1 处',
+      st.disk === '# 文档\n\n第一段 AGENTX 改过。\n\n第二段原文。\n\n第三段原文。\n' && st.toasts.some((t) => /1/.test(t)),
+      JSON.stringify(st))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
   try {
     if (!only || only.includes('A')) await groupA(browser)
+    if (!only || only.includes('B')) await groupB(browser)
   } finally {
     await browser.close()
   }

@@ -156,8 +156,19 @@ export function reconcileSteps(cur: ProseNode, next: ProseNode): Step[] {
   return steps
 }
 
-/** 回灌事务:cur → next 的多段最小替换;无差异 = null。已设 addToHistory:false(K-05)。 */
-export function reconcileTr(state: EditorState, next: ProseNode): Transaction | null {
+/** 回灌的一处改动(评审 G3-03):新文档里的区间 [from, to) + 被换掉的旧片段(只在内存,绝不落盘)。 */
+export interface ReconcileChange {
+  from: number
+  to: number
+  old: Slice
+  /** 同一处在回灌**前**文档里的区间(= 被换掉的那段)。 */
+  oldFrom: number
+  oldTo: number
+}
+
+/** 回灌事务:cur → next 的多段最小替换;无差异 = null。已设 addToHistory:false(K-05)。
+ *  传 `changes` 时顺带交出每一处改动(G3-03 的「Tangu 修改了 N 处」):新区间 + 旧片段,按文档序。 */
+export function reconcileTr(state: EditorState, next: ProseNode, changes?: ReconcileChange[]): Transaction | null {
   const steps = reconcileSteps(state.doc, next)
   if (!steps.length) return null
   const sel = state.selection
@@ -166,6 +177,13 @@ export function reconcileTr(state: EditorState, next: ProseNode): Transaction | 
   for (let k = steps.length - 1; k >= 0; k--) {
     const s = steps[k]
     tr.replace(s.from, s.to, s.slice)
+  }
+  if (changes) {
+    for (const s of steps) {
+      // 新区间 = 旧区间两端过整条映射:起点左结合、终点右结合(纯插入时 from===to,右结合才落到插入内容之后)。
+      // 不拿 slice.size 推终点:replace 放不下原样片段时会自己补结构,实际插入长度未必等于它。
+      changes.push({ from: tr.mapping.map(s.from, -1), to: tr.mapping.map(s.to, 1), old: state.doc.slice(s.from, s.to), oldFrom: s.from, oldTo: s.to })
+    }
   }
   // 光标落在某个被替换区间的**里面**:PM 映射会把它甩到区间一端 —— 按原偏移夹回新内容里(D-08 建议②)。
   if (sel instanceof TextSelection) {

@@ -65,7 +65,10 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
-import { reconcileTr } from './reconcileDiff'
+import { reconcileTr, type ReconcileChange } from './reconcileDiff'
+import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
+import { AgentChangeCapsule } from './AgentChangeCapsule'
+import { agentWroteRecently } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
 import { readTangu } from '../plugins/tanguSeam'
 import { headingFoldPlugins } from './headingFold'
@@ -209,9 +212,11 @@ function flashCiteTip(r: DOMRect): void {
 /** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
  *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
  *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
-function applyMinimalDiff(view: EditorView, next: ProseNode): void {
-  const tr = reconcileTr(view.state, next)
-  if (tr) view.dispatch(tr)
+function applyMinimalDiff(view: EditorView, next: ProseNode, agent = false): void {
+  // agent = 这次外部改动是 Tangu 写的(G3-03):顺带交出每一处改动(新区间 + 旧片段),打标给 agentChanges 画出来。
+  const changes: ReconcileChange[] = []
+  const tr = reconcileTr(view.state, next, agent ? changes : undefined)
+  if (tr) view.dispatch(agent ? markAgentChanges(tr, view.state.doc, changes) : tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
@@ -260,8 +265,9 @@ interface Pipe {
 }
 
 interface HostApi {
-  /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。 */
-  applyBody: (stored: string) => boolean
+  /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
+   *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
+  applyBody: (stored: string, agent?: boolean) => boolean
   /** 当前 doc 立即序列化为 stored md(编辑器未挂载 = null)。flush 路径必用:listener 的
    *  markdownUpdated 有 200ms 防抖,pipe.body 可能落后最后几击(Codex A4:快打字后立刻
    *  改名/关页,不强制序列化就丢字)。 */
@@ -328,13 +334,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   useEffect(() => {
     apiRef.current = {
       applySlashItem: (it) => applySlashRef.current(it),
-      applyBody: (stored) => {
+      applyBody: (stored, agent) => {
         let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
-          applyMinimalDiff(view, doc as ProseNode)
+          applyMinimalDiff(view, doc as ProseNode, agent)
           adoptOrigins(view.state.doc, doc as ProseNode) // D-18:保留下来的块改记到新盘上文本的来源
           ok = true
           if (probe) probe.reconciled = ((probe.reconciled as number) ?? 0) + 1
@@ -1222,6 +1228,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 「stored ⊆ owned」判据 fail-closed,画布派生冻结到重开)。与 makeCard 的 ownedCards.add 同源。
     minted: (anchors) => { for (const a of anchors) pipe.ownedCards.add(a) },
   }
+  // Agent 改动呈现(G3-03):插件状态 → 胶囊的 N / 当前第几处。回调经 ref 现读(editorPlugins 只建一次)。
+  const [agentView, setAgentView] = useState<{ count: number; index: number }>({ count: 0, index: 0 })
+  const agentStateRef = useRef<(st: AgentChangesState) => void>(() => {})
+  agentStateRef.current = (st) => {
+    const index = st.current == null ? 0 : st.changes.findIndex((c) => c.id === st.current) + 1
+    setAgentView((v) => (v.count === st.changes.length && v.index === index ? v : { count: st.changes.length, index }))
+  }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -1252,6 +1265,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createCardActiveDeco(),
       // 文档模式的层级缩进档位(同一份 pipe.fm 闭包;tree 变了要补一笔空事务推醒,见下面的 effect)。
       ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
+      // Tangu 改了这篇 → 装饰 + 胶囊(G3-03)。装饰与旧片段只在插件状态里,不进序列化。
+      ...createAgentChanges(agentStateRef),
       ...headingFoldPlugins,
       ...listFoldPlugins,
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
@@ -1315,6 +1330,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const askTangu = (view: EditorView, from: number, to: number): void => {
     const quote = askTanguQuote(view.state.doc, from, to, path)
     if (quote) readTangu()?.askInChat?.(quote)
+  }
+  /** 胶囊「逐处查看」:停到下一处(循环),把那一处滚到阅读位置(装饰带 data-agent-change,定位与大纲跳转同一套)。 */
+  const onAgentReview = (): void => {
+    const view = layer.getView()
+    if (!view) return
+    const c = nextAgentChange(view)
+    const el = c ? bodyRef.current?.querySelector(`[data-agent-change="${c.id}"]`) : null
+    if (el instanceof HTMLElement) revealBlockAtTop(el, 48)
+  }
+  /** 胶囊「全部撤回」:一次普通的用户编辑(进撤销栈),照常走防抖 + CAS 保存链。用户已改过的那几处不撤。 */
+  const onAgentRevert = (): void => {
+    const view = layer.getView()
+    if (!view) return
+    const { skipped } = revertAgentChanges(view)
+    syncFromEditor()
+    schedule()
+    if (skipped) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('agentchg.skipped', { n: String(skipped) }) } }))
+    }
   }
   const turnInto = (trig: Trigger): void => withSelectedNode((view, sel) => {
     // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
@@ -1682,7 +1716,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
           pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
-          if (hostApi.current?.applyBody(body)) {
+          // 归属(G3-03):写类工具在途或刚结束、目标就是这篇 → 按 Tangu 的改动画出来(胶囊 + 装饰)。
+          // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
+          const agent = !pipe.readOnly && agentWroteRecently(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path)
+          if (hostApi.current?.applyBody(body, agent)) {
             pipe.body = body
           } else {
             pipe.body = body
@@ -2266,6 +2303,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             </MilkdownProvider>
           </CanvasStage>
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
+          {!readOnly && agentView.count > 0 && (
+            <AgentChangeCapsule
+              count={agentView.count}
+              index={agentView.index}
+              onReview={onAgentReview}
+              onRevert={onAgentRevert}
+              onKeep={() => { const v = layer.getView(); if (v) keepAgentChanges(v) }}
+            />
+          )}
         </div>
       )}
       <LinkHoverCard

@@ -17,6 +17,29 @@ export interface DeskItem {
 export const DESK_EDIT_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'multi_edit'])
 
 const ABS_RE = /^\/|^[A-Za-z]:[\\/]/
+/** Agent 写文件的全部工具(评审 G3-03:打开着的笔记被 Agent 改了要能认出来)。比 DESK_EDIT_TOOLS 多一个
+ *  apply_patch —— 它的路径藏在补丁正文里,Desk 的直播格按 `path` 字段取不到,所以**不并进** DESK_EDIT_TOOLS
+ *  (并进去 = Desk 为每个 apply_patch 弹一个没有路径的空直播卡)。与引擎 tools/writeTargets.ts 的 WRITE_TOOLS 同表。 */
+export const AGENT_WRITE_TOOLS: ReadonlySet<string> = new Set([...DESK_EDIT_TOOLS, 'apply_patch'])
+
+// 补丁里的目标路径:File: / Move to: 行(照抄引擎 tools/writeTargets.ts 的 PATCH_PATH_RE,含改名的新路径)。
+const PATCH_PATH_RE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm
+
+/** 一次写类工具调用的全部目标路径(已按 cwd 解析成绝对路径;定位不了的丢掉)。参数必须是**完整** JSON。 */
+export function agentWriteTargets(tool: string, argsJson: string | undefined, cwd?: string): string[] {
+  if (!AGENT_WRITE_TOOLS.has(tool)) return []
+  let args: Record<string, unknown> = {}
+  try { args = argsJson ? JSON.parse(argsJson) : {} } catch { return [] }
+  const raw: string[] = []
+  if (tool === 'apply_patch') {
+    const patch = String(args.patch ?? args.input ?? '')
+    PATCH_PATH_RE.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = PATCH_PATH_RE.exec(patch))) raw.push((m[1] || m[2] || '').trim())
+  } else if (typeof args.path === 'string') raw.push(args.path)
+  return raw.map((p) => resolveDeskPath(p, cwd)).filter((p): p is string => !!p)
+}
+
 
 /** 编辑工具的目标路径 → 面板可读的绝对路径(相对路径拼 cwd;无 cwd 定位不了 → null)。 */
 export function resolveDeskPath(raw: string, cwd?: string): string | null {

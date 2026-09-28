@@ -3964,3 +3964,66 @@ body.amx-marquee-active * {
   cursor: default;
   overflow: visible;
 }
+
+/* ── Agent 改动呈现(评审 G3-03)──────────────────────────────────────────────────────
+   装饰只在内存(agentChanges.ts),不进序列化。色值一律走语义 token:改动 = --green 的淡底 + 下划线
+   (diff 的「新增」语义),当前查看的那一处加深。胶囊贴在正文底部 sticky,不挡正文、不阻塞编辑;
+   画布模式没有滚动正文,改为贴舞台底边居中。 */
+.am-app .am-agent-change {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--green) 55%, transparent);
+  border-radius: 2px;
+  transition: background var(--dur-fast) var(--ease-apple);
+}
+.am-app .am-agent-change.is-current {
+  background: color-mix(in srgb, var(--green) 30%, transparent);
+  box-shadow: inset 0 -2px 0 var(--green);
+}
+.am-app .am-agent-change.am-agent-change-block {
+  outline: 1px solid color-mix(in srgb, var(--green) 55%, transparent);
+  outline-offset: 2px;
+}
+.am-app .am-agent-del {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin: 0 1px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: var(--danger);
+}
+.am-app .am-agent-del.is-current {
+  width: 3px;
+}
+.am-app .am-agent-capsule {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  margin: 12px auto 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 6px 5px 12px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+}
+.am-app .am-agent-capsule > svg { flex: 0 0 auto; color: var(--green); }
+.am-app .am-agent-capsule-text { font-weight: 500; white-space: nowrap; }
+.am-app .am-agent-capsule-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
+.am-app .am-agent-capsule .btn.sm { border-radius: var(--radius-pill); }
+.am-app .amx-canvas .am-agent-capsule {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  margin: 0;
+  translate: -50% 0;
+}

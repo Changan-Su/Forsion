@@ -31,7 +31,8 @@ import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { finishRunStats, stepRunStats, type RunStats } from './runStats'
-import { DESK_EDIT_TOOLS, DESK_PERSIST_KEY, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteTargets, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
+import { noteAgentWriteEnd, noteAgentWriteStart } from './agentWriteLedger'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
@@ -1068,6 +1069,12 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'tool_call':
         if (pl.name === 'generate_image') { track('image.generate'); act('image.generate') }
+        // 写类工具记进归属账本(G3-03):编辑器回灌时据此认出「这是 Tangu 改的」。cwd 口径同 deskAutoShow。
+        if (pl.name && AGENT_WRITE_TOOLS.has(String(pl.name))) {
+          const cfg = get().configBySession[sessionId] || {}
+          const cwd = cfg.cwd || get().sessions.find((x) => x.id === sessionId)?.project_path || undefined
+          noteAgentWriteStart(String(pl.id), agentWriteTargets(String(pl.name), typeof pl.arguments === 'string' ? pl.arguments : JSON.stringify(pl.arguments ?? {}), cwd))
+        }
         patchMessage(sessionId, assistantId, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
@@ -1101,6 +1108,7 @@ export const useApp = create<AppState>((set, get) => ({
           }
           return { ...m, toolEvents: evs }
         })
+        noteAgentWriteEnd(String(pl.id)) // 归属账本:在途 → 宽限期(不是写类工具的 id 查不到,无操作)
         if (!pl.isError) get().deskAutoShow(sessionId, String(pl.id)) // 成功:磁盘真身顶格(覆盖直播格)
         get().deskLiveClear(sessionId, String(pl.id)) // 失败/未切换成功的直播格残留在此清场(成功路径上是 no-op)
         break
