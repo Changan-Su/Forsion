@@ -71,10 +71,19 @@ export function renderRemoteShellProfile(spec: RemoteShellWriteDenySpec): string
   return [...new Set(lines)].join('\n');
 }
 
-/** 现算名单并渲染(每条命令一次:名单里有随配置变的项,如微信状态目录、急停锁文件)。 */
+/** local(不带远程污点、因 writeProtectShell 才套的:引擎自己的 git、免审批的 git 读命令)的 profile 缓存窗口。
+ *  git 现场一次 3 条、项目详情面板一次 7 条,各自现算名单在真家目录上每次要几到几十 ms(机器负载高时),远超 sandbox-exec 本身;
+ *  名单里随配置变的项(微信状态目录、急停锁文件)一秒的滞后无所谓。远程污点命令照旧每条现算。 */
+const LOCAL_PROFILE_TTL_MS = 1000;
+let localProfile: { at: number; profile: string } | undefined;
+/** 现算名单并渲染(远程污点命令每条一次:名单里有随配置变的项,如微信状态目录、急停锁文件;local 见上)。 */
 export function remoteShellProfile(local = false): string {
-  try { return renderRemoteShellProfile(remoteShellWriteDenySpec()); }
-  catch (e) {
+  if (local && localProfile && Date.now() - localProfile.at < LOCAL_PROFILE_TTL_MS) return localProfile.profile;
+  try {
+    const profile = renderRemoteShellProfile(remoteShellWriteDenySpec());
+    if (local) localProfile = { at: Date.now(), profile };
+    return profile;
+  } catch (e) {
     const detail = e instanceof RemoteShellProtectionError ? e.detail : `the protected path list could not be built: ${String((e as Error)?.message || e)}`;
     throw e instanceof RemoteShellProtectionError && !local ? e : new RemoteShellProtectionError(detail, local);
   }
