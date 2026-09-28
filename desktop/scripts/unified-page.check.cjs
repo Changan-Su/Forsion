@@ -1619,6 +1619,77 @@ async function main() {
     await pg.close()
   }
 
+  // P20c:查找条收起后的焦点(评审 C-17:Esc / × 关掉后焦点掉到 body,直接打字无效、光标也不在命中处)。
+  //  a. Esc:选区落在当前命中上、焦点回正文,接着打字就在命中处;
+  //  b. 点 ×:焦点回到开条前的地方,光标原位不动;
+  //  c. 源码模式 Esc:焦点回 textarea,选区 = 命中(textarea 的命中在镜像上,偏移映射回 textarea)。
+  //  负对照:closeFindBar 的 restoreFocus 摘掉 → 三条全红(已实跑)。
+  {
+    const seed = '# 焦点页\n\n苹果一号。\n\n香蕉。\n\n苹果二号在这里。\n\n末段。\n'
+    const pg = await browser.newPage({ locale: 'zh-CN' })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const clickEnd = async (text) => {
+      const at = await pg.evaluate(([s, t]) => {
+        const p = [...document.querySelectorAll(s + ' > p')].find((x) => x.textContent.includes(t))
+        const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect()
+        return { x: b.right - 1, y: b.top + b.height / 2 }
+      }, [PM, text])
+      await pg.mouse.click(at.x, at.y)
+      await pg.waitForTimeout(150)
+    }
+    const pmSel = () => pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const { from, to } = v.state.selection
+      return { focused: document.activeElement === v.dom, text: v.state.doc.textBetween(from, to), para: v.state.selection.$from.parent.textContent, head: v.state.selection.head }
+    })
+    const openAndType = async (q) => {
+      await pg.evaluate(() => window.__openFind())
+      await pg.waitForTimeout(200)
+      await pg.keyboard.type(q)
+      await pg.waitForTimeout(350)
+    }
+    // a
+    await clickEnd('末段')
+    await openAndType('苹果')
+    await pg.keyboard.press('Enter') // → 第 2 条
+    await pg.waitForTimeout(200)
+    await pg.keyboard.press('Escape')
+    await pg.waitForTimeout(200)
+    const a = await pmSel()
+    await pg.keyboard.type('梨')
+    await pg.waitForTimeout(200)
+    a.after = await pg.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+    // b
+    await clickEnd('香蕉')
+    const b0 = await pmSel()
+    await openAndType('末段')
+    await pg.click('.amx-findbar button[aria-label="关闭（Esc）"]')
+    await pg.waitForTimeout(200)
+    const b = await pmSel()
+    b.before = b0.head
+    // c
+    await pg.evaluate(() => window.__upage.setEditorMode('source'))
+    await pg.waitForSelector('.amx-source', { timeout: 5000 })
+    await pg.waitForTimeout(300)
+    await pg.evaluate(() => { const t = document.querySelector('.amx-source'); t.focus(); t.setSelectionRange(0, 0) })
+    await openAndType('香蕉')
+    await pg.keyboard.press('Escape')
+    await pg.waitForTimeout(200)
+    const c = await pg.evaluate(() => {
+      const t = document.querySelector('.amx-source')
+      return { focused: document.activeElement === t, sel: t.value.slice(t.selectionStart, t.selectionEnd) }
+    })
+    record('P20c 查找条收起:Esc → 选区落在当前命中、接着打字就在命中处;× → 焦点回原处光标不动;源码模式 Esc → textarea 选中命中(C-17)',
+      a.focused && a.text === '苹果' && a.para.includes('二号') && a.after.includes('梨二号在这里') && a.after.includes('苹果一号') &&
+        b.focused && b.head === b.before && b.text === '' &&
+        c.focused && c.sel === '香蕉',
+      JSON.stringify({ a, b, c }))
+    await pg.close()
+  }
+
   // P21:跨块文字拖选按真实字符范围呈现;块内选字也仍是原生高亮。
   {
     const seed = '甲段落文字。\n\n乙段落文字。\n\n丙段落文字。\n'
