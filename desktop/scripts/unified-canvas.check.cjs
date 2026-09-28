@@ -89,6 +89,7 @@
 //   C93 Frame 里用卡片工具 / 双击建卡:留在框内,只避让卡片不避让 Frame(V-02)
 //   C94 开卷自动适应与「适应内容」把 Frame(连同框外上沿的标题条)框进视野(V-03)
 //   C95 画布视口的会话记忆按「库 + 路径」作键、只在画布态记(V-15)
+//   C96 拖动中的卡压在文档序靠后的卡上面(V-10)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -375,6 +376,40 @@ async function wave2(browser) {
   record('C95b 视口记忆按库隔离:库 B 同名笔记开卷适应(不沿用库 A 的平移);回库 A 平移还在',
     t2.vaultA === '/vault-A' && JSON.stringify(t2.vB) !== JSON.stringify(t2.vA) && t2.b1 && t2.b2 && JSON.stringify(t2.backA) === JSON.stringify(t2.vA),
     JSON.stringify(t2))
+
+  // ── C96 拖动中的卡浮在最上层(V-10)─────────────────────────────────────────────
+  //  修前:卡片同为 absolute、按文档序叠放,拖动态的 LIFT 样式没有 z-index —— 把文档序靠前的 k1 拖到 k2 上,
+  //  k1 被画在 k2 **底下**。反方向(k2 拖到 k1 上)本来就在上面,作对照。判据取重叠区命中栈的最上层。
+  const SEED96 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":0,"y":300,"w":300},{"ref":"k2","x":500,"y":300,"w":300}]}',
+    '---', '', '# 画布页', '', '主卡一段。', '',
+    '<!-- a k1 -->', '', '卡 K1 第一行', '', '第二行', '', '<!-- /a k1 -->', '',
+    '<!-- a k2 -->', '', '卡 K2 第一行', '', '第二行', '', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const top96 = async (from, to) => {
+    const pg = await open(browser, SEED96)
+    await pg.waitForTimeout(700)
+    const a = await pg.evaluate((a) => { const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } }, from)
+    const t = await pg.evaluate((a) => { const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect(); return { l: r.left, t: r.top } }, to)
+    await pg.mouse.move(a.x, a.y); await pg.mouse.down()
+    const dx = t.l + 40 - (a.x - 6), dy = t.t + 20 - (a.y - 6) // 停在目标卡心中立区,避开边缘认亲带
+    for (let i = 1; i <= 15; i++) await pg.mouse.move(a.x + dx * i / 15, a.y + dy * i / 15)
+    await pg.waitForTimeout(150)
+    const top = await pg.evaluate(({ from, to }) => {
+      const f = document.querySelector(`.amx-ucard[data-anchor="${from}"]`).getBoundingClientRect()
+      const g = document.querySelector(`.amx-ucard[data-anchor="${to}"]`).getBoundingClientRect()
+      const x = (Math.max(f.left, g.left) + Math.min(f.right, g.right)) / 2, y = (Math.max(f.top, g.top) + Math.min(f.bottom, g.bottom)) / 2
+      return document.elementsFromPoint(x, y).map((e) => e.closest('.amx-ucard')?.dataset.anchor).find(Boolean) ?? null
+    }, { from, to })
+    await pg.mouse.up()
+    await pg.close()
+    return top
+  }
+  const up96 = await top96('k1', 'k2')
+  const ctl96 = await top96('k2', 'k1')
+  record('C96 拖动中的卡浮在最上层:文档序靠前的 k1 拖到 k2 上 = k1 在上(对照:k2 拖到 k1 上 = k2 在上)',
+    up96 === 'k1' && ctl96 === 'k2', JSON.stringify({ k1OverK2: up96, k2OverK1: ctl96 }))
 }
 
 async function main() {

@@ -1965,7 +1965,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         : `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${CSS.escape(key)}"]{${selectionPosition(selection, true)}}`
       dragCss.textContent = `${target}\n${selected}`
     }
-    const LIFT = 'cursor:grabbing;opacity:.94;box-shadow:0 12px 32px rgb(0 0 0 / 24%);' // shadow-contract: interaction (drag lift)
+    // z-index:1(V-10):卡片同为 absolute、按文档序叠放,不抬的话拖着的卡会钻到文档序靠后的卡底下(再叠上
+    // relatedFocus 的 0.44 透明度,像两段字糊在一起)。只抬 1 档:认亲高亮(z 2/3)与关系线仍须画在它上面。
+    const LIFT = 'cursor:grabbing;opacity:.94;box-shadow:0 12px 32px rgb(0 0 0 / 24%);z-index:1;' // shadow-contract: interaction (drag lift)
     const clearDragRule = (): void => { dragCss.textContent = '' }
     const stopRepelMotion = (): void => {
       cancelAnimationFrame(repelRaf)
