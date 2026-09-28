@@ -118,7 +118,7 @@ describe('I1 远端 PATCH project_path → 会话盖远程标记', () => {
     expect((await rowOf('I1c')).cfg).toEqual({ remoteOrigin: first, thinkingLevel: 'low' });
   });
 
-  it('正对照:本机改路径、远端只改标题 / 归档、远端写回同一路径、远端清空路径 → 都不盖标记', async () => {
+  it('正对照:本机改路径、远端只改标题 / 归档、远端写回同一路径、远端清空路径 → 都不盖 remoteOrigin(改标题只盖 remoteContent)', async () => {
     const p = dir('I1d');
     await addSession('I1d', { agentSlug: 'a1' }, p);
     expect((await send('PATCH', '/agent/sessions/I1d', { project_path: dir('I1d-local-move') })).status).toBe(200);
