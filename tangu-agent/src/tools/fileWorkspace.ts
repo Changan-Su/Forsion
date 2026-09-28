@@ -13,6 +13,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { cancellableRead, throwIfReadAborted } from '../utils/readCancellation.js';
+import { anchoredRoot, mkdirConfined, readConfined, writeConfined } from '../sandbox/confinedFs.js';
 
 // ── 注入依赖的 lazy 别名:把 Penzor cloudStorageService 收敛到 brain.storage(保持调用点不变)──
 const cloudStorageService = {
@@ -328,7 +329,8 @@ export async function hydrateWorkspaceToDir(
     for (const it of items) {
       const rel = node.rel ? `${node.rel}/${it.name}` : it.name;
       if (it.fileType === 'directory') {
-        await fs.mkdir(path.join(destDir, rel), { recursive: true }).catch(() => {});
+        // 会话目录里可能有别人种的软链(docker 沙箱里的代码能种指向宿主绝对路径的链):建目录 / 落文件都钳在根内(P1 K10a)。
+        await mkdirConfined(destDir, rel).catch(() => {});
         queue.push({ id: it.id, rel });
       } else if (it.fileType === 'file') {
         if (fileNodes.length >= WS_MAX_FILES) { complete = false; continue; }
@@ -342,11 +344,9 @@ export async function hydrateWorkspaceToDir(
   await mapLimit(fileNodes, HYDRATE_CONCURRENCY, async (f) => {
     try {
       const { content } = await cloudStorageService.getFileContent(f.id, userId);
-      const abs = path.join(destDir, f.rel);
-      await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => {});
-      await fs.writeFile(abs, content);
+      await writeConfined(destDir, f.rel, content); // 软链逃逸 / `..` 名 → 抛,按坏文件跳过
       manifest.set(f.rel, sha256(content)); // Map.set 同步、单线程无竞态
-    } catch { complete = false; /* 跳过坏文件 */ }
+    } catch { complete = false; /* 跳过坏文件(含越界):缺席不能当「云端已删」 */ }
   });
   return { manifest, complete };
 }
@@ -387,20 +387,16 @@ export async function snapshotDirToWorkspace(
   srcDir: string,
   beforeManifest: Map<string, string>,
 ): Promise<string[]> {
+  // 会话目录自身被换成软链(指向家目录)时 walkLocal 会跟过去把外面的文件整批传上云 —— 根不锚定就一个都不传(P1 K10a)。
+  if (!(await anchoredRoot(srcDir))) return [];
   const rels = await walkLocal(srcDir);
   // 先本地 diff（读文件 + sha256，本地操作快）收集变更；manifest 统一用 posix 相对路径键。
   const pending: Array<{ posixRel: string; buf: Buffer; hash: string }> = [];
   for (const rel of rels) {
     if (pending.length >= WS_MAX_FILES) break;
-    const abs = path.join(srcDir, rel);
-    let buf: Buffer;
-    try {
-      const st = await fs.stat(abs);
-      if (st.size > WS_MAX_FILE_BYTES) continue;
-      buf = await fs.readFile(abs);
-    } catch {
-      continue;
-    }
+    // walkLocal 已跳过软链条目;readConfined 再挡「列完到读之间换成软链」的竞态(O_NOFOLLOW + 打开后 inode 复核)。
+    const buf = await readConfined(srcDir, rel, { maxBytes: WS_MAX_FILE_BYTES });
+    if (!buf) continue;
     const posixRel = rel.split(path.sep).join('/');
     const hash = sha256(buf);
     if (beforeManifest.get(posixRel) === hash) continue; // 未变

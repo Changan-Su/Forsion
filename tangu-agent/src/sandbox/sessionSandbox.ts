@@ -30,6 +30,7 @@ import {
   runPython, DEFAULT_TIMEOUT_MS, MAX_CAPTURE, type ExecResult,
 } from './dockerProvider.js';
 import { hydrateWorkspaceToDir, snapshotDirToWorkspace, scopeOf } from '../tools/fileWorkspace.js';
+import { readConfined, unlinkConfined } from './confinedFs.js';
 
 export interface SessionKey {
   userId: string;
@@ -261,10 +262,10 @@ async function ensureHydrated(s: Session): Promise<void> {
         if (r.complete) {
           for (const [rel, hash] of prev) {
             if (s.manifest.has(rel)) continue;
-            const abs = path.join(s.dir, rel);
-            const buf = await fsp.readFile(abs).catch(() => null);
+            // 读 / 删都钳在会话目录内(P1 K10a):中间目录被换成指到外面的软链时,不去删外面恰好同内容的文件。
+            const buf = await readConfined(s.dir, rel);
             if (buf && createHash('sha256').update(buf).digest('hex') === hash) {
-              await fsp.rm(abs, { force: true }).catch(() => {});
+              await unlinkConfined(s.dir, rel);
             }
           }
         }
