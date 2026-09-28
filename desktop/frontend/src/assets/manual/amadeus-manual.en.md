@@ -774,6 +774,7 @@ There are three kinds of Enter — do not mix them up:
 - Enter inherits the current indent level. Pressing Enter in an empty indented paragraph **keeps the same level** — that is deliberate; to get out, press `Shift + Tab` or `Backspace` at the start of the line.
 - Paragraphs inside list items and quotes do not take indent levels: lists sink and lift instead, and Markdown cannot express an indented paragraph inside a quote.
 - `Tab` never moves focus out of the editor — the key is always swallowed.
+- On-screen keyboards have no `Tab`: the "Outdent" and "Indent" buttons in the bottom editing capsule are `Shift + Tab` / `Tab`, with exactly the same rules.
 - `Tab` against a folded previous sibling only unfolds it; press again to indent.
 - Enter inside a quote gives you two clean quote paragraphs, not a line break. For a line break inside a quote, use `⌘/Ctrl + Enter`.
 - Inside a code block, `Shift + Tab` removes up to two leading spaces per line.

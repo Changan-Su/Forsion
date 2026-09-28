@@ -1089,10 +1089,12 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-mbar button {
   /* 可收缩 + 下限:胶囊是 width:max-content + max-width:calc(100% - 24px),而按钮此前 flex:0 0 auto
      —— 窄机(≈360pt,再摊上 body zoom 1.15)上多加一颗就顶穿药丸背景往外溢。给一档收缩空间,
-     图标本身 19px,收到 34 仍留得住内边距(2026-08-20 加画布键时补;负对照:退回 0 0 auto 后
-     360pt 下最后一颗键溢出药丸 8px,e2e 的 4a2 当场变红)。 */
+     图标本身 19px(2026-08-20 加画布键时补;负对照:退回 0 0 auto 后 360pt 下最后一颗键溢出药丸 8px,
+     e2e 的 4a2 当场变红)。下限 34 → 28(09-28 G2-06 加缩进 / 提升两颗,v4 共九颗):9×28 + 间隙 + 内边距
+     ≈ 276,窄机 360pt 的 ≈289 装得下;只在挤不下时才收,390pt 下约 33、更宽的机型仍是 40。
+     再加键就该换思路(分组 / 横滑),别再压这个下限(check:mobilebar 的 M4d 与 e2e 4a2 钉宽度账)。 */
   flex: 0 1 auto;
-  min-width: 34px;
+  min-width: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -883,6 +883,8 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
 export interface UnifiedHistory {
   undo: () => boolean
   redo: () => boolean
+  /** 缩进 / 提升一档(= Tab / Shift-Tab)。挂在同一只句柄上,是因为宿主的移动端胶囊只握这一只(G2-06)。 */
+  indent?: (dir: 1 | -1) => boolean
 }
 
 export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, compact = false, readOnly = false, hardBreaks = false }: {
@@ -1041,7 +1043,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const v = layer.getView()
       return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
     }
-    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo') }
+    const indent = (dir: 1 | -1): boolean => {
+      const v = layer.getView()
+      return !pipe.readOnly && !!v && layer.indent(v, dir)
+    }
+    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo'), indent }
     historyRef.current = h
     return () => { if (historyRef.current === h) historyRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -72,6 +72,8 @@ export interface BlockLayer {
   topRangeOf: (view: EditorView) => { from: number; to: number } | null
   /** 复制块(⠿ 菜单「复制块」与 Mod-D 同一份,B-12):跨块选区 / 块选中 / 光标所在块。没东西可复制返回 false。 */
   duplicate: (view: EditorView) => boolean
+  /** 缩进 / 提升一档,与 Tab / Shift-Tab 同一条阶梯(含列表折叠钩子)。移动端胶囊用(G2-06:软键盘没有 Tab)。 */
+  indent: (view: EditorView, dir: 1 | -1) => boolean
 }
 
 /** 元素的**累计视觉缩放**(CSS zoom × 全部祖先的 transform scale)。`rect` 是视口 px、`offsetWidth`
@@ -2366,5 +2368,6 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     getView: () => viewRef,
     topRangeOf,
     duplicate: (view) => duplicateBlocks(view.state, view.dispatch.bind(view), view),
+    indent: (view, dir) => (dir > 0 ? tabIndent(view.state, view.dispatch.bind(view), view, tabFoldHooks) : tabOutdent(view.state, view.dispatch.bind(view))),
   }
 }
