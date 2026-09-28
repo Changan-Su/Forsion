@@ -331,3 +331,16 @@ describe('createRemoteSafety', () => {
     expect(h.rs.trayView()).toMatchObject({ locked: true, capable: false })
   })
 })
+
+// G11(INTEGRATION §4):「清空数据」不许删锁文件 —— 删了 = 不经系统认证解锁。钉 main.ts 的 app:clearData 清理列表。
+describe('G11 清空数据不解锁', () => {
+  it('main.ts 的 app:clearData 里不出现 remote-lock.json / REMOTE_LOCK_FILE', async () => {
+    const src = await readFile(join(__dirname, 'main.ts'), 'utf8')
+    const at = src.indexOf("ipcMain.handle('app:clearData'")
+    expect(at).toBeGreaterThan(0)
+    const end = src.indexOf('ipcMain.handle(', at + 10)
+    const body = src.slice(at, end > at ? end : at + 4000).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+    expect(body).toContain('REMOTE_SESSIONS_FILE') // K4 的开关 / 信任文件照删(对照:确实切到了清理列表那段)
+    expect(body).not.toMatch(/REMOTE_LOCK_FILE|remote-lock\.json/)
+  })
+})
