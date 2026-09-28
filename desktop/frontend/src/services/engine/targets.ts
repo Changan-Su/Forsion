@@ -16,10 +16,10 @@ import type { SessionRecord, StoredDesktopConfig, TanguDesktopConfig } from '../
 import { authFetch } from '../http'
 import { currentPlatform } from '../platform'
 import { cloudApiBaseOf } from './cloudBase'
-import { HOME_REF, isEngineTarget, mintTarget, targetKeyOf, type EngineTarget, type TargetKey, type TargetRef, type TargetVia } from './target'
+import { assertTargetRef, HOME_REF, isEngineTarget, isTargetKey, mintTarget, targetKeyOf, type EngineTarget, type TargetKey, type TargetRef, type TargetVia } from './target'
 
 export type { EngineTarget, TargetKey, TargetRef, TargetVia } from './target'
-export { HOME_REF, isEngineTarget, sameRef, targetKeyOf } from './target'
+export { HOME_REF, isEngineTarget, isTargetKey, sameRef, targetKeyOf } from './target'
 export { isHomeSession } from '../../types'
 export { cloudApiBaseOf } from './cloudBase'
 
@@ -151,6 +151,8 @@ export async function engineFetch(
 const sessionTargets = new Map<string, TargetKey>()
 
 function refOfKey(key: TargetKey): TargetRef {
+  // 表里的键只由 targetKeyOf 写入(已校验);S4 从持久化读回时也逐条过 isTargetKey。这里再兜一道,别让坏键变成 unit。
+  if (!isTargetKey(key)) throw new TypeError(`locationOf: malformed target key ${JSON.stringify(key)}`)
   return key === 'home' ? HOME_REF : Object.freeze({ kind: 'unit' as const, unitId: key.slice('unit:'.length) })
 }
 
@@ -160,7 +162,7 @@ function refOfKey(key: TargetKey): TargetRef {
  */
 export function bindSession(sid: string, ref: TargetRef): 'bound' | 'conflict' {
   if (typeof sid !== 'string' || !sid) throw new TypeError('bindSession: session id is required')
-  if (ref.kind === 'unit' && (typeof ref.unitId !== 'string' || !ref.unitId)) throw new TypeError('bindSession: unit id is required')
+  assertTargetRef(ref, 'bindSession') // 未知 kind(旧形状 {kind:'cloud'}、坏掉的持久化提示)抛,绝不落成 unit:undefined
   const key = targetKeyOf(ref)
   const current = sessionTargets.get(sid)
   if (current !== undefined) return current === key ? 'bound' : 'conflict'

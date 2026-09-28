@@ -45,8 +45,27 @@ export const HOME_REF: TargetRef = Object.freeze({ kind: 'home' }) as TargetRef
 
 const minted = new WeakSet<EngineTarget>()
 
+/**
+ * 运行期校验位置。类型只挡得住有类型的调用点;持久化的路由提示(S4 `forsion_session_targets`)、R-14 之前的旧形状
+ * `{ kind: 'cloud' }` 这类无类型输入照样进得来 —— 不校验的话非 home 一律被当成 unit,绑成 `unit:undefined`,
+ * 而绑定先到先得、永不改绑,之后正确的 home 绑定只能拿到 'conflict'(评审实测)。只认 home 与带非空 unitId 的 unit。
+ */
+export function assertTargetRef(ref: unknown, who: string): asserts ref is TargetRef {
+  const r = ref as { kind?: unknown; unitId?: unknown } | null | undefined
+  if (typeof r !== 'object' || r === null) throw new TypeError(`${who}: target ref is required`)
+  if (r.kind === 'home') return
+  if (r.kind !== 'unit') throw new TypeError(`${who}: unknown target kind ${JSON.stringify(r.kind)}`)
+  if (typeof r.unitId !== 'string' || !r.unitId) throw new TypeError(`${who}: unit id is required`)
+}
+
+/** 目标键的运行期判定('home' | 'unit:<非空 id>');从持久化读回绑定时逐条过它,过不了的丢掉。 */
+export function isTargetKey(x: unknown): x is TargetKey {
+  return x === 'home' || (typeof x === 'string' && x.startsWith('unit:') && x.length > 'unit:'.length)
+}
+
 /** @internal 只许 services/engine/ 下调用(棘轮 R3 钉住)。别处要目标,找 targets.ts 的解析函数。 */
 export function mintTarget(p: EngineTargetInit): EngineTarget {
+  assertTargetRef(p.ref, 'mintTarget')
   const ref: TargetRef = p.ref.kind === 'home' ? HOME_REF : Object.freeze({ kind: 'unit', unitId: p.ref.unitId })
   const t = Object.freeze({ ...p, ref }) as unknown as EngineTarget
   minted.add(t)
@@ -58,10 +77,14 @@ export function isEngineTarget(x: unknown): x is EngineTarget {
   return typeof x === 'object' && x !== null && minted.has(x as EngineTarget)
 }
 
+/** 穷举:未知 kind / 空 unitId 直接抛(别让非 home 默认落成 `unit:undefined`)。 */
 export function targetKeyOf(ref: TargetRef): TargetKey {
+  assertTargetRef(ref, 'targetKeyOf')
   return ref.kind === 'home' ? 'home' : `unit:${ref.unitId}`
 }
 
 export function sameRef(a: TargetRef, b: TargetRef): boolean {
-  return a.kind === b.kind && (a.kind === 'home' || a.unitId === (b as { unitId: string }).unitId)
+  if (!a || !b || a.kind !== b.kind) return false
+  if (a.kind === 'home') return true
+  return a.kind === 'unit' && typeof a.unitId === 'string' && !!a.unitId && a.unitId === (b as { unitId?: unknown }).unitId
 }

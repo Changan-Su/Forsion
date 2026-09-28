@@ -62,6 +62,13 @@ describe('品牌(运行期)', () => {
     expect(T.isEngineTarget(null)).toBe(false)
     expect(Object.isFrozen(real)).toBe(true)
   })
+
+  it('铸造点也校验位置:未知 kind 铸不出目标', async () => {
+    const { mintTarget } = await import('./target')
+    const init = { key: 'home' as const, via: 'local' as const, base: '', unitBase: null, headers: async () => ({}) }
+    expect(() => mintTarget({ ...init, ref: { kind: 'cloud' } as never })).toThrow(TypeError)
+    expect(() => mintTarget({ ...init, ref: { kind: 'unit', unitId: '' } })).toThrow(TypeError)
+  })
 })
 
 describe('homeTarget / knownTargets', () => {
@@ -199,6 +206,32 @@ describe('会话绑定表(R-15 / R-16)', () => {
   it('空会话 id / 空 unit id 直接抛', () => {
     expect(() => T.bindSession('', unitA)).toThrow(TypeError)
     expect(() => T.bindSession('s4', { kind: 'unit', unitId: '' })).toThrow(TypeError)
+  })
+
+  it('未知 kind(旧形状 {kind:"cloud"} / 坏掉的持久化提示)抛,绝不落成 unit:undefined 占住会话', () => {
+    // 评审复现序列:不校验时 → 'bound',locationOf = {kind:'unit',unitId:'undefined'},之后正确的 home 绑定 = 'conflict'
+    expect(() => T.bindSession('s5', { kind: 'cloud' } as never)).toThrow(TypeError)
+    expect(T.locationOf('s5')).toEqual({ kind: 'home' })
+    expect(T.bindSession('s5', { kind: 'home' })).toBe('bound')
+    for (const bad of [null, undefined, {}, { kind: 'unit' }, { kind: 'unit', unitId: 42 }, { kind: 'Home' }, 'home']) {
+      expect(() => T.bindSession('s6', bad as never), JSON.stringify(bad)).toThrow(TypeError)
+    }
+    expect(T.locationOf('s6')).toEqual({ kind: 'home' })
+  })
+
+  it('targetKeyOf 穷举、sameRef 不把未知 kind 当相等、isTargetKey 只认 home 与 unit:<非空>', () => {
+    expect(T.targetKeyOf({ kind: 'home' })).toBe('home')
+    expect(T.targetKeyOf(unitA)).toBe(`unit:${unitA.unitId}`)
+    expect(() => T.targetKeyOf({ kind: 'cloud' } as never)).toThrow(TypeError)
+    expect(() => T.targetKeyOf({ kind: 'unit' } as never)).toThrow(TypeError)
+    expect(T.sameRef({ kind: 'cloud' } as never, { kind: 'cloud' } as never)).toBe(false)
+    expect(T.sameRef({ kind: 'unit' } as never, { kind: 'unit' } as never)).toBe(false)
+    expect(T.sameRef(unitA, { ...unitA })).toBe(true)
+    expect(T.sameRef(unitA, unitB)).toBe(false)
+    expect(T.sameRef({ kind: 'home' }, { kind: 'home' })).toBe(true)
+    expect(T.sameRef(null as never, null as never)).toBe(false)
+    for (const k of ['home', 'unit:a']) expect(T.isTargetKey(k), k).toBe(true)
+    for (const k of ['unit:', 'cloud', 'unit', '', null, 1, 'Home']) expect(T.isTargetKey(k), String(k)).toBe(false)
   })
 
   it('isHomeSession:未打标 / home = true,unit = false', () => {
