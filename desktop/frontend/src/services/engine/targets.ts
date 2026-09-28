@@ -88,10 +88,40 @@ export function knownTargets(): EngineTarget[] {
 /** 调用方能带进来的头:只有这两个。鉴权头归目标所有;`x-forsion-remote*` 这类来源标记只许 unitWeb 盖(C1)。 */
 const PASS_HEADERS: Record<string, string> = { 'content-type': 'Content-Type', accept: 'Accept' }
 
+/** 解析 URL 用的固定参照:两侧(基址 / 请求)对**同一个**参照解析即可判出逃逸,与页面实际地址无关。 */
+const RESOLVE_REF = 'http://engine-target.invalid/'
+
+/**
+ * 请求 URL 必须落在目标基址之下(同源 + 路径前缀),否则 Bearer 会被送到别处。两道:
+ *  ① 字面拒:非 `/` 开头、`//`、`scheme://`、反斜杠、以及 **C0 控制符 / 空白 / DEL** —— WHATWG URL 解析器会把
+ *     tab / CR / LF 静默剥掉,`'/\t/evil.test'` 于是变成协议相对的 `//evil.test`(评审实测,base 为空时 Bearer 外泄);
+ *  ② 解析后比对:`t.base + path` 解析出的地址必须以 `t.base` 解析出的地址(补尾 `/`)为前缀 —— 挡住字面判不全的
+ *     变体,也挡住点段(含 `%2e%2e`)逃出基址路径:unit 基址 `…/units/<id>/proxy/engine` + `/../../../../auth/x`
+ *     同源,但已经落到云端别的接口上。
+ */
+function assertEnginePath(base: string, path: unknown): asserts path is string {
+  const reject = (): never => {
+    throw new TypeError(`engineFetch: expected a relative engine path such as "/agent/…", got ${JSON.stringify(path)}`)
+  }
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('://') || path.includes('\\')) reject()
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x20\x7f]/.test(path as string)) reject()
+  let scope: URL
+  let url: URL
+  try {
+    scope = new URL(base || '/', RESOLVE_REF)
+    url = new URL(base + (path as string), RESOLVE_REF)
+  } catch {
+    return reject()
+  }
+  const prefix = scope.origin + scope.pathname.replace(/\/*$/, '/')
+  if (url.origin !== scope.origin || !(url.origin + url.pathname).startsWith(prefix)) reject()
+}
+
 /**
  * 对某个目标发一条引擎请求(INTEGRATION R-20,给 K3 的待批索引等消费方)。
- * - 只收 mintTarget 铸出来的目标;path 必须是以单个 `/` 开头的相对引擎路径(`//host`、`scheme://` 一律拒:
- *   base 为空时协议相对路径会把 Bearer 送到别的主机)。
+ * - 只收 mintTarget 铸出来的目标;path 必须是以单个 `/` 开头、解析后仍落在目标基址之下的相对引擎路径
+ *   (见 assertEnginePath:`//host`、`scheme://`、控制符、点段逃逸一律拒 —— 否则 Bearer 会被送到别的主机 / 接口)。
  * - init.headers 只放行 Content-Type / Accept,其余(含 Authorization、x-forsion-remote*)静默丢弃。
  * - 不给缺省超时(SSE / 长轮询要能长挂);需要时显式传 timeoutMs。
  */
@@ -102,9 +132,10 @@ export async function engineFetch(
   opts: { timeoutMs?: number } = {},
 ): Promise<Response> {
   if (!isEngineTarget(t)) throw new TypeError('engineFetch: the target was not minted by the engine target resolver')
-  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('://') || path.includes('\\')) {
-    throw new TypeError(`engineFetch: expected a relative engine path such as "/agent/…", got ${JSON.stringify(path)}`)
-  }
+  // base 与鉴权头在同一段同步代码里取(headers() 的函数体在第一个 await 之前就读完 token):活目标的 cfg 中途换了,
+  // 也不会拼出「新基址 + 旧 token」。
+  const base = t.base
+  assertEnginePath(base, path)
   const out: Record<string, string> = { ...(await t.headers(typeof init.body === 'string')) }
   new Headers(init.headers ?? undefined).forEach((value, name) => {
     const canonical = PASS_HEADERS[name]
@@ -112,7 +143,7 @@ export async function engineFetch(
     for (const k of Object.keys(out)) if (k.toLowerCase() === name) delete out[k]
     out[canonical] = value
   })
-  return authFetch(`${t.base}${path}`, { ...init, headers: out }, opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : undefined)
+  return authFetch(`${base}${path}`, { ...init, headers: out }, opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : undefined)
 }
 
 // ── 会话 → 目标绑定表(路由真源,INTEGRATION R-15 / R-16)──

@@ -111,13 +111,44 @@ describe('engineFetch 出口闸', () => {
     expect(init.headers).toEqual({ Authorization: 'Bearer engine-token', Accept: 'text/event-stream', 'Content-Type': 'text/plain' })
   })
 
-  it.each(['//evil.test/agent/x', 'https://evil.test/agent/x', 'agent/x', '/\\evil.test', '/agent/x?next=http://evil.test', ''])(
-    '非相对引擎路径拒发 %j(base 为空时协议相对路径会把 Bearer 送到别的主机)',
-    async (path) => {
-      await expect(T.engineFetch(T.asTarget(cfg), path)).rejects.toThrow(TypeError)
+  const UNIT_SHAPED = 'https://forsion.test/api/units/u1/proxy/engine'
+  it.each([
+    ['http://127.0.0.1:4100/', '//evil.test/agent/x'],
+    ['http://127.0.0.1:4100/', 'https://evil.test/agent/x'],
+    ['http://127.0.0.1:4100/', 'agent/x'],
+    ['http://127.0.0.1:4100/', '/\\evil.test'],
+    ['http://127.0.0.1:4100/', '/agent/x?next=http://evil.test'],
+    ['http://127.0.0.1:4100/', ''],
+    // WHATWG URL 解析器静默剥掉 tab / CR / LF:'/\t/evil.test' 解析成 //evil.test(base 为空时 Bearer 外泄,评审实测)
+    ['', '/\t/evil.test/agent/x'],
+    ['', '/\n/evil.test'],
+    ['', '/\r/evil.test'],
+    ['', '/\t\t/evil.test'],
+    ['', '/ /evil.test'],
+    ['', '/\u0000/evil.test'],
+    ['', '/agent/x\u007f'],
+    // 点段逃出基址路径:同源,但已经落在云端别的接口上(unit 目标的 Bearer = forsion_token)
+    [UNIT_SHAPED, '/../../../../auth/x'],
+    [UNIT_SHAPED, '/%2e%2e/%2e%2e/%2e%2e/%2e%2e/auth/x'],
+    [UNIT_SHAPED, '/agent/../../../../u2/proxy/engine/agent/x'], // → /api/units/u2/proxy/engine/…(另一台电脑)
+  ])(
+    'base %j 下拒发 %j(解析后必须仍落在目标基址之下,否则 Bearer 会被送到别的主机 / 接口)',
+    async (backendUrl, path) => {
+      await expect(T.engineFetch(T.asTarget({ backendUrl, token: 'tk', modelId: '' }), path)).rejects.toThrow(TypeError)
       expect(authFetch).not.toHaveBeenCalled()
     },
   )
+
+  it.each([
+    ['', '/agent/x', '/agent/x'],
+    ['http://127.0.0.1:4100/', '/agent/x', 'http://127.0.0.1:4100//agent/x'], // legacy 尾斜杠原样(行为逐字不变)
+    [UNIT_SHAPED, '/agent/sessions?q=a/../b', `${UNIT_SHAPED}/agent/sessions?q=a/../b`], // 查询串里的点段不算
+    [UNIT_SHAPED, '/agent/./x', `${UNIT_SHAPED}/agent/./x`], // 不出基址的点段照发(URL 原样交给 authFetch)
+    [UNIT_SHAPED, '/', `${UNIT_SHAPED}/`],
+  ])('base %j + %j 照发 → %j', async (backendUrl, path, want) => {
+    await T.engineFetch(T.asTarget({ backendUrl, token: 'tk', modelId: '' }), path)
+    expect(authFetch.mock.calls[0][0]).toBe(want)
+  })
 
   it('伪造的目标拒发', async () => {
     const forged = { ...T.asTarget(cfg) } as unknown as Parameters<typeof T.engineFetch>[0]
