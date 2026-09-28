@@ -58,7 +58,7 @@ import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusPro
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
+import { applyTrigger, codeBlockTurnInto, type Trigger } from '../blocks/markdown/blockTriggers'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
@@ -1517,6 +1517,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
   }
   const turnInto = (trig: Trigger): void => withSelectedNode((view, sel) => {
+    // 代码块按行拆 / 包进容器(R-23):applyTrigger 按文本块走,会把代码换行压成空格、列表类静默无效、折叠令牌插进代码首行。
+    if (sel.node.type.spec.code && codeBlockTurnInto(view, sel.from, trig)) return
     // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
     view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(sel.from + 1))))
     applyTrigger(view, trig, null)
