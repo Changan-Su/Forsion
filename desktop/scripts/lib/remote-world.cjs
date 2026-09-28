@@ -7,7 +7,8 @@
  *           --cloud-url(= 假 hub,所以 LLM 走「云端大脑」,api_usage 的 client 在 hub 这侧可观测)/ --sandbox none;隔离 TANGU_HOME、会话沙箱目录;
  *   unitWeb webDeps:getEngine / remoteAccess = createRemoteSessions(...).gate / readConfig(家目录 + 默认工作区)/ 主机文件面钳在工作区;
  *   unitHost getCreds(hub + 账号 token)/ getUnitWeb(url + internalSecret + proxyCallerKey)/ 配对只在内存。
- * 不在内:K2 急停 / 锁定(本分支未合入)、K7 caps 上报器(这里直接替它 POST 一次 caps {engine:'ready'})、seedGatedEngine(本机项目根种子)。
+ *   caps    真 K7a UnitCapsReporter(electron/unitCaps.ts)挂在 unitHost 的 onChannelReady / onChannelDown 上,引擎活着报 ready、退出报 stopped。
+ * 不在内:K2 急停 / 锁定(本分支未合入)、seedGatedEngine(本机项目根种子)。
  */
 'use strict'
 const fs = require('node:fs')
@@ -109,7 +110,7 @@ async function startRemoteWorld(o) {
 
   // ── 真 unitWeb + 真 K4 远程会话闸 + 真 unitHost ──
   const M = loadTs(path.join(__dirname, 'remote-world.entry.ts'))
-  const { startUnitWeb, UnitHost, forsionAccountId } = M
+  const { startUnitWeb, UnitHost, UnitCapsReporter, forsionAccountId } = M
   const rsMod = M
   if (o.mainLocale) M.setMainLocale(o.mainLocale)
   const confirms = []
@@ -160,7 +161,17 @@ async function startRemoteWorld(o) {
   }, { port: 0, bindHost: '127.0.0.1' })
 
   let pairing = null
+  // P1-K7a:真 caps 上报器(同 main.ts 的接线:通道 ready 之后报一次,引擎态变了再报)
+  const caps = new UnitCapsReporter({
+    getCreds: () => ({ cloudUrl: hub.url, token: DESKTOP_TOKEN }),
+    getPairing: () => pairing,
+    current: () => (engineExit ? 'stopped' : 'ready'),
+    log: (m) => log(m),
+    debounceMs: 50,
+  })
   const unitHost = new UnitHost({
+    onChannelReady: () => caps.channelReady(),
+    onChannelDown: () => caps.channelDown(),
     getCreds: () => ({ cloudUrl: hub.url, token: DESKTOP_TOKEN }),
     getUnitWeb: () => ({ url: `http://127.0.0.1:${unitWeb.port}`, internalSecret: unitWeb.internalSecret, proxyCallerKey: unitWeb.proxyCallerKey }),
     getLanUrl: () => null,
@@ -175,8 +186,9 @@ async function startRemoteWorld(o) {
   const DESKTOP_UNIT = pairing.unitId
   const row = hub.units.get(DESKTOP_UNIT)
   row.name = o.desktopName || 'K9 Studio Mac' // 用户在名册里改过名(registered_name 仍是登记时的 hostname)
-  // K7 的 caps 上报器(本分支未合入)在通道接上后会报一次;这里替它报,UnitsSheet 才显示「可用」
-  await fetch(`${hub.url}/api/units/${DESKTOP_UNIT}/caps`, { method: 'POST', headers: { Authorization: `Bearer ${DESKTOP_TOKEN}`, 'X-Unit-Secret': pairing.secret, 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: 'ready', tools: [] }) })
+  // P1-K7a:caps 上报器在通道 ready 之后自己报(名册 capsLive + engine=ready,手机的 UnitsSheet / 设备分组据此显示「在线」)
+  for (let i = 0; i < 50 && hub.units.get(DESKTOP_UNIT)?.caps?.engine !== 'ready'; i++) await sleep(100)
+  if (hub.units.get(DESKTOP_UNIT)?.caps?.engine !== 'ready') throw new Error('caps 上报器 5s 内没把 engine=ready 报到假 hub(K7a UnitCapsReporter × unitHost onChannelReady)')
 
   // ── K3 待批送达(真 approvalDelivery,假通知)──
   let delivery = null

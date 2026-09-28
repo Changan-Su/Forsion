@@ -8,6 +8,7 @@ import { track } from '../achievements/store'
 import { CapabilityMenu } from './CapabilityMenu'
 import { publishAccountQuota, subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
 import './specialAgents.css'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 registerMessages({
   'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
@@ -172,7 +173,7 @@ const specialDrafts = new Map<string, SpecialDraft>()
 /** Explicit, field-level saves keep text editing stable and preserve unrelated backend changes. */
 export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktopConfig; localHost?: boolean }) {
   const { t } = useI18n()
-  const draftKey = JSON.stringify([cfg.backendUrl, cfg.token])
+  const draftKey = connectionKey(cfg)
   const [conf, setConf] = useState<SpecialAgentsConfig | null>(null)
   const [baseline, setBaseline] = useState<SpecialAgentsConfig | null>(null)
   const [promptDefault, setPromptDefault] = useState('')
@@ -194,9 +195,9 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   useEffect(() => {
     let alive = true
     setLoading(true); setError('')
-    getSpecialConfig(cfg).then((r) => { if (!alive) return; if (r.remote) { setRemoteView(r.config); return } setRemoteView(null); setCloud(!!r.cloud); const cached = specialDrafts.get(draftKey); setConf(cached?.conf || r.config); setBaseline(cached?.baseline || r.config); setPromptDefault(r.defaults?.historianPrompt || ''); setPrompt(cached?.prompt ?? (r.config.historian.prompt || r.defaults?.historianPrompt || '')); setFolders(cached?.folders ?? r.config.muse.allowedFolders.join('\n')) }).catch(() => { if (alive) setError(t('specialUi.loadFailed')) }).finally(() => { if (alive) setLoading(false) })
-    listModels(cfg).then((r) => { if (alive) { setModels(r.models); setSlotDefault(r.backgroundModelId || r.defaultModelId || '') } }).catch(() => {})
-    listAgents(cfg).then((r) => { if (alive) setAgents(r) }).catch(() => {})
+    getSpecialConfig(homeTarget()).then((r) => { if (!alive) return; if (r.remote) { setRemoteView(r.config); return } setRemoteView(null); setCloud(!!r.cloud); const cached = specialDrafts.get(draftKey); setConf(cached?.conf || r.config); setBaseline(cached?.baseline || r.config); setPromptDefault(r.defaults?.historianPrompt || ''); setPrompt(cached?.prompt ?? (r.config.historian.prompt || r.defaults?.historianPrompt || '')); setFolders(cached?.folders ?? r.config.muse.allowedFolders.join('\n')) }).catch(() => { if (alive) setError(t('specialUi.loadFailed')) }).finally(() => { if (alive) setLoading(false) })
+    listModels(homeTarget()).then((r) => { if (alive) { setModels(r.models); setSlotDefault(r.backgroundModelId || r.defaultModelId || '') } }).catch(() => {})
+    listAgents(homeTarget()).then((r) => { if (alive) setAgents(r) }).catch(() => {})
     return () => { alive = false }
   }, [cfg, retry]) // Locale changes must not replace unsaved text.
   const changeHistorian = (patch: Partial<HistorianConfig>) => { setConf((c) => c && ({ ...c, historian: { ...c.historian, ...patch } })); setNotice('') }
@@ -213,7 +214,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
     const next = { historian: { ...conf.historian, prompt: prompt === promptDefault ? '' : prompt }, muse: { ...conf.muse, allowedFolders: [...new Set(folders.split('\n').map((s) => s.trim()).filter(Boolean))] } }
     const diff = <T extends object>(a: T, b: T): Partial<T> => Object.fromEntries(Object.entries(a).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(b[key as keyof T]))) as Partial<T>
     try {
-      const saved = await saveSpecialConfig(cfg, { historian: diff(next.historian, baseline.historian), muse: diff(next.muse, baseline.muse) })
+      const saved = await saveSpecialConfig(homeTarget(), { historian: diff(next.historian, baseline.historian), muse: diff(next.muse, baseline.muse) })
       if ((!baseline.historian.enabled && saved.historian.enabled) || (!baseline.muse.enabled && saved.muse.enabled)) track('special.enable')
       setConf(saved); setBaseline(saved); setPrompt(saved.historian.prompt || promptDefault); setFolders(saved.muse.allowedFolders.join('\n')); setNotice(t('specialUi.saved'))
       void useApp.getState().refreshSpecialEnabled(cfg)

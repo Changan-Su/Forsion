@@ -9,7 +9,7 @@ import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
 import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
-import { asTarget, fetchOpts, isEngineTarget, routeSession, targetLabel, type EngineArg, type EngineTarget } from './engine/targets'
+import { fetchOpts, targetLabel, type EngineTarget } from './engine/targets'
 import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, noteVerdict, refusalOf, waitReady, type Verdict } from './engine/health'
 import { remoteRefusalMessage } from './localOnly'
 import './engine/messages'
@@ -23,12 +23,12 @@ registerMessages({
   'agentrun.stopUnconfirmed': { zh: '尚未确认任务停止，请重试停止操作。', en: 'The run has not confirmed it stopped. Please try stopping it again.' },
 })
 
-/** 对目标引擎发一条请求(P1-K6):基址与鉴权头都归目标(`asTarget`),本文件不再直读 cfg.backendUrl / cfg.token。
+/** 对目标引擎发一条请求(P1-K6):基址与鉴权头都归目标,本文件不读 cfg。
  *  头与改造前的 `headers(cfg.token)` 同形;home 目标 opts 缺省时不传第三参,与改造前逐字一致;
  *  非 home 目标恒带 `target`(401 分流,§3.5)。
- *  S2:本文件的 13 个函数全是会话类(§3.3),调用方传整份本端 cfg 时按 routeSession 走会话所在的目标(= 焦点)。 */
-async function engineRequest(cfg: EngineArg, path: string, init: RequestInit = {}, opts?: { timeoutMs?: number }): Promise<Response> {
-  const t = routeSession(cfg)
+ *  S3 起本文件的函数只收解析层给的目标:会话类由调用方传 targetForSession(sid)(run 类同理,sid 在调用方手里),
+ *  testConnection 探调用方指定的那台(焦点 / 设置页外部连接表单的 connectionTarget)。 */
+async function engineRequest(t: EngineTarget, path: string, init: RequestInit = {}, opts?: { timeoutMs?: number }): Promise<Response> {
   const req = { ...init, headers: await t.headers(true) }
   const o = fetchOpts(t, opts?.timeoutMs)
   const r = await (o ? authFetch(`${t.base}${path}`, req, o) : authFetch(`${t.base}${path}`, req))
@@ -62,19 +62,17 @@ export function currentClientId(): string {
 export const AUTH_PROBE_PATH = PROBE_PATH
 
 /** authRejected:探针 401(令牌被拒)。凭证问题不是瞬态连接故障 —— 调用方(boot 重试环)见它即停,自愈归 handleAuthExpired。 */
-export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; message: string; authRejected?: boolean; verdict?: Verdict }> {
-  // 目录类(§3.3 target 类):探的是**调用方指定的那台**(设置页外部连接表单现拼的地址 / appStore 显式传的焦点),
-  // 不按会话路由 —— 老调用点传整份 cfg 仍折成 home,与改造前一致。
-  cfg = asTarget(cfg)
+export async function testConnection(t: EngineTarget): Promise<{ ok: boolean; message: string; authRejected?: boolean; verdict?: Verdict }> {
+  // 目录类(§3.3 target 类):探的是**调用方指定的那台**(设置页外部连接表单现拼的 connectionTarget / appStore 的焦点),不按会话路由。
   try {
-    const r = await engineRequest(cfg, '/health', {}, { timeoutMs: 15000 })
+    const r = await engineRequest(t, '/health', {}, { timeoutMs: 15000 })
     if (!r.ok) {
       // unit 目标(经 hub):离线 / 引擎没起 / 设备被移除 / 调用方身份取不到各给一句人话,并把类别带回去(appStore 据此定健康态)
-      if (cfg.via === 'unit') {
+      if (t.via === 'unit') {
         const body = await r.clone().json().catch(() => null) as { code?: string } | null
         const verdict = classify(r.status, body)
-        noteVerdict(cfg.key, verdict, noteExtra(body))
-        return { ok: false, message: unitFailureMessage(cfg, verdict, body?.code, body) || `HTTP ${r.status}`, verdict }
+        noteVerdict(t.key, verdict, noteExtra(body))
+        return { ok: false, message: unitFailureMessage(t, verdict, body?.code, body) || `HTTP ${r.status}`, verdict }
       }
       return { ok: false, message: `HTTP ${r.status}` }
     }
@@ -82,24 +80,24 @@ export async function testConnection(cfg: EngineArg): Promise<{ ok: boolean; mes
     // /health 不鉴权(standalone/main.ts 直接 res.json)—— 令牌漂了它照样 200,connState 假绿,随后每个真请求
     // 各自 401(真机一轮 9 次)。再追一次带鉴权的 GET:**只认 401**(凭证被拒);403 / 404 / 5xx / 网络错是别的
     // 问题(云端面没有这条路由、配额、后端半启动),不把连接判死。authFetch 的 401 拦截器照常触发重登录自愈。
-    const probe = await engineRequest(cfg, AUTH_PROBE_PATH, {}, { timeoutMs: 15000 }).catch(() => null)
+    const probe = await engineRequest(t, AUTH_PROBE_PATH, {}, { timeoutMs: 15000 }).catch(() => null)
     if (probe && probe.status === 401) return { ok: false, message: translate('agentrun.authFailed'), authRejected: true }
-    if (cfg.via === 'unit') {
+    if (t.via === 'unit') {
       // 带鉴权的那条被执行设备 / hub 按调用方拒了(身份、远程会话开关、急停)= 这台连不上,不是「已连接」
       const pb = probe && !probe.ok ? await probe.clone().json().catch(() => null) as { code?: string } | null : null
       const pv = probe && !probe.ok ? classify(probe.status, pb) : 'ok'
       if (pv === 'caller-unavailable' || pv === 'refused' || pv === 'gone') {
-        noteVerdict(cfg.key, pv, noteExtra(pb))
-        return { ok: false, message: unitFailureMessage(cfg, pv, pb?.code, pb) || `HTTP ${probe!.status}`, verdict: pv }
+        noteVerdict(t.key, pv, noteExtra(pb))
+        return { ok: false, message: unitFailureMessage(t, pv, pb?.code, pb) || `HTTP ${probe!.status}`, verdict: pv }
       }
-      noteVerdict(cfg.key, 'ok')
+      noteVerdict(t.key, 'ok')
     }
     return { ok: true, message: translate('agentrun.connected', { sandbox: j.sandbox ?? '?' }) }
   } catch (e: any) {
-    if (cfg.via === 'unit') {
+    if (t.via === 'unit') {
       const verdict = classifyError(e)
-      noteVerdict(cfg.key, verdict, typeof e?.code === 'string' ? { code: e.code } : {})
-      return { ok: false, message: unitFailureMessage(cfg, verdict, e?.code) || e?.message || translate('agentrun.connectFailed'), verdict }
+      noteVerdict(t.key, verdict, typeof e?.code === 'string' ? { code: e.code } : {})
+      return { ok: false, message: unitFailureMessage(t, verdict, e?.code) || e?.message || translate('agentrun.connectFailed'), verdict }
     }
     return { ok: false, message: e?.message || translate('agentrun.connectFailed') }
   }
@@ -134,7 +132,7 @@ export function unitFailureMessage(t: EngineTarget, v: Verdict, code?: unknown, 
 }
 
 export async function startRun(
-  cfg: EngineArg,
+  t: EngineTarget,
   params: {
     sessionId: string
     message: string
@@ -143,15 +141,13 @@ export async function startRun(
     agentConfig?: AgentConfig
   },
 ): Promise<StartRunResult> {
-  // 模型回退:老调用点传整份 cfg 时沿用 cfg.modelId(行为不变);目标本身不带模型。
-  // S2:焦点在「我的电脑」时 cfg.modelId 是这台手机的偏好,那台电脑未必有这个模型 → 不回退,交给调用方 / 引擎缺省。
-  const t = routeSession(cfg, params.sessionId)
-  const fallbackModel = isEngineTarget(cfg) || t.key !== 'home' ? undefined : cfg.modelId
+  // 模型:目标不带模型,回退链只在调用方(appStore.send 的 sessionModelId:会话的 → 按目标的缺省 → 目录 defaultModelId,
+  // home 缺省即 cfg.modelId —— 改造前这里对 legacy cfg 的兜底与它同值,S3 删掉)。空 = 交给引擎按 profile 缺省。
   const r = await engineRequest(t, '/agent/runs', {
     method: 'POST',
     body: JSON.stringify({
       session_id: params.sessionId,
-      model_id: params.modelId || fallbackModel || undefined,
+      model_id: params.modelId || undefined,
       app_id: AGENT_APP_ID,
       client: currentClientId(),
       // 界面面能力握手 + 目录/设置快照(引擎侧 input.uiCommands/uiSettings → ToolContext)。
@@ -171,12 +167,12 @@ export async function startRun(
   return r.json()
 }
 
-async function requestAbort(cfg: EngineArg, runId: string): Promise<{ settled?: boolean; status?: string }> {
+async function requestAbort(t: EngineTarget, runId: string): Promise<{ settled?: boolean; status?: string }> {
   // 超时覆盖读取 body 的全过程,不只等 HTTP 响应头。
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('Stop request timed out', 'TimeoutError')), 5000)
   try {
-    const r = await engineRequest(cfg, `/agent/runs/${encodeURIComponent(runId)}/abort`, {
+    const r = await engineRequest(t, `/agent/runs/${encodeURIComponent(runId)}/abort`, {
     method: 'POST',
     signal: ac.signal,
     })
@@ -185,8 +181,8 @@ async function requestAbort(cfg: EngineArg, runId: string): Promise<{ settled?: 
   } finally { clearTimeout(timer) }
 }
 
-export async function abortRun(cfg: EngineArg, runId: string): Promise<void> {
-  await requestAbort(cfg, runId)
+export async function abortRun(t: EngineTarget, runId: string): Promise<void> {
+  await requestAbort(t, runId)
 }
 
 export type TerminalRunStatus = 'done' | 'failed' | 'aborted'
@@ -195,13 +191,13 @@ function isTerminalStatus(status: unknown): status is TerminalRunStatus {
 }
 
 /** 保留 SSE 订阅直到真终态。新引擎等 finally;旧引擎回退到显式的终态记录,空列表不是证明。 */
-export async function abortRunAndWait(cfg: EngineArg, runId: string, sessionId: string): Promise<TerminalRunStatus> {
+export async function abortRunAndWait(t: EngineTarget, runId: string, sessionId: string): Promise<TerminalRunStatus> {
   const deadline = Date.now() + 10_000
   do {
-    const result = await requestAbort(cfg, runId)
+    const result = await requestAbort(t, runId)
     if (result.settled === true && isTerminalStatus(result.status)) return result.status
     if (result.settled === undefined) {
-      const run = (await listActiveRuns(cfg, sessionId)).find((r) => r.id === runId)
+      const run = (await listActiveRuns(t, sessionId)).find((r) => r.id === runId)
       if (run && isTerminalStatus(run.status)) return run.status
     }
     if (Date.now() >= deadline) break
@@ -212,11 +208,11 @@ export async function abortRunAndWait(cfg: EngineArg, runId: string, sessionId: 
 
 /** 运行时转向:把消息注入仍在跑的 run(下一迭代生效)。run 已结束 → 409 返回 {ok:false,reason:'not_active'},前端回退起新 run。 */
 export async function steerRun(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   params: { message: string; attachments?: Attachment[] },
 ): Promise<{ ok: boolean; reason?: string; userMessageId?: string }> {
-  const r = await engineRequest(cfg, `/agent/runs/${encodeURIComponent(runId)}/steer`, {
+  const r = await engineRequest(t, `/agent/runs/${encodeURIComponent(runId)}/steer`, {
     method: 'POST',
     body: JSON.stringify({ message: params.message, attachments: params.attachments || [] }),
   })
@@ -227,11 +223,11 @@ export async function steerRun(
 }
 
 /** Wake queued input in the SAME run. Old engines may reject flush; never fall back to abort. */
-export async function expediteSteer(cfg: EngineArg, runId: string): Promise<{ ok: boolean }> {
+export async function expediteSteer(t: EngineTarget, runId: string): Promise<{ ok: boolean }> {
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('Steering request timed out', 'TimeoutError')), 5000)
   try {
-    const r = await engineRequest(cfg, `/agent/runs/${encodeURIComponent(runId)}/steer`, {
+    const r = await engineRequest(t, `/agent/runs/${encodeURIComponent(runId)}/steer`, {
       method: 'POST', signal: ac.signal, body: JSON.stringify({ flush: true }),
     })
     if (r.status === 409) return { ok: false }
@@ -244,11 +240,11 @@ export async function expediteSteer(cfg: EngineArg, runId: string): Promise<{ ok
 
 /** 撤回一条尚未注入的转向消息。gone=true:已注入或 run 已终结(来不及了,交给事件流收拾)。 */
 export async function cancelSteer(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   messageId: string,
 ): Promise<{ ok: boolean; gone?: boolean }> {
-  const r = await engineRequest(cfg, `/agent/runs/${encodeURIComponent(runId)}/steer/${encodeURIComponent(messageId)}`, {
+  const r = await engineRequest(t, `/agent/runs/${encodeURIComponent(runId)}/steer/${encodeURIComponent(messageId)}`, {
     method: 'DELETE',
   })
   if (r.status === 404) return { ok: false, gone: true }
@@ -258,13 +254,13 @@ export async function cancelSteer(
 
 /** 列出某会话的在飞/最近 run(刷新恢复:重新挂 SSE)。 */
 export async function listActiveRuns(
-  cfg: EngineArg,
+  t: EngineTarget,
   sessionId: string,
 ): Promise<Array<{ id: string; status: string; assistant_message_id: string | null }>> {
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(new DOMException('Run status request timed out', 'TimeoutError')), 5000)
   try {
-    const r = await engineRequest(cfg, `/agent/runs?session_id=${encodeURIComponent(sessionId)}`, {
+    const r = await engineRequest(t, `/agent/runs?session_id=${encodeURIComponent(sessionId)}`, {
       signal: ac.signal,
     })
     if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
@@ -276,13 +272,13 @@ export async function listActiveRuns(
 
 /** 兑现一次询问(ask_user/exit_plan_mode)。410 = 已不在等待(过期/他端已处理)。 */
 export async function resolveInquiry(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   inquiryId: string,
   answer: string,
 ): Promise<{ ok: boolean; gone: boolean }> {
   const r = await engineRequest(
-    cfg,
+    t,
     `/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(inquiryId)}`,
     { method: 'POST', body: JSON.stringify({ answer }) },
     { timeoutMs: DECIDE_TIMEOUT_MS },
@@ -298,7 +294,7 @@ export async function resolveInquiry(
  * 网络异常吞掉:重试没意义(引擎 8s 就超时了),这是纯附加能力,不该冒泡打断会话。
  */
 export async function sendUiAck(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   ackId: string,
   body: { ok: boolean; error?: string; state?: string; settings?: Record<string, string> },
@@ -311,7 +307,7 @@ export async function sendUiAck(
   let outcome = 'network'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await engineRequest(cfg, path, { method: 'POST', body: JSON.stringify(body) })
+      const r = await engineRequest(t, path, { method: 'POST', body: JSON.stringify(body) })
       outcome = String(r.status)
       if (r.ok || (r.status >= 400 && r.status < 500)) return outcome
     } catch { outcome = 'network' /* 网络异常 → 落到下面重试一次 */ }
@@ -323,13 +319,13 @@ export async function sendUiAck(
 /** 兑现一次 Agent Desk 截屏请求(desk_screenshot)。失败也要发——引擎那头在等,不发就是干等超时。
  *  网络异常吞掉:重试没意义(引擎 8s 就超时了),这是纯附加能力,不该冒泡打断会话。 */
 export async function sendDeskCapture(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   shotId: string,
   body: { dataUrl?: string; mode?: 'card' | 'open'; companion?: string; error?: string },
 ): Promise<void> {
   await engineRequest(
-    cfg,
+    t,
     `/agent/runs/${encodeURIComponent(runId)}/captures/${encodeURIComponent(shotId)}`,
     { method: 'POST', body: JSON.stringify(body) },
   ).catch(() => {})
@@ -342,14 +338,14 @@ const DECIDE_TIMEOUT_MS = 15_000
  *  其余非 2xx 带回 message(远端改参数 → REMOTE_ARGS_OVERRIDE_FORBIDDEN 等已本地化):调用方必须上屏,
  *  否则点了「批准」什么都不发生、卡片一直挂着(Codex 终审 F#2)。 */
 export async function resolveApproval(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   approvalId: string,
   action: 'approve' | 'approve_always' | 'reject',
   argsOverride?: Record<string, any>,
 ): Promise<{ ok: boolean; gone: boolean; message?: string; code?: string }> {
   const r = await engineRequest(
-    cfg,
+    t,
     `/agent/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: 'POST', body: JSON.stringify({ action, argsOverride }) },
     { timeoutMs: DECIDE_TIMEOUT_MS },
@@ -396,12 +392,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  *   home 5xx / 网络错 → 重试 6 次(约 21s)后抛(不变);home 其它 4xx → 抛(不变)
  */
 export async function subscribeRunEvents(
-  cfg: EngineArg,
+  t: EngineTarget,
   runId: string,
   onEvent: (ev: AgentRunEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const t = routeSession(cfg)
   const unit = t.via === 'unit'
   let lastSeq = 0
   let failures = 0

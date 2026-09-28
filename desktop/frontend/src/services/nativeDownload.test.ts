@@ -2,6 +2,7 @@
 // 断言「分流对不对」与「提示是不是人话」:成功 toast 带原生回的实际文件名;超限在读 body 之前就拒;原生错误码本地化。
 // 语言由 testSetup 钉 zh。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { connectionTarget } from './engine/targets'
 
 const authFetch = vi.fn()
 vi.mock('./http', () => ({ authFetch: (...args: unknown[]) => authFetch(...args) }))
@@ -34,7 +35,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
   it('有桥:交给 window.tangu.saveDownload(名字 / MIME / 字节),不碰 <a download>,toast 用原生回的实际文件名', async () => {
     const save = vi.fn(async () => ({ name: 'b (1).txt' }))
     vi.stubGlobal('window', { tangu: { saveDownload: save } })
-    await api.downloadWorkspaceFile(cfg, 's', '/out/b.txt')
+    await api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/b.txt')
     expect(authFetch).toHaveBeenCalledTimes(1)
     expect(authFetch.mock.calls[0][0]).toBe(URL_B)
     expect(save).toHaveBeenCalledTimes(1)
@@ -48,7 +49,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
 
   it('无桥(desktop / web / 移动端 dev):照旧 <a download>,不弹「已保存」', async () => {
     vi.stubGlobal('window', { tangu: {} })
-    await api.downloadWorkspaceFile(cfg, 's', '/out/b.txt')
+    await api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/b.txt')
     expect(createElement).toHaveBeenCalledWith('a')
     expect(anchors).toHaveLength(1)
     expect(anchors[0].download).toBe('b.txt')
@@ -58,7 +59,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
 
   it('无 window(node / worker):不抛,走 <a download>', async () => {
     vi.stubGlobal('window', undefined)
-    await api.downloadWorkspaceFile(cfg, 's', '/out/b.txt')
+    await api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/b.txt')
     expect(anchors[0].download).toBe('b.txt')
   })
 
@@ -71,7 +72,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
       headers: new Headers({ 'Content-Length': String(NATIVE_DOWNLOAD_MAX_BYTES + 1) }),
       blob,
     }))
-    await expect(api.downloadWorkspaceFile(cfg, 's', '/out/big.zip')).rejects.toThrow('文件太大（50.0 MB），手机上一次最多保存 50 MB')
+    await expect(api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/big.zip')).rejects.toThrow('文件太大（50.0 MB），手机上一次最多保存 50 MB')
     expect(blob).not.toHaveBeenCalled()
     expect(save).not.toHaveBeenCalled()
   })
@@ -83,7 +84,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
       ok: true, status: 200, headers: new Headers(),
       blob: async () => ({ size: 60 * 1024 * 1024, type: '' }),
     }))
-    await expect(api.downloadWorkspaceFile(cfg, 's', '/out/big.zip')).rejects.toThrow('文件太大（60.0 MB）')
+    await expect(api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/big.zip')).rejects.toThrow('文件太大（60.0 MB）')
     expect(save).not.toHaveBeenCalled()
   })
 
@@ -94,7 +95,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
       ['io', '保存到「下载」失败：IOException'],
     ] as const) {
       vi.stubGlobal('window', { tangu: { saveDownload: vi.fn(async () => { throw Object.assign(new Error(code === 'io' ? 'IOException' : 'x'), { code }) }) } })
-      await expect(api.downloadWorkspaceFile(cfg, 's', '/out/b.txt')).rejects.toThrow(want)
+      await expect(api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/b.txt')).rejects.toThrow(want)
     }
     expect(texts()).toEqual([])
   })
@@ -103,7 +104,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
     const save = vi.fn(async () => ({ name: 'x' }))
     vi.stubGlobal('window', { tangu: { saveDownload: save } })
     authFetch.mockImplementation(async () => new Response('nope', { status: 404 }))
-    await expect(api.downloadWorkspaceFile(cfg, 's', '/out/b.txt')).rejects.toThrow('下载失败 (404)')
+    await expect(api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/b.txt')).rejects.toThrow('下载失败 (404)')
     expect(save).not.toHaveBeenCalled()
   })
 
@@ -112,7 +113,7 @@ describe('downloadWorkspaceFile × 原生存「下载」(P1-DL)', () => {
     setLocaleGlobal('en')
     try {
       vi.stubGlobal('window', { tangu: { saveDownload: vi.fn(async () => ({ name: 'b.txt' })) } })
-      await api.downloadWorkspaceFile(cfg, 's', '/out/b.txt')
+      await api.downloadWorkspaceFile(connectionTarget(cfg), 's', '/out/b.txt')
       expect(texts()).toEqual(['Saved to Downloads: b.txt'])
     } finally { setLocaleGlobal('zh') }
   })

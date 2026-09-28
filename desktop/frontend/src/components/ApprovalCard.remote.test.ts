@@ -20,7 +20,7 @@ import { authFetch } from '../services/http'
 import { resolveApproval } from '../services/agentRunService'
 import { syncNow } from '../services/backendService'
 import { useApp } from '../stores/appStore'
-import { resetFocusForTests, useEngineFocus } from '../services/engine/targets'
+import { resetFocusForTests, useEngineFocus, connectionTarget } from '../services/engine/targets'
 
 const req: ApprovalRequest = {
   approvalId: 'a1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }),
@@ -79,15 +79,15 @@ const reply = (body: unknown, status: number): Promise<Response> => Promise.reso
 describe('远端拒绝码上屏(zh/en)', () => {
   it('resolveApproval:400 REMOTE_ARGS_OVERRIDE_FORBIDDEN → ok=false、gone=false、本地化 message', async () => {
     vi.mocked(authFetch).mockImplementation(() => reply({ code: 'REMOTE_ARGS_OVERRIDE_FORBIDDEN', detail: 'Editing the arguments of an approval is only available on the host computer.' }, 400))
-    const r = await resolveApproval(cfg, 'r1', 'a1', 'approve', { command: 'x' })
+    const r = await resolveApproval(connectionTarget(cfg), 'r1', 'a1', 'approve', { command: 'x' })
     expect(r).toEqual({ ok: false, gone: false, code: 'REMOTE_ARGS_OVERRIDE_FORBIDDEN', message: translateFor('zh', 'unitpage.remoteArgsOverride') })
     vi.mocked(authFetch).mockImplementation(() => reply({ detail: 'gone' }, 410))
-    expect(await resolveApproval(cfg, 'r1', 'a1', 'approve')).toEqual({ ok: false, gone: true })
+    expect(await resolveApproval(connectionTarget(cfg), 'r1', 'a1', 'approve')).toEqual({ ok: false, gone: true })
   })
 
   it('request():400 REMOTE_CWD_FORBIDDEN → 本地化提示 + code(英文 detail 不上屏)', async () => {
     vi.mocked(authFetch).mockImplementation(() => reply({ code: 'REMOTE_CWD_FORBIDDEN', detail: 'A remote session cannot use /Users/x as its working directory' }, 400))
-    const err = await syncNow(cfg).catch((e) => e)
+    const err = await syncNow(connectionTarget(cfg)).catch((e) => e)
     expect(err.message).toBe(translateFor('zh', 'unitpage.remoteCwd'))
     expect(err.code).toBe('REMOTE_CWD_FORBIDDEN')
   })

@@ -21,6 +21,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { homeTarget } from '../services/engine/targets'
 
 type Tab = 'agents' | 'settings' | 'git'
 const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
@@ -109,7 +110,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   useEffect(() => {
     let alive = true
     setLoadError('')
-    void getProjectContext(s.cfg, session.id).then((value) => {
+    void getProjectContext(homeTarget(), session.id).then((value) => {
       if (!alive) return
       setCtx(value)
       useApp.getState().rememberProjectSettings(dir, value.settings)
@@ -159,7 +160,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy) return
     setBusy('default'); clear()
     try {
-      const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
+      const saved = await putProjectSettings(homeTarget(), session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
       setCtx((c) => (c ? { ...c, settings: saved } : c))
       setSettingsDraft(saved ?? {}); setSettingsDirty(false)
       useApp.getState().rememberProjectSettings(dir, saved)
@@ -188,7 +189,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         reader.onerror = () => reject(reader.error || new Error('read failed'))
         reader.readAsDataURL(file)
       })
-      applyIcon(await uploadProjectIcon(s.cfg, session.id, dataUrl))
+      applyIcon(await uploadProjectIcon(homeTarget(), session.id, dataUrl))
       setNotice(t('projectProfile.iconSaved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
@@ -198,7 +199,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy || (emoji ?? undefined) === icon) return
     setBusy('icon'); clear()
     try {
-      applyIcon(await (emoji ? setProjectIconEmoji(s.cfg, session.id, emoji) : deleteProjectIcon(s.cfg, session.id)))
+      applyIcon(await (emoji ? setProjectIconEmoji(homeTarget(), session.id, emoji) : deleteProjectIcon(homeTarget(), session.id)))
       setNotice(t(emoji ? 'projectProfile.iconSaved' : 'projectProfile.iconRemoved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
@@ -206,7 +207,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy) return
     setBusy('init'); clear()
     try {
-      const r = await initProjectContext(s.cfg, session.id)
+      const r = await initProjectContext(homeTarget(), session.id)
       setCtx(r.context)
       setNotice(t('projectProfile.initialized', { dir: r.context.workspaceDirName }))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
@@ -224,12 +225,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     setBusy('save'); clear()
     try {
       if (docDirty) {
-        const r = await putProjectDoc(s.cfg, session.id, docDraft, ctx.doc.mtimeMs)
+        const r = await putProjectDoc(homeTarget(), session.id, docDraft, ctx.doc.mtimeMs)
         setCtx((c) => (c ? { ...c, doc: { ...c.doc, path: r.path, exists: true, content: docDraft, mtimeMs: r.mtimeMs, bytes: new TextEncoder().encode(docDraft).length } } : c))
         setDocDirty(false)
       }
       if (settingsDirty) {
-        const saved = await putProjectSettings(s.cfg, session.id, settingsDraft)
+        const saved = await putProjectSettings(homeTarget(), session.id, settingsDraft)
         setCtx((c) => (c ? { ...c, settings: saved } : c))
         useApp.getState().rememberProjectSettings(dir, saved)
         setSettingsDirty(false)
@@ -241,7 +242,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (!skillForm || busy) return
     setBusy('skill'); clear()
     try {
-      await createProjectSkill(s.cfg, session.id, skillForm)
+      await createProjectSkill(homeTarget(), session.id, skillForm)
       setSkillForm(null)
       setReloadAt((n) => n + 1)
       setNotice(t('projectProfile.skillCreated'))
@@ -363,7 +364,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>
           <section className="project-card" data-project-skills>
             <div className="project-card-head"><div><h3><Sparkles size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('projectProfile.skills')}</h3><small>{t('projectProfile.skillsHint', { dir: skillsDir })}</small></div>
-              <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(s.cfg, session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
+              <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(homeTarget(), session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
             {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <button type="button" key={`${skill.id}:${skill.legacy}`} className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>)}</div>
               : <p className="agent-profile-muted">{t('projectProfile.noSkills')}</p>}
             {skillForm ? <form className="project-skill-form" onSubmit={(e) => { e.preventDefault(); void submitSkill() }}>

@@ -69,6 +69,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
+import { UnitCapsReporter, engineCapsState } from './unitCaps' // P1-K7a
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
@@ -886,6 +887,8 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 //   unitWeb(unitWeb.ts):局域网 web 面(0.0.0.0,无需登录;配对令牌鉴权)——把本机曝成网页。
 //   unitHost(unitHost.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb。
 let unitHost: UnitHost | null = null
+/** P1-K7a:caps 上报器(通道 ready 之后报本机引擎态,手机据此分「在线但引擎没起」);随 unitHost 一起换。 */
+let unitCaps: UnitCapsReporter | null = null
 let unitWeb: UnitWebHandle | null = null
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
@@ -1087,6 +1090,7 @@ async function doRefreshUnitHost(): Promise<void> {
   const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
   if (unitHost) { unitHost.stop(); unitHost = null }
+  unitCaps = null // stop() 已让它停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
   if (!stored.unitHostEnabled) return
@@ -1097,7 +1101,7 @@ async function doRefreshUnitHost(): Promise<void> {
     await saveConfig({ unitInstanceId: instanceId })
   }
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
-  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded())
+  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitCaps?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
     getEngine: seedGatedEngine(() => {
       const st = backend.getStatus()
@@ -1251,7 +1255,17 @@ async function doRefreshUnitHost(): Promise<void> {
     console.warn('[unit] 设备凭据读不出来:只起局域网面,不建设备通道')
     return
   }
+  // P1-K7a(R-30):caps 上报器 —— 通道 ready 之后报一次,backend.onStatus / 种子做完再报变化(unitCaps.ts)
+  const caps = new UnitCapsReporter({
+    getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
+    getPairing: () => unitHostPairing,
+    current: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
+    log: (m) => console.log(m),
+  })
+  unitCaps = caps
   const host: UnitHost = new UnitHost({
+    onChannelReady: () => caps.channelReady(),
+    onChannelDown: () => caps.channelDown(),
     getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
     getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '', proxyCallerKey: unitWeb?.proxyCallerKey ?? '' }),
     getLanUrl: () => unitLanUrl(),
@@ -3456,6 +3470,7 @@ app.whenReady().then(async () => {
       w.webContents.send('backend:status', st)
     }
     remoteSafety.engineStatusChanged() // P1-K2:重连活动流;有没送到的急停 / 解锁就补
+    unitCaps?.engineChanged() // P1-K7a:引擎起停 / 崩溃 → 名册的 caps.engine
   })
 
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证

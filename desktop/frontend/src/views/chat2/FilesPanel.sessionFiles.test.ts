@@ -24,7 +24,7 @@ import { listWorkspace, downloadWorkspaceFile } from '../../services/backendServ
 import { LocaleProvider, translateFor } from '../../i18n'
 import { FilesPanel } from './FilesPanel'
 import { useApp } from '../../stores/appStore'
-import { resetFocusForTests, useEngineFocus } from '../../services/engine/targets'
+import { bindSession, clearSessionBindings, resetFocusForTests, useEngineFocus } from '../../services/engine/targets'
 import type { WorkspaceDescriptor } from '../../types'
 
 const SID = 'sess-remote-1'
@@ -53,11 +53,13 @@ afterEach(async () => {
   await act(async () => root.unmount()); host.remove()
   useApp.setState(initial, true)
   resetFocusForTests()
+  clearSessionBindings()
 })
 
 describe('FilesPanel ×「本会话的文件」(M1B)', () => {
   it('会话在别的电脑上 → 列出会话沙箱、行尾下载键按会话下载;没有工作区也照样显示', async () => {
     useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name: 'K9 Studio Mac' })
+    bindSession(SID, { kind: 'unit', unitId: UNIT }) // S4:会话在那台上(绑定是判据)
     await render([])
     expect(group()?.textContent).toContain(translateFor('zh', 'panel.files.sessionFiles'))
     expect(vi.mocked(listWorkspace)).toHaveBeenCalledWith(expect.anything(), SID, undefined)
@@ -70,6 +72,7 @@ describe('FilesPanel ×「本会话的文件」(M1B)', () => {
 
   it('右键菜单:预览 / 下载,没有删除(unit 上工作区删除不可用)', async () => {
     useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name: null })
+    bindSession(SID, { kind: 'unit', unitId: UNIT })
     await render([])
     const row = host.querySelector('[data-ws-file="/k9-attach.txt"]') as HTMLElement
     await act(async () => { row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 })) })

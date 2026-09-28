@@ -10,6 +10,7 @@ import { getAgentSchedules } from '../services/backendService'
 import type { AgentScheduleInfo, TanguDesktopConfig } from '../types'
 import { cellText, type AggDb } from '../amadeus/store/dbAggregateStore'
 import type { CellValue, DbColumn } from '@amadeus-shared/db/schema'
+import { homeTarget } from '../services/engine/targets'
 
 interface AgentScheduleState {
   schedules: AgentScheduleInfo[]
@@ -21,7 +22,7 @@ export const useAgentSchedules = create<AgentScheduleState>((set, get) => ({
   schedules: [],
   loaded: false,
   async refresh(cfg) {
-    const next = await getAgentSchedules(cfg).catch(() => get().schedules)
+    const next = await getAgentSchedules(homeTarget()).catch(() => get().schedules)
     // 旧/代理后端偶尔会以 200 返回缺字段对象；Calendar 不应因一份可选只读源把主视图一起砸掉。
     const schedules = Array.isArray(next) ? next : get().schedules
     set({ schedules, loaded: true })

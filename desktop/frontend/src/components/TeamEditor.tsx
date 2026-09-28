@@ -9,6 +9,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import * as api from '../services/backendService'
 import { isTeamImageAvatar, type NormalAgentDef, type TeamDef } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'team.editor.titleNew': { zh: '新建团队', en: 'New team' },
@@ -81,8 +82,8 @@ export const TeamEditor: React.FC<{
     const st = useApp.getState()
     try {
       const input = { name: name.trim(), avatar: removeImage ? '' : avatar.trim(), members, doc }
-      let saved = team ? await api.patchTeam(st.cfg, team.slug, input) : await api.createTeam(st.cfg, input)
-      if (removeImage && team) { await api.deleteTeamAvatar(st.cfg, saved.slug); saved = { ...saved, avatar: '' } }
+      let saved = team ? await api.patchTeam(homeTarget(), team.slug, input) : await api.createTeam(homeTarget(), input)
+      if (removeImage && team) { await api.deleteTeamAvatar(homeTarget(), saved.slug); saved = { ...saved, avatar: '' } }
       if (avatarFile) {
         const data = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader()
@@ -90,7 +91,7 @@ export const TeamEditor: React.FC<{
           reader.onerror = () => reject(new Error(t('team.editor.avatarReadFailed')))
           reader.readAsDataURL(avatarFile)
         })
-        const uploaded = await api.uploadTeamAvatar(st.cfg, saved.slug, data, avatarFile.type)
+        const uploaded = await api.uploadTeamAvatar(homeTarget(), saved.slug, data, avatarFile.type)
         saved = { ...saved, avatar: uploaded.avatar }
       }
       await st.refreshTeams()

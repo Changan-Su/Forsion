@@ -1,6 +1,7 @@
-// P1-K6 S0 的「零行为变化」证据:服务函数改收 EngineArg 之后,老调用点(传整份 cfg)发出去的请求与改造前
-// **逐字**一致(URL、头的键与值与顺序、init 的其余字段、authFetch 的参数个数);传解析层铸的 home 目标与传 cfg 等价。
-// 期望值按改造前的源码手写(`authFetch(\`${cfg.backendUrl}${path}\`, { ...init, headers: headers(cfg.token) }, opts)`)。
+// P1-K6 的「零行为变化」证据:服务函数改收目标之后(S0 兼容联合 → S3 只收 EngineTarget),发出去的请求与改造前
+// **逐字**一致(URL、头的键与值与顺序、init 的其余字段、authFetch 的参数个数)。
+// 期望值按改造前的源码手写(`authFetch(\`${cfg.backendUrl}${path}\`, { ...init, headers: headers(cfg.token) }, opts)`),
+// S3 起两种合法的 home 目标 —— 活目标 homeTarget()(宿主 cfg 就是这份)与显式快照 connectionTarget(cfg)—— 都必须等于它。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const authFetch = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify({ sessions: [], runs: [], runId: 'r', ok: true }), { status: 200 }))
@@ -10,25 +11,28 @@ vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revok
 
 const api = await import('../backendService')
 const run = await import('../agentRunService')
-const { asTarget, installEngineHost } = await import('./targets')
+const { connectionTarget, homeTarget, installEngineHost } = await import('./targets')
 
 const cfg = { backendUrl: 'http://127.0.0.1:4100', token: 'engine-token', modelId: 'fallback-model' }
 const H = { 'Content-Type': 'application/json', Authorization: 'Bearer engine-token' }
 
-beforeEach(() => authFetch.mockClear())
+beforeEach(() => {
+  authFetch.mockClear()
+  installEngineHost({ cfg: () => cfg, desktopConfig: () => null }) // 本端宿主的 cfg 就是这份:homeTarget() 读它
+})
 afterEach(() => vi.unstubAllGlobals())
 
-/** 同一次调用分别喂 cfg 与 asTarget(cfg),两次 authFetch 的参数必须完全相同。 */
-async function both(call: (arg: typeof cfg | ReturnType<typeof asTarget>) => Promise<unknown>): Promise<unknown[]> {
+/** 同一次调用分别喂 homeTarget()(活目标)与 connectionTarget(cfg)(快照),两次 authFetch 的参数必须完全相同。 */
+async function both(call: (arg: ReturnType<typeof homeTarget>) => Promise<unknown>): Promise<unknown[]> {
   // 每次调用各自 new 的 AbortSignal 不是同一个对象:比对时只看「有没有带 signal」
   const norm = (c: unknown[]) => c.map((x, i) => (i === 1 && x && typeof x === 'object' && 'signal' in x
     ? { ...(x as object), signal: (x as { signal?: unknown }).signal ? '<signal>' : (x as { signal?: unknown }).signal }
     : x))
   authFetch.mockClear()
-  await call(cfg)
+  await call(homeTarget())
   const legacy = authFetch.mock.calls.map((c) => norm([...c]))
   authFetch.mockClear()
-  await call(asTarget(cfg))
+  await call(connectionTarget(cfg))
   const viaTarget = authFetch.mock.calls.map((c) => norm([...c]))
   expect(viaTarget).toEqual(legacy)
   expect(viaTarget.map((c) => c.length)).toEqual(legacy.map((c) => c.length))
@@ -63,8 +67,8 @@ describe('backendService:request() 与直连五处', () => {
 
   it('workspaceDownloadUrl 与 downloadWorkspaceFile 的 URL 一致', async () => {
     const url = 'http://127.0.0.1:4100/agent/workspace/download?sessionId=s&appId=tangu&path=a%2Fb.txt'
-    expect(api.workspaceDownloadUrl(cfg, 's', 'a/b.txt')).toBe(url)
-    expect(api.workspaceDownloadUrl(asTarget(cfg), 's', 'a/b.txt')).toBe(url)
+    expect(api.workspaceDownloadUrl(homeTarget(), 's', 'a/b.txt')).toBe(url)
+    expect(api.workspaceDownloadUrl(connectionTarget(cfg), 's', 'a/b.txt')).toBe(url)
     vi.stubGlobal('document', { createElement: () => ({ click: () => {} }) })
     const c = await both((a) => api.downloadWorkspaceFile(a, 's', 'a/b.txt')) as unknown[]
     expect(c).toEqual([url, { headers: H }])
@@ -72,9 +76,9 @@ describe('backendService:request() 与直连五处', () => {
 })
 
 describe('agentRunService 13 个函数', () => {
-  it('startRun:无模型时回退 cfg.modelId(legacy),目标本身不带模型', async () => {
+  it('startRun:URL / 头 / 两参调用与改造前一致;目标不带模型(回退链在调用方:appStore.send 的 sessionModelId,home 缺省即 cfg.modelId)', async () => {
     authFetch.mockClear()
-    await run.startRun(cfg, { sessionId: 's', message: 'hi' })
+    await run.startRun(homeTarget(), { sessionId: 's', message: 'hi', modelId: 'fallback-model' })
     const [url, init, ...rest] = authFetch.mock.calls[0] as [string, RequestInit, ...unknown[]]
     expect(url).toBe('http://127.0.0.1:4100/agent/runs')
     expect(rest).toEqual([]) // 改造前是两参调用
@@ -82,18 +86,20 @@ describe('agentRunService 13 个函数', () => {
     expect(init.headers).toEqual(H)
     expect(JSON.parse(String(init.body)).model_id).toBe('fallback-model')
 
+    // S3 删了服务层对 legacy cfg.modelId 的兜底:它与调用方回退链(defaultModelOf:home = cfg.modelId)同值,
+    // 调用方的链由 appStore.test「新会话固化模型」钉住。不带模型 = 交给引擎按 profile 缺省。
     authFetch.mockClear()
-    await run.startRun(asTarget(cfg), { sessionId: 's', message: 'hi' })
+    await run.startRun(connectionTarget(cfg), { sessionId: 's', message: 'hi' })
     expect(JSON.parse(String((authFetch.mock.calls[0][1] as RequestInit).body)).model_id).toBeUndefined()
 
     authFetch.mockClear()
-    await run.startRun(asTarget(cfg), { sessionId: 's', message: 'hi', modelId: 'explicit' })
+    await run.startRun(connectionTarget(cfg), { sessionId: 's', message: 'hi', modelId: 'explicit' })
     expect(JSON.parse(String((authFetch.mock.calls[0][1] as RequestInit).body)).model_id).toBe('explicit')
   })
 
   it('带超时的(testConnection / resolveApproval / resolveInquiry)三参,其余两参', async () => {
     authFetch.mockClear()
-    await run.testConnection(cfg)
+    await run.testConnection(homeTarget())
     expect(authFetch.mock.calls.map((c) => [c[0], c[2]])).toEqual([
       ['http://127.0.0.1:4100/health', { timeoutMs: 15000 }],
       ['http://127.0.0.1:4100/agent/special/config', { timeoutMs: 15000 }],
@@ -130,22 +136,22 @@ describe('移动端本地收件箱 pull(S1:广播是云端 API,基址读 cloudAp
 
   it('今天(引擎 = 云网关):URL 与头都与改造前逐字一致', async () => {
     installEngineHost({ cfg: () => cfg, desktopConfig: () => ({ cloudUrl: 'https://api.forsion.test/api', cloudApiBase: 'https://api.forsion.test/api' }) })
-    const r = await api.pullInbox({ backendUrl: 'https://api.forsion.test/api', token: 'forsion-token', modelId: '' })
+    const r = await api.pullInbox(connectionTarget({ backendUrl: 'https://api.forsion.test/api', token: 'forsion-token', modelId: '' }))
     expect(r).toEqual({ pulled: true, added: 0 })
     expect(fetchSpy.mock.calls[0]).toEqual(['https://api.forsion.test/api/brain/inbox/broadcasts', { headers: { Authorization: 'Bearer forsion-token' } }])
   })
 
   it('引擎切到「我的电脑」后广播仍打云端(不跟着 backendUrl 进隧道)', async () => {
     installEngineHost({ cfg: () => cfg, desktopConfig: () => ({ cloudApiBase: 'https://api.forsion.test/api' }) })
-    await api.pullInbox({ backendUrl: 'https://api.forsion.test/api/units/u1/proxy/engine', token: 'forsion-token', modelId: '' })
+    await api.pullInbox(connectionTarget({ backendUrl: 'https://api.forsion.test/api/units/u1/proxy/engine', token: 'forsion-token', modelId: '' }))
     expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.forsion.test/api/brain/inbox/broadcasts')
   })
 
   it('空 token / 云端基址未就绪 → 不外呼', async () => {
     installEngineHost({ cfg: () => cfg, desktopConfig: () => ({ cloudApiBase: 'https://api.forsion.test/api' }) })
-    expect(await api.pullInbox({ backendUrl: 'https://api.forsion.test/api', token: '', modelId: '' })).toEqual({ pulled: false, added: 0, detail: 'no backend/token' })
+    expect(await api.pullInbox(connectionTarget({ backendUrl: 'https://api.forsion.test/api', token: '', modelId: '' }))).toEqual({ pulled: false, added: 0, detail: 'no backend/token' })
     installEngineHost({ cfg: () => cfg, desktopConfig: () => null })
-    expect(await api.pullInbox({ backendUrl: 'https://api.forsion.test/api', token: 'forsion-token', modelId: '' })).toEqual({ pulled: false, added: 0, detail: 'no backend/token' })
+    expect(await api.pullInbox(connectionTarget({ backendUrl: 'https://api.forsion.test/api', token: 'forsion-token', modelId: '' }))).toEqual({ pulled: false, added: 0, detail: 'no backend/token' })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

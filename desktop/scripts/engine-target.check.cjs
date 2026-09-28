@@ -1,5 +1,5 @@
 /**
- * 整端切到一台电脑(P1-K6 S2 = 设计文档「最小切片」)的真浏览器台架 —— `npm run check:enginetarget`。
+ * 手机把「在哪运行」切到一台电脑(P1-K6 S2 = 设计文档「最小切片」)+ 会话按绑定路由(S4)的真浏览器台架 —— `npm run check:enginetarget`。
  *
  * 为什么要它:单测(appStore.target / agentRunService.target / backendService.target)各自钉住一段契约,
  * 但「手机渲染层 × 真 SSE 流 × hub 隧道前缀 × 离线续订 × 审批卡 × 切回本端」只有整条链一起跑才看得见;
@@ -12,13 +12,16 @@
  *      可切离线(断掉在途流 + 回 503 UNIT_OFFLINE)。两个桩引擎 = scripts/lib/stub-engine.cjs。
  *   焦点经 dev 构建的 window.__forsionEngineTargets 切(选择器 UI 归 K8);store 经 window.__forsionStore 读。
  *
- * 断言:切焦点 → 会话列表 / 目录换成那台的、家目录取那台的;新会话建在那台且是 host 执行、没有整对象 PUT;
+ * 断言:切焦点 → 目录换成那台的、家目录取那台的,会话列表仍只列本端(S4 / R-17:不把那台的整张列表并进来);
+ *      新会话建在那台(绑到那台)且是 host 执行、没有整对象 PUT;
  *      run 的 SSE 走隧道前缀;审批卡远端只读(无改命令框、无「总允许」)、批准打到那台;
  *      断线 → 连接态提示「不在线」、恢复后按 fromSeq 续订、不把消息标错;
  *      **空闲时**断线(没有在飞的 run,只有轮询撞上)→ 恢复后不点重试也回 ready、提示消失、带外消息照到(评审 F1);
  *      切回本端 → 列表回来;离开一台离线的电脑后不再经 hub 探它(评审 F2);
  *      调用方身份取不到(终局)→ 不自动重试,但提示条给「重试」,点了就连上(评审 F3);
  *      每条隧道请求都带 Bearer、不带 x-forsion-remote*、URL 不含 token=。
+ *      **两台并存(S4)**:会话建在 A、焦点换到 B → 那条会话留在列表里、仍绑在 A;打开它批审批 / 跑完 / 再发一句全打 A,B 一条都收不到;
+ *      焦点 B 上的空白新对话建在 B;B 断线不影响 A 上的会话。负对照:把 targetForSession 改回「恒 = 焦点」→ 这一段红。
  * 截图(自己看):已切到那台电脑的对话 / 远端只读审批卡 / 不在线提示 / 终局态的「重试」,落 SHOT_DIR 或临时目录。
  *
  * 用法:cd desktop && npm run check:enginetarget
@@ -39,6 +42,7 @@ const MOBILE = path.join(GENESIS, 'mobile')
 const PORT = Number(process.env.ENGINE_TARGET_PORT) || 5303
 const ORIGIN = `http://localhost:${PORT}`
 const U = '7f0e8a52-1b2c-4d3e-8f40-5a6b7c8d9e0f'
+const U2 = '3c9d1e2f-4a5b-4c6d-8e7f-90a1b2c3d4e5' // S4 两台并存:第二台电脑「Office PC」
 const SHOT_DIR = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-enginetarget-'))
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
 const TOKEN = `${b64({ alg: 'none' })}.${b64({ userId: 'e2e-user' })}.sig`
@@ -88,9 +92,23 @@ async function startWorld() {
     override: archivedEmpty,
   })
 
+  // 第二台电脑(S4 两台并存):新会话 id 与 Mac 的错开(真引擎是 uuid,不会撞;桩的 s-new-N 会撞 → 先到先得的 conflict)
+  let pcNew = 0
+  const pc = await startStubEngine({
+    sessions: [session('pc-1', 'PC 上的会话')],
+    models: [{ id: 'pc-model', name: 'PC Model', provider: 'stub', contextWindow: 128000 }],
+    agents: [{ slug: 'xyra', name: 'Tangu' }],
+    override: (ctx) => {
+      if (ctx.path === '/agent/sessions' && ctx.method === 'POST') return { session: session(`pc-new-${++pcNew}`, 'New Chat') }
+      return archivedEmpty(ctx)
+    },
+  })
+
   // callerDown:模拟 K8 中继换不到调用方票(合成 503 CALLER_UNAVAILABLE,请求没到那台);终局态,渲染层不得自动重试
-  const hub = { offline: false, callerDown: false, seen: [], streams: new Set() }
+  // offline2:第二台单独断线(S4:一台断线不影响另一台上的会话)
+  const hub = { offline: false, offline2: false, callerDown: false, seen: [], streams: new Set() }
   const unitPrefix = `/api/units/${U}/proxy`
+  const unitPrefix2 = `/api/units/${U2}/proxy`
   const forward = (req, res, base, subPath) => {
     const target = new URL(subPath, base)
     const up = http.request(target, { method: req.method, headers: { 'content-type': req.headers['content-type'] || 'application/json', accept: req.headers.accept || '*/*', authorization: 'Bearer stub' } }, (r) => {
@@ -111,7 +129,7 @@ async function startWorld() {
         }
       })
       r.on('end', () => res.end())
-      const entry = { res, up: r }
+      const entry = { res, up: r, unit: base === pc.url ? 'B' : 'A' }
       hub.streams.add(entry)
       res.on('close', () => { hub.streams.delete(entry); r.destroy() })
     })
@@ -123,9 +141,19 @@ async function startWorld() {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://hub')
     const p = u.pathname
-    if (p.startsWith('/api/units/')) hub.seen.push({ method: req.method, url: req.url, headers: { ...req.headers }, at: Date.now(), offline: hub.offline })
+    if (p.startsWith('/api/units/')) hub.seen.push({ method: req.method, url: req.url, headers: { ...req.headers }, at: Date.now(), offline: hub.offline, unit: p.startsWith(`/api/units/${U2}/`) ? 'B' : p.startsWith(`/api/units/${U}/`) ? 'A' : '?' })
     if (p === '/api/auth/me') return json(res, 200, { id: 'e2e-user', username: 'e2e', nickname: 'E2E' })
-    if (p === '/api/units') return json(res, 200, { units: [{ id: U, name: 'Studio Mac', kind: 'desktop', platform: 'darwin', online: !hub.offline, capsLive: true, caps: { engine: 'ready' } }] })
+    if (p === '/api/units') return json(res, 200, { units: [
+      { id: U, name: 'Studio Mac', kind: 'desktop', platform: 'darwin', online: !hub.offline, capsLive: true, caps: { engine: 'ready' } },
+      { id: U2, name: 'Office PC', kind: 'desktop', platform: 'win32', online: !hub.offline2, capsLive: true, caps: { engine: 'ready' } },
+    ] })
+    if (p.startsWith(unitPrefix2)) {
+      if (hub.offline2) return json(res, 503, { code: 'UNIT_OFFLINE', detail: 'Unit offline' })
+      const rest = p.slice(unitPrefix2.length)
+      if (rest === '/unit/config') return json(res, 200, { config: { homeDir: 'C:\\Users\\office', defaultWorkspaceDir: 'C:\\Users\\office\\Forsion' } })
+      if (rest === '/engine' || rest.startsWith('/engine/')) return forward(req, res, pc.url, (rest.slice('/engine'.length) || '/') + u.search)
+      return json(res, 403, { code: 'LOCAL_ONLY' })
+    }
     if (p.startsWith('/api/units/') && !p.startsWith(`/api/units/${U}/`)) return json(res, 404, { code: 'UNIT_NOT_FOUND', detail: 'Unit not found' })
     if (p.startsWith(unitPrefix)) {
       if (hub.offline) return json(res, 503, { code: 'UNIT_OFFLINE', detail: 'Unit offline' })
@@ -143,14 +171,18 @@ async function startWorld() {
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   return {
-    home, mac, hub,
+    home, mac, pc, hub,
     url: `http://127.0.0.1:${server.address().port}`,
     setOffline(on) {
       hub.offline = on
       // 隧道断:hub 收掉在途的流(客户端看到的是非终态的断流 → 800ms 后续订 → 503 UNIT_OFFLINE → 暂停等恢复)
-      if (on) for (const s of hub.streams) { try { s.res.end(); s.up.destroy() } catch { /* ignore */ } }
+      if (on) for (const s of hub.streams) { if (s.unit === 'A') { try { s.res.end(); s.up.destroy() } catch { /* ignore */ } } }
     },
-    close() { server.close(); home.close(); mac.close() },
+    setOffline2(on) {
+      hub.offline2 = on
+      if (on) for (const s of hub.streams) { if (s.unit === 'B') { try { s.res.end(); s.up.destroy() } catch { /* ignore */ } } }
+    },
+    close() { server.close(); home.close(); mac.close(); pc.close() },
   }
 }
 
@@ -210,13 +242,16 @@ async function main() {
 
     // ── B. 切到那台电脑 ──
     await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
-    await page.waitForFunction(() => window.__forsionStore.getState().sessions.some((s) => s.id === 'mac-1'), null, { timeout: 20_000 })
-    await page.waitForFunction(() => window.__forsionStore.getState().agentDefs.length > 0, null, { timeout: 10_000 }).catch(() => {})
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok', null, { timeout: 20_000 })
+    await page.waitForFunction(() => window.__forsionStore.getState().agentDefs.some((a) => a.slug === 'mac-only'), null, { timeout: 10_000 }).catch(() => {})
     const b = await st(() => {
       const s = window.__forsionStore.getState()
       return { ids: s.sessions.map((x) => x.id), conn: s.connState, models: s.modelsResp?.models?.map((m) => m.id), agents: s.agentDefs.map((a) => a.slug), homeDir: s.homeDir, ws: s.defaultWsDir, health: window.__forsionEngineTargets.health() }
     })
-    check('切焦点:会话列表换成那台电脑的', JSON.stringify(b.ids) === '["mac-1"]', JSON.stringify(b.ids))
+    // S4(R-17):列表只拉本端,不把那台的整张列表并进 appStore.sessions(设备分组归 K7);焦点只管「新会话建在哪」。
+    // P1-K7a 起手机侧栏的「我的电脑」分组会经隧道拉那台的列表(只进 deviceSessionsStore,打开哪条才注入哪条)—— 所以这里不再断言
+    // 「没有 /engine/agent/sessions 请求」,只断言 appStore.sessions 里没有那台自己的会话(mac-1)。
+    check('切焦点:会话列表仍只列本端(不并进那台的整张列表)', JSON.stringify(b.ids) === '["home-1"]', JSON.stringify(b.ids))
     check('切焦点:连上了,健康 ready', b.conn === 'ok' && b.health[`unit:${U}`]?.state === 'ready', `${b.conn} ${JSON.stringify(b.health)}`)
     check('切焦点:目录(模型 / Agent)是那台的', JSON.stringify(b.models) === '["mac-model"]' && b.agents.includes('mac-only'), `${JSON.stringify(b.models)} ${JSON.stringify(b.agents)}`)
     await page.waitForFunction(() => window.__forsionStore.getState().defaultWsDir === '/Users/studio/Forsion', null, { timeout: 10_000 }).catch(() => {})
@@ -245,6 +280,8 @@ async function main() {
     check('那台电脑的新会话 = host 执行,工作目录 = 那台的默认工作区', created?.agentConfig?.execMode === 'host' && created?.agentConfig?.cwd === '/Users/studio/Forsion', JSON.stringify(created?.agentConfig && { e: created.agentConfig.execMode, c: created.agentConfig.cwd }))
     check('建会话没有整对象 PUT(远端 deny-remote)', !world.hub.seen.some((r) => r.method === 'PUT'), world.hub.seen.filter((r) => r.method === 'PUT').map((r) => r.url).join(','))
     check('本端桩没收到 run(没有打错引擎)', world.home.seen.runs.length === 0, String(world.home.seen.runs.length))
+    const bound = await page.evaluate((sid) => ({ loc: window.__forsionEngineTargets.locationOf(sid), tag: window.__forsionStore.getState().sessions.find((s) => s.id === sid)?.location }), newSid)
+    check('新会话绑到那台电脑(路由真源),列表里的记录经 withLocation 打标', bound.loc?.kind === 'unit' && bound.loc.unitId === U && bound.tag?.kind === 'unit' && bound.tag.unitId === U, JSON.stringify(bound))
     const card = await page.evaluate(() => {
       const c = document.querySelector('.approval-card')
       if (!c) return null
@@ -320,14 +357,17 @@ async function main() {
 
     // ── E. 切回本端 ──
     await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
-    await page.waitForFunction(() => window.__forsionStore.getState().sessions.some((s) => s.id === 'home-1'), null, { timeout: 20_000 }).catch(() => {})
+    await page.waitForFunction(() => window.__forsionStore.getState().modelsResp?.models?.some((m) => m.id === 'cloud-model'), null, { timeout: 20_000 }).catch(() => {})
     const back = await st(() => ({ ids: window.__forsionStore.getState().sessions.map((s) => s.id), models: window.__forsionStore.getState().modelsResp?.models?.map((m) => m.id), focus: window.__forsionEngineTargets.focusRef() }))
-    check('切回本端:列表 / 目录回到本端', JSON.stringify(back.ids) === '["home-1"]' && JSON.stringify(back.models) === '["cloud-model"]' && back.focus.kind === 'home', JSON.stringify(back))
+    // S4:那台上建的会话留在列表里(已注入,仍绑在那台);本端的列表照旧
+    check('切回本端:目录回到本端;列表 = 本端的 + 那台上建的那条(仍在)', JSON.stringify(back.models) === '["cloud-model"]' && back.focus.kind === 'home' && back.ids.includes('home-1') && back.ids.includes(newSid) && !back.ids.includes('mac-1'), JSON.stringify(back))
+    const stillA = await page.evaluate((sid) => window.__forsionEngineTargets.locationOf(sid), newSid)
+    check('焦点回本端后,那台上建的会话仍绑在那台(R-19:不跟焦点走)', stillA?.kind === 'unit' && stillA.unitId === U, JSON.stringify(stillA))
 
     // ── E2. 重启恢复焦点 + 开机时那台就不在线(深色主题截图)──
     // 焦点按账号落盘:切回本端前再切一次过去,然后重载 —— 应恢复到那台电脑;那台此刻离线 → 连接失败 + 不在线提示。
     await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
-    await page.waitForFunction(() => window.__forsionStore.getState().sessions.some((s) => s.id === 'mac-1'), null, { timeout: 20_000 }).catch(() => {})
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok', null, { timeout: 20_000 }).catch(() => {})
     world.setOffline(true)
     await page.evaluate(() => { try { localStorage.setItem('forsion_theme', 'dark') } catch { /* ignore */ } })
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -338,6 +378,10 @@ async function main() {
     await page.waitForFunction(() => window.__forsionStore.getState().connState === 'err', null, { timeout: 30_000 }).catch(() => {})
     const bootOffline = await st(() => ({ conn: window.__forsionStore.getState().connState, msg: window.__forsionStore.getState().connMessage, h: window.__forsionEngineTargets.health() }))
     check('开机时那台就不在线:连接失败、健康 offline、给人话', bootOffline.conn === 'err' && /不在线/.test(bootOffline.msg) && Object.values(bootOffline.h).some((x) => x.state === 'offline'), JSON.stringify(bootOffline))
+    // S4:焦点那台连不上不妨碍本端会话 —— 列表照样拉;重载后绑定从落盘读回(那台上建的会话仍认那台)
+    await page.waitForFunction(() => window.__forsionStore.getState().sessions.some((s) => s.id === 'home-1'), null, { timeout: 15_000 }).catch(() => {})
+    const bootList = await page.evaluate((sid) => ({ ids: window.__forsionStore.getState().sessions.map((s) => s.id), loc: window.__forsionEngineTargets.locationOf(sid) }), newSid)
+    check('开机时那台不在线:本端会话列表照样在;重载后那条会话的绑定从落盘读回', bootList.ids.includes('home-1') && bootList.loc?.kind === 'unit' && bootList.loc.unitId === U, JSON.stringify(bootList))
     // 主页 → Tangu 对话视图看输入框顶上的提示(新对话空态也挂着同一个输入框)
     const ta3 = page.locator('.t2c-ta').first()
     if (await ta3.count()) { await ta3.click().catch(() => {}); await ta3.fill('离线时打的字').catch(() => {}); await page.keyboard.press('Enter').catch(() => {}) }
@@ -349,9 +393,9 @@ async function main() {
     check('没连上时输入框占位说「等那台连上」(不是本端的「先在设置里连接后端」)', /Studio Mac/.test(ph || ''), String(ph))
     // 提示说了「恢复连接后会自动继续」:那台回来后必须**不点重试**就自己连上(健康探针退避 ≤ 30s)
     world.setOffline(false)
-    await page.waitForFunction(() => { const s = window.__forsionStore.getState(); return s.connState === 'ok' && s.sessions.some((x) => x.id === 'mac-1') }, null, { timeout: 45_000 }).catch(() => {})
-    const healed = await st(() => ({ conn: window.__forsionStore.getState().connState, ids: window.__forsionStore.getState().sessions.map((s) => s.id) }))
-    check('那台回来后不点重试也自己连上(开机离线 → 自动恢复)', healed.conn === 'ok' && healed.ids.includes('mac-1'), JSON.stringify(healed))
+    await page.waitForFunction(() => { const s = window.__forsionStore.getState(); return s.connState === 'ok' && s.agentDefs.some((a) => a.slug === 'mac-only') }, null, { timeout: 45_000 }).catch(() => {})
+    const healed = await st(() => ({ conn: window.__forsionStore.getState().connState, agents: window.__forsionStore.getState().agentDefs.map((a) => a.slug) }))
+    check('那台回来后不点重试也自己连上(开机离线 → 自动恢复,目录拉到那台的)', healed.conn === 'ok' && healed.agents.includes('mac-only'), JSON.stringify(healed))
     await page.waitForFunction(() => !document.querySelector('.t2-target-health'), null, { timeout: 5_000 }).catch(() => {})
     check('自动恢复后连接态提示消失', !(await page.$('.t2-target-health')))
     await page.evaluate(() => { try { localStorage.setItem('forsion_theme', 'light') } catch { /* ignore */ } })
@@ -401,8 +445,84 @@ async function main() {
     check('点「重试」→ 连上、健康 ready、提示消失', retried.conn === 'ok' && retried.h === 'ready' && !(await page.$('.t2-target-health')), JSON.stringify(retried))
     await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
 
+    // ── G. 两台并存(S4):会话建在 A,焦点换到 B,那条会话的一切仍打 A ──
+    // 负对照(实跑过):把 targets.ts 的 targetForSession 改回「恒 = 焦点」(S2 语义)重新构建 → 本段红。
+    world.mac.script([
+      { type: 'token', payload: { delta: 'A 上的活。' } },
+      { type: 'approval_request', payload: { approvalId: 'apA', name: 'run_bash', arguments: JSON.stringify({ command: 'pwd' }), preview: '$ pwd', reason: { kind: 'mode', mode: 'auto-edit' }, remote: { via: 'tunnel' } } },
+      { type: 'approval_result', payload: { approvalId: 'apA', decision: 'approved' }, delay: 12_000 },
+      { type: 'token', payload: { delta: '\nA 跑完了。' }, delay: 300 },
+      { type: 'done', payload: {} },
+    ])
+    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Studio Mac' }), U)
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok', null, { timeout: 20_000 }).catch(() => {})
+    const macRunsBefore = world.mac.seen.runs.length
+    const taA = page.locator('.t2c-ta').first()
+    await taA.click()
+    await taA.fill('在 A 上干活')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction((n) => window.__forsionStore.getState().activeId && document.querySelector('.approval-card'), macRunsBefore, { timeout: 20_000 }).catch(() => {})
+    const sidA = await st(() => window.__forsionStore.getState().activeId)
+    const runA = world.mac.seen.runs[world.mac.seen.runs.length - 1]
+    check('G:会话建在 A、run 打到 A', world.mac.seen.runs.length > macRunsBefore && runA?.sessionId === sidA, JSON.stringify({ sidA, runA: runA?.sessionId }))
+
+    // 焦点换到 B:A 上的会话不被掐(SSE 仍挂着、run 仍在跑),留在列表里、仍绑 A
+    await page.evaluate((u) => window.__forsionEngineTargets.setFocusTarget({ kind: 'unit', unitId: u }, { name: 'Office PC' }), U2)
+    await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok' && window.__forsionStore.getState().modelsResp?.models?.some((m) => m.id === 'pc-model'), null, { timeout: 20_000 }).catch(() => {})
+    const g2 = await page.evaluate((sid) => {
+      const s = window.__forsionStore.getState()
+      return { listed: s.sessions.some((x) => x.id === sid), running: !!s.runningBySession[sid], loc: window.__forsionEngineTargets.locationOf(sid), known: window.__forsionEngineTargets.known(), focus: window.__forsionEngineTargets.focusRef() }
+    }, sidA)
+    check('G:焦点换到 B → A 上的会话留在列表、仍绑 A、run 仍在跑(SSE 没掐)', g2.listed && g2.running && g2.loc?.unitId === U && g2.focus.unitId === U2, JSON.stringify(g2))
+    check('G:已知目标 = home + 焦点 B + 有绑定会话的 A(R-20)', g2.known.includes('home') && g2.known.includes(`unit:${U2}`) && g2.known.includes(`unit:${U}`), JSON.stringify(g2.known))
+
+    // 打开 A 上的会话,批审批 → 打到 A;B 一条都收不到;审批卡按会话判远端只读(不看焦点)
+    await page.evaluate((sid) => window.__forsionStore.getState().setActiveId(sid), sidA)
+    await page.waitForSelector('.approval-card', { timeout: 10_000 }).catch(() => {})
+    const cardA = await page.evaluate(() => { const c = document.querySelector('.approval-card'); return c ? { edit: !!c.querySelector('textarea.approval-edit'), readonly: !!c.querySelector('[data-remote-readonly]') } : null })
+    check('G:A 上会话的审批卡远端只读(按会话的绑定判,焦点在 B 也一样)', !!cardA && !cardA.edit && cardA.readonly, JSON.stringify(cardA))
+    await page.screenshot({ path: path.join(SHOT_DIR, 'enginetarget-two-targets.png') })
+    await sleep(600)
+    const approveA = page.locator('.approval-card .approval-actions .btn.primary').first()
+    if (await approveA.count()) await approveA.click()
+    else await page.evaluate((sid) => { const s = window.__forsionStore.getState(); const m = (s.messagesBySession[sid] || []).find((x) => x.approvals?.some((a) => a.approvalId === 'apA')); if (m) void s.decideApproval(m.id, 'apA', 'approve', undefined, sid) }, sidA)
+    for (let i = 0; i < 40 && !world.mac.seen.approvals.some((a) => a.approvalId === 'apA'); i++) await sleep(100)
+    check('G:焦点在 B 时批 A 上会话的审批 → 打到 A,B 一条都没收到', world.mac.seen.approvals.some((a) => a.approvalId === 'apA' && a.action === 'approve') && world.pc.seen.approvals.length === 0, JSON.stringify({ mac: world.mac.seen.approvals.map((a) => a.approvalId), pc: world.pc.seen.approvals.length }))
+    await page.waitForFunction((sid) => (window.__forsionStore.getState().messagesBySession[sid] || []).some((m) => m.role === 'assistant' && m.status === 'done' && /A 跑完了/.test(m.content)), sidA, { timeout: 25_000 }).catch(() => {})
+    const doneA = await page.evaluate((sid) => (window.__forsionStore.getState().messagesBySession[sid] || []).filter((m) => m.role === 'assistant').map((m) => ({ st: m.status, c: m.content })), sidA)
+    check('G:A 上的 run 照常跑完(事件流一直走 A 的隧道)', doneA.some((m) => m.st === 'done' && /A 跑完了/.test(m.c)), JSON.stringify(doneA))
+
+    // B 断线不影响 A 上的会话:在 A 的会话里再发一句 → 打 A
+    world.setOffline2(true)
+    world.mac.script([{ type: 'token', payload: { delta: 'B 断了,A 照常。' } }, { type: 'done', payload: {} }])
+    const macRunsMid = world.mac.seen.runs.length
+    const taA2 = page.locator('.t2c-ta').first()
+    await taA2.click()
+    await taA2.fill('B 断了还能在 A 上说话吗')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction((sid) => (window.__forsionStore.getState().messagesBySession[sid] || []).some((m) => m.role === 'assistant' && /A 照常/.test(m.content) && m.status === 'done'), sidA, { timeout: 20_000 }).catch(() => {})
+    const runA2 = world.mac.seen.runs[world.mac.seen.runs.length - 1]
+    check('G:B 断线时 A 上的会话照常收发(第二个 run 打 A、B 没收到 run)', world.mac.seen.runs.length > macRunsMid && runA2?.sessionId === sidA && world.pc.seen.runs.length === 0, JSON.stringify({ runA2: runA2?.sessionId, pcRuns: world.pc.seen.runs.length }))
+    world.setOffline2(false)
+
+    // 焦点 B 上的空白新对话建在 B
+    world.pc.script([{ type: 'token', payload: { delta: 'B 上的新会话。' } }, { type: 'done', payload: {} }])
+    await page.evaluate(() => window.__forsionStore.getState().setActiveId(null))
+    await page.waitForFunction(() => window.__forsionEngineTargets.health()[`unit:${'3c9d1e2f-4a5b-4c6d-8e7f-90a1b2c3d4e5'}`]?.state !== 'offline', null, { timeout: 20_000 }).catch(() => {})
+    const taB = page.locator('.t2c-ta').first()
+    await taB.click()
+    await taB.fill('在 B 上开个新的')
+    await page.keyboard.press('Enter')
+    for (let i = 0; i < 100 && !world.pc.seen.runs.length; i++) await sleep(100)
+    const sidB = await st(() => window.__forsionStore.getState().activeId)
+    const locB = await page.evaluate((sid) => window.__forsionEngineTargets.locationOf(sid), sidB)
+    check('G:焦点 B 上的空白新对话建在 B、run 打到 B', world.pc.seen.runs[0]?.sessionId === sidB && locB?.unitId === U2, JSON.stringify({ sidB, run: world.pc.seen.runs[0]?.sessionId, locB }))
+    const leakedToB = world.hub.seen.filter((r) => r.unit === 'B' && r.url.includes(String(sidA)))
+    check('G:B 从没收到 A 上那条会话的任何请求', leakedToB.length === 0, leakedToB.map((r) => `${r.method} ${r.url}`).slice(0, 3).join(','))
+    await page.evaluate(() => window.__forsionEngineTargets.setFocusTarget({ kind: 'home' }))
+
     // ── F. 隧道请求的不变量 ──
-    const tunnel = world.hub.seen.filter((r) => r.url.startsWith(`/api/units/${U}/proxy/`))
+    const tunnel = world.hub.seen.filter((r) => r.url.startsWith(`/api/units/${U}/proxy/`) || r.url.startsWith(`/api/units/${U2}/proxy/`))
     check('有隧道请求', tunnel.length > 10, String(tunnel.length))
     check('每条隧道请求都带 Bearer(forsion_token)', tunnel.every((r) => r.headers.authorization === `Bearer ${TOKEN}`), tunnel.filter((r) => r.headers.authorization !== `Bearer ${TOKEN}`).map((r) => r.url).slice(0, 3).join(','))
     check('不带 x-forsion-remote*(来源标记只许 unitWeb 盖,C1)', tunnel.every((r) => !Object.keys(r.headers).some((k) => k.startsWith('x-forsion-remote'))))

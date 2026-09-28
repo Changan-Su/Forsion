@@ -25,7 +25,7 @@ import { listWorkspace, readWorkspaceFile, downloadWorkspaceFile, deleteWorkspac
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { useApp } from '../../stores/appStore'
 import { hostTargetFor } from '../wsFileNav'
-import { refForSession, useEngineFocus } from '../../services/engine/targets'
+import { refForSession, targetForSession, useComposerRef } from '../../services/engine/targets'
 import { capsForRef } from '../../services/engine/targetCaps'
 import { tipProps, fsTipLines } from '../../hoverTip'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
@@ -233,7 +233,7 @@ function ScopeGroup({ label, title, scope, kind, open, onToggle, onOpenPreview, 
   useEffect(() => { setFiles(null) }, [sig])
   const refresh = useCallback(() => {
     const mine = sig
-    void listWorkspace(cfg, sessionId, project)
+    void listWorkspace(targetForSession(sessionId), sessionId, project)
       .then((fs) => { if (sigRef.current === mine) setFiles([...fs].sort((a, b) => a.path.localeCompare(b.path))) })
       .catch(() => { if (sigRef.current === mine) setFiles([]) })
   }, [cfg, sessionId, project, sig])
@@ -246,14 +246,14 @@ function ScopeGroup({ label, title, scope, kind, open, onToggle, onOpenPreview, 
   }, [running, open, refresh])
 
   const download = (f: WorkspaceFileMeta): void => {
-    void downloadWorkspaceFile(cfg, sessionId, f.path, project)
+    void downloadWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project)
       .catch((err) => useApp.getState().toast(err?.message || String(err), true))
   }
   const preview = (f: WorkspaceFileMeta, newTab?: boolean): void => {
     onOpenPreview({
       name: f.path,
       load: async () => {
-        const r = await readWorkspaceFile(cfg, sessionId, f.path, project)
+        const r = await readWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project)
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
       },
       download: () => download(f),
@@ -261,13 +261,13 @@ function ScopeGroup({ label, title, scope, kind, open, onToggle, onOpenPreview, 
   }
   const del = async (f: WorkspaceFileMeta): Promise<void> => {
     if (!window.confirm(t('panel.confirm.delete', { name: f.path }))) return
-    try { await deleteWorkspaceFile(cfg, sessionId, f.path, project); refresh() }
+    try { await deleteWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project); refresh() }
     catch (err: any) { useApp.getState().toast(err?.message || String(err), true) }
   }
   /** 整批删除(云端文件无回收站 → 一次确认后逐个 DELETE)。 */
   const delMany = async (fs: WorkspaceFileMeta[]): Promise<void> => {
     if (!fs.length || !window.confirm(t('panel.confirm.deleteN', { n: String(fs.length) }))) return
-    try { for (const f of fs) await deleteWorkspaceFile(cfg, sessionId, f.path, project) }
+    try { for (const f of fs) await deleteWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project) }
     catch (err: any) { useApp.getState().toast(err?.message || String(err), true) }
     sel.clear()
     refresh()
@@ -368,10 +368,9 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   const toggleOpenWorkspace = useApp((s) => s.toggleOpenWorkspace)
   const locals = workspaces.filter((w) => w.kind === 'local' && !!w.path)
   const clouds = workspaces.filter((w) => w.kind === 'cloud' && !!w.project)
-  // M1B:当前会话在别的电脑上 → 顶上一组「本会话的文件」(那台电脑上的会话沙箱)。订阅焦点:切到 / 切离那台电脑时重算
+  // M1B:当前会话在别的电脑上 → 顶上一组「本会话的文件」(那台电脑上的会话沙箱)。S4 起按会话的绑定判(订阅绑定表:绑上 / 忘掉时重算)
   const activeId = useApp((s) => s.activeId)
-  useEngineFocus((s) => s.ref)
-  const remoteSid = activeId && refForSession(activeId).kind === 'unit' ? activeId : null
+  const remoteSid = useComposerRef(activeId).kind === 'unit' ? activeId : null
   const [sessionOpen, setSessionOpen] = useState(true)
   const [rootsByKey, setRootsByKey] = useState<Record<string, Entry[] | null>>({})
   const scrollRef = useRef<HTMLDivElement>(null)

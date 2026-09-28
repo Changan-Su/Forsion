@@ -76,6 +76,10 @@ export interface UnitHostDeps {
   requestTimeoutMs?: number
   /** 打云端网关用的 fetch(测试注入;缺省全局 fetch)。本机 unitWeb 那一跳永远用全局 fetch。 */
   hubFetch?: typeof fetch
+  // P1-K7a(INTEGRATION R-30):caps 上报器(unitCaps.ts)的两个挂点。只在这条通道收到网关 `event: ready` 之后才算 ready
+  // (server 把 caps 绑在那条连接上);通道断开 / stop() 时 down。抛错一律吞掉,不进通道主循环。
+  onChannelReady?: () => void
+  onChannelDown?: () => void
 }
 
 /** 缺省读看门狗:网关心跳 15s × 3。 */
@@ -143,7 +147,7 @@ export class UnitHost {
   stop(): void {
     this.ctrl?.abort()
     this.ctrl = null
-    this.connected = false
+    this.markDown()
     this.abortEnvelopes()
     this.wake?.()
   }
@@ -155,6 +159,16 @@ export class UnitHost {
     this.redialNow = true
     this.conn?.abort()
     this.wake?.()
+  }
+
+  /** 通道不在了(断开 / 出错 / stop):置 connected=false 并告诉 caps 上报器停报(P1-K7a)。 */
+  private markDown(): void {
+    this.connected = false
+    this.hook(this.deps.onChannelDown)
+  }
+
+  private hook(fn: (() => void) | undefined): void {
+    try { fn?.() } catch (e: any) { this.deps.log(`[unit-host] 通道回调出错(已忽略): ${e?.message || e}`) }
   }
 
   /** 按信封 id 中止在飞的本机请求(含流式回传)。true = 找到并中止;false = 不在飞(已完成 / 未知 id)。 */
@@ -235,10 +249,10 @@ export class UnitHost {
         backoff = 1000
         this.deps.log('[unit-host] 通道已连接')
         await this.consume(resp.body, conn)
-        this.connected = false
+        this.markDown()
         this.deps.log('[unit-host] 通道断开,准备重连')
       } catch (e: any) {
-        this.connected = false
+        this.markDown()
         if (ctrl.signal.aborted) return
         this.lastError = conn.signal.aborted ? '通道被本机断开(看门狗 / 重连)' : String(e?.message || e)
         this.deps.log(`[unit-host] ${this.lastError};${this.redialNow ? '立即' : `${Math.round(backoff / 1000)}s 后`}重试`)
@@ -327,6 +341,7 @@ export class UnitHost {
           const caps = (JSON.parse(d || '{}') as { caps?: unknown }).caps
           this.hubCaps = new Set(Array.isArray(caps) ? caps.map(String) : [])
         } catch { this.hubCaps = new Set() }
+        if (!conn.signal.aborted) this.hook(this.deps.onChannelReady) // P1-K7a:caps 上报器从这里开始报
         continue
       }
       if (!block.includes('event: dispatch')) continue

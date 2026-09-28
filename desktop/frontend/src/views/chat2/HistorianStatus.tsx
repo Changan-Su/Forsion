@@ -8,6 +8,7 @@ import { useChildChat } from '../../stores/childChatStore'
 import { registerMessages, useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
+import { targetForSession } from '../../services/engine/targets'
 
 registerMessages({
   'historian.status.ready': { zh: '待命', en: 'Ready' },
@@ -71,7 +72,7 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
     let disposed = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const load = (): void => {
-      void getBackgroundSessions(cfg, sessionId, 'historian')
+      void getBackgroundSessions(targetForSession(sessionId), sessionId, 'historian')
         .then((rows) => rows.find((r) => r.kind === 'historian')?.sessionId ?? null, () => null)
         .then((id) => {
           if (disposed) return
@@ -88,7 +89,7 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
     let timer: ReturnType<typeof setTimeout>
     const load = async (): Promise<void> => {
       try {
-        const result = await getSessionHistorian(cfg, sessionId, open)
+        const result = await getSessionHistorian(targetForSession(sessionId), sessionId, open)
         if (!disposed) {
           setData(result); setFailed(false)
           const { fresh, seen: next } = takeFreshNominations(result.activity || [], seen.current)

@@ -93,7 +93,7 @@ async function drive(cfg: Parameters<typeof run.subscribeRunEvents>[0], total: n
 
 describe('subscribeRunEvents × hub 半截断流(P1-K9)', () => {
   it('home 目标:连续 8 次半截断开 → 按 fromSeq 续订到 done,不丢不重、不抛', async () => {
-    const r = await drive(home, 36, 4) // 36 帧、每连接 4 帧 → 8 次断开 + 1 次收尾
+    const r = await drive(T.connectionTarget(home), 36, 4) // 36 帧、每连接 4 帧 → 8 次断开 + 1 次收尾
     expect(r.settled).toBe('ok')
     expect(r.fromSeqs).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32])
     expect(r.seqs).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))
@@ -111,7 +111,7 @@ describe('subscribeRunEvents × hub 半截断流(P1-K9)', () => {
   })
 
   it('M1B:续订时从更早处回放(fromSeq 被改回 0)→ 按 seq 丢掉已见过的事件,回调 1..N 各一次', async () => {
-    const r = await drive(home, 36, 4, engineReplayingFromZero)
+    const r = await drive(T.connectionTarget(home), 36, 4, engineReplayingFromZero)
     expect(r.settled).toBe('ok')
     expect(r.fromSeqs).toEqual([0, 4, 8, 12, 16, 20, 24, 28, 32])
     expect(r.seqs).toEqual(Array.from({ length: 36 }, (_, i) => i + 1))

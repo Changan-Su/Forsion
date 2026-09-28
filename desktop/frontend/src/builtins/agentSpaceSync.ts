@@ -8,6 +8,7 @@
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { postMuseFeedback } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 const loadedStamp = new Map<string, number>()
 const reportedStamp = new Map<string, number>()
@@ -42,7 +43,7 @@ export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stam
   const report = (text: string): void => {
     if (reportedStamp.get(slug) === stamp) return
     reportedStamp.set(slug, stamp) // 同一份内容只报一次
-    void postMuseFeedback(cfg, text).catch(() => {})
+    void postMuseFeedback(homeTarget(), text).catch(() => {})
   }
   // blocked 不止 invalid:apiVersion / minAppVersion 门禁挡下同样一声不吭地不渲染
   const err = st.lastSetupError[id] || (p.blocked ? p.blockedReason || `manifest.json blocked (${p.blocked}): check apiVersion / minAppVersion` : '')
@@ -66,7 +67,7 @@ export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string
   if (seen.has(text)) return
   seen.add(text)
   const sent = seen
-  void postMuseFeedback(cfg, `Space view "${def.id}" registered but its mount() threw, so the user sees "Plugin view failed to load": ${text}`)
+  void postMuseFeedback(homeTarget(), `Space view "${def.id}" registered but its mount() threw, so the user sees "Plugin view failed to load": ${text}`)
     .catch(() => { sent.delete(text) })
 }
 

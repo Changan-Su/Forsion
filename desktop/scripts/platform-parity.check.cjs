@@ -132,8 +132,8 @@ const KNOWN_GATES = {
   'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
   // P1-K8
-  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head rb-unit)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端照样注册但 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害;webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支',
-  'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变',
+  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head rb-unit)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端照样注册但 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害;webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支。P1-K7a:features/runtime.ts 的 rosterAvailable() 也读它 —— 手机的跨设备会话分组 / 「在哪运行」选择器的名册(Electron IPC + mobileShim cloudJson;webShim / unitShim 无 → 网页版与设备页不显示,K7 U2 与 §4.7 b6)',
+  'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变。P1-K7a:它还**无条件**关掉「在哪运行」选择器、设备会话分组与逐台拉会话(features/runtime.ts rosterAvailable,不得经 A 的隧道再驱动 B;设备页在手机视口加载 @mobile/mobileEntry 也同样关)',
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',

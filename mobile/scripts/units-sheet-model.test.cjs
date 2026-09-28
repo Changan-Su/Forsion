@@ -343,17 +343,18 @@ const rowOf = (out, now) => runRows([U(DESK)], null, HOME, {}, { [DESK]: out.sti
     assert.equal(rosterNameOf(units, HOME), null)
   })
 
-  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef) = return setFocusTarget(ref, {name})(K6-S2 整端切换);runOn 与移除本机只注入它', async () => {
+  await check('16 UnitsSheet.tsx:唯一的生效出口 selectRunLocation(ref: TargetRef) = return setDraftLocation(ref, {explicit:true, name})(R-21,K7 之后);runOn 与移除本机只注入它', async () => {
     const tsx = fs.readFileSync(path.resolve(__dirname, '../src/UnitsSheet.tsx'), 'utf8')
     const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): Promise<void> \{([\s\S]*?)\n\}/g) || []
     assert.equal(defs.length, 1, '必须恰好一个 selectRunLocation 定义')
-    assert.match(defs[0], /\{\s*return setFocusTarget\(ref, \{ name: rosterNameOf\(lastRoster, ref\) \}\)\s*\}/, '生效 = 返回 setFocusTarget 的 Promise(移除本机要等它);展示名取名册(M1B)')
+    assert.match(defs[0], /\{\s*return setDraftLocation\(ref, \{ explicit: true, name: rosterNameOf\(lastRoster, ref\) \}\)\s*\}/, '生效 = 返回 setDraftLocation(亲手选的)的 Promise(移除本机要等它);展示名取名册(M1B)')
     assert.equal((tsx.match(/select: selectRunLocation,/g) || []).length, 2, 'runOn 与 removeThisPhone 各注入一次')
     assert.match(tsx, /removeThisPhone\(\{/)
     assert.doesNotMatch(tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /unitForgetSelf\?\.\(\)[^\n]*\.then\(/, '移除不许绕过 removeThisPhone 直接调 unitForgetSelf')
     // 不许绕过出口自己切位置(K8 的整端切换兜底已被 R-21 删除):setFocusTarget 只在出口里出现一次;注释里提到的不算
     const code = tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-    assert.equal((code.match(/setFocusTarget\(/g) || []).length, 1, 'setFocusTarget 只许在 selectRunLocation 里调')
+    assert.equal((code.match(/setFocusTarget\(/g) || []).length, 0, '不许绕过 setDraftLocation 直接 setFocusTarget(K7 之后,R-21)')
+    assert.equal((code.match(/setDraftLocation\(/g) || []).length, 1, 'setDraftLocation 只许在 selectRunLocation 里调')
     for (const banned of [/setRunTarget\(/, /location\.reload\(/, /remoteCaller\s*=/]) assert.doesNotMatch(code, banned)
     // 当前位置读整端焦点,不是写死云端
     assert.match(code, /function currentRunLocation\(\): TargetRef \{\s*return focusRef\(\)\s*\}/)

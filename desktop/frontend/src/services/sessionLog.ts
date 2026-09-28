@@ -11,6 +11,7 @@ import { currentClientId } from './agentRunService'
 import { readUiSettings, buildCommandCatalog } from '../agentCommands'
 import { rendererErrors, uiActionLog } from '../diag'
 import type { SessionRecord, TanguDesktopConfig } from '../types'
+import { targetForSession } from './engine/targets'
 
 /** 导出那一刻界面的**实际**状态:设置值+值域、documentElement 上的主题属性(用户眼里的真相)、模型可见的命令目录。 */
 function snapshotUiState(): Record<string, unknown> {
@@ -64,15 +65,15 @@ export async function buildSessionLogPayload(
   }
   const host = window.tangu
   const [messages, agentConfig, backendLogs, stored, appVersion, backendStatus, usage, timeline, activityLog] = await Promise.all([
-    conversation && session ? read('messages', () => listMessages(cfg, session.id, 500), []) : undefined,
-    diagnostics && session ? read('agentConfig', () => getSessionConfig(cfg, session.id), {}) : undefined,
+    conversation && session ? read('messages', () => listMessages(targetForSession(session.id), session.id, 500), []) : undefined,
+    diagnostics && session ? read('agentConfig', () => getSessionConfig(targetForSession(session.id), session.id), {}) : undefined,
     diagnostics ? read('backendLogs', host?.backendLogs ? () => host.backendLogs!() : undefined, []) : undefined,
     diagnostics ? read('connection', host?.getConfig ? () => host.getConfig() : undefined, null) : null,
     read('appVersion', host?.appVersion ? () => host.appVersion!() : undefined, null),
     diagnostics ? read('backendStatus', host?.backendStatus ? () => host.backendStatus!() : undefined, null) : undefined,
-    diagnostics && session ? read('usage', () => getSessionUsage(cfg, session.id)
+    diagnostics && session ? read('usage', () => getSessionUsage(targetForSession(session.id), session.id)
       .then((u) => ({ tokensTotal: u.base, contextTokens: u.ctx })), null) : undefined,
-    diagnostics && session ? read('timeline', () => getSessionTimeline(cfg, session.id), null) : undefined,
+    diagnostics && session ? read('timeline', () => getSessionTimeline(targetForSession(session.id), session.id), null) : undefined,
     activity ? read('activityLog', host?.exportActivity ? () => host.exportActivity!(2) : undefined, '') : undefined,
   ])
   const connectionMode = stored?.mode || 'external'

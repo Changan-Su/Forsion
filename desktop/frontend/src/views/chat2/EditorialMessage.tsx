@@ -53,7 +53,7 @@ import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
-import { useEngineFocus } from '../../services/engine/targets'
+import { targetForSession, useSessionHostName } from '../../services/engine/targets'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -216,7 +216,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
     // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
     if (!ctx?.sessionId || !at) { setStat({ files: 0, skipped: 0 }); return }
     let alive = true
-    void api.listCheckpoints(ctx.cfg, ctx.sessionId)
+    void api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
       .then((cps) => {
         if (!alive) return
         const files = new Set<string>()
@@ -273,7 +273,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
 function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; callId: string; status: ApprovalOutcome['status'] }) {
   const { t } = useI18n()
   const req = useApp((s) => (sessionId ? approvalForCall(s.messagesBySession[sessionId], callId) : undefined))
-  const hostName = useEngineFocus((s) => s.name)
+  const hostName = useSessionHostName(sessionId) // S4:本会话所在的那台(焦点可能已换走)
   if (!req?.answeredBy) return null
   const where = answeredByText(req.answeredBy, { remotePage: isRemoteApprover(sessionId), answeredHere: wasDecidedHere(req.approvalId), hostName }, t as (k: string, v?: Record<string, unknown>) => string)
   if (!where) return null
@@ -453,7 +453,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
               {body && (
                 voiceMode
-                  ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
+                  ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
                   : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} /></div>
               )}
             </>

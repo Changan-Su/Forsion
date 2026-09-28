@@ -79,10 +79,14 @@ function createFakePhoneNative(o) {
     return identity
   }
 
+  // 原生 UnitRegistrar.ensure / ensureLazy 是 synchronized:并发的登记只会有一次网络登记,后到的拿到先到的那份身份。
+  // (P1-K7a 起手机一打开侧栏「我的电脑」分组就会经中继拉那台的会话 = 懒登记,与弹层里的显式登记并发;替身漏了这道锁会登记出两台手机)
+  let registering = null
   async function ensure(lazy) {
     if (identity) return identity
     if (lazy && forgotten) throw Object.assign(new Error('this phone was removed'), { code: 'caller_unavailable' })
-    return register()
+    if (!registering) registering = register().finally(() => { registering = null })
+    return registering
   }
 
   async function getTicket(force) {

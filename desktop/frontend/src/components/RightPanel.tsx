@@ -19,6 +19,7 @@ import { SubChatsTab } from './SubChatsTab'
 import type { PreviewTarget } from './WorkspaceFilePreview'
 import { fmtSize, b64ToBytes } from '../services/fileKinds'
 import { useI18n } from '../i18n'
+import { homeTarget, targetForSession } from '../services/engine/targets'
 
 type Tab = 'workspace' | 'toc' | 'memory' | 'subchats'
 
@@ -49,7 +50,7 @@ export const RightPanel: React.FC<{
       {active === 'workspace' && <WorkspaceTab {...p} />}
       {active === 'toc' && <ChatToc containerRef={p.chatScrollRef} scanTrigger={p.messages.length} />}
       {active === 'memory' && <MemoryTab {...p} />}
-      {active === 'subchats' && <SubChatsTab cfg={p.cfg} subChats={p.subChats} />}
+      {active === 'subchats' && <SubChatsTab sessionId={p.sessionId} subChats={p.subChats} />}
     </>
   )
 
@@ -441,7 +442,7 @@ const SandboxFilesTab: React.FC<{
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    try { setFiles(await api.listWorkspace(cfg, sessionId)) }
+    try { setFiles(await api.listWorkspace(targetForSession(sessionId), sessionId)) }
     catch (e: any) { onToast(t('panel.toast.workspaceLoadFail', { err: e?.message || e }), true) }
     finally { setLoading(false) }
   }, [cfg, sessionId, onToast])
@@ -451,20 +452,20 @@ const SandboxFilesTab: React.FC<{
     onOpenPreview({
       name: f.path,
       load: async () => {
-        const r = await api.readWorkspaceFile(cfg, sessionId, f.path)
+        const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
       },
-      download: () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path).catch((err) => onToast(err.message, true)) },
+      download: () => { void api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, f.path).catch((err) => onToast(err.message, true)) },
     })
   }
-  const download = (path: string) => { void api.downloadWorkspaceFile(cfg, sessionId, path).catch((err) => onToast(err.message, true)) }
+  const download = (path: string) => { void api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, path).catch((err) => onToast(err.message, true)) }
   const del = async (paths: string[]) => {
     if (!paths.length) return
     const ok = window.confirm(paths.length === 1
       ? t('panel.confirm.delete', { name: paths[0].replace(/^\//, '') })
       : t('panel.confirm.deleteN', { n: String(paths.length) }))
     if (!ok) return
-    try { for (const p of paths) await api.deleteWorkspaceFile(cfg, sessionId, p); sel.clear(); void refresh() }
+    try { for (const p of paths) await api.deleteWorkspaceFile(targetForSession(sessionId), sessionId, p); sel.clear(); void refresh() }
     catch (err: any) { onToast(err.message, true) }
   }
   const upload = async (list: FileList | null) => {
@@ -478,7 +479,7 @@ const SandboxFilesTab: React.FC<{
       }),
     )
     try {
-      const r = await api.uploadWorkspaceFiles(cfg, sessionId, payload)
+      const r = await api.uploadWorkspaceFiles(targetForSession(sessionId), sessionId, payload)
       onToast(t('panel.toast.uploaded', { saved: r.saved, total: r.total }))
       void refresh()
     } catch (e: any) {
@@ -580,14 +581,14 @@ const AgentMemoryBlock: React.FC<{
 
   const refresh = useCallback(async () => {
     try {
-      setMemory(await api.getAgentMemory(cfg, slug))
+      setMemory(await api.getAgentMemory(homeTarget(), slug))
     } catch (e: any) {
       setMemory(null)
       onToast(t('panel.toast.memoryLoadFail', { err: e?.message || e }), true)
     }
     try {
-      const dates = (await api.listAgentLogDates(cfg, slug)).slice().sort((a, b) => b.localeCompare(a)).slice(0, 3)
-      const entries = await Promise.all(dates.map(async (d) => ({ date: d, content: await api.getAgentLog(cfg, slug, d) })))
+      const dates = (await api.listAgentLogDates(homeTarget(), slug)).slice().sort((a, b) => b.localeCompare(a)).slice(0, 3)
+      const entries = await Promise.all(dates.map(async (d) => ({ date: d, content: await api.getAgentLog(homeTarget(), slug, d) })))
       const nonEmpty = entries.filter((e) => e.content.trim())
       setLogs(nonEmpty)
       setOpenDate((cur) => cur ?? nonEmpty[0]?.date ?? null) // 默认展开最近一条
@@ -600,7 +601,7 @@ const AgentMemoryBlock: React.FC<{
     const text = draft.trim()
     if (!text) return
     try {
-      const r = await api.appendMemory(cfg, text, slug)
+      const r = await api.appendMemory(homeTarget(), text, slug)
       onToast(r.appended ? t('panel.toast.memorySaved') : t('panel.toast.memoryNotWritten'))
       setDraft('')
       void refresh()

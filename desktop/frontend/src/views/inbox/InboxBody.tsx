@@ -23,6 +23,7 @@ import type { PendingApprovalInfo } from '../../types'
 import { splitSuggestions } from '../chat2/suggest'
 import { TaskCards } from '../chat2/TaskCards'
 import { runTaskCard } from '../chat2/taskLanding'
+import { homeTarget } from '../../services/engine/targets'
 
 const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
 
@@ -49,7 +50,7 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
     if (!todoKey) return
     let alive = true
     for (const id of todoKey.split(',')) {
-      getMuseTodo(cfg, id)
+      getMuseTodo(homeTarget(), id)
         .then((t): string => t.status, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
         .then((st) => { if (alive) setTodoRes((p) => ({ gen, map: { ...(p.gen === gen ? p.map : {}), [id]: st } })) })
     }
@@ -104,7 +105,7 @@ function ApprovalCard({ id }: { id: string }) {
   const [tick, setTick] = useState(0)
   useEffect(() => {
     let alive = true
-    getMuseApproval(cfg, id)
+    getMuseApproval(homeTarget(), id)
       .then((r) => { if (alive) setRow(r ?? null) })
       // 只把本端点自己的 404 文案当「不存在」;别的 404(老引擎还没重启、没有这条路由)/ 网络错都是「读失败」,给重试而不是谎报记录没了。
       .catch((e: any) => { if (alive) setRow(/approval not found/i.test(String(e?.message || e)) ? null : 'error') })
@@ -124,7 +125,7 @@ function ApprovalCard({ id }: { id: string }) {
     setBusy(true)
     setErr('')
     try {
-      const r = await decideMuseApproval(cfg, row.id, decision)
+      const r = await decideMuseApproval(homeTarget(), row.id, decision)
       // 200 也可能是「批准了但工具执行失败」(status=failed,result=错误文本):不能静默当成功。
       setRow({ ...row, status: r.status as PendingApprovalInfo['status'], result: r.result ?? row.result, decided_by: 'user' })
       if (r.status === 'failed') setErr(t('special.muse.execFailed', { e: String(r.result || '').slice(0, 200) }))

@@ -4,17 +4,17 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Play, Pause, Loader2, FileText } from 'lucide-react'
-import type { StoredDesktopConfig, TanguDesktopConfig } from '../types'
+import type { StoredDesktopConfig } from '../types'
 import { synthesizeToBlobUrl } from '../services/ttsService'
+import { homeTarget } from '../services/engine/targets'
 import { Markdown } from './Markdown'
 import { useI18n } from '../i18n'
 
 export const VoiceBubble: React.FC<{
   text: string
-  cfg: TanguDesktopConfig
   stored: StoredDesktopConfig | null
   anchorPrefix?: string
-}> = ({ text, cfg, stored, anchorPrefix }) => {
+}> = ({ text, stored, anchorPrefix }) => {
   const { t } = useI18n()
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const urlRef = useRef<string | null>(null)
@@ -34,7 +34,7 @@ export const VoiceBubble: React.FC<{
     if (audioRef.current) return audioRef.current
     setLoading(true); setErr(null)
     try {
-      const url = await synthesizeToBlobUrl(cfg, stored, text)
+      const url = await synthesizeToBlobUrl(homeTarget(), stored, text)
       urlRef.current = url
       const a = new Audio(url)
       a.onloadedmetadata = () => setDur(a.duration || 0)

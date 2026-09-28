@@ -20,6 +20,7 @@ import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
 import { deleteWithUndo, isPendingDelete } from '../views/automation/automationListSource'
+import { homeTarget, targetForSession } from '../services/engine/targets'
 
 registerMessages({
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
@@ -59,19 +60,19 @@ export const MuseView: React.FC<{
   const shownTracks = tracks.filter((e) => !isPendingDelete({ kind: 'schedule', slug: 'muse', rowId: e.id }))
 
   const load = async (): Promise<void> => {
-    const st = await getMuseStatus(cfg).catch(() => null)
+    const st = await getMuseStatus(homeTarget()).catch(() => null)
     setStatus(st)
     void syncAgentSpace(cfg, 'muse', st?.spaceStamp) // 自建 Space 变了 → 只重载 agent-muse 插件(按戳去重)
     // 各列表缺省一律补空数组:老引擎 / 外部后端可能回一个不是数组的壳,渲染里的 .filter / .length 会崩掉整个面板。
-    const nextTodos = arr<MuseTodo>(await getMuseTodos(cfg, 'pending').catch(() => []))
+    const nextTodos = arr<MuseTodo>(await getMuseTodos(homeTarget(), 'pending').catch(() => []))
     setTodos(nextTodos)
     setSel((p) => new Set([...p].filter((id) => nextTodos.some((x) => x.id === id)))) // 已被处理/消失的 TODO 不留在选择集里
-    setTriggers(arr(await getMuseTriggers(cfg).catch(() => [])))
+    setTriggers(arr(await getMuseTriggers(homeTarget()).catch(() => [])))
     // 旧引擎无此端点 → 404 → 空列表(读端兜底,面板不红)。
-    setApprovals(arr(await listMuseApprovals(cfg, 'pending').catch(() => [])))
-    setTracks(await getAgentSchedules(cfg).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
+    setApprovals(arr(await listMuseApprovals(homeTarget(), 'pending').catch(() => [])))
+    setTracks(await getAgentSchedules(homeTarget()).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
     if (st?.sessionId) {
-      const ms = arr<{ role: string; content?: unknown }>(await listMessages(cfg, st.sessionId, 6).catch(() => []))
+      const ms = arr<{ role: string; content?: unknown }>(await listMessages(targetForSession(st.sessionId), st.sessionId, 6).catch(() => []))
       const lastAssistant = [...ms].reverse().find((m) => m.role === 'assistant' || m.role === 'model')
       // 每个周期一个新会话(09-27):新周期**还在跑**、没写出回复时留着上一轮的思考,别闪成空的;
       // 已经不在跑了还没有回复(周期失败)→ 清空,别把上一轮的当成「当前思考」一直挂着
@@ -99,7 +100,7 @@ export const MuseView: React.FC<{
   const inject = async (): Promise<void> => {
     if (!target || !sel.size) return
     try {
-      await injectMuseTodos(cfg, [...sel], target)
+      await injectMuseTodos(homeTarget(), [...sel], target)
       setMsg(t('special.muse.injected', { n: sel.size }))
       setSel(new Set())
       onInjected(target)
@@ -117,8 +118,8 @@ export const MuseView: React.FC<{
       openNewChat()
       const ok = await useApp.getState().send(message, [], undefined, undefined, undefined, null)
       if (!ok) return
-      for (const x of picked) await patchMuseTodo(cfg, x.id, 'injected').catch(() => {})
-      void postMuseFeedback(cfg, `todos run in a new session by user: ${picked.map((x) => `"${x.title}"`).join('; ')}`).catch(() => {})
+      for (const x of picked) await patchMuseTodo(homeTarget(), x.id, 'injected').catch(() => {})
+      void postMuseFeedback(homeTarget(), `todos run in a new session by user: ${picked.map((x) => `"${x.title}"`).join('; ')}`).catch(() => {})
       setMsg(t('special.muse.injected', { n: picked.length }))
       setSel(new Set())
       const sid = useApp.getState().activeId
@@ -130,18 +131,18 @@ export const MuseView: React.FC<{
   // 删除类:请求成功才动列表;失败留在原地并说明(吞掉异常后先删再被轮询复活,用户只看到「闪一下」)。
   const fail = (e: any): void => setMsg(t('special.muse.actionFail', { e: e?.message || e }))
   const setTodoStatus = async (id: string, status: MuseTodo['status']): Promise<void> => {
-    try { await patchMuseTodo(cfg, id, status); setTodos((p) => p.filter((x) => x.id !== id)); setSel((p) => { const n = new Set(p); n.delete(id); return n }) } catch (e) { fail(e) }
+    try { await patchMuseTodo(homeTarget(), id, status); setTodos((p) => p.filter((x) => x.id !== id)); setSel((p) => { const n = new Set(p); n.delete(id); return n }) } catch (e) { fail(e) }
   }
   // 规则 / 跟踪日程是引擎硬删(与 U-03 自动化删除同一类数据):走同一套「先藏起来、撤销窗口过了才真删」,
   // 自动化 Space 指向它的选中与列表由 deleteWithUndo 一并收拾。
   const removeTrigger = (id: string, name: string): void =>
-    deleteWithUndo({ kind: 'trigger', triggerId: id }, name, () => deleteMuseTrigger(cfg, id), () => { setTriggers((p) => p.filter((x) => x.id !== id)); setMsg('') })
+    deleteWithUndo({ kind: 'trigger', triggerId: id }, name, () => deleteMuseTrigger(homeTarget(), id), () => { setTriggers((p) => p.filter((x) => x.id !== id)); setMsg('') })
   const removeTrack = (id: string, name: string): void =>
-    deleteWithUndo({ kind: 'schedule', slug: 'muse', rowId: id }, name, () => deleteAgentScheduleEntry(cfg, 'muse', id), () => { setTracks((p) => p.filter((x) => x.id !== id)); setMsg('') })
+    deleteWithUndo({ kind: 'schedule', slug: 'muse', rowId: id }, name, () => deleteAgentScheduleEntry(homeTarget(), 'muse', id), () => { setTracks((p) => p.filter((x) => x.id !== id)); setMsg('') })
   const decide = async (a: PendingApprovalInfo, decision: 'approve' | 'reject'): Promise<void> => {
     setBusy(a.id)
     try {
-      const r = await decideMuseApproval(cfg, a.id, decision)
+      const r = await decideMuseApproval(homeTarget(), a.id, decision)
       // 200 也可能是「批准了但工具执行失败」(status=failed,result=错误文本):不能静默当成功。
       if (r.status === 'failed') setMsg(t('special.muse.execFailed', { e: String(r.result || '').slice(0, 200) }))
       else setMsg('')
