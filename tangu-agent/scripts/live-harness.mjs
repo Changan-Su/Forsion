@@ -35,6 +35,9 @@
  *   npm run live:harness -- --only remotecaller              # 远程调用方(P1 · K1):台架给引擎注入随机 TANGU_REMOTE_MARK_SECRET,起 run 带 x-forsion-remote: tunnel + 该标记 +
  *                                                           #   合成的 x-forsion-remote-caller(随机 unit id);诱发 run_bash 审批。判据:approval_request.remote 带同一 callerUnit / kind / name、
  *                                                           #   有效档仍是 auto-edit(调用方身份不放宽任何东西),模型行为与 remoteclamp 同。负对照 = 改前的 dist(remote 字段缺失 → 红)
+ *   npm run live:harness -- --only estop                     # 急停 + 远程锁定(P1 · K2):远程 run 起后台 sleep 进程再等审批 → 台架写锁文件 + POST /agent/remote/estop →
+ *                                                           #   run 终态 reason:'remote_estop'、后台进程已死、挂起审批被收(再批 410);再带远程头起 run → 423 REMOTE_LOCKED;本机 run 照常答;
+ *                                                           #   写 lock:null + /agent/remote/unlock → 远程 run 又能起。负对照 = 改前的 dist(无 estop 路由 → 红)
  *   npm run live:harness -- --only remotecwd                 # 远程 cwd / 家目录启动项(09-27,契约 C8):远程起 run 带 cwd=家目录须 400 REMOTE_CWD_FORBIDDEN;
  *                                                           #   远程 run 用 write_file 写家目录点文件 ~/.live-remotecwd-<随机> 须被硬拒(不弹审批、文件不出现)。负对照 = 修复前的 dist(须红,会在真家目录建出探针文件,场景自己清)
  *   npm run live:harness -- --only remotemgmt                # 远程管理面 + known-safe 凭据读(09-27 P0 第三轮 E3/E6):远程 run 用 manage_schedule 建 auto 日程须硬拒
@@ -89,7 +92,9 @@ const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna')
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
 const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp',
   // P1-K1
-  'remotecaller'];
+  'remotecaller',
+  // P1-K2
+  'estop'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -98,7 +103,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'remotecaller']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'remotecaller', 'estop']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -415,6 +420,7 @@ const authLink = join(shared, 'provider-auth.json');
 symlinkSync(AUTH, authLink); // 引擎起来装载完就 unlink(见下),产物目录里不留活凭证指针
 const MARKER = `LIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 const REMOTE_MARK = randomUUID(); // P1-K1 remotecaller
+const ESTOP_LOCK_FILE = join(OUT, 'userData', 'remote-lock.json'); // P1-K2 estop:同桌面 userData/remote-lock.json
 const markerFile = join(workspace, 'marker.txt');
 writeFileSync(markerFile, `# 台架标记文件\ncode = ${MARKER}\n`);
 // read_document 场景专用:**本机 liteparse 实测拒 .txt 与 .md**(`unsupported file format`),收 .csv。
@@ -482,6 +488,8 @@ const child = spawn(process.execPath, [
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
+  // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
+  ...(ONLY.has('estop') ? { FORSION_REMOTE_LOCK_FILE: ESTOP_LOCK_FILE } : {}),
 }, stdio: ['ignore', 'pipe', 'pipe'] });
 child.stdout.on('data', (d) => appendFileSync(engineLog, d));
 child.stderr.on('data', (d) => appendFileSync(engineLog, d));
@@ -641,7 +649,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
           else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
-          else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
+          else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
       }
     }
@@ -975,6 +983,79 @@ try {
   //       修复后硬拒(不进审批)。判据:write_file 调了、结果是远程保护路径拒绝、没弹审批、文件不存在。
   //       ⚠️模型被拒后改用 run_bash 写(§6.8 残余:沙箱关着时 run_bash 写保护路径拦不住)→ 台架代批会让文件出现 —— 这不是本修复的判据,
   //       记 inconclusive 不记红。探针名随机、只在家目录顶层,场景结束一律删掉(负对照那一跑会真的建出来)。
+  // P1-K2 急停 + 远程锁定(设备能力 MCP 方案 §6.5)。桌面主进程在引擎之外持锁(锁文件 + 进程内闩),这里由台架扮演主进程:
+  //   ① 带 x-forsion-remote 起 run,诱模型先 run_bash background:true 起一个 sleep 600,再跑一条要批的命令;
+  //   ② 那张审批卡挂着时(run 停在等批准)查活动快照拿到后台进程 pid → 写锁文件 + POST /agent/remote/estop;
+  //      判据:run 终态 reason:'remote_estop'、estop 报告含这条 run 且杀了 ≥1 个进程、pid 已死、台架随后的代批 410(挂起审批已被收);
+  //   ③ 再带远程头起 run → 423 REMOTE_LOCKED(引擎中间件;unitWeb 那层由 desktop 单测钉);④ 本机 run 照常答(真模型);
+  //   ⑤ 写 lock:null + POST /agent/remote/unlock → 远程 run 又能起并跑完。S13:会话消息里没有锁文案。
+  // 模型没按剧本先起后台进程 / 没走到第二张审批卡 → inconclusive(不计绿),急停那一步照样对着快照里的 run 做并判终态。
+  await scenario('estop', 'estop 急停:远程 run 中止 + 后台进程被杀 + 新远程 run 423 + 本机照常 + 解锁恢复', async () => {
+    const token = `ESTOP-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const session = `live-estop-${Date.now()}`;
+    mkdirSync(dirname(ESTOP_LOCK_FILE), { recursive: true });
+    writeFileSync(ESTOP_LOCK_FILE, JSON.stringify({ v: 1, lock: null, hotkey: '' }));
+    let report = null; let bgPid = null; let estopAt = null; let snapAtEstop = null;
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const doEstop = async () => {
+      if (report) return;
+      snapAtEstop = await api('/agent/remote/activity').catch(() => null);
+      bgPid = snapAtEstop?.processes?.find((x) => x.origin === 'remote')?.pid ?? null;
+      writeFileSync(ESTOP_LOCK_FILE, JSON.stringify({ v: 1, lock: { locked: true, at: Date.now(), source: 'hotkey' }, hotkey: '' }));
+      estopAt = Date.now();
+      report = await api('/agent/remote/estop', { method: 'POST', body: JSON.stringify({ source: 'hotkey' }) });
+    };
+    const ev = await run(session,
+      'Do these two steps in order, using the run_bash tool each time.\n'
+      + '1. Start a long-running background process: call run_bash with background set to true and the command `sleep 600`.\n'
+      + `2. After it has started, call run_bash (not in the background) with exactly: echo ${token} && pwd\n`
+      + 'Then reply with only the output of step 2.',
+      240_000, {}, 'mobile/live-harness',
+      async (p) => {
+        // 第二张(及以后)审批卡:后台进程已起 → 此刻 run 停在等批准,急停
+        const snap = await api('/agent/remote/activity').catch(() => null);
+        if (snap?.processes?.some((x) => x.origin === 'remote')) await doEstop();
+        void p;
+      },
+      { 'x-forsion-remote': 'tunnel' });
+    if (!report) await doEstop(); // 模型没按剧本走:照样急停一次,判下面几条
+    await sleep(3500); // SIGTERM → 3s → SIGKILL
+    const aborted = ev.error === 'aborted' && ev.errorReason === 'remote_estop';
+    const inReport = !!report?.aborted?.some((x) => x.runId === ev.runId);
+    const killed = bgPid != null ? !alive(bgPid) : null;
+    const approvalGone = /410/.test(String(ev.approveError || ''));
+    const scripted = bgPid != null;
+    // ③ 锁定时远程起 run → 423
+    const r3 = await fetch(`${base}/agent/runs`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'x-forsion-remote': 'tunnel' },
+      body: JSON.stringify({ session_id: `${session}-locked`, model_id: MODEL, message: 'Reply with exactly: OK', agent_config: { ...AGENT_CONFIG } }) });
+    const b3 = await r3.json().catch(() => null);
+    const refused = r3.status === 423 && b3?.code === 'REMOTE_LOCKED';
+    // ④ 本机 run 照常(锁只收紧远程)
+    const localTok = `LOCAL-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const local = await run(`${session}-local`, `Reply with exactly: ${localTok}`, 120_000);
+    const localOk = local.done && local.content.includes(localTok);
+    // ⑤ 解锁:主进程先写 lock:null,再清闩 → 远程 run 又能起
+    const unlock409 = await fetch(`${base}/agent/remote/unlock`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}` } }).then((r) => r.status);
+    writeFileSync(ESTOP_LOCK_FILE, JSON.stringify({ v: 1, lock: null, hotkey: '' }));
+    const unlocked = await api('/agent/remote/unlock', { method: 'POST', body: '{}' }).catch((e) => ({ error: String(e.message) }));
+    const againTok = `AGAIN-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const again = await run(`${session}-again`, `Reply with exactly: ${againTok}`, 120_000, {}, 'mobile/live-harness', undefined, { 'x-forsion-remote': 'tunnel' });
+    const restored = unlocked?.locked === false && again.done && again.content.includes(againTok);
+    // S13:锁 / 急停不进模型上下文(会话消息里没有锁文案)
+    const msgs = await api(`/agent/sessions/${session}/messages`).catch(() => null);
+    const leaked = JSON.stringify(msgs || '').includes('Remote access to this computer is locked');
+    const ok = aborted && inReport && (report?.killedProcesses ?? 0) >= (scripted ? 1 : 0) && killed !== false && refused && localOk && restored && !leaked && (!scripted || approvalGone);
+    return {
+      ok, inconclusive: ok && !scripted,
+      detail: `终态 ${ev.error || (ev.done ? 'done' : '?')}/${ev.errorReason ?? '-'}${aborted ? '' : ' ← 不是 remote_estop'};报告 ${report ? `中止 ${report.aborted?.length} 杀进程 ${report.killedProcesses} 撤回 ${report.revertedEntries} locked=${report.locked}` : '无'}${inReport ? '' : ' ← 报告里没有这条 run'}`
+        + `;后台进程 ${bgPid == null ? '没起(模型没按剧本,不计绿)' : (killed ? `pid ${bgPid} 已死` : `pid ${bgPid} 还活着 ←`)};审批 ${ev.approvals} 次${ev.approveError ? `,急停后代批 ${/410/.test(ev.approveError) ? '410' : ev.approveError}` : ''}`
+        + `;锁定时远程起 run ${r3.status}${b3?.code ? ' ' + b3.code : ''}${refused ? '' : ' ← 应 423 REMOTE_LOCKED'};本机 run ${localOk ? '照常' : `异常(${local.error || local.content.slice(0, 40)}) ←`}`
+        + `;未写解锁时清闩 ${unlock409}${unlock409 === 409 ? '' : ' ← 应 409'};解锁后远程 run ${restored ? '照常' : `异常(${again.error || JSON.stringify(unlocked)}) ←`};会话消息里锁文案 ${leaked ? '出现 ←' : '无'}`
+        + `;急停到终态 ${estopAt ? `${((Date.now() - estopAt) / 1000).toFixed(0)}s 内` : '-'}`,
+      output: `${ev.content || ''}\n[local] ${local.content}\n[again] ${again.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
   await scenario('remotecwd', 'remotecwd 远程 cwd=家目录被拒 + 家目录点文件远程硬拒', async () => {
     const r = await fetch(`${base}/agent/runs`, {
       method: 'POST',
