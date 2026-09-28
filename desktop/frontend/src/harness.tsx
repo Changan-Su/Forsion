@@ -30,7 +30,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { setLocaleGlobal } from './i18n'
+import { LocaleProvider, setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -703,6 +703,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     const units = [
       { id: 'u-mba', name: 'MacBook Air', platform: 'darwin', icon: '🦊', online: true, lanUrl: 'http://192.168.1.20:8791' },
       { id: 'u-pc', name: '书房 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
+      // P1-K1:手机是调用方、不开设备通道 → 切换器不列它(unit-switcher.check 判据)
+      { id: 'u-phone', name: '口袋 Pixel', platform: 'android', icon: null, online: false, lanUrl: null, kind: 'phone' },
     ]
     const opened: string[] = []
     ;(window as unknown as { __unitOpened: string[] }).__unitOpened = opened
@@ -710,7 +712,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     w.tangu = {
       ...(w.tangu ?? {}),
       getConfig: async () => ({ ...cfg }),
-      setConfig: async (patch: Record<string, unknown>) => Object.assign(cfg, patch),
+      // 父开关变了:真主进程经 refreshUnitHost → remoteSessions.notifyChanged 广播,桩在这里补同一拍(P1-K4)
+      setConfig: async (patch: Record<string, unknown>) => { const next = Object.assign(cfg, patch); (window as unknown as { __rsPush?: () => unknown }).__rsPush?.(); return next },
       openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
       unitsList: async () => ({ status: 200, json: { units } }),
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
@@ -718,6 +721,49 @@ if (new URLSearchParams(location.search).has('dock')) {
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
       unitsPairedList: async () => (cfg.unitHostEnabled ? [{ id: 'p1', name: '客厅 iPad', createdAt: 1 }] : []),
       unitsPairedRemove: async () => ({ ok: true }),
+      // P1-K5 &secrets=plaintext|locked|restart:设备凭据降级 / 锁定 / 要重启态(SecretStorageNotice 截图用);缺省 = 正常(不渲染)。
+      // 重试 / 重新登记 / 重启 → 恢复正常。restart = macOS 钥匙串被拒绝(这次运行拿不到系统加密)。
+      ...(() => {
+        const mode = new URLSearchParams(location.search).get('secrets')
+        let st = mode === 'plaintext'
+          ? { level: 'plaintext', backend: 'basic_text', locked: [], restartRequired: false, lastError: null }
+          : mode === 'locked'
+            ? { level: 'os', backend: 'keychain', locked: ['unitPairing'], restartRequired: false, lastError: 'decrypt-failed' }
+            : mode === 'restart'
+              ? { level: 'unavailable', backend: 'keychain', locked: ['unitPairing'], restartRequired: true, lastError: 'os-crypto-unavailable' }
+              : { level: 'os', backend: 'keychain', locked: [], restartRequired: false, lastError: null }
+        const ok = { level: 'os', backend: 'keychain', locked: [], restartRequired: false, lastError: null }
+        return {
+          secretStorageStatus: async () => st,
+          secretStorageRetry: async () => (st = ok),
+          secretStorageResetUnitPairing: async () => (st = ok),
+          secretStorageRelaunch: async () => (st = ok),
+        }
+      })(),
+      // P1-K4:「允许远程会话」子开关桩(父开关跟 cfg.unitHostEnabled;&secrets=plaintext|locked|restart 时设备凭据不允许 → 置灰)。
+      remoteSessions: (() => {
+        const secretsMode = new URLSearchParams(location.search).get('secrets')
+        let enabled = true
+        const listeners = new Set<(v: unknown) => void>()
+        // 同真主进程:父开关关着不问 K5(permitted=null = 未知)
+        const view = () => ({ hostEnabled: cfg.unitHostEnabled === true, enabled, permitted: cfg.unitHostEnabled === true ? !secretsMode : null, maxApprovalMode: 'auto-edit', trusted: [], pending: [], accountEntry: 'none' })
+        const push = () => { const v = view(); for (const cb of listeners) cb(v); return v }
+        ;(window as unknown as { __rsPush: () => unknown }).__rsPush = push
+        const w2 = window as unknown as { __rsGets: number }
+        w2.__rsGets = 0 // unit-switcher.check:互联关着时切换器不许主动取视图(取 = 主进程问 K5 = 可能碰钥匙串)
+        return {
+          get: async () => { w2.__rsGets++; return view() },
+          setEnabled: async (on: boolean) => {
+            if (on && secretsMode) throw new Error("Error invoking remote method 'remoteSessions:setEnabled': Error: secret-store-insecure")
+            enabled = on
+            return push()
+          },
+          setMaxApprovalMode: async () => view(),
+          revoke: async () => view(),
+          allowAccount: async () => view(),
+          onChanged: (cb: (v: unknown) => void) => { listeners.add(cb); return () => { listeners.delete(cb) } },
+        }
+      })(),
       // LAN 探针桩:MacBook Air 的直连地址可达,别的一律探不通。
       unitsProbeLan: async (lanUrl: string) =>
         lanUrl === 'http://192.168.1.20:8791' ? { instanceId: 'inst-mba', name: 'MacBook Air' } : null,
@@ -745,7 +791,10 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 快捷键提示的符号按 data-platform 走(宿主启动时写);仪器钉死 mac 一路,断言才不看 CI 跑在什么系统上。
   document.documentElement.dataset.platform = 'mac'
   ;(window as unknown as { __rb: typeof useRibbonStore }).__rb = useRibbonStore
-  createRoot(document.getElementById('root')!).render(<RibbonHarness />)
+  // &unit 挂真 LocaleProvider(P1-K5:SecretStorageNotice 要拍 zh / en 两种真实截图;没有 Provider 时 useI18n 恒回中文)。
+  // 只包 &unit:别的 ribbon 台架按中文文案选元素,换成跟随页面语言会假红。
+  const unitLocale = new URLSearchParams(location.search).has('unit')
+  createRoot(document.getElementById('root')!).render(unitLocale ? <LocaleProvider><RibbonHarness /></LocaleProvider> : <RibbonHarness />)
 } else if (new URLSearchParams(location.search).has('modelpill')) {
   // 模型 / Effort 菜单:真组件裸挂,肉眼/截图核对三行结构与 Max 特效(几何契约由 scripts/model-menu.check.cjs 钉)。
   const modelPillParams = new URLSearchParams(location.search)

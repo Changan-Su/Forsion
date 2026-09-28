@@ -95,7 +95,8 @@ export function installUnitCloudTransport(options: {
   }
   return {
     amadeus, stop,
-    config: { mode: 'external' as const, backendUrl: apiBase, token: capabilities.tangu ? getToken() : '', cloudUrl: apiBase, sandbox: 'none' as const },
+    // cloudApiBase(P1-K6 S1):云端 API 基址与引擎基址分家,云端读者读它;设备页经云中转时两者同值。
+    config: { mode: 'external' as const, backendUrl: apiBase, token: capabilities.tangu ? getToken() : '', cloudUrl: apiBase, cloudApiBase: apiBase, sandbox: 'none' as const },
     getToken, signal: scope.signal,
   }
 }

@@ -16,8 +16,9 @@ import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
 import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched, pluginSettingsTreeTouched } from '../sandbox/hostSandboxProtection.js';
-import { existsSync } from 'node:fs';
-import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
+import { gitDiscovery, repoGitPrograms, type GitDiscovery } from './gitRepoPrograms.js';
+import { hostSandboxBackend } from '../sandbox/hostSandbox.js';
+import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteApprovalPayload, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
@@ -27,6 +28,8 @@ import { USER_BROWSER_ACTIONS, userBrowserBound } from '../tools/builtin/browser
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
+import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
+export type { AnswerBy } from './pendingPromptIndex.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
@@ -36,6 +39,9 @@ export interface ApprovalDecision {
   argsOverride?: Record<string, any>;
   /** 拒绝原因（仅规则自动拒绝时有）：让模型与用户都看得见是**哪条规则**挡的，否则无从调起。 */
   rejectReason?: string;
+  /** G5 方案 B:这次放行只因为它是 known-safe 的 `git` 读命令(没人看过卡)→ 执行时套写拒绝 profile(macOS、宿主沙箱关;
+   *  本机 run 也套)。用户亲手批的命令不带它,照旧不包。 */
+  writeProtect?: boolean;
 }
 
 /** 挂起的审批(gateToolCall 带 park):审批请求已发出、**不等**用户,调用方先给模型一个占位结果继续干活,
@@ -49,6 +55,8 @@ export interface ParkedApproval {
 interface Pending {
   runId: string;
   resolve: (d: ApprovalDecision) => void;
+  /** reason.kind==='protected'(P1 · K3):只有执行设备本机能批准,远端只能拒绝(方案 §6.3)。 */
+  localOnly: boolean;
 }
 
 const pending = new Map<string, Pending>(); // approvalId -> resolver
@@ -134,17 +142,20 @@ export function setApprovalTray(runId: string, on: boolean): void {
   else trayRuns.delete(runId);
 }
 
-/** 登记一次审批请求:同 run 内排队逐个发布(发事件 + await 决定)。中止信号触发时按拒绝兑现。 */
+/** 登记一次审批请求:同 run 内排队逐个发布(发事件 + await 决定)。中止信号触发时按拒绝兑现。
+ *  origin = 这次调用的有效远程污点(P1 · K1):远程污点 run 的 approval_request 带 `remote {via, callerUnit?, callerKind?, callerName?}`,
+ *  审批卡据此写「来自远程会话 · X」;本机 run 不带该键。只作展示,不参与任何判定。 */
 export function requestApproval(
   runId: string,
   call: ToolCall,
   preview: string,
   signal?: AbortSignal,
   reason?: ApprovalReason,
+  origin?: RemoteInfo,
 ): Promise<ApprovalDecision> {
-  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason);
+  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin);
   const tail = approvalQueues.get(runId) || Promise.resolve();
-  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason));
+  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin));
   const entry = mine.then(() => undefined, () => undefined);
   approvalQueues.set(runId, entry);
   void entry.then(() => { if (approvalQueues.get(runId) === entry) approvalQueues.delete(runId); });
@@ -157,17 +168,22 @@ function requestApprovalNow(
   preview: string,
   signal?: AbortSignal,
   reason?: ApprovalReason,
+  origin?: RemoteInfo,
 ): Promise<ApprovalDecision> {
   if (signal?.aborted) return Promise.resolve({ action: 'reject' });
   const approvalId = nextApprovalId();
+  // P1 · K3:受保护路径的审批只在执行设备本机批准 —— 兑现路由 / 异步审批 / 通道据此拒远端「批准」,卡片据此不给远端批准键。
+  const localOnly = reason?.kind === 'protected';
   return new Promise<ApprovalDecision>((resolve) => {
     const onAbort = (): void => {
       pending.delete(approvalId);
+      untrackPrompt(approvalId, 'expired'); // 中止分支不发 approval_result:索引(通知 / 角标)要在这里撤,否则残留
       resolve({ action: 'reject' });
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     pending.set(approvalId, {
       runId,
+      localOnly,
       resolve: (d) => {
         if (signal) signal.removeEventListener('abort', onAbort);
         resolve(d);
@@ -179,8 +195,11 @@ function requestApprovalNow(
       arguments: call.function.arguments,
       preview,
       ...(reason ? { reason } : {}), // 旧客户端忽略未知字段;preview 一个字都没动(它是越界警示的唯一载体)
+      ...(origin ? { remote: remoteApprovalPayload(origin) } : {}), // 远程污点 run 才带(P1 · K1);旧客户端忽略
+      ...(localOnly ? { localOnly: true } : {}), // P1 · K3;旧客户端忽略
       toolCallId: call.id, // 客户端据此把审批挂回对应的工具卡(挂起的调用在卡上显示「等你批准」)
     });
+    trackPrompt({ id: approvalId, kind: 'approval', runId, tool: call.function.name, localOnly, origin });
   });
 }
 
@@ -190,15 +209,32 @@ function requestApprovalNow(
  * —— 桌面引擎所有 run 都属于 'local',不比对 = 拿任意 run 的 URL 兑现任意 run 的审批。
  * 进程内调用方(TUI / 通道)拿的是自己订阅的那条 run 事件流里的 id,可不传。
  */
-export function resolveApproval(approvalId: string, decision: ApprovalDecision, runId?: string): boolean {
+export function resolveApproval(approvalId: string, decision: ApprovalDecision, runId?: string, by?: AnswerBy): boolean {
   const p = pending.get(approvalId);
   // runId 不匹配 → 一律当作「不在等待」,不泄露它是否存在。
   if (!p || (runId !== undefined && p.runId !== runId)) return false;
   pending.delete(approvalId);
   p.resolve(decision);
+  // 谁答的(P1 · K3):先答先得的另一端据此把卡收起成「已在 X 上批准」。进程内调用方(TUI)不传 = 本机。
+  const answeredBy: AnswerBy = by ?? { via: 'local' };
   // 广播审批结果:SSE 回放/多端订阅者据此知道该审批已被消化(TUI 忽略未知事件类型,零影响)。
-  void publish(p.runId, 'approval_result', { approvalId, action: decision.action });
+  void publish(p.runId, 'approval_result', { approvalId, action: decision.action, by: answeredBy });
+  untrackPrompt(approvalId, decision.action === 'reject' ? 'rejected' : 'approved', answeredBy);
   return true;
+}
+
+/** 受保护路径的审批只能在执行设备本机批准(方案 §6.3,P1 · K3);远端(隧道 / P2P / 局域网 / 设备页)仍可拒绝。
+ *  兑现路由与异步审批(special.ts)共用同一个 403 回包。 */
+export const APPROVAL_LOCAL_ONLY_BODY = {
+  code: 'APPROVAL_LOCAL_ONLY',
+  detail: 'This action touches protected configuration or credentials and can only be approved on the computer running it. You can still reject it here.',
+} as const;
+
+/** 这条审批是不是只能在本机批准(受保护路径,P1 · K3)。null = 不在等 / 不属于这条 run(与兑现路由的 410 同口径,不泄露存在性)。 */
+export function approvalLocalOnly(approvalId: string, runId: string): boolean | null {
+  const p = pending.get(approvalId);
+  if (!p || p.runId !== runId) return null;
+  return p.localOnly;
 }
 
 export function isAlwaysAllowed(sessionId: string, toolName: string): boolean {
@@ -259,28 +295,17 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   });
 }
 
-/** The git work tree containing `dir` (nearest ancestor holding a `.git` dir or file), or null outside any repo. */
-function gitToplevel(dir: string): string | null {
-  let cur = path.resolve(dir);
-  for (;;) {
-    if (existsSync(path.join(cur, '.git'))) return cur;
-    const parent = path.dirname(cur);
-    if (parent === cur) return null;
-    cur = parent;
-  }
-}
-
 /** Contract C4 for `git diff` / `git show` (review F#0): given a path outside the work tree, `git diff` silently switches to
  * `--no-index` and prints the file — `git diff --no-ext-diff --no-textconv ~/.forsion/auth.json /dev/null` read the token
  * with zero approvals. Known-safe only when inside a repo, and every operand (revisions resolve harmlessly as in-tree names)
  * passes the same credential check as `cat` and lies inside the toplevel in both its literal and its realpath form
  * (`link/auth.json` with link -> ~/.forsion is literally inside, canonically outside). A repo whose tree contains a
  * credential file (a dotfiles repo at ~) is never known-safe for diff/show either: their output is file content. */
-function gitReadStaysInRepo(sub: string, args: string[], cwd: string): boolean {
+function gitReadStaysInRepo(sub: string, args: string[], cwd: string, found: Exclude<GitDiscovery, 'unvetted'>): boolean {
   if (args.includes('--no-index')) return false;
   const operands = splitOptions(args).operands;
-  const top = gitToplevel(cwd);
-  if (!top) return !['diff', 'show'].includes(sub) && operands.length === 0;
+  if (found === 'none') return !['diff', 'show'].includes(sub) && operands.length === 0;
+  const top = found.top;
   const tops = [...new Set([top, canonicalFuturePath(top)])];
   if (['diff', 'show'].includes(sub) && credentialPaths().some((c) => tops.some((t) => pathWithin(c, t)))) return false;
   return operands.every((a) => {
@@ -318,6 +343,17 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
     return splitOptions(args).options.every((a) => flags.has(a));
   }
   if (program !== 'git') return false;
+  // Every git subcommand reads the discovered git dir's config; only a repo whose config the agent cannot write qualifies.
+  const found = gitDiscovery(cwd);
+  if (found === 'unvetted') return false;
+  // G5 方案 B:仓库级配置(含已检出的子模块)里有 git 会替人跑的程序 —— filter、fsmonitor、post-index-change 钩子、外部 diff /
+  // textconv、pager、gpg、ssh、credential、include …… —— 就不算只读(读不懂也不算)。远程命令能在 .git 里摆这些,卡上却只写着 `git status`。
+  if (found !== 'none') {
+    const programs = repoGitPrograms(found.top);
+    if (programs === 'unknown' || programs.keys.length) return false;
+  }
+  // macOS:免审批的 git 在写拒绝 profile 里跑(agentLoop 按 decision.writeProtect 包);包不上(sandbox-exec 缺失)就回到审批。
+  if (process.platform === 'darwin' && !hostSandboxBackend('darwin').available) return false;
   const [sub, ...rest] = args;
   // branch and remote have mutating forms; only exact listing invocations qualify.
   if (sub === 'branch') return rest.every((a) => ['-a', '-r', '--all', '--remotes', '--list'].includes(a));
@@ -327,7 +363,7 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   if (['diff', 'show'].includes(sub) && !(rest.includes('--no-ext-diff') && rest.includes('--no-textconv'))) return false;
   if (!['status', 'diff', 'show', 'log', 'rev-parse', 'describe'].includes(sub)) return false;
   if (!rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a))) return false;
-  return gitReadStaysInRepo(sub, rest, cwd);
+  return gitReadStaysInRepo(sub, rest, cwd, found);
 }
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
@@ -572,7 +608,10 @@ export async function gateToolCall(
   }
 
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
-  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return { action: 'approve' };
+  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
+    // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
+    return /^git( |$)/.test(bashCommandOf(call).trim()) ? { action: 'approve', writeProtect: true } : { action: 'approve' };
+  }
 
   // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。远程污点 run 不认额外可写根(同 fsPolicy.writableRoots)。
   const escCtx = remote ? { ...ctx, extraRoots: undefined, remote } : ctx;
@@ -630,7 +669,7 @@ export async function gateToolCall(
     const { deferApproval } = await import('./pendingApprovals.js');
     return deferApproval(runId, call, preview, reason, ctx);
   }
-  const decided = requestApproval(runId, call, preview, signal, reason).then(async (d): Promise<ApprovalDecision> => {
+  const decided = requestApproval(runId, call, preview, signal, reason, remote).then(async (d): Promise<ApprovalDecision> => {
     if (d.action === 'reject') return d;
     let out: ApprovalDecision = { action: 'approve' };
     if (d.argsOverride) {

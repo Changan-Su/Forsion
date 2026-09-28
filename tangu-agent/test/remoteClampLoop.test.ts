@@ -6,6 +6,7 @@
  *   ③ verifyCommand 绕过路由抄进远程 run(会话存值 / 派生配置)→ loop 不跑;
  *   ④ 远程 run 里 delegate 出的子代理同样按远程钳;
  *   ⑤ 远程 run 进不了外部引擎私聊会话(不回落自有 loop)。
+ *   ⑧ P1 · K1:远程 run 的 approval_request 带 remote(含调用方),子代理的卡同样带;本机 run 不带该键(S11 / S12 引擎半边)。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
@@ -82,14 +83,14 @@ afterEach(() => {
 
 let runSeq = 0;
 /** 跑到终态;approval_request 一律拒(记下来),返回 { asked, status, error }。 */
-async function run(agentConfig: Record<string, any>, remote: boolean, steered = false): Promise<{ asked: any[]; status: string; error?: string; runId: string }> {
+async function run(agentConfig: Record<string, any>, remote: boolean | Record<string, unknown>, steered = false): Promise<{ asked: any[]; status: string; error?: string; runId: string }> {
   const asked: any[] = [];
   const runId = `L${++runSeq}`;
   // steered:本机起的 run,被远端 steer 染色(路由在 enqueueSteer 成功后登记;这里在起跑前登记 = 首个迭代边界就已染上)
   if (steered) taintRunRemote(runId, { via: 'p2p', marked: false });
   await createRun({
     id: runId, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${runId}-a`,
-    input: { message: 'go', userMessageId: `${runId}-u`, attachments: [], agentConfig: { execMode: 'host', cwd: ws, ...agentConfig }, origin: 'client', ...(remote ? { remote: REMOTE } : {}) },
+    input: { message: 'go', userMessageId: `${runId}-u`, attachments: [], agentConfig: { execMode: 'host', cwd: ws, ...agentConfig }, origin: 'client', ...(remote ? { remote: remote === true ? REMOTE : remote } : {}) },
   });
   let error: string | undefined;
   const off = subscribe(runId, (ev) => {
@@ -142,6 +143,23 @@ describe('远程污点 run × 真 loop', () => {
     expect(existsSync(remoteMark)).toBe(false);
   });
 
+  it('⑧ K1:远程 run 的审批事件带 remote(调用方随 input.remote 进闸,子代理的卡同样带);本机 run 的卡不带该键', async () => {
+    const CALLER = { via: 'tunnel', marked: true, callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone', callerName: 'Pixel 9' };
+    script = [bash(`touch ${join(ws, 'k1-main.txt')}`), delegate('touch a file'), bash(`touch ${join(ws, 'k1-sub.txt')}`), final('sub done'), final()];
+    const remote = await run({ approvalMode: 'full-auto' }, CALLER);
+    expect(remote.asked.map((a) => a.name)).toEqual(['run_bash', 'run_bash']);
+    for (const a of remote.asked) expect(a.remote).toEqual({ via: 'tunnel', callerUnit: CALLER.callerUnit, callerKind: 'phone', callerName: 'Pixel 9' });
+    // 调用方不改判定:与不带调用方的远程 run 同样钳到 auto-edit(S13 的真 loop 版)
+    expect(remote.asked.map((a) => a.reason?.mode)).toEqual(['auto-edit', 'auto-edit']);
+    script = [bash(`touch ${join(ws, 'k1-anon.txt')}`), final()];
+    const anon = await run({ approvalMode: 'full-auto' }, true);
+    expect(anon.asked.map((a) => [a.reason?.mode, a.remote])).toEqual([['auto-edit', { via: 'tunnel' }]]);
+    script = [bash(`touch ${join(ws, 'k1-local.txt')}`), final()];
+    const local = await run({ approvalMode: 'auto-edit' }, false);
+    expect(local.asked).toHaveLength(1);
+    expect('remote' in local.asked[0]).toBe(false);
+  });
+
   it('④ 远程 run 里 delegate 的子代理同样按远程钳(负对照:本机 full-auto 子代理不问)', async () => {
     script = [delegate('touch a file'), bash(`touch ${join(ws, 'sub-local.txt')}`), final('sub done'), final()];
     expect((await run({ approvalMode: 'full-auto' }, false)).asked).toHaveLength(0);
@@ -183,5 +201,8 @@ describe('远程污点 run × 真 loop', () => {
     expect(r.status).toBe('failed');
     expect(r.error).toBe('engine_unavailable_remote');
     expect(engineRuns).toBe(1);
+    // P1-K2:拒跑分支正常 return,以前不释放会话队列 → 同会话下一条本机 run 永远排队
+    expect((await run({}, false)).status).toBe('done');
+    expect(engineRuns).toBe(2);
   });
 });

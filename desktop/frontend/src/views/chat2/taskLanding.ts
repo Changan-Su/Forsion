@@ -13,6 +13,7 @@ import { approveMuseTodo, patchMuseTodo, postMuseFeedback, saveAgentScheduleEntr
 import { useApp } from '../../stores/appStore'
 import type { TaskCard } from './suggest'
 import type { TaskLanding } from './TaskCards'
+import { homeTarget } from '../../services/engine/targets'
 
 function localStamp(d: Date): string {
   const p = (x: number): string => String(x).padStart(2, '0')
@@ -28,7 +29,7 @@ export const TRACK_PREFIX = 'Track this task; report to the user only when somet
 async function syncTodo(id: string, status: 'injected' | 'dismissed'): Promise<boolean> {
   const app = useApp.getState()
   try {
-    await patchMuseTodo(app.cfg, id, status, 'pending')
+    await patchMuseTodo(homeTarget(), id, status, 'pending')
     return true
   } catch (e: any) {
     app.toast(e?.code === 'todo_not_pending' ? app.tr('chat.task.doneTodo') : app.tr('chat.task.todoSyncFail', { e: e?.message || String(e) }), true)
@@ -39,7 +40,7 @@ async function syncTodo(id: string, status: 'injected' | 'dismissed'): Promise<b
 /** 发送没成:把刚占下的 injected 退回 pending(from=injected 的 CAS,别处已改走就不动);退不回就提示。 */
 async function revertTodo(id: string): Promise<void> {
   const app = useApp.getState()
-  await patchMuseTodo(app.cfg, id, 'pending', 'injected').catch((e: any) => {
+  await patchMuseTodo(homeTarget(), id, 'pending', 'injected').catch((e: any) => {
     app.toast(app.tr('chat.task.todoSyncFail', { e: e?.message || String(e) }), true)
   })
 }
@@ -47,7 +48,7 @@ async function revertTodo(id: string): Promise<void> {
 /** 返回 true = 做成(卡片定格);false = 没做成(卡片保留按钮,toast 说明)。反馈行只在做成后发,免得 LOG 里记着没发生的事。 */
 export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionId: string | null): Promise<boolean> {
   const app = useApp.getState()
-  const feedback = (line: string): void => { void postMuseFeedback(app.cfg, line).catch(() => {}) }
+  const feedback = (line: string): void => { void postMuseFeedback(homeTarget(), line).catch(() => {}) }
   const label = `task-card "${card.title.slice(0, 80)}"`
   if (landing === 'here' || landing === 'new') {
     if (card.todo && !(await syncTodo(card.todo, 'injected'))) return false
@@ -63,7 +64,7 @@ export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionI
   }
   if (landing === 'muse' && card.todo) {
     try {
-      await approveMuseTodo(app.cfg, card.todo)
+      await approveMuseTodo(homeTarget(), card.todo)
       app.toast(app.tr('chat.task.handedDo'))
       return true
     } catch (e: any) {
@@ -75,7 +76,7 @@ export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionI
     const prompt = TRACK_PREFIX + card.prompt
     if (prompt.length > TRACK_PROMPT_MAX) { app.toast(app.tr('chat.task.tooLong'), true); return false }
     try {
-      await saveAgentScheduleEntry(app.cfg, 'muse', {
+      await saveAgentScheduleEntry(homeTarget(), 'muse', {
         name: card.title.slice(0, 120),
         date: localStamp(new Date(Date.now() + 3600_000)), // 一小时后首查,之后每天
         repeat: '1d',

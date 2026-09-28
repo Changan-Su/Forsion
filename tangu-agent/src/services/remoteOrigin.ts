@@ -4,7 +4,13 @@
  * C1:桌面 unitWeb 代理 /engine/* 时先剥掉入站的 `x-forsion-remote*`,再盖 `x-forsion-remote: tunnel|p2p|lan`
  * 与 `x-forsion-remote-mark: <每次启动的密钥>`(主进程生成,经 env TANGU_REMOTE_MARK_SECRET 交给引擎)。
  * 引擎只要看到 `x-forsion-remote` 就按**远程**处理 —— 标记只会收紧、不会放宽;mark 只用于记录
- * `input.remote.marked`(本机其他进程自己加头 = 未盖章的远程,照样被钳),**绝不**据它信任任何调用方身份(callerUnit 是 P1 的事)。
+ * `input.remote.marked`(本机其他进程自己加头 = 未盖章的远程,照样被钳),**绝不**据它信任任何调用方身份。
+ *
+ * 调用方设备(P1 · K1):unitWeb 只在隧道来路、且 hub 盖章 → unitHost 签 → unitWeb 验签都过了,才盖
+ * `x-forsion-remote-caller: b64url({u,k,n,p,r})`。引擎是末跳,只防畸形、不报错:**只在 marked && via==='tunnel'** 时读它
+ * (未盖章的远程 = 本机进程自己加的头,永远拿不到 callerUnit),读进 input.remote.callerUnit/callerKind/callerName,
+ * 随 run 落库、随派生 run 传播(整对象抄 remote)、进 approval_request 事件与审批卡。
+ * ⚠️ 调用方身份**不改变任何审批 / 钳制判定**(D1、C3):它只回答「是谁」,给展示、活动登记与 P2 的 dev_origin 用。
  *
  * 引擎只认 `run.input.remote`(本模块经路由解析、派生 run 显式抄写);请求体 / 会话存值里的任何同名字段一律不作数。
  *
@@ -16,11 +22,17 @@ import { getRawSection } from '../core/config.js';
 import { remoteCwdForbidden } from '../sandbox/hostSandboxProtection.js';
 
 export type RemoteVia = 'tunnel' | 'p2p' | 'lan';
+export type RemoteCallerKind = 'phone' | 'desktop';
 export interface RemoteInfo {
   /** 来源入口;头值不在契约内(只可能是本机进程自己加的头)→ undefined,但仍按远程处理(fail-closed)。 */
   via?: RemoteVia;
   /** true = 带着本次启动的 unitWeb 密钥盖章;false = 没盖章 / 盖错。只作记录,不放宽任何东西。 */
   marked: boolean;
+  /** 已验证的调用方设备 unit id(hub 盖章 → unitHost 签 → unitWeb 验)。只在 marked && via==='tunnel' 时有;缺席 = 账号级未识别调用方。 */
+  callerUnit?: string;
+  callerKind?: RemoteCallerKind;
+  /** 调用方的登记名(不可信串:已去控制符、截 120;只作展示)。 */
+  callerName?: string;
 }
 
 export type CapMode = 'readonly' | 'auto-edit' | 'full-auto';
@@ -42,22 +54,63 @@ function markMatches(given: string | undefined): boolean {
   return timingSafeEqual(a, b);
 }
 
-/** 从请求头解析远程来源;无 `x-forsion-remote` → undefined(本机请求)。 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CALLER_KINDS = new Set<string>(['phone', 'desktop']);
+/** 调用方名字里的控制符、零宽与双向覆写(防在审批卡 / 活动面上伪装成别的名字)。 */
+const UNSAFE_NAME_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
+
+/** 调用方三字段的**唯一**校验口(头解析与持久化重建共用,两边不会漂):unit 过 uuid、kind 过枚举,二者缺一则三者都丢;
+ *  name 去控制符截 120,空了就不带。只在 marked && via==='tunnel' 时才可能有(调用方自己先判)。 */
+function callerFields(u: unknown, k: unknown, n: unknown): Pick<RemoteInfo, 'callerUnit' | 'callerKind' | 'callerName'> {
+  if (typeof u !== 'string' || !UUID_RE.test(u) || typeof k !== 'string' || !CALLER_KINDS.has(k)) return {};
+  const name = typeof n === 'string' ? n.replace(UNSAFE_NAME_CHARS, '').trim().slice(0, 120) : '';
+  return { callerUnit: u.toLowerCase(), callerKind: k as RemoteCallerKind, ...(name ? { callerName: name } : {}) };
+}
+
+/** `x-forsion-remote-caller` 的 b64url JSON {u,k,n,…};任何不合法 → {}(引擎是末跳,unitWeb 已验;这里只防畸形)。 */
+function parseCallerHeader(raw: string | undefined): Pick<RemoteInfo, 'callerUnit' | 'callerKind' | 'callerName'> {
+  if (!raw || raw.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(raw)) return {};
+  try {
+    const j = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return {};
+    return callerFields(j.u, j.k, j.n);
+  } catch { return {}; }
+}
+
+/** 从请求头解析远程来源;无 `x-forsion-remote` → undefined(本机请求)。调用方头只在 marked && via==='tunnel' 时读。 */
 export function parseRemoteOrigin(headers: HeaderBag | undefined): RemoteInfo | undefined {
   const raw = headerOf(headers, 'x-forsion-remote');
   if (raw === undefined) return undefined;
   const v = String(raw).trim().toLowerCase();
-  return {
+  const info: RemoteInfo = {
     ...(VIAS.has(v as RemoteVia) ? { via: v as RemoteVia } : {}),
     marked: markMatches(headerOf(headers, 'x-forsion-remote-mark')),
   };
+  return info.marked && info.via === 'tunnel' ? { ...info, ...parseCallerHeader(headerOf(headers, 'x-forsion-remote-caller')) } : info;
 }
 
-/** run.input.remote → RemoteInfo(只认对象形状;来自库里,字段按契约重建,不透传多余键)。 */
+/** run.input.remote → RemoteInfo(只认对象形状;来自库里,字段按契约重建,不透传多余键)。
+ *  调用方三字段按同一规则重建:via!=='tunnel' 或 !marked 时丢;callerUnit / callerKind 不合法则三者都丢。 */
 export function remoteOf(input: any): RemoteInfo | undefined {
   const r = input?.remote;
   if (!r || typeof r !== 'object' || Array.isArray(r)) return undefined;
-  return { ...(VIAS.has(r.via) ? { via: r.via as RemoteVia } : {}), marked: r.marked === true };
+  const info: RemoteInfo = { ...(VIAS.has(r.via) ? { via: r.via as RemoteVia } : {}), marked: r.marked === true };
+  return info.marked && info.via === 'tunnel' ? { ...info, ...callerFields(r.callerUnit, r.callerKind, r.callerName) } : info;
+}
+
+/** 驱动这次工具调用 / 审批的调用方设备 unit id(P2 的 dev_origin 只认它,方案 §4.6-1)。缺席 = 账号级未识别 / 本机。 */
+export function remoteCallerUnit(ctx: { remote?: RemoteInfo; runId?: string } | undefined): string | undefined {
+  return effectiveRemote(ctx)?.callerUnit;
+}
+
+/** approval_request.remote 的载荷:来路 + 调用方(不带 marked —— 那是引擎内部的记录位,客户端用不上)。 */
+export function remoteApprovalPayload(r: RemoteInfo): { via?: RemoteVia; callerUnit?: string; callerKind?: RemoteCallerKind; callerName?: string } {
+  return {
+    ...(r.via ? { via: r.via } : {}),
+    ...(r.callerUnit ? { callerUnit: r.callerUnit } : {}),
+    ...(r.callerKind ? { callerKind: r.callerKind } : {}),
+    ...(r.callerName ? { callerName: r.callerName } : {}),
+  };
 }
 
 /**
@@ -68,7 +121,14 @@ export function remoteOf(input: any): RemoteInfo | undefined {
  * 标记由引擎自己盖:远端写配置改不了它(不在 REMOTE_WRITABLE_CONFIG_KEYS 里),本机写配置(PUT 整对象替换)也抹不掉(见 sessions.ts writeSessionConfig)。
  */
 export function remoteOriginMarker(remote: RemoteInfo): Record<string, unknown> {
-  return { ...(remote.via ? { via: remote.via } : {}), marked: remote.marked, at: new Date().toISOString() };
+  // 调用方(P1 · K1)只作会话级展示(跨设备会话列表 / 活动登记);标记只在缺席时盖 = 先到先得。
+  return {
+    ...(remote.via ? { via: remote.via } : {}), marked: remote.marked,
+    ...(remote.callerUnit ? { callerUnit: remote.callerUnit } : {}),
+    ...(remote.callerKind ? { callerKind: remote.callerKind } : {}),
+    ...(remote.callerName ? { callerName: remote.callerName } : {}),
+    at: new Date().toISOString(),
+  };
 }
 
 /** config.json `remote.maxApprovalMode`(每次现读,改完下一次工具调用即生效);非法 / 缺省 → auto-edit。 */
@@ -91,7 +151,7 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
  *   extraRoots —— 免审批可写根;
  *   clientCapabilities / client_capabilities —— 会给 run 注册手机能力,而回执打的是云端;
  *   devices —— 设备挂载(P1),远端不可改;
- *   remoteOrigin —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉;
+ *   remoteOrigin / remoteContent —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉;
  *   muse / activityAccess / automationOrigin / approvalDeferral —— 引擎内部角色键:muse 让 run 看见 add_muse_todo / set_next_wake /
  *     read_activity,TODO 被批准后排出的 Muse run **不带污点**(Muse 自动档是完全通行)= 远端借 Muse 起一条无钳制的后续执行;
  *     其余几个改的是「有没有人在看、审批往哪排」;
@@ -101,7 +161,7 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
  * 会话配置的远程**写**走白名单,见 REMOTE_WRITABLE_CONFIG_KEYS。
  */
 export const REMOTE_STRIPPED_CONFIG_KEYS = [
-  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin',
+  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin', 'remoteContent',
   'muse', 'activityAccess', 'automationOrigin', 'approvalDeferral', 'delegatedFrom', 'delegatedBy', 'subAgentGrants',
   'systemPrompt', 'soul', 'toolsMode', 'toolsList',
 ] as const;
@@ -192,19 +252,32 @@ export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any
  *  一律硬拒 —— 不进审批:按 D1 远端能批自己的卡,弹卡挡不住。审批闸与工具实现两处共用这一个判定。 */
 // remember 与 manage_* 同理:写进 Agent 长期记忆的条目会注入之后每一次会话(含本机 full-auto / 自动化),等于在宿主上植入指令;
 // HTTP 的记忆写路由本就是 deny-remote,工具不能成为旁路(09-27 终审 P1)。
-const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember']);
+// log_event 同理(P1 · M1A,G7):每日日志按天进 Muse 周期提示词的活动摘要,远端写一条 = 把原话送进无人值守的 Muse;
+// HTTP 的 POST /agent/log 本就是 deny-remote。它没有 action 参数,恒拒。
+const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember', 'log_event']);
 export function remoteManagementDenied(tool: string, action: unknown): string | null {
   if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
+  if (tool === 'log_event') return 'Remote sessions cannot write to the daily log: it feeds background agents on the host computer. Tell the user the result in your reply instead.';
   return `Remote sessions cannot create, change or delete agents, skills, working notes, long-term memory, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
 }
 
 // ── 中途染色:远端对一个**本机**起的在飞 run 发 steer,注入的文字从下一个迭代起就在驱动它 → 这条 run 从此按远程钳制。
 // 进程内表(run 只活在本进程的 loop 里)。只登记**已成功入队**的 steer(路由里 enqueueSteer 成功之后才调),
+// **先到先得**(P1 · K1):本机起的 run 被手机 steer 后,callerUnit = **第一个**远端染色者;之后别的设备再 steer 不改它。
 // 表项随 run 收尾由 agentLoop 清掉(clearRunRemoteTaint)—— 表长 ≤ 在飞 run 数,不做容量淘汰:
 // 按 FIFO 挤掉的若是仍在跑的 run,它就悄悄回到本机档位(Codex 评审)。
 const steeredRemote = new Map<string, RemoteInfo>();
+// P1-K2:首次染色的订阅者(活动登记表 remoteActivity.noteRunTainted:本机起的 run 被手机 steer 后立刻按远程列出)。
+// 用订阅而不是直接 import:remoteActivity → processRegistry → remoteOrigin 已是一条链,反向 import 成环(模块求值期 TDZ)。
+const taintListeners = new Set<(runId: string) => void>();
+export function onRunTainted(cb: (runId: string) => void): () => void {
+  taintListeners.add(cb);
+  return () => { taintListeners.delete(cb); };
+}
 export function taintRunRemote(runId: string, info: RemoteInfo): void {
-  if (!steeredRemote.has(runId)) steeredRemote.set(runId, info);
+  if (steeredRemote.has(runId)) return;
+  steeredRemote.set(runId, info);
+  for (const cb of [...taintListeners]) { try { cb(runId); } catch { /* 订阅者的错误不影响染色 */ } } // P1-K2
 }
 export function clearRunRemoteTaint(runId: string): void {
   steeredRemote.delete(runId);

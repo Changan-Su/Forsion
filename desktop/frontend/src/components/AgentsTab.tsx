@@ -15,6 +15,7 @@ import { useApp } from '../stores/appStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { agentDescription } from './builtinAgentDescriptions'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'agentstab.userMdTemplate': {
@@ -69,15 +70,15 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
   const [toolCatalog, setToolCatalog] = useState<{ name: string; description: string }[]>([])
 
   const load = (): void => {
-    void listAgents(cfg).then(setAgents).catch(() => setAgents([]))
-    void getAgentsMeta(cfg).then((m) => setDefaultSlug(m.defaultSlug || 'xyra')).catch(() => { /* ignore */ })
+    void listAgents(homeTarget()).then(setAgents).catch(() => setAgents([]))
+    void getAgentsMeta(homeTarget()).then((m) => setDefaultSlug(m.defaultSlug || 'xyra')).catch(() => { /* ignore */ })
   }
   useEffect(() => {
     load()
-    void listModels(cfg).then((r) => setModels(r.models)).catch(() => setModels([]))
-    void fetchToolCatalog(cfg).then(setToolCatalog)
+    void listModels(homeTarget()).then((r) => setModels(r.models)).catch(() => setModels([]))
+    void fetchToolCatalog(homeTarget()).then(setToolCatalog)
     // USER.md:有内容直接载入;为空则用登录用户名/昵称预填模板。
-    void getUserProfile(cfg).then(async (content) => {
+    void getUserProfile(homeTarget()).then(async (content) => {
       if (content.trim()) { setUserMd(content); return }
       let nick = ''
       try { const a = await window.tangu?.authStatus?.(); nick = a?.nickname || a?.username || '' } catch { /* ignore */ }
@@ -96,7 +97,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
       activityAccess: !!a.activityAccess, toolsMode: a.toolsMode || '', toolsList: a.toolsList || [],
     })
     setAvatarUrl(null)
-    if (a.avatar) void fetchAgentAvatar(cfg, a.slug).then(setAvatarUrl).catch(() => {})
+    if (a.avatar) void fetchAgentAvatar(homeTarget(), a.slug).then(setAvatarUrl).catch(() => {})
   }
 
   // 「让 AI 帮我配置」:开新会话 + 预填一段创建意图,交给默认 agent(桌面 host 会话本就带 manage_agent 工具)对话式建 agent。
@@ -113,7 +114,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
     setBusy(true)
     setMsg('')
     try {
-      await saveAgentDef(cfg, {
+      await saveAgentDef(homeTarget(), {
         name: editing.name,
         description: editing.description,
         model: editing.model,
@@ -158,7 +159,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
 
   const remove = async (a: NormalAgentDef): Promise<void> => {
     if (!window.confirm(t('settings.agents.deleteConfirm', { name: a.name }))) return
-    try { await deleteAgentDef(cfg, a.slug); load() } catch { /* ignore */ }
+    try { await deleteAgentDef(homeTarget(), a.slug); load() } catch { /* ignore */ }
   }
 
   const onPickAvatar = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
@@ -174,8 +175,8 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
         r.onerror = () => reject(new Error('read failed'))
         r.readAsDataURL(file)
       })
-      await uploadAgentAvatar(cfg, editing.slug, dataUrl, file.type)
-      setAvatarUrl(await fetchAgentAvatar(cfg, editing.slug))
+      await uploadAgentAvatar(homeTarget(), editing.slug, dataUrl, file.type)
+      setAvatarUrl(await fetchAgentAvatar(homeTarget(), editing.slug))
       load()
     } catch (err: any) {
       setMsg(t('settings.agents.saveFail', { e: err?.message || err }))
@@ -188,7 +189,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
     if (!editing?.slug || !avatarUrl) return
     setAvatarBusy(true); setMsg('')
     try {
-      await deleteAgentAvatar(cfg, editing.slug)
+      await deleteAgentAvatar(homeTarget(), editing.slug)
       setAvatarUrl(null)
       load()
     } catch (err: any) {
@@ -199,11 +200,11 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
   }
 
   const setDefault = (slug: string): void => {
-    void putAgentsMeta(cfg, { defaultSlug: slug }).then((m) => setDefaultSlug(m.defaultSlug)).catch(() => { /* ignore */ })
+    void putAgentsMeta(homeTarget(), { defaultSlug: slug }).then((m) => setDefaultSlug(m.defaultSlug)).catch(() => { /* ignore */ })
   }
   /** 列表行快捷开关云同步:开启的 agent 全部文件跨设备完全镜像。 */
   const toggleCloudSync = (a: NormalAgentDef): void => {
-    void saveAgentDef(cfg, { cloudSync: !a.cloudSync } as Partial<NormalAgentDef>, a.slug).then(() => load()).catch(() => { /* ignore */ })
+    void saveAgentDef(homeTarget(), { cloudSync: !a.cloudSync } as Partial<NormalAgentDef>, a.slug).then(() => load()).catch(() => { /* ignore */ })
   }
   const reorder = (from: string, to: string): void => {
     if (!agents || from === to) return
@@ -211,12 +212,12 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
     const ti = slugs.indexOf(to)
     if (ti < 0) return
     slugs.splice(ti, 0, from) // 拖到目标之前
-    void putAgentsMeta(cfg, { order: slugs }).then(() => load()).catch(() => { /* ignore */ })
+    void putAgentsMeta(homeTarget(), { order: slugs }).then(() => load()).catch(() => { /* ignore */ })
   }
 
   const saveUserMd = async (): Promise<void> => {
     setUserMdBusy(true)
-    try { await putUserProfile(cfg, userMd) } finally { setUserMdBusy(false) }
+    try { await putUserProfile(homeTarget(), userMd) } finally { setUserMdBusy(false) }
   }
 
   const modelOptions = useMemo(() => models.map((m) => ({ id: m.id, label: m.name || m.id })), [models])

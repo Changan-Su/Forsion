@@ -9,6 +9,7 @@ import { Loader2, Play, RefreshCw, Trash2, Check } from 'lucide-react'
 import type { TanguDesktopConfig, DirectProviderConfig } from '../types'
 import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsVoiceInfo } from '../services/backendService'
 import { useI18n } from '../i18n'
+import { homeTarget } from '../services/engine/targets'
 
 // 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD/COSY_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
 const KIND_MODEL: Record<'clone' | 'design' | 'cosy', string> = {
@@ -35,7 +36,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
 
   const refresh = (): void => {
     setBusy('list'); setMsg('')
-    listTtsVoices(cfg, auth)
+    listTtsVoices(homeTarget(), auth)
       .then(setVoices)
       .catch((e) => setMsg(`✗ ${e?.message || e}`))
       .finally(() => setBusy(''))
@@ -55,7 +56,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
     const fr = new FileReader()
     fr.onerror = () => { setBusy(''); setMsg('✗ read file failed') }
     fr.onload = () => {
-      cloneTtsVoice(cfg, { ...auth, name: cloneName, audioData: String(fr.result) })
+      cloneTtsVoice(homeTarget(), { ...auth, name: cloneName, audioData: String(fr.result) })
         // 成功:先清 busy 再 refresh(refresh 自管 'list' 态,同一批次合并不闪);失败:保留错误信息,不 refresh(其 setMsg('') 会吃掉报错)。
         .then((r) => { apply(r.voice, r.targetModel); setCloneFile(null); setCloneName(''); setBusy(''); refresh() })
         .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
@@ -67,7 +68,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   const doCosyClone = (): void => {
     if (!cosyUrl.trim() || busy) return
     setBusy('cosy'); setMsg('')
-    cloneTtsVoice(cfg, { ...auth, name: cosyName, engine: 'cosy', audioUrl: cosyUrl.trim() })
+    cloneTtsVoice(homeTarget(), { ...auth, name: cosyName, engine: 'cosy', audioUrl: cosyUrl.trim() })
       .then((r) => { apply(r.voice, r.targetModel); setCosyUrl(''); setCosyName(''); setBusy(''); refresh() })
       .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
   }
@@ -75,7 +76,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   const doDesign = (): void => {
     if (!designPrompt.trim() || busy) return
     setBusy('design'); setMsg(''); setPreview(null)
-    designTtsVoice(cfg, { ...auth, name: designName, voicePrompt: designPrompt, previewText: designPreviewText || undefined })
+    designTtsVoice(homeTarget(), { ...auth, name: designName, voicePrompt: designPrompt, previewText: designPreviewText || undefined })
       .then((r) => {
         if (r.previewAudio?.data) setPreview({ voice: r.voice, targetModel: r.targetModel, b64: r.previewAudio.data })
         else apply(r.voice, r.targetModel)
@@ -87,7 +88,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   const doDelete = (v: TtsVoiceInfo): void => {
     if (busy) return
     setBusy('list'); setMsg('')
-    deleteTtsVoice(cfg, { ...auth, voice: v.voice, kind: v.kind })
+    deleteTtsVoice(homeTarget(), { ...auth, voice: v.voice, kind: v.kind })
       .then(() => { setBusy(''); refresh() })
       .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
   }

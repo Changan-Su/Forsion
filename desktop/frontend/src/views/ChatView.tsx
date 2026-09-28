@@ -7,6 +7,7 @@ import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
+import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
@@ -39,6 +40,7 @@ import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
+import { homeTarget } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
@@ -50,6 +52,7 @@ import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
+import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -78,6 +81,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const studioRoot = useCodeStudio(state => state.activeProject)
   const pinnedSessionId = typeof params.sessionId === 'string' ? params.sessionId : null
   const activeId = followActive ? globalActiveId : pinnedSessionId
+  // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
+  const targetPlaceholder = useTargetComposerPlaceholder(activeId)
+  const composerTargetReady = useComposerReady(activeId)
+  const runPickerOn = useRunPickerVisible() // P1-K7a:手机上的「在哪运行」
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
   const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
@@ -426,7 +433,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const ttsEnabled = !!s.desktopConfig?.ttsModelId?.trim()
   const speak = (id: string, text: string): void => {
     if (tts?.msgId === id) { stopSpeaking(); return }
-    speakMessage(s.cfg, s.desktopConfig, id, text).catch((e: any) => {
+    speakMessage(homeTarget(), s.desktopConfig, id, text).catch((e: any) => {
       s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
     })
   }
@@ -640,17 +647,19 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
   
-        {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。 */}
-        {!activeId && mvCfg.preset !== 'chat' && (!studioChat || studioRoot) && (
+        {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。
+            P1-K7a:手机上另有「在哪运行」药丸(Chat 模式也要有 —— 聊天会话同样可以建在电脑上),排在项目药丸之前。 */}
+        {!activeId && (!studioChat || studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat)) && (
           <div className="newchat-projectbar">
             <div className="newchat-projectbar-inner">
-              {studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
+              {runPickerOn && !studioChat && <RunLocationPicker />}
+              {mvCfg.preset !== 'chat' && (studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
                 workspaces={s.workspaces()}
                 value={s.newChatWs?.key ?? null}
                 onChange={(w) => s.setNewChatWs(w)}
                 onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
                 onAddCloudProject={(name) => void s.addCloudProject(name)}
-              />}
+              />)}
             </div>
           </div>
         )}
@@ -666,22 +675,29 @@ export function ChatView({ leaf, params }: ViewProps) {
             <ApprovalTray
               // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
               key={activeId ?? ''}
+              sessionId={activeId ?? undefined}
               items={pendingApprovals}
               onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
               onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
             />
           ) : undefined}
           advisory={!params.childSurface ? (
-            <QuotaAdvisoryBanner
-              loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
-              onToast={s.toast}
-            />
+            // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
+            // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
+            //    接管这一格 —— 要么收编 TargetHealthNotice(读同一张 useTargetHealth、同一个 retryFocusTarget),要么换成自己的条并把
+            //    这里还原成裸 QuotaAdvisoryBanner;下面 disabledPlaceholder 的 targetPlaceholder 随 K7 的 remoteBlocked 一起并过去。
+            <TargetHealthNotice sessionId={activeId} fallback={
+              <QuotaAdvisoryBanner
+                loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
+                onToast={s.toast}
+              />
+            } />
           ) : undefined}
           // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
           liveOwner={followActive && leaf.loc === 'main'}
           liveSessionKey={activeId}
-          disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
-          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
+          disabled={!!params.readOnly || !composerTargetReady || (studioChat && !studioRoot)}
+          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : targetPlaceholder}
           running={running}
           execConfig={teamCfg ? { ...mvCfg, approvalMode: teamCfg.approvalMode || mvCfg.approvalMode } : mvCfg}
           teamApproval={!!teamCfg}

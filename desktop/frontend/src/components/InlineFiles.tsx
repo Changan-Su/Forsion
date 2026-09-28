@@ -1,13 +1,17 @@
 /**
  * 对话区内联文件:agent 经 display_file / generate_image / 表情包展示给用户的文件。
  * 图片 = 缩略图,点击放大(复用 WorkspaceFilePreview 灯箱);其它 = 可点击文件卡片(同样开预览,支持各类文件)。
- * 字节来源:dataUrl 直接用;工作区路径 host 会话走 window.tangu.readHostFile、沙箱走 /agent/workspace/read。
+ * 字节来源:dataUrl 直接用;工作区路径 host 会话走「会话所在那台电脑」的 host 文件面(hostFs:本机 = window.tangu.readHostFile,
+ * 手机把整端切到我的电脑 = 经 hub 的 /unit/hostfile)、沙箱走 /agent/workspace/read(P1-K6 S2)。
  */
 import React, { useEffect, useRef, useState } from 'react'
 import type { DisplayFile, TanguDesktopConfig } from '../types'
 import type { PreviewTarget, PreviewData } from './WorkspaceFilePreview'
 import { b64ToBytes, iconForFile } from '../services/fileKinds'
 import * as api from '../services/backendService'
+import { hostFsForSession } from '../services/engine/hostFs'
+import { notifyApp } from '../stores/notificationStore'
+import { targetForSession } from '../services/engine/targets'
 
 type ExecMode = 'host' | 'sandbox' | undefined
 
@@ -32,42 +36,57 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
     load: async () => {
       if (f.dataUrl) return decodeDataUrl(f.dataUrl)
       if (!f.path) return null
-      if (execMode === 'host' && window.tangu?.readHostFile) {
-        const r = await window.tangu.readHostFile(f.path)
+      const fs = execMode === 'host' ? hostFsForSession(sessionId) : null
+      if (fs) {
+        const r = await fs.readHostFile(f.path)
         if (r.tooLarge) return { tooLarge: true as const, size: r.size }
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
       }
-      const r = await api.readWorkspaceFile(cfg, sessionId, f.path)
+      const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
       return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
     },
     download: f.path
       ? (execMode === 'host'
           // 设备页无 revealHostPath:undefined 藏掉下载位,免留静默哑弹
           ? (window.tangu?.revealHostPath ? () => { void window.tangu?.revealHostPath?.(f.path!) } : undefined)
-          : () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path!).catch(() => {}) })
+          // 失败要看得见(P1-DL):手机上原生存「下载」会因超限 / 系统版本被拒,吞掉 = 点了没反应
+          : () => { void api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, f.path!).catch((err) => notifyApp({ text: err?.message || String(err), level: 'error' })) })
       : undefined,
   }
 }
 
-/** 缩略图:dataUrl / 沙箱直链直接用;host 路径异步读字节做 blob URL。 */
+/** 缩略图:dataUrl / 沙箱直链直接用;host 路径异步读字节做 blob URL。
+ *  目标不能直链(手机经 hub 打我的电脑:`<img src>` 不带凭据、隧道 cookie 对手机源是跨站)→ 沙箱文件也读字节做 blob。 */
 const Thumb: React.FC<{ f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; onClick: () => void }> = ({ f, cfg, sessionId, execMode, onClick }) => {
   sessionId = f.sourceSessionId || sessionId
-  const direct = f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(cfg, sessionId, f.path) : null)
+  const direct = f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(targetForSession(sessionId), sessionId, f.path) : null)
   const [src, setSrc] = useState<string | null>(direct)
   const urlRef = useRef<string | null>(null)
   useEffect(() => {
     if (direct) { setSrc(direct); return }
     let cancelled = false
     void (async () => {
-      if (f.path && window.tangu?.readHostFile) {
-        try {
-          const r = await window.tangu.readHostFile(f.path)
+      if (!f.path) return
+      const fs = execMode === 'host' ? hostFsForSession(sessionId) : null
+      try {
+        let bytes: Uint8Array | null = null
+        let mime = ''
+        if (fs) {
+          const r = await fs.readHostFile(f.path)
           if (cancelled || r.tooLarge) return
-          const url = URL.createObjectURL(new Blob([b64ToBytes(r.content) as BlobPart], { type: r.mimeType || f.mime || 'image/png' }))
-          urlRef.current = url
-          setSrc(url)
-        } catch { /* 显示失败 → 退化为文件卡片由父层兜 */ }
-      }
+          bytes = b64ToBytes(r.content)
+          mime = r.mimeType
+        } else if (execMode !== 'host') {
+          const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
+          if (cancelled) return
+          bytes = b64ToBytes(r.content)
+          mime = r.mimeType
+        }
+        if (!bytes || cancelled) return
+        const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime || f.mime || 'image/png' }))
+        urlRef.current = url
+        setSrc(url)
+      } catch { /* 显示失败 → 退化为文件卡片由父层兜 */ }
     })()
     return () => { cancelled = true; if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null } }
   }, [f.path, f.dataUrl]) // eslint-disable-line react-hooks/exhaustive-deps

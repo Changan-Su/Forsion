@@ -30,7 +30,13 @@ function pullUserId(): string {
   return process.env.TANGU_USER_ID || 'local';
 }
 
-/** 拉一轮广播(手动 POST /agent/inbox/pull 复用)。返回本轮新落库条数。 */
+/** 服务端定向投递的审批提醒(unit-hub POST /units/:id/attention → thread {kind:'approval', …})。脏 JSON 按不是。 */
+function isApprovalThread(thread: string | null): boolean {
+  if (!thread) return false;
+  try { return JSON.parse(thread)?.kind === 'approval'; } catch { return false; }
+}
+
+/** 拉一轮广播(手动 POST /agent/inbox/pull 复用)。返回本轮新落库条数(不含当场软删的审批提醒)。 */
 export async function pullBroadcastsOnce(userId: string): Promise<{ added: number }> {
   const s = seam();
   if (!s) return { added: 0 };
@@ -74,9 +80,12 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
       const rowId = uuidv4();
       // thread 原文照抄(服务端已是 JSON 串;非串 / 脏值按无线程)——解析与信任裁决在读端 routes/inbox.ts。
       const thread = typeof b.thread === 'string' && b.thread ? b.thread : null;
+      // 审批提醒(P1 · K3,thread.kind==='approval'):是执行设备自己投给手机的「这台电脑上有 Agent 在等你」,桌面收自己的提醒没有意义。
+      // 照样落库但**当场软删**:软删行仍是去重锚与游标(不写就每 5 分钟重拉同几行);不计 added、不转通道。
+      const hidden = isApprovalThread(thread);
       await query(
-        `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, attachments, expires_at, thread, created_at)
-         VALUES (?, ?, ?, ?, 'server', 'forsion', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, attachments, expires_at, thread, created_at, deleted_at)
+         VALUES (?, ?, ?, ?, 'server', 'forsion', ?, ?, ?, ?, ?, ${hidden ? 'CURRENT_TIMESTAMP' : 'NULL'}) ON CONFLICT DO NOTHING`,
         [rowId, userId, String(b.title || '').slice(0, 500), String(b.body || ''), b.id, attachments, b.expires_at ? String(b.expires_at) : null, thread, String(b.created_at)],
       );
       // codex#12:定时 tick 与手动 pull 并发时两边都过了前置 dup 查——落库赢家才计数/转发,
@@ -86,6 +95,7 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
         [rowId],
       );
       if (!won?.length) continue;
+      if (hidden) continue;
       added++;
       // 通道转发:首拉基准(整轮,含后续分页)不转发,防历史广播轰炸;之后的增量轮才推。
       if (!baselinePull) {

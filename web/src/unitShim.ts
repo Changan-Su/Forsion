@@ -144,7 +144,8 @@ export async function installUnitShim(): Promise<boolean> {
 
   const engineBase = new URL('engine', base()).href
   // 连接键恒为本页值(对方的 mode/backendUrl/token 绝不进来 —— 服务端白名单也不会下发它们)。
-  const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', sandbox: 'none' as const }
+  // cloudApiBase 显式置空(P1-K6 S1):局域网直连的设备页没有云端 API;连接键压在对方偏好之后,对方也写不进来。
+  const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', cloudApiBase: '', sandbox: 'none' as const }
   const authHeaders = (): Record<string, string> | undefined =>
     fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined
   /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig

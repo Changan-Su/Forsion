@@ -6,6 +6,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
+import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
 
 export interface InquiryRequestPayload {
   question: string;
@@ -40,6 +41,7 @@ export function requestInquiry(
   return new Promise<string>((resolve) => {
     const onAbort = (): void => {
       pending.delete(inquiryId);
+      untrackPrompt(inquiryId, 'expired'); // 中止不发 inquiry_result:索引(通知 / 角标)在这里撤(P1 · K3)
       resolve('(用户中止了运行)');
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
@@ -51,17 +53,20 @@ export function requestInquiry(
       },
     });
     void publish(runId, 'inquiry_request', { inquiryId, ...payload });
+    trackPrompt({ id: inquiryId, kind: payload.kind === 'plan' ? 'plan' : 'inquiry', runId });
   });
 }
 
 /** TUI 直调 / HTTP 端点调用:兑现某询问。false = 该 id 已不在等待(重复/过期)。
  *  ⚠️ HTTP 路由必须传 runId(理由同 approvals.resolveApproval):不比对 = 拿任意 run 的 URL 替别的 run 回答 / 批计划。 */
-export function resolveInquiry(inquiryId: string, answer: string, runId?: string): boolean {
+export function resolveInquiry(inquiryId: string, answer: string, runId?: string, by?: AnswerBy): boolean {
   const p = pending.get(inquiryId);
   if (!p || (runId !== undefined && p.runId !== runId)) return false;
   pending.delete(inquiryId);
   p.resolve(answer);
+  const answeredBy: AnswerBy = by ?? { via: 'local' }; // 谁答的(P1 · K3);进程内调用方不传 = 本机
   // 广播结果:SSE 回放/多端订阅者据此知道该询问已被消化(未知事件类型各端自动忽略)。
-  void publish(p.runId, 'inquiry_result', { inquiryId, answer });
+  void publish(p.runId, 'inquiry_result', { inquiryId, answer, by: answeredBy });
+  untrackPrompt(inquiryId, 'answered', answeredBy);
   return true;
 }

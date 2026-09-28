@@ -13,6 +13,7 @@ describe('resolveSettingsTarget', () => {
     ['model/m-providers', { tab: 'model', sub: 'm-providers' }], // ReloginChip(订阅登录按钮在提供方)
     ['general/g-basic', { tab: 'general', sub: 'g-basic' }],
     ['skills', { tab: 'skills' }],
+    ['remote-sessions', { tab: 'remote-sessions' }], // P1-K4:设备切换器的「设置 ›」深链
     ['plugin:a/b', { tab: 'plugin:a/b' }], // 插件 id 里的 `/` 不拆
     ['fplugin:x', { tab: 'fplugin:x' }],
     ['model/', { tab: 'model/' }], // 空 sub 不算二级落点(交给 SettingsModal 兜底到第一个可用页)
@@ -21,7 +22,7 @@ describe('resolveSettingsTarget', () => {
   })
 
   it('别名里的一级页都是真实存在的 StaticTab', () => {
-    const known = new Set(['general', 'model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'amadeus-plugins', 'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'advanced', 'developer', 'about'])
+    const known = new Set(['general', 'model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'amadeus-plugins', 'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'remote-sessions', 'advanced', 'developer', 'about'])
     for (const [alias, [tab]] of Object.entries(LEGACY_TARGETS)) expect(known.has(tab), alias).toBe(true)
   })
 })

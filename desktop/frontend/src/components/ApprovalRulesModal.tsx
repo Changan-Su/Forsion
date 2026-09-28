@@ -16,6 +16,7 @@ import * as api from '../services/backendService'
 import type { ApprovalRules } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { MODE_KEY } from './ApprovalCard'
+import { homeTarget } from '../services/engine/targets'
 
 const BASES: ApprovalRules['base'][] = ['readonly', 'auto-edit', 'full-auto']
 const EMPTY: ApprovalRules = { base: 'auto-edit', allow: [], ask: [], deny: [] }
@@ -48,7 +49,7 @@ export const ApprovalRulesModal: React.FC<{ cfg: TanguDesktopConfig; onClose: ()
   const load = React.useCallback((): void => {
     setLoading(true)
     setErr('')
-    api.getApprovalRules(cfgRef.current)
+    api.getApprovalRules(homeTarget())
       .then((r) => {
         setBase(r.base)
         setText({ deny: toLines(r.deny), ask: toLines(r.ask), allow: toLines(r.allow) })
@@ -65,7 +66,7 @@ export const ApprovalRulesModal: React.FC<{ cfg: TanguDesktopConfig; onClose: ()
     setSaving(true)
     setErr('')
     try {
-      await api.putApprovalRules(cfgRef.current, {
+      await api.putApprovalRules(homeTarget(), {
         base, deny: fromLines(text.deny), ask: fromLines(text.ask), allow: fromLines(text.allow),
       })
       onClose()

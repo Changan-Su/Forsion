@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentMemoryPanel } from './AgentMemoryPanel'
 import * as api from '../services/backendService'
 import type { AgentMemorySnapshot } from '../services/backendService'
+import { homeTarget, installEngineHost } from '../services/engine/targets'
 
 vi.mock('../i18n', () => ({ registerMessages: () => {}, useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('../services/backendService', () => ({
@@ -32,8 +33,17 @@ beforeEach(() => {
 })
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals() })
 const cfg = { backendUrl: 'http://backend-a', token: 'account-a' } as any
+// P1-K6 S3:面板的请求走 homeTarget()(活目标现读宿主 cfg)—— 宿主 cfg 就是渲染时传进来的那份(生产里两者同源:store.cfg)
+let hostCfg = cfg
+installEngineHost({ cfg: () => hostCfg, desktopConfig: () => null })
 async function render(slug = 'alpha', config = cfg) {
+  hostCfg = config
   await act(async () => root.render(React.createElement(AgentMemoryPanel, { slug, cfg: config })))
+}
+/** 某次服务调用实际带出去的令牌(目标的鉴权头现读)。 */
+async function tokenOf(target: unknown): Promise<string> {
+  expect(target).toBe(homeTarget())
+  return ((await (target as ReturnType<typeof homeTarget>).headers()).Authorization || '').replace(/^Bearer /, '')
 }
 function button(key: string): HTMLButtonElement {
   const found = [...host.querySelectorAll('button')].find((element) => element.textContent?.trim() === key)
@@ -64,8 +74,9 @@ describe('Agent memory management', () => {
     await act(async () => old.resolve(snapshot('OLD_ACCOUNT_SECRET')))
     expect(host.textContent).not.toContain('OLD_ACCOUNT_SECRET')
     await click('agentMemory.forget')
-    expect(api.mutateAgentMemoryEntry).toHaveBeenCalledWith(expect.objectContaining({ token: 'account-b' }), 'beta',
-      { action: 'forget', id: 'fact-1', expectedVersion: 'v1' })
+    const call = vi.mocked(api.mutateAgentMemoryEntry).mock.calls.at(-1)!
+    expect(await tokenOf(call[0])).toBe('account-b')
+    expect(call.slice(1)).toEqual(['beta', { action: 'forget', id: 'fact-1', expectedVersion: 'v1' }])
   })
   it('read failures are visible and never become editable empty memory', async () => {
     vi.mocked(api.getAgentMemorySnapshot).mockRejectedValueOnce(new Error('EIO: storage unavailable'))
@@ -83,7 +94,9 @@ describe('Agent memory management', () => {
     // The raw editor's save button is the last save button when no entry is being edited.
     const saves = [...host.querySelectorAll('button')].filter((element) => element.textContent === 'common.save')
     await act(async () => saves.at(-1)!.click())
-    expect(api.putAgentMemory).toHaveBeenCalledWith(cfg, 'alpha', 'MY_UNSAVED_DRAFT', 'v1')
+    const put = vi.mocked(api.putAgentMemory).mock.calls.at(-1)!
+    expect(await tokenOf(put[0])).toBe('account-a')
+    expect(put.slice(1)).toEqual(['alpha', 'MY_UNSAVED_DRAFT', 'v1'])
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('409')
     vi.mocked(api.getAgentMemorySnapshot).mockResolvedValue(snapshot('NEW_SERVER_FACT', 'v2'))
     await click('agentMemory.reload')

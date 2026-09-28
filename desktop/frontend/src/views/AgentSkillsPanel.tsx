@@ -11,6 +11,7 @@ import {
   importSkillCatalogEntry, listSkillCatalog, listSkills, setSkillCatalogEntryDisabled, updateSkillCatalogEntry,
 } from '../services/backendService'
 import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 type Props = {
   cfg: TanguDesktopConfig
@@ -75,9 +76,9 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
   useEffect(() => {
     let active = true
     setLoading(true); setError('')
-    const legacyRequest = listSkills(cfg, agentSlug)
+    const legacyRequest = listSkills(homeTarget(), agentSlug)
     void legacyRequest.then((skills) => { if (active) setAvailableSkills(skills) }).catch(() => { if (active) setAvailableSkills([]) })
-    void listSkillCatalog(cfg, agentSlug).then((skills) => { if (active) { setCatalog(Array.isArray(skills) ? skills : []); setLegacy(null) } })
+    void listSkillCatalog(homeTarget(), agentSlug).then((skills) => { if (active) { setCatalog(Array.isArray(skills) ? skills : []); setLegacy(null) } })
       .catch(async (e) => {
         if (!active) return
         if (e?.status === 404) {
@@ -97,7 +98,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     if (!detailKey) { setDetail(null); return }
     let active = true
     setDetailLoading(true)
-    void getSkillCatalogEntry(cfg, detailKey, agentSlug).then((entry) => {
+    void getSkillCatalogEntry(homeTarget(), detailKey, agentSlug).then((entry) => {
       if (!active) return
       setDetail(entry)
       if (!editing && !createOpen) { setName(entry.name); setDescription(entry.description); setContent(entry.content || '') }
@@ -189,7 +190,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     if (mode === 'selected') {
       if (enabled && (entry.disabledForAgent || entry.disabled)) {
         void mutate(entry.key, async () => {
-          await setSkillCatalogEntryDisabled(cfg, entry.key, false, agentSlug)
+          await setSkillCatalogEntryDisabled(homeTarget(), entry.key, false, agentSlug)
           onSelectedIds([...new Set([...(selectedIds || []), entry.id])])
         })
       } else onSelectedIds(enabled ? [...new Set([...(selectedIds || []), entry.id])] : (selectedIds || []).filter((id) => id !== entry.id))
@@ -201,7 +202,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
       ...(item.scope === 'user' ? { disabledForAgent: !enabled } : { disabled: !enabled }),
       availability: enabled ? 'available' : 'disabled',
     } : item))
-    void mutate(entry.key, () => setSkillCatalogEntryDisabled(cfg, entry.key, !enabled, agentSlug),
+    void mutate(entry.key, () => setSkillCatalogEntryDisabled(homeTarget(), entry.key, !enabled, agentSlug),
       t(enabled ? 'agentProfile.skillEnabled' : 'agentProfile.skillDisabled'), () => setCatalog(previous))
   }
   const status = (entry: SkillCatalogEntry) => {
@@ -229,7 +230,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
   const create = async () => {
     if (!slug.trim() || !name.trim() || !content.trim()) return
     await mutate('create', async () => {
-      const entry = await createSkillCatalogEntry(cfg, { scope: 'agent', agentSlug, slug: slug.trim(), name: name.trim(), description: description.trim(), content: content.trim() })
+      const entry = await createSkillCatalogEntry(homeTarget(), { scope: 'agent', agentSlug, slug: slug.trim(), name: name.trim(), description: description.trim(), content: content.trim() })
       setCreateOpen(false); setSlug(''); setName(''); setDescription(''); setContent(''); setDetailKey(entry.key)
     }, t('agentProfile.skillCreated'))
   }
@@ -237,22 +238,22 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     if (!canImportLocalFolder) return
     const sourcePath = await window.tangu?.pickDirectory?.()
     if (!sourcePath) return
-    await mutate('import', () => importSkillCatalogEntry(cfg, { scope: 'agent', agentSlug, sourcePath }), t('agentProfile.skillImported'))
+    await mutate('import', () => importSkillCatalogEntry(homeTarget(), { scope: 'agent', agentSlug, sourcePath }), t('agentProfile.skillImported'))
   }
   const saveDetail = async () => {
     if (!detail || !name.trim() || !content.trim()) return
     await mutate(detail.key, async () => {
-      const latest = await getSkillCatalogEntry(cfg, detail.key, agentSlug)
+      const latest = await getSkillCatalogEntry(homeTarget(), detail.key, agentSlug)
       const changedElsewhere = (['name', 'description', 'content'] as const).some((key) => latest[key] !== detail[key] && latest[key] !== ({ name, description, content })[key])
       if (changedElsewhere) throw new Error(t('agentProfile.skillEditConflict'))
-      const updated = await updateSkillCatalogEntry(cfg, detail.key, { name: name.trim(), description: description.trim(), content: content.trim(), agentSlug })
+      const updated = await updateSkillCatalogEntry(homeTarget(), detail.key, { name: name.trim(), description: description.trim(), content: content.trim(), agentSlug })
       setDetail(updated); setEditing(false)
     }, t('agentProfile.skillSaved'))
   }
   const deleteDetail = async () => {
     if (!detail || !window.confirm(t('agentProfile.skillDeleteConfirm', { name: detail.name }))) return
     await mutate(detail.key, async () => {
-      const result = await deleteSkillCatalogEntry(cfg, detail.key, agentSlug) as { ok: boolean; backupPath?: string }
+      const result = await deleteSkillCatalogEntry(homeTarget(), detail.key, agentSlug) as { ok: boolean; backupPath?: string }
       if (!result.ok) throw new Error(t('agentProfile.skillDeleteFailed'))
       setNotice(result.backupPath ? t('agentProfile.skillDeletedBackup', { path: result.backupPath }) : t('agentProfile.skillDeleted'))
       setDetailKey(null); setDetail(null); setEditing(false)
@@ -261,7 +262,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
   const copyGlobal = async (entry: SkillCatalogEntry) => {
     if (!copySlug.trim()) return
     await mutate(entry.key, async () => {
-      const copied = await copySkillCatalogEntry(cfg, entry.key, { scope: 'agent', agentSlug, slug: copySlug.trim() }, entry.scope === 'agent' ? agentSlug : undefined)
+      const copied = await copySkillCatalogEntry(homeTarget(), entry.key, { scope: 'agent', agentSlug, slug: copySlug.trim() }, entry.scope === 'agent' ? agentSlug : undefined)
       setCopyOpen(false); setDetailKey(copied.key)
     }, t('agentProfile.skillCopied'))
   }

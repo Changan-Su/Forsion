@@ -14,8 +14,12 @@
  * 系统唤醒(powerMonitor resume)时主进程调 reconnect() 立即重拨。每个在飞信封一个 AbortController,
  * 可按信封 id 中止(abortEnvelope,留给网关的 cancel 帧);通道拆除时全部中止 —— 网关那头对未认领的派发
  * 已经 502(failPending),本机没必要替一个没人收的回包继续跑。
+ *
+ * 调用方断言(P1 · K1):信封带 hub 验过的 proxyCaller → 用 unitWeb 的 per-boot proxyCallerKey 签成 x-unit-caller,
+ * 绑定信封 id、方法与**实际发出**的请求目标;/unit/mcp* 永不签。unitWeb 只在隧道来路验它(见 unitCaller.ts)。
  */
 import { hostname } from 'node:os'
+import { proxyAssertionAllowed, sanitizeProxyCaller, signProxyCaller, UNIT_CALLER_HEADER } from './unitCaller'
 
 /** 整包缓冲的上限。超过它(或长度未知)的响应改走流式回包 —— 缓冲路是「设备 base64 → JSON body →
  *  网关整包 parse 回 Buffer」,峰值内存约响应体的 3 倍且随并发线性叠(2026-08-25)。
@@ -54,8 +58,9 @@ export interface UnitHostDeps {
   /** 云端地址 + 当前 forsion_token(每次连接现读,续期自然生效)。 */
   getCreds: () => { cloudUrl: string; token: string }
   /** 本机 unitWeb 服务(v2:一个目标吃全部——页面资产/引擎反代/配对);
-   *  internalSecret 走「loopback + 内部密钥头」豁免 unitWeb 鉴权(server 已验 owner)。null=web 未起。 */
-  getUnitWeb: () => { url: string | null; internalSecret: string }
+   *  internalSecret 走「loopback + 内部密钥头」豁免 unitWeb 鉴权(server 已验 owner)。null=web 未起。
+   *  proxyCallerKey = unitWeb 的 per-boot 调用方断言钥(P1 · K1);空串 = 不签(信封里的 proxyCaller 丢弃,按账号级未识别)。 */
+  getUnitWeb: () => { url: string | null; internalSecret: string; proxyCallerKey: string }
   /** 上报给名册的本机局域网直连地址(随通道自报,IP/端口会漂)。 */
   getLanUrl: () => string | null
   /** 已配对凭据(shell 配置);null = 未入册。 */
@@ -71,6 +76,10 @@ export interface UnitHostDeps {
   requestTimeoutMs?: number
   /** 打云端网关用的 fetch(测试注入;缺省全局 fetch)。本机 unitWeb 那一跳永远用全局 fetch。 */
   hubFetch?: typeof fetch
+  // P1-K7a(INTEGRATION R-30):caps 上报器(unitCaps.ts)的两个挂点。只在这条通道收到网关 `event: ready` 之后才算 ready
+  // (server 把 caps 绑在那条连接上);通道断开 / stop() 时 down。抛错一律吞掉,不进通道主循环。
+  onChannelReady?: () => void
+  onChannelDown?: () => void
 }
 
 /** 缺省读看门狗:网关心跳 15s × 3。 */
@@ -85,7 +94,8 @@ export interface UnitHostStatus {
   lastError: string | null
 }
 
-interface Envelope { id: string; method: string; path: string; ct?: string; accept?: string; body: string | null }
+/** proxyCaller:hub 验过 caller token 后写的调用方(P1 · K1)。**不信形状**,过 sanitizeProxyCaller。 */
+interface Envelope { id: string; method: string; path: string; ct?: string; accept?: string; body: string | null; proxyCaller?: unknown }
 
 const apiBase = (cloudUrl: string): string => `${cloudUrl.replace(/\/+$/, '')}/api`
 
@@ -105,6 +115,8 @@ export class UnitHost {
   /** 本次通道上网关宣告的能力(event: ready)。⚠️ 每次连接前清空 —— 重连可能落到**回滚后的老网关**上,
    *  留着上一条通道的 caps 就等于认了它不具备的能力(附件安全头会被静默剥掉)。 */
   private hubCaps = new Set<string>()
+  /** 畸形 proxyCaller 只记一次日志(版本错配时每个请求都会带)。 */
+  private warnedBadCaller = false
 
   constructor(deps: UnitHostDeps) {
     this.deps = deps
@@ -135,7 +147,7 @@ export class UnitHost {
   stop(): void {
     this.ctrl?.abort()
     this.ctrl = null
-    this.connected = false
+    this.markDown()
     this.abortEnvelopes()
     this.wake?.()
   }
@@ -147,6 +159,16 @@ export class UnitHost {
     this.redialNow = true
     this.conn?.abort()
     this.wake?.()
+  }
+
+  /** 通道不在了(断开 / 出错 / stop):置 connected=false 并告诉 caps 上报器停报(P1-K7a)。 */
+  private markDown(): void {
+    this.connected = false
+    this.hook(this.deps.onChannelDown)
+  }
+
+  private hook(fn: (() => void) | undefined): void {
+    try { fn?.() } catch (e: any) { this.deps.log(`[unit-host] 通道回调出错(已忽略): ${e?.message || e}`) }
   }
 
   /** 按信封 id 中止在飞的本机请求(含流式回传)。true = 找到并中止;false = 不在飞(已完成 / 未知 id)。 */
@@ -227,10 +249,10 @@ export class UnitHost {
         backoff = 1000
         this.deps.log('[unit-host] 通道已连接')
         await this.consume(resp.body, conn)
-        this.connected = false
+        this.markDown()
         this.deps.log('[unit-host] 通道断开,准备重连')
       } catch (e: any) {
-        this.connected = false
+        this.markDown()
         if (ctrl.signal.aborted) return
         this.lastError = conn.signal.aborted ? '通道被本机断开(看门狗 / 重连)' : String(e?.message || e)
         this.deps.log(`[unit-host] ${this.lastError};${this.redialNow ? '立即' : `${Math.round(backoff / 1000)}s 后`}重试`)
@@ -319,6 +341,7 @@ export class UnitHost {
           const caps = (JSON.parse(d || '{}') as { caps?: unknown }).caps
           this.hubCaps = new Set(Array.isArray(caps) ? caps.map(String) : [])
         } catch { this.hubCaps = new Set() }
+        if (!conn.signal.aborted) this.hook(this.deps.onChannelReady) // P1-K7a:caps 上报器从这里开始报
         continue
       }
       if (!block.includes('event: dispatch')) continue
@@ -360,7 +383,13 @@ export class UnitHost {
     if (env.accept) headers.Accept = env.accept
     let r: Response
     try {
-      r = await fetch(`${web.url}${env.path}`, {
+      // 先解析成 URL、fetch 与签名都用它:签名里的 t 必须等于 unitWeb 收到的 req.url,而 URL 解析会规整点段、转义空格(K1 S8)。
+      // ⚠️ 用拼接后再解析,**不用** new URL(env.path, web.url):env.path 若是 `//host/x`,相对解析会把请求发到别的主机(SSRF);
+      // 拼接后主机恒为本机 unitWeb(与改版前 fetch(`${url}${path}`) 同一个目标)。
+      const target = new URL(`${web.url}${env.path}`)
+      const assertion = this.callerAssertion(env, target, web.proxyCallerKey)
+      if (assertion) headers[UNIT_CALLER_HEADER] = assertion
+      r = await fetch(target, {
         method: env.method,
         headers,
         body: env.body ?? undefined,
@@ -392,6 +421,18 @@ export class UnitHost {
     } else {
       await this.respond(env.id, r.status, effCt, Buffer.from(await r.arrayBuffer()), extra, ctrl.signal)
     }
+  }
+
+  /** 信封 proxyCaller → x-unit-caller(没有 / 畸形 / 钥未就绪 / /unit/mcp* → null,不签)。 */
+  private callerAssertion(env: Envelope, target: URL, key: string): string | null {
+    if (env.proxyCaller == null) return null
+    const caller = sanitizeProxyCaller(env.proxyCaller)
+    if (!caller) {
+      if (!this.warnedBadCaller) { this.warnedBadCaller = true; this.deps.log('[unit-host] 信封里的调用方字段不合法,已丢弃(按账号级未识别调用方转发)') }
+      return null
+    }
+    if (!key || !proxyAssertionAllowed(target.pathname)) return null
+    return signProxyCaller(key, { dispatchId: env.id, method: env.method, target: target.pathname + target.search, caller })
   }
 
   /** 整包回包:有总时限(评审 A-desktop#4)—— 网关半开时不设时限,这次派发的在飞记录就一直挂着。

@@ -65,6 +65,13 @@ const GATE_FILES = [
   // 实证:`checkForUpdates`/`onUpdaterStatus` 移动端 shim 一直没实现 → 装了旧版永远没有更新提醒,
   // 而 A/B/C 三段全绿(useBootstrap 两边都调),D 段又扫不到这个文件 = 整条通道没有台账。
   path.join(GENESIS, 'desktop/frontend/src/stores/bootstrap.ts'),
+  // P1-K6
+  // 2026-09-28 加入 platform.ts:端判定单源 currentPlatform() 从 agentRunService.ts 搬到这个叶子模块(解开与引擎目标解析层的循环依赖),门控随之搬家。
+  path.join(GENESIS, 'desktop/frontend/src/services/platform.ts'),
+  // 2026-09-28 加入 services/engine/targets.ts:引擎目标解析层按宿主标志推 home 目标的来路(设备页 unitPage),S2 起还有 unit 目标的调用方头接缝。
+  path.join(GENESIS, 'desktop/frontend/src/services/engine/targets.ts'),
+  // P1-DL:原生「存到下载」的门控住在这个叶子模块(downloadWorkspaceFile 经它分流)。
+  path.join(GENESIS, 'desktop/frontend/src/services/nativeDownload.ts'),
 ]
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
@@ -125,11 +132,18 @@ const KNOWN_GATES = {
   'window.tangu?.marketList': '应用市场入口(ribbon 图标 + open-market 命令)— 仅桌面',
   'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
-  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head)— 仅真桌面:名册/配对回收走桌面 IPC,设备行=打开对方设备页(B 端渲染,方案 §11);web/mobile 无此 IPC,vault 切换仍走 VaultSideSwitch mobile 分支',
-  'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变',
+  // P1-K8
+  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head rb-unit)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端照样注册但 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害;webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支。P1-K7a:features/runtime.ts 的 rosterAvailable() 也读它 —— 手机的跨设备会话分组 / 「在哪运行」选择器的名册(Electron IPC + mobileShim cloudJson;webShim / unitShim 无 → 网页版与设备页不显示,K7 U2 与 §4.7 b6)',
+  'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变。P1-K7a:它还**无条件**关掉「在哪运行」选择器、设备会话分组与逐台拉会话(features/runtime.ts rosterAvailable,不得经 A 的隧道再驱动 B;设备页在手机视口加载 @mobile/mobileEntry 也同样关)',
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
+  // P1-K3
+  'window.tangu?.onApprovalOpen': '远程会话待批的系统通知被点击 → 打开会话 — 仅 Electron:通知由桌面主进程 approvalDelivery 订阅本机引擎待批流后发出(webContents.send approval:open)。移动端没有本机引擎、P1 没有原生通知(方案 P2),手机侧走收件箱审批提醒信的「打开会话」按钮(InboxReaderView,共享)与会话列表「等你处理」点(attentionStore,经 useBootstrap 三端共用);web 无此 IPC',
+  // P1-K6
+  'window.tangu?.unitCallerHeaders': 'unit 目标(手机 / 网页版经 hub 打「我的电脑」)的调用方头接缝(INTEGRATION R-05),读在 services/engine/targets.ts:每个请求现取、只放行 X-Forsion-Caller、抛错即失败关闭不发请求。只有 K8 手机原生**桥模式**实现它;K8 缺省中继模式(原生层自己附头)与 web 都不实现 → 不带头(hub 眼里的账号级未识别调用方),桌面 / 设备页根本没有 unit 目标。缺席是设计,不是移动端漏了功能',
+  // P1-DL
+  'window.tangu?.saveDownload': '工作区文件下载的落盘分流(services/nativeDownload.ts,downloadWorkspaceFile / InlineFiles / FilesPanel / RightPanel 共用)— **只有移动端 native 有**(mobileShim → 原生 DownloadsPlugin 写 MediaStore.Downloads):Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。desktop / web / 移动端 dev 缺席 → 照旧 `<a download>`(真浏览器 / Electron 会存)。反向的缺席:多维表导出 CSV(下面 exportCsv)在移动端仍不渲染,日后可改走本接缝',
   'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
 }
 

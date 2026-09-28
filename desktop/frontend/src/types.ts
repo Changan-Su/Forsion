@@ -4,6 +4,7 @@ import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, Produc
 import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
+import type { TargetRef } from './services/engine/target'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 
 /**
@@ -38,6 +39,10 @@ export interface TanguDesktopConfig {
   visionModelId?: string
   /** 图像识别何时介入(落 config.json models.visionMode;缺省 auto)。 */
   visionMode?: VisionMode
+  // P1-K6
+  /** Forsion 云端 API 基址(含 `/api`,无尾斜杠)。web / 手机 / 设备页垫片直接给;桌面主进程不给,由
+   *  services/engine/cloudBase.ts 从纯源 `cloudUrl` 现算。读它一律经 `cloudApiBase()` / `cloudApiBaseOf()`。 */
+  cloudApiBase?: string
 }
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
@@ -114,6 +119,16 @@ export interface SessionRecord {
   projectless?: boolean
   created_at: string
   updated_at: string
+  // P1-K6
+  /** 会话跑在哪台引擎上(**渲染层专用**:引擎不返回、绝不回写引擎)。缺省 = home。
+   *  只由 services/engine/targets.ts 的 withLocation 从绑定表派生,别处不许自己拼(INTEGRATION R-15)。 */
+  location?: TargetRef
+}
+
+// P1-K6
+/** 会话在本端引擎上(未打标 = home)。 */
+export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
+  return !s.location || s.location.kind === 'home'
 }
 
 // ── Special Agents（Historian / Muse;本地）──────────────────────────────────
@@ -174,6 +189,18 @@ export interface PendingApprovalInfo {
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
 export interface MuseLibraryEntry { path: string; size: number; mtime: number; dir: boolean }
 export interface SpecialAgentsConfig { historian: HistorianConfig; muse: MuseConfig }
+// P1-K10b
+/** 引擎给**远程来源**(手机经隧道 / 设备页 / 局域网 / P2P)的 GET /agent/special/config 投影(`remote: true`):只有开关与两个节奏值,
+ *  提示词、授权文件夹、模型、活跃时段、预算、通知 / 升级对象这条路由都不回(Muse 的权限档 / 心跳另经 muse/status 可读)。
+ *  整份 SpecialAgentsConfig 结构上也满足它 —— 只读这几个字段的调用点用它。 */
+export interface SpecialAgentsSummary {
+  historian: Pick<HistorianConfig, 'enabled' | 'everyRounds'>
+  muse: Pick<MuseConfig, 'enabled' | 'supervisorPollMinutes'>
+}
+/** GET /agent/special/config 的回包:本机整份(+ 默认提示词);云端整份形状 + cloud:true;远程来源只有摘要 + remote:true。 */
+export type SpecialConfigResponse =
+  | { config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean; remote?: undefined }
+  | { config: SpecialAgentsSummary; remote: true; defaults?: undefined; cloud?: undefined }
 
 export interface HistorianActivityItem {
   id: string
@@ -192,12 +219,13 @@ export interface MuseTodo {
 }
 export interface MuseStatusInfo {
   enabled: boolean
-  hasModel: boolean
+  /** 这四个远程来源拿不到(引擎 routes/special.ts remoteMuseStatusView:设备页 / 手机整端切过去时缺席),读端自己兜底。 */
+  hasModel?: boolean
   running: boolean
-  restartsThisWindow: number
-  maxRestartsPerWindow: number
+  restartsThisWindow?: number
+  maxRestartsPerWindow?: number
   lastCycleAt: number | null
-  lastError: string | null
+  lastError?: string | null
   sessionId: string | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
@@ -907,6 +935,33 @@ export interface ApprovalRequest {
   reason?: ApprovalReason
   /** 对应的工具调用 id(挂起的工具卡据此判断「还在等你」还是早已了结)。旧事件没有。 */
   toolCallId?: string
+  // P1-K1
+  /** 远程会话发起的审批:来路 + 调用方设备(引擎只给远程污点 run 带;reducer 白名单清洗)。本机 run 没有。 */
+  remote?: ApprovalRemote
+  // P1-K3
+  /** 受保护路径(凭据 / Forsion 本机配置):只能在执行设备本机批准,远端卡片只给「拒绝」(引擎对远端批准回 403 APPROVAL_LOCAL_ONLY)。 */
+  localOnly?: boolean
+  /** 谁答的(approval_result.by,reducer 白名单清洗):卡片收起时写「在 X 上」。旧引擎没有。 */
+  answeredBy?: AnswerBy
+}
+
+// P1-K3
+/** approval_result.by / inquiry_result.by:谁兑现了这张卡。remote = 带远程标记但来路不在契约内;callerUnit 只在隧道且验过调用方时有。
+ *  callerName 是登记者自选的不可信串,只作纯文本展示;可能清洗后为空(看 callerUnit 判「是不是已登记设备」)。 */
+export interface AnswerBy {
+  via: 'local' | 'tunnel' | 'p2p' | 'lan' | 'remote' | 'channel'
+  callerUnit?: string
+  callerName?: string
+}
+
+// P1-K1
+/** approval_request.remote(设备能力 MCP 方案 P1 · K1)。callerUnit/Kind/Name 只在 via==='tunnel' 且 hub → 本机 unitWeb 验过调用方断言时才有;
+ *  缺席 = 账号下未识别的客户端(隧道)/ 局域网配对设备 / 点对点直连。callerName 是登记者自选的不可信串,只作纯文本展示。 */
+export interface ApprovalRemote {
+  via?: 'tunnel' | 'p2p' | 'lan'
+  callerUnit?: string
+  callerKind?: 'phone' | 'desktop'
+  callerName?: string
 }
 
 /** 引擎给出的审批判定理由。kind 由 reducer 白名单清洗,渲染层可以信任。 */
@@ -930,6 +985,9 @@ export interface InquiryRequest {
   answer?: string
   /** 'plan'=计划审阅(渲染专属计划卡:批准 / 编辑后批准 / 打回);缺省=通用问答卡。 */
   kind?: 'plan'
+  // P1-K3
+  /** 谁答的(inquiry_result.by)。 */
+  answeredBy?: AnswerBy
 }
 
 /** sketch 工具画的对话内 HTML 卡片。载荷在 tool_call **参数**里(原样落 JSONB 不截断),
@@ -1128,6 +1186,19 @@ export interface UnitInfo {
   lastSeenAt?: string | null
   /** 设备自报的局域网直连地址(同网段优先直连的候选;不作可达性担保)。 */
   lanUrl?: string | null
+  // P1-K1(INTEGRATION R-27:六个字段一次加全,K7 / K8 不再碰 UnitInfo;两端数据桥原样转 hub JSON,无需改 main)
+  /** 设备类型(server 2.3.23 起;老 server 不回 → 按 desktop)。手机 P1 不开通道,切换器滤掉它。 */
+  kind?: 'desktop' | 'phone'
+  /** 用户起的短别名(拼进 MCP server 名 dev_<alias>);null = 没起。 */
+  alias?: string | null
+  /** 登记时的名字(server 2.3.24 起;之后改名不影响它)。确认框 / 信任条目快照用它,不用谁都能改的 name。 */
+  registeredName?: string | null
+  /** 设备自报的能力快照(不作授权依据);capsLive=false 时 engine 当「未知」,不沿用重连前的 ready。 */
+  caps?: { engine?: 'ready' | 'starting' | 'external' | 'stopped' | null; tools?: { id: string; version: string }[] } | null
+  /** caps 上报时刻(只作展示 / 年龄)。 */
+  capsAt?: string | null
+  /** 这份 caps 是不是设备**当前这次连接**里报的。 */
+  capsLive?: boolean
 }
 
 /** 已配对的来访设备(本机 unitWeb 的 T1 局域网配对;令牌只存 hash)。 */
@@ -1213,6 +1284,37 @@ declare global {
       unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
       /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
       unitsP2pOpen?(id: string): Promise<{ url: string }>
+      // P1-K8 ── 手机本机作为 Unit(调用方)的身份:只在移动端 mobileShim 注入(web 路径回「仅安卓 App」)。
+      // 远端引擎请求的调用方票由原生中继透明附加(window.fetch 前置),票与凭据永不进 JS;中继模式下
+      // 刻意没有 unitCallerHeaders(INTEGRATION R-05,那是桥模式的接缝)。relay:'unsupported' = 原生缺席或
+      // 启动断言 cloudApiBase ≠ 原生 apiBase,中继面上的请求一律合成 503 CALLER_UNSUPPORTED;'native_only' = 不是安卓 App。
+      unitSelf?(): Promise<{ registered: boolean; unitId: string | null; name: string | null; relay?: 'ready' | 'unsupported' | 'native_only' }>
+      /** 懒登记:没登记过才登记(kind='phone');失败 code:native_only / caller_unsupported / not_signed_in / no_api_base / network / server_<status> / storage。 */
+      unitEnsureSelf?(): Promise<{ ok: true; unitId: string; name: string } | { ok: false; code: string }>
+      /** 删本机条目并尽力从名册移除;之后各电脑对这台手机的授权都失效(按 unit id 认)。 */
+      unitForgetSelf?(): Promise<{ ok: boolean }>
+      // P1-DL ── 安卓 App 把字节存进系统公共「下载」(MediaStore.Downloads,Android 10+,原生 DownloadsPlugin 分块写)。
+      // 只有 mobileShim 的 native 路径注入;desktop / web / 移动端 dev 缺席 → 调用方回落 `<a download>`(见 services/nativeDownload.ts)。
+      // 回的 name 是 MediaStore 实际落下的显示名(同名去重成 `x (1).txt`)。上限 50 MB;reject 的 code:
+      // too_large / unsupported_os(Android 8–9)/ busy / not_found / bad_request / io。
+      saveDownload?(name: string, mime: string, data: Blob): Promise<{ name: string }>
+      // P1-K5 ── 设备凭据存储状态(SecretStorageNotice;远程会话开关按它置灰)──
+      secretStorageStatus?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      secretStorageRetry?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      /** 主进程先核「配对锁定」、再弹原生确认框;没锁定 / 这次运行加密不可用时 reject。 */
+      secretStorageResetUnitPairing?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      /** 只在 restartRequired 时放行:重启 Forsion(进程内的重试救不回钥匙串被拒绝)。 */
+      secretStorageRelaunch?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      // P1-K4 ── 「允许远程会话」开关 / 信任列表 / 远程会话最高审批档(主进程 electron/remoteSessions.ts;设备页 / web / 手机没有)──
+      remoteSessions?: import('../../shared/remoteSessions').RemoteSessionsApi
+      // P1-K2 ── 急停 / 远程锁定(主进程 electron/remoteSafety.ts;设备页 / web / 手机没有)──
+      remoteSafety?: import('../../shared/remoteSafety').RemoteSafetyApi
+      // P1-K6 ── unit 目标的调用方头接缝(INTEGRATION R-05;§2.2 把声明记在 K8 的块里,消费方 services/engine/targets.ts 先落地,
+      //   所以 K6-S2 先在这里声明)。⚠️ 保持**方法签名**:K8 合入时在自己的块里再声明一次(方法或属性签名皆可)= 重载合并,
+      //   不报 TS2300(tsc 实测:只有「属性 + 属性」才重复标识符);K8 合入后二者留一即可,这一条可删。──
+      /** 手机原生层给经 hub 隧道打「我的电脑」的请求现取调用方头(只认 `X-Forsion-Caller`)。K8 **桥模式**才实现;
+       *  中继模式缺省(原生层自己附头)→ 渲染层不带头。实现了却抛错 / 拒绝 / 给不出有效的 X-Forsion-Caller = 失败关闭,请求不发。 */
+      unitCallerHeaders?(unitId: string): Promise<Record<string, string>>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>
@@ -1417,6 +1519,9 @@ declare global {
       notify?(title: string, body: string): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
+      // P1-K3
+      /** 远程会话待批的系统通知被点击(主进程 approvalDelivery)→ 打开那条会话。仅桌面壳。 */
+      onApprovalOpen?(cb: (p: { sessionId: string }) => void): () => void
       // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ──
       /** 独立窗启动握手:pull 本窗待打开的初始视图(拖出时登记的 {type,params}[];重启已恢复布局则返回空)。 */
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
@@ -1443,6 +1548,8 @@ declare global {
       broadcastUi?(state: import('../../shared/uiSync').UiSyncPayload): void
       /** 本窗收到别处的界面变更 → 原样重放。返回取消订阅。 */
       onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
+      /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
+      reportUiLocale?(locale: 'zh' | 'en'): void
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void

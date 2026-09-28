@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_PROBE_PATH, testConnection } from './agentRunService'
 import { setUnauthorizedHandler } from './http'
+import { connectionTarget } from './engine/targets'
 
 const cfg = { backendUrl: 'http://127.0.0.1:1', token: 't', modelId: '' } as any
 const json = (status: number, body: unknown = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -25,7 +26,7 @@ describe('testConnection 鉴权探针', () => {
 
   it('health 200 + 探针 200 → ok,且两条请求都带 Bearer', async () => {
     probeStatus = 200
-    const r = await testConnection(cfg)
+    const r = await testConnection(connectionTarget(cfg))
     expect(r.ok).toBe(true)
     const calls = vi.mocked(fetch).mock.calls
     expect(calls.map((c) => String(c[0]))).toEqual([`${cfg.backendUrl}/health`, `${cfg.backendUrl}${AUTH_PROBE_PATH}`])
@@ -34,7 +35,7 @@ describe('testConnection 鉴权探针', () => {
 
   it('health 200 但探针 401 → ok:false(token 漂了不再假绿),且 401 拦截器照常触发', async () => {
     probeStatus = 401
-    const r = await testConnection(cfg)
+    const r = await testConnection(connectionTarget(cfg))
     expect(r.ok).toBe(false)
     expect(r.authRejected).toBe(true)
     expect(r.message).toContain('401')
@@ -43,16 +44,16 @@ describe('testConnection 鉴权探针', () => {
 
   it.each([403, 404, 500])('探针 %i 不算连接失败(只认 401)', async (st) => {
     probeStatus = st
-    const r = await testConnection(cfg)
+    const r = await testConnection(connectionTarget(cfg))
     expect(r.ok).toBe(true)
     expect(r.authRejected).toBeFalsy()
   })
 
   it('探针网络错不算连接失败;health 失败照旧判死', async () => {
     probeStatus = 'throw'
-    expect((await testConnection(cfg)).ok).toBe(true)
+    expect((await testConnection(connectionTarget(cfg))).ok).toBe(true)
     vi.mocked(fetch).mockImplementation(async () => json(503))
-    const r = await testConnection(cfg)
+    const r = await testConnection(connectionTarget(cfg))
     expect(r.ok).toBe(false)
     expect(r.message).toBe('HTTP 503')
   })

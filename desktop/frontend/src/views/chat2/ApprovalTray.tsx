@@ -23,8 +23,10 @@ const ARM_MS = 350
 
 type Sent = void | boolean | Promise<boolean | void>
 
-export function ApprovalTray({ items, onDecide, onAnswer }: {
+export function ApprovalTray({ items, onDecide, onAnswer, sessionId }: {
   items: TrayItem[]
+  /** P1-K6:托盘所属会话(审批卡按会话所在的目标判远端只读,INTEGRATION R-31)。 */
+  sessionId?: string
   /** 返回 false = 没送达,托盘解锁这一项让用户重试。 */
   onDecide: (messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>) => Sent
   /** 询问 / 计划的回答;返回 false = 没送达。 */
@@ -100,7 +102,7 @@ export function ApprovalTray({ items, onDecide, onAnswer }: {
         >
           {cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
           {cur.kind === 'approval' ? (
-            <ApprovalCard key={cur.id} req={cur.req} onDecide={(action, args) => submit(cur.id, () => onDecide(cur.messageId, cur.id, action, args))} />
+            <ApprovalCard key={cur.id} req={cur.req} sessionId={sessionId} onDecide={(action, args) => submit(cur.id, () => onDecide(cur.messageId, cur.id, action, args))} />
           ) : cur.kind === 'plan' ? (
             <PlanDecision key={cur.id} plan={cur.plan} req={cur.req} busy={busy} onAnswer={(a) => submit(cur.id, () => onAnswer(cur.messageId, cur.id, a))} />
           ) : (

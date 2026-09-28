@@ -131,6 +131,11 @@ describe('runGroupChat', () => {
     taintRunRemote('r-steered', { via: 'p2p', marked: false });
     await runGroupChat(params({ runId: 'r-steered', agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
     expect(acts.map((a) => a.remote)).toEqual([{ via: 'p2p', marked: false }, { via: 'p2p', marked: false }]);
+    // P1 · K1 S11:调用方设备随激活下发到每位成员
+    acts = [];
+    const caller = { via: 'tunnel', marked: true, callerUnit: '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f', callerKind: 'phone', callerName: 'Pixel' };
+    await runGroupChat(params({ remote: caller as any, agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
+    expect(acts.map((a) => a.remote)).toEqual([caller, caller]);
   });
 
   it('every member ending with DONE stops the discussion (no vote step, no vote events)', async () => {

@@ -4,6 +4,7 @@ import { getAgentsMeta, getUserProfile, listAgents, putUserProfile } from '../se
 import type { NormalAgentDef, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import './agentSettingsOverview.css'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'agentSettings.rosterTitle': { zh: 'Agent 名册', en: 'Agent roster' },
@@ -31,14 +32,14 @@ export function AgentSettingsOverview({ cfg, onOpenAgent }: { cfg: TanguDesktopC
   useEffect(() => {
     let active = true
     const refreshAgents = (): void => {
-      void Promise.allSettled([listAgents(cfg), getAgentsMeta(cfg)]).then(([agentResult, metaResult]) => {
+      void Promise.allSettled([listAgents(homeTarget()), getAgentsMeta(homeTarget())]).then(([agentResult, metaResult]) => {
         if (!active) return
         setAgents(agentResult.status === 'fulfilled' ? agentResult.value : [])
         if (metaResult.status === 'fulfilled') setDefaultSlug(metaResult.value.defaultSlug || 'xyra')
       })
     }
     refreshAgents()
-    void getUserProfile(cfg).then((value) => {
+    void getUserProfile(homeTarget()).then((value) => {
       if (active) { setProfile(value); setSavedProfile(value) }
     }).catch(() => {})
     window.addEventListener('forsion:agents-changed', refreshAgents)
@@ -47,7 +48,7 @@ export function AgentSettingsOverview({ cfg, onOpenAgent }: { cfg: TanguDesktopC
   const current = agents?.find((a) => a.slug === defaultSlug) || agents?.[0]
   const save = async (): Promise<void> => {
     setBusy(true); setMessage('')
-    try { await putUserProfile(cfg, profile); setSavedProfile(profile); setMessage(t('agentSettings.saved')) }
+    try { await putUserProfile(homeTarget(), profile); setSavedProfile(profile); setMessage(t('agentSettings.saved')) }
     catch (error: any) { setMessage(t('agentSettings.error', { error: String(error?.message || error) })) }
     finally { setBusy(false) }
   }

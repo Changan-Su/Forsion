@@ -8,7 +8,7 @@ import { ErrorBoundary } from './ErrorBoundary'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
@@ -70,6 +70,7 @@ import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
+import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -96,7 +97,9 @@ import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry }
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
+import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import './settingsModal.css'
+import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
@@ -204,7 +207,7 @@ registerMessages({
   'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'computer-history' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'remote-sessions' | 'computer-history' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
 export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
@@ -230,6 +233,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   permissions: <MonitorCog size={14} />,
+  'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
   'computer-history': <History size={14} />,
   developer: <Bug size={14} />,
   about: <Info size={14} />,
@@ -416,6 +420,8 @@ export const SettingsModal: React.FC<{
     ['statusbar', t('settings.tab.statusbar')],
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
+    ...(remoteSessionsApi() ? ([['remote-sessions', t('remoteSessions.tab')]] as Array<[Tab, string]>) : []),
     // 不按 darwin 门控:非 mac 也列出来,页内说明「目前仅支持 macOS」,免得用户找不到入口。
     ...(computerHistoryApi() ? ([['computer-history', t('settingsmodal.tab.computerHistory')]] as Array<[Tab, string]>) : []),
     ...((isDesktop || cloudWeb) && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
@@ -615,18 +621,18 @@ export const SettingsModal: React.FC<{
   const [pluginAgents, setPluginAgents] = useState<NormalAgentDef[]>([])
   const reloadPlugins = useCallback(() => {
     if (!isDesktop) return
-    void listPlugins(p.cfg).then(setPlugins).catch(() => setPlugins([]))
+    void listPlugins(homeTarget()).then(setPlugins).catch(() => setPlugins([]))
   }, [isDesktop, p.cfg])
   useEffect(() => {
     if (!p.open || !isDesktop) return
     reloadPlugins()
-    void listAgents(p.cfg).then(setPluginAgents).catch(() => { /* ignore */ })
+    void listAgents(homeTarget()).then(setPluginAgents).catch(() => { /* ignore */ })
   }, [p.open, isDesktop, reloadPlugins, p.cfg])
 
   // 本地联网搜索配置:进模型 tab 拉取;云端/旧后端 404 → wsRed=null 整段隐藏。
   useEffect(() => {
     if (!p.open || tab !== 'model' || !isDesktop) return
-    void getLocalWebSearch(p.cfg)
+    void getLocalWebSearch(homeTarget())
       .then((r) => {
         setWsRed(r)
         setWsProvider(r.provider)
@@ -659,7 +665,7 @@ export const SettingsModal: React.FC<{
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
-    void listTools(p.cfg).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
+    void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
   }
 
   const writeMcp = (next: Record<string, McpServerConfigEntry>, msg: string): void => {
@@ -720,7 +726,7 @@ export const SettingsModal: React.FC<{
 
   const refreshSyncStatus = (): void => {
     const request = ++syncRequest.current
-    backendGetSyncStatus(p.cfg).then((value) => {
+    backendGetSyncStatus(homeTarget()).then((value) => {
       if (request === syncRequest.current) setSyncSt(value)
     }).catch(() => { if (request === syncRequest.current) setSyncSt(null) })
   }
@@ -731,7 +737,7 @@ export const SettingsModal: React.FC<{
     setSyncing(true)
     setSyncMsg('')
     try {
-      const r = await backendSyncNow(p.cfg)
+      const r = await backendSyncNow(homeTarget())
       if (request !== syncRequest.current) return
       if (r.ok) {
         setSyncMsg(t('settings.forsion.syncOk', { memory: r.memory, logs: r.logs.length }) + (r.agents ? ` · ${r.agents} agent ↑${r.pushed ?? 0} ↓${r.pulled ?? 0}` : ''))
@@ -999,11 +1005,11 @@ export const SettingsModal: React.FC<{
     }
   }
 
-  // cfg 缺省取实时 store 值而非 draft:draft 是挂载时快照,后端一重启(换端口)就成死地址。
+  // cfg 缺省取实时 store 值(homeTarget 活目标)而非 draft:draft 是挂载时快照,后端一重启(换端口)就成死地址。
   const loadModels = async (cfg?: TanguDesktopConfig) => {
     setModelsLoading(true)
     try {
-      setModels(await listModels(cfg ?? useApp.getState().cfg))
+      setModels(await listModels(cfg ? connectionTarget(cfg) : homeTarget())) // 重启后刚从主进程读到的配置 = 显式连接;缺省 = 本端当前那份
     } catch (e: any) {
       setModels(null)
       setTestResult(e?.message || t('settings.model.loadFailed'))
@@ -1029,7 +1035,7 @@ export const SettingsModal: React.FC<{
   const test = async () => {
     if (connCfgPending) return
     setTesting(true)
-    const r = await testConnection({ ...draft, ...connForm })
+    const r = await testConnection(connectionTarget({ ...draft, ...connForm }))
     setTestResult(r.message)
     setTesting(false)
   }
@@ -1078,6 +1084,7 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
+    'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
     developer: 'settings.page.developerDescription',
     about: 'settings.page.aboutDescription',
@@ -1182,7 +1189,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1507,6 +1514,7 @@ export const SettingsModal: React.FC<{
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
+                {tab === 'remote-sessions' && <RemoteSessionsSettings />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {/* 基本(U-14):用户常改的两项放第一屏;后端技术项挪到「连接」。 */}
                 {tab === 'general' && activeSub === 'g-basic' && isDesktop && stored && (
@@ -1660,6 +1668,8 @@ export const SettingsModal: React.FC<{
                             placeholder={t('settings.external.tokenPlaceholder')}
                           />
                         </div>
+                        {/* P1-K5:已落盘为外部连接时,保存的 token 读不出来(钥匙串拒绝 / 被重置)/ 系统加密不可用 → 这里说清楚并给重试 / 重启 */}
+                        {isDesktop && mode === 'external' && <SecretStorageNotice slot="externalToken" className="secnotice-inpanel" />}
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <button className="btn ghost sm" onClick={test} disabled={testing || connCfgPending}>
                             {testing ? <Loader2 size={13} className="spin" /> : null} {t('settings.btn.testConnection')}
@@ -2162,8 +2172,8 @@ export const SettingsModal: React.FC<{
                 {tab === 'model' && activeSub === 'm-display' && isDesktop && <AutoCompactSetting cfg={p.cfg} />}
                 {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} onContextWindow={isDesktop ? async (modelId, tokens) => {
                   // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
-                  await setModelContextWindow(p.cfg, modelId, tokens)
-                  const next = await listModels(p.cfg)
+                  await setModelContextWindow(homeTarget(), modelId, tokens)
+                  const next = await listModels(homeTarget())
                   setModels(next)
                   // 进度环读的是 store 里启动时装的 modelsResp,且优先上一轮 run 的 context_info(只在切模型时清):
                   // 两处都刷,否则改完窗口它还显示旧数直到下一条消息。
@@ -2353,7 +2363,7 @@ export const SettingsModal: React.FC<{
                               setProviderTesting(true)
                               setProviderTestMsg('')
                               const firstModel = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)[0]
-                              void testProviderConnection(p.cfg, {
+                              void testProviderConnection(homeTarget(), {
                                 baseUrl: editProvider.baseUrl,
                                 apiKey: editProvider.apiKey || undefined,
                                 modelId: firstModel,
@@ -2374,7 +2384,7 @@ export const SettingsModal: React.FC<{
                             onClick={() => {
                               setFetchingModels(true)
                               setFetchModelsMsg('')
-                              void fetchProviderModels(p.cfg, {
+                              void fetchProviderModels(homeTarget(), {
                                 baseUrl: editProvider.baseUrl,
                                 apiKey: editProvider.apiKey || undefined,
                               })
@@ -2548,7 +2558,7 @@ export const SettingsModal: React.FC<{
                               onClick={() => {
                                 const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
                                 setWsBusy(true); setWsMsg('')
-                                void saveLocalWebSearch(p.cfg, {
+                                void saveLocalWebSearch(homeTarget(), {
                                   provider: wsProvider,
                                   bochaApiKey: keyOut('bocha'),
                                   tavilyApiKey: keyOut('tavily'),
@@ -2572,7 +2582,7 @@ export const SettingsModal: React.FC<{
                                 const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
                                 const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
                                 setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(p.cfg, { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
+                                void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
                                   .then((r) => setWsMsg(r.ok
                                     ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
                                     : `✗ ${r.provider}: ${r.error || 'failed'}`))
@@ -2650,7 +2660,7 @@ export const SettingsModal: React.FC<{
                               disabled={ttsTesting || !(stored.ttsModelId || '').trim()}
                               onClick={() => {
                                 setTtsTesting(true); setTtsTestMsg('')
-                                previewTts(p.cfg, { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
+                                previewTts(homeTarget(), { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
                                   .then(() => setTtsTestMsg(`✓ ${t('settings.tts.testOk')}`))
                                   .catch((e: any) => setTtsTestMsg(`✗ ${e?.message || e}`))
                                   .finally(() => setTtsTesting(false))

@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { broadcastPrefs } from './uiPrefsBus'
 import { LOCALE_KEY as LS_KEY } from './types'
+import { cloudApiBaseOf } from './services/engine/cloudBase'
 
 export type Locale = 'zh' | 'en'
 
@@ -64,8 +65,8 @@ export function resolveInitialLocale(): Locale {
  * 中文)—— 这是唯一会伤到现有用户基本盘的回归,靠 IP=CN 兜住。代价是「在华外国人 + 英文系统」
  * 会先拿到中文,切一次即持久化。要让系统语言绝对优先,把下面 `country === 'CN'` 那行删掉即可。
  *
- * ⚠️ cloudUrl 两种形态:desktop 是纯源(`https://api.forsion.net`),web/mobile 垫片给的
- * 已经含 `/api`(见 mobileShim 注释)。拼错就是 404,所以按后缀分流。
+ * 基址读 `cloudApiBase`(P1-K6 S1):web / 手机垫片直接给含 `/api` 的基址,桌面由纯源 `cloudUrl` 现算,
+ * 口径单源在 services/engine/cloudBase.ts —— 这里不再按 `/api` 后缀猜 cloudUrl 的形态。
  */
 export async function correctLocaleByRegion(): Promise<void> {
   // ⚠️ 系统中文 = 第②档定论,IP **不得**推翻它。少了这行,「中文用户出国」会在启动后一秒
@@ -77,9 +78,9 @@ export async function correctLocaleByRegion(): Promise<void> {
     if (localStorage.getItem(LS_REGION)) return // 已探测过
   } catch { return } // 无 localStorage(隐私模式)= 存不下结果,探了也白探
   let base = ''
-  try { base = String((await window.tangu?.getConfig?.())?.cloudUrl || '').replace(/\/+$/, '') } catch { /* ignore */ }
+  try { base = cloudApiBaseOf(await window.tangu?.getConfig?.()) } catch { /* ignore */ }
   if (!base) return
-  const url = /\/api$/.test(base) ? `${base}/auth/region` : `${base}/api/auth/region`
+  const url = `${base}/auth/region`
   try {
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), 3000)
@@ -3811,9 +3812,19 @@ function broadcastLocale(l: Locale): void {
   if (_locale === l) return
   _locale = l
   broadcastPrefs() // 跨窗:设置浮窗切了语言,主窗不能等到重启才跟上
+  reportLocaleToHost(l)
   for (const cb of Array.from(localeSubs)) {
     try { cb(l) } catch (e) { console.error('[i18n] locale subscriber failed', e) }
   }
+}
+
+/**
+ * 把本窗**生效**语言报给宿主主进程(P1-KF):托盘、系统通知(远程审批)、原生对话框的文案只跟它走。
+ * 报的是四级链的结论,不是 localStorage 的手选键 —— ② 系统语言 / ③ IP 区域判出的语言不写那个键,主进程拿键当语言源
+ * 就会在中文界面下弹英文通知(K5 原接线的缺陷,见 electron/uiLocaleSync.ts)。桌面之外(web / 手机 / 设备页)没有这个接缝 = 不报。
+ */
+export function reportLocaleToHost(l: Locale = _locale): void {
+  try { window.tangu?.reportUiLocale?.(l) } catch { /* 无 preload / 非浏览器环境 */ }
 }
 /** 模块级切换(无 Provider 也成立:台架/非 React 宿主)。Provider 在时由它驱动 React 状态。 */
 export function setLocaleGlobal(l: Locale): void {
@@ -3834,6 +3845,9 @@ export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [])
 
   useEffect(() => { _setLocale = setLocale; _locale = locale; return () => { if (_setLocale === setLocale) _setLocale = null } }, [setLocale, locale])
+
+  // 挂载即报一次生效语言(之后的切换由 broadcastLocale 报):主进程在渲染层判完语言之前只有上次的缓存 / 系统语言可用。
+  useEffect(() => { reportLocaleToHost(locale) }, [locale])
 
   useEffect(() => {
     try { document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }

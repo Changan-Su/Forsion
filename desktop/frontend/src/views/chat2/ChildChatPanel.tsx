@@ -5,6 +5,7 @@ import { listActiveRuns } from '../../services/agentRunService'
 import { recordToUi, useApp } from '../../stores/appStore'
 import { useChildChat } from '../../stores/childChatStore'
 import { getBackgroundSessions, getSessionDetail, listMessages, openTeamMemberSession, type BackgroundSessionInfo } from '../../services/backendService'
+import { inheritBinding, inheritChildRows, refForSession, targetForSession } from '../../services/engine/targets'
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
@@ -30,11 +31,13 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     let disposed = false
     setSaved([])
-    const load = () => void getBackgroundSessions(cfg, sessionId).then((rows) => {
-      if (!disposed) setSaved(rows)
+    const load = () => void getBackgroundSessions(targetForSession(sessionId), sessionId).then((rows) => {
+      const kept = inheritChildRows(rows, sessionId) // S4:子会话跟父会话在同一台上;撞上本端会话 / 别处的行丢掉(R-16)
+      if (!disposed) setSaved(kept)
     }).catch(() => {})
     load()
-    const timer = setInterval(load, 4000)
+    // P1-K6:父会话在「我的电脑」上时这条轮询走 hub 隧道(吃全局限流),放慢到与 pollSession 同档的 12s(S4 起按会话所在的那台判)
+    const timer = setInterval(load, refForSession(sessionId).kind === 'unit' ? 12_000 : 4000)
     return () => { disposed = true; clearInterval(timer) }
   }, [cfg, sessionId])
   const rows = subChatRows(saved, live, historianOn)
@@ -67,7 +70,9 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     if (!target?.slug || sessionId) return
     let disposed = false
     setError('')
-    void openTeamMemberSession(cfg, parentId, target.slug).then((session) => {
+    void openTeamMemberSession(targetForSession(parentId), parentId, target.slug).then((session) => {
+      // S4:成员会话在父会话那台上建;回来的 id 撞上本端会话 / 别处(R-16)→ 不认,当打不开处理
+      if (inheritBinding(session.id, parentId) === 'conflict') throw new Error(t('app.cannotCreateSession'))
       if (!disposed) { useChildChat.getState().open(parentId, { ...target, sessionId: session.id }); void useApp.getState().hydrateTeamWork(parentId) }
     }).catch((e) => { if (!disposed) setError(String(e.message || e)) })
     return () => { disposed = true }
@@ -76,7 +81,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     setReady(''); setError(''); setPersistedBusy(false)
     if (!sessionId) return
     let disposed = false
-    void getSessionDetail(cfg, sessionId).then(async (session) => {
+    void getSessionDetail(targetForSession(sessionId), sessionId).then(async (session) => {
       if (disposed) return
       setPersistedBusy(!!session.delegate_running)
       useChildChat.getState().remember(session)
@@ -90,9 +95,9 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   useEffect(() => {
     if (!sessionId || !persistedBusy) return
     let disposed = false
-    const timer = setInterval(() => void getSessionDetail(cfg, sessionId).then((s) => {
+    const timer = setInterval(() => void getSessionDetail(targetForSession(sessionId), sessionId).then((s) => {
       if (!disposed && !s.delegate_running) {
-        void listMessages(cfg, sessionId).then((records) => {
+        void listMessages(targetForSession(sessionId), sessionId).then((records) => {
           if (disposed) return
           useApp.setState((state) => {
             const restored = records.map((r) => recordToUi(r, undefined, (slug) => state.agentDefs.find((a) => a.slug === slug)?.name))
@@ -109,7 +114,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   useEffect(() => {
     if (!sessionId || !runId || ready !== sessionId) return
     let disposed = false
-    void listActiveRuns(cfg, sessionId).then((runs) => {
+    void listActiveRuns(targetForSession(sessionId), sessionId).then((runs) => {
       if (disposed) return
       const run = runs.find((r) => r.id === runId && (r.status === 'running' || r.status === 'queued'))
       if (!run?.assistant_message_id) return

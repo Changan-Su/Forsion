@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { configFile, tanguHome, forsionSharedDir, agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { getRawSection } from '../core/config.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
+import { REMOTE_LOCK_FILE_ENV } from '../services/remoteLock.js'; // P1-K2
 
 /** Resolve the nearest existing ancestor too, so a missing config under a home symlink is protected.
  *  A *dangling* symlink (its target does not exist yet) makes realpath fail, yet a write through it creates the target —
@@ -121,6 +122,10 @@ export function credentialPaths(): string[] {
   // Local Storage / Cookies(登录态)都在里面,整目录收。引擎不知道 Electron 的 userData,但宿主给的 FORSION_AMADEUS_CONFIG
   // 就住在 userData 里(backendManager.amadeusConfigPath),兄弟目录按同一个 appData 父目录推。
   out.push(...desktopUserDataDirs());
+  // P1-K2:远程锁文件(桌面主进程经 FORSION_REMOTE_LOCK_FILE 交来的绝对路径)。平时就在 userData 里、上面已整目录收;
+  // 这里再点名一次 —— 宿主没给 FORSION_AMADEUS_CONFIG(推不出 userData)时也收得住:远端写 / 删它 = 绕过急停锁。
+  const lockFile = process.env[REMOTE_LOCK_FILE_ENV];
+  if (lockFile && path.isAbsolute(lockFile)) out.push(lockFile);
   return withCanonical(out);
 }
 
@@ -276,6 +281,51 @@ export function remoteForbiddenRoot(abs: string): string | null {
     for (const r of roots) if (pathWithin(f, r)) return r;
   }
   return null;
+}
+
+/**
+ * P1 · G5(方案 A,docs/remote-bash-protected-paths.md):宿主沙箱关时,macOS 上远程污点 run 的 shell 套一层 Seatbelt 写拒绝 profile。
+ * 名单与 protectedRemoteWrite 同源 —— 同一组表,这里只把它们整理成 profile 需要的几类(渲染见 sandbox/remoteShellSeatbelt.ts)。
+ * 与结构化写工具的两处**刻意**差异(评估正文「落地」一节):
+ *   · 不拒 `.git`:远程 run 要能 `git commit` / `git init` / `git clone`,而这些都会写 `.git/config` 与 `.git/hooks`;
+ *   · 家目录点目录不整棵拒:只拒顶层点条目**本身**(~/.gitconfig、~/.npmrc 这类文件不能新建或改写)+ 启动区,
+ *     ~/.npm、~/.cache、~/.cargo 里面照常可写,否则 npm install 之类全坏。
+ */
+export interface RemoteShellWriteDenySpec {
+  /** 整片禁写、但 Agent / 团队 / 引擎 Library 例外能盖过的根(= remoteForbiddenRoot 的根,两种形态)。 */
+  domainRoots: string[];
+  /** Library 例外的基(引擎 home 的各种形态):<基>/(agents|teams|engines)/<名>/Library。 */
+  libraryBases: string[];
+  /** Library 例外也盖不过的整棵禁写:凭据 / 本机配置 / 宿主沙箱那张表 / 家目录启动区。已被 domainRoots 盖住(且不在 Library 里)的不重复列。 */
+  protectedTrees: string[];
+  /** 家目录(两种形态):顶层点条目本身禁写。 */
+  homes: string[];
+  /** shell 启动文件名(任何位置,小写)。 */
+  startupNames: string[];
+  /** 任何位置都禁写的路径段(Library 里也禁):别的 agent 工具的技能 / 配置目录。 */
+  metadataSegments: string[];
+  /** 工作区控制目录段:Library 外任何位置禁写;Library 里另按基锚定再禁一次。 */
+  controlSegments: string[];
+}
+export function remoteShellWriteDenySpec(): RemoteShellWriteDenySpec {
+  const homes = tanguHomes();
+  const domainRoots = withCanonical([...forsionDomains(), ...homes, ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
+  const libraryBases = withCanonical(homes);
+  const candidates = [
+    ...credentialPaths(), ...forsionConfigPaths(), ...protectedHostPaths(), ...remoteStartupDirs(),
+    ...withCanonical([path.join(os.homedir(), '.local', 'bin')]), // PATH 上的执行入口(C8 的点目录那条在 shell 这边只收这一处)
+  ];
+  // 精简:落在某个 domain 根里、又不在任何 Library 里的条目,domain 那条已经拒了(Library 的 allow 也盖不到它)。
+  const kept = [...new Set(candidates)].filter((p) => !(domainRoots.some((r) => pathWithin(p, r)) && !inEngineLibrary(p, libraryBases)));
+  // 再去掉被别的条目整棵盖住的。
+  const protectedTrees = kept.filter((p) => !kept.some((q) => q !== p && pathWithin(p, q) && !(foldCase && p.toLowerCase() === q.toLowerCase())));
+  return {
+    domainRoots, libraryBases, protectedTrees,
+    homes: withCanonical([os.homedir()]),
+    startupNames: [...SHELL_STARTUP_NAMES],
+    metadataSegments: ['.agents', '.codex'],
+    controlSegments: ['.tangu', '.forsion'],
+  };
 }
 
 // ── 契约 C8:远程 cwd / 项目路径 + 远程专属的家目录启动项禁写集。────────────────────────────────────────

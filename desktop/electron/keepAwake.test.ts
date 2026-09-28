@@ -59,3 +59,24 @@ describe('keepAwake', () => {
     expect([...state.held]).toEqual([2])
   })
 })
+
+// P1-K2:强制通道 —— 远程 run 在跑时不看开关也阻止闲置休眠
+describe('keepAwake.force(P1-K2)', () => {
+  it('开关关着也持有;与上报叠加;两路都撤才释放;rearm 后仍持有', () => {
+    const { state, ka } = setup()
+    state.enabled = false
+    expect(ka.force('remote', true)).toBe(true)
+    expect(state.held.size).toBe(1)
+    state.enabled = true
+    ka.report(1, true)
+    expect(state.held.size).toBe(1) // 仍只持一枚
+    expect(ka.force('remote', false)).toBe(true) // 上报那一路还在
+    ka.report(1, false)
+    expect(state.held.size).toBe(0)
+    ka.force('remote', true)
+    expect(ka.rearm()).toBe(true)
+    expect(state.held.size).toBe(1)
+    expect(ka.force('remote', false)).toBe(false)
+    expect(state.held.size).toBe(0)
+  })
+})

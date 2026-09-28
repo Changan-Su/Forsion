@@ -30,6 +30,9 @@ registerMessages({
   'chat.approval.update.approved': { zh: '已批准并执行 {name}', en: 'Approved and ran {name}' },
   'chat.approval.update.failed': { zh: '已批准，{name} 执行出错', en: 'Approved; {name} ran with an error' },
   'chat.approval.update.rejected': { zh: '已拒绝 {name}（没有执行）', en: 'Rejected {name} (not run)' },
+  // M1B:别处答的(执行的电脑本机 / 另一台设备 / 消息通道)—— {where} = approval.byHost* / byDevice … 的「在哪」短语
+  'chat.approval.update.byApproved': { zh: '{where}批准', en: 'Approved {where}' },
+  'chat.approval.update.byRejected': { zh: '{where}拒绝', en: 'Rejected {where}' },
 })
 const UPDATE_KEY = {
   approved: 'chat.approval.update.approved',
@@ -47,7 +50,10 @@ import { useEdgeNudge } from '@lcl/engine'
 import { splitSuggestions, type SuggestState, type TaskCard } from './suggest'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
-import { APPROVAL_UPDATE_OPEN, parseApprovalUpdate, pickPlanInquiry } from './approvalQueue'
+import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
+import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
+import { answeredByText } from '../../approvalReason'
+import { targetForSession, useSessionHostName } from '../../services/engine/targets'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -210,7 +216,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
     // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
     if (!ctx?.sessionId || !at) { setStat({ files: 0, skipped: 0 }); return }
     let alive = true
-    void api.listCheckpoints(ctx.cfg, ctx.sessionId)
+    void api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
       .then((cps) => {
         if (!alive) return
         const files = new Set<string>()
@@ -260,6 +266,18 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
       </div>
     </div>
   )
+}
+
+/** <approval_update> 结局行下的「在哪批的」(M1B,K3 反方向):托盘模式下卡答完即撤,手机上只剩这一行 —— 按 approval_result.by
+ *  (reducer 清洗过、挂在原审批上)补一行说明;本页自己答的不写。只在渲染层,不进给模型看的回灌正文。 */
+function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; callId: string; status: ApprovalOutcome['status'] }) {
+  const { t } = useI18n()
+  const req = useApp((s) => (sessionId ? approvalForCall(s.messagesBySession[sessionId], callId) : undefined))
+  const hostName = useSessionHostName(sessionId) // S4:本会话所在的那台(焦点可能已换走)
+  if (!req?.answeredBy) return null
+  const where = answeredByText(req.answeredBy, { remotePage: isRemoteApprover(sessionId), answeredHere: wasDecidedHere(req.approvalId), hostName }, t as (k: string, v?: Record<string, unknown>) => string)
+  if (!where) return null
+  return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
 }
 
 export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
@@ -314,11 +332,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
       return (
         <div ref={rootRef} className="t2-sys t2-apv-update" data-approval-update={rows.length}>
           {rows.map((r) => (
-            <div key={r.callId} className="t2-apv-update-row" data-status={r.status}>
-              {r.status === 'approved' ? <CircleCheck size={12} /> : <CircleX size={12} />}
-              <span className="t2-apv-update-what">{t(UPDATE_KEY[r.status], { name: r.name })}</span>
-              <span className="t2-apv-update-preview" title={r.preview}>{r.preview}</span>
-            </div>
+            <Fragment key={r.callId}>
+              <div className="t2-apv-update-row" data-status={r.status}>
+                {r.status === 'approved' ? <CircleCheck size={12} /> : <CircleX size={12} />}
+                <span className="t2-apv-update-what">{t(UPDATE_KEY[r.status], { name: r.name })}</span>
+                <span className="t2-apv-update-preview" title={r.preview}>{r.preview}</span>
+              </div>
+              <ApprovalUpdateBy sessionId={runSid} callId={r.callId} status={r.status} />
+            </Fragment>
           ))}
         </div>
       )
@@ -432,7 +453,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
               {body && (
                 voiceMode
-                  ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
+                  ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
                   : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} /></div>
               )}
             </>

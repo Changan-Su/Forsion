@@ -27,7 +27,7 @@ import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
-import { parseRemoteOrigin } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -41,12 +41,33 @@ function ensureLocal(res: any): boolean {
   return true;
 }
 
+/**
+ * `GET /agent/agents` 对远程来源(unitWeb 盖了 x-forsion-remote:手机 / 设备页)的投影(P1 · M1A,K10b openIssues)。
+ * 远端要这份名册做的事:聊天面选 Agent、盖身份(slug / name / description / avatar / model / thinkingLevel / createdBy / apps …)、
+ * 输入区审批药丸的缺省档(Composer2:会话没设档时显示 Agent 定义的档)、私聊入口(libraryDir 在场 = 本机 Agent,可开私聊)。
+ * 不回:systemPrompt(developer_instructions)与 soul(SOUL.md)—— 远端的读者只有 Agent 编辑器,而改 Agent 远端本就 deny-remote;
+ * systemPrompt 置空串(类型是必填 string,渲染层有 .trim() 读者)、soul 省略。
+ * approvalMode 按远程上限钳后回(C3:远程 run 真正生效的就是钳后的档 —— 回原值会让手机上的药丸显示「完全通行」而实际是「自动编辑」);
+ * 未设('')原样。remote:true 与 GET /agent/special/config 的投影同一口径。
+ * ⚠️ 新增 / 放回字段先找到远端真用它的调用点,再改 test/remoteProjectionRoutes.test.ts 的断言。
+ */
+function remoteAgentView<T extends { systemPrompt?: string; soul?: string; approvalMode?: string }>(a: T, cap: ReturnType<typeof remoteApprovalCap>) {
+  const { soul: _soul, systemPrompt: _sp, ...rest } = a;
+  return { ...rest, systemPrompt: '', ...(a.approvalMode ? { approvalMode: clampApprovalMode(a.approvalMode, cap) } : {}) };
+}
+
 router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   try {
     if (cloudAgentsEnabled()) return void res.json({ agents: await cloudListAgents(req.user!.userId) });
     if (!ensureLocal(res)) return;
     const scope = agentSyncScope(deps().brain.agentFiles, req.user!.userId);
-    res.json({ agents: (await listAgents()).map((a) => ({ ...a, cloudSync: agentSyncPermission(a.slug, scope).enabled })) });
+    const agents = (await listAgents()).map((a) => ({ ...a, cloudSync: agentSyncPermission(a.slug, scope).enabled }));
+    // 头在就按远程(值不在契约内也算 —— 同 parseRemoteOrigin 的 fail-closed:标记只会收紧)
+    if (parseRemoteOrigin(req.headers)) {
+      const cap = remoteApprovalCap();
+      return void res.json({ agents: agents.map((a) => remoteAgentView(a, cap)), remote: true });
+    }
+    res.json({ agents });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list agents failed' });
   }
