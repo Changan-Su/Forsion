@@ -152,7 +152,12 @@ describe('standalone local Amadeus capability', () => {
     const events: Array<{ channel: string; payload: unknown; origin: string | null }> = []
     vault.onEvent((channel, payload, origin) => events.push({ channel, payload, origin }))
     await vault.call(IPC.writeTextFile, ['Observed.md', 'initial'], 'tab-a')
-    expect(events).toContainEqual({ channel: IPC.fileChange, payload: 'Observed.md', origin: 'tab-a' })
+    // 笔记经 writeTextFile(v4 唯一落盘通道)写 → externalChange:开着的编辑器只听这一条(评审 G1-04,原为 fileChange)。
+    expect(events).toContainEqual({ channel: IPC.externalChange, payload: 'Observed.md', origin: 'tab-a' })
+    // 带 base 的 writeTextFile 也是 CAS:被拒 = 没写,不许叫别的编辑器回灌(同下面 Calendar 的 dbWriteCas)。
+    const beforeTextConflict = events.length
+    expect(await vault.call(IPC.writeTextFile, ['Observed.md', 'stale', { base: 'not-the-current-fingerprint' }], 'stale-tab')).toMatchObject({ ok: false, current: 'initial' })
+    expect(events).toHaveLength(beforeTextConflict)
     const saved = await vault.call(IPC.dbRead, ['', 'Calendar.db']) as Extract<DbReadResult, { status: 'ok' }>
     const data = { ...saved.data, name: 'Changed calendar' }
     expect(await vault.call(IPC.dbWriteCas, ['Calendar.db', data, saved.version], 'tab-a')).toMatchObject({ ok: true })
