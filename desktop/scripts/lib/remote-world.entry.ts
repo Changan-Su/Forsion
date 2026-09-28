@@ -4,6 +4,7 @@
  */
 export { startUnitWeb } from '../../electron/unitWeb'
 export { UnitHost } from '../../electron/unitHost'
+export { UnitCapsReporter } from '../../electron/unitCaps' // P1-K7a
 export { createRemoteSessions, lookupRosterUnit, REMOTE_SESSIONS_FILE } from '../../electron/remoteSessions'
 export { createApprovalDelivery } from '../../electron/approvalDelivery'
 export { mt, setMainLocale } from '../../electron/mainI18n'

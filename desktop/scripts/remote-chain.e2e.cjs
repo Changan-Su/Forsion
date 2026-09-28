@@ -86,6 +86,8 @@ const SERVER_DIR = process.env.FORSION_SERVER_DIR || [path.resolve(GENESIS, '../
 const hex = () => crypto.randomBytes(3).toString('hex').toUpperCase()
 const MARK = `K9-${hex()}` // 第一轮(手机批)
 const MARK2 = `K9B-${hex()}` // 第二轮:远端 remember + 电脑本机批(反方向)
+const MARK3 = `K7C-${hex()}` // P1-K7a:焦点换到云端后,从侧栏「我的电脑」分组重开那条会话再发一句(要批 run_bash)
+const MARK4 = `K7D-${hex()}` // P1-K7a:离开后再重开,再发一句(不要批)
 const LMARK = `K9L-${hex()}` // 本机正对照会话
 const ATTACH_NAME = `k9-attach-${MARK.toLowerCase()}.txt`
 const ATTACH_TEXT = `hello from the phone ${MARK}\nsecond line\n`
@@ -135,7 +137,7 @@ function makeLlm(world) {
   }
   // 日志 / 工作笔记候选也带标记(P1 · M1A):远程轮的 LOG 进 Muse 周期提示词的日志摘要,判官交了、闸在代码里 —— agents/** 扫描据此看得见漏写
   const judge = (mark) => say(JSON.stringify({ title: 't', summary: '', log: `Did task ${mark}`, memory_candidates: [`User code is ${mark}`], harness_candidates: [`When asked, answer ${mark}`] }))
-  const markIn = (s) => [MARK2, LMARK, MARK].find((m) => s.includes(m)) || null // MARK2 / LMARK 先判(前缀互不包含,顺序只为读着清楚)
+  const markIn = (s) => [MARK2, LMARK, MARK, MARK3, MARK4].find((m) => s.includes(m)) || null // MARK2 / LMARK 先判(前缀互不包含,顺序只为读着清楚)
   return (call) => {
     const msgs = call.messages || []
     const sys = text(msgs.find((m) => m.role === 'system')?.content)
@@ -163,13 +165,14 @@ function makeLlm(world) {
       if (!since.includes('call_k9_lremember') && call.tools.includes('remember')) return tool('call_k9_lremember', 'remember', { action: 'add', fact: `User code is ${LMARK}` }, '记下了。')
       return say(`已记住(${LMARK})。`)
     }
+    if (mark === MARK4) return say(`又回到这台电脑上了(${MARK4})。`) // P1-K7a 重开后的一句:不要工具
     if (!call.tools.includes('run_bash')) return say('ok')
     // 审批托盘(approval_tray):要批的调用先挂起,工具结果是「⏸ 等批准」—— 模型先收尾;批完引擎以 <approval_update> 回灌真结果再续一轮
     if (last.role === 'tool' && /^\s*⏸/.test(text(last.content))) return say('命令在等你批准。')
     if (mark === MARK2 && !since.includes('call_k9_remember') && call.tools.includes('remember')) {
       return tool('call_k9_remember', 'remember', { action: 'add', fact: `User code is ${MARK2}` }, '先记一下。')
     }
-    const bashId = mark === MARK ? 'call_k9_bash' : 'call_k9_bash2'
+    const bashId = mark === MARK ? 'call_k9_bash' : mark === MARK3 ? 'call_k7_bash3' : 'call_k9_bash2'
     if (mark && !since.includes(bashId)) {
       // 第一轮:把附件转成大写写到它旁边。附件在引擎会话沙箱目录里,host 模式工具的 cwd 是工作区 —— 模型只能从本轮用户消息
       // 第一行(引擎按桌面 fileChip 格式拼的附件绝对路径,P1 · M1A)知道它在哪;台架扮的模型**只从那里拿路径**。
@@ -182,10 +185,10 @@ function makeLlm(world) {
         cmd = p
           ? `f=${shq(p)} && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
           : `f="$(find '${world.sandboxDir}' -type f -name '${ATTACH_NAME}' | head -1)" && tr 'a-z' 'A-Z' < "$f" > "$(dirname "$f")/${RESULT_NAME}" && wc -c < "$(dirname "$f")/${RESULT_NAME}"`
-      } else cmd = `ls '${world.sandboxDir}' && echo ${MARK2}`
+      } else cmd = mark === MARK3 ? `echo ${MARK3} && ls '${world.sandboxDir}'` : `ls '${world.sandboxDir}' && echo ${MARK2}`
       return tool(bashId, 'run_bash', { command: cmd })
     }
-    if (mark) return say(mark === MARK ? `已处理附件,产物 ${RESULT_NAME}(${MARK})。` : `已核对产物(${MARK2})。`)
+    if (mark) return say(mark === MARK ? `已处理附件,产物 ${RESULT_NAME}(${MARK})。` : mark === MARK3 ? `在那台电脑上跑完了(${MARK3})。` : `已核对产物(${MARK2})。`)
     return say('ok')
   }
 }
@@ -435,6 +438,133 @@ async function main() {
       JSON.stringify({ button: hasBtn, file: d?.name ?? null, got: downloaded === null ? null : String(downloaded).slice(0, 60), req: dlReq && { unit: dlReq.unit === world.DESKTOP_UNIT ? '那台电脑' : dlReq.unit, caller: dlReq.callerUnit === phoneUnit ? '手机' : dlReq.callerUnit, path: dlReq.path.slice(0, 90) } }))
     const listReq = world.hub.ledger.proxy.find((x) => /^\/engine\/agent\/workspace\/list\?/.test(x.path) && x.path.includes(sid))
     check('列表请求经中继发往那台电脑、带手机的票(/engine/agent/workspace/list?sessionId=本会话)', !!listReq && listReq.unit === world.DESKTOP_UNIT && listReq.callerUnit === phoneUnit, JSON.stringify(listReq && { unit: listReq.unit === world.DESKTOP_UNIT, caller: listReq.callerUnit === phoneUnit }))
+    await closeOverlays(page)
+
+    // ── P1-K7a:侧栏「我的电脑」分组 × 打开 × 发送 × 审批 × 换焦点后重开 ──
+    //   这条会话(C 步在那台电脑上建的)出现在左抽屉的「K9 Studio Mac」分组里(不在本端分组);「在哪运行」药丸 → K8 弹层 → 切回云端
+    //   (焦点 = 新会话建在哪);再从分组里点开它、发一句要批的 → run 与审批都打那台电脑(hub 上带手机的票)、云端一条都收不到;
+    //   离开(回空白新对话)再重开、再发一句 → 仍是那台。caps 是真 K7a 上报器报的(remote-world:onChannelReady)。
+    // F 步开着右侧栏「工作区」:先关掉(推开式抽屉的遮罩会拦住左抽屉 / 输入区)
+    const closeRight = async () => {
+      for (let i = 0; i < 4 && (await page.locator('.mb-drawer--right.open').count()); i++) { await tap(page.locator('.mb-drawer--right.open [aria-label="close"]').first()).catch(() => {}); await sleep(600) }
+    }
+    await closeRight()
+    const openLeft = async () => {
+      await closeRight()
+      // 顶部胶囊在聊天下滑后会自动收起(useChromeAutoHide),空白新对话里没有可滚的东西召回它:先上滑召回,召不回就直接点那枚钮
+      // (DOM click,胶囊移出屏幕时手势点不到;这里测的是 K7a 的分组,不是胶囊的收放)。
+      // 点一次就等它真的开(开关是 toggle:负载高时 700ms 内还没开就再点 = 把刚要开的又关上,来回振荡)
+      for (let i = 0; i < 3 && !(await page.locator('.mb-drawer--left.open').count()); i++) {
+        if (await page.locator('.mb-shell[data-chrome="off"]').count()) {
+          await page.mouse.move(195, 420); await page.mouse.wheel(0, -800); await sleep(500)
+        }
+        if (await page.locator('.mb-shell[data-chrome="off"]').count()) await page.evaluate(() => document.querySelector('.mb-topbar [aria-label="left panel"]')?.click())
+        else await tap(page.locator('.mb-topbar [aria-label="left panel"]')).catch(() => {})
+        await page.waitForSelector('.mb-drawer--left.open', { timeout: 6000 }).catch(() => {})
+      }
+      await sleep(400) // 推开动画
+    }
+    const deviceSel = `[data-device-section="${world.DESKTOP_UNIT}"]`
+    const rowSel = `${deviceSel} [data-remote-session="${sid}"]`
+    const hubRow = world.hub.units.get(world.DESKTOP_UNIT)
+    check('K7a caps:执行设备的真上报器在通道 ready 之后报了 engine=ready(名册 capsLive)', hubRow?.caps?.engine === 'ready' && world.hub.online(world.DESKTOP_UNIT), JSON.stringify({ caps: hubRow?.caps ?? null, capsAt: hubRow?.capsAt ?? null }))
+    await openLeft()
+    await page.waitForSelector(rowSel, { timeout: 20_000 }).catch(() => {})
+    const side = await page.evaluate(({ dsel, sid: s }) => {
+      const sec = document.querySelector(dsel)
+      return {
+        status: sec?.getAttribute('data-device-status') ?? null,
+        caption: sec?.querySelector('.t2d-status')?.textContent ?? null,
+        name: sec?.querySelector('.t2d-name')?.textContent ?? null,
+        listed: !!sec?.querySelector(`[data-remote-session="${s}"]`),
+        inHome: !!document.querySelector(`[data-sel-id="${s}"]`), // 本端分组的行才带 data-sel-id
+        sections: [...document.querySelectorAll('[data-device-section]')].map((e) => e.getAttribute('data-device-section')),
+      }
+    }, { dsel: deviceSel, sid })
+    check('K7a:侧栏「我的电脑」分组列出那台电脑上的这条会话(状态 = 在线),本端分组里没有它', side.status === 'ready' && side.listed && !side.inHome && side.name === DESKTOP_NAME, JSON.stringify(side))
+    check('K7a:分组只有电脑(这台手机自己不成一组)', side.sections.length === 1 && side.sections[0] === world.DESKTOP_UNIT, JSON.stringify(side.sections))
+    const listReqs = world.hub.ledger.proxy.filter((x) => x.unit === world.DESKTOP_UNIT && /^\/engine\/agent\/sessions\?archived=false&limit=50/.test(x.path))
+    check('K7a:分组的会话列表经中继拉那台电脑(limit 50,带手机的票)', listReqs.length > 0 && listReqs.every((x) => x.callerUnit === phoneUnit), `${listReqs.length} 条;${JSON.stringify(listReqs.map((x) => ({ caller: x.callerUnit === phoneUnit ? '手机' : x.callerUnit, hdr: !!x.callerHeader, rej: x.rejected || null, at: x.at ?? null })))}`)
+    await page.addStyleTag({ content: '.ach-toast,.ntf-wrap{display:none!important}' })
+    await page.locator(deviceSel).first().scrollIntoViewIfNeeded().catch(() => {})
+    await sleep(300)
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-k7a-sidebar-${SHOT_TAG}.png`) })
+    await closeOverlays(page)
+
+    // 回空白新对话:药丸 = 那台电脑(焦点);点它 → K8 弹层 → 选云端(亲手选的,setDraftLocation)
+    await page.evaluate(() => window.__forsionStore.getState().setActiveId(null))
+    await page.waitForSelector('[data-run-location-picker]', { timeout: 10_000 }).catch(() => {})
+    const pill0 = await page.evaluate(() => { const p = document.querySelector('[data-run-location-picker]'); return p ? { loc: p.getAttribute('data-run-location'), text: (p.textContent || '').trim() } : null })
+    check('K7a:空白新对话上有「在哪运行」药丸,显示新会话会建在那台电脑上', !!pill0 && pill0.loc === `unit:${world.DESKTOP_UNIT}` && pill0.text.includes(DESKTOP_NAME), JSON.stringify(pill0))
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-k7a-pill-mac-${SHOT_TAG}.png`) })
+    await tap(page.locator('[data-run-location-picker] button').first()).catch(() => {})
+    await page.waitForSelector('[data-units-sheet] [data-run-row="home"]', { timeout: 10_000 }).catch(() => {})
+    const sheetFromPill = await page.locator('[data-units-sheet]').count()
+    await tap(page.locator('[data-units-sheet] [data-run-row="home"]')).catch(() => {})
+    await page.waitForFunction(() => window.__forsionEngineTargets?.focusRef().kind === 'home', null, { timeout: 15_000 }).catch(() => {})
+    await closeOverlays(page)
+    await page.waitForFunction(() => document.querySelector('[data-run-location-picker]')?.getAttribute('data-run-location') === 'home', null, { timeout: 10_000 }).catch(() => {})
+    const afterPick = await page.evaluate(() => ({ focus: window.__forsionEngineTargets.focusRef(), pill: document.querySelector('[data-run-location-picker]')?.getAttribute('data-run-location') ?? null }))
+    check('K7a:药丸点开的是 K8「在哪运行」弹层;选云端后焦点 = 本端,药丸跟着变', sheetFromPill > 0 && afterPick.focus.kind === 'home' && afterPick.pill === 'home', JSON.stringify({ sheetFromPill, ...afterPick }))
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-k7a-pill-cloud-${SHOT_TAG}.png`) })
+
+    // 焦点在云端:从分组里点开那条会话 → 注入 + 绑定(inject-on-open)→ 发一句要批的
+    const reopen = async () => {
+      await openLeft()
+      await page.waitForSelector(rowSel, { timeout: 20_000 }).catch(() => {})
+      const before = await page.evaluate(({ dsel, rsel }) => ({ leftOpen: !!document.querySelector('.mb-drawer--left.open'), row: !!document.querySelector(rsel), status: document.querySelector(dsel)?.getAttribute('data-device-status') ?? null }), { dsel: deviceSel, rsel: rowSel })
+      if (!before.leftOpen && process.env.REMOTECHAIN_DEBUG_SHOTS) await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-k7a-debug-${Date.now()}-${SHOT_TAG}.png`) })
+      // 行在抽屉的滚动区下方:先滚进视口再点(抽屉推开动画 / 刷新重排时一次点空 → 再点一次)
+      for (let i = 0; i < 2; i++) {
+        await page.locator(rowSel).first().scrollIntoViewIfNeeded().catch(() => {})
+        await tap(page.locator(rowSel).first()).catch(() => {})
+        const ok = await page.waitForFunction((s) => window.__forsionStore.getState().activeId === s, sid, { timeout: 8_000 }).then(() => true).catch(() => false)
+        if (ok) break
+      }
+      await closeOverlays(page)
+      return page.evaluate(({ s, before: b }) => {
+        const st = window.__forsionStore.getState()
+        const rec = st.sessions.find((x) => x.id === s)
+        return { active: st.activeId === s, location: rec?.location ?? null, bound: window.__forsionEngineTargets.locationOf(s), focus: window.__forsionEngineTargets.focusRef(), before: b }
+      }, { s: sid, before })
+    }
+    const r1 = await reopen()
+    check('K7a:焦点在云端,从分组点开那台电脑上的会话 → 打开、打标 unit、绑在那台(焦点不动)', r1.active && r1.location?.kind === 'unit' && r1.location.unitId === world.DESKTOP_UNIT && r1.bound?.unitId === world.DESKTOP_UNIT && r1.focus.kind === 'home', JSON.stringify(r1))
+    const homeRunsAt = home.seen.runs.length
+    const ledgerAtK7 = world.hub.ledger.proxy.length
+    await compose(page, `在那台电脑上再跑一下 ${MARK3}`)
+    await page.keyboard.press('Enter')
+    await page.waitForSelector('.approval-card', { timeout: 30_000 }).catch(() => {})
+    const card3 = await page.evaluate(() => { const c = document.querySelector('.approval-card'); return c ? { readonly: !!c.querySelector('[data-remote-readonly]'), preview: (c.querySelector('.approval-preview')?.textContent || '').slice(0, 80) } : null })
+    check('K7a:重开后发的这句在那台电脑上起 run,审批卡到手机(远端只读)', !!card3 && card3.readonly && card3.preview.includes(MARK3), JSON.stringify(card3))
+    await sleep(600)
+    const approve3 = page.locator('.approval-card .approval-actions .btn.primary').first()
+    if (await approve3.count()) await tap(approve3)
+    await page.waitForFunction((m) => { const st = window.__forsionStore.getState(); return (st.messagesBySession[st.activeId] || []).some((x) => x.role === 'assistant' && x.status === 'done' && x.content.includes(m)) }, MARK3, { timeout: 45_000 }).catch(() => {})
+    const k7Reqs = world.hub.ledger.proxy.slice(ledgerAtK7)
+    const runPost3 = k7Reqs.find((x) => x.method === 'POST' && /^\/engine\/agent\/runs(\?|$)/.test(x.path))
+    const apvPost3 = k7Reqs.find((x) => x.method === 'POST' && /^\/engine\/agent\/runs\/[^/]+\/approvals\//.test(x.path))
+    const done3 = await page.evaluate((m) => { const st = window.__forsionStore.getState(); return (st.messagesBySession[st.activeId] || []).some((x) => x.role === 'assistant' && x.status === 'done' && x.content.includes(m)) }, MARK3)
+    const run3 = runsOf(sid).at(-1) || null
+    const res3 = run3 ? eventsOf(run3.id, ['approval_result']).at(-1)?.p ?? null : null
+    check('K7a:run 与批准都经 hub 打那台电脑(带手机的票),云端引擎一条 run 都没收到;跑完结果回到手机',
+      done3 && !!runPost3 && runPost3.unit === world.DESKTOP_UNIT && runPost3.callerUnit === phoneUnit && !!apvPost3 && apvPost3.unit === world.DESKTOP_UNIT && res3?.by?.via === 'tunnel' && home.seen.runs.length === homeRunsAt,
+      JSON.stringify({ done: done3, run: runPost3 && { unit: runPost3.unit === world.DESKTOP_UNIT, caller: runPost3.callerUnit === phoneUnit }, approve: apvPost3 && apvPost3.unit === world.DESKTOP_UNIT, by: res3?.by ?? null, homeRuns: home.seen.runs.length - homeRunsAt }))
+    await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-k7a-remote-done-${SHOT_TAG}.png`) })
+
+    // 离开(回空白新对话,焦点仍在云端)→ 再从分组重开 → 再发一句 → 仍是那台电脑
+    await page.evaluate(() => window.__forsionStore.getState().setActiveId(null))
+    await sleep(300)
+    const r2 = await reopen()
+    const ledgerAtK7b = world.hub.ledger.proxy.length
+    const homeRunsAt2 = home.seen.runs.length
+    await compose(page, `回来了 ${MARK4}`)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction((m) => { const st = window.__forsionStore.getState(); return (st.messagesBySession[st.activeId] || []).some((x) => x.role === 'assistant' && x.status === 'done' && x.content.includes(m)) }, MARK4, { timeout: 45_000 }).catch(() => {})
+    const runPost4 = world.hub.ledger.proxy.slice(ledgerAtK7b).find((x) => x.method === 'POST' && /^\/engine\/agent\/runs(\?|$)/.test(x.path))
+    const done4 = await page.evaluate((m) => { const st = window.__forsionStore.getState(); return (st.messagesBySession[st.activeId] || []).some((x) => x.role === 'assistant' && x.status === 'done' && x.content.includes(m)) }, MARK4)
+    check('K7a:离开再从分组重开(焦点仍在云端)→ 再发一句仍打那台电脑、结果回来;云端没收到', r2.active && r2.bound?.unitId === world.DESKTOP_UNIT && done4 && !!runPost4 && runPost4.unit === world.DESKTOP_UNIT && runPost4.callerUnit === phoneUnit && home.seen.runs.length === homeRunsAt2,
+      JSON.stringify({ r2, done: done4, run: runPost4 && { unit: runPost4.unit === world.DESKTOP_UNIT, caller: runPost4.callerUnit === phoneUnit }, homeRuns: home.seen.runs.length - homeRunsAt2 }))
     await closeOverlays(page)
 
     // ── G1:发往 unit 目标的中继语法面请求全部带有效调用方票 ──
