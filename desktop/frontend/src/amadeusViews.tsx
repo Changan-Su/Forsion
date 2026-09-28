@@ -38,6 +38,7 @@ import type { TrashEntry } from '@amadeus-shared/ipc'
 import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { openTutorial } from './amadeusTutorial'
+import { canUploadToNote } from './amadeusNoteBar'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
@@ -2574,7 +2575,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           >
             {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
           </button>
-          {activePage && (
+          {canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') && (
             <button
               className="amx-mode-btn"
               title={t('amxv.uploadToPage')}
@@ -2720,7 +2721,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
-          ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
           ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
