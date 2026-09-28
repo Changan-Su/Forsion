@@ -1,7 +1,9 @@
 /**
  * P1 · K2 §3.5:远程活动 / 急停 / 解锁四条路由。真 express + 真路由 + 真 agentLoop(内存 SQLite,模型挂住直到被中止)+ 真后台进程。
- *   S5  急停中止远程 + 通道 + 无人值守 run(终态事件带 reason:'remote_estop')、杀它们的后台进程、撤回远端批准的 Muse 条目;本机交互 run 不动;
- *       恒上闩 → 之后新的远程 run 在 dispatchRun 被拦(remote_locked)。
+ *   S5  急停中止远程 + 通道 + 无人值守 run(终态事件带 reason:'remote_estop')、杀它们的后台进程、撤回远端批准的 Muse 条目
+ *       (还没跑的 + 带着它的周期被中止的);本机交互 run 不动;恒上闩 → 之后新的远程 run 在 dispatchRun 被拦(remote_locked)。
+ *       排在本机 run 后面的非本机 run(sessionQueue,不在活动表)同样终态化,解锁后永不再跑(独立评审 P1;负对照:
+ *       去掉 abortUnregisteredNonLocalRuns → aborted: [] 红)。
  *   S2  解锁:锁文件 ENOENT / 仍 locked / 坏 JSON → 409 且闩不动(只凭本机令牌清不掉);主进程写好 lock:null 之后才清。
  *   S11 带 x-forsion-remote → 403(unitWeb 允许清单之外的第二道);hostExec=false(云端 worker)→ 404。
  *   SSE 连上即一帧全量 snapshot,之后每次变更再发全量。
@@ -29,6 +31,7 @@ import { REMOTE_LOCK_FILE_ENV, __resetRemoteLatchForTests, remoteLocked } from '
 import { startBackgroundProcess, disposeAllProcesses, type BackgroundProcess } from '../src/tools/processRegistry.js';
 import { recordRemoteCreated, listRemoteCreated } from '../src/services/remoteCreated.js';
 import { ensureEntry, validateEntryInput, loadSchedule, entriesOf } from '../src/services/agentSchedule.js';
+import { markMuseEntriesFired } from '../src/services/muse.js';
 
 const USER = 'u1';
 const AUTH = { Authorization: 'Bearer x' };
@@ -193,10 +196,18 @@ describe('急停 + 解锁(S5 / S2)', () => {
     const e = await ensureEntry('muse', v.value, (x) => x.description === 'todo T1');
     if (!e.ok) throw new Error(e.error);
     await recordRemoteCreated({ kind: 'muse-todo', slug: 'muse', entryId: e.entry.id, todoId: 'T1', via: 'tunnel' });
+    // 另一条远端批准 TODO:已交给在飞的 Muse 周期(lastRun 已写)→ 周期被急停中止,同样撤回
+    await query(`INSERT INTO muse_todos (id, user_id, title, status) VALUES ('T2', ?, '回邮件', 'injected')`, [USER]);
+    const v2 = validateEntryInput({ name: '回邮件', date: '2026-09-28T10:00', auto: true, todo: true, prompt: 'do it', description: 'todo T2' });
+    if (!v2.ok) throw new Error(v2.error);
+    const e2 = await ensureEntry('muse', v2.value, (x) => x.description === 'todo T2');
+    if (!e2.ok) throw new Error(e2.error);
+    await recordRemoteCreated({ kind: 'muse-todo', slug: 'muse', entryId: e2.entry.id, todoId: 'T2', via: 'tunnel' });
+    await markMuseEntriesFired(muse.runId, [e2.entry]);
 
     const r = await post('/agent/remote/estop', { source: 'hotkey' });
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ ok: true, killedProcesses: 1, revertedEntries: 1, locked: true });
+    expect(r.body).toMatchObject({ ok: true, killedProcesses: 1, revertedEntries: 2, locked: true });
     expect(r.body.aborted.map((x: any) => [x.runId, x.category]).sort()).toEqual([[remote.runId, 'remote'], [channel.runId, 'channel'], [muse.runId, 'unattended']].sort());
     for (const x of [remote, channel, muse]) {
       await settled(x.runId);
@@ -208,6 +219,8 @@ describe('急停 + 解锁(S5 / S2)', () => {
     expect(alive(lp.pid)).toBe(true);
     expect(entriesOf((await loadSchedule('muse'))!).find((x) => x.id === e.entry.id)).toBeUndefined();
     expect((await query<any[]>(`SELECT status FROM muse_todos WHERE id = 'T1'`))[0].status).toBe('pending');
+    expect((await query<any[]>(`SELECT status FROM muse_todos WHERE id = 'T2'`))[0].status).toBe('pending');
+    expect(entriesOf((await loadSchedule('muse'))!).find((x) => x.id === e2.entry.id)).toBeUndefined();
     expect(await listRemoteCreated()).toEqual([]);
 
     // 恒上闩:锁文件还没写(主进程写盘失败 / 还没到),新的远程 run 照样被拦
@@ -229,6 +242,36 @@ describe('急停 + 解锁(S5 / S2)', () => {
 
     abortRun(local.runId);
     await settled(local.runId);
+  }, 30_000);
+
+  it('排在本机 run 后面的远程 / 通道 run(还在 sessionQueue、不在活动表)也被急停终态化:reason remote_estop,解锁后永不再跑;排队的本机 run 不动', async () => {
+    const local = await start('SL', {});
+    await vi.waitFor(async () => expect(await statusOf(local.runId)).toBe('running'), { timeout: 5000 });
+    const qRemote = await start('SL', REMOTE);
+    const qChannel = await start('SL', { source: { channel: 'wechat', accountId: 'a', openid: 'p', messageId: 'm' } });
+    const qLocal = await start('SL', {});
+    for (const x of [qRemote, qChannel, qLocal]) expect(await statusOf(x.runId)).toBe('queued');
+
+    const r = await post('/agent/remote/estop', { source: 'tray' });
+    expect(r.status).toBe(200);
+    expect(r.body.aborted.map((x: any) => [x.runId, x.sessionId, x.category]).sort()).toEqual([[qRemote.runId, 'SL', 'remote'], [qChannel.runId, 'SL', 'channel']].sort());
+    for (const x of [qRemote, qChannel]) {
+      await settled(x.runId);
+      expect(await statusOf(x.runId)).toBe('aborted');
+      expect(x.errors.at(-1)).toMatchObject({ aborted: true, reason: 'remote_estop' });
+    }
+    expect(await statusOf(local.runId)).toBe('running');
+    expect(await statusOf(qLocal.runId)).toBe('queued');
+
+    // 先解锁、再让本机 run 结束:排队的本机 run 照常起,急停掉的远程 / 通道 run 永远不起
+    writeFileSync(lockFile, JSON.stringify({ v: 1, lock: null, hotkey: '' }));
+    expect((await post('/agent/remote/unlock')).body).toEqual({ ok: true, locked: false });
+    abortRun(local.runId);
+    await settled(local.runId);
+    await vi.waitFor(async () => expect(await statusOf(qLocal.runId)).toBe('running'), { timeout: 5000 });
+    for (const x of [qRemote, qChannel]) expect(await statusOf(x.runId)).toBe('aborted');
+    abortRun(qLocal.runId);
+    await settled(qLocal.runId);
   }, 30_000);
 
   it('急停幂等:没有在飞 run 也成功并上闩;source 非法按 settings', async () => {

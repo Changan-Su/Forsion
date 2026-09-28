@@ -51,6 +51,7 @@ import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { launchAutomationTriggers, launchDueSchedules, advanceSelfCursors } from './automation.js';
 import { drainAutomation } from './automationDrain.js';
 import { remoteLocked } from './remoteLock.js'; // P1-K2
+import { noteRemoteEntriesCarried } from './remoteCreated.js'; // P1-K2
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -642,7 +643,7 @@ export function buildCycleMessages(
   return { message, ephemeralHint: ephemeralHint.replace(/^\n+/, '') };
 }
 
-async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<void> {
+async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<string> {
   const userId = museUserId();
   const sessionId = await ensureMuseSession(userId, cfg.modelId);
   await ensureMuseDirs().catch(() => {});
@@ -688,6 +689,17 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
   lastRunning = true;
   pendingJournal = { runId, sessionId, trigger, mode: cfg.mode, startedAt: lastCycleAt };
   enqueueRun(sessionId, runId);
+  return runId;
+}
+
+/**
+ * 周期起跑之后写回到期条目的 lastRun。**先**在远端批准条目的台账里记下 carrier(P1-K2):lastRun 在起跑时就写了、不代表做完,
+ * 急停中止了这个周期时要按 carrier 撤回(独立评审 P2);顺序反了会有「lastRun 已写、carrier 还没记」的窗口,急停落在里面条目就丢。
+ */
+export async function markMuseEntriesFired(runId: string, due: ScheduleEntry[]): Promise<void> {
+  if (!due.length) return;
+  await noteRemoteEntriesCarried(MUSE_AGENT_SLUG, due.map((e) => e.id), runId).catch((err: any) => log(`远端批准条目记 carrier 失败:${err?.message || err}`));
+  for (const e of due) await markEntryFired(MUSE_AGENT_SLUG, e.id).catch((err: any) => log(`日程 ${e.id} 写回 lastRun 失败:${err?.message || err}`));
 }
 
 function rollWindow(cfg: MuseConfig): void {
@@ -835,10 +847,10 @@ async function tick(): Promise<void> {
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
-    await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
+    const cycleRunId = await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
     if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
-    for (const e of dueMuse) await markEntryFired(MUSE_AGENT_SLUG, e.id).catch((err: any) => log(`日程 ${e.id} 写回 lastRun 失败:${err?.message || err}`));
+    await markMuseEntriesFired(cycleRunId, dueMuse);
   } catch (e: any) {
     lastError = e?.message || String(e);
     log(`tick 失败:${lastError}`);

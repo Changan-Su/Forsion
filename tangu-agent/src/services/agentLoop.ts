@@ -52,7 +52,7 @@ import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
-import { registerRun, runCategory, unregisterRun } from './remoteActivity.js'; // P1-K2
+import { registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -537,6 +537,37 @@ export function abortRun(runId: string, opts?: { reason?: string }): void {
   }
   const task = terminalizeQueuedAbort(runId).finally(() => { runTasks.delete(runId); abortReasons.delete(runId); });
   runTasks.set(runId, task);
+}
+
+/**
+ * P1-K2 急停的补集:活动登记表只列 dispatchRun 已登记的 run。排在同会话本机 run 后面的(sessionQueue),以及刚 startRun、
+ * dispatchRun 还没读到 input 的,都不在里面 —— 只靠扼流点的话,用户先解锁、它们就会在急停**之后**照跑(独立评审 P1)。
+ * 这里按 dispatchRun 同口径读 input 现分类,非本机的一律 abortRun(排队中的经 terminalizeQueuedAbort 终态化,reason 记得住)。
+ * skip = 调用方已按活动快照处理过的 run。run 行没了 → 跳过(没东西可跑);读 run 抛 → 按非本机中止(与 runCategory 读不出同口径)。
+ */
+export async function abortUnregisteredNonLocalRuns(
+  skip: ReadonlySet<string>, reason: string,
+): Promise<Array<{ runId: string; sessionId: string; category: RunCategory }>> {
+  const out: Array<{ runId: string; sessionId: string; category: RunCategory }> = [];
+  for (const [runId, sid] of [...runSession.entries()]) {
+    if (skip.has(runId)) continue;
+    let category: RunCategory;
+    let sessionId = sid;
+    try {
+      const run = await getRun(runId);
+      if (!run) continue;
+      sessionId = run.session_id || sid;
+      category = runCategory(typeof run.input === 'string' ? safeParse(run.input) : run.input || {}, runId);
+    } catch {
+      category = 'remote';
+    }
+    if (category === 'local') continue;
+    // 读 run 期间它可能已经收尾(runSession 没了)→ abortRun 自己是空操作,不算进报告
+    if (!runSession.has(runId) && !abortControllers.has(runId)) continue;
+    abortRun(runId, { reason });
+    out.push({ runId, sessionId, category });
+  }
+  return out;
 }
 
 /** 排队中被取消的 run：标 aborted + 补一条终态事件，让 SSE/刷新能看到结束。 */
