@@ -120,6 +120,82 @@ async function main() {
     await page.close()
   })
 
+  // ── L-03:代码块 / 行内代码里 [[ 与 @ 恒字面,不弹面板、不劫持 Enter/Tab ──
+  await tryTest('L-03', async () => {
+    const PAGES3 = ['Alpha.md', 'Beta.md', 'Test plan.md']
+    const codeText = (p) => p.evaluate(() => {
+      let t = null
+      window.__upage.probe.view().state.doc.descendants((n) => { if (n.type.name === 'code_block') t = n.textContent })
+      return t
+    })
+    let page = await open(browser, '# T\n\n```bash\necho hi\n```\n\npara\n', PAGES3)
+    const c = await page.evaluate((PM) => {
+      const e = document.querySelector(PM + ' pre code') || document.querySelector(PM + ' pre')
+      const r = document.createRange()
+      r.selectNodeContents(e)
+      const rects = r.getClientRects()
+      const b = rects[rects.length - 1]
+      return { x: b.right - 1, y: b.top + b.height / 2 }
+    }, PM)
+    await page.mouse.click(c.x, c.y)
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('if [[ -f x', { delay: 20 })
+    await page.waitForTimeout(200)
+    check('L-03a 代码块里 `[[` 不弹面板', (await popupCount(page)) === 0, JSON.stringify(await items(page)))
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('x=[[ab', { delay: 20 })
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('@Test', { delay: 20 })
+    await page.waitForTimeout(200)
+    check('L-03b 代码块里 `@Test` 不弹提及面板', (await popupCount(page)) === 0, JSON.stringify(await items(page)))
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(150)
+    const code = await codeText(page)
+    check('L-03c 代码块里 Enter/Tab 照常落进代码(不被补全吞成 [[…]])',
+      typeof code === 'string' && code.startsWith('echo hi\nif [[ -f x\nx=[[ab') && code.includes('@Test\n') && !code.includes(']]'),
+      JSON.stringify(code))
+    await page.close()
+
+    page = await open(browser, '# T\n\nuse `x` here\n', PAGES3)
+    const ic = await page.evaluate((PM) => {
+      const e = document.querySelector(PM + ' code')
+      const r = document.createRange()
+      r.selectNodeContents(e)
+      const b = r.getBoundingClientRect()
+      return { x: b.right - 1, y: b.top + b.height / 2 }
+    }, PM)
+    await page.mouse.click(ic.x, ic.y)
+    await page.waitForTimeout(100)
+    const inCodeMark = await page.evaluate(() => window.__upage.probe.view().state.selection.$head.marks().some((m) => m.type.spec.code))
+    await page.keyboard.type('[[al', { delay: 20 })
+    await page.waitForTimeout(200)
+    check('L-03d 行内代码里 `[[` 不弹面板', inCodeMark && (await popupCount(page)) === 0, `inCode=${inCodeMark} ${JSON.stringify(await items(page))}`)
+    await page.keyboard.type(' @Al', { delay: 20 })
+    await page.waitForTimeout(200)
+    check('L-03e 行内代码里 `@` 不弹提及面板', (await popupCount(page)) === 0, JSON.stringify(await items(page)))
+    await page.keyboard.press('Enter')
+    const out = await saved(page)
+    check('L-03f 行内代码原样落盘(未被改写成双链)', typeof out === 'string' && out.includes('`x[[al @Al`') && !out.includes(']]'), JSON.stringify(out))
+    await page.close()
+
+    // slash 同一根因:行内代码里 ` /h` 不弹命令菜单(对照:正文里照弹)
+    page = await open(browser, '# T\n\nuse `x` here\n', PAGES3)
+    await page.mouse.click(ic.x, ic.y)
+    await page.waitForTimeout(100)
+    await page.keyboard.type(' /h', { delay: 20 })
+    await page.waitForTimeout(200)
+    check('L-03g 行内代码里 ` /h` 不弹 slash 菜单', (await page.locator('.slash-menu').count()) === 0)
+    await page.keyboard.press('End')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('/h', { delay: 20 })
+    await page.waitForTimeout(200)
+    check('L-03g 对照:正文行首 `/h` 照弹 slash 菜单', (await page.locator('.slash-menu').count()) === 1)
+    await page.close()
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

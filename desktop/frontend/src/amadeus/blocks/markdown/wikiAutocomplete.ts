@@ -17,8 +17,21 @@ registerMessages({
  *  中文输入法下打 `[` 得先切回英文键盘 —— 不给这条,双链在中文写作里天然多两次切换。
  *  换完由既有的 wikiSuggestPlugin 照常接管(它只认半角,不必改)。 */
 export const fullWidthWikiRule = $inputRule(
-  () => new InputRule(/【【$/, (state, _match, start, end) => state.tr.insertText('[[', start, end)),
+  // inCodeMark:false —— 行内代码里的【【是字面(代码块本来就不跑输入规则),同 L-03。
+  () => new InputRule(/【【$/, (state, _match, start, end) => state.tr.insertText('[[', start, end), { inCodeMark: false }),
 )
+
+/** 触发串([[ / @ / '/')到光标这一段落在代码里:代码块,或带 code 标记(行内代码)的文字。
+ *  代码里这些字符恒字面(`if [[ -f x ]]`、Java 的 `@Test`、路径里的 `/`),弹面板还会劫持
+ *  Enter/Tab(L-03)。判的是**触发串本身**而不只是光标处的 marks:光标刚出行内代码、`[[` 却在里面也算。 */
+function inCode(state: EditorState, from: number, to: number): boolean {
+  if (state.selection.$head.parent.type.spec.code) return true
+  let hit = false
+  state.doc.nodesBetween(from, to, (n) => {
+    if (n.isInline && n.marks.some((m) => m.type.spec.code)) hit = true
+  })
+  return hit
+}
 
 export interface WikiQuery {
   /** Text typed after the opening "[[". */
@@ -52,6 +65,7 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             if (open < 0) return report(null)
             const q = before.slice(open + 2)
             if (/[\]\n]/.test(q)) return report(null) // the [[ was closed or aborted
+            if (inCode(view.state, $head.start() + open, selection.head)) return report(null)
             // ⚠️ 光标**后面**已经有配对的 `]]` = 这条双链早就写完了。这种情况下**只有用户真的在里面
             // 打字才补全,单纯移动光标不弹**:
             //  · 不加这道闸 → 「↑ 从下一行走进 [[某笔记]] 那一行」会当场弹出候选面板,而面板要吃掉
@@ -106,6 +120,7 @@ export function slashSuggestPlugin(report: (q: WikiQuery | null) => void) {
             const before = $head.parent.textBetween(0, $head.parentOffset, undefined, '￼')
             const slash = before.lastIndexOf('/')
             if (slash < 0) return report(null)
+            if (inCode(view.state, $head.start() + slash, selection.head)) return report(null) // 行内代码同理
             if (slash > 0 && !/\s/.test(before[slash - 1])) return report(null) // 词中的 '/'(TCP/IP、路径)不触发
             const q = before.slice(slash + 1)
             // 空格(含 nbsp)/换行/']' → 关菜单留字面;'￼' = 行内图片/公式 leaf 占位,命中即关
@@ -143,6 +158,7 @@ export function mentionSuggestPlugin(report: (q: WikiQuery | null) => void) {
             const before = $head.parent.textBetween(0, $head.parentOffset, undefined, '￼')
             const at = before.lastIndexOf('@')
             if (at < 0) return report(null)
+            if (inCode(view.state, $head.start() + at, selection.head)) return report(null)
             if (at > 0 && !/\s/.test(before[at - 1])) return report(null) // 邮箱等:@ 前非空白不触发
             const q = before.slice(at + 1)
             // 空格(含 nbsp)/换行/方括号/'￼' → 退出提及语义,留成字面文本(同 slash)。空格这条是
