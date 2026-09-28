@@ -9,6 +9,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { broadcastPrefs } from './uiPrefsBus'
 import { LOCALE_KEY as LS_KEY } from './types'
+import { cloudApiBaseOf } from './services/engine/cloudBase'
 
 export type Locale = 'zh' | 'en'
 
@@ -64,8 +65,8 @@ export function resolveInitialLocale(): Locale {
  * 中文)—— 这是唯一会伤到现有用户基本盘的回归,靠 IP=CN 兜住。代价是「在华外国人 + 英文系统」
  * 会先拿到中文,切一次即持久化。要让系统语言绝对优先,把下面 `country === 'CN'` 那行删掉即可。
  *
- * ⚠️ cloudUrl 两种形态:desktop 是纯源(`https://api.forsion.net`),web/mobile 垫片给的
- * 已经含 `/api`(见 mobileShim 注释)。拼错就是 404,所以按后缀分流。
+ * 基址读 `cloudApiBase`(P1-K6 S1):web / 手机垫片直接给含 `/api` 的基址,桌面由纯源 `cloudUrl` 现算,
+ * 口径单源在 services/engine/cloudBase.ts —— 这里不再按 `/api` 后缀猜 cloudUrl 的形态。
  */
 export async function correctLocaleByRegion(): Promise<void> {
   // ⚠️ 系统中文 = 第②档定论,IP **不得**推翻它。少了这行,「中文用户出国」会在启动后一秒
@@ -77,9 +78,9 @@ export async function correctLocaleByRegion(): Promise<void> {
     if (localStorage.getItem(LS_REGION)) return // 已探测过
   } catch { return } // 无 localStorage(隐私模式)= 存不下结果,探了也白探
   let base = ''
-  try { base = String((await window.tangu?.getConfig?.())?.cloudUrl || '').replace(/\/+$/, '') } catch { /* ignore */ }
+  try { base = cloudApiBaseOf(await window.tangu?.getConfig?.()) } catch { /* ignore */ }
   if (!base) return
-  const url = /\/api$/.test(base) ? `${base}/auth/region` : `${base}/api/auth/region`
+  const url = `${base}/auth/region`
   try {
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), 3000)

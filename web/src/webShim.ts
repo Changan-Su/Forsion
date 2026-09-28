@@ -106,8 +106,11 @@ export async function installWebShim(): Promise<boolean> {
 
   // 2) API 基址(同 AI Studio 约定):VITE_API_URL 覆盖,否则同源 location.origin+/api
   //    —— dev 经 vite proxy、prod 经本 app 自己的 nginx 把 /api 代理到 Forsion server(→ tangu worker)。
-  const backendUrl = String(import.meta.env.VITE_API_URL || (location.origin + '/api')).replace(/\/$/, '')
-  syncCloudAccountCache(backendUrl, token)
+  // P1-K6 S1:两个基址分家。cloudApiBase = Forsion 云端 API(账号 / 额度 / 云桥);backendUrl = 本端引擎
+  // (web 的 home 引擎就是云网关,今天同值)。云端读者一律用 cloudApiBase。
+  const cloudApiBase = getApiBase()
+  const backendUrl = cloudApiBase
+  syncCloudAccountCache(cloudApiBase, token)
 
   const origFetch = window.fetch.bind(window)
 
@@ -149,7 +152,7 @@ export async function installWebShim(): Promise<boolean> {
     cloudWeb: true,
     getConfig: async () => ({
       mode: 'external', backendUrl, token: readToken(), modelId: '',
-      cloudUrl: backendUrl, sandbox: 'none',
+      cloudUrl: cloudApiBase, cloudApiBase, sandbox: 'none',
     }),
     authStatus,
     forsionLogin: async () => {
@@ -189,10 +192,10 @@ export async function installWebShim(): Promise<boolean> {
 
   // The same transport guard serves regular Web and Unit visitors, using the
   // account that each host already selected.
-  const api = new URL(backendUrl)
+  const api = new URL(cloudApiBase)
   const apiPath = api.pathname.replace(/\/+$/, '')
   window.fetch = createAccountFetch({
-    apiBase: backendUrl, getToken: account.getToken, fallback: origFetch,
+    apiBase: cloudApiBase, getToken: account.getToken, fallback: origFetch,
     request: async (path, init) => {
       const token = account.getToken()
       const generation = account.generation
@@ -207,7 +210,7 @@ export async function installWebShim(): Promise<boolean> {
   // A different tab can replace the shared token without calling this window's logout hook.
   window.addEventListener('storage', (event) => {
     if (event.key !== TOKEN_KEY || event.oldValue === event.newValue) return
-    syncCloudAccountCache(backendUrl, readToken())
+    syncCloudAccountCache(cloudApiBase, readToken())
     location.reload()
   })
 

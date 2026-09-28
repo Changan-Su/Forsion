@@ -11,8 +11,7 @@
     "desktop/frontend/src/services/ttsService.ts": 3,
     "desktop/frontend/src/stores/appStore.ts": 5,
     "desktop/frontend/src/views/automation/AutomationRunsView.tsx": 1,
-    "desktop/frontend/src/views/chat2/btwStore.ts": 1,
-    "mobile/src/main.tsx": 3
+    "desktop/frontend/src/views/chat2/btwStore.ts": 1
   },
   "R2": {
     "desktop/frontend/src/services/ttsService.ts": 3,

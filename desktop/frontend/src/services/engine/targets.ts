@@ -9,16 +9,19 @@
  *   - knownTargets() = [home];engineFetch 是给 K3 等消费方的通用出口。
  *   - 会话绑定表只在内存(S4 起持久化);bindSession 先到先得、永不改绑(R-16),withLocation 是往
  *     appStore.sessions 插记录时唯一的打标入口(R-15)。
- * S1 起:cloudApiBase()(云端 API 基址,含 /api)与引擎基址分家,见 cloudBase.ts。
+ * S1:cloudApiBase()(云端 API 基址,含 /api)与引擎基址分家 —— 凡是打 Forsion 云端 API 的读者(登录态、额度、
+ *     名册、Amadeus 云桥、收件箱广播、区域探测)一律读它,不再拿 backendUrl 当云端用。形态见 cloudBase.ts。
  */
 import type { SessionRecord, StoredDesktopConfig, TanguDesktopConfig } from '../../types'
 import { authFetch } from '../http'
 import { currentPlatform } from '../platform'
+import { cloudApiBaseOf } from './cloudBase'
 import { HOME_REF, isEngineTarget, mintTarget, targetKeyOf, type EngineTarget, type TargetKey, type TargetRef, type TargetVia } from './target'
 
 export type { EngineTarget, TargetKey, TargetRef, TargetVia } from './target'
 export { HOME_REF, isEngineTarget, sameRef, targetKeyOf } from './target'
 export { isHomeSession } from '../../types'
+export { cloudApiBaseOf } from './cloudBase'
 
 /**
  * @deprecated 两阶段迁移的 Phase A 兼容口(K6-S0):服务函数暂时仍收整份 cfg。S3 codemod 把调用点改成
@@ -38,6 +41,11 @@ export interface EngineHost {
 let host: EngineHost | null = null
 export function installEngineHost(h: EngineHost): void {
   host = h
+}
+
+/** 云端 API 基址(含 /api、无尾斜杠;S1)。宿主配置还没到(启动极早期)或未配置 → ''。 */
+export function cloudApiBase(): string {
+  return cloudApiBaseOf(host?.desktopConfig())
 }
 
 /** home 目标的来路。设备页的 home 是被投射过来的那台引擎;其余按端判定单源(services/platform.ts)。 */

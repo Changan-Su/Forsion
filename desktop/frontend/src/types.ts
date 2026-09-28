@@ -39,6 +39,10 @@ export interface TanguDesktopConfig {
   visionModelId?: string
   /** 图像识别何时介入(落 config.json models.visionMode;缺省 auto)。 */
   visionMode?: VisionMode
+  // P1-K6
+  /** Forsion 云端 API 基址(含 `/api`,无尾斜杠)。web / 手机 / 设备页垫片直接给;桌面主进程不给,由
+   *  services/engine/cloudBase.ts 从纯源 `cloudUrl` 现算。读它一律经 `cloudApiBase()` / `cloudApiBaseOf()`。 */
+  cloudApiBase?: string
 }
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */

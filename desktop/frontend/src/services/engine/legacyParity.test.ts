@@ -10,7 +10,7 @@ vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revok
 
 const api = await import('../backendService')
 const run = await import('../agentRunService')
-const { asTarget } = await import('./targets')
+const { asTarget, installEngineHost } = await import('./targets')
 
 const cfg = { backendUrl: 'http://127.0.0.1:4100', token: 'engine-token', modelId: 'fallback-model' }
 const H = { 'Content-Type': 'application/json', Authorization: 'Bearer engine-token' }
@@ -120,17 +120,32 @@ describe('agentRunService 13 个函数', () => {
   })
 })
 
-describe('移动端本地收件箱 pull(改走目标的鉴权头)', () => {
-  it('头与改造前一致;空 token 不外呼', async () => {
-    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ broadcasts: [] }), { status: 200 }))
+describe('移动端本地收件箱 pull(S1:广播是云端 API,基址读 cloudApiBase;凭据走目标鉴权头)', () => {
+  const fetchSpy = vi.fn(async (..._a: unknown[]) => new Response(JSON.stringify({ broadcasts: [] }), { status: 200 }))
+  beforeEach(() => {
+    fetchSpy.mockClear()
     vi.stubGlobal('fetch', fetchSpy)
     vi.stubGlobal('window', { tangu: { mobile: true, cloudWeb: true } })
-    const r = await api.pullInbox({ backendUrl: 'https://api.forsion.test/api/', token: 'forsion-token', modelId: '' })
+  })
+
+  it('今天(引擎 = 云网关):URL 与头都与改造前逐字一致', async () => {
+    installEngineHost({ cfg: () => cfg, desktopConfig: () => ({ cloudUrl: 'https://api.forsion.test/api', cloudApiBase: 'https://api.forsion.test/api' }) })
+    const r = await api.pullInbox({ backendUrl: 'https://api.forsion.test/api', token: 'forsion-token', modelId: '' })
     expect(r).toEqual({ pulled: true, added: 0 })
     expect(fetchSpy.mock.calls[0]).toEqual(['https://api.forsion.test/api/brain/inbox/broadcasts', { headers: { Authorization: 'Bearer forsion-token' } }])
+  })
 
-    fetchSpy.mockClear()
+  it('引擎切到「我的电脑」后广播仍打云端(不跟着 backendUrl 进隧道)', async () => {
+    installEngineHost({ cfg: () => cfg, desktopConfig: () => ({ cloudApiBase: 'https://api.forsion.test/api' }) })
+    await api.pullInbox({ backendUrl: 'https://api.forsion.test/api/units/u1/proxy/engine', token: 'forsion-token', modelId: '' })
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://api.forsion.test/api/brain/inbox/broadcasts')
+  })
+
+  it('空 token / 云端基址未就绪 → 不外呼', async () => {
+    installEngineHost({ cfg: () => cfg, desktopConfig: () => ({ cloudApiBase: 'https://api.forsion.test/api' }) })
     expect(await api.pullInbox({ backendUrl: 'https://api.forsion.test/api', token: '', modelId: '' })).toEqual({ pulled: false, added: 0, detail: 'no backend/token' })
+    installEngineHost({ cfg: () => cfg, desktopConfig: () => null })
+    expect(await api.pullInbox({ backendUrl: 'https://api.forsion.test/api', token: 'forsion-token', modelId: '' })).toEqual({ pulled: false, added: 0, detail: 'no backend/token' })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
