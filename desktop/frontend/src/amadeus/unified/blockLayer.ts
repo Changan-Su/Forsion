@@ -1193,6 +1193,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // 删除/复制/拖拽全部沿用原生那条路(与整块淡底同一个模型,不另造块选区对象)。
         let marquee: HTMLDivElement | null = null
         let mqFrom: { x: number; y: number } | null = null
+        /** 块矩形**内**留白上的按下(短行右侧、列表缩进区):先原样交给浏览器与 PM —— 点击落光标到行尾、
+         *  Shift+点击扩选、三击选段、点待办方框都靠原生 mousedown;真拖动起来(>4px)才转成框选。 */
+        let mqPending: { x: number; y: number } | null = null
         /** 顶层块的 DOM(分栏行下探到 cell 的直接子,列内逐块可框)。 */
         const topBlockEls = (): HTMLElement[] => {
           const out: HTMLElement[] = []
@@ -1233,15 +1236,86 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const t = e.target as HTMLElement | null
           if (!t || t.closest('.unified-gutter') || t.closest('.amx-embed') || t.closest('button, input, textarea, a')) return
           if (!editorView.editable) return
-          if (topBlockEls().some((el) => contentAt(el, e.clientX, e.clientY))) return
-          e.preventDefault() // 空白处手势由框选接管,不让浏览器同时起原生文字拖选。
-          mqFrom = { x: e.clientX, y: e.clientY }
+          const blocks = topBlockEls()
+          if (blocks.some((el) => contentAt(el, e.clientX, e.clientY))) return
+          // 待办方框是 li 的 ::before(左侧槽),按事件 target 认:整段交给原生点按(taskList 的 handleClick
+          // 挂在 PM 的 mouseup 上,吞掉 mousedown 它就是哑巴 —— P-01)。
+          const task = t.closest('li[data-item-type="task"]')
+          if (task && e.clientX - task.getBoundingClientRect().left <= 2) return
+          const inBlock = blocks.some((el) => {
+            const r = el.getBoundingClientRect()
+            return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+          })
+          if (inBlock) {
+            // ⚠️ 不 preventDefault(P-01):pointerdown 上一拦,浏览器就不再派发兼容 mousedown,PM 收不到按下 ——
+            //    短行右侧点击光标落到段首、Shift+点击塌成光标、三击选不中、方框点不动,全是这一处。
+            mqPending = { x: e.clientX, y: e.clientY }
+            window.addEventListener('pointermove', onPendingMove)
+            window.addEventListener('pointerup', endPending, { once: true })
+            return
+          }
+          e.preventDefault() // 块外空白(块间缝/两侧余白)手势由框选接管,不让浏览器同时起原生文字拖选。
+          beginMarquee(e.clientX, e.clientY)
+        }
+        const beginMarquee = (x: number, y: number): void => {
+          mqFrom = { x, y }
           marquee = document.createElement('div')
           marquee.className = 'amx-marquee'
           document.body.appendChild(marquee)
           document.body.classList.add('amx-marquee-active')
           window.addEventListener('pointermove', onMqMove)
           window.addEventListener('pointerup', onMqUp as EventListener, { once: true })
+        }
+        const endPending = (): void => {
+          mqPending = null
+          window.removeEventListener('pointermove', onPendingMove)
+          window.removeEventListener('pointerup', endPending)
+        }
+        const onPendingMove = (e: PointerEvent): void => {
+          const from = mqPending
+          if (!from || (Math.abs(e.clientX - from.x) <= 4 && Math.abs(e.clientY - from.y) <= 4)) return
+          endPending()
+          // 从块内留白拖起 = 框选(selection-display.check 钉住的设计,拖在起点块内也算)。
+          // 原生拖选此时已经起步,由 holdNativeDrag 接管到松手。
+          beginMarquee(from.x, from.y)
+          nativeHeld = true
+          window.addEventListener('dragstart', holdNativeDrag, true)
+          window.addEventListener('selectionchange', holdNativeDrag, true)
+          onMqMove(e)
+        }
+        /** 原生 mousedown 已放行,浏览器把这次按住后的移动当原生拖选/拖拽继续处理(实测 contenteditable 里
+         *  user-select:none 与取消 mousemove 都拦不住):
+         *  · 单块框选设的 NodeSelection 让 PM 给该块挂 draggable → 下一次移动起 HTML5 拖拽 + pointercancel,
+         *    框选当场断掉 —— 取消 dragstart;
+         *  · 原生选区照样扩,PM 读 selectionchange 就把框选设的选区盖掉 —— 框选期间不让它到达 PM
+         *    (窗口捕获期先于 PM 挂在 document 上的监听),松手后见 releaseNativeHold。 */
+        let nativeHeld = false
+        const holdNativeDrag = (e: Event): void => {
+          if (e.type === 'dragstart') e.preventDefault()
+          else e.stopImmediatePropagation()
+        }
+        /** 松手:先把 PM 状态里的框选选区写回 DOM(盖掉原生拖出来的那段),再放开 selectionchange。
+         *  PM 在按住拖动时会把写 DOM 选区推迟到 mouseup 之后(chrome 的 delayedSelectionSync),所以放开
+         *  要等 mouseup 处理完的下一拍,否则迟到的 selectionchange 会把原生选区读回来。 */
+        const releaseNativeHold = (): void => {
+          if (!nativeHeld) return
+          nativeHeld = false
+          window.removeEventListener('dragstart', holdNativeDrag, true)
+          let finished = false
+          const done = (): void => {
+            if (finished) return
+            finished = true
+            window.removeEventListener('mouseup', later, true)
+            clearTimeout(fallback)
+            // focus() 走 PM 的 selectionToDOM:DOM 选区与状态不等价就按状态重写 —— 原生拖出来的那段被盖掉。
+            const view = viewRef
+            if (view && !view.isDestroyed) view.focus()
+            // 期间又起了一次块内框选:挡板归那一次,由它自己松手时再放。
+            if (!nativeHeld) window.removeEventListener('selectionchange', holdNativeDrag, true)
+          }
+          const later = (): void => { setTimeout(done, 0) }
+          const fallback = setTimeout(done, 300) // 没有 mouseup(pointercancel 等)也要放开
+          window.addEventListener('mouseup', later, { capture: true, once: true })
         }
         const onMqMove = (e: PointerEvent): void => {
           if (!marquee || !mqFrom) return
@@ -1290,6 +1364,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         const onMqUp = (e?: PointerEvent): void => {
           window.removeEventListener('pointermove', onMqMove)
+          releaseNativeHold()
           const moved = !!(e && mqFrom && (Math.abs(e.clientX - mqFrom.x) > 4 || Math.abs(e.clientY - mqFrom.y) > 4))
           const start = mqFrom
           marquee?.remove()
@@ -1384,6 +1459,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const onCtxMenu = (e: MouseEvent): void => {
           const view = viewRef
           if (!view) return
+          // 只读实例(分享页/收件箱/Muse 预览)不接管右键:原生菜单(复制/查词)照旧,编辑块菜单
+          // 不出现 —— 与 show() 不给把手同一口径(B-02:此前菜单里的「删除/转换」真的会改文档)。
+          if (!view.editable) return
           const a = pickBlockAt(view, { x: e.clientX, y: e.clientY })
           if (!a || !NodeSelection.isSelectable(a.node)) return
           e.preventDefault()

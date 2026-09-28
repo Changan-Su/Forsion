@@ -116,6 +116,21 @@ async function main() {
   const checkedAfter = await li.getAttribute('data-checked')
   check('点待办勾选框不翻转', checkedBefore === checkedAfter, `${checkedBefore} → ${checkedAfter}`)
 
+  // 右键正文(B-02):只读不接管右键 —— 原生菜单不被吞,不弹编辑块菜单,选区不被换成整块。
+  await page.evaluate(() => {
+    window.__ctx = []
+    document.addEventListener('contextmenu', (e) => window.__ctx.push(e.defaultPrevented), false)
+  })
+  await page.mouse.click(p1.x + 20, p1.y + p1.height / 2, { button: 'right' })
+  await page.waitForTimeout(300)
+  const ctx = await page.evaluate(() => ({
+    prevented: window.__ctx,
+    menu: document.querySelectorAll('.unified-block-menu').length,
+    nodeSel: window.__upage.probe.view().state.selection.toJSON().type === 'node',
+  }))
+  check('右键正文不吞原生菜单、不弹编辑块菜单、不改成整块选中', ctx.prevented.length === 1 && ctx.prevented[0] === false && ctx.menu === 0 && !ctx.nodeSel, JSON.stringify(ctx))
+  await page.keyboard.press('Escape')
+
   // 属性面板:只展示,不给添加/改键/删除。
   await page.click('.amx-props-chip')
   await page.waitForTimeout(150)

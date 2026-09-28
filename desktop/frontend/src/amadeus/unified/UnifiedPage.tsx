@@ -2151,7 +2151,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           </div>
         </OverlayPortal>
       )}
-      {blockMenu && (
+      {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
+      {blockMenu && !readOnly && (
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
             <div className="ubm-label">{t('unipage.menu.turnInto')}</div>

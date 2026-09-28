@@ -3011,7 +3011,11 @@ body.amx-marquee-active * {
   left: 0;
   top: 0;
   width: 2.6em;
+  /* 行号栏挂在 <pre> 里、<code> 之外(codeBlock.ts NodeView,R-04):上下内边距随 pre 才与代码行对齐;
+     左右不继承 —— pre 的 padding-left 是给这一栏让出的槽。 */
   padding: inherit;
+  padding-left: 0;
+  padding-right: 0;
   text-align: right;
   white-space: pre;
   user-select: none;
