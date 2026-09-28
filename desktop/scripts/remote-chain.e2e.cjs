@@ -421,17 +421,18 @@ async function main() {
     await page.screenshot({ path: path.join(SHOT_DIR, `remotechain-workspace-${SHOT_TAG}.png`) })
     const want = ATTACH_TEXT.toUpperCase()
     const dlAt = world.hub.ledger.proxy.length
-    const dlEvent = page.waitForEvent('download', { timeout: 15_000 }).catch(() => null)
+    // 手机页跑在「安卓 App」自定义平台上:下载走原生 ForsionDownloads(P1-DL,存进系统「下载」),替身在 phone-page 的 saved 里收字节
+    const savedAt = opened.saved.length
     const dlBtn = group.locator(`[data-ws-file="/${RESULT_NAME}"] [data-download]`).first()
     const hasBtn = (await dlBtn.count()) > 0
     if (hasBtn) await tap(dlBtn)
-    const d = hasBtn ? await dlEvent : null
-    let downloaded = null
-    if (d) { const p = await d.path().catch(() => null); if (p) downloaded = fs.readFileSync(p, 'utf8') }
+    for (let i = 0; hasBtn && i < 60 && opened.saved.length === savedAt; i++) await sleep(250)
+    const d = opened.saved.slice(savedAt)[0] || null
+    const downloaded = d ? d.bytes.toString('utf8') : null
     const dlReq = world.hub.ledger.proxy.slice(dlAt).find((x) => /^\/engine\/agent\/workspace\/download\?/.test(x.path))
     check('下载产物(手机 UI:工作区 › 本会话的文件 › 下载 → 按会话路由到那台电脑 → 中继带手机的票)= 附件经 run_bash 处理后的内容',
       hasBtn && downloaded === want && !!dlReq && dlReq.unit === world.DESKTOP_UNIT && dlReq.callerUnit === phoneUnit,
-      JSON.stringify({ button: hasBtn, file: d?.suggestedFilename?.() ?? null, got: downloaded === null ? null : String(downloaded).slice(0, 60), req: dlReq && { unit: dlReq.unit === world.DESKTOP_UNIT ? '那台电脑' : dlReq.unit, caller: dlReq.callerUnit === phoneUnit ? '手机' : dlReq.callerUnit, path: dlReq.path.slice(0, 90) } }))
+      JSON.stringify({ button: hasBtn, file: d?.name ?? null, got: downloaded === null ? null : String(downloaded).slice(0, 60), req: dlReq && { unit: dlReq.unit === world.DESKTOP_UNIT ? '那台电脑' : dlReq.unit, caller: dlReq.callerUnit === phoneUnit ? '手机' : dlReq.callerUnit, path: dlReq.path.slice(0, 90) } }))
     const listReq = world.hub.ledger.proxy.find((x) => /^\/engine\/agent\/workspace\/list\?/.test(x.path) && x.path.includes(sid))
     check('列表请求经中继发往那台电脑、带手机的票(/engine/agent/workspace/list?sessionId=本会话)', !!listReq && listReq.unit === world.DESKTOP_UNIT && listReq.callerUnit === phoneUnit, JSON.stringify(listReq && { unit: listReq.unit === world.DESKTOP_UNIT, caller: listReq.callerUnit === phoneUnit }))
     await closeOverlays(page)

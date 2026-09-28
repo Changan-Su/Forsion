@@ -119,6 +119,8 @@ function capacitorInit({ token }) {
       { name: 'ForsionUnit', methods: [P('attach'), P('status'), P('ensureRegistered'), P('forget'), C('request'), P('cancel'), C('addListener'), P('removeListener')] },
       { name: 'LiveIsland', methods: [P('show'), P('reset'), C('addListener'), P('removeListener')] },
       { name: 'SpaceShortcuts', methods: [P('setSpaces'), P('pin'), C('addListener'), P('removeListener')] },
+      // P1-DL:安卓 App 存「下载」走原生 ForsionDownloads(分块 begin / append / finish / abort),替身在 Node 侧收字节
+      { name: 'ForsionDownloads', methods: [P('begin'), P('append'), P('finish'), P('abort')] },
     ],
     nativePromise: (plugin, method, options) => window.__k9Native({ plugin, method, options: options ?? {}, cbId: null }),
     nativeCallback: (plugin, method, options, cb) => {
@@ -146,7 +148,21 @@ async function openPhonePage({ world, native, locale = 'zh-CN', colorScheme = 'l
   const pageErrors = []
   page.on('pageerror', (e) => pageErrors.push(e.message))
   // 原生桥:页面 → Node 替身。request 的回调按序送回(每条一次 evaluate,SSE 分块逐条到达)
+  // ForsionDownloads 替身:同真插件的分块协议;finish 落进 saved(台架据此核「手机上存下来的就是那份产物」)
+  const saved = []
+  const pending = new Map()
+  let dlSeq = 0
+  const downloads = {
+    begin: ({ name, mime }) => { const id = `dl${++dlSeq}`; pending.set(id, { name, mime, parts: [] }); return { id } },
+    append: ({ id, data }) => { const e = pending.get(id); if (!e) throw new Error('unknown_id'); const b = Buffer.from(data, 'base64'); e.parts.push(b); return { written: b.length } },
+    finish: ({ id }) => { const e = pending.get(id); if (!e) throw new Error('unknown_id'); pending.delete(id); const bytes = Buffer.concat(e.parts); saved.push({ name: e.name, mime: e.mime, bytes }); return { name: e.name, size: bytes.length } },
+    abort: ({ id }) => ({ ok: pending.delete(id) }),
+  }
   await page.exposeBinding('__k9Native', async (_src, { plugin, method, options, cbId }) => {
+    if (plugin === 'ForsionDownloads') {
+      if (typeof downloads[method] !== 'function') throw new Error(`ForsionDownloads.${method} not implemented`)
+      return downloads[method](options)
+    }
     if (plugin !== 'ForsionUnit') return {}
     if (method === 'request') {
       let chain = Promise.resolve()
@@ -173,7 +189,7 @@ async function openPhonePage({ world, native, locale = 'zh-CN', colorScheme = 'l
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await sleep(350)
   }
-  return { browser, ctx, page, tap, pageErrors }
+  return { browser, ctx, page, tap, pageErrors, saved }
 }
 
 /** 左抽屉 → 互联入口 → UnitsSheet(打开时现拉一次名册);等 waitRow 那一行出现。 */
