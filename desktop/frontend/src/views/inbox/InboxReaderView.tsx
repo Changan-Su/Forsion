@@ -18,6 +18,8 @@ import { FeedbackThread, feedbackThreadAvailable } from './FeedbackThread'
 import { inboxThreadOf } from './feedbackThreadLib'
 import { approvalThreadOf } from './approvalThreadLib'
 import { openSessionFromApproval } from '../../stores/attentionOpen'
+import { openRemoteSession } from '../../stores/deviceSessionsStore' // P1-K7a
+import { runLocationsAvailable } from '../../features/runtime'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
 import './inbox.css'
 
@@ -88,11 +90,14 @@ export function InboxReaderView() {
   // 反馈线程:服务端投递的定向信(thread 判别列)+ 桌面壳有云端接缝才挂;Web / 移动端只看正文。
   const thread = feedbackThreadAvailable() ? inboxThreadOf(msg) : null
   // P1-K3:电脑上的远程会话在等人 → 一键打开那条会话。
-  // ponytail: K7 合入前只认本端已知的会话(手机整端切到那台电脑后,它的会话就在列表里);K7 的 openRemoteSession(unitId, sid) 接上后改走它。
+  // P1-K7a(R-20):手机上按 (那台电脑, 会话 id) 打开 —— 设备分组里列着就注入,没列出来就经那台拉一次 /detail 再注入(openRemoteSession);
+  // 那个 id 其实是本端会话 / 这一端不能连别的电脑 → 退回本端已知会话的打开方式。
   const approvalThread = approvalThreadOf(msg)
   const openApprovalSession = async (): Promise<void> => {
     if (!approvalThread) return
-    if (!(await openSessionFromApproval(approvalThread.sessionId))) useApp.getState().toast(t('inbox.approvalOpenFail'), true)
+    const opened = (runLocationsAvailable() && await openRemoteSession(approvalThread.unitId, approvalThread.sessionId))
+      || await openSessionFromApproval(approvalThread.sessionId)
+    if (!opened) useApp.getState().toast(t('inbox.approvalOpenFail'), true)
   }
 
   /** 与发件 agent 开新聊天:切 Tangu Space + blankNewChat 等价序列(不 import bootstrapEngine 防环)+ 选中该 agent。 */
