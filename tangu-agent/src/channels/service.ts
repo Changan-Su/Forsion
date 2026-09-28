@@ -15,6 +15,7 @@ import { createRun } from '../services/runStore.js';
 import { abortRun, enqueueRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
 import { approvalLocalOnly, resolveApproval } from '../services/approvals.js';
+import { remoteLocked } from '../services/remoteLock.js'; // P1-K2
 import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
@@ -65,6 +66,10 @@ export function parseJson(v: any): any {
 }
 
 /** P1 · K3:受保护路径的审批只能在电脑上批准(方案 §6.3)。通道没有语言设置 → 双语同一条。 */
+/** P1-K2:锁定时通道的回执。通道没有语言设置(引擎无 locale)→ 双语同一条。 */
+export const REMOTE_LOCKED_CHANNEL_REPLY = '这台电脑已锁定远程访问，请在电脑上解锁后再试。\nRemote access to this computer is locked. Unlock it on the computer and try again.';
+const lockedNow = (): boolean => { try { return remoteLocked(); } catch { return true; } };
+
 const LOCAL_ONLY_EN = 'This touches protected configuration and can only be approved on the computer running it. Once you approve it there, the result will be sent here.';
 function localOnlyPrompt(preview: string): string {
   return `⚠️ 这个操作涉及受保护的配置,只能在电脑上批准:\n${preview}\n\n在电脑上批准后,结果会发到这里;回复「拒绝」取消,或「停止」结束任务。\n\n${LOCAL_ONLY_EN} Reply "reject" to cancel or "stop" to end the task.`;
@@ -292,6 +297,10 @@ export class ChannelService {
       }
       return '当前没有正在运行的 Tangu Agent 任务。';
     }
+
+    // P1-K2(方案 §6.5):这台电脑急停后锁定了远程访问 → 通道只剩「停止」(上面,只会中止);批准 / 拒绝 / slash / 新任务一律回锁定提示,
+    // 不 resolveApproval、不 createRun。通道 run 没有远程污点(只有 input.source.channel),锁定判定只能在这里现查。读不出锁 = 锁定。
+    if (lockedNow()) return REMOTE_LOCKED_CHANNEL_REPLY;
 
     // 通道内审批:有待批操作时,「批准/拒绝」直接放行或取消(无需回桌面)。
     const pendingApproval = this.pendingApprovalByPeer.get(key);

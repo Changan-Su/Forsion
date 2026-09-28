@@ -19,6 +19,7 @@ import { remoteSessionsApi } from '../services/remoteSessionsApi'
 import { onRemoteSettingsSectionsChange, remoteSettingsSections } from './remoteSettingsSections'
 import { CAP_MODES, SECRET_STORE_INSECURE, type CapMode, type RemoteSessionsApi, type RemoteSessionsView } from '../../../shared/remoteSessions'
 import './remoteSessionsCopy'
+import './RemoteSafetyPanel' // P1-K2:急停与远程锁定区块经 registerRemoteSettingsSection 挂到本页末尾(R-12;副作用 import 只为让登记跑到)
 import './remoteSessions.css'
 
 export { registerRemoteSettingsSection, type RemoteSettingsSection } from './remoteSettingsSections'

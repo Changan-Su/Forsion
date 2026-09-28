@@ -13,7 +13,8 @@
 import { app, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import type { ComputerHistoryState } from '../shared/computerHistory'
-import { mainLocaleOverride, onMainLocaleChange, setMainLocale, UI_LOCALE_PREF_KEY as MAIN_UI_LOCALE_PREF_KEY } from './mainI18n'
+import { mainLocaleOverride, mtFor, onMainLocaleChange, setMainLocale, UI_LOCALE_PREF_KEY as MAIN_UI_LOCALE_PREF_KEY } from './mainI18n'
+import { REMOTE_SAFETY_MESSAGES, type RemoteTrayView } from './remoteSafety' // P1-K2:托盘远程段的文案片段(main.remoteSafety.tray.*)
 
 export type TrayLang = 'zh' | 'en'
 
@@ -27,7 +28,15 @@ export interface TrayHandlers {
     pauseHour: () => void
     resume: () => void
   }
+  /** P1-K2 远程活动 / 急停(可选:无 agent 后端的产品形态不传)。文案走 main.remoteSafety.tray.*,不进 COPY 表(R-23)。 */
+  remote?: {
+    view: () => RemoteTrayView
+    stopAll: () => void
+    unlock: () => void
+    openSettings: () => void
+  }
 }
+void REMOTE_SAFETY_MESSAGES // 片段随 import 登记(mtFor 取得到)
 
 let tray: Tray | null = null
 let handlers: TrayHandlers | null = null
@@ -72,10 +81,38 @@ function untilLabel(until: number, now: number): string {
   return d.toDateString() === n.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
 }
 
+/**
+ * P1-K2 远程段(插在「显示 / 检查更新」之前):
+ *   在跑 → 禁用标签「远程会话运行中 · {name}」(多个带「等 n 个」,有人在等批准再加一句);
+ *   能远程 / 在跑 / 锁着 → 「停止全部远程任务」(accelerator 只显示热键、不在菜单里注册,registerAccelerator:false);
+ *   锁着 → 禁用标签「远程访问已锁定」+「解锁远程访问…」;
+ *   能远程但热键没注册上 → 禁用标签「急停快捷键不可用」+「更改快捷键…」(失败可见,D13)。
+ */
+export function remoteTrayItems(r: NonNullable<TrayHandlers['remote']>, lang: TrayLang): Electron.MenuItemConstructorOptions[] {
+  let v: RemoteTrayView
+  try { v = r.view() } catch { return [] }
+  const m = (k: string, vars?: Record<string, string | number>): string => mtFor(lang, `main.remoteSafety.tray.${k}`, vars)
+  const items: Electron.MenuItemConstructorOptions[] = []
+  if (v.activeCount > 0 && v.activeLabel) {
+    const head = v.activeCount > 1 ? m('runningMore', { name: v.activeLabel, n: v.activeCount - 1 }) : m('running', { name: v.activeLabel })
+    items.push({ label: v.waitingApproval ? head + m('waiting') : head, enabled: false })
+  }
+  if (v.capable || v.activeCount > 0 || v.locked) {
+    items.push({
+      label: m('stopAll'), click: () => r.stopAll(),
+      ...(v.hotkey.registered && v.hotkey.accelerator ? { accelerator: v.hotkey.accelerator, registerAccelerator: false } : {}),
+    })
+  }
+  if (v.locked) items.push({ label: m('locked'), enabled: false }, { label: m('unlock'), click: () => r.unlock() })
+  if (v.capable && !v.hotkey.registered) items.push({ label: m('hotkeyUnavailable'), enabled: false }, { label: m('changeHotkey'), click: () => r.openSettings() })
+  return items.length ? [...items, { type: 'separator' }] : []
+}
+
 /** 纯函数:菜单模板(单测直接断言)。 */
 export function trayMenuTemplate(h: TrayHandlers, lang: TrayLang, now = Date.now()): Electron.MenuItemConstructorOptions[] {
   const t = COPY[lang]
   const items: Electron.MenuItemConstructorOptions[] = [
+    ...(h.remote ? remoteTrayItems(h.remote, lang) : []), // P1-K2
     { label: t.show, click: () => h.show() },
     { label: t.checkUpdates, click: () => h.checkUpdates() },
   ]
@@ -121,6 +158,15 @@ export function createTray(h: TrayHandlers): void {
 
 // 界面语言变了 → 重建菜单(托盘还没建时 refreshTrayMenu 自己是空操作)。
 onMainLocaleChange(() => refreshTrayMenu())
+
+/** P1-K2:菜单栏标题(仅 mac 显示文字:' 远程' / ' 已锁定')+ 所有平台的 tooltip。托盘还没建就什么都不做。 */
+export function setTrayIndicator(title: string, tooltip: string): void {
+  if (!tray) return
+  try {
+    if (process.platform === 'darwin') tray.setTitle(title)
+    tray.setToolTip(tooltip || 'Forsion')
+  } catch { /* 托盘已销毁 */ }
+}
 
 /** 电脑历史状态变了 → 重建菜单(托盘还没建就什么都不做)。 */
 export function refreshTrayMenu(): void {

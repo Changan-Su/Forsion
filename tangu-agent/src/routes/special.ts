@@ -56,6 +56,7 @@ import { runWithAgentSlug } from '../seams/runContext.js';
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
+import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -260,6 +261,15 @@ router.post('/agent/special/muse/todos/:id/approve', authMiddleware, async (req:
       const now = (await query<any[]>(`SELECT status FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [id, userId]))?.[0]?.status;
       if (r.created && now !== 'injected') await removeEntry(MUSE_AGENT_SLUG, r.entry.id);
       return res.status(409).json({ error: 'todo_not_pending', detail: 'todo already handled' });
+    }
+    // P1-K2(方案 §6.5「暂停远程条目」):远端批准建出的条目进台账,急停时撤回(还没跑的删掉、TODO 回 pending)。
+    // 台账写失败不挡批准(锁定期间 Muse 整个暂停,解锁后照常执行 = 本机用户已知的结果),只留日志。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) {
+      await recordRemoteCreated({
+        kind: 'muse-todo', slug: MUSE_AGENT_SLUG, entryId: r.entry.id, todoId: id,
+        ...(remote.via ? { via: remote.via } : {}), ...(remote.callerUnit ? { callerUnit: remote.callerUnit } : {}),
+      }).catch((e: any) => console.warn('[special] remote-created ledger write failed:', e?.message || e));
     }
     void appendMuseFeedback(userId, `[feedback] todo "${title}" approved by user: Muse should carry it out now`);
     kickMuse();

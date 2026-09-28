@@ -45,7 +45,7 @@ import type { WhoamiResult } from './forsionAuth'
 import { waitForAccountRenderers } from './accountTransition'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
-import { createTray, refreshTrayMenu } from './tray'
+import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
 import { initMainLocale, mt, setMainLocale, UI_LOCALE_PREF_KEY } from './mainI18n'
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -71,6 +71,10 @@ import { UnitHost } from './unitHost'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
+import { createRemoteSafety } from './remoteSafety' // P1-K2
+import { registerRemoteSafetyIpc } from './remoteSafetyIpc' // P1-K2
+import { createSystemAuth } from './remoteSafetyAuth' // P1-K2
+import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
@@ -574,7 +578,7 @@ const keepAwake = createKeepAwake({
 
 // P1-K4 ── 「允许远程会话」开关 / 调用方首次本机确认 / 远程会话最高审批档(electron/remoteSessions.ts)。
 // 只管 unitWeb 的 /engine(G9);开关与信任落 userData/remote-sessions.json,审批档只写 config.json 的 remote.maxApprovalMode。
-// init 在 deviceSecrets.init 之后(K5 门控要有状态);K2 合入时 isLocked 改接 remoteSafety(R-26)。
+// init 在 deviceSecrets.init 之后(K5 门控要有状态);isLocked 接 K2 的 remoteSafety(R-26:锁定时不弹首次确认)。
 const remoteSessions = createRemoteSessions({
   file: () => join(app.getPath('userData'), REMOTE_SESSIONS_FILE),
   unitHostEnabled: async () => (await readShellConfig()).unitHostEnabled === true,
@@ -591,12 +595,59 @@ const remoteSessions = createRemoteSessions({
     return signal.aborted ? null : r.response === 0
   },
   permitted: () => deviceSecrets.remoteSessionsPermitted(),
-  isLocked: () => false,
+  // P1-K2(R-26):remoteSafety 在下方定义,经 thunk 互引(不成环);K4 自己 try/catch → 读不出按锁定
+  isLocked: () => (PRODUCT.agentBackend ? remoteSafety.isLocked() : false),
   onChanged: (view) => {
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('remoteSessions:changed', view)
   },
   log: (m) => console.log(m),
 })
+
+// P1-K2 ── 急停 + 远程锁定 + 远程活动指示(electron/remoteSafety.ts)。锁状态独占 userData/remote-lock.json(引擎经
+// FORSION_REMOTE_LOCK_FILE 每次现读);unitWeb 读内存镜像。backend / mainWindow 在下方定义 → 这里一律惰性 thunk。
+const remoteSafety = createRemoteSafety({
+  file: () => join(app.getPath('userData'), REMOTE_LOCK_FILE),
+  engine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
+  shortcuts: { register: (acc, cb) => globalShortcut.register(acc, cb), unregister: (acc) => globalShortcut.unregister(acc) },
+  notify: (title, body) => { if (Notification.isSupported()) new Notification({ title: title.slice(0, 200), body: body.slice(0, 300) }).show() },
+  refreshTray: (ind) => { refreshTrayMenu(); setTrayIndicator(ind.title, ind.tooltip) },
+  keepAwake,
+  systemAuth: createSystemAuth({
+    platform: process.platform,
+    touchId: { can: () => systemPreferences.canPromptTouchID(), prompt: (reason) => systemPreferences.promptTouchID(reason) },
+    isAdmin: () => new Promise((res) => execFile('id', ['-Gn'], (err, out) => res(!err && /(^|\s)admin(\s|$)/.test(String(out))))),
+    osascript: (script) => new Promise((res) => execFile('osascript', ['-e', script], (err, _out, stderr) => res(err
+      ? { ok: false, spawnError: (err as NodeJS.ErrnoException).code === 'ENOENT', stderr: String(stderr || err.message) }
+      : { ok: true }))),
+    confirm: async () => {
+      showMainWindow()
+      // ⚠️ 必须挂父窗(同 confirmPair / K4 confirm):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不弹(= 取消)
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      if (!win) return null
+      const r = await dialog.showMessageBox(win, {
+        type: 'warning', title: mt('main.remoteSafety.auth.dialogTitle'), message: mt('main.remoteSafety.auth.dialogMessage'),
+        detail: mt('main.remoteSafety.auth.dialogDetail'), buttons: [mt('main.remoteSafety.auth.unlock'), mt('main.remoteSafety.auth.cancel')],
+        defaultId: 1, cancelId: 1, noLink: true,
+      })
+      return r.response === 0
+    },
+    passwordPrompt: () => mt('main.remoteSafety.auth.dialogMessage'),
+    log: (m) => console.log(m),
+  }),
+  lang: () => trayLang(),
+  remoteCapable: () => remoteSessions.isEnabled(), // R-11
+  trustedCallerLabel: (id) => remoteSessions.trustedCaller(id)?.name ?? null, // R-11
+  mac: process.platform === 'darwin',
+  log: (m) => console.log(m),
+})
+remoteSafety.onChange((st) => {
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('remoteSafety:changed', st)
+})
+/** 托盘「更改快捷键…」:主窗前置 + 打开设置浮窗的「远程会话」页(K2 面板经 K4 的扩展槽挂在那页末尾)。 */
+function openRemoteSafetySettings(): void {
+  showMainWindow()
+  openFloatingPanel({ id: 'settings', title: mt('main.remoteSafety.settingsTitle'), builtin: 'settings', params: { tab: 'remote-sessions', skillKey: null } })
+}
 
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
   let cur: Partial<TanguStoredConfig> = {}
@@ -1172,6 +1223,7 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     log: (m: string) => console.log(m),
     remoteAccess: remoteSessions.gate, // P1-K4:会话档闸(同步;K2 的 remoteLock 放在相邻一行)
+    ...(PRODUCT.agentBackend ? { remoteLock: () => remoteSafety.isLocked() } : {}), // P1-K2:急停后远端只剩读 + 中止(同步内存镜像)
   }
   // 配对名单在队列里现读,别用开头那份快照:上面几处 await 期间用户可能刚撤销了设备,旧快照会把它重新放行
   unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
@@ -2169,6 +2221,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('config:get', () => effectiveConfig())
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
+  registerRemoteSafetyIpc(ipcMain, remoteSafety, isTrustedSender) // P1-K2:remoteSafety:get / estop / unlock / setHotkey / setHotkeyRecording
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
     // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
@@ -3115,6 +3168,7 @@ app.whenReady().then(async () => {
         await chWipe?.afterWipe()
       }
       if (opts?.desktop) {
+        // ⚠️ P1-K2 / G11:remote-lock.json **不在**清理列表 —— 清数据 = 不经系统认证解锁(远端锁定只能本机认证后解)
         for (const f of ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE]) { // P1-K4:remote-sessions.json(重置远程会话开关与信任)
           await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
         }
@@ -3401,6 +3455,7 @@ app.whenReady().then(async () => {
     for (const w of BrowserWindow.getAllWindows()) {
       w.webContents.send('backend:status', st)
     }
+    remoteSafety.engineStatusChanged() // P1-K2:重连活动流;有没送到的急停 / 解锁就补
   })
 
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证
@@ -3664,6 +3719,7 @@ app.whenReady().then(async () => {
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
   if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
+  if (PRODUCT.agentBackend) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
   // 启动即续期(2 周滑动窗口),且**必须先于 ensureBackend**:后端 token 走 env 快照,而本地端点鉴权
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
@@ -3700,6 +3756,7 @@ app.whenReady().then(async () => {
       pauseHour: () => { void ch.pause(3_600_000).catch(() => {}) },
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
+    remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow)
@@ -3723,6 +3780,7 @@ app.on('before-quit', (e) => {
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   approvalDelivery.stop() // P1-K3
+  remoteSafety.dispose() // P1-K2:断活动流、注销急停热键、放掉强制防休眠(锁文件原样留着 = 锁跨重启)
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。

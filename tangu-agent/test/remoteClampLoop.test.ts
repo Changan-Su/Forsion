@@ -201,5 +201,8 @@ describe('远程污点 run × 真 loop', () => {
     expect(r.status).toBe('failed');
     expect(r.error).toBe('engine_unavailable_remote');
     expect(engineRuns).toBe(1);
+    // P1-K2:拒跑分支正常 return,以前不释放会话队列 → 同会话下一条本机 run 永远排队
+    expect((await run({}, false)).status).toBe('done');
+    expect(engineRuns).toBe(2);
   });
 });

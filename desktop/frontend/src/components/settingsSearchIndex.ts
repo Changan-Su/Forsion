@@ -59,6 +59,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'remote-sessions-switch', tab: 'remote-sessions', anchor: 'remote-sessions-switch', labelKey: 'remoteSessions.switch', keywords: '远程会话 手机 远程 允许 remote session phone allow' },
   { id: 'remote-approval-cap', tab: 'remote-sessions', anchor: 'remote-approval-cap', labelKey: 'remoteSessions.cap', keywords: '远程审批档 全自动 审批 remote approval full auto' },
   { id: 'remote-trusted-devices', tab: 'remote-sessions', anchor: 'remote-trusted-devices', labelKey: 'remoteSessions.trusted', keywords: '信任设备 已允许 撤销 浏览器 网页版 P2P trusted allowed devices revoke browser web app' },
+  // P1-K2:急停与远程锁定(经 K4 扩展槽挂在远程会话页末尾)
+  { id: 'remote-safety', tab: 'remote-sessions', anchor: 'remote-safety', labelKey: 'remoteSafety.title', keywords: '急停 紧急停止 锁定 解锁 快捷键 停止远程任务 emergency stop lock unlock shortcut hotkey stop remote tasks' },
   { id: 'computer-history', tab: 'computer-history', anchor: 'computer-history', labelKey: 'settingsmodal.tab.computerHistory', keywords: '电脑历史 活动记录 隐私 排除 暂停 computer history activity privacy recording exclude pause' },
   { id: 'mcp-server', tab: 'advanced', sub: 'a-mcp', labelKey: 'settings.sub.mcpServer', keywords: '对外 端点 endpoint mcp' },
   { id: 'reset-layout', tab: 'advanced', sub: 'a-ui', anchor: 'reset-layout', labelKey: 'settingsmodal.advanced.resetLayout', keywords: '布局 恢复 layout reset' },

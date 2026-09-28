@@ -66,6 +66,11 @@ export const CLASSIFICATION = {
   // P1-K3
   'GET /agent/approvals/pending': [A, 'per-session pending counts for the session-list badge (no ids / previews)'],
   'GET /agent/approvals/stream': [D, 'engine-wide pending approval feed for the host main process only'],
+  // P1-K2 ── remote.ts:远程活动 / 急停 / 解锁,只给执行设备本机的主进程(路由自身对 x-forsion-remote 另回 403)
+  'GET /agent/remote/activity': [D, 'in-flight run registry for the host main process (tray / keep-awake)'],
+  'GET /agent/remote/activity/events': [D, 'in-flight run registry feed for the host main process'],
+  'POST /agent/remote/estop': [D, 'emergency stop is a host-only action (design §6.5)'],
+  'POST /agent/remote/unlock': [D, 'unlocking remote access needs local system auth on the host (design §6.1, D13)'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],

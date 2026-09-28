@@ -88,8 +88,12 @@ export interface ToolContext {
    *  缺省=不限制。只约束无门禁的内置工具,见 resolveTools。 */
   toolsMode?: 'allow' | 'deny';
   toolsList?: string[];
-  /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。 */
+  /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。
+   *  ⚠️ 会话级旗标,不是 run 的来源:同一会话里用户在桌面敲的 run 也为真。判「这条 run 从哪来」用 runOrigin。 */
   channelSession?: boolean;
+  /** P1 · K2:这条 run 自己的来源(= remoteActivity.runCategory(input),只看引擎自写字段;loop 每 run 算一次,子代理随 parentCtx 继承)。
+   *  后台进程据此打来源标签;中途被远端染色另由 effectiveRemote(ctx) 现判。 */
+  runOrigin?: 'remote' | 'channel' | 'unattended' | 'local';
   /** 工作预设(会话事实,由 agentLoop 解析+锁定后传入):'coding'=编码任务形态(Coding Space / bench / CLI 项目模式),
    *  'chat'=轻聊天形态(正向工具面 + Conversation Contract);缺省=work。分档真源 core/presetTable.ts。 */
   preset?: Preset;

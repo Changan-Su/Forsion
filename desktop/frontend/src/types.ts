@@ -1289,6 +1289,8 @@ declare global {
       secretStorageRelaunch?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       // P1-K4 ── 「允许远程会话」开关 / 信任列表 / 远程会话最高审批档(主进程 electron/remoteSessions.ts;设备页 / web / 手机没有)──
       remoteSessions?: import('../../shared/remoteSessions').RemoteSessionsApi
+      // P1-K2 ── 急停 / 远程锁定(主进程 electron/remoteSafety.ts;设备页 / web / 手机没有)──
+      remoteSafety?: import('../../shared/remoteSafety').RemoteSafetyApi
       // P1-K6 ── unit 目标的调用方头接缝(INTEGRATION R-05;§2.2 把声明记在 K8 的块里,消费方 services/engine/targets.ts 先落地,
       //   所以 K6-S2 先在这里声明)。⚠️ 保持**方法签名**:K8 合入时在自己的块里再声明一次(方法或属性签名皆可)= 重载合并,
       //   不报 TS2300(tsc 实测:只有「属性 + 属性」才重复标识符);K8 合入后二者留一即可,这一条可删。──
