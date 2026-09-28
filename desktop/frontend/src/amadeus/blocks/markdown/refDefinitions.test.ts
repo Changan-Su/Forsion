@@ -284,4 +284,41 @@ describe('外来剪贴板 HTML 的 data-md-raw', () => {
       expect(paste('<p>前</p><p data-md-raw="[1]: http://x.example">[1]: http://x.example</p>')).toBe('前\n\n[1]: http://x.example\n')
     } finally { await b.destroy() }
   })
+
+  // Codex g1#2:原先只校验首行 —— 首行 `[a]: /x`、第二行 `# 标题` 的外来原文照样被收下、不经转义整段落盘,
+  // 重开后段内第二行成了标题(落盘结构被剪贴板改掉)。现在整段原文单独解析必须**全是定义**才收。
+  // 负对照(实跑过):改回只看首行 → 本条红。
+  it('原文的每一行都得属于定义(地址 / 标题续行):夹带标题、脚注、空行的一律作废,按普通段落转义写、字不丢', async () => {
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const paste = (html: string): string => {
+        const div = document.createElement('div')
+        div.innerHTML = html
+        const slice = DOMParser.fromSchema(schema).parseSlice(div)
+        b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+        return b.md()
+      }
+      const noBlockSyntax = (md: string): boolean => md.split('\n').every((l) => !/^\s{0,3}(?:#{1,6}(?:\s|$)|>|```|\[\^)/.test(l))
+      // 夹带标题 / 引用 / 代码围栏:这些行一旦原样落盘就改了结构
+      for (const [attr, text, word] of [
+        ['[a]: /x&#10;# 标题', '[a]: /x<br># 标题', '标题'],
+        ['[a]: /x&#10;&gt; 引文', '[a]: /x<br>&gt; 引文', '引文'],
+        ['[a]: /x&#10;```&#10;code', '[a]: /x<br>```<br>code', 'code'],
+      ]) {
+        const out = paste(`<p data-md-raw="${attr}">${text}</p>`)
+        expect(out).toContain(word)
+        expect(noBlockSyntax(out), out).toBe(true)
+      }
+      // GFM 脚注定义不是链接定义:原样落盘会变成脚注
+      const fn = paste('<p data-md-raw="[^1]: 脚注">[^1]: 脚注</p>')
+      expect(fn).toContain('脚注')
+      expect(noBlockSyntax(fn), fn).toBe(true)
+      // 定义之间夹空行:原样落盘重开是两段
+      expect(paste('<p data-md-raw="[a]: /x&#10;&#10;[b]: /y">[a]: /x<br><br>[b]: /y</p>')).not.toBe('[a]: /x\n\n[b]: /y\n')
+      // 阳性对照:相邻两条定义、标题写在下一行的定义,照旧逐字
+      expect(paste('<p data-md-raw="[1]: http://a.example&#10;[c]: /c">[1]: http://a.example<br>[c]: /c</p>')).toBe('[1]: http://a.example\n[c]: /c\n')
+      expect(paste('<p data-md-raw="[a]: /x&#10;&quot;t&quot;">[a]: /x<br>"t"</p>')).toBe('[a]: /x\n"t"\n')
+    } finally { await b.destroy() }
+  })
 })

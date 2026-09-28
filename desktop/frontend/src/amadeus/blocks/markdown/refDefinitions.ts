@@ -19,6 +19,9 @@ import { $remark } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { linkAttr, linkSchema } from '@milkdown/kit/preset/commonmark'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
 
 // mdast 是动态形状的 AST,这层统一按 any 处理(同 softBreak.ts / marks.ts)。
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -152,8 +155,24 @@ export function pristineRaw(node: PMNode): string | null {
 /** 一行定义的开头:≤3 格缩进 + `[label]:`(label 里不许有未转义的方括号,同 CommonMark)。 */
 const DEF_START = /^[ \t]{0,3}(\[((?:[^\\[\]]|\\[\s\S])+)\]:)/
 
-/** 外来的定义原文(剪贴板 HTML 的 data-md-raw):首行得是定义的样子才收(这份原文会不经转义写进 .md)。 */
-export const literalRawFromDom = (v: string | null): string | null => (v != null && DEF_START.test(v.split('\n')[0]) ? v : null)
+/** 块级解析(= 编辑器的块结构口径:commonmark + gfm;CJK 扩展只管行内,不影响块)。懒建:只有粘贴带 data-md-raw 才用。 */
+let blockParser: { parse: (s: string) => unknown } | null = null
+/** 这段原文单独解析出来**全是**链接定义 —— 重开时它就原样还是一个字面段落,不会冒出标题 / 引用 / 围栏 / 脚注。 */
+const onlyDefinitions = (raw: string): boolean => {
+  blockParser ??= unified().use(remarkParse).use(remarkGfm)
+  const kids: MdNode[] = (blockParser.parse(raw) as MdNode)?.children ?? []
+  return kids.length > 0 && kids.every((k) => k?.type === 'definition')
+}
+
+/** 外来的定义原文(剪贴板 HTML 的 data-md-raw)。这份原文会**不经转义**写进 .md,所以每一行都必须属于定义
+ *  (定义行本身,或它的地址 / 标题续行)—— Codex g1#2:原先只看首行,首行 `[a]: /x`、第二行 `# 标题` 的原文照收,
+ *  落盘后第二行成了标题。判据按解析结果而不是逐行正则:标题可以跨行,续行长什么样只有解析器说得准。
+ *  夹空行也不收(原样落盘重开是两段)。不收 = raw 作废,段落按普通文字转义写,内容不丢。 */
+export const literalRawFromDom = (v: string | null): string | null => {
+  if (v == null || !DEF_START.test(v.split('\n')[0])) return null
+  if (/(?:^|\n)[ \t\r]*(?:\n|$)/.test(v)) return null
+  return onlyDefinitions(v) ? v : null
+}
 
 const parseRef = (v: string | null): LinkRef | null => {
   if (!v) return null
