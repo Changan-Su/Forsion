@@ -24,6 +24,7 @@ import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amade
 import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { useMobileBackClose } from '../lib/mobileBack'
+import { touchScrollMarginPlugin } from './touchScroll'
 import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
@@ -1333,6 +1334,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
       ...createEmbedLayer({ path, readOnly }),
+      touchScrollMarginPlugin(), // 触屏:光标行不滚到悬浮胶囊底下(G2-11)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
       // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
       // 时间线只在画布模式被查询,顺序跨模式仍然成立)。

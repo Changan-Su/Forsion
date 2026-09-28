@@ -17,6 +17,8 @@
 //     「+」块面板、⠿ 块菜单、图片大图、askString 对话框;一次只关一层(后开的先关),关完了才轮到壳(不再被拦)。
 //  M7 选区格式条 × 窄屏触屏(G2-10):390 / 360 宽下格式条整条在视口内,键那一行可横滑,滑到头最后一颗(右对齐)
 //     完整露在视口里、点得中(修前约 465px 宽,右侧 2–4 颗键越界够不着)。环境变量 SHOT_DIR 给了就存一张 390 截图。
+//  M8 软键盘弹起(APK adjustResize ≈ 390×430)时在文中连续回车打字:光标所在行始终在悬浮胶囊之上(G2-11:
+//     修前第 3 行起被胶囊盖住 —— PM 的 scrollMargin 只留 5px)。
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -306,6 +308,44 @@ async function main() {
       record(`M7 ${vw} 宽触屏:格式条整条在视口内,键行可横滑,滑到头「右对齐」露全且点得中`,
         !!m && m.inView && m.scrollable && m.last === '右对齐' && m.lastIn && m.lastHit, JSON.stringify(m))
       await tctx.close()
+    }
+    // ── M8:光标行不被悬浮胶囊盖住(G2-11)──
+    {
+      const kctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 430 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+      const pg = await kctx.newPage()
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      const paras = Array.from({ length: 40 }, (_, i) => `第 ${i} 段正文内容。`).join('\n\n')
+      await mount(pg, '# T\n\n' + paras + '\n')
+      await pg.waitForSelector(MOB, { timeout: 60000 })
+      await pg.waitForTimeout(800)
+      // 第 10 段滚到视口下部(离底 ~130px),点它行尾 —— 与评审探针 g211 同一个起点
+      const at = await pg.evaluate((s) => {
+        const p = [...document.querySelectorAll(s + ' > p')][10]
+        let sc = p.parentElement
+        while (sc && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement
+        if (sc) sc.scrollTop += p.getBoundingClientRect().top - (innerHeight - 130)
+        const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect()
+        return { x: b.right - 2, y: b.top + b.height / 2 }
+      }, MOB)
+      await pg.touchscreen.tap(at.x, at.y)
+      await pg.waitForTimeout(250)
+      const rows = []
+      for (let i = 0; i < 7; i++) {
+        await pg.keyboard.press('Enter')
+        await pg.keyboard.type('新行' + i)
+        await pg.waitForTimeout(150)
+        rows.push(await pg.evaluate(() => {
+          const bar = document.querySelector('#mob-host .amx-mbar').getBoundingClientRect()
+          const node = getSelection().anchorNode
+          const para = (node.nodeType === 3 ? node.parentElement : node).closest('p')
+          const pr = para.getBoundingClientRect()
+          return { line: [Math.round(pr.top), Math.round(pr.bottom)], bar: Math.round(bar.top), under: pr.bottom > bar.top + 0.5 }
+        }))
+      }
+      record('M8 键盘弹起时文中连续回车打字:光标行始终在胶囊之上', rows.every((r) => !r.under), JSON.stringify(rows))
+      await kctx.close()
     }
   } finally {
     await browser.close()
