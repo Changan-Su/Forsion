@@ -63,7 +63,7 @@
 
 <!-- P1-K10b -->
 - When you use this computer remotely from the device page or your phone, reading the background agent settings now only returns whether Historian and Muse are on and how often they run. Historian's custom and default prompts, the folders Muse may read, the models both use, Muse's active hours and token budgets, and notification and escalation settings are no longer sent to the remote side. This does not cover Muse's permission level, heartbeat interval or persona, which the remote side can still read (the device page's Muse page shows the permission level). On the device page, Settings › Agents › Background agents is now read-only and says these can only be set up on this computer (it used to show every setting, but changes could not be saved).
-- Read-only git commands such as `git status` now ask for approval when the workspace contains a planted, fake git directory. Before, an agent could use such a directory to run commands as you without any approval, and a remote session could use it to raise its own approval limit. Read-only git commands in normal repositories, git worktrees and submodules still run without approval. In folders that are not in any repository, git commands now ask for approval too.
+- Read-only git commands such as `git status` now ask for approval when the workspace contains a planted, fake git directory. Before, an agent could use such a directory to run commands as you without any approval, and a remote session could use it to raise its own approval limit. Read-only git commands still run without approval in normal repositories, git worktrees, submodules and folders that are not in any repository.
 <!-- /P1-K10b -->
 
 ## 2.11.4 (2026-09-23)

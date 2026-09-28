@@ -310,33 +310,41 @@ function protectedDotGit(top: string): boolean {
   return [target, canonicalFuturePath(target)].every(inGitSegment) && existsSync(path.join(target, 'HEAD'));
 }
 
+/** Where git's discovery lands from a directory: a vetted work tree, no repository at all, or somewhere whose config the
+ * agent may have written. */
+type GitDiscovery = { top: string } | 'none' | 'unvetted';
+
 /** Walk one directory chain the way git's discovery does (setup_git_directory): at each level `D/.git` first, then `D`
- * itself as a git dir. Returns the work tree only when discovery lands on a protected `.git`. */
-function vettedToplevelFrom(start: string): string | null {
+ * itself as a git dir. */
+function discoverFrom(start: string): GitDiscovery {
   let cur = start;
   for (;;) {
-    if (existsSync(path.join(cur, '.git'))) return protectedDotGit(cur) ? cur : null;
+    if (existsSync(path.join(cur, '.git'))) return protectedDotGit(cur) ? { top: cur } : 'unvetted';
     // A git dir needs HEAD (plus objects/ and refs/); HEAD alone is the conservative test — false positives only cost a card.
-    if (existsSync(path.join(cur, 'HEAD'))) return null;
+    if (existsSync(path.join(cur, 'HEAD'))) return 'unvetted';
     const parent = path.dirname(cur);
-    if (parent === cur) return null;
+    if (parent === cur) return 'none';
     cur = parent;
   }
 }
 
-/** The git work tree `git` would use from `dir`, or null when that is not a repo whose config the agent cannot write
- * (review K10b-2): known-safe `git status` / `log` / … read the discovered git dir's config, and a git-dir layout (HEAD,
- * config, objects/, refs/) with no `.git` segment can be planted with ordinary in-workspace writes — its `core.fsmonitor`
- * then runs under the known-safe label with zero approvals. Both the literal and the realpath chain must land on the same
- * kind of protected `.git` (git itself walks getcwd(), i.e. the realpath). GIT_DIR set in the environment bypasses
- * discovery entirely — not modelled, so not vetted. Outside any repo git has nothing to show: not vetted either. */
-function vettedGitToplevel(dir: string): string | null {
-  if (process.env.GIT_DIR) return null;
+/** What `git` would use from `dir` (review K10b-2): known-safe `git status` / `log` / … read the discovered git dir's
+ * config, and a git-dir layout (HEAD, config, objects/, refs/) with no `.git` segment can be planted with ordinary
+ * in-workspace writes — its `core.fsmonitor` then ran under the known-safe label with zero approvals. A work tree counts
+ * only when discovery lands on a protected `.git`, on both the literal and the realpath chain (git itself walks getcwd(),
+ * i.e. the realpath). 'none' = neither chain has a `.git` or a HEAD anywhere up to the root, so git reads no repository
+ * config and just reports "not a git repository" — harmless. GIT_DIR in the environment bypasses discovery entirely — not
+ * modelled, so unvetted; so are chains that disagree on whether there is a repo at all. */
+function gitDiscovery(dir: string): GitDiscovery {
+  if (process.env.GIT_DIR) return 'unvetted';
   const literal = path.resolve(dir);
-  const top = vettedToplevelFrom(literal);
-  if (!top) return null;
+  const lit = discoverFrom(literal);
   const real = canonicalFuturePath(literal);
-  return real === literal || vettedToplevelFrom(real) ? top : null;
+  const rea = real === literal ? lit : discoverFrom(real);
+  if (lit === 'unvetted' || rea === 'unvetted') return 'unvetted';
+  if (lit === 'none' && rea === 'none') return 'none';
+  if (lit === 'none' || rea === 'none') return 'unvetted';
+  return lit;
 }
 
 /** Contract C4 for `git diff` / `git show` (review F#0): given a path outside the work tree, `git diff` silently switches to
@@ -345,11 +353,11 @@ function vettedGitToplevel(dir: string): string | null {
  * passes the same credential check as `cat` and lies inside the toplevel in both its literal and its realpath form
  * (`link/auth.json` with link -> ~/.forsion is literally inside, canonically outside). A repo whose tree contains a
  * credential file (a dotfiles repo at ~) is never known-safe for diff/show either: their output is file content. */
-function gitReadStaysInRepo(sub: string, args: string[], cwd: string): boolean {
+function gitReadStaysInRepo(sub: string, args: string[], cwd: string, found: Exclude<GitDiscovery, 'unvetted'>): boolean {
   if (args.includes('--no-index')) return false;
   const operands = splitOptions(args).operands;
-  const top = vettedGitToplevel(cwd);
-  if (!top) return false;
+  if (found === 'none') return !['diff', 'show'].includes(sub) && operands.length === 0;
+  const top = found.top;
   const tops = [...new Set([top, canonicalFuturePath(top)])];
   if (['diff', 'show'].includes(sub) && credentialPaths().some((c) => tops.some((t) => pathWithin(c, t)))) return false;
   return operands.every((a) => {
@@ -388,7 +396,8 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   }
   if (program !== 'git') return false;
   // Every git subcommand reads the discovered git dir's config; only a repo whose config the agent cannot write qualifies.
-  if (!vettedGitToplevel(cwd)) return false;
+  const found = gitDiscovery(cwd);
+  if (found === 'unvetted') return false;
   const [sub, ...rest] = args;
   // branch and remote have mutating forms; only exact listing invocations qualify.
   if (sub === 'branch') return rest.every((a) => ['-a', '-r', '--all', '--remotes', '--list'].includes(a));
@@ -398,7 +407,7 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   if (['diff', 'show'].includes(sub) && !(rest.includes('--no-ext-diff') && rest.includes('--no-textconv'))) return false;
   if (!['status', 'diff', 'show', 'log', 'rev-parse', 'describe'].includes(sub)) return false;
   if (!rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a))) return false;
-  return gitReadStaysInRepo(sub, rest, cwd);
+  return gitReadStaysInRepo(sub, rest, cwd, found);
 }
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。

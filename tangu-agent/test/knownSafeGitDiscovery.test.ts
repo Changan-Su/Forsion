@@ -10,7 +10,7 @@
  * 负对照:下面标「修复前」的断言在修复前的 approvals.ts 上实跑为红(输出见交付报告)。
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -70,9 +70,9 @@ afterAll(() => {
   try { rmSync(base, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
-// fsmonitor 的实证要跑 POSIX shell(touch);Windows 上 git 的钩子走 sh.exe,台架口径同 remoteBashProtectedResidual —— 只在 POSIX 跑
-describe.skipIf(process.platform === 'win32')('known-safe git 只信任落在受保护 .git 上的仓库发现', () => {
-  it('实证:摆出来的目录确实被 git 当成 git dir,`git status` 执行了它的 core.fsmonitor', () => {
+describe('known-safe git 只信任落在受保护 .git 上的仓库发现', () => {
+  // 只有这条要跑摆进来的 fsmonitor 载荷(POSIX shell 的 touch);其余用例不执行 git 的钩子,Windows 上照跑(path.sep / `.GIT` 折叠)
+  it.skipIf(process.platform === 'win32')('实证:摆出来的目录确实被 git 当成 git dir,`git status` 执行了它的 core.fsmonitor', () => {
     const parent = join(base, 'proof');
     const dir = join(parent, 'ws');
     plant(dir, parent);
@@ -111,13 +111,16 @@ describe.skipIf(process.platform === 'win32')('known-safe git 只信任落在受
     expect(isKnownSafeBash('git remote -v', join(repo, 'src'))).toBe(true);
   });
 
-  it('不在任何仓库里:git 读不出东西,也就不免审批(修复前:status / log 免审批)', () => {
+  it('不在任何仓库里(一路到根都没有 .git 也没有 HEAD):git 只会报「不是仓库」,无参数的读照旧免审批;diff / show / 带路径的照旧要批', () => {
     const plain = join(base, 'plain');
     mkdirSync(plain, { recursive: true });
+    expect(isKnownSafeBash('git status', plain)).toBe(true); // Tangu 默认文件夹里模型开局常跑,别平白多一张卡
+    expect(isKnownSafeBash('git log', plain)).toBe(true);
+    expect(isKnownSafeBash('git diff --no-ext-diff --no-textconv', plain)).toBe(false);
+    expect(isKnownSafeBash('git log a.txt', plain)).toBe(false);
+    // 同一个目录一旦被摆进 HEAD,就不再是「没有仓库」
+    writeFileSync(join(plain, 'HEAD'), 'ref: refs/heads/main\n');
     expect(isKnownSafeBash('git status', plain)).toBe(false);
-    expect(isKnownSafeBash('git log', plain)).toBe(false);
-    // 负对照:非 git 的只读命令不受影响
-    expect(isKnownSafeBash('ls -la', plain)).toBe(true);
   });
 
   it('.git 是文件:指向 .git/worktrees/<name>(git worktree)照旧免审批;指向没有 .git 段的目录(--separate-git-dir)不免审批', () => {
@@ -128,6 +131,13 @@ describe.skipIf(process.platform === 'win32')('known-safe git 只信任落在受
     execFileSync('git', ['worktree', 'add', '-q', wt], { cwd: main, env: process.env });
     expect(isKnownSafeBash('git status', wt)).toBe(true);
     expect(isKnownSafeBash('git log --oneline', wt)).toBe(true);
+
+    // 子模块:lib/.git 是 `gitdir: ../.git/modules/lib`
+    const host = join(base, 'sm-host');
+    gitInit(host);
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', main, 'lib'], { cwd: host, env: process.env });
+    expect(readFileSync(join(host, 'lib', '.git'), 'utf8')).toMatch(/gitdir: \.\.[\\/]\.git[\\/]modules[\\/]lib/);
+    expect(isKnownSafeBash('git status', join(host, 'lib'))).toBe(true);
 
     // --separate-git-dir:gitdir 落在工作区里一个普通目录 → 结构化写能改它的 config
     const sep = join(base, 'sep');
