@@ -252,9 +252,12 @@ export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any
  *  一律硬拒 —— 不进审批:按 D1 远端能批自己的卡,弹卡挡不住。审批闸与工具实现两处共用这一个判定。 */
 // remember 与 manage_* 同理:写进 Agent 长期记忆的条目会注入之后每一次会话(含本机 full-auto / 自动化),等于在宿主上植入指令;
 // HTTP 的记忆写路由本就是 deny-remote,工具不能成为旁路(09-27 终审 P1)。
-const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember']);
+// log_event 同理(P1 · M1A,G7):每日日志按天进 Muse 周期提示词的活动摘要,远端写一条 = 把原话送进无人值守的 Muse;
+// HTTP 的 POST /agent/log 本就是 deny-remote。它没有 action 参数,恒拒。
+const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember', 'log_event']);
 export function remoteManagementDenied(tool: string, action: unknown): string | null {
   if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
+  if (tool === 'log_event') return 'Remote sessions cannot write to the daily log: it feeds background agents on the host computer. Tell the user the result in your reply instead.';
   return `Remote sessions cannot create, change or delete agents, skills, working notes, long-term memory, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
 }
 

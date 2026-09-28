@@ -85,6 +85,9 @@ export interface ReadActivityOptions {
   limit?: number;
   /** 可选子串过滤(对整行匹配)。 */
   query?: string;
+  /** 连远程 run 写的行(`remote=1`)也给。缺省不给:Muse 的活动尾部与 read_activity 不吃远端给的串(P1 · M1A,G7);
+   *  只有盯任务规则的评估显式要(它只比对用户自己写的 match 串,行文不进提示词)。 */
+  includeRemote?: boolean;
   /** 测试注入用的"现在"。 */
   now?: Date;
 }
@@ -114,6 +117,7 @@ export async function readActivityLines(opts: ReadActivityOptions = {}): Promise
     for (const line of raw.split('\n')) {
       if (!/^\d{12} \S/.test(line)) continue; // 残尾/垃圾行丢弃
       if (line.slice(0, 12) < cutoff) continue;
+      if (!opts.includeRemote && isRemoteActivityLine(line)) continue;
       if (query && !line.includes(query)) continue;
       out.push(line);
     }
@@ -126,6 +130,15 @@ export async function readActivityLines(opts: ReadActivityOptions = {}): Promise
     tail = tail.slice(1);
   }
   return tail;
+}
+
+/**
+ * 这行是不是远程污点 run 写的(引擎侧写入口给远程 run 的行加 `remote=1`:registry.ts agent.edit、runStore.ts run.done)。
+ * 与 isUserActivityLine 同法:先抹掉引号段再找,值里的字面 ` remote=1` 不算。远端内容只会出现在带这个键的行里 —— 标记由引擎盖,
+ * 远端伪造它只会把自己藏起来。
+ */
+export function isRemoteActivityLine(line: string): boolean {
+  return /\sremote=1(\s|$)/.test(line.replace(/"[^"]*"/g, '""'));
 }
 
 /**

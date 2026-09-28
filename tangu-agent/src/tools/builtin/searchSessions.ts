@@ -18,6 +18,7 @@ import {
   sessionToolScope, type SessionHit,
 } from '../../services/sessionSearch.js';
 import { computerHistoryRecallHide } from '../../services/computerHistory.js';
+import { remoteRecallHide } from '../../services/remoteTaint.js';
 import { deps } from '../../seams/runtime.js';
 
 // 纯函数面从服务层原样再导出:既有单测(searchSessions.test.ts)与其它 import 点不变。
@@ -106,6 +107,8 @@ export const searchSessionsProvider: ToolProvider = {
           toolScope: sessionToolScope(ctx.agentSlug),
           // 本 run 过不了电脑历史门禁 → 调过 read_computer_history 的会话不给搜(否则关掉 / 通道里照样能翻出复述过的内容)
           excludeSessionsWithTool: computerHistoryRecallHide(ctx.profile ?? deps().profile, ctx),
+          // 无人值守 / 通道 run 不吃远端驱动过的会话(P1 · M1A,G7;见 remoteTaint.remoteRecallHide)
+          excludeRemoteSessions: remoteRecallHide(ctx),
           signal: ctx.signal,
         });
 

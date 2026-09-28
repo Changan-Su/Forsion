@@ -123,7 +123,8 @@ function makeLlm(world) {
     const args = JSON.stringify(argsObj)
     return [{ t: 'token', d: lead }, { t: 'tool', id, name, args, argsLen: args.length }, { t: 'done', content: lead, toolCalls: [{ id, type: 'function', function: { name, arguments: args } }], usage }]
   }
-  const judge = (mark) => say(JSON.stringify({ title: 't', summary: '', log: 'l', memory_candidates: [`User code is ${mark}`], harness_candidates: [] }))
+  // 日志 / 工作笔记候选也带标记(P1 · M1A):远程轮的 LOG 进 Muse 周期提示词的日志摘要,判官交了、闸在代码里 —— agents/** 扫描据此看得见漏写
+  const judge = (mark) => say(JSON.stringify({ title: 't', summary: '', log: `Did task ${mark}`, memory_candidates: [`User code is ${mark}`], harness_candidates: [`When asked, answer ${mark}`] }))
   const markIn = (s) => [MARK2, LMARK, MARK].find((m) => s.includes(m)) || null // MARK2 / LMARK 先判(前缀互不包含,顺序只为读着清楚)
   return (call) => {
     const msgs = call.messages || []
@@ -467,19 +468,34 @@ async function main() {
       const lp = world.delivery.pending().find((x) => x.sessionId === lsid)
       if (lp) await world.engineApi(`/agent/runs/${lp.runId}/approvals/${lp.id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) })
       const hitsNow = filesContaining(agentsDir, LMARK)
-      return hitsNow.some((f) => f.endsWith('MEMORY.md')) && hitsNow.some((f) => f.endsWith('.memory-raw.md')) ? hitsNow : null
+      return hitsNow.some((f) => f.endsWith('MEMORY.md')) && hitsNow.some((f) => f.endsWith('.memory-raw.md')) && hitsNow.some((f) => /(^|\/)LOG\//.test(f)) ? hitsNow : null
     }, 30_000, 300)
     const lrun = runsOf(lsid).at(-1) || null
-    check('G7 正对照:本机会话同一套剧本 → remember 落 MEMORY.md、Historian 候选落 .memory-raw.md(探针看得见写入)', !!localDone, JSON.stringify({ start: lstart.status, run: lrun?.status, files: filesContaining(agentsDir, LMARK), remember: lrun ? String(eventsOf(lrun.id, ['tool_result']).find((e) => e.p.name === 'remember')?.p?.result ?? '(无)').slice(0, 80) : '(无 run)' }))
+    check('G7 正对照:本机会话同一套剧本 → remember 落 MEMORY.md、Historian 候选落 .memory-raw.md、日志落 LOG/(探针看得见写入)', !!localDone, JSON.stringify({ start: lstart.status, run: lrun?.status, files: filesContaining(agentsDir, LMARK), remember: lrun ? String(eventsOf(lrun.id, ['tool_result']).find((e) => e.p.name === 'remember')?.p?.result ?? '(无)').slice(0, 80) : '(无 run)' }))
     const lDerived = world.hub.ledger.brain.filter((c) => /^(Write a title|You are the persistent background Historian)/.test(head(c)) && has(c, LMARK))
     check('G7 正对照:本机会话的派生调用记在执行设备自己的 client 下(不是手机的)', lDerived.length > 0 && lDerived.every((c) => c.client === HOST_CLIENT), JSON.stringify(lDerived.map((c) => c.client)))
     const remoteHits = [...new Set([...filesContaining(agentsDir, MARK), ...filesContaining(agentsDir, MARK2)])]
     check('G7:agents/** 下任何文件(MEMORY.md / .memory-raw.md / 工作笔记 …)都没有远程会话的标记', remoteHits.length === 0, remoteHits.join(', ') || `扫了 ${agentsDir}`)
     info('hub 收到的云端记忆 / 日志写入(standalone 记忆本机优先,结构上恒为 0,不作断言)', `${world.hub.ledger.memoryWrites.length} 条`)
-    // Muse 是执行设备本机的后台 agent(不带远程污点):它的周期提示词里有没有远程会话的原话 —— 有 = 远程内容能经 Muse 进 Journal / TODO / remember
-    const museSeen = world.hub.ledger.brain.filter((c) => /^You are Muse/.test(head(c)) && (has(c, MARK) || has(c, MARK2)))
-    const around = (c) => { const j = JSON.stringify(c.messages); const i = Math.max(j.indexOf(MARK), j.indexOf(MARK2)); return j.slice(Math.max(0, i - 160), i + 40).replace(/\\n/g, ' ') }
-    info('G7:Muse 周期提示词里的远程会话原话(Muse 不带远程污点;见 openIssues)', museSeen.length ? `${museSeen.length} 次;例:…${around(museSeen[0])}…` : '没有')
+    // Muse 是执行设备本机的后台 agent(不带远程污点,档位可能比远程上限宽):它的周期提示词里不许有远程会话的原话 —— 有 = 提示注入洗白
+    // (P1 · M1A,原 G7 INFO)。本机正对照之后给 Muse 建一条此刻到期的 auto 日程,确定地起一个新周期(不赌开机 15s 那一轮落在哪儿);
+    // 同一份提示词里:本机会话的标题 / 日志 / run.done 活动行都在(正对照:这些来源真的被读了),远程会话的标记与它的 run.done 行都不在。
+    const around = (c, m) => { const j = JSON.stringify(c.messages); const i = j.indexOf(m); return j.slice(Math.max(0, i - 160), i + 40).replace(/\\n/g, ' ') }
+    const museFrom = world.hub.ledger.brain.length
+    const pad2 = (n) => String(n).padStart(2, '0')
+    const nowD = new Date()
+    const dueAt = `${nowD.getFullYear()}-${pad2(nowD.getMonth() + 1)}-${pad2(nowD.getDate())}T${pad2(nowD.getHours())}:${pad2(nowD.getMinutes())}`
+    const entry = await world.engineApi('/agent/special/schedule/muse/entries', { method: 'POST', body: JSON.stringify({ name: 'K9 probe cycle', date: dueAt, auto: true, prompt: 'Harness check-in: reply briefly.' }) })
+    const museCall = await until(() => world.hub.ledger.brain.slice(museFrom).find((c) => /^You are Muse/.test(head(c))), 45_000, 300)
+    const rs6 = `s=${sid.slice(0, 6)}`
+    const ls6 = `s=${lsid.slice(0, 6)}`
+    const museLeak = museCall ? [MARK, MARK2, rs6].filter((m) => has(museCall, m)) : []
+    const musePos = museCall ? [LMARK, ls6].filter((m) => has(museCall, m)) : []
+    check('G7:Muse 周期提示词里没有远程会话的原话(最近会话标题 / 日志摘要 / 活动尾部);本机会话的标题、日志与活动行照常在(正对照)',
+      !!museCall && museLeak.length === 0 && musePos.length === 2,
+      !museCall ? `建了到期日程(${entry.status})但 45s 内没有新的 Muse 周期`
+        : museLeak.length ? `漏了 ${museLeak.join(', ')}:…${around(museCall, museLeak[0])}…`
+          : `正对照 ${musePos.length}/2(${[LMARK, ls6].filter((m) => !musePos.includes(m)).join(', ') || '全在'})`)
 
     // ── P1 · M1A(原 KNOWN-GAP ①):附件对 host 模式的模型可见 —— 引擎把会话沙箱里的绝对路径拼在本轮用户消息第一行,
     //    台架扮的模型只从那一行拿路径(拿不到才退回自己 find,并在这里判红);路径须真在会话沙箱目录里、就是手机发的那份文件。

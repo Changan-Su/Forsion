@@ -72,6 +72,7 @@ import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync
 import { buildAgentMemoryContext } from './memoryRecall.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
+import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
 
@@ -1382,8 +1383,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined, inDiscussion: isTeamMember || undefined,
         ephemeral: !!inlineMemberDef || undefined, subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
       });
+      // 远端驱动过的会话(remoteTaint.ts)不自动召回进本机无污点的 run:召回片段不经任何人点头就进上下文,与「远程轮不写长期记忆」同一条规矩
+      // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
+      const hideRemoteSessions = !effectiveRemote({ remote, runId });
       const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug,
-        query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, signal: ac.signal });
+        query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
       } else {

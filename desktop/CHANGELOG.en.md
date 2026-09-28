@@ -82,6 +82,7 @@
 
 <!-- P1-M1 -->
 - **Agents on your computer can now find files you attach from your phone (or the device page)**. The file already reached that computer, but in sessions that run in a folder on the computer the agent didn't know where it was and had to search the whole disk. Now the file's location on that computer is handed to the agent with your message, just like a file dragged in on the computer, and the agent reads it from there. When you reopen the session, a file tag for it shows at the start of the message. Small files picked with "Add › File" in sessions that run in a folder on the computer work the same way.
+- Conversations run on this computer from your phone or the device page no longer flow automatically into background agents and other conversations on this computer: the recent session titles, daily log summary and activity that Muse sees leave them out, and the related past excerpts that local conversations attach automatically no longer come from them (you can still find them when you ask an agent to search your history in a local conversation). Remote conversations also no longer write to an agent's daily log (neither Historian nor the agent itself), in line with them not writing long-term memory.
 <!-- /P1-M1 -->
 
 ## 2.11.4 (2026-09-23)

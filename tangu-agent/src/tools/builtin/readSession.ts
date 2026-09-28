@@ -12,6 +12,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import { deps } from '../../seams/runtime.js';
 import { sessionToolScope } from '../../services/sessionSearch.js';
 import { computerHistoryRecallHide } from '../../services/computerHistory.js';
+import { remoteRecallHide } from '../../services/remoteTaint.js';
 
 /** 一条消息压成一行(工具调用只留名字;正文按 perMsg 截断)。
  *  ⚠️助手消息在库里 role='model'(不是 'assistant'),这里归一化,免得模型把它当成用户发言。 */
@@ -83,6 +84,8 @@ export const readSessionProvider: ToolProvider = {
           messageId: messageId || undefined, beforeMessageId: beforeId || undefined,
           // 与 search_sessions 同一道:过不了电脑历史门禁的 run 读不到调过 read_computer_history 的会话(按「无此会话」答)
           excludeSessionsWithTool: computerHistoryRecallHide(ctx.profile ?? deps().profile, ctx),
+          // 无人值守 / 通道 run 不吃远端驱动过的会话(P1 · M1A,G7;见 remoteTaint.remoteRecallHide)
+          excludeRemoteSessions: remoteRecallHide(ctx),
           signal: ctx.signal,
         });
         ctx.signal?.throwIfAborted();

@@ -15,6 +15,8 @@ export interface AgentMemoryContextInput {
   /** Trusted runtime decision: sessions where any message called this tool are left out of the history section
    *  (read_computer_history when the run fails its gate). */
   hideSessionsWithTool?: string;
+  /** 远端驱动过的会话不进「相关历史片段」(本机无污点 run 的自动召回;P1 · M1A,见 remoteTaint.ts)。 */
+  hideRemoteSessions?: boolean;
   signal?: AbortSignal;
   /** Includes labels and evidence references; hard maximum 4,000 UTF-16 characters. */
   maxChars?: number;
@@ -158,7 +160,7 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
     try {
       history = await searchSessions({ userId: input.userId, appId: input.appId,
         toolScope: sessionToolScope(input.agentSlug), terms, limit: 3, matchAny: true,
-        excludeSessionId: input.excludeSessionId, excludeSessionsWithTool: input.hideSessionsWithTool, signal: input.signal,
+        excludeSessionId: input.excludeSessionId, excludeSessionsWithTool: input.hideSessionsWithTool, excludeRemoteSessions: input.hideRemoteSessions, signal: input.signal,
         candidateLimit: MEMORY_RECALL_HISTORY_SESSIONS, messagesPerSession: MEMORY_RECALL_HISTORY_MESSAGES,
         messageChars: MEMORY_RECALL_HISTORY_MESSAGE_CHARS });
     } catch (e: any) {
