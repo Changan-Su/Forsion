@@ -1,11 +1,13 @@
 /** 代码块增强(AFFiNE 对标):lowlight(highlight.js common,37 语言)语法高亮装饰
- *  + 悬停工具条 widget(语言选择 / 复制 / 折行)。配色复用 base.css 既有 .hljs-* 主题 token。
+ *  + 悬停工具条(语言选择 / 复制 / 折行,NodeView 挂在 <code> 之外)。配色复用 base.css 既有 .hljs-* 主题 token。
  *  语言即 fence info(```py)= code_block 节点 attrs.language,改语言 = setNodeMarkup(落盘 md 原生);
  *  折行是会话视图态(不进 md),位置经事务映射保持贴同一块。
  *  块编辑器一块一 doc,doc 极小 → 每次变更全量重高亮,无需缓存。 */
 import { $prose } from '@milkdown/kit/utils'
+import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
+import type { EditorView, NodeView, ViewMutationRecord } from '@milkdown/kit/prose/view'
 import { common, createLowlight } from 'lowlight'
 import { currentLocale, registerMessages, translate } from '../../../i18n'
 import { isShellLang, runInTerminal, stripPrompt } from '../../../builtins/runCommand'
@@ -86,177 +88,243 @@ interface CodeUi {
 /** 语言选择的「最近使用」:同一次会话里选过的语言排到列表最前(AFFiNE 同款手感)。 */
 const recentLangs: string[] = []
 
+/** 悬停工具条(语言 / 复制 / 折行 / 行号 / 折叠 / 运行)。nodeAt = 代码块节点当前的文档位置。 */
+function buildToolbar(view: EditorView, nodeAt: () => number | null, lang: string, isWrap: boolean, isNo: boolean, isCollapsed: boolean): HTMLDivElement {
+  const bar = document.createElement('div')
+  bar.className = 'amx-code-tools'
+  bar.contentEditable = 'false'
+  // 语言选择
+  const sel = document.createElement('select')
+  sel.className = 'amx-code-lang'
+  sel.title = translate('amxcode.langTitle')
+  const opt0 = document.createElement('option')
+  opt0.value = ''
+  opt0.textContent = translate('amxcode.plainText')
+  sel.appendChild(opt0)
+  const known = LANGS.includes(lang) || !lang
+  // 最近用过的排最前(会话内),其余保持原序 —— AFFiNE 选中即 unshift 的同款手感。
+  const ordered = [...recentLangs.filter((l) => LANGS.includes(l)), ...LANGS.filter((l) => !recentLangs.includes(l))]
+  for (const l of known ? ordered : [lang, ...ordered]) {
+    const o = document.createElement('option')
+    o.value = l
+    o.textContent = l
+    sel.appendChild(o)
+  }
+  sel.value = lang
+  sel.addEventListener('change', () => {
+    const at = nodeAt()
+    if (sel.value) {
+      const i = recentLangs.indexOf(sel.value)
+      if (i >= 0) recentLangs.splice(i, 1)
+      recentLangs.unshift(sel.value)
+    }
+    if (at === null) return
+    const n = view.state.doc.nodeAt(at)
+    if (n?.type.name === 'code_block') {
+      view.dispatch(view.state.tr.setNodeMarkup(at, undefined, { ...n.attrs, language: sel.value }))
+    }
+  })
+  // 复制
+  const copy = document.createElement('button')
+  copy.className = 'amx-code-btn'
+  copy.textContent = translate('amxcode.copy')
+  copy.title = translate('amxcode.copyTitle')
+  copy.addEventListener('click', () => {
+    const at = nodeAt()
+    const n = at === null ? null : view.state.doc.nodeAt(at)
+    if (!n) return
+    void navigator.clipboard.writeText(n.textContent).then(() => {
+      copy.textContent = translate('amxcode.copied')
+      setTimeout(() => { copy.textContent = translate('amxcode.copy') }, 1200)
+    })
+  })
+  // 折行
+  const wrap = document.createElement('button')
+  wrap.className = `amx-code-btn${isWrap ? ' on' : ''}`
+  wrap.textContent = translate('amxcode.wrap')
+  wrap.title = translate('amxcode.wrapTitle')
+  wrap.addEventListener('click', () => {
+    const at = nodeAt()
+    if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at }))
+  })
+  // 行号(与折行互斥:软换行没有自己的号,开着折行时行号必然错位)
+  const nums = document.createElement('button')
+  nums.className = `amx-code-btn${isNo ? ' on' : ''}`
+  nums.textContent = isNo ? translate('amxcode.linenoOff') : translate('amxcode.lineno')
+  nums.title = isWrap ? translate('amxcode.linenoDisabled') : translate('amxcode.linenoTitle')
+  nums.disabled = isWrap
+  nums.addEventListener('click', () => {
+    const at = nodeAt()
+    if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'lineno' }))
+  })
+  // 折叠(限高 8 行 + 底部渐隐,AFFiNE 同款)
+  const fold = document.createElement('button')
+  fold.className = `amx-code-btn${isCollapsed ? ' on' : ''}`
+  fold.textContent = isCollapsed ? translate('amxcode.expand') : translate('amxcode.collapse')
+  fold.title = translate('amxcode.collapseTitle')
+  fold.addEventListener('click', () => {
+    const at = nodeAt()
+    if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'collapse' }))
+  })
+  bar.append(sel, copy, wrap, nums, fold)
+  // 运行(仅 shell fence 且桌面端有 PTY;笔记里没有会话,只跑不回传)
+  if (isShellLang(lang) && window.tangu?.pty) {
+    const run = document.createElement('button')
+    run.className = 'amx-code-btn'
+    run.textContent = translate('amxcode.run')
+    run.title = translate('amxcode.runTitle')
+    run.addEventListener('click', () => {
+      const at = nodeAt()
+      const n = at === null ? null : view.state.doc.nodeAt(at)
+      const cmd = n ? stripPrompt(n.textContent) : ''
+      if (cmd) runInTerminal(cmd)
+    })
+    bar.append(run)
+  }
+  return bar
+}
+
+/** 代码块 NodeView(R-04):工具条与行号栏挂在 contentDOM(<code>)**之外**,<code> 里只有代码。
+ *  此前两者是 pos+1 的 side:-1 widget,落在 <code> 里文字之前;首个关键字一被高亮包进 span,
+ *  DOM 选区停在 CODE@2(span 之后的元素边界),Chrome 下一个字却插到 span **前面** ——
+ *  空代码块打 `const a` 得到 ` aconst`。最小实验:只去工具条、或只去高亮,乱序都消失;
+ *  病根是「contentDOM 里夹着非内容节点」,所以把它们请出 contentDOM,而不是去矫正选区。
+ *  外层 Decoration.node 的 class(amx-code / -wrap / -lineno / -collapsed)PM 照常贴在 this.dom 上。 */
+class CodeBlockView implements NodeView {
+  dom: HTMLElement
+  contentDOM: HTMLElement
+  private bar: HTMLDivElement | null = null
+  private nums: HTMLSpanElement | null = null
+  private barSig = ''
+
+  constructor(
+    private node: ProseNode,
+    private readonly view: EditorView,
+    private readonly getPos: () => number | undefined,
+    private readonly onDestroy: () => void,
+  ) {
+    this.dom = document.createElement('pre')
+    this.contentDOM = document.createElement('code')
+    this.dom.appendChild(this.contentDOM)
+    this.sync()
+  }
+
+  update(node: ProseNode): boolean {
+    if (node.type !== this.node.type) return false
+    this.node = node
+    this.sync()
+    return true
+  }
+
+  /** 按节点 + 插件视图态(折行/行号/折叠,会话态)+ 界面语言刷新工具条与行号;签名不变不碰 DOM,
+   *  语言下拉开着时不会被重建打断。插件 view.update 每个事务都调一次(视图态切换不一定改到节点)。 */
+  sync(): void {
+    const lang = String((this.node.attrs as { language?: string }).language ?? '').trim()
+    if (lang) this.dom.setAttribute('data-language', lang)
+    else this.dom.removeAttribute('data-language')
+    const pos = this.getPos()
+    const ui = codeKey.getState(this.view.state)
+    const isWrap = pos != null && !!ui?.wrapped.has(pos)
+    const isNo = pos != null && !!ui?.lineno.has(pos) && !isWrap // 折行时软换行没有自己的号,互斥
+    const isCollapsed = pos != null && !!ui?.collapsed.has(pos)
+    const sig = `${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}`
+    if (sig !== this.barSig) {
+      const bar = buildToolbar(this.view, () => this.getPos() ?? null, lang, isWrap, isNo, isCollapsed)
+      if (this.bar) this.bar.replaceWith(bar)
+      else this.dom.insertBefore(bar, this.contentDOM)
+      this.bar = bar
+      this.barSig = sig
+    }
+    if (isNo) {
+      // ⚠️ code_block 是**一个** <pre>,行不是元素 —— CSS 计数器没有可计的东西。自己画一列,与代码
+      //    同字体同行高(pre 内部,直接继承),绝对定位在左槽。
+      const lines = this.node.textContent.split('\n').length
+      const text = Array.from({ length: lines }, (_, i) => String(i + 1)).join('\n')
+      if (!this.nums) {
+        this.nums = document.createElement('span')
+        this.nums.className = 'amx-code-nums'
+        this.nums.contentEditable = 'false'
+        this.dom.insertBefore(this.nums, this.contentDOM)
+      }
+      if (this.nums.textContent !== text) this.nums.textContent = text
+    } else if (this.nums) {
+      this.nums.remove()
+      this.nums = null
+    }
+  }
+
+  /** 工具条/行号栏里的变化(「已复制」换字、按钮态)不是文档变化,别让 PM 重读这一块。 */
+  ignoreMutation(m: ViewMutationRecord): boolean {
+    if (m.type === 'selection') return false
+    return !this.contentDOM.contains(m.target)
+  }
+
+  /** 工具条上的点按/选择自己处理(原 widget 的 stopEvent 同口径);<code> 与 <pre> 本身仍交给 PM。 */
+  stopEvent(e: Event): boolean {
+    const t = e.target as Node | null
+    return !!t && t !== this.dom && this.dom.contains(t) && !this.contentDOM.contains(t)
+  }
+
+  destroy(): void {
+    this.onDestroy()
+  }
+}
+
 export function codeBlockPlugin() {
-  return $prose(
-    () =>
-      new Plugin({
-        key: codeKey,
-        state: {
-          init: () => ({ wrapped: new Set<number>(), lineno: new Set<number>(), collapsed: new Set<number>() }),
-          apply(tr, v) {
-            if (!tr.docChanged && !tr.getMeta(codeKey)) return v
-            const wrapped = new Set([...v.wrapped].map((p) => tr.mapping.map(p)))
-            const lineno = new Set([...v.lineno].map((p) => tr.mapping.map(p)))
-            const collapsed = new Set([...v.collapsed].map((p) => tr.mapping.map(p)))
-            const meta = tr.getMeta(codeKey) as { toggle?: number; which?: 'wrap' | 'lineno' | 'collapse' } | undefined
-            if (meta?.toggle != null) {
-              const set = meta.which === 'lineno' ? lineno : meta.which === 'collapse' ? collapsed : wrapped
-              if (set.has(meta.toggle)) set.delete(meta.toggle)
-              else set.add(meta.toggle)
+  return $prose(() => {
+    const views = new Set<CodeBlockView>()
+    return new Plugin({
+      key: codeKey,
+      view: () => ({ update: () => { for (const v of views) v.sync() } }),
+      state: {
+        init: () => ({ wrapped: new Set<number>(), lineno: new Set<number>(), collapsed: new Set<number>() }),
+        apply(tr, v) {
+          if (!tr.docChanged && !tr.getMeta(codeKey)) return v
+          const wrapped = new Set([...v.wrapped].map((p) => tr.mapping.map(p)))
+          const lineno = new Set([...v.lineno].map((p) => tr.mapping.map(p)))
+          const collapsed = new Set([...v.collapsed].map((p) => tr.mapping.map(p)))
+          const meta = tr.getMeta(codeKey) as { toggle?: number; which?: 'wrap' | 'lineno' | 'collapse' } | undefined
+          if (meta?.toggle != null) {
+            const set = meta.which === 'lineno' ? lineno : meta.which === 'collapse' ? collapsed : wrapped
+            if (set.has(meta.toggle)) set.delete(meta.toggle)
+            else set.add(meta.toggle)
+          }
+          return { wrapped, lineno, collapsed }
+        },
+      },
+      props: {
+        nodeViews: {
+          code_block: (node, view, getPos) => {
+            let cv!: CodeBlockView
+            cv = new CodeBlockView(node, view, getPos, () => views.delete(cv))
+            views.add(cv)
+            return cv
+          },
+        },
+        decorations(state) {
+          const decos: Decoration[] = []
+          const ui = codeKey.getState(state)
+          const wrapped = ui?.wrapped ?? new Set<number>()
+          const lineno = ui?.lineno ?? new Set<number>()
+          const collapsed = ui?.collapsed ?? new Set<number>()
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== 'code_block') return true
+            const lang = String((node.attrs as { language?: string }).language ?? '').trim()
+            const isWrap = wrapped.has(pos)
+            const isNo = lineno.has(pos) && !isWrap // 折行时行号必然错位(软换行没有自己的号),互斥
+            const isCollapsed = collapsed.has(pos)
+            decos.push(Decoration.node(pos, pos + node.nodeSize, {
+              class: `amx-code${isWrap ? ' amx-code-wrap' : ''}${isNo ? ' amx-code-lineno' : ''}${isCollapsed ? ' amx-code-collapsed' : ''}`,
+              ...(isNo ? { 'data-lines': String(node.textContent.split('\n').length) } : {}),
+            }))
+            for (const t of tokenRanges(node.textContent, lang)) {
+              decos.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
             }
-            return { wrapped, lineno, collapsed }
-          },
+            return false
+          })
+          return decos.length ? DecorationSet.create(state.doc, decos) : DecorationSet.empty
         },
-        props: {
-          decorations(state) {
-            const decos: Decoration[] = []
-            const ui = codeKey.getState(state)
-            const wrapped = ui?.wrapped ?? new Set<number>()
-            const lineno = ui?.lineno ?? new Set<number>()
-            const collapsed = ui?.collapsed ?? new Set<number>()
-            state.doc.descendants((node, pos) => {
-              if (node.type.name !== 'code_block') return true
-              const lang = String((node.attrs as { language?: string }).language ?? '').trim()
-              const isWrap = wrapped.has(pos)
-              const isNo = lineno.has(pos) && !isWrap // 折行时行号必然错位(软换行没有自己的号),互斥
-              const isCollapsed = collapsed.has(pos)
-              decos.push(Decoration.node(pos, pos + node.nodeSize, {
-                class: `amx-code${isWrap ? ' amx-code-wrap' : ''}${isNo ? ' amx-code-lineno' : ''}${isCollapsed ? ' amx-code-collapsed' : ''}`,
-                ...(isNo ? { 'data-lines': String(node.textContent.split('\n').length) } : {}),
-              }))
-              for (const t of tokenRanges(node.textContent, lang)) {
-                decos.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
-              }
-              if (isNo) {
-                // ⚠️ code_block 是**一个** <pre>,行不是元素 —— CSS 计数器没有可计的东西。
-                // 只能自己画一列:与代码同字体同行高(挂在 pre 内部,直接继承),绝对定位在左槽。
-                const lines = node.textContent.split('\n').length
-                decos.push(
-                  Decoration.widget(
-                    pos + 1,
-                    () => {
-                      const col = document.createElement('span')
-                      col.className = 'amx-code-nums'
-                      col.contentEditable = 'false'
-                      col.textContent = Array.from({ length: lines }, (_, i) => String(i + 1)).join('\n')
-                      return col
-                    },
-                    { side: -1, ignoreSelection: true, stopEvent: () => true, key: `cn${pos}:${lines}` },
-                  ),
-                )
-              }
-              decos.push(
-                Decoration.widget(
-                  pos + 1,
-                  (view, getPos) => {
-                    /** widget 当前位置 = 节点位置 + 1(getPos 随事务映射,比 posAtDOM 猜测可靠)。 */
-                    const nodeAt = (): number | null => {
-                      const p = getPos()
-                      return p === undefined ? null : p - 1
-                    }
-                    const bar = document.createElement('div')
-                    bar.className = 'amx-code-tools'
-                    bar.contentEditable = 'false'
-                    // 语言选择
-                    const sel = document.createElement('select')
-                    sel.className = 'amx-code-lang'
-                    sel.title = translate('amxcode.langTitle')
-                    const opt0 = document.createElement('option')
-                    opt0.value = ''
-                    opt0.textContent = translate('amxcode.plainText')
-                    sel.appendChild(opt0)
-                    const known = LANGS.includes(lang) || !lang
-                    // 最近用过的排最前(会话内),其余保持原序 —— AFFiNE 选中即 unshift 的同款手感。
-                    const ordered = [...recentLangs.filter((l) => LANGS.includes(l)), ...LANGS.filter((l) => !recentLangs.includes(l))]
-                    for (const l of known ? ordered : [lang, ...ordered]) {
-                      const o = document.createElement('option')
-                      o.value = l
-                      o.textContent = l
-                      sel.appendChild(o)
-                    }
-                    sel.value = lang
-                    sel.addEventListener('change', () => {
-                      const at = nodeAt()
-                      if (sel.value) {
-                        const i = recentLangs.indexOf(sel.value)
-                        if (i >= 0) recentLangs.splice(i, 1)
-                        recentLangs.unshift(sel.value)
-                      }
-                      if (at === null) return
-                      const n = view.state.doc.nodeAt(at)
-                      if (n?.type.name === 'code_block') {
-                        view.dispatch(view.state.tr.setNodeMarkup(at, undefined, { ...n.attrs, language: sel.value }))
-                      }
-                    })
-                    // 复制
-                    const copy = document.createElement('button')
-                    copy.className = 'amx-code-btn'
-                    copy.textContent = translate('amxcode.copy')
-                    copy.title = translate('amxcode.copyTitle')
-                    copy.addEventListener('click', () => {
-                      const at = nodeAt()
-                      const n = at === null ? null : view.state.doc.nodeAt(at)
-                      if (!n) return
-                      void navigator.clipboard.writeText(n.textContent).then(() => {
-                        copy.textContent = translate('amxcode.copied')
-                        setTimeout(() => { copy.textContent = translate('amxcode.copy') }, 1200)
-                      })
-                    })
-                    // 折行
-                    const wrap = document.createElement('button')
-                    wrap.className = `amx-code-btn${isWrap ? ' on' : ''}`
-                    wrap.textContent = translate('amxcode.wrap')
-                    wrap.title = translate('amxcode.wrapTitle')
-                    wrap.addEventListener('click', () => {
-                      const at = nodeAt()
-                      if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at }))
-                    })
-                    // 行号(与折行互斥:软换行没有自己的号,开着折行时行号必然错位)
-                    const nums = document.createElement('button')
-                    nums.className = `amx-code-btn${isNo ? ' on' : ''}`
-                    nums.textContent = isNo ? translate('amxcode.linenoOff') : translate('amxcode.lineno')
-                    nums.title = isWrap ? translate('amxcode.linenoDisabled') : translate('amxcode.linenoTitle')
-                    nums.disabled = isWrap
-                    nums.addEventListener('click', () => {
-                      const at = nodeAt()
-                      if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'lineno' }))
-                    })
-                    // 折叠(限高 8 行 + 底部渐隐,AFFiNE 同款)
-                    const fold = document.createElement('button')
-                    fold.className = `amx-code-btn${isCollapsed ? ' on' : ''}`
-                    fold.textContent = isCollapsed ? translate('amxcode.expand') : translate('amxcode.collapse')
-                    fold.title = translate('amxcode.collapseTitle')
-                    fold.addEventListener('click', () => {
-                      const at = nodeAt()
-                      if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'collapse' }))
-                    })
-                    bar.append(sel, copy, wrap, nums, fold)
-                    // 运行(仅 shell fence 且桌面端有 PTY;笔记里没有会话,只跑不回传)
-                    if (isShellLang(lang) && window.tangu?.pty) {
-                      const run = document.createElement('button')
-                      run.className = 'amx-code-btn'
-                      run.textContent = translate('amxcode.run')
-                      run.title = translate('amxcode.runTitle')
-                      run.addEventListener('click', () => {
-                        const at = nodeAt()
-                        const n = at === null ? null : view.state.doc.nodeAt(at)
-                        const cmd = n ? stripPrompt(n.textContent) : ''
-                        if (cmd) runInTerminal(cmd)
-                      })
-                      bar.append(run)
-                    }
-                    return bar
-                  },
-                  // key 带语言与折行态:变更即重建(select 值/按钮态才会刷新)。
-                  // 末尾的界面语言同理:切了中英文后下一次重绘会重建工具条,不至于留着旧语言的按钮文案。
-                  { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ct${pos}:${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}` },
-                ),
-              )
-              return false
-            })
-            return decos.length ? DecorationSet.create(state.doc, decos) : DecorationSet.empty
-          },
-        },
-      }),
-  )
+      },
+    })
+  })
 }

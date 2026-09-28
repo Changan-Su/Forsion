@@ -246,6 +246,71 @@ async function main() {
         await page.close()
       }
     }
+
+    // ── R-04:空代码块里打完首个关键字,光标不再跳回块首(五种语言)。──
+    if (want('R04')) {
+      const codeText = (page) => page.evaluate(() => {
+        let t = null
+        window.__upage.probe.view().state.doc.descendants((n) => { if (n.type.name === 'code_block') t = n.textContent })
+        return t
+      })
+      for (const [lang, typed] of [['js', 'const a = (1)'], ['python', 'def main():'], ['sql', 'SELECT 1'], ['python', 'import os'], ['bash', 'echo hi']]) {
+        const page = await open(browser, '段一\n\n```' + lang + '\n\n```\n')
+        await caretIn(page, 'code_block', { atStart: true })
+        const kw = typed.split(' ')[0]
+        await page.keyboard.type(kw, { delay: 40 })
+        await page.waitForTimeout(120)
+        // 机理:关键字被高亮包进 span 之后,DOM 光标必须仍在文本节点里,而不是 <code> 的元素边界上。
+        const mech = await page.evaluate((PM) => {
+          const code = document.querySelector(PM + ' pre code')
+          const s = getSelection()
+          return { token: !!code.querySelector('[class^="hljs-"]'), anchorIsText: s.anchorNode && s.anchorNode.nodeType === 3, nonContent: [...code.children].filter((c) => !/^hljs-/.test(c.className) && c.tagName !== 'BR').length }
+        }, PM)
+        await page.keyboard.type(typed.slice(kw.length), { delay: 40 })
+        await page.waitForTimeout(150)
+        const got = await codeText(page)
+        check(`R04 \`\`\`${lang} 首行打 ${JSON.stringify(typed)} 不乱序`, got === typed && mech.token && mech.anchorIsText && mech.nonContent === 0, `got=${JSON.stringify(got)} ${JSON.stringify(mech)}`)
+        await page.close()
+      }
+      // 真实入口:键盘敲 ```js + 回车起代码块,接着打字。
+      {
+        const page = await open(browser, '段一\n')
+        await caretIn(page, 'paragraph')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('```js', { delay: 30 })
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(150)
+        await page.keyboard.type('const a = (1)', { delay: 40 })
+        await page.waitForTimeout(1300)
+        const got = await codeText(page)
+        check('R04 键盘 ```js⏎ 新建后打 "const a = (1)" 不乱序,落盘一致', got === 'const a = (1)' && /```js\nconst a = \(1\)\n```/.test(await lastWrite(page) || ''), `got=${JSON.stringify(got)} saved=${JSON.stringify(await lastWrite(page))}`)
+        await page.close()
+      }
+      // NodeView 工具条仍可用:改语言写回 fence info、行号栏与代码行对齐。
+      {
+        const page = await open(browser, '段一\n\n```js\nconst a = 1\nlet b = 2\n```\n')
+        await page.hover(PM + ' pre')
+        await page.waitForTimeout(200)
+        await page.selectOption(PM + ' .amx-code-tools select.amx-code-lang', 'python')
+        await page.waitForTimeout(1300)
+        const saved = await lastWrite(page)
+        const toolsOutsideCode = await page.evaluate((PM) => !document.querySelector(PM + ' pre code .amx-code-tools') && !!document.querySelector(PM + ' pre > .amx-code-tools'), PM)
+        check('R04 工具条在 <code> 之外,改语言写回 fence info', toolsOutsideCode && /```python\nconst a = 1\nlet b = 2\n```/.test(saved || ''), JSON.stringify({ toolsOutsideCode, saved }))
+        await page.evaluate(() => [...document.querySelectorAll('.amx-code-tools .amx-code-btn')].find((x) => /行号|Numbers/.test(x.textContent)).click())
+        await page.waitForTimeout(200)
+        const geo = await page.evaluate((PM) => {
+          const pre = document.querySelector(PM + ' pre')
+          const nums = pre.querySelector('.amx-code-nums')
+          const code = pre.querySelector('code')
+          const n = document.createRange(); n.selectNodeContents(nums)
+          const c = document.createRange(); c.selectNodeContents(code)
+          const nr = n.getClientRects(), cr = c.getClientRects()
+          return { text: nums.textContent, dy: Math.abs(nr[0].top - cr[0].top), outside: !code.contains(nums) }
+        }, PM)
+        check('R04 行号栏在 <code> 之外、首行与代码首行对齐', geo.text === '1\n2' && geo.outside && geo.dy <= 2, JSON.stringify(geo))
+        await page.close()
+      }
+    }
   } finally {
     await browser.close()
   }
