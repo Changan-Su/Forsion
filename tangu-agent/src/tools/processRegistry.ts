@@ -124,8 +124,9 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
   }
   const id = `bg_${Date.now().toString(36)}_${++seq}`;
   let child: ChildProcess;
-  const remoteSeatbelt = remoteShellSeatbeltApplies(ctx);
+  let remoteSeatbelt = false;
   try {
+    remoteSeatbelt = remoteShellSeatbeltApplies(ctx);
     child = spawnHostShell(ctx || { cwd }, command);
   } catch (e: any) {
     if (e instanceof RemoteShellProtectionError) return `Error: ${e.message}`;
