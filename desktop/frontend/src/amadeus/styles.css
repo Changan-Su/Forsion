@@ -612,6 +612,27 @@
   font-size: var(--ui-font-body, 13px);
   font-style: italic;
 }
+/* 坏图 / 坏媒体的失败态(R-21,brokenMedia.ts):与丢失壳同口径 —— 次要文字色、无描边浅底圆角块,
+   写明「无法加载:文件名」。图让位给占位(0×0 的远程坏图也就有了可点、可选、可悬停 `</>` 的面积)。 */
+.am-app .amx-broken-media {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: var(--ui-font-body, 13px);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: none;
+}
+.am-app .amx-broken-media svg { flex: 0 0 auto; }
+.am-app .amx-broken-media--block { display: flex; }
+.am-app .wiki-inline-img-wrap[data-broken] > img.wiki-inline-img,
+.am-app .wiki-inline-img-wrap[data-broken] .amx-img-resize { display: none; }
 /* 丢失壳里的「创建」(评审 L-15):复用嵌入工具钮 .embed-media-btn,只把丢失提示的斜体摘掉、留一点间距。 */
 .am-app .embed-missing .embed-create {
   margin-left: 8px;

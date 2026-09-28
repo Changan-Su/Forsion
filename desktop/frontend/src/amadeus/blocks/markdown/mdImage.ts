@@ -16,6 +16,7 @@ import { fromAssetUrl, toAssetUrl } from '@amadeus-shared/assets'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { attachSourceButton } from './sourceToggle'
 import { armImageDrag } from './imageDrag'
+import { mediaNameOf, watchBrokenImage } from './brokenMedia'
 
 /** `![|200](x)` / `![说明|200](x)` 的 alt → 说明文字 + 宽度;没有 `|数字` 尾巴 → 整串都是说明。 */
 export function parseAlt(alt: string): { label: string; width?: number } {
@@ -67,6 +68,8 @@ class MdImageView implements NodeView {
       select()
     })
     attachSourceButton(this.dom, view, () => this.openSource()) // 悬停浮现的 `</>`,与其它图片一致
+    // 加载失败 → 占位说明(R-21);名字取说明文字,没有就取路径末段。
+    watchBrokenImage(this.dom, this.img, () => parseAlt((this.node.attrs.alt as string) ?? '').label || mediaNameOf((this.node.attrs.src as string) ?? ''))
     this.apply(node)
   }
   private apply(node: ProseNode): void {

@@ -20,6 +20,7 @@
 //   P1-P5 粘贴一条 URL → 「粘贴为」菜单三选一(链接 / 书签卡 / 内嵌);**忽略菜单 = 裸 URL = 书签卡**,
 //         视频链接不再自动变播放器(用户实报「粘贴视频链接直接就 embed 了」)
 //   R1-R4 嵌入宽度 `![[…|320]]`:像图片一样拖右缘把手改宽,零位移不写盘,别的嵌入形态不挂把手
+//   F1-F3 坏图 / 坏媒体失败态(R-21):占位写明「无法加载:文件名」,远程坏图不再 0×0,放不了的视频不留空播放器
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -556,6 +557,31 @@ async function main() {
       await p.screenshot({ path: f, fullPage: true })
       console.log(`  截图 → ${f}`)
     }
+    await p.close()
+  }
+
+  // ── F1–F3:坏图 / 坏媒体的失败态(R-21)。台架里没有 amadeus-asset:// 协议 = 生产里文件缺失的同一种失败。──
+  {
+    const p = await open(browser, '段一\n\n![[missing.png]]\n\n![图注说明](attachments/missing2.png)\n\n![](http://127.0.0.1:9/none.png)\n\n![[missing.mp4]]\n\n段尾\n')
+    await p.waitForTimeout(2500)
+    const st = await p.evaluate((PM) => ({
+      imgs: [...document.querySelectorAll(PM + ' .wiki-inline-img-wrap')].map((w) => {
+        const r = w.getBoundingClientRect()
+        return { broken: w.hasAttribute('data-broken'), note: w.querySelector('.amx-broken-media')?.textContent.trim() ?? null, w: Math.round(r.width), h: Math.round(r.height) }
+      }),
+      media: document.querySelector('[data-testid=media-broken]')?.textContent.trim() ?? null,
+      player: [...document.querySelectorAll(PM + ' .embed-media video, ' + PM + ' .embed-media audio')].some((el) => el.getClientRects().length > 0), // 看得见的播放器
+    }), PM)
+    const [a, b, c] = st.imgs
+    record('F1 坏图有失败态:写明「图片无法加载」+ 文件名 / 图注(wikilink 与 md 图两条路)',
+      a?.broken && /missing\.png/.test(a.note) && b?.broken && /图注说明/.test(b.note) && /图片无法加载/.test(a.note), JSON.stringify(st.imgs))
+    record('F2 没有 alt 的远程坏图不再 0×0:占位有面积、可点可选', c?.broken && c.w > 40 && c.h > 16 && /none\.png/.test(c.note), JSON.stringify(c))
+    record('F3 放不了的视频:占位说明代替空播放器', /媒体无法加载/.test(st.media ?? '') && /missing\.mp4/.test(st.media ?? '') && !st.player, JSON.stringify(st))
+    // 点坏图的占位 = 选中这一块(与正常图片同一套交互)
+    const box = await p.$(PM + ' .wiki-inline-img-wrap[data-broken]')
+    if (box) { const r = await box.boundingBox(); await p.mouse.click(r.x + r.width / 2, r.y + r.height / 2); await p.waitForTimeout(200) }
+    const sel = await p.evaluate(() => window.__upage.probe.view().state.selection.toJSON().type)
+    record('F1 点坏图占位仍是选中这块(交互不因失败态丢)', sel === 'node', sel)
     await p.close()
   }
 
