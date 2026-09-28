@@ -94,6 +94,17 @@ export function listHiddenRanges(state: EditorState): Array<{ start: number; aft
   return out
 }
 
+/** 把 pos 藏起来的那些折叠项(项前位;嵌套折叠可能不止一层)。搜索 / 标签命中落在折起的子项里时,
+ *  定位前要先把它们展开(unified/revealText.ts)—— 光标守卫会把放进隐藏区的选区弹出去。 */
+export function listFoldsHiding(state: EditorState, pos: number): number[] {
+  const st = listFoldKey.getState(state)
+  if (!st?.folded.length) return []
+  return st.folded.filter((p) => {
+    const f = foldableAt(state.doc, p)
+    return !!f && pos > f.from && pos < f.to
+  })
+}
+
 /** 该 list_item 当前是否折叠(键盘层用:折叠态回车只拆兄弟,子项留在原项里)。 */
 export function isListFolded(state: EditorState, itemPos: number): boolean {
   return !!listFoldKey.getState(state)?.folded.includes(itemPos)

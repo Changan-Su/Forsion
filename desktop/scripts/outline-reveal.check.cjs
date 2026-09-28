@@ -22,6 +22,12 @@
 //  L5 点 `[[Alpha#Sec]]` → 打开 Alpha.md 并把 Sec 标题亮到阅读位置(台架的 loadPage 换成 switchFile,模拟宿主路由)
 //  L6 点 `[[Alpha#^b1]]` → 打开 Alpha.md 并把挂 ^b1 的那段亮到阅读位置
 //
+//  —— 全智库搜索 / 标签面板点命中(评审 G4-01:v4 笔记只打开不定位)。走生产接缝 lifecycle.unifiedRevealText ——
+//  S1 深处的命中 → 落在顶栏下 12px,选区正好盖住命中文字
+//  S2 命中在折起的标题小节里 → 先展开那一节再定位(光标守卫不许把选区放进隐藏区)
+//  S3 命中在折起的列表子项里 → 先展开那一项再定位
+//  S4 标签边界:`#work` 落在真正的 #work 上,不落在前面的 #workshop 上
+//
 // 用法:npm run check:outlinereveal(= node scripts/e2e-editor.cjs --check=outline-reveal;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -186,6 +192,86 @@ async function anchorLinks(browser) {
   await p.close()
 }
 
+// ── G4-01:搜索 / 标签命中定位 ─────────────────────────────────────────────────────────────────
+const SEARCH_MD = `# 文首\n\n前面提到 #workshop 与别的。\n\n${[1, 2, 3, 4, 5].map(sec).join('\n\n')}\n\n- 父项\n  - 子项里的 listneedle 在这\n- 另一项\n\n## 收尾\n\n这里才是 #work 标签。\n\n${Array.from({ length: 30 }, (_, i) => `尾部 ${i}。`).join('\n\n')}\n`
+
+async function openSearch(browser) {
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+  p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(SEARCH_MD)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+  await p.waitForSelector(PM, { timeout: 120000 })
+  await p.waitForFunction(() => !!(window.__upage && window.__upage.lifecycle), null, { timeout: 20000 })
+  await p.waitForTimeout(400)
+  return p
+}
+/** 折叠:直接发两个折叠插件自己的 toggle meta(与把手上的折叠钮同一条路),不经鼠标 hover。 */
+const fold = (p, kind, text) => p.evaluate(([kind, text]) => {
+  const v = window.__upage.probe.view()
+  const plugin = v.state.plugins.find((x) => x.key.startsWith(kind === 'heading' ? 'AMX_HEADING_FOLD' : 'AMX_LIST_FOLD'))
+  let at = null
+  v.state.doc.descendants((n, pos) => {
+    if (at != null) return false
+    if (kind === 'heading' && n.type.name === 'heading' && n.textContent === text) at = pos
+    if (kind === 'list' && n.type.name === 'list_item' && n.firstChild.textContent === text) at = pos
+    return at == null
+  })
+  v.dispatch(v.state.tr.setMeta(plugin, { toggle: at }))
+  return at
+}, [kind, text])
+/** 命中文字的视口几何 + 选区是否正好盖住它。 */
+const measureHit = (p, needle) => p.evaluate((needle) => {
+  const v = window.__upage.probe.view()
+  const s = v.state.selection
+  const picked = v.state.doc.textBetween(s.from, s.to)
+  const dom = v.domAtPos(s.from)
+  const node = dom.node.nodeType === 3 ? dom.node.parentElement : dom.node
+  const r = node.getBoundingClientRect()
+  return {
+    picked, top: Math.round(r.top), h: Math.round(r.height),
+    bar: Math.round(document.querySelector('.amx-pane > .amx-toolbar').getBoundingClientRect().bottom),
+    scroll: Math.round(document.querySelector('.amx-pane').scrollTop),
+    headFolded: document.querySelectorAll('.amx-heading-folded').length, listFolded: document.querySelectorAll('.amx-listitem-folded').length,
+    ok: picked.toLowerCase() === needle.toLowerCase(),
+  }
+}, needle)
+const reveal = (p, needles, opts) => p.evaluate(([n, o]) => window.__upage.lifecycle.unifiedRevealText('Unified.md', n, o), [needles, opts])
+
+async function textReveal(browser) {
+  let p = await openSearch(browser)
+  const r1 = await reveal(p, ['第 4-6 段'])
+  await p.waitForTimeout(200)
+  const m1 = await measureHit(p, '第 4-6 段')
+  record('S1 深处命中 → 落在顶栏下 12px、选区盖住命中', r1 === true && m1.ok && m1.scroll > 0 && Math.abs(m1.top - (m1.bar + GAP)) <= TOL, JSON.stringify({ r1, ...m1 }))
+  await p.close()
+
+  p = await openSearch(browser)
+  await fold(p, 'heading', '小节 3')
+  await p.waitForTimeout(150)
+  const before2 = await p.evaluate(() => document.querySelectorAll('.amx-heading-folded').length)
+  const r2 = await reveal(p, ['第 3-7 段'])
+  await p.waitForTimeout(200)
+  const m2 = await measureHit(p, '第 3-7 段')
+  record('S2 命中在折起的标题小节里 → 先展开再定位', before2 === 1 && r2 === true && m2.ok && m2.headFolded === 0 && m2.h > 0 && Math.abs(m2.top - (m2.bar + GAP)) <= TOL, JSON.stringify({ before2, r2, ...m2 }))
+  await p.close()
+
+  p = await openSearch(browser)
+  await fold(p, 'list', '父项')
+  await p.waitForTimeout(150)
+  const before3 = await p.evaluate(() => document.querySelectorAll('.amx-listitem-folded').length)
+  const r3 = await reveal(p, ['listneedle'])
+  await p.waitForTimeout(200)
+  const m3 = await measureHit(p, 'listneedle')
+  record('S3 命中在折起的列表子项里 → 先展开再定位', before3 === 1 && r3 === true && m3.ok && m3.listFolded === 0 && m3.h > 0 && Math.abs(m3.top - (m3.bar + GAP)) <= TOL, JSON.stringify({ before3, r3, ...m3 }))
+  await p.close()
+
+  p = await openSearch(browser)
+  const r4 = await reveal(p, ['#work'], { tag: true })
+  await p.waitForTimeout(200)
+  const m4 = await p.evaluate(() => { const v = window.__upage.probe.view(); const s = v.state.selection; return { picked: v.state.doc.textBetween(s.from, s.to), para: v.state.doc.resolve(s.from).parent.textContent } })
+  record('S4 标签 #work 按边界匹配,不落在 #workshop 上', r4 === true && m4.picked === '#work' && m4.para.includes('这里才是'), JSON.stringify({ r4, ...m4 }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
@@ -246,6 +332,7 @@ async function main() {
       JSON.stringify({ ...m7, flash }))
     await p.close()
     await anchorLinks(browser)
+    await textReveal(browser)
   } finally {
     await browser.close()
   }

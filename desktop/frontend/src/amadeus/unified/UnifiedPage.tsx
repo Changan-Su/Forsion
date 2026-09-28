@@ -48,6 +48,7 @@ import { formatDateTime } from '../../format/time'
 import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
+import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
@@ -1886,6 +1887,29 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           // 位置同步读:滚动是同步写 scrollTop,此刻的 rect 就是最终位置(同标题锚)。
           if (flash) flashCiteTip(el.getBoundingClientRect())
         }
+        return true
+      },
+      revealText: (needles, opts) => {
+        const v = layer.getView()
+        if (!v) return false
+        const hit = findTextHit(v.state.doc, needles, !!opts?.tag)
+        if (!hit) return false // 命中只在标题 / 属性里,或这篇还没装上正文:不动(调用方据此重试 / 放弃)
+        // 顺序是死的(G4-01 / C-03):① 先展开藏着命中的会话折叠 —— 两个折叠插件的光标守卫会把放进隐藏区的
+        // 选区弹回标题;② focus;③ 选中命中文字;④ 显式贴顶滚动。
+        unfoldToReveal(v, hit.from)
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, hit.from, hit.to)))
+        // 命中在折起的 callout 里(那是 md 标记,展开 = 写盘,点搜索结果不许动文件)时文本块没有盒子:
+        // 退到最近一个看得见的祖先(callout 本身)去亮,至少把用户带到那一块。
+        let el: Node | null = v.nodeDOM(hit.block)
+        while (el instanceof HTMLElement && el !== v.dom) {
+          const r = el.getBoundingClientRect()
+          if (r.width || r.height) break
+          el = el.parentElement
+        }
+        if (!(el instanceof HTMLElement) || el === v.dom) return true
+        revealBlockAtTop(el)
+        if (opts?.flash) flashCiteTip(el.getBoundingClientRect())
         return true
       },
       retire: (movedTo) => {

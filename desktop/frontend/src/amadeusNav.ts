@@ -4,7 +4,7 @@
 import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
-import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading } from '@amadeus/unified/lifecycle'
+import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText } from '@amadeus/unified/lifecycle'
 import { findHeadingIndex } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
@@ -171,6 +171,20 @@ export async function revealBlockWhenReady(path: string, blockId: string): Promi
     }
     await new Promise((r) => setTimeout(r, 250))
   }
+}
+
+/** 全智库搜索 / 标签面板点命中之后的定位(评审 G4-01):笔记已经在打开了,等 v4 实例挂上再把第一处命中
+ *  亮出来(命中在会话折叠里先展开)。节拍与补跳同 revealHeadingWhenReady;v3 笔记没有 unified 实例,
+ *  重试几拍后自然放弃(v3 那条定位在调用方,按 data-block-id 找)。needles 依次尝试:整串优先,切词兜底。 */
+export async function revealTextWhenReady(path: string, needles: string[], opts?: { tag?: boolean }): Promise<boolean> {
+  for (let tries = 0; tries < 5; tries++) {
+    if (unifiedRevealText(path, needles, opts)) {
+      setTimeout(() => unifiedRevealText(path, needles, { ...opts, flash: true }), 600)
+      return true
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return false
 }
 
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
