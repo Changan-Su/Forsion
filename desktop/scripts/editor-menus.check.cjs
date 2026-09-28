@@ -12,6 +12,7 @@
 //   B7   列表 / 引用(callout)空行里 slash 插整块 = 原地换掉这一行,不留空项残渣,callout 里的代码块不跑出去(B-07)
 //   B10  块菜单开着时:方向键不挪编辑器选区(在菜单项间移动)、Enter 执行聚焦项、动作落在打开时的那一块;
 //        role=menu / menuitem;键盘打开把焦点送进菜单(B-10)
+//   B11  对 callout「转换为」先摘 `[!type]` 令牌再整只转(正文 / 标题 / 列表 / 引用 / 折叠 / 代码块)(B-11)
 //   B14  块菜单「转换为」有代码块(按原文造,不把文字挪到空代码块下面)与标注(`[!note]`)(B-14)
 //   B15  块菜单「复制标题链接」(`[[笔记#标题]]`)/「复制块链接」(只给已有 `^id` 的块)/「移动到…」(追加到目标末尾再删源);
 //        /embed 说明不再指向 v4 没有的「复制嵌入引用」(B-15)
@@ -482,6 +483,33 @@ async function main() {
         const st = await page.evaluate(() => ({ inMenu: !!document.activeElement?.closest('.unified-block-menu'), sel: window.__upage.probe.view().state.selection.toJSON().type }))
         check('B10d 键盘打开:块已选上、焦点进菜单首项', open && st.inMenu && st.sel === 'node', JSON.stringify(st))
         await page.keyboard.press('Escape')
+      }
+    }
+
+    if (want('B11')) {
+      // B-11:对 callout「转换为」= 先摘 `[!type]` 令牌再整只转;落盘里不许出现字面 `[!note]` / `\[!`。
+      const SEED = '段首。\n\n> [!note] 标题\n> 第一行\n\n段尾。\n'
+      for (const [label, want] of [
+        ['正文', '段首。\n\n标题\n\n第一行\n\n段尾。\n'],
+        ['标题 2', '段首。\n\n## 标题\n\n第一行\n\n段尾。\n'],
+        ['无序列表', /^段首。\n\n[-*] 标题\n[-*] 第一行\n\n段尾。\n$/],
+        ['引用', '段首。\n\n> 标题\n>\n> 第一行\n\n段尾。\n'],
+        ['折叠', '段首。\n\n> [!fold]- 标题\n>\n> 第一行\n\n段尾。\n'],
+        ['代码块', '段首。\n\n```\n标题\n第一行\n```\n\n段尾。\n'],
+      ]) {
+        const nm = await load(page, SEED)
+        const open = await openHandleMenu(page, '[!note]') // callout 的 textContent 以(藏着的)令牌开头
+        const ok = open && await clickItem(page, label)
+        const md = await mdOf(page, nm)
+        const hit = typeof want === 'string' ? md === want : want.test(md || '')
+        check(`B11 callout → ${label}:令牌不漏进正文`, ok && hit && !/\\\[!|\[!note\]/.test(md || ''), JSON.stringify(md))
+      }
+      {
+        const nm = await load(page, '> [!tip]- 折起的\n> 藏着的内容\n\n段尾。\n')
+        const open = await openHandleMenu(page, '[!tip]')
+        const ok = open && await clickItem(page, '正文')
+        const md = await mdOf(page, nm)
+        check('B11 折起的 callout → 正文:内容全部提出、令牌不留', ok && md === '折起的\n\n藏着的内容\n\n段尾。\n', JSON.stringify(md))
       }
     }
 

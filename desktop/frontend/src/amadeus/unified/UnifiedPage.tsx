@@ -60,7 +60,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '..
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
-import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
+import { turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
 import { withFoldedSections } from './foldCarry'
@@ -1635,6 +1635,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     withBlocks(
       (view, r) => { ok = turnBlocksInto(view, r.from, r.to, trig) },
       (view, sel) => {
+        // callout 单独处理(B-11):先摘 `[!type]` 令牌再整只转,否则令牌以字面漏进正文。
+        const callout = turnCalloutInto(view, sel.from, sel.to, trig)
+        if (callout != null) { ok = callout; return }
         // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
         view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(sel.from + 1))))
         ok = applyTrigger(view, trig, null)
@@ -1647,7 +1650,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     let ok = true
     withBlocks(
       (view, r) => { ok = kind === 'code' ? turnRangeIntoCode(view, r.from, r.to) : turnIntoCallout(view, r.from, r.to, true) },
-      (view, sel) => { ok = kind === 'code' ? turnRangeIntoCode(view, sel.from, sel.to) : turnIntoCallout(view, sel.from, sel.to, false) },
+      (view, sel) => { ok = kind === 'code' ? turnCalloutInto(view, sel.from, sel.to, 'code') ?? turnRangeIntoCode(view, sel.from, sel.to) : turnIntoCallout(view, sel.from, sel.to, false) },
     )
     if (!ok) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
   }
