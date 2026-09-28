@@ -93,8 +93,6 @@ if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
 // productName 改名(Tangu Agent 2.0 → Forsion)→ userData 目录随名走:一次性迁移壳层配置(打包态才有产品名目录)。
 if (app.isPackaged) migratePair(join(app.getPath('appData'), 'Tangu Agent 2.0'), join(app.getPath('appData'), 'Forsion'))
 const tanguHomeDir = forsionHomeDir // 品牌迁移后真身在 ~/.forsion(名字保留,少动 20+ 调用点)
-// 主进程文案(mt)的系统语言来源:惰性取,模块装载即注入(界面覆盖值之后由 did-finish-load / ui:sync 转进来)。
-initMainLocale({ systemLanguages: () => app.getPreferredSystemLanguages() })
 /** ~/.tangu/themes:拖入式主题目录(每主题一子目录:theme.json + theme.css)。 */
 const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
@@ -680,13 +678,13 @@ async function writeConfigPatch(patch: Partial<TanguStoredConfig>, accountCreds:
   if (Object.keys(accountPatch).length && (patch.forsionSyncAccountId === undefined || patch.forsionSyncAccountId === accountId)) {
     saveAccountCloudSettings(accountPatch, accountCreds)
   }
-  // P1-K5:external token 进加密存储;shell 里残留的旧原件(迁移没做完 / 降级旧版本写回)一并删掉,否则下次启动迁移按「shell 为准」把旧值盖回来
+  // P1-K5:external token 进加密存储(setExternalToken 顺带删掉 shell 里残留的旧原件)。下面读 shell 必须排在它之后,
+  // 否则写回的是删之前那份 → 下次启动迁移按「shell 为准」把旧 token 盖回来。
   if ('token' in patch) await deviceSecrets.setExternalToken(String(patch.token ?? ''))
   // shell 键
   const shell = await readShellConfig()
   let shellTouched = false
   for (const k of SHELL_KEYS) if (k in patch) { (shell as any)[k] = (patch as any)[k]; shellTouched = true }
-  if ('token' in patch && 'token' in shell) { delete (shell as Record<string, unknown>).token; shellTouched = true }
   if (shellTouched) await writePrivateJson(configPath(), shell)
   // config-backed 键 → config.json 段:持跨进程写锁、在写入那一刻的内容上合并(引擎 / CLI 同写这份);
   // patch 里没有这类键(最常见的 lastApprovalMode 之类)就不碰锁
@@ -811,8 +809,6 @@ let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null //
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
-/** P1-K5:互联开着却没建设备通道的原因(设备凭据锁定);units:hostStatus 的 lastError 报它。 */
-let unitHostBlocked: string | null = null
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
 let unitTunnelPrefix = ''
 /** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,
@@ -983,7 +979,6 @@ async function doRefreshUnitHost(): Promise<void> {
   // P1-K5:配对从 device-secrets.json 读,只在互联开着时读(读 = 可能解密 = macOS 可能弹钥匙串)。
   const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
-  unitHostBlocked = null
   if (unitHost) { unitHost.stop(); unitHost = null }
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   if (!stored.unitHostEnabled) return
@@ -1142,7 +1137,6 @@ async function doRefreshUnitHost(): Promise<void> {
   // P1-K5:配对读不出来(钥匙串拒绝 / 被重置 / 迁移校验没过)= 只起局域网面,不建设备通道,**绝不自动重新登记**
   // (新 unit id 会让别的设备对本机的信任全部作废);等本机「重试」或「重新登记本机」(secrets:* IPC)。
   if (deviceSecrets.unitHostStartPlan({ enabled: stored.unitHostEnabled, pairing: pairing.state }) === 'web-only-locked') {
-    unitHostBlocked = 'secret-store-locked'
     console.warn('[unit] 设备凭据读不出来:只起局域网面,不建设备通道')
     return
   }
@@ -1986,6 +1980,8 @@ app.whenReady().then(async () => {
   migrateEngineData() // 两层布局:顶层引擎条目 → ~/.forsion/tangu/ + ~/.tangu 软链改指(dev 家同法;须在 backend spawn/读盘之前)
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
   await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
+  // P1-K5:主进程文案(mt)的系统语言来源(界面覆盖值之后由 did-finish-load / ui:sync 转进来)。托盘、对话框都在这之后才建。
+  initMainLocale({ systemLanguages: () => app.getPreferredSystemLanguages() })
   // P1-K5:设备凭据(配对 / external token)迁出明文 shell 配置、进 safeStorage。必须是 configQueue 的第一个使用者:
   // loadConfig 要等它(external token 从这里解密),排在它前面的队列任务若调 loadConfig 就会互等。
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
@@ -2113,7 +2109,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
-  deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing
+  deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
     // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
@@ -2246,7 +2242,7 @@ app.whenReady().then(async () => {
     unitsApi('PATCH', `/units/${encodeURIComponent(String(id))}`, { name: patch?.name, icon: patch?.icon }))
   ipcMain.handle('units:remove', (_e, id: string) => unitsApi('DELETE', `/units/${encodeURIComponent(String(id))}`))
   ipcMain.handle('units:hostStatus', () => ({
-    ...(unitHost ? unitHost.status() : { running: false, connected: false, unitId: null, lastError: unitHostBlocked }),
+    ...(unitHost ? unitHost.status() : { running: false, connected: false, unitId: null, lastError: null }),
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))

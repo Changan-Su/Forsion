@@ -90,6 +90,7 @@ const api = {
   secretStorageStatus: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:status'),
   secretStorageRetry: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:retry'),
   secretStorageResetUnitPairing: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:resetUnitPairing'),
+  secretStorageRelaunch: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:relaunch'),
   // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
@@ -476,7 +477,7 @@ const AGENT_KEYS = [
   'pluginsUserInstalled', 'pluginsUninstall',
   'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
   // P1-K5
-  'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
+  'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
   'computerHistory', // 电脑历史同理:读者是 agent 工具与 Muse(主进程也只在 agentBackend 下建控制器)
   'reportRunningSessions', // 无 agent 后端就没有 run

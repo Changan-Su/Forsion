@@ -1216,7 +1216,10 @@ declare global {
       // P1-K5 ── 设备凭据存储状态(SecretStorageNotice;远程会话开关按它置灰)──
       secretStorageStatus?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       secretStorageRetry?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      /** 主进程先核「配对锁定」、再弹原生确认框;没锁定 / 这次运行加密不可用时 reject。 */
       secretStorageResetUnitPairing?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
+      /** 只在 restartRequired 时放行:重启 Forsion(进程内的重试救不回钥匙串被拒绝)。 */
+      secretStorageRelaunch?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>

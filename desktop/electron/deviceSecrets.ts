@@ -12,15 +12,19 @@
  *
  * 规矩:
  *   - locked ≠ absent。读不出来时 **绝不自动重新登记**(会铸新 unit id,别的设备对本机的信任全部作废,名册里还多一台重复设备);
- *     unitHost 不启动(unitHostStartPlan → web-only-locked),等用户在本机点「重试」或「重新登记本机」(需确认)。
+ *     unitHost 不启动(unitHostStartPlan → web-only-locked),等用户在本机点「重试」(解密失败)/「重启 Forsion」(restartRequired)
+ *     或「重新登记本机」(只在配对锁定时可用,主进程原生确认框)。
+ *   - macOS / Windows 这次运行拿不到系统加密(level=unavailable):配对即使为空也按锁定处理 —— 新登记出来的配对存不下,
+ *     UnitHost 却会拿内存里那份一直连着,下次启动再铸一个新 unit id(名册里的孤儿)。
  *   - 迁移校验没通过:shell 原样保留(下次启动 / 重试再来),期间配对按锁定处理,external token 回落 shell 里那份。
  *   - 远程会话 fail-closed:remoteSessionsPermitted() 只在 level=os、配对没锁定、配对不是明文条目时为真。
- *   - IPC 三个通道都只给本机可信发送方(unitWeb 不转发 IPC)。
+ *   - IPC 四个通道都只给本机可信发送方(unitWeb 不转发 IPC)。
  */
-import { app, safeStorage, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, safeStorage, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { writePrivateJson } from './configWrite'
+import { defineMainMessages, mt } from './mainI18n'
 import { createSecretStore, type CryptoProvider, type SecretSlot, type SecretStorageStatus, type SecretStore, type SlotRead } from './secretStore'
 
 export type { SecretStorageStatus, SlotRead } from './secretStore'
@@ -76,7 +80,9 @@ export interface DeviceSecrets {
   setCallerSecret(v: string | null): Promise<void>
   remoteSessionsPermitted(): boolean
   retry(): Promise<SecretStorageStatus>
-  resetUnitPairing(): Promise<SecretStorageStatus>
+  /** 重新登记本机(清空配对槽)。只在配对锁定时可用(否则抛 not-locked:任何可信渲染层代码都不许随手换掉本机身份);
+   *  这次运行拿不到系统加密时抛 restart-required(新配对存不下)。confirm 回 false = 用户取消,什么都不动。 */
+  resetUnitPairing(o?: { confirm?: () => Promise<boolean> }): Promise<SecretStorageStatus>
   wipe(): Promise<void>
 }
 
@@ -174,7 +180,11 @@ export function createDeviceSecrets(o: { store: SecretStore; warn?: (m: string) 
       if (pendingPairing) return { state: 'locked' }
       const r = await store.get('unitPairing')
       if (r.state !== 'ok') return { state: 'locked' }
-      if (r.value === null) return { state: 'ok', value: null }
+      if (r.value === null) {
+        // 空槽但这次运行存不下新配对(macOS / Windows 加密不可用):当成空 = UnitHost 去入册、存盘失败、下次启动再铸新 id。
+        // 只在互联开着时才会问到这里(doRefreshUnitHost),判定 level 就是入册前本来要做的事。
+        return store.status().level === 'unavailable' ? { state: 'locked' } : { state: 'ok', value: null }
+      }
       const p = parsePairing(r.value)
       return p ? { state: 'ok', value: p } : { state: 'locked' } // 解出来是坏的:同样不当成空
     },
@@ -195,6 +205,15 @@ export function createDeviceSecrets(o: { store: SecretStore; warn?: (m: string) 
       if (pendingToken === null && cur.state === 'ok' && cur.value === next) return // 同值不重写(不为此碰钥匙串)
       await store.set('externalToken', next)
       pendingToken = null
+      // shell 里残留的旧原件(迁移校验没过 / 降级旧版本写回)一并删掉:否则下次启动迁移按「shell 为准」把旧值盖回用户刚填的新值。
+      // 调用方(main.ts writeConfigPatch)已在 configQueue 内 → 直接读写 shell,不能再排队(自等死锁)。
+      if (shellDeps) {
+        const shell = await shellDeps.readShell()
+        if ('token' in shell) {
+          delete shell.token
+          await shellDeps.writeShell(shell)
+        }
+      }
     },
     async callerSecret() {
       if (!(await ready('callerSecret()'))) return { state: 'locked' }
@@ -219,10 +238,18 @@ export function createDeviceSecrets(o: { store: SecretStore; warn?: (m: string) 
       })
       return status()
     },
-    async resetUnitPairing() {
+    async resetUnitPairing(o) {
       if (!(await ready('resetUnitPairing()')) || !shellDeps) throw new Error('device-secrets-not-ready')
       const d = shellDeps
+      const gate = (): void => {
+        const st = status()
+        if (!st.locked.includes('unitPairing')) throw new Error('not-locked')
+        if (st.level === 'unavailable') throw new Error('restart-required')
+      }
+      gate() // 先判再问:没锁定时连确认框都不弹
+      if (o?.confirm && !(await o.confirm())) return status()
       await d.queue(async () => {
+        gate() // 确认框开着的期间状态可能变了(另一个窗口点了重试)
         await store.set('unitPairing', null, { force: true })
         // 迁移没做完时 shell 里还躺着旧配对:一并删掉,否则下次启动又把旧身份迁回来
         const shell = await d.readShell()
@@ -245,6 +272,53 @@ export function createDeviceSecrets(o: { store: SecretStore; warn?: (m: string) 
   return api
 }
 
+// ── 隔离 dev 实例不碰真钥匙串 ───────────────────────────────────────────────────────────────────
+/** 未打包 + 显式 --user-data-dir(= 台架的隔离实例;`npm run dev` 不带它)→ macOS 用 Chromium 的 MockKeychain、Linux 用
+ *  basic 后端,不读写开发者真钥匙串里的「forsion-desktop Safe Storage」(与 dev 实例同名共用;钥匙串锁着 / ACL 失配时的
+ *  模态框会把主线程挂住,台架 firstWindow 超时)。OSCrypt 在第一次用钥匙串时才查 use-mock-keychain(os_crypt_mac.mm),
+ *  所以本模块被 main.ts 顶部 import 时(ready 之前)追加开关即可。FORSION_REAL_KEYCHAIN=1 关掉(要在隔离实例里测真钥匙串时)。
+ *  打包版永不生效。 */
+function isolateDevKeychain(): void {
+  try {
+    if (app.isPackaged || process.env.FORSION_REAL_KEYCHAIN === '1' || !app.commandLine.hasSwitch('user-data-dir')) return
+    if (process.platform === 'darwin') {
+      if (!app.commandLine.hasSwitch('use-mock-keychain')) app.commandLine.appendSwitch('use-mock-keychain')
+      console.log('[device-secrets] 隔离的 dev 实例(--user-data-dir):safeStorage 用 MockKeychain,不碰真钥匙串')
+    } else if (process.platform === 'linux') {
+      if (!app.commandLine.hasSwitch('password-store')) app.commandLine.appendSwitch('password-store', 'basic')
+      console.log('[device-secrets] 隔离的 dev 实例(--user-data-dir):safeStorage 用 basic 后端,不碰真钥匙串')
+    }
+  } catch { /* 单测里的 electron 桩没有 commandLine */ }
+}
+isolateDevKeychain()
+
+// ── 主进程原生确认框(重新登记本机)─────────────────────────────────────────────────────────────
+defineMainMessages({
+  'main.secrets.resetTitle': { zh: '重新登记本机？', en: 'Re-register this device?' },
+  'main.secrets.resetDetail': {
+    zh: '将为本机生成新的设备 ID，其他设备需要重新确认对本机的信任。',
+    en: 'This gives the device a new ID. Your other devices will need to trust it again.',
+  },
+  'main.secrets.resetConfirm': { zh: '重新登记', en: 'Re-register' },
+  'main.secrets.cancel': { zh: '取消', en: 'Cancel' },
+})
+
+/** 确认框在主进程弹(挂发起窗口):渲染层的 window.confirm 挡不住插件之类的可信渲染层代码直接调 IPC。 */
+async function confirmResetNative(e: IpcMainInvokeEvent): Promise<boolean> {
+  const opts = {
+    type: 'warning' as const,
+    message: mt('main.secrets.resetTitle'),
+    detail: mt('main.secrets.resetDetail'),
+    buttons: [mt('main.secrets.resetConfirm'), mt('main.secrets.cancel')],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  }
+  const win = BrowserWindow.fromWebContents(e.sender)
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+  return r.response === 0
+}
+
 // ── Electron 单例 ─────────────────────────────────────────────────────────────────────────────
 function electronCrypto(): CryptoProvider {
   return {
@@ -259,6 +333,7 @@ function electronCrypto(): CryptoProvider {
 export const DEVICE_SECRETS_FILE = 'device-secrets.json'
 
 let singleton: DeviceSecrets | null = null
+function defaultImpl(): DeviceSecrets { return impl() }
 function impl(): DeviceSecrets {
   return (singleton ??= createDeviceSecrets({
     store: createSecretStore({
@@ -292,8 +367,20 @@ export const setCallerSecret = (v: string | null): Promise<void> => impl().setCa
 export const remoteSessionsPermitted = (): boolean => impl().remoteSessionsPermitted()
 export const wipe = (): Promise<void> => impl().wipe()
 
-/** secrets:status / secrets:retry / secrets:resetUnitPairing —— 只给本机可信发送方;重试与重新登记之后刷新 unitHost。 */
-export function registerSecretsIpc(ipc: IpcMain, d: { isTrustedSender(e: IpcMainInvokeEvent): boolean; refreshUnitHost(): Promise<void> }): void {
+/** secrets:status / retry / resetUnitPairing / relaunch —— 只给本机可信发送方;重试与重新登记之后刷新 unitHost。
+ *  relaunch 只在 restartRequired 时放行(进程内救不回的那一类);重新登记只在配对锁定时放行,并由主进程弹原生确认框。
+ *  impl / confirmReset / relaunch 可注入(单测);缺省走 Electron。 */
+export function registerSecretsIpc(ipc: IpcMain, d: {
+  isTrustedSender(e: IpcMainInvokeEvent): boolean
+  refreshUnitHost(): Promise<void>
+  confirmReset?(e: IpcMainInvokeEvent): Promise<boolean>
+  relaunch?(): void
+  impl?: () => DeviceSecrets
+}): void {
+  const impl = d.impl ?? defaultImpl
+  const confirmReset = d.confirmReset ?? confirmResetNative
+  // app.quit 而不是 app.exit:before-quit 里优雅停引擎、落盘电脑历史;relaunch 标记在退出时生效
+  const relaunch = d.relaunch ?? (() => { app.relaunch(); app.quit() })
   const guard = (e: IpcMainInvokeEvent): void => { if (!d.isTrustedSender(e)) throw new Error('forbidden') }
   ipc.handle('secrets:status', async (e) => {
     guard(e)
@@ -308,8 +395,16 @@ export function registerSecretsIpc(ipc: IpcMain, d: { isTrustedSender(e: IpcMain
   })
   ipc.handle('secrets:resetUnitPairing', async (e) => {
     guard(e)
-    await impl().resetUnitPairing()
-    await d.refreshUnitHost()
+    let confirmed = false
+    await impl().resetUnitPairing({ confirm: async () => (confirmed = await confirmReset(e)) }) // 没锁定 / 要重启 → 抛错,不弹框
+    if (confirmed) await d.refreshUnitHost() // 用户取消:什么都不动
+    return impl().publicStatus()
+  })
+  ipc.handle('secrets:relaunch', async (e) => {
+    guard(e)
+    await impl().whenReady()
+    if (!impl().status().restartRequired) throw new Error('not-restart-required')
+    relaunch()
     return impl().publicStatus()
   })
 }
