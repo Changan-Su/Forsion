@@ -81,10 +81,18 @@ describe('RemoteSessionsSettings', () => {
   })
 
   it('父开关关:子开关置灰并提示先打开「允许其他设备连接本机」', async () => {
-    view = makeView({ hostEnabled: false, enabled: false })
+    view = makeView({ hostEnabled: false, enabled: false, permitted: null }) // 父开关关着主进程不问 K5
     await mount()
     expect(sw().disabled).toBe(true)
     expect(q('[data-rs-need-host]')!.textContent).toContain('允许其他设备连接本机')
+    expect(q('[data-rs-insecure]')).toBeNull() // null = 未知,不画「未加密」提示
+    expect(q('[data-secrets]')).toBeNull()
+    // 开关存档开着、后来关了互联:照实显示存档意愿(开),但置灰
+    view = makeView({ hostEnabled: false, enabled: true, permitted: null })
+    await act(async () => pushChanged!(view))
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+    expect(sw().disabled).toBe(true)
+    expect(q('[data-rs-insecure]')).toBeNull()
   })
 
   it('R-24:设备凭据未加密(permitted=false)→ 开关显示关、置灰,挂 SecretStorageNotice;主进程拒绝时提示换成本地化那句', async () => {

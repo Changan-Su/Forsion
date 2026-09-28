@@ -49,6 +49,7 @@ function harness(o: {
   const changed: RemoteSessionsView[] = []
   const capWrites: CapMode[] = []
   const lookupUnit = vi.fn(async (id: string) => (env.roster === 'unreachable' ? 'unreachable' as const : env.roster[id] ?? null))
+  const permitted = vi.fn(() => env.permitted)
   const confirm = vi.fn((opts: ConfirmDialogOptions, signal: AbortSignal) => new Promise<boolean | null>((resolve) => {
     prompts.push({ opts, signal, answer: resolve })
     if (!o.lateAnswer) signal.addEventListener('abort', () => resolve(null)) // 真 Electron:signal 关框 = 按取消;main.ts 据 signal.aborted 回 null
@@ -61,7 +62,7 @@ function harness(o: {
     accountId: () => env.account,
     lookupUnit,
     confirm,
-    permitted: () => env.permitted,
+    permitted,
     isLocked: () => env.locked,
     onChanged: (v) => { changed.push(v) },
     log: () => {},
@@ -74,7 +75,7 @@ function harness(o: {
     },
   }
   const rs = createRemoteSessions(deps)
-  return { rs, env, writes, prompts, changed, capWrites, lookupUnit, confirm, deps, disk: () => (env.disk ? JSON.parse(env.disk) : null) }
+  return { rs, env, writes, prompts, changed, capWrites, lookupUnit, confirm, permitted, deps, disk: () => (env.disk ? JSON.parse(env.disk) : null) }
 }
 const booted = async (o: Parameters<typeof harness>[0] = {}) => { const h = harness(o); await h.rs.init(); return h }
 const enabledDisk = (extra: object = {}): string => JSON.stringify({ v: 1, enabled: true, migratedFromUnitHost: false, trusted: [], ...extra })
@@ -138,7 +139,7 @@ describe('迁移(一次性、持久化)', () => {
 
 describe('开关 / 审批档 / 撤销:落盘与广播', () => {
   it('R-24:K5 不允许时 isEnabled=false(存档开也一样)、setEnabled(true) 抛 secret-store-insecure、闸回 REMOTE_SESSIONS_OFF', async () => {
-    const h = await booted({ disk: enabledDisk(), permitted: false })
+    const h = await booted({ disk: enabledDisk(), permitted: false, host: true })
     expect(h.rs.isEnabled()).toBe(false)
     await expect(h.rs.setEnabled(true)).rejects.toThrow('secret-store-insecure')
     const g = h.rs.gate.gateEngine({ ...RUN, caller: { kind: 'paired', pairId: 'p', name: 'x' } })
@@ -146,6 +147,25 @@ describe('开关 / 审批档 / 撤销:落盘与广播', () => {
     expect((await h.rs.view())).toMatchObject({ enabled: true, permitted: false })
     h.env.permitted = true // 用户在本机解决了钥匙串
     expect(h.rs.isEnabled()).toBe(true)
+  })
+
+  it('K5 懒加载契约(评审 P1):互联关着 → init / 广播 / view / notifyChanged 都不问 K5(permitted=null = 未知,不是未加密);互联一开才问', async () => {
+    // 新用户(无文件);以及迁移过来开关开着、后来关了互联的老用户 —— 两种人都不许因为这个包在每次启动时碰钥匙串
+    for (const disk of [null, enabledDisk({ trusted: [{ principal: 'account', accountId: ACC, confirmedAt: 1, preconfirmed: true }] })]) {
+      const h = harness({ disk, host: false })
+      await h.rs.init()
+      await tick(12)
+      h.rs.notifyChanged()
+      await tick(12)
+      const v = await h.rs.view()
+      expect(v.permitted, String(disk)).toBeNull()
+      expect(h.changed.length).toBeGreaterThan(0)
+      expect(h.changed.every((x) => x.permitted === null)).toBe(true)
+      expect(h.permitted).not.toHaveBeenCalled()
+      h.env.host = true // 用户打开「允许其他设备连接本机」:这时才问(同 K5 提示只在互联开着时问状态)
+      expect((await h.rs.view()).permitted).toBe(true)
+      expect(h.permitted).toHaveBeenCalled()
+    }
   })
 
   it('setEnabled:开 = 落盘成功才生效;关 = 先关再落盘(落盘失败内存仍是关);都广播', async () => {

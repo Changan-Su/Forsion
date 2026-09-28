@@ -101,8 +101,9 @@ export function RemoteSessionsSettings(): React.ReactNode {
       : <SettingsState icon={<Loader2 size={18} className="spin" />} title={t('remoteSessions.tab')} busy />
   }
 
-  const on = view.enabled && view.permitted
-  const switchLocked = !view.hostEnabled || !view.permitted
+  // permitted === null:父开关关着、主进程没去问设备凭据状态(不碰钥匙串)—— 按「未知」处理,不当成「未加密」
+  const on = view.enabled && view.permitted !== false
+  const switchLocked = !view.hostEnabled || view.permitted !== true
   const pickCap = (m: CapMode): void => {
     if (m === view.maxApprovalMode) { setConfirmFullAuto(false); return }
     if (m === 'full-auto') { setAck(false); setConfirmFullAuto(true); return }
@@ -122,7 +123,7 @@ export function RemoteSessionsSettings(): React.ReactNode {
         actions={<SettingsSwitch checked={on} disabled={switchLocked || !!busy} label={t('remoteSessions.switch')}
           onChange={(next) => void act('enabled', (a) => a.setEnabled(next))} />}>
         {!view.hostEnabled && <p className="rs-note" data-rs-need-host="">{t('remoteSessions.needHost')}</p>}
-        {!view.permitted && (
+        {view.permitted === false && (
           <div className="rs-secrets">
             <p className="rs-note" data-rs-insecure="">{t('remoteSessions.insecure')}</p>
             <SecretStorageNotice onChange={() => { void load() }} className="secnotice-inpanel" />

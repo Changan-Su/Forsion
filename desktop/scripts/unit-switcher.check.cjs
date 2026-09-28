@@ -114,6 +114,8 @@ async function main() {
     })
     check('菜单整体在视口内', geo.l >= 0 && geo.t >= 0 && geo.r <= geo.iw && geo.b <= geo.ih, JSON.stringify(geo))
 
+    // P1-K4 评审:互联关着时切换器不主动取远程会话视图(取视图 = 主进程问 K5 设备凭据状态 = macOS 可能碰钥匙串)
+    check('互联关着:切换器没取远程会话视图', (await page.evaluate(() => window.__rsGets)) === 0, await page.evaluate(() => window.__rsGets))
     // 脚部:开互联 → 直连地址 + 已配对回收面(先截「开着互联」那张全家福)
     await page.evaluate(() => {
       const btn = document.querySelector('.unitsw-hosttoggle')
@@ -131,6 +133,7 @@ async function main() {
 
     // P1-K4:父开关 → K5 提示 → 「允许远程会话」子开关 + 「设置 ›」深链(INTEGRATION §2.2 脚部顺序)
     await page.waitForSelector('[data-unitsw-remote]', { timeout: 5000 })
+    check('互联一开:切换器重取一次视图(拿到真 permitted)', (await page.evaluate(() => window.__rsGets)) >= 1, await page.evaluate(() => window.__rsGets))
     const sub = await page.evaluate(() => {
       const foot = document.querySelector('.unitsw-foot')
       const order = Array.from(foot.children).map((el) => (el.matches('.unitsw-hosttoggle') ? 'host' : el.matches('.secnotice') ? 'secrets' : el.matches('.unitsw-subrow') ? 'remote' : el.matches('.unitsw-foot-hint') ? 'hint' : el.className))

@@ -482,7 +482,10 @@ export function createRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
         ? { principal: 'unit' as const, unitId: p.caller.caller.unit, name: clean(p.caller.caller.name), kind: p.caller.caller.kind, since: p.since }
         : { principal: 'account' as const, since: p.since }
     ))
-    return { hostEnabled, enabled: state.enabled, permitted: safePermitted(), maxApprovalMode: cap, trusted, pending: pend }
+    // 互联关着就不问 K5(与 K5 的懒加载契约同口径:main.ts 只在 unitHostEnabled 时读配对;问状态 = 判定钥匙串等级 = macOS 可能弹框)。
+    // 互联关着时没有 unitWeb、也就没有远程请求,「设备凭据是否加密」这一刻无关紧要 → null(未知,不是「未加密」)。
+    // 刻意不看 state.enabled:迁移过来(enabled 开)而后关了互联的用户,正是 K5 要保护的那批。isEnabled() 只在闸 / 状态面里跑(= 互联开着)。
+    return { hostEnabled, enabled: state.enabled, permitted: hostEnabled ? safePermitted() : null, maxApprovalMode: cap, trusted, pending: pend }
   }
 
   function emit(): void {

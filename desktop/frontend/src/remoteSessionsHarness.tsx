@@ -23,7 +23,7 @@ const now = Date.now()
 let view: RemoteSessionsView = {
   hostEnabled: state !== 'nohost',
   enabled: state !== 'off' && state !== 'nohost',
-  permitted: state !== 'insecure',
+  permitted: state === 'nohost' ? null : state !== 'insecure', // 父开关关着时主进程不问 K5(null = 未知)
   maxApprovalMode: state === 'fullauto' ? 'full-auto' : 'auto-edit',
   trusted: state === 'empty' ? [] : [
     { principal: 'account', confirmedAt: now - 3 * 86_400_000, preconfirmed: true },

@@ -75,8 +75,9 @@ export interface RemoteSessionsView {
   hostEnabled: boolean
   /** 存档里的开关意愿。生效 = enabled && permitted。 */
   enabled: boolean
-  /** 设备凭据已绑系统加密(K5 remoteSessionsPermitted);false 时开关置灰、打不开。 */
-  permitted: boolean
+  /** 设备凭据已绑系统加密(K5 remoteSessionsPermitted);false 时开关置灰、打不开。
+   *  null = 父开关关着、没去问 K5(问 = 判定钥匙串等级,macOS 可能弹框;K5 懒加载契约)—— 是「未知」,**不是**「未加密」。 */
+  permitted: boolean | null
   maxApprovalMode: CapMode
   trusted: TrustedView[]
   pending: PendingView[]

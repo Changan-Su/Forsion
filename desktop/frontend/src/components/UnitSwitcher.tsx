@@ -155,10 +155,12 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     const api = remoteSessionsApi()
     if (!api) return
     let live = true
-    void api.get().then((v) => { if (live) setRemoteView(v) }).catch(() => {})
     const off = api.onChanged((v) => { if (live) setRemoteView(v) })
+    // 只在互联开着时主动取(同 K5 提示:取视图会问设备凭据状态 = 判定钥匙串等级);关着时子开关那行本就不画。
+    // 父开关刚打开也在这里重取一次,不靠旧视图(旧视图的 permitted 可能是 null = 那时没问)。
+    if (hostEnabled) void api.get().then((v) => { if (live) setRemoteView(v) }).catch(() => {})
     return () => { live = false; off() }
-  }, [])
+  }, [hostEnabled])
 
   // 原 VaultSideSwitch 桌面分支负责的 vaultSide 初始化,随胶囊迁到这里。
   useEffect(() => { if (window.amadeusSync) void initSide() }, [initSide])
@@ -289,14 +291,16 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     if (!api || !remoteView) return
     guard(async () => {
       try {
-        setRemoteView(await api.setEnabled(!(remoteView.enabled && remoteView.permitted)))
+        setRemoteView(await api.setEnabled(!(remoteView.enabled && remoteView.permitted === true)))
       } catch (e) {
         const msg = ipcErrorText(e)
         say(msg.includes(SECRET_STORE_INSECURE) ? t('remoteSessions.insecure') : t('remoteSessions.actionFailed', { error: msg }))
       }
     })
   }
-  const remoteOn = !!remoteView && remoteView.enabled && remoteView.permitted
+  const remoteOn = !!remoteView && remoteView.enabled && remoteView.permitted === true
+  /** 设备凭据已加密(null = 视图是互联关着时取的、还没问过 —— 父开关一开就重取,这一瞬间按锁定画,点了主进程也会再判)。 */
+  const remotePermitted = remoteView?.permitted === true
 
   const removePaired = (d: UnitPairedDevice): void => {
     guard(async () => {
@@ -399,13 +403,13 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               {/* P1-K4:父开关 → K5 提示 → 远程会话子开关(INTEGRATION §2.2 脚部顺序);设备凭据没加密时置灰(K5 提示在上面说明原因) */}
               {hostEnabled && remoteView && (
                 // 整行可点(同父开关);键盘 / 读屏走行尾那个 role=switch 按钮。开关与父开关右缘对齐,「设置 ›」在两者之间
-                <div className={`unitsw-subrow${remoteView.permitted ? '' : ' is-locked'}`} onClick={remoteView.permitted ? toggleRemoteSessions : undefined}>
+                <div className={`unitsw-subrow${remotePermitted ? '' : ' is-locked'}`} onClick={remotePermitted ? toggleRemoteSessions : undefined}>
                   <span className="unitsw-foot-label">{t('remoteSessions.switch')}</span>
                   <button className="unitsw-sublink" onClick={(e) => { e.stopPropagation(); setOpen(false); useApp.getState().openSettings('remote-sessions') }} data-unitsw-remote-settings="">
                     {t('remoteSessions.openSettings')} ›
                   </button>
                   <button className="unitsw-subswitch" role="switch" aria-checked={remoteOn} aria-label={t('remoteSessions.switch')} data-on={remoteOn || undefined}
-                    disabled={!remoteView.permitted} onClick={(e) => { e.stopPropagation(); toggleRemoteSessions() }} data-unitsw-remote="">
+                    disabled={!remotePermitted} onClick={(e) => { e.stopPropagation(); toggleRemoteSessions() }} data-unitsw-remote="">
                     <span className="unitsw-switch" aria-hidden />
                   </button>
                 </div>

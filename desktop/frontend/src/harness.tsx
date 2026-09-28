@@ -742,11 +742,14 @@ if (new URLSearchParams(location.search).has('dock')) {
         const secretsMode = new URLSearchParams(location.search).get('secrets')
         let enabled = true
         const listeners = new Set<(v: unknown) => void>()
-        const view = () => ({ hostEnabled: cfg.unitHostEnabled === true, enabled, permitted: !secretsMode, maxApprovalMode: 'auto-edit', trusted: [], pending: [] })
+        // 同真主进程:父开关关着不问 K5(permitted=null = 未知)
+        const view = () => ({ hostEnabled: cfg.unitHostEnabled === true, enabled, permitted: cfg.unitHostEnabled === true ? !secretsMode : null, maxApprovalMode: 'auto-edit', trusted: [], pending: [] })
         const push = () => { const v = view(); for (const cb of listeners) cb(v); return v }
         ;(window as unknown as { __rsPush: () => unknown }).__rsPush = push
+        const w2 = window as unknown as { __rsGets: number }
+        w2.__rsGets = 0 // unit-switcher.check:互联关着时切换器不许主动取视图(取 = 主进程问 K5 = 可能碰钥匙串)
         return {
-          get: async () => view(),
+          get: async () => { w2.__rsGets++; return view() },
           setEnabled: async (on: boolean) => {
             if (on && secretsMode) throw new Error("Error invoking remote method 'remoteSessions:setEnabled': Error: secret-store-insecure")
             enabled = on
