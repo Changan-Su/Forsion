@@ -3,8 +3,9 @@
  *
  *  阶梯(先命中先赢):
  *  · code_block 内 Tab = 插两空格(多行选区=逐行行首),Shift-Tab = 逐行去至多两空格
- *  · 表格内 → 自己调 goToNextCell(±1)(与 gfm tableKeymap 同一条命令):边界格跳不动时**吞键**,
- *    裸 return false 会落进浏览器默认行为把焦点抛出编辑器(评审 P2)
+ *  · 表格内 → 自己调 goToNextCell(±1)(与 gfm tableKeymap 同一条命令):末格 Tab = 加一行、进新行首格
+ *    (K-10,Notion/Obsidian 同);首格 Shift-Tab 跳不动时**吞键**,裸 return false 会落进浏览器默认行为
+ *    把焦点抛出编辑器(评审 P2)
  *  · 列表项 Tab/Shift-Tab = 优先 sink/lift；首项无前一兄弟时缩进整份列表，退档时保留待办/编号类型；
  *    Shift-Tab 对「li 内非首子段落」只抬那一段(历史 merge 内容的对称逃生口)
  *  · 普通段落、标题、引用/callout、跨块选区 → 各自视觉缩进档 ±1；图片/嵌入跟着所在段落。
@@ -17,6 +18,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { goToNextCell } from '@milkdown/kit/prose/tables'
 import { liftTarget } from '@milkdown/kit/prose/transform'
 import { adjustParagraphIndent } from './paragraphIndent'
+import { tableAppendRow } from './tableEdit'
 import { adjustSelectedBlockIndents, adjustStructuralIndent } from './structuralIndent'
 
 export interface TabFoldHooks {
@@ -51,9 +53,10 @@ const visualListIndent = (state: EditorState): number => {
   return 0
 }
 
-/** 表格内 Tab/Shift-Tab:与 gfm tableKeymap 同一条 goToNextCell;边界格跳不动也吞键防焦点逃逸。 */
+/** 表格内 Tab/Shift-Tab:与 gfm tableKeymap 同一条 goToNextCell;末格 Tab 加一行再进新行首格(K-10),
+ *  首格 Shift-Tab 跳不动也吞键防焦点逃逸。 */
 function tableTab(state: EditorState, dispatch: Dispatch, dir: 1 | -1): boolean {
-  goToNextCell(dir)(state, dispatch)
+  if (!goToNextCell(dir)(state, dispatch) && dir === 1) tableAppendRow(state, dispatch)
   return true
 }
 

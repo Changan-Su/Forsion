@@ -2966,6 +2966,11 @@ body.amx-marquee-active * {
   background: var(--border);
   margin: 3px 4px;
 }
+/* 块菜单里的当前态(表格区的列对齐,K-10):勾放末列(DESIGN §3 菜单几何:状态置于末列)。 */
+.ubm-check {
+  margin-left: auto;
+  color: var(--accent-ink);
+}
 
 /* 列表项折叠(unified/listFold.ts,会话态):折起时子列表整只藏起,项上留一个常驻展开箭头。
    复用 .amx-fold-hidden / .amx-fold-caret —— 与标题小节折叠同一套视觉,用户不必学两遍。 */
