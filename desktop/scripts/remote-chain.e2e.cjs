@@ -41,15 +41,12 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
-const { spawnSync } = require('node:child_process')
-const { chromium } = require('playwright-core')
 const { startRemoteWorld, GENESIS } = require('./lib/remote-world.cjs')
+const { PHONE_ORIGIN, buildPhoneDist, openPhonePage, pickComputer, closeOverlays, compose } = require('./lib/phone-page.cjs')
 const { createFakePhoneNative } = require('./lib/fake-phone-native.cjs')
 const { callerTokenParity } = require('./lib/fake-unit-hub.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
-const MOBILE = path.join(GENESIS, 'mobile')
-const PHONE_ORIGIN = 'http://phone-hub.test'
 const NEGCTL = process.env.NEGCTL || ''
 const STRICT = process.env.REMOTECHAIN_STRICT === '1'
 const SHOT_DIR = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-remotechain-shots-'))
@@ -66,31 +63,6 @@ const results = []
 const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  | ${detail}` : ''}`) }
 const info = (name, detail) => console.log(`INFO  ${name}${detail ? `  | ${detail}` : ''}`)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
-function findChromium() {
-  if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
-  for (const root of [path.join(os.homedir(), 'Library/Caches/ms-playwright'), path.join(os.homedir(), '.cache/ms-playwright')]) {
-    if (!fs.existsSync(root)) continue
-    for (const d of fs.readdirSync(root).filter((x) => x.startsWith('chromium-')).sort().reverse()) {
-      for (const rel of ['chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium', 'chrome-linux/chrome', 'chrome-linux64/chrome']) {
-        const e = path.join(root, d, rel)
-        if (fs.existsSync(e)) return e
-      }
-    }
-  }
-  throw new Error('找不到 chromium,设 CHROMIUM_EXE')
-}
-
-function buildDist() {
-  const out = process.env.REMOTECHAIN_DIST || path.join(os.tmpdir(), 'forsion-remotechain-dist')
-  if (process.env.REMOTECHAIN_DIST && fs.existsSync(path.join(out, 'index.html'))) return out
-  console.log(`… 构建 mobile(dev 风味、VITE_API_ORIGIN=${PHONE_ORIGIN})→ ${out}`)
-  const r = spawnSync('npx', ['vite', 'build', '--mode', 'development', '--outDir', out, '--emptyOutDir'], {
-    cwd: MOBILE, env: { ...process.env, NODE_ENV: 'development', VITE_API_ORIGIN: PHONE_ORIGIN }, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8',
-  })
-  if (r.status !== 0) throw new Error(`mobile 构建失败:\n${String(r.stderr).slice(-1500)}`)
-  return out
-}
 
 // ── 可编剧假模型:主 run 先要 run_bash 处理附件,工具结果回来后收尾;其余(标题 / Historian 等后台调用)回一句 ok ──
 function makeLlm(world) {
@@ -125,36 +97,6 @@ function makeLlm(world) {
   }
 }
 
-// ── Capacitor「安卓 App」自定义平台(页面 init script):ForsionUnit 走 exposeBinding 到 Node 替身 ──
-function capacitorInit({ token }) {
-  try {
-    localStorage.setItem('CapacitorStorage.forsion_token', token)
-    localStorage.setItem('forsion_tangu_onboarding_done', '1')
-    localStorage.setItem('forsion_tangu_onboarding_dismissed', '1')
-    localStorage.setItem('tangu-locale', 'zh')
-  } catch { /* ignore */ }
-  const cbs = new Map()
-  let n = 0
-  const P = (name) => ({ name, rtype: 'promise' })
-  const C = (name) => ({ name, rtype: 'callback' })
-  window.CapacitorCustomPlatform = { name: 'android', plugins: {} }
-  window.Capacitor = {
-    PluginHeaders: [
-      { name: 'ForsionUnit', methods: [P('attach'), P('status'), P('ensureRegistered'), P('forget'), C('request'), P('cancel'), C('addListener'), P('removeListener')] },
-      { name: 'LiveIsland', methods: [P('show'), P('reset'), C('addListener'), P('removeListener')] },
-      { name: 'SpaceShortcuts', methods: [P('setSpaces'), P('pin'), C('addListener'), P('removeListener')] },
-    ],
-    nativePromise: (plugin, method, options) => window.__k9Native({ plugin, method, options: options ?? {}, cbId: null }),
-    nativeCallback: (plugin, method, options, cb) => {
-      const id = `k9cb${++n}`
-      cbs.set(id, cb)
-      window.__k9Native({ plugin, method, options: options ?? {}, cbId: id }).catch((e) => { try { cb(null, e) } catch { /* ignore */ } })
-      return id
-    },
-  }
-  window.__k9Deliver = (id, msg, err) => { const cb = cbs.get(id); if (cb) cb(msg, err) }
-}
-
 async function main() {
   console.log(`K9 remote chain  MARK=${MARK}${NEGCTL ? `  NEGCTL=${NEGCTL}` : ''}`)
   // 0 caller token 与 server 同格式同派生(对真模块交叉验证)
@@ -162,7 +104,7 @@ async function main() {
   if (parity.skipped) info('caller token 与 server 同格式同派生(SKIP)', parity.skipped)
   else check('caller token 与 server 同格式同派生(对 server callerToken.ts 交叉验证)', parity.ok, parity.detail)
 
-  const dist = buildDist()
+  const dist = buildPhoneDist(process.env.REMOTECHAIN_DIST || path.join(os.tmpdir(), 'forsion-remotechain-dist'))
   const nativeCfg = JSON.parse(fs.readFileSync(path.join(dist, 'forsion-native.json'), 'utf8'))
   const home = await startStubEngine({ sessions: [], models: [{ id: 'cloud-model', name: 'Cloud Model', provider: 'forsion', contextWindow: 128000 }], agents: [{ slug: 'xyra', name: 'Tangu' }] })
   let confirmGate = null
@@ -183,57 +125,18 @@ async function main() {
 
   let browser = null
   try {
-    browser = await chromium.launch({
-      executablePath: findChromium(), headless: true,
-      proxy: { server: `http://127.0.0.1:${world.hub.port}` },
-      args: ['--no-sandbox', `--unsafely-treat-insecure-origin-as-secure=${PHONE_ORIGIN}`],
-    })
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true, locale: 'zh-CN' })
-    const page = await ctx.newPage()
-    const pageErrors = []
-    page.on('pageerror', (e) => pageErrors.push(e.message))
-    // 原生桥:页面 → Node 替身。request 的回调按序送回(每条一次 evaluate,SSE 分块逐条到达)
-    await page.exposeBinding('__k9Native', async (_src, { plugin, method, options, cbId }) => {
-      if (plugin !== 'ForsionUnit') return {}
-      if (method === 'request') {
-        let chain = Promise.resolve()
-        const deliver = (msg) => { chain = chain.then(() => page.evaluate(([id, m]) => window.__k9Deliver(id, m), [cbId, msg]).catch(() => {})) }
-        void native.request(options, deliver)
-        return cbId
-      }
-      if (method === 'addListener' || method === 'removeListener') return cbId || {}
-      if (typeof native[method] !== 'function') throw new Error(`ForsionUnit.${method} not implemented`)
-      return native[method](options)
-    })
-    await ctx.addInitScript(capacitorInit, { token: world.PHONE_TOKEN })
-    await page.goto(`${PHONE_ORIGIN}/`, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-    await page.waitForSelector('.mb-shell', { timeout: 60_000 })
-    await page.waitForFunction(() => window.__forsionStore?.getState().connState === 'ok', null, { timeout: 30_000 })
+    const opened = await openPhonePage({ world, native })
+    browser = opened.browser
+    const { page, tap, pageErrors } = opened
     const boot = await page.evaluate(() => ({ native: window.Capacitor?.isNativePlatform?.(), self: null }))
     check('手机页走安卓 App 分支(Capacitor 自定义平台 isNativePlatform)', boot.native === true, JSON.stringify(boot))
     const self0 = await page.evaluate(() => window.tangu?.unitSelf?.())
     check('中继启动断言成立(原生 apiBase === 页面 cloudApiBase → relay ready)', self0?.relay === 'ready', JSON.stringify(self0))
 
-    // ── B. UnitsSheet「在哪运行」→ 点那台电脑 ──
-    const cdp = await ctx.newCDPSession(page)
-    const tap = async (locator) => {
-      const b = await locator.boundingBox()
-      if (!b) throw new Error(`目标不可见: ${locator}`)
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + b.height / 2 }] })
-      await sleep(60)
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-      await sleep(350)
-    }
-    for (let i = 0; i < 6 && !(await page.locator('.mb-drawer--left.open').count()); i++) {
-      await tap(page.locator('.mb-topbar [aria-label="left panel"]'))
-      await sleep(700)
-    }
-    const entry = page.locator('.mb-drawer--left.open .mb-foot-row [aria-label="Forsion Unit 切换"], .mb-drawer--left.open .mb-foot-row [aria-label="Switch Forsion Unit"]')
-    await tap(entry.first())
-    await page.waitForSelector(`[data-units-sheet] [data-run-row="${world.DESKTOP_UNIT}"]`, { timeout: 10_000 })
+    // ── B. UnitsSheet「在哪运行」→ 点那台电脑(执行设备的首次确认框先不答)──
     let releaseConfirm
     confirmGate = new Promise((r) => { releaseConfirm = r })
-    await tap(page.locator(`[data-run-row="${world.DESKTOP_UNIT}"]`))
+    await pickComputer({ page, tap, unitId: world.DESKTOP_UNIT })
     // 执行设备弹首次确认框(台架先不答):手机应显示「请在「K9 Studio Mac」上允许这台手机」
     for (let i = 0; i < 40 && !world.confirms.length; i++) await sleep(250)
     await page.waitForSelector(`[data-run-row="${world.DESKTOP_UNIT}"][data-status="awaitingConfirm"]`, { timeout: 8000 }).catch(() => {})
@@ -248,32 +151,11 @@ async function main() {
     check('手机上点允许后整端切到那台电脑(setFocusTarget)', focus.kind === 'unit' && focus.unitId === world.DESKTOP_UNIT, JSON.stringify(focus))
     check('本机懒登记为 kind=phone、登记名 = 设备名', !!native.identity && world.hub.units.get(native.identity.unitId)?.kind === 'phone' && world.hub.units.get(native.identity.unitId)?.registeredName === PHONE_NAME, JSON.stringify(native.identity && world.hub.units.get(native.identity.unitId)))
     check('确认之前没有 run 起得来(会话档未放行)', beforeConfirm === 0)
-    await page.keyboard.press('Escape').catch(() => {})
-    await page.evaluate(() => { const s = document.querySelector('[data-units-sheet]'); if (s) s.click() })
-    await sleep(600)
-    // 收起左抽屉(推开式抽屉的遮罩会拦住输入区)
-    for (let i = 0; i < 4 && (await page.locator('.mb-push-dim.on').count()); i++) {
-      const dim = page.locator('.mb-push-dim.on').first()
-      const b = await dim.boundingBox()
-      if (b) await dim.click({ position: { x: Math.max(1, b.width - 12), y: b.height / 2 }, force: true }).catch(() => {})
-      await sleep(500)
-    }
+    await closeOverlays(page)
     await page.waitForFunction(() => window.__forsionStore.getState().connState === 'ok', null, { timeout: 20_000 }).catch(() => {})
 
     // ── C. 发附件 + 一句话(真 UI:添加 › 文件 → 系统文件选择器)──
-    const ta = page.locator('.t2c-ta').first()
-    await ta.waitFor({ timeout: 20_000 })
-    for (let i = 0; i < 40 && !(await ta.isEnabled().catch(() => false)); i++) await sleep(250)
-    await page.locator('.add-pill-btn').first().click()
-    await sleep(300)
-    const [chooser] = await Promise.all([
-      page.waitForEvent('filechooser', { timeout: 8000 }),
-      page.locator('.composer-menu--add .menu-item').filter({ hasText: /文件|Files/ }).first().click(),
-    ])
-    await chooser.setFiles({ name: ATTACH_NAME, mimeType: 'text/plain', buffer: Buffer.from(ATTACH_TEXT) })
-    await sleep(500)
-    await ta.click()
-    await ta.fill(`把附件转成大写 ${MARK}`)
+    await compose(page, `把附件转成大写 ${MARK}`, { name: ATTACH_NAME, mimeType: 'text/plain', buffer: Buffer.from(ATTACH_TEXT) })
     await page.screenshot({ path: path.join(SHOT_DIR, 'remotechain-compose.png') })
     await page.keyboard.press('Enter')
 
@@ -385,7 +267,9 @@ async function main() {
     const derived = others.filter((c) => /^(Write a title|You are the persistent background Historian)/.test(head(c)))
     check('G7:本会话的派生调用(标题 / Historian)同样记在手机的 client 下', derived.length > 0 && derived.every((c) => c.client === phoneClient), JSON.stringify(derived.map((c) => c.client)))
     check('G7:电脑本机的后台 run(Muse)没有被盖上手机的 client', muse.every((c) => c.client !== phoneClient), JSON.stringify(muse.map((c) => c.client)))
-    check('G7:run 归属本机引擎用户、默认 agent(没有串到别的 agent)', !!runRow && (input.agentConfig?.agentSlug ?? input.agent_config?.agentSlug ?? 'xyra') !== undefined, JSON.stringify({ user: runRow?.user_id, slug: input.agentConfig?.agentSlug ?? input.agent_config?.agentSlug ?? null }))
+    // standalone 引擎是单用户(本机 'local',--user-id 缺省):远程调用方不会在引擎里长出第二个身份;agent = 手机选的(缺省 xyra)
+    const slug = input.agentConfig?.agentSlug ?? input.agent_config?.agentSlug ?? null
+    check('G7:run 归属本机引擎的单用户(local)、agent = 默认 xyra(远程调用方不在引擎里另起身份 / 串 agent)', runRow?.user_id === 'local' && (slug === null || slug === 'xyra'), JSON.stringify({ user: runRow?.user_id, slug }))
     // Historian:远程轮次不写长期记忆(localHistorian:「第 N 轮来自远端设备,本轮不写长期记忆」)
     await sleep(4000)
     const englog = fs.readFileSync(world.engineLog, 'utf8')

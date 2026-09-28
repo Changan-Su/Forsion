@@ -126,7 +126,9 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
  * @param {string} [o.homeEngineUrl]     手机「本端(云端)」引擎:/api/agent/* 与 /api/health 转过去;缺省回空列表
  * @param {(call: object) => Array<object>} [o.llm]  可编剧模型:给一次 build-and-stream 的请求体,回 SSE 帧数组(见 brainFrames)
  * @param {{ totalMs?: number, idleMs?: number }} [o.streamCut]  流式回包的总时长 / 空闲上限(缺省 1h / 15min,同生产)
- * @param {{ omitProxyCaller?: boolean }} [o.negctl]  负对照开关:信封不写 proxyCaller(断 hub → 设备那一跳)
+ * @param {{ omitProxyCaller?: boolean, dropReplayFrame?: number, rewriteFromSeq0?: boolean }} [o.negctl]  负对照开关:
+ *        omitProxyCaller = 信封不写 proxyCaller(断 hub → 设备那一跳);dropReplayFrame = N → 第 N 次带 fromSeq>0 的事件流续订丢掉头一帧(丢事件);
+ *        rewriteFromSeq0 = 续订时把 fromSeq 改回 0(引擎从头回放,客户端会收到重复事件)
  */
 async function startFakeUnitHub(o) {
   const jwtSecret = o.jwtSecret
@@ -387,6 +389,13 @@ async function startFakeUnitHub(o) {
         if (u.searchParams.get('xcto')) client.setHeader('X-Content-Type-Options', String(u.searchParams.get('xcto')))
         client.flushHeaders()
         const entry = { did: m[2], path: got.path, startedAt: Date.now(), bytes: 0, cut: null }
+        // 负对照:第 N 次续订(fromSeq>0 的事件流)丢掉回放的头一帧
+        let dropFrame = false
+        if (cfg.negctl.dropReplayFrame && /\/events\?(?:.*&)?fromSeq=[1-9]/.test(got.path || '')) {
+          cfg.replays = (cfg.replays || 0) + 1
+          dropFrame = cfg.replays === cfg.negctl.dropReplayFrame
+        }
+        let pend = ''
         // 真 hub:Node requestTimeout(1h)/ socket 空闲(15min)→ 设备上行 aborted → abortClient → client.destroy()(半截断开)
         const cut = (reason) => {
           if (entry.cut) return
@@ -403,7 +412,17 @@ async function startFakeUnitHub(o) {
           entry.bytes += c.length
           clearTimeout(idle)
           idle = setTimeout(() => cut('idle'), cfg.streamCut.idleMs)
-          if (!client.destroyed) client.write(c)
+          if (client.destroyed) return
+          if (!dropFrame) { client.write(c); return }
+          pend += c.toString('utf8')
+          let i
+          while (dropFrame && (i = pend.indexOf('\n\n')) >= 0) {
+            const frame = pend.slice(0, i + 2)
+            pend = pend.slice(i + 2)
+            if (/^data:/m.test(frame)) { dropFrame = false; ledger.cuts.push({ at: Date.now(), reason: 'negctl-drop', did: entry.did, path: entry.path, frame: frame.slice(0, 120) }); continue }
+            client.write(frame)
+          }
+          if (!dropFrame && pend) { client.write(pend); pend = '' }
         })
         const done = () => { clearTimeout(total); clearTimeout(idle); streams.delete(entry) }
         req.on('end', () => { done(); if (!entry.cut) { try { client.end() } catch { /* 已断 */ } } if (!res.headersSent) json(res, 200, { ok: true }) })
@@ -430,8 +449,9 @@ async function startFakeUnitHub(o) {
           if (bodyStr.length > 10 * 1024 * 1024) return json(res, 413, { code: 'UNIT_BODY_TOO_LARGE' })
         }
         const withCaller = rc.caller && !cfg.negctl.omitProxyCaller
+        const envPath = cfg.negctl.rewriteFromSeq0 ? (m[2] + u.search).replace(/([?&]fromSeq=)\d+/, '$10') : m[2] + u.search
         const ok = dispatch(target.id, {
-          method: req.method, path: m[2] + u.search,
+          method: req.method, path: envPath,
           ct: bodyless ? undefined : String(req.headers['content-type'] || 'application/json'),
           accept: req.headers.accept ? String(req.headers.accept) : undefined,
           body: bodyStr,

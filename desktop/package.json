@@ -177,6 +177,7 @@
     "check:parity": "node scripts/platform-parity.check.cjs",
     "check:enginetarget": "node scripts/engine-target.check.cjs",
     "check:remotechain": "node scripts/remote-chain.e2e.cjs",
+    "check:streamrenew": "node scripts/stream-renew.check.cjs",
     "check:unitswitcher": "node scripts/unit-switcher.check.cjs",
     "check:secrets": "node scripts/device-secrets.e2e.cjs",
     "gen:engineroutes": "node scripts/gen-engine-routes.mjs",
