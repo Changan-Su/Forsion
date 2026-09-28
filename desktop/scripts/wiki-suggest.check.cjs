@@ -4,6 +4,7 @@
 //   L-03 代码块 / 行内代码里的 [[ 与 @ 照样弹面板、劫持 Enter/Tab —— 代码里须恒字面;
 //   L-04 编辑器失焦后面板不关、继续在 window 捕获阶段劫持 ↑↓/Enter —— 失焦即关,按键只在编辑器持焦时拦;
 //   L-08 输入法组字时 ↓/Enter 被面板抢走(拼音选词回车直接插入候选)—— 组字一律放行。
+//   L-13 [[ 空查询最近优先;`名#` 列标题、`名#^` 只列已有块 ID(`[[#` = 本篇);解析不到 / 带锚点不给「新建」;fm 别名是候选。
 //   L-14 正文 #标签 渲染成可点胶囊(光标行露源码)、点击发 amadeus:open-tag、`#` 补全(打字才弹、Esc 闩锁、代码里不弹)。
 //        合成 KeyboardEvent 的 isComposing 到不了页面,必须走 CDP Input.imeSetComposition 起真组合。
 // 用法:npm run check:wikisuggest(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/wiki-suggest.check.cjs
@@ -306,6 +307,43 @@ async function main() {
     check('L-08a [[ 组字中 Enter 不插入候选', !r.doc.includes(']]'), JSON.stringify(r.doc))
     r = await imeRun(' @Al')
     check('L-08b @ 组字中 Enter 不插入候选', r.opened === 1 && !r.doc.includes('[['), JSON.stringify(r.doc))
+  })
+
+  // ── L-13:[[ 空查询最近优先;`名#` 列标题、`名#^` 只列已有块 ID;解析不到 / 带锚点不给「新建」;别名候选 ──
+  await tryTest('L-13', async () => {
+    const PAGES13 = ['Alpha.md', 'Beta.md', 'Unified.md', 'Zed.md']
+    const ALPHA = '---\naliases: [甲方]\n---\n# One\n\npara ^blk1\n\n## Two\n\n```\n# 注释\n```\n'
+    const run = async (typed, { recents, enter = false } = {}) => {
+      const page = await open(browser, '# Here\n\nx\n', PAGES13)
+      await page.evaluate(({ ALPHA, recents }) => {
+        window.__upage.vault.set('Alpha.md', ALPHA)
+        if (recents) window.__upage.setRecents(recents)
+      }, { ALPHA, recents })
+      await clickEnd(page, `${PM} > p`)
+      await page.keyboard.type(typed, { delay: 30 })
+      await page.waitForTimeout(400)
+      const shown = await items(page)
+      let out = null
+      if (enter) {
+        await page.keyboard.press('Enter')
+        out = await saved(page)
+      }
+      await page.close()
+      return { shown, out }
+    }
+    let r = await run(' [[', { recents: ['Zed.md', 'Beta.md'] })
+    check('L-13a `[[` 空查询最近优先', r.shown[0] === '*Zed' && r.shown[1] === 'Beta', JSON.stringify(r.shown))
+    r = await run(' [[Alpha#', { enter: true })
+    check('L-13b `[[Alpha#` 列目标笔记的标题(围栏里的 # 不算),默认高亮第一个标题而非「新建」', JSON.stringify(r.shown) === '["*OneH1","TwoH2"]', JSON.stringify(r.shown))
+    check('L-13b 回车插入 `[[Alpha#One]]`', typeof r.out === 'string' && r.out.includes('x [[Alpha#One]]'), JSON.stringify(r.out))
+    r = await run(' [[Alpha#^')
+    check('L-13c `[[Alpha#^` 只列已有块 ID', JSON.stringify(r.shown) === '["*^blk1para"]', JSON.stringify(r.shown))
+    r = await run(' [[Nope#', { enter: true })
+    check('L-13d 目标解析不到:不弹面板,回车不插 `[[Nope#]]`', r.shown.length === 0 && !String(r.out).includes('[[Nope#]]'), `${JSON.stringify(r.shown)} ${JSON.stringify(r.out)}`)
+    r = await run(' [[甲方', { enter: true })
+    check('L-13e fm 别名是候选,选中插 `[[Alpha|甲方]]`', r.shown[0] === '*甲方别名 → Alpha' && String(r.out).includes('x [[Alpha|甲方]]'), `${JSON.stringify(r.shown)} ${JSON.stringify(r.out)}`)
+    r = await run(' [[#')
+    check('L-13f `[[#` 列本篇标题', r.shown[0] === '*HereH1', JSON.stringify(r.shown))
   })
 
   // ── L-14:正文 #标签 胶囊(非光标行)+ 点击发 open-tag + `#` 补全(打字才弹、Esc 闩锁、代码里不弹) ──

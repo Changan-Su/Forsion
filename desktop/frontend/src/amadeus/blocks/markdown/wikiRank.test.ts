@@ -36,4 +36,11 @@ describe('pickWikiResults', () => {
   it('不匹配的候选照旧被过滤掉', () => {
     expect(pickWikiResults([...MANY_PAGES, ...FILES], 'zzz')).toEqual([])
   })
+
+  it('别名候选(L-13):空查询不列;有查询时按别名命中', () => {
+    const alias: Cand = { path: 'Alpha.md', base: '甲方', file: false, alias: '甲方' }
+    const pages = [page('Alpha'), page('Beta')]
+    expect(pickWikiResults([...pages, alias], '').map((c) => c.base)).toEqual(['Alpha', 'Beta'])
+    expect(pickWikiResults([...pages, alias], '甲方')[0]).toBe(alias)
+  })
 })

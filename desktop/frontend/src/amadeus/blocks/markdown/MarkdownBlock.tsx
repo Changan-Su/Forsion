@@ -1267,7 +1267,7 @@ export function MilkdownInner({
     setTagQ(null)
   }
 
-  // @ 候选:最近打开的页面排最前(宿主经 setRecentsProvider 注入),其余页面跟后;空查询即按此序展示。
+  // @ 与 [[ 候选:最近打开的页面排最前(宿主经 setRecentsProvider 注入),其余页面跟后;空查询即按此序展示(L-13)。
   const mentionPageNames = (): string[] => {
     const all = getPageNames()
     const inVault = new Set(all)
@@ -1414,11 +1414,12 @@ export function MilkdownInner({
           left={wiki.left}
           top={wiki.top}
           anchorTop={wiki.anchorTop}
-          getPageNames={getPageNames}
+          getPageNames={mentionPageNames}
           getFiles={getFiles}
           onPick={pickWiki}
           onClose={() => setWiki(null)}
           editorFocused={editorFocused}
+          sourcePath={attachmentPagePath}
         />
       )}
       {!wiki && mention && !readOnly && (

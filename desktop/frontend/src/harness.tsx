@@ -55,6 +55,7 @@ import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { parseTags, stripForIndex } from '@amadeus-shared/links'
 import { noteFmMeta } from '@amadeus-shared/linkIndex'
+import { setRecentsProvider } from './amadeus/lib/recents'
 import { parseBody } from '@amadeus-shared/compiler/markers'
 import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from '@amadeus-shared/compiler/split'
 import { parseLayout } from '@amadeus-shared/compiler/manifest'
@@ -1783,6 +1784,10 @@ if (new URLSearchParams(location.search).has('dock')) {
     fire(path: string, text: string) {
       vault.set(path, text)
       for (const cb of listeners) cb(path)
+    },
+    /** 「最近打开」注入(生产由 amadeusPrefs 提供;`[[` / `@` 空查询按它排序,评审 L-13)。 */
+    setRecents(paths: string[]) {
+      setRecentsProvider(() => paths)
     },
     // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。
     setEditorMode(m: 'wysiwyg' | 'source') {

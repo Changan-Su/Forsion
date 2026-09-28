@@ -14,6 +14,8 @@ export interface Cand {
   base: string
   /** 文件候选(附件/.db/画板…);页面为 false。 */
   file: boolean
+  /** 别名候选(fm `aliases:`,L-13):base = 别名,path = 它所属的笔记;选中插 `[[笔记|别名]]`。 */
+  alias?: string
 }
 
 export const WIKI_LIMIT = 8
@@ -25,6 +27,7 @@ export function pickWikiResults(cands: Cand[], query: string, limit = WIKI_LIMIT
   // 名字命中优先(+1000)、仅路径命中垫底;sort 稳定 → 同分保持入参顺序(@ 提及 recents-first 不乱)。
   const scored: Array<{ c: Cand; s: number }> = []
   for (const c of cands) {
+    if (c.alias && !query.trim()) continue // 空查询不列别名:每篇笔记会平白多出几行,冲掉最近优先的顺序
     const sName = fuzzyScore(query, c.base)
     const s = sName !== null ? sName + 1000 : fuzzyScore(query, c.path)
     if (s !== null) scored.push({ c, s })
