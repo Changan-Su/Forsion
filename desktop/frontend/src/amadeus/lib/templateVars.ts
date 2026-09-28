@@ -4,7 +4,9 @@
  *  - 变量:大小写 / 空白容忍,`{{date:fmt}}` / `{{time:fmt}}` 按 moment 常用子集格式化;缺省格式可由
  *    `.obsidian/templates.json` 的 dateFormat / timeFormat 给(从 Obsidian 搬来的库照旧生效)。
  *  - 日记:`.obsidian/daily-notes.json` 的 format / folder / template 作缺省(设置里的日记文件夹非空时优先)。
- *  纯函数,不碰 IO(IO 在 amadeusTemplates.ts)。 */
+ *  纯函数,不碰 IO(IO 在 amadeusTemplates.ts)。月 / 星期名字走 format/time.ts 单源(U-29)。 */
+
+import { formatDateName } from '../../format/time'
 
 type Loc = 'zh' | 'en'
 const pad = (n: number, w = 2): string => String(n).padStart(w, '0')
@@ -17,7 +19,6 @@ function isoWeek(d: Date): { week: number; year: number } {
   return { week: Math.ceil(((t.getTime() - y0.getTime()) / 86400000 + 1) / 7), year: t.getUTCFullYear() }
 }
 const dayOfYear = (d: Date): number => Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(d.getFullYear(), 0, 1)) / 86400000) + 1
-const names = (d: Date, loc: Loc, opt: Intl.DateTimeFormatOptions): string => new Intl.DateTimeFormat(loc === 'zh' ? 'zh-CN' : 'en-US', opt).format(d)
 const ordinal = (n: number, loc: Loc): string => {
   if (loc === 'zh') return `${n}日`
   const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')
@@ -34,8 +35,8 @@ export function formatMoment(d: Date, fmt: string, loc: Loc = 'en'): string {
     switch (tok) {
       case 'YYYY': return String(d.getFullYear())
       case 'YY': return pad(d.getFullYear() % 100)
-      case 'MMMM': return names(d, loc, { month: 'long' })
-      case 'MMM': return names(d, loc, { month: 'short' })
+      case 'MMMM': return formatDateName(d, 'month', loc)
+      case 'MMM': return formatDateName(d, 'monthShort', loc)
       case 'MM': return pad(d.getMonth() + 1)
       case 'M': return String(d.getMonth() + 1)
       case 'DDDD': return pad(dayOfYear(d), 3)
@@ -43,9 +44,9 @@ export function formatMoment(d: Date, fmt: string, loc: Loc = 'en'): string {
       case 'Do': return ordinal(d.getDate(), loc)
       case 'DD': return pad(d.getDate())
       case 'D': return String(d.getDate())
-      case 'dddd': return names(d, loc, { weekday: 'long' })
-      case 'ddd': return names(d, loc, { weekday: 'short' })
-      case 'dd': return loc === 'zh' ? names(d, loc, { weekday: 'narrow' }) : names(d, loc, { weekday: 'short' }).slice(0, 2)
+      case 'dddd': return formatDateName(d, 'weekday', loc)
+      case 'ddd': return formatDateName(d, 'weekdayShort', loc)
+      case 'dd': return loc === 'zh' ? formatDateName(d, 'weekdayNarrow', loc) : formatDateName(d, 'weekdayShort', loc).slice(0, 2)
       case 'd': return String(d.getDay())
       case 'HH': return pad(h)
       case 'H': return String(h)
