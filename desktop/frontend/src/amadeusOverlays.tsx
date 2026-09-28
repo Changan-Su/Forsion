@@ -20,6 +20,9 @@ import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 import { registerMessages, useI18n } from './i18n'
+import { useNotifications } from './stores/notificationStore'
+import { windowKind } from './windowKind'
+import type { AmadeusToastDetail } from '@amadeus/unified/writeSafety'
 
 // ⚠️ `amoverlay.noTemplates` 值里的 {{date}} 之类是**给用户看的模板变量**,不是 i18n 占位符 ——
 //    这条永远不带 vars 调用(interpolate 无 vars 时原样返回);一旦给它传 vars,`{date}` 会被吃掉。
@@ -64,8 +67,18 @@ export function AmadeusOverlays() {
   // 同一解耦模式:编辑器层要给用户提示时发事件(目前用于插件斜杠项失败 —— 第三方代码静默失败会被当成「点了没反应」)。
   useEffect(() => {
     const onToast = (e: Event): void => {
-      const d = (e as CustomEvent<{ text?: string }>).detail
-      if (d?.text) useUiStore.getState().notify(d.text) // 与插件 ctx.notify 同一条吐司通道(2.6s 自动消失)
+      const d = (e as CustomEvent<Partial<AmadeusToastDetail>>).detail
+      if (!d?.text) return
+      // 带级别 / 动作的(写盘冲突副本、写失败 —— 评审 D-03/D-04)走右上角通知栈:error 常驻到手动关、能挂
+      // 「打开副本」。NotificationHost 只挂在主窗(Root / MobileRoot);独立窗 / Mini 卡没有它,退回底部吐司,
+      // 文字照样看得见。用户在设置里关掉了通知(notify 回 null)时同样退回吐司 —— 写盘出事不能静默。
+      if ((d.level || d.action) && windowKind() === 'main') {
+        const id = useNotifications.getState().notify({
+          text: d.text, level: d.level, action: d.action, dedupeKey: d.dedupeKey, inAppOnly: true,
+        })
+        if (id != null) return
+      }
+      useUiStore.getState().notify(d.text) // 与插件 ctx.notify 同一条吐司通道(2.6s 自动消失)
     }
     window.addEventListener('amadeus:toast', onToast)
     return () => window.removeEventListener('amadeus:toast', onToast)

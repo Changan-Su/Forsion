@@ -10,7 +10,7 @@
  *      ttl/2 自续;setAssetUrlBuilder 接进渲染层 toAssetUrl。**首枚令牌在工厂里等到手**——
  *      否则 LAN 直连下首屏笔记先于令牌渲染,资源 URL 缺 at 全 401 且无人重渲(Codex P2)。
  *   3. 事件:GET vault/events SSE({ch,payload,origin} 直通 desktop 的回灌通道);断线自管理重连
- *      (1s→30s 退避),重连后补课 = structureChange + 当前笔记 externalChange(照 cloudEvents);
+ *      (1s→30s 退避),重连后补课 = structureChange + 开着的笔记逐篇 externalChange(v3 当前页 + 全部 v4 实例);
  *      回声按 **origin===本桥 clientId** 丢弃(RPC 带 X-Unit-Client,B 侧原样回吐)——
  *      路径时间窗方案有预臂竞态(SSE 回声先于 RPC 响应到达)且会误吞窗内真改动,已废(Codex P1)。
  *      结构事件永不抑制,照 cloud 口径。
@@ -19,6 +19,7 @@
  * exportPdf 走浏览器打印(与 cloudBridge 同口径);服务端白名单(unitWeb VAULT_RPC_ALLOW)是真闸,
  * 这里的覆盖只是给出合理的远程语义。
  */
+import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { IPC } from '@amadeus-shared/ipc'
 import type { AmadeusApi } from '@amadeus-shared/ipc'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
@@ -155,9 +156,11 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     src.onopen = () => {
       backoff = 1000
       if (hadSession) {
-        // 断线补课:结构刷一次 + 当前笔记走既有 LWW reconcile(掉线期间的事件丢了)。
+        // 断线补课:结构刷一次 + 开着的笔记逐篇走既有回灌(掉线期间的事件丢了,Unit SSE 没有 seq 可重放)。
+        // v4 笔记只经 readTextFile 打开、从不设 lastLoadedPage —— 只补它 = 开着的 v4 编辑器漏补,
+        // 下一击键把掉线期间 B 侧的改动整篇盖掉(评审 G1-04)。开着哪些以 unified 登记处为准。
         for (const cb of [...structCbs]) cb()
-        if (lastLoadedPage) fire(extCbs, lastLoadedPage)
+        for (const p of new Set([lastLoadedPage, ...unifiedPaths()])) if (p) fire(extCbs, p)
       }
       hadSession = true
     }
@@ -257,7 +260,8 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     readDrawing: (pagePath, ref) => rpc(IPC.drawingRead, [pagePath, ref]),
     writeDrawing: (drawingPath, source) => rpc(IPC.drawingWrite, [drawingPath, source]),
     readTextFile: (filePath) => rpc(IPC.readTextFile, [filePath]),
-    writeTextFile: (filePath, text) => rpc(IPC.writeTextFile, [filePath, text]),
+    // opts 原样转给本机宿主:base(CAS,G1-01)由桌面主进程比对,冲突结果 { ok:false, current } 原样回来。
+    writeTextFile: (filePath, text, opts) => rpc(IPC.writeTextFile, opts ? [filePath, text, opts] : [filePath, text]),
     listPageProps: (folder) => rpc(IPC.listPageProps, [folder]),
     setPageFrontmatter: (pagePath, patch) => rpc(IPC.setPageFrontmatter, [pagePath, patch]),
     renamePageFile: (oldPath, newBaseName) => rpc(IPC.renamePageFile, [oldPath, newBaseName]),

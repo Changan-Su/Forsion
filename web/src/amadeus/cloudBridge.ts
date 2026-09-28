@@ -46,6 +46,7 @@ import type {
 } from '@amadeus-shared/ipc'
 import { createCloudHttp, is404, is409, HttpError } from './cloudHttp'
 import { startCloudEvents } from './cloudEvents'
+import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { pushPresence, setRoster } from './cloudPresence'
 import { buildAssetUrl, installCloudAssetUrls } from './cloudAssets'
 import {
@@ -424,6 +425,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       clientId,
       knownSeq: (p) => seqMap.get(p),
       lastLoadedPage: () => lastLoadedPage,
+      // 兜底补课(服务端 reset)连开着的 v4 笔记一起回灌:它们只经 readTextFile 打开,从不设 lastLoadedPage(评审 G2-01)。
+      openPages: unifiedPaths,
       onPageChange: (p) => { pageCache.delete(p); fireExternal(p) },
       onDbChange: (p) => fireDb(p),
       // 别处改名:seq 随路径迁移,旧路径记「已挪走」→ 开着旧路径的编辑器下一次保存跟到新路径,而不是

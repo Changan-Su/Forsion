@@ -4,8 +4,11 @@
  * - 断线自管理重连:指数退避 1s→30s + 抖动(不用 EventSource 自带的固定重试);
  * - 回声抑制:自己写的(origin.client === clientId)或已知 seq 之前的旧事件丢弃 —— 只抑制
  *   页面/.db 内容事件,结构事件永不抑制(设计要求;树刷新有 300ms 防抖 + 树缓存去重兜底);
- * - 断线补课:重连后 hello.seq 出现缺口、或服务端显式 reset → 触发一次结构刷新 +
- *   当前笔记 external-change(pageStore.reconcileExternal 走既有 LWW 通道)。
+ * - 断线补课:重连带 `?since=<已收到的最大 seq>`,服务端在 hello 之后按序重放缺口里的 change(与在线时同一条
+ *   处理路径,开着的哪篇笔记都能收到自己那条);重放窗口不够(日志被剪)→ 服务端发 reset → 兜底:结构刷新 +
+ *   开着的笔记逐篇 external-change(lastLoadedPage ∪ openPages:v4 笔记只经 readTextFile 打开,从不设
+ *   lastLoadedPage —— 只补它就漏补 v4,下一击键 409 后强写,盖掉别处的修改;评审 G2-01)。
+ *   首连不带 since(restoreVault 刚拉过全量树),hello 只记起点。
  *
  * change 事件体(与服务端约定,宽容解析):{ path?, seq?, op?/kind?, origin?: { client? } }。
  * op/kind 含 create/delete/move/rename/folder/structure… 视为结构事件;write/modify 等视为内容事件;
@@ -20,6 +23,8 @@ export interface CloudEventsCfg {
   /** 本端已知的 path→seq(只由自己的 GET/PUT 更新;事件 seq <= 已知 = 回声/旧闻)。 */
   knownSeq(path: string): number | undefined
   lastLoadedPage(): string | null
+  /** 兜底补课时一并回灌的开着的笔记(web/mobile = unified 生命周期里挂着的 v4 实例)。可选:缺省只补 lastLoadedPage。 */
+  openPages?(): string[]
   onPageChange(path: string): void
   onDbChange(path: string): void
   /** 别处把文件改名/移走(op=move,带 newPath)。桥据此把开着的编辑器改指新路径,
@@ -58,9 +63,8 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
   let backoff = 1000
   let retryTimer: ReturnType<typeof setTimeout> | null = null
   let structTimer: ReturnType<typeof setTimeout> | null = null
-  /** 见过的最大事件序号(change.seq 与 hello.seq);hello 带缺口 = 断线期间漏事件。 */
+  /** 已**收到**的最大事件序号(change.seq;hello.seq 只在没有待重放的缺口时计入)—— 重连的 since 就用它。 */
   let lastSeq: number | null = null
-  let hadSession = false
 
   const fireStructure = (): void => {
     if (structTimer) return
@@ -71,12 +75,11 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     }, 300)
   }
 
-  /** 断线补课 / reset:结构刷一次 + 当前笔记走 external-change(既有 LWW reconcile)。 */
+  /** 兜底补课(重放不可用):结构刷一次 + 开着的笔记逐篇走 external-change(既有回灌通道)。 */
   const recoverGap = (): void => {
     if (stopped) return
     fireStructure()
-    const lp = cfg.lastLoadedPage()
-    if (lp) cfg.onPageChange(lp)
+    for (const p of new Set([cfg.lastLoadedPage(), ...(cfg.openPages?.() ?? [])])) if (p) cfg.onPageChange(p)
   }
 
   const handleChange = (raw: string): void => {
@@ -111,9 +114,14 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
 
   const connect = (): void => {
     if (stopped) return
+    // 断线重连带上已收到的最大 seq(服务端 routes.ts `/vaults/:v/events`:hello 之后重放 (since, seq],窗口不够 → reset)。
+    const since = lastSeq
+    /** 本连接 hello 报的服务端 seq,仍有待重放的缺口时暂存(reset 兜底补完才算「已收到」)。 */
+    let pendingHelloSeq: number | null = null
     let src: EventSource
     try {
-      src = new EventSource(cfg.url())
+      const u = cfg.url()
+      src = new EventSource(since === null ? u : `${u}${u.includes('?') ? '&' : '?'}since=${since}`)
     } catch {
       scheduleRetry()
       return
@@ -127,13 +135,22 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
         const d = JSON.parse((e as MessageEvent).data as string) as { seq?: unknown }
         if (typeof d.seq === 'number') seq = d.seq
       } catch { /* hello 无体也接受 */ }
-      // 重连后发现缺口 → 补课一次(首连不算:restoreVault 刚拉过全量树)。
-      if (hadSession && seq !== null && lastSeq !== null && seq > lastSeq) recoverGap()
-      if (seq !== null) lastSeq = Math.max(lastSeq ?? 0, seq)
-      hadSession = true
+      if (since !== null && seq !== null) {
+        // 带了 since:hello 先于重放到达,缺口里的 change 紧跟着就来(或 reset)—— 此刻既不补课也不推进 lastSeq,
+        // 否则重放中途再断,下一次 since 会越过没收到的那几条。服务端 seq 倒退(库被重建)= 重放无从谈起,按 reset 兜底。
+        if (seq < since) { lastSeq = seq; recoverGap() }
+        else if (seq > since) pendingHelloSeq = seq
+      } else if (seq !== null) {
+        // 首连(或此前从没收到过 seq):restoreVault 刚拉过全量树,hello 只用来记起点。
+        lastSeq = Math.max(lastSeq ?? 0, seq)
+      }
     })
     src.addEventListener('change', (e) => handleChange((e as MessageEvent).data as string))
-    src.addEventListener('reset', () => recoverGap())
+    src.addEventListener('reset', () => {
+      recoverGap()
+      if (pendingHelloSeq !== null) lastSeq = Math.max(lastSeq ?? 0, pendingHelloSeq)
+      pendingHelloSeq = null
+    })
     src.addEventListener('presence', (e) => {
       if (stopped) return
       try { cfg.onPresence?.(JSON.parse((e as MessageEvent).data as string)) } catch { /* ignore */ }

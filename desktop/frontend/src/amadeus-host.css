@@ -1954,3 +1954,10 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-prop-row-ro .amx-prop-input { display: inline-flex; align-items: center; min-height: 24px; }
 .amx-stage-ro .amx-stage-inner { cursor: grab; }
 .amx-stage-ro .amx-stage-inner:active { cursor: grabbing; }
+
+/* ── 写盘状态条(UnifiedPage,评审 D-04 2026-09-27):写失败「未保存」/ 上次没写成的草稿。
+ * 外观就是全局 `.mk-notice` 提示条(base.css);这里只把设置页那套宽度(calc(100% - 76px) 居中)
+ * 换成跟正文列走,并给按钮让出不换行的位置。(0,2,0) 压过 .mk-notice 与它的 820px 断点。 */
+.unified-page .unified-savebar { width: auto; max-width: none; margin: 8px 0 4px; align-items: center; }
+.unified-page .unified-savebar > svg { margin-top: 0; }
+.unified-page .unified-savebar > .btn { flex: 0 0 auto; white-space: nowrap; }
