@@ -633,6 +633,8 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
   color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 3px 6px; border-radius: var(--radius-sm, 6px);
 }
 .amx-prop-input:hover, .amx-prop-input:focus { background: var(--overlay-light, rgba(127, 127, 127, 0.07)); }
+/* 多行字符串值(`desc: |`,D-20):多行框,观感同单行值框;高度随内容(field-sizing,故不给拖拽把手),rows 兜底。 */
+.amx-prop-multiline { display: block; resize: none; line-height: 1.5; white-space: pre-wrap; field-sizing: content; }
 .amx-prop-check { align-self: center; accent-color: var(--accent, #6c5ce7); }
 .amx-prop-nested { flex: 1; white-space: pre-wrap; color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); padding: 3px 6px; }
 .amx-prop-del { flex: 0 0 auto; align-self: center; border: none; background: transparent; color: var(--text-faint); cursor: pointer; padding: 3px; border-radius: var(--radius-sm, 6px); opacity: 0; }
@@ -662,7 +664,8 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
   border-color: var(--warning);
 }
 /* 值框本身无边框(border:none):补一圈零模糊内环(描边不是高程,见 DESIGN §7.6);原文框靠上面的 border-color。 */
-.amx-props input.amx-prop-conflict { box-shadow: inset 0 0 0 1px var(--warning); }
+.amx-props input.amx-prop-conflict,
+.amx-props textarea.amx-prop-input.amx-prop-conflict { box-shadow: inset 0 0 0 1px var(--warning); }
 
 /* ── 拖拽分栏投放区:静止时零宽(保 Obsidian 左对齐),拖拽中(.stack[data-dnd])绝对定位浮进
  *    48px 页边距 → 无内容位移,拖到行两侧边缘即可裂出新列(与 styles.css 的 [data-over] 高亮配合)。 ── */

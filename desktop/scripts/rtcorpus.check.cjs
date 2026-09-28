@@ -133,10 +133,10 @@ const CASES = [
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
   { id: 'tags.midLine', bucket: V, md: `${M}\n\n正文 #tag 与 #嵌套/标签\n` },
   { id: 'tags.heading', bucket: V, md: `${M}\n\n# 标题\n` },
-  { id: 'tags.lineStart', bucket: P, why: 'R-25(0b):行首 `#tag` 被转义成 `\\#tag`', md: `${M}\n\n#tag 与 #嵌套/标签 正文\n` },
-  { id: 'tags.listItem', bucket: P, why: 'R-25 + D-05(0b)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
-  { id: 'tags.quote', bucket: P, why: 'R-25(0b)', md: `${M}\n\n> #idea 想法\n` },
-  { id: 'tags.onlyTag', bucket: P, why: 'R-25(0b)', md: `${M}\n\n#tag\n` },
+  { id: 'tags.lineStart', bucket: V, why: 'R-25(0b 已修):行首 `#tag` 曾被转义成 `\\#tag`', md: `${M}\n\n#tag 与 #嵌套/标签 正文\n` },
+  { id: 'tags.listItem', bucket: P, why: 'D-05(0b):紧凑 `-` 列表被改写(行首 `#` 的转义已由 R-25 修掉)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
+  { id: 'tags.quote', bucket: V, why: 'R-25(0b 已修)', md: `${M}\n\n> #idea 想法\n` },
+  { id: 'tags.onlyTag', bucket: V, why: 'R-25(0b 已修)', md: `${M}\n\n#tag\n` },
 ]
 
 // ── 入口:修复挂在 remark 管线(唯一咽喉)上 —— 加载之外,外部回灌 / 切换文件 / 粘贴也必须同样保真 ──

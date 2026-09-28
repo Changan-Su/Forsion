@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   setFmExtraOnSource,
   patchFmExtraText,
+  patchYamlText,
+  renameYamlKey,
   parseFmObject,
   inferColumnType,
   fmValueToCell,
@@ -165,5 +167,81 @@ describe('deriveColumns (并集列)', () => {
     const again = deriveColumns(existing, [{ status: 'y', extra: 1 }])
     expect(again.filter((c) => c.id === 'status')).toHaveLength(1)
     expect(again.some((c) => c.id === 'extra')).toBe(true)
+  })
+})
+
+// D-20(评审 2026-09-27 P1):属性面板 / 封面 / 图标写 fm 时整块 parse→stringify,改一个键就把别的键改值
+// (`007`→`7`、`1.10`→`1.1`、20 位整数丢精度、`0x1F`→`31`)、注释丢光、flow 改块状。现在只重写被改的那个条目。
+// 真浏览器那一半:评审探针 verify-integrity-4/props.cjs、cover.cjs。
+// 负对照:setFmExtraOnSource / patchYamlText 换回整块 stringify → 本组红。
+describe('行级改写:只动被改的那个键(D-20)', () => {
+  const FM = [
+    'title: "Hello: world"',
+    '# my comment',
+    'tags: [alpha, beta]',
+    'desc: |',
+    '  multi',
+    '  line',
+    'zip: 007',
+    'version: 1.10',
+    'big: 12345678901234567890',
+    'hex: 0x1F',
+    'empty:',
+    "quoted: 'single'",
+  ].join('\n')
+
+  it('改一个键:其余行(注释、007、1.10、大整数、0x1F、多行块、flow)逐字', () => {
+    const out = patchYamlText(FM, { quoted: 'changed' })!
+    expect(out).toBe(FM.replace("quoted: 'single'", 'quoted: changed'))
+  })
+
+  it('删键摘整条目(连同续行);加键追加在末尾', () => {
+    expect(patchYamlText(FM, { desc: undefined })).toBe(FM.replace('desc: |\n  multi\n  line\n', ''))
+    expect(patchYamlText(FM, { status: 'todo' })).toBe(`${FM}\nstatus: todo`)
+  })
+
+  it('flow 写法的数组改完仍是 flow;多行字符串改完仍是块状', () => {
+    expect(patchYamlText(FM, { tags: ['alpha', 'gamma'] })).toBe(FM.replace('tags: [alpha, beta]', 'tags: [alpha, gamma]'))
+    expect(patchYamlText(FM, { desc: 'multi\nline 2\n' })).toBe(FM.replace('desc: |\n  multi\n  line', 'desc: |\n  multi\n  line 2'))
+  })
+
+  it('新值与现值相同 → 整条逐字(`zip: 007` 设成 7 仍是 007)', () => {
+    expect(patchYamlText(FM, { zip: 7, version: 1.1 })).toBe(FM)
+  })
+
+  it('改键名:只换键 token,值原文逐字、位置不动;带引号的键沿用引号', () => {
+    expect(renameYamlKey(FM, 'zip', 'postcode')).toBe(FM.replace('zip: 007', 'postcode: 007'))
+    expect(patchYamlText('"a b": 1\nc: 2', { 'a b': 3 })).toBe('"a b": 3\nc: 2')
+  })
+
+  it('CRLF 原文:改动行也用 CRLF,结尾换行照旧', () => {
+    const crlf = 'a: 007\r\nb: x\r\n'
+    expect(patchYamlText(crlf, { b: 'y' })).toBe('a: 007\r\nb: y\r\n')
+    expect(patchYamlText(crlf, { c: 1 })).toBe('a: 007\r\nb: x\r\nc: 1\r\n')
+  })
+
+  it('认不出的键写法恰好就是要改的键 → 核对不过,退回整块重排(语义对,不写出重复键)', () => {
+    const out = patchYamlText('? k\n: 1\nz: 2', { k: 5 })!
+    expect(parseYaml(out)).toEqual({ k: 5, z: 2 })
+  })
+
+  it('setFmExtraOnSource(封面 / 图标 / 多维表单元格):栅栏、保留行、别的键、正文逐字', () => {
+    const src = `---\namadeus_schema: amadeus.page/4\n${FM}\n---\n\nbody\n`
+    expect(setFmExtraOnSource(src, { cover: 'https://x/y.jpg' })).toBe(`---\namadeus_schema: amadeus.page/4\n${FM}\ncover: https://x/y.jpg\n---\n\nbody\n`)
+    const crlf = '---\r\nzip: 007\r\n---\r\nbody\r\n'
+    expect(setFmExtraOnSource(crlf, { icon: 'x' })).toBe('---\r\nzip: 007\r\nicon: x\r\n---\r\nbody\r\n')
+  })
+
+  it('setFmExtraOnSource 行级核对不过 → 退回「保留行原样 + 外来区重排」,绝不整块重排(布局 JSON 不过 YAML 往返)', () => {
+    const src = '---\namadeus_layout: {"type":"stack","children":[]}\n? icon\n: old\n---\nbody\n'
+    const out = setFmExtraOnSource(src, { icon: 'new' })
+    expect(out).toContain('amadeus_layout: {"type":"stack","children":[]}\n')
+    expect(parseYaml(/^---\n([\s\S]*?)---\n/.exec(out)![1])).toEqual({ amadeus_layout: { type: 'stack', children: [] }, icon: 'new' })
+    expect(out.endsWith('---\nbody\n')).toBe(true)
+  })
+
+  it('setFmExtraOnSource 在本就解析不了的 fm 上:只动被改的条目,别的行一概不碰(旧版折成 {} 抹光外来键)', () => {
+    const broken = '---\ntitle: "未闭合\nrank: [1, 2\n---\nbody\n'
+    expect(setFmExtraOnSource(broken, { status: 'done' })).toBe('---\ntitle: "未闭合\nrank: [1, 2\nstatus: done\n---\nbody\n')
   })
 })

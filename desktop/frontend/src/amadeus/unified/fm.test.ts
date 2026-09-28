@@ -413,7 +413,12 @@ describe('多行 flow 结构键 + 顶格收尾(N-2)', () => {
     const fm = `---\nx: &c ${CANVAS}\namadeus_schema: amadeus.page/4\namadeus_canvas: *c\n---\n`
     expect(inner(fm)).toBeTruthy()
     expect(setAmadeusStructure(fm, layoutLineOf(fm), canvasLineOf(fm))).toBe(fm)
-    expect(setForeignFm(fm, 'x: &c {"v":1}\ntags: [b]')).toBe(fm)
+    // setForeignFm:外来区连续的一段 → 原位替换(D-20),锚点仍在别名之前,合法;外来区被保留行隔开 → 走重组 →
+    // 结构键挪到最前成了「别名先于锚点」→ 原样返回
+    expect(setForeignFm(fm, 'x: &c {"v":1}\ntags: [b]')).toBe(`---\nx: &c {"v":1}\ntags: [b]\namadeus_schema: amadeus.page/4\namadeus_canvas: *c\n---\n`)
+    const split = `---\nx: &c ${CANVAS}\namadeus_schema: amadeus.page/4\ny: 1\namadeus_canvas: *c\n---\n`
+    expect(inner(split)).toBeTruthy()
+    expect(setForeignFm(split, 'x: &c {"v":1}\ny: 2')).toBe(split)
     // 对照:原文本来就解析不了(重复键等)→ 不拦,照旧按行级规则重写(兜底只防「由好变坏」)
     const dup = `---\ntags: [a]\ntags: [b]\namadeus_schema: amadeus.page/4\n---\n`
     expect(setAmadeusStructure(dup, null, CANVAS)).toContain(`amadeus_canvas: ${CANVAS}`)
