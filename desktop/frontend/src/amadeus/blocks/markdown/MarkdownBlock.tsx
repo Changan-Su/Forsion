@@ -1015,7 +1015,7 @@ export function MilkdownInner({
       .use(calloutPlugin())
       .use(codeBlockPlugin()) // 语法高亮 + 语言/复制/折行工具条(lowlight,base.css .hljs-* 配色)
       .use(spellcheckPlugin) // 拼写检查开关 + 行内代码 / 公式不查(G4-07,见 ./spellcheck)
-      // 行内格式键位补齐(AFFiNE 六件套):预设只给了 Mod-B / Mod-I / Mod-E 与 Mod-Alt-X,
+      // 行内格式键位补齐(AFFiNE 六件套):预设只给了 Mod-B / Mod-I / Mod-E(行内代码)与 Mod-Alt-X,
       // 下划线(自有 mark)、Mod-Shift-S 删除线、Mod-K 链接三个一直没有键位。
       // Mod-K 走与工具栏 🔗 完全同一条 editLink(选区已是链接=直接摘掉,空选区不弹框)。
       .use($prose((c) =>
@@ -1034,9 +1034,11 @@ export function MilkdownInner({
             return true
           },
           'Mod-Shift-h': toggleObsHighlight, // `==` 高亮切换(I-17;仓内与 darwin 默认菜单均无占用)
-          'Mod-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
-          'Mod-e': (state, dispatch) => setTextAlignment(state, dispatch, 'center'),
-          'Mod-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
+          // 对齐 = ⌘⇧L / ⌘⇧E / ⌘⇧R(拍板 #2,I-09):⌘E 还给行内代码(预设 inlineCodeKeymap 的 Mod-e,
+          // Notion / AFFiNE 同键)。⚠️ 别再在这里绑 Mod-e —— 本表的键盖得过预设(当年居中就是这么把行内代码唯一的键吃掉的)。
+          'Mod-Shift-l': (state, dispatch) => setTextAlignment(state, dispatch, 'left'),
+          'Mod-Shift-e': (state, dispatch) => setTextAlignment(state, dispatch, 'center'),
+          'Mod-Shift-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
         }),
       ))
       // Tab 缩进(与 v4 blockLayer 共用 tabIndent.ts 的同一份阶梯):列表嵌套/首项视觉档、代码块两空格、
