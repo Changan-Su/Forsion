@@ -107,6 +107,7 @@ export function toolNameSpellings(name: string): string[] {
  * 子代理也该有改配置的权限(此前 deferBypass 会把整族管理工具直接放进子代理首轮工具面)。
  */
 export const SUB_AGENT_DENY_TOOLS: ReadonlySet<string> = new Set<string>([
+  'manage_human',
   'manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule', 'manage_harness',
   'muse_watch',
 ]);
@@ -124,6 +125,7 @@ export const SUB_AGENT_GRANTABLE_TOOLS: readonly string[] = [
  *  子代理发起、用户事后批准的那一笔会落到父代理身上(2026-09-15 抓到的目标漂移)。
  *  参数里带显式目标的工具(manage_automation / manage_schedule / write_file …)不在此列,重放无歧义。 */
 export const AGENT_SCOPED_TOOLS: ReadonlySet<string> = new Set<string>([
+  'manage_human',
   'manage_harness', 'manage_skill', 'manage_agent',
 ]);
 
@@ -168,7 +170,7 @@ const LOADOUT_EXEMPT = new Set(['exit_plan_mode', 'ask_user', 'load_tools']);
 
 /** 有门禁、但**仍受**每-agent 黑白名单约束且进 UI 目录的工具:读用户隐私数据的面,全局开关打开后
  *  用户要能对单个 agent(市场导入的第三方 agent)关掉它。allow 模式的 agent 不列即不可见(默认拒)。 */
-const LOADOUT_GATED = new Set(['read_computer_history']);
+const LOADOUT_GATED = new Set(['read_computer_history', 'manage_human']);
 
 /** 注册一个 provider。同 id 幂等覆盖(保持原位置,热加载安全)。 */
 export function registerToolProvider(p: ToolProvider): void {

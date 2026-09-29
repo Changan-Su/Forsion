@@ -1,3 +1,5 @@
+import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
+import type { HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, Users, X } from 'lucide-react'
@@ -27,8 +29,8 @@ import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { homeTarget } from '../services/engine/targets'
 
-type Tab = 'agents' | 'settings' | 'git'
-const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
+type Tab = 'agents' | 'settings' | 'git' | 'human'
+const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'human', icon: FileText }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
 
 type Props = {
   session: SessionRecord
@@ -37,6 +39,7 @@ type Props = {
   renderAgent: (agent: NormalAgentDef, sessionId?: string | null) => ReactNode
   renderTeam: (session: SessionRecord, config: AgentConfig) => ReactNode
   /** 「当前会话」标记跟谁:缺省 = session。侧栏「查看详情」打开时 session 只是借来的载体(引擎端点按 sessionId 绑定),传真正的当前会话。 */
+  humanJump?: HumanJump
   currentSessionId?: string | null
 }
 
@@ -80,7 +83,7 @@ type GitErr = { message: string; info?: string; retry?: () => void }
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -93,7 +96,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [ctx, setCtx] = useState<ProjectContext | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
-  const [tab, setTab] = useState<Tab>('agents')
+  const [tab, setTab] = useState<Tab>(humanJump ? 'human' : 'agents')
+  useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
   const [selected, setSelected] = useState('')
   const [opened, setOpened] = useState<string[]>([])
   const [picker, setPicker] = useState(false)
@@ -403,6 +407,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   }
 
   const agentOf = (slug: string) => s.agents.find((a) => a.slug === slug)
+  const collaborationSlugs = config.engineId || config.soloEngineId ? [] : config.groupChat || config.teamSlug
+    ? [...new Set(config.groupAgents || s.teams.find(team => team.slug === config.teamSlug)?.members.map(m => m.slug) || [])]
+    : [config.agentSlug || s.defaultSlug]
   const teamOf = (slug: string) => s.teams.find((team) => team.slug === slug)
   const executorLabel = (ex: ProjectExecutor): string => ex.kind === 'agent' ? agentOf(ex.id)?.name || ex.id
     : ex.kind === 'team' ? teamOf(ex.id)?.name || ex.id
@@ -477,6 +484,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       }}>{TABS.map(({ id, icon: Icon }) => <button key={id} role="tab" aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} className={tab === id ? 'selected' : ''} onClick={() => setTab(id)}><Icon size={14} /><span>{t(`projectProfile.tab.${id}`)}</span></button>)}</nav>
       <fieldset disabled={!!busy} className="team-profile-fields" key={tab}>
         {loadError && <p className="agent-profile-error" role="alert" style={{ paddingTop: 16 }}>{loadError} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>}
+        {tab === 'human' && <>
+          <HumanCollaborationPanel cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} />
+          {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentOf(slug)?.name || slug })}</summary>
+            <HumanCollaborationPanel cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} />
+          </details>)}
+        </>}
         {tab === 'agents' && <>
           <div className="team-lineup-toolbar"><p className="team-profile-caption">{t('projectProfile.agentsHint')}</p><button className="team-member-add" onClick={() => setPicker(!picker)} aria-expanded={picker}><Plus size={24} strokeWidth={1.5} /><span>{t('projectProfile.add')}</span></button></div>
           {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('projectProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div>

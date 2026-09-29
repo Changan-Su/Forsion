@@ -6,7 +6,8 @@ interface AutoMiniDeps {
   manualMiniVisible(): boolean
   session(): MiniSessionContext
   open(sessionId: string): void
-  close(): void
+  /** `restore`: the run that owned the panel ended while the user stayed away — hand Forsion back as it was. */
+  close(restore?: boolean): void
 }
 
 /** App-wide ownership of a temporary conversation panel. A physical-input lease starts
@@ -15,7 +16,7 @@ export function startMiniAutoPanel(deps: AutoMiniDeps) {
   let stopped = false, checking = false, foreground = false
   let episode: string | null = null, suppressed: string | null = null
   let foregroundRun: string | null = null
-  let requested: string | null = null
+  let requested: string | null = null, requestedKey: string | null = null
   const refresh = (): void => {
     if (stopped) return
     const { sessionId, runId } = deps.session()
@@ -30,9 +31,10 @@ export function startMiniAutoPanel(deps: AutoMiniDeps) {
     else if (episode !== key) episode = null
     const next = episode && episode === key && suppressed !== key ? sessionId : null
     if (next === requested) return
-    requested = next
+    const finished = !!requested && !next && requestedKey !== key && !deps.hasForsionFocus()
+    requested = next; requestedKey = next ? key : null
     if (next) deps.open(next)
-    else deps.close()
+    else deps.close(finished)
   }
   const poll = async (): Promise<void> => {
     if (stopped || checking) return
@@ -51,7 +53,7 @@ export function startMiniAutoPanel(deps: AutoMiniDeps) {
       const { sessionId, runId } = deps.session()
       suppressed = sessionId && runId ? JSON.stringify([sessionId, runId]) : null
       episode = null
-      if (requested) { requested = null; deps.close() }
+      if (requested) { requested = requestedKey = null; deps.close() }
     },
     wants(sessionId: string): boolean { return !stopped && requested === sessionId },
     following(): boolean {
@@ -59,6 +61,6 @@ export function startMiniAutoPanel(deps: AutoMiniDeps) {
       const sameRun = !!foregroundRun && foregroundRun === JSON.stringify([sessionId, runId])
       return !stopped && (foreground || sameRun) && !deps.hasForsionFocus()
     },
-    stop(): void { stopped = true; clearInterval(timer); requested = episode = foregroundRun = null; deps.close() },
+    stop(): void { stopped = true; clearInterval(timer); requested = requestedKey = episode = foregroundRun = null; deps.close() },
   }
 }

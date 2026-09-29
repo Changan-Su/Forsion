@@ -294,7 +294,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     result.pulled++;
     // 定义文件被云端覆盖必须留痕:别的设备/网页端存过 config.toml,本机就静默换了参数,09-13 排查时无从判断是谁写的。
     // Library 文件量大不记;config.toml 额外对比 max_iterations —— 最容易悄悄咬人的一个字段。
-    if (p === 'config.toml' || p === 'SOUL.md' || p === 'HARNESS.md') { // 明确白名单:Library 量大、USER.md(__user__)不在本条留痕范围
+    if (p === 'config.toml' || p === 'SOUL.md' || p === 'HARNESS.md' || p === 'HUMAN.md') { // 明确白名单:Library 量大、USER.md(__user__)不在本条留痕范围
       let delta = '';
       if (p === 'config.toml') {
         const before = initial ? parseAgentConfig(slug, initial.toString('utf8'), '').maxIterations : null;

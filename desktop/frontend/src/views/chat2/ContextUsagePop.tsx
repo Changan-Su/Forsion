@@ -20,6 +20,7 @@ registerMessages({
   'ctx.pop.compact': { zh: '立即压缩', en: 'Compact now' },
   'ctx.grp.tools': { zh: '工具与本轮', en: 'Tools & this run' },
   'ctx.grp.system': { zh: '系统提示', en: 'System prompt' },
+  'ctx.sec.human': { zh: '协作说明', en: 'Collaboration handbook' },
   'ctx.grp.memory': { zh: '记忆', en: 'Memory' },
   'ctx.grp.project': { zh: '项目与资料', en: 'Project & files' },
   'ctx.grp.skills': { zh: '技能', en: 'Skills' },
@@ -38,13 +39,13 @@ export const fmtTokens = (n: number): string =>
   n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : n >= 1e3 ? `${Math.floor(n / 100) / 10}k` : String(n)
 
 /** 引擎已知的注入段;未来新增的段显示 key 本身并归进「系统提示」,别渲染成 'ctx.sec.xxx' 原始键。 */
-const CTX_SEC_KEYS = new Set(['persona', 'harness', 'guidance', 'profile', 'project', 'agentFolder', 'memory', 'skills', 'environment', 'hooks', 'plan'])
+const CTX_SEC_KEYS = new Set(['persona', 'harness', 'human', 'guidance', 'profile', 'project', 'agentFolder', 'memory', 'skills', 'environment', 'hooks', 'plan'])
 
 // 没有分类色板:借模型标签的蓝 / 紫 + 语义绿 / 琥珀 + 主题色调和。不用 --danger —— 弹层里它是「预警」的意思。
 const BLUE = 'var(--model-tag-blue)'
 const GROUPS = [
   { id: 'system', keys: ['persona', 'guidance', 'environment', 'hooks', 'plan'], color: 'var(--warning)' },
-  { id: 'memory', keys: ['memory', 'profile', 'harness'], color: 'var(--green)' },
+  { id: 'memory', keys: ['memory', 'profile', 'harness', 'human'], color: 'var(--green)' },
   { id: 'project', keys: ['project', 'agentFolder'], color: 'color-mix(in srgb, var(--accent-ink) 55%, transparent)' },
   { id: 'skills', keys: ['skills'], color: 'color-mix(in srgb, var(--model-tag-blue) 45%, var(--green))' },
 ]

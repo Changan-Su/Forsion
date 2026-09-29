@@ -3,7 +3,7 @@ import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
 import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
-import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
+import { startMiniPassThrough, readComputerUseForeground, topRightPosition } from './miniForeground'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
@@ -1719,8 +1719,10 @@ let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 let computerHistory: ComputerHistory | null = null
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
-let miniFollowing = false
-let stopMiniFollow: (() => void) | null = null
+/** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
+let lastFocusedWindow: BrowserWindow | null = null
+let autoMiniReturnTo: BrowserWindow | null = null
+let stopMiniPassThrough: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
 let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
@@ -1736,21 +1738,28 @@ const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细�
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
 
-function closeAutoMini(): void {
-  const win = autoMiniWindow
-  autoMiniWindow = null; autoMiniSessionId = null
+function closeAutoMini(restore = false): void {
+  const win = autoMiniWindow, back = autoMiniReturnTo
+  autoMiniWindow = null; autoMiniSessionId = null; autoMiniReturnTo = null
   if (win && !win.isDestroyed()) win.destroy()
+  // Computer Use 跑完:回到开场时用户所在的 Forsion 窗口。期间被用户自己藏起来的不强拉。
+  if (!restore || !back || back.isDestroyed() || !(back.isVisible() || back.isMinimized())) return
+  if (back.isMinimized()) back.restore()
+  if (!QUIET_WINDOWS) app.focus({ steal: true })
+  present(back)
 }
 
-/** A temporary observer owns no saved Mini layout and never activates the app. */
+/** A temporary observer: parked top-right, owns no saved Mini layout, and opens without activating the app.
+ * Focusable + acceptFirstMouse so the header drags on the first press; that click does activate Forsion,
+ * but the card itself takes focus (not the main window), and hasForsionFocus ignores it. */
 function openAutoMini(sessionId: string): void {
   closeAutoMini()
   autoMiniSessionId = sessionId
-  const cursor = screen.getCursorScreenPoint()
-  const size = { x: 0, y: 0, width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
-  const position = cursorPanelTarget(cursor, size, screen.getDisplayNearestPoint(cursor).workArea)
+  autoMiniReturnTo = lastFocusedWindow
+  const size = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
+  const position = topRightPosition(size, screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea)
   const win = new BrowserWindow({
-    ...size, ...position, show: false, focusable: false,
+    ...size, ...position, show: false, acceptFirstMouse: true,
     frame: false, transparent: true, resizable: false, alwaysOnTop: true,
     skipTaskbar: true, hasShadow: true, backgroundColor: '#00000000',
     webPreferences: satelliteWebPreferences(),
@@ -1758,20 +1767,9 @@ function openAutoMini(sessionId: string): void {
   autoMiniWindow = win
   win.setAlwaysOnTop(true, 'floating')
   if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
-  win.setIgnoreMouseEvents(true)
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
-  const stop = startMiniCursorFollow({
-    isDestroyed: () => win.isDestroyed(), isVisible: () => win.isVisible(), getBounds: () => win.getBounds(),
-    setPosition: (x, y, animate) => win.setPosition(x, y, animate),
-    // Keep the automatic observer passive between calls, too. Manual Mini remains interactive.
-    setIgnoreMouseEvents: () => { if (!win.isDestroyed()) win.setIgnoreMouseEvents(true) },
-  }, {
-    readActive: async () => miniAutoPanel?.following() ?? false,
-    cursor: () => screen.getCursorScreenPoint(),
-    workArea: (point) => screen.getDisplayNearestPoint(point).workArea,
-    onFollowing: () => {},
-  })
+  const stop = startMiniPassThrough(win, { active: () => true, cursor: () => screen.getCursorScreenPoint() })
   win.on('closed', () => {
     stop()
     if (autoMiniWindow === win) { autoMiniWindow = null; autoMiniSessionId = null; miniAutoPanel?.dismiss() }
@@ -1806,24 +1804,12 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   miniWindow.webContents.on('did-finish-load', () => {
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
   })
-  stopMiniFollow = startMiniCursorFollow(miniWindow, {
-    readActive: async () => miniAutoPanel?.following() ?? false,
+  stopMiniPassThrough = startMiniPassThrough(miniWindow, {
+    active: () => miniAutoPanel?.following() ?? false,
     cursor: () => screen.getCursorScreenPoint(),
-    workArea: (cursor) => screen.getDisplayNearestPoint(cursor).workArea,
-    onFollowing: (following) => {
-      miniFollowing = following
-      if (following) {
-        miniDock = null; miniDragging = false
-        if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
-        stopMiniPoll()
-      } else {
-        suppressMiniMoved = true
-        setTimeout(() => { suppressMiniMoved = false }, 100)
-      }
-    },
   })
   miniWindow.on('moved', onMiniMoved)
-  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniFollow?.(); stopMiniFollow = null; miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
+  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null; miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
   console.log('[win] mini open')
   loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
@@ -1852,7 +1838,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
-  if (!miniWindow || miniFollowing || suppressMiniMoved) return // 程序化移动不算用户拖拽
+  if (!miniWindow || suppressMiniMoved) return // 程序化移动不算用户拖拽
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
   miniSettleTimer = setTimeout(onMiniSettled, 200)
@@ -1860,7 +1846,7 @@ function onMiniMoved(): void {
 
 function onMiniSettled(): void {
   miniDragging = false
-  if (!miniWindow || miniWindow.isDestroyed() || miniFollowing) return
+  if (!miniWindow || miniWindow.isDestroyed()) return
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
   const edge = nearestEdge(b, wa)
@@ -1883,7 +1869,7 @@ function stopMiniPoll(): void {
   if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
 }
 function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniFollowing || miniDragging || suppressMiniMoved) return
+  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniDragging || suppressMiniMoved) return
   const pt = screen.getCursorScreenPoint()
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
@@ -3567,12 +3553,13 @@ app.whenReady().then(async () => {
   if (PRODUCT.agentBackend && process.platform === 'darwin') {
     miniAutoPanel = startMiniAutoPanel({
       readForeground: readComputerUseForeground,
-      hasForsionFocus: () => BrowserWindow.getFocusedWindow() !== null,
+      // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
+      hasForsionFocus: () => { const w = BrowserWindow.getFocusedWindow(); return !!w && w !== autoMiniWindow },
       manualMiniVisible: () => !!miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible(),
       session: () => miniSession,
       open: openAutoMini, close: closeAutoMini,
     })
-    app.on('browser-window-focus', () => miniAutoPanel?.refresh())
+    app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   createWindow()
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
