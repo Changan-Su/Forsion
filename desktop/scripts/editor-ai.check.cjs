@@ -15,7 +15,8 @@
 //   F = G3-08 助手回答插回笔记:台架里挂一条生产 EditorialMessage(侧栏对话的形态),点操作行「插入笔记」→
 //       正文没被聚焦过 → 文末;有过光标 → 光标所在块之后,连插两条按序排、各自一步 Cmd+Z;「问 Tangu」发起的对话 →
 //       插回被引用块之后(胜过光标);不抢焦点;代码块 / 公式原样落盘;回执点名笔记 + 撤销(之后又改过就不撤、说明);
-//       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示。
+//       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示;
+//       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -930,8 +931,8 @@ async function groupF(browser) {
     await page.evaluate(() => window.__upage.setLocked(false))
     await page.waitForTimeout(800)
     const aria2 = await page.evaluate((s) => document.querySelector(s)?.getAttribute('aria-disabled'), insBtn)
-    check('F5 锁定:按钮 aria-disabled、点了说明「先打开一篇笔记」、零写入;解锁后恢复',
-      aria === 'true' && st.w === w0 && !st.d.includes('回答丁') && st.ntf.length === 1 && st.ntf[0].startsWith('先打开一篇笔记') && aria2 == null,
+    check('F5 锁定:按钮 aria-disabled、点了说明「没有可写入的笔记」、零写入;解锁后恢复',
+      aria === 'true' && st.w === w0 && !st.d.includes('回答丁') && st.ntf.length === 1 && st.ntf[0].startsWith('没有可写入的笔记') && aria2 == null,
       JSON.stringify({ aria, aria2, w0, st }))
     await page.close()
   }
@@ -951,6 +952,33 @@ async function groupF(browser) {
     check('F6 源码模式:不插(textarea / 切回可视 / 盘上都没有),提示「没能插入」',
       !ta.includes('回答戊') && !back.includes('回答戊') && !(await vault(page)).includes('回答戊') && ntf.length === 1 && ntf[0].startsWith('没能插入'),
       JSON.stringify({ ntf, ta: ta.slice(0, 40) }))
+    await page.close()
+  }
+  // F7 一篇 v4 笔记都没开(台架缺省壳 = v3 编辑器)→ 按钮不出现;实例挂上 → 出现(只读 = 灰态、可写 = 可用);全卸下 → 再消失。
+  //    实例用生产 lifecycle 登记的最小桩(只读实例的形态 = 不登记 insertReply),验的是按钮对挂载通知的反应。
+  {
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1560, height: 900 } })
+    page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+    await page.addInitScript(() => performance.setResourceTimingBufferSize(100000))
+    await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 120000 })
+    await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/deps\/react-dom_client\.js\?/.test(e.name)), null, { timeout: 120000 })
+    await page.waitForTimeout(800)
+    await mountChat(page, { reply: '回答己' })
+    const btn = () => page.evaluate((s) => { const b = document.querySelector(s); return !b ? 'absent' : b.getAttribute('aria-disabled') === 'true' ? 'disabled' : 'ready' }, insBtn)
+    const lc = (fn) => page.evaluate(async ({ MOD, fn }) => {
+      const m = await eval(MOD)('/src/amadeus/unified/lifecycle\\.ts(\\?|$)', '/src/amadeus/unified/lifecycle.ts')
+      eval(fn)(m)
+      await new Promise((r) => setTimeout(r, 150))
+    }, { MOD, fn: fn.toString() })
+    const s0 = await btn()
+    await lc((m) => { window.__unRO = m.registerUnifiedPipe({ path: 'RO.md', flush: async () => {}, retire: () => {} }) })
+    const s1 = await btn()
+    await lc((m) => { window.__unRW = m.registerUnifiedPipe({ path: 'RW.md', flush: async () => {}, retire: () => {}, insertReply: () => null }) })
+    const s2 = await btn()
+    await lc(() => { window.__unRO(); window.__unRW() })
+    const s3 = await btn()
+    check('F7 没有 v4 实例 → 按钮不出现;只读实例挂上 → 灰态;可写实例挂上 → 可用;全卸下 → 再消失',
+      s0 === 'absent' && s1 === 'disabled' && s2 === 'ready' && s3 === 'absent', JSON.stringify({ s0, s1, s2, s3 }))
     await page.close()
   }
 }

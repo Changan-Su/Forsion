@@ -6,7 +6,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput } from 'lucide-react'
-import { useNoteInsertable } from './insertToNote'
+import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
@@ -285,11 +285,13 @@ function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; c
   return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
 }
 
-/** 「插入笔记」(G3-08):没有能接住的笔记时 aria-disabled + 说明 —— 不用 disabled:手机上没有悬停,
- *  点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
+/** 「插入笔记」(G3-08):一篇 v4 笔记都没开 → 不出现;开着的全是只读 / 锁定 → aria-disabled + 说明 —— 不用 disabled:
+ *  手机上没有悬停,点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
 function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
   const { t } = useI18n()
-  const ready = useNoteInsertable()
+  const state = useNoteInsertState()
+  if (state === 'hidden') return null
+  const ready = state === 'ready'
   return (
     <button
       className="t2-iconbtn"

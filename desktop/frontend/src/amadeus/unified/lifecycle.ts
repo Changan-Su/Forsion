@@ -246,7 +246,12 @@ export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' 
   return false
 }
 
-/** 有没有能接住助手回答的 v4 实例(G3-08:聊天操作行「插入到笔记」的可用态;实例增减经 subscribeUnified 通知)。 */
+/** 此刻有没有任何 v4 实例开着(G3-08:聊天操作行「插入笔记」没有实例就不出现 —— Mini / 浮窗 / 手机上不挂一排灰按钮)。 */
+export function unifiedHasAny(): boolean {
+  return handles.size > 0
+}
+
+/** 有没有能接住助手回答的 v4 实例(G3-08:聊天操作行「插入笔记」的可用态;实例增减经 subscribeUnified 通知)。 */
 export function unifiedHasReplyTarget(): boolean {
   for (const h of handles) if (h.insertReply) return true
   return false

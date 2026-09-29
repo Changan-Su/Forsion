@@ -11,13 +11,13 @@
 import { useSyncExternalStore } from 'react'
 import type { UiMessage } from '../../types'
 import { normalizeMath } from '../../services/mathNormalize'
-import { subscribeUnified, unifiedHasReplyTarget, unifiedInsertReply, type ReplyAnchor } from '../../amadeus/unified/lifecycle'
+import { subscribeUnified, unifiedHasAny, unifiedHasReplyTarget, unifiedInsertReply, type ReplyAnchor } from '../../amadeus/unified/lifecycle'
 import { notifyApp } from '../../stores/notificationStore'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
   'chat.action.insertNote': { zh: '插入笔记', en: 'Insert into note' },
-  'chat.insertNote.none': { zh: '先打开一篇笔记，回答会插进你最近用过的那篇', en: 'Open a note first — the reply goes into the note you used last' },
+  'chat.insertNote.none': { zh: '没有可写入的笔记：开着的笔记是只读或已锁定', en: 'No writable note: the open notes are read-only or locked' },
   'chat.insertNote.done': { zh: '已插入「{name}」', en: 'Inserted into “{name}”' },
   'chat.insertNote.failed': { zh: '没能插入：笔记是只读、已锁定或处在源码模式', en: 'Couldn’t insert: the note is read-only, locked, or in source mode' },
   'chat.insertNote.undo': { zh: '撤销', en: 'Undo' },
@@ -97,7 +97,11 @@ export function insertReplyToNote(body: string, origin: AskOrigin | null): boole
   return true
 }
 
-/** 此刻有没有能接住回答的笔记(按钮的可用态;实例挂上 / 卸下时刷新)。 */
-export function useNoteInsertable(): boolean {
-  return useSyncExternalStore(subscribeUnified, unifiedHasReplyTarget)
+/** 按钮的三态(实例挂上 / 卸下时刷新,锁定 = 换 key 重挂同样会通知):
+ *  hidden = 一篇 v4 笔记都没开(不出按钮;Mini / 浮窗 / 手机上每条回答挂个灰按钮只是噪音,用户 09-29 拍板);
+ *  disabled = 开着的全是只读 / 锁定(灰态,点了说明);ready = 有能接的(源码模式点了再说明,不另算一态)。 */
+export type NoteInsertState = 'hidden' | 'disabled' | 'ready'
+const insertState = (): NoteInsertState => (!unifiedHasAny() ? 'hidden' : unifiedHasReplyTarget() ? 'ready' : 'disabled')
+export function useNoteInsertState(): NoteInsertState {
+  return useSyncExternalStore(subscribeUnified, insertState)
 }
