@@ -39,6 +39,7 @@ function check(name, ok, detail) {
 const HUB_UNIT = 'e2e-unit-0001'
 function startFakeHub() {
   const hits = []
+  const caps = [] // caps 上报的请求体(engine 值),按到达顺序
   const server = http.createServer((req, res) => {
     const url = req.url || ''
     hits.push({ method: req.method, url, auth: String(req.headers.authorization || ''), secret: String(req.headers['x-unit-secret'] || '') })
@@ -51,7 +52,12 @@ function startFakeHub() {
       res.on('close', () => clearInterval(hb))
       return
     }
-    if (req.method === 'POST' && url === `/api/units/${HUB_UNIT}/caps`) { req.resume(); return json(200, {}) }
+    if (req.method === 'POST' && url === `/api/units/${HUB_UNIT}/caps`) {
+      let body = ''
+      req.on('data', (c) => { body += c })
+      req.on('end', () => { try { caps.push(JSON.parse(body)) } catch { caps.push({ unparsable: body }) } json(200, {}) })
+      return
+    }
     // 账号核心的 whoami:404 会被当成账号已失效(注销)→ 清掉登录态,之后重建的设备通道拿不到 token(形状同 fake-forsion-cloud)
     if (req.method === 'GET' && url === '/api/brain/users/me') return json(200, { id: 'e2e-user', username: 'e2e_user', role: 'USER', nickname: 'E2E', avatar: null, email: null, emailVerified: false, phone: null, phoneVerified: false, membershipTier: 'free' })
     if (req.method === 'GET' && url === '/api/units') {
@@ -61,7 +67,7 @@ function startFakeHub() {
     json(404, { detail: 'not found' })
   })
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
-    url: `http://127.0.0.1:${server.address().port}`, hits, close: () => { server.closeAllConnections(); server.close() },
+    url: `http://127.0.0.1:${server.address().port}`, hits, caps, close: () => { server.closeAllConnections(); server.close() },
   })))
 }
 /** 预置「已登录(auth.json 指向假 hub)+ 允许其他设备连接本机」。shell 配置在 dev userData(--user-data-dir + '-dev')里,已有就合并。 */
@@ -300,6 +306,8 @@ async function extendCard(sp) {
         if (connected?.connected && hub.hits.some((h) => h.url === `/api/units/${HUB_UNIT}/caps`)) break
         await sleep(250)
       }
+      // 引擎就绪 + 本机项目根种子做完 → caps 应再报一次 ready(开机时设备互联常比引擎先起,先报的是 starting)
+      for (let i = 0; i < 80 && !hub.caps.some((c) => c.engine === 'ready'); i++) await sleep(250)
       const units3 = await run3.win.evaluate(() => window.tangu?.unitsList?.())
       const rows3 = await switcherRows(run3.win)
       await run3.app.close().catch(() => {})
@@ -309,6 +317,10 @@ async function extendCard(sp) {
       check('⑤ 设备通道经 Extend 工厂连上假 hub:入册带账号 Bearer、通道带设备密钥、ready 之后报 caps;unitHostStatus connected + 入册的 unit id',
         !!reg && reg.auth === `Bearer ${HUB_TOKEN}` && !!chan && chan.secret === 'e2e-unit-secret' && !!caps && connected?.connected === true && connected?.unitId === HUB_UNIT,
         JSON.stringify({ hits: hub.hits.filter((h) => h.url.startsWith('/api/units')).map((h) => `${h.method} ${h.url}`), status: connected }))
+      const ENGINE_STATES = ['ready', 'starting', 'external', 'stopped']
+      check('⑤c caps 上报的是引擎态本身:每次都是合法值,引擎就绪、种子做完之后再报一次 ready(不是只报一次 starting 就不动了)',
+        hub.caps.length >= 1 && hub.caps.every((c) => ENGINE_STATES.includes(c.engine)) && hub.caps[hub.caps.length - 1].engine === 'ready',
+        JSON.stringify(hub.caps.map((c) => c.engine)))
       check('⑤b 名册随包出现:unitsList → 200 两台;切换器列出另一台(本机那行被滤掉)',
         units3?.status === 200 && units3?.json?.units?.length === 2 && Array.isArray(rows3) && rows3.some((r) => r.includes('E2E Other Mac')) && !rows3.some((r) => r.includes('E2E This Mac')),
         JSON.stringify({ units: units3?.status, rows: rows3 }))

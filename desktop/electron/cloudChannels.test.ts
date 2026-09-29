@@ -58,6 +58,7 @@ async function extendChannels(): Promise<string[]> {
     onExternalCredsChange: () => {},
     setTokenRefresher: () => {},
     setAmadeusSyncFactory: () => {},
+    setUnitHubFactory: () => {}, // 0.6 起:缺它 Extend 跳过设备名册四通道,撞名就查不到
   }
   await registerCloud(host)
   return channels
@@ -69,6 +70,8 @@ describe('cloud channels: host × Extend 不重名', () => {
     const theirs = await extendChannels()
     expect(mine.size).toBeGreaterThan(100) // 仪器自检:扫描器真读到了宿主源码
     expect(theirs.length).toBeGreaterThanOrEqual(8) // 账号面 8 条起
+    // 0.6 起设备名册四通道由 Extend 注册:真进了比较集合(宿主 main.ts 同一刀删掉了自己的那四个)
+    for (const c of ['units:list', 'units:update', 'units:remove', 'units:openInBrowser']) expect(theirs).toContain(c)
     const clash = theirs.filter((c) => mine.has(c))
     expect(clash).toEqual([])
     expect(new Set(theirs).size).toBe(theirs.length) // Extend 自己也不重复注册

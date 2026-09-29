@@ -43,6 +43,15 @@ export interface UnitHubInstance {
 }
 export type UnitHubFactory = (deps: UnitHubHostDeps) => UnitHubInstance
 
+/** 配对落盘只认此刻挂着的那个实例:停用 / 换号 / 重建之后,旧实例迟到的 savePairing / clearPairing 一律丢弃
+ *  (UnitHost.stop() 会中止在途入册,这是宿主这边的第二道)。 */
+export function pairingWriters(isCurrent: () => boolean, write: (p: UnitPairing | null) => Promise<void>): Pick<UnitHubHostDeps, 'savePairing' | 'clearPairing'> {
+  return {
+    savePairing: async (p) => { if (isCurrent()) await write(p) },
+    clearPairing: async () => { if (isCurrent()) await write(null) },
+  }
+}
+
 /** 引擎态 → caps.engine。seeded = 本机项目根种子做完(没做完之前 unitWeb 对远端回 503 ENGINE_NOT_READY,手机上应显示「在启动」)。 */
 export function engineCapsState(i: { agentBackend: boolean; backend: 'stopped' | 'starting' | 'ready' | 'crashed'; seeded: boolean }): EngineCapsState {
   if (!i.agentBackend) return 'external'

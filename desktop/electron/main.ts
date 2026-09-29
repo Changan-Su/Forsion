@@ -63,7 +63,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { engineCapsState, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
+import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
@@ -1285,8 +1285,7 @@ async function doRefreshUnitHost(): Promise<void> {
     getPairing: () => unitHostPairing,
     // 入册回包到达时这个通道已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
     // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
-    savePairing: async (p) => { if (unitHub !== hub) return; unitHostPairing = p; await deviceSecrets.setUnitPairing(p) },
-    clearPairing: async () => { if (unitHub !== hub) return; unitHostPairing = null; await deviceSecrets.setUnitPairing(null) },
+    ...pairingWriters(() => unitHub === hub, async (p) => { unitHostPairing = p; await deviceSecrets.setUnitPairing(p) }),
     // caps 上报器每次现算(通道 ready 之后报一次,backend.onStatus / 种子做完再报变化)
     engineCaps: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
     log: (m) => console.log(m),
@@ -3302,6 +3301,9 @@ app.whenReady().then(async () => {
     }
     remoteSafety.engineStatusChanged() // P1-K2:重连活动流;有没送到的急停 / 解锁就补
     unitHub?.engineChanged() // P1-K7a:引擎起停 / 崩溃 → 名册的 caps.engine
+    // 引擎刚就绪:补一次本机项目根种子。开机时设备互联常比引擎先起,那一次 ensureSeeded 拿不到引擎就返回了;
+    // 不补的话 caps 一直报「在启动」,要等第一条远端请求经 seedGatedEngine 才顺手种(0.6 Codex 评审 P2 的 e2e 钉出来的)。
+    if (st.state === 'ready' && unitWeb) void unitSessionRootsSource().ensureSeeded().then(() => unitHub?.engineChanged())
   })
 
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证
