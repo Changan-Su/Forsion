@@ -310,7 +310,7 @@
 }
 
 .am-app .page-view {
-  max-width: 920px;
+  max-width: var(--amx-page-max, 920px); /* 阅读宽度 token(C-21):全宽 = 宿主在 .amx-pane 上改写它 */
   margin: 0 auto;
   padding: 28px 40px 120px;
 }

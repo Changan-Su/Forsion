@@ -1,23 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_PAGE_STYLE,
   noteMemoryId,
   readDocumentScroll,
   readNoteLocked,
+  readNotePageStyle,
   readNoteSurfaceMode,
+  remapNotePageStylePrefix,
   remapNoteViewMemory,
   writeDocumentScroll,
   writeNoteLocked,
+  writeNotePageStyle,
   writeNoteSurfaceMode,
 } from './viewMemory'
 import { recallViewport, rememberViewport } from './canvasKit/viewport'
 
 describe('Amadeus note view memory', () => {
+  let data = new Map<string, string>()
   beforeEach(() => {
-    const data = new Map<string, string>()
+    data = new Map<string, string>()
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => data.get(key) ?? null,
       setItem: (key: string, value: string) => data.set(key, value),
       removeItem: (key: string) => data.delete(key),
+      // 前缀迁移要枚举键(文件夹改名 / 移动):没有这两个,扫描恒空 = 假绿。
+      get length() { return data.size },
+      key: (i: number) => [...data.keys()][i] ?? null,
     })
   })
 
@@ -54,5 +62,34 @@ describe('Amadeus note view memory', () => {
     expect(readNoteLocked('/a', 'note.md')).toBe(false)
     writeNoteLocked('/a', 'renamed.md', false)
     expect(readNoteLocked('/a', 'renamed.md')).toBe(false)
+  })
+
+  // C-21 页面排版(拍板 #14):本机视图状态,按库根隔离;全缺省即删键;改名跟着走且旧键删掉(第二次调用是空操作)。
+  it('keeps page typography per vault, drops the key at defaults, and carries it across rename', () => {
+    expect(readNotePageStyle('/a', 'p.md')).toEqual(DEFAULT_PAGE_STYLE)
+    writeNotePageStyle('/a', 'p.md', { wide: true, font: 'serif' })
+    expect(readNotePageStyle('/a', 'p.md')).toEqual({ wide: true, small: false, font: 'serif' })
+    expect(readNotePageStyle('/b', 'p.md')).toEqual(DEFAULT_PAGE_STYLE)
+    remapNoteViewMemory('/a', 'p.md', 'q.md')
+    expect(readNotePageStyle('/a', 'q.md')).toEqual({ wide: true, small: false, font: 'serif' })
+    expect(readNotePageStyle('/a', 'p.md')).toEqual(DEFAULT_PAGE_STYLE)
+    writeNotePageStyle('/a', 'q.md', { small: true })
+    remapNoteViewMemory('/a', 'p.md', 'q.md') // 行内改名之后 remapScopePaths 再调一次:不许拿旧的盖掉新的
+    expect(readNotePageStyle('/a', 'q.md')).toEqual({ wide: true, small: true, font: 'serif' })
+    writeNotePageStyle('/a', 'q.md', { wide: false, small: false, font: 'default' })
+    expect([...data.keys()].filter((k) => k.startsWith('amx.notePage:'))).toEqual([])
+  })
+
+  it('moves page typography of a whole subtree on folder rename / move, only inside that vault', () => {
+    writeNotePageStyle('/a', 'dir/sub/n.md', { font: 'mono' })
+    writeNotePageStyle('/a', 'dir/top.md', { wide: true })
+    writeNotePageStyle('/a', 'dirx/n.md', { small: true }) // 'dirx/…' 不在 'dir' 子树里
+    writeNotePageStyle('/b', 'dir/sub/n.md', { wide: true }) // 别的库同路径
+    remapNotePageStylePrefix('/a', 'dir', 'moved/dir')
+    expect(readNotePageStyle('/a', 'moved/dir/sub/n.md').font).toBe('mono')
+    expect(readNotePageStyle('/a', 'moved/dir/top.md').wide).toBe(true)
+    expect(readNotePageStyle('/a', 'dir/sub/n.md')).toEqual(DEFAULT_PAGE_STYLE)
+    expect(readNotePageStyle('/a', 'dirx/n.md').small).toBe(true)
+    expect(readNotePageStyle('/b', 'dir/sub/n.md').wide).toBe(true)
   })
 })

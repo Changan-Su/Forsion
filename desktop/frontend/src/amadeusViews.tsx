@@ -1,5 +1,6 @@
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
+import { ALargeSmall, Check, MoveHorizontal, Type } from 'lucide-react'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
@@ -21,6 +22,7 @@ import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
 import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
+import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle, type PageStyleEntry } from '@amadeus/unified/pageStyle'
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
@@ -1694,7 +1696,20 @@ export function AmadeusPagesView() {
 
 /** 编辑器需 Amadeus 契约 token → 包 .am-app.tangu-lovable + 镜像 Tangu mode/flat,经 bridge 取色。 */
 /** 底部 sheet 里的一条动作(移动端把原顶栏那排 + 「更多操作」菜单全并到这里)。 */
-interface AmxAction { id: string; icon: ReactNode; label: string; on?: boolean; danger?: boolean; run: () => void }
+interface AmxAction {
+  id: string; icon: ReactNode; label: string; on?: boolean; danger?: boolean; run: () => void
+  /** 开关项(页面排版 C-21):末列打勾;点了 sheet 不关,边点边看正文。`on` 只是高亮,sheet 行没有它的样式。 */
+  checked?: boolean
+  /** 多选一(页面字体):整行画成一排选项,点选项不关 sheet;此时 run 不用。 */
+  choices?: Array<{ id: string; label: string; on: boolean; run: () => void }>
+}
+
+/** 页面排版入口(pageStyleEntries,桌面 ⋯ 菜单同一份)→ 移动端 sheet 的行。台架 `&umbar` 也用它(导出只为台架)。 */
+export function pageStyleSheetActions(entries: PageStyleEntry[]): AmxAction[] {
+  return entries.map((e) => e.kind === 'choice'
+    ? { id: `page-${e.id}`, icon: <Type size={16} />, label: e.label, run: () => {}, choices: e.options }
+    : { id: `page-${e.id}`, icon: e.id === 'wide' ? <MoveHorizontal size={16} /> : <ALargeSmall size={16} />, label: e.label, checked: e.on, run: e.run })
+}
 
 /** 软键盘度量:`lift` = 浏览器里被键盘压掉的 visual viewport 高度;`kbHeight()` = 最近一次量到的
  *  键盘高度(键盘收起后仍记着,块面板按它开高,才能「占住键盘的位置」)。
@@ -1772,7 +1787,8 @@ function AmxBlockPicker({ height, onClose }: { height: number; onClose: () => vo
  *    故用差值 translateY 顶上去。差值是视口 px,元素在 body zoom 里 → 除以 zoomOf 反补偿(老坑)。
  *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
  *  - 「+」:先记下键盘高度再收键盘,块面板正好补上键盘让出的那块地。 */
-function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNeedFocus, canvas }: {
+/** 导出只为台架(`?upage&upane&umbar`,页面排版 C-21 的移动端 sheet 截图 / 点验)。 */
+export function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNeedFocus, canvas }: {
   actions: AmxAction[]
   onUpload: () => void
   undo: () => void
@@ -1834,14 +1850,28 @@ function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNee
         <div className="mb-sheet-scrim" onClick={() => setSheet(false)}>
           <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
             <div className="mb-sheet-grip" />
-            {actions.map((a) => (
+            {actions.map((a) => a.choices ? (
+              <div key={a.id} className="mb-sheet-row amx-sheet-choice" role="group" aria-label={a.label} data-action={a.id}>
+                {a.icon}
+                <span>{a.label}</span>
+                <span className="amx-sheet-seg">
+                  {a.choices.map((c) => (
+                    <button key={c.id} type="button" role="radio" aria-checked={c.on} data-font={c.id} className={c.on ? 'on' : undefined} onClick={c.run}>{c.label}</button>
+                  ))}
+                </span>
+              </div>
+            ) : (
               <button
                 key={a.id}
                 className={`mb-sheet-row${a.danger ? ' danger' : ''}${a.on ? ' on' : ''}`}
-                onClick={() => { setSheet(false); a.run() }}
+                role={a.checked !== undefined ? 'switch' : undefined}
+                aria-checked={a.checked}
+                data-action={a.id}
+                onClick={() => { if (a.checked === undefined) setSheet(false); a.run() }}
               >
                 {a.icon}
                 <span>{a.label}</span>
+                {a.checked && <Check size={16} className="amx-sheet-check" />}
               </button>
             ))}
           </div>
@@ -1865,10 +1895,12 @@ function useNoteLocked(vaultRoot: string | null, path: string | null): boolean {
 }
 
 function EditorScope({
-  children, dragging, rootRef, onDrop, onDragOver, onDragLeave, onClick, onPaste,
+  children, dragging, rootRef, onDrop, onDragOver, onDragLeave, onClick, onPaste, pageAttrs,
 }: {
   children: ReactNode
   dragging?: boolean
+  /** 这一篇的页面排版选项(C-21):`data-page-*` 挂在壳上,PDF 克隆随壳带走。 */
+  pageAttrs?: ReturnType<typeof pageStyleAttrs>
   /** 导出 PDF 要克隆的宿主。**必须是真 ref**:此前靠「更多」按钮 onClick 里 `closest('.amx-editor')`
    *  现取,一旦按钮搬出编辑器(移动端底栏胶囊就是),closest 返回 null → exportPdf 静默不干活。 */
   rootRef?: RefObject<HTMLElement | null>
@@ -1884,6 +1916,7 @@ function EditorScope({
       ref={(el) => { if (rootRef) rootRef.current = el }}
       className={`am-app tangu-lovable amx-pane amx-editor${dragging ? ' amx-dragover' : ''}`}
       data-mode={mode}
+      {...pageAttrs}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -2293,6 +2326,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   }, [lockWanted, lockApplied, notePath, lockTick])
   // 以本标签**实际显示的**锁定态为准切换(另一个标签刚切了、本标签还没换过来时,点的就是眼前看到的那个状态)。
   const toggleLock = (): void => { if (notePath) void switchNoteLock(vaultRoot, notePath, !lockOn) }
+  // 页面排版选项(C-21,拍板 #14):只给 v4 笔记,锁定态照样生效、照样能改(视图偏好,不写 md)。
+  const pageStyle = useNotePageStyle(vaultRoot, unifiedRoute ? notePath : null)
+  const pageEntries: PageStyleEntry[] = unifiedRoute && notePath
+    ? pageStyleEntries(pageStyle, (patch) => setNotePageStyle(vaultRoot, notePath, patch), t)
+    : []
 
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
   // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
@@ -2502,7 +2540,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
 
   return (
     <>
-    <EditorScope rootRef={printHostRef} dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
+    <EditorScope rootRef={printHostRef} pageAttrs={unifiedRoute ? pageStyleAttrs(pageStyle) : undefined} dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
       {/* 与 Chat View 同一份 LCL FloatingToc。只给文档模式:源码没有可导航标题,画布有自己的空间导航;
           mini / coarse pointer 则把稀缺横向空间留给正文。根就是本 leaf 的滚动 EditorScope,分屏互不串页。 */}
       {barPath && mode !== 'source' && !canvasSeg?.on && !leaf.params.miniSurface && !isCoarsePointer() && (
@@ -2600,6 +2638,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       )}
       {noteMenu && barPath && (
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
+          {pageEntries.length > 0 && <><PageStyleMenuItems entries={pageEntries} /><div className="ctx-separator" /></>}
           {canExportPdf() && <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> {t('amxv.menu.exportPdf')}</button>}
           <button onClick={() => { useAmadeusPrefs.getState().toggleStar(barPath); setNoteMenu(null) }}>
             <Star size={13} /> {starred ? t('amxv.menu.unstar') : t('amxv.menu.star')}
@@ -2725,6 +2764,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
           ...(canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
           ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
+          ...pageStyleSheetActions(pageEntries),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn'), on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),

@@ -43,8 +43,10 @@ import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
 import { switchNoteLock } from './amadeus/unified/noteLock'
+import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle } from './amadeus/unified/pageStyle'
+import { OverlayAt } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
-import { NoteTabIcon } from './amadeusViews'
+import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
@@ -1908,8 +1910,19 @@ if (new URLSearchParams(location.search).has('dock')) {
       const d = routeNote(path, raw, true, new Date().toISOString())
       return d.editor === 'unified' ? { path, initial: d.initial, diskRaw: d.diskRaw } : { path, initial: raw, block: true }
     }
-    function UPageHost({ file, probe = upageProbe }: { file?: string; probe?: Record<string, unknown> }): React.ReactElement {
+    function UPageHost({ file, probe = upageProbe, onPath }: { file?: string; probe?: Record<string, unknown>; onPath?: (path: string) => void }): React.ReactElement {
       const [st, setSt] = useState<{ path: string; initial: string; diskRaw?: string; block?: true }>(() => routeOf(file ?? 'Unified.md', vault.get(file ?? 'Unified.md') ?? seedMd))
+      // 页面排版选项(评审 C-21)的菜单一半,镜像 amadeusViews:顶栏 ⋯ 开的是生产同一个 PageStyleMenuItems(入口集合 pageStyleEntries);
+      // 属性一半在 UPane(= 生产 EditorScope)上。库根 null(台架无库)。仪器:scripts/page-style.check.cjs。
+      useEffect(() => { onPath?.(st.path) }, [st.path]) // eslint-disable-line react-hooks/exhaustive-deps
+      const pageStyle = useNotePageStyle(null, st.path)
+      const [styleMenu, setStyleMenu] = useState<{ x: number; y: number } | null>(null)
+      useEffect(() => {
+        if (!styleMenu) return
+        const close = (): void => setStyleMenu(null)
+        window.addEventListener('click', close)
+        return () => window.removeEventListener('click', close)
+      }, [styleMenu])
       useEffect(() => {
         // `&udual` 的第二实例不接 switchFile(那条只驱动主实例);它照生产 amadeusViews 的样子听「路径没了」广播改指
         // (别处改名 / 本端另一个标签行内改名 → remapScopePaths → onNotePathGone,评审 G1-02 仪器)。
@@ -1957,8 +1970,17 @@ if (new URLSearchParams(location.search).has('dock')) {
           {barReady && (
             <div className="amx-toolbar">
               <span className={SEG_SLOT} />
-              <button className="amx-mode-btn" type="button">⋯</button>
+              <button className="amx-mode-btn amx-more-btn" type="button" onClick={(e) => {
+                e.stopPropagation()
+                const r = e.currentTarget.getBoundingClientRect()
+                setStyleMenu((cur) => (cur ? null : { x: Math.max(8, Math.min(r.right - 180, window.innerWidth - 196)), y: r.bottom + 4 }))
+              }}>⋯</button>
             </div>
+          )}
+          {styleMenu && (
+            <OverlayAt className="ctx-menu" x={styleMenu.x} y={styleMenu.y} onClick={(e) => e.stopPropagation()}>
+              <PageStyleMenuItems entries={pageStyleEntries(pageStyle, (patch) => setNotePageStyle(null, st.path, patch))} />
+            </OverlayAt>
           )}
           {st.block ? <div data-uroute="block" /> : <div
             style={{ display: 'contents' }}
@@ -2034,6 +2056,11 @@ if (new URLSearchParams(location.search).has('dock')) {
     //    做成 opt-in 而不是改默认壳:`unified-page` / `unified-columns` 两套仪器也吃 ?upage,
     //    换掉默认纸面宽度会连带动它们的几何。
     const upane = new URLSearchParams(location.search).has('upane')
+    // `&udark`(配 &upane):真 applyTheme 切暗色(token 选择子在 <html> 上,只给壳写 data-mode 只拿到半套变量)。截图自查用。
+    if (upane && new URLSearchParams(location.search).has('udark')) {
+      applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), 'dark')
+      useTheme.setState({ mode: 'dark' })
+    }
     // 页内查找:生产里浮条挂 Root、由 `find-in-page` 命令(mod+f)开;台架没有 Shell 也没有
     // installEngine,所以这里手动挂条 + 把开条函数露出来给仪器直接调 —— 仪器验的是**查找引擎**
     // (扫描/计数/步进/定位/收尾),热键与命令注册那半在真 Electron 里人工过(见 DESIGN.md §8)。
@@ -2054,10 +2081,26 @@ if (new URLSearchParams(location.search).has('dock')) {
     // `&utoc`(配 &upane):挂生产的笔记浮动目录(与 amadeusViews 同一个 NoteFloatingToc,根 = 滚动的 .amx-pane),评审 C-04。
     function UPane(): React.ReactElement {
       const paneRef = useRef<HTMLDivElement | null>(null)
+      // 页面排版选项(C-21)挂壳上,同生产 EditorScope。`&udark` = 暗色壳(截图自查用)。
+      const [path, setPath] = useState('Unified.md')
+      const pageStyle = useNotePageStyle(null, path)
       return (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: 'fixed', inset: 0 }}>
           {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
-          <UPageHost />
+          <UPageHost onPath={setPath} />
+          {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
+          {new URLSearchParams(location.search).has('umbar') && (
+            <AmxMobileBar
+              actions={pageStyleSheetActions(pageStyleEntries(pageStyle, (patch) => setNotePageStyle(null, path, patch)))}
+              onUpload={() => {}}
+              undo={() => {}}
+              redo={() => {}}
+              indent={null}
+              sourceMode={false}
+              onNeedFocus={() => {}}
+              canvas={null}
+            />
+          )}
         </div>
       )
     }
