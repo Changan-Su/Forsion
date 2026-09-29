@@ -354,6 +354,19 @@ export function handleFoldKeyDown(view: EditorView, event: KeyboardEvent): boole
   return false
 }
 
+/** 光标停在标题行隐藏语法(令牌 / 标题前缀)之前时,返回可见标题的起点;否则 null。
+ *  Cmd+← 与点标题最左侧(类型图标一带)都会把光标落到这里 —— 拍板 #19 之后,无 +/- 的有色标注单击标题不再切折叠,
+ *  而是照常放光标,这个位置于是成了常态落点。在这儿打字 / 回车 / Delete 改到的是看不见的令牌:`x[!warning] 标题`
+ *  当场把标注打回普通引用。下面三处据此把编辑挪到可见标题起点(光标规则本身不变,C8c 钉着)。 */
+function hiddenPrefixStart(state: EditorState): number | null {
+  const sel = state.selection
+  if (!sel.empty) return null
+  const c = calloutAt(sel.$from)
+  if (!c || !c.inHead || calloutKey.getState(state)?.srcAt === c.bqPos) return null
+  const start = c.hidden[c.hidden.length - 1][1]
+  return sel.from < start ? start : null
+}
+
 /** 语法字符藏着时,方向键把它当一个整体跳过 —— 否则光标停在看不见的字里,打字位置发玄。 */
 function skipHidden(state: EditorState, next: number, dir: 1 | -1): number | null {
   const size = state.doc.content.size
@@ -424,6 +437,11 @@ export function calloutPlugin() {
           },
           handleKeyDown(view, event) {
             if (handleFoldKeyDown(view, event)) return true
+            // 隐藏语法之前按回车 / Delete:先把光标挪到可见标题起点,再交给通常的处理(见 hiddenPrefixStart)。
+            if ((event.key === 'Enter' || event.key === 'Delete') && !event.isComposing && !event.metaKey && !event.ctrlKey && !event.altKey) {
+              const start = hiddenPrefixStart(view.state)
+              if (start != null) view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, start)))
+            }
             // 语法字符藏着时,←/→ 把它整段跳过(否则光标停在看不见的字里)
             if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !event.shiftKey) {
               const sel = view.state.selection
@@ -449,6 +467,13 @@ export function calloutPlugin() {
            *  `[!x]` 就是用户要的类型令牌 —— 它一成形就替掉那枚自动令牌,否则落成 `[!fold]-\[!note] 标题`。
            *  只在打字(含输入法提交)完成 `]` 的那一下判,不改 `>` 键位。 */
           handleTextInput(view, from, to, text) {
+            // 隐藏语法之前打字:落到可见标题起点(见 hiddenPrefixStart),令牌不动。
+            const visible = from === to ? hiddenPrefixStart(view.state) : null
+            if (visible != null && from < visible) {
+              const tr = view.state.tr.insertText(text, visible)
+              view.dispatch(tr.setSelection(TextSelection.create(tr.doc, visible + text.length)).scrollIntoView())
+              return true
+            }
             if (!text.includes(']')) return false
             const { state } = view
             const $f = state.doc.resolve(from)

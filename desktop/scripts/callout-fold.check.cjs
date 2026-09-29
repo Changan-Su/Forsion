@@ -348,6 +348,28 @@ async function main() {
   check('C12 无 +/- 的有色标注:不给折叠箭头,单击标题不写 `-`(不可折叠)', !w0.chevron && !/\[!warning\]-/.test(w1), JSON.stringify({ w0, w1 }))
   check('C12 有色标注标题行有类型图标', w0.icon, JSON.stringify(w0))
   await p.close()
+  // 不再单击切折叠 = 单击会放光标;点在标题最左(图标旁)光标落在隐藏令牌之前 —— 在这儿打字 / Delete / 回车
+  // 必须落到可见标题上,绝不改到令牌(否则 `x[!warning]` 当场把标注打回普通引用)。
+  for (const [label, act, want] of [
+    ['打字', async (pg) => pg.keyboard.type('x'), /^> \[!warning\] x无箭头\n/],
+    ['Delete', async (pg) => pg.keyboard.press('Delete'), /^> \[!warning\] 箭头\n/],
+    ['回车', async (pg) => pg.keyboard.press('Enter'), /^> \[!warning\] *\n(>\s*\n)?> 无箭头\n/], // 令牌留在首行,标题文字换到下一行
+  ]) {
+    p = await fresh('> [!warning] 无箭头\n> 内容一')
+    const pt = await p.evaluate(() => {
+      const head = document.querySelector('.md-block .ProseMirror > blockquote > p')
+      const icon = head.querySelector('.callout-icon').getBoundingClientRect()
+      return { x: icon.right + 2, y: icon.top + icon.height / 2 }
+    })
+    await p.mouse.click(pt.x, pt.y)
+    await p.waitForTimeout(200)
+    await act(p)
+    await p.waitForTimeout(300)
+    const md = await p.evaluate(() => window.__harness.blocks[0].content)
+    const cls = await p.evaluate(() => document.querySelector('.md-block .ProseMirror > blockquote').className)
+    check(`C12 点标题最左后${label}:落在可见标题上,令牌不动、仍是标注`, want.test(md) && /callout-warning/.test(cls), JSON.stringify({ md, cls }))
+    await p.close()
+  }
   p = await fresh('> [!WARNING]\n> 内容一')
   const dt = await p.evaluate(() => {
     const el = document.querySelector('.md-block .ProseMirror > blockquote .callout-default-title')
