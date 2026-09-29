@@ -15,7 +15,7 @@ import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
-import { nativeSaveDownload, saveResponseNative } from './nativeDownload'
+import { saveResponseAs } from './nativeDownload'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -1006,15 +1006,7 @@ export async function downloadWorkspaceFile(t: EngineTarget, sessionId: string, 
   const o = fetchOpts(t)
   const r = await (o ? authFetch(url, init, o) : authFetch(url, init))
   if (!r.ok) throw new Error(translate('backendsvc.downloadFailed', { status: r.status }))
-  const name = path.split('/').filter(Boolean).pop() || 'file'
-  const save = nativeSaveDownload()
-  if (save) { await saveResponseNative(save, name, r); return }
-  const blob = await r.blob()
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+  await saveResponseAs(path.split('/').filter(Boolean).pop() || 'file', r)
 }
 
 type UploadFile = { path: string; content: string; encoding?: 'base64'; mimeType?: string }

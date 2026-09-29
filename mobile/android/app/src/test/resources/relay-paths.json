@@ -46,6 +46,7 @@
     { "name": "unit/mcp 永不带断言", "url": "https://api.forsion.net/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/unit/mcp", "js": "pass", "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "path": "/unit/mcp", "native": false },
     { "name": "unit/mcp 子路径", "url": "https://api.forsion.net/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/unit/mcp/x", "js": "pass", "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "path": "/unit/mcp/x", "native": false },
     { "name": "设备辅助面 unit/hostfile 照旧匿名", "url": "https://api.forsion.net/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/unit/hostfile?path=/x", "js": "pass", "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "path": "/unit/hostfile?path=/x", "native": false },
+    { "name": "设备辅助面 unit/hostfile/download(P1-DL 下载原文件)同类:匿名直发", "url": "https://api.forsion.net/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/unit/hostfile/download?path=/x", "js": "pass", "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "path": "/unit/hostfile/download?path=/x", "native": false },
     { "name": "proxy 根", "url": "https://api.forsion.net/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/proxy/", "js": "pass", "id": "0f8fad5b-d9cb-469f-a165-70867728950e", "path": "/", "native": false },
     { "name": "名册", "url": "https://api.forsion.net/api/units", "js": "pass" },
     { "name": "换票端点", "url": "https://api.forsion.net/api/units/0f8fad5b-d9cb-469f-a165-70867728950e/caller-token", "js": "pass" },

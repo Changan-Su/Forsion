@@ -21,7 +21,7 @@
 import http from 'node:http'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { extname, normalize, sep } from 'node:path'
-import { readFile, realpath } from 'node:fs/promises'
+import { readFile, realpath, type FileHandle } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -175,6 +175,10 @@ export interface UnitWebDeps {
   /** 主机文件只读(Desk/文件卡数据源):deps 层 realpath 钳制工作区根∪vault 根∪host 会话根;
    *  越界/不存在=null。maxBytes:隧道路径信封余量(b64 双重膨胀),超限回 tooLarge 而非撑爆信封。 */
   readHostFile: (p: string, maxBytes?: number) => Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean } | null>
+  /** 主机文件下载(P1-DL,/unit/hostfile/download):与 readHostFile **同一个解析**(main.ts openUnitScopedFile ——
+   *  realpath 钳制 + 凭据硬拒 + 校验与读取绑同一 FileHandle,只认普通文件);越界 / 不存在 / 不可读 = null(统一 404)。
+   *  返回已打开的句柄,unitWeb 流式写出并负责关闭。缺省 = 这台不提供下载(501)。 */
+  openHostFile?: (p: string) => Promise<{ fh: FileHandle; real: string; size: number } | null>
   /** 主机目录列表/条目 stat(工作台文件面板/悬停提示):钳制同上,目录类可指根本身;越界=null。 */
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
@@ -228,6 +232,28 @@ const MIME: Record<string, string> = {
   '.gif': 'image/gif', '.jpeg': 'image/jpeg', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
   '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
   '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.md': 'text/markdown; charset=utf-8',
+}
+
+/** 远程下载主机文件的单文件上限(与手机原生中继 UnitRelay.MAX_RESPONSE_BYTES 同档)。超了回 413,不开流。 */
+export const HOST_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
+
+/** 下载的 Content-Type:按扩展名(静态资产表 + 常见办公 / 归档类型),认不出 = octet-stream。 */
+const DOWNLOAD_MIME: Record<string, string> = {
+  ...MIME,
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.doc': 'application/msword', '.xls': 'application/vnd.ms-excel', '.ppt': 'application/vnd.ms-powerpoint',
+  '.csv': 'text/csv; charset=utf-8', '.zip': 'application/zip', '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
+}
+
+/** RFC 6266 / 5987:ASCII 兜底名(非 ASCII、引号、反斜杠换成 _)+ filename* 原名(UTF-8 百分号编码)。
+ *  中文文件名(`介绍….docx`)只放在 filename* 里 —— 头值必须是 latin1,原样塞进去 Node 直接抛。 */
+export function attachmentDisposition(name: string): string {
+  const safe = name.replace(/[\r\n]/g, '') || 'download'
+  const ascii = safe.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  const utf8 = encodeURIComponent(safe).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`
 }
 
 const isLoopback = (addr: string | undefined): boolean =>
@@ -450,6 +476,46 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
   }
 
+  /**
+   * /unit/hostfile 与 /unit/hostfile/download 共用的请求闸(P1-DL,两条永不分叉):鉴权(配对令牌 / 隧道 / P2P 内部密钥)→ 取 path。
+   * 急停锁定(K2)在 handler 顶层对二者同判(GET = 读,放行);K4 会话档闸按 G9 只管 /engine,/unit/host* 都不过它。
+   * 文件解析(realpath 钳制 / 凭据硬拒 / fd 绑定)在 deps 层同一个函数里(main.ts openUnitScopedFile)。
+   */
+  const hostFileRequest = (req: http.IncomingMessage, res: http.ServerResponse, url: string): { p: string; via: UnitIngress | null } | null => {
+    const info = authInfo(req)
+    if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return null }
+    return { p: String(new URL(url, 'http://x').searchParams.get('path') || ''), via: info.via }
+  }
+
+  /** 把主机文件原样流出去(下载)。句柄来自 deps.openHostFile,这里负责关(流结束 / 出错 / 客户端断开都关)。 */
+  const sendHostDownload = async (res: http.ServerResponse, p: string): Promise<void> => {
+    if (!deps.openHostFile) { json(res, 501, { detail: 'Host file download is not available on this device', code: 'HOST_DOWNLOAD_UNSUPPORTED' }); return }
+    const f = await deps.openHostFile(p)
+    if (!f) { json(res, 404, { detail: 'not readable' }); return }
+    if (f.size > HOST_DOWNLOAD_MAX_BYTES) {
+      await f.fh.close().catch(() => {})
+      json(res, 413, { detail: `File is larger than the ${HOST_DOWNLOAD_MAX_BYTES / 1048576} MB remote download limit`, code: 'HOST_DOWNLOAD_TOO_LARGE', size: f.size, limit: HOST_DOWNLOAD_MAX_BYTES })
+      return
+    }
+    const name = p.split(/[\\/]/).filter(Boolean).pop() || 'download'
+    res.writeHead(200, {
+      'Content-Type': DOWNLOAD_MIME[extname(f.real).toLowerCase()] || 'application/octet-stream',
+      'Content-Length': f.size,
+      'Content-Disposition': attachmentDisposition(name),
+      // 同 /vault/asset:主机文件是不受信内容。隧道的 /stream 面不转 Content-Disposition,有人把下载链接当页面直开时,
+      // HTML / SVG 会在鉴权过的 proxy origin 上执行 —— nosniff + CSP sandbox 惰化(网关宣告 stream-sec-headers 才走流式,见 unitHost.streamWorthy)。
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': 'sandbox',
+      'Cache-Control': 'no-store',
+    })
+    if (f.size === 0) { await f.fh.close().catch(() => {}); res.end(); return }
+    // 读到 stat 时的长度为止:文件还在写也不会多出 Content-Length 之外的字节(少了 = 连接提前断,客户端当失败)。
+    const stream = f.fh.createReadStream({ start: 0, end: f.size - 1 }) // autoClose:结束 / destroy 即关句柄
+    stream.on('error', () => res.destroy())
+    res.on('close', () => stream.destroy())
+    stream.pipe(res)
+  }
+
   /** 请求路径(剥掉 projection 前缀、去 query)—— 顶层锁定闸用;不做 308 之类的副作用,那些仍在下面原位。 */
   const plainPath = (req: http.IncomingMessage): string => {
     let u = req.url || '/'
@@ -591,13 +657,16 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       return
     }
     // 主机文件只读(钳制在 deps 层):越界与不存在同样 404,不泄露存在性。
-    if (path === '/unit/hostfile' && req.method === 'GET') {
-      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      const p = String(new URL(url, 'http://x').searchParams.get('path') || '')
+    //   /unit/hostfile          = 预览(base64 JSON,隧道上 4MB 封顶走 tooLarge);
+    //   /unit/hostfile/download = 下载原文件(P1-DL:流式;隧道上 > 256KB 的走 unitHost 的 stream 回包,不进 10MB 信封)。
+    // 两条共用同一道请求闸(hostFileRequest)与 deps 层同一个文件解析(openUnitScopedFile),判据永不分叉。
+    if ((path === '/unit/hostfile' || path === '/unit/hostfile/download') && req.method === 'GET') {
+      const q = hostFileRequest(req, res, url)
+      if (!q) return
+      if (path === '/unit/hostfile/download') { await sendHostDownload(res, q.p); return }
       // 隧道来的请求(unitHost 带内部密钥):响应还要整体再 base64 进 10MB 信封,原文超 ~4MB 就撑爆
       // → 传更小上限,超限走 tooLarge(渲染层有兜底 UI)而不是超时(Codex P2)。
-      const viaTunnel = authInfo(req).via === 'tunnel'
-      const f = await deps.readHostFile(p, viaTunnel ? 4 * 1024 * 1024 : undefined)
+      const f = await deps.readHostFile(q.p, q.via === 'tunnel' ? 4 * 1024 * 1024 : undefined)
       if (!f) { json(res, 404, { detail: 'not readable' }); return }
       json(res, 200, f)
       return

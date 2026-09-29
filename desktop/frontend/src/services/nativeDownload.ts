@@ -3,7 +3,7 @@
  *
  * 病根:安卓 App 的 Capacitor WebView 没有 DownloadListener,`<a download href=blob:>` 点了什么都不发生 ——
  * 手机上「本会话的文件」的下载键是哑弹,而浏览器台架是绿的(浏览器自己会存)。
- * 所以 downloadWorkspaceFile 先问 host 有没有 `window.tangu?.saveDownload`(只有 mobileShim 的 native 路径注入,
+ * 所以下载出口 saveResponseAs(工作区文件与主机文件下载共用)先问 host 有没有 `window.tangu?.saveDownload`(只有 mobileShim 的 native 路径注入,
  * 原生半身 = mobile/android …/DownloadsPlugin.java,写 MediaStore.Downloads),有就走它,没有(desktop / web /
  * 移动端 dev)照旧 `<a download>`。
  *
@@ -26,6 +26,12 @@ registerMessages({
   },
   'nativedl.unsupportedOs': { zh: '保存到「下载」需要 Android 10 及以上', en: 'Saving to Downloads requires Android 10 or later' },
   'nativedl.failed': { zh: '保存到「下载」失败：{err}', en: 'Could not save to Downloads: {err}' },
+  'hostdl.failed': { zh: '下载失败（{status}）', en: 'Download failed ({status})' },
+  'hostdl.tooLarge': {
+    zh: '文件太大（{size} MB），远程下载一次最多 {max} MB',
+    en: 'File is too large ({size} MB); remote downloads are limited to {max} MB',
+  },
+  'hostdl.unsupported': { zh: '那台电脑上的 Forsion 版本还不支持远程下载文件', en: 'Forsion on that computer does not support remote file downloads yet' },
 })
 
 export type SaveDownloadFn = (name: string, mime: string, data: Blob) => Promise<{ name: string }>
@@ -71,4 +77,30 @@ export async function saveResponseNative(save: SaveDownloadFn, name: string, r: 
   // 用户刚点的下载键的即时回执:只在应用内弹,不跟发系统横幅
   notifyApp({ text: translate('nativedl.saved', { name: saved }), level: 'info', inAppOnly: true })
   return saved
+}
+
+/**
+ * 把一个已经 ok 的下载响应存成文件 —— 所有「下载」按钮的单一出口(工作区文件 downloadWorkspaceFile、主机文件
+ * /unit/hostfile/download 共用):安卓 App(有原生桥)→ 存进「下载」;其余(桌面 / 浏览器 / 设备页)→ blob + `<a download>`。
+ */
+export async function saveResponseAs(name: string, r: Response): Promise<void> {
+  const save = nativeSaveDownload()
+  if (save) { await saveResponseNative(save, name, r); return }
+  const blob = await r.blob()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+}
+
+/** /unit/hostfile/download 非 2xx → 一句人话(413 带大小与上限、501 = 对方版本太老,其余带状态码)。 */
+export async function hostDownloadError(r: Response): Promise<Error> {
+  let body: { code?: unknown; size?: unknown; limit?: unknown } = {}
+  try { body = await r.json() } catch { /* 非 JSON:只报状态码 */ }
+  if (r.status === 413 && body.code === 'HOST_DOWNLOAD_TOO_LARGE') {
+    return Object.assign(new Error(translate('hostdl.tooLarge', { size: mb(Number(body.size) || 0), max: String(Math.round((Number(body.limit) || 0) / 1024 / 1024)) })), { status: 413, code: 'too_large' })
+  }
+  if (r.status === 501) return Object.assign(new Error(translate('hostdl.unsupported')), { status: 501 })
+  return Object.assign(new Error(translate('hostdl.failed', { status: r.status })), { status: r.status })
 }
