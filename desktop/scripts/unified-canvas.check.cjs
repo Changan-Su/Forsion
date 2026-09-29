@@ -94,6 +94,10 @@
 //   C98 方向键微移:选中 Frame 连辖域一起走;步长与仪表盘同一个 nudgeStep(吸附开 = 一格,关 = 8 / Shift 32)(V-11)
 //   C99 Mod+Y = 重做,舞台焦点与卡内编辑都走统一时间线(V-18)
 //   C100 「切换文档 / 画布」命令:落到本篇、与胶囊同一个 toggle(记忆模式、不写盘);源码模式空操作(V-20)
+//   —— 波次 3(评审 2026-09-27 新功能)在 wave3();`UCANVAS_ONLY=w3` 只跑这一段 ——
+//   C101 画布颜色(V-08,拍板 #9):手写 color 渲染且编辑后不丢;右键卡片 / 连线 / 混选设色(撤销一击);
+//        「无颜色」删键;自定义 #rrggbb;文档模式不显色、旧笔记正文编辑后 canvas 行逐字不变
+//   C102 拖到视口边缘自动平移(V-13):拖卡 / 框选 / 连线橡皮筋贴边即跑、松手或离边即停;按住不拖不跑;只读不跑
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -122,7 +126,7 @@ const record = (name, ok, detail) => {
  *  amadeusViews 渲染),默认那个 720px 居中盒子根本没有顶栏 —— 在那儿测切模式等于测一个
  *  用户永远看不到的形态。满铺的两个真风险(脱不出纸面 / 盖住顶栏)也只有这个壳能暴露。
  *  (unified-page / unified-columns 仍吃默认壳,别去动它们的几何。) */
-async function open(browser, seed, keepSurfaceMemory = false) {
+async function open(browser, seed, keepSurfaceMemory = false, flags = '') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   // 资源计时缓冲默认 250 条,dev 下几百个模块早溢出 —— modUrl 要靠它找「应用实际加载的那个模块 URL」。
@@ -135,7 +139,7 @@ async function open(browser, seed, keepSurfaceMemory = false) {
       }
     })
   }
-  await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+  await p.goto(`${URL}?upage&upane${flags}&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
   await p.waitForTimeout(400)
   return p
@@ -575,6 +579,242 @@ async function wave2(browser) {
     JSON.stringify({ id100, c0, c1, m1, c2, m2, c3, w100 }))
 }
 
+/** 波次 3(评审 2026-09-27 新功能:画布颜色 V-08 / 边缘自动平移 V-13)。默认跟在全套后面跑;`UCANVAS_ONLY=w3` 只跑这里。 */
+async function wave3(browser) {
+  const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const cardsOfCv = (cv) => Object.fromEntries((cv?.cards ?? []).map((c) => [c.ref, c]))
+  const elsOfCv = (cv) => Object.fromEntries((cv?.elements ?? []).map((e) => [e.id, e]))
+  const style = (pg, sel) => pg.evaluate((sel) => {
+    const el = document.querySelector(sel)
+    if (!el) return null
+    const cs = getComputedStyle(el)
+    return { border: cs.borderTopColor, bg: cs.backgroundColor, color: cs.color, dc: el.getAttribute('data-color') }
+  }, sel)
+  /** 右键某个视口点 → 点色板里 data-swatch=v 的那一枚。返回菜单里看到的东西(给失败时的 detail)。 */
+  const pickSwatch = async (pg, at, v) => {
+    await pg.mouse.click(at.x, at.y, { button: 'right' })
+    await pg.waitForTimeout(300)
+    const seen = await pg.evaluate(() => ({
+      swatches: [...document.querySelectorAll('.amx-canvas-menu .amx-color-swatch')].map((b) => b.dataset.swatch ?? 'custom'),
+      items: [...document.querySelectorAll('.amx-canvas-menu > button')].map((b) => b.textContent),
+    }))
+    if (v != null) {
+      await pg.click(`.amx-canvas-menu .amx-color-swatch[data-swatch="${v}"]`)
+      await pg.waitForTimeout(500)
+    }
+    return seen
+  }
+
+  // ── C101 画布颜色(V-08,拍板 #9)──────────────────────────────────────────────────
+  //  修前:卡片 color 只在盘上、派生按 PM attrs 重建 cards → 任何一次编辑就把手写的 color 删掉;元素的
+  //  color 虽被原样保管但不渲染;也没有任何设色入口(连线连右键菜单都没有)。
+  const CV101 = {
+    v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
+    cards: [{ ref: 'k1', x: 480, y: 0, w: 300, color: '1' }, { ref: 'k2', x: 480, y: 200, w: 300 }],
+    elements: [
+      { id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '方块', color: '4' },
+      { id: 's2', type: 'shape', shape: 'rect', x: 0, y: 500, w: 200, h: 120, text: '方块2' },
+      { id: 'e1', type: 'connector', from: { id: 's1' }, to: { id: 's2' } },
+    ],
+  }
+  const body101 = ['# 颜色', '', '主卡一段。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '卡 K2', '', '<!-- /a k2 -->', '']
+  const p101 = await open(browser, ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV101)}`, '---', '', ...body101].join('\n'))
+  await p101.waitForTimeout(800)
+  const r101 = {
+    k1: await style(p101, '.amx-ucard[data-anchor="k1"]'), k2: await style(p101, '.amx-ucard[data-anchor="k2"]'),
+    s1: await style(p101, '.amx-el-shape[data-el="s1"]'), s2: await style(p101, '.amx-el-shape[data-el="s2"]'),
+  }
+  // 一次编辑(选中 k1 → 方向键微移):修前派生在这一步把 k1 的 color 删掉
+  let pt = await p101.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  await p101.mouse.click(pt.x, pt.y)
+  await p101.keyboard.press('ArrowRight')
+  await p101.waitForTimeout(700)
+  const cvA = await cvOf(p101)
+  record('C101a 手写的 color 在画布上渲染(卡片 / 形状描边与无色的不同),一次编辑后卡片与形状的 color 都还在盘上',
+    r101.k1?.dc === '1' && r101.k1.border !== r101.k2.border && r101.k1.bg !== r101.k2.bg
+      && r101.s1?.dc === '4' && r101.s1.border !== r101.s2.border
+      && cardsOfCv(cvA).k1?.color === '1' && cardsOfCv(cvA).k1?.x !== 480 && elsOfCv(cvA).s1?.color === '4' && !('color' in (cardsOfCv(cvA).k2 ?? {})),
+    JSON.stringify({ r101, cards: cvA?.cards, s1: elsOfCv(cvA).s1 }))
+
+  // 右键卡片 → 色板设色(PM attrs,进撤销);Cmd+Z 一击撤回
+  pt = await p101.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k2"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  const seenCard = await pickSwatch(p101, pt, '2')
+  const cvB = await cvOf(p101)
+  const domB = await p101.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k2"]')?.getAttribute('data-color'))
+  // 视口内一处真空白(点它 = 焦点回舞台,Cmd+Z 走舞台的统一时间线):按网格扫,第一个命中舞台本体的点
+  const blank = await p101.evaluate(() => {
+    const s = document.querySelector('.amx-stage').getBoundingClientRect()
+    for (let y = s.top + 60; y < s.bottom - 60; y += 40)
+      for (let x = s.left + 60; x < s.right - 60; x += 40) {
+        const t = document.elementFromPoint(x, y)
+        if (t && (t.classList.contains('amx-stage') || t.classList.contains('amx-stage-inner') || t.classList.contains('amx-el-layer'))) return { x, y }
+      }
+    return null
+  })
+  await p101.mouse.click(blank.x, blank.y)
+  await p101.keyboard.press(`${MOD}+z`)
+  await p101.waitForTimeout(600)
+  const cvB2 = await cvOf(p101)
+  record('C101b 右键卡片 → 色板:写进该卡的 color(DOM 同步),Cmd+Z 一击撤回(color 键消失)',
+    seenCard.swatches.join(',') === 'none,1,2,3,4,5,6,custom' && cardsOfCv(cvB).k2?.color === '2' && domB === '2' && !('color' in (cardsOfCv(cvB2).k2 ?? {})),
+    JSON.stringify({ seenCard, k2: cardsOfCv(cvB).k2, domB, after: cardsOfCv(cvB2).k2, blank }))
+
+  // 右键连线(元素层整层不吃指针,修前落进空白菜单)→ 设色;再选「无颜色」= 删键(不写空串)
+  const mid = await stageToClient(p101, 100, 460)
+  const seenConn = await pickSwatch(p101, mid, '6')
+  const cvC = await cvOf(p101)
+  const connDom = await p101.evaluate(() => { const s = document.querySelector('svg.amx-el-conn[data-el="e1"]'); return s ? { dc: s.getAttribute('data-color'), stroke: getComputedStyle(s.querySelector('path')).stroke } : null })
+  await pickSwatch(p101, mid, 'none')
+  const cvC2 = await cvOf(p101)
+  record('C101c 右键连线有菜单(色板在、没有「连线到…」/「成组为 Frame」),设色写进连线条目;「无颜色」删掉 color 键',
+    seenConn.swatches.length === 8 && !seenConn.items.some((t) => /连线到|成组为/.test(t ?? ''))
+      && elsOfCv(cvC).e1?.color === '6' && connDom?.dc === '6' && !('color' in (elsOfCv(cvC2).e1 ?? {})),
+    JSON.stringify({ seenConn, e1: elsOfCv(cvC).e1, connDom, e1after: elsOfCv(cvC2).e1 }))
+
+  // 卡 + 形状混选一起设色 = 一格 pair,Cmd+Z 两边一起退
+  pt = await p101.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  await p101.mouse.click(pt.x, pt.y)
+  const s2pt = await p101.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s2"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  await p101.keyboard.down(MOD); await p101.mouse.click(s2pt.x, s2pt.y); await p101.keyboard.up(MOD)
+  await p101.waitForTimeout(200)
+  await pickSwatch(p101, s2pt, '5')
+  const cvD = await cvOf(p101)
+  await p101.mouse.click(blank.x, blank.y)
+  await p101.keyboard.press(`${MOD}+z`)
+  await p101.waitForTimeout(600)
+  const cvD2 = await cvOf(p101)
+  record('C101d 卡 + 形状混选设色:两边同时上色,一次 Cmd+Z 两边一起退回(卡回到原来的红,形状回到无色)',
+    cardsOfCv(cvD).k1?.color === '5' && elsOfCv(cvD).s2?.color === '5' && cardsOfCv(cvD2).k1?.color === '1' && !('color' in (elsOfCv(cvD2).s2 ?? {})),
+    JSON.stringify({ d: [cardsOfCv(cvD).k1, elsOfCv(cvD).s2], undo: [cardsOfCv(cvD2).k1, elsOfCv(cvD2).s2] }))
+
+  // 自定义色 = JSON Canvas 的 #rrggbb(原生取色器只认 change 那一下)
+  await p101.mouse.click(s2pt.x, s2pt.y, { button: 'right' })
+  await p101.waitForTimeout(300)
+  await p101.evaluate(() => {
+    const inp = document.querySelector('.amx-canvas-menu .amx-color-swatch.is-custom input[type="color"]')
+    inp.value = '#12ab34'
+    inp.dispatchEvent(new Event('input', { bubbles: true })) // 拖动中:不写
+    inp.dispatchEvent(new Event('change', { bubbles: true })) // 提交
+  })
+  await p101.waitForTimeout(500)
+  const cvE = await cvOf(p101)
+  const s2css = await p101.evaluate(() => document.querySelector('.amx-el-shape[data-el="s2"]')?.style.getPropertyValue('--amx-color'))
+  await p101.close()
+  record('C101e 自定义色:取色器提交后写成 #rrggbb,渲染吃同一个值',
+    elsOfCv(cvE).s2?.color === '#12ab34' && s2css === '#12ab34', JSON.stringify({ s2: elsOfCv(cvE).s2, s2css }))
+
+  // 文档模式不受影响 + 旧笔记零改写:mode=doc 打开,带色卡与无色卡观感一致;正文打一个字,canvas 行逐字不变
+  //  (无色的卡不长出 color 键,认不出的怪值 "red" 与手写的 color 都原样保留)。
+  const L101 = JSON.stringify({ v: 1, mode: 'doc', main: { x: 0, y: 0, w: 400 }, cards: [{ ref: 'k1', x: 480, y: 0, w: 300, color: '1' }, { ref: 'k2', x: 480, y: 200, w: 300 }, { ref: 'k3', x: 480, y: 400, w: 300, color: 'red' }] })
+  const pF = await open(browser, ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${L101}`, '---', '', '# 颜色', '', '主卡一段。', '',
+    ...['k1', 'k2', 'k3'].flatMap((k) => [`<!-- a ${k} -->`, '', `卡 ${k}`, '', `<!-- /a ${k} -->`, ''])].join('\n'))
+  await pF.waitForTimeout(700)
+  const docMode = await pF.evaluate(() => { const s = document.querySelector('.amx-stage'); return !!s && s.classList.contains('amx-stage-off') })
+  await pF.mouse.move(2, 2)
+  const f1 = await style(pF, '.amx-ucard[data-anchor="k1"]')
+  const f2 = await style(pF, '.amx-ucard[data-anchor="k2"]')
+  await pF.click('.unified-body .ProseMirror > p')
+  await pF.keyboard.press('End')
+  await pF.keyboard.type('x')
+  await pF.waitForTimeout(700)
+  const lineF = canvasLine(await fmOf(pF))
+  const bodyF = await pF.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+  await pF.close()
+  record('C101f 文档模式:带色卡与无色卡观感一致(颜色只在画布模式显示);正文打字后 canvas 行逐字不变(无色卡不长 color 键,怪值原样留)',
+    docMode && f1?.dc === '1' && f1.border === f2?.border && f1.bg === f2?.bg && lineF === L101 && bodyF.includes('主卡一段。x'),
+    JSON.stringify({ docMode, f1, f2, same: lineF === L101, lineF }))
+
+  // ── C102 拖到视口边缘自动平移(V-13)──────────────────────────────────────────────
+  //  修前:onMove 里没有边缘检测,拖卡 / 框选到舞台边上停住,视口纹丝不动(只能边拖边滚滚轮)。
+  const SEED102 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":260}]}',
+    '---', '', '# 边缘', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const vpOf = (pg) => pg.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f) } })
+  const stageRect = (pg) => pg.evaluate(() => { const r = document.querySelector('.amx-stage').getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom } })
+  /** 在 (x,y) 停 ms 毫秒,每 100ms 原地抖 1px(真人的手不会纹丝不动;也兼容「要持续 move 才滚」的实现)。 */
+  const hold = async (pg, x, y, ms) => { for (let i = 0; i < ms / 100; i++) { await pg.mouse.move(x - (i % 2), y); await pg.waitForTimeout(100) } }
+  const p102 = await open(browser, SEED102)
+  await p102.waitForTimeout(800)
+  const st = await stageRect(p102)
+  const k1pt = await p102.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  const v0 = await vpOf(p102)
+  await p102.mouse.move(k1pt.x, k1pt.y); await p102.mouse.down()
+  const tx = st.r - 3
+  for (let i = 1; i <= 12; i++) await p102.mouse.move(k1pt.x + (tx - k1pt.x) * i / 12, k1pt.y + 40 * i / 12)
+  const vIn = await vpOf(p102)
+  await hold(p102, tx, k1pt.y + 40, 1200)
+  const vHold = await vpOf(p102)
+  // 视口在跑时被拖的卡钉在指针底下(舞台跟着走,卡的视口位置不动)
+  const underPtr = await p102.evaluate(({ x, y }) => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom }, { x: tx - 1, y: k1pt.y + 40 })
+  await p102.mouse.up()
+  await p102.waitForTimeout(300)
+  const vUp = await vpOf(p102)
+  await p102.waitForTimeout(400)
+  const vUp2 = await vpOf(p102)
+  const k1after = cardsOfCv(await cvOf(p102)).k1
+  const pointerDelta = Math.round(tx - k1pt.x)
+  record('C102a 拖卡到右缘停住:视口持续向左平移、卡钉在指针下被带走(落盘位移 ≫ 指针位移),松手即停',
+    vHold.x < vIn.x - 200 && underPtr && vUp.x === vUp2.x && !!k1after && k1after.x - 480 > pointerDelta + 200,
+    JSON.stringify({ v0, vIn, vHold, underPtr, vUp, vUp2, k1: k1after, pointerDelta }))
+  // 按在贴边的卡上**没拖动**:不许平地开始漂(drag.live 闸)
+  const vP0 = await vpOf(p102)
+  await p102.mouse.move(tx, k1pt.y + 40); await p102.mouse.down()
+  await p102.waitForTimeout(700)
+  const vP1 = await vpOf(p102)
+  await p102.mouse.up()
+  await p102.waitForTimeout(200)
+  record('C102b 按住贴边的卡但没拖动:视口不动', JSON.stringify(vP0) === JSON.stringify(vP1), JSON.stringify({ vP0, vP1 }))
+  // 框选拖到下缘
+  const vM0 = await vpOf(p102)
+  const m0 = { x: st.l + 60, y: st.b - 200 }
+  await p102.mouse.move(m0.x, m0.y); await p102.mouse.down()
+  for (let i = 1; i <= 10; i++) await p102.mouse.move(m0.x + 20 * i, m0.y + 197 * i / 10)
+  await hold(p102, m0.x + 200, st.b - 3, 1000)
+  const vM1 = await vpOf(p102)
+  const marq = await p102.evaluate(() => !!document.querySelector('.amx-el-marquee'))
+  await p102.mouse.up()
+  await p102.waitForTimeout(200)
+  record('C102c 框选拖到下缘停住:视口向上平移(框选矩形仍在)', marq && vM1.y < vM0.y - 150, JSON.stringify({ vM0, vM1, marq }))
+  await p102.close()
+  // 连线橡皮筋(第一击之后的悬停)靠左缘:视口向右平移;回到中间即停(新开一页:上面几格已把视口带到远处)
+  const pC = await open(browser, SEED102)
+  await pC.waitForTimeout(800)
+  await pickTool(pC, '箭头')
+  const kC = await pC.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  await pC.mouse.click(kC.x, kC.y)
+  await pC.waitForTimeout(150)
+  const vC0 = await vpOf(pC)
+  await pC.mouse.move(st.l + 60, kC.y, { steps: 6 })
+  await hold(pC, st.l + 3, kC.y, 800)
+  const vC1 = await vpOf(pC)
+  const rubber = await pC.evaluate(() => !!document.querySelector('.amx-el-conn.is-preview'))
+  await pC.mouse.move((st.l + st.r) / 2, (st.t + st.b) / 2, { steps: 6 })
+  await pC.waitForTimeout(200)
+  const vC2 = await vpOf(pC)
+  await pC.waitForTimeout(300)
+  const vC3 = await vpOf(pC)
+  await pC.keyboard.press('Escape')
+  await pC.close()
+  record('C102d 连线橡皮筋悬停到左缘:视口向右平移;指针回到中间即停',
+    rubber && vC1.x > vC0.x + 100 && JSON.stringify(vC2) === JSON.stringify(vC3), JSON.stringify({ vC0, vC1, vC2, vC3, rubber }))
+  // 只读画布:拖 = 平移,贴边停住时视口只跟手(抖动 1px),不自动跑
+  const pR = await open(browser, SEED102, false, '&uro')
+  await pR.waitForTimeout(800)
+  const stR = await stageRect(pR)
+  const kR = await pR.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  await pR.mouse.move(kR.x, kR.y); await pR.mouse.down()
+  const txR = stR.r - 3
+  for (let i = 1; i <= 12; i++) await pR.mouse.move(kR.x + (txR - kR.x) * i / 12, kR.y)
+  const vR0 = await vpOf(pR)
+  await hold(pR, txR, kR.y, 1000)
+  const vR1 = await vpOf(pR)
+  await pR.mouse.up()
+  await pR.close()
+  record('C102e 只读画布不自动平移:贴边停住期间视口只随 1px 抖动', Math.abs(vR1.x - vR0.x) <= 2 && Math.abs(vR1.y - vR0.y) <= 2, JSON.stringify({ vR0, vR1 }))
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   if (process.env.UCANVAS_ONLY === 'w2') {
@@ -582,6 +822,13 @@ async function main() {
     await browser.close()
     const ok = results.filter(Boolean).length
     console.log(`\n${ok}/${results.length} 通过(仅波次 2 段)`)
+    process.exit(ok === results.length ? 0 : 1)
+  }
+  if (process.env.UCANVAS_ONLY === 'w3') {
+    await wave3(browser)
+    await browser.close()
+    const ok = results.filter(Boolean).length
+    console.log(`\n${ok}/${results.length} 通过(仅波次 3 段)`)
     process.exit(ok === results.length ? 0 : 1)
   }
   const SEED = '# 画布页\n\n主卡一段。\n\n要拖出去的段。\n'
@@ -1122,13 +1369,15 @@ async function main() {
     sel: document.querySelectorAll('.amx-el-selbox, .amx-el-shape.is-sel').length,
     tf: getComputedStyle(document.querySelector('.amx-stage-inner')).transform,
   }))
+  // ⚠️ 终点停在舞台边缘 **40px 以内侧**(V-13 之后):贴边 32px 的边带里停着 = 拖到边缘自动平移(设计行为),
+  //    「视口没被平移」这条断言钉的是「空白拖不是平移手势」,不是「边带不许自动平移」—— 那一条由 C102 管。
   await p19.evaluate(() => {
     const stage = document.querySelector('.amx-stage')
     const r = stage.getBoundingClientRect()
     const mk = (t, x, y) => new PointerEvent(t, { bubbles: true, cancelable: true, pointerId: 8, button: 0, clientX: x, clientY: y })
     window.__r = r
     stage.dispatchEvent(mk('pointerdown', r.left + 3, r.top + 3))
-    stage.dispatchEvent(mk('pointermove', r.right - 3, r.bottom - 3))
+    stage.dispatchEvent(mk('pointermove', r.right - 40, r.bottom - 40))
   })
   await p19.waitForTimeout(120)
   const c21mid = await p19.evaluate(() => ({
@@ -1139,7 +1388,7 @@ async function main() {
   await p19.evaluate(() => {
     const stage = document.querySelector('.amx-stage')
     const r = window.__r
-    stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 8, button: 0, clientX: r.right - 3, clientY: r.bottom - 3 }))
+    stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 8, button: 0, clientX: r.right - 40, clientY: r.bottom - 40 }))
   })
   await p19.waitForTimeout(150)
   const c21 = await p19.evaluate(() => ({
@@ -3725,10 +3974,12 @@ async function main() {
   }
   const b1 = await box59()
   // 再把 NW 一路拖过对角:MIN_EL 夹住之后**对角必须还钉在原处**(拿增量硬夹会整体跟着指针走)
+  // ⚠️ 终点留在视口内、离边缘 > 32px(V-13):原来的 +400 会把指针拖出窗口底边,贴边即自动平移,
+  //    屏幕坐标上的「对角」就跟着视口挪了(盘上的几何仍对),断言量的是屏幕盒。
   if (g59.at) {
     await p59.mouse.move(b1.x - 5, b1.y - 5)
     await p59.mouse.down()
-    await p59.mouse.move(b1.x + 400, b1.y + 400, { steps: 8 })
+    await p59.mouse.move(b1.x + 300, b1.y + 200, { steps: 8 })
     await p59.mouse.up()
     await p59.waitForTimeout(300)
   }
@@ -6050,6 +6301,7 @@ async function main() {
     JSON.stringify({ vEdit0, vEdit1, inCard92 }))
 
   await wave2(browser)
+  await wave3(browser)
   await browser.close()
   const ok = results.filter(Boolean).length
   console.log(`\n${ok}/${results.length} 通过`)

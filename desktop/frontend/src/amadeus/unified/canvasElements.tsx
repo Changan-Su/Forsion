@@ -51,14 +51,15 @@ export interface EndRef { ref?: string; id?: string; main?: boolean }
  *  ⚠️ 真源在 canvasEdit(数据层)—— 它同时是**层级里的主卡父键**,而剪枝住在 canvas.ts,
  *  那边不可能 import 一个 .tsx 渲染模块。这里只是转出,别在本文件里另写一份字面量。 */
 export { MAIN_KEY } from './canvasEdit'
-import { MAIN_KEY } from './canvasEdit'
+import { MAIN_KEY, canvasColorCss } from './canvasEdit'
 
-export interface ShapeEl extends ElBox { kind: 'shape' | 'text'; id: string; shape: 'rect' | 'ellipse'; text: string | null }
-export interface ConnEl { kind: 'connector'; id: string; from: EndRef; to: EndRef; label: string | null }
+/** `color`(V-08)= 盘上原值里**认得出**的那一份(`"1"`–`"6"` / `#rrggbb`);认不出 = 不上色(原值仍在盘上)。 */
+export interface ShapeEl extends ElBox { kind: 'shape' | 'text'; id: string; shape: 'rect' | 'ellipse'; text: string | null; color?: string | null }
+export interface ConnEl { kind: 'connector'; id: string; from: EndRef; to: EndRef; label: string | null; color?: string | null }
 /** Frame(AFFiNE 同名同义,2026-08-18):一个带标题的区域,拖标题条 = 连内容整体搬走。
  *  ⚠️ 它**不是容器**:辖域是「完全落在框内」的几何判定,现算现用,盘上不存成员表 ——
  *  存成员表就要在每次移动/删除/回灌后维护它,而几何判定永远与眼睛看到的一致。 */
-export interface FrameEl extends ElBox { kind: 'frame'; id: string; title: string | null }
+export interface FrameEl extends ElBox { kind: 'frame'; id: string; title: string | null; color?: string | null }
 export type El = ShapeEl | ConnEl | FrameEl
 
 /** 选中键:卡片 `c:<锚>`,元素 `e:<id>`。卡锚与元素 id 的字符集重叠,裸值会歧义。 */
@@ -72,6 +73,13 @@ export const keyId = (k: string): string => k.slice(2)
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+/** 渲染用的颜色收窄:过不了 JSON Canvas 编码的一律当无色(不是整条跳过 —— 一个怪颜色不许带走形状)。 */
+const colorOf = (v: unknown): string | null => (canvasColorCss(v) ? (v as string) : null)
+/** 上色元素的根节点属性:`data-color` 给 CSS 当开关,`--amx-color` 给它具体的值(styles.css 的 V-08 段)。 */
+const colorAttrs = (color: string | null | undefined): { 'data-color'?: string; style?: React.CSSProperties } => {
+  const css = canvasColorCss(color)
+  return css ? { 'data-color': color as string, style: { ['--amx-color' as string]: css } } : {}
+}
 
 function endOf(v: unknown): EndRef | null {
   if (!v || typeof v !== 'object') return null
@@ -101,7 +109,7 @@ export function safeElements(raw: unknown): El[] {
       const to = endOf(o.to)
       if (!from || !to) continue
       seen.add(id)
-      out.push({ kind: 'connector', id, from, to, label: str(o.label) })
+      out.push({ kind: 'connector', id, from, to, label: str(o.label), color: colorOf(o.color) })
       continue
     }
     if (o.type !== 'shape' && o.type !== 'text' && o.type !== 'frame') continue
@@ -112,10 +120,10 @@ export function safeElements(raw: unknown): El[] {
     if (x == null || y == null || w == null || h == null || w <= 0 || h <= 0) continue
     seen.add(id)
     if (o.type === 'frame') {
-      out.push({ kind: 'frame', id, x, y, w, h, title: str(o.title) })
+      out.push({ kind: 'frame', id, x, y, w, h, title: str(o.title), color: colorOf(o.color) })
       continue
     }
-    out.push({ kind: o.type === 'text' ? 'text' : 'shape', id, x, y, w, h, shape: o.shape === 'ellipse' ? 'ellipse' : 'rect', text: str(o.text) })
+    out.push({ kind: o.type === 'text' ? 'text' : 'shape', id, x, y, w, h, shape: o.shape === 'ellipse' ? 'ellipse' : 'rect', text: str(o.text), color: colorOf(o.color) })
   }
   return out
 }
@@ -709,10 +717,12 @@ function AddButtons({ node }: { node: string }): React.ReactElement {
  *  可点矩形就是糊在画布上的看不见的挡板(挡拖卡、挡选字、挡 ⠿),文件头纪律 1 说的就是这件事。
  *  代价是「点框内空白不会选中 Frame」,那与 Figma/AFFiNE 一致(那两家也是点标题选框)。 */
 function Frame({ el, box, sel }: { el: FrameEl; box: ElBox; sel: boolean }): React.ReactElement {
+  const c = colorAttrs(el.color)
   return (
     <div
       className={`amx-el-frame${sel ? ' is-sel' : ''}`}
-      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
+      data-color={c['data-color']}
+      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px`, ...c.style }}
     >
       <div className="amx-el-frame-bar" data-el={el.id}>{el.title ?? 'Frame'}</div>
     </div>
@@ -721,11 +731,13 @@ function Frame({ el, box, sel }: { el: FrameEl; box: ElBox; sel: boolean }): Rea
 
 function Shape({ el, box, sel }: { el: ShapeEl; box: ElBox; sel: boolean }): React.ReactElement {
   const cls = el.kind === 'text' ? 'amx-el-text' : el.shape === 'ellipse' ? 'amx-el-ellipse' : 'amx-el-rect'
+  const c = colorAttrs(el.color)
   return (
     <div
       className={`amx-el-shape ${cls}${sel ? ' is-sel' : ''}`}
       data-el={el.id}
-      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
+      data-color={c['data-color']}
+      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px`, ...c.style }}
     >
       {el.text}
     </div>
@@ -752,13 +764,15 @@ function Connector({ el, a, b, sel, related, tree, preview }: { el: ConnEl; a: E
     `${p.tip.x - L * cos + W * sin},${p.tip.y - L * sin - W * cos}`,
     `${p.tip.x - L * cos - W * sin},${p.tip.y - L * sin + W * cos}`,
   ].join(' ')
+  const c = colorAttrs(el.color)
   return (
     <>
       {/* viewBox 直接吃舞台坐标 → path 的 d 不用做任何平移换算。 */}
       <svg
         className={`amx-el-conn${sel ? ' is-sel' : ''}${related ? ' is-related' : ''}${tree ? ' is-tree' : ''}${preview ? ' is-preview' : ''}`}
         data-el={el.id}
-        style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
+        data-color={c['data-color']}
+        style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px`, ...c.style }}
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
       >
         {related ? <path className="amx-el-conn-halo" d={p.d} /> : null}
@@ -767,7 +781,7 @@ function Connector({ el, a, b, sel, related, tree, preview }: { el: ConnEl; a: E
         {tree ? null : <polygon points={tri} />}
       </svg>
       {el.label ? (
-        <div className={`amx-el-label${sel ? ' is-sel' : ''}`} style={{ left: `${p.mid.x}px`, top: `${p.mid.y}px` }}>
+        <div className={`amx-el-label${sel ? ' is-sel' : ''}`} data-color={c['data-color']} style={{ left: `${p.mid.x}px`, top: `${p.mid.y}px`, ...c.style }}>
           {el.label}
         </div>
       ) : null}
