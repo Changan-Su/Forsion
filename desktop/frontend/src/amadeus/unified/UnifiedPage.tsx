@@ -1656,16 +1656,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
     // 键盘打开的(聚焦 ⠿ 按 Enter)→ 焦点进首项;鼠标打开的不抢焦点(Cmd+C / Delete 仍直接作用于选中的块)。
     // Mod-Alt-/(K-17)= 直奔「转换为」:焦点落在该区第一项(表格上没有文字类转换 → 退回首项)。
-    if (blockMenu.keyboard) requestAnimationFrame(() => {
-      const menu = document.querySelector<HTMLElement>('.unified-block-menu')
-      let el = blockMenu.focus === 'turnInto' ? menu?.querySelector('[data-sec="turnInto"]')?.nextElementSibling ?? null : null
-      while (el && el.tagName !== 'BUTTON') el = el.nextElementSibling
-      ;((el as HTMLElement | null) ?? menu?.querySelector<HTMLElement>('button'))?.focus()
-    })
+    // 浮层可能晚一两帧才挂上(OverlayPortal / 定位测量):等到菜单在场再送焦点,最多 10 帧 —— 只等一帧时
+    // 编程放光标后按 Mod-Alt-/ 会扑空,焦点留在正文(合并后 K17c 实测)。
+    let focusRaf = 0
+    if (blockMenu.keyboard) {
+      let tries = 0
+      const focusIn = (): void => {
+        const menu = document.querySelector<HTMLElement>('.unified-block-menu')
+        if (!menu) { if (++tries < 10) focusRaf = requestAnimationFrame(focusIn); return }
+        let el = blockMenu.focus === 'turnInto' ? menu.querySelector('[data-sec="turnInto"]')?.nextElementSibling ?? null : null
+        while (el && el.tagName !== 'BUTTON') el = el.nextElementSibling
+        ;((el as HTMLElement | null) ?? menu.querySelector<HTMLElement>('button'))?.focus()
+      }
+      focusRaf = requestAnimationFrame(focusIn)
+    }
     window.addEventListener('pointerdown', close, true)
     window.addEventListener('contextmenu', close, true)
     window.addEventListener('keydown', onKey, true)
     return () => {
+      cancelAnimationFrame(focusRaf)
       window.removeEventListener('pointerdown', close, true)
       window.removeEventListener('contextmenu', close, true)
       window.removeEventListener('keydown', onKey, true)
