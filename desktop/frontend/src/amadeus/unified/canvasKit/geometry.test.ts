@@ -3,7 +3,7 @@
  * 纯函数层;真 DOM 那一层由 check:canvas / check:dashboard 各自钉。
  */
 import { describe, expect, it } from 'vitest'
-import { GRID_STEP, boxFromPoints, boxOverlaps, marqueeHit, resizeBox, snapGrid, snapMoveToNeighbors, snapResizeToNeighbors, unionBox } from './geometry'
+import { EDGE_PAN_MAX, EDGE_PAN_ZONE, GRID_STEP, boxFromPoints, boxOverlaps, edgePanVelocity, marqueeHit, resizeBox, snapGrid, snapMoveToNeighbors, snapResizeToNeighbors, unionBox } from './geometry'
 
 const B = (x: number, y: number, w: number, h: number) => ({ x, y, w, h })
 
@@ -93,5 +93,29 @@ describe('贴邻居边缘吸附', () => {
     const r = snapResizeToNeighbors(B(0, 178, 300, 62), 's', [B(0, 0, 300, 180)], 7, 80, 60)
     expect(r.box.h).toBe(62) // 吸到 180 会剩 2px 高 → 拒绝
     expect(r.guides.h).toEqual([])
+  })
+})
+
+describe('edgePanVelocity(V-13 拖到边缘自动平移)', () => {
+  const R = { left: 0, top: 0, right: 1000, bottom: 800 }
+  it('边带之外不动', () => {
+    expect(edgePanVelocity(R, 500, 400)).toEqual({ vx: 0, vy: 0 })
+    expect(edgePanVelocity(R, EDGE_PAN_ZONE, 1000 - EDGE_PAN_ZONE).vx).toBe(0)
+  })
+  it('越贴边越快,贴死边缘满速,出界封顶', () => {
+    const a = edgePanVelocity(R, 1000 - 24, 400).vx
+    const b = edgePanVelocity(R, 1000 - 8, 400).vx
+    expect(a).toBeGreaterThan(0)
+    expect(b).toBeGreaterThan(a)
+    expect(edgePanVelocity(R, 1000, 400).vx).toBe(EDGE_PAN_MAX)
+    expect(edgePanVelocity(R, 1400, 400).vx).toBe(EDGE_PAN_MAX)
+  })
+  it('方向:左 / 上为负,右 / 下为正;两轴独立(角落两轴一起跑)', () => {
+    const c = edgePanVelocity(R, 2, 798)
+    expect(c.vx).toBeLessThan(0)
+    expect(c.vy).toBeGreaterThan(0)
+  })
+  it('舞台窄到放不下两条边带 + 中间区:那一轴不自动平移', () => {
+    expect(edgePanVelocity({ left: 0, top: 0, right: 80, bottom: 800 }, 78, 400).vx).toBe(0)
   })
 })

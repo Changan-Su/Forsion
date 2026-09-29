@@ -31,7 +31,7 @@ import { zoomOf } from '@lcl/engine'
 // 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
 // dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
 import {
-  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, PRESS_SLOP, TOUCH_SLOP, nudgeStep,
+  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, PRESS_SLOP, TOUCH_SLOP, nudgeStep, edgePanVelocity,
   CanvasChrome, CanvasMiniMap as KitMiniMap, gridLayerStyle, recallViewport, rememberViewport, resizeBox, snapGrid,
   type MiniItem, type ResizeEdge, type Viewport,
 } from './canvasKit'
@@ -2203,6 +2203,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
 
     /** 手势被别的东西接管:只回滚外观,**绝不落笔**(与 pointercancel 同一条,见 onCancel 顶注)。 */
     const abortDrag = (): void => {
+      edgeStop()
       const d = drag
       drag = null
       if (d && d.kind !== 'pan') clearVisuals(d)
@@ -2682,7 +2683,69 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       capture(e.pointerId)
     }
 
+    // ── 拖到视口边缘自动平移(V-13,Figma / Obsidian 同款)────────────────────────────────
+    // 拖卡 / 形状 / Frame / 主卡、框选、塑型、拖出新形状,以及连线橡皮筋(第一击之后的悬停):指针进了边带,
+    // 视口就按 edgePanVelocity 自己跑(越贴边越快)。每帧先挪视口、再拿**缓存的指针位置**把 moveCore 重跑
+    // 一遍 —— 指针不动而舞台在动,被拖的对象于是钉在指针底下跟着走。松手 / 离开边带 / 手势被接管即停。
+    //  ⚠️ 只读舞台不触发:那里一切按下都是平移,本身就在挪视口(unified-readonly 钉着「拖卡 = 平移」)。
+    //  ⚠️ 必须 `drag.live`:按在贴边的卡上还没动,不能平地开始漂(过了 slop 才算拖)。
+    //  ⚠️ vpRef 必须**同步**写:setVp 要等下一次渲染才进 vpRef,重跑时 toStage 会拿上一帧的视口 → 对象落后指针。
+    //  ⚠️ 橡皮筋悬停没有指针捕获:指针离开舞台(pointerleave)即停,压在工具栏 / HUD / 缩略图上不跑
+    //     (工具栏就贴在底边的边带里)。
+    const edge = { raf: 0, t: 0, x: 0, y: 0, id: -1, type: 'mouse' }
+    const edgeStop = (): void => {
+      if (edge.raf) cancelAnimationFrame(edge.raf)
+      edge.raf = 0
+    }
+    const edgeRect = (): { left: number; top: number; right: number; bottom: number } => {
+      const r = host.getBoundingClientRect()
+      return { left: Math.max(r.left, 0), top: Math.max(r.top, 0), right: Math.min(r.right, window.innerWidth), bottom: Math.min(r.bottom, window.innerHeight) }
+    }
+    const edgeEligible = (target: Element | null): boolean => {
+      if (readOnlyRef.current || pinch) return false
+      if (drag) return drag.kind !== 'pan' && drag.live === true
+      return toolRef.current === 'conn' && !!connFromRef.current && !target?.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')
+    }
+    const edgeTick = (now: number): void => {
+      edge.raf = 0
+      const target = document.elementFromPoint(edge.x, edge.y)
+      if (!edgeEligible(target)) return
+      const { vx, vy } = edgePanVelocity(edgeRect(), edge.x, edge.y)
+      if (!vx && !vy) return
+      const dt = Math.min(0.05, Math.max(0, (now - edge.t) / 1000)) // 卡顿 / 切后台回来别一帧跳一大截
+      edge.t = now
+      const u = zoomOf(host) || 1 // 应用级 CSS zoom,与滚轮平移同口径
+      const next = { ...vpRef.current, x: vpRef.current.x - (vx * dt) / u, y: vpRef.current.y - (vy * dt) / u }
+      vpRef.current = next
+      setVp(next)
+      moveCore({ clientX: edge.x, clientY: edge.y, pointerId: edge.id, pointerType: edge.type, target: target ?? host } as unknown as PointerEvent)
+      edge.raf = requestAnimationFrame(edgeTick)
+    }
+    const edgeTrack = (e: PointerEvent): void => {
+      if (drag && dragOwner !== e.pointerId) return // 别的手指的移动不改缓存的指针(见 capture 顶注)
+      edge.x = e.clientX
+      edge.y = e.clientY
+      edge.id = e.pointerId
+      edge.type = e.pointerType
+      const { vx, vy } = edgeEligible(e.target as Element | null) ? edgePanVelocity(edgeRect(), e.clientX, e.clientY) : { vx: 0, vy: 0 }
+      if (!vx && !vy) {
+        edgeStop()
+        return
+      }
+      if (!edge.raf) {
+        edge.t = performance.now()
+        edge.raf = requestAnimationFrame(edgeTick)
+      }
+    }
+    const onLeave = (): void => {
+      if (!drag) edgeStop() // 橡皮筋悬停出了舞台;拖拽有捕获,出界照跑
+    }
     const onMove = (e: PointerEvent): void => {
+      moveCore(e)
+      edgeTrack(e)
+    }
+
+    const moveCore = (e: PointerEvent): void => {
       if (e.pointerType === 'touch') {
         if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY })
         if (pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > PRESS_SLOP) clearPress()
@@ -2833,6 +2896,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         release(e.pointerId) // 别人的手指抬起:动不了这一笔(见 capture 顶注)
         return
       }
+      edgeStop() // 松手即停(V-13);落笔用的是 moveCore 最后一帧按当时视口算好的位移
       const d = drag
       drag = null
       release(e.pointerId)
@@ -3302,6 +3366,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
 
     host.addEventListener('pointerdown', onDown)
     host.addEventListener('pointermove', onMove)
+    host.addEventListener('pointerleave', onLeave)
     host.addEventListener('pointerup', onUp)
     host.addEventListener('pointercancel', onCancel)
     host.addEventListener('dblclick', onDblClick)
@@ -3331,6 +3396,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       host.removeEventListener('wheel', onWheel)
       host.removeEventListener('pointerdown', onDown)
       host.removeEventListener('pointermove', onMove)
+      host.removeEventListener('pointerleave', onLeave)
+      edgeStop()
       host.removeEventListener('pointerup', onUp)
       host.removeEventListener('pointercancel', onCancel)
       host.removeEventListener('dblclick', onDblClick)

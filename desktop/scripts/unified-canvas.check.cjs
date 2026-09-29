@@ -97,6 +97,7 @@
 //   —— 波次 3(评审 2026-09-27 新功能)在 wave3();`UCANVAS_ONLY=w3` 只跑这一段 ——
 //   C101 画布颜色(V-08,拍板 #9):手写 color 渲染且编辑后不丢;右键卡片 / 连线 / 混选设色(撤销一击);
 //        「无颜色」删键;自定义 #rrggbb;文档模式不显色、旧笔记正文编辑后 canvas 行逐字不变
+//   C102 拖到视口边缘自动平移(V-13):拖卡 / 框选 / 连线橡皮筋贴边即跑、松手或离边即停;按住不拖不跑;只读不跑
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -125,7 +126,7 @@ const record = (name, ok, detail) => {
  *  amadeusViews 渲染),默认那个 720px 居中盒子根本没有顶栏 —— 在那儿测切模式等于测一个
  *  用户永远看不到的形态。满铺的两个真风险(脱不出纸面 / 盖住顶栏)也只有这个壳能暴露。
  *  (unified-page / unified-columns 仍吃默认壳,别去动它们的几何。) */
-async function open(browser, seed, keepSurfaceMemory = false) {
+async function open(browser, seed, keepSurfaceMemory = false, flags = '') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   // 资源计时缓冲默认 250 条,dev 下几百个模块早溢出 —— modUrl 要靠它找「应用实际加载的那个模块 URL」。
@@ -138,7 +139,7 @@ async function open(browser, seed, keepSurfaceMemory = false) {
       }
     })
   }
-  await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+  await p.goto(`${URL}?upage&upane${flags}&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
   await p.waitForTimeout(400)
   return p
@@ -578,7 +579,7 @@ async function wave2(browser) {
     JSON.stringify({ id100, c0, c1, m1, c2, m2, c3, w100 }))
 }
 
-/** 波次 3(评审 2026-09-27 新功能:画布颜色 V-08)。默认跟在全套后面跑;`UCANVAS_ONLY=w3` 只跑这里。 */
+/** 波次 3(评审 2026-09-27 新功能:画布颜色 V-08 / 边缘自动平移 V-13)。默认跟在全套后面跑;`UCANVAS_ONLY=w3` 只跑这里。 */
 async function wave3(browser) {
   const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
   const cardsOfCv = (cv) => Object.fromEntries((cv?.cards ?? []).map((c) => [c.ref, c]))
@@ -722,6 +723,96 @@ async function wave3(browser) {
   record('C101f 文档模式:带色卡与无色卡观感一致(颜色只在画布模式显示);正文打字后 canvas 行逐字不变(无色卡不长 color 键,怪值原样留)',
     docMode && f1?.dc === '1' && f1.border === f2?.border && f1.bg === f2?.bg && lineF === L101 && bodyF.includes('主卡一段。x'),
     JSON.stringify({ docMode, f1, f2, same: lineF === L101, lineF }))
+
+  // ── C102 拖到视口边缘自动平移(V-13)──────────────────────────────────────────────
+  //  修前:onMove 里没有边缘检测,拖卡 / 框选到舞台边上停住,视口纹丝不动(只能边拖边滚滚轮)。
+  const SEED102 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":260}]}',
+    '---', '', '# 边缘', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const vpOf = (pg) => pg.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f) } })
+  const stageRect = (pg) => pg.evaluate(() => { const r = document.querySelector('.amx-stage').getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom } })
+  /** 在 (x,y) 停 ms 毫秒,每 100ms 原地抖 1px(真人的手不会纹丝不动;也兼容「要持续 move 才滚」的实现)。 */
+  const hold = async (pg, x, y, ms) => { for (let i = 0; i < ms / 100; i++) { await pg.mouse.move(x - (i % 2), y); await pg.waitForTimeout(100) } }
+  const p102 = await open(browser, SEED102)
+  await p102.waitForTimeout(800)
+  const st = await stageRect(p102)
+  const k1pt = await p102.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  const v0 = await vpOf(p102)
+  await p102.mouse.move(k1pt.x, k1pt.y); await p102.mouse.down()
+  const tx = st.r - 3
+  for (let i = 1; i <= 12; i++) await p102.mouse.move(k1pt.x + (tx - k1pt.x) * i / 12, k1pt.y + 40 * i / 12)
+  const vIn = await vpOf(p102)
+  await hold(p102, tx, k1pt.y + 40, 1200)
+  const vHold = await vpOf(p102)
+  // 视口在跑时被拖的卡钉在指针底下(舞台跟着走,卡的视口位置不动)
+  const underPtr = await p102.evaluate(({ x, y }) => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom }, { x: tx - 1, y: k1pt.y + 40 })
+  await p102.mouse.up()
+  await p102.waitForTimeout(300)
+  const vUp = await vpOf(p102)
+  await p102.waitForTimeout(400)
+  const vUp2 = await vpOf(p102)
+  const k1after = cardsOfCv(await cvOf(p102)).k1
+  const pointerDelta = Math.round(tx - k1pt.x)
+  record('C102a 拖卡到右缘停住:视口持续向左平移、卡钉在指针下被带走(落盘位移 ≫ 指针位移),松手即停',
+    vHold.x < vIn.x - 200 && underPtr && vUp.x === vUp2.x && !!k1after && k1after.x - 480 > pointerDelta + 200,
+    JSON.stringify({ v0, vIn, vHold, underPtr, vUp, vUp2, k1: k1after, pointerDelta }))
+  // 按在贴边的卡上**没拖动**:不许平地开始漂(drag.live 闸)
+  const vP0 = await vpOf(p102)
+  await p102.mouse.move(tx, k1pt.y + 40); await p102.mouse.down()
+  await p102.waitForTimeout(700)
+  const vP1 = await vpOf(p102)
+  await p102.mouse.up()
+  await p102.waitForTimeout(200)
+  record('C102b 按住贴边的卡但没拖动:视口不动', JSON.stringify(vP0) === JSON.stringify(vP1), JSON.stringify({ vP0, vP1 }))
+  // 框选拖到下缘
+  const vM0 = await vpOf(p102)
+  const m0 = { x: st.l + 60, y: st.b - 200 }
+  await p102.mouse.move(m0.x, m0.y); await p102.mouse.down()
+  for (let i = 1; i <= 10; i++) await p102.mouse.move(m0.x + 20 * i, m0.y + 197 * i / 10)
+  await hold(p102, m0.x + 200, st.b - 3, 1000)
+  const vM1 = await vpOf(p102)
+  const marq = await p102.evaluate(() => !!document.querySelector('.amx-el-marquee'))
+  await p102.mouse.up()
+  await p102.waitForTimeout(200)
+  record('C102c 框选拖到下缘停住:视口向上平移(框选矩形仍在)', marq && vM1.y < vM0.y - 150, JSON.stringify({ vM0, vM1, marq }))
+  await p102.close()
+  // 连线橡皮筋(第一击之后的悬停)靠左缘:视口向右平移;回到中间即停(新开一页:上面几格已把视口带到远处)
+  const pC = await open(browser, SEED102)
+  await pC.waitForTimeout(800)
+  await pickTool(pC, '箭头')
+  const kC = await pC.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  await pC.mouse.click(kC.x, kC.y)
+  await pC.waitForTimeout(150)
+  const vC0 = await vpOf(pC)
+  await pC.mouse.move(st.l + 60, kC.y, { steps: 6 })
+  await hold(pC, st.l + 3, kC.y, 800)
+  const vC1 = await vpOf(pC)
+  const rubber = await pC.evaluate(() => !!document.querySelector('.amx-el-conn.is-preview'))
+  await pC.mouse.move((st.l + st.r) / 2, (st.t + st.b) / 2, { steps: 6 })
+  await pC.waitForTimeout(200)
+  const vC2 = await vpOf(pC)
+  await pC.waitForTimeout(300)
+  const vC3 = await vpOf(pC)
+  await pC.keyboard.press('Escape')
+  await pC.close()
+  record('C102d 连线橡皮筋悬停到左缘:视口向右平移;指针回到中间即停',
+    rubber && vC1.x > vC0.x + 100 && JSON.stringify(vC2) === JSON.stringify(vC3), JSON.stringify({ vC0, vC1, vC2, vC3, rubber }))
+  // 只读画布:拖 = 平移,贴边停住时视口只跟手(抖动 1px),不自动跑
+  const pR = await open(browser, SEED102, false, '&uro')
+  await pR.waitForTimeout(800)
+  const stR = await stageRect(pR)
+  const kR = await pR.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
+  await pR.mouse.move(kR.x, kR.y); await pR.mouse.down()
+  const txR = stR.r - 3
+  for (let i = 1; i <= 12; i++) await pR.mouse.move(kR.x + (txR - kR.x) * i / 12, kR.y)
+  const vR0 = await vpOf(pR)
+  await hold(pR, txR, kR.y, 1000)
+  const vR1 = await vpOf(pR)
+  await pR.mouse.up()
+  await pR.close()
+  record('C102e 只读画布不自动平移:贴边停住期间视口只随 1px 抖动', Math.abs(vR1.x - vR0.x) <= 2 && Math.abs(vR1.y - vR0.y) <= 2, JSON.stringify({ vR0, vR1 }))
 }
 
 async function main() {
