@@ -35,6 +35,45 @@ const APPROVE_OPTIONS = [PLAN_OPTIONS[0], PLAN_OPTIONS[1]];
  *  (还可能因为含「自动开始」直接开跑)。否定式中文是这条的常态,不是边角。 */
 const FREE_APPROVE_RE = /^(批准|同意|approve|approved|ok|yes|y)[!!。.]?$/i;
 
+/**
+ * 系统代答(不是用户本人的回答)的约定前缀:下面两句系统说明都以它开头,模型一眼看得出「没人答」。
+ * 识别**不按前缀**(用户自己打出「[No answer] …」那是用户的答复,照样贴标签),只认 SYSTEM_ANSWERS 里逐字相同的整句。
+ */
+export const SYSTEM_ANSWER_PREFIX = '[No answer]';
+/** requestInquiry 在 run 中止时兑现的字面量(services/inquiries.ts;中文,不能原样回给模型)。只用来识别。 */
+const INQUIRY_ABORTED_ANSWER = '(用户中止了运行)';
+/** run 中止导致询问没等到答复时回给模型的系统说明(英文,自带 [No answer] 前缀)。 */
+export const INQUIRY_RUN_STOPPED_NOTE =
+  `${SYSTEM_ANSWER_PREFIX} The run was stopped before the user answered this question. This is a system note, not the user's reply: do not assume an answer.`;
+/**
+ * 通道完全停止 / 账号断开时 channels/service.ts 兑现给还挂着的询问的兜底答复(与那边的 INQUIRY_CHANNEL_STOPPED_ANSWER 逐字相同)。
+ * 这里留一份是因为 tools → channels/service 会撞进 channels 的模块环;两份漂移由 interaction.test.ts 的钉子测试兜住
+ * (那边改了措辞这里没跟上 → 通道兜底会被贴成「User answered」,测试红)。
+ */
+export const INQUIRY_CHANNEL_STOPPED_ANSWER =
+  '[No answer] The chat channel was stopped or disconnected before the user answered this question. This is a system note, not the user\'s reply: do not assume an answer; continue without it or wait for the user to reach out again.';
+/** 全部系统代答(逐字)。新增一种兜底答复要加进来,否则会被当成用户的答复贴标签。 */
+const SYSTEM_ANSWERS: ReadonlySet<string> = new Set([INQUIRY_RUN_STOPPED_NOTE, INQUIRY_CHANNEL_STOPPED_ANSWER]);
+
+/**
+ * 把询问的原始答复规整成「给模型的答复」:run 已中止且拿到的是中止字面量 → 英文系统说明;其余原样。
+ * 中止判定要求**信号已中止 + 字面量逐字命中**两条同时成立:用户恰好打出同一串字不会被吞成系统说明,
+ * 也不会把「批准后紧接着被中止」的真实批准改判成没答。
+ */
+export function normalizeInquiryAnswer(answer: string, signal?: AbortSignal): string {
+  return signal?.aborted && answer === INQUIRY_ABORTED_ANSWER ? INQUIRY_RUN_STOPPED_NOTE : answer;
+}
+
+/** 是否系统代答(非用户本人回复):逐字命中已知的系统说明才算,用户打出同样的开头不算。 */
+export function isSystemAnswer(answer: string): boolean {
+  return SYSTEM_ANSWERS.has(answer);
+}
+
+/** ask_user 的工具结果(给模型,英文):用户答复带「User answered:」标签;系统代答原样交回,不冒充用户。 */
+export function formatInquiryResult(answer: string): string {
+  return isSystemAnswer(answer) ? answer : `User answered: ${answer}`;
+}
+
 /** 解析计划审阅的答案。修订全文**只在头部逐字等于批准选项时**才认(自由文本恰好含标记不算)。 */
 export function parsePlanAnswer(answer: string): {
   approved: boolean;
@@ -89,7 +128,7 @@ export const interactionProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const question = String(args.question ?? '').trim();
         if (!question) return 'Error: question is required';
-        if (!ctx.runId) return 'Error: 无 run 上下文,无法询问用户';
+        if (!ctx.runId) return 'Error: no run context; cannot ask the user';
         const options = (Array.isArray(args.options) ? args.options : [])
           .map((o: any) => String(o ?? '').trim())
           .filter(Boolean)
@@ -99,7 +138,7 @@ export const interactionProvider: ToolProvider = {
           { question, options, allowFreeText: true },
           ctx.signal,
         );
-        return `用户回答:${answer}`;
+        return formatInquiryResult(normalizeInquiryAnswer(answer, ctx.signal));
       },
     },
     {
@@ -126,10 +165,10 @@ export const interactionProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const plan = String(args.plan ?? '').trim();
         if (!plan) return 'Error: plan is required';
-        if (!ctx.runId) return 'Error: 无 run 上下文';
+        if (!ctx.runId) return 'Error: no run context';
         // 计划全文走专用事件(客户端渲染计划卡;询问事件只带问题不重复带全文)
         void publish(ctx.runId, 'plan', { plan });
-        const answer = await requestInquiry(
+        const rawAnswer = await requestInquiry(
           ctx.runId,
           {
             question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?',
@@ -141,6 +180,8 @@ export const interactionProvider: ToolProvider = {
           },
           ctx.signal,
         );
+        // 只换掉「run 中止」那句中文系统字面量;用户的答复逐字交给 parsePlanAnswer(批准判定口径不变)。
+        const answer = normalizeInquiryAnswer(rawAnswer, ctx.signal);
         const verdict = parsePlanAnswer(answer);
         if (verdict.approved) {
           const autoStart = verdict.autoStart;
@@ -152,7 +193,7 @@ export const interactionProvider: ToolProvider = {
             cfg.planMode = false;
             await deps().state.setAgentConfig(ctx.sessionId, JSON.stringify(cfg));
           } catch (e: any) {
-            return `用户已批准,但关闭计划模式失败:${e?.message || e}(请手动关闭计划开关)`;
+            return `The user approved the plan, but turning off plan mode failed: ${e?.message || e}. Ask the user to turn off the plan-mode switch manually.`;
           }
           // 把批准的计划存盘(<cwd>/.tangu/plans/plan-<时间>.md;best-effort,失败不阻断退出)
           // 目录名走 WORKSPACE_DIR_NAME 单一常量 —— 别再写字面量,双名漂移就是那么来的。
@@ -177,17 +218,23 @@ export const interactionProvider: ToolProvider = {
             ...(verdict.revised ? { revised: true } : {}),
           });
           return (
-            '用户已批准计划,计划模式已关闭。' +
-            (planFile ? `计划已存档到 ${planFile}。` : '') +
+            'The user approved the plan; plan mode is now off. ' +
+            (planFile ? `The plan was saved to ${planFile}. ` : '') +
             (verdict.revised
-              ? `\n\n⚠️ 用户**修改了计划**,以下是最终版,一切以它为准(不要按你原来那份执行):\n\n${finalPlan}\n\n`
+              ? `\n\n⚠️ The user **edited the plan**. Below is the final version; follow it, not your original draft:\n\n${finalPlan}\n\n`
               : '') +
-            '现在请用 todo_write 把计划拆成任务清单(便于跟踪进度),并简要总结收尾;' +
-            '本轮工具集仍为只读,' +
-            (autoStart ? '收尾后将自动开始执行(无需等用户确认)。' : '用户的下一条消息将开始执行。')
+            'Now use todo_write to break the plan into a task list (to track progress), then briefly wrap up this turn. ' +
+            'The tool set for this turn is still read-only; ' +
+            (autoStart
+              ? 'execution will start automatically after you wrap up (no need to wait for the user).'
+              : "execution starts with the user's next message.")
           );
         }
-        return `用户未批准:${verdict.raw}\n请按反馈完善计划,再次调用 exit_plan_mode 提交。`;
+        // 系统代答(通道停止 / run 中止)不是用户的反馈:不贴「用户没批准,按反馈改」,那会让模型对着一句系统说明改计划。
+        if (isSystemAnswer(verdict.raw)) {
+          return `The plan was not approved: no answer from the user.\n${verdict.raw}`;
+        }
+        return `The user did not approve the plan. Their reply: ${verdict.raw}\nRevise the plan per the feedback, then call exit_plan_mode again to resubmit it.`;
       },
     },
   ],

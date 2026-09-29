@@ -38,7 +38,7 @@
 
 ### 🪟 多端，同一引擎
 
-- **终端 TUI**（`tangu`）：Ink 终端界面，Markdown/代码高亮、工具卡片、状态栏、slash 命令、Tab 补全、`@文件`提及。进程内跑、无端口、嵌入式 DB。
+- **终端 TUI**（`tangu`）：Ink 终端界面，Markdown/代码高亮、工具卡片、状态栏（模型 · 思考档 · 审批档 · 计划模式 · Agent）、slash 命令、Tab 补全、`@文件`提及；`/model` `/think` `/approval` `/resume` 不带参数弹选择器（↑↓ 移动、打字过滤）；`Shift+Tab` 循环思考档、`Ctrl+P` 选模型；运行中回车即插话（下一步注入）；输入历史跨会话保存。进程内跑、无端口、嵌入式 DB。快捷键 `/hotkeys`，详见 [docs/reference/cli.md](../docs/reference/cli.md)。
 - **桌面 GUI**（Electron + React）：完整图形界面，自带托管后端，开箱即用。提供 macOS `.dmg` / Windows `.exe` / Linux `.AppImage` 安装包。
 - **Standalone 服务**（`tangu-server`）：无头 HTTP/SSE 服务，供桌面、远程或脚本调用。
 
@@ -182,7 +182,7 @@ tangu --model <托管模型id>
 ```
 > 云端模式跨设备共享记忆/技能；直连 provider（你自己的 key）则完全本地、不经云端、不产生云端计费。
 
-> 审批档：`readonly`（写文件/跑命令都要批）· `auto-edit`（默认，改文件放行、命令需批）· `full-auto`（全放行）。会话内 `/approval <档>` 热切。
+> 审批档：询问我批准 `readonly`（写文件/跑命令都要批）· 替我批准 `auto-edit`（默认，工作区内改文件放行、命令需批）· 完全放行 `full-auto`（不再询问，受保护路径仍拒绝）· 自定义 `custom`（按 `config.json` 的 approval 规则）。会话内 `/approval`（同 `/permissions`）不带参数弹选择器、带参数直接切；切到完全放行需再确认一次（`/agent` 启用的 Agent 若要求完全放行，同样要确认）。TUI 的审批档只管 TUI 自己，不会改动桌面端同一会话的审批档。
 
 ---
 

@@ -107,7 +107,7 @@
 .ibx-body-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 末尾卡片(审批卡 / 任务卡):与正文留出间距;卡面样式复用聊天的 .t2-taskcard。 */
 .ibx-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
-.ibx-approval-preview { font-family: var(--font-mono, monospace); font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
+.ibx-approval-preview { font-family: var(--font-mono, monospace); font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .ibx-approval-meta { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
 .ibx-approval-result { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--ui-font-meta, 12px); max-height: 160px; overflow: auto; color: var(--text-muted); }
 .ibx-approval-err { color: var(--danger); font-size: var(--ui-font-meta, 12px); }

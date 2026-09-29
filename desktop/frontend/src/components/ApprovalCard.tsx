@@ -8,7 +8,7 @@
  * 来源行(P1 · K1):远程会话发起的审批在标题下写「来自远程会话 · 设备名」(调用方经 hub → 本机 unitWeb 验过)或按来路写
  * 「账号下未识别的客户端 / 局域网配对设备 / 点对点直连」。本机 run 不带 remote,不显示。设备名是不可信串,只进文本节点。
  */
-import React, { useMemo, useState } from 'react'
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
 import type { ApprovalRequest } from '../types'
 import { DiffView } from './DiffView'
@@ -55,6 +55,9 @@ export const wasDecidedHere = (approvalId: string): boolean => decidedHere.has(a
  *  `targetCaps(targetForSession(sid)).remoteApprover`;设备页里 home 目标的 remoteApprover 仍按 window.tangu.remoteCaller。
  *  不铸目标(refForSession + capsForRef),没装引擎宿主的单测里也能判。 */
 export const isRemoteApprover = (sessionId?: string): boolean => capsForRef(refForSession(sessionId)).remoteApprover
+import { SPOOF_RE, WIDE_BLANK_RE } from './approvalText'
+
+const TA_MAX_PX = 480
 
 export const ApprovalCard: React.FC<{
   req: ApprovalRequest
@@ -71,6 +74,20 @@ export const ApprovalCard: React.FC<{
     try { return String(JSON.parse(req.arguments).command ?? '') } catch { return '' }
   })()
   const [cmd, setCmd] = useState(initialCmd)
+  // 命令框按内容自适应高度(上限 TA_MAX_PX),还放不下就明说 —— 尾部不能藏在折叠线下(Codex 09-25 复审:原先封顶 6 行)。
+  // 只数 \n 不够:一条长单行 + 挂在行尾的大段空白,软换行后照样把 `rm -rf` 推到可见区外(替补评审实测),所以量真实 scrollHeight。
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const [cmdOverflow, setCmdOverflow] = useState(false)
+  useLayoutEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const h = el.scrollHeight
+    el.style.height = `${Math.min(h, TA_MAX_PX)}px`
+    setCmdOverflow(h > TA_MAX_PX)
+  }, [cmd])
+  const cmdHidden = SPOOF_RE.test(cmd)
+  const cmdWideBlank = WIDE_BLANK_RE.test(cmd)
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
@@ -114,12 +131,26 @@ export const ApprovalCard: React.FC<{
           className="approval-edit"
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
-          rows={Math.min(6, Math.max(1, cmd.split('\n').length))}
+          ref={taRef}
+          rows={1}
           spellCheck={false}
         />
-      ) : (
+      ) : null}
+      {isBash && !resolved && (cmdOverflow || cmdHidden || cmdWideBlank) && (
         <>
-          {/* preview 恒显:它是「⚠ 工作区外写入」等升级警示的唯一载体(引擎 approvals.ts 拼进字符串),diff 只能附加不能替换 */}
+          <div className="approval-why">
+            {cmdOverflow && <div>{t('approval.cmdOverflow')}</div>}
+            {cmdHidden && <div>{t('approval.cmdHiddenChars')}</div>}
+            {cmdWideBlank && <div>{t('approval.cmdWideBlank')}</div>}
+          </div>
+          {/* 引擎净化过的预览(控制字符转义、长空白标成 [N spaces]):可疑时摆出来,原始命令框看不出的东西在这里看得出 */}
+          {(cmdHidden || cmdWideBlank) && <div className="approval-preview">{req.preview}</div>}
+        </>
+      )}
+      {isBash && !resolved ? null : (
+        <>
+          {/* preview 恒显:引擎把越界警示(英文「⚠ Write outside the workspace · 」)与控制面要害(建什么、到点无人值守跑什么)
+              拼进这个字符串;本地化的原因走上面的 why 行。旧事件没有 reason 时它仍是唯一的警示载体,diff 只能附加不能替换 */}
           <div className="approval-preview">{req.preview}</div>
           {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
           {remote && !resolved && approveHere && <div className="approval-why" data-remote-readonly>{t('approval.remoteReadOnly')}</div>}

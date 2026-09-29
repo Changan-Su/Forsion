@@ -5,6 +5,10 @@
  * 记录——agent 对自己的日程规划)。日程会显示在桌面 Calendar Space(按 agent 标色,只读)。
  * 缺省操作 ctx.agentSlug 自己的日程;显式传 agent 可管他人(与 manage_agent 权限面一致)。
  * 可见性:本地限定(hostExec,照 muse_watch);不进 PLAN_MODE_TOOLS(写操作)。
+ * 审批(H1 控制面,见 approvals.controlPlaneCall):set + auto=true 在询问我批准 / 替我批准两档每次都问、不进「总允许」
+ * (到期经 automation 管道以 host + full-auto 起跑);本机 sandbox 会话里不论档位都问(本工具 mode:'both')。
+ * auto=false 纯规划、list / remove 免批。唯一豁免:Muse 后台周期给自己排的 auto 条目(回灌进 Muse 自己的周期、
+ * 按它当前档跑)。改 auto / agent 的解析口径须同步那边的分类器。
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import {
