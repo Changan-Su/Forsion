@@ -3,7 +3,7 @@
  *
  * 取代 cloudWorkerHost:thin worker 不持库、不验 JWT。入站请求由**网关**(已验用户 token)注入受信头
  * `X-Forsion-User`,本中间件据此填 req.user;网关同时把 per-dispatch token 放 Authorization,
- * 本中间件 stash 进 HttpStateStore 的请求 ALS(供 handler 期 state 调用)。**入站信任靠网络隔离**
+ * 本中间件把后续 handler 放进 HttpStateStore 的请求 ALS 作用域(供 handler 期 state 调用)。**入站信任靠网络隔离**
  * (仅网关可达 worker)。host.query 不被调用(状态全经 deps().state = HttpStateStore)。
  */
 import type { RequestHandler } from 'express';
@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { HostServices } from '../seams/hostServices.js';
 import type { StateStore } from '../seams/stateStore.js';
-import { createHttpStateStore, currentToken, enterRequestToken } from '../services/stateStore/httpStateStore.js';
+import { createHttpStateStore, currentToken, runWithRequestToken } from '../services/stateStore/httpStateStore.js';
 
 export function createHttpWorkerHost(opts?: { fleetSecret?: string }): { host: HostServices } {
   const fleetSecret = opts?.fleetSecret;
@@ -32,10 +32,10 @@ export function createHttpWorkerHost(opts?: { fleetSecret?: string }): { host: H
     const role = (req.headers['x-forsion-role'] as string) || 'USER';
     const username = (req.headers['x-forsion-username'] as string) || 'tangu-user';
     (req as any).user = { userId, username, role };
-    // 网关注入的 per-dispatch token(出站凭证)→ stash 进请求 ALS,供 handler 期 state 调用回退取用。
+    // 网关注入的 per-dispatch token(出站凭证)→ 请求 ALS 作用域,供 handler 期 state 调用回退取用。
+    // 无 Authorization 也要显式 undefined 作用域(不串上一个请求的,见 runWithRequestToken)。
     const auth = req.headers.authorization;
-    if (auth && auth.startsWith('Bearer ')) enterRequestToken(auth.slice(7));
-    next();
+    runWithRequestToken(auth?.startsWith('Bearer ') ? auth.slice(7) : undefined, next);
   };
 
   const adminMiddleware: RequestHandler = (req, res, next) => {
