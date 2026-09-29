@@ -146,6 +146,45 @@ describe('writeTextFile CAS(G1-01)', () => {
   })
 })
 
+// Codex 复核返修 P0-3:物理改名 / 移动 / 移入回收站不在路径锁里 —— CAS 保存读完基线、正要原子写的那一刻文件被挪走,
+// 写照样落到旧路径 = 旧名复活成幽灵笔记(新路径还是保存前的旧内容)。时序做法:拦住保存那一发写(按内容认)到改名排上之后。
+// 负对照(实跑过):改名 / 回收站的锁摘掉 → 对应条红。
+describe('改名 / 移入回收站与在途 CAS 保存互斥(Codex 复核返修 P0-3)', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const holdSave = (h: Awaited<ReturnType<typeof setup>>, text: string) => {
+    const real = h.vault.writeTextFile.bind(h.vault)
+    vi.spyOn(h.vault, 'writeTextFile').mockImplementation(async (rel: string, t: string) => {
+      if (t === text) await sleep(120) // 保存已过比对、卡在写之前:改名在这段里发起
+      return real(rel, t)
+    })
+  }
+  const exists = (h: Awaited<ReturnType<typeof setup>>, rel: string) => fs.access(path.join(h.root, rel)).then(() => true, () => false)
+
+  it('renamePageFile:等在途保存落盘再搬 —— 旧名不复活,新名是保存后的内容', async () => {
+    const h = await setup()
+    await fs.writeFile(path.join(h.root, 'n.md'), 'v1')
+    holdSave(h, 'v2')
+    const saving = h.write({ sender: 'w1' }, 'n.md', 'v2', { base: textFingerprint('v1') })
+    await sleep(20)
+    const renaming = h.handlers.get(IPC.renamePageFile)!(null, 'n.md', 'm')
+    const [saved, renamed] = await Promise.all([saving, renaming])
+    expect(saved).toEqual({ ok: true })
+    expect(renamed).toBe('m.md')
+    expect(await exists(h, 'n.md')).toBe(false)
+    expect(await h.disk('m.md')).toBe('v2')
+  })
+
+  it('trashEntry:等在途保存落盘再移入回收站 —— 旧名不复活', async () => {
+    const h = await setup()
+    await fs.writeFile(path.join(h.root, 't.md'), 'v1')
+    holdSave(h, 'v2')
+    const saving = h.write({ sender: 'w1' }, 't.md', 'v2', { base: textFingerprint('v1') })
+    await sleep(20)
+    await Promise.all([saving, h.handlers.get(IPC.trashEntry)!(null, 't.md')])
+    expect(await exists(h, 't.md')).toBe(false)
+  })
+})
+
 // Codex g3#2:CAS 的路径锁起初只包住 writeTextFile。Bases 属性写(setPageFrontmatter)、待办就地勾(patchMark)是同一篇
 // .md 的「读→改→写」:它读到旧全文,编辑器随即 CAS 写入新正文(比对通过、回 ok:true),它再把旧正文连同补丁写回 →
 // 新正文静默丢失,编辑器毫不知情。修法:同篇的读改写通道都进同一把路径锁,并且在锁内读。
