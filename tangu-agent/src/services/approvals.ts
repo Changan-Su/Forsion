@@ -1157,8 +1157,8 @@ export async function gateToolCall(
 
   const base = control ? await controlPreview(call) : approvalPreview(call);
   const preview = protectedAsk
-    ? '⚠ 受保护的配置 / 凭据 · Protected config or credentials · ' + base
-    : escalate ? '⚠ 工作区外写入 · ' + base : base;
+    ? '⚠ Protected config or credentials · ' + base
+    : escalate ? '⚠ Write outside the workspace · ' + base : base;
   // 「为什么问你」(B3):保护路径 > 用户自己写的规则 > 越界升级 > 档位本身。
   // 保护路径排最前:它是「总允许在这里不作数、完全通行也要问」的那个理由,卡片据此说清(契约 C6,桌面映射 zh/en 文案)。
   const reason: ApprovalReason = protectedAsk

@@ -12,12 +12,14 @@ import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import { BrowserExtensionPanel } from './components/BrowserExtensionPanel'
 import type { TanguDesktopConfig } from './types'
+import { installEngineHost } from './services/engine/targets'
 
 const params = new URLSearchParams(location.search)
 setLocaleGlobal(params.get('lang') === 'en' ? 'en' : 'zh')
 applyTheme('lovable', 'cream', 'cream', params.has('dark') ? 'dark' : 'light')
 
 const BACKEND = 'http://stub.local'
+installEngineHost({ cfg: () => ({ backendUrl: BACKEND, token: 'stub' } as TanguDesktopConfig), desktopConfig: () => ({ mode: params.has('external') ? 'external' : 'managed' }) })
 const harness = {
   opened: [] as string[], resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e',
   holdPolls: false, holdResets: false, held: [] as Array<() => void>,

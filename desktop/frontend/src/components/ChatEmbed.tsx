@@ -11,8 +11,8 @@ import { registerMessages, useI18n } from '../i18n'
 import { ChatWikiLink, openFileCitation } from './ChatWikiLink'
 
 registerMessages({
-  'chatembed.badAnchor': { zh: '时刻锚点无效,从头播放', en: 'Invalid time anchor — playing from the start' },
-  'chatembed.badRangeEnd': { zh: '区间终点无效,已忽略', en: 'Invalid range end — ignored' },
+  'chatembed.badAnchor': { zh: '时刻锚点无效，从头播放', en: 'Invalid time anchor — playing from the start' },
+  'chatembed.badRangeEnd': { zh: '区间终点无效，已忽略', en: 'Invalid range end — ignored' },
 })
 
 /** 开嵌入的调用点给的上下文(只有 EditorialMessage 给,见 Markdown 的 EmbedContext)。 */

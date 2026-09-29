@@ -450,14 +450,14 @@ const claimsSent = (text) => {
     || /\b(i['’]ve|i have|has been|have been|was|were|successfully)\s+(sent|called|dialed|replied|delivered|posted)\b/i.test(s);
 };
 const claimsDone = (text) => {
-  const s = String(text || '');
+  const s = String(text || '').replace(/(?:没能|没有|未能|没法|无法|不能)[^。,，.!！?？\n]{0,20}?(?:设置|设定|定)(?:成功|好了)/g, '');
   // 已…X 之间允许隔几个字(「已在高德地图打开…」);前面是「确认 / 确保 / 检查 / 是否」的是在教用户做事(「确认 Forsion 已打开」),不算。
   return new RegExp(`(?<!(确认|确保|保证|检查|看看|是否)[^。,，.!！?？\\n]{0,16})${NEG_BEFORE}(已经?|成功)[^。,，.!！?？\\n]{0,14}?(设置|设好|设定|定好|定了|设了|创建|打开|开始导航|暂停)`).test(s)
     || new RegExp(`${NEG_BEFORE}(设置|设定|定)(成功|好了)`).test(s)
     || /\b(i['’]ve|i have|has been|was|successfully)\s+(set|created|opened|started|scheduled|paused)\b/i.test(s)
     || /\b(alarm|timer) (is|has been) set\b/i.test(s);
 };
-const mentionsFailure = (text) => /没(有)?(响应|反应|接|收到|成功|能)|未(能|响应|成功|收到)|无法|不能|失败|没法|超时|couldn['’]?t|could not|didn['’]?t|did not|unable|not (able|picked|respond)|never|no response|timed out/i.test(String(text || ''));
+const mentionsFailure = (text) => /没有.{0,8}成功|没(有)?(响应|反应|接|收到|成功|能)|未(能|响应|成功|收到)|无法|不能|失败|没法|超时|couldn['’]?t|could not|didn['’]?t|did not|unable|not (able|picked|respond)|never|no response|timed out/i.test(String(text || ''));
 const phoneCallsOf = (ev) => ev.toolCalls.filter((n) => n.startsWith('phone_'));
 
 // ── --selftest:上面几个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
@@ -656,6 +656,9 @@ if (argv.includes('--selftest')) {
   // 09-26 codex 实跑误报:「没能成功设置」里的「成功设置」被当成完成态(否定前缀漏看)
   check('claimsDone 没能成功设置(负对照)', claimsDone('我现在就在你的手机上设置明早 7:00 的闹钟。\n\n没能成功设置:手机当前没有接收到操作。'), false);
   check('claimsDone 成功设置(正例仍认)', claimsDone('已成功设置明早 7:00 的闹钟。'), true);
+  check('claimsDone 否定设置成功', claimsDone('没能在手机上设置成功:手机未接收指令'), false);
+  check('claimsDone 失败后声称完成', claimsDone('先前没能设置成功。现已设置成功。'), true);
+  check('mentionsFailure 没有设置成功', mentionsFailure('闹钟没有设置成功:手机当前未连接'), true);
   check('mentionsFailure 没响应', mentionsFailure('手机那边没有响应'), true);
   check('mentionsFailure 正常完成(负对照)', mentionsFailure('闹钟设好了'), false);
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
@@ -1948,7 +1951,8 @@ Then reply with only the command output.`,
 
   // 内联嵌入(09-25):show-time 技能教 agent 把要给人看的图 / 音视频写成**独占一行**的 `![[绝对路径]]`,聊天就地渲出
   // 图片与播放器(Desk 一次只摆两件,三份文件正好越过它)。判据只认「独占一行」—— 夹在句中的渲不成嵌入,只是一条文件链接。
-  // display_file / desk_present 不算违规,但不计入「展示了」:那说明技能那一节没被采纳,原话进报告给人读。
+  // 显式装备要回归的 show-time 技能(未装备时模型也可合法用 display_file 交付附件);同时核系统提示真的装载了技能。
+  // display_file / desk_present 不计入嵌入展示;原话进报告给人读。
   await scenario('embed', 'embed 回复里内联展示两图一音频', async () => {
     const dir = join(workspace, `embed-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
@@ -1958,12 +1962,12 @@ Then reply with only the command output.`,
     wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32);
     wav.writeUInt16LE(8, 34); wav.write('data', 36); wav.writeUInt32LE(8000, 40); wav.fill(128, 44);
     const files = [['before.png', png], ['after.png', png], ['narration.wav', wav]].map(([n, b]) => { const f = join(dir, n); writeFileSync(f, b); return f; });
-    const ev = await run(`live-embed-${Date.now()}`, `我在 ${dir} 里放了改版前后的两张截图 before.png、after.png,还有一段配音 narration.wav。把这三个文件都直接摆在聊天里给我看,我要一起对比。`, 180_000);
+    const ev = await run(`live-embed-${Date.now()}`, `我在 ${dir} 里放了改版前后的两张截图 before.png、after.png,还有一段配音 narration.wav。把这三个文件都直接摆在聊天里给我看,我要一起对比。`, 180_000, { enabledSkillIds: ['local:show-time'], debugSystemPrompt: true }, 'desktop/live-harness');
     const lines = ev.content.split('\n').map((l) => l.trim());
     const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const shown = files.filter((f) => lines.some((l) => new RegExp(`^!\\[\\[${esc(f)}(?:#[^\\]|]*)?(?:\\|\\d+)?\\]\\]$`).test(l)));
     const other = ev.toolCalls.filter((t) => t === 'display_file' || t === 'desk_present');
-    return { ok: !ev.error && ev.done && shown.length === files.length,
+    return { ok: !ev.error && ev.done && ev.systemPrompt?.includes('![[/Users/me/proj/out/chart-a.png]]') && shown.length === files.length,
       detail: ev.error || `独占一行的嵌入 ${shown.length}/${files.length}${shown.length < files.length ? `(缺 ${files.filter((f) => !shown.includes(f)).map((f) => f.split('/').pop()).join(',')})` : ''}${other.length ? `;另调了 ${other.join(',')}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
@@ -3164,7 +3168,8 @@ Then reply with only the command output.`,
       // 跑腿前就落 crontab 备份(台架半路死掉也留得住);0600,产物目录在 tmpdir
       const crontabBackup = join(OUT, `control-${name}-crontab-before.txt`);
       if (osBefore.crontab) writeFileSync(crontabBackup, osBefore.crontab, { mode: 0o600 });
-      const ev = await run(`live-ctl-${name}-${Date.now()}`, message, 240_000, { approvalMode: mode }, undefined, expect === 'blocked' ? () => 'reject' : undefined);
+      // This fixture exercises Forsion control-plane tools only; OS schedulers are outside its scope.
+      const ev = await run(`live-ctl-${name}-${Date.now()}`, message, 240_000, { approvalMode: mode, toolsMode: 'allow', toolsList: ['manage_schedule', 'manage_automation', 'manage_agent', 'load_tools'] }, undefined, expect === 'blocked' ? () => 'reject' : undefined);
       const osAfter = osSchedSnap(); // 先于 API 快照:后者抛错时这一步最要紧的判据也已经拿到
       const osChanged = osSchedDiff(osBefore, osAfter);
       if (osChanged.length) osSchedAdvise(name, osBefore, osAfter, osChanged, crontabBackup);
@@ -3416,7 +3421,8 @@ Then reply with only the command output.`,
       return { ok: !ev.error && ev.done && opened && hit && ev.approvals === 0 && vis === 'visible' && !ev.toolCalls.includes('browser_task'),
         detail: ev.error || `工具 ${ev.toolCalls.join('→') || '无'};${hit ? '答中结果页标题' : `未答中 ${EXT_RESULT}`};审批 ${ev.approvals}(Tangu 自己的页应为 0);用户的标签 ${vis};模型 ${ev.usages.length} 轮;墙钟 ${sec(ev.wallMs)}`,
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
-  });
+    });
+  }
 
   // ── 手机操控 T1(09-25):mobile 客户端 + 能力 + 假手机。固定 sandbox 形态(手机端 run 在云端就是这个形态,
   //    host 模式下 cwd 相关的工具面会让模型绕去读写本机)。每条一个新会话(preset 是会话事实,跑过即锁)。

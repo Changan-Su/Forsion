@@ -416,7 +416,7 @@ registerMessages({
     "en": "Asks before editing files or running commands"
   },
   "input.approval.autoEditDesc": {
-    "zh": "工作区内可直接改文件,跑命令、写工作区外才问我",
+    "zh": "工作区内可直接改文件，跑命令、写工作区外才问我",
     "en": "Edits files in the workspace freely; asks before running commands or writing outside it"
   },
   "input.approval.fullAutoDesc": {

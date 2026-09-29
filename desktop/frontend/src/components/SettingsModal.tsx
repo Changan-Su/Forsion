@@ -2919,7 +2919,7 @@ export const SettingsModal: React.FC<{
                         <div className="settings-panel-footer"><span className="hint" role="status">{remoteMsg}</span></div>
                       ) : null}
                     </SettingsPanel>
-                    <BrowserExtensionPanel cfg={p.cfg} managed={stored.mode !== 'external'} />
+                    {isDesktop && !unitPage && <BrowserExtensionPanel cfg={p.cfg} managed={stored.mode !== 'external'} />}
                   </>
                 )}
 

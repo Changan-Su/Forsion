@@ -91,7 +91,6 @@ function collectFragments(files: string[]): { zh: Record<string, string>; en: Re
  * 移动端自有源码(liveIsland / UnitsSheet / phoneControl …)同样在模块作用域 registerMessages,
  * 运行时进的是同一本字典 —— 不扫就是给整个 mobile/src 开了后门(那里的文案只在手机上显示,更没人点检)。
  */
-const MOBILE_SRC = join(SRC, '../../../mobile/src')
 
 const base = __dictSnapshot()
 const ALL_SRC = walk(SRC)

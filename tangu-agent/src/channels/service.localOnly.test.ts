@@ -33,19 +33,18 @@ vi.mock('../core/db.js', () => ({
 }));
 vi.mock('../seams/runtime.js', () => ({ deps: () => ({ profile: { appId: 'tangu', defaultModelId: 'model-1' } }) }));
 vi.mock('../services/runStore.js', () => ({ createRun: vi.fn(async (run: any) => { state.created = run; }) }));
-vi.mock('../services/agentLoop.js', () => ({ abortRun: vi.fn(), enqueueRun: vi.fn() }));
+vi.mock('../services/agentLoop.js', () => ({ abortRun: vi.fn(), enqueueRun: vi.fn((_sid: string, runId: string) => { const ev = state.script.shift(); if (ev) queueMicrotask(() => emit(runId, ev)); }) }));
 vi.mock('../services/eventBus.js', () => ({
   subscribe: vi.fn((runId: string, listener: (event: any) => void) => {
     let set = state.listeners.get(runId);
     if (!set) state.listeners.set(runId, (set = new Set()));
     set.add(listener);
-    const ev = state.script.shift();
-    if (ev) queueMicrotask(() => { for (const l of [...(state.listeners.get(runId) ?? [])]) l(ev); });
     return () => { set!.delete(listener); };
   }),
 }));
-vi.mock('../services/approvals.js', () => ({
-  resolveApproval: vi.fn((...a: any[]) => { state.resolved.push(a); return true; }),
+vi.mock('../services/approvals.js', async (original) => ({
+  ...(await original<typeof import('../services/approvals.js')>()),
+  resolveApproval: vi.fn((...a: any[]) => { state.resolved.push(a); const ev = a[1]?.rejectReason ? null : state.script.shift(); if (ev) queueMicrotask(() => emit(state.created.id, ev)); return true; }),
   approvalLocalOnly: vi.fn((id: string, runId: string) => (state.localOnly.has(id) ? ['*', runId].includes(state.localOnly.get(id)!) : null)),
 }));
 vi.mock('../agents/agentRegistry.js', () => ({ readAgentsMeta: () => ({ defaultSlug: 'xyra' }), listAgents: vi.fn(async () => []), getAgent: vi.fn(async () => null) }));
@@ -63,7 +62,14 @@ function service(): ChannelService {
   const driver: ChannelDriver = { kind: 'wechat', start: async () => {}, stop: () => {}, status: () => [], send: async (_a: string, _p: string, text: string) => { state.sent.push(text); return { ok: true }; } };
   return new ChannelService({ kind: 'wechat', driver, unboundHint: 'unbound', inboxDirName: 'wechat-inbox', sessionTitle: 'wechat' });
 }
-const inbound = (s: ChannelService, text: string) => s.handleInbound({ accountId: 'account-1', peerId: 'peer-1', text, messageId: `m-${text}` });
+const inbound = async (s: ChannelService, text: string) => {
+  const before = state.sent.length;
+  const reply = await s.handleInbound({ accountId: 'account-1', peerId: 'peer-1', text, messageId: `m-${text}` });
+  await flush();
+  // Capture and acknowledge a delivered card separately from the inbound reply.
+  const card = !reply && state.sent.length > before ? state.sent.splice(before).join('\n') : '';
+  return reply || card;
+};
 
 beforeEach(() => {
   state.created = null;
@@ -139,7 +145,7 @@ describe('通道批准 × 受保护审批', () => {
     expect(state.resolved).toEqual([['apv_b', { action: 'approve' }, undefined, { via: 'channel' }]]);
   });
 
-  it('受保护审批挂着时发新任务:按放弃拒掉旧审批并撤掉挂着的等待(旧 run 之后的结果不再推给通道)', async () => {
+  it('受保护审批挂着时发新任务:明确拒绝旧审批并保留订阅,两个 run 的结果各自送达', async () => {
     const s = service();
     state.localOnly.set('apv_old', '*');
     state.script = [protectedAsk('apv_old')];
@@ -147,11 +153,13 @@ describe('通道批准 × 受保护审批', () => {
     const oldRun = state.created.id;
     state.script = [{ type: 'done', payload: { content: '新任务完成' } }];
     expect(await inbound(s, '换个事:列一下文件')).toBe('新任务完成');
-    expect(state.resolved).toEqual([['apv_old', { action: 'reject' }, undefined, { via: 'channel' }]]);
-    expect(subscribers(oldRun)).toBe(0);
-    emit(oldRun, { type: 'done', payload: { content: '旧任务被拒后的收尾' } });
+    expect(state.resolved).toEqual([['apv_old', { action: 'reject', rejectReason: expect.stringContaining('action was not run') }]]);
+    expect(subscribers(oldRun)).toBe(1);
+    emit(oldRun, { type: 'approval_result', payload: { approvalId: 'apv_old', action: 'reject' } });
+    emit(oldRun, { type: 'done', payload: { content: '旧任务完成' } });
     await flush();
-    expect(state.sent).toEqual([]);
+    expect(state.sent).toEqual(['旧任务完成']);
+    expect(subscribers(oldRun)).toBe(0);
   });
 
   it('受保护审批挂着时回「停止」:只回一句已停止,挂着的等待不再补发「任务已停止」', async () => {
@@ -167,11 +175,11 @@ describe('通道批准 × 受保护审批', () => {
     expect(subscribers(runId)).toBe(0);
   });
 
-  it('普通审批:照旧邀请「批准」并在 approval_request 处退订;回「批准」照常兑现,by={via:channel}', async () => {
+  it('普通审批:确认送达后邀请「批准」并保留订阅;回「批准」照常兑现,by={via:channel}', async () => {
     const s = service();
     state.script = [{ type: 'approval_request', payload: { approvalId: 'apv_plain', preview: '$ npm test' } }, { type: 'done', payload: { content: '测试通过' } }];
     expect(await inbound(s, '跑测试')).toContain('回复「批准」执行');
-    expect(subscribers(state.created.id)).toBe(0);
+    expect(subscribers(state.created.id)).toBe(1);
     expect(await inbound(s, 'ok')).toBe('测试通过');
     expect(state.resolved).toEqual([['apv_plain', { action: 'approve' }, undefined, { via: 'channel' }]]);
   });

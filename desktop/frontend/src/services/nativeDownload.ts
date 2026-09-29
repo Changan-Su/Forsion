@@ -19,7 +19,7 @@ import { notifyApp } from '../stores/notificationStore'
 export const NATIVE_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024
 
 registerMessages({
-  'nativedl.saved': { zh: '已保存到「下载」: {name}', en: 'Saved to Downloads: {name}' },
+  'nativedl.saved': { zh: '已保存到「下载」：{name}', en: 'Saved to Downloads: {name}' },
   'nativedl.tooLarge': {
     zh: '文件太大（{size} MB），手机上一次最多保存 {max} MB',
     en: 'File is too large ({size} MB); the phone can save up to {max} MB at a time',

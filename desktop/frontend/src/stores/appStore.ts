@@ -745,14 +745,14 @@ async function syncAgentSessionConfig(sid: string, want: { modelId?: string; thi
   // 本地连会话配置都没有就不凭空造一条 {thinkingLevel}:残缺条目会挡住 refreshSessions 的整份预填(那里只填「本地还没有」的会话)
   const checkLevel = !!want.thinkingLevel && !!base && levelBefore !== want.thinkingLevel
   if (!checkModel && !checkLevel) return // 值未变(常见于回放、引擎现值就是 agent 这笔):不读、不提示
-  const c = s0.cfg
+  const c = targetForSession(sid)
   const [engineModel, engineLevel] = await Promise.all([
     checkModel ? readWithRetry(() => api.getSessionDetail(c, sid)).then((r) => (r === READ_FAILED ? '' : r?.model_id || '')) : Promise.resolve(''),
     checkLevel
       ? readWithRetry(() => api.getSessionConfig(c, sid)).then((r) => (r === READ_FAILED ? undefined : THINKING_LEVELS.find((lv) => lv === r?.thinkingLevel)))
       : Promise.resolve(undefined),
   ])
-  if (generation !== authGeneration) return
+  if (generation !== authGeneration || !sameRef(c.ref, targetForSession(sid).ref)) return
   const s = useApp.getState()
   const tr = s.tr
   const here = sid === s.activeId

@@ -38,7 +38,7 @@ const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { spawnSync } = require('child_process')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 

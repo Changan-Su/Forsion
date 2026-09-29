@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { manageAgentProvider } from './manageAgent.js';
-import { getAgent, AGENT_MAX_ITERATIONS_MIN } from '../../agents/agentRegistry.js';
+import { getAgent, saveAgent, AGENT_MAX_ITERATIONS_MIN } from '../../agents/agentRegistry.js';
 import { agentsDir } from '../../core/tanguHome.js';
 import { enterRunContext } from '../../seams/runContext.js';
 

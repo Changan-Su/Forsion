@@ -22,8 +22,9 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const zlib = require('zlib')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { enterSpace } = require('./lib/uiux-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const SHOTS = { light: path.join(os.tmpdir(), 'forsion-chatembed-light.png'), dark: path.join(os.tmpdir(), 'forsion-chatembed-dark.png'), warn: path.join(os.tmpdir(), 'forsion-chatembed-warn.png') }
@@ -85,11 +86,7 @@ async function waitMedia(win, sel, want, ms = 15_000) {
 async function openChatSession(win) {
   await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
   await win.waitForTimeout(1000)
-  await win.evaluate((names) => {
-    const button = [...document.querySelectorAll('button.rb-space')]
-      .find((item) => names.some((name) => (item.getAttribute('title') || item.textContent || '').includes(name)))
-    button?.click()
-  }, ['Agent', 'Tangu'])
+  await enterSpace(win, 'tangu')
   await win.waitForTimeout(1500)
   if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
     await win.click('.dv-edge-left').catch(() => {})
@@ -101,7 +98,10 @@ async function openChatSession(win) {
     await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
     await win.waitForTimeout(1000)
   }
-  await win.locator('.t2s-srow', { hasText: '内联嵌入会话' }).first().click()
+  const row = win.locator(`.t2s-srow[data-sel-id="${SESSION.id}"]`).first()
+  await row.waitFor({ timeout: 15_000 })
+  await row.click()
+  await win.locator(`.t2s-srow.active[data-sel-id="${SESSION.id}"]`).first().waitFor({ timeout: 10_000 })
   await win.waitForTimeout(900)
 }
 
@@ -166,6 +166,11 @@ async function main() {
     ],
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
   })
+  // The current host defaults to managed mode; seed the external stub connection explicitly.
+  for (const dir of [path.join(home, 'userdata'), path.join(home, 'userdata-dev')]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }))
+  }
   const app = await electron.launch({
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
@@ -180,8 +185,8 @@ async function main() {
       const b = win.locator(`text=${label}`).first()
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
-    await openChatSession(win)
     try {
+      await openChatSession(win)
       await win.waitForSelector('.t2-asst .t2-embeds', { timeout: 30_000 })
     } catch (e) {
       await win.screenshot({ path: path.join(os.tmpdir(), 'forsion-chatembed-fail.png') }).catch(() => {})

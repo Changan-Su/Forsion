@@ -87,6 +87,10 @@ async function main() {
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000, thinkingLevels: ['off', 'low', 'medium'] }],
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatev-'))
+  for (const dir of [path.join(home, 'userdata'), path.join(home, 'userdata-dev')]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }))
+  }
   const app = await electron.launch({
     // -ApplePersistenceIgnoreState:强杀过的 Electron 下次启动先弹「重新打开窗口」模态框,firstWindow 等不到(台架纪律)
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
@@ -600,7 +604,7 @@ async function main() {
     // 并提示「一大段空白」、摆出引擎净化过的预览([N spaces])。排最前,不挪动 D1-D5 取的末三张。
     const SNEAKY = `echo ok${' '.repeat(200)}&& echo "cleanup finished"${' '.repeat(200)}&& rm -rf ~/Documents`
     stub.script([
-      // 排最前(托盘缺省展开它):D1-D5 点开的是后三张;这张只给 D6-D8(长 diff 撑破 .approval-diff 的滚动盒)
+      // 长命令排最前,在审批仍待决时验 D9;长 diff 单独给 D6-D8。
       { type: 'approval_request', payload: {
         approvalId: 'a9', name: 'run_bash', arguments: JSON.stringify({ command: SNEAKY }),
         preview: '$ echo ok [200 spaces]&& echo "cleanup finished" [200 spaces]&& rm -rf ~/Documents', reason: { kind: 'mode', mode: 'auto-edit' },
@@ -634,8 +638,23 @@ async function main() {
       pointer: document.querySelector('.t2-stream [data-approval-pointer]')?.getAttribute('data-approval-pointer'),
       rows: document.querySelectorAll('.t2c-apv-row').length,
     }))
-    check('D0 四个待批审批攒进输入框上方的托盘(一张展开 + 三行排队),流里不插整张卡、只留一行指路',
-      tray.count === '4' && tray.inComposer && tray.streamCards === 0 && tray.pointer === '4' && tray.rows === 3, JSON.stringify(tray))
+    check('D0 五个待批审批攒进输入框上方的托盘(一张展开 + 四行排队),流里不插整张卡、只留一行指路',
+      tray.count === '5' && tray.inComposer && tray.streamCards === 0 && tray.pointer === '5' && tray.rows === 4, JSON.stringify(tray))
+    const sneaky = win.locator('.approval-card', { hasText: '[200 spaces]' }).first()
+    await sneaky.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
+    await win.waitForTimeout(300)
+    const sn = await sneaky.evaluate((card) => {
+      const ta = card.querySelector('textarea.approval-edit')
+      return {
+        why: [...card.querySelectorAll('.approval-why')].map((w) => w.textContent || '').join(' | ').trim(), // 档位理由一行 + 可疑提示另起一块
+        preview: (card.querySelector('.approval-preview')?.textContent || '').trim(),
+        fits: !!ta && ta.scrollHeight <= ta.clientHeight + 2, sh: ta?.scrollHeight, ch: ta?.clientHeight,
+      }
+    }).catch((e) => ({ err: String(e) }))
+    check('D9 ⚠️长单行 + 大段空白:命令框整段可见(或提示没显示完)、提示「一大段空白」、摆出标过空白的预览',
+      (sn.fits || /没显示完|too long to show/.test(sn.why || '')) && /一大段空白|long run of blank/.test(sn.why || '') && /\[200 spaces\]&& rm -rf ~\/Documents/.test(sn.preview || ''),
+      JSON.stringify(sn))
+    await sneaky.screenshot({ path: process.env.APPROVAL_BASH_SHOT || '/tmp/approval-bash-wideblank.png' }).catch(() => {})
     // 观感自查:托盘在真实悬浮输入区里的整窗实景(DESIGN §8)
     await win.screenshot({ path: process.env.TRAY_SHOT || '/tmp/approval-tray.png' }).catch(() => {})
     const openTrayCard = async (rowText) => {
@@ -896,21 +915,7 @@ async function main() {
     stub.removePrompt('apv_k3e_local', 'rejected')
     await win.locator('.t2s-srow', { hasText: '端到端会话' }).first().click().catch(() => {}) // 后面的场景在第一个会话里跑
     await win.waitForTimeout(1200)
-    const sneaky = win.locator('.approval-card', { hasText: '[200 spaces]' }).first()
-    await sneaky.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
-    await win.waitForTimeout(300)
-    const sn = await sneaky.evaluate((card) => {
-      const ta = card.querySelector('textarea.approval-edit')
-      return {
-        why: [...card.querySelectorAll('.approval-why')].map((w) => w.textContent || '').join(' | ').trim(), // 档位理由一行 + 可疑提示另起一块
-        preview: (card.querySelector('.approval-preview')?.textContent || '').trim(),
-        fits: !!ta && ta.scrollHeight <= ta.clientHeight + 2, sh: ta?.scrollHeight, ch: ta?.clientHeight,
-      }
-    }).catch((e) => ({ err: String(e) }))
-    check('D9 ⚠️长单行 + 大段空白:命令框整段可见(或提示没显示完)、提示「一大段空白」、摆出标过空白的预览',
-      (sn.fits || /没显示完|too long to show/.test(sn.why || '')) && /一大段空白|long run of blank/.test(sn.why || '') && /\[200 spaces\]&& rm -rf ~\/Documents/.test(sn.preview || ''),
-      JSON.stringify(sn))
-    await sneaky.screenshot({ path: process.env.APPROVAL_BASH_SHOT || '/tmp/approval-bash-wideblank.png' }).catch(() => {})
+
 
     // ── 场景 E:custom 规则编辑器(H2)。此前这套规则只能手写 config.json。
     // 钉三件:入口只在选了 custom 时出现 / 打开时把服务端已有规则读进来 / 保存发出的 PUT 是编辑后的内容。

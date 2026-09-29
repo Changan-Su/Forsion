@@ -51,7 +51,7 @@ async function until(page, fn, ms, every = 1500, arg) {
 
 /** 引擎侧取证:status 事件不落前端 store,催交发没发只有 dev 库知道(今晚的取证套路)。 */
 function nudgeCount(sessionId) {
-  const db = path.join(require('os').homedir(), '.forsion-dev/tangu/state.db')
+  const db = process.env.TANGU_HOME ? path.join(process.env.TANGU_HOME, 'state.db') : path.join(require('os').homedir(), '.forsion-dev/tangu/state.db')
   if (!fs.existsSync(db)) return -1
   try {
     const out = require('child_process').execFileSync('sqlite3', [db,

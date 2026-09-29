@@ -718,7 +718,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const method = req.method || 'GET'
       const info = authInfo(req)
       if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      if (isLocalOnlyEnginePath(url)) { json(res, 403, LOCAL_ONLY_BODY); return }
+      if (isLocalOnlyEnginePath(url)) {
+        if (!engineTarget(url.slice('/engine'.length))) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+        json(res, 403, LOCAL_ONLY_BODY); return
+      }
       if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
       // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。

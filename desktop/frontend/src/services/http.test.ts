@@ -1,3 +1,4 @@
+import { connectionTarget } from './engine/targets'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { authFetch } from './http'
 import { getProjectSettings } from './backendService'
@@ -69,7 +70,7 @@ describe('authFetch opt-in timeout × response body', () => {
   it('request() callers that opted in fail on time too (getProjectSettings)', async () => {
     vi.stubGlobal('fetch', stalledBody())
     const cfg = { backendUrl: 'http://engine.test', token: 't' } as TanguDesktopConfig
-    expect(await settle(getProjectSettings(cfg, { sessionId: 's' }, { timeoutMs: 50 }), 1000)).toBe('rejected:TimeoutError')
+    expect(await settle(getProjectSettings(connectionTarget(cfg), { sessionId: 's' }, { timeoutMs: 50 }), 1000)).toBe('rejected:TimeoutError')
   })
 
   it('a caller\'s own cancel during the body read stays the caller\'s abort, not a timeout', async () => {

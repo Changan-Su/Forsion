@@ -147,7 +147,7 @@ export const ApprovalCard: React.FC<{
           {(cmdHidden || cmdWideBlank) && <div className="approval-preview">{req.preview}</div>}
         </>
       )}
-      {isBash && !resolved ? null : (
+      {isBash && !resolved && !remote ? null : (
         <>
           {/* preview 恒显:引擎把越界警示(英文「⚠ Write outside the workspace · 」)与控制面要害(建什么、到点无人值守跑什么)
               拼进这个字符串;本地化的原因走上面的 why 行。旧事件没有 reason 时它仍是唯一的警示载体,diff 只能附加不能替换 */}

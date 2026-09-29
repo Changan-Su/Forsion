@@ -7,7 +7,7 @@
 // 仅 macOS,要 xcrun clang;dev Electron 是 ad-hoc 签名、无 hardened runtime,DYLD_INSERT_LIBRARIES 才生效。
 const fs = require('fs'), os = require('os'), path = require('path')
 const { execFileSync } = require('child_process')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 if (process.platform !== 'darwin') { console.log('SKIP persist-ignore: macOS only'); process.exit(0) }
 const ROOT = path.resolve(__dirname, '..')
