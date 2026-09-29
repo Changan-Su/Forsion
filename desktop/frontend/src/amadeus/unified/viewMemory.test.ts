@@ -92,4 +92,41 @@ describe('Amadeus note view memory', () => {
     expect(readNotePageStyle('/a', 'dirx/n.md').small).toBe(true)
     expect(readNotePageStyle('/b', 'dir/sub/n.md').wide).toBe(true)
   })
+
+  // Codex 复核 P1:改名搬走的滚动 / 光标不许复活 —— 旧键在盘上换成删除标记(不留原数据),另一个窗口(另一份模块缓存)
+  // 拿它更旧的那份写回时输给标记;旧路径日后新建的笔记什么都读不到。模式 / 锁定 / 排版的旧键同样删掉。
+  it('does not resurrect moved scroll / caret from storage or from another window cache after rename', async () => {
+    const fresh = async (): Promise<typeof import('./viewMemory')> => { vi.resetModules(); return await import('./viewMemory') }
+    const a = await fresh() // 发起改名的窗口
+    a.writeDocumentScroll('/v', 'old.md', 640)
+    a.writeNoteCaret('/v', 'old.md', { a: 3, h: 5, t: 'abc' })
+    a.writeNoteSurfaceMode('/v', 'old.md', 'canvas')
+    a.writeNotePageStyle('/v', 'old.md', { wide: true })
+    a.flushNoteViews()
+    const b = await fresh() // 另一个窗口:缓存里已经装着旧条目
+    expect(b.readDocumentScroll('/v', 'old.md')).toBe(640)
+
+    a.remapNoteViewMemory('/v', 'old.md', 'new.md')
+    const oldId = a.noteMemoryId('/v', 'old.md')
+    const disk = (): Record<string, { s?: number; c?: unknown; d?: number }> => JSON.parse(data.get('amx.noteView.v1') ?? '{}')
+    expect(disk()[oldId]?.s).toBeUndefined()
+    expect(disk()[oldId]?.c).toBeUndefined()
+    expect(disk()[a.noteMemoryId('/v', 'new.md')]?.s).toBe(640)
+    expect([...data.keys()].filter((k) => k.includes('old.md') && !k.startsWith('amx.noteView'))).toEqual([]) // 模式 / 排版旧键
+
+    b.writeDocumentScroll('/v', 'other.md', 10) // 另一个窗口照常写别的笔记并落盘:不许把 old.md 写回来
+    b.flushNoteViews()
+    expect(disk()[oldId]?.s).toBeUndefined()
+
+    const c = await fresh() // 之后在旧路径上新建的笔记
+    expect(c.readDocumentScroll('/v', 'old.md')).toBe(0)
+    expect(c.readNoteCaret('/v', 'old.md')).toBeNull()
+    expect(c.readNoteSurfaceMode('/v', 'old.md')).toBeNull()
+    expect(c.readDocumentScroll('/v', 'new.md')).toBe(640)
+    expect(c.readNoteCaret('/v', 'new.md')).toEqual({ a: 3, h: 5, t: 'abc' })
+    c.writeDocumentScroll('/v', 'old.md', 20) // 旧路径上的新笔记自己写的照常记得住(标记不挡新写入)
+    expect(c.readDocumentScroll('/v', 'old.md')).toBe(20)
+    c.flushNoteViews()
+    expect(disk()[oldId]?.s).toBe(20)
+  })
 })

@@ -5,7 +5,7 @@
  * 存在模块 Map；模式、文档滚动与光标(C-23)要跨重启恢复，落 localStorage。
  */
 
-import { recallViewport, rememberViewport } from './canvasKit/viewport'
+import { forgetViewport, recallViewport, rememberViewport } from './canvasKit/viewport'
 
 export type NoteSurfaceMode = 'doc' | 'canvas'
 
@@ -35,7 +35,7 @@ export function writeNoteSurfaceMode(vaultRoot: string | null | undefined, path:
 
 export function readDocumentScroll(vaultRoot: string | null | undefined, path: string): number {
   const id = noteMemoryId(vaultRoot, path)
-  return docScroll.get(id) ?? views()[id]?.s ?? 0
+  return docScroll.get(id) ?? live(views()[id])?.s ?? 0
 }
 
 export function writeDocumentScroll(vaultRoot: string | null | undefined, path: string, top: number): void {
@@ -50,6 +50,8 @@ export function writeDocumentScroll(vaultRoot: string | null | undefined, path: 
 // 按 noteMemoryId(库根 + 路径)存本机 localStorage,一个键一张表、按最近使用淘汰到 VIEW_CAP 条;不写 md。
 // 光标带一小段上下文文字(caretContext):回放前按文本复核,文档在别处被改得对不上了就丢弃,绝不把光标放到别的字上。
 // 写入防抖 500ms(滚动事件很密),pagehide / beforeunload 立即落;多窗口各写各的,落盘前与盘上那份按条目的新旧合并。
+// 改名 / 移动搬走的条目留一条**删除标记**(d:1,u = 搬走那一刻)并当场落盘:合并照旧按 u 取新,于是别的窗口缓存里
+// 那份更旧的原条目写回时输给标记、不会复活;旧路径日后新建的笔记也读不到它(读取一律跳过标记)。
 
 export interface NoteCaret {
   /** anchor / head(PM 文档位置) */
@@ -58,7 +60,7 @@ export interface NoteCaret {
   /** head 前后各一小段文字(复核用) */
   t: string
 }
-interface NoteView { s?: number; c?: NoteCaret; u: number }
+interface NoteView { s?: number; c?: NoteCaret; u: number; /** 删除标记(改名 / 移动搬走后留下) */ d?: 1 }
 const VIEW_KEY = 'amx.noteView.v1'
 const VIEW_CAP = 300
 let viewCache: Record<string, NoteView> | null = null
@@ -76,6 +78,13 @@ function views(): Record<string, NoteView> {
   if (!viewCache) viewCache = loadViews()
   return viewCache
 }
+/** 删除标记当「没有」读。 */
+const live = (v: NoteView | undefined): NoteView | undefined => (v && !v.d ? v : undefined)
+/** 把盘上更新的条目(含别的窗口留下的删除标记)并进本窗缓存;本窗更新的留着等防抖落盘。 */
+function syncViews(): void {
+  const mine = views()
+  for (const [id, v] of Object.entries(loadViews())) if (!mine[id] || (mine[id].u ?? 0) < (v.u ?? 0)) mine[id] = v
+}
 function persistViews(): void {
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
   const mine = views()
@@ -91,13 +100,15 @@ function persistViews(): void {
 }
 function touchView(id: string, patch: Partial<NoteView>): void {
   const all = views()
-  all[id] = { ...all[id], ...patch, u: Date.now() }
+  all[id] = { ...live(all[id]), ...patch, u: Date.now() }
   if (!persistTimer) persistTimer = setTimeout(persistViews, 500)
 }
 if (typeof window !== 'undefined') {
   const now = (): void => { if (persistTimer) persistViews() }
   window.addEventListener('pagehide', now)
   window.addEventListener('beforeunload', now)
+  // 别的窗口落了盘(含改名留下的删除标记):本窗缓存跟上,别拿旧条目给旧路径上的新笔记用。
+  window.addEventListener('storage', (e) => { if (e.key === VIEW_KEY && viewCache) syncViews() })
 }
 
 /** 立刻落盘(防抖窗里的也算):窗口要走了(pagehide)时,防抖着没记的光标先记进来再调它。 */
@@ -106,7 +117,7 @@ export function flushNoteViews(): void {
 }
 
 export function readNoteCaret(vaultRoot: string | null | undefined, path: string): NoteCaret | null {
-  const c = views()[noteMemoryId(vaultRoot, path)]?.c
+  const c = live(views()[noteMemoryId(vaultRoot, path)])?.c
   return c && Number.isInteger(c.a) && Number.isInteger(c.h) && typeof c.t === 'string' ? c : null
 }
 
@@ -118,16 +129,30 @@ export function writeNoteCaret(vaultRoot: string | null | undefined, path: strin
 export function remapNoteViewMemory(vaultRoot: string | null | undefined, oldPath: string, newPath: string): void {
   if (oldPath === newPath) return
   const mode = readNoteSurfaceMode(vaultRoot, oldPath)
-  if (mode) writeNoteSurfaceMode(vaultRoot, newPath, mode)
-  const oldId = noteMemoryId(vaultRoot, oldPath)
-  if (docScroll.has(oldId)) docScroll.set(noteMemoryId(vaultRoot, newPath), docScroll.get(oldId)!)
-  const kept = views()[oldId]
-  if (kept) {
-    delete views()[oldId]
-    touchView(noteMemoryId(vaultRoot, newPath), { ...kept })
+  if (mode) {
+    writeNoteSurfaceMode(vaultRoot, newPath, mode)
+    try { localStorage.removeItem(modeKey(vaultRoot, oldPath)) } catch { /* 私有模式 */ }
   }
+  const oldId = noteMemoryId(vaultRoot, oldPath)
+  const newId = noteMemoryId(vaultRoot, newPath)
+  if (docScroll.has(oldId)) {
+    docScroll.set(newId, docScroll.get(oldId)!)
+    docScroll.delete(oldId)
+  }
+  // 滚动 / 光标表:先并进盘上的(别的窗口可能刚写过这一篇),搬到新键,旧键换成删除标记,**当场**读盘 → 合并 → 写回。
+  syncViews()
+  const kept = live(views()[oldId])
+  if (kept) {
+    const { u: _u, d: _d, ...carry } = kept
+    touchView(newId, carry)
+  }
+  views()[oldId] = { d: 1, u: Date.now() }
+  persistViews()
   const vp = recallViewport(oldId) // 画布视口(会话级,键同口径;V-15)
-  if (vp) rememberViewport(noteMemoryId(vaultRoot, newPath), vp)
+  if (vp) {
+    rememberViewport(newId, vp)
+    forgetViewport(oldId)
+  }
   if (readNoteLocked(vaultRoot, oldPath)) {
     writeNoteLocked(vaultRoot, newPath, true)
     writeNoteLocked(vaultRoot, oldPath, false)
