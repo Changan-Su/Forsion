@@ -20,7 +20,7 @@ const assets = {
   LOGO: `data:image/png;base64,${readFileSync(join(repo, 'desktop/build/icon.png')).toString('base64')}`,
 };
 
-// Special edition emblem: the logo's tree-F, split along the trunk (logo/special.svg).
+// Special edition emblem: the logo's tree in the film's red, with no plate (logo/special.svg).
 const tree = read('.github/assets/showcase/logo.svg').match(/fill="#bd866c" d="([^"]+)"/)[1].replace(/\s+/g, ' ').trim();
 const special = readFileSync(join(here, 'logo/special.svg'), 'utf8').replace(/%%TREE%%/g, tree);
 assets.EMBLEM = special.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
@@ -57,8 +57,10 @@ if (existsSync(score)) {
 }
 console.log(`dist/music.html ${(music.length / 1024).toFixed(0)} KB`);
 
-// Full film (study B, ~87 s): shared fonts, styles and engine, the cue sheet, and the real assets.
+// Full film (study B): shared fonts, styles and engine, the cue sheet, and the real assets.
 const cues = readFileSync(join(here, 'film/cuesheet.json'), 'utf8').trim();
+assets.LEN = String(JSON.parse(cues).length);
+assets.SECONDS = String(Math.round(JSON.parse(cues).length));
 const film = readFileSync(join(here, 'film.src.html'), 'utf8')
   .replace('%%FONTS%%', () => cut('fonts'))
   .replace('%%STYLE%%', () => style)

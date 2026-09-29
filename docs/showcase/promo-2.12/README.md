@@ -43,13 +43,16 @@ VSCO=~/vsco python3 music/make.py 5-battle && bash music/mux.sh 5-battle && node
 
 ## 完整版（`film.src.html`）
 
-《第 2.12 话 · 人类补完计划》，4:3，约 94 秒，片头是光敏性癫痫警告，片尾是特别版 Logo 与 Made By Forsion Video Studio。前半段（到片名为止）致敬 EVA 的标题卡与 NERV 式界面；片名之后换成 Forsion 自己的画面语言：黑底、白色明朝体、来自 Logo 的铜色枝线、白纸文档、以及「另一半」半圆。画面与两条配乐共用一张剪辑点表 `film/cuesheet.json`（150 BPM 的小节编号）：画面按小节切，「决战 II」就是 150 BPM，「补完」用 75 BPM，它的一拍正好是半小节，所以两条配乐的重音落在同一批帧上。关键帧引擎核心在 `stage-engine.js`，由 `build.mjs` 内联进各个页面。
+《第 2.12 话 · 人类补完计划》，4:3，约 94 秒，配乐「决战 II」。片头是光敏性癫痫警告，片尾是特别版 Logo 与 Made By Forsion Video Studio。画面致敬 EVA：明朝体标题卡、NERV 式界面、MAGI 审议、人机同步率、AT 力场式的 Interface。六边形背景只留在系统检查和 MAGI 两处；其余界面画面的背景和标题栏上是 Forsion 的红色树形标志，放在 NERV 标志会出现的位置。关键帧引擎核心在 `stage-engine.js`，由 `build.mjs` 内联进各个页面。
+
+画面和配乐共用一张剪辑点表 `film/cuesheet.json`：`sections` 是按 150 BPM 小节编号的段落，`hits` 是每段里画面切换的拍点（从段落开头算的拍数，最小到八分音符）。画面的每个切点都从 `hits` 读出，`music/film_scores.py` 在同一批拍点上写重音。`music/sync_check.py` 从渲染出的帧里找出切点，逐个报告离八分音符网格差几毫秒、配乐在那一帧的重音有多强。
 
 ```bash
-node build.mjs                                               # → dist/film.html（可切换两条配乐的播放页）与 dist/film-capture.html
-NODE_PATH=$(npm root -g) node render.cjs film --workers 4 --frames-only   # → out/frames-film（2617 帧）
-VSCO=~/vsco python3 music/film_scores.py                     # → out/audio/film-battle.wav / film-choral.wav（响度已对齐）
+node build.mjs                                               # → dist/film.html（播放页）与 dist/film-capture.html
+NODE_PATH=$(npm root -g) node render.cjs film --workers 4 --frames-only   # → out/frames-film（2833 帧）
+VSCO=~/vsco python3 music/film_scores.py                     # → out/audio/film-battle.wav
 FFMPEG=/path/to/ffmpeg bash music/mux_film.sh                # → out/film/*.mp4（原尺寸与 720p 分享版）与播放页用的 MP3
+python3 music/sync_check.py                                  # 检查画面切点与配乐重音的对位
 ```
 
 特别版 Logo 在 `logo/special.svg`：Logo 的树形 F 换成片中的红色，去掉底板，直接融进黑色画面。`node build.mjs` 会从 `.github/assets/showcase/logo.svg` 填入树形路径并写出 `dist/logo-2.12-special.svg`；`NODE_PATH=$(npm root -g) node logo/render-logo.cjs` 输出黑底与透明底 PNG。

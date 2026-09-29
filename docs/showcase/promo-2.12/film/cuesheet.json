@@ -14,14 +14,33 @@
     { "id": "twosides", "bar": 13, "bars": 1 },
     { "id": "humanmd", "bar": 14, "bars": 2 },
     { "id": "asks", "bar": 16, "bars": 2 },
-    { "id": "agents", "bar": 18, "bars": 2 },
+    { "id": "memory", "bar": 18, "bars": 2 },
     { "id": "magi", "bar": 20, "bars": 3 },
     { "id": "layers", "bar": 23, "bars": 4 },
-    { "id": "evolve", "bar": 27, "bars": 5 },
+    { "id": "evolve", "bar": 27, "bars": 3 },
+    { "id": "control", "bar": 30, "bars": 2 },
     { "id": "interface", "bar": 32, "bars": 3 },
     { "id": "montage", "bar": 35, "bars": 8 },
     { "id": "finale", "bar": 43, "bars": 9 },
     { "id": "release", "bar": 52, "bars": 2 },
     { "id": "credit", "bar": 54, "bars": 2 }
-  ]
+  ],
+  "hits": {
+    "cards": [0, 2, 4, 6, 8, 10, 12, 14],
+    "years": [0, 2, 4, 6],
+    "half": [0, 3],
+    "twosides": [0, 1.5, 2.5],
+    "humanmd": [0, 1.5, 2.5, 3.5],
+    "asks": [0, 1.5, 3, 4.5, 6],
+    "memory": [0, 4],
+    "magi": [0, 1, 2, 4, 5, 6],
+    "layers": [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14],
+    "evolve": [0, 1, 4, 5, 8, 9],
+    "control": [0, 1, 2, 3, 4],
+    "interface": [0, 4, 8],
+    "montage": [0, 2, 4, 8, 12, 16, 17, 18, 20, 24, 28],
+    "finale": [0, 4, 8, 12, 16, 20],
+    "release": [0, 4, 5],
+    "credit": [0]
+  }
 }

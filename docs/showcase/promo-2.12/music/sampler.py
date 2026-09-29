@@ -4,6 +4,9 @@ SampleTrack mirrors engine.Track (note / chord / cc / ramp / render), so pieces 
 General MIDI instruments for recorded ones. Pitched samples are picked by nearest pitch,
 velocity layer and round robin, then resampled to the target pitch. Unpitched percussion is
 picked by dynamic marking. CC 11 events become a gain envelope (expression swells).
+
+Each sample starts early by its own attack time (to reach 35% of its peak), so a brass stab lands its
+body on the beat as a drum does, instead of swelling in 50 ms late.
 """
 import os
 import re
@@ -45,11 +48,20 @@ def _num(pattern, fn, default=1):
     return int(m.group(1)) if m else default
 
 
+def _attack(x, level=0.35, cap=0.09):
+    """Seconds from the sample's start until its 5 ms envelope reaches `level` of the peak in its first 0.4 s."""
+    a = np.abs(x[: int(0.4 * SR)]).max(1)
+    w = int(0.005 * SR)
+    env = np.convolve(a, np.ones(w) / w, mode='same')
+    return min(cap, int(np.argmax(env >= level * env.max())) / SR)
+
+
 class Bank:
     """Samples of one instrument articulation: list of (midi, layer, rr, audio)."""
 
     def __init__(self, key, samples, release):
         self.key, self.samples, self.release = key, samples, release
+        self.attack = {id(s[3]): _attack(s[3]) for s in samples}
         self.layers = sorted({s[1] for s in samples})
         self.rr = {}
         loud = [np.sqrt((s[3][: SR // 2] ** 2).mean()) for s in samples if s[1] == self.layers[-1]]
@@ -103,8 +115,10 @@ def _render_note(bank, midi, vel, dur, pitched_=True):
     bank.rr[k] = i + 1
     s = cand[i % len(cand)]
     x = s[3]
+    lead = bank.attack[id(x)]
     if pitched_ and s[0] != midi:
         ratio = 2 ** ((midi - s[0]) / 12)
+        lead /= ratio
         idx = np.arange(0, len(x) - 1, ratio)
         i0 = idx.astype(int)
         fr = (idx - i0)[:, None].astype(np.float32)
@@ -117,7 +131,7 @@ def _render_note(bank, midi, vel, dur, pitched_=True):
         r = min(L, int(bank.release * SR))
         cut = max(0, L - r)
         x[cut:] *= np.linspace(1, 0, L - cut, dtype=np.float32)[:, None] ** 2
-    return x * g
+    return x * g, lead
 
 
 class SampleTrack:
@@ -153,10 +167,12 @@ class SampleTrack:
         out = np.zeros((total, 2), np.float32)
         for t, dur, midi, vel in sorted(self.notes):
             bank = self.short if (self.short is not None and dur <= self.short_below) else self.bank
-            x = _render_note(bank, midi, vel, None if (self.natural or bank is self.short) else dur, self.pitched)
-            i = int(t * SR)
+            x, lead = _render_note(bank, midi, vel, None if (self.natural or bank is self.short) else dur, self.pitched)
+            i = int((t - lead) * SR)
             if i >= total:
                 continue
+            if i < 0:
+                x, i = x[-i:], 0
             j = min(total, i + len(x))
             out[i:j] += x[: j - i]
         if self.ccs:
