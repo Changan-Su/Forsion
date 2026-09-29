@@ -2588,15 +2588,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       fmNow: () => foreignFmText(pipe.fm),
       insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
       // 助手回答插回(评审 G3-08):只读 / 锁定实例不登记(聊天那边据此判「没有可插的笔记」);源码模式下 hostApi 为 null → 不接。
-      // 撤销只在文档仍是插入后那一版时做(之后又打了字 / 回灌过 → 交给用户在笔记里撤),仲裁与键盘 Cmd+Z 同路(画布态走舞台)。
+      // 撤销只在「插入这一笔仍是撤销栈顶」时做:文档仍是插入后那一版,**且**统一撤销时间线(画布舞台的形状 / 连线 / Frame
+      // 颜色这类只在 frontmatter 的操作也记在这里)自插入起没动过 —— 否则撤的会是别人的改动(Codex 复核 P1:插入后改了形状
+      // 颜色,舞台仲裁先退 fm 那一格,颜色没了、回答还在)。任一条不满足就拒撤,交给用户在笔记里撤。仲裁与键盘 Cmd+Z 同路。
       insertReply: readOnly ? undefined : (md, anchor) => {
         if (pipe.retired || pipe.dead || pipe.readOnly) return null
         if (!hostApi.current?.insertMarkdown(md, 'cursor', { quiet: true, after: anchor, caretless: !bodyUsed.current })) return null
         const after = liveView()?.state.doc
+        const tl = undoTimeline
+        const mark = { n: tl.log.length, top: tl.log[tl.log.length - 1], future: tl.future.length }
         return {
           undo: () => {
             const v = liveView()
             if (!v || !after || v.state.doc !== after || pipe.retired || pipe.dead) return false
+            if (mark.top !== 'pm' || tl.log.length !== mark.n || tl.log[tl.log.length - 1] !== 'pm' || tl.future.length !== mark.future) return false
             return canvasModeRef.current && stageHist.current ? stageHist.current('undo') : pmUndo(v.state, v.dispatch)
           },
         }

@@ -16,7 +16,8 @@
 //       正文没被聚焦过 → 文末;有过光标 → 光标所在块之后,连插两条按序排、各自一步 Cmd+Z;「问 Tangu」发起的对话 →
 //       插回被引用块之后(胜过光标);不抢焦点;代码块 / 公式原样落盘;回执点名笔记 + 撤销(之后又改过就不撤、说明);
 //       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示;
-//       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失。
+//       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失;
+//       F8(Codex 复核 P1)插入后在画布里改了形状颜色(只在 frontmatter、文档不变)→ 回执撤销拒撤,颜色与回答都在。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -979,6 +980,44 @@ async function groupF(browser) {
     const s3 = await btn()
     check('F7 没有 v4 实例 → 按钮不出现;只读实例挂上 → 灰态;可写实例挂上 → 可用;全卸下 → 再消失',
       s0 === 'absent' && s1 === 'disabled' && s2 === 'ready' && s3 === 'absent', JSON.stringify({ s0, s1, s2, s3 }))
+    await page.close()
+  }
+  // F8 画布态:插入回答后右键形状设色(元素颜色只在 amadeus_canvas 行,PM 文档不变;舞台统一时间线记一格 fm)→
+  //    点回执「撤销」必须拒撤(否则舞台仲裁先退的是这格颜色:颜色没了、回答还在),提示去笔记里撤。
+  {
+    const CV = { v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 }, elements: [{ id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '方块' }] }
+    const page = await openF(browser, ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV)}`, '---', '', '# 画布', '', '主卡一段。', ''].join('\n'))
+    await page.waitForTimeout(800)
+    const cvOf = (d) => { const m = /^amadeus_canvas: (.*)$/m.exec(d ?? ''); try { return m ? JSON.parse(m[1]) : null } catch { return null } }
+    // 对照:画布态下插入后什么都没动 → 回执撤销照常撤回(拒撤的闸不许把正常撤销也挡掉)
+    await mountChat(page, { reply: '先撤的回答' })
+    await clickIns(page)
+    await page.waitForTimeout(1200)
+    const d0a = await vault(page)
+    await page.evaluate(() => window.__ntf[0]?.action?.run())
+    await page.waitForTimeout(1500)
+    const d0b = await vault(page)
+    check('F8a 画布态对照:插入后没动别的 → 回执撤销照常撤回', d0a.includes('先撤的回答') && !d0b.includes('先撤的回答'), JSON.stringify({ d0b }))
+    await mountChat(page, { reply: '画布里的回答' })
+    await clickIns(page)
+    await page.waitForTimeout(1200)
+    const d1 = await vault(page)
+    const at = await page.evaluate(() => { const r = document.querySelector('.amx-el-shape[data-el="s1"]')?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null })
+    if (at) {
+      await page.mouse.click(at.x, at.y, { button: 'right' })
+      await page.waitForTimeout(300)
+      await page.click('.amx-canvas-menu .amx-color-swatch[data-swatch="3"]').catch(() => {})
+      await page.waitForTimeout(800)
+    }
+    const d2 = await vault(page)
+    await page.evaluate(() => window.__ntf[0]?.action?.run())
+    await page.waitForTimeout(1500)
+    const d3 = await vault(page)
+    const ntf = await page.evaluate(() => window.__ntf.map((x) => x.text))
+    const col = (d) => cvOf(d)?.elements?.find((e) => e.id === 's1')?.color
+    check('F8b 画布里插入后改了形状颜色 → 回执撤销拒撤:颜色与回答都还在,提示去笔记里撤',
+      !!at && d1.includes('画布里的回答') && col(d2) === '3' && d3.includes('画布里的回答') && col(d3) === '3' && ntf[1] === '笔记之后又有改动，请在笔记里撤销',
+      JSON.stringify({ at, c2: col(d2), c3: col(d3), ans: d3?.includes('画布里的回答'), ntf }))
     await page.close()
   }
 }
