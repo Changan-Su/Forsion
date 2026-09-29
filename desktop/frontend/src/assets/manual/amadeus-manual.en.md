@@ -994,10 +994,11 @@ Cards never stack:
 - However a new card is created, it is nudged clear of the cards already there instead of landing on top of them.
 - Release a card overlapping another one and it slides to the nearest free spot with a short spring animation. It looks like the card "bounced back", but it is just the anti-overlap rule, and the whole gesture is still one undo step.
 
-Right-click gives three menus, in this order:
+Right-click gives four menus, in this order:
 
-- A card or the main card: "Connect to…", "Auto-arrange" (only when it actually has children), "Group into a frame", "Unwrap into document" (absent on the main card), "Delete" (absent on the main card).
-- A shape, connector or frame: "Edit text", "Connect to…", "Group into a frame", "Delete".
+- A card or the main card: a row of color swatches at the top (absent on the main card), then "Connect to…", "Auto-arrange" (only when it actually has children), "Group into a frame", "Unwrap into document" (absent on the main card), "Delete" (absent on the main card).
+- A shape or frame: a row of color swatches at the top, then "Edit text", "Connect to…", "Group into a frame", "Delete".
+- A connector: a row of color swatches at the top, then "Edit text", "Delete". Connectors are thin, so a right-click within 8px of the line counts as a hit.
 - Empty canvas: "New card", "Rectangle", "Ellipse", "Text", `Frame`, "Fit to content". That `Frame` entry reads the same in both languages.
 
 Right-clicking a card you are editing yields to the system text menu (copy, paste, spell-check) instead. On touch, a 500ms long press is the right-click. One `Esc` backs out four levels in order: close the context menu, cancel a connector in progress, return from the current tool to the select tool, clear the selection.
@@ -1057,6 +1058,8 @@ Back in doc mode, the hierarchy shows as indent plus a rounded frame:
 
 Panning has four equivalent entrances: the hand tool in the toolbar, holding `Alt` and dragging, dragging with the middle mouse button, and the scroll wheel (vertical) or `Shift` + wheel (horizontal). Two-finger trackpad scrolling does the same. The hand tool, `Alt` and the middle button **do not interrupt a card you are editing** — moving the viewport should not break your typing.
 
+When you drag a card or shape, draw a marquee, resize, or pull a connector's rubber band to the edge of the canvas, the viewport pans toward that side on its own — faster the closer you get to the edge — and whatever you are dragging stays under the pointer. It stops as soon as you let go or move the pointer away from the edge. Pressing without dragging does not trigger it, and neither does a read-only canvas.
+
 Zoom runs from 25% to 250%:
 
 | How | Anchored on |
@@ -1113,6 +1116,7 @@ The tools have no letter shortcuts; the only tool key is `Esc`, which returns to
 - Shapes can be dragged, reshaped from their corners (24px minimum) and given text. The reshape handles appear only on a **single selected element**.
 - To edit text: double-click the shape or connector; or select it and press `Enter` or `F2`; or right-click → "Edit text". The dialog's heading follows the type: "Connector label", "Frame title", "Element text". Clearing the text removes it rather than storing an empty string.
 - "Group into a frame" wraps the current selection in a frame with 32px of padding around it. With nothing selected it frames just the object you right-clicked.
+- Color: right-click a card, shape, frame or connector and the top row of the menu is the palette — "No color", six presets (red, orange, yellow, green, cyan, purple), and a last swatch that opens the system color picker for any color. With several objects selected they are all colored at once, and one `⌘/Ctrl + Z` undoes the whole batch. Colors show only in canvas mode; cards look the same as before in document mode. The note stores the same encoding as Obsidian's JSON Canvas (`"1"`–`"6"` or `#rrggbb`). The main card and hierarchy lines cannot be colored.
 - Land the arrow tool's second click on a shape or frame, or hold `Shift` for that second click, and you draw a plain connector instead of a parent/child link. `Alt` cannot stand in for `Shift` — `Alt` is already taken by panning. After the first click a rubber-band preview follows the pointer, and clicking empty space abandons it.
 
 > [!warning]
