@@ -3,6 +3,7 @@
  *  所有原 prompt 调用点一律换用本入口;Host 挂在 AmadeusOverlays(三端共用)。 */
 import { create } from 'zustand'
 import { PromptDialog } from './Dialogs'
+import { useMobileBackClose } from '../lib/mobileBack'
 
 /** askStringOrAlt 的次要出口(如「移除链接」)被点时的返回值。 */
 export const ASK_ALT: unique symbol = Symbol('askString.alt')
@@ -46,6 +47,13 @@ export function askStringOrAlt(title: string, initial: string, opts: { label?: s
  *  才跟当前主题/明暗走 —— 所有弹窗载体(WikiCreateConfirm/CloudSyncDialogHost)同款。 */
 export function AskStringHost() {
   const req = usePromptStore((s) => s.req)
+  // Android 返回 = 取消(G2-12:此前返回键关掉了底下的笔记,对话框却还留在屏幕上)。
+  useMobileBackClose(!!req, () => {
+    const cur = usePromptStore.getState().req
+    if (!cur) return
+    usePromptStore.getState().clear()
+    cur.resolve(null)
+  })
   if (!req) return null
   const settle = (v: string | null | typeof ASK_ALT): void => {
     if (usePromptStore.getState().req !== req) return // 已决(confirm 先到,close 随后)不再二次 resolve

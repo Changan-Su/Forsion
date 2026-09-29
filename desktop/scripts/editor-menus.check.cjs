@@ -20,6 +20,9 @@
 //   B18  不适用就不列:单元格里 `/` 不开菜单(一项都做不成);列表项里 slash 不列「分栏 / 卡片」;
 //        块菜单「移到新列」只对顶层单块列出(B-18)
 //   B19  ＋ 插新块并当场开 slash 菜单,Esc 把 ＋ 敲的 `/` 删干净;Alt+点 = 插到上方;列表项上点 = 同级新项、列表不劈(B-19 / B-19b)
+//   P10  可达名 / 展开态(P-10):编辑器根有 aria-label;⠿ / ＋ / 折叠钮的名称是文案而不是字形,折叠钮带 aria-expanded;
+//        标题 / 列表折叠后的 ▸ 展开钮有名称且 aria-expanded=false;slash 菜单开着时编辑器根的 aria-activedescendant
+//        指向当前高亮项(↓ 跟着走、关菜单摘掉);切英文后以上名称当场跟着变
 // 用法:npm run check:menus(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=I9,B10` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -782,6 +785,92 @@ async function main() {
         const md = await mdOf(page, nm)
         check('B19d 列表项上 ＋ = 同级新项(不劈列表)', ok && md === '1. 项一\n2. 项二\n3. 新项\n4. 项三\n\n段尾。\n', JSON.stringify(md))
       }
+    }
+
+    if (want('P10')) {
+      /** gutter 里可见按钮的 [类, 字形, aria-label, aria-expanded]。 */
+      const gutter = () => page.evaluate(() => [...document.querySelectorAll('.unified-gutter[data-show="true"] button')]
+        .filter((b) => getComputedStyle(b).display !== 'none')
+        .map((b) => ({ cls: b.className, txt: b.textContent, aria: b.getAttribute('aria-label'), exp: b.getAttribute('aria-expanded') })))
+      // 按「含」找块(折叠后标题首有 ▸ 展开钮,textContent 不再以标题字开头)
+      const hover = async (text, sel = ':scope > *') => {
+        const r = await page.evaluate(({ PM, text, sel }) => {
+          const el = [...document.querySelector(PM).querySelectorAll(sel)].find((x) => x.textContent.includes(text))
+          if (!el) return null
+          const b = el.getBoundingClientRect()
+          return { x: b.x, y: b.y, h: b.height }
+        }, { PM, text, sel })
+        await page.mouse.move(5, 5)
+        await page.waitForTimeout(120)
+        await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+        await page.waitForTimeout(300)
+      }
+      const clickFold = async () => {
+        const b = await page.evaluate(() => { const el = document.querySelector('.unified-gutter[data-show="true"] .block-fold'); if (!el || getComputedStyle(el).display === 'none') return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })
+        if (b) await page.mouse.click(b.x, b.y)
+        await page.waitForTimeout(250)
+        return !!b
+      }
+      const carets = () => page.evaluate((PM) => [...document.querySelectorAll(PM + ' .amx-fold-caret')].map((b) => `${b.getAttribute('aria-label')}|${b.getAttribute('aria-expanded')}`), PM)
+      await load(page, '# 标题\n\n## 小节一\n\n第一段正文。\n\n- 父项\n  - 子项\n\n## 小节二\n\n末段。\n')
+      const rootLabel = await page.evaluate((PM) => document.querySelector(PM).getAttribute('aria-label'), PM)
+      await hover('小节一')
+      const g0 = await gutter()
+      const byCls = (g, c) => g.find((b) => b.cls.split(' ').includes(c))
+      const glyphs = g0.filter((b) => !b.aria || b.aria === b.txt)
+      check('P10a 编辑器根有可达名;⠿ / ＋ / 折叠钮的 aria-label 是文案不是字形,折叠钮 aria-expanded=true',
+        rootLabel === '笔记正文' && g0.length >= 3 && glyphs.length === 0 && byCls(g0, 'block-fold')?.exp === 'true' && byCls(g0, 'drag-handle')?.aria === '点击打开菜单，按住拖动',
+        JSON.stringify({ rootLabel, g0 }))
+      const folded = await clickFold()
+      await hover('小节一')
+      const g1 = await gutter()
+      const c1 = await carets()
+      check('P10b 折叠后:折叠钮 aria-expanded=false、名称换「展开小节」;标题上的 ▸ 展开钮有名称且 aria-expanded=false',
+        folded && byCls(g1, 'block-fold')?.exp === 'false' && byCls(g1, 'block-fold')?.aria === '展开小节' && c1.join(',') === '展开小节|false', JSON.stringify({ g1, c1 }))
+      await clickFold() // 展开回来,好折列表
+      await hover('父项', 'li')
+      const g2 = await gutter()
+      await clickFold()
+      const c2 = await carets()
+      check('P10c 列表父项:折叠钮「折叠子项」aria-expanded=true → 折叠后项内 ▸「展开子项」aria-expanded=false',
+        byCls(g2, 'block-fold')?.aria === '折叠子项' && byCls(g2, 'block-fold')?.exp === 'true' && c2.join(',') === '展开子项|false', JSON.stringify({ g2, c2 }))
+      // slash 菜单:焦点留在编辑器,读屏靠 aria-activedescendant 知道高亮项
+      await page.evaluate(() => { // 折叠钮点完选区可能是 NodeSelection:用 Selection.near 落回文字光标
+        const v = window.__upage.probe.view()
+        let at = null
+        v.state.doc.descendants((n, p) => { if (at == null && n.isTextblock && n.textContent === '末段。') at = p + 1 + n.content.size; return at == null })
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+      })
+      await page.waitForTimeout(100)
+      await page.keyboard.press('Enter')
+      await page.keyboard.type('/')
+      const opened = await waitSel(page, '.slash-menu', 1500)
+      const ad = () => page.evaluate((PM) => {
+        const root = document.querySelector(PM)
+        const id = root.getAttribute('aria-activedescendant')
+        const el = id ? document.getElementById(id) : null
+        return { id, controls: root.getAttribute('aria-controls'), menuId: document.querySelector('.slash-menu')?.id ?? null, points: el ? el.hasAttribute('data-active') && el.getAttribute('role') === 'menuitem' : false, label: el?.querySelector('.slash-label')?.textContent ?? null }
+      }, PM)
+      const s0 = await ad()
+      await page.keyboard.press('ArrowDown')
+      await page.waitForTimeout(120)
+      const s1 = await ad()
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(150)
+      const s2 = await ad()
+      check('P10d slash 菜单:aria-activedescendant 指向高亮项、↓ 跟着走、aria-controls = 菜单;关菜单摘掉',
+        opened && s0.points && s0.controls && s0.controls === s0.menuId && s1.points && s1.id !== s0.id && s2.id === null && s2.controls === null, JSON.stringify({ s0, s1, s2 }))
+      // 切英文:不重挂,名称当场跟着变(常驻钮 / 展开钮 / 编辑器根都靠订语言变更)
+      await page.evaluate(() => window.__upage.setLocale('en'))
+      await page.waitForTimeout(200)
+      const enRoot = await page.evaluate((PM) => document.querySelector(PM).getAttribute('aria-label'), PM)
+      const enCarets = await carets()
+      await hover('第一段')
+      const g3 = await gutter()
+      await page.evaluate(() => window.__upage.setLocale('zh'))
+      check('P10e 切英文:编辑器根 / ⠿ / 展开钮的名称当场变英文', enRoot === 'Note body' && enCarets.join(',') === 'Expand children|false'
+        && byCls(g3, 'drag-handle')?.aria === 'Click for menu, hold to drag', JSON.stringify({ enRoot, enCarets, g3 }))
     }
 
     await page.close()

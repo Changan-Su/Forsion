@@ -33,6 +33,22 @@ interface Target extends AgentWriteTarget {
 interface Call { targets: Target[]; started: number; ended: number | null }
 const calls = new Map<string, Call>()
 
+/** 「Tangu 正在改这篇」的提示窗口(评审 G3-05):流式阶段 / 在途超过这么久还没下文(run 中止、断线、审批一直挂着)就不再提示。 */
+export const AGENT_EDITING_MAX_MS = 2 * 60_000
+/** 流式阶段(tool_stream:参数还在生成、目标路径已经流出来)的写入意图。**只给提示用,不参与归属认领** ——
+ *  认领要核盘上正文(Codex 复核 P0 ③),完整参数要等 tool_call;混进 calls 的话 noteAgentWriteStart 见 id 已在就早退,核对内容就丢了。 */
+const live = new Map<string, { path: string; at: number }>()
+const listeners = new Set<() => void>()
+function changed(): void {
+  for (const l of [...listeners]) {
+    try { l() } catch (e) { console.error('[agentWriteLedger] listener failed', e) }
+  }
+}
+/** 过了提示窗口要让订阅者重算一次(否则一个中止的写入会让「正在修改」一直挂着)。 */
+function expireLater(): void {
+  if (typeof setTimeout === 'function') setTimeout(changed, AGENT_EDITING_MAX_MS + 50)
+}
+
 /** 比对口径:分隔符统一成 `/`、叠斜杠压成一个、去尾斜杠。 */
 export function normAgentPath(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '')
@@ -54,15 +70,49 @@ export function noteAgentWriteStart(callId: string, targets: Array<string | Agen
     started: now,
     ended: null,
   })
+  live.delete(callId)
+  changed()
+  expireLater()
+}
+
+/** 写类工具的参数还在流式生成、目标路径已经完整流出来(tool_stream)。只登记「正在改哪篇」给编辑器提示用(G3-05)。 */
+export function noteAgentWriteLive(callId: string, absPath: string, now = Date.now()): void {
+  if (!callId || calls.has(callId) || live.has(callId)) return
+  live.set(callId, { path: normAgentPath(absPath), at: now })
+  changed()
+  expireLater()
+}
+
+/** 这次调用已经登记过(流式或在途):调用方据此跳过每个 delta 都重扫一遍参数。 */
+export function agentWriteKnown(callId: string): boolean {
+  return live.has(callId) || calls.has(callId)
+}
+
+/** Tangu 此刻是不是正在改这个路径:参数流式生成中,或工具已发出、结果还没回来(含等审批);都有 AGENT_EDITING_MAX_MS 上限。 */
+export function agentEditing(absPath: string, now = Date.now()): boolean {
+  const p = normAgentPath(absPath)
+  for (const l of live.values()) if (l.path === p && now - l.at <= AGENT_EDITING_MAX_MS) return true
+  for (const c of calls.values()) {
+    if (c.ended == null && now - c.started <= AGENT_EDITING_MAX_MS && c.targets.some((t) => t.path === p)) return true
+  }
+  return false
+}
+
+/** 账本变了(开始 / 结束 / 流式登记 / 过期)的通知 —— 编辑器的「正在修改」提示订阅它。 */
+export function subscribeAgentWrites(cb: () => void): () => void {
+  listeners.add(cb)
+  return () => { listeners.delete(cb) }
 }
 
 /** 写类工具结束(tool_result)。成功:从现在起再算 GRACE 这么久;**失败(isError)立即撤销**(Codex 复核 P0 ①)——
  *  没写成的调用不该在接下来的 15 秒里把别人的改动认成 Tangu 的。 */
 export function noteAgentWriteEnd(callId: string, ok = true, now = Date.now()): void {
+  if (live.delete(callId)) changed()
   const c = calls.get(callId)
   if (!c) return
-  if (!ok) { calls.delete(callId); return }
-  if (c.ended == null) c.ended = now
+  if (!ok) calls.delete(callId)
+  else if (c.ended == null) c.ended = now
+  changed()
 }
 
 /** 这份盘上正文是不是这次写入写出来的(③:带了完整内容 / new_string 的写入逐项核对;只有路径的照旧放行)。 */
@@ -97,4 +147,6 @@ export function claimAgentWrite(absPath: string, diskText: string, now = Date.no
 /** 测试 / 台架用:清空账本。 */
 export function resetAgentWriteLedger(): void {
   calls.clear()
+  live.clear()
+  changed()
 }

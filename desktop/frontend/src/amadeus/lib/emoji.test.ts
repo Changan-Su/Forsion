@@ -5,7 +5,7 @@ describe('emoji 库', () => {
   it('比原来那 66 个硬编码的多得多', () => expect(EMOJI_ALL.length).toBeGreaterThan(300))
 
   it('每条都有关键词(没关键词=搜不到=等于不存在)', () => {
-    for (const g of EMOJI_GROUPS) for (const [e, kw] of g.items) expect(kw.trim(), `${g.name} ${e}`).not.toBe('')
+    for (const g of EMOJI_GROUPS) for (const [e, kw] of g.items) expect(kw.trim(), `${g.nameKey} ${e}`).not.toBe('')
   })
 
   it('中英文都能搜', () => {

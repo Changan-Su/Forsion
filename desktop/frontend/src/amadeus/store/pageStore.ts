@@ -17,6 +17,7 @@ import { pageKey, resolvePageName } from '@amadeus-shared/links'
 import { parseBlockSubpath, parsePdfLinkInner, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { amadeus } from '../api'
 import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../lib/fd'
 import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
@@ -305,6 +306,9 @@ interface PageState {
   cancelWikiCreate(): void
   /** 显式创建意图(QuickSwitcher 新建):vault 根、不询问(= 历史 openWikiLink 的创建分支)。 */
   createWikiPage(name: string): Promise<void>
+  /** 新建笔记的统一出生 + 打开(评审 G4-12):素文件出生(已存在则不写、只打开)→ 刷新结构 →
+   *  新建才发标题聚焦 → 宿主 openNote 门面导航(无人接管才就地 loadPage)。 */
+  birthAndOpen(path: string): Promise<void>
   /** 在 parentPath 的 .fd 里建子笔记(名字对全库 pageKey 与 .fd 内文件双重去重,同步父 children),
    *  返回新 vault 相对路径;不导航。「在笔记内创建文件」的统一落点。 */
   createChildNote(parentPath: string, name: string): Promise<string>
@@ -701,12 +705,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // v4(2026-08-13):新建笔记以**素文件**出生(空纯 md,零 frontmatter 零标记)——
       // amadeusViews 的绞杀者路由把它送进统一实例编辑器,不再用 newPage 造 v3(amadeus_page+标记)。
       // 素文件对旧端=外来 md(照常可编辑,混装矩阵见 spec §5.2),不受「手机闸」限制。
-      await amadeus.writeTextFile(path, '', { create: true })
-      track('note.create'); act('note.create', { f: path })
-      await get().refreshPages()
+      // 出生 + 打开统一走 birthAndOpen(评审 G4-12:其余新建入口此前各自调 newPage 造 v3、绕开门面)。
+      await get().birthAndOpen(path)
+    },
+
+    async birthAndOpen(path) {
+      const r = await birthNoteFile(path)
+      await get().refreshStructure()
       // 聚焦请求必须先于导航:后设时 UnifiedPage 已经挂载并跑完一次性消费 effect,
-      // 信号永远等不到下一次 path 变化,表现成"新笔记偶尔不进标题编辑"。
-      requestTitleFocus(path)
+      // 信号永远等不到下一次 path 变化,表现成"新笔记偶尔不进标题编辑"。已存在的笔记 = 打开,不抢标题。
+      if (r === 'created') requestTitleFocus(path)
       // ⚠️ 导航必须交给宿主的 openNote 门面,别在这里直调 loadPage:loadPage 装的是**活动 scope**,
       // 而活动 scope 只跟着编辑器面板走(amadeusViews effect ②)—— 站在主页/聊天/新标签上新建时,
       // 它指着一个后台的编辑器 tab:笔记静默装进看不见的那份 store(当前 view 不跳),还会被那个 tab
@@ -945,12 +953,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       if (!base) return
       try {
         await get().flushSave() // 换页前落盘,防待存的上一页内容被丢/写错对象
-        const path = `${base}.md`
-        const page = await amadeus.newPage(path)
-        track('note.create'); act('note.create', { f: path })
-        await get().refreshPages()
-        requestTitleFocus(path)
-        set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
+        await get().birthAndOpen(`${base}.md`)
       } catch (e) {
         set({ error: String(e) })
       }
@@ -967,17 +970,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
           const clean = name.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
           if (!clean) return
           await get().flushSave()
-          const path = /\.md$/i.test(clean) ? clean : `${clean}.md`
-          const page = await amadeus.newPage(path)
-          track('note.create'); act('note.create', { f: path })
-          await get().refreshStructure()
-          requestTitleFocus(path)
-          set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
+          await get().birthAndOpen(/\.md$/i.test(clean) ? clean : `${clean}.md`)
           return
         }
         if (sourcePath) {
           const p = await get().createChildNote(sourcePath, name)
-          await get().loadPage(p)
+          // 导航交给宿主 openNote 门面(同 createPageInFolder 的理由);无人接管才就地装载。
+          if (!navigateToNote(p)) await get().loadPage(p)
           return
         }
         await get().createWikiPage(name)
@@ -1003,8 +1002,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       let base = stem
       for (let i = 1; globalKeys.has(pageKey(base)) || inFd.has(`${base}.md`.toLowerCase()); i++) base = `${stem}-${i}`
       const path = `${fd}/${base}.md`
-      await amadeus.newPage(path) // mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile 同
-      track('note.create'); act('note.create', { f: path })
+      await birthNoteFile(path) // 素文件出生(G4-12);mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile recursive
       await get().syncFdChildren(parentPath) // 内含 refreshStructure
       requestTitleFocus(path) // 打开后落光标到标题栏(调用方负责导航)
       return path
@@ -1594,6 +1592,21 @@ export function navigateToNote(path: string): boolean {
   // cancelable + preventDefault:平台自带的「有人接管了吗」握手,不用再自己发明标志位。
   const ev = typeof CustomEvent === 'function' ? new CustomEvent('amadeus:navigate-note', { detail: { path }, cancelable: true }) : null
   return !!ev && window.dispatchEvent?.(ev) === false
+}
+
+/** 新建笔记的**唯一**出生动作(评审 G4-12):空纯 md,零 frontmatter 零块标记 —— v4「素文件出生」约定。
+ *  老入口(快切新建 / 未解析链接确认 / 子笔记 / 笔记视图加行)此前调 `amadeus.newPage`,生出的是 v3
+ *  (amadeus_page 三键 + `<!-- a 1 -->`),而且主进程 newPage 对已存在的文件照写 = 覆盖风险。
+ *  已存在(以**磁盘**为准:pages[] 可能落后于磁盘)→ 不写,回 'exists',调用方照常打开它。
+ *  写带 base = 空串指纹:支持比对交换写的宿主(桌面主进程 / 云桥 / 移动本地库)在「读后写前」那道窄缝里
+ *  别处刚建了同名且有内容的文件时也不覆盖(回 ok:false → 按已存在处理)。 */
+export async function birthNoteFile(path: string): Promise<'created' | 'exists'> {
+  const cur = await amadeus.readTextFile?.(path)?.catch(() => null)
+  if (cur != null) return 'exists'
+  const r = await amadeus.writeTextFile(path, '', { create: true, base: textFingerprint('') })
+  if (r && r.ok === false) return 'exists'
+  track('note.create'); act('note.create', { f: path })
+  return 'created'
 }
 
 /** 标题聚焦请求(Notion 式:新建即先命名)。一次性,由装到该篇的编辑器认领。 */

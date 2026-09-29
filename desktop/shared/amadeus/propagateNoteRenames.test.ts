@@ -71,6 +71,12 @@ describe('propagateNoteRenames', () => {
     expect(r.rewritten).toEqual(['A.md'])
     expect(r.failed).toEqual([{ path: 'Gone.md', error: 'gone' }])
   })
+  it('(Codex 复核 inst P0-2)宿主的 CAS 报文件已不在(current:null)→ 记入 failed(gone),不拿 null 去重算', async () => {
+    const files = new Map([['A.md', 'x [[B]]\n'], ['C.md', '']])
+    const io: RenamePropagationIO = { read: async (p) => files.get(p) ?? null, write: async () => ({ ok: false, current: null }) }
+    const r = await propagateNoteRenames(io, { 'B.md': 'C.md' }, ['A.md', 'B.md'])
+    expect(r).toEqual({ rewritten: [], failed: [{ path: 'A.md', error: 'gone' }] })
+  })
 })
 
 describe('queueStructureOps', () => {

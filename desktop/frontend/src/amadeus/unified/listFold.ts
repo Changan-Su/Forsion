@@ -12,7 +12,7 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { registerMessages, translate } from '../../i18n'
+import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'listfold.expandChildren': { zh: '展开子项', en: 'Expand children' },
@@ -52,10 +52,12 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           b.className = 'amx-fold-caret'
           b.textContent = '▸'
           b.contentEditable = 'false'
-          b.title = translate('listfold.expandChildren')
-          // widget 带 key,装饰重建时 DOM 会被复用 —— 切语言不会重造这颗按钮,
-          // 所以在 hover(tooltip 真正要显示的那一刻)重取一次文案。
-          b.addEventListener('mouseenter', () => { b.title = translate('listfold.expandChildren') })
+          // widget 带 key,装饰重建时 DOM 会被复用 —— 切语言不会重造这颗按钮,所以订语言变更刷文案
+          // (spec.destroy 退订)。可达名 + 展开态(P-10):文字是字形 ▸,只出现在已折叠项上,恒 aria-expanded=false。
+          const label = (): void => { b.title = translate('listfold.expandChildren'); b.setAttribute('aria-label', b.title) }
+          label()
+          b.setAttribute('aria-expanded', 'false')
+          ;(b as unknown as { __off?: () => void }).__off = subscribeLocale(label)
           b.addEventListener('mousedown', (e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -65,7 +67,7 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           })
           return b
         },
-        { side: -1, ignoreSelection: true, key: `amxlfold:${p}` },
+        { side: -1, ignoreSelection: true, key: `amxlfold:${p}`, destroy: (dom) => { (dom as unknown as { __off?: () => void }).__off?.() } },
       ),
     )
   }

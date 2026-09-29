@@ -5,7 +5,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { lazyRetry } from '../../../lazyRetry'
 import { useDrawStore, registerDrawingApplier } from '../../store/drawingStore'
 import { useTheme } from '../../../stores/themeStore'
-import { useI18n } from '../../../i18n'
+import { registerMessages, useI18n } from '../../../i18n'
 import { amadeus } from '../../api'
 import type { BoardSettings } from '@amadeus-shared/excalidraw/board'
 
@@ -30,34 +30,44 @@ if (typeof window !== 'undefined') {
 
 const ExcalidrawCanvas = lazyRetry(() => import('./ExcalidrawCanvas'))
 
+// 嵌入层(unified/embedLayer)的独立 React 根也渲染本组件 —— 那里靠 HostLocaleProvider 拿到 useI18n(评审 R-15)。
+registerMessages({
+  'drawembed.loading': { zh: '读取画板…', en: 'Loading drawing…' },
+  'drawembed.missing': { zh: '画板文件缺失：', en: 'Drawing file not found: ' },
+  'drawembed.corrupt': { zh: '画板文件读不出场景数据，已进入只读保护。', en: "Can't read the drawing's scene data, so it is open read-only." },
+  'drawembed.reveal': { zh: '在文件管理器中显示', en: 'Show in file manager' },
+  'drawembed.loadingEditor': { zh: '加载画板编辑器…', en: 'Loading drawing editor…' },
+})
+
 export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target: string; pagePath: string; readOnly?: boolean }): React.JSX.Element {
   const entry = useDrawStore((s) => s.entries[target])
   const generation = useDrawStore((s) => s.gen)
+  const { t } = useI18n()
   useEffect(() => {
     void useDrawStore.getState().load(pagePath, target) // 幂等,多处嵌入共用一次载入
   }, [pagePath, target, generation])
 
   if (!entry || entry.status === 'loading') {
-    return <div className="amx-draw amx-draw-state">读取画板…</div>
+    return <div className="amx-draw amx-draw-state">{t('drawembed.loading')}</div>
   }
   if (entry.status === 'missing') {
     return (
       <div className="amx-draw amx-draw-state">
-        画板文件缺失:<code>{target}</code>
-        <button className="amx-db-linkbtn" onClick={() => void useDrawStore.getState().reload(pagePath, target)}>重试</button>
+        {t('drawembed.missing')}<code>{target}</code>
+        <button className="amx-db-linkbtn" onClick={() => void useDrawStore.getState().reload(pagePath, target)}>{t('common.retry')}</button>
       </div>
     )
   }
   if (entry.status === 'corrupt' || !entry.scene) {
     return (
       <div className="amx-draw amx-draw-state">
-        画板文件读不出场景数据,已进入只读保护。
+        {t('drawembed.corrupt')}
         {entry.path && (
           <button className="amx-db-linkbtn" onClick={() => void amadeus.revealInFileManager(entry.path!)}>
-            在文件管理器中显示
+            {t('drawembed.reveal')}
           </button>
         )}
-        <button className="amx-db-linkbtn" onClick={() => void useDrawStore.getState().reload(pagePath, target)}>重试</button>
+        <button className="amx-db-linkbtn" onClick={() => void useDrawStore.getState().reload(pagePath, target)}>{t('common.retry')}</button>
       </div>
     )
   }
@@ -75,10 +85,10 @@ function Board({ target, settings, generation, readOnly = false }: { target: str
     if (!readOnly && useDrawStore.getState().gen === generation) void useDrawStore.getState().flush(target)
   }, [target, generation, readOnly])
   const mode = useTheme((s) => s.mode) // 注意:themeStore 的 lang 是**设计语言**(lovable/echo…),不是界面语言
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   return (
     <div className="amx-draw" onPointerDown={(e) => e.stopPropagation()}>
-      <Suspense fallback={<div className="amx-draw-state">加载画板编辑器…</div>}>
+      <Suspense fallback={<div className="amx-draw-state">{t('drawembed.loadingEditor')}</div>}>
         <ExcalidrawCanvas
           initialData={seed}
           theme={mode}

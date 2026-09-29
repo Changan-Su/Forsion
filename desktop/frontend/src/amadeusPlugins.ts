@@ -9,7 +9,7 @@ import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { calloutBlocks, wordCount } from '@amadeus/plugins/builtins'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
-import { useUiOverlay } from './amadeusOverlayStore'
+import { useQuickFind } from './quickFind'
 import { addCommand, removeCommand } from '@lcl/engine'
 import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
@@ -90,7 +90,7 @@ export function installAmadeusPlugins(): void {
     if (!s.palette || s.palette === p.palette) return
     const pal = s.palette
     useUiStore.getState().setPalette(null)
-    if (pal === 'switch') useUiOverlay.getState().open('switcher')
+    if (pal === 'switch') useQuickFind.getState().openPalette() // 快切已并入全局快速查找(G4-11)
     else if (pal === 'search') openSearchView()
   })
 }

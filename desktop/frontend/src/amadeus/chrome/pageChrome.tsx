@@ -66,6 +66,15 @@ export function useActiveCoverY(): number {
   }, [fmExtra])
 }
 
+/** 封面图在框里纵向能挪动的余量(CSS px):object-fit:cover 按 max(宽比, 高比) 缩放,画出来的高减去框高。
+ *  object-position 的 Y% 语义是「余量的百分之几落在上方」—— 所以 1% = 余量/100 px,增益随图片比例而变;
+ *  余量 ≤ 0(图比框还扁,缩放按高度走)时纵向调位没有意义。 */
+export function coverSlack(img: HTMLImageElement): number {
+  const nw = img.naturalWidth, nh = img.naturalHeight, bw = img.clientWidth, bh = img.clientHeight
+  if (!nw || !nh || !bw || !bh) return 0
+  return nh * Math.max(bw / nw, bh / nh) - bh
+}
+
 /** Notion/pixel-banner 式封面横幅:收进正文区、四角圆角裁切;上下拖动图片调纵向焦点(存 fm cover_y);
  *  底部柔和渐变逐渐融入页面背景色,与正文自然过渡;悬停出「更换/移除」。 */
 export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCoverY, readOnly = false }: {
@@ -88,7 +97,21 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const [dragY, setDragY] = useState<number | null>(null)
   const [reposition, setReposition] = useState(false) // 「调整位置」模式:默认图片锁定,点按钮才解锁可拖
+  const [slack, setSlack] = useState(0) // 纵向可调余量(见 coverSlack);≤0 不给「调整位置」
+  const imgRef = useRef<HTMLImageElement | null>(null)
+  /** 拖动中的现值:松手时从这里取,不在 setState 的 updater 里调 setY(那会在渲染期更新父组件,C-11 的 React 警告)。 */
+  const drag = useRef<{ id: number; startY: number; base: number; z: number; slack: number; cur: number } | null>(null)
   const target = page ?? activePage
+  useEffect(() => {
+    const img = imgRef.current
+    if (!img) return
+    const measure = (): void => setSlack(coverSlack(img))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(img)
+    return () => ro.disconnect()
+  }, [target, coverProp, storeCover])
+  useEffect(() => { if (reposition && slack < 1) setReposition(false) }, [reposition, slack])
   const cover = coverProp !== undefined ? coverProp : storeCover
   const savedY = coverY ?? storeY
   const posY = dragY ?? savedY
@@ -99,26 +122,40 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   return (
     <div className={`amx-cover${reposition ? ' amx-cover-repo' : ''}`}>
       <img
+        ref={imgRef}
         src={src}
         alt=""
         draggable={false}
         style={{ objectPosition: `50% ${posY}%` }}
-        onMouseDown={(e) => {
-          // 仅「调整位置」模式解锁拖拽:鼠标下移 → object-position Y 增大;松手落 fm cover_y。
-          if (!reposition || e.button !== 0) return
+        onLoad={(e) => setSlack(coverSlack(e.currentTarget))}
+        // 仅「调整位置」模式解锁拖拽,图片**跟手** 1:1(评审 C-11):指针下移 Δ → 图片下移 Δ,即 Y% 减 Δ/余量×100。
+        // 此前按框高换算且符号反了:16:9 约 1.3 倍、1:2 甩出框外、3:1 只有 0.37 倍,方向还与手相反。
+        // pointer 事件 + capture:触屏也能拖,指针出框不丢;松手才落 fm cover_y。
+        onPointerDown={(e) => {
+          if (!reposition || !e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return
+          const k = coverSlack(e.currentTarget)
+          if (k < 1) return
           e.preventDefault()
-          const startClientY = e.clientY
-          const h = (e.currentTarget as HTMLElement).offsetHeight || 210
-          const base = posY
-          const onMove = (ev: MouseEvent): void => setDragY(Math.max(0, Math.min(100, base + ((ev.clientY - startClientY) / h) * 100)))
-          const onUp = (): void => {
-            window.removeEventListener('mousemove', onMove)
-            window.removeEventListener('mouseup', onUp)
-            setDragY((cur) => { if (cur != null) setY(Math.round(cur)); return null })
-          }
-          window.addEventListener('mousemove', onMove)
-          window.addEventListener('mouseup', onUp)
+          e.currentTarget.setPointerCapture(e.pointerId)
+          const z = (e.currentTarget as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
+          drag.current = { id: e.pointerId, startY: e.clientY, base: posY, z, slack: k, cur: posY }
         }}
+        onPointerMove={(e) => {
+          const d = drag.current
+          if (!d || d.id !== e.pointerId) return
+          const dy = (e.clientY - d.startY) / d.z // 视口 px → 元素 CSS px(应用级 zoom)
+          d.cur = Math.max(0, Math.min(100, d.base - (dy / d.slack) * 100))
+          setDragY(d.cur)
+        }}
+        onPointerUp={(e) => {
+          const d = drag.current
+          if (!d || d.id !== e.pointerId) return
+          drag.current = null
+          setDragY(null)
+          const y = Math.round(d.cur * 10) / 10
+          if (y !== d.base) setY(y)
+        }}
+        onPointerCancel={() => { drag.current = null; setDragY(null) }}
         onError={(e) => { (e.target as HTMLElement).style.opacity = '0.15' }}
       />
       <div className="amx-cover-grad" />
@@ -130,7 +167,7 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
           ) : (
             <>
               <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>{t('pgchrome.coverChange')}</button>
-              <button onClick={() => setReposition(true)}>{t('pgchrome.coverReposition')}</button>
+              {slack >= 1 && <button onClick={() => setReposition(true)}>{t('pgchrome.coverReposition')}</button>}
               <button onClick={() => setCover(null)}>{t('pgchrome.coverRemove')}</button>
             </>
           )}
@@ -340,10 +377,10 @@ export function IconPicker({ x, y, current, onPick, onClose }: {
                 </button>
               ))
             : EMOJI_GROUPS.map((g) => (
-                <Fragment key={g.name}>
-                  <div className="amx-iconpick-group">{g.name}</div>
+                <Fragment key={g.nameKey}>
+                  <div className="amx-iconpick-group">{t(g.nameKey)}</div>
                   {g.items.map(([em, kw]) => (
-                    <button key={`${g.name}-${em}`} className={`amx-iconpick-item${current === em ? ' active' : ''}`} title={kw} onClick={() => onPick(em)}>
+                    <button key={`${g.nameKey}-${em}`} className={`amx-iconpick-item${current === em ? ' active' : ''}`} title={kw} onClick={() => onPick(em)}>
                       {em}
                     </button>
                   ))}

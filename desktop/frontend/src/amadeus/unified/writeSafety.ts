@@ -16,6 +16,10 @@ registerMessages({
     zh: '「{name}」在你编辑时被别处改过。已保留你的版本，被覆盖的那一版另存为「{copy}」。',
     en: '"{name}" was changed elsewhere while you were editing. Your version was kept, and the overwritten version was saved as "{copy}".',
   },
+  'unisave.conflict.agentToast': {
+    zh: 'Tangu 在你编辑时改了「{name}」。已保留你的版本，Tangu 的改动另存为「{copy}」。',
+    en: 'Tangu changed "{name}" while you were editing. Your version was kept, and Tangu’s changes were saved as "{copy}".',
+  },
   'unisave.conflict.open': { zh: '打开副本', en: 'Open copy' },
   'unisave.failed.toast': {
     zh: '「{name}」没能保存（{reason}），正在自动重试。保存成功之前请不要关闭它。',
@@ -28,6 +32,16 @@ registerMessages({
   'unisave.draft.hint': { zh: '恢复后会覆盖盘上当前内容；盘上那一版若是别处改过的，会先另存为冲突副本。', en: 'Restoring replaces what’s on disk now. If that version was changed elsewhere, it is saved as a conflict copy first.' },
   'unisave.draft.restore': { zh: '恢复草稿', en: 'Restore draft' },
   'unisave.draft.discard': { zh: '丢弃', en: 'Discard' },
+  'unisave.gone.toast': {
+    zh: '「{name}」已在别处被删除或移走，最后的改动没来得及保存，另存副本也没写成。可以把这篇的内容复制下来。',
+    en: '"{name}" was deleted or moved elsewhere before your last changes were saved, and a backup copy couldn’t be written. You can copy its text.',
+  },
+  'unisave.rescued.toast': {
+    zh: '「{name}」已在别处被删除或移走。你还没保存的内容另存为「{copy}」。',
+    en: '"{name}" was deleted or moved elsewhere. Your unsaved changes were saved as "{copy}".',
+  },
+  'unisave.gone.copy': { zh: '复制内容', en: 'Copy text' },
+  'unisave.gone.copied': { zh: '已复制到剪贴板', en: 'Copied to clipboard' },
 })
 
 /** `amadeus:toast` 的事件载荷(编辑器层 → amadeusOverlays)。只有 text 时走底部吐司;带 level / action 的
@@ -49,7 +63,17 @@ const noteName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$
 /** 把即将被本地版本盖掉的盘上内容另存为冲突副本,返回副本路径。
  *  命名与云同步引擎同一口径(shared/writeConflict):同分钟撞名按 `-2/-3…` 递增;已有**同内容**副本就直接复用
  *  (同一版本不出第二份)。写不进去就抛 —— 调用方据此**不许**覆盖原文件(宁可这次保存卡住重试,不吃掉别人的改动)。 */
-export async function writeConflictCopy(path: string, content: string, now = new Date()): Promise<string> {
+// 本窗内的副本写入排成一条队(评审 G1-08 返修):「查空位 → 写」不是原子的,同篇双开的两个实例同时另存
+// (别处删了这篇、两边各有没落盘的字)会看中同一个空位,后写的把先写的整份盖掉 —— 正是要保住的那份字。
+// 跨窗口的同一竞态仍在(记账:需要主进程的「仅新建」写口)。
+let copyQueue: Promise<unknown> = Promise.resolve()
+export function writeConflictCopy(path: string, content: string, now = new Date()): Promise<string> {
+  const run = copyQueue.then(() => writeConflictCopyNow(path, content, now), () => writeConflictCopyNow(path, content, now))
+  copyQueue = run.catch(() => {})
+  return run
+}
+
+async function writeConflictCopyNow(path: string, content: string, now: Date): Promise<string> {
   const first = conflictCopyPath(path, now)
   for (let n = 1; n <= 50; n++) {
     const candidate = conflictCopyVariant(first, n)
@@ -63,11 +87,12 @@ export async function writeConflictCopy(path: string, content: string, now = new
 }
 
 /** D-03 / G1-01:error 级提示 + 「打开副本」。同一篇的连续冲突合并成一条(dedupeKey)。 */
-export function toastConflictCopy(path: string, copy: string): void {
+/** agent:被盖掉的那一版是 Tangu 写的(评审 G3-05:归属账本认得出)—— 说清是谁的改动进了副本,别让它像「别处」一样模糊。 */
+export function toastConflictCopy(path: string, copy: string, agent = false): void {
   emitAmadeusToast({
     level: 'error',
     dedupeKey: `amx-conflict:${path}`,
-    text: translate('unisave.conflict.toast', { name: noteName(path), copy: noteName(copy) }),
+    text: translate(agent ? 'unisave.conflict.agentToast' : 'unisave.conflict.toast', { name: noteName(path), copy: noteName(copy) }),
     action: {
       label: translate('unisave.conflict.open'),
       // 走导航门面事件(amadeusOverlays → openNote):副本是刚写出来的新文件,按名字解析可能还没进页面清单。
@@ -90,6 +115,36 @@ export function toastSaveFailed(path: string, error: unknown): void {
     level: 'warning',
     dedupeKey: `amx-savefail:${path}`,
     text: translate('unisave.failed.toast', { name: noteName(path), reason: shortWriteError(error) }),
+  })
+}
+
+/** 这篇在盘上没了、手里的字已另存为副本(评审 G1-08 返修):error 级常驻,带「打开副本」。
+ *  去重键按**副本**:同篇双开两个实例各存各的副本、各出一条,不互相顶掉(同内容共用一份副本时也只出一条)。 */
+export function toastRescued(path: string, copy: string): void {
+  emitAmadeusToast({
+    level: 'error',
+    dedupeKey: `amx-rescued:${copy}`,
+    text: translate('unisave.rescued.toast', { name: noteName(path), copy: noteName(copy) }),
+    action: {
+      label: translate('unisave.conflict.open'),
+      run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },
+    },
+  })
+}
+
+/** 兜底(评审 G1-08):另存副本也写不进去时,最后的入口是剪贴板。复制在点按钮时发生(用户手势,剪贴板写得进)。
+ *  去重键带一段内容指纹:同篇双开两个实例的字不同,各出一条。 */
+export function toastGoneUnsaved(path: string, text: string): void {
+  emitAmadeusToast({
+    level: 'error',
+    dedupeKey: `amx-gone:${path}:${textFingerprint(text)}`,
+    text: translate('unisave.gone.toast', { name: noteName(path) }),
+    action: {
+      label: translate('unisave.gone.copy'),
+      run: () => {
+        void navigator.clipboard?.writeText(text).then(() => emitAmadeusToast({ text: translate('unisave.gone.copied') }), () => {})
+      },
+    },
   })
 }
 

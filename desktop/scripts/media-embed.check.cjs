@@ -21,6 +21,8 @@
 //         视频链接不再自动变播放器(用户实报「粘贴视频链接直接就 embed 了」)
 //   R1-R4 嵌入宽度 `![[…|320]]`:像图片一样拖右缘把手改宽,零位移不写盘,别的嵌入形态不挂把手
 //   F1-F3 坏图 / 坏媒体失败态(R-21):占位写明「无法加载:文件名」,远程坏图不再 0×0,放不了的视频不留空播放器
+//   L1-L3 嵌入层独立 React 根跟界面语言(评审 R-15):英文界面下书签卡 / 媒体 / 网页 / 按钮 / 跨笔记壳没有汉字,
+//         切语言当场跟着变 —— 独立根跨不过 LocaleProvider,子组件的 useI18n 以前恒回落中文
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -64,8 +66,8 @@ function silentWavDataUrl(seconds) {
   return 'data:audio/wav;base64,' + buf.toString('base64')
 }
 
-async function open(browser, seed) {
-  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
+async function open(browser, seed, locale = 'zh-CN') {
+  const p = await browser.newPage({ locale, viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
@@ -582,6 +584,46 @@ async function main() {
     if (box) { const r = await box.boundingBox(); await p.mouse.click(r.x + r.width / 2, r.y + r.height / 2); await p.waitForTimeout(200) }
     const sel = await p.evaluate(() => window.__upage.probe.view().state.selection.toJSON().type)
     record('F1 点坏图占位仍是选中这块(交互不因失败态丢)', sel === 'node', sel)
+    await p.close()
+  }
+
+  // ── L1–L3:嵌入层独立 React 根跟界面语言(R-15)────────────────────────────────
+  {
+    const seed = [
+      '开篇', '', 'https://example.com/article', '', '![[a.m4a]]', '', '![[https://example.com/page]]', '',
+      '```forsion-button', '{"v":1,"label":""}', '```', '', '![[NoSuchNote]]',
+    ].join('\n')
+    const p = await open(browser, seed, 'en-US')
+    await installAssets(p, wav, ['a.m4a'])
+    await p.waitForTimeout(1200)
+    // 嵌入体里的**界面**文案(title / aria-label / placeholder / 纯文本叶子);嵌入笔记的正文是用户内容,不算。
+    const scan = () => p.evaluate(() => {
+      const han = /[\u4e00-\u9fa5]/
+      const out = { kinds: [], zh: [] }
+      for (const body of document.querySelectorAll('.unified-embed .unified-embed-body')) {
+        out.kinds.push(body.firstElementChild?.className?.split(' ')[0] ?? '?')
+        body.querySelectorAll('*').forEach((n) => {
+          // ⚠️ 嵌入体本身就在外层编辑器的 .ProseMirror 里 —— 只排除嵌入体**内部**的第二个编辑器(嵌入笔记正文)
+          const inner = n.closest('.ProseMirror')
+          if (inner && body.contains(inner)) return
+          for (const a of ['title', 'aria-label', 'placeholder']) { const v = n.getAttribute(a); if (v && han.test(v)) out.zh.push(`${a}=${v.slice(0, 30)}`) }
+          if (n.childNodes.length === 1 && n.firstChild.nodeType === 3 && han.test(n.textContent)) out.zh.push(`text=${n.textContent.trim().slice(0, 30)}`)
+        })
+      }
+      return out
+    })
+    const en = await scan()
+    record('L1 英文界面:书签卡 / 媒体 / 网页 / 按钮 / 跨笔记壳的界面文案不含汉字',
+      en.kinds.length >= 5 && en.zh.length === 0, `kinds=${en.kinds.join(',')} zh=${JSON.stringify(en.zh.slice(0, 4))}`)
+    await p.evaluate(() => window.__upage.setLocale('zh'))
+    await p.waitForTimeout(400)
+    const zh = await scan()
+    // L2 兼作 L1 / L3 的仪器自检:同一批嵌入体在中文下确实扫得到汉字,「零汉字」才不是扫描漏了。
+    record('L2 切到中文 → 嵌入体当场跟着变(不重挂)', zh.zh.length >= 3, `zh=${JSON.stringify(zh.zh.slice(0, 4))}`)
+    await p.evaluate(() => window.__upage.setLocale('en'))
+    await p.waitForTimeout(400)
+    const back = await scan()
+    record('L3 再切回英文 → 汉字全部退掉', back.zh.length === 0, `zh=${JSON.stringify(back.zh.slice(0, 4))}`)
     await p.close()
   }
 

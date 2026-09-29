@@ -5,6 +5,8 @@
  */
 
 import { cloudAccountIdentity } from '@/services/cloudAccountCache'
+import { translate } from '@/i18n'
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案(G2-14)
 
 export class HttpError extends Error {
   constructor(
@@ -86,8 +88,8 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
     } catch (e) {
       throw new HttpError(0, null, ctrl.signal.aborted
-        ? `请求超时(${Math.round(timeoutMs / 1000)}s),请检查网络后重试`
-        : `网络错误:${e instanceof Error ? e.message : String(e)}`)
+        ? translate('amxbridge.timeout', { s: Math.round(timeoutMs / 1000) })
+        : translate('amxbridge.network', { msg: e instanceof Error ? e.message : String(e) }))
     } finally {
       clearTimeout(timer)
       cfg.signal?.removeEventListener('abort', cancel)

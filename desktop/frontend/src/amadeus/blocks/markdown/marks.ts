@@ -172,7 +172,9 @@ export function inlineHtmlMarksPlugin(this: any) {
       // `remarkStringifyOptionsCtx.handlers` 压掉,见 attentionFlanking.ts 文件头。
       [U]: htmlWrap(() => '<u>', '</u>'),
       [FG]: htmlWrap((n: MdNode) => `<span style="color:${n.color}">`, '</span>'),
-      [BG]: htmlWrap((n: MdNode) => `<mark style="background:${n.bg}">`, '</mark>'),
+      // 无色高亮(裸 `<mark>` / `==x==` 以外的高亮命令)写回裸 `<mark>`:`style="background:"` 读侧 openTag 不认
+      // (颜色值至少一个字),重开退成字面,高亮永久丢失(I-16e)。
+      [BG]: htmlWrap((n: MdNode) => (n.bg ? `<mark style="background:${n.bg}">` : '<mark>'), '</mark>'),
       [KBD]: htmlWrap(() => '<kbd>', '</kbd>'),
       [SUB]: htmlWrap(() => '<sub>', '</sub>'),
       [SUP]: htmlWrap(() => '<sup>', '</sup>'),

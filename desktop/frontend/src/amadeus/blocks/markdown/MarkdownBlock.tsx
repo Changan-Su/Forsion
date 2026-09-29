@@ -16,7 +16,7 @@
 // Images are stored as PORTABLE page-relative links (![](.amadeus/x.png)); for display
 // they are rewritten to the amadeus-asset:// protocol and back on save (see @amadeus-shared/assets).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   Editor,
   commandsCtx,
@@ -56,12 +56,13 @@ import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './pa
 import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { serializeForSave } from './verbatim'
+import { restoreEscapeSentinels } from './literalEscape'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { MarkType, Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
+import { DOMParser as PmDOMParser, DOMSerializer, Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -108,20 +109,20 @@ import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
-import { taskCheckboxPlugin } from './taskList'
+import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { spellcheckPlugin } from './spellcheck'
 import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
-import { isPlainMultiline, plainLinesToParagraphs } from './plainPaste'
+import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
-import { pluginEditorExtensions, editorExtensionGen, subscribeEditorExtensions } from '../../plugins/editorExtensions'
-import { registerMessages, translate, useI18n } from '../../../i18n'
+import { pluginEditorExtensions } from '../../plugins/editorExtensions'
+import { registerMessages, subscribeLocale, translate, useI18n } from '../../../i18n'
 
 // 本文件的文案命名空间恒为 `mdblock.*`(别的组件在同一本全局字典里注册,撞键=静默覆盖)。
 // ⚠️ 模块作用域的表(SLASH_ITEMS)只存**键**,取文案一律在渲染期 t()/translate() ——
@@ -135,6 +136,8 @@ registerMessages({
   'mdblock.default.drawing': { zh: '画板', en: 'Drawing' },
   'mdblock.default.noteViewFolder': { zh: '笔记视图', en: 'Note view' },
   'mdblock.default.noteView': { zh: '未命名视图', en: 'Untitled view' },
+  // `/表格` 骨架的表头(R-16):写进磁盘的「列 1 | 列 2」跟当前界面语言走,英文界面不再落中文表头。
+  'amadeus.default.tableColumn': { zh: '列 {n}', en: 'Column {n}' },
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
   'mdblock.group.basic': { zh: '基础', en: 'Basic' },
@@ -199,6 +202,8 @@ registerMessages({
   'mdblock.pasteAs.embedHint': { zh: '播放器 / 网页', en: 'Player / web page' },
   // 菜单空态与脚注
   'mdblock.menu.noMatch': { zh: '无匹配项', en: 'No matches' },
+  // 编辑器根的可达名(P-10):读屏进到正文时念出这是什么,而不是一个无名的文本框。
+  'mdblock.editorLabel': { zh: '笔记正文', en: 'Note body' },
   'mdblock.menu.noDatabase': { zh: '库里还没有多维表（用 /多维表 新建一个）', en: 'No databases in this vault yet (create one with /database)' },
   'mdblock.foot.select': { zh: '↑↓ 选择', en: '↑↓ Select' },
   'mdblock.foot.confirm': { zh: '↵ 确认', en: '↵ Confirm' },
@@ -224,7 +229,8 @@ export function stampedFileName(kind: string): string {
  *  markdownUpdated 监听器与 UnifiedPage.serializeNow(flush 前同步快照)都必须走这里 ——
  *  Codex 终审 P0:serializeNow 曾绕过本链,快打字后立刻改名会把 \[\[ 持久化成死链。 */
 export function normalizeSerializedMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))))
+  // restoreEscapeSentinels 必须在最后:用户写的转义(D-11)以占位穿过上面这串反转义,再换回 `\`(见 ./literalEscape)。
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown))))))))
 }
 /** v4 整篇落盘(D-18):没被编辑的顶层块逐字写回原文,其余走序列化 + normalizeSerializedMd(见 ./verbatim)。
  *  监听器、UnifiedPage.serializeNow 与 canonical(isPristine 的规范形)**必须同用这一个** —— 口径一分叉,
@@ -239,7 +245,7 @@ export function serializeUnified(ctx: Ctx, doc: ProseNode): string {
  *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
  *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
 export function normalizeFragmentMd(markdown: string): string {
-  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown)))))
+  return restoreEscapeSentinels(stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(unescapeTagAtLineStart(unescapeHighlightAtLineStart(markdown))))))
 }
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
@@ -583,11 +589,9 @@ export function MilkdownInner({
     return normalizeFragmentMd(out)
   }
 
-  // 插件编辑器扩展(ctx.registerEditorExtension)的注册表代次。变了 = 有插件被启用/停用,
-  // 已建好的编辑器带着旧扩展集合,必须重建才能跟上 —— 塞进 useEditor 的 deps 即可(milkdown 会
-  // destroy 旧实例再建新的)。代次不变时与原来的空 deps 行为完全一致。
-  // 时机注意:插件启停发生在设置界面,那会儿没人在笔记里打字(200ms 的保存 debounce 早已落盘)。
-  const extGen = useSyncExternalStore(subscribeEditorExtensions, editorExtensionGen)
+  // 插件编辑器扩展(ctx.registerEditorExtension)启停 / 重载:**不再重建编辑器**(评审 G1-06)。
+  // 此前注册表代次挂在 useEditor 的 deps 上 → milkdown destroy + create,焦点、撤销栈、listener 防抖窗里
+  // 最近 ~200ms 的字全丢,组字中重建还把拼音写盘。现在由 pluginEditorExtensions 自己订阅注册表、原地重配。
 
   useEditor((root) => {
     const handleKeyDown = (view: EditorView, event: KeyboardEvent): boolean => {
@@ -740,7 +744,8 @@ export function MilkdownInner({
      * 「ul>li>p>text」这种单链也判成 isPureText,同样退化成纯文本 —— 单行待办正好落进它的盲区。
      */
     const clipboardTextSerializer = (slice: Slice, view: EditorView): string => {
-      const plain = (): string => slice.content.textBetween(0, slice.content.size, '\n')
+      // 块与块之间空一行(D-14):单个 `\n` 贴到 markdown 编辑器里是软换行,两段就并成了一段。
+      const plain = (): string => slice.content.textBetween(0, slice.content.size, '\n\n')
       // 整张图片被选中(NodeSelection)→ 纯文本 flavor 给字面 markdown。默认的 textBetween 对
       // image 这种无文本叶子返回**空串**:编辑器内粘贴靠 text/html 没事,复制到聊天框/别的编辑器
       // 却是一片空白。`![[…]]` 那条形态本来就是文本、一直给字面源码,两边口径得一致。
@@ -757,15 +762,23 @@ export function MilkdownInner({
         const src = String(onlyImage.attrs.src ?? '')
         return `![${String(onlyImage.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src})`
       }
-      const { $from, $to } = view.state.selection
-      const whole = $from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size
+      const sel = view.state.selection
+      const { $from, $to } = sel
+      // 结构化(带 markdown)的三种:整块选中(NodeSelection —— `$from.parentOffset` 是相对外层的,旧判据对它恒假,
+      // 块选中复制退化成纯文字,D-14 / B-06)、跨块选区(从段落中间选到待办,`- [ ]` 不许丢)、恰好盖住整个文本块。
+      const whole = sel instanceof NodeSelection || !$from.sameParent($to) ||
+        ($from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size)
       if (!whole) return plain()
       // 只看 firstChild 不够:「从一个段落一直选到下面的待办」时首块是段落,会退回纯文本、
       // 把后面那条的 `- [ ]` 丢掉(Codex 复审)。只要**任意一个**顶层块不是普通段落就走 markdown。
       let structured = false
       slice.content.forEach((n) => { if (n.type.name !== 'paragraph') structured = true })
       if (!structured) return plain()
-      const doc = view.state.schema.topNodeType.createAndFill(undefined, slice.content)
+      // 块选中的列表项(Esc 选中 / ⠿):切片里是光秃秃的 list_item,doc 收不下 —— 套回它所在的那只列表。
+      const content = sel instanceof NodeSelection && sel.node.type.name === 'list_item' && /_list$/.test($from.parent.type.name)
+        ? Fragment.from($from.parent.type.create($from.parent.attrs, slice.content))
+        : slice.content
+      const doc = view.state.schema.topNodeType.createAndFill(undefined, content)
       if (!doc) return plain()
       // 复制分栏内容(v4 unified)时剥锚注释行:锚脱离本文件的 amadeus_layout 就是散标记,
       // 贴到别处只会污染目标(规范:锚随文件,不随剪贴板)。v3 编辑器内永远不出现标记,零影响。
@@ -781,7 +794,13 @@ export function MilkdownInner({
         return !structural
       })
       // 纯文本给人看:关掉 attention 边界编码(`**注意：**&#x540E;面` 贴进微信就是乱码,见 withoutBoundaryRefs)。
-      let out = withoutBoundaryRefs(() => serialize(doc))
+      // 与落盘同一条规范化(D-14):片段那条(normalizeFragmentMd)不还原 `\[\[`,多块复制时双链被转义成 `\[\[x]]`。
+      // 从裸序列化出发只过一次 —— 叠在 serialize() 的片段规范化上,公式反转义会跑两遍。
+      let out = withoutBoundaryRefs(() => {
+        let raw = ''
+        getInstance()?.action((c) => { raw = c.get(serializerCtx)(doc) })
+        return normalizeSerializedMd(raw)
+      })
       if (structural) out = out.replace(/^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->[ \t]*\n?/gm, '')
       // entitiesToTabs:缩进段落序列化出的 &#9; 归一成字面制表符,外部应用不见实体垃圾(评审 P2)。
       const md = entitiesToTabs(out)
@@ -868,14 +887,62 @@ export function MilkdownInner({
         if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
       }
+      // 纯文本逐字(D-13):⌘⇧V / Ctrl+Shift+V(「粘贴并匹配样式」)—— PM 自己记着按键时的 Shift(input.shiftKey,
+      // 它的 plain 粘贴同一个判据),Milkdown 的剪贴板插件不看它、照样当 markdown 解析。这里接住:原文逐字,多行一行一段。
+      const plain = event.clipboardData?.getData('text/plain') ?? ''
+      const html = event.clipboardData?.getData('text/html') ?? ''
+      const inCode = !!sel.$from.parent.type.spec.code
+      if (unified && plain && !inCode && (view as unknown as { input?: { shiftKey?: boolean } }).input?.shiftKey) {
+        event.preventDefault()
+        const lines = plain.replace(/\r\n?/g, '\n').split('\n')
+        const paragraph = view.state.schema.nodes.paragraph
+        if (lines.length === 1 || !paragraph) {
+          view.dispatch(view.state.tr.insertText(lines.join(' ')).scrollIntoView().setMeta('uiEvent', 'paste'))
+        } else {
+          const frag = Fragment.from(lines.map((l) => paragraph.create(null, l ? view.state.schema.text(l) : null)))
+          view.dispatch(view.state.tr.replaceSelection(new Slice(frag, 1, 1)).scrollIntoView().setMeta('uiEvent', 'paste'))
+        }
+        return true
+      }
+      // 单行纯文本粘进一段已有文字的中间(D-13,见 ./plainPaste singleLinePasteMode):解析出块结构(`2024. `、`- `、`# `…)
+      // 在句中不成立 → 原文逐字;只是行内标记 → 照常解析,首尾空白原样补回(解析会吃掉 ` world ` 的空格)。
+      // 空段落里粘贴照旧转结构(与 Obsidian 同),不进这一支。
+      const $f = sel.$from
+      const $t = sel.$to
+      if (
+        unified && plain && !html && !inCode && !/[\r\n]/.test(plain) && $f.sameParent($t) && $f.parent.isTextblock &&
+        ($f.parentOffset > 0 || $t.parentOffset < $t.parent.content.size)
+      ) {
+        let parsed: ProseNode | null = null
+        getInstance()?.action((c) => { parsed = (c.get(parserCtx)(plain) as ProseNode | undefined) ?? null })
+        const doc = parsed as ProseNode | null
+        if (doc) {
+          const top: string[] = []
+          doc.forEach((n) => { top.push(n.type.name) })
+          const mode = singleLinePasteMode(plain, top)
+          if (mode === 'literal') {
+            event.preventDefault()
+            view.dispatch(view.state.tr.insertText(plain).scrollIntoView().setMeta('uiEvent', 'paste'))
+            return true
+          }
+          if (mode === 'inline-ws') {
+            event.preventDefault()
+            const { schema } = view.state
+            const lead = /^\s*/.exec(plain)![0]
+            const trail = /\s*$/.exec(plain)![0]
+            const nodes: ProseNode[] = []
+            if (lead) nodes.push(schema.text(lead))
+            doc.firstChild!.forEach((n) => { nodes.push(n) })
+            if (trail) nodes.push(schema.text(trail))
+            view.dispatch(view.state.tr.replaceSelection(new Slice(Fragment.from(nodes), 0, 0)).scrollIntoView().setMeta('uiEvent', 'paste'))
+            return true
+          }
+        }
+      }
       // 纯文本多行(D-10,拍板 #12):只有 text/plain、不像 markdown → 一行一段,再交回同一条 markdown 粘贴管线
       // (Milkdown clipboard 从 clipboardData 取 text/plain → parserCtx)。转换后已无单个 `\n`,重入本函数不会再进这一支。
       // 代码块内不动(那里 `\n` 就是代码的换行)。见 ./plainPaste。
-      const plain = event.clipboardData?.getData('text/plain') ?? ''
-      if (
-        unified && plain && !event.clipboardData?.getData('text/html') &&
-        !sel.$from.parent.type.spec.code && isPlainMultiline(plain)
-      ) {
+      if (unified && plain && !html && !inCode && isPlainMultiline(plain)) {
         const dt = new DataTransfer()
         dt.setData('text/plain', plainLinesToParagraphs(plain))
         event.preventDefault()
@@ -899,6 +966,17 @@ export function MilkdownInner({
     }
     // 文件拖入(含图片)统一交给编辑器级附件处理(AmadeusEditorView.onDrop),按笔记设置存放 → 不在块内内联,
     // 故此处不设 handleDrop(ProseMirror 默认对文件拖放不作插入,事件冒泡到编辑器容器被 preventDefault)。
+    //
+    // 外部拖入的**文字**(评审 G4-04):PM 的 drop 走 parseFromClipboard,text/plain 默认按字面插入 —— markdown 被
+    // 转义成 `\-` `\*\*` 落盘;同一段文字粘贴却被 Milkdown clipboard 解析成结构。补 clipboardTextParser,解析口径与
+    // Milkdown 的粘贴逐字一致(parser → DOM → parseSlice)。只在 drop 这一拍生效(handleDOMEvents.drop 先于 PM
+    // 自己的 drop 同步置位):粘贴那条已由 clipboard 插件处理,别让每次粘贴白白多解析一遍。
+    let textDropping = false
+    const onDropMark = (): boolean => {
+      textDropping = true
+      queueMicrotask(() => { textDropping = false })
+      return false
+    }
 
     // 点链接就打开(同 Obsidian 实时预览)。contenteditable 里 Chromium **不会**自己导航,
     // 不接这一手 `[文字](url)` 就只是个蓝字。window.open 会被主进程 setWindowOpenHandler 截住、
@@ -954,6 +1032,17 @@ export function MilkdownInner({
           handleDOMEvents: readOnly ? prev.handleDOMEvents : {
             ...prev.handleDOMEvents,
             copy: handleAttachmentCopy,
+            drop: onDropMark,
+          },
+          clipboardTextParser: readOnly ? undefined : (text, _ctx, plain, view) => {
+            if (!textDropping) return null as unknown as Slice // 粘贴 / pasteText:PM 默认(见 onDropMark 注释)
+            textDropping = false
+            const md = droppedTextMarkdown(text, plain)
+            if (md == null) return null as unknown as Slice
+            const parsed = ctx.get(parserCtx)(md) as ProseNode | string | undefined
+            if (!parsed || typeof parsed === 'string') return null as unknown as Slice
+            const dom = DOMSerializer.fromSchema(view.state.schema).serializeFragment(parsed.content)
+            return PmDOMParser.fromSchema(view.state.schema).parseSlice(dom)
           },
           handleClick: handleLinkClick,
           clipboardTextSerializer,
@@ -980,6 +1069,7 @@ export function MilkdownInner({
       .use(commonmarkWithIndent)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
+      .use(emptyTaskRemark) // Obsidian 的空待办 `- [ ]`:GFM 读成字面 `[ ]`,这里补认成空待办(R-10b,见 ./taskList)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。
@@ -1017,6 +1107,15 @@ export function MilkdownInner({
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
       .use($prose(() => new Plugin({ props: { attributes: (): Record<string, string> => (pagePathRef.current ? { 'data-amx-src': pagePathRef.current } : {}) } })))
+      // 编辑器根的 aria-label(P-10):直接写 DOM + 订语言变更 —— PM 只回收自己经 attributes 管过的属性,不会抹掉它;
+      // 走 attributes prop 的话切语言要等下一个事务才刷新。
+      .use($prose(() => new Plugin({
+        view: (v) => {
+          const label = (): void => { v.dom.setAttribute('aria-label', translate('mdblock.editorLabel')) }
+          label()
+          return { destroy: subscribeLocale(label) }
+        },
+      })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
       .use(wikiSuggestPlugin((q, blurred) => {
@@ -1119,7 +1218,7 @@ export function MilkdownInner({
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
       .use(pluginEditorExtensions('normal', { pagePath: () => pagePathRef.current }))
       .use(extraPlugins ?? [])
-  }, [extGen])
+  }, [])
 
   // slash 选中 → 由外部(applySlash)驱动编辑器:consume 消费触发 '/',transform 原地转换。
   // 一律单事务直接改编辑器文档,绝不经 store 回写:markdownUpdated 有 200ms debounce、序列化
@@ -1340,6 +1439,11 @@ export function MilkdownInner({
       focused = ctx.get(editorViewCtx).hasFocus()
     })
     return focused
+  }
+  const editorDom = (): HTMLElement | null => {
+    let dom: HTMLElement | null = null
+    getInstance()?.action((ctx) => { dom = ctx.get(editorViewCtx).dom })
+    return dom
   }
 
   // @ 提及:把 "@query"(含 @ 本身)整体替换成 [[name]] 双链。
@@ -1614,6 +1718,7 @@ export function MilkdownInner({
           ctx={slash.ctx}
           unified={unified}
           editorFocused={editorFocused}
+          editorDom={editorDom}
           onPick={(it) => {
             setSlash(null)
             getInstance()?.action((ctx) => { takeMachineSlash(ctx.get(editorViewCtx), slash.from) }) // 选中了:标记作废
@@ -2146,7 +2251,18 @@ export interface SlashItem {
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
  *  ⚠️ 模块作用域调不了 hook —— 表里直接写文案 = 冻在模块加载那一刻,切语言纹丝不动。
  *  对外(菜单 / 移动端块面板)露出的仍是 SlashItem,label/group 已是当前语言的成品文案。 */
-type SlashSeed = Omit<SlashItem, 'label' | 'group'> & { labelKey: string; groupKey: string }
+type SlashSeed = Omit<SlashItem, 'label' | 'group' | 'scaffold'> & {
+  labelKey: string; groupKey: string
+  /** 函数形态 = 落盘内容里带界面语言的文案(如表格表头),同样在渲染期取词。 */
+  scaffold: string | ((tr: (key: string, vars?: Record<string, unknown>) => string) => string)
+}
+
+/** `/表格` 的骨架(R-16)。表头是**落盘产物命名**,跟当前界面语言 —— 以前表里写死 `| 列 1 | 列 2 |`,
+ *  英文界面插出来的表头也是中文并照样写进磁盘。它不是 sentinel / 前缀触发符,现算的串不会撞 applySlash 的分流。 */
+function tableScaffold(tr: (key: string, vars?: Record<string, unknown>) => string): string {
+  const h = (n: number): string => tr('amadeus.default.tableColumn', { n })
+  return `| ${h(1)} | ${h(2)} |\n| --- | --- |\n|  |  |`
+}
 
 /** 触发型 scaffold 的对外名册:v4 统一实例(unified/UnifiedPage 的 applySlash)按同一套判定分流。
  *  ⚠️ 这些常量的字面量含 NUL 字符 —— 一律从这里引用,**绝不在别的文件里重打一遍**。 */
@@ -2201,7 +2317,7 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'quote', labelKey: 'mdblock.slash.quote', hint: '|', icon: <QuoteIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| ', kw: 'quote 引用 yinyong blockquote' },
   { key: 'fold', labelKey: 'mdblock.slash.fold', hint: '>', icon: <FoldIcon />, groupKey: 'mdblock.group.advanced', scaffold: '> ', kw: 'fold toggle 折叠 zhedie collapse 展开 详情 details' },
   { key: 'code', labelKey: 'mdblock.slash.code', hint: '```', icon: <CodeBlockIcon />, groupKey: 'mdblock.group.advanced', scaffold: '```\n\n```', kw: 'code 代码 daima codeblock' },
-  { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |', kw: 'table 表格 biaoge grid 网格' },
+  { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: tableScaffold, kw: 'table 表格 biaoge grid 网格' },
   { key: 'divider', labelKey: 'mdblock.slash.divider', hint: '---', icon: <DividerIcon />, groupKey: 'mdblock.group.advanced', scaffold: '---\n\n', kw: 'divider hr 分割线 分隔 fenge' },
   // 单行 $$  $$(两 delimiter 同处一个 textblock,填内容即渲染为居中块公式)。旧的 '$$\n\n$$' 会被 commonmark
   // 拆成两个段落、每段只剩一个 $$ → 实况预览永远扫不到成对公式(见 mathLivePreview.scanMath)。
@@ -2240,7 +2356,9 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
   const pluginSlash = usePluginStore((s) => s.slashItems)
   const all: SlashItem[] = [
     // 内置项在**这里**取词(表里只有键):切语言时 useI18n 让消费方重渲染,菜单当场跟上。
-    ...SLASH_ITEMS.map(({ labelKey, groupKey, ...rest }) => ({ ...rest, label: t(labelKey), group: t(groupKey) })),
+    ...SLASH_ITEMS.map(({ labelKey, groupKey, scaffold, ...rest }) => ({
+      ...rest, label: t(labelKey), group: t(groupKey), scaffold: typeof scaffold === 'function' ? scaffold(t) : scaffold,
+    })),
     ...pluginSlash.map(({ item }) => ({
       key: item.id,
       label: textOf(item.label), // 函数形态每次渲染求值(B-20)
@@ -2427,7 +2545,7 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   )
 }
 
-function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, onPick, onClose }: {
+function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editorFocused, editorDom, onPick, onClose }: {
   query: string; left: number; top: number; anchorTop?: number
   /** 本宿主暂不支持的项(见 UNIFIED_HIDDEN_SLASH):点了没反应比少一条更糟,直接不露。 */
   hideKeys?: ReadonlySet<string>
@@ -2436,10 +2554,15 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   unified?: boolean
   /** 宿主编辑器是否持焦:不持焦时一个键都不拦(L-04,同 WikiSuggest)。 */
   editorFocused?: () => boolean
+  /** 宿主编辑器的根 DOM:焦点一直留在编辑器里,读屏靠它上面的 aria-activedescendant 知道高亮的是哪一项(P-10)。 */
+  editorDom?: () => HTMLElement | null
   onPick: (it: SlashItem) => void; onClose: () => void
 }) {
   const { t } = useI18n()
   const [active, setActive] = useState(0)
+  const menuId = `amx-slash-${useId().replace(/[^\w-]/g, '')}`
+  const editorDomRef = useRef(editorDom)
+  editorDomRef.current = editorDom
   const all = useAllSlashItems({ unified })
   const allItems = useMemo(
     () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
@@ -2460,6 +2583,21 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   useEffect(() => {
     setActive(0)
   }, [query])
+
+  // 读屏(P-10):焦点留在编辑器,高亮项靠编辑器根的 aria-activedescendant 指过去(菜单是 role=menu / menuitem,
+  // menuitem 不支持 aria-selected,「当前项」就用 activedescendant 表达);关菜单时摘掉,别让读屏指向已卸载的节点。
+  const activeIdx = items.length ? Math.min(active, items.length - 1) : -1
+  useEffect(() => {
+    const dom = editorDomRef.current?.()
+    if (!dom) return
+    dom.setAttribute('aria-controls', menuId)
+    if (activeIdx >= 0) dom.setAttribute('aria-activedescendant', `${menuId}-${activeIdx}`)
+    else dom.removeAttribute('aria-activedescendant')
+    return () => {
+      dom.removeAttribute('aria-activedescendant')
+      dom.removeAttribute('aria-controls')
+    }
+  }, [menuId, activeIdx])
 
   useEffect(() => {
     const stop = (e: KeyboardEvent): void => {
@@ -2497,6 +2635,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
   const renderItem = (it: SlashItem, i: number) => (
     <button
       key={it.key}
+      id={`${menuId}-${i}`}
       className="slash-item"
       data-active={i === active || undefined}
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
@@ -2529,7 +2668,7 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
-      <OverlayAt className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
+      <OverlayAt id={menuId} className="slash-menu" role="menu" x={left} y={top} anchorTop={anchorTop} onMouseDown={(e) => e.preventDefault()}>
         {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
         <div className="slash-scroll">
           {q

@@ -16,6 +16,26 @@
 //  R 组(G2-03,别处改名后本端开着旧路径的实例):
 //   R1 退休时给了新路径且有未落盘的字 → 草稿记在**新路径**上,新实例挂载出「恢复草稿」条;旧路径零写
 //   R2 没有未落盘的字 → 不留草稿,新实例干净打开
+//   R3(评审 G1-08 + 返修 P0)防抖窗内被别的窗口**删除**(没有新路径可交接)→ 旧路径不复活、不留孤儿草稿,
+//      全文(含刚打的字)另存为冲突副本(持久文件,不是只在提示回调里),提示「已另存为 X」带「打开副本」;R4 已落盘后被删 → 零提示
+//   R5(返修 P0)同篇双开、两边各有没落盘的字时被删 → 各存各的副本、各出一条提示,谁的字都没丢
+//  X 组(评审 G1-06,插件编辑器扩展启停 = 原地重配,不重挂):
+//   X1 打字后 50ms 内启用一个带编辑器扩展的插件 → 编辑器 DOM 还是同一个、扩展已生效、焦点还在、刚打的字在屏上也在盘上,
+//      不点击接着打的字接在后面 · X2 停用 → 扩展摘掉、编辑器仍是同一个;空闲启停零写盘
+//   X3 撤销栈跨启停保留:停用后 Cmd+Z 撤掉的是启停之前打的字 · X4 输入法组字中启停 → 推迟到上屏后,盘上是汉字不是拼音
+//   X5 画布卡归属不随启停清零:启停后删掉一张卡,amadeus_canvas 照常跟着更新(清了归属 = 派生冻结)
+//   X6 嵌入不随启停变空壳:重配会重建全部插件视图,嵌入层的 React 根不许被卸(widget DOM 还在用)
+//   X7-X9(评审 G1-07,扩展异常隔离):X7 笔记开着时启用一个 state.init 抛错的扩展 → 正文照常、提示点名插件、打字照常落盘;
+//   X8 spec.view 抛错 → 宿主插件视图不被打断(⠿ 把手、大纲、insertMarkdown 照常)、提示点名;
+//   X9 init 只对某篇抛错(建编辑器那一刻才炸)→ 切到那篇正文照常渲染、提示点名
+//  M 组(评审 C-08,源码 / 可视按 leaf 记):`&udual` 同窗两个标签 A / B ——
+//   M1 A 切源码 → B 不跟着切、B 的编辑器不被动重建(DOM 还是同一个)、B 切换前打的字仍可 Cmd+Z 撤掉
+//   M2 本机记忆:刷新后 A 仍是源码、B 仍是可视;M3 B 自己切源码只动 B
+//  S 组(评审 C-06,源码 ↔ 可视切换保住滚动 / 光标 / 撤销;`&upane` 长文):
+//   S1 可视 → 源码:textarea 光标落在同一处、焦点跟过去、光标在视口里的高度不变
+//   S2 源码 → 可视:编辑器还是同一个(没重建)、光标回原处、滚动回原位,切换前打的字 Cmd+Z 撤得掉(屏上、盘上)
+//   S3 源码里的改动回可视后是一步可撤的编辑:第一下 Cmd+Z 只撤源码里打的,第二下撤可视里打的
+//   S4 切换前 200ms 内打的字不丢(listener 防抖窗)· S5 源码模式里外部改动照常回灌到 textarea,回可视后编辑器是新内容、零冲突副本
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -49,6 +69,7 @@ async function open(browser, seed, flags = '') {
   p.errs = []
   p.on('pageerror', (e) => { p.errs.push(e.message); console.log('[pageerror]', e.message) })
   await p.addInitScript(() => {
+    performance.setResourceTimingBufferSize(20000) // X 组按已加载模块的 URL 取生产模块实例(裸 /src 路径会另起一份)
     window.__toasts = []
     window.addEventListener('amadeus:toast', (e) => window.__toasts.push({ text: e.detail.text, level: e.detail.level }))
   })
@@ -307,6 +328,381 @@ async function groupR(browser) {
   }
 }
 
+/** 别的窗口删了 Unified.md:盘上没了 → 生产收尾(pageStore.onPathGone 的 to=null 分支:retireUnifiedPath)→ 标签改指别处。 */
+async function remoteDelete(p) {
+  await p.evaluate(() => {
+    const u = window.__upage
+    window.__goneToasts = []
+    window.addEventListener('amadeus:toast', (e) => window.__goneToasts.push(e.detail))
+    navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve() }
+    u.vault.delete('Unified.md')
+    u.lifecycle.retireUnifiedPath('Unified.md')
+    u.switchFile('Other.md', '# 其它\n\n其它正文。\n')
+  })
+  await wait(1500)
+}
+async function groupR2(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('删前打的')
+    await remoteDelete(p)
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'error' && x.action).map((x) => ({ text: x.text, label: x.action.label })))
+    const old = await disk(p, 'Unified.md')
+    const drafts = await draftFor(p, 'Unified.md')
+    const cs = await p.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)))
+    record('R3 防抖窗内被别处删除 → 旧路径不复活、不留孤儿草稿;全文(含刚打的字)另存为冲突副本,提示点名副本并带「打开副本」',
+      old == null && drafts.length === 0 && cs.length === 1 && cs[0][1].includes('第一段。删前打的') &&
+        t.length === 1 && t[0].text.includes(cs[0][0].replace(/\.md$/, '')) && t[0].label === '打开副本',
+      JSON.stringify({ old, drafts, t, cs }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('已落盘')
+    await wait(1600)
+    await remoteDelete(p)
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'warning' || x.level === 'error'))
+    const cs = await p.evaluate(() => [...window.__upage.vault.keys()].filter((k) => /\(conflict /.test(k)))
+    record('R4 已落盘后被别处删除 → 零提示、零副本', t.length === 0 && cs.length === 0 && (await disk(p, 'Unified.md')) == null, JSON.stringify({ t, cs }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n', '&udual')
+    await p.waitForFunction((s) => document.querySelectorAll(s).length === 2, PM, { timeout: 60000 })
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('A的字')
+    await p.evaluate(() => {
+      const v = window.__upage.probe2.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('第二段。')) at = pos + n.text.indexOf('第二段。') + 4; return at < 0 })
+      let proto = Object.getPrototypeOf(v.state.selection)
+      while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+      v.focus()
+      v.dispatch(v.state.tr.setSelection(proto.constructor.near(v.state.doc.resolve(at))))
+    })
+    await p.keyboard.type('B的字')
+    await remoteDelete(p)
+    const cs = await p.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)).map(([, v]) => v))
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'error').map((x) => x.dedupeKey))
+    record('R5 同篇双开、两边各有没落盘的字时被删 → 各存各的副本(A 的字、B 的字都在)、各出一条提示(去重键不同)',
+      (await disk(p, 'Unified.md')) == null && cs.length === 2 && cs.some((x) => x.includes('第一段。A的字')) && cs.some((x) => x.includes('第二段。B的字')) &&
+        t.length === 2 && t[0] !== t[1], JSON.stringify({ cs, t }))
+    await p.close()
+  }
+}
+
+// ─────────────────────────────── G1-06 ───────────────────────────────
+const XPLUG = `ctx.registerEditorExtension((pm) => [new pm.Plugin({ props: { attributes: { 'data-xext': 'on' } } })])`
+const pmTag = (p) => p.evaluate((s) => { const el = document.querySelector(s); if (!el.__xtag) el.__xtag = Math.random().toString(36).slice(2); return el.__xtag }, PM)
+const extOn = (p) => p.evaluate((s) => document.querySelector(s)?.getAttribute('data-xext') === 'on', PM)
+const pmFocused = (p) => p.evaluate((s) => { const el = document.querySelector(s); return !!el && (el === document.activeElement || el.contains(document.activeElement)) }, PM)
+const setPlugin = (p, on) => p.evaluate(async (on) => {
+  const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/src\/amadeus\/plugins\/pluginStore\.ts/.test(n))
+  const m = await import(url)
+  const st = m.usePluginStore.getState()
+  if (on) st.enable('xext')
+  else st.disable('xext')
+}, on)
+async function groupX(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    const tag = await pmTag(p)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('RACE')
+    await wait(50)
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG) // 真 setup 路径:registerEditorExtension
+    await wait(400)
+    const r = { same: (await pmTag(p)) === tag, on: await extOn(p), focus: await pmFocused(p) }
+    await p.keyboard.type('y') // 不点击直接接着打
+    await wait(1600)
+    const d = await disk(p)
+    record('X1 打字后 50ms 内启用编辑器扩展 → 不重挂、扩展生效、焦点还在、字不丢,接着打的字接在后面',
+      r.same && r.on && r.focus && d.includes('第一段。RACEy'), JSON.stringify({ ...r, d }))
+    const w0 = (await p.evaluate(() => window.__upage.writes.length))
+    await setPlugin(p, false)
+    await wait(400)
+    const off = { same: (await pmTag(p)) === tag, on: await extOn(p) }
+    await setPlugin(p, true)
+    await wait(400)
+    const on2 = await extOn(p)
+    await wait(1200)
+    const dw = (await p.evaluate(() => window.__upage.writes.length)) - w0
+    record('X2 停用 → 扩展摘掉、编辑器仍是同一个;再启用又生效;空闲启停零写盘', off.same && !off.on && on2 && dw === 0, JSON.stringify({ ...off, on2, dw }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(400)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('UNDOME')
+    await wait(1600)
+    await setPlugin(p, false)
+    await wait(400)
+    await p.keyboard.press('Meta+z')
+    await wait(1500)
+    const txt = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    const d = await disk(p)
+    record('X3 撤销栈跨启停保留:停用扩展后 Cmd+Z 撤掉启停之前打的字(屏上、盘上都撤了)', !txt.includes('UNDOME') && !d.includes('UNDOME'), JSON.stringify({ txt, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(400)
+    await caretAfter(p, '第一段。')
+    const cdp = await p.context().newCDPSession(p)
+    await cdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
+    await wait(200)
+    await setPlugin(p, false)
+    await wait(300)
+    await cdp.send('Input.insertText', { text: '你' })
+    await wait(1800)
+    const d = await disk(p)
+    const txt = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    record('X4 输入法组字中停用扩展 → 推迟到上屏后重配:屏上、盘上都是「你」,没有残留拼音、扩展已摘掉',
+      d.includes('第一段。你\n') && !d.includes('ni') && txt.includes('第一段。你') && !(await extOn(p)), JSON.stringify({ d, txt }))
+    await p.close()
+  }
+  {
+    const seed = ['---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":700,"y":40,"w":300},{"ref":"k2","x":700,"y":300,"w":300}]}',
+      '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一甲。', '', '<!-- a k2 -->', '卡二乙。', ''].join('\n')
+    const p = await open(browser, seed)
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(300)
+    await setPlugin(p, false)
+    await wait(300)
+    // 删掉卡二(直驱事务 = 与块菜单删卡同一类文档改动),派生应把 k2 从 cards 里剪掉
+    await p.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1, size = 0
+      v.state.doc.forEach((n, pos) => { if (n.type.name === 'amadeusCanvasCard' && n.attrs.anchor === 'k2') { at = pos; size = n.nodeSize } })
+      if (at >= 0) v.dispatch(v.state.tr.delete(at, at + size))
+    })
+    await wait(1600)
+    const d = await disk(p)
+    const line = (/^amadeus_canvas:\s*(.*)$/m.exec(d) || [])[1] ?? ''
+    record('X5 启停之后删掉一张卡 → amadeus_canvas 照常更新(k2 剪掉、k1 还在),归属集合没被清零冻结派生',
+      line.includes('"k1"') && !line.includes('"k2"') && !d.includes('卡二乙'), JSON.stringify({ line }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n前一段。\n\n![[Embedded]]\n\n后一段。\n')
+    await wait(800)
+    const emb = () => p.evaluate(() => (document.querySelector('.unified-body')?.innerText ?? '').includes('被嵌入的第一段'))
+    const before = await emb()
+    await p.evaluate((code) => window.__ep.loadPlugin(code, { id: 'xext' }), XPLUG)
+    await wait(300)
+    await setPlugin(p, false)
+    await wait(800)
+    record('X6 启停之后嵌入仍有内容(重配重建插件视图不卸嵌入的 React 根)', before && (await emb()), JSON.stringify({ before, after: await emb() }))
+    await p.close()
+  }
+}
+
+const badToasts = (p) => p.evaluate(() => window.__toasts.filter((t) => t.level === 'error').map((t) => t.text))
+async function groupXFault(browser) {
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await p.evaluate(() => window.__ep.loadPlugin(`ctx.registerEditorExtension((pm) => [new pm.Plugin({ state: { init: () => { throw new Error('init boom') }, apply: (t, v) => v } })])`, { id: 'badinit', name: '坏初始化' }))
+    await wait(600)
+    const body = await p.evaluate((s) => document.querySelector(s)?.innerText ?? null, PM)
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('照打')
+    await wait(1600)
+    const t = await badToasts(p)
+    record('X7 启用 state.init 抛错的扩展 → 正文照常、提示点名插件、打字照常落盘',
+      !!body && body.includes('第一段。') && t.some((x) => x.includes('坏初始化')) && (await disk(p)).includes('第一段。照打'), JSON.stringify({ body, t }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n## 小节\n')
+    await p.evaluate(() => window.__ep.loadPlugin(`ctx.registerEditorExtension((pm) => [new pm.Plugin({ view: () => { throw new Error('view boom') } })])`, { id: 'badview', name: '坏视图', }))
+    await wait(600)
+    const r = await p.evaluate(() => {
+      const box = document.querySelector('.unified-body .ProseMirror p').getBoundingClientRect()
+      return { heads: window.__upage.lifecycle.unifiedHeadings('Unified.md')?.length ?? -1, box: { x: box.left + 10, y: box.top + box.height / 2 } }
+    })
+    await p.mouse.move(r.box.x, r.box.y)
+    await wait(300)
+    const handle = await p.evaluate(() => [...document.querySelectorAll('.unified-body *')].some((el) => el.textContent === '⠿' && el.getBoundingClientRect().width > 0))
+    const ins = await p.evaluate(() => window.__upage.lifecycle.unifiedInsertMarkdown('Unified.md', '插入的段。', 'end'))
+    await wait(1600)
+    const t = await badToasts(p)
+    record('X8 spec.view 抛错的扩展 → 宿主插件视图照常(⠿ 把手、大纲、insertMarkdown),提示点名插件',
+      handle && r.heads === 2 && ins && (await disk(p)).includes('插入的段。') && t.some((x) => x.includes('坏视图')), JSON.stringify({ handle, heads: r.heads, ins, t }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n')
+    await p.evaluate(() => window.__ep.loadPlugin(`ctx.registerEditorExtension((pm) => [new pm.Plugin({ state: { init: (c, st) => { if (st.doc.textContent.includes('BOOM')) throw new Error('doc boom'); return 0 }, apply: (t, v) => v } })])`, { id: 'baddoc', name: '挑文档' }))
+    await wait(500)
+    const t0 = await badToasts(p)
+    await p.evaluate(() => window.__upage.switchFile('Boom.md', '# 炸\n\nBOOM 在这里。\n'))
+    await wait(1200)
+    const body = await p.evaluate((s) => document.querySelector(s)?.innerText ?? null, PM)
+    const t = await badToasts(p)
+    record('X9 init 只对某篇抛错 → 切到那篇正文照常渲染、提示点名插件(之前那篇不受影响、不提示)',
+      t0.length === 0 && !!body && body.includes('BOOM 在这里') && t.some((x) => x.includes('挑文档')), JSON.stringify({ t0, body, t }))
+    await p.close()
+  }
+}
+
+// ─────────────────────────────── C-08 ───────────────────────────────
+const taIn = (p, idx) => p.evaluate((idx) => !!document.querySelectorAll('.amadeus-root, #root')[0] && !!(idx ? document.querySelector('[data-instance="B"] textarea.amx-source') : document.querySelector('#root textarea.amx-source')), idx)
+async function groupM(browser) {
+  const seed = '# 标题\n\n第一段。\n\n第二段。\n'
+  const p = await open(browser, seed, '&udual')
+  await p.waitForFunction((s) => document.querySelectorAll(s).length === 2, PM, { timeout: 60000 })
+  const tagB = await p.evaluate(() => { const el = document.querySelector('[data-instance="B"] .ProseMirror'); el.__mtag = 'B0'; return true })
+  // 在 B 里打字(直驱 B 的选区)
+  await p.evaluate(() => {
+    const v = window.__upage.probe2.view()
+    let at = -1
+    v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('第二段。')) at = pos + n.text.indexOf('第二段。') + 4; return at < 0 })
+    let proto = Object.getPrototypeOf(v.state.selection)
+    while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+    v.focus()
+    v.dispatch(v.state.tr.setSelection(proto.constructor.near(v.state.doc.resolve(at))))
+  })
+  await p.keyboard.type('BB')
+  await wait(1600)
+  await p.evaluate(() => window.__upage.setEditorMode('source')) // 切 A(主实例)
+  await wait(700)
+  const m1 = {
+    aSrc: await taIn(p, 0),
+    bSrc: await taIn(p, 1),
+    bSame: await p.evaluate(() => document.querySelector('[data-instance="B"] .ProseMirror')?.__mtag === 'B0'),
+  }
+  await p.evaluate(() => window.__upage.probe2.view()?.focus()) // B 被跟着切走(回退)时没有 view
+  await p.keyboard.press('Meta+z')
+  await wait(300)
+  m1.bUndo = await p.evaluate(() => { const v = window.__upage.probe2.view(); return !!v && !v.state.doc.textContent.includes('BB') })
+  record('M1 A 切源码 → B 不跟着切、不被动重建,B 之前打的字仍可 Cmd+Z', m1.aSrc && !m1.bSrc && m1.bSame && m1.bUndo, JSON.stringify(m1))
+  await p.reload({ waitUntil: 'domcontentloaded' })
+  await p.waitForFunction(() => !!document.querySelector('#root textarea.amx-source') && !!document.querySelector('[data-instance="B"] .ProseMirror'), null, { timeout: 60000 })
+  const m2 = { aSrc: await taIn(p, 0), bSrc: await taIn(p, 1) }
+  record('M2 本机记忆:刷新后 A 仍是源码、B 仍是可视', m2.aSrc && !m2.bSrc, JSON.stringify(m2))
+  await p.evaluate(() => { window.__upage.setEditorMode('wysiwyg'); window.__upage.setEditorMode('source', 'harness-B') })
+  await wait(700)
+  const m3 = { aSrc: await taIn(p, 0), bSrc: await taIn(p, 1) }
+  record('M3 B 自己切源码只动 B(A 切回可视)', !m3.aSrc && m3.bSrc, JSON.stringify(m3))
+  await p.close()
+}
+
+// ─────────────────────────────── C-06 ───────────────────────────────
+const LONG = '# 文首\n\n' + Array.from({ length: 80 }, (_, i) => `第 ${i} 段填充文字。`).join('\n\n') + '\n'
+const para40 = (p) => p.evaluate(() => { const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => x.textContent.startsWith('第 40 段')); return el ? el.textContent : null })
+const modeTo = async (p, m) => {
+  await p.evaluate((m) => window.__upage.setEditorMode(m), m)
+  await p.waitForFunction((m) => (m === 'source') === !!document.querySelector('textarea.amx-source'), m, { timeout: 10000 })
+  await wait(400)
+}
+const viewState = (p) => p.evaluate(() => {
+  const pane = document.querySelector('.amx-pane')
+  const ta = document.querySelector('textarea.amx-source')
+  const v = window.__upage.probe.view()
+  const out = { scroll: Math.round(pane.scrollTop), active: document.activeElement?.tagName }
+  if (ta) {
+    out.taLine = ta.value.slice(0, ta.selectionStart).split('\n').pop()
+  } else if (v) {
+    const $h = v.state.selection.$head
+    out.pmPara = $h.parent.textContent
+    out.pmOff = $h.parentOffset
+    out.caretY = Math.round(v.coordsAtPos(v.state.selection.head).top - pane.getBoundingClientRect().top)
+  }
+  return out
+})
+async function openLong(browser) {
+  const p = await open(browser, LONG, '&upane')
+  await p.evaluate(() => { const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => x.textContent.startsWith('第 40 段')); el.scrollIntoView({ block: 'center' }) })
+  await wait(200)
+  await caretAfter(p, '第 40 段填充文字。')
+  return p
+}
+async function groupS(browser) {
+  {
+    const p = await openLong(browser)
+    await p.keyboard.type('追加ABC')
+    await wait(1300)
+    await p.evaluate((s) => { document.querySelector(s).__stag = 'S0' }, PM)
+    const v0 = await viewState(p)
+    await modeTo(p, 'source')
+    const s1 = await p.evaluate(() => {
+      const ta = document.querySelector('textarea.amx-source')
+      const pane = document.querySelector('.amx-pane')
+      // 镜像量 textarea 光标高度(与生产 modeRelay 同法,独立实现)
+      const cs = getComputedStyle(ta), d = document.createElement('div')
+      for (const k of ['boxSizing', 'width', 'padding', 'border', 'font', 'letterSpacing', 'lineHeight', 'whiteSpace', 'wordBreak', 'overflowWrap', 'tabSize']) d.style[k] = cs[k]
+      d.style.position = 'absolute'; d.style.visibility = 'hidden'; d.style.whiteSpace = 'pre-wrap'
+      d.textContent = ta.value.slice(0, ta.selectionStart); const m = document.createElement('span'); m.textContent = '.'; d.appendChild(m); document.body.appendChild(d)
+      const y = ta.getBoundingClientRect().top + m.offsetTop - pane.getBoundingClientRect().top; d.remove()
+      return { line: ta.value.slice(0, ta.selectionStart).split('\n').pop(), focus: document.activeElement === ta, y: Math.round(y) }
+    })
+    record('S1 可视 → 源码:光标落在同一处、焦点跟过去、光标在视口里的高度不变(±40px)',
+      s1.line === '第 40 段填充文字。追加ABC' && s1.focus && Math.abs(s1.y - v0.caretY) <= 40, JSON.stringify({ v0, s1 }))
+    await modeTo(p, 'wysiwyg')
+    const v2 = await viewState(p)
+    const same = await p.evaluate((s) => document.querySelector(s).__stag === 'S0', PM)
+    await p.keyboard.press('Meta+z')
+    await wait(1300)
+    const undone = { screen: await para40(p), disk: (await disk(p)).includes('追加ABC') }
+    record('S2 源码 → 可视:没重建、光标回原处、滚动回原位,切换前打的字 Cmd+Z 撤得掉',
+      same && v2.pmPara === '第 40 段填充文字。追加ABC' && v2.pmOff === v2.pmPara.length && Math.abs(v2.scroll - v0.scroll) <= 40 && v2.active === 'DIV' &&
+        undone.screen === '第 40 段填充文字。' && !undone.disk, JSON.stringify({ v0, v2, same, undone }))
+    await p.close()
+  }
+  {
+    const p = await openLong(browser)
+    await p.keyboard.type('可视打')
+    await wait(1300)
+    await modeTo(p, 'source')
+    await p.keyboard.type('SRC') // 焦点已在 textarea、光标在「可视打」之后
+    await wait(1300)
+    await modeTo(p, 'wysiwyg')
+    const a0 = await para40(p)
+    await p.keyboard.press('Meta+z')
+    await wait(200)
+    const a1 = await para40(p)
+    await p.keyboard.press('Meta+z')
+    await wait(1300)
+    const a2 = await para40(p)
+    const d = await disk(p)
+    record('S3 源码里的改动回可视后是一步可撤的编辑:第一下只撤源码里打的,第二下撤可视里打的',
+      a0 === '第 40 段填充文字。可视打SRC' && a1 === '第 40 段填充文字。可视打' && a2 === '第 40 段填充文字。' && d.includes('第 40 段填充文字。\n'), JSON.stringify({ a0, a1, a2 }))
+    await p.close()
+  }
+  {
+    const p = await openLong(browser)
+    await p.keyboard.type('QQ')
+    await p.evaluate(() => window.__upage.setEditorMode('source')) // 不等防抖,当拍就切
+    await p.waitForSelector('textarea.amx-source')
+    await wait(300)
+    const ta = await p.evaluate(() => document.querySelector('textarea.amx-source').value.includes('第 40 段填充文字。QQ'))
+    await modeTo(p, 'wysiwyg')
+    await wait(1200)
+    record('S4 切换前 200ms 内打的字不丢:textarea 里有、回可视后盘上也有', ta && (await disk(p)).includes('第 40 段填充文字。QQ') && (await para40(p)) === '第 40 段填充文字。QQ', JSON.stringify({ ta }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n')
+    await modeTo(p, 'source')
+    await p.evaluate(() => window.__upage.fire('Unified.md', '# 标题\n\n第一段 外部改的。\n\n第二段。\n'))
+    await wait(1200)
+    const ta = await p.evaluate(() => document.querySelector('textarea.amx-source').value)
+    await modeTo(p, 'wysiwyg')
+    await wait(900)
+    const txt = await p.evaluate((s) => document.querySelector(s).innerText, PM)
+    record('S5 源码模式里外部改动照常回灌到 textarea,回可视后编辑器是新内容、零写盘零冲突副本',
+      ta.includes('第一段 外部改的。') && txt.includes('第一段 外部改的。') && (await copies(p)).length === 0 && (await p.evaluate(() => window.__upage.writes.length)) === 0,
+      JSON.stringify({ ta, txt }))
+    await p.close()
+  }
+}
+
 // ─────────────────────────────── D-17 ───────────────────────────────
 /** 标题改名 + 回车;改名 IPC 人为延迟 delay ms(真机要走全智库重写,很容易 >120ms;内存库 0ms 测不出)。 */
 async function titleEnter(p, delay) {
@@ -357,7 +753,7 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: groupR, E: groupE }
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) }, M: groupM, S: groupS }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

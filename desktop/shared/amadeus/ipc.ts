@@ -437,8 +437,10 @@ export type DbReadResult =
   | { status: 'corrupt'; path: string; message: string }
 
 /** `writeTextFile(…, { base })` 的比对交换结果(仅支持 CAS 的宿主、且调用方传了 base 时才有)。
- *  ok:false = 盘上已不是调用方的基线(别的实例 / 窗口 / 外部写者刚写过),本次**没写**;current 是盘上现文。 */
-export type TextWriteResult = { ok: true } | { ok: false; current: string }
+ *  ok:false = 盘上已不是调用方的基线(别的实例 / 窗口 / 外部写者刚写过),本次**没写**;current 是盘上现文。
+ *  current:null = 文件已经不在了(写发出之后被别处删除 / 挪走):宿主绝不按旧路径重建,由调用方另存 / 提示。
+ *  只带 base 的写才会有它;真新建不带 base。 */
+export type TextWriteResult = { ok: true } | { ok: false; current: string | null }
 
 /** `drawing:read` 的结果:同 DbReadResult 的「错误是数据」约定,但只回原文——
  *  解析/序列化是纯函数(shared/amadeus/excalidraw),放渲染端与编辑器同侧,主进程只管字节进出。 */
@@ -498,6 +500,16 @@ export interface VaultInfo {
 }
 
 /** The surface exposed on `window.amadeus` by the preload bridge. */
+/** 见 AmadeusApi.hostCaps。false = 这个宿主做不了。 */
+export interface AmadeusHostCaps {
+  /** 在系统文件管理器里显示(桌面才有文件管理器)。 */
+  revealInFileManager?: boolean
+  /** 导出 PDF(桌面走主进程 printToPDF;网页走浏览器打印)。 */
+  exportPdf?: boolean
+  /** 用系统程序打开附件(PDF 卡走应用内阅读器,不受此限)。 */
+  openAttachment?: boolean
+}
+
 export interface AmadeusApi {
   openVault(): Promise<VaultInfo | null>
   /** Re-open the last vault (persisted across launches), or null if none/unavailable. */
@@ -652,6 +664,9 @@ export interface AmadeusApi {
   bundleAgentOwned?(pluginId: string, slug: string): Promise<boolean>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
+  /** 宿主做不了的 OS 动作(评审 G2-13):对应键**不渲染**(留一个点了没反应的按钮比没有更糟,见 platform-parity)。
+   *  可选、向后兼容:缺省 / 缺某键 = 能做(桌面主进程桥全能做,不必声明)。判据单源在渲染层 amadeus/lib/hostCaps.ts。 */
+  hostCaps?: AmadeusHostCaps
   /** 解析 `![[xxx.db]]` 目标(basename 或页相对路径,与附件同一解析语义)并读取数据库。 */
   readDatabase(pagePath: string, ref: string): Promise<DbReadResult>
   /** 按 `db:read` 返回的确切 vault 相对路径原子写回(主进程 schema 校验,坏数据拒写)。 */

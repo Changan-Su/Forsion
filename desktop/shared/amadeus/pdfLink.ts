@@ -29,7 +29,7 @@ export const isHostPath = (p: string): boolean => /^\/|^[A-Za-z]:[\\/]/.test(p)
 /** Does a wikilink's inner text point at a PDF? (`report.pdf`, `report.pdf#page=2`, `a/b.pdf|x`) */
 export function isPdfLinkInner(inner: string): boolean {
   let s = inner.trim()
-  const bar = s.indexOf('|')
+  const bar = s.search(/\\?\|/) // 表格里的别名分隔写成 `\|`(L-09,同 links.aliasBarIndex)
   if (bar >= 0) s = s.slice(0, bar)
   const hash = s.indexOf('#')
   if (hash >= 0) s = s.slice(0, hash)
@@ -71,7 +71,7 @@ export function parsePdfSubpath(subpath: string): PdfLoc | null {
 /** Split a raw wikilink inner (`report.pdf#page=3&...`, alias stripped) into target path + location. */
 export function parsePdfLinkInner(inner: string): { target: string; loc: PdfLoc | null } | null {
   let s = inner.trim()
-  const bar = s.indexOf('|')
+  const bar = s.search(/\\?\|/) // 表格里的别名分隔写成 `\|`(L-09,同 links.aliasBarIndex)
   if (bar >= 0) s = s.slice(0, bar).trim()
   const hash = s.indexOf('#')
   const target = (hash >= 0 ? s.slice(0, hash) : s).trim()
@@ -184,7 +184,7 @@ function findWithKey(hs: Array<{ level: number; text: string }>, heading: string
  *  linkTarget 会把 subpath 砍掉 —— 需要锚点的消费方(聊天引用条)用这个。 */
 export function splitLinkInner(inner: string): { target: string; subpath: string | null } {
   let s = inner.trim()
-  const bar = s.indexOf('|')
+  const bar = s.search(/\\?\|/) // 表格里的别名分隔写成 `\|`(L-09,同 links.aliasBarIndex)
   if (bar >= 0) s = s.slice(0, bar).trim()
   const hash = s.indexOf('#')
   if (hash < 0) return { target: s, subpath: null }

@@ -15,7 +15,7 @@
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { findParent } from '@milkdown/kit/prose'
-import { keymap } from '@milkdown/kit/prose/keymap'
+import { keydownHandler, keymap } from '@milkdown/kit/prose/keymap'
 import { AllSelection, NodeSelection, TextSelection, Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
@@ -35,6 +35,7 @@ import { keyboardPlugins } from './keyboard'
 import { markMachineSlash } from '../blocks/markdown/machineSlash'
 import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
+import { REF_MIME } from '../../views/chat2/chatDragRef'
 
 registerMessages({
   'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
@@ -74,7 +75,7 @@ export function plusInsert(state: EditorState, node: ProseNode, pos: number, abo
 export interface BlockLayerHooks {
   /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。
    *  keyboard:键盘打开的(聚焦 ⠿ 按 Enter / 空格 = detail 为 0 的 click)→ 宿主把焦点送进菜单(B-10)。 */
-  onMenu: (at: { x: number; y: number; keyboard?: boolean }) => void
+  onMenu: (at: { x: number; y: number; keyboard?: boolean; focus?: 'turnInto' }) => void
   /** **整块**删掉了这些内容(块选中 Delete/Backspace)。宿主据此问「引用块牵着的磁盘文件也删吗」。
    *  剪切不发(搬家不是删除),逐字符编辑更不经过这里 —— 判据是结构性的,不靠启发式。
    *  调用时机在 dispatch **之后**:宿主要读删完的文档算「同一篇里还有没有别处引用」。 */
@@ -934,7 +935,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           content.style.setProperty('--amx-block-grow-y', `${growY}px`)
           const w = content.offsetWidth || 52
           content.style.top = `${(r.top - o.y) / z + lineOffset}px`
-          content.style.left = `${(anchorLeft - o.x) / z - w - 8}px`
+          let left = (anchorLeft - o.x) / z - w - 8
+          // 窄屏触屏(评审 P-14):手机内距只有 24px(用户拍板,不动),把手栏整个落在屏幕左外 —— ⠿ 可见宽度 0,
+          // 手指点到的是「＋」,转换 / 复制 / 删除 / 移动块全都做不到。触屏上「＋」让位给胶囊(CSS 藏掉)、
+          // 折叠钮排到 ⠿ 前面,这里再把 ⠿ 自己夹进屏内(视口 x ≥ 2);宁可折叠钮出屏,也不藏 ⠿。
+          if (isCoarsePointer()) left = Math.max(left, (2 - o.x) / z - drag.offsetLeft)
+          content.style.left = `${left}px`
         }
 
         const drag = document.createElement('button')
@@ -943,6 +949,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         drag.textContent = '⠿'
         drag.draggable = true
         drag.title = translate('blocklayer.dragHandle')
+        // 可达名:按钮文字是字形 ⠿,不设 aria-label 读屏就念符号本身(P-10);与 title 同串,切语言在下面一起刷。
+        drag.setAttribute('aria-label', drag.title)
         drag.addEventListener('click', (e) => {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
@@ -1175,6 +1183,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             kind === 'list'
               ? fs === 'folded' ? translate('blocklayer.expandChildren') : translate('blocklayer.foldChildren')
               : fs === 'folded' ? translate('blocklayer.expandSection') : translate('blocklayer.foldSection')
+          // 读屏:名称别念字形 ▾/▸,展开态走 aria-expanded(P-10,同 callout chevron 的写法)。
+          fold.setAttribute('aria-label', fold.title)
+          fold.setAttribute('aria-expanded', String(fs !== 'folded'))
         }
         fold.addEventListener('click', (e) => {
           e.stopPropagation()
@@ -1196,6 +1207,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         add.className = 'block-add'
         add.textContent = '＋'
         add.title = translate('blocklayer.addBelow')
+        add.setAttribute('aria-label', add.title)
         // ＋(B-19,对标 Notion):插一个新块并当场打开块选择器(新块里先放一个 `/` 唤起 slash 菜单;
         // Esc / 点空白关掉时 MarkdownBlock 把这个 `/` 删掉,见 machineSlash)。按住 Alt 点 = 插到上方。
         // 列表项上点(B-19b)插的是同级新项 —— 此前往列表中间塞了个段落,列表被劈成两段、有序列表从 1 重新编号。
@@ -1227,6 +1239,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         cardGrab.textContent = '❏'
         cardGrab.draggable = true
         cardGrab.title = translate('blocklayer.cardGrab')
+        cardGrab.setAttribute('aria-label', cardGrab.title)
         cardGrab.style.display = 'none'
         /** 悬停块所在的卡(自身就是卡 → null,主把手已经是它)。 */
         const cardHostOf = (a: ActiveBlock | null): ActiveBlock | null => {
@@ -1628,7 +1641,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : []
           // OS 文件拖入:内容插入仍归 fileDropGuard/importToPage 那条链,但落点得**看得见**——
           // 画一条横线,并在 drop 时把光标先送到线所在处,否则文件恒插在原光标位置、线在撒谎。
-          if (types.includes('Files')) {
+          // 侧栏树行拖入(REF_MIME,评审 G4-05)同理:`[[链接]]` 由宿主经本 leaf 的 mdRef 插在光标处。
+          // 画布模式的树行拖入归舞台(canvasStage 落卡),这里不插手。
+          if (types.includes('Files') || (types.includes(REF_MIME) && !!view && !inCanvas(view))) {
             if (!view) return
             const hit = topBlockAtY(view, e.clientY)
             if (!hit) return
@@ -1781,9 +1796,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
               if (node) {
                 unfoldOver(view, fd.pos + node.nodeSize) // 命中折叠标题:它的下缘在隐藏小节里,先展开
                 const doc = view.state.doc
+                // 下半区 = 块尾:偏置必须朝回(-1)。块尾那个位置在容器(列表 / callout / 表格)里没有文本位,
+                // 默认 +1 偏置会往前找到**下一块**的开头,saveFiles 按选区所在顶层块插在它后面 —— 线画在这块下沿,
+                // 文件却落到下一块之后(评审 G4-03)。朝回找落在本块最后一个文本位,插入点就是线所在处。
                 view.dispatch(view.state.tr.setSelection(node.isAtom
                   ? NodeSelection.create(doc, fd.pos)
-                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1))))
+                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1), fd.lower ? -1 : 1)))
               }
             } catch { /* 位置已失效 */ }
             return
@@ -1899,6 +1917,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           drag.title = translate('blocklayer.dragHandle')
           add.title = translate('blocklayer.addBelow')
           cardGrab.title = translate('blocklayer.cardGrab')
+          for (const b of [drag, add, cardGrab]) b.setAttribute('aria-label', b.title)
         })
 
         return {
@@ -2556,8 +2575,112 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     }),
   )
 
+  // ── 块选中态的键盘(评审 K-17)。Esc / ⠿ / 框选进了块模式之后,此前只有 Esc 两段式:Shift+↓ 扩出来的是文字选区,
+  //    Shift+点击只延伸字符。这里按**顶层块**(doc / 分栏 cell 的直接子,与 topRangeOf 同一容器口径)扩选:
+  //    锚块不动、头块一格一格走,单块回到 NodeSelection,多块 = 整块文字范围 + blockSelectionKey(与框选同一表示,
+  //    删除 / 复制 / 拖动 / 块菜单全走既有多块机器)。折叠标题藏起来的块跳过(随折叠标题整体进出)。
+  //    另:Mod-Alt-/ 打开块菜单并把焦点放在「转换为」第一项(Cmd+/ 被左侧栏占着);Mod-] / Mod-[ = 缩进 / 减少缩进
+  //    (段落接缩进档,与 Tab 同一套;代码块里不接,免得插空格)。
+  const TOP_CONTAINERS = ['doc', 'amadeusColumnCell']
+  const inBlockMode = (state: EditorState): boolean => {
+    const sel = state.selection
+    if (sel instanceof NodeSelection) return sel.node.isBlock
+    return sel instanceof TextSelection && !sel.empty && !!blockSelectionKey.getState(state)
+  }
+  /** pos 落在(或正好起于)哪个顶层块。 */
+  const topBlockOf = (doc: ProseNode, pos: number): { from: number; to: number } | null => {
+    const $p = doc.resolve(pos)
+    if (TOP_CONTAINERS.includes($p.parent.type.name)) {
+      const n = $p.nodeAfter
+      return n ? { from: pos, to: pos + n.nodeSize } : null
+    }
+    let d = $p.depth
+    while (d >= 1 && !TOP_CONTAINERS.includes($p.node(d - 1).type.name)) d--
+    return d >= 1 ? { from: $p.before(d), to: $p.after(d) } : null
+  }
+  const anchorHeadBlocks = (state: EditorState): { a: { from: number; to: number }; h: { from: number; to: number } } | null => {
+    const sel = state.selection
+    const doc = state.doc
+    const a = topBlockOf(doc, sel instanceof NodeSelection ? sel.from : sel.anchor)
+    const h = sel instanceof NodeSelection ? a : topBlockOf(doc, sel.head)
+    if (!a || !h || doc.resolve(a.from).parent !== doc.resolve(h.from).parent) return null
+    return { a, h }
+  }
+  /** 锚块到头块(含)整块选中:同一块 → NodeSelection;多块 → 整块文字范围(方向随头块)。 */
+  const selectBlockSpan = (state: EditorState, a: { from: number; to: number }, h: { from: number; to: number }): Transaction => {
+    const doc = state.doc
+    const one = a.from === h.from ? doc.nodeAt(a.from) : null
+    if (one && NodeSelection.isSelectable(one)) return state.tr.setSelection(NodeSelection.create(doc, a.from))
+    const down = h.from >= a.from
+    const $a = doc.resolve(down ? a.from + 1 : a.to - 1)
+    const $h = doc.resolve(down ? h.to - 1 : h.from + 1)
+    return state.tr.setSelection(TextSelection.between($a, $h)).setMeta(blockSelectionKey, true)
+  }
+  const extendBlocks = (dir: -1 | 1) => (state: EditorState, dispatch?: (tr: Transaction) => void): boolean => {
+    if (!inBlockMode(state)) return false
+    const ah = anchorHeadBlocks(state)
+    if (!ah) return false
+    const $h = state.doc.resolve(ah.h.from)
+    const parent = $h.parent
+    let i = $h.index() + dir
+    let at = dir > 0 ? ah.h.to : ah.h.from
+    // 折叠标题藏起来的块跳过
+    while (i >= 0 && i < parent.childCount) {
+      const size = parent.child(i).nodeSize
+      const from = dir > 0 ? at : at - size
+      if (isHiddenAt(state, from + 1) == null) {
+        dispatch?.(selectBlockSpan(state, ah.a, { from, to: from + size }).scrollIntoView())
+        return true
+      }
+      at = dir > 0 ? at + size : at - size
+      i += dir
+    }
+    return true // 到头了:吞键,不退回文字扩选(那会把块模式悄悄换成字符选区)
+  }
+  const inCode = (state: EditorState): boolean => state.selection.$from.parent.type.name === 'code_block'
+  const blockKbKeymap = $prose(() =>
+    new Plugin({
+      props: {
+        handleKeyDown: keydownHandler({
+          'Shift-ArrowDown': extendBlocks(1),
+          'Shift-ArrowUp': extendBlocks(-1),
+          'Mod-Alt-/': (state, dispatch, view) => {
+            if (!view || !view.editable || !dispatch) return false
+            // 菜单动作作用于块选区(与点 ⠿ 同):文字光标先按 Esc 的单位选中所在块。
+            if (!inBlockMode(state)) {
+              const at = escTargetPos(state)
+              if (at == null) return false
+              dispatch(state.tr.setSelection(NodeSelection.create(state.doc, at)))
+            }
+            const st = view.state
+            const dom = st.selection instanceof NodeSelection ? view.nodeDOM(st.selection.from) : null
+            const r = dom instanceof HTMLElement ? dom.getBoundingClientRect() : view.coordsAtPos(st.selection.from)
+            hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: true, focus: 'turnInto' })
+            return true
+          },
+          'Mod-]': (state, dispatch, view) => (inCode(state) ? false : tabIndent(state, dispatch, view, tabFoldHooks)),
+          'Mod-[': (state, dispatch) => (inCode(state) ? false : tabOutdent(state, dispatch)),
+        }),
+        handleDOMEvents: {
+          // Shift+点击:块模式下按顶层块延伸到点中的那块(文字选区照旧由浏览器延伸字符)。
+          mousedown: (view, e) => {
+            if (!e.shiftKey || e.button !== 0 || !view.editable || !inBlockMode(view.state)) return false
+            const hit = view.posAtCoords({ left: e.clientX, top: e.clientY })
+            const ah = anchorHeadBlocks(view.state)
+            const target = hit ? topBlockOf(view.state.doc, hit.pos) : null
+            if (!ah || !target || view.state.doc.resolve(target.from).parent !== view.state.doc.resolve(ah.a.from).parent) return false
+            e.preventDefault()
+            view.dispatch(selectBlockSpan(view.state, ah.a, target))
+            view.focus()
+            return true
+          },
+        },
+      },
+    }),
+  )
+
   return {
-    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, duplicateKeymap, keyboardPlugins].flat(),
+    plugins: [blockKbKeymap, handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, duplicateKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
     duplicate: (view) => duplicateBlocks(view.state, view.dispatch.bind(view), view),

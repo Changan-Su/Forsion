@@ -7,8 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
 import './styles/base.css'
-import './amadeus-host.css'
-import './amadeus/styles.css'
+import './amadeus-host.css' // 编辑器块样式经它的 @import 进来(同生产 main.tsx);别再单独 import styles.css —— 级联会反过来(评审 P-14 / §5)
 import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import { FindBar, openFindBar } from './findInPage'
 import { AskStringHost } from './amadeus/components/askString'
@@ -30,7 +29,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { setLocaleGlobal } from './i18n'
+import { HostLocaleProvider, setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -44,12 +43,14 @@ import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGone } from './amadeus/store/pageStore'
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
 import { switchNoteLock } from './amadeus/unified/noteLock'
+import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
 import { FileText as FileTextIcon } from 'lucide-react'
 import { QuickFind, useQuickFind } from './quickFind'
+import { treeRefBlocks } from './amadeus/unified/treeRefDrop'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
@@ -686,6 +687,15 @@ if (new URLSearchParams(location.search).has('dock')) {
   })
   useQuickFind.getState().openPalette()
   createRoot(document.getElementById('root')!).render(<QuickFind />)
+  // 从外部进入编辑器的几个输入框(评审 G4-02 IME 守卫 / G4-11 快切合并)同台:命令面板 + Amadeus 浮层(模板选择器)
+  // 另挂一个根,store 露到 `window.__qf` 由仪器开关。动态 import:别的台架模式不求值这些模块。见 scripts/quickfind-entry.check.cjs。
+  void Promise.all([import('@lcl/engine/CommandPalette'), import('@lcl/engine/commandRegistry'), import('./amadeusOverlays'), import('./amadeusOverlayStore')])
+    .then(([{ CommandPalette }, { useCommandStore }, { AmadeusOverlays }, { useUiOverlay }]) => {
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
+      ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
+    })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []
@@ -1658,7 +1668,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   vault.set('Embedded.md', EMBED_MD)
   const writes: Array<{ path: string; text: string }> = []
   /** 被 CAS 拒掉的写(评审 G1-01 仪器):{path, text(想写的), current(盘上的)} —— 没落盘,不进 writes。 */
-  const casRejects: Array<{ path: string; text: string; current: string }> = []
+  const casRejects: Array<{ path: string; text: string; current: string | null }> = []
   const listeners = new Set<(p: string) => void>()
   let switchUPage: ((path: string) => void) | null = null
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
@@ -1689,13 +1699,20 @@ if (new URLSearchParams(location.search).has('dock')) {
     // 与桌面主进程同一份契约(fs/vaultHandlers 的 writeTextFile):带 base 且盘上指纹不符 → 不写、回现文;
     // 文件不在 = 无冲突;不带 base 回 undefined。写失败注入:`__upage.failWrites = n`(接下来 n 次写抛错,
     // Infinity = 一直失败)—— 早先这里静默吞掉第三个参数,CAS 与写失败两条路在台架里根本造不出来。
-    writeTextFile: (p: string, text: string, opts?: { base?: string }) => {
-      const api = (window as unknown as { __upage?: { failWrites?: number } }).__upage
+    // 带 base 而文件已不在 → 拒写、current:null(同主进程,Codex 复核 inst P0-2:不重建被删的旧路径)。
+    // `__upage.casDelayMs = n`:写到达「主进程」前先在路上走 n ms(已发出的 IPC)—— 仪器在这段里删文件,造「在途写 × 别处删除」。
+    writeTextFile: async (p: string, text: string, opts?: { base?: string }) => {
+      const api = (window as unknown as { __upage?: { failWrites?: number; casDelayMs?: number } }).__upage
       if (api && (api.failWrites ?? 0) > 0) {
         api.failWrites = (api.failWrites ?? 0) - 1
         return Promise.reject(new Error('EACCES: permission denied (harness)'))
       }
+      if ((api?.casDelayMs ?? 0) > 0) await new Promise((r) => setTimeout(r, api!.casDelayMs))
       const cur = vault.get(p)
+      if (typeof opts?.base === 'string' && cur == null) {
+        casRejects.push({ path: p, text, current: null })
+        return { ok: false as const, current: null }
+      }
       if (typeof opts?.base === 'string' && cur != null && textFingerprint(cur) !== opts.base) {
         casRejects.push({ path: p, text, current: cur })
         return Promise.resolve({ ok: false, current: cur })
@@ -1767,6 +1784,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writes,
     casRejects,
     failWrites: 0,
+    casDelayMs: 0,
     writeLagMs: 0,
     probe: upageProbe,
     probe2: upageProbe2,
@@ -1789,6 +1807,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       vault.set(path, text)
       for (const cb of listeners) cb(path)
     },
+    /** 切界面语言(走真广播;`?upage` 的根包了 HostLocaleProvider,useI18n 与 translate 两路一起跟,评审 R-15 / C-14)。 */
+    setLocale: (l: 'zh' | 'en') => setLocaleGlobal(l),
     /** 把一个侧栏视图挂在页面右侧(台架没有 dockview 侧栏;反链面板等观感自查用)。mod = '/src/…' 模块路径。 */
     async mountSide(mod: string, name: string) {
       const m = (await import(/* @vite-ignore */ mod)) as Record<string, () => React.ReactElement>
@@ -1803,9 +1823,10 @@ if (new URLSearchParams(location.search).has('dock')) {
     setRecents(paths: string[]) {
       setRecentsProvider(() => paths)
     },
-    // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。
-    setEditorMode(m: 'wysiwyg' | 'source') {
-      void import('./amadeusOverlayStore').then(({ useUiOverlay }) => useUiOverlay.setState({ editorMode: m }))
+    // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。按 leaf 记(评审 C-08):
+    // 缺省切主实例('main' = 没挂 PageScopeCtx 的主实例跟随的活动面板),`&udual` 的第二实例传 'harness-B'。
+    setEditorMode(m: 'wysiwyg' | 'source', scope = 'main') {
+      void import('./amadeusOverlayStore').then(({ useUiOverlay }) => useUiOverlay.getState().setEditorMode(scope, m))
     },
   }
   void import('./amadeus/unified/lifecycle').then((m) => { (window as unknown as { __upage: { lifecycle: unknown } }).__upage.lifecycle = m })
@@ -1850,6 +1871,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       // `&udrop`:宿主级 OS 文件拖入(镜像 amadeusViews EditorScope 的 onDrop):文件递给**本宿主**的实例写口(filesRef),
       // 不按路径找实例(评审 G1-02)。opt-in:别的仪器里合成的文件拖放不该突然开始插上传占位。
       const filesRef = useRef<((files: File[]) => boolean) | null>(null)
+      // 同一开关下的侧栏树行拖入(评审 G4-05):映射走生产的 treeRefBlocks,插入走本宿主实例的 mdRef(镜像 amadeusViews)。
+      const mdRef = useRef<((md: string) => boolean) | null>(null)
       const hostDrop = new URLSearchParams(location.search).has('udrop')
       // `&ulock`:锁定页面(评审 C-07)的宿主一半,镜像 amadeusViews:锁定态存本机、进 key 触发重挂,换实例时按盘上
       // 现文重挂(生产先 flush 再重读路由;台架的写是同步落 vault 的,直接重读)。仪器:unified-readonly 的 K 组。
@@ -1883,8 +1906,10 @@ if (new URLSearchParams(location.search).has('dock')) {
           )}
           {st.block ? <div data-uroute="block" /> : <div
             style={{ display: 'contents' }}
-            onDragOver={hostDrop ? (e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault() } : undefined}
+            onDragOver={hostDrop ? (e) => { const ty = Array.from(e.dataTransfer?.types ?? []); if (ty.includes('Files') || ty.includes('application/x-forsion-chatref')) e.preventDefault() } : undefined}
             onDrop={hostDrop ? (e) => {
+              const refs = treeRefBlocks(e.dataTransfer)
+              if (refs.length) { e.preventDefault(); mdRef.current?.(refs.join('\n\n')); return }
               const files = Array.from(e.dataTransfer?.files ?? [])
               if (!files.length) return
               e.preventDefault()
@@ -1897,6 +1922,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             diskRaw={st.diskRaw}
             probe={probe}
             filesRef={filesRef}
+            mdRef={mdRef}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
             readOnly={new URLSearchParams(location.search).has('uro') || locked}
             onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}
@@ -1966,22 +1992,32 @@ if (new URLSearchParams(location.search).has('dock')) {
       document.body.appendChild(hostB)
       const rootB = createRoot(hostB)
       // B 挂在自己的面板作用域里(生产里每个标签一个 leaf):同篇多开的实例身份(草稿槽位 / 改名聚焦认领)靠它区分,评审 G1-02。
-      rootB.render(<PageScopeCtx.Provider value="harness-B"><UPageHost probe={upageProbe2} /></PageScopeCtx.Provider>)
+      rootB.render(<HostLocaleProvider><PageScopeCtx.Provider value="harness-B"><UPageHost probe={upageProbe2} /></PageScopeCtx.Provider></HostLocaleProvider>)
       unmountB = () => rootB.unmount()
     }
+    // `&utoc`(配 &upane):挂生产的笔记浮动目录(与 amadeusViews 同一个 NoteFloatingToc,根 = 滚动的 .amx-pane),评审 C-04。
+    function UPane(): React.ReactElement {
+      const paneRef = useRef<HTMLDivElement | null>(null)
+      return (
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
+          <UPageHost />
+        </div>
+      )
+    }
+    // 生产的编辑器挂在 LocaleProvider 之下(useI18n 跟界面语言);台架原来没包,useI18n 一律回落中文,英文界面的
+    // 断言写不了(评审 §0 台架边界)。包 HostLocaleProvider(不接管 setter、不探 IP),仪器用 `__upage.setLocale` 切。
     createRoot(document.getElementById('root')!).render(
-      <>
+      <HostLocaleProvider>
         <FindBar />
         {upane ? (
-          <div className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
-            <UPageHost />
-          </div>
+          <UPane />
         ) : (
           <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
             <UPageHost />
           </div>
         )}
-      </>,
+      </HostLocaleProvider>,
     )
   })
 } else if (new URLSearchParams(location.search).has('unified')) {

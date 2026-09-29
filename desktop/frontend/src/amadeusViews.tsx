@@ -15,14 +15,18 @@ import {
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
-import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
+import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
+import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
+import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
+import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
-import { useUiOverlay } from './amadeusOverlayStore'
+import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
+import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
@@ -38,10 +42,12 @@ import type { TrashEntry } from '@amadeus-shared/ipc'
 import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { openTutorial } from './amadeusTutorial'
+import { canUploadToNote } from './amadeusNoteBar'
+import { printClone } from '@amadeus/lib/printClone'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { REF_MIME, PATHS_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, PATHS_MIME, setChatRefDrag } from './views/chat2/chatDragRef'
 import { useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
@@ -54,7 +60,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, FloatingToc, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -1588,7 +1594,7 @@ export function AmadeusPagesView() {
               <button onClick={() => { const p = menu.path; setMenu(null); openCloudSyncDialog(p, 'page') }}><Cloud size={13} /> {t('amxv.menu.cloudSyncOn')}</button>
             )
           )}
-          <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
+          {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); void deleteNoteFlow(p) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
         </OverlayAt>
       )}
@@ -1625,7 +1631,7 @@ export function AmadeusPagesView() {
           ) : (
             <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><Eye size={13} /> {t('amxv.menu.open')}</button>
           )}
-          <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
+          {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); if (confirmedDelete('file', p)) void ps().deletePage(p) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
         </OverlayAt>
       )}
@@ -1642,7 +1648,7 @@ export function AmadeusPagesView() {
             </button>
           ))}
           <button onClick={() => { const f = menu.path; setMenu(null); void askString(t('amxv.renameFolder'), folderName(f)).then((name) => { const n = name?.trim(); if (n) void ps().renameFolder(f, n) }) }}><Pencil size={13} /> {t('amxv.menu.rename')}</button>
-          <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
+          {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           {window.amadeusSync?.entrySyncEnable && vaultSide === 'local' && (
             isSyncedEntry(vaultRoot, menu.path) ? (
               <button onClick={() => { const f = menu.path; setMenu(null); void window.amadeusSync!.entrySyncDisable!(f) }}><CloudOff size={13} /> {t('amxv.menu.cloudSyncOff')}</button>
@@ -1782,6 +1788,9 @@ function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNee
   const { lift, kbHeight } = useKeyboardMetrics()
   const [sheet, setSheet] = useState(false)
   const [pick, setPick] = useState(0) // 0 = 关;>0 = 面板高度(= 收键盘前量到的键盘高度)
+  // Android 返回先关「⋯」弹层 / 「+」块面板,不直接关掉整篇笔记(G2-12)。
+  useMobileBackClose(sheet, () => setSheet(false))
+  useMobileBackClose(pick > 0, () => setPick(0))
   const barRef = useRef<HTMLDivElement>(null)
   const keep = (e: React.PointerEvent): void => e.preventDefault()
   // lift / pick 都是**视口 px**,而元素活在 body zoom(触屏 1.15)里,写回样式前一律除以 zoom 反补偿。
@@ -2106,8 +2115,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const loadError = usePageStore((s) => s.error)
   // 插件文件类型也占用全局 activePage(单活页模型)→ 认领时须能认出「这不是笔记」,见下面的 useEffect。
   const pluginFileTypes = usePluginStore((s) => s.fileTypes)
-  // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state。
-  const mode = useUiOverlay((s) => s.editorMode)
+  // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state;按本 leaf 记(评审 C-08)。
+  const mode = useUiOverlay((s) => editorModeOf(s, leaf.id))
   const [dragging, setDragging] = useState(false)
   // 兜底收虚线框:拖拽在别处松手 / Esc 取消 / 拖出窗口,本容器的 dragleave 未必来得及。
   useEffect(() => {
@@ -2126,6 +2135,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const unifiedHistRef = useRef<UnifiedHistory | null>(null)
   /** 本 leaf 的 v4 实例的文件写口(G1-02):拖入 / 上传直接交给它,不按路径全局找 —— 同篇双开时那会找到另一个标签。 */
   const unifiedFilesRef = useRef<((files: File[]) => boolean) | null>(null)
+  const unifiedMdRef = useRef<((md: string) => boolean) | null>(null) // 树行拖入的 markdown 写口(G4-05)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
@@ -2154,7 +2164,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (!page || !host) return
     const wrap = document.createElement('div')
     wrap.id = 'amx-print-root'
-    const clone = host.cloneNode(true) as HTMLElement
+    const clone = printClone(host) // 标题框换成静态 h1(长标题折行、取此刻的值;C-12)
     clone.setAttribute('data-mode', 'light')
     wrap.appendChild(clone)
     document.body.appendChild(wrap)
@@ -2416,25 +2426,24 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // ④ 面板关掉 → 回收它那份 store(内部先 flush 落盘,不带走没写完的改动)。
   useEffect(() => () => disposePageScope(leaf.id), [leaf.id])
 
-  // 侧栏笔记行拖进编辑器 → 追加 [[链接]] 块。链接一律路径限定形态([[dir/Name|Name]]):
-  // resolvePageName 对带路径名不做同名回退,重名笔记也指向唯一目标;根目录笔记只能裸名(天花板:
-  // 与当前页同夹的同名笔记会优先命中,极罕见)。会话/工作区文件引用与笔记语义不兼容,编辑器不收。
-  const noteWikiInner = (rel: string): string => {
-    const link = rel.replace(/\.md$/i, '')
-    const base = link.split(/[\\/]/).pop() || link
-    return link === base ? link : `${link}|${base}`
-  }
+  // 侧栏笔记行拖进编辑器 → [[链接]] 块(映射与链接形态见 unified/treeRefDrop 顶注,v3 / v4 共用)。
   // 拖入文件 → 按 Tangu 笔记设置存放(attachments/同目录/固定夹)→ 预览开则插 ![[base]],否则插 [名](相对路径)。
   const onDrop = async (e: RDragEvent<HTMLDivElement>): Promise<void> => {
     setDragging(false) // ⚠️必须在任何 early return 之前:落个不认识的东西也得把虚线框收掉
     // 树行拖源对一切叶子(含图片/PDF/.db 附件)都打 kind:'note' —— 按真实类型分流:
     // .md → [[链接]];非笔记 → ![[嵌入]](与 OS 文件拖入 importToPage 的语义一致,评审 P1)。
-    const treeRefs = readChatRefs(e.dataTransfer).filter((r) => r.kind === 'note')
+    const treeRefs = treeRefBlocks(e.dataTransfer)
     if (treeRefs.length) {
       e.preventDefault()
+      // v4:交给**本 leaf** 的实例插在光标处(blockLayer 已把光标送到落点横线;G1-02 同理不按路径找实例)。
+      // 此前只走下面 v3 那条 —— v4 的 activePage 恒空,虚线框亮着、松手什么都没发生(评审 G4-05)。
+      if (unifiedRoute && notePath) {
+        const md = treeRefs.join('\n\n')
+        if (unifiedMdRef.current ? unifiedMdRef.current(md) : unifiedInsertMarkdown(notePath, md, 'cursor')) return
+      }
       const ps = myPs()
       if (!ps.activePage) return
-      ps.insertBlocksAfter(null, treeRefs.map((r) => (isNotePath(r.path) ? `[[${noteWikiInner(r.path)}]]` : `![[${r.path}]]`)))
+      ps.insertBlocksAfter(null, treeRefs)
       return
     }
     const files = Array.from(e.dataTransfer?.files ?? [])
@@ -2497,14 +2506,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {/* 与 Chat View 同一份 LCL FloatingToc。只给文档模式:源码没有可导航标题,画布有自己的空间导航;
           mini / coarse pointer 则把稀缺横向空间留给正文。根就是本 leaf 的滚动 EditorScope,分屏互不串页。 */}
       {barPath && mode !== 'source' && !canvasSeg?.on && !leaf.params.miniSurface && !isCoarsePointer() && (
-        <FloatingToc
-          scrollContainer={printHostRef}
-          contentRoot={printHostRef}
-          selector=".page-view h1, .page-view h2, .page-view h3"
-          label={t('amxv.floatingToc')}
-          scanTrigger={barPath}
-          placement="sticky"
-        />
+        <NoteFloatingToc host={printHostRef} label={t('amxv.floatingToc')} scanTrigger={barPath} />
       )}
       {/* ⚠️ 上传用的隐藏 input **必须住在顶栏外面**:移动端整条顶栏不渲染,而底栏胶囊的「上传」
           仍旧 uploadInputRef.current?.click() —— 留在顶栏里 = 手机上 ref 恒 null,上传静默失效。 */}
@@ -2569,12 +2571,12 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           )}
           <button
             className="amx-mode-btn"
-            onClick={() => useUiOverlay.getState().toggleEditorMode()}
+            onClick={() => useUiOverlay.getState().toggleEditorMode(leaf.id)}
             title={mode === 'source' ? t('amxv.toVisualLong') : t('amxv.toSource')}
           >
             {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
           </button>
-          {activePage && (
+          {canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') && (
             <button
               className="amx-mode-btn"
               title={t('amxv.uploadToPage')}
@@ -2598,11 +2600,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       )}
       {noteMenu && barPath && (
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> {t('amxv.menu.exportPdf')}</button>
+          {canExportPdf() && <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> {t('amxv.menu.exportPdf')}</button>}
           <button onClick={() => { useAmadeusPrefs.getState().toggleStar(barPath); setNoteMenu(null) }}>
             <Star size={13} /> {starred ? t('amxv.menu.unstar') : t('amxv.menu.star')}
           </button>
-          <button onClick={() => { void amadeus.revealInFileManager(barPath); setNoteMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
+          {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(barPath); setNoteMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           {unifiedRoute && (
             <button onClick={() => { setNoteMenu(null); toggleLock() }}><LockIcon size={13} /> {lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage')}</button>
           )}
@@ -2628,6 +2630,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           onCanvasMode={setCanvasSeg}
           historyRef={unifiedHistRef}
           filesRef={unifiedFilesRef}
+          mdRef={unifiedMdRef}
           onRenamed={(np) => {
             leaf.setParams({ ...leaf.params, notePath: np })
             leaf.setTitle(baseName(np))
@@ -2717,17 +2720,18 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         indent={canvasSeg ? (dir) => { unifiedHistRef.current?.indent?.(dir) } : null}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
-          { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },
+          { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode(leaf.id) },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
-          ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
           ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn'), on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),
           ...(window.amadeusCollab ? [{ id: 'share', icon: <Share2 size={16} />, label: t('amxv.shareOrPublish'), run: () => setShareCard({ x: window.innerWidth / 2, y: window.innerHeight / 2 }) }] : []),
-          { id: 'pdf', icon: <FileDown size={16} />, label: t('amxv.menu.exportPdf'), run: () => void exportPdf() },
-          { id: 'reveal', icon: <FolderOpen size={16} />, label: t('amxv.menu.reveal'), run: () => void amadeus.revealInFileManager(barPath!) },
+          // 宿主做不了的两件不出键(G2-13:移动本地库上都是 no-op 死键),判据单源 amadeus/lib/hostCaps。
+          ...(canExportPdf() ? [{ id: 'pdf', icon: <FileDown size={16} />, label: t('amxv.menu.exportPdf'), run: () => void exportPdf() }] : []),
+          ...(canRevealInFileManager() ? [{ id: 'reveal', icon: <FolderOpen size={16} />, label: t('amxv.menu.reveal'), run: () => void amadeus.revealInFileManager(barPath!) }] : []),
           { id: 'delete', icon: <Trash2 size={16} />, label: t('amxv.menu.deleteNote'), danger: true, run: () => void deleteNoteFlow(barPath!, myPs) },
         ]}
       />

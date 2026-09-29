@@ -462,3 +462,47 @@ export function applyTrigger(
   view.dispatch(tr.scrollIntoView())
   return true
 }
+
+/**
+ * 代码块的「转换为」(R-23,评审 2026-09-27)。applyTrigger 按文本块走,对代码块全不对:正文 / 标题的 setBlockType
+ * 把代码里的换行压成空格;列表类在代码块上 findWrapping 失败 → 静默无效;折叠把 `[!fold]-` 插进代码首行。
+ * 这里按行拆:正文 / 标题 → 每行一块(空行 = 空段落);列表类 → 每行一项(空行跳过,全空给一个空项);
+ * 引用 → 整块包进引用(`> ```js` 是合法形态);折叠 → 包进 `> [!fold]-` 折叠 callout(令牌是 callout 首段,不进代码)。
+ * 其余(code / math)或 schema 不允许 → false,调用方照旧。pos = 代码块节点起点。都能撤销(一个事务)。
+ */
+export function codeBlockTurnInto(view: EditorView, pos: number, trig: Trigger): boolean {
+  const { state } = view
+  const node = state.doc.nodeAt(pos)
+  if (!node || !node.type.spec.code) return false
+  const { schema } = state
+  const { paragraph, heading, blockquote, bullet_list: bulletList, ordered_list: orderedList, list_item: listItem } = schema.nodes
+  if (!paragraph) return false
+  const lines = node.textContent.split('\n')
+  const para = (l: string): ProseNode => paragraph.create(null, l ? schema.text(l) : null)
+  let blocks: ProseNode[]
+  if (trig.kind === 'text' || trig.kind === 'heading') {
+    if (trig.kind === 'heading' && !heading) return false
+    blocks = lines.map((l) => (trig.kind === 'heading' && l ? heading.create({ level: trig.level ?? 1 }, schema.text(l)) : para(l)))
+  } else if (trig.kind === 'bullet' || trig.kind === 'ordered' || trig.kind === 'task') {
+    const listType = trig.kind === 'ordered' ? orderedList : bulletList
+    if (!listType || !listItem) return false
+    const attrs = trig.kind === 'task' ? { checked: trig.checked ?? false } : null
+    const texts = lines.filter((l) => l.trim())
+    const items = (texts.length ? texts : ['']).map((l) => listItem.create(attrs, para(l)))
+    blocks = [listType.create(trig.kind === 'ordered' ? { order: trig.order ?? 1 } : null, items)]
+  } else if (trig.kind === 'quote' || trig.kind === 'fold') {
+    if (!blockquote) return false
+    blocks = [blockquote.create(null, trig.kind === 'fold' ? [paragraph.create(null, schema.text(FOLD_TOKEN)), node] : [node])]
+  } else {
+    return false
+  }
+  const tr = state.tr
+  try {
+    tr.replaceWith(pos, pos + node.nodeSize, blocks)
+  } catch {
+    return false // 所在容器收不下这些块(schema 拒绝):不动
+  }
+  tr.setSelection(Selection.near(tr.doc.resolve(Math.min(pos + 1, tr.doc.content.size))))
+  view.dispatch(tr.scrollIntoView())
+  return true
+}

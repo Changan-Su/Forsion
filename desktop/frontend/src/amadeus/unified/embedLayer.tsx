@@ -41,7 +41,8 @@ import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
 import { attachSourceButton } from '../blocks/markdown/sourceToggle'
 import { getAttachmentPrefs } from '../lib/attachments'
-import { registerMessages, subscribeLocale, translate } from '../../i18n'
+import { canOpenAttachment } from '../lib/hostCaps'
+import { HostLocaleProvider, registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'uembed.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
@@ -179,6 +180,16 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
   const [open, setOpen] = useState(true)
   const pdfVaultPath = fileKind === 'pdf' ? resolveFileName(name, files, pagePath) : null
   if (fileKind === 'other') {
+    const sub = /\.[a-z0-9]+\.md$/i.test(name) // 插件文件类型:应用内开,不经系统程序
+    // 宿主打不开附件(移动本地库,评审 G2-13):只是一张名片,不是一颗点了没反应的按钮。
+    if (!sub && !canOpenAttachment()) {
+      return (
+        <div className="embed-file">
+          <span className="embed-file-ic" aria-hidden>📄</span>
+          <span className="embed-file-name">{name}</span>
+        </div>
+      )
+    }
     return (
       <button
         className="embed-file"
@@ -207,7 +218,8 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
           <span className="embed-media-warn" title={t('uembed.badAnchorTip')}>{t('uembed.badAnchor')}</span>
         )}
         <button className="embed-media-btn" onClick={() => setOpen((o) => !o)}>{open ? t('uembed.collapse') : t('uembed.expand')}</button>
-        <button
+        {/* PDF 走应用内阅读器,恒可开;视频 / 音频走系统程序,宿主打不开就不出这颗键(G2-13)。 */}
+        {(fileKind === 'pdf' || canOpenAttachment()) && <button
           className="embed-media-btn"
           title={fileKind === 'pdf' ? t('uembed.openPdfInTab') : t('uembed.openWithSystem')}
           onClick={() => {
@@ -216,7 +228,7 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
           }}
         >
           {t('uembed.open')}
-        </button>
+        </button>}
       </div>
       {open && fileKind === 'pdf' && (
         pdfVaultPath ? (
@@ -520,7 +532,10 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 }
               }
               const root = createRoot(host)
+              // 独立根跨不过 LocaleProvider:子组件(书签卡/媒体/网页/按钮/多维表/画板/跨笔记编辑器)全走 useI18n,
+              // 不包就恒回落中文(评审 R-15)。HostLocaleProvider 只订 currentLocale,切语言整棵树跟着重渲。
               const render = (nextKind: EmbedKind): void => root.render(
+                <HostLocaleProvider>
                 <EmbedBody
                   kind={nextKind}
                   pagePath={opts.path}
@@ -538,7 +553,8 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                     v.dispatch(v.state.tr.insert(hit.at + hit.size, blocks))
                   }}
                   replaceText={replaceText}
-                />,
+                />
+                </HostLocaleProvider>,
               )
               render(kind)
               attachSourceButton(dom, view, () => {
@@ -606,8 +622,14 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         return {
           destroy: () => {
             viewRef = null
-            for (const [, e] of roots) queueMicrotask(() => e.root.unmount())
-            roots.clear()
+            // 插件表原地重配(评审 G1-06:插件扩展启停)时 PM 会拆掉**全部**插件视图再同步建回来,而嵌入 widget 的 DOM
+            // 原样留在文档里(装饰没变,PM 复用它们)—— 此刻无条件卸 React 根,每个嵌入都成了空壳。推到微任务再看:
+            // 同一个插件实例已经建回了视图 = 只是重配,根照旧用;没人接手 = 编辑器真拆了,再卸。
+            queueMicrotask(() => {
+              if (viewRef) return
+              for (const [, e] of roots) e.root.unmount()
+              roots.clear()
+            })
           },
         }
       },

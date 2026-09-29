@@ -7,13 +7,15 @@ import { createPortal } from 'react-dom'
 import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
-import { pageKey, resolvePageName } from '@amadeus-shared/links'
+import { mapOutsideFences, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { trailingBlockId } from '@amadeus-shared/pdfLink'
-import { toStoredMarkdown } from '@amadeus-shared/assets'
+import { joinRel, toStoredMarkdown } from '@amadeus-shared/assets'
+import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { anchorSafe } from '../blocks/markdown/wikiSubpath'
 import { amadeus } from '../api'
-import { hasUnifiedInstance, unifiedInsertMarkdown } from './lifecycle'
+import { flushUnifiedPath, hasUnifiedInstance, unifiedInsertMarkdown } from './lifecycle'
+import { fromDisk, toDisk } from './eol'
 import { carryFolds } from './foldCarry'
 import { registerMessages, translate, useI18n } from '../../i18n'
 
@@ -29,11 +31,66 @@ registerMessages({
   'blocklinks.moved': { zh: '已移动到「{name}」末尾', en: 'Moved to the end of "{name}"' },
   'blocklinks.moveFailed': { zh: '没能移动到「{name}」，原块没动', en: 'Couldn\'t move to "{name}" — the blocks were left in place' },
   'blocklinks.moveConflict': { zh: '「{name}」刚被别处改过，没有移动，请重试', en: '"{name}" was just changed elsewhere — nothing was moved, try again' },
+  'blocklinks.targetUnsaved': { zh: '已追加到「{name}」，但它还没存上，原块先保留在这里', en: 'Added to "{name}", but it hasn\'t been saved yet, so the blocks were kept here too' },
   'blocklinks.keptSource': { zh: '已追加到「{name}」，但这几块期间被改过，没有从本篇删掉', en: 'Added to "{name}", but these blocks changed meanwhile, so they were kept here too' },
 })
 
 const toast = (text: string): void => { window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text } })) }
 const baseOf = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
+
+const dirOf = (p: string): string => p.split('/').slice(0, -1).join('/')
+
+/** vault 相对路径规范化(折叠 `.` / `..`;越出库根的 `..` 保留在头上)。 */
+function normPath(p: string): string {
+  const out: string[] = []
+  for (const seg of p.split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop()
+    else out.push(seg)
+  }
+  return out.join('/')
+}
+
+/** 从 fromDir 指向 vaultRel 的相对路径。 */
+function relPath(fromDir: string, vaultRel: string): string {
+  const a = fromDir ? fromDir.split('/') : []
+  const b = vaultRel.split('/')
+  let i = 0
+  while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++
+  return [...a.slice(i).map(() => '..'), ...b.slice(i)].join('/')
+}
+
+/** 跨目录搬块:`[文字](相对地址)` 按源 → 目标目录重算(Codex 复核 B-15 P1)。图片已由 toStoredMarkdown 按目标目录落好,
+ *  外链 / 协议 / 绝对路径 / 纯锚点不动;围栏代码里的不动。
+ *  ponytail: 行内代码 span 里的 `[x](y)` 也会被改 —— 罕见,真碰上再按 outsideCodeSpans 细分。 */
+export function rebaseRelativeLinks(md: string, fromDir: string, toDir: string): string {
+  if (fromDir === toDir) return md
+  return mapOutsideFences(md, (line) => line.replace(/(^|[^!])\[([^\]\n]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (m, pre: string, text: string, href: string, title: string) => {
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/|#|<)/i.test(href)) return m
+    const [raw, hash = ''] = href.split(/(?=#)/)
+    return `${pre}[${text}](${relPath(toDir, normPath(joinRel(fromDir, raw)))}${hash}${title})`
+  }))
+}
+
+/** 目标原文末尾停在没收尾的围栏代码块 / HTML 注释里:追加的内容会被吞进去(Codex 复核 B-15 P0)。
+ *  ponytail: 只认顶格(≤3 空格)的围栏,列表 / 引用里的围栏不认 —— 那种末尾没收尾的极少见。 */
+export function endsInsideOpenBlock(text: string): boolean {
+  let fence: string | null = null
+  for (const line of text.split('\n')) {
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (!m) continue
+    if (!fence) fence = m[1]
+    else if (m[1][0] === fence[0] && m[1].length >= fence.length && !m[2].trim()) fence = null
+  }
+  return fence != null || text.lastIndexOf('<!--') > text.lastIndexOf('-->')
+}
+
+/** 追加到磁盘原文末尾:原文(含结尾空白、行尾风格)一字不动,只补必要的空行分隔(Codex 复核 B-15 P0)。 */
+export function appendToNote(cur: string, md: string): string {
+  const { text, eol } = fromDisk(cur)
+  const sep = !text ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n'
+  return toDisk(`${text}${sep}${md}\n`, eol)
+}
 
 /** 链接里写笔记的哪个名字:裸名在全库解析得回这篇就用裸名,重名时写库相对路径(去 .md)—— 与 resolvePageName 同一套规则。 */
 export function linkNameFor(path: string, pages: string[]): string {
@@ -82,6 +139,8 @@ export async function moveBlocksTo(opts: {
   source: string
   target: string
   serialize: (content: Fragment) => string | null
+  /** 全库页面表(排序):跨目录搬块时按目标位置重算裸名双链的指向。 */
+  pages?: string[]
 }): Promise<boolean> {
   const { view, from, to, source, target } = opts
   const name = baseOf(target)
@@ -89,15 +148,21 @@ export async function moveBlocksTo(opts: {
   const content = view.state.doc.slice(from, to).content
   const display = opts.serialize(content)
   if (!display?.trim()) { toast(translate('blocklinks.moveFailed', { name })); return false }
-  const md = toStoredMarkdown(display, target.split('/').slice(0, -1).join('/')).trim()
+  let md = rebaseRelativeLinks(toStoredMarkdown(display, dirOf(target)).trim(), dirOf(source), dirOf(target))
+  if (opts.pages && dirOf(source) !== dirOf(target)) {
+    // 裸名双链按「源笔记所在处」就近解析:搬到别的目录后可能指向另一篇同名笔记 → 按目标位置改写成仍指向原笔记的写法。
+    md = rewriteNoteRefs(md, source, target, { pairs: new Map(), pagesBefore: opts.pages, pagesAfter: opts.pages })
+  }
   try {
     if (hasUnifiedInstance(target)) {
       if (!unifiedInsertMarkdown(target, md, 'end')) throw new Error('insert refused')
+      // 目标的保存还在防抖队列里:严格落盘成功才删源块 —— 否则目标没存上、源块已删,两边都丢(Codex 复核 B-15 P0)。
+      try { await flushUnifiedPath(target, true) } catch { toast(translate('blocklinks.targetUnsaved', { name })); return false }
     } else {
       const cur = await amadeus.readTextFile(target)
       if (cur == null) throw new Error('missing')
-      const next = cur.trim() ? `${cur.replace(/\s+$/, '')}\n\n${md}\n` : `${md}\n`
-      const res = await amadeus.writeTextFile(target, next, { base: textFingerprint(cur) })
+      if (endsInsideOpenBlock(fromDisk(cur).text)) throw new Error('unsafe tail')
+      const res = await amadeus.writeTextFile(target, appendToNote(cur, md), { base: textFingerprint(cur) })
       if (res && !res.ok) { toast(translate('blocklinks.moveConflict', { name })); return false }
     }
   } catch {

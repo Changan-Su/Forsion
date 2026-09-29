@@ -65,6 +65,8 @@ const GATE_FILES = [
   // 实证:`checkForUpdates`/`onUpdaterStatus` 移动端 shim 一直没实现 → 装了旧版永远没有更新提醒,
   // 而 A/B/C 三段全绿(useBootstrap 两边都调),D 段又扫不到这个文件 = 整条通道没有台账。
   path.join(GENESIS, 'desktop/frontend/src/stores/bootstrap.ts'),
+  // 2026-09-28 加入 amadeus/lib/hostCaps.ts(评审 G2-13):编辑器「⋯」/ 附件卡上桌面专属动作的宿主能力门控单源。
+  path.join(GENESIS, 'desktop/frontend/src/amadeus/lib/hostCaps.ts'),
 ]
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
@@ -131,6 +133,7 @@ const KNOWN_GATES = {
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
+  'window.amadeus?.hostCaps': 'Amadeus 桥声明「做不了」的 OS 动作(评审 G2-13):导出 PDF / 在文件管理器中显示 / 系统程序打开附件,对应键**不渲染**。desktop 主进程桥不声明 = 全能做;移动本地库三件 false;云桥与 Unit 网页桥 revealInFileManager=false;移动端(window.tangu?.mobile)导出 PDF 除非桥显式声明 true 否则不给(云桥导出 = window.print,Android WebView 里是空操作,真机未验)。PDF 卡的「打开」走应用内阅读器不受限。判据单源 amadeus/lib/hostCaps.ts',
   'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
 }
 

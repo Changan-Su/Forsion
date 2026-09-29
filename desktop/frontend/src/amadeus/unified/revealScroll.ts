@@ -22,7 +22,7 @@ function scrollerOf(el: Element | null): HTMLElement | null {
 /** 滚动容器顶上被 sticky 顶栏盖住的那一截(视口 px)。只认宿主壳的笔记顶栏 `.amx-toolbar`
  *  (EditorScope / 台架 upane 里都是滚动容器的直接子元素;移动端与 Mini 不渲染它 → 0)。
  *  不做「凡 sticky 都算」的泛扫:LCL FloatingToc 的 sticky 框是 top:50% / height:0,会把落点推到半屏。 */
-function stickyTopInset(host: HTMLElement): number {
+export function stickyTopInset(host: HTMLElement): number {
   const bar = host.querySelector(':scope > .amx-toolbar')
   if (!(bar instanceof HTMLElement)) return 0
   const st = getComputedStyle(bar)
@@ -30,8 +30,11 @@ function stickyTopInset(host: HTMLElement): number {
   return bar.getBoundingClientRect().height
 }
 
+/** 阅读位置在顶栏下留的那条缝(大纲跳转 / 锚点 / 搜索命中 / 浮动目录同一口径)。 */
+export const READING_GAP = 12
+
 /** el 的顶边滚到「滚动容器顶 + 顶栏高 + gap」。el 不可见(折叠区里,rect 为空)时不动。 */
-export function revealBlockAtTop(el: HTMLElement, gap = 12): void {
+export function revealBlockAtTop(el: HTMLElement, gap = READING_GAP): void {
   const rect = el.getBoundingClientRect()
   if (!rect.width && !rect.height) return
   const taken = !el.dispatchEvent(new CustomEvent('amx-reveal', { bubbles: true, cancelable: true, detail: { rect } }))

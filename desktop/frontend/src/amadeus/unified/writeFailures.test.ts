@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm'
 import { transform } from 'sucrase'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composeFm } from './fm'
+import { fromDisk, toDisk } from './eol'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { flushUnifiedScopes, registerUnifiedPipe } from './lifecycle'
 
@@ -18,7 +19,7 @@ afterEach(() => { while (disposers.length) disposers.pop()!() })
 
 type WriteResult = void | { ok: true } | { ok: false; current: string }
 function harness() {
-  const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', pending: true, timer: null, chain: Promise.resolve(), unpreserved: null as string | null, writing: 0 }
+  const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', eol: '\n' as '\n' | '\r\n', pending: true, timer: null, chain: Promise.resolve(), unpreserved: null as string | null, writing: 0 }
   const writeTextFile = vi.fn<(path: string, content: string, opts?: { base?: string }) => Promise<WriteResult>>()
   // 写盘安全件(评审 G1-01 / D-03 / D-04)在组件里住在 writeNow 前面,这里注入桩:只验 writeNow 的控制流。
   const safety = {
@@ -32,13 +33,29 @@ function harness() {
   const flushPropDrafts = vi.fn<() => void>() // 属性面板草稿冲洗(C-02)
   const script = writer + '\n({ writeNow, handle: { path, ' + flushProperty + ' retire() {} } })'
   const result = runInNewContext(transform(script, { transforms: ['typescript'] }).code, {
-    path: 'Note.md', pipe, composeFm, textFingerprint, amadeus: { writeTextFile }, ...safety,
+    path: 'Note.md', pipe, composeFm, textFingerprint, fromDisk, toDisk, amadeus: { writeTextFile }, ...safety,
     scoped: { getState: () => ({ bumpLinkGraph: vi.fn() }) },
     syncFromEditor() {}, clearTimeout, flushPropDrafts,
   }) as { writeNow: (strict?: boolean) => Promise<void>; handle: Parameters<typeof registerUnifiedPipe>[0] }
   disposers.push(registerUnifiedPipe(result.handle))
   return { pipe, writeTextFile, flushPropDrafts, ...safety, ...result }
 }
+
+// D-19:CRLF 笔记在磁盘边界还原行尾 —— 正文与 CAS 基线都是盘上字节;CAS 拒写回的现文归一成 LF 进内存。
+describe('unified editor CRLF boundary (D-19)', () => {
+  it('writes CRLF with the CRLF fingerprint; a CAS reject brings the disk text back as LF', async () => {
+    const h = harness()
+    h.pipe.eol = '\r\n'
+    h.pipe.body = 'a\nb\n'
+    h.pipe.lastSaved = 'a\n'
+    h.writeTextFile.mockResolvedValueOnce({ ok: false, current: 'x\r\ny\r\n' }).mockResolvedValueOnce({ ok: true })
+    await h.writeNow()
+    expect(h.writeTextFile.mock.calls[0]).toEqual(['Note.md', 'a\r\nb\r\n', { base: textFingerprint('a\r\n') }])
+    expect(h.preserveExternal).toHaveBeenCalledWith('x\ny\n')
+    expect(h.writeTextFile.mock.calls[1]).toEqual(['Note.md', 'a\r\nb\r\n', { base: textFingerprint('x\r\ny\r\n') }])
+    expect(h.pipe.lastSaved).toBe('a\nb\n')
+  })
+})
 
 describe('unified editor account-switch persistence barrier', () => {
   it('rejects a real file-write failure and preserves the draft for a successful retry', async () => {

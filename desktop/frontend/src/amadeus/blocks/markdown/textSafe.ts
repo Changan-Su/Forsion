@@ -6,9 +6,8 @@
 // `\- ab` 退两格、`# ` 后撤销(K-21 让撤销回到字面 `# `)都会撞上。
 // 修法:保留「行尾空白原样、不写 `&#x20;`」这一半,只对去掉行尾空白的主体走 state.safe;主体无需转义时
 // 与原来逐字相同(不动存量落盘形态)。`\- ` 重开后是段落 `-`(行尾空格被解析器吃掉,与任何行尾空格同命)。
-// ⚠️ 必须挂 `remarkStringifyOptionsCtx.handlers`(同 attentionFlanking.ts 顶注:options 那份恒压过 extensions)。
+// 注册处:attentionFlanking.ts 的 attentionHandlers.text(经 remarkStringifyOptionsCtx;L-09b 的表格 `|` 同根,同一份实现)。
 // 仪器:npm run check:unifiedkeys -- --only=K20b(切走切回往返)、textSafe.test.ts。
-import { config, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mdast handler 签名(同 listFormat / attentionFlanking) */
 export function handleText(node: any, _parent: unknown, state: any, info: any): string {
@@ -23,9 +22,3 @@ export function handleText(node: any, _parent: unknown, state: any, info: any): 
   return state.safe(value, { ...info, encode: [] })
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
-
-/** 挂进 commonmarkWithIndent(paragraphIndent.ts),与 preset 同进同出。 */
-export const textSafeSerializer = config((ctx) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx.update(remarkStringifyOptionsCtx, (o: any) => ({ ...o, handlers: { ...o.handlers, text: handleText } }))
-})

@@ -628,6 +628,29 @@ const codeShiftEnter: Command = (state, dispatch) => {
   return true
 }
 
+/** mac 的 ⌘↑ / ⌘↓ = 到文首 / 文末(评审 K-16)。浏览器原生做法在两种首尾块上原地不动:代码块首子节点是
+ *  contenteditable=false 的工具条、嵌入段首子节点是 widget。只接这两种 —— 嵌入是整块型,NodeSelection 选中它
+ *  (与 ↑/↓ 撞上嵌入同口径);代码块有可编辑的行,光标进块首 / 块尾。其余首尾块(段落 / 分割线 / 表格)原生都到得了,
+ *  照旧放行。只在 mac 挂(见 keyboardPlugins):别的平台 Ctrl+↑ 是按段落跳,不能吞。 */
+function docEdge(dir: 'up' | 'down'): Command {
+  return (state, dispatch) => {
+    const doc = state.doc
+    const edge = dir === 'up' ? doc.firstChild : doc.lastChild
+    if (!edge) return false
+    const pos = dir === 'up' ? 0 : doc.content.size - edge.nodeSize
+    if (classifyEmbed(edge) != null) {
+      if (!NodeSelection.isSelectable(edge) || hiddenAt(state, pos)) return false
+      dispatch?.(state.tr.setSelection(NodeSelection.create(doc, pos)).scrollIntoView())
+      return true
+    }
+    if (edge.type.name === 'code_block') {
+      dispatch?.(state.tr.setSelection(TextSelection.create(doc, dir === 'up' ? pos + 1 : pos + edge.nodeSize - 1)).scrollIntoView())
+      return true
+    }
+    return false
+  }
+}
+
 /** 有选区时按成对符号 = **包裹**选中文字而不是替换掉它(AFFiNE 的 PAIRS 同款)。
  *  反引号 = 行内代码(I-09 / K-18b):与 ⌘E、工具栏 </> 走**同一条** toggleInlineCode 命令。
  *  ⚠️ 别改回按字面插两个反引号 —— 字面 `x` 在编辑器里只是文字,落盘被转义成 \`x\`,永远成不了代码。
@@ -737,8 +760,11 @@ export const keyboardPlugins: MilkdownPlugin[] = [
   $prose(() =>
     keymap({
       Enter: enterCmd,
+      // 标题里的 Shift+Enter 同回车(K-19):ATX 标题容不下换行,放行硬换行 = H3 及以下落盘成 `### 甲 乙`、所见非所存。
+      // 不在标题里返回 false,照旧交给 preset 的硬换行(段内换行);表格格内的 Shift+Enter 由排在前面的 tableKeyPlugins 先接。
+      // 代码块里 = 代码内换行(R-27);块公式 `$$…$$` 里 = 公式内软换行(R-17);其余仍交回 preset 的硬换行。
+      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath),
       'Mod-Enter': modEnterCmd,
-      'Shift-Enter': chain(codeShiftEnter, enterInDisplayMath), // 其余交回 preset 的硬换行
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
       Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
@@ -748,6 +774,7 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       ArrowUp: arrowToAtom('up'),
       ArrowDown: chain(codeExit('down'), arrowToAtom('down')),
       ArrowRight: codeExit('right'),
+      ...(IS_MAC ? { 'Meta-ArrowUp': docEdge('up'), 'Meta-ArrowDown': docEdge('down') } : {}),
     }),
   ),
 ].flat()
