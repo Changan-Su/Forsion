@@ -48,7 +48,7 @@ import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -81,7 +81,7 @@ import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange
 import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
 import { alignByAnchor, hostTop, registerModeCapture, scrollHostOf, textareaCaretY } from './modeRelay'
-import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, type PendingAnchor } from './pendingInsert'
+import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, toastPendingSourceMode, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
@@ -289,6 +289,9 @@ interface Pipe {
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
+  /** 写的时候发现文件已经没了(CAS 回 current:null,Codex 复核 inst P0-2)而退休时,已另存进副本的那份全文;null = 没发生过。
+   *  删除通知到之前用户还可能接着打字 —— 退休 / 卸载时比对它,多出来的再另存一份,不许静默丢。 */
+  gone?: string | null
   /** 本实例是否**真渲染过**分栏行:layout 剥除(解散语义)只许在此后发生 —— layout 形状合法
    *  但因缺锚/错位没折叠成功时,首次编辑绝不能顺手把结构键抹掉(Codex 终审 P0)。 */
   sawRows: boolean
@@ -350,7 +353,7 @@ interface HostApi {
   posAfterPrefix: (md: string) => number | null
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, hidden, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
   path: string
   pageDir: string
   body: string
@@ -360,6 +363,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onFinalFlush: (storedMd: string) => void
   /** 回灌触发的重建要跳过终末快照(旧 doc 会盖掉刚回灌进 pipe 的新内容)。 */
   skipFinalFlush: () => boolean
+  /** 编辑器此刻被藏着(源码模式,C-06):textarea 才是真源,异步回来的结果不许写进隐藏的 doc(Codex 复核 inst P1-3)。 */
+  hidden?: () => boolean
   apiRef: { current: HostApi | null }
   probe?: Record<string, unknown>
   extraPlugins?: MilkdownPlugin[]
@@ -645,6 +650,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  fileMade:文件已经建好了(多维表 / 画板 / 子页面 / 图片)—— 落点没了要说清「文件在,只是没插进来」。 */
   const insertAsync = (md: string, a: PendingAnchor | null, fileMade = true): void => {
     if (a?.cancelled()) return
+    if (hidden?.()) {
+      // 结果回来时用户在源码模式(Codex 复核 inst P1-3):编辑器藏着,textarea 才是真源 —— 写进隐藏的 doc 要么随回可视被
+      // 源码那份盖掉(静默丢),要么回可视时凭空多一段。不插,撤锚,说一声(文件类的文件已建好,只是没插引用)。
+      dropPending(a)
+      toastPendingSourceMode(a?.label ?? '')
+      return
+    }
     const lost = (): void => {
       if (fileMade || !a) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
       else toastPendingLost(a.label)
@@ -891,7 +903,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           onClose={() => setDbPick(false)}
           onPick={(inner) => {
             setDbPick(false)
-            insertMd(`![[${inner}]]`)
+            if (hidden?.()) toastPendingSourceMode(translate('mdblock.slash.linkdb'))
+            else insertMd(`![[${inner}]]`)
           }}
         /></OverlayPortal>
       )}
@@ -1885,6 +1898,34 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
 
+  /** 这篇在盘上没了(别处删除 / 挪走,或在途的 CAS 写撞上删除),手里还有没落盘的字(评审 G1-08 返修 P0):按冲突副本的命名
+   *  另存一份 —— 持久、树里看得见,不是 8 秒就消失的提示里的一个按钮;提示「已另存为 X」。按实例各存各的(同篇双开两边的字
+   *  各落各的副本)。绝不写回旧路径(复活幽灵文件),也不存旧路径草稿(孤儿,同名新笔记会误弹恢复)。
+   *  副本写不进去就抛:调用方按写失败处理 / 退回剪贴板提示。 */
+  const rescueUnsaved = async (text: string): Promise<void> => {
+    const copy = await writeConflictCopy(path, toDisk(text, pipe.eol))
+    toastRescued(path, copy)
+    void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
+  }
+  /** 文件没了之后(pipe.gone)用户又打的字:退休 / 卸载时再另存一份(内容不同 = 新副本,前一份是它的子集)。 */
+  const rescueMore = (): void => {
+    if (pipe.gone == null || pipe.readOnly) return
+    syncFromEditor()
+    const text = composeFm(pipe.fm, pipe.body)
+    if (text === pipe.gone) return
+    pipe.gone = text
+    void rescueGone(text)
+  }
+  /** 同上,带兜底:副本也写不进去 → 本机草稿(旧路径上,持久;宁可多一份可能用不上的草稿也不丢字)+ 剪贴板提示。 */
+  const rescueGone = async (text: string): Promise<void> => {
+    try {
+      await rescueUnsaved(text)
+    } catch {
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+      toastGoneUnsaved(path, text)
+    }
+  }
+
   /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
   const noteWriteFailed = (error: unknown): void => {
     // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
@@ -1962,12 +2003,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           if (strict) throw error
           return // 普通自动保存:退避重试 / 恢复信号 / 下一次编辑 / 卸载再试。
         }
-        if (res && res.ok === false) {
+        if (res && res.ok === false && res.current == null) {
+          // 文件已经不在了(Codex 复核 inst P0-2:这发写发出之后被别处删除 / 挪走,删除通知还在路上)。宿主没写,本实例也
+          // 再不许写这个路径(会重建幽灵文件):退休,没落盘的全文另存为冲突副本并提示。删除通知随后到 retire 时见已退休就不重复。
+          if (!pipe.retired) {
+            pipe.retired = true
+            pipe.pending = false
+            syncFromEditor()
+            pipe.gone = composeFm(pipe.fm, pipe.body)
+            await rescueGone(pipe.gone)
+          }
+          return
+        }
+        if (res && res.ok === false && res.current != null) {
           // CAS 拒写:盘上已不是本实例的基线 —— 同篇的另一个实例 / 窗口,或外部写者刚写过。
           const cur = fromDisk(res.current)
           pipe.eol = cur.eol
-          res = { ...res, current: cur.text }
-          if (res.current === text) {
+          const current = cur.text
+          if (current === text) {
             pipe.lastSaved = text // 殊途同归:别人写的正是这份
             continue
           }
@@ -1986,8 +2039,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             return
           }
           // 本地胜(拍板 #6):盘上那版登记为待保全,换基线再写一轮 —— 循环开头先落副本。
-          pipe.unpreserved = res.current
-          pipe.lastSaved = res.current
+          pipe.unpreserved = current
+          pipe.lastSaved = current
           continue
         }
         pipe.lastSaved = text
@@ -2229,6 +2282,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 就是一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。改名 IPC 窗口里打的字由 doRename 按新路径
       // 补写;本实例此前写失败存下的那份也一并清掉(只删自己存的,别的会话留的不碰)。
       if (pipe.retired) {
+        if (pipe.gone != null) rescueMore() // 写时发现文件已没了(P0-2)之后又打的字:另存,不许随卸载丢掉
         if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
         pipe.stashed = null
         return
@@ -2315,19 +2369,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 押后回灌期间照旧冻结保存:回灌收尾(reconcile 的 finally)会补发这一笔,这里只留草稿。
   // 与上面 D-04 的 kick 分开:那条只管「写失败后的补写」,这条管「还没到点的防抖写」。
   useEffect(() => {
-    const flushNow = (props: boolean): void => {
-      if (pipe.readOnly || pipe.retired || pipe.dead) return
+    /** 此刻的全文同步存进本机草稿(进程可能在异步写回来之前就没了);返回是否真有待写。 */
+    const stashNow = (props: boolean): boolean => {
+      if (pipe.readOnly || pipe.retired || pipe.dead) return false
       syncFromEditor()
       if (props) flushPropDrafts()
+      const text = composeFm(pipe.fm, pipe.body)
+      if (!pipe.writing && (text === pipe.lastSaved || isPristine())) return false
+      pipe.pending = true
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+      return true
+    }
+    const flushNow = (props: boolean): void => {
+      if (!stashNow(props)) return
       if (pipe.timer) {
         clearTimeout(pipe.timer)
         pipe.timer = null
       }
-      const text = composeFm(pipe.fm, pipe.body)
-      if (!pipe.writing && (text === pipe.lastSaved || isPristine())) return
-      pipe.pending = true
-      pipe.stashed = text
-      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
       if (pipe.reconcileBusy) return
       void writeNow()
     }
@@ -2335,11 +2394,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const onLeave = (): void => flushNow(true)
     // 窗口失焦要节流:在几个窗口间来回切是常态,每切一次都整篇写一遍没必要。属性框的草稿不在这里提交 ——
     // 窗口失焦时输入框自己会收到 blur 并提交。
+    // 节流窗内的失焦(Codex 复核 inst P2-4):不许被整个吞掉 —— 此刻的字照样同步存草稿,窗口一过补一次冲洗(末次补写)。
     let lastBlur = 0
+    let trail: ReturnType<typeof setTimeout> | null = null
     const onBlur = (): void => {
-      const now = Date.now()
-      if (now - lastBlur < 1000) return
-      lastBlur = now
+      const wait = lastBlur + 1000 - Date.now()
+      if (wait > 0) {
+        stashNow(false)
+        if (!trail) trail = setTimeout(() => { trail = null; lastBlur = Date.now(); flushNow(false) }, wait)
+        return
+      }
+      lastBlur = Date.now()
       flushNow(false)
     }
     document.addEventListener('visibilitychange', onHidden)
@@ -2353,6 +2418,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       document.removeEventListener('freeze', onLeave)
       document.removeEventListener('pause', onLeave)
       window.removeEventListener('blur', onBlur)
+      if (trail) clearTimeout(trail)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
@@ -2519,16 +2585,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 本实例一个字都不再写,还没落盘的字先**同步**存成新路径的草稿 —— 标签随后改指新路径,新实例挂载即出
         // 「恢复草稿」条,恢复时 0a 的流程负责保全盘上那版(基线对不上先落冲突副本)。不做异步交接写:新实例挂载就
         // 读盘,两边会赛跑。本实例自己发起的改名(doRename)先置 retired 并自己补写新路径,这里不重复。
-        // 被删除 / 挪走而没有新路径可交接(评审 G1-08:别的窗口删了它、库根换了、路由判 missing)→ 没落盘的字当面说一声,
-        // 全文交给剪贴板。只在**真有**用户改动时出声:切号 / 本端删除前都先冲洗过,那几条路走到这里手里是干净的。
+        // 被删除 / 挪走而没有新路径可交接(评审 G1-08:别的窗口删了它、路由判 missing)→ 没落盘的字另存为冲突副本并提示
+        // (返修 P0:原先只在提示的「复制内容」回调里,提示一消失就再没入口)。库根已换(切库 / 切侧)时不往新库写副本:
+        // 草稿记在旧库的这条路径上,回到那个库打开它时出「恢复草稿」条。
+        // 只在**真有**用户改动时出声:切号 / 本端删除前都先冲洗过,那几条路走到这里手里是干净的。
         if (!pipe.retired && !pipe.readOnly && !pipe.dead) {
           syncFromEditor()
           const text = composeFm(pipe.fm, pipe.body)
           if (text !== pipe.lastSaved && !isPristine()) {
             if (movedTo) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
-            else toastGoneUnsaved(path, text)
+            else if ((scoped.getState().vaultRoot ?? null) !== (vaultRoot ?? null)) stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
+            else void rescueGone(text)
           }
-        }
+        } else if (pipe.retired && pipe.gone != null) rescueMore() // 写时已发现文件没了、之后又打了字
         pipe.retired = true
         if (pipe.timer) {
           clearTimeout(pipe.timer)
@@ -3024,6 +3093,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                   setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
                 }}
                 skipFinalFlush={() => pipe.reconcileBusy > 0 || srcRef.current}
+                hidden={() => srcRef.current}
                 apiRef={hostRaw}
                 probe={probe}
                 extraPlugins={editorPlugins}

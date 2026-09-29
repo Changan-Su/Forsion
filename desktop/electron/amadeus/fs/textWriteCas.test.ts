@@ -1,6 +1,7 @@
 // writeTextFile 的比对交换写 + 跨窗回灌(G1-01,2026-09-27 评审波次 0a)。
 // 同篇多开时陈旧实例拿旧全文盲写,把别处刚写的内容整篇盖掉 —— 主进程这一半的契约:
-//  ① 带 base 且盘上指纹不符 → 不写,把现文交回;文件不在 = 无冲突;不带 base = 与从前逐字一致(返回 undefined)。
+//  ① 带 base 且盘上指纹不符 → 不写,把现文交回;文件不在 → 不写、current:null(不重建被删的旧路径,Codex 复核 inst P0-2);
+//     不带 base = 与从前逐字一致(返回 undefined,可新建)。
 //  ② 两个窗口的 CAS 写同时进来,「读→比对→写」不许交错(否则两边都比对通过、先写的被静默盖掉)。
 //  ③ 写成功后给**除发起窗口以外**的窗口发 externalChange(自写账本是整个进程一本,watcher 回声被压掉了);
 //     Unit RPC 起源(event=null)不在这里发;非笔记文件不发。
@@ -60,10 +61,17 @@ describe('writeTextFile CAS(G1-01)', () => {
     expect(await h.disk('a.md')).toBe('v2')
   })
 
-  it('文件不在 = 无冲突(删了再写 = 重建)', async () => {
+  // Codex 复核 inst P0-2:A 的 CAS 写已发往主进程、B 随后把文件删了 —— 旧口径「不在 = 无冲突」把旧路径重建出来。
+  // 负对照(实跑过):换回 `cur = null` 放行 → 本条红。
+  it('带 base 而文件已不在 → 拒写、current:null,绝不重建被删的旧路径;不带 base 的新建照旧', async () => {
     const h = await setup()
-    expect(await h.write(null, 'gone.md', 'reborn', { base: textFingerprint('whatever') })).toEqual({ ok: true })
-    expect(await h.disk('gone.md')).toBe('reborn')
+    await fs.writeFile(path.join(h.root, 'gone.md'), 'v1')
+    await fs.rm(path.join(h.root, 'gone.md')) // 别处删了
+    expect(await h.write({ sender: 'w1' }, 'gone.md', 'reborn', { base: textFingerprint('v1') })).toEqual({ ok: false, current: null })
+    await expect(h.disk('gone.md')).rejects.toThrow(/ENOENT/)
+    expect(h.peers).toEqual([]) // 没写就不通知
+    expect(await h.write(null, 'fresh.md', 'new note')).toBeUndefined() // 真新建:不带 base
+    expect(await h.disk('fresh.md')).toBe('new note')
   })
 
   // Codex g3#4:只有 ENOENT 才算「文件不在」。文件本身读不了(权限 / I/O 错误)而目录仍可写时,原子 rename

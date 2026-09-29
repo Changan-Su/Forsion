@@ -16,8 +16,9 @@
 //  R 组(G2-03,别处改名后本端开着旧路径的实例):
 //   R1 退休时给了新路径且有未落盘的字 → 草稿记在**新路径**上,新实例挂载出「恢复草稿」条;旧路径零写
 //   R2 没有未落盘的字 → 不留草稿,新实例干净打开
-//   R3(评审 G1-08)防抖窗内被别的窗口**删除**(没有新路径可交接)→ 旧路径不复活、不留孤儿草稿,出 warning 提示,
-//      「复制内容」把全文(含刚打的字)交给剪贴板;R4 已落盘后被删 → 零提示
+//   R3(评审 G1-08 + 返修 P0)防抖窗内被别的窗口**删除**(没有新路径可交接)→ 旧路径不复活、不留孤儿草稿,
+//      全文(含刚打的字)另存为冲突副本(持久文件,不是只在提示回调里),提示「已另存为 X」带「打开副本」;R4 已落盘后被删 → 零提示
+//   R5(返修 P0)同篇双开、两边各有没落盘的字时被删 → 各存各的副本、各出一条提示,谁的字都没丢
 //  X 组(评审 G1-06,插件编辑器扩展启停 = 原地重配,不重挂):
 //   X1 打字后 50ms 内启用一个带编辑器扩展的插件 → 编辑器 DOM 还是同一个、扩展已生效、焦点还在、刚打的字在屏上也在盘上,
 //      不点击接着打的字接在后面 · X2 停用 → 扩展摘掉、编辑器仍是同一个;空闲启停零写盘
@@ -346,15 +347,14 @@ async function groupR2(browser) {
     await caretAfter(p, '第一段。')
     await p.keyboard.type('删前打的')
     await remoteDelete(p)
-    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'warning' && x.action).map((x) => ({ text: x.text, label: x.action.label })))
-    await p.evaluate(() => { const x = window.__goneToasts.find((y) => y.action && y.level === 'warning'); x?.action.run() })
-    await wait(200)
-    const copied = await p.evaluate(() => window.__copied ?? null)
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'error' && x.action).map((x) => ({ text: x.text, label: x.action.label })))
     const old = await disk(p, 'Unified.md')
     const drafts = await draftFor(p, 'Unified.md')
-    record('R3 防抖窗内被别处删除 → 旧路径不复活、不留孤儿草稿,出提示;「复制内容」交出全文(含刚打的字)',
-      old == null && drafts.length === 0 && t.length === 1 && /Unified/.test(t[0].text) && typeof copied === 'string' && copied.includes('第一段。删前打的'),
-      JSON.stringify({ old, drafts, t, copied }))
+    const cs = await p.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)))
+    record('R3 防抖窗内被别处删除 → 旧路径不复活、不留孤儿草稿;全文(含刚打的字)另存为冲突副本,提示点名副本并带「打开副本」',
+      old == null && drafts.length === 0 && cs.length === 1 && cs[0][1].includes('第一段。删前打的') &&
+        t.length === 1 && t[0].text.includes(cs[0][0].replace(/\.md$/, '')) && t[0].label === '打开副本',
+      JSON.stringify({ old, drafts, t, cs }))
     await p.close()
   }
   {
@@ -363,8 +363,32 @@ async function groupR2(browser) {
     await p.keyboard.type('已落盘')
     await wait(1600)
     await remoteDelete(p)
-    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'warning'))
-    record('R4 已落盘后被别处删除 → 零提示', t.length === 0 && (await disk(p, 'Unified.md')) == null, JSON.stringify(t))
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'warning' || x.level === 'error'))
+    const cs = await p.evaluate(() => [...window.__upage.vault.keys()].filter((k) => /\(conflict /.test(k)))
+    record('R4 已落盘后被别处删除 → 零提示、零副本', t.length === 0 && cs.length === 0 && (await disk(p, 'Unified.md')) == null, JSON.stringify({ t, cs }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, '# 标题\n\n第一段。\n\n第二段。\n', '&udual')
+    await p.waitForFunction((s) => document.querySelectorAll(s).length === 2, PM, { timeout: 60000 })
+    await caretAfter(p, '第一段。')
+    await p.keyboard.type('A的字')
+    await p.evaluate(() => {
+      const v = window.__upage.probe2.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('第二段。')) at = pos + n.text.indexOf('第二段。') + 4; return at < 0 })
+      let proto = Object.getPrototypeOf(v.state.selection)
+      while (Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) proto = Object.getPrototypeOf(proto)
+      v.focus()
+      v.dispatch(v.state.tr.setSelection(proto.constructor.near(v.state.doc.resolve(at))))
+    })
+    await p.keyboard.type('B的字')
+    await remoteDelete(p)
+    const cs = await p.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)).map(([, v]) => v))
+    const t = await p.evaluate(() => window.__goneToasts.filter((x) => x.level === 'error').map((x) => x.dedupeKey))
+    record('R5 同篇双开、两边各有没落盘的字时被删 → 各存各的副本(A 的字、B 的字都在)、各出一条提示(去重键不同)',
+      (await disk(p, 'Unified.md')) == null && cs.length === 2 && cs.some((x) => x.includes('第一段。A的字')) && cs.some((x) => x.includes('第二段。B的字')) &&
+        t.length === 2 && t[0] !== t[1], JSON.stringify({ cs, t }))
     await p.close()
   }
 }

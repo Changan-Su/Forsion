@@ -437,8 +437,10 @@ export type DbReadResult =
   | { status: 'corrupt'; path: string; message: string }
 
 /** `writeTextFile(…, { base })` 的比对交换结果(仅支持 CAS 的宿主、且调用方传了 base 时才有)。
- *  ok:false = 盘上已不是调用方的基线(别的实例 / 窗口 / 外部写者刚写过),本次**没写**;current 是盘上现文。 */
-export type TextWriteResult = { ok: true } | { ok: false; current: string }
+ *  ok:false = 盘上已不是调用方的基线(别的实例 / 窗口 / 外部写者刚写过),本次**没写**;current 是盘上现文。
+ *  current:null = 文件已经不在了(写发出之后被别处删除 / 挪走):宿主绝不按旧路径重建,由调用方另存 / 提示。
+ *  只带 base 的写才会有它;真新建不带 base。 */
+export type TextWriteResult = { ok: true } | { ok: false; current: string | null }
 
 /** `drawing:read` 的结果:同 DbReadResult 的「错误是数据」约定,但只回原文——
  *  解析/序列化是纯函数(shared/amadeus/excalidraw),放渲染端与编辑器同侧,主进程只管字节进出。 */

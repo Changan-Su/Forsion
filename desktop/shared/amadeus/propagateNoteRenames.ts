@@ -59,6 +59,10 @@ export async function propagateNoteRenames(
           out.rewritten.push(p)
           return
         }
+        if (r.current == null) {
+          out.failed.push({ path: p, error: 'gone' }) // 宿主报文件已不在(读完之后被删 / 挪走):同 'gone'
+          return
+        }
         raw = r.current // 盘上刚被别人写过:按现文重算(对方的字一个不丢),再试
       }
       out.failed.push({ path: p, error: 'conflict' })
