@@ -43,11 +43,10 @@ export function editorModeOf(s: { modes: Record<string, 'source'> }, scope: stri
 }
 
 interface UiOverlayState {
-  overlay: 'switcher' | 'template' | null
+  overlay: 'template' | null
   templateCtx: TemplateCtx | null
   /** 按 leaf 的源码/可视模式(见上)。读用 editorModeOf。 */
   modes: Record<string, 'source'>
-  open(o: 'switcher'): void
   openTemplate(ctx: TemplateCtx): void
   close(): void
   /** 切一个 leaf 的模式;缺省 = 活动面板(命令面板那条路)。 */
@@ -59,7 +58,6 @@ export const useUiOverlay = create<UiOverlayState>((set, get) => ({
   overlay: null,
   templateCtx: null,
   modes: loadModes(),
-  open: (o) => set({ overlay: o, templateCtx: null }),
   openTemplate: (ctx) => set({ overlay: 'template', templateCtx: ctx }),
   close: () => set({ overlay: null, templateCtx: null }),
   toggleEditorMode: (scope) => {

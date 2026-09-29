@@ -32,6 +32,18 @@ export function plainLinesToParagraphs(text: string): string {
   return text.replace(/\r\n?/g, '\n').replace(/(?<!\n)\n(?!\n)/g, '\n\n')
 }
 
+/** 外部拖入的 text/plain 该按哪段 markdown 解析(评审 G4-04:与粘贴同口径 —— 同样一段 `# 标题\n- 项`
+ *  粘贴成结构、拖入却被转义成字面 `\-` `\*\*`)。null = 保持 PM 默认的字面插入:
+ *  · plain(「粘贴为纯文本」那条 pasteText)→ 字面;
+ *  · 单条裸 URL → 字面(拖到空段 = 裸 URL = 书签卡;按 markdown 解析会被 gfm autolink 包成链接,落地形态就变了);
+ *  · 不像 markdown 的多行 → 一行一段(D-10 同一条);其余原样交给 markdown 解析。 */
+export function droppedTextMarkdown(text: string, plain: boolean): string | null {
+  const t = text.trim()
+  if (plain || !t) return null
+  if (!/\s/.test(t) && /^https?:\/\//i.test(t)) return null
+  return isPlainMultiline(text) ? plainLinesToParagraphs(text) : text
+}
+
 /** 该不该按「一行一段」处理这次粘贴:含**单个** `\n`(已是一行一段的不再处理 —— 调用方转换后重入就停在这)、且不像 markdown。 */
 export function isPlainMultiline(text: string): boolean {
   return /(?<!\n)\n(?!\n)/.test(text.replace(/\r\n?/g, '\n').trim()) && !looksLikeMarkdown(text)

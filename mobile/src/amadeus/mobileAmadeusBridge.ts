@@ -419,6 +419,8 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
 
     // OS 集成 / 事件 —— 移动端 no-op(渲染层已 `?.` 兜底)。图片经原生 amadeus-asset 拦截,不走这里。
+    // 这三件 no-op 的入口一律不渲染(评审 G2-13:⋯ 菜单与附件卡上的死键),判据单源 amadeus/lib/hostCaps.ts。
+    hostCaps: { revealInFileManager: false, exportPdf: false, openAttachment: false },
     openAttachment: async () => { /* no-op(可后续接系统分享) */ },
     openVaultFile: async () => { /* no-op */ },
     exportPdf: async () => null,

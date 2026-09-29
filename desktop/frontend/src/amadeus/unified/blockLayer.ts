@@ -34,6 +34,7 @@ import { keyboardPlugins } from './keyboard'
 import { markMachineSlash } from '../blocks/markdown/machineSlash'
 import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
+import { REF_MIME } from '../../views/chat2/chatDragRef'
 
 registerMessages({
   'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
@@ -917,7 +918,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           content.style.setProperty('--amx-block-grow-y', `${growY}px`)
           const w = content.offsetWidth || 52
           content.style.top = `${(r.top - o.y) / z + lineOffset}px`
-          content.style.left = `${(anchorLeft - o.x) / z - w - 8}px`
+          let left = (anchorLeft - o.x) / z - w - 8
+          // 窄屏触屏(评审 P-14):手机内距只有 24px(用户拍板,不动),把手栏整个落在屏幕左外 —— ⠿ 可见宽度 0,
+          // 手指点到的是「＋」,转换 / 复制 / 删除 / 移动块全都做不到。触屏上「＋」让位给胶囊(CSS 藏掉)、
+          // 折叠钮排到 ⠿ 前面,这里再把 ⠿ 自己夹进屏内(视口 x ≥ 2);宁可折叠钮出屏,也不藏 ⠿。
+          if (isCoarsePointer()) left = Math.max(left, (2 - o.x) / z - drag.offsetLeft)
+          content.style.left = `${left}px`
         }
 
         const drag = document.createElement('button')
@@ -1592,7 +1598,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : []
           // OS 文件拖入:内容插入仍归 fileDropGuard/importToPage 那条链,但落点得**看得见**——
           // 画一条横线,并在 drop 时把光标先送到线所在处,否则文件恒插在原光标位置、线在撒谎。
-          if (types.includes('Files')) {
+          // 侧栏树行拖入(REF_MIME,评审 G4-05)同理:`[[链接]]` 由宿主经本 leaf 的 mdRef 插在光标处。
+          // 画布模式的树行拖入归舞台(canvasStage 落卡),这里不插手。
+          if (types.includes('Files') || (types.includes(REF_MIME) && !!view && !inCanvas(view))) {
             if (!view) return
             const hit = topBlockAtY(view, e.clientY)
             if (!hit) return
@@ -1745,9 +1753,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
               if (node) {
                 unfoldOver(view, fd.pos + node.nodeSize) // 命中折叠标题:它的下缘在隐藏小节里,先展开
                 const doc = view.state.doc
+                // 下半区 = 块尾:偏置必须朝回(-1)。块尾那个位置在容器(列表 / callout / 表格)里没有文本位,
+                // 默认 +1 偏置会往前找到**下一块**的开头,saveFiles 按选区所在顶层块插在它后面 —— 线画在这块下沿,
+                // 文件却落到下一块之后(评审 G4-03)。朝回找落在本块最后一个文本位,插入点就是线所在处。
                 view.dispatch(view.state.tr.setSelection(node.isAtom
                   ? NodeSelection.create(doc, fd.pos)
-                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1))))
+                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1), fd.lower ? -1 : 1)))
               }
             } catch { /* 位置已失效 */ }
             return

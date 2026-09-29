@@ -14,6 +14,7 @@ import { registerMessages, subscribeLocale, translate } from '../../../i18n'
 registerMessages({
   'mdtask.checkbox': { zh: '完成', en: 'Done' },
 })
+import { isCoarsePointer } from '../../../touch'
 
 // ── 空待办 `- [ ]` 的读侧(R-10b,评审 2026-09-27)────────────────────────────────────────────────
 // GFM(micromark 的 task-list-item)要求 `[ ]` 后面「空白 + 非空白」才算勾选框 —— 只有 `- [ ]` / `- [ ] `(Obsidian 里
@@ -125,6 +126,14 @@ function taskA11yApply(tr: Transaction, old: DecorationSet): DecorationSet {
   return set
 }
 
+/** 指针落在待办的方框槽里(内容盒左侧)→ 那个 li;否则 null。点击与触屏按下共用同一份判据。 */
+function taskBoxAt(view: EditorView, event: MouseEvent): HTMLElement | null {
+  const li = (event.target as HTMLElement | null)?.closest?.('li[data-item-type="task"]') as HTMLElement | null
+  if (!li) return null
+  // Only toggle when the click lands in the checkbox gutter (left of the content box).
+  return event.clientX - li.getBoundingClientRect().left > 2 ? null : li
+}
+
 export function taskCheckboxPlugin() {
   return $prose(
     () =>
@@ -138,18 +147,30 @@ export function taskCheckboxPlugin() {
         props: {
           decorations: (state) => taskA11yKey.getState(state),
           handleClick(view, _pos, event) {
-            const target = event.target as HTMLElement | null
-            const li = target?.closest('li[data-item-type="task"]') as HTMLElement | null
-            if (!li) return false
             // 只读视图(分享页/嵌入体):PM 对 handleClick 不看 editable,这里自己挡,勾选框不翻转。
             if (!view.editable) return false
-            // Only toggle when the click lands in the checkbox gutter (left of the content box).
-            const rect = li.getBoundingClientRect()
-            if (event.clientX - rect.left > 2) return false
+            const li = taskBoxAt(view, event)
+            if (!li) return false
             const tr = toggleTaskTr(view.state, view.posAtDOM(li, 0))
             if (!tr) return false
             view.dispatch(tr)
             return true
+          },
+          handleDOMEvents: {
+            // 触屏上点方框(评审 G2-15):编辑器没聚焦时,按下的默认行为会把焦点送进正文 —— 真机当场弹软键盘,
+            // 用户只是想勾一下。沿用 blockLayer「触屏不 focus」的约定:粗指针 + 未聚焦时在按下这一拍就翻转并
+            // preventDefault(焦点不动);返回 true = PM 不再起它自己的点击跟踪,随后的 handleClick 不会再翻一次。
+            // 已聚焦(键盘本来就开着)照旧走 handleClick,光标行为不变。
+            mousedown(view, event) {
+              if (!view.editable || view.hasFocus() || event.button !== 0 || !isCoarsePointer()) return false
+              const li = taskBoxAt(view, event)
+              if (!li) return false
+              const tr = toggleTaskTr(view.state, view.posAtDOM(li, 0))
+              if (!tr) return false
+              event.preventDefault()
+              view.dispatch(tr)
+              return true
+            },
           },
         },
       }),

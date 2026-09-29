@@ -4,7 +4,7 @@
 import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
-import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
+import { hasUnifiedInstance, unifiedFocusBody, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
 import { findHeadingIndex } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
@@ -18,6 +18,7 @@ import { act, actThrottled } from './activity/log'
 import { track } from './achievements/store'
 import { openLocalHtml } from './builtins'
 import { registerMessages, translate } from './i18n'
+import { isCoarsePointer } from './touch'
 
 // 本文件自己的文案(命名空间 `amnav.*`,勿与 i18n.tsx 的 `amadeus.*` 基础词条混用)。
 registerMessages({
@@ -41,7 +42,23 @@ registerMessages({
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
-export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean }): Promise<void> {
+/** focus:'body' = 打开后把焦点给正文(评审 G4-06:从快速查找 / 日记进入**已有**笔记后直接打字;
+ *  Obsidian 同)。新建流不传它 —— 新建聚焦标题(requestTitleFocus)才是对的。粗指针不做:手机上点开一篇就弹软键盘。 */
+export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
+  await openNoteInner(path, opts)
+  if (opts?.focus === 'body' && opts.activate !== false && !isCoarsePointer()) await focusBodyWhenReady(path)
+}
+
+/** openNote(focus:'body')的后半段:实例挂上、编辑器建好之后把焦点给正文。节拍同 revealHeadingWhenReady;
+ *  v3 笔记 / 非笔记文件没有 unified 实例,重试几拍后自然放弃。 */
+async function focusBodyWhenReady(path: string): Promise<void> {
+  for (let tries = 0; tries < 12; tries++) {
+    if (unifiedFocusBody(path)) return
+    await new Promise((r) => setTimeout(r, 150))
+  }
+}
+
+async function openNoteInner(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean }): Promise<void> {
   // 画板文件绝不进笔记编辑器(compiler 会把插件载荷改写成块 = 在 Obsidian 那边毁档)→ 一律改道白板视图。
   if (isDrawingPath(path)) {
     openDrawing(path)

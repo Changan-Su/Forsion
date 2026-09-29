@@ -205,7 +205,7 @@ Three icon-only tabs, named in their tooltips. Amadeus opens on "Workspace".
 > Pressing `⌘/Ctrl + ⇧ + F` again while "Search" is already the front tab collapses the whole left sidebar rather than returning you to the input box.
 
 > [!note]
-> `⌘/Ctrl + P` opens "Quick find", which searches notes, files and chat sessions at once. The palette also has "Quick switch note", which searches only notes but can create a missing one (the new note lands at the vault root) — reach it from the palette, or give it a key under Settings → Appearance → Shortcuts.
+> `⌘/Ctrl + P` opens "Quick find", which searches notes, files and chat sessions at once; if the name you type has no note yet, an extra last row reads "Create note “name”" — press Enter to create it (the new note lands at the vault root).
 
 ### The right sidebar and the bottom panel
 
@@ -325,7 +325,7 @@ The left sidebar lays the whole vault out as a tree: folders first in alphabetic
 
 Above the tree sit a few more sections: "Pinned", "Starred", "Collections", "Shared with me", "Cloud sync". Press and drag a section header to reorder them (mouse only); the order and each section's open state are remembered.
 
-- The box at the top, "Search notes", filters by **file name** and replaces the tree with a flat list. It does not search note contents — full-text search is a separate command, `⌘/Ctrl + Shift + F` "Search notes (full text)"; to jump by name use `⌘/Ctrl + P` "Quick switch note".
+- The box at the top, "Search notes", filters by **file name** and replaces the tree with a flat list. It does not search note contents — full-text search is a separate command, `⌘/Ctrl + Shift + F` "Search notes (full text)"; to jump by name use `⌘/Ctrl + P` "Quick find".
 - While the filter box has text, folders are not shown and you cannot drag a file to the vault root. With no hits it reads "No matching notes".
 - Hover a row for file details: "Modified: {t}", plus "Created: {t}" where the filesystem can supply it; hovering a folder shows "{files} files, {folders} folders".
 - Click the breadcrumb above a note title and the sidebar expands the parent chain, scrolls that row into view and flashes it.
@@ -1389,7 +1389,7 @@ Start from the clue you actually have, then pick the tool. Their jobs do not ove
 | A name (note, file or session) | Quick find | `⌘/Ctrl + P` |
 | The content, but not the title | Full-text search (sidebar "Search") | `⌘/Ctrl + Shift + F` |
 | It is on the page in front of you | Find in page | `⌘/Ctrl + F` |
-| A note name, which may not exist yet | Quick switch note | Command palette |
+| A note name, which may not exist yet | Quick find (the last row offers "Create note" when nothing matches) | `⌘/Ctrl + P` |
 | The handful of notes you use daily | Sidebar "Pinned" and "Starred" | None |
 | A search you ran before | Sidebar "Collections" | None |
 | The page you were just on | Back (this tab) | `⌘/Ctrl + Shift + [` |
@@ -1400,7 +1400,7 @@ The command palette is `⌘/Ctrl + K`. Everything above except find in page need
 > The editor uses that key for "insert link". Click somewhere outside the text first (the sidebar, the title bar), then press it.
 
 > [!note] Some commands only exist in the Amadeus Space
-> "Search notes (full text)", "Quick switch note", "Star / unstar current note" and "Rebuild full-text index" are all like this. In another Space the palette will not find them and `⌘/Ctrl + Shift + F` does nothing — switch to Amadeus first.
+> "Search notes (full text)", "Star / unstar current note" and "Rebuild full-text index" are all like this. In another Space the palette will not find them and `⌘/Ctrl + Shift + F` does nothing — switch to Amadeus first.
 
 ### Quick find: search by name
 
@@ -1409,7 +1409,11 @@ Press `⌘/Ctrl + P` anywhere, in any Space; in the command palette it is "Quick
 - **What it covers**: note names, file names in the vault (including `.db` databases) and Tangu session titles. Fuzzy match, up to 30 rows. File rows show the extension — when you are hunting for a PDF or an image, the extension is part of the clue.
 - **Scope pills**: four segments, "All / Notes / Files / Sessions", switchable by clicking. On the keyboard, think of the pills as sitting just after your text: press `→` only once the caret is at the very end of what you typed and you step into the first pill, "Notes"; from there `←` and `→` move between pills; pressing `←` on the first one puts you back in the text. "All" is not a pill you step onto — it just means the caret is still in the text.
 - **With nothing typed**: it lists what you opened recently, under the heading "Recent", up to 12 rows; with no recent items at all it falls back to your most recently updated sessions.
-- **Keys**: `↑` `↓` select, `←` `→` scope, `↵` open, `esc` close — the footer spells out all four. With no hits it reads "No matches"; before you have opened anything it reads "No recent items yet".
+- **Keys**: `↑` `↓` select, `←` `→` scope, `↵` open, `⌘/Ctrl + ↵` open in a new tab, `esc` close — the footer spells them out. With no hits it reads "No matches"; before you have opened anything it reads "No recent items yet".
+- **Create**: under "All" or "Notes", if no note has the name you typed, an extra last row reads "Create note “name”"; press Enter to create and open it, with the caret in the title.
+
+> [!warning] "Create" puts the note at the root of the vault
+> It does not ask where. This differs from clicking an unresolved `[[link]]`, which asks first and creates the note inside the source note's sub-note folder.
 
 > [!warning] Quick find matches names only, never note contents
 > A word written inside a note will not turn up here. To search content, use full-text search in the next section.
@@ -1442,25 +1446,6 @@ When something will not turn up, work through this in order:
 > [!note] "Rebuild full-text index" has no progress bar and no completion message — nothing at all happens on screen after you run it, and that is not it hanging.
 
 The left sidebar also has a "Tags" tab, listing every inline `#tag` in the vault by count; click one to expand the notes carrying it. It only sees tags written in the note body — a `tags:` entry in the properties block at the top of a note will not appear here.
-
-### Quick switch note
-
-Command palette `⌘/Ctrl + K` → "Quick switch note". That is its only working entry point.
-
-> [!warning] The `⌘/Ctrl + P` shown next to it opens Quick find instead
-> Both the command palette and Settings → Shortcuts display `⌘/Ctrl + P` against this command, but that combo belongs to Quick find and that is what pressing it opens. To reach the quick switcher from the keyboard, go to Settings → Appearance → Shortcuts and record a different combo for it (recording a new combo automatically unbinds whichever command held it).
-
-Using the overlay:
-
-- The box reads "Jump to note…" and fuzzy-matches note names across the vault, up to 30 rows; each row shows the note title on the left and its path in the vault on the right.
-- `↑` `↓` select, `↵` open, `esc` close; the footer on the right reads "{n} results".
-- With nothing matching it shows "No matching notes".
-- If the name you typed does not exist, an extra row appears at the bottom reading "Create “name”" with the subtitle "New note"; press Enter to create and open it.
-
-> [!warning] "Create" puts the note at the root of the vault
-> It does not ask where. This differs from clicking an unresolved `[[link]]`, which asks first and creates the note inside the source note's sub-note folder.
-
-How it divides with Quick find: the quick switcher covers notes only, but can create one on the spot; Quick find also covers files and sessions, but cannot create anything. Both need an open vault.
 
 ### Find in page
 
@@ -2627,7 +2612,7 @@ A Note view is the thing that turns properties into a table — one row per note
 Two boundaries are worth knowing before you rely on properties.
 
 > [!warning]
-> Full-text search (`⌘/Ctrl + Shift + F`) and the quick switcher (`⌘/Ctrl + P`) look at the title and the body only — **the properties block is not indexed**, so a value that exists only there will not be found. The sidebar's "Tags" panel works the same way: it counts `#tags` written in the body, and a `tags:` list in the frontmatter is just an ordinary list property that never shows up in that panel.
+> Full-text search (`⌘/Ctrl + Shift + F`) looks at the title and the body only — **the properties block is not indexed**, so a value that exists only there will not be found. The sidebar's "Tags" panel works the same way: it counts `#tags` written in the body, and a `tags:` list in the frontmatter is just an ordinary list property that never shows up in that panel.
 
 - A dashboard's "Stat card…" and "Chart (database)…" ask you to pick a `.db`. A Note view keeps no rows of its own in the file, so those two cards report "No data" when pointed at one. To put a Note view on a dashboard, use "Add card" → "Views" → "Database" and pick the file — that gives you the live table.
 
@@ -2990,15 +2975,14 @@ The command palette is the single entry point for every command. Press `⌘/Ctrl
 
 The shortcut shown on the right of each row is the command's **default** key, not your own rebinding. Once you have rebound something, trust what Settings → Appearance → Shortcuts shows.
 
-Three overlays that look alike — do not mix them up:
+Two overlays that look alike — do not mix them up:
 
 | Overlay | How to open | What it searches |
 | --- | --- | --- |
 | Command palette | `⌘/Ctrl + K` | Commands |
 | Quick find | `⌘/Ctrl + P` | Note names, files in the vault, chat sessions; lists “Recent” before you type |
-| Quick switch note | Command palette → Quick switch note | Notes only; if nothing matches it offers to create one, at the vault root |
 
-All three overlays work the same way: `↑` `↓` select, `↵` confirms, `Esc` closes. In Quick switch note, if what you typed matches no existing note, the last row reads “Create “{name}””. In Quick find, press `→` past the end of what you have typed to jump up to the category pills — All, Notes, Files, Sessions — then use `←` `→` to move between them and narrow the results.
+Both overlays work the same way: `↑` `↓` select, `↵` confirms, `Esc` closes. In Quick find, if no note has the name you typed, the last row reads “Create note “{name}””; `⌘/Ctrl + ↵` opens in a new tab. In Quick find, press `→` past the end of what you have typed to jump up to the category pills — All, Notes, Files, Sessions — then use `←` `→` to move between them and narrow the results.
 
 The command list is one flat global list with no Space scoping: the Amadeus commands are added when you enter Amadeus and removed when you leave. So pressing `⌘/Ctrl + K` in Tangu or on Home will not find New note. When a command is missing, check which Space you are in first, then check whether a vault is open.
 
@@ -3013,7 +2997,6 @@ These commands come from Amadeus. They appear in the palette only in the desktop
 | New note | `⌘/Ctrl + N` | Creates an untitled note at the vault root and opens it |
 | New whiteboard | — | Creates a drawing board and opens it |
 | New dashboard | — | Creates a dashboard and opens it |
-| Quick switch note | — | Opens the jump overlay over every note; offers to create one if nothing matches |
 | Search notes (full text) | `⌘/Ctrl + Shift + F` | Opens the full-text search panel in the sidebar and searches every note body |
 | Open the tutorial | — | Writes a demo note into your vault and opens it — a real note you can edit |
 | Open the user manual | — | Writes and opens this manual, in the language the interface is currently in |
@@ -3025,8 +3008,6 @@ These commands come from Amadeus. They appear in the palette only in the desktop
 | Rebuild full-text index | — | Rebuilds the search index when results look stale or incomplete |
 | Toggle attachments & databases in wikilink autocomplete | — | Decides whether typing `[[` suggests notes only, or attachments, databases and drawing boards too |
 | Count words | — | Shows a notification with the character and word count of this note |
-
-> [!warning] Quick switch note shows `⌘/Ctrl + P` both in the palette and on the Shortcuts page, but pressing it opens Quick find — that key is already taken. To give it a working key, record a combo for it in Settings → Appearance → Shortcuts.
 
 > [!note] Star / unstar current note and Reveal current note in file manager may do nothing when run from the palette. The reliable entry points are the ⋮ menu above the note, or a right-click on the note in the sidebar.
 
@@ -3177,7 +3158,6 @@ Every command's shortcut can be changed. Press `⌘/Ctrl + ,` to open settings, 
 
 | What you want | How |
 | --- | --- |
-| Give Quick switch note a working key | Record a free combo for it, say `⌘/Ctrl + Shift + O`. If you insist on `⌘/Ctrl + P`, record that — Quick find is unbound for you automatically |
 | Give Toggle right sidebar a key | It ships with no shortcut; just record one |
 | Free up a combo that is taken | Find the command holding it and click “Unbind” |
 
@@ -3441,7 +3421,6 @@ Every completion popup shares one rule: once you close it with `Esc`, that same 
 | The menu closes on its own and `/foo` stays in the text | A space, a `]`, a newline, or a query over 40 characters closes it | Delete those characters and start again |
 | Moving the caret back into a finished `[[link]]` does not reopen the completion | It only reopens when you actually edit — otherwise `↑` and `↓` would be swallowed and the caret could not leave that line | Type one character |
 | Pressing `Enter` right after pasting a link selects nothing | The "Paste as" menu highlights nothing at first, so `Enter` still inserts a line break | Press `↑` or `↓` to pick a row first, then `Enter` |
-| `⌘/Ctrl + P` opens "Quick find", not "Quick switch note" | That key belongs to "Quick find" | Open "Quick switch note" from `⌘/Ctrl + K` |
 | "Outline", "Backlinks" and "Graph" are nowhere to be found | The right sidebar starts collapsed and has no hotkey | `⌘/Ctrl + K` → "Toggle right sidebar" |
 
 > [!info]
