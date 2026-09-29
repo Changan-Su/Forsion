@@ -31,7 +31,8 @@
     "e2e:attachsave": "node scripts/attachment-save.e2e.cjs",
     "e2e:runon": "node scripts/units-runon.e2e.cjs",
     "emu:unitrelay": "node scripts/unit-relay-emu.cjs",
-    "emu:savedl": "node scripts/save-download-emu.cjs"
+    "emu:savedl": "node scripts/save-download-emu.cjs",
+    "emu:phone": "node scripts/phone-control-emu.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",
