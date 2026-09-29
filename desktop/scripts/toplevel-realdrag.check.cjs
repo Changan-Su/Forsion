@@ -9,6 +9,7 @@
 //  T3 两条相邻 hr,拖到第二条下半 → 落在第二条之后(修前:错一格,落在两条之间)
 //  T4 OS 文件拖到 hr 上 → 线画在 hr 下沿、文件落在 hr 之后(修前:不出线/线停在上一块、文件进上一块之后)
 //  T5 OS 文件拖到「前面也是 hr」的 hr 上 → 同上(修前:光标被吸成 hr 的 NodeSelection,文件落到文末)
+//  T4b OS 文件拖到块缝里(外边距,不在任何块矩形内)→ 取纵向最近的块(修前:落点回 null,线与文件都停在上一次经过的块)
 //  ② 折叠小节:落点在隐藏区里 = 块一落下就被 display:none 吞掉(「线在明处、块进暗处」)。
 //  T6 文末是折叠小节,⠿ 拖到折叠标题下半(落点插件那条路)→ 小节展开、块紧跟标题且看得见
 //  T6b 外部拖入两条 hr(PM 默认 drop)到折叠标题行尾 → 展开(落下全是原子块时选区会退回标题,落点要取插入 step)
@@ -267,6 +268,22 @@ async function main() {
     check(`${tag} 文件拖到${idx ? '「前面也是 hr」的' : ''} hr 上:线画在这条 hr 的下沿`,
       r.line.length === 1 && Math.abs(r.line[0].y - (hr.b + 6)) <= 2, JSON.stringify({ line: r.line, hrBottom: Math.round(hr.b) }))
     check(`${tag} 文件落在这条 hr 之后`, r.handed && at > 0 && JSON.stringify(doc.slice(at - 2, at + 2)) === JSON.stringify(want), JSON.stringify({ handed: r.handed, doc }))
+    await p.close()
+  }
+
+  // ── T4b OS 文件拖到块缝里(不在任何块的矩形内):先经过段甲,再停在段乙下沿之下 1px 的外边距里 ──────────
+  //    拖拽事件的 clientY 是整数、块矩形常在小数像素上,1px 高的 hr 与块缝都会「判不中任何块」;修前落点解析回 null,
+  //    线停在段甲、文件落在段甲之后(T4/T5 在标题框改 textarea 后整页错开零点几像素时正是这样红的)。现在取纵向最近的块。
+  {
+    const p = await openPage(browser, SEED_HR, 'Hr.md', READY_HR)
+    const via = await elRect(p, 'p', '段甲')
+    const yi = await elRect(p, 'p', '段乙')
+    const r = await fileDrop(p, 'Hr.md', { x: yi.x + 40, y: Math.ceil(yi.b) + 1 }, { x: via.x + 40, y: via.y + via.h / 2 })
+    await p.waitForTimeout(400)
+    const doc = await shape(p)
+    check('T4b 文件拖到块缝里:线画在最近那块(段乙)的下沿,不停在经过的段甲',
+      r.line.length === 1 && Math.abs(r.line[0].y - (yi.b + 6)) <= 2, JSON.stringify({ line: r.line, yiBottom: Math.round(yi.b) }))
+    check('T4b 文件落在段乙之后', r.handed && JSON.stringify(doc.slice(0, 4)) === JSON.stringify(['段甲。', '段乙。', '![[dro', '段丙。']), JSON.stringify({ handed: r.handed, doc }))
     await p.close()
   }
 

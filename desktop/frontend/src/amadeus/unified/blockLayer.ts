@@ -732,19 +732,31 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
    *  不可见线 + 块掉进隐藏区,「线画在明处、块掉进暗处」那条老账的同款)。 */
   const boxed = (el: unknown): el is HTMLElement => el instanceof HTMLElement && el.getClientRects().length > 0
 
-  /** 纵坐标 y 落在哪个**顶层块**的矩形里(看不见的折叠块不算)。块位从 doc 正着数,DOM 只拿来量矩形 ——
+  /** 纵坐标 y 落在哪个**顶层块**上(看不见的折叠块不算)。块位从 doc 正着数,DOM 只拿来量矩形 ——
    *  别从 DOM 反推(`posAtDOM(el, 0) - 1`):有 contentDOM 的块 posAtDOM 给内容起点,减 1 恰是块前位;
    *  hr 这类叶子块给的就是块前位,再减 1 要么落进上一块里解析成 null(松手零反应),要么落到相邻的
-   *  上一条 hr 上(错一格)。 */
+   *  上一条 hr 上(错一格)。
+   *  y 不在任何块的矩形里(块与块之间的外边距、1px 高的 hr 两侧)→ 取**纵向最近**的那块,不回 null:
+   *  拖拽事件的 clientY 是整数(Chromium 截断),块矩形却常在小数像素上(上方标题框撑高 41px、行高 33.15px 之类
+   *  都会让下面整页错开零点几像素)—— 1px 高的 hr 占 [266.375, 267.375] 时,指针压在它上面报的是 266,严格包含
+   *  判不中;块缝里同理。回 null 的调用方只能沿用上一次的落点:线停在上一块、文件落到上一块之后(线在撒谎)。
+   *  缝里取最近的块,调用方再按上 / 下半定前后 —— 缝上方那块的「之后」与下方那块的「之前」是同一个位置,不会错格。 */
   const topBlockAtY = (view: EditorView, y: number): { pos: number; node: ProseNode; el: HTMLElement } | null => {
     const doc = view.state.doc
+    let best: { pos: number; node: ProseNode; el: HTMLElement } | null = null
+    let bestD = Infinity
     for (let i = 0, pos = 0; i < doc.childCount; pos += doc.child(i).nodeSize, i++) {
       const el = view.nodeDOM(pos)
       if (!boxed(el)) continue
       const r = el.getBoundingClientRect()
-      if (y >= r.top && y <= r.bottom) return { pos, node: doc.child(i), el }
+      const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0
+      if (d === 0) return { pos, node: doc.child(i), el }
+      if (d < bestD) {
+        bestD = d
+        best = { pos, node: doc.child(i), el }
+      }
     }
-    return null
+    return best
   }
 
   /** 分栏行内的落点:指针落在某列的横向范围里 → 落点就在**那一列**内(直接子块之间的缝,末块
