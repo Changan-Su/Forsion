@@ -289,6 +289,12 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     openSearch: () => useUiStore.getState().setPalette('search'),
     // 插件层不依赖应用层 store:发窗口事件,应用层(bootstrapEngine)接住转给 openSettings
     openSettings: (target) => { if (ok() && typeof target === 'string' && target) window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: target })) },
+    // 同一条路:应用层(bootstrapEngine)接住弹用卡动画。只认首方内置包,别的插件不能拿假数字弹「额度已恢复」
+    showResetCardCeremony: (result) => {
+      if (!ok() || !result || typeof result !== 'object') return
+      if (!usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return
+      window.dispatchEvent(new CustomEvent('forsion:reset-card-ceremony', { detail: result }))
+    },
     openSwitcher: () => useUiStore.getState().setPalette('switch'),
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),

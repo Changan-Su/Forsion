@@ -58,3 +58,22 @@ describe('locked 包的渲染半身跟主进程开关走', () => {
     expect(usePluginStore.getState().activeIds).not.toContain('third')
   })
 })
+
+// ctx.app.showResetCardCeremony:「你的额度已恢复」那张动画只让首方内置包弹,别的插件调了是 no-op。
+// 负对照:删掉 pluginStore 里的 locked 判断 → 这条红(third 也发出去)。
+describe('ctx.app.showResetCardCeremony 只放行首方内置包', () => {
+  it('locked 包 → 发给应用层;普通插件 → 不发', async () => {
+    const seen: unknown[] = []
+    const on = (e: Event): void => { seen.push((e as CustomEvent).detail) }
+    window.addEventListener('forsion:reset-card-ceremony', on)
+    const code = 'ctx.app.showResetCardCeremony({ before: { dailyLimit: 10, dailyRemaining: 0 }, after: { dailyLimit: 10, dailyRemaining: 10 }, remainingCards: 1 })'
+    env.sources = [
+      src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false, code }),
+      src({ id: 'third', code }),
+    ]
+    await usePluginStore.getState().loadExternal()
+    window.removeEventListener('forsion:reset-card-ceremony', on)
+    expect(usePluginStore.getState().activeIds).toEqual(expect.arrayContaining(['forsion-extend', 'third']))
+    expect(seen).toEqual([{ before: { dailyLimit: 10, dailyRemaining: 0 }, after: { dailyLimit: 10, dailyRemaining: 10 }, remainingCards: 1 }])
+  })
+})
