@@ -209,7 +209,10 @@ export function writeFoldMemory(vaultRoot: string | null | undefined, path: stri
 export function remapFoldMemory(vaultRoot: string | null | undefined, oldPath: string, newPath: string): void {
   if (oldPath === newPath) return
   const fps = readFoldMemory(vaultRoot, oldPath)
-  if (fps.length) writeFoldMemory(vaultRoot, newPath, fps)
+  if (fps.length) {
+    writeFoldMemory(vaultRoot, newPath, fps)
+    writeFoldMemory(vaultRoot, oldPath, []) // 旧键删掉:旧路径日后新建的笔记不继承这篇的折叠
+  }
 }
 
 /** 每个 UnifiedPage 一份(闭包现读智库与路径)。挂上即:登记为命令目标、按记忆复原折叠、之后折叠一变就写回。 */
