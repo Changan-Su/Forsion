@@ -34,7 +34,7 @@ const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } 
 const profile = createTanguProfile({ sandboxMode: 'none' });
 
 /** 五个管理面工具。写死名字(不从 SUB_AGENT_DENY_TOOLS 读):名单被误删一项时本块必须红。 */
-const MANAGE_TOOLS = ['manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule', 'manage_harness'];
+const MANAGE_TOOLS = ['manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule', 'manage_harness', 'manage_human'];
 
 let home: string;
 beforeAll(() => {
@@ -139,10 +139,10 @@ describe('子代理硬闸:管理面既不可见也不可执行', () => {
     expect(r.result).not.toMatch(/unavailable to sub-agents/i);
   });
 
-  it('两份名单不许漂移:可授予清单 ≡ 五个管理工具,且每一项都在 deny 名单里', () => {
-    // 新加第六个 manage_* 时最容易只改一处:只进 DENY → 父代理永远授不出去(delegate 的 enum 里没有);
-    // 只进 GRANTABLE → 它压根不是被拦的工具,「授予」是句空话。两份名单必须同进同出。
-    expect([...SUB_AGENT_GRANTABLE_TOOLS].sort()).toEqual([...MANAGE_TOOLS].sort());
+  it('五个管理工具可授予，HUMAN.md 只由主 Agent 维护，全部受子代理拒绝闸保护', () => {
+    // HUMAN.md 的长期协作约定不委托给子代理;其余五个管理面保留原有显式授予机制。
+    expect([...SUB_AGENT_GRANTABLE_TOOLS].sort()).toEqual(MANAGE_TOOLS.filter(n => n !== 'manage_human').sort());
+    expect(SUB_AGENT_GRANTABLE_TOOLS).not.toContain('manage_human');
     for (const n of SUB_AGENT_GRANTABLE_TOOLS) {
       expect(SUB_AGENT_DENY_TOOLS.has(n), `${n} 可授予却不在 deny 名单里 —— 授予它没有任何意义`).toBe(true);
     }

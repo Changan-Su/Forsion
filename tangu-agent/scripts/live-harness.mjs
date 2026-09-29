@@ -7,6 +7,7 @@
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
+ *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
@@ -89,7 +90,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -101,7 +102,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -840,6 +841,50 @@ try {
     return { ok: !before.error && !after.error && oldOk && newOk, inconclusive: newOk && !roleOk,
       detail: before.error || after.error || `改名前${oldOk ? '答 Nova' : '未答 Nova(人格未生效,本场景无效)'};改名后${newOk ? '答 Orion' : '仍未用新名'};新简介${roleOk ? '已体现' : '未体现(不计红)'}`,
       output: `改名前:${before.content}\n改名后:${after.content}`, ttftMs: ttft(after), tokens: tokensOf(after), toolCalls: [...before.toolCalls, ...after.toolCalls] };
+  });
+
+  // HUMAN.md:真模型决定两级归属,立即落盘;新会话读取,异项目负对照,可选真 Electron 验收。
+  await scenario('human', 'human 协作说明双作用域、默认生效、新会话读取与撤销', async () => {
+    const slug = 'live-human';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Collaboration', systemPrompt: 'Be concise and respond in Chinese.' }) });
+    const project = join(workspace, 'human-project'); mkdirSync(project);
+    const mkSession = async (cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug: slug, execMode: 'host', cwd } }) })).session;
+    const session = await mkSession(project, 'Human collaboration live');
+    const aMark = `双案对照-${randomUUID().slice(0, 6)}`, pMark = `验收点-${randomUUID().slice(0, 6)}`;
+    const cfg = { agentSlug: slug, cwd: project, debugSystemPrompt: true, thinkingLevel: 'low' };
+    const ev = await run(session.id, `请把这两点写入协作说明并保留具体名称。今后无论什么项目，我们都采用“${aMark}”：你先给两种可比较的方案，我再选方向。仅这个项目采用“${pMark}”：你每次交付附上三步复现路径，我来验收实际界面。之后直接按这些方式配合。`, 240_000, cfg);
+    const receipts = ev.toolResults.flatMap(r => { try { const v = JSON.parse(r.full); return v.kind === 'human_update' ? [v.change] : []; } catch { return []; } });
+    const agent = await api(`/agent/agents/${slug}/human`);
+    const pd = await api(`/agent/project-context/human?sessionId=${session.id}`);
+    const disk = readFileSync(agent.path, 'utf8') === agent.content && readFileSync(pd.path, 'utf8') === pd.content;
+    const scoped = agent.content.includes(aMark) && !agent.content.includes(pMark) && pd.content.includes(pMark) && !pd.content.includes(aMark);
+    const receiptOk = ['agent', 'project'].every(kind => receipts.some(c => c.scope.kind === kind));
+    const savedMessages = (await api(`/agent/sessions/${session.id}/messages`)).messages;
+    const durable = receipts.length === 2 && receipts.every(c => JSON.stringify(savedMessages).includes(c.id));
+    if (ev.error || !ev.done || !scoped || !disk || !receiptOk || !durable || ev.approvals) return { ok: false, detail: ev.error || JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals }), output: ev.content, toolCalls: ev.toolCalls };
+    const fresh = await mkSession(project, 'Human fresh session');
+    const recall = await run(fresh.id, '报出协作说明中两条约定的完整名称（含后缀），并各用一句话说明如何配合。不调用工具。', 120_000, cfg);
+    const recalled = !recall.error && [aMark, pMark].every(m => recall.systemPrompt?.includes(m) && recall.content.includes(m));
+    const other = join(workspace, 'human-other'); mkdirSync(other);
+    const alien = await mkSession(other, 'Human isolated project');
+    const negative = await run(alien.id, '用一句话说说我们的长期协作方式。不调用工具。', 120_000, { ...cfg, cwd: other });
+    const isolated = !negative.error && negative.systemPrompt?.includes(aMark) && !negative.systemPrompt?.includes(pMark);
+    writeFileSync(join(OUT, 'human-model-evidence.json'), JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, content: ev.content, recall: recall.content, negative: negative.content }, null, 2));
+    if (argv.includes('--human-ui')) {
+      const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/plan-live.e2e.cjs'), '--human'], {
+        cwd: join(root, '../desktop'), timeout: 300_000, maxBuffer: 2 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_HUMAN_TOKEN: TOKEN, TANGU_HUMAN_SESSION: session.id, TANGU_HUMAN_SLUG: slug, TANGU_HUMAN_UI_HOME: join(OUT, 'human-ui') },
+      });
+      writeFileSync(join(OUT, 'human-ui.log'), ui.stdout + ui.stderr);
+    } else {
+      const change = receipts.find(c => c.scope.kind === 'project');
+      await api('/agent/project-context/human/undo', { method: 'POST', body: JSON.stringify({ sessionId: session.id, expectedVersion: change.afterVersion, changeId: change.id }) });
+    }
+    const undo = await api(`/agent/project-context/human?sessionId=${session.id}`);
+    const after = await mkSession(project, 'Human after undo');
+    const removed = await run(after.id, '回复 OK，不调用工具。', 120_000, cfg);
+    const reverted = undo.history.some(h => h.undoOf === receipts.find(c => c.scope.kind === 'project').id) && !removed.systemPrompt?.includes(pMark);
+    return { ok: recalled && isolated && reverted && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}`, toolCalls: ev.toolCalls, tokens: [ev, recall, negative, removed].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
 
   const chat = await scenario('chat', 'chat 基础对话', async () => {

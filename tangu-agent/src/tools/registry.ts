@@ -45,6 +45,7 @@ import { readActivityProvider } from './builtin/readActivity.js';
 import { readComputerHistoryProvider } from './builtin/readComputerHistory.js';
 import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
+import { manageHumanProvider } from './builtin/manageHuman.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
@@ -176,6 +177,7 @@ registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面�
 registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
+registerToolProvider(manageHumanProvider);
 registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
 registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI 不注册):sketch 在对话流内联画可交互 HTML 卡片(append 末尾,保前缀缓存)
 registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经桌面桥(desktop-bridge.json)调主进程 ASR;无桥文件不可见(append 末尾,保前缀缓存)

@@ -17,7 +17,7 @@ import { effectiveRemote } from '../services/remoteOrigin.js';
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
  *  人格(SOUL/config)归用户在设置里改;工作笔记必须走 manage_harness 的快照/封顶/脱敏管线,
  *  否则文件工具就是一条绕过人格主权与 journal 的后门(Codex 评审 #1)。Library/MEMORY/LOG 照旧可写。 */
-const SELF_PROTECTED_AGENT_FILES = new Set(['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md', '.cloudsync-accounts.json', '.memory-state.json', '.memory-tombstones.json', '.memory-dream.json', '.memory-raw.md', '.memory.lock']);
+const SELF_PROTECTED_AGENT_FILES = new Set(['HUMAN.md', 'SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md', '.cloudsync-accounts.json', '.memory-state.json', '.memory-tombstones.json', '.memory-dream.json', '.memory-raw.md', '.memory.lock']);
 
 /** 本次 run 的可写根:当前工作目录 + 当前 agent 的专属文件夹 + 用户显式添加的额外工作文件夹。 */
 export function writableRoots(ctx: ToolContext): string[] {
@@ -156,11 +156,16 @@ export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict 
         return {
           ok: false,
           hardDeny: true,
-          reason: `${path.relative(dir, resolved)} 是 agent 身份/自进化文件:人格由用户在设置中修改;工作笔记请用 manage_harness 工具`,
+          reason: rel.toLowerCase() === 'human.md' ? 'Update HUMAN.md through manage_human so the user receives version history and an undo card.' : `${path.relative(dir, resolved)} 是 agent 身份/自进化文件:人格由用户在设置中修改;工作笔记请用 manage_harness 工具`,
         };
       }
     }
   } catch { /* run 上下文缺席(测试等)→ 不加此判 */ }
+  if (path.basename(resolved).toLowerCase() === 'human.md' && (
+    pathWithin(resolved, realResolve(agentsDir())) || (ctx.cwd && ['HUMAN.md', '.tangu/HUMAN.md', '.forsion/HUMAN.md'].some(rel => realResolve(path.join(ctx.cwd!, rel)) === resolved))
+  )) {
+    return { ok: false, hardDeny: true, reason: 'Update HUMAN.md through manage_human so the user receives version history and an undo card.' };
+  }
   if (writableRoots(ctx).some((r) => isInside(resolved, realResolve(r)))) {
     return { ok: true, hardDeny: false, reason: '' };
   }

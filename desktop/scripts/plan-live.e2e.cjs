@@ -15,6 +15,8 @@
  *   1. 先起 dev(端口别用 9222,那是 Chrome 的默认调试端口,本机 Chrome 正占着):
  *        npm run dev -- -- --remote-debugging-port=9333
  *      (electron-vite 把 `-- args` 经 ELECTRON_CLI_ARGS 转交 Electron)
+ *   HUMAN.md 专项：先 build desktop，再从 tangu-agent 跑 npm run live:harness -- --only human --human-ui。
+ *   它以真实模型写入的数据启动隔离 Electron，并调用此脚本的 --human 分支；不用正在使用的 dev 实例。
  *   2. npm run e2e:planlive   [-- --cdp=9333 --cwd=/tmp/forsion-acc-0818]
  *
  * ⚠️ 会真实消耗模型额度(几轮短对话)。会在 --cwd 目录里建 ZZ-ACC-* 文件并写库(dev 家目录)。
@@ -277,4 +279,5 @@ async function main() {
   process.exit(bad.length ? 1 : 0)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+if (process.argv.includes('--human')) require('./human-collaboration.check.cjs')
+else main().catch((e) => { console.error(e); process.exit(1) })

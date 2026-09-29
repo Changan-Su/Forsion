@@ -10,6 +10,8 @@ import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listS
 import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
+import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
+import type { HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../types'
@@ -26,12 +28,12 @@ import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { thinkingLabel } from '../components/thinkingLabel'
 
-type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule'
+type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,
-// 腾出的位置给「日程」(它接下来要做什么)。五个标签 = 窄栏里一行放得下的上限。
+// 协作单独呈现 HUMAN.md;窄栏保持紧凑导航，正文在独立滚动体中阅读。
 type Growth = 'memory' | 'evolution'
 const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
-  { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'growth', icon: Sprout }, { id: 'schedule', icon: CalendarClock },
+  { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'human', icon: BookOpen }, { id: 'growth', icon: Sprout }, { id: 'schedule', icon: CalendarClock },
 ]
 const EMPTY_CONFIG: AgentConfig = {}
 type StoredProfileDraft = { draft: NormalAgentDef; base: NormalAgentDef; fields: Array<keyof NormalAgentDef> }
@@ -76,8 +78,8 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
     <div className="agent-profile-panel-title">{t('agentProfile.title')}
       {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
     {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
-        workspace={subjectProject.workspace} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
-      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} />
+        workspace={subjectProject.workspace} humanJump={subject?.human} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
+      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} />
       : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
   </div>
@@ -213,7 +215,7 @@ function EquipmentRow({ name, description, checked, onChange, chip, tinted }: { 
 }
 
 /** evolutionJumpAt:一次性跳到「成长 › 进化」的令牌(提名提醒点开要落在工作笔记上)。令牌变了才跳;首挂时也按它初始化,免得先闪一下「配置」。 */
-function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; evolutionJumpAt?: number; extendView?: ViewProps['extendView'] }) {
+function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, humanJump, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; evolutionJumpAt?: number; humanJump?: HumanJump; extendView?: ViewProps['extendView'] }) {
   const { t } = useI18n()
   const id = useId()
   const draftKey = `${compact ? 'details' : 'space'}:${agent.slug}`
@@ -223,7 +225,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
     running: sessionId ? !!a.runningBySession[sessionId] : Object.entries(a.runningBySession).some(([id, run]) => !!run && a.configBySession[id]?.agentSlug === agent.slug),
     connected: a.connState === 'ok', usage: sessionId ? a.usageBySession[sessionId] : undefined,
   })))
-  const [section, setSection] = useState<Section>(evolutionJumpAt ? 'growth' : 'config')
+  const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [draft, setDraft] = useState(storedDraft?.draft || agent)
@@ -285,6 +287,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
   // 记忆面板有自己的草稿:第一次看到它才挂,之后一直留着(切标签 / 切分段都不卸)。
   useEffect(() => { if (section === 'growth' && growth === 'memory') setVisitedMemory(true) }, [section, growth])
   useEffect(() => { if (evolutionJumpAt) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (humanJump?.at) navigate('human') }, [humanJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
   const patch = (p: Partial<NormalAgentDef>) => {
     Object.keys(p).forEach((key) => dirtyFields.current.add(key as keyof NormalAgentDef))
     setDraft((d) => {
@@ -521,6 +524,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
       </>}
       {section === 'skills' && <AgentSkillsPanel cfg={s.cfg} agentSlug={agent.slug} surface={compact ? 'details' : 'space'} selectedIds={draft.enabledSkillIds} onSelectedIds={(enabledSkillIds) => patch({ enabledSkillIds })} extendView={extendView} />}
       {section === 'mcp' && equipment('mcp')}
+      {section === 'human' && <HumanCollaborationPanel cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running} jump={humanJump} />}
       {section === 'growth' && <>
         {/* 两层各一张分段卡:标题 + 一句话说清它是什么。待复盘候选的角标跟着「进化」走。 */}
         <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'evolution'] as const).map((g) =>
@@ -544,7 +548,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
     <footer className={`agent-profile-save${dirty ? ' is-dirty' : ''}`}>
       {error && <p className="agent-profile-error" role="alert">{error}</p>}
       {dirty && !draft.name.trim() && <p className="agent-profile-error" role="alert">{t('agentProfile.nameRequired')}</p>}
-      {dirty ? <><small>{t('agentProfile.unsaved')} · {t('agentProfile.agentDefaults')}</small><div><button className="btn" disabled={busy} onClick={() => { profileDrafts.delete(draftKey); dirtyFields.current.clear(); baseDraft.current = agent; setDraft(agent); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}{t(busy ? 'agentProfile.saving' : 'agentProfile.save')}</button></div></> : section === 'growth' || section === 'schedule' ? null : notice ? <p className="profile-save-notice" role="status"><Check size={14} />{notice}</p> : section === 'config' ? null /* 配置页组内已有同义的 defaultsHint(U-25) */ : <small>{t('agentProfile.scopeHint')}</small>}
+      {dirty ? <><small>{t('agentProfile.unsaved')} · {t('agentProfile.agentDefaults')}</small><div><button className="btn" disabled={busy} onClick={() => { profileDrafts.delete(draftKey); dirtyFields.current.clear(); baseDraft.current = agent; setDraft(agent); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}{t(busy ? 'agentProfile.saving' : 'agentProfile.save')}</button></div></> : section === 'growth' || section === 'schedule' || section === 'human' ? null : notice ? <p className="profile-save-notice" role="status"><Check size={14} />{notice}</p> : section === 'config' ? null /* 配置页组内已有同义的 defaultsHint(U-25) */ : <small>{t('agentProfile.scopeHint')}</small>}
     </footer>
     {library && <AgentMemoryModal cfg={s.cfg} slug={agent.slug} name={agent.name} shareDefaultMemory={agent.shareDefaultMemory} onClose={() => setLibrary(false)} />}
   </div>

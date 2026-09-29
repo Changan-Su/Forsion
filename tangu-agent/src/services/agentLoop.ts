@@ -1,3 +1,5 @@
+import { HUMAN_GUIDANCE, readHuman } from '../agents/humanStore.js';
+import { humanProjectScope } from './humanContext.js';
 /**
  * 服务端 agent loop（进程内异步，run 生命周期 > HTTP 连接）。
  * hydrate（chat_messages 近期消息）→ for iteration：token 流式调 LLM → 检测 tool_calls →
@@ -1201,6 +1203,24 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       } catch { /* 读失败不阻断 run */ }
     }
     ctxMark('harness');
+    // HUMAN is collaboration context, including projectless Chat and Coding. It never
+    // changes tool permissions. All documents are read anew at each user turn.
+    if (profile.capabilities.hostExec && !inlineMemberDef) {
+      systemParts.push(HUMAN_GUIDANCE);
+      try {
+        const human = await readHuman({ kind: 'agent', slug: activeAgentSlug });
+        if (human.content) systemParts.push('Agent collaboration context (user-editable):\n' + human.content);
+      } catch (e) { console.warn('[human] Cannot load Agent collaboration context:', e instanceof Error ? e.message : e); }
+      try {
+        const projectScope = await humanProjectScope(userId, sessionId);
+        if (projectScope) {
+          const projectHuman = await readHuman(projectScope);
+          if (projectHuman.content) systemParts.push('Current project collaboration context (user-editable; specific to this project):\n' + projectHuman.content);
+        }
+      } catch (e) { console.warn('[human] Cannot load collaboration context:', e instanceof Error ? e.message : e); }
+    }
+    ctxMark('human');
+
     // 2c) preset 契约段(coding=编码契约 / chat=Conversation Contract;引擎级契约,不进 guidance——同 PERSISTENCE_SECTION 的理由)。
     //     chat 按 D11 两形态分裁:无 docker 不提 run_python、host 形态不提工作区(与 efficiencySection(false) 保持一致)。
     const presetContract = presetContractSection(preset, { pyExec: profile.features.sandbox, workspace: execMode === 'sandbox' });
