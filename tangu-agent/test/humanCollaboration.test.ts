@@ -18,6 +18,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { readHuman, writeHuman, renderHumanContext } from '../src/agents/humanStore.js';
 import { manageHumanProvider } from '../src/tools/builtin/manageHuman.js';
+import { getToolDefinitions, listDeferredTools } from '../src/tools/registry.js';
 import { humanProjectScope } from '../src/services/humanContext.js';
 import { checkWritePath } from '../src/tools/fsPolicy.js';
 import humanRouter from '../src/routes/human.js';
@@ -137,6 +138,17 @@ describe('HUMAN.md collaboration lifecycle', () => {
     expect(result.kind).toBe('human_update'); expect(result.change.scope).toEqual({ kind: 'agent', slug: 'shared' });
     expect((await readHuman(scope)).content).not.toContain('Use sketches');
     expect((await readHuman({ kind: 'agent', slug: 'shared' })).content).toContain('Use sketches');
+  });
+  it('keeps collaboration available on a fresh chat or work turn without loading it again', () => {
+    for (const preset of ['chat', 'work'] as const) {
+      const ctx = { userId: 'owner', sessionId: 'rootless', appId: 'tangu', execMode: 'sandbox' as const, preset, profile: deps().profile };
+      const visible = (extra = {}) => getToolDefinitions({ ...ctx, ...extra }).map(t => t.function.name);
+      expect(visible()).toContain('manage_human');
+      expect(listDeferredTools(ctx).map(t => t.name)).not.toContain('manage_human');
+      for (const extra of [{ planMode: true }, { ephemeral: true }, { subAgentDepth: 1 }, { remote: { marked: true } }, { toolsMode: 'deny' as const, toolsList: ['manage_human'] }]) {
+        expect(visible(extra)).not.toContain('manage_human');
+      }
+    }
   });
   it('does not bypass plan, remote, ephemeral, or delegated execution boundaries', async () => {
     const tool = manageHumanProvider.tools()[0];

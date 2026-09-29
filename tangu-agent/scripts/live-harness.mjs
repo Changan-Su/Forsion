@@ -884,7 +884,16 @@ try {
     // Same original conversation still contains successful old tool receipts: UI undo must supersede those too.
     const removed = await run(session.id, '只列出当前仍生效的已保存协作约定的完整名称（含后缀），不调用工具。', 120_000, cfg);
     const reverted = undo.history.some(h => h.undoOf === receipts.find(c => c.scope.kind === 'project').id) && !removed.systemPrompt?.includes(pMark) && removed.content.includes(aMark) && !removed.content.includes(pMark);
-    return { ok: recalled && isolated && reverted && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}`, toolCalls: ev.toolCalls, tokens: [ev, recall, negative, removed].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
+    // A later turn gives ordinary feedback without naming HUMAN.md or its tool.
+    // Grok dev regression: a deferred schema disappeared here and it repeatedly
+    // chose an unrelated plugin tool instead of updating the existing agreement.
+    const feedback = await run(session.id, '还有一个长期配合方式要改：以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。这样我能更快拍板。', 120_000, cfg);
+    const revised = await api(`/agent/agents/${slug}/human`);
+    const feedbackApplied = !feedback.error && feedback.done && feedback.toolResults.some(r => {
+      try { const v = JSON.parse(r.full); return v.kind === 'human_update' && v.change?.scope.kind === 'agent'; } catch { return false; }
+    }) && revised.content.includes(aMark) && /时间|耗时/.test(revised.content) && revised.content.includes('假设') && !revised.content.includes(pMark);
+    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, output: feedback.content, content: revised.content, toolCalls: feedback.toolCalls }, null, 2));
+    return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
 
   const chat = await scenario('chat', 'chat 基础对话', async () => {

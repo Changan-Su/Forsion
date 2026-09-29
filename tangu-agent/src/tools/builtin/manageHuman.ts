@@ -9,8 +9,9 @@ import { deps } from '../../seams/runtime.js';
 
 export const manageHumanProvider: ToolProvider = {
   id: 'builtin:manage_human', tools: () => [{
-    name: 'manage_human', deferred: true,
-    deferHint: 'Read or improve HUMAN.md: how you and the human collaborate, their needed input, and optional learning. Updates take effect immediately with an undo card.',
+    // Collaboration feedback can arrive on any turn. Keep the schema available
+    // across runs instead of requiring a second discovery step after each reply.
+    name: 'manage_human',
     // Like local memory, Agent scope also works in projectless Chat (sandbox execution).
     isEnabledFor: (profile, ctx) => profile.capabilities.hostExec && !ctx.ephemeral && !ctx.planMode && !effectiveRemote(ctx) && !ctx.subAgentDepth,
     capabilities: { sideEffect: 'write', concurrencyKey: 'human-collaboration' },

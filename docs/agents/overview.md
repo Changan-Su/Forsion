@@ -39,6 +39,8 @@ Agent 可以根据明确反馈和反复出现的协作问题更新说明。更�
 
 本功能目前连接本地 Tangu 引擎使用。Agent 文件位于其目录下的 `HUMAN.md`；新项目文件写入所选项目的 `.tangu/HUMAN.md`，兼容已有根目录或 `.forsion/HUMAN.md`。最近 40 次修改历史保留在本机引擎目录，不写入项目仓库；历史保留范围之外的旧卡片仍可打开当前说明，但不可直接撤销。
 
+本地普通会话中的 `manage_human` 每轮均可用，无需重新加载；计划、远程和子代理等边界仍按原规则限制。回归入口 `tangu-agent` 的 `npm run live:harness -- --only human` 覆盖后续自然反馈自动更新，追加 `--human-ui` 验证真实 Electron 卡片与编辑。
+
 ## 内置 Agent
 
 - **Arioso** — 默认助手，关注目标、感受与取舍，提供独立判断。
