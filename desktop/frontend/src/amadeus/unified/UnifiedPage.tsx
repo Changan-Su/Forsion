@@ -17,7 +17,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
+import { undo as pmUndo, redo as pmRedo, closeHistory } from '@milkdown/kit/prose/history'
 import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
@@ -89,6 +89,8 @@ import type { TanguInlineAction } from '../plugins/tanguSeam'
 import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
 import { agentEditing, claimAgentWrite, subscribeAgentWrites } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
+import { replyAnchorPos } from './replyInsert'
+import type { ReplyAnchor } from './lifecycle'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
 import { headingFoldPlugins } from './headingFold'
@@ -321,6 +323,17 @@ interface Pipe {
   peerPatch: Record<string, unknown> | null
 }
 
+/** insertMd 的附加项。quiet = 助手回答插回(评审 G3-08,经 lifecycle.unifiedInsertReply):**不抢焦点**(用户此刻在聊天框里)、
+ *  单独一步撤销(closeHistory:连点两次是两步)、落点亮到阅读位置并闪一下(PM 的 scrollIntoView 要求 DOM 选区已在编辑器里,
+ *  见 revealScroll 顶注)。after = 「问 Tangu」带回来的出处(replyInsert.ts 找被引用块);caretless = 正文从没被聚焦过 ——
+ *  那时的选区只是文首缺省值,'cursor' 退成文末。 */
+interface InsertMdOpts {
+  caretBack?: number
+  quiet?: boolean
+  after?: ReplyAnchor | null
+  caretless?: boolean
+}
+
 interface HostApi {
   /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
    *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
@@ -335,7 +348,7 @@ interface HostApi {
   /** OS 拖入/上传按钮的文件:存附件 + 光标处插 `![[base]]`(经 lifecycle.insertFilesForPath 递入)。 */
   insertFiles: (files: File[]) => void
   /** 插一段 markdown(插件块表面的 v4 写口;经 lifecycle.unifiedInsertMarkdown 递入)。编辑器未挂载 = false。 */
-  insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end') => boolean
+  insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end', opts?: InsertMdOpts) => boolean
   /** markdown → 块内容(画布粘贴/拖入用)。解析不出东西 = null。 */
   parseMd: (md: string) => Fragment | null
   /** 块内容 → markdown(parseMd 的反向;画布跨实例复制卡用)。编辑器未挂载 = null。
@@ -437,7 +450,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       insertFiles: (files) => {
         void saveFiles(files)
       },
-      insertMarkdown: (md, where) => insertMd(md, where),
+      insertMarkdown: (md, where, opts) => insertMd(md, where, opts),
       parseMd: (md) => {
         let out: Fragment | null = null
         getInstance()?.action((ctx) => {
@@ -609,16 +622,21 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
    *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
    *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: { caretBack?: number }): boolean => {
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: InsertMdOpts): boolean => {
     let done = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
       if (!parsed?.childCount) return
       const content = parsed.content
-      if (where !== 'cursor') {
-        const at = where === 'start' ? 0 : view.state.doc.content.size
-        view.dispatch(view.state.tr.insert(at, content))
+      const quiet = !!opts?.quiet
+      const anchorAt = quiet ? replyAnchorPos(view.state.doc, opts?.after) : null
+      if (quiet && anchorAt == null && opts?.caretless) where = 'end'
+      if (where !== 'cursor' || anchorAt != null) {
+        const at = anchorAt ?? (where === 'start' ? 0 : view.state.doc.content.size)
+        const tr = view.state.tr.insert(at, content)
+        if (quiet) dispatchQuiet(view, tr, at)
+        else view.dispatch(tr)
         done = true
         return
       }
@@ -657,8 +675,11 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const from = $p.before()
           tr.replaceWith(from, $p.after(), content)
           land(tr, from + content.size)
-          view.dispatch(tr.scrollIntoView())
-          view.focus()
+          if (quiet) dispatchQuiet(view, tr, from)
+          else {
+            view.dispatch(tr.scrollIntoView())
+            view.focus()
+          }
           done = true
           return
         }
@@ -667,12 +688,26 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const to = $from.after(d)
       const blank = $from.node(d).textContent.trim() === ''
       const tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
+      // quiet 也挪选区(不聚焦):连着插几条回答时一条接一条往下排,而不是每条都插回同一块之后、倒着排。
       land(tr, (blank ? from : to) + content.size)
-      view.dispatch(tr.scrollIntoView())
-      view.focus()
+      if (quiet) dispatchQuiet(view, tr, blank ? from : to)
+      else {
+        view.dispatch(tr.scrollIntoView())
+        view.focus()
+      }
       done = true
     })
     return done
+  }
+  /** quiet 插入(G3-08)的落定:独立一步撤销、不聚焦;落点藏在会话折叠里先展开,不在视野里才滚,闪一下。 */
+  const dispatchQuiet = (view: EditorView, tr: Transaction, at: number): void => {
+    view.dispatch(closeHistory(tr))
+    unfoldToReveal(view, Math.min(at + 1, view.state.doc.content.size))
+    const el = view.nodeDOM(at)
+    if (!(el instanceof HTMLElement)) return
+    const r = el.getBoundingClientRect()
+    if (r.top < 0 || r.top > window.innerHeight - 40) revealBlockAtTop(el)
+    flashCiteTip(el.getBoundingClientRect())
   }
 
   /** 异步 slash 项的锚(评审 G3-06,见 pendingInsert.ts):'/query' 消费掉之后**当场**在光标处钉住,结果回来插到那里 ——
@@ -1226,6 +1261,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const canvasToggleImpl = useRef<(() => void) | null>(null)
   const canvasToggleCmd = useRef((): void => { canvasToggleImpl.current?.() }).current
   const touchActive = (): void => { lastActive.current = performance.now(); claimCanvasToggle(canvasToggleCmd) }
+  /** 正文拿过焦点没有(G3-08):没拿过时编辑器的选区只是文首缺省值 —— 回答插回按文末算,不插到第一段后面。 */
+  const bodyUsed = useRef(false)
   useEffect(() => {
     // 切标签只激活 leaf、未必把焦点给编辑器(命令面板插模板就是这个形态):活动面板本身也算「正在用」。
     if (scope != null && scope === activeScope) touchActive()
@@ -2550,6 +2587,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
       insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      // 助手回答插回(评审 G3-08):只读 / 锁定实例不登记(聊天那边据此判「没有可插的笔记」);源码模式下 hostApi 为 null → 不接。
+      // 撤销只在文档仍是插入后那一版时做(之后又打了字 / 回灌过 → 交给用户在笔记里撤),仲裁与键盘 Cmd+Z 同路(画布态走舞台)。
+      insertReply: readOnly ? undefined : (md, anchor) => {
+        if (pipe.retired || pipe.dead || pipe.readOnly) return null
+        if (!hostApi.current?.insertMarkdown(md, 'cursor', { quiet: true, after: anchor, caretless: !bodyUsed.current })) return null
+        const after = liveView()?.state.doc
+        return {
+          undo: () => {
+            const v = liveView()
+            if (!v || !after || v.state.doc !== after || pipe.retired || pipe.dead) return false
+            return canvasModeRef.current && stageHist.current ? stageHist.current('undo') : pmUndo(v.state, v.dispatch)
+          },
+        }
+      },
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
       statsNow: () => statsReader(),
@@ -3130,7 +3181,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           style={mode === 'source' ? { display: 'none' } : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare
-          onFocusCapture={() => { touchActive(); setFocusedBlockApply(stableApply) }}
+          onFocusCapture={() => { touchActive(); bodyUsed.current = true; setFocusedBlockApply(stableApply) }}
           onPointerDownCapture={touchActive}
         >
           {/* 模式钮(AFFiNE 同位:页面右上)。整篇零画布数据时也照常显示 —— 画布是任意笔记随时

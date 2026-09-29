@@ -5,6 +5,8 @@
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { FileInput } from 'lucide-react'
+import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
@@ -200,6 +202,8 @@ export interface MessageHandlers {
   onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
+  /** 把这条回答插回笔记(评审 G3-08,见 insertToNote.ts);宿主没有 Amadeus 编辑能力时不传 → 按钮不渲染。text = 摘掉围栏的正文。 */
+  onInsertNote?: (text: string) => void
 }
 
 /**
@@ -279,6 +283,27 @@ function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; c
   const where = answeredByText(req.answeredBy, { remotePage: isRemoteApprover(sessionId), answeredHere: wasDecidedHere(req.approvalId), hostName }, t as (k: string, v?: Record<string, unknown>) => string)
   if (!where) return null
   return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
+}
+
+/** 「插入笔记」(G3-08):一篇 v4 笔记都没开 → 不出现;开着的全是只读 / 锁定 → aria-disabled + 说明 —— 不用 disabled:
+ *  手机上没有悬停,点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
+function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
+  const { t } = useI18n()
+  const state = useNoteInsertState()
+  if (state === 'hidden') return null
+  const ready = state === 'ready'
+  return (
+    <button
+      className="t2-iconbtn"
+      data-act="insert-note"
+      aria-disabled={ready ? undefined : true}
+      title={t(ready ? 'chat.action.insertNote' : 'chat.insertNote.none')}
+      aria-label={t('chat.action.insertNote')}
+      onClick={onInsert}
+    >
+      <FileInput size={14} />
+    </button>
+  )
 }
 
 export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
@@ -553,6 +578,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 {speakState === 'loading' ? <Loader2 size={14} className="spin" /> : speakState === 'playing' ? <Square size={14} /> : <Volume2 size={14} />}
               </button>
             )}
+            {handlers?.onInsertNote && !!body && <InsertNoteButton onInsert={() => handlers.onInsertNote?.(body)} />}
             <button className="t2-iconbtn" title={t('chat.action.regenerate')} onClick={() => handlers?.onRegenerate?.()}><RotateCcw size={14} /></button>
             <button className="t2-iconbtn" title={t('chat.action.branch')} onClick={() => handlers?.onBranch?.()}><GitBranch size={14} /></button>
           </div>
