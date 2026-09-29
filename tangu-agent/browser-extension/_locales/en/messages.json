@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "Tangu for Chrome" },
+  "extDescription": { "message": "Lets Tangu see the tabs you have open and work in its own tab group in the background, without taking over the page you are on." },
+  "popupTitle": { "message": "Tangu for Chrome" },
+  "statusConnected": { "message": "Connected to Tangu" },
+  "statusConnecting": { "message": "Connecting to Tangu…" },
+  "statusOffline": { "message": "Tangu is not running, or the connect code is out of date" },
+  "statusBadCode": { "message": "The connect code was rejected. Copy it again from Tangu." },
+  "statusNotPaired": { "message": "Not paired with Tangu yet" },
+  "codeLabel": { "message": "Connect code" },
+  "codePlaceholder": { "message": "Paste the code from Tangu → Settings → Browser" },
+  "codeHelp": { "message": "In Tangu, open Settings → Browser → Chrome extension and copy the connect code. You only need to do this once." },
+  "codeInvalid": { "message": "That doesn't look like a Tangu connect code." },
+  "save": { "message": "Connect" },
+  "forget": { "message": "Unpair" },
+  "groupHint": { "message": "Tabs Tangu opens are kept in the orange “Tangu” tab group." }
+}

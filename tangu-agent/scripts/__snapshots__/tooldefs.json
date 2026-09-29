@@ -3986,7 +3986,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4921,7 +4921,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7032,7 +7032,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7967,7 +7967,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8941,7 +8941,7 @@
       "type": "function",
       "function": {
         "name": "browser_tabs",
-        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
         "parameters": {
           "type": "object",
           "properties": {

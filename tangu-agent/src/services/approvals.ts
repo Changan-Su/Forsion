@@ -24,7 +24,7 @@ import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
-import { USER_BROWSER_ACTIONS, userBrowserBound } from '../tools/builtin/browserTools.js';
+import { USER_BROWSER_ACTIONS, userBrowserActionGated } from '../tools/builtin/browserTools.js';
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
@@ -621,7 +621,8 @@ export async function gateToolCall(
   if (!escalate && !forceAsk && !protectedAsk) {
     // 接管态的点按类工具只能作用在绑定过的用户标签上 → 「有活绑定」即要批(与执行侧同一真源,不另探端口);
     // 无人值守 run 本就不接管,也就不因此排队审批
-    const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
+    // 扩展那一路:动的是 Tangu 标签组里它自己开的页 → 不批;动用户自己的标签 → 批
+    const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId);
     if (!toolNeedsApproval(name, mode, { userBrowser })) return { action: 'approve' };
     // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
     // 远程污点 run 也不走:本机在这个会话里点过的「总允许 run_bash」会让远程 run 越过上限档(C3)。

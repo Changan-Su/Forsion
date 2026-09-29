@@ -215,6 +215,15 @@ describe('unitWeb', () => {
       const hit = b.engine.seen.find((s) => s.path === '/agent/runs')!
       expect(hit.auth).toBe('Bearer ENGINE_TOKEN') // 盖的是引擎 token,不是配对令牌
       expect(hit.headers['x-forsion-remote']).toBe('lan') // 引擎据此拒本机专属工具(电脑历史);设备页自己带 x-forsion-remote:'' 也覆盖不掉
+      // Chrome 扩展连接码只给本机:已配对的设备读不到、换不了,大小写 / 双斜杠 / 编码变体也绕不过(请求根本到不了引擎)
+      for (const [method, p] of [
+        ['GET', '/engine/agent/browser-extension'], ['POST', '/engine/agent/browser-extension/reset-code'],
+        ['GET', '/engine/agent/Browser-Extension'], ['GET', '/engine//agent/browser-extension/'], ['GET', '/engine/agent/browser%2Dextension'],
+        ['GET', '/engine/agent/./browser-extension?x=1'],
+      ] as const) {
+        expect([400, 403], p).toContain((await fetch(`${b.base}${p}`, { method, headers: { Authorization: `Bearer ${token}` } })).status)
+      }
+      expect(b.engine.seen.some((s) => /browser/i.test(s.path))).toBe(false)
       // 内部密钥豁免(测试即 loopback 来源)
       const r2 = await fetch(`${b.base}/unit/plugins`, { headers: { 'x-unit-internal': b.handle.internalSecret } })
       expect(r2.status).toBe(200)

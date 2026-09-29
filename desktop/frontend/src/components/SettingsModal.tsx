@@ -4,6 +4,7 @@ import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
+import { BrowserExtensionPanel } from './BrowserExtensionPanel'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
@@ -2917,6 +2918,7 @@ export const SettingsModal: React.FC<{
                         <div className="settings-panel-footer"><span className="hint" role="status">{remoteMsg}</span></div>
                       ) : null}
                     </SettingsPanel>
+                    <BrowserExtensionPanel cfg={p.cfg} managed={stored.mode !== 'external'} />
                   </>
                 )}
 
