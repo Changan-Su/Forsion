@@ -381,7 +381,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   background: color-mix(in srgb, var(--callout-color) 8%, transparent);
   border-radius: 8px;
   padding: 10px 14px;
-  margin-inline: 0;
+  /* 只归零右侧:左外边距归 Tab 缩进档(styles.css 的 `[data-indent]`,同特异性)。写 margin-inline 会在
+     本文件 @import styles.css 之后的级联里把缩进档压成 0 —— 缩进落盘了、callout / 折叠块却一动不动。
+     不缩进时左边距本来就是通用 blockquote 规则给的 0。 */
+  margin-right: 0;
 }
 /* callout 左边一条竖线都不留(平铺色块);普通 `>` 引用的细竖条照旧 —— 那条是 styles.css 的
    `blockquote::before`,这里只对 callout 关掉,别去动通用规则。 */
