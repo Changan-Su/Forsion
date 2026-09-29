@@ -18,7 +18,49 @@ registerMessages({
   'mdcallout.title': { zh: '折叠标题', en: 'Toggle title' },
   'mdcallout.empty': { zh: '空折叠块，点击添加内容', en: 'Empty toggle. Click to add content.' },
   'mdcallout.source': { zh: '编辑折叠源码', en: 'Edit toggle source' },
+  // 有色标注没写标题时的默认标题(R-09,Obsidian 同:缺标题 = 类型名)。别名归到下面 CALLOUT_ALIASES 的正名。
+  'mdcallout.type.note': { zh: '笔记', en: 'Note' },
+  'mdcallout.type.abstract': { zh: '摘要', en: 'Abstract' },
+  'mdcallout.type.info': { zh: '信息', en: 'Info' },
+  'mdcallout.type.todo': { zh: '待办', en: 'Todo' },
+  'mdcallout.type.tip': { zh: '提示', en: 'Tip' },
+  'mdcallout.type.success': { zh: '成功', en: 'Success' },
+  'mdcallout.type.question': { zh: '问题', en: 'Question' },
+  'mdcallout.type.warning': { zh: '警告', en: 'Warning' },
+  'mdcallout.type.failure': { zh: '失败', en: 'Failure' },
+  'mdcallout.type.danger': { zh: '危险', en: 'Danger' },
+  'mdcallout.type.bug': { zh: '缺陷', en: 'Bug' },
+  'mdcallout.type.example': { zh: '示例', en: 'Example' },
+  'mdcallout.type.quote': { zh: '引用', en: 'Quote' },
 })
+
+/** Obsidian 的 callout 类型:13 个正名 + 别名(R-09)。别名与正名同色同图标;不认识的类型(`[!my-type]`)照样是标注,
+ *  用缺省(note)的图标与配色。图标 = lucide 同名图标的描边路径(24 格,描边 2),渲染成行首的小图标。 */
+const CALLOUT_ALIASES: Record<string, string> = {
+  summary: 'abstract', tldr: 'abstract', hint: 'tip', important: 'tip', check: 'success', done: 'success',
+  help: 'question', faq: 'question', caution: 'warning', attention: 'warning', fail: 'failure', missing: 'failure',
+  error: 'danger', cite: 'quote',
+}
+const CALLOUT_ICONS: Record<string, string> = {
+  note: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  abstract: '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  todo: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  tip: '<path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4"/>',
+  success: '<path d="M20 6 9 17l-5-5"/>',
+  question: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  warning: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  failure: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  danger: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  bug: '<path d="M12 20v-9"/><path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z"/><path d="M14.12 3.88 16 2"/><path d="M21 21a4 4 0 0 0-3.81-4"/><path d="M21 5a4 4 0 0 1-3.55 3.97"/><path d="M22 13h-4"/><path d="M3 21a4 4 0 0 1 3.81-4"/><path d="M3 5a4 4 0 0 0 3.55 3.97"/><path d="M6 13H2"/><path d="m8 2 1.88 1.88"/><path d="M9 7.13V6a3 3 0 1 1 6 0v1.13"/>',
+  example: '<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>',
+  quote: '<path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/>',
+}
+/** 类型 → 正名;不认识返回 null。 */
+export function calloutKind(type: string): string | null {
+  const t = CALLOUT_ALIASES[type] ?? type
+  return t in CALLOUT_ICONS ? t : null
+}
 
 // Obsidian callout 的第一行就是标题；只在读取时拆开这一个段落，不改变普通 Markdown 的软换行。
 // 序列化树没有 position，不能在写侧重复拆分（Shift+Enter 仍是段内换行）。
@@ -26,7 +68,7 @@ type CalloutAst = { type: string; value?: string; children?: CalloutAst[]; posit
 export function splitCalloutTitle(tree: CalloutAst): void {
   const first = tree.children?.[0]
   if (tree.type === 'blockquote' && first?.type === 'paragraph' && first.position
-    && /^\[![a-z]+\][+-]?/i.test(first.children?.[0]?.value ?? '')) {
+    && /^\[![\w-]+\][+-]?/.test(first.children?.[0]?.value ?? '')) {
     const parts: CalloutAst[] = splitParagraph(first)
     if (parts.length > 1) tree.children!.splice(0, 1, ...parts)
   }
@@ -55,7 +97,8 @@ export const unescapeCalloutToken = (md: string): string =>
 // —— callout 整个功能从来没生效过(2026-07-29 真浏览器取证:blockquote 的 class 恒为空)。
 // 顺手放宽尾部:标题紧跟在 `-` 后面(`[!fold]-标题`)也认,Obsidian 同样接受;而且 contenteditable
 // 会把行尾那个空格吃掉,不放宽的话「敲 `>` 生成令牌 → 一打字就不是 callout 了」。
-const CALLOUT_RE = /^\[!([a-zA-Z]+)\]([+-])?/
+// R-09:类型放宽到 `[\w-]+` —— `[!my-type]`、`[!todo-2]` 这类自定义类型此前退化成普通引用(Obsidian 认)。
+const CALLOUT_RE = /^\[!([\w-]+)\]([+-])?/
 
 // 令牌之后才是标题;标题自己还能带块级前缀:`## ` → 按 H2 排版,`- ` → 项目符号。
 // 纯装饰(落盘仍是 Obsidian 的单行 callout,折叠跨端不坏),故 `##` 不进 schema、不变成真 heading 节点。
@@ -72,6 +115,7 @@ function calloutOf(node: PMNode) {
   const mk = TITLE_MARK_RE.exec(first.textContent.slice(m[0].length + gap))
   return {
     type: m[1].toLowerCase(),
+    raw: m[1],
     marker: m[2] as '+' | '-' | undefined,
     token: m[0],
     hideLen: m[0].length + gap, // 隐藏范围(含那个空格)比徽章范围长
@@ -310,6 +354,19 @@ export function handleFoldKeyDown(view: EditorView, event: KeyboardEvent): boole
   return false
 }
 
+/** 光标停在标题行隐藏语法(令牌 / 标题前缀)之前时,返回可见标题的起点;否则 null。
+ *  Cmd+← 与点标题最左侧(类型图标一带)都会把光标落到这里 —— 拍板 #19 之后,无 +/- 的有色标注单击标题不再切折叠,
+ *  而是照常放光标,这个位置于是成了常态落点。在这儿打字 / 回车 / Delete 改到的是看不见的令牌:`x[!warning] 标题`
+ *  当场把标注打回普通引用。下面三处据此把编辑挪到可见标题起点(光标规则本身不变,C8c 钉着)。 */
+function hiddenPrefixStart(state: EditorState): number | null {
+  const sel = state.selection
+  if (!sel.empty) return null
+  const c = calloutAt(sel.$from)
+  if (!c || !c.inHead || calloutKey.getState(state)?.srcAt === c.bqPos) return null
+  const start = c.hidden[c.hidden.length - 1][1]
+  return sel.from < start ? start : null
+}
+
 /** 语法字符藏着时,方向键把它当一个整体跳过 —— 否则光标停在看不见的字里,打字位置发玄。 */
 function skipHidden(state: EditorState, next: number, dir: 1 | -1): number | null {
   const size = state.doc.content.size
@@ -380,6 +437,11 @@ export function calloutPlugin() {
           },
           handleKeyDown(view, event) {
             if (handleFoldKeyDown(view, event)) return true
+            // 隐藏语法之前按回车 / Delete:先把光标挪到可见标题起点,再交给通常的处理(见 hiddenPrefixStart)。
+            if ((event.key === 'Enter' || event.key === 'Delete') && !event.isComposing && !event.metaKey && !event.ctrlKey && !event.altKey) {
+              const start = hiddenPrefixStart(view.state)
+              if (start != null) view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, start)))
+            }
             // 语法字符藏着时,←/→ 把它整段跳过(否则光标停在看不见的字里)
             if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !event.shiftKey) {
               const sel = view.state.selection
@@ -405,6 +467,13 @@ export function calloutPlugin() {
            *  `[!x]` 就是用户要的类型令牌 —— 它一成形就替掉那枚自动令牌,否则落成 `[!fold]-\[!note] 标题`。
            *  只在打字(含输入法提交)完成 `]` 的那一下判,不改 `>` 键位。 */
           handleTextInput(view, from, to, text) {
+            // 隐藏语法之前打字:落到可见标题起点(见 hiddenPrefixStart),令牌不动。
+            const visible = from === to ? hiddenPrefixStart(view.state) : null
+            if (visible != null && from < visible) {
+              const tr = view.state.tr.insertText(text, visible)
+              view.dispatch(tr.setSelection(TextSelection.create(tr.doc, visible + text.length)).scrollIntoView())
+              return true
+            }
             if (!text.includes(']')) return false
             const { state } = view
             const $f = state.doc.resolve(from)
@@ -431,6 +500,8 @@ export function calloutPlugin() {
               alignFoldTitleCaret(view)
               return true
             }
+            // 没写 +/- 的有色标注不可折叠(拍板 #19,Obsidian 同):单击标题就是普通点击,放光标改标题。
+            if (!c.marker) return false
             toggleFold(view, c)
             return true
           },
@@ -451,9 +522,11 @@ export function calloutPlugin() {
                 const collapsed = marker === '-'
                 const pluginState = calloutKey.getState(state)
                 const inSrcMode = pluginState?.srcAt === pos
+                const kind = type === 'fold' ? null : calloutKind(type)
                 decos.push(
                   Decoration.node(pos, pos + node.nodeSize, {
-                    class: `callout callout-${type}${collapsed ? ' callout-collapsed' : ''}`,
+                    // 别名再挂一枚正名的 class(`[!faq]` → callout-faq callout-question),配色只按正名写一份。
+                    class: `callout callout-${type}${kind && kind !== type ? ` callout-${kind}` : ''}${collapsed ? ' callout-collapsed' : ''}`,
                     'data-callout': type,
                     ...(pluginState?.animations.some((a) => a.at === pos) ? { 'data-fold-animating': '' } : {}),
                   }),
@@ -473,6 +546,29 @@ export function calloutPlugin() {
                   }))
                 }
                 if (mark) decos.push(Decoration.node(headStart, headEnd, { class: `callout-title-${mark.cls}` }))
+                if (type !== 'fold') {
+                  // 有色标注的类型图标(R-09):行首,令牌之前;不认识的类型用缺省图标。
+                  const icon = CALLOUT_ICONS[kind ?? 'note']
+                  decos.push(Decoration.widget(pos + 2, () => {
+                    const el = document.createElement('span')
+                    el.className = 'callout-icon'
+                    el.contentEditable = 'false'
+                    el.setAttribute('aria-hidden', 'true')
+                    el.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`
+                    return el
+                  }, { side: -1, ignoreSelection: true, key: `ci${pos}:${kind ?? 'note'}` }))
+                  // 没写标题 → 显示类型名作默认标题(本地化;自定义类型用它自己的名字)。只是装饰,不写进 md。
+                  if (!inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)) {
+                    const label = kind ? translate(`mdcallout.type.${kind}`) : c.raw.charAt(0).toUpperCase() + c.raw.slice(1)
+                    decos.push(Decoration.widget(headEnd - 1, () => {
+                      const el = document.createElement('span')
+                      el.className = 'callout-default-title'
+                      el.contentEditable = 'false'
+                      el.textContent = label
+                      return el
+                    }, { side: -1, ignoreSelection: true, key: `cd${pos}:${label}` }))
+                  }
+                }
                 // 语法字符(令牌 + 标题前缀)只在显式进入源码态时露出。
                 // ⚠️ 别改回「光标在标题行就露」,原因见 calloutKey 处的注释(两次实报都栽在那上面)。
                 if (!inSrcMode) {
@@ -488,8 +584,9 @@ export function calloutPlugin() {
                 // ']' 之后的位置 = pos+2 + '[!' + type + ']'。
                 const markerPos = pos + 2 + type.length + 3
                 // 折叠块按钮固定在行首；有色标注仍在标题文字之后。二者都必须挂在段落内。
+                // 没写 +/- 的有色标注不可折叠,不给箭头(拍板 #19:此前恒有箭头,一点就把 `-` 写进 md)。
                 const chevronAt = type === 'fold' ? pos + 2 : pos + 2 + c.first.content.size
-                decos.push(
+                if (type === 'fold' || marker) decos.push(
                   Decoration.widget(
                     chevronAt,
                     (view) => {

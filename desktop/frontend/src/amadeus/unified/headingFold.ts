@@ -163,6 +163,16 @@ export function hiddenRanges(doc: ProseNode, folded: number[]): Array<{ start: n
   return out
 }
 
+/** 标题**结构上**的小节末尾之后那个位置(不管折没折):到下一个 level ≤ 本级的标题或容器末为止;
+ *  空小节 = 标题自己的后位。不是标题返回 null。键盘搬「折起的小节」时按整节跟邻居换位用(B-04)。 */
+export function sectionEnd(doc: ProseNode, headingPos: number): number | null {
+  const site = headingSiteAt(doc, headingPos)
+  if (!site) return null
+  const end = sectionEndIndex(site.parent, site.index) ?? site.index
+  const at = childPositions(site)
+  return at[end] + site.parent.child(end).nodeSize
+}
+
 /** 折叠标题的小节末尾之后那个位置(顶层坐标);该标题没折叠或不可折叠返回 null。
  *  键盘层也用它判定光标所在标题是否处于折叠态。 */
 export function foldedSectionAfter(state: EditorState, headingPos: number): number | null {

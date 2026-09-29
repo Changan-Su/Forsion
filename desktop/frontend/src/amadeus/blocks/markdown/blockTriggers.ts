@@ -33,7 +33,7 @@ export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | '
 // 令牌**不带尾随空格**:contenteditable 会把行尾空格吃掉(实测),留着只会得到一个「有时有有时没有」
 // 的落盘形态。标题紧跟在 `-` 后面 Obsidian 照样认,渲染层靠 CSS 给出间距。
 export const FOLD_TOKEN = '[!fold]-'
-const CALLOUT_HEAD_RE = /^\[!\w+\]/
+const CALLOUT_HEAD_RE = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09:`[!my-type]` 也是 callout)
 
 export interface Trigger {
   kind: TriggerKind
@@ -274,7 +274,7 @@ const inAny = ($p: ResolvedPos, names: string[]): boolean => names.some((n) => f
  *
  * 嵌套列表要提多次,故循环;liftTarget 给不出目标(结构不允许)就停在当前层,绝不硬改。
  */
-function liftOutOfWrappers(tr: Transaction, pos: number, names: string[]): number {
+export function liftOutOfWrappers(tr: Transaction, pos: number, names: string[]): number {
   let p = pos
   // 上限只是失控保险(每轮都靠「没产生 step 就 break」保证推进);6 层对深嵌套列表不够,给到 32。
   for (let i = 0; i < 32; i++) {

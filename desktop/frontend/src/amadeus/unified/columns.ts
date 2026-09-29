@@ -6,10 +6,11 @@
 // (Codex 评审 A/B 两组 P0),单实例列节点让这些机械性问题按构造消失。
 import { $nodeSchema, $prose, $remark } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
-import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import type { Node as ProseNode, Schema } from '@milkdown/kit/prose/model'
 
 export interface LayoutColumn { refs: string[]; width: number }
 /** tail = 行尾界标锚(可选):规范辖域是「锚到下一锚或文件尾」,行在文件中间而行后内容无锚时,
@@ -291,6 +292,29 @@ export function deriveLayoutJson(doc: ProseNode): string | null {
   return JSON.stringify({ v: 4, rows })
 }
 
+/** 空列 = 只剩一枚空段(「移到新列」造出来的落点就是这形态)。 */
+const cellIsEmpty = (c: ProseNode): boolean =>
+  c.childCount === 1 && c.firstChild!.type.name === 'paragraph' && c.firstChild!.content.size === 0
+
+/** 被清掉的列 / 解散的行,锚一律转惰性字面标记留在自然流(锚永不回收,见下面 normalizer 顶注)。
+ *  空锚不发标记(PM createAndFill 自动补出的 cell anchor='',发出去就是 `<!-- a  -->` 毁格式)。 */
+function anchorMarkers(schema: Schema, anchor: string): ProseNode[] {
+  const { paragraph, html } = schema.nodes
+  return anchor && paragraph && html ? [paragraph.create(null, html.create({ value: `<!-- a ${anchor} -->` }))] : []
+}
+
+/** 解散一行 = 每列的锚标记 + 该列内容按列序摊平 + tail 锚标记。normalizer 的「不足两列」与「取消分栏」共用。
+ *  skipEmpty:空列只留锚标记,不留它那枚占位空段(取消分栏时那是纯粹的空行)。 */
+function flattenCells(schema: Schema, cells: ProseNode[], tail: string, skipEmpty = false): ProseNode[] {
+  const flat: ProseNode[] = []
+  for (const c of cells) {
+    flat.push(...anchorMarkers(schema, String(c.attrs.anchor)))
+    if (!(skipEmpty && cellIsEmpty(c))) c.forEach((child) => flat.push(child))
+  }
+  flat.push(...anchorMarkers(schema, tail))
+  return flat
+}
+
 // ── 规范化(appendTransaction):行内 <2 列 → 解散回自然流(恒);空 cell 只在**结构性事务**
 // (drop / 我们自己的列操作,meta uiEvent='drop' | amxColumns)后清除 —— 打字删空必须保留
 // (Codex B10:空 cell = 合法裸锚,正常编辑不许突然塌方)。
@@ -303,10 +327,8 @@ export const columnsNormalizer = $prose(() =>
       if (!trs.some((t) => t.docChanged)) return null
       const structural = trs.some((t) =>
         (t.getMeta('uiEvent') === 'drop' || t.getMeta('amxColumns')) && !t.getMeta('amxColumnsKeepEmpty'))
-      const { paragraph, html } = state.schema.nodes
-      // 空锚不发标记(PM createAndFill 自动补出的 cell anchor='',发出去就是 `<!-- a  -->` 毁格式)。
-      const markerParas = (anchor: string): ProseNode[] =>
-        anchor ? [paragraph.create(null, html.create({ value: `<!-- a ${anchor} -->` }))] : []
+      const { paragraph } = state.schema.nodes
+      const markerParas = (anchor: string): ProseNode[] => anchorMarkers(state.schema, anchor)
       type Job = { from: number; to: number; content: ProseNode[] }
       const jobs: Job[] = []
       // 嵌套行禁令(Codex Y-P0:cell content 'block+' 管不住粘贴进来的 row):cell 里的 row 原地展开。
@@ -324,9 +346,7 @@ export const columnsNormalizer = $prose(() =>
         if (node.type.name !== 'amadeusColumnRow') return
         const cells: ProseNode[] = []
         node.forEach((c) => cells.push(c))
-        const isEmpty = (c: ProseNode): boolean =>
-          c.childCount === 1 && c.firstChild!.type.name === 'paragraph' && c.firstChild!.content.size === 0
-        const survivors = structural ? cells.filter((c) => !isEmpty(c)) : cells
+        const survivors = structural ? cells.filter((c) => !cellIsEmpty(c)) : cells
         // 空锚补号(PM createAndFill 自动补 cell 时 anchor=''):就地重建带新锚的 cell。
         const needAnchorFix = survivors.some((c) => !c.attrs.anchor)
         if (survivors.length === cells.length && survivors.length >= 2 && !needAnchorFix) return
@@ -353,12 +373,7 @@ export const columnsNormalizer = $prose(() =>
           })
         } else {
           // 解散:每个存活 cell 的锚转惰性标记 + 内容摊平,空 cell 只留标记,tail 锚同保。
-          const flat: ProseNode[] = [...droppedMarkers]
-          for (const c of survivors) {
-            flat.push(...markerParas(String(c.attrs.anchor)))
-            c.forEach((child) => flat.push(child))
-          }
-          flat.push(...markerParas(String(node.attrs.tail ?? '')))
+          const flat: ProseNode[] = [...droppedMarkers, ...flattenCells(state.schema, survivors, String(node.attrs.tail ?? ''))]
           jobs.push({ from: offset, to: offset + node.nodeSize, content: flat.length ? flat : [paragraph.create()] })
         }
       })
@@ -529,6 +544,78 @@ export function splitToColumn(view: EditorView, from: number, to: number, node: 
   // 这枚空 cell 是“移到新列”刻意创建的可输入落点,不是拖拽后遗留的空列。普通结构清理会
   // 当场删掉它并因只剩一列而解散整行(用户看到的就是图片/附件“无法分栏”)。
   tr.setMeta('amxColumnsKeepEmpty', true)
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+/** 删掉一枚空列(B-08:空列此前没有任何删除办法 —— 退格 / Delete 无效,⠿「删除」又补出一个空段)。
+ *  键盘在「已经空了的列」里再按退格 / Delete 走这里。锚照规矩转成行后的惰性标记;删完不足两列的行
+ *  由 normalizer 照常解散(不挂 amxColumns:那会顺手把**别的行**里刻意留着的空列一并清掉)。
+ *  cellPos = 列的前位;不是空列返回 null(anyContent = 连内容一起删:⠿「删除」列里唯一的块时用)。
+ *  dir = 光标去向:-1 落到前一列末尾,1 落到后一列开头。 */
+export function removeEmptyColumnTr(state: EditorState, cellPos: number, dir: -1 | 1, anyContent = false): Transaction | null {
+  const cell = state.doc.nodeAt(cellPos)
+  if (!cell || cell.type.name !== 'amadeusColumnCell' || !(anyContent || cellIsEmpty(cell))) return null
+  const $c = state.doc.resolve(cellPos)
+  const row = $c.parent
+  if (row.type.name !== 'amadeusColumnRow') return null
+  const rowPos = $c.before()
+  const rowEnd = $c.after()
+  const idx = $c.index()
+  const rest: ProseNode[] = []
+  row.forEach((c, _o, i) => { if (i !== idx) rest.push(c) })
+  const markers = anchorMarkers(state.schema, String(cell.attrs.anchor))
+  if (rest.length >= 2) {
+    const tr = state.tr.delete(cellPos, cellPos + cell.nodeSize)
+    if (markers.length) tr.insert(tr.mapping.map(rowEnd), markers)
+    tr.setSelection(Selection.near(tr.doc.resolve(Math.min(cellPos, tr.doc.content.size)), dir))
+    return tr.scrollIntoView()
+  }
+  // 只剩一列:就地解散(与 normalizer 同形),光标自己放 —— 交给 normalizer 的整行替换,光标会被映射进锚标记里。
+  const flat = [...flattenCells(state.schema, rest, String(row.attrs.tail ?? '')), ...markers]
+  const tr = state.tr.replaceWith(rowPos, rowEnd, flat)
+  const left = rest[0]
+  const toEnd = dir < 0 ? idx > 0 : idx >= rest.length // 被删的列在左边剩下那列之后 = 往回落到它末尾
+  const target = toEnd ? left?.lastChild : left?.firstChild
+  let at = rowPos
+  for (const n of flat) {
+    if (n === target) {
+      tr.setSelection(Selection.near(tr.doc.resolve(toEnd ? at + n.nodeSize - 1 : at + 1), toEnd ? -1 : 1))
+      break
+    }
+    at += n.nodeSize
+  }
+  return tr.scrollIntoView()
+}
+
+/** 「取消分栏」(B-08):整行解散回自然流,各列内容按列序排开;锚转惰性标记(同 normalizer 解散),空列的占位空段不留。
+ *  光标 / 块选中跟着原来那块走。rowPos = 行的前位。 */
+export function unsplitRow(view: EditorView, rowPos: number): boolean {
+  const { state } = view
+  const row = state.doc.nodeAt(rowPos)
+  if (!row || row.type.name !== 'amadeusColumnRow') return false
+  const cells: ProseNode[] = []
+  row.forEach((c) => cells.push(c))
+  const flat = flattenCells(state.schema, cells, String(row.attrs.tail ?? ''), true)
+  const content = flat.length ? flat : [state.schema.nodes.paragraph.create()]
+  // 原选区所在的那一块 → 它在摊平结果里的新位置(同一个节点对象,按身份找)。
+  const sel = state.selection
+  let hit: { node: ProseNode; off: number; nodeSel: boolean } | null = null
+  state.doc.nodesBetween(rowPos, rowPos + row.nodeSize, (n, pos, parent) => {
+    if (hit || parent?.type.name !== 'amadeusColumnCell') return !hit
+    if (sel.from >= pos && sel.from < pos + n.nodeSize) hit = { node: n, off: sel.from - pos, nodeSel: sel instanceof NodeSelection && sel.from === pos }
+    return false
+  })
+  const tr = state.tr.replaceWith(rowPos, rowPos + row.nodeSize, content)
+  let at = rowPos
+  for (const n of content) {
+    const h = hit as { node: ProseNode; off: number; nodeSel: boolean } | null
+    if (h && n === h.node) {
+      tr.setSelection(h.nodeSel ? NodeSelection.create(tr.doc, at) : Selection.near(tr.doc.resolve(at + h.off)))
+      break
+    }
+    at += n.nodeSize
+  }
   view.dispatch(tr.scrollIntoView())
   return true
 }

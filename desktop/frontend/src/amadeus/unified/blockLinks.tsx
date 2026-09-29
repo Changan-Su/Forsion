@@ -16,6 +16,7 @@ import { anchorSafe } from '../blocks/markdown/wikiSubpath'
 import { amadeus } from '../api'
 import { flushUnifiedPath, hasUnifiedInstance, unifiedInsertMarkdown } from './lifecycle'
 import { fromDisk, toDisk } from './eol'
+import { carryFolds } from './foldCarry'
 import { registerMessages, translate, useI18n } from '../../i18n'
 
 registerMessages({
@@ -172,7 +173,10 @@ export async function moveBlocksTo(opts: {
     toast(translate('blocklinks.keptSource', { name }))
     return true
   }
-  view.dispatch(view.state.tr.delete(from, to).scrollIntoView())
+  // 区间里的折叠锚随内容一起离开(B-04):交给 mapping 的话,删除点上的下一枚标题会「继承」折叠。
+  const tr = view.state.tr.delete(from, to)
+  carryFolds(view.state, tr, { from, to, drop: true })
+  view.dispatch(tr.scrollIntoView())
   toast(translate('blocklinks.moved', { name }))
   return true
 }

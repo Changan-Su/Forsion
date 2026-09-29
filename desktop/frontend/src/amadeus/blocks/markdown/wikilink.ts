@@ -16,6 +16,7 @@ import { buildBlockString } from './mathLivePreview'
 import { attachSourceButton } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
+import { watchBrokenImage } from './brokenMedia'
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 /** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
@@ -158,6 +159,7 @@ function buildDecorations(
               el.alt = img.name
               if (img.width) el.style.width = `${img.width}px`
               wrap.appendChild(el)
+              watchBrokenImage(wrap, el, () => img.name) // 加载失败 → 占位说明(R-21)
               // 单击 = 选中这段源码。双击**不**在这里拦 —— 用户 2026-08-28 拍板「双击 = 看大图」,
               // 交给 UnifiedPage 的灯箱;源码入口只有悬停的 `</>` 一个。
               // preventDefault + stopPropagation 缺一不可:前者拦浏览器落焦点,后者拦 PM 自己的

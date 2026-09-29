@@ -3,6 +3,7 @@
 //  C2 ⠿ 把手在 cell 内逐块锚定(plugin-block 三层嵌套命中)
 //  C3 块拖拽 cell→cell 原生成立(同 doc NodeSelection 拖)
 //  C4 撤销 wrap 一步还原线性文档(多实例方案的 B7 撤销撕裂在此为不可能)
+//  C11 空列的删除办法(B-08):空列里退格 / Delete 删列;列末 Delete 不拽行后正文;块菜单「取消分栏」
 // 用法:HARNESS_URL=http://localhost:5199/harness.html node scripts/unified-columns.check.cjs
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -549,6 +550,101 @@ async function main() {
       JSON.stringify(b),
     )
     await pg.close()
+  }
+
+  // ── C11 空列的删除办法(B-08)。种子:两列行,右列是「移到新列」造出来的空列。 ────────────────────
+  {
+    const lay = (cols, tail) => `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${JSON.stringify({ v: 4, rows: [{ columns: cols.map((r) => ({ refs: [r], width: 1 })), tail }] })}\n---\n`
+    const TWO = lay(['ca1', 'ca2'], 'cat') + '<!-- a ca1 -->\n\n段甲。\n\n<!-- a ca2 -->\n\n<!-- a cat -->\n\n段乙。\n'
+    const THREE = lay(['cb1', 'cb2', 'cb3'], 'cbt') + '<!-- a cb1 -->\n\n甲列。\n\n<!-- a cb2 -->\n\n乙列一。\n\n乙列二。\n\n<!-- a cb3 -->\n\n丙列。\n\n<!-- a cbt -->\n\n行后。\n'
+    const open = async (md) => {
+      const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM + ' .amx-ucolrow', { timeout: 20000 })
+      await pg.waitForTimeout(400)
+      return pg
+    }
+    const state = (pg) => pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const cells = []
+      v.state.doc.descendants((n) => { if (n.type.name === 'amadeusColumnCell') { cells.push(n.textContent || '∅'); return false } return true })
+      const top = []
+      v.state.doc.forEach((n) => { if (n.textContent) top.push(n.type.name === 'amadeusColumnRow' ? 'row' : n.textContent) })
+      return { cells: cells.join('|'), top: top.join('|'), sel: v.state.selection.$from.parent.textContent }
+    })
+    /** 光标放进第 i 列的第一个文本块开头 / 末尾。 */
+    const caretCell = (pg, i, end = false) => pg.evaluate(({ i, end }) => {
+      const v = window.__upage.probe.view()
+      let k = 0, at = -1
+      v.state.doc.descendants((n, pos) => {
+        if (at >= 0) return false
+        if (n.type.name === 'amadeusColumnCell') { if (k++ === i) at = end ? pos + n.nodeSize - 2 : pos + 2; return false }
+        return true
+      })
+      const S = v.state.selection.constructor
+      v.dispatch(v.state.tr.setSelection(S.near(v.state.doc.resolve(at), end ? -1 : 1)))
+      v.focus()
+    }, { i, end })
+    const lastMd = (pg) => pg.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : '' })
+    for (const key of ['Backspace', 'Delete']) {
+      const pg = await open(TWO)
+      await caretCell(pg, 1)
+      await pg.waitForTimeout(100)
+      await pg.keyboard.press(key)
+      await pg.waitForTimeout(1300)
+      const st = await state(pg), md = await lastMd(pg)
+      record(`C11 空列里按 ${key}:这一列被删掉,只剩一列的行解散回正文、光标回到左列末尾;锚转惰性标记留着`,
+        st.cells === '' && st.top === '段甲。|段乙。' && st.sel === '段甲。' && !/amadeus_layout/.test(md) && /<!-- a ca2 -->/.test(md), JSON.stringify({ st, md }))
+      await pg.close()
+    }
+    {
+      const pg = await open(THREE)
+      await caretCell(pg, 2, true) // 丙列末尾
+      await pg.waitForTimeout(100)
+      await pg.keyboard.press('Delete')
+      await pg.waitForTimeout(200)
+      const st = await state(pg)
+      record('C11 列里最后一段末尾按 Delete:不把行后的正文拽进列里', st.cells === '甲列。|乙列一。乙列二。|丙列。' && st.top === 'row|行后。', JSON.stringify(st))
+      await pg.close()
+    }
+    {
+      const pg = await open(TWO)
+      const r = await pg.evaluate((PM) => { const b = document.querySelectorAll(PM + ' .amx-ucolcell')[1].getBoundingClientRect(); return { x: b.x + 20, y: b.y + 10 } }, PM)
+      await pg.mouse.move(r.x, r.y, { steps: 4 })
+      await pg.waitForTimeout(260)
+      const h = await pg.evaluate(() => { const g = document.querySelector('.unified-gutter'); const el = g?.querySelector('.drag-handle'); if (!el || g.dataset.show !== 'true') return null; const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + Math.min(10, b.height / 2) } })
+      if (h) await pg.mouse.click(h.x, h.y)
+      await pg.waitForSelector('.unified-block-menu', { timeout: 3000 }).catch(() => null)
+      const ok = await pg.locator('.unified-block-menu button').filter({ hasText: '删除' }).first().click({ timeout: 2000 }).then(() => true, () => false)
+      await pg.waitForTimeout(300)
+      const st = await state(pg)
+      record('C11 ⠿「删除」空列里唯一的块:连这一列一起删,不再补出空段', ok && st.cells === '' && st.top === '段甲。|段乙。', JSON.stringify({ ok, st }))
+      await pg.close()
+    }
+    {
+      const pg = await open(THREE)
+      await caretCell(pg, 1, true) // 乙列 → 乙列二 末尾
+      await pg.waitForTimeout(100)
+      const hasItem = async () => {
+        const r = await pg.evaluate((PM) => { const el = [...document.querySelectorAll(PM + ' p')].find((x) => x.textContent === '乙列二。'); const b = el.getBoundingClientRect(); return { x: b.x + 10, y: b.y + b.height / 2 } }, PM)
+        await pg.mouse.move(r.x, r.y, { steps: 4 })
+        await pg.waitForTimeout(260)
+        const h = await pg.evaluate(() => { const g = document.querySelector('.unified-gutter'); const el = g?.querySelector('.drag-handle'); if (!el || g.dataset.show !== 'true') return null; const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + Math.min(10, b.height / 2) } })
+        if (!h) return false
+        await pg.mouse.click(h.x, h.y)
+        await pg.waitForSelector('.unified-block-menu', { timeout: 3000 }).catch(() => null)
+        return pg.locator('.unified-block-menu button').filter({ hasText: '取消分栏' }).count()
+      }
+      const n = await hasItem()
+      if (n) await pg.locator('.unified-block-menu button').filter({ hasText: '取消分栏' }).first().click()
+      await pg.waitForTimeout(1300)
+      const st = await state(pg), md = await lastMd(pg)
+      const sel = await pg.evaluate(() => { const s = window.__upage.probe.view().state.selection; return s.node ? s.node.textContent : null })
+      record('C11 块菜单「取消分栏」:整行解散,各列内容按列序排开、选中仍在原块、锚留作标记',
+        n === 1 && st.cells === '' && st.top === '甲列。|乙列一。|乙列二。|丙列。|行后。' && sel === '乙列二。' && !/amadeus_layout/.test(md) && /<!-- a cb2 -->/.test(md), JSON.stringify({ n, st, sel, md }))
+      await pg.close()
+    }
   }
 
   await browser.close()

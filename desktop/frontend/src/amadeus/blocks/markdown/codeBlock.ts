@@ -13,6 +13,8 @@ import type { EditorView, NodeView, ViewMutationRecord } from '@milkdown/kit/pro
 import { common, createLowlight } from 'lowlight'
 import { currentLocale, registerMessages, translate } from '../../../i18n'
 import { isShellLang, runInTerminal, stripPrompt } from '../../../builtins/runCommand'
+import { parseButtonBlock } from '../button/format'
+import { codeAutoPairBackspace, codeAutoPairInput } from './codeAutoPair'
 
 /** 工具条文案。⚠️ 按钮字面**必须短**(和中文的两字一样):工具条绝对定位盖在代码块右上,
  *  英文写长了(实测 "Line numbers"/"Collapse" 一套 375px)会盖住短代码块的水平中心,点进去
@@ -297,12 +299,21 @@ class CodeBlockView implements NodeView {
     const isWrap = pos != null && !!ui?.wrapped.has(pos)
     const isNo = pos != null && !!ui?.lineno.has(pos) && !isWrap // 折行时软换行没有自己的号,互斥
     const isCollapsed = pos != null && !!ui?.collapsed.has(pos)
-    const sig = `${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}`
+    // 有效的按钮块(```forsion-button + 合法 JSON)由嵌入层渲染成按钮,不给代码块工具条(R-14):工具条压在按钮上,
+    // 语言下拉一改(改成 javascript 后列表里再没有 forsion-button)按钮就变回 JSON、改不回来。JSON 坏了的仍是
+    // 普通代码块(R-13 的回落),工具条照给 —— 那时它就是一段代码。签名带上这一位:改源码修好 / 改坏时当场切换。
+    const button = lang === 'forsion-button' && !!parseButtonBlock('```forsion-button\n' + this.node.textContent + '\n```')
+    const sig = button ? 'button' : `${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}`
     if (sig !== this.barSig) {
-      const bar = buildToolbar(this.view, () => this.getPos() ?? null, lang, isWrap, isNo, isCollapsed)
-      if (this.bar) this.bar.replaceWith(bar)
-      else this.dom.insertBefore(bar, this.contentDOM)
-      this.bar = bar
+      if (button) {
+        this.bar?.remove()
+        this.bar = null
+      } else {
+        const bar = buildToolbar(this.view, () => this.getPos() ?? null, lang, isWrap, isNo, isCollapsed)
+        if (this.bar) this.bar.replaceWith(bar)
+        else this.dom.insertBefore(bar, this.contentDOM)
+        this.bar = bar
+      }
       this.barSig = sig
     }
     if (isNo) {
@@ -381,6 +392,11 @@ export function codeBlockPlugin() {
         decorations(state) {
           return codeKey.getState(state)?.decos ?? DecorationSet.empty
         },
+        // 括号 / 引号自动配对(R-27,本机开关,见 codeAutoPair.ts)。
+        handleTextInput: (view, from, to, text) => codeAutoPairInput(view, from, to, text),
+        handleKeyDown: (view, event) =>
+          event.key === 'Backspace' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.isComposing
+            ? codeAutoPairBackspace(view) : false,
       },
     })
   })

@@ -35,6 +35,8 @@ import { tableKeyPlugins } from './tableKeys'
 import { commandsCtx } from '@milkdown/kit/core'
 import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
+import { buildBlockString } from '../blocks/markdown/mathLivePreview'
+import { removeEmptyColumnTr } from './columns'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -289,10 +291,42 @@ const enterTaskItem: Command = (state, dispatch, view) => {
   return true
 }
 
+/** 块公式 `$$…$$` 里按回车 / Shift+回车 = 公式内换行(R-17)。公式在文档里是段落纯文本,实况预览只在**一个文本块内**
+ *  配对 `$$`:回车拆段 = 公式被劈成两半、不再渲染(磁盘上原有的多行公式在行末回车也一样);Shift+回车给的是硬换行,
+ *  落盘成 `\` + 换行,混进 LaTeX 成了控制符。这里插 isInline 的 hardbreak —— 与 remark-line-break 读回来的软换行同形,
+ *  落盘就是裸换行,重开照样是同一段里的多行公式。
+ *  配对口径与 scanMath 的块级分支一致(`$$$` 不起手、代码文本已抹空),只是**空骨架 `$$  $$` 也算** —— `/math`、`$$`+空格
+ *  刚插出来的就是它,第一下回车就得是换行。未闭合的 `$$` 不算(还在打字,回车照常拆段)。 */
+const displayMathSpans = (s: string): Array<[number, number]> => {
+  const out: Array<[number, number]> = []
+  for (let i = 0; ;) {
+    const o = s.indexOf('$$', i)
+    if (o < 0) break
+    if (s[o + 2] === '$') { i = o + 3; continue }
+    const c = s.indexOf('$$', o + 2)
+    if (c < 0) break
+    out.push([o, c + 2])
+    i = c + 2
+  }
+  return out
+}
+const enterInDisplayMath: Command = (state, dispatch) => {
+  const { $from, $to } = state.selection
+  if (!$from.sameParent($to) || !$from.parent.isTextblock || $from.parent.type.spec.code) return false
+  const br = state.schema.nodes.hardbreak
+  if (!br || !$from.parent.textContent.includes('$$')) return false
+  const a = $from.parentOffset
+  const b = $to.parentOffset
+  if (!displayMathSpans(buildBlockString($from.parent)).some(([o, c]) => a >= o + 2 && b <= c - 2)) return false
+  dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+  return true
+}
+
 const enterCmd: Command = chain(
   enterFoldedHeading,
   enterHeadingToParagraph,
   enterOnBlockSelection,
+  enterInDisplayMath,
   enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
   enterEmptyListItem,
   enterFoldedListItem,
@@ -427,7 +461,18 @@ const bsOutdentParagraph: Command = (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
+/** 已经空了的列里再按退格 / Delete = 删掉这一列(B-08,Notion 同:空列没内容就收起)。此前两颗键都无效,
+ *  ⠿「删除」又会补出一个空段 —— 空列没有任何删除办法。锚转惰性标记、不足两列解散,见 removeEmptyColumnTr。 */
+const deleteEmptyColumn = (dir: -1 | 1): Command => (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.depth < 2 || $from.node(-1).type.name !== 'amadeusColumnCell') return false
+  const tr = removeEmptyColumnTr(state, $from.before(-1), dir)
+  if (!tr) return false
+  dispatch?.(tr)
+  return true
+}
+
+const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
@@ -487,7 +532,7 @@ const deleteSelectNextAtom: Command = (state, dispatch) => {
  *  只接管跨容器的那几种;同层相邻兄弟(段↔段、段↔标题)base 本来就并对,原样交回。
  *  下一块是 callout 标题 → 整块选中(与撞上代码块同一口径),不把 `[!note]` 令牌拉成正文;
  *  中间夹着分割线等叶子、代码块、表格、折叠藏起来的块 → 交回原路。 */
-const CALLOUT_HEAD = /^\[![A-Za-z]+\]/
+const CALLOUT_HEAD = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09)
 const deleteJoinNextText: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
   if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false
@@ -504,6 +549,13 @@ const deleteJoinNextText: Command = (state, dispatch) => {
   if ($n.parentOffset !== 0 || !$n.parent.isTextblock || $n.parent.type.name === 'code_block' || inTable($n)) return false
   if ($n.depth === $from.depth && $n.before() === after) return false // 同层相邻兄弟:base 的 joinForward 就对
   if (hiddenAt(state, $n.pos)) return false
+  // 不跨隔离边界(分栏的列、画布卡):列里最后一段按 Delete 会把行后的正文拽进列里(B-08 探针实测)。
+  // 列是 isolating —— 退格本来就不跨,Delete 同一口径;表格单元格上面已单独挡过。
+  const isolated = ($p: ResolvedPos): number => {
+    for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.spec.isolating) return $p.before(d)
+    return -1
+  }
+  if (isolated($from) !== isolated($n)) return false
   let blocked = false
   state.doc.nodesBetween(after, $n.before(), (node, pos) => {
     if (pos >= after && pos + node.nodeSize <= $n.before() && (node.isLeaf || node.isTextblock)) blocked = true
@@ -547,6 +599,33 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
     dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, pos)).scrollIntoView())
     return true
   }
+}
+
+/** 代码块是所在容器的最后一块(典型:文末的代码块)时,在最后一行按 ↓ / 在块尾按 → = 在它后面新起一段(R-27,
+ *  TipTap exitOnArrowDown 同款)。此前后面没有块可去,只有 Mod+Enter 能出去 —— 连按回车只会在代码里加空行。
+ *  后面还有块时不接管,交回原生纵向移动(进下一块)。 */
+function codeExit(dir: 'down' | 'right'): Command {
+  return (state, dispatch, view) => {
+    const { $from, empty } = state.selection
+    if (!empty || $from.parent.type.name !== 'code_block' || $from.depth < 1) return false
+    if (dir === 'down' ? !view?.endOfTextblock('down') : $from.parentOffset !== $from.parent.content.size) return false
+    const container = $from.node(-1)
+    if ($from.index(-1) !== container.childCount - 1) return false
+    const paragraph = state.schema.nodes.paragraph
+    const after = $from.after()
+    if (!paragraph || !container.canReplaceWith($from.index(-1) + 1, $from.index(-1) + 1, paragraph)) return false
+    if (!dispatch) return true
+    const tr = state.tr.insert(after, paragraph.create())
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView())
+    return true
+  }
+}
+
+/** 代码块里 Shift+回车 = 换行(与回车相同;此前是空操作 —— 硬换行进不了代码块)。 */
+const codeShiftEnter: Command = (state, dispatch) => {
+  if (state.selection.$from.parent.type.name !== 'code_block') return false
+  dispatch?.(state.tr.insertText('\n').scrollIntoView())
+  return true
 }
 
 /** mac 的 ⌘↑ / ⌘↓ = 到文首 / 文末(评审 K-16)。浏览器原生做法在两种首尾块上原地不动:代码块首子节点是
@@ -683,16 +762,18 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       Enter: enterCmd,
       // 标题里的 Shift+Enter 同回车(K-19):ATX 标题容不下换行,放行硬换行 = H3 及以下落盘成 `### 甲 乙`、所见非所存。
       // 不在标题里返回 false,照旧交给 preset 的硬换行(段内换行);表格格内的 Shift+Enter 由排在前面的 tableKeyPlugins 先接。
-      'Shift-Enter': enterHeadingToParagraph,
+      // 代码块里 = 代码内换行(R-27);块公式 `$$…$$` 里 = 公式内软换行(R-17);其余仍交回 preset 的硬换行。
+      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath),
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
-      Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
+      Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
-      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
       ArrowUp: arrowToAtom('up'),
-      ArrowDown: arrowToAtom('down'),
+      ArrowDown: chain(codeExit('down'), arrowToAtom('down')),
+      ArrowRight: codeExit('right'),
       ...(IS_MAC ? { 'Meta-ArrowUp': docEdge('up'), 'Meta-ArrowDown': docEdge('down') } : {}),
     }),
   ),

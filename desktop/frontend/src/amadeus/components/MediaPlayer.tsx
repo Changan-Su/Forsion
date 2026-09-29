@@ -5,6 +5,7 @@ import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { amadeus } from '../api'
 import { registerMessages, useI18n } from '../../i18n'
+import { BROKEN_MEDIA_ICON } from '../blocks/markdown/brokenMedia'
 
 registerMessages({
   'mediaplayer.grabTitle': { zh: '把当前画面存成图片，并在下方插入回源时间戳', en: 'Save the current frame as an image and insert a timestamp link back to this moment' },
@@ -40,6 +41,17 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
   // crossOrigin 是**截帧**要的(canvas 不被污染);协议端已回 ACAO:*。万一某端没这个头,
   // 视频会直接 load 失败 —— onError 里降级重挂一次无 crossOrigin 的,宁可丢截帧也不能丢播放。
   const [anon, setAnon] = useState(kind === 'video')
+  // 加载失败(R-21):第二次失败(已退到无跨源模式仍失败)= 文件真没了 / 格式放不了 → 占位说明,不留一个空播放器。
+  const [failed, setFailed] = useState(false)
+  useEffect(() => { setFailed(false) }, [url])
+  // 退到无跨源模式后要**重新加载**:只摘 crossorigin 属性不会重走资源选择(HTML 规范),元素停在第一次的错误上,
+  // 第二次失败永远不来 —— 缺失的视频于是一直是个空播放器。
+  const retrying = useRef(false)
+  useEffect(() => {
+    if (anon || !retrying.current) return
+    retrying.current = false
+    ref.current?.load()
+  }, [anon])
 
   /** 就位即 seek;元数据还没到就押后一次。返回撤销函数(押后的监听必须能撤 —— 否则 loc 连变
    *  几次会堆叠出好几个 once 监听,元数据一到按注册序依次赋值,中间那些是**过期时刻**)。 */
@@ -132,12 +144,21 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
     controls: true,
     preload: 'metadata' as const,
     ...(anon ? { crossOrigin: 'anonymous' as const } : {}),
-    onError: () => { if (anon) setAnon(false) }, // 见上:丢截帧也不能丢播放
+    onError: () => { if (anon) { retrying.current = true; setAnon(false) } else setFailed(true) }, // 见上:丢截帧也不能丢播放;无跨源也失败 = 放不了
   }
+  // 失败时播放器只是藏起来、不卸载:ref 与挂在它身上的 seek / 停点监听都得留着 —— 路径改对(url 变)后
+  // 同一个元素重新加载,锚点照样生效(卸载重挂的话,押后的 seek 早已挂在旧元素上,起播停在 0 秒)。
+  const hide = failed ? { style: { display: 'none' } } : {}
   return (
     <>
-      {kind === 'video' ? <video className="embed-video" {...common} /> : <audio className="embed-audio" {...common} />}
-      {kind === 'video' && insertAfter && (
+      {failed && (
+        <div className="amx-broken-media amx-broken-media--block" data-testid="media-broken">
+          <span className="amx-broken-media-icon" dangerouslySetInnerHTML={{ __html: BROKEN_MEDIA_ICON }} />
+          {t('brokenmedia.media', { name })}
+        </div>
+      )}
+      {kind === 'video' ? <video className="embed-video" {...common} {...hide} /> : <audio className="embed-audio" {...common} {...hide} />}
+      {kind === 'video' && insertAfter && !failed && (
         <div className="embed-media-foot">
           <button className="embed-media-btn" onClick={() => void grab()} disabled={shot === 'working' || !anon}
             title={anon ? t('mediaplayer.grabTitle') : t('mediaplayer.grabUnavailable')}>

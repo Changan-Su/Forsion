@@ -7,9 +7,12 @@
 //        转换做不成要么真转了、要么给提示,不许静默(I-19)
 //   I20  选区工具栏键盘可达 + ARIA:Alt+F10 进工具栏(焦点进去工具栏不被卸载)、←→ 移动、Enter 触发、子面板键盘开 +
 //        ↓ 选项、Esc 退回编辑器;格式钮有 aria-pressed / aria-label(I-20)
+//   B4   块菜单对折起的标题:「复制块」「移动到…」以整节为单位(B-04)
 //   B5   块菜单作用于多块选区:「转换为」逐块生效(列表并成一只,一次撤销全回)、「移到新列」置灰并说明(B-05)
+//   B7   列表 / 引用(callout)空行里 slash 插整块 = 原地换掉这一行,不留空项残渣,callout 里的代码块不跑出去(B-07)
 //   B10  块菜单开着时:方向键不挪编辑器选区(在菜单项间移动)、Enter 执行聚焦项、动作落在打开时的那一块;
 //        role=menu / menuitem;键盘打开把焦点送进菜单(B-10)
+//   B11  对 callout「转换为」先摘 `[!type]` 令牌再整只转(正文 / 标题 / 列表 / 引用 / 折叠 / 代码块)(B-11)
 //   B14  块菜单「转换为」有代码块(按原文造,不把文字挪到空代码块下面)与标注(`[!note]`)(B-14)
 //   B15  块菜单「复制标题链接」(`[[笔记#标题]]`)/「复制块链接」(只给已有 `^id` 的块)/「移动到…」(追加到目标末尾再删源);
 //        /embed 说明不再指向 v4 没有的「复制嵌入引用」(B-15)
@@ -486,6 +489,33 @@ async function main() {
       }
     }
 
+    if (want('B11')) {
+      // B-11:对 callout「转换为」= 先摘 `[!type]` 令牌再整只转;落盘里不许出现字面 `[!note]` / `\[!`。
+      const SEED = '段首。\n\n> [!note] 标题\n> 第一行\n\n段尾。\n'
+      for (const [label, want] of [
+        ['正文', '段首。\n\n标题\n\n第一行\n\n段尾。\n'],
+        ['标题 2', '段首。\n\n## 标题\n\n第一行\n\n段尾。\n'],
+        ['无序列表', /^段首。\n\n[-*] 标题\n[-*] 第一行\n\n段尾。\n$/],
+        ['引用', '段首。\n\n> 标题\n>\n> 第一行\n\n段尾。\n'],
+        ['折叠', '段首。\n\n> [!fold]- 标题\n>\n> 第一行\n\n段尾。\n'],
+        ['代码块', '段首。\n\n```\n标题\n第一行\n```\n\n段尾。\n'],
+      ]) {
+        const nm = await load(page, SEED)
+        const open = await openHandleMenu(page, '[!note]') // callout 的 textContent 以(藏着的)令牌开头
+        const ok = open && await clickItem(page, label)
+        const md = await mdOf(page, nm)
+        const hit = typeof want === 'string' ? md === want : want.test(md || '')
+        check(`B11 callout → ${label}:令牌不漏进正文`, ok && hit && !/\\\[!|\[!note\]/.test(md || ''), JSON.stringify(md))
+      }
+      {
+        const nm = await load(page, '> [!tip]- 折起的\n> 藏着的内容\n\n段尾。\n')
+        const open = await openHandleMenu(page, '[!tip]')
+        const ok = open && await clickItem(page, '正文')
+        const md = await mdOf(page, nm)
+        check('B11 折起的 callout → 正文:内容全部提出、令牌不留', ok && md === '折起的\n\n藏着的内容\n\n段尾。\n', JSON.stringify(md))
+      }
+    }
+
     if (want('B14')) {
       // B14a 段落 → 代码块:原文进代码块,不另起空块。
       {
@@ -561,6 +591,74 @@ async function main() {
         await page.keyboard.press('Escape')
         check('B15d /embed 说明指向「复制标题链接 / 复制块链接」,不再提「复制嵌入引用」', /复制标题链接/.test(msg) && !/复制嵌入引用/.test(msg), JSON.stringify(msg))
       }
+    }
+
+    if (want('B4')) {
+      // B-04:块菜单对折起的标题 = 标题 + 藏着的小节一个整体。「复制块」复制整节(副本同样折着);
+      //       「移动到…」把整节搬去目标笔记,本篇删干净,下一枚标题不「继承」折叠。
+      const foldVia = async (page, name) => {
+        const r = await rectOf(page, name)
+        await page.mouse.move(r.x + 10, r.y + Math.min(10, r.h / 2), { steps: 4 })
+        await page.waitForTimeout(260)
+        await page.evaluate(() => document.querySelector('.unified-gutter .block-fold')?.click())
+        await page.waitForTimeout(200)
+        await page.mouse.move(5, 5)
+        await page.waitForTimeout(150)
+      }
+      const foldedNames = (page) => page.evaluate(() => [...document.querySelectorAll('.amx-heading-folded')].map((e) => e.textContent.replace('▸', '')))
+      const SEED = '前段。\n\n## 小节\n\n节内一。\n\n节内二。\n\n## 下节\n\n下节正文。\n'
+      {
+        await load(page, SEED)
+        await foldVia(page, '小节')
+        const open = await openHandleMenu(page, '▸小节') // 折起的标题行首挂着展开钮 ▸
+        const ok = open && await clickItem(page, '复制块')
+        await page.waitForTimeout(200)
+        const s = await shape(page)
+        check('B4a 「复制块」折起的标题:复制整节,副本同样折着', ok && JSON.stringify(s) === JSON.stringify(['前段。', 'heading2:小节', '节内一。', '节内二。', 'heading2:小节', '节内一。', '节内二。', 'heading2:下节', '下节正文。']) && JSON.stringify(await foldedNames(page)) === JSON.stringify(['小节', '小节']), JSON.stringify({ s, f: await foldedNames(page) }))
+      }
+      {
+        await page.evaluate(() => {
+          window.__upage.vault.set('小节去处.md', '# 去处\n')
+          const st = window.__upage.pageStore.getState()
+          window.__upage.pageStore.setState({ pages: [...new Set([...(st.pages || []), '小节去处.md'])] })
+        })
+        const nm = await load(page, SEED)
+        await foldVia(page, '小节')
+        const open = await openHandleMenu(page, '▸小节') // 折起的标题行首挂着展开钮 ▸
+        const ok = open && await clickItem(page, '移动到')
+        const picker = await waitSel(page, '[data-testid=note-picker]')
+        await page.keyboard.type('小节去处')
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        const target = await page.evaluate(() => window.__upage.vault.get('小节去处.md'))
+        const f = await foldedNames(page)
+        check('B4b 「移动到…」折起的标题:整节搬走,本篇删干净,下节不继承折叠', ok && picker && target === '# 去处\n\n## 小节\n\n节内一。\n\n节内二。\n' && md === '前段。\n\n## 下节\n\n下节正文。\n' && f.length === 0, JSON.stringify({ target, md, f }))
+      }
+    }
+
+    if (want('B7')) {
+      // B-07:列表 / 引用(callout)的**空行**里 slash 插整块 = 原地换掉这一行:不留 `-` / `- [ ] <br />` / `>` 空项残渣,
+      //       callout 里的代码块留在 callout 里;列表被劈成前后两只(与手打 ``` 同一结果)。非空行照旧插到整块之后。
+      const run = async (md, after, cmd) => {
+        const nm = await load(page, md)
+        await caretAt(page, after)
+        await page.keyboard.press('Enter')
+        await page.keyboard.type(`/${cmd}`)
+        const open = await waitSel(page, '.slash-menu')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(200)
+        return { open, md: await mdOf(page, nm), shape: await topBlocks(page) }
+      }
+      const a = await run('- 项一\n- 项二\n- 项三\n\n段尾。\n', '项二', 'code')
+      check('B7a 列表空项 /code:代码块原地劈开列表,不留空项', a.open && a.md === '- 项一\n- 项二\n\n```\n```\n\n- 项三\n\n段尾。\n', JSON.stringify(a))
+      const b = await run('- [ ] 任务一\n- [ ] 任务二\n\n段尾。\n', '任务一', 'divider')
+      check('B7b 待办空项 /divider:原地成分割线,不留 `- [ ] <br />`', b.open && !/<br \/>|\[ \] *\n/.test(b.md || '') && /^- \[ \] 任务一\n\n---\n/.test(b.md || '') && /- \[ \] 任务二\n/.test(b.md || ''), JSON.stringify(b))
+      const c = await run('> [!note] 标题\n> 第一行\n\n段尾。\n', '第一行', 'code')
+      check('B7c callout 空行 /code:代码块留在 callout 里,不留空 `>` 行', c.open && c.md === '> [!note] 标题\n>\n> 第一行\n>\n> ```\n> ```\n\n段尾。\n', JSON.stringify(c))
+      const d = await run('> [!note] 标题\n> - 项一\n\n段尾。\n', '项一', 'table')
+      check('B7d callout 里的列表空项 /table:只脱出列表、表格留在 callout 里', d.open && /^blockquote:/.test(d.shape) && /^> \[!note\] 标题\n>\n> [-*] 项一\n>\n> \| 列 1/.test(d.md || '') && !/>\s*[-*]\s*\n/.test(d.md || ''), JSON.stringify(d))
+      const e = await run('- 项一\n- 项二\n\n段尾。\n', '项一', 'math')
+      check('B7e 列表空项 /math:公式骨架留在这一项里(段落放得进列表项)', e.open && e.md === '- 项一\n- $$  $$\n- 项二\n\n段尾。\n', JSON.stringify(e))
     }
 
     if (want('B17')) {

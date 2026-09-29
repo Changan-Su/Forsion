@@ -28,7 +28,8 @@ import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
 import { blockDragViews, imageDragParagraph, visualBlockElement } from '../blocks/markdown/imageDrag'
 import { executeMoveBelowRow, executeMoveIntoCell, executePair, mintCardCopies } from './columns'
-import { foldStateAt, foldedSectionAfter, isHiddenAt, toggleFoldAt } from './headingFold'
+import { foldStateAt, foldedSectionAfter, isHiddenAt, sectionEnd, toggleFoldAt } from './headingFold'
+import { carryFolds, unfoldNewlyHidden, withFoldedSections } from './foldCarry'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 import { markMachineSlash } from '../blocks/markdown/machineSlash'
@@ -332,6 +333,18 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     return kids ? { from: pos, to: end } : null
   }
 
+  /** 折起的标题正在整节拖(B-04,beginBlockDrag 换成了盖住整节的块选区):标题的原位置;否则 null。 */
+  let foldDragHead: number | null = null
+  /** 整批拖落下的善后:区间里的折叠锚跟着内容走(否则删除点上的邻居标题会「继承」折叠),
+   *  折叠标题整节拖的选区还原成新位置上标题的块选中。 */
+  const settleFoldedDrag = (state: EditorState, tr: Transaction, range: { from: number; to: number }, insertAt: number, copy: boolean): void => {
+    carryFolds(state, tr, { from: range.from, to: range.to, newStart: insertAt, copy })
+    unfoldNewlyHidden(state, tr, { from: range.from, to: range.to, newStart: insertAt })
+    if (foldDragHead === range.from && tr.doc.nodeAt(insertAt)?.type.name === 'heading') {
+      tr.setSelection(NodeSelection.create(tr.doc, insertAt))
+      foldDragHead = null
+    }
+  }
   /** 跨块选区的整批拖:落点按「指针在目标块中线上/下」定前/后,删+插一个事务。
    *  为什么不交给 PM/落点插件:TextSelection.content() 是 openStart/openEnd=1 的**开片**,
    *  drop 时 replaceRange 会把它并进落点块 —— 实测只搬走第一块,后面几块留在原地(M2 首红)。
@@ -355,7 +368,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       }
       let tr = state.tr
       if (!copy) tr = tr.delete(range.from, range.to)
-      tr = tr.insert(tr.mapping.map(end), content)
+      const insertAt = tr.mapping.map(end)
+      tr = tr.insert(insertAt, content)
+      settleFoldedDrag(state, tr, range, insertAt, copy)
       tr.setMeta('amxColumns', true)
       view.dispatch(tr.scrollIntoView())
       return true
@@ -392,7 +407,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     unfoldOver(view, at) // 折叠标题下缘 = 隐藏小节之内:先展开,否则整批块一落下就看不见
     let tr = view.state.tr
     if (!copy) tr = tr.delete(range.from, range.to)
-    tr = tr.insert(tr.mapping.map(at), content)
+    const insertAt = tr.mapping.map(at)
+    tr = tr.insert(insertAt, content)
+    settleFoldedDrag(view.state, tr, range, insertAt, copy)
     tr.setMeta('amxColumns', true)
     view.dispatch(tr.scrollIntoView())
     return true
@@ -1023,9 +1040,27 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // ⠿ 与图片本体两个起拖口共用;dragImage 空 = 用浏览器自己的拖影(图片本体起拖时就是那张图)。
         const beginBlockDrag = (view: EditorView, event: DragEvent, dragImage: HTMLElement | null): void => {
           view.dom.dataset.dragging = 'true'
-          const sel = view.state.selection
-          // 拖折叠标题:先展开(否则只拖走标题本身,隐藏小节留在原地、落点处还会错吸新范围)。
-          if (sel instanceof NodeSelection && foldStateAt(view, sel.from) === 'folded') toggleFoldAt(view, sel.from)
+          let sel = view.state.selection
+          // 拖折起的标题 = 标题 + 藏着的小节一个整体,且**折着拖**(B-04:此前先展开,正文在指针下方跳动,
+          // 落下后只带走标题一行)。把选区换成盖住整节的块选区 → 走跨块整批拖的既有路径(executeMoveBlocks /
+          // executeMoveToTail 用 carryFolds 把折叠带到新位置);落下 / 取消后选区还原成标题的块选中(foldDragHead)。
+          // 选区若盖不齐整节(小节以非文字块收尾之类),退回旧做法:先展开再拖标题本身。
+          foldDragHead = null
+          if (sel instanceof NodeSelection && foldStateAt(view, sel.from) === 'folded') {
+            const head = sel.from
+            const end = foldedSectionAfter(view.state, head)
+            const doc = view.state.doc
+            if (end != null) {
+              view.dispatch(view.state.tr
+                .setSelection(TextSelection.between(doc.resolve(head + 1), doc.resolve(end - 1)))
+                .setMeta(blockSelectionKey, true))
+              const r = topRangeOf(view)
+              if (r && r.from === head && r.to === end) foldDragHead = head
+              else view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, head)))
+            }
+            if (foldDragHead == null) toggleFoldAt(view, head)
+            sel = view.state.selection
+          }
           if (sel instanceof NodeSelection && listFoldStateAt(view, sel.from) === 'folded') toggleListFoldAt(view, sel.from)
           const multi = sel instanceof TextSelection && !sel.empty && !sel.$from.sameParent(sel.$to)
           if (event.dataTransfer && (sel instanceof NodeSelection || multi)) {
@@ -1072,6 +1107,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         root.addEventListener('dragstart', onImageDragStart, true)
         const endBlockDrag = (): void => {
           const view = viewRef
+          // 折叠标题整节拖(B-04)被取消:选区还原成标题的块选中(落下的那条已在执行里还原并清掉)。
+          if (view && foldDragHead != null) {
+            const r = topRangeOf(view)
+            if (r && r.from === foldDragHead && view.state.doc.nodeAt(foldDragHead)?.type.name === 'heading') {
+              view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, foldDragHead)))
+            }
+            foldDragHead = null
+          }
           hideHoverRect()
           markDropCard(null) // Esc 取消若没触发 root 的 dragleave,画布目标卡的描边会留到下一次拖拽(Codex 评审)
           pairRef = null
@@ -2195,32 +2238,99 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   // ── 键盘搬块 Mod-Alt-↑/↓(AFFiNE 另绑 Mod-Shift-↑/↓,两套都收)。────────────────
-  // 与前/后一个**同级兄弟**互换位置,光标跟着走(块内偏移原样保留)。v3 块世界靠 keys.moveDir
-  // 走 store 换序,统一实例里 ArrowUp/Down 分支整条 `if (unified) return false` 让给原生 ——
-  // 于是键盘搬块在 v4 页面上直接消失了(只剩鼠标拖 ⠿)。
+  // 与前/后一个**同级兄弟**互换位置。v3 块世界靠 keys.moveDir 走 store 换序,统一实例里
+  // ArrowUp/Down 分支整条 `if (unified) return false` 让给原生 —— 于是键盘搬块在 v4 页面上直接消失了
+  // (只剩鼠标拖 ⠿)。
+  // 搬运单位按选区类型分三路(B-03:此前一律拿 $from.depth 推算,块选中时 depth=0 直接放行给原生
+  // Mod-Shift-↑ = 扩选到文首,接着退格就删光上面所有块;跨块选区只搬首块;⠿ 选中列表项连整只列表搬):
+  //  · 块选中(Esc / 点 ⠿,NodeSelection)→ 就是这个节点(列表项 = 单项);所在容器不收换位(引用 / callout
+  //    里的段)时爬到可换位的祖先,与光标态同一粒度;
+  //  · 跨块选区(拖选跨段 / 框选 / 把手子树)→ 两端共同容器里被盖到的整批兄弟;
+  //  · 光标 / 块内选区 → 最内层可与兄弟换位的祖先:顶层块、列内块,或列表里的**单个列表项**(AFFiNE 是项级,
+  //    爬到顶层会把整只列表搬走)。引用 / callout 不在名单里 → 整只搬,与把手粒度一致。
+  // 搬完原样重建选区(块选中仍块选中、框选仍框选、光标块内偏移不变);命中后一律吞键 —— 到头了也不把
+  // 这颗键还给原生的扩选。
+  const MOVE_CONTAINERS = ['doc', 'amadeusColumnCell', 'bullet_list', 'ordered_list']
+  const climbMovable = ($p: ResolvedPos): number => {
+    let d = $p.depth
+    while (d >= 1 && !MOVE_CONTAINERS.includes($p.node(d - 1).type.name)) d--
+    return d
+  }
+  /** 键盘搬块的单位 = 同一容器里的一段整块兄弟 [from, to);null = 选区不在可搬的地方(交回原路)。 */
+  const moveUnitOf = (state: EditorState): { from: number; to: number } | null => {
+    const sel = state.selection
+    if (sel instanceof NodeSelection) {
+      if (!sel.node.isBlock) return null // 行内原子(图片 / 公式)不归块搬
+      if (MOVE_CONTAINERS.includes(sel.$from.parent.type.name)) return { from: sel.from, to: sel.to }
+      const d = climbMovable(sel.$from)
+      return d < 1 ? null : { from: sel.$from.before(d), to: sel.$from.after(d) }
+    }
+    const { $from, $to } = sel
+    if (!$from.sameParent($to)) {
+      let c = $from.sharedDepth($to.pos)
+      while (c > 0 && !MOVE_CONTAINERS.includes($from.node(c).type.name)) c--
+      return { from: $from.before(c + 1), to: $to.after(c + 1) }
+    }
+    const d = climbMovable($from)
+    return d < 1 ? null : { from: $from.before(d), to: $from.after(d) }
+  }
   const moveBlock = (dir: -1 | 1) => (state: EditorState, dispatch?: (tr: Transaction) => void): boolean => {
-    const { $from } = state.selection
-    // 搬运单位 = 最内层「可与兄弟换位」的祖先:顶层块,或列表里的**单个列表项**(AFFiNE 是项级,
-    // 爬到顶层会把整只列表搬走)。引用/callout 不在名单里 → 整只搬,与把手粒度一致。
-    let d = $from.depth
-    while (d >= 1 && !['doc', 'amadeusColumnCell', 'bullet_list', 'ordered_list'].includes($from.node(d - 1).type.name)) d--
-    if (d < 1) return false
-    const parent = $from.node(d - 1)
-    const index = $from.index(d - 1)
-    const swapWith = index + dir
-    if (swapWith < 0 || swapWith >= parent.childCount) return false
-    const from = $from.before(d)
-    const to = $from.after(d)
-    const node = state.doc.nodeAt(from)
-    if (!node) return false
-    const offset = state.selection.from - from // 块内光标偏移,搬完原样还原
-    const siblingSize = parent.child(swapWith).nodeSize
-    // 上移:落到前一个兄弟之前(该位置在删除点之前,不受删除影响);
-    // 下移:落到后一个兄弟之后(原坐标 to+size,删掉本块后左移 to-from → from+size)。
-    const at = dir < 0 ? from - siblingSize : from + siblingSize
-    const tr = state.tr.delete(from, to).insert(at, node)
-    tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(at + offset, tr.doc.content.size))))
-    dispatch?.(tr.scrollIntoView())
+    const unit = moveUnitOf(state)
+    if (!unit) return false
+    const { from } = unit
+    // 折起来的标题连同藏着的小节是一个整体(B-04):只搬标题一行 = 正文留在原地、折叠态丢失。
+    const to = withFoldedSections(state, unit.from, unit.to)
+    const $f = state.doc.resolve(from)
+    const parent = $f.parent
+    const i0 = $f.index()
+    const i1 = state.doc.resolve(to).index() - 1
+    // 邻居 [nFrom, nTo)。md 的小节是**结构**(到下一个同级或更高级标题为止),所以折起的小节换位时
+    // 按小节对小节换,否则换过去的正文会被并进别人的小节(或把别人的正文并进来)、当场藏起来:
+    //  · 本单位是折起的标题 lv 级:下移越过后面那枚标题的整节;上移越过前面最近一枚 ≤ lv 级标题起的那段
+    //    (找不到 = 前面是无标题的前言,只能逐块越过 —— 被并进来的前言由下面的 unfoldNewlyHidden 展开);
+    //  · 其余单位逐块换,前一个兄弟藏在别的折叠小节里时越过那整节(连同它的标题)。
+    // 兜底:凡是搬完才被藏起来的块,盖住它的折叠一律展开(unfoldNewlyHidden)—— 块绝不凭空消失。
+    const first = parent.child(i0)
+    const lv = to > unit.to && first.type.name === 'heading' ? Number(first.attrs.level) || 1 : null
+    let nFrom: number
+    let nTo: number
+    if (dir < 0) {
+      if (i0 === 0) return true // 到头了:吞键,不让原生 Mod-Shift-↑ 扩选到文首
+      nTo = from
+      nFrom = from - parent.child(i0 - 1).nodeSize
+      let sect: number | null = null
+      if (lv != null) {
+        for (let i = i0 - 1, p = from; i >= 0; i--) {
+          const n = parent.child(i)
+          p -= n.nodeSize
+          if (n.type.name === 'heading' && (Number(n.attrs.level) || 1) <= lv) { sect = p; break }
+        }
+      }
+      if (sect != null) nFrom = sect
+      else for (let f = isHiddenAt(state, nFrom + 1); f != null && f < nFrom; f = isHiddenAt(state, nFrom + 1)) nFrom = f
+    } else {
+      if (i1 + 1 >= parent.childCount) return true
+      nFrom = to
+      const next = parent.child(i1 + 1)
+      nTo = to + next.nodeSize
+      // 普通单位撞上折起的标题:只跟标题换位(落进它的小节,由 unfoldNewlyHidden 展开)—— 越过整节也一样
+      // 会并进那一节(小节到下一个同级标题才结束),不如少挪一点。
+      if (lv != null && next.type.name === 'heading') nTo = sectionEnd(state.doc, nFrom) ?? nTo
+    }
+    if (!dispatch) return true
+    const size = to - from
+    const content = state.doc.slice(from, to).content
+    // 上移:落到邻居之前(该位置在删除点之前,不受删除影响);下移:落到邻居之后(删掉本段后左移 size)。
+    const at = dir < 0 ? nFrom : nTo - size
+    const tr = state.tr.delete(from, to).insert(at, content)
+    const shift = at - from
+    carryFolds(state, tr, { from, to, newStart: at })
+    unfoldNewlyHidden(state, tr, { from, to, newStart: at })
+    const sel = state.selection
+    if (sel instanceof NodeSelection) tr.setSelection(NodeSelection.create(tr.doc, sel.from + shift))
+    else tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
+    if (blockSelectionKey.getState(state)) tr.setMeta(blockSelectionKey, true) // 框选搬完仍按整块呈现
+    dispatch(tr.scrollIntoView())
     return true
   }
   const moveBlockKeymap = $prose(() =>
@@ -2246,10 +2356,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     const range = view ? topRangeOf(view) : null
     if (range) {
       if (!dispatch) return true
-      const { content, minted } = mintCardCopies(state.doc, state.doc.slice(range.from, range.to).content)
+      const end = withFoldedSections(state, range.from, range.to) // 折起的标题连小节一起复制(B-04)
+      const { content, minted } = mintCardCopies(state.doc, state.doc.slice(range.from, end).content)
       if (minted.length) hooks.onCardsMinted?.(minted)
-      const shift = range.to - range.from
-      const tr = state.tr.insert(range.to, content)
+      const shift = end - range.from
+      const tr = state.tr.insert(end, content)
+      carryFolds(state, tr, { from: range.from, to: end, newStart: end, copy: true })
+      unfoldNewlyHidden(state, tr, { from: range.from, to: end, newStart: end })
       tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
       if (blockSelectionKey.getState(state)) tr.setMeta(blockSelectionKey, true) // 框选副本仍按整块呈现
       dispatch(tr.scrollIntoView())
@@ -2258,6 +2371,16 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     if (sel instanceof NodeSelection) {
       if (!sel.node.isBlock) return false // 行内原子(图片 / 公式)不归块复制
       if (!dispatch) return true
+      // 折起的标题(B-04):副本 = 标题 + 藏着的小节,同样折着;选区落到副本标题上。
+      const end = withFoldedSections(state, sel.from, sel.to)
+      if (end > sel.to) {
+        const tr = state.tr.insert(end, state.doc.slice(sel.from, end).content)
+        carryFolds(state, tr, { from: sel.from, to: end, newStart: end, copy: true })
+        unfoldNewlyHidden(state, tr, { from: sel.from, to: end, newStart: end })
+        tr.setSelection(NodeSelection.create(tr.doc, end))
+        dispatch(tr.scrollIntoView())
+        return true
+      }
       let copy = sel.node
       if (copy.type.name === 'amadeusCanvasCard') {
         const { content, minted } = mintCardCopies(state.doc, Fragment.from(copy))
@@ -2276,12 +2399,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     while (d >= 1 && !['doc', 'amadeusColumnCell', 'amadeusCanvasCard', 'bullet_list', 'ordered_list'].includes($from.node(d - 1).type.name)) d--
     if (d < 1) return false
     const from = $from.before(d)
-    const to = $from.after(d)
-    const node = state.doc.nodeAt(from)
-    if (!node) return false
+    const to = withFoldedSections(state, from, $from.after(d)) // 光标在折起的标题里:连小节一起(B-04)
+    if (!state.doc.nodeAt(from)) return false
     if (!dispatch) return true
     const shift = to - from
-    const tr = state.tr.insert(to, node)
+    const tr = state.tr.insert(to, state.doc.slice(from, to).content)
+    carryFolds(state, tr, { from, to, newStart: to, copy: true })
+    unfoldNewlyHidden(state, tr, { from, to, newStart: to })
     tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
     dispatch(tr.scrollIntoView())
     return true

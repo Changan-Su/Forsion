@@ -1,9 +1,9 @@
 // 块菜单(⠿)「转换为」的落地(评审 B-05):单块走 applyTrigger(与 slash / 工具栏 / 空格触发符同一套转换),
 // 跨块选区逐块转换。放在独立模块里,UnifiedPage 只管接线。
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { canJoin, findWrapping } from '@milkdown/kit/prose/transform'
-import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
+import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
+import { FOLD_TOKEN, applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 
 const LIST_KINDS = new Set<Trigger['kind']>(['bullet', 'ordered', 'task'])
 
@@ -11,6 +11,19 @@ const LIST_KINDS = new Set<Trigger['kind']>(['bullet', 'ordered', 'task'])
  *  自下而上逐块做:后面的块先变,前面块的位置不受影响;相邻的改动在撤销史里并成一步。
  *  列表类转换逐块包出来的是一串单项列表 → 最后把区间内相邻的同类列表并成一只(Notion 同:选中几段转列表 = 一只列表)。 */
 export function turnBlocksInto(view: EditorView, from: number, to: number, trig: Trigger): boolean {
+  // 区间里的 callout 先摘掉 `[!type]` 令牌(B-11),否则标题行连令牌一起转成正文 / 标题 / 列表项。
+  if (trig.kind !== 'quote' && trig.kind !== 'fold') {
+    const tr = view.state.tr
+    const size0 = tr.doc.content.size
+    view.state.doc.nodesBetween(from, to, (node, pos) => {
+      if (node.type.name === 'blockquote') { stripCalloutToken(tr, tr.mapping.map(pos)); return false }
+      return !node.isTextblock
+    })
+    if (tr.docChanged) {
+      view.dispatch(tr)
+      to += tr.doc.content.size - size0
+    }
+  }
   const targets: number[] = []
   view.state.doc.nodesBetween(from, to, (node, pos) => {
     if (node.isTextblock) {
@@ -99,4 +112,57 @@ export function turnIntoCallout(view: EditorView, from: number, to: number, mult
   if (!quote || quote.type !== bq || !first?.isTextblock || CALLOUT_HEAD.test(first.textContent)) return !!quote
   view.dispatch(view.state.tr.insertText(first.content.size ? '[!note] ' : '[!note]', quoteAt + 2))
   return true
+}
+
+/** callout 首行令牌:`[!type]`,可带折叠符,连同其后那一个空格。 */
+const CALLOUT_TOKEN = /^\[![\w-]+\]([+-])?[ \u00a0]?/
+
+/** at 处的 blockquote 若是 callout:摘掉首行令牌(标题留作普通段落;标题为空则整行不留)。返回是否摘了。 */
+function stripCalloutToken(tr: Transaction, at: number): boolean {
+  const bq = tr.doc.nodeAt(at)
+  const head = bq?.firstChild
+  const m = bq?.type.name === 'blockquote' && head?.isTextblock ? CALLOUT_TOKEN.exec(head.textContent) : null
+  if (!bq || !head || !m) return false
+  if (head.content.size === m[0].length && bq.childCount > 1) tr.delete(at + 1, at + 1 + head.nodeSize)
+  else tr.delete(at + 2, at + 2 + m[0].length)
+  return true
+}
+
+/** callout 的「转换为」(B-11):[from, to) 恰是一只 callout 时接管,否则返回 null 交回通常路径。
+ *  此前按普通引用处理 —— 光标落进首段再转,`[!note]` 令牌以字面漏进正文(落盘 `\[!note] 标题`),只有标题行被提出来,
+ *  其余留在引用里;转「引用」什么都不发生。现在先摘令牌,再按目标整只处理(Notion 转成文本 = 去掉容器、保留全部内容):
+ *   · 引用 → 只摘令牌,仍是一只引用;折叠 → 令牌换成 `[!fold]-`(已是折叠则不动);
+ *   · 正文 / 标题 / 列表 / 代码块 → 摘令牌后把全部内容提出引用,标题 = 首行转标题,列表 = 逐行成项并成一只,
+ *     代码块 = 按原文合成一个。 */
+export function turnCalloutInto(view: EditorView, from: number, to: number, target: Trigger | 'code'): boolean | null {
+  const bq = view.state.doc.nodeAt(from)
+  const head = bq?.firstChild
+  const m = bq?.type.name === 'blockquote' && from + bq.nodeSize === to && head?.isTextblock ? CALLOUT_TOKEN.exec(head.textContent) : null
+  if (!bq || !head || !m) return null
+  const tr = view.state.tr
+  if (target !== 'code' && target.kind === 'fold') {
+    if (/^\[!fold\]/i.test(head.textContent)) return true
+    const tokenLen = m[0].length - (/[ \u00a0]$/.test(m[0]) ? 1 : 0)
+    tr.replaceWith(from + 2, from + 2 + tokenLen, view.state.schema.text(FOLD_TOKEN))
+    view.dispatch(tr.scrollIntoView())
+    return true
+  }
+  stripCalloutToken(tr, from)
+  if (target !== 'code' && target.kind === 'quote') {
+    tr.setSelection(TextSelection.near(tr.doc.resolve(from + 1)))
+    view.dispatch(tr.scrollIntoView())
+    return true
+  }
+  const quote = tr.doc.nodeAt(from)!
+  const size = quote.content.size
+  const range = tr.doc.resolve(from + 1).blockRange(tr.doc.resolve(from + quote.nodeSize - 1))
+  const lift = range ? liftTarget(range) : null
+  if (!range || lift == null) return false
+  tr.lift(range, lift)
+  tr.setSelection(TextSelection.near(tr.doc.resolve(from + 1)))
+  view.dispatch(tr.scrollIntoView())
+  if (target === 'code') return turnRangeIntoCode(view, from, from + size)
+  if (target.kind === 'text') return true
+  if (target.kind === 'heading') return applyTrigger(view, target, null) // 光标已在首行(原标题)
+  return turnBlocksInto(view, from, from + size, target)
 }

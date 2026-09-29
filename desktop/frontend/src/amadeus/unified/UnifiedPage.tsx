@@ -12,13 +12,13 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
-import { NodeSelection, TextSelection, type Selection } from '@milkdown/kit/prose/state'
+import { NodeSelection, TextSelection, type Selection, type Transaction } from '@milkdown/kit/prose/state'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageSquarePlus, Code2, Info, Link2, FileInput } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -63,15 +63,16 @@ import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusPro
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { applyTrigger, codeBlockTurnInto, type Trigger } from '../blocks/markdown/blockTriggers'
-import { turnBlocksInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
-import { columnSplitApplies } from '../blocks/markdown/menuContext'
+import { applyTrigger, codeBlockTurnInto, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
+import { turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRangeIntoCode } from './blockTurn'
+import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
+import { withFoldedSections } from './foldCarry'
 import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, removeEmptyColumnTr, splitToColumn, unsplitRow } from './columns'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
@@ -145,6 +146,7 @@ registerMessages({
   'unipage.menu.code': { zh: '代码块', en: 'Code block' },
   'unipage.menu.card': { zh: '卡片', en: 'Card' },
   'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
+  'unipage.menu.unsplit': { zh: '取消分栏', en: 'Unsplit columns' },
   'unipage.menu.aria': { zh: '块操作', en: 'Block actions' },
   'unipage.menu.stale': { zh: '笔记在菜单打开期间变了，请重新打开块菜单', en: 'The note changed while the menu was open — open the block menu again' },
   'unipage.menu.toNewColumnMulti': { zh: '选中多块时不能移到新列，请只选一块', en: 'Select a single block to move it to a new column' },
@@ -603,7 +605,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
    *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
    *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor'): boolean => {
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor', opts?: { caretBack?: number }): boolean => {
     let done = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
@@ -620,13 +622,48 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       let d = $from.depth
       while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(d - 1).type.name)) d--
       if (d < 1) return
+      /** 落点 = 插入内容的末尾(v3 的 requestSelfFocus('end') 同位),**向前**找文字位(R-17:向后找会在
+       *  「后面还有块」时落进下一块 —— /code 插完光标跑到下面那段里)。caretBack = 再往回退几格(/math 落在 `$$ | $$`)。 */
+      const land = (tr: Transaction, end: number): void => {
+        const at = TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size)), -1)
+        const back = opts?.caretBack ?? 0
+        tr.setSelection(back && at.$from.parentOffset >= back ? TextSelection.create(tr.doc, at.from - back) : at)
+      }
+      // 列表项 / 引用(callout)里的**空行**(B-07):就在这一行原地换成要插的块。此前一律按「整个顶层块空不空」判,
+      // 容器永远非空 → 插到整只列表 / 引用之后,原处留下 `-`、`- [ ] <br />`、`>` 空项残渣,callout 里的代码块跑到外面。
+      // 引用 / callout 收任何块:原地替换,留在容器里;列表项的首子只能是段落 → 容不下时只脱出**列表**(不脱引用),再替换。
+      // 非空行照旧插到顶层块之后(列表中间插代码块不劈列表)。
+      if ($from.depth > d && $from.parent.isTextblock && $from.parent.content.size === 0) {
+        const tr = view.state.tr
+        const fits = (at: number): boolean => {
+          const $p = tr.doc.resolve(at)
+          const i = $p.index(-1)
+          return $p.parent.isTextblock && $p.parent.content.size === 0 && $p.node(-1).canReplace(i, i + 1, content)
+        }
+        let at = $from.pos
+        if (!fits(at)) {
+          for (let k = tr.doc.resolve(at).depth; k > 0; k--) {
+            if (tr.doc.resolve(at).node(k).type.name !== 'list_item') continue
+            at = liftOutOfWrappers(tr, at, ['list_item'])
+            break
+          }
+        }
+        if (fits(at)) {
+          const $p = tr.doc.resolve(at)
+          const from = $p.before()
+          tr.replaceWith(from, $p.after(), content)
+          land(tr, from + content.size)
+          view.dispatch(tr.scrollIntoView())
+          view.focus()
+          done = true
+          return
+        }
+      }
       const from = $from.before(d)
       const to = $from.after(d)
       const blank = $from.node(d).textContent.trim() === ''
-      let tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
-      // 落点=插入内容的末尾(v3 的 requestSelfFocus('end') 同位):near() 会自己找最近的合法文字位。
-      const end = Math.min((blank ? from : to) + content.size, tr.doc.content.size)
-      tr = tr.setSelection(TextSelection.near(tr.doc.resolve(end)))
+      const tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
+      land(tr, (blank ? from : to) + content.size)
       view.dispatch(tr.scrollIntoView())
       view.focus()
       done = true
@@ -866,7 +903,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       return
     }
     // 整块型(代码/表格/分隔线/公式/[[/按钮):scaffold 本身就是要插的 markdown。
-    insertMd(item.scaffold)
+    // 公式骨架 `$$  $$`:光标落在两对 `$$` 之间(R-17),而不是行尾 —— 否则插完还得往回挪三格才能开写。
+    insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
   }
   applySlashRef.current = applySlash // 交出去的是恒等身份 stableApply,真身逐渲染刷新
 
@@ -1668,6 +1706,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     else if (view.state.selection instanceof NodeSelection) single(view, view.state.selection)
     view.focus()
   }
+  /** 「移动到…」搬走的范围:跨块选区或块选中;折起的标题连同藏着的小节一起走(B-04)。 */
+  const moveRangeOf = (view: EditorView): { from: number; to: number } | null => {
+    const sel = view.state.selection
+    const r = layer.topRangeOf(view) ?? (sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : null)
+    return r && { from: r.from, to: withFoldedSections(view.state, r.from, r.to) }
+  }
   /** 「问 Tangu」(评审 G3-04):选区 / 块的文字 + 最近标题的锚点交给侧栏对话(挂成引用,不发送)。
    *  笔记一个字不动 —— 不铸 `^id`,锚点只到标题(askTangu.ts)。入口只在宿主给了 askInChat(= 注册了侧栏
    *  对话)时出现:纯 Amadeus 壳、automation-only 档案、台架都不给,不画一个点了没反应的按钮。 */
@@ -1792,6 +1836,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     withBlocks(
       (view, r) => { ok = turnBlocksInto(view, r.from, r.to, trig) },
       (view, sel) => {
+        // callout 单独处理(B-11):先摘 `[!type]` 令牌再整只转,否则令牌以字面漏进正文。
+        const callout = turnCalloutInto(view, sel.from, sel.to, trig)
+        if (callout != null) { ok = callout; return }
         // 代码块按行拆 / 包进容器(R-23):applyTrigger 按文本块走,会把代码换行压成空格、列表类静默无效、折叠令牌插进代码首行。
         if (sel.node.type.spec.code && codeBlockTurnInto(view, sel.from, trig)) return
         // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
@@ -1806,7 +1853,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     let ok = true
     withBlocks(
       (view, r) => { ok = kind === 'code' ? turnRangeIntoCode(view, r.from, r.to) : turnIntoCallout(view, r.from, r.to, true) },
-      (view, sel) => { ok = kind === 'code' ? turnRangeIntoCode(view, sel.from, sel.to) : turnIntoCallout(view, sel.from, sel.to, false) },
+      (view, sel) => { ok = kind === 'code' ? turnCalloutInto(view, sel.from, sel.to, 'code') ?? turnRangeIntoCode(view, sel.from, sel.to) : turnIntoCallout(view, sel.from, sel.to, false) },
     )
     if (!ok) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: label }) } }))
   }
@@ -3261,6 +3308,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
               </button>
             )}
+            {/* 块在分栏的某一列里(B-08):整行解散回自然流,各列内容按列序排开。 */}
+            {layer.getView() && columnRowOf(layer.getView()!.state.selection) != null && (
+              <button role="menuitem" tabIndex={-1} data-act="unsplit" onClick={() => {
+                setBlockMenu(null)
+                const view = layer.getView()
+                if (!view || !restoreMenuTarget(view)) return
+                const rowPos = columnRowOf(view.state.selection)
+                if (rowPos != null) unsplitRow(view, rowPos)
+                view.focus()
+              }}>
+                <Rows2 size={13} /> {t('unipage.menu.unsplit')}
+              </button>
+            )}
             {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。
                 条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
             {layer.getView()?.state.selection instanceof NodeSelection
@@ -3295,7 +3355,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               const view = layer.getView()
               if (!view) return null
               const sel = view.state.selection
-              const range = layer.topRangeOf(view) ?? (sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : null)
+              const range = moveRangeOf(view)
               const link = sel instanceof NodeSelection ? blockLinkOf(sel.node, path, scoped.getState().pages) : null
               const movable = !!range && canMove(view.state.doc.slice(range.from, range.to).content)
               return (
@@ -3310,8 +3370,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                       setBlockMenu(null)
                       const v = layer.getView()
                       if (!v || !restoreMenuTarget(v)) return
-                      const s2 = v.state.selection
-                      const r = layer.topRangeOf(v) ?? (s2 instanceof NodeSelection ? { from: s2.from, to: s2.to } : null)
+                      const r = moveRangeOf(v)
                       if (r) setMovePick({ doc: v.state.doc, ...r })
                     }}>
                       <FileInput size={13} /> {t('blocklinks.moveTo')}
@@ -3328,7 +3387,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               },
               (view, sel) => {
                 const removed = Fragment.from(sel.node)
-                view.dispatch(view.state.tr.deleteSelection().scrollIntoView())
+                // 列里唯一的块:连这一列一起删(B-08)—— 只删块的话列里当场补回一个空段,空列永远删不掉。
+                const cell = sel.$from.parent
+                const col = cell.type.name === 'amadeusColumnCell' && cell.childCount === 1
+                  ? removeEmptyColumnTr(view.state, sel.$from.before(), -1, true) : null
+                view.dispatch(col ?? view.state.tr.deleteSelection().scrollIntoView())
                 onBlocksDeleted(removed)
               },
             )}>

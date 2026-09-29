@@ -116,7 +116,8 @@ async function main() {
   let c
 
   // C3 点箭头折叠时,原本在内容里的光标要被收回标题(原 bug:光标消失在虚空)
-  p = await fresh('> [!note] 标题\n> 内容一\n> 内容二') // 无标记 = 展开态,光标默认在文末
+  // 种 `+`(展开态)而不是无标记:无 +/- 的有色标注不可折叠、不给箭头(拍板 #19,见 C12)。
+  p = await fresh('> [!note]+ 标题\n> 内容一\n> 内容二') // 光标默认在文末
   await p.click('.callout-chevron')
   await p.waitForTimeout(350)
   c = await caret(p)
@@ -333,6 +334,53 @@ async function main() {
     full > 0 && frames.some((h) => h > 0 && h < full),
     `frames=${JSON.stringify(frames.filter((_, i) => i % 3 === 0))} 终值=${full}`
   )
+  await p.close()
+
+  // C12 有色标注的类型呈现(R-09)与「无 +/- 不可折叠」(拍板 #19)。
+  p = await fresh('> [!warning] 无箭头\n> 内容一')
+  const w0 = await p.evaluate(() => {
+    const bq = document.querySelector('.md-block .ProseMirror > blockquote')
+    return { chevron: !!bq.querySelector('.callout-chevron'), icon: !!bq.querySelector('.callout-icon svg'), md: window.__harness.blocks[0].content }
+  })
+  await clickTitleText(p)
+  await p.waitForTimeout(300)
+  const w1 = await p.evaluate(() => window.__harness.blocks[0].content)
+  check('C12 无 +/- 的有色标注:不给折叠箭头,单击标题不写 `-`(不可折叠)', !w0.chevron && !/\[!warning\]-/.test(w1), JSON.stringify({ w0, w1 }))
+  check('C12 有色标注标题行有类型图标', w0.icon, JSON.stringify(w0))
+  await p.close()
+  // 不再单击切折叠 = 单击会放光标;点在标题最左(图标旁)光标落在隐藏令牌之前 —— 在这儿打字 / Delete / 回车
+  // 必须落到可见标题上,绝不改到令牌(否则 `x[!warning]` 当场把标注打回普通引用)。
+  for (const [label, act, want] of [
+    ['打字', async (pg) => pg.keyboard.type('x'), /^> \[!warning\] x无箭头\n/],
+    ['Delete', async (pg) => pg.keyboard.press('Delete'), /^> \[!warning\] 箭头\n/],
+    ['回车', async (pg) => pg.keyboard.press('Enter'), /^> \[!warning\] *\n(>\s*\n)?> 无箭头\n/], // 令牌留在首行,标题文字换到下一行
+  ]) {
+    p = await fresh('> [!warning] 无箭头\n> 内容一')
+    const pt = await p.evaluate(() => {
+      const head = document.querySelector('.md-block .ProseMirror > blockquote > p')
+      const icon = head.querySelector('.callout-icon').getBoundingClientRect()
+      return { x: icon.right + 2, y: icon.top + icon.height / 2 }
+    })
+    await p.mouse.click(pt.x, pt.y)
+    await p.waitForTimeout(200)
+    await act(p)
+    await p.waitForTimeout(300)
+    const md = await p.evaluate(() => window.__harness.blocks[0].content)
+    const cls = await p.evaluate(() => document.querySelector('.md-block .ProseMirror > blockquote').className)
+    check(`C12 点标题最左后${label}:落在可见标题上,令牌不动、仍是标注`, want.test(md) && /callout-warning/.test(cls), JSON.stringify({ md, cls }))
+    await p.close()
+  }
+  p = await fresh('> [!WARNING]\n> 内容一')
+  const dt = await p.evaluate(() => {
+    const el = document.querySelector('.md-block .ProseMirror > blockquote .callout-default-title')
+    return el ? { text: el.textContent, w: Math.round(el.getBoundingClientRect().width) } : null
+  })
+  check('C12 没写标题:显示类型名作默认标题(不写进 md)', !!dt && dt.text === '警告' && dt.w > 10, JSON.stringify(dt))
+  await p.close()
+  p = await fresh('> [!my-type] 自定义\n> 内容\n\n> [!success] 成功\n> 内容\n\n> [!faq] 别名\n> 内容')
+  const kinds = await p.evaluate(() => [...document.querySelectorAll('.md-block .ProseMirror > blockquote')].map((b) => ({ cls: b.className, color: getComputedStyle(b).getPropertyValue('--callout-color').trim() })))
+  check('C12 `[!my-type]` 这类自定义类型也是标注;success 绿、别名 faq 按 question 着色',
+    /\bcallout\b/.test(kinds[0]?.cls) && kinds[1]?.color === '#00c853' && /callout-question/.test(kinds[2]?.cls) && kinds[2]?.color === '#ffab00', JSON.stringify(kinds))
   await p.close()
 
   const fails = results.filter((r) => !r).length

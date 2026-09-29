@@ -109,6 +109,9 @@ export type EmbedKind =
 export function classifyEmbed(node: ProseNode): EmbedKind | null {
   if (node.type.name === 'code_block') {
     if (node.attrs.language !== 'forsion-button') return null
+    // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
+    // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。
+    if (!parseButtonBlock(buttonFence(node.textContent))) return null
     return { k: 'button', src: node.textContent }
   }
   if (node.type.name !== 'paragraph') return null
@@ -366,11 +369,16 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
     case 'web':
       return <WebEmbed url={kind.url} toCard={() => rewrite(kind.url)} />
     case 'button': {
-      const spec = parseButtonBlock('```forsion-button\n' + kind.src + '\n```')
-      if (!spec) return <span /> // JSON 坏:装饰层不该到这(classify 已过),兜底空
+      const spec = parseButtonBlock(buttonFence(kind.src))
+      if (!spec) return <span /> // 不可达:classifyEmbed 已把坏 JSON 交回普通代码块
       return <ButtonBlock spec={spec} readOnly={readOnly} onChange={(next: ButtonSpec) => rewrite(codeBody(serializeButtonBlock(next)))} />
     }
   }
+}
+
+/** code_block 内文 → parseButtonBlock 认的整个围栏(分类与渲染共用一份拼法)。 */
+function buttonFence(body: string): string {
+  return '```forsion-button\n' + body + '\n```'
 }
 
 /** serializeButtonBlock 给的是整个 fence;code_block 内文替换只要 body。 */
