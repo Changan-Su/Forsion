@@ -133,6 +133,34 @@ async function main() {
       return { minimizable: win.isMinimizable(), closable: win.isClosable(), resizable: win.isResizable(), parent: !!win.getParentWindow() }
     })
     check('native window is movable-family, minimizable, closable and resizable', native.minimizable && native.closable && native.resizable && native.parent, JSON.stringify(native))
+    // 切界面语言后标题栏(macOS 自绘 .floating-native-chrome)与原生窗口标题跟着变:开窗时传来的 title 是开窗那一刻的语言,
+    // 内置面板必须渲染期按 key 现译(此前只有旁聊这么做,设置切到英文仍挂着「设置」)。截图留在 SHOTS 供人工看。
+    const SHOTS = path.join(os.tmpdir(), 'forsion-floating-panel-shots')
+    fs.mkdirSync(SHOTS, { recursive: true })
+    const titles = async () => ({
+      chrome: process.platform === 'darwin' ? await floating.locator('.floating-native-chrome span').innerText().catch(() => null) : null,
+      native: await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((item) => item.webContents.getURL().includes('window=floating'))?.getTitle()),
+    })
+    const pickLocale = async (index, lang) => {
+      await floating.locator('.locale-seg button').nth(index).click()
+      await floating.waitForFunction((want) => document.documentElement.lang === want, lang, { timeout: 6000 })
+      await floating.waitForTimeout(300)
+    }
+    const shoot = async (name) => {
+      await floating.screenshot({ path: path.join(SHOTS, `${name}.png`) })
+      if (process.platform === 'darwin') await floating.locator('.floating-native-chrome').screenshot({ path: path.join(SHOTS, `${name}-titlebar.png`) })
+    }
+    const expectTitle = (t, want) => (process.platform !== 'darwin' || t.chrome === want) && t.native === want
+    const enTitle = await titles()
+    check('floating title starts in the UI language (Settings)', expectTitle(enTitle, 'Settings'), JSON.stringify(enTitle))
+    await pickLocale(0, 'zh-CN')
+    const zhTitle = await titles()
+    await shoot('settings-after-zh')
+    check('switching to 中文 re-translates the floating title bar and native window title (设置)', expectTitle(zhTitle, '设置'), JSON.stringify(zhTitle))
+    await pickLocale(1, 'en')
+    const backTitle = await titles()
+    await shoot('settings-after-en')
+    check('switching back to English re-translates it again (Settings)', expectTitle(backTitle, 'Settings'), `${JSON.stringify(backTitle)} | shots: ${SHOTS}`)
     await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'plugins' } }))
     await pause(300)
     check('opening the same panel id reuses its native window', app.windows().filter((page) => page.url().includes('window=floating')).length === 1)
