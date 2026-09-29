@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { isRepoTrusted, repoConfigRisks, trustRepo } from './gitTrust.js';
+import { isRepoTrusted, repoConfigRisks, trustRepo, untrustedRisks } from './gitTrust.js';
 import { gitSummary } from './projectContext.js';
 import { collectGitState } from './runtimeContext.js';
 
@@ -131,6 +131,14 @@ describe.skipIf(process.platform === 'win32')('零点击路径:未信任就不�
     writeFileSync(path.join(cwd, 'a.txt'), 'b');
     return { cwd, marker };
   };
+
+  it('信任判定本身(不依赖平台:Linux 上 G5 整条拦截挡在前面时,下面两条走不到这道闸,由这条钉住):未信任 → read 级风险拦着;信任后放行', async () => {
+    const { cwd, marker } = evil('decision');
+    expect(await untrustedRisks(cwd, 'read')).toMatchObject({ risks: expect.arrayContaining(['filter.evil.clean']) });
+    await trustRepo((await repoConfigRisks(cwd))!.commonDir);
+    expect(await untrustedRisks(cwd, 'read')).toBeNull();
+    expect(existsSync(marker)).toBe(false); // 判定只读配置,不跑 status
+  });
 
   it('项目详情的摘要:分支 / 提交照读,改动标成未读取,过滤器没跑;信任后才读', async () => {
     const { cwd, marker } = evil('summary');
