@@ -967,7 +967,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
           // 键盘激活(Enter / 空格)没有 mousedown,块还没被选上:这里补选,菜单才有目标。
-          if (e.detail === 0 && viewRef && activeRef) selectDragUnit(viewRef, activeRef)
+          // 已有整块选区且包住了悬停的块(Esc 选中整张卡后再开 ⠿)→ 保留它,菜单作用于整卡(「收回文档」等);
+          // 否则键盘激活会把选区缩回悬停的段落(C56,合并后实测)。
+          if (e.detail === 0 && viewRef && activeRef) {
+            const sel = viewRef.state.selection
+            const covers = sel instanceof NodeSelection && sel.from <= activeRef.pos && activeRef.pos + activeRef.node.nodeSize <= sel.to
+            if (!covers) selectDragUnit(viewRef, activeRef)
+          }
           hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: e.detail === 0 })
           // 焦点收回编辑器:mousedown 的浏览器默认行为把焦点给了 ⠿ 这个 <button>,不收回的话
           // 菜单一开,键盘就整片失效(块选着却 Cmd+C/Delete 无反应)。菜单是浮层,不吃焦点也照用。
