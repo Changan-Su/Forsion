@@ -14,6 +14,8 @@ vi.mock('../cloudAccountCache', () => cache)
 // 手机垫片的原生依赖在 desktop 的 node_modules 里没有:桩掉(web 路径根本不碰它们)
 vi.mock('@capacitor/app', () => ({ App: { getInfo: async () => ({ version: '0.0.0-ci.1' }) } }))
 vi.mock('@capacitor/browser', () => ({ Browser: { open: async () => {} } }))
+// 手机垫片 import 了 registerPlugin(P1-K8 原生中继 / 下载,只在 native 时调);desktop 的 CI 没装 mobile 依赖,同其余三个 @capacitor 包一样 mock 掉
+vi.mock('@capacitor/core', () => ({ registerPlugin: () => ({}) }))
 vi.mock('@capacitor/inappbrowser', () => ({ InAppBrowser: { openInWebView: async () => {} }, ToolbarPosition: {}, iOSViewStyle: {}, iOSAnimation: {} }))
 vi.mock('../../../../../mobile/src/capacitorAuth', () => ({
   isNative: () => false,
