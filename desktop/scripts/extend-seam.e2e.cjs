@@ -52,6 +52,8 @@ function startFakeHub() {
       return
     }
     if (req.method === 'POST' && url === `/api/units/${HUB_UNIT}/caps`) { req.resume(); return json(200, {}) }
+    // 账号核心的 whoami:404 会被当成账号已失效(注销)→ 清掉登录态,之后重建的设备通道拿不到 token(形状同 fake-forsion-cloud)
+    if (req.method === 'GET' && url === '/api/brain/users/me') return json(200, { id: 'e2e-user', username: 'e2e_user', role: 'USER', nickname: 'E2E', avatar: null, email: null, emailVerified: false, phone: null, phoneVerified: false, membershipTier: 'free' })
     if (req.method === 'GET' && url === '/api/units') {
       return json(200, { units: [{ id: HUB_UNIT, name: 'E2E This Mac', online: true, kind: 'desktop' }, { id: 'e2e-unit-0002', name: 'E2E Other Mac', online: false, kind: 'desktop' }] })
     }
@@ -63,8 +65,15 @@ function startFakeHub() {
   })))
 }
 /** 预置「已登录(auth.json 指向假 hub)+ 允许其他设备连接本机」。shell 配置在 dev userData(--user-data-dir + '-dev')里,已有就合并。 */
+/** JWT 形状的假 token:账号核心按 payload.userId 认账号,不是 JWT 形状就当未登录(同 account-center.shot.cjs)。 */
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+const HUB_TOKEN = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ userId: 'e2e-user', username: 'e2e_user' })}.e2e`
 function presetUnitHost(home, hubUrl) {
-  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: hubUrl, token: 'e2e-token' }))
+  // 先放一份 config.json:引擎首启时 config.json 不在,会把散落的旧 JSON(含 auth.json)收进去、原文件改名 .bak
+  // (tangu-agent core/config.ts 的一次性迁移)—— 打开互联会拉起引擎,不预置的话登录态在 run 中途被挪走。
+  const cfg = path.join(home, 'config.json')
+  if (!fs.existsSync(cfg)) fs.writeFileSync(cfg, '{}')
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: hubUrl, token: HUB_TOKEN }))
   const ud = path.join(home, 'userdata-dev')
   fs.mkdirSync(ud, { recursive: true })
   const shellPath = path.join(ud, 'tangu-desktop-config.json')
@@ -298,7 +307,7 @@ async function extendCard(sp) {
       const chan = hub.hits.find((h) => h.method === 'GET' && h.url === `/api/units/${HUB_UNIT}/channel`)
       const caps = hub.hits.find((h) => h.method === 'POST' && h.url === `/api/units/${HUB_UNIT}/caps`)
       check('⑤ 设备通道经 Extend 工厂连上假 hub:入册带账号 Bearer、通道带设备密钥、ready 之后报 caps;unitHostStatus connected + 入册的 unit id',
-        !!reg && reg.auth === 'Bearer e2e-token' && !!chan && chan.secret === 'e2e-unit-secret' && !!caps && connected?.connected === true && connected?.unitId === HUB_UNIT,
+        !!reg && reg.auth === `Bearer ${HUB_TOKEN}` && !!chan && chan.secret === 'e2e-unit-secret' && !!caps && connected?.connected === true && connected?.unitId === HUB_UNIT,
         JSON.stringify({ hits: hub.hits.filter((h) => h.url.startsWith('/api/units')).map((h) => `${h.method} ${h.url}`), status: connected }))
       check('⑤b 名册随包出现:unitsList → 200 两台;切换器列出另一台(本机那行被滤掉)',
         units3?.status === 200 && units3?.json?.units?.length === 2 && Array.isArray(rows3) && rows3.some((r) => r.includes('E2E Other Mac')) && !rows3.some((r) => r.includes('E2E This Mac')),
