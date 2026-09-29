@@ -2,7 +2,9 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
-## Unreleased
+## 2.12.0 (2026-09-29)
+
+- **A NoExtend desktop installer is now available** on macOS, Windows and Linux alongside the standard installer with Forsion Extend. Both variants keep the same app identity and local data. NoExtend has its own update feed, so later updates stay on that variant.
 
 - Permissions for Load in Forsion and desktop shortcuts now also check when the folder was created, so a folder deleted and recreated at the same path no longer inherits the earlier permission. Permissions saved by older versions lack this record and need to be confirmed once: opening such a shortcut asks you to choose Add to desktop again in Creations, and the Sandbox panel in the Coding Studio asks you to choose Load again.
 - **The device page (this computer's Forsion opened from another device) is safer**. The following now only work on this computer itself: installing plugins; changing external engines, messaging channels, model providers, web search, hooks and approval rules; permanently deleting sessions or messages in a session; listing read-aloud voices; and emptying the notes trash or permanently deleting items from it. Trying them on the device page shows "This action is only available on that device itself, not over a remote connection". Archiving sessions still works.

@@ -7,6 +7,7 @@ const { join } = require('path')
 const { backendDependencyFilter } = require('./build/backend-dependencies.cjs')
 // 内置插件捆绑包清单(单一来源;electron/builtinPlugins.ts 播种、builtinUpdates 更新、release-content.check 核对都读它)。
 const builtinBundles = require('./electron/builtinBundles.json')
+const { bundleExtend, artifactSuffix, updateChannel } = require('./build/distribution.cjs')
 const bundledDirName = (pkg) => pkg.replace(/^@[^/]+\//, '')
 
 const id = process.env.FORSION_PRODUCT || 'forsion'
@@ -28,7 +29,7 @@ module.exports = {
   afterPack: 'build/afterPack.cjs',
   // 更新 feed:仅全家桶(M2 给各单品建独立 release 仓后按档案配置;无 publish 则不产 latest*.yml)。
   ...(product.id === 'forsion'
-    ? { publish: { provider: 'github', owner: 'Changan-Su', repo: 'Forsion' } }
+    ? { publish: { provider: 'github', owner: 'Changan-Su', repo: 'Forsion', channel: updateChannel } }
     : {}),
   // ⚠️ 这里**完全不产生 beta*.yml**,而且这是对的 —— 别照着「版本号带 -beta.1 就该写 beta.yml」去改。
   // 2026-07-31 发 v2.7.4-beta.1 时读源码 + 看真实产物实证的三段机制:
@@ -48,7 +49,8 @@ module.exports = {
   // 写注册表(NSIS 装机即生效);linux AppImage 无自动 .desktop 安装,用户需自行集成(appimaged 等)——
   // electron-builder 会把 protocols 合入生成的 .desktop 的 MimeType(x-scheme-handler/forsion)。
   protocols: [{ name: 'Forsion', schemes: ['forsion'] }],
-  artifactName: product.artifactPrefix + '-${version}-${arch}.${ext}',
+  artifactName: product.artifactPrefix + artifactSuffix + '-${version}-${arch}.${ext}',
+  extraMetadata: { forsionBundleExtend: bundleExtend },
   files: [
     'out/**/*',
     'node_modules/**/*',
@@ -94,8 +96,8 @@ module.exports = {
     // 精确版本装进 node_modules 的包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
     // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定;清单里每个包都要在,少了
     // release-content.check 会红(不再静默漏包)。清单 requires: 'agentBackend' 的(电脑操作)只进带 agent 后端的档案;
-    // Forsion Extend 全档案都带 —— Amadeus 单品也是云产品(云同步 / penzor / 登录态续期都住在它里面)。
-    ...builtinBundles.filter((b) => !b.requires || product[b.requires]).map((b) => ({
+    // Forsion Extend 缺省全档案都带;FORSION_BUNDLE_EXTEND=0 另出不捆云插件的安装包。
+    ...builtinBundles.filter((b) => (!b.requires || product[b.requires]) && (bundleExtend || b.id !== 'forsion-extend')).map((b) => ({
       from: `node_modules/${b.pkg}`,
       to: `bundled-plugins/${bundledDirName(b.pkg)}`,
       // 电脑操作的 CI 原生编译会留下数百 MB 的 Rust 中间文件;只交付 prebuilt 和源码。别的包没有这个目录,过滤器无副作用。
@@ -112,8 +114,7 @@ module.exports = {
           { from: '../tangu-agent/package.json', to: 'tangu-server/package.json' },
           { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
-          // Tangu for Chrome 扩展:设置页「打开扩展文件夹」指向这里,用户在 Chrome 里「加载已解压的扩展程序」选它
-          // (引擎按 dist/services/../../browser-extension 自定位,dev 与打包态同一相对路径)。
+          // 设置页按引擎路径打开随包的 Chrome 扩展，两个发行版都需要。
           { from: '../tangu-agent/browser-extension', to: 'tangu-server/browser-extension' },
           { from: 'build/python', to: 'python' },
           { from: 'build/node', to: 'node' },

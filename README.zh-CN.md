@@ -161,6 +161,10 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 | Windows | `Forsion-*.exe` | NSIS 安装程序。 |
 | Linux | `Forsion-*.AppImage` | 添加执行权限后运行。 |
 
+每次桌面发布提供两种安装包：`Forsion-<版本>-<架构>` 默认内置 Forsion Extend，提供账号与云端功能；`Forsion-NoExtend-<版本>-<架构>` 保留本地应用与 Agent 后端，不捆绑 Extend，云端账号、同步、发布和远程设备功能需要 Extend。两种包使用相同的应用身份与数据目录。Windows/Linux 应用内更新保持所选发行版；macOS 手动更新时下载相同文件名变体。
+
+本地打包时，在 `desktop/` 依次运行 `FORSION_BUNDLE_EXTEND=0 npm run build` 和 `FORSION_BUNDLE_EXTEND=0 npm run dist`；不设置该变量则产出默认版。
+
 1. **安装并连上模型。** 首次引导帮助你配置连接、模型和工作区，桌面安装版自带 Agent 后端与 Node.js 运行时。
 2. **带入真实背景。** 建一篇项目笔记，把目标、参考资料和下一步放进去；让 Agent 读取它，并明确告诉它值得长期记住的偏好。
 3. **完成一件小事。** 让 Agent 根据材料生成一份有用的成果，打开文件检查，再到记忆面板确认一条明确保存的偏好。TEAM、Muse 与插件可以之后按需加入。
