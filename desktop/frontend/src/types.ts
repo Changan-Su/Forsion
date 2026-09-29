@@ -1442,6 +1442,7 @@ declare global {
       productsIsCreation?(dir: string): Promise<boolean>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
+      productsExternalLaunchNeedsReauth?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>
