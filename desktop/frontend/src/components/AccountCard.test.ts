@@ -165,6 +165,33 @@ it('uses a reset card only on the second click and plays the ceremony', async ()
   expect(document.querySelector('.reset-ceremony')).toBeNull()
 })
 
+// Codex 评审 P1:用卡在途时关掉再开菜单(开菜单会作废在途请求代次),原来回包被丢 → 不弹动画、菜单还是旧张数,
+// 用户照旧张数再点就多耗一张。现在只在换了账号时丢。负对照:结果守卫改回 quotaRequest → 红
+it('keeps the reset card result when the menu is closed and reopened while it is in flight', async () => {
+  let settle!: (v: any) => void
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: QUOTA }) as any
+  window.tangu!.accountUseResetCard = vi.fn(() => new Promise((r) => { settle = r })) as any
+  await mount()
+  await click('Alice')
+  await tick()
+  await click('AI 额度')
+  await click('使用额度重置卡')
+  await click('再点一次确认使用')
+  await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+  expect(document.querySelector('.account-pop')).toBeNull()
+  await click('Alice') // 重开:额度 GET 又发一次,还按旧张数
+  await tick()
+  await click('AI 额度')
+  const pending = [...document.querySelectorAll<HTMLButtonElement>('.ap-sub-item')].find((b) => b.textContent?.includes('使用额度重置卡'))
+  expect(pending?.disabled).toBe(true) // 在途期间锁着,不能再点一次
+  await act(async () => { settle({ status: 200, json: { success: true, resetCards: 1, quota: { dailyLimit: 1000, dailyRemaining: 1000, weeklyLimit: 1000, weeklyRemaining: 1000 } } }) })
+  await tick()
+  expect(document.querySelector('.reset-ceremony[role="dialog"]')?.textContent).toContain('额度重置卡剩余 1 张')
+  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledOnce()
+  await click('继续使用')
+  await tick()
+})
+
 it('says so when the reset card could not be used, without a ceremony', async () => {
   window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: QUOTA }) as any
   window.tangu!.accountUseResetCard = vi.fn().mockResolvedValue({ status: 400, json: { error: 'no_reset_card' } }) as any

@@ -42,7 +42,7 @@ import { ChangelogView } from './views/ChangelogView'
 import { initUiZoom } from './uiZoom'
 import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
-import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
+import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
@@ -213,9 +213,8 @@ export function installEngine(): void {
   })
   // 插件的 ctx.app.showResetCardCeremony(pluginStore 已只放行首方内置包):弹与账号菜单同一张用卡动画。
   // 缺的上限按 -1(不限)补 → 那一行不画,不会凭空编出百分比
-  window.addEventListener('forsion:reset-card-ceremony', (e) => {
-    const r = (e as CustomEvent<{ before?: Record<string, unknown>; after?: Record<string, unknown>; remainingCards?: unknown }>).detail
-    const view = (q?: Record<string, unknown>): AccountQuotaView => ({
+  setResetCardCeremonyHandler((r) => {
+    const view = (q?: { dailyLimit?: unknown; dailyRemaining?: unknown; weeklyLimit?: unknown; weeklyRemaining?: unknown }): AccountQuotaView => ({
       dailyLimit: Number(q?.dailyLimit ?? -1), dailyRemaining: q?.dailyRemaining as number | undefined,
       weeklyLimit: Number(q?.weeklyLimit ?? -1), weeklyRemaining: q?.weeklyRemaining as number | undefined,
     })

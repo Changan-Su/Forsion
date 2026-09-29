@@ -76,6 +76,8 @@ export const AccountCard: React.FC<{
   const authAction = useRef(0)
   const actionBusy = useRef(false)
   const quotaRequest = useRef(0)
+  /** 账号代次:只在登录 / 切号 / 登出时变。用卡结果只在换了账号时才丢 —— 关掉再开菜单不能丢(会按旧张数再点、多耗一张)。 */
+  const accountGen = useRef(0)
 
   const refresh = useCallback(() => {
     const request = ++authRequest.current
@@ -92,6 +94,7 @@ export const AccountCard: React.FC<{
     })
     // 登录态变化(本窗/他窗登录登出、CLI tangu login 等外部来源经主进程 auth.json watcher 广播)→ 重拉。
     const offAuth = window.tangu?.onAuthChanged?.(() => {
+      ++accountGen.current
       ++quotaRequest.current
       setAuth(null)
       setMenu(null)
@@ -123,6 +126,7 @@ export const AccountCard: React.FC<{
     const action = ++authAction.current
     ++authRequest.current
     ++quotaRequest.current
+    ++accountGen.current
     setLoggingIn(true)
     setMenu(null)
     setQuota(null)
@@ -143,6 +147,7 @@ export const AccountCard: React.FC<{
     const action = ++authAction.current
     ++authRequest.current
     ++quotaRequest.current
+    ++accountGen.current
     actionBusy.current = true
     setLoggingIn(true)
     setMenu(null)
@@ -196,25 +201,29 @@ export const AccountCard: React.FC<{
   }, [menu])
 
   // 两击确认(防误耗);成功就关菜单、弹用卡动画。失败不一定没核销(服务端先核销再读额度,回包可能丢)→ 关菜单,
-  // 下次打开重拉张数,免得照旧张数再点一次多用一张
+  // 下次打开重拉张数,免得照旧张数再点一次多用一张。在途期间 usingCard 一直锁着按钮(关掉再开菜单也锁着),
+  // 结果只在换了账号时丢;菜单这时开着就顺手换上回包里的新额度(Codex 评审 P1)
   const useCard = async (): Promise<void> => {
     if (usingCard || !quota) return
     if (!confirmCard) { setConfirmCard(true); return }
     setUsingCard(true)
-    const request = quotaRequest.current
+    const gen = accountGen.current
+    const before = quota
     try {
       const r = await window.tangu?.accountUseResetCard?.('both')
-      if (request !== quotaRequest.current) return
+      if (gen !== accountGen.current) return
+      ++quotaRequest.current // 在途的额度 GET 作废:它可能比用卡早读到旧张数
       setMenu(null)
       if (r?.status === 200 && r.json?.success) {
         const next = { ...(r.json.quota || {}), resetCards: r.json.resetCards } as AccountQuotaView
+        setQuota(next)
         publishAccountQuota(next)
-        presentResetCardCeremony({ scope: 'both', before: quota, after: next, remainingCards: r.json.resetCards })
+        presentResetCardCeremony({ scope: 'both', before, after: next, remainingCards: r.json.resetCards })
       } else {
         onToast?.(r?.json?.error === 'no_reset_card' ? t('sidebar.account.menu.noCard') : String(r?.json?.detail || t('sidebar.account.menu.useCardFail')), true)
       }
     } catch (e: any) {
-      if (request === quotaRequest.current) { setMenu(null); onToast?.(String(e?.message || e), true) }
+      if (gen === accountGen.current) { setMenu(null); onToast?.(String(e?.message || e), true) }
     } finally {
       setUsingCard(false)
       setConfirmCard(false)

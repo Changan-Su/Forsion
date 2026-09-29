@@ -265,6 +265,12 @@ function watchVaultFile(rel: string, cb: () => void): () => void {
 
 /** 每个插件一份 app API。块表面是**可吊销**的(见 blockSurface.tsx 的信任边界说明):
  *  teardown 时调 revoke,插件开的订阅/挂的 React root 一并收掉,之后它在飞的异步任务也改不动用户文件。 */
+/** ctx.app.showResetCardCeremony 的落点:应用层(bootstrapEngine)登记。不走窗口事件 —— 插件与宿主同一个渲染进程,
+ *  公开事件谁都能派发,首方判断就被绕过了(Codex 评审 P1)。 */
+type ResetCardCeremonyArg = Parameters<NonNullable<PluginAppApi['showResetCardCeremony']>>[0]
+let resetCardCeremonyHandler: ((r: ResetCardCeremonyArg) => void) | null = null
+export function setResetCardCeremonyHandler(fn: ((r: ResetCardCeremonyArg) => void) | null): void { resetCardCeremonyHandler = fn }
+
 function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
   const surface = createBlockSurface(pluginId)
   // 块表面有 alive 闸,ctx.app 的**直通副作用面**(写盘/换页/开文件)此前没有 —— 插件禁用后残留的
@@ -289,11 +295,11 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     openSearch: () => useUiStore.getState().setPalette('search'),
     // 插件层不依赖应用层 store:发窗口事件,应用层(bootstrapEngine)接住转给 openSettings
     openSettings: (target) => { if (ok() && typeof target === 'string' && target) window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: target })) },
-    // 同一条路:应用层(bootstrapEngine)接住弹用卡动画。只认首方内置包,别的插件不能拿假数字弹「额度已恢复」
+    // 应用层登记的处理函数弹用卡动画。只认首方内置包,别的插件不能拿假数字弹「额度已恢复」
     showResetCardCeremony: (result) => {
       if (!ok() || !result || typeof result !== 'object') return
       if (!usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return
-      window.dispatchEvent(new CustomEvent('forsion:reset-card-ceremony', { detail: result }))
+      resetCardCeremonyHandler?.(result)
     },
     openSwitcher: () => useUiStore.getState().setPalette('switch'),
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
