@@ -22,9 +22,11 @@ export const codeExitPlugin = $prose(
           //    这一下 keydown 常常先于它被处理 —— state.selection 还停在 ← 之前(行尾),这里判「不在代码里」放行,
           //    光标一路移到后文,新字落错地方(check:attention X2 在页面稍忙时稳定复现)。所以以 DOM 选区为准:
           //    它与 PM 选区不一致时按 DOM 的落点判,接管时顺手把 PM 选区同步过去(stored marks 在同一事务里设)。
+          //    stored marks 非空 = 刚由本插件(或打字)在当前位置设过 —— PM 这时是新的,而且光标落在 PM 为 stored marks
+          //    画的 cursor wrapper 里,DOM 落点反解会偏;这种时候只信 PM(否则第二下 → 又被当成第一下吞掉,X3)。
           let head = sel.head
           let synced = false
-          const dom = (view.root as Document).getSelection?.()
+          const dom = state.storedMarks ? null : (view.root as Document).getSelection?.()
           if (dom && dom.isCollapsed && dom.anchorNode && view.dom.contains(dom.anchorNode)) {
             try {
               const at = view.posAtDOM(dom.anchorNode, dom.anchorOffset)
