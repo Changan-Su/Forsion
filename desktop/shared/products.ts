@@ -38,7 +38,7 @@ export interface ProductSummary {
   published: boolean
   /** 原地加入造物的外部文件夹(不在托管根里):从造物移除 = 取消登记,文件夹不动。 */
   external?: boolean
-  /** 列出这一刻产物目录的身份(`dev:ino`)。删除时连同用户确认的动作一起交回宿主:期间目录被换过(同一个 id 落到了别的文件夹)就拒绝。 */
+  /** 列出这一刻产物目录的身份(`dev:ino:创建时间`,见 dirIdentity.dirIdToken)。删除时连同用户确认的动作一起交回宿主:期间目录被换过(同一个 id 落到了别的文件夹)就拒绝。 */
   dirId?: string
   /** kind==='plugin':manifest.json 里的插件 id。 */
   pluginId?: string

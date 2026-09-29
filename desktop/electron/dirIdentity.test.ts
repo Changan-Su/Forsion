@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { dirIdentity, isDirIdentity, sameDirIdentity } from './dirIdentity'
+import { dirIdToken, dirIdentity, isDirIdentity, sameDirIdentity } from './dirIdentity'
 import { isDevLoaded, isDevLoadStale, readDevLoads, setDevLoad } from './devLoadStore'
 import { addExternalCreation, allowExternalLaunch, externalCreationFor, externalCreations, externalLaunchNeedsReauth, isExternalLaunchAllowed } from './productTrust'
 
@@ -48,6 +48,12 @@ describe('dirIdentity:创建时间', () => {
     expect(isDirIdentity(legacy)).toBe(true) // 旧记录照样读得出(才能提示重新授权)
     expect(sameDirIdentity(legacy, id)).toBe(false)
     expect(sameDirIdentity(id, legacy)).toBe(false)
+  })
+
+  it('删除确认用的短串也带创建时间:确认框开着时同一路径删了重建(inode 复用)就对不上', () => {
+    const id = dirIdentity(A.root)!
+    expect(dirIdToken(id)).toBe(dirIdToken(dirIdentity(A.root)!))
+    expect(dirIdToken({ ...id, birth: id.birth! + 1 })).not.toBe(dirIdToken(id))
   })
 
   for (const [label, birth] of [['同 dev/ino、不同创建时间(inode 被复用)', 1] as const, ['没有创建时间的旧记录', undefined] as const]) {

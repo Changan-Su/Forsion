@@ -11,7 +11,7 @@ import { existsSync, promises as fs, type Dirent, type Stats } from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PRODUCT_SIDECAR_NEW, PRODUCT_SIDECAR_PATHS, effectivePluginId, type ProductKind, type ProductSummary } from '../shared/products'
-import { dirIdentity, sameDirIdentity, type DirIdentity } from './dirIdentity'
+import { dirIdToken, dirIdentity, sameDirIdentity, type DirIdentity } from './dirIdentity'
 
 /** 本机登记过的外部造物(调用方从 productTrust 取:真实路径 + 登记时的目录身份)。 */
 export interface ExternalRoot { root: string; dir: DirIdentity }
@@ -407,7 +407,7 @@ async function summarize(record: Indexed): Promise<ProductSummary> {
     updatedAt: record.updatedAt,
     published: existsSync(path.join(record.root, CONNECT_MARKER)),
     ...(record.external ? { external: true } : {}),
-    dirId: `${record.dir.dev}:${record.dir.ino}`,
+    dirId: dirIdToken(record.dir),
     // pluginId 跟**生效后的** kind 走:sidecar 把 kind 改成 web 就不该再挂着插件 id,
     // 反过来一个没有清单的目录被标成 plugin 也变不出 id(那种 patch 已在 updateProduct 挡掉)。
     ...(kind === 'plugin' && detected.pluginId ? { pluginId: detected.pluginId } : {}),

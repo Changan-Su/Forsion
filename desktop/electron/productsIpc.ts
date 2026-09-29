@@ -16,7 +16,7 @@ import { addExternalCreation, allowExternalLaunch, externalCreationFor, external
 import { commitGitVersion, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import { serveProductRoot, servePathRoot, setPreviewPersistence, type PreviewPersistedState } from './codePreview'
 import { AdoptError, checkAdoptable, createCreationDir } from './productAdopt'
-import { dirIdentity } from './dirIdentity'
+import { dirIdToken, dirIdentity } from './dirIdentity'
 
 export interface ProductsIpcDeps {
   ipcMain: IpcMain
@@ -227,7 +227,7 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     const p = await product(id)
     const want = expect as { action?: unknown; dirId?: unknown } | null
     const now = dirIdentity(p.root)
-    if (!want || want.action !== (p.external ? 'unregister' : 'trash') || !now || want.dirId !== `${now.dev}:${now.ino}`) throw new Error('This creation changed; refresh and try again')
+    if (!want || want.action !== (p.external ? 'unregister' : 'trash') || !now || want.dirId !== dirIdToken(now)) throw new Error('This creation changed; refresh and try again')
     // 先撤权再删:开发副本的授权不撤,回收站里的代码下次启动照样以插件权限加载(目录被「放回原处」就更是了);
     // 已加载的实例也得当场全窗拆掉。
     const grant = readDevLoads(d.homeDir())[p.id]

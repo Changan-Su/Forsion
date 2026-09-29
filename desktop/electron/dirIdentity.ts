@@ -41,6 +41,11 @@ export function sameDevIno(a: DirIdentity, b: DirIdentity): boolean {
   return a.dev === b.dev && a.ino === b.ino
 }
 
+/** 列表卡片带着的「这一刻的目录身份」短串(删除确认时原样交回来核):含创建时间,确认框开着时同一路径删了重建也对不上。 */
+export function dirIdToken(id: DirIdentity): string {
+  return `${id.dev}:${id.ino}:${id.birth ?? ''}`
+}
+
 /** dir 此刻是不是当初登记的那个目录。 */
 export function matchesDirIdentity(dir: string, want: DirIdentity): boolean {
   return sameDirIdentity(want, dirIdentity(dir))
