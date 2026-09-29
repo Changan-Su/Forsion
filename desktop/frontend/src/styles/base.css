@@ -3010,8 +3010,12 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: 50%;
   background: var(--bg-card);
   box-shadow: var(--btn-shadow);
-  transition: transform var(--duration-fast);
+  transition: transform var(--duration-fast), background var(--duration-fast);
 }
+/* 暗色的「关」:旋钮若仍是 --bg-card,与卡面同色、与半透明轨道只差一丝(≈1.3:1),开关看不出状态。
+ * 改用背景族的 --text-faint(随 data-bg 走,不碰主题色轴),旋钮对轨道 ≥ 3:1(WCAG 1.4.11);「开」与浅色不变。
+ * 仪器:check:themecontrast 的 switch-off 探针(全部语言 × 配色 × 暗色)。 */
+:root[data-mode='dark'] .settings-switch:not(.active) > span { background: var(--text-faint); }
 .settings-switch.active { border-color: var(--accent-ink); background: var(--accent-ink); }
 .settings-switch.active > span { transform: translateX(14px); background: var(--bg-card); }
 .settings-switch:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
