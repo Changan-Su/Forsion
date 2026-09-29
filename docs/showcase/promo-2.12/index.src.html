@@ -1,0 +1,558 @@
+<title>人类补完计划样片</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;700;900&display=swap">
+<style>
+/* Screening room: one dark page, three players stacked, each with its own label and transport. */
+:root {
+  color-scheme: dark;
+  --bg: #0e0d0c;
+  --panel: #171514;
+  --fg: #efebe7;
+  --muted: #a1968e;
+  --line: #2c2826;
+  --accent: #c9957a;
+
+  /* Study A · brand warm */
+  --a-paper: #f3ebe1;
+  --a-ink: #201915;
+  --a-copper: #bd866c;
+  --a-copper-soft: #debcaa;
+  --a-cream: #fbf2e9;
+  --a-muted: #8b7c70;
+  /* Study B · EVA homage */
+  --b-black: #000000;
+  --b-white: #f2f0ea;
+  --b-red: #e3161b;
+  --b-orange: #ff6a13;
+  --b-green: #38ff8b;
+  /* Study C · product cinema */
+  --c-stage: #0c0c0e;
+  --c-ui-bg: #f7f7f6;
+  --c-ui-card: #ffffff;
+  --c-ui-line: #e2e2e0;
+  --c-ui-text: #171717;
+  --c-ui-muted: #8a8a8a;
+  --c-ui-accent: #262626;
+  --c-gold: #a88427;
+
+  --f-display: 'Noto Serif SC', 'Songti SC', serif;
+  --f-body: 'Noto Sans SC', 'Inter', 'PingFang SC', system-ui, sans-serif;
+  --f-ui: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  --f-latin-serif: 'Instrument Serif', 'Times New Roman', serif;
+  --f-cond: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+}
+html, body { background: var(--bg); color: var(--fg); }
+body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
+.page { max-width: 1180px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 40px); padding-block: 56px 88px; display: grid; gap: 72px; }
+.intro { display: grid; gap: 14px; max-width: 62ch; }
+.intro .eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.intro h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(34px, 6vw, 56px); line-height: 1.1; margin: 0; text-wrap: balance; letter-spacing: .04em; }
+.intro p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.7; }
+.study { display: grid; gap: 18px; }
+.study-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 20px; align-items: baseline; }
+.study-meta .letter { grid-row: span 2; font-family: var(--f-display); font-weight: 700; font-size: 44px; line-height: 1; color: var(--accent); }
+.study-meta h2 { margin: 0; font-size: 22px; font-weight: 700; text-wrap: balance; }
+.study-meta h2 small { font-family: var(--f-mono); font-size: 12px; font-weight: 400; letter-spacing: .12em; color: var(--muted); margin-left: 10px; white-space: nowrap; }
+.study-meta p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.7; max-width: 68ch; min-width: 0; }
+.player { display: grid; gap: 12px; }
+.frame { position: relative; width: 100%; overflow: hidden; border-radius: 4px; background: #000; box-shadow: 0 0 0 1px var(--line); }
+.frame.r169 { aspect-ratio: 16 / 9; }
+.frame.r43 { aspect-ratio: 4 / 3; max-width: 860px; }
+.controls { display: flex; align-items: center; gap: 12px; max-width: 100%; }
+.player.r43 .controls { max-width: 860px; }
+.controls button { font: 500 13px var(--f-ui); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; height: 32px; padding: 0 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.controls button:hover { border-color: var(--muted); }
+.controls button:focus-visible, .controls input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.controls button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.controls input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.controls output { font: 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; flex: none; min-width: 8.5ch; text-align: right; }
+.note { color: var(--muted); font-size: 13px; line-height: 1.7; border-top: 1px solid var(--line); padding-top: 20px; margin: 0; }
+
+/* ───────── stage base ───────── */
+.stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; }
+.stage * { box-sizing: border-box; }
+.stage p, .stage h2, .stage h4, .stage ul { margin: 0; padding: 0; }
+.stage li { list-style: none; }
+.abs { position: absolute; }
+.grain { position: absolute; inset: 0; pointer-events: none; background-size: 200px 200px; }
+
+/* ───────── A · The Other Half ───────── */
+.sa { width: 1920px; height: 1080px; background: radial-gradient(ellipse 70% 60% at 50% 42%, #f8f1e8 0%, var(--a-paper) 60%, #e9dfd3 100%); color: var(--a-ink); }
+.sa .grain { opacity: .07; mix-blend-mode: multiply; }
+.sa-orb { position: absolute; left: 697px; top: 170px; width: 526px; height: 520px; transform-origin: 50% 50%; }
+.sa-left { position: absolute; left: 0; top: 0; width: 260px; height: 520px; background: var(--a-copper); border-radius: 260px 0 0 260px / 260px 0 0 260px; }
+.sa .sa-labels { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 14px; padding-right: 34px; }
+.sa-labels li { font: 500 18px var(--f-mono); letter-spacing: .22em; color: var(--a-cream); }
+.sa-dash { position: absolute; left: 266px; top: 0; width: 262px; height: 520px; overflow: visible; }
+.sa-dash path { fill: none; stroke: var(--a-copper); stroke-width: 2; stroke-dasharray: 7 9; }
+.sa-q { position: absolute; left: 330px; top: 170px; font: italic 150px/1 var(--f-latin-serif); color: var(--a-copper); }
+.sa-right { position: absolute; left: 266px; top: 0; width: 260px; height: 520px; background: var(--a-ink); border-radius: 0 260px 260px 0 / 0 260px 260px 0; display: flex; flex-direction: column; justify-content: center; padding-left: 32px; }
+.sa-file { font: 500 26px var(--f-mono); color: var(--a-copper-soft); letter-spacing: .02em; }
+.sa-rules { display: grid; gap: 12px; margin-top: 22px !important; }
+.sa-rules li { font: 400 18px var(--f-body); color: var(--a-cream); letter-spacing: .04em; }
+.sa-cap { position: absolute; left: 0; right: 0; top: 768px; text-align: center; }
+.sa-cap .en { font: italic 68px/1.1 var(--f-latin-serif); color: var(--a-ink); }
+.sa-cap .zh { font: 500 28px var(--f-display); color: var(--a-muted); letter-spacing: .14em; margin-top: 16px !important; }
+.sa-title { position: absolute; left: 0; right: 0; top: 548px; text-align: center; }
+.sa-eyebrow { font: 600 22px var(--f-ui); letter-spacing: .42em; color: var(--a-muted); padding-left: .42em; }
+.sa-h { font: 700 136px/1.12 var(--f-display); letter-spacing: .08em; padding-left: .08em; margin: 16px 0 6px !important; color: var(--a-ink); }
+.sa-sub { font: italic 56px/1.1 var(--f-latin-serif); color: var(--a-copper); }
+
+/* ───────── B · 第 2.12 话 ───────── */
+.sb { width: 1440px; height: 1080px; background: var(--b-black); color: var(--b-white); font-family: var(--f-display); }
+.sb-card { position: absolute; inset: 0; background: var(--b-black); }
+.sb .k { position: absolute; font-weight: 900; line-height: 1; color: var(--b-white); white-space: nowrap; }
+.sb .e { position: absolute; font: 600 52px/1 var(--f-display); letter-spacing: .08em; color: var(--b-white); white-space: nowrap; }
+.sb-c1 .k { left: 110px; top: 250px; font-size: 340px; transform: scaleX(.8); transform-origin: 0 0; }
+.sb-c1 .e { left: 760px; top: 650px; }
+.sb-c2 .k { left: 1010px; top: 70px; font-size: 300px; writing-mode: vertical-rl; transform: scaleY(.86); transform-origin: 0 0; }
+.sb-c2 .e { left: 110px; top: 900px; }
+.sb-c3 .k { left: 0; right: 0; top: 330px; text-align: center; font-size: 380px; transform: scaleX(.78); }
+.sb-c3 .e { left: 0; right: 0; top: 190px; text-align: center; font-size: 46px; }
+.sb-c4 .k { left: 110px; top: 540px; font-size: 360px; transform: scaleX(.8); transform-origin: 0 0; }
+.sb-c4 .e { left: 118px; top: 420px; font-size: 48px; }
+.sb-c5 { background: var(--b-white); }
+.sb-c5 .k { left: 104px; top: 220px; font-size: 380px; color: var(--b-black); transform: scaleX(.8); transform-origin: 0 0; }
+.sb-c5 .q { position: absolute; left: 720px; top: 220px; font: 900 380px/1 var(--f-display); color: var(--b-red); transform: scaleX(.8); transform-origin: 0 0; }
+.sb-c5 .e { left: 112px; top: 760px; font: 700 64px/1 var(--f-cond); letter-spacing: .22em; color: var(--b-red); }
+.sb-hud { position: absolute; inset: 0; background: var(--b-black); color: var(--b-orange); font-family: var(--f-cond); }
+.sb-hex { position: absolute; inset: 0; opacity: .75; }
+.sb-top { position: absolute; left: 70px; right: 70px; top: 46px; height: 58px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--b-orange); font: 700 30px var(--f-cond); letter-spacing: .16em; }
+.sb-top .live { color: var(--b-red); }
+.sb-box { position: absolute; border: 2px solid rgba(255, 106, 19, .75); background: rgba(0, 0, 0, .78); }
+.sb-box .lbl { position: absolute; left: 16px; top: 10px; font: 700 22px var(--f-cond); letter-spacing: .18em; color: var(--b-orange); }
+.sb-term { left: 70px; top: 140px; width: 690px; height: 250px; padding: 50px 22px 0; }
+.sb-term p { font: 500 21px/1.62 var(--f-mono); color: var(--b-green); white-space: pre; min-height: 1.62em; }
+.sb-sync { left: 790px; top: 140px; width: 580px; height: 250px; }
+.sb-sync .num { position: absolute; left: 22px; top: 44px; font: 700 112px/1 var(--f-mono); color: var(--b-white); font-variant-numeric: tabular-nums; }
+.sb-sync .num small { font-size: 52px; color: var(--b-orange); margin-left: 6px; }
+.sb-sync canvas { position: absolute; left: 0; bottom: 8px; width: 576px; height: 80px; }
+.sb-warn { left: 70px; top: 420px; width: 1300px; height: 240px; border: none; background: var(--b-black); }
+.sb-warn::before, .sb-warn::after { content: ''; position: absolute; left: 0; right: 0; height: 24px; background: repeating-linear-gradient(-45deg, var(--b-red) 0 18px, var(--b-black) 18px 36px); }
+.sb-warn::before { top: 0; } .sb-warn::after { bottom: 0; }
+.sb-warn .wait, .sb-warn .go { position: absolute; inset: 24px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.sb-warn .wait { font: 700 64px var(--f-cond); letter-spacing: .2em; color: var(--b-orange); }
+.sb-warn .go .en { font: 700 76px/1 var(--f-cond); letter-spacing: .08em; color: var(--b-red); }
+.sb-warn .go .zh { font: 900 64px/1 var(--f-display); color: var(--b-white); letter-spacing: .06em; }
+.sb-magi { position: absolute; top: 700px; width: 414px; height: 320px; }
+.sb-magi .name { position: absolute; left: 18px; top: 12px; font: 700 42px var(--f-cond); letter-spacing: .12em; color: var(--b-orange); }
+.sb-magi .role { position: absolute; left: 20px; top: 62px; font: 500 20px var(--f-body); color: rgba(255, 106, 19, .8); letter-spacing: .1em; }
+.sb-magi img { position: absolute; left: 18px; top: 110px; width: 184px; height: 184px; border-radius: 50%; filter: grayscale(1) contrast(1.25); border: 2px solid rgba(255, 106, 19, .6); }
+.sb-magi .st { position: absolute; left: 220px; top: 128px; width: 176px; height: 152px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+.sb-magi .ok { border: 2px solid var(--b-green); color: var(--b-green); }
+.sb-magi .hand { border: 2px solid var(--b-red); background: var(--b-red); color: var(--b-black); }
+.sb-magi .st b { font: 900 58px/1 var(--f-display); }
+.sb-magi .st i { font: 700 20px var(--f-cond); letter-spacing: .16em; font-style: normal; }
+.sb-t0 { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+.sb-t0 p { font: 700 44px/1 var(--f-display); letter-spacing: .08em; }
+.sb-t0 p + p { font-size: 64px; letter-spacing: .04em; }
+.sb-title .no { position: absolute; left: 112px; top: 112px; font: 900 76px/1 var(--f-display); transform: scaleX(.86); transform-origin: 0 0; white-space: nowrap; }
+.sb-title .big1 { position: absolute; left: 96px; top: 222px; font: 900 350px/1 var(--f-display); transform: scaleX(.8); transform-origin: 0 0; white-space: nowrap; }
+.sb-title .big2 { position: absolute; left: 100px; top: 578px; font: 900 250px/1 var(--f-display); transform: scaleX(.74); transform-origin: 0 0; white-space: nowrap; }
+.sb-title .en { position: absolute; right: 110px; top: 876px; text-align: right; font: 700 34px/1.45 var(--f-display); letter-spacing: .06em; }
+.sb-title .en span { font-size: 48px; }
+.sb-title .brand { position: absolute; left: 114px; top: 982px; font: 600 26px var(--f-cond); letter-spacing: .6em; color: #8c8c8c; }
+.sb-scan { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.28) 2px 3px); }
+.sb-vig { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,.6) 100%); }
+.sb .grain { opacity: .1; mix-blend-mode: screen; }
+.sb-flash { position: absolute; inset: 0; background: var(--b-white); pointer-events: none; opacity: 0; }
+
+/* ───────── C · 一次协作的进化 ───────── */
+.sc { width: 1920px; height: 1080px; background: var(--c-stage); color: var(--c-ui-text); font-family: var(--f-body); }
+.sc .grain { opacity: .05; mix-blend-mode: overlay; }
+.sc-glow { position: absolute; inset: -200px; background: radial-gradient(circle 700px at 72% 30%, rgba(189,134,108,.30), rgba(189,134,108,0) 70%), radial-gradient(circle 620px at 18% 85%, rgba(120,110,160,.16), rgba(0,0,0,0) 70%); }
+.sc-world { position: absolute; inset: 0; perspective: 2400px; perspective-origin: 50% 45%; transform-style: preserve-3d; }
+.ui { position: absolute; background: var(--c-ui-bg); border-radius: 18px; overflow: hidden; box-shadow: 0 50px 120px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06); }
+.sc-chat { left: 190px; top: 160px; width: 830px; height: 650px; }
+.ui-top { height: 48px; background: #eeeeec; border-bottom: 1px solid var(--c-ui-line); display: flex; align-items: center; padding: 0 18px; gap: 18px; }
+.ui-top .dots { display: flex; gap: 8px; }
+.ui-top .dots i { width: 12px; height: 12px; border-radius: 50%; background: #d4d4d2; display: block; }
+.ui-top .tab { font: 500 15px var(--f-body); color: #555; background: #fff; border-radius: 8px; padding: 6px 14px; }
+.ui-body { padding: 34px 44px; display: grid; gap: 26px; }
+.msg-user { display: grid; justify-items: end; gap: 8px; }
+.msg-user .who { font: 600 12px var(--f-ui); letter-spacing: .12em; color: var(--c-ui-muted); }
+.msg-user .bubble { background: #e8e8e6; border-radius: 16px; padding: 16px 22px; font-size: 21px; line-height: 1.5; max-width: 560px; }
+.msg-agent { display: grid; grid-template-columns: 46px 1fr; gap: 16px; }
+.msg-agent .av { width: 46px; height: 46px; border-radius: 50%; }
+.msg-agent .name { font: 600 13px var(--f-ui); letter-spacing: .14em; color: var(--c-gold); }
+.msg-agent .text { font-size: 21px; line-height: 1.55; margin-top: 6px !important; min-height: 1.55em; }
+.hcard { margin-top: 18px; width: 580px; background: var(--c-ui-card); border: 1px solid var(--c-ui-line); border-radius: 12px; padding: 18px 20px; box-shadow: 0 0 0 calc(var(--g, 0) * 7px) rgba(189,134,108, calc(var(--g, 0) * .35)); }
+.hcard-head { display: flex; align-items: center; gap: 9px; }
+.hcard-head svg { width: 19px; height: 19px; stroke: var(--c-ui-text); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.hcard-head strong { font-size: 18px; font-weight: 700; }
+.hcard-head .chip { margin-left: auto; font-size: 13px; color: #555; background: #f1f1f0; border-radius: 999px; padding: 4px 11px; }
+.hcard-sum { font-size: 18px; color: #262626; margin: 12px 0 4px !important; }
+.hcard-why { font-size: 14px; color: var(--c-ui-muted); }
+.hcard-acts { display: flex; gap: 8px; margin-top: 14px; }
+.hcard-acts span { font-size: 14px; padding: 6px 14px; border: 1px solid var(--c-ui-line); border-radius: 8px; color: #333; }
+.hcard-acts span:first-child { background: var(--c-ui-accent); border-color: var(--c-ui-accent); color: #fff; }
+.ui-input { position: absolute; left: 36px; right: 36px; bottom: 22px; height: 62px; border-radius: 16px; background: #fff; border: 1px solid var(--c-ui-line); font-size: 16px; color: #a3a3a3; display: flex; align-items: center; padding: 0 20px; }
+.sc-doc { left: 1070px; top: 120px; width: 680px; height: 730px; background: var(--c-ui-card); }
+.doc-head { display: flex; align-items: center; gap: 16px; padding: 28px 30px 20px; }
+.doc-head img { width: 58px; height: 58px; border-radius: 50%; }
+.doc-head strong { display: block; font: 700 25px var(--f-ui); }
+.doc-head span { font-size: 14px; color: var(--c-ui-muted); }
+.doc-tabs { display: flex; gap: 4px; padding: 0 22px; border-bottom: 1px solid var(--c-ui-line); }
+.doc-tabs span { font-size: 16px; padding: 12px 14px; color: var(--c-ui-muted); border-bottom: 2px solid transparent; }
+.doc-tabs .on { color: var(--c-ui-text); font-weight: 700; border-bottom-color: var(--c-ui-text); }
+.doc-file { display: flex; justify-content: space-between; align-items: center; padding: 18px 30px 4px; font: 500 15px var(--f-mono); color: var(--c-ui-muted); }
+.doc-file .ver { font: 500 13px var(--f-body); background: #f1f1f0; border-radius: 999px; padding: 4px 11px; color: #555; }
+.doc-md { padding: 0 30px; }
+.doc-md h4 { font: 700 15px var(--f-body); color: var(--c-ui-muted); letter-spacing: .08em; margin: 24px 0 10px !important; }
+.doc-md .li { position: relative; font-size: 19px; line-height: 1.55; color: #262626; padding: 5px 12px 5px 22px; min-height: 2.1em; }
+.doc-md .li::before { content: ''; position: absolute; left: 7px; top: 19px; width: 6px; height: 6px; border-radius: 50%; background: #9a9a9a; }
+.doc-md .li.new { border-radius: 8px; background: rgba(189,134,108, calc(var(--hl, 0) * .16)); box-shadow: inset 3px 0 0 rgba(189,134,108, var(--hl, 0)); }
+.sc-cap { position: absolute; left: 196px; top: 880px; display: flex; align-items: baseline; gap: 26px; color: #f3f3f3; }
+.sc-cap .file { font: 700 58px var(--f-mono); letter-spacing: -.01em; }
+.sc-cap .q { font: 500 36px var(--f-body); color: #c9c7cc; }
+.sc-end { position: absolute; left: 0; right: 0; top: 430px; display: flex; justify-content: center; align-items: center; gap: 34px; color: #f5f5f5; }
+.sc-end img { width: 118px; height: 118px; }
+.sc-end .name { font: 700 84px/1 var(--f-ui); letter-spacing: -.01em; }
+.sc-end .tag { font: 400 32px var(--f-body); color: #d9a88f; margin-top: 14px !important; letter-spacing: .04em; }
+
+@media (max-width: 640px) {
+  .study-meta { grid-template-columns: 1fr; }
+  .study-meta .letter { grid-row: auto; font-size: 32px; }
+  .controls button .lbl { display: none; }
+}
+</style>
+
+<main class="page">
+  <header class="intro">
+    <p class="eyebrow">Forsion 2.12 · 宣传片画面方向</p>
+    <h1>人类补完计划</h1>
+    <p>三个画面方向，每个 5 秒，循环播放。先定画面，音乐之后再配。三个小样讲的是同一件事：Agent 只是系统的一半，HUMAN.md 补上另一半。</p>
+  </header>
+
+  <section class="study" id="study-a">
+    <div class="study-meta">
+      <span class="letter">A</span>
+      <h2>另一半<small>品牌暖色 · 16:9</small></h2>
+      <p>用 Logo 的奶油色与铜棕做底。一个圆承载全片隐喻：左半是 Agent 的 SOUL、MEMORY、SKILLS、HARNESS，右半留白，直到 HUMAN.md 把它补完。节奏克制，靠字体和留白说话。</p>
+    </div>
+    <div class="player" data-player="a">
+      <div class="frame r169">
+        <div class="stage sa">
+          <div class="sa-orb">
+            <div class="sa-left"><ul class="sa-labels"><li>SOUL</li><li>MEMORY</li><li>SKILLS</li><li>HARNESS</li><li>TOOLS</li><li>TEAMS</li></ul></div>
+            <svg class="sa-dash" viewBox="0 0 262 520" aria-hidden="true"><path d="M0 1 A259 259 0 0 1 0 519"/></svg>
+            <div class="sa-q">?</div>
+            <div class="sa-right"><p class="sa-file">HUMAN.md</p><ul class="sa-rules"><li>产品决策 · 由我确认</li><li>技术实现 · 你来判断</li><li>汇报 · 先给结论</li></ul></div>
+          </div>
+          <div class="sa-cap sa-cap1"><p class="en">The Agent was only half the system.</p><p class="zh">Agent，只是系统的一半。</p></div>
+          <div class="sa-cap sa-cap2"><p class="en">But collaboration has two sides.</p><p class="zh">但协作，有两面。</p></div>
+          <div class="sa-title"><p class="sa-eyebrow">FORSION 2.12</p><h2 class="sa-h">人类补完计划</h2><p class="sa-sub">Complete the Other Half.</p></div>
+          <div class="grain"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="study" id="study-b">
+    <div class="study-meta">
+      <span class="letter">B</span>
+      <h2>第 2.12 话<small>EVA 致敬 · 4:3</small></h2>
+      <p>黑底、粗明朝体标题卡、快切。人格、记忆、技能、进化之后，闪出一个未定义的「人类？」。随后是 NERV 式界面：Aria、Recita、Arioso 组成三联审议面板，一条 HUMAN.md 规则让三方同时转为「移交人类」，人机同步率一路升到 99.8%。</p>
+    </div>
+    <div class="player r43" data-player="b">
+      <div class="frame r43">
+        <div class="stage sb">
+          <div class="sb-card sb-c1"><span class="k">人格</span><span class="e">SOUL</span></div>
+          <div class="sb-card sb-c2"><span class="k">记忆</span><span class="e">MEMORY</span></div>
+          <div class="sb-card sb-c3"><span class="e">SKILLS</span><span class="k">技能</span></div>
+          <div class="sb-card sb-c4"><span class="e">HARNESS</span><span class="k">进化</span></div>
+          <div class="sb-card sb-c5"><span class="k">人类</span><span class="q">？</span><span class="e">HUMAN — UNDEFINED</span></div>
+          <div class="sb-hud">
+            <canvas class="sb-hex" width="1440" height="1080"></canvas>
+            <div class="sb-top blk"><span>FORSION / HUMAN–AGENT SYSTEM</span><span class="live">● HUMAN.md SYNC</span></div>
+            <div class="sb-box sb-term blk"><span class="lbl">MANAGE_HUMAN · SCOPE: AGENT</span>
+              <p>&gt; arioso / HUMAN.md</p><p>+ 技术实现 → 自主判断</p><p>+ 产品决策 → 人类确认</p><p>+ 汇报方式 → 先给结论</p><p>✓ v12 已写入 · 可撤销</p>
+            </div>
+            <div class="sb-box sb-sync blk"><span class="lbl">人机同步率 · SYNC RATIO</span><div class="num"><span class="n">41.3</span><small>%</small></div><canvas width="1152" height="160"></canvas></div>
+            <div class="sb-box sb-warn blk">
+              <div class="wait">审议中 · DELIBERATING</div>
+              <div class="go"><span class="en">HUMAN CONFIRMATION REQUIRED</span><span class="zh">需要人类确认 · 产品决策</span></div>
+            </div>
+            <div class="sb-box sb-magi m1 blk" style="left:70px"><span class="name">ARIA · 1</span><span class="role">情感 · 表达</span><img src="%%ARIA%%" alt=""><div class="st ok"><b>承认</b><i>APPROVE</i></div><div class="st hand"><b>移交</b><i>TO HUMAN</i></div></div>
+            <div class="sb-box sb-magi m2 blk" style="left:513px"><span class="name">RECITA · 2</span><span class="role">证据 · 可行性</span><img src="%%RECITA%%" alt=""><div class="st ok"><b>承认</b><i>APPROVE</i></div><div class="st hand"><b>移交</b><i>TO HUMAN</i></div></div>
+            <div class="sb-box sb-magi m3 blk" style="left:956px"><span class="name">ARIOSO · 3</span><span class="role">目标 · 取舍</span><img src="%%ARIOSO%%" alt=""><div class="st ok"><b>承认</b><i>APPROVE</i></div><div class="st hand"><b>移交</b><i>TO HUMAN</i></div></div>
+          </div>
+          <div class="sb-card sb-t0"><p>EPISODE 2.12</p><p>COMPLETE THE OTHER HALF.</p></div>
+          <div class="sb-card sb-title"><span class="no">第 2.12 话</span><span class="big1">人类</span><span class="big2">补完计划</span><p class="en">EPISODE 2.12<br><span>COMPLETE THE OTHER HALF.</span></p><span class="brand">FORSION</span></div>
+          <div class="sb-scan"></div><div class="sb-vig"></div><div class="grain"></div><div class="sb-flash"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="study" id="study-c">
+    <div class="study-meta">
+      <span class="letter">C</span>
+      <h2>一次协作的进化<small>产品电影 · 16:9</small></h2>
+      <p>深色舞台上漂浮 Forsion 的真实界面。用户一句「以后不用再问我」，对话里弹出「协作说明已更新」卡片，镜头推进到 Agent 详情的「协作」页，新规则写进 HUMAN.md。这个方向最适合承载后面的功能细节。</p>
+    </div>
+    <div class="player" data-player="c">
+      <div class="frame r169">
+        <div class="stage sc">
+          <div class="sc-glow"></div>
+          <div class="sc-world">
+            <div class="ui sc-chat">
+              <div class="ui-top"><span class="dots"><i></i><i></i><i></i></span><span class="tab">Forsion 官网改版 · Arioso</span></div>
+              <div class="ui-body">
+                <div class="msg-user"><span class="who">YOU</span><div class="bubble">按钮圆角这种实现细节，以后不用再问我。</div></div>
+                <div class="msg-agent"><img class="av" src="%%ARIOSO%%" alt=""><div><span class="name">ARIOSO</span><p class="text">明白。实现细节我自己判断，做完一并说明。</p>
+                  <div class="hcard">
+                    <div class="hcard-head"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><strong>协作说明已更新</strong><span class="chip">Arioso · 长期协作</span></div>
+                    <p class="hcard-sum">实现细节自主判断，不再逐项询问。</p>
+                    <p class="hcard-why">依据：你在这次对话里的明确反馈</p>
+                    <div class="hcard-acts"><span>查看</span><span>编辑</span><span>撤销</span></div>
+                  </div>
+                </div></div>
+              </div>
+              <div class="ui-input">输入消息，/ 调用技能</div>
+            </div>
+            <div class="ui sc-doc">
+              <div class="doc-head"><img src="%%ARIOSO%%" alt=""><div><strong>Arioso</strong><span>默认助手 · 关注目标、感受与取舍</span></div></div>
+              <div class="doc-tabs"><span>配置</span><span>技能</span><span>MCP</span><span class="on">协作</span><span>成长</span><span>日程</span></div>
+              <div class="doc-file"><span>HUMAN.md</span><span class="ver">v12 · 刚刚更新</span></div>
+              <div class="doc-md">
+                <h4>我会怎样调整</h4>
+                <p class="li new"><span class="tw">实现细节（圆角、间距、命名）自主判断，完成后说明。</span></p>
+                <p class="li">汇报先给结论，再列依据与风险。</p>
+                <h4>需要你来决定</h4>
+                <p class="li">产品决策与对外文案，由你确认。</p>
+                <h4>需要你补充</h4>
+                <p class="li">目标用户与验收标准。</p>
+              </div>
+            </div>
+          </div>
+          <div class="sc-cap"><span class="file">HUMAN.md</span><span class="q">我们应该怎样一起工作？</span></div>
+          <div class="sc-end"><img src="%%LOGO%%" alt=""><div><p class="name">Forsion 2.12</p><p class="tag">人类补完计划 · Complete the Other Half.</p></div></div>
+          <div class="grain"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="note">画面使用 Forsion 真实的 Logo、内置 Agent 头像（Arioso、Aria、Recita）和 2.12 界面元素（协作说明卡片、Agent 详情的「协作」页）还原。暂无音乐。空格键或按钮控制播放，拖动进度条可逐帧查看。</p>
+</main>
+
+<script>
+/* Deterministic keyframe engine: every visual is a pure function of t, so the page can play live or be captured frame by frame. */
+(() => {
+  const EASE = {
+    lin: t => t,
+    in: t => t * t * t,
+    out: t => 1 - (1 - t) ** 3,
+    io: t => t < .5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2,
+    expo: t => t >= 1 ? 1 : 1 - 2 ** (-10 * t),
+    back: t => { const c = 1.70158; return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2; },
+    step: t => t < 1 ? 0 : 1,
+  };
+  const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+  const prog = (t, a, b, e = 'io') => EASE[e](clamp((t - a) / (b - a)));
+  const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let x = Math.imul(seed ^ seed >>> 15, 1 | seed); x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x; return ((x ^ x >>> 14) >>> 0) / 4294967296; };
+  const TF = ['x', 'y', 'z', 's', 'sx', 'sy', 'r', 'rx', 'ry'];
+
+  function sample(kf, t) {
+    if (t <= kf[0].t) return kf[0].v;
+    for (let i = 1; i < kf.length; i++) {
+      const b = kf[i];
+      if (t < b.t) {
+        const a = kf[i - 1], k = EASE[b.e]((t - a.t) / (b.t - a.t)), v = {};
+        for (const key in b.v) { const va = key in a.v ? a.v[key] : b.v[key]; v[key] = va + (b.v[key] - va) * k; }
+        return v;
+      }
+    }
+    return kf[kf.length - 1].v;
+  }
+  function apply(el, v, hasTf) {
+    const s = el.style;
+    if (hasTf) {
+      let tf = `translate3d(${v.x || 0}px,${v.y || 0}px,${v.z || 0}px)`;
+      if (v.rx) tf += ` rotateX(${v.rx}deg)`;
+      if (v.ry) tf += ` rotateY(${v.ry}deg)`;
+      if (v.r) tf += ` rotate(${v.r}deg)`;
+      if ((v.s ?? 1) !== 1) tf += ` scale(${v.s})`;
+      if ((v.sx ?? 1) !== 1 || (v.sy ?? 1) !== 1) tf += ` scale(${v.sx ?? 1},${v.sy ?? 1})`;
+      s.transform = tf;
+    }
+    if ('o' in v) { s.opacity = v.o; s.visibility = v.o < .002 ? 'hidden' : ''; }
+    if ('b' in v || 'br' in v) s.filter = `blur(${v.b || 0}px) brightness(${v.br ?? 1})`;
+    if ('ct' in v || 'cr' in v || 'cb' in v || 'cl' in v) s.clipPath = `inset(${v.ct || 0}% ${v.cr || 0}% ${v.cb || 0}% ${v.cl || 0}%)`;
+    for (const k in v) if (k[0] === '-') s.setProperty(k, v[k]);
+  }
+
+  function createStage(root, w, h, dur) {
+    const tracks = [], hooks = [];
+    const q = sel => typeof sel === 'string' ? [...root.querySelectorAll(sel)] : [].concat(sel);
+    const st = {
+      root, w, h, dur, q,
+      /* keyframes: [time, props, ease]; props carry forward to later keyframes */
+      K(sel, kfs, opt = {}) {
+        let acc = {};
+        const kf = kfs.map(([t, props = {}, e = 'io']) => (acc = { ...acc, ...props }, { t, v: acc, e }));
+        const hasTf = kf.some(k => Object.keys(k.v).some(p => TF.includes(p)));
+        q(sel).forEach((el, i) => tracks.push({ el, kf, hasTf, off: (opt.stagger || 0) * i }));
+      },
+      /* hard cut: shown only inside [a, b) */
+      S(sel, a, b) { const els = q(sel); hooks.push(t => { for (const el of els) el.style.display = t >= a && t < b ? '' : 'none'; }); },
+      H(fn) { hooks.push(fn); },
+      type(sel, a, cps = 30, gap = 0) {
+        q(sel).forEach((el, i) => {
+          const chars = [...el.textContent], start = a + gap * i;
+          hooks.push(t => { const n = clamp(Math.floor((t - start) * cps), 0, chars.length); const s = chars.slice(0, n).join(''); if (el.textContent !== s) el.textContent = s; });
+        });
+      },
+      render(t) { for (const f of hooks) f(t); for (const tr of tracks) apply(tr.el, sample(tr.kf, t - tr.off), tr.hasTf); },
+    };
+    return st;
+  }
+
+  /* film grain: four deterministic noise tiles, cycled at 24 fps */
+  const grainTiles = (() => {
+    const r = rng(7), out = [];
+    for (let n = 0; n < 4; n++) {
+      const c = document.createElement('canvas'); c.width = c.height = 200;
+      const g = c.getContext('2d'), img = g.createImageData(200, 200);
+      for (let i = 0; i < img.data.length; i += 4) { const v = r() * 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
+      g.putImageData(img, 0, 0); out.push(`url(${c.toDataURL()})`);
+    }
+    return out;
+  })();
+  function grain(st) { const els = st.q('.grain'); st.H(t => { const bg = grainTiles[Math.floor(t * 24) % 4]; for (const el of els) el.style.backgroundImage = bg; }); }
+
+  /* ───────── A · The Other Half ───────── */
+  function studyA(root) {
+    const A = createStage(root, 1920, 1080, 5);
+    grain(A);
+    A.K('.sa-left', [[0, { ct: 100 }], [0.9, { ct: 0 }, 'out']]);
+    A.K('.sa-labels li', [[0.25, { o: 0, x: -14 }], [0.6, { o: .92, x: 0 }, 'out'], [3.35, { o: .92 }], [3.55, { o: 0 }]], { stagger: .09 });
+    A.K('.sa-dash', [[0.3, { cb: 100, o: 1 }], [1.15, { cb: 0 }], [2.5, { o: 1 }], [2.8, { o: 0 }]]);
+    A.K('.sa-q', [[0.85, { o: 0, s: .85 }], [1.25, { o: 1, s: 1 }, 'out'], [1.9, { o: 1, s: 1 }], [2.2, { o: 0, s: 1.08 }]]);
+    A.K('.sa-right', [[1.95, { cr: 100 }], [2.7, { cr: 0 }]]);
+    A.K('.sa-file', [[2.35, { o: 0, y: 8 }], [2.7, { o: 1, y: 0 }, 'out'], [3.35, { o: 1 }], [3.55, { o: 0 }]]);
+    A.K('.sa-rules li', [[2.55, { o: 0, x: -10 }], [2.85, { o: 1, x: 0 }, 'out'], [3.35, { o: 1 }], [3.55, { o: 0 }]], { stagger: .08 });
+    A.K('.sa-cap1', [[0.35, { o: 0, y: 18 }], [0.95, { o: 1, y: 0 }, 'out'], [1.85, { o: 1, y: 0 }], [2.1, { o: 0, y: -10 }, 'in']]);
+    A.K('.sa-cap2', [[2.15, { o: 0, y: 18 }], [2.65, { o: 1, y: 0 }, 'out'], [3.4, { o: 1, y: 0 }], [3.62, { o: 0, y: -10 }, 'in']]);
+    A.K('.sa-orb', [[3.45, { y: 0, s: 1 }], [4.3, { y: -104, s: .46 }]]);
+    A.K('.sa-eyebrow', [[3.75, { o: 0, y: 12 }], [4.2, { o: 1, y: 0 }, 'out']]);
+    A.K('.sa-h', [[3.85, { o: 0, y: 20 }], [4.45, { o: 1, y: 0 }, 'out']]);
+    A.K('.sa-sub', [[4.1, { o: 0, y: 12 }], [4.65, { o: 1, y: 0 }, 'out']]);
+    return A;
+  }
+
+  /* ───────── B · 第 2.12 话 ───────── */
+  function studyB(root) {
+    const B = createStage(root, 1440, 1080, 5);
+    grain(B);
+    const cuts = [['.sb-c1', .06, .40], ['.sb-c2', .40, .72], ['.sb-c3', .72, 1.04], ['.sb-c4', 1.04, 1.34], ['.sb-c5', 1.34, 1.78], ['.sb-hud', 1.78, 3.4], ['.sb-t0', 3.4, 3.78], ['.sb-title', 3.78, 99]];
+    for (const [sel, a, b] of cuts) B.S(sel, a, b);
+    B.K('.sb-flash', [[1.34, { o: 0 }], [1.341, { o: .9 }, 'step'], [1.42, { o: 0 }, 'out'], [1.78, { o: 0 }], [1.781, { o: .55 }, 'step'], [1.86, { o: 0 }, 'out'], [3.78, { o: 0 }], [3.781, { o: .85 }, 'step'], [3.96, { o: 0 }, 'out']]);
+    B.K('.sb-hud .blk', [[1.78, { o: 0 }], [1.8, { o: 1 }, 'step'], [1.83, { o: .2 }, 'step'], [1.86, { o: 1 }, 'step']], { stagger: .04 });
+    B.type('.sb-term p', 1.86, 60, .2);
+    // sync ratio climbs as HUMAN.md rules land
+    const num = root.querySelector('.sb-sync .n');
+    B.H(t => { num.textContent = (41.3 + (99.8 - 41.3) * prog(t, 1.95, 3.1, 'out')).toFixed(1); });
+    const wave = root.querySelector('.sb-sync canvas'), wg = wave.getContext('2d');
+    B.H(t => {
+      if (t < 1.7 || t > 3.45) return;
+      const W = wave.width, Hh = wave.height, ph = 2.6 * (1 - prog(t, 1.95, 3.1, 'out'));
+      wg.clearRect(0, 0, W, Hh);
+      wg.strokeStyle = 'rgba(255,106,19,.25)'; wg.lineWidth = 1;
+      for (let x = 0; x < W; x += 48) { wg.beginPath(); wg.moveTo(x, 0); wg.lineTo(x, Hh); wg.stroke(); }
+      const line = (color, off) => { wg.strokeStyle = color; wg.lineWidth = 5; wg.beginPath(); for (let x = 0; x <= W; x += 6) { const y = Hh / 2 + Math.sin(x / 70 + t * 7 + off) * Hh * .34; x ? wg.lineTo(x, y) : wg.moveTo(x, y); } wg.stroke(); };
+      line('#ff6a13', 0); line('#38ff8b', ph);
+    });
+    B.S('.sb-warn .wait', 0, 2.35); B.S('.sb-warn .go', 2.35, 99);
+    const warnWait = root.querySelector('.sb-warn .wait'), warnGo = root.querySelector('.sb-warn .go');
+    B.H(t => { warnWait.style.opacity = Math.floor(t * 4) % 2 ? .35 : 1; warnGo.style.opacity = Math.floor((t - 2.35) * 6) % 2 ? .3 : 1; });
+    [['.m1', 2.3], ['.m2', 2.38], ['.m3', 2.46]].forEach(([m, sw]) => { B.S(`${m} .ok`, 0, sw); B.S(`${m} .hand`, sw, 99); });
+    // hex field, drawn once
+    const hex = root.querySelector('.sb-hex'), hg = hex.getContext('2d'), r = rng(12), R = 36;
+    for (let row = 0, y = 0; y < 1120; row++, y += R * 1.5) for (let x = (row % 2) * R * .866; x < 1480; x += R * 1.732) {
+      hg.beginPath(); for (let i = 0; i < 6; i++) { const a = Math.PI / 3 * i + Math.PI / 6; hg.lineTo(x + R * .94 * Math.cos(a), y + R * .94 * Math.sin(a)); } hg.closePath();
+      const v = r(); if (v > .965) { hg.fillStyle = 'rgba(227,22,27,.35)'; hg.fill(); }
+      hg.strokeStyle = 'rgba(255,106,19,.16)'; hg.lineWidth = 1.5; hg.stroke();
+    }
+    // gate weave on the title cards + projector flicker
+    const cards = B.q('.sb-card'), hud = root.querySelector('.sb-hud'), wr = rng(3), weave = [...Array(240)].map(() => [wr() * 2.4 - 1.2, wr() * 2.4 - 1.2, wr()]);
+    B.H(t => { const [jx, jy, f] = weave[Math.floor(t * 24) % 240]; for (const c of cards) c.style.translate = `${jx}px ${jy}px`; hud.style.filter = `brightness(${.94 + f * .12})`; });
+    return B;
+  }
+
+  /* ───────── C · 一次协作的进化 ───────── */
+  function studyC(root) {
+    const C = createStage(root, 1920, 1080, 5);
+    grain(C);
+    C.K('.sc-glow', [[0, { x: 0, y: 0 }], [5, { x: -60, y: 30 }, 'lin']]);
+    C.K('.sc-chat', [[0, { o: 0, x: 40, z: -260, ry: 16, rx: 4, b: 0, br: 1 }], [0.8, { o: 1, x: 0, z: 0, ry: 9, rx: 2 }, 'out'], [1.8, { x: 0, z: 0, ry: 9 }], [2.8, { x: -90, z: -170, ry: 17 }], [3.5, {}], [4.1, { z: -340, br: .2, b: 8 }]]);
+    C.K('.sc-doc', [[1.85, { o: 0, x: 280, z: -220, ry: -36, rx: 2, b: 0, br: 1 }], [2.75, { o: 1, x: 0, z: 0, ry: -12 }, 'out'], [3.5, {}], [4.1, { z: -340, br: .2, b: 8 }]]);
+    C.K('.msg-user', [[0.3, { o: 0, y: 14 }], [0.65, { o: 1, y: 0 }, 'out']]);
+    C.K('.msg-agent', [[0.8, { o: 0, y: 14 }], [1.1, { o: 1, y: 0 }, 'out']]);
+    C.type('.msg-agent .text', 0.9, 44);
+    C.K('.hcard', [[1.35, { o: 0, y: 16, s: .97, '--g': 0 }], [1.75, { o: 1, y: 0, s: 1 }, 'back'], [1.95, { '--g': 1 }], [2.9, { '--g': 0 }]]);
+    C.K('.doc-md .li.new', [[2.45, { '--hl': 0 }], [2.8, { '--hl': 1 }]]);
+    C.type('.doc-md .tw', 2.6, 38);
+    C.K('.sc-cap', [[2.3, { o: 0, y: 16 }], [2.75, { o: 1, y: 0 }, 'out'], [3.5, { o: 1, y: 0 }], [3.72, { o: 0, y: -8 }, 'in']]);
+    C.K('.sc-end', [[3.8, { o: 0, y: 18, b: 8 }], [4.35, { o: 1, y: 0, b: 0 }, 'out']]);
+    return C;
+  }
+
+  /* ───────── player ───────── */
+  const builders = { a: studyA, b: studyB, c: studyC };
+  const stages = {};
+  document.querySelectorAll('[data-player]').forEach(p => { const id = p.dataset.player; stages[id] = builders[id](p.querySelector('.stage')); });
+
+  const capture = new URLSearchParams(location.search).get('capture');
+  if (capture && stages[capture]) {
+    const st = stages[capture];
+    document.head.append(...document.querySelectorAll('body style, body link'));
+    document.body.replaceChildren(st.root);
+    document.body.style.margin = '0';
+    st.root.style.transform = 'none';
+    window.__stage = { w: st.w, h: st.h, dur: st.dur, seek: t => st.render(t) };
+    st.render(0);
+    return;
+  }
+
+  const HOLD = .7, reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const players = [];
+  document.querySelectorAll('[data-player]').forEach(el => {
+    const st = stages[el.dataset.player], frame = el.querySelector('.frame');
+    const ctr = document.createElement('div'); ctr.className = 'controls';
+    const id = el.dataset.player;
+    ctr.innerHTML = `<button type="button" id="play-${id}" data-act="play" aria-label="播放或暂停"><span class="ic">❚❚</span><span class="lbl">暂停</span></button>
+      <input type="range" id="seek-${id}" min="0" max="${st.dur}" step="0.01" value="0" aria-label="进度">
+      <output id="time-${id}">0.00 / ${st.dur.toFixed(2)}s</output>
+      <button type="button" id="slow-${id}" data-act="slow" aria-pressed="false"><span>0.25×</span></button>`;
+    el.appendChild(ctr);
+    const btn = ctr.querySelector('[data-act=play]'), range = ctr.querySelector('input'), out = ctr.querySelector('output'), slow = ctr.querySelector('[data-act=slow]');
+    const P = { st, t: 0, playing: !reduced, rate: 1 };
+    const show = () => { const t = Math.min(P.t, st.dur); st.render(t); range.value = t; out.textContent = `${t.toFixed(2)} / ${st.dur.toFixed(2)}s`; btn.querySelector('.ic').textContent = P.playing ? '❚❚' : '▶'; btn.querySelector('.lbl').textContent = P.playing ? '暂停' : '播放'; };
+    P.show = show;
+    P.step = dt => { if (!P.playing) return; P.t += dt * P.rate; if (P.t > st.dur + HOLD) P.t = 0; show(); };
+    btn.addEventListener('click', () => { P.playing = !P.playing; if (P.playing && P.t >= st.dur) P.t = 0; show(); });
+    range.addEventListener('input', () => { P.playing = false; P.t = +range.value; show(); });
+    slow.addEventListener('click', () => { P.rate = P.rate === 1 ? .25 : 1; slow.setAttribute('aria-pressed', P.rate !== 1); });
+    const fit = () => { st.root.style.transform = `scale(${frame.clientWidth / st.w})`; };
+    new ResizeObserver(fit).observe(frame); fit();
+    if (reduced) P.t = st.dur;
+    show();
+    players.push(P);
+    frame.addEventListener('click', () => btn.click());
+  });
+  document.addEventListener('keydown', e => {
+    if (e.code !== 'Space' || e.target.closest('input,button')) return;
+    e.preventDefault();
+    const vis = players.find(p => { const r = p.st.root.parentElement.getBoundingClientRect(); return r.top < innerHeight / 2 && r.bottom > innerHeight / 2; }) || players[0];
+    vis.playing = !vis.playing; vis.show();
+  });
+  let last = null;
+  const tick = now => { const dt = last == null ? 0 : Math.min(.1, (now - last) / 1000); last = now; for (const p of players) p.step(dt); requestAnimationFrame(tick); };
+  const start = () => requestAnimationFrame(tick);
+  Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]).then(start);
+})();
+</script>
