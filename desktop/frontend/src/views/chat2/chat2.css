@@ -157,6 +157,8 @@
   cursor: pointer; transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
 }
 .t2-iconbtn:hover { background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text); }
+/* 暂不可用(「插入笔记」没有可插的笔记,G3-08):仍可点 —— 点了给说明;与 :hover 同特异性,必须排在它后面 */
+.t2-iconbtn[aria-disabled="true"], .t2-iconbtn[aria-disabled="true"]:hover { background: transparent; color: var(--text-faint, var(--text-muted)); opacity: .45; cursor: default; }
 
 /* ====== 用户消息(暖色带尾气泡,右对齐 + 昵称/头像) ====== */
 .t2-userwrap { display: flex; justify-content: flex-end; align-items: flex-start; gap: 8px; }
