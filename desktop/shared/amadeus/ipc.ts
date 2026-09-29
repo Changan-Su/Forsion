@@ -322,8 +322,12 @@ export interface ExternalPluginSource {
    *  ⚠️ 名字不叫 builtin:渲染层 pluginStore 用 `builtin` 区分「代码里注册的内置插件」与外置来源(reload 时按它筛),
    *  播种来的仍是外置来源,只是不可卸载。 */
   preinstalled?: boolean
-  /** 内置且带主进程半身(Forsion Extend):渲染半身的启停开关对主进程半身是空操作(每次启动都装),设置页不给开关。 */
+  /** 内置且带主进程半身(Forsion Extend):主进程半身开机前装载、不能热卸,设置页的开关改的是下次开机装不装(bundleOff)。 */
   locked?: boolean
+  /** locked 包下次开机不装主进程半身(桌面配置 disabledBundles)。 */
+  bundleOff?: boolean
+  /** locked 包的开关自本次开机以来改过 → 重启才生效。 */
+  restartPending?: boolean
   /** Agent 自建 Space 插件(2026-09-11):来源 `<tangu>/agents/<slug>/Space/`,id 固定 `agent-<slug>`;不可卸载(关开关即可),
    *  capabilities / fileExtensions / requiresApp / onboarding / bundle 一律不带(没有「用户点安装」这一步授权)。值 = agent slug。 */
   agent?: string

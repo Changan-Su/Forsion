@@ -36,9 +36,9 @@ async function main() {
   const banner = page.locator('.t2-quota-advisory')
   await banner.waitFor()
 
-  check('显示更紧张的本周额度', (await banner.textContent()).includes('本周托管 AI 额度即将用尽，仅剩 8%'))
+  check('显示更紧张的本周额度', (await banner.textContent()).includes('本周 AI 额度即将用尽，仅剩 8%'))
   check('显示升级会员', await banner.getByText('升级会员', { exact: true }).isVisible())
-  check('显示可用重置卡数', await banner.getByText('使用重置卡 (2)', { exact: true }).isVisible())
+  check('显示可用重置卡数', await banner.getByText('使用额度重置卡（2）', { exact: true }).isVisible())
   const geometry = await page.locator('.quota-harness-chat').evaluate((root) => {
     const strip = root.querySelector('.t2-quota-advisory').getBoundingClientRect()
     const cardEl = root.querySelector('.t2c-card')
@@ -62,15 +62,15 @@ async function main() {
   await banner.waitFor()
   check('进入 5% 档会重新提醒', (await banner.textContent()).includes('严重不足，仅剩 4%'))
 
-  await banner.getByText('使用重置卡 (2)', { exact: true }).click()
-  check('使用重置卡需要二次确认', await banner.getByText('再次点击确认', { exact: true }).isVisible())
+  await banner.getByText('使用额度重置卡（2）', { exact: true }).click()
+  check('使用额度重置卡需要二次确认', await banner.getByText('再次点击确认', { exact: true }).isVisible())
   await banner.getByText('再次点击确认', { exact: true }).click()
   await banner.waitFor({ state: 'detached' })
   check('额度恢复后提示消失', await banner.count() === 0)
 
   await page.evaluate(() => window.__quotaHarness.setQuota({ dailyRemaining: 0, weeklyRemaining: 40, resetCards: 0 }))
   await banner.waitFor()
-  check('耗尽状态与无卡状态正确', (await banner.textContent()).includes('今日托管 AI 额度已用尽') && (await banner.textContent()).includes('暂无重置卡'))
+  check('耗尽状态与无卡状态正确', (await banner.textContent()).includes('今日 AI 额度已用尽') && (await banner.textContent()).includes('暂无额度重置卡'))
 
   if (process.argv.some((arg) => arg.startsWith('--shot'))) {
     const out = path.join(os.tmpdir(), 'forsion-quota-banner')
@@ -94,10 +94,10 @@ async function main() {
   await page.evaluate((bg) => window.__quotaHarness.setQuota({ dailyRemaining: 70, weeklyRemaining: 70, resetCards: 2, background: bg }), bgExhausted)
   // 上一步的主额度提示条还在:等换成后台那条再读,别在重渲前读到旧的
   await page.locator('.t2-quota-advisory[data-bucket="background"]').waitFor()
-  check('后台桶用尽占用同一个提醒位', (await banner.getAttribute('data-bucket')) === 'background' && (await banner.textContent()).includes('后台 Agent 今日额度已用尽，Muse 与自动化已暂停'))
+  check('后台桶用尽占用同一个提醒位', (await banner.getAttribute('data-bucket')) === 'background' && (await banner.textContent()).includes('今日后台额度已用尽，Muse 与自动化已暂停'))
   check('始终只有一条提示条', await page.locator('.t2-quota-advisory').count() === 1)
   check('后台那条不挂重置卡', !(await banner.textContent()).includes('重置卡'))
-  check('后台那条有转入与设置', await banner.getByText('从主额度转入 10%', { exact: true }).isVisible() && await banner.getByText('后台额度设置', { exact: true }).isVisible())
+  check('后台那条有转入与设置', await banner.getByText('从 AI 额度转入 10%', { exact: true }).isVisible() && await banner.getByText('后台额度设置', { exact: true }).isVisible())
   if (process.argv.some((arg) => arg.startsWith('--shot'))) {
     const out = path.join(os.tmpdir(), 'forsion-quota-banner')
     await page.screenshot({ path: path.join(out, 'quota-bg-light.png') })
@@ -107,7 +107,7 @@ async function main() {
     check('后台那条窄栏不横向溢出', narrow.left >= 0 && narrow.right <= narrow.viewport, narrow)
     await page.setViewportSize({ width: 1000, height: 720 })
   }
-  await banner.getByText('从主额度转入 10%', { exact: true }).click()
+  await banner.getByText('从 AI 额度转入 10%', { exact: true }).click()
   check('转入需要二次确认', await banner.getByText('再次点击确认', { exact: true }).isVisible())
   await banner.getByText('再次点击确认', { exact: true }).click()
   await banner.waitFor({ state: 'detached' })

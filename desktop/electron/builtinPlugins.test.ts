@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest, BUILTIN_BUNDLES, type BuiltinSource } from './builtinPlugins'
+import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest, BUILTIN_BUNDLES, type BuiltinSource, initBundleSwitches, setBundleOff, bundleOff, bundleRestartPending } from './builtinPlugins'
 import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 const write = async (dir: string, files: Record<string, string>): Promise<void> => {
@@ -215,5 +215,24 @@ describe('builtinBundleSources', () => {
     expect(builtinBundleSources(base).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend'])
     expect(BUILTIN_BUNDLES.find((b) => b.id === 'tangu-computer-use')?.requires).toBe('agentBackend')
     expect(BUILTIN_BUNDLES.find((b) => b.id === 'forsion-extend')?.requires).toBeUndefined()
+  })
+})
+
+// 插件页拨带主进程半身的包(Forsion Extend):待重启 = 开关自本次开机以来改过,拨回去就不待了。
+// ⚠️ 不能拿「装上了没有」判 —— 验签 / 版本闸挡下的包重启也装不上,提示会永远挂着。
+describe('bundle switches', () => {
+  it('restart is pending only while the switch differs from what this launch loaded', () => {
+    initBundleSwitches(['forsion-extend'])
+    expect(bundleOff('forsion-extend')).toBe(true)
+    expect(bundleRestartPending('forsion-extend')).toBe(false)
+    setBundleOff('forsion-extend', false)
+    expect(bundleOff('forsion-extend')).toBe(false)
+    expect(bundleRestartPending('forsion-extend')).toBe(true)
+    setBundleOff('forsion-extend', true)
+    expect(bundleRestartPending('forsion-extend')).toBe(false)
+    initBundleSwitches([])
+    setBundleOff('forsion-extend', true)
+    expect(bundleRestartPending('forsion-extend')).toBe(true)
+    expect(bundleRestartPending('tangu-computer-use')).toBe(false)
   })
 })
