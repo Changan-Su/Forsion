@@ -12,7 +12,7 @@ const env = vi.hoisted(() => ({ sources: [] as ExternalPluginSource[] }))
 vi.mock('../api', () => ({
   amadeus: { listPlugins: async () => env.sources, listPages: async () => [], listFiles: async () => [] },
 }))
-const { usePluginStore } = await import('./pluginStore')
+const { usePluginStore, setResetCardCeremonyHandler } = await import('./pluginStore')
 
 const DISABLED_KEY = 'amadeus.plugins.disabled'
 const src = (over: Partial<ExternalPluginSource> & { id: string }): ExternalPluginSource => ({ name: over.id, version: '0.0.1', apiVersion: 1, code: '', ...over })
@@ -56,5 +56,24 @@ describe('locked 包的渲染半身跟主进程开关走', () => {
     env.sources = [src({ id: 'third' })]
     await usePluginStore.getState().loadExternal()
     expect(usePluginStore.getState().activeIds).not.toContain('third')
+  })
+})
+
+// ctx.app.showResetCardCeremony:「你的额度已恢复」那张动画只让首方内置包弹,别的插件调了是 no-op。
+// 落点是应用层登记的处理函数,不是公开窗口事件(插件能自己派发事件,Codex 评审 P1)。
+// 负对照:删掉 pluginStore 里的 locked 判断 → 这条红(third 也进来)。
+describe('ctx.app.showResetCardCeremony 只放行首方内置包', () => {
+  it('locked 包 → 交给应用层;普通插件 → 不交', async () => {
+    const seen: unknown[] = []
+    setResetCardCeremonyHandler((r) => { seen.push(r) })
+    const code = 'ctx.app.showResetCardCeremony({ before: { dailyLimit: 10, dailyRemaining: 0 }, after: { dailyLimit: 10, dailyRemaining: 10 }, remainingCards: 1 })'
+    env.sources = [
+      src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false, code }),
+      src({ id: 'third', code }),
+    ]
+    await usePluginStore.getState().loadExternal()
+    setResetCardCeremonyHandler(null)
+    expect(usePluginStore.getState().activeIds).toEqual(expect.arrayContaining(['forsion-extend', 'third']))
+    expect(seen).toEqual([{ before: { dailyLimit: 10, dailyRemaining: 0 }, after: { dailyLimit: 10, dailyRemaining: 10 }, remainingCards: 1 }])
   })
 })

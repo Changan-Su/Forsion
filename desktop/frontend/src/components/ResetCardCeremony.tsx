@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import { Check, RotateCcw, X } from 'lucide-react'
-import { registerMessages, useI18n } from '../i18n'
+import { HostLocaleProvider, registerMessages, useI18n } from '../i18n'
 import { formatRemaining, remainingPercent as remainingOf, type AccountQuotaView } from '../services/accountQuota'
 import './resetCardCeremony.css'
 
@@ -103,4 +104,15 @@ export function ResetCardCeremony({ result, onClose, returnFocusSelector }: { re
       </section>
     </div>, document.body,
   )
+}
+
+/** 不挂在任何组件树上的一次性弹出:菜单用完卡就关了,插件(ctx.app.showResetCardCeremony)也没有 React 树可挂。 */
+export function presentResetCardCeremony(result: ResetCardResult, returnFocusSelector = '.ribbon-account, .account-card'): void {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  // 关闭钮的点击还在这棵树的事件里:推到下一拍再卸,免得同步卸载正在派发事件的根
+  let closed = false
+  const close = (): void => { if (!closed) { closed = true; queueMicrotask(() => { root.unmount(); host.remove() }) } }
+  root.render(<HostLocaleProvider><ResetCardCeremony result={result} onClose={close} returnFocusSelector={returnFocusSelector} /></HostLocaleProvider>)
 }

@@ -1,16 +1,16 @@
 /**
  * 侧栏左下角 Forsion 账号卡(forsion-ui UserProfileCard 规范):
  *  - 已登录:36px 头像(URL,或渐变圆+首字母)+ 昵称 + 会员徽章(TierBadge);
- *    点击弹出账号菜单。2026-09-28 起菜单只留四样:头部(→ 设置「Forsion 云端 → 账号」)、一行 AI 额度摘要
- *    (→「额度与积分」)、切换账号、退出登录 —— 升级、重置卡、邀请、网页个人中心都收进 Extend 画的那几页,
- *    菜单里不再各放一份(个人中心盘点:同一件事三四个入口、说法各不相同)。悬停露出「退出登录」。
+ *    点击弹出账号菜单:头部(→ 设置「Forsion 云端 → 账号」)、AI 额度(点开看今日 / 本周 / 后台额度、用额度重置卡、
+ *    升级会员、去「额度与积分」)、切换账号、退出登录。邀请、网页个人中心在 Extend 画的那几页里。悬停露出「退出登录」。
+ *    09-28 曾把额度详情和用卡收进设置页,09-29 用户要回:额度随手看、卡随手用,用完弹用卡动画。
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OverlayAt } from '@lcl/engine'
-import { LogIn, LogOut, Loader2, Gauge, ChevronRight, RotateCcw } from 'lucide-react'
+import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react'
 import type { AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
@@ -18,6 +18,8 @@ import { track } from '../achievements/store'
 import { AccountSwitcher } from './AccountSwitcher'
 import { formatRemaining, publishAccountQuota, remainingPercent, type AccountQuotaView } from '../services/accountQuota'
 import { useApp } from '../stores/appStore'
+import { museAvailable } from '../features/runtime'
+import { presentResetCardCeremony } from './ResetCardCeremony'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -25,7 +27,30 @@ registerMessages({
   'sidebar.account.menu.quota': { zh: 'AI 额度', en: 'AI quota' },
   'sidebar.account.menu.quotaLine': { zh: '今日 {daily} · 本周 {weekly}', en: 'Today {daily} · This week {weekly}' },
   'sidebar.account.menu.openAccount': { zh: '账号设置', en: 'Account settings' },
+  'sidebar.account.menu.background': { zh: '后台额度', en: 'Background quota' },
+  'sidebar.account.menu.backgroundHint': {
+    zh: '主额度之外额外的一份，只计 Muse 与自动化用云端默认后台模型的用量',
+    en: 'An extra allowance on top of your main quota, used only by Muse and automations on the cloud default background model',
+  },
+  'sidebar.account.menu.resetOn': { zh: '{date} 重置', en: 'Resets {date}' },
+  'sidebar.account.menu.useCard': { zh: '使用额度重置卡（{n} 张）', en: 'Use a quota reset card ({n} left)' },
+  'sidebar.account.menu.useCardConfirm': { zh: '再点一次确认使用', en: 'Click again to confirm' },
+  'sidebar.account.menu.noCard': { zh: '没有可用的额度重置卡', en: 'No quota reset card available' },
+  'sidebar.account.menu.useCardFail': { zh: '额度重置卡使用失败', en: "Couldn't use the quota reset card" },
+  'sidebar.account.menu.upgrade': { zh: '升级会员', en: 'Upgrade membership' },
+  'sidebar.account.menu.more': { zh: '额度与积分', en: 'Quota and points' },
 })
+
+/** 后台额度两轴里更紧的那个的剩余百分比;两轴都不限 → null。 */
+const tighter = (...pcts: Array<number | null>): number | null => {
+  const axes = pcts.filter((x): x is number => x !== null)
+  return axes.length ? Math.min(...axes) : null
+}
+/** 周重置日是北京日历日的纯日期串:手工拆,不过 new Date()(按 UTC 解析,西时区会少一天)。 */
+const shortDate = (d?: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || '')
+  return m ? `${Number(m[2])}/${Number(m[3])}` : ''
+}
 
 /** 「Forsion 云端」里 Extend 画的子页(registerSettingsView category 'forsion')。没有 Extend 的设备页 / 旧宿主不给跳。 */
 const openCloudPage = (id: 'account' | 'quota'): void =>
@@ -44,10 +69,15 @@ export const AccountCard: React.FC<{
   const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
+  const [quotaOpen, setQuotaOpen] = useState(false)
+  const [confirmCard, setConfirmCard] = useState(false)
+  const [usingCard, setUsingCard] = useState(false)
   const authRequest = useRef(0)
   const authAction = useRef(0)
   const actionBusy = useRef(false)
   const quotaRequest = useRef(0)
+  /** 账号代次:只在登录 / 切号 / 登出时变。用卡结果只在换了账号时才丢 —— 关掉再开菜单不能丢(会按旧张数再点、多耗一张)。 */
+  const accountGen = useRef(0)
 
   const refresh = useCallback(() => {
     const request = ++authRequest.current
@@ -64,6 +94,7 @@ export const AccountCard: React.FC<{
     })
     // 登录态变化(本窗/他窗登录登出、CLI tangu login 等外部来源经主进程 auth.json watcher 广播)→ 重拉。
     const offAuth = window.tangu?.onAuthChanged?.(() => {
+      ++accountGen.current
       ++quotaRequest.current
       setAuth(null)
       setMenu(null)
@@ -95,6 +126,7 @@ export const AccountCard: React.FC<{
     const action = ++authAction.current
     ++authRequest.current
     ++quotaRequest.current
+    ++accountGen.current
     setLoggingIn(true)
     setMenu(null)
     setQuota(null)
@@ -115,6 +147,7 @@ export const AccountCard: React.FC<{
     const action = ++authAction.current
     ++authRequest.current
     ++quotaRequest.current
+    ++accountGen.current
     actionBusy.current = true
     setLoggingIn(true)
     setMenu(null)
@@ -136,6 +169,8 @@ export const AccountCard: React.FC<{
   const openMenu = (el: HTMLElement): void => {
     const r = el.getBoundingClientRect()
     setMenu({ x: r.left, y: r.top, anchorTop: r.top })
+    setQuotaOpen(false) // 同 09-28 前:每次打开从收起的一行摘要起步
+    setConfirmCard(false)
     setQuotaErr(false)
     setQuota(null) // 每次打开都从「加载中」起步,别让上一次的旧数据把失败盖成正常(codex#10)
     const request = ++quotaRequest.current
@@ -164,6 +199,36 @@ export const AccountCard: React.FC<{
       window.removeEventListener('blur', close)
     }
   }, [menu])
+
+  // 两击确认(防误耗);成功就关菜单、弹用卡动画。失败不一定没核销(服务端先核销再读额度,回包可能丢)→ 关菜单,
+  // 下次打开重拉张数,免得照旧张数再点一次多用一张。在途期间 usingCard 一直锁着按钮(关掉再开菜单也锁着),
+  // 结果只在换了账号时丢;菜单这时开着就顺手换上回包里的新额度(Codex 评审 P1)
+  const useCard = async (): Promise<void> => {
+    if (usingCard || !quota) return
+    if (!confirmCard) { setConfirmCard(true); return }
+    setUsingCard(true)
+    const gen = accountGen.current
+    const before = quota
+    try {
+      const r = await window.tangu?.accountUseResetCard?.('both')
+      if (gen !== accountGen.current) return
+      ++quotaRequest.current // 在途的额度 GET 作废:它可能比用卡早读到旧张数
+      setMenu(null)
+      if (r?.status === 200 && r.json?.success) {
+        const next = { ...(r.json.quota || {}), resetCards: r.json.resetCards } as AccountQuotaView
+        setQuota(next)
+        publishAccountQuota(next)
+        presentResetCardCeremony({ scope: 'both', before, after: next, remainingCards: r.json.resetCards })
+      } else {
+        onToast?.(r?.json?.error === 'no_reset_card' ? t('sidebar.account.menu.noCard') : String(r?.json?.detail || t('sidebar.account.menu.useCardFail')), true)
+      }
+    } catch (e: any) {
+      if (gen === accountGen.current) { setMenu(null); onToast?.(String(e?.message || e), true) }
+    } finally {
+      setUsingCard(false)
+      setConfirmCard(false)
+    }
+  }
 
   const loggedIn = !!auth?.loggedIn
   const hasQuota = !!window.tangu?.accountQuota
@@ -228,20 +293,59 @@ export const AccountCard: React.FC<{
       {engineDown && <button className="ap-item" onClick={() => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) }}>
         <RotateCcw size={14} /><span>{t('sidebar.account.engineDown')}</span>
       </button>}
-      {/* 一行 AI 额度摘要(口径同全端:剩余向下取整、不足 1% 写 <1%)→「额度与积分」 */}
-      {loggedIn && hasQuota && (
-        <button className="ap-item" disabled={!hasCloudPages} onClick={() => { setMenu(null); openCloudPage('quota') }}>
-          <Gauge size={14} /><span>{t('sidebar.account.menu.quota')}</span><span className="grow" />
-          <span className="ap-dim">
-            {quota
-              ? t('sidebar.account.menu.quotaLine', {
-                daily: formatRemaining(remainingPercent(quota.dailyLimit, quota.dailyRemaining, quota.dailyPercent), t('sidebar.account.menu.unlimited')),
-                weekly: formatRemaining(remainingPercent(quota.weeklyLimit, quota.weeklyRemaining, quota.weeklyPercent), t('sidebar.account.menu.unlimited')),
-              })
-              : quotaErr ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')}
-          </span>
-        </button>
-      )}
+      {/* AI 额度:收起时一行摘要,点开看各项、用卡、升级(数字口径同全端 formatRemaining,每个数字只出现一次) */}
+      {loggedIn && hasQuota && (() => {
+        const unlimited = t('sidebar.account.menu.unlimited')
+        const daily = quota ? remainingPercent(quota.dailyLimit, quota.dailyRemaining, quota.dailyPercent) : null
+        const weekly = quota ? remainingPercent(quota.weeklyLimit, quota.weeklyRemaining, quota.weeklyPercent) : null
+        const bg = quota?.background
+        const bgPct = bg ? tighter(remainingPercent(bg.dailyLimit, bg.dailyRemaining, bg.dailyPercent), remainingPercent(bg.weeklyLimit, bg.weeklyRemaining, bg.weeklyPercent)) : null
+        const cards = Math.max(0, Number(quota?.resetCards) || 0)
+        const resetDate = quota && quota.weeklyLimit >= 0 ? shortDate(quota.weeklyResetAt) : ''
+        return <>
+          <button className="ap-item" aria-expanded={quotaOpen} onClick={() => { setQuotaOpen((v) => !v); setConfirmCard(false) }}>
+            <Gauge size={14} /><span>{t('sidebar.account.menu.quota')}</span><span className="grow" />
+            {!quotaOpen && <span className="ap-dim">
+              {quota
+                ? t('sidebar.account.menu.quotaLine', { daily: formatRemaining(daily, unlimited), weekly: formatRemaining(weekly, unlimited) })
+                : quotaErr ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')}
+            </span>}
+            {quotaOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
+          {quotaOpen && <div className="ap-usage" data-testid="account-quota-detail">
+            {quota ? <>
+              <div className="ap-row"><span>{t('sidebar.account.menu.daily')}</span><span className="grow" /><b>{formatRemaining(daily, unlimited)}</b></div>
+              <div className="ap-row">
+                <span>{t('sidebar.account.menu.weekly')}</span><span className="grow" /><b>{formatRemaining(weekly, unlimited)}</b>
+                {!!resetDate && <span className="ap-dim">{t('sidebar.account.menu.resetOn', { date: resetDate })}</span>}
+              </div>
+              {/* 后台额度:Muse 只在桌面本地引擎跑;服务端没配计入模型 → 不显示 */}
+              {museAvailable() && !!bg?.modelId && (
+                <div className="ap-row" data-row="background" title={t('sidebar.account.menu.backgroundHint')}>
+                  <span>{t('sidebar.account.menu.background')}</span><span className="grow" /><b>{formatRemaining(bgPct, unlimited)}</b>
+                </div>
+              )}
+            </> : <div className="ap-row ap-dim">{quotaErr ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')}</div>}
+            {cards > 0 && !!window.tangu?.accountUseResetCard && (
+              <button className="ap-item ap-sub-item" disabled={usingCard} onClick={() => void useCard()}>
+                <RotateCcw size={12} className={usingCard ? 'spin' : undefined} />
+                <span>{confirmCard ? t('sidebar.account.menu.useCardConfirm') : t('sidebar.account.menu.useCard', { n: String(cards) })}</span>
+              </button>
+            )}
+            {/* 升级入口不依赖额度接口成败 */}
+            {!!window.tangu?.openPayCenter && (
+              <button className="ap-item ap-sub-item" onClick={() => { setMenu(null); void window.tangu?.openPayCenter?.() }}>
+                <span>{t('sidebar.account.menu.upgrade')}</span><span className="grow" /><ExternalLink size={12} />
+              </button>
+            )}
+            {hasCloudPages && (
+              <button className="ap-item ap-sub-item" onClick={() => { setMenu(null); openCloudPage('quota') }}>
+                <span>{t('sidebar.account.menu.more')}</span><span className="grow" /><ChevronRight size={12} />
+              </button>
+            )}
+          </div>}
+        </>
+      })()}
       <AccountSwitcher menu busy={loggingIn} onSelect={(id) => void login(id)} onAdd={() => void login()} />
       {loggedIn && <button className="ap-item ap-danger" onClick={() => { setMenu(null); void logout() }}>
         <LogOut size={14} /><span>{t('sidebar.account.logout')}</span>

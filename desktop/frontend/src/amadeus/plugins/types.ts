@@ -130,6 +130,14 @@ export interface ThemeContribution {
  * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / 自己的视图 DOM)。
  * 新增方法时把「需库 / 无需库」写进它的注释,别让下一个人再踩。
  */
+/** showResetCardCeremony 的额度快照(服务端 /token-quota/my 字段;-1 = 不限)。 */
+export interface ResetCardQuota {
+  dailyLimit?: number
+  dailyRemaining?: number
+  weeklyLimit?: number
+  weeklyRemaining?: number
+}
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -143,6 +151,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** 2026-09-28+:打开设置到某一页或某个子页,口径同宿主深链(如 'model/m-providers'、'forsion/fx:forsion-extend:quota')。
    *  旧宿主 / 没有设置页的宿主没有:`ctx.app.openSettings?.(…)`。 */
   openSettings?(target: string): void
+  /** 2026-09-29+:用完一张额度重置卡后弹宿主那张用卡动画(与左下角账号菜单同一张)。只对首方内置包(locked)生效,
+   *  别的插件调了是 no-op —— 这张卡说的是「你的额度已恢复」,不能让任意插件拿假数字弹。字段 = 服务端 /token-quota/my 原样。
+   *  旧宿主没有:`ctx.app.showResetCardCeremony?.(…)`,没有就自己画结果。 */
+  showResetCardCeremony?(result: { before: ResetCardQuota; after: ResetCardQuota; remainingCards?: number }): void
   openSwitcher(): void
   /** Show a transient toast. */
   notify(message: string): void

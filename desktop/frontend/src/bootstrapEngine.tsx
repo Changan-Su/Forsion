@@ -42,12 +42,14 @@ import { ChangelogView } from './views/ChangelogView'
 import { initUiZoom } from './uiZoom'
 import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
-import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
+import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
 import { installDeepLinks } from './deepLinkInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
+import { presentResetCardCeremony } from './components/ResetCardCeremony'
+import type { AccountQuotaView } from './services/accountQuota'
 
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
 // **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
@@ -208,6 +210,16 @@ export function installEngine(): void {
   window.addEventListener('forsion:open-settings', (e) => {
     const target = (e as CustomEvent<unknown>).detail
     if (typeof target === 'string' && target) useApp.getState().openSettings(target as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
+  })
+  // 插件的 ctx.app.showResetCardCeremony(pluginStore 已只放行首方内置包):弹与账号菜单同一张用卡动画。
+  // 缺的上限按 -1(不限)补 → 那一行不画,不会凭空编出百分比
+  setResetCardCeremonyHandler((r) => {
+    const view = (q?: { dailyLimit?: unknown; dailyRemaining?: unknown; weeklyLimit?: unknown; weeklyRemaining?: unknown }): AccountQuotaView => ({
+      dailyLimit: Number(q?.dailyLimit ?? -1), dailyRemaining: q?.dailyRemaining as number | undefined,
+      weeklyLimit: Number(q?.weeklyLimit ?? -1), weeklyRemaining: q?.weeklyRemaining as number | undefined,
+    })
+    const left = Number(r?.remainingCards)
+    presentResetCardCeremony({ scope: 'both', before: view(r?.before), after: view(r?.after), remainingCards: Number.isFinite(left) ? left : undefined })
   })
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
   // 上面的同步策略跑在装载之前,若目标是某个用户 Space,那时它还没注册 → 装载完成后补定位。两种补法:
