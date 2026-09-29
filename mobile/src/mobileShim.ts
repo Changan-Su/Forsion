@@ -13,6 +13,7 @@
  * 共享 UI(bootstrap 的启动静默检查→自动弹「更新」页、设置-关于的按钮)全靠可选链探测,移动端缺席
  * = 装了旧版也永远没有任何提示。安装仍由系统完成(下载 APK 手动安装),故不实现 installUpdate。
  */
+import { registerPlugin } from '@capacitor/core'
 import { App } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
@@ -21,6 +22,9 @@ import { APP_VERSION } from '@/changelog'
 import { isNewer } from '../../desktop/shared/updateVersion'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
+import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
+import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
+import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
 
 const TOKEN_KEY = 'forsion_token'
 // 本机偏好(默认模型 / 生图模型 / 上次审批档与思考档…)。移动端没有引擎的 ~/.tangu/config.json,
@@ -28,7 +32,7 @@ const TOKEN_KEY = 'forsion_token'
 const PREFS_KEY = 'forsion_mobile_config'
 // 连接身份一律由垫片现算,永不接受落盘覆盖:native 的 token 刻意住 Capacitor Preferences,
 // 放任 `{token}` 的 patch 镜像进 localStorage 等于自己开一道后门。
-const IDENTITY_KEYS = ['mode', 'backendUrl', 'token', 'cloudUrl', 'sandbox']
+const IDENTITY_KEYS = ['mode', 'backendUrl', 'token', 'cloudUrl', 'cloudApiBase', 'sandbox']
 
 function readPrefs(): Record<string, unknown> {
   try {
@@ -47,16 +51,23 @@ function gotoWebLogin(force = false): void {
 
 /** 用 token + 后端基址装 window.tangu(两条路共用)。login/logout 落点按 native/web 分。 */
 function setWindowTangu(backendUrl: string, token: string, native: boolean): void {
+  // P1-K6 S1:两个基址分家。cloudApiBase = Forsion 云端 API(登录态 / 额度 / 名册 / 更新源 / 云桥),
+  // backendUrl = 本端引擎。手机的 home 引擎就是云网关,所以今天两者同值;引擎切到「我的电脑」时只换 backendUrl。
+  // 云端读者一律读 cloudApiBase(源码守卫:desktop/frontend/src/services/engine/cloudBase.test.ts)。
+  const cloudApiBase = backendUrl
   const origFetch = window.fetch.bind(window)
-  syncCloudAccountCache(backendUrl, token)
+  // P1-K8:手机作为 Unit —— 远端引擎请求经原生中继(调用方票只在原生)+ 本机登记三件。启动即握手:断言原生 apiBase === cloudApiBase、
+  // 并让原生收掉上一个页面遗留的在途中继。web 路径(dev / preview)不装中继(没有原生身份,同 Genesis web 走原 fetch)。
+  const unit = createUnitBridge(cloudApiBase, native ? registerPlugin<ForsionUnitPlugin>('ForsionUnit') : null, location.origin)
+  syncCloudAccountCache(cloudApiBase, token)
   const authListeners = new Set<() => void>()
 
   const authStatus = async (): Promise<Record<string, unknown>> => {
-    const base = { cloudUrl: backendUrl, tokenSource: 'config' as const }
+    const base = { cloudUrl: cloudApiBase, tokenSource: 'config' as const }
     if (!token) return { ...base, loggedIn: false, tokenValid: null, username: null, tokenSource: null }
     const requestToken = token
     try {
-      const r = await origFetch(`${backendUrl}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      const r = await origFetch(`${cloudApiBase}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       if (r.status === 401 || r.status === 403) return { ...base, loggedIn: false, tokenValid: false, username: null }
       if (!r.ok) return { ...base, loggedIn: true, tokenValid: null, username: null }
       const u = await r.json().catch(() => ({} as Record<string, unknown>))
@@ -78,7 +89,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
 
   // /account 与 /pay 是 Forsion 站点的**网页**(与登录页 /auth 同一处),不在 `/api` 下 ——
-  // 拿 backendUrl 拼会得到 /api/account = 404 =「个人中心无法跳转」。用网页源。
+  // 拿 cloudApiBase 拼会得到 /api/account = 404 =「个人中心无法跳转」。用网页源。
   const webOrigin = forsionWebOrigin()
   // 外开页面:native 走系统浏览器(Capacitor Browser),web 新标签。带 token 是账号中心的登录交接方式(桌面同款)。
   const openExternal = async (url: string): Promise<{ ok: boolean }> => {
@@ -111,7 +122,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     await InAppBrowser.openInWebView({
       url,
       options: {
-        showURL: !url.startsWith(backendUrl),
+        showURL: !url.startsWith(cloudApiBase),
         showToolbar: true,       // 只为那枚关闭钮:全屏无出口 = 只能杀进程
         clearCache: false,
         clearSessionCache: false,
@@ -136,12 +147,12 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
   // 账号菜单的云端调用(电文形状对齐 electron 的 account:quota / account:useResetCard —— AccountCard 靠
   // `window.tangu?.accountQuota` 探测本能力,此前移动端缺席 → 点头像走 openAccountCenter 也缺席 = 点了没反应)。
-  // ⚠️ backendUrl 已经含 `/api`(= apiBase()),path 一律从 `/api` **之后**写起。
+  // ⚠️ cloudApiBase 已经含 `/api`(= apiBase()),path 一律从 `/api` **之后**写起。
   //    写成 '/api/token-quota/my' 会拼出 /api/api/… = 404 =「额度加载失败」(2026-08-08 实翻)。
   const cloudJson = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
     if (!token) return { status: 401, json: null }
     try {
-      const r = await origFetch(`${backendUrl}${path}`, {
+      const r = await origFetch(`${cloudApiBase}${path}`, {
         method,
         headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -193,13 +204,13 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       const current = await installedVersion()
       const cands: Array<{ version: string; url: string }> = []
       let answered = 0
-      // ⚠️ backendUrl 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
-      const cfg = await getJson(`${backendUrl}/website/config`)
+      // ⚠️ cloudApiBase 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
+      const cfg = await getJson(`${cloudApiBase}/website/config`)
       if (cfg) {
         answered += 1
         const srvVer = String(cfg?.platforms?.android?.version || '').trim()
         // 网关那份要管理员点过「从 GitHub 导入」才有值:空 = 还没导入,不是错。
-        if (srvVer) cands.push({ version: srvVer, url: `${backendUrl}/website/download/android` })
+        if (srvVer) cands.push({ version: srvVer, url: `${cloudApiBase}/website/download/android` })
       }
       const rel = await getJson('https://api.github.com/repos/Changan-Su/Forsion/releases/latest')
       if (rel) {
@@ -231,7 +242,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   // 身份字段压在最后:落盘偏好(可能是旧号 / 被人改过的 localStorage)绝不该盖掉连接与鉴权。
   const config = (): Record<string, unknown> => ({
     modelId: '', ...readPrefs(),
-    mode: 'external', backendUrl, token, cloudUrl: backendUrl, sandbox: 'none',
+    mode: 'external', backendUrl, token, cloudUrl: cloudApiBase, cloudApiBase, sandbox: 'none',
   })
 
   ;(window as unknown as { tangu: unknown }).tangu = {
@@ -265,6 +276,14 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     downloadUpdate: async () => { await openExternal(apkUrl || 'https://github.com/Changan-Su/Forsion/releases/latest') },
     // 账号名下设备名册(Forsion Unit):互联入口 UnitsSheet 的数据面;与桌面 units:list IPC 同形 {status,json}。
     unitsList: () => cloudJson('GET', '/units'),
+    // P1-K8 手机本机的 Unit 身份(懒登记:首次选电脑 / 首个中继请求时才登记;web 路径回「仅安卓 App」)。
+    // 中继模式下刻意**没有** unitCallerHeaders(INTEGRATION R-05):调用方票不进 JS。
+    unitSelf: unit.unitSelf,
+    unitEnsureSelf: unit.unitEnsureSelf,
+    unitForgetSelf: unit.unitForgetSelf,
+    // P1-DL 存到系统「下载」:Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。只装 native 路径 ——
+    // web(dev / preview)是真浏览器,缺席 → 调用方回落 <a download>(见 services/nativeDownload.ts)。
+    saveDownload: native ? createSaveDownload(registerPlugin<ForsionDownloadsPlugin>('ForsionDownloads'), { maxBytes: NATIVE_DOWNLOAD_MAX_BYTES }) : undefined,
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
@@ -279,8 +298,13 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       openExternal(`${webOrigin}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${webOrigin}/account`)}`),
   }
 
+  // P1-K8 中继前置:`{cloudApiBase}/units/<id>/proxy/(engine…|unit/remote-access…)` 交原生中继(带调用方票);
+  // 冲着中继面去但语法不过的失败关闭;其余照旧走下面的原 fetch(web 路径 unit.relay 恒为 null)。中继 URL 不含 /api/agent/,
+  // 不会误触 401 登出(换票撞 401 时中继合成的 401 交给渲染层的复检账号去判)。
   // 401 兜底:/api/agent/* 鉴权失败 → 清 token 重新登录。
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const relayed = unit.relay(input, init)
+    if (relayed) return relayed
     const requestToken = token
     const res = await origFetch(input, init)
     try {
@@ -291,7 +315,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
   if (!native) window.addEventListener('storage', (event) => {
     if (event.key !== TOKEN_KEY || event.oldValue === event.newValue) return
-    syncCloudAccountCache(backendUrl, readWebToken())
+    syncCloudAccountCache(cloudApiBase, readWebToken())
     location.reload()
   })
 }

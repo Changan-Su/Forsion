@@ -53,6 +53,9 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // P1-K8 原生身份 / 中继的纯逻辑单测(RelayPathsTest 等):android.jar 里的 org.json 是桩(一调就抛 / 返回缺省值),
+    // JVM 上要真实现。只进测试 classpath,不进 APK。⚠️ origin/feat/phone-control-t2 同一行,后合者删重复。
+    testImplementation 'org.json:json:20231013'
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

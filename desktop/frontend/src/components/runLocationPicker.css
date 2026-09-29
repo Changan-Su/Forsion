@@ -1,0 +1,13 @@
+/* P1-K7a「在哪运行」药丸:外形整段派生项目药丸(base.css .composer-chip.project-pill),这里只加状态说明与并排排布。
+   字号只用六档角色(check:uiscale)。 */
+.runloc-pill:disabled { cursor: default; opacity: 1; }
+.runloc-status {
+  flex: none;
+  font-size: var(--ui-font-caption, 11px);
+  color: var(--text-faint, var(--text-muted));
+  white-space: nowrap;
+}
+.runloc-status[data-tone='warn'] { color: var(--warning, var(--text-muted)); }
+/* 与项目药丸同一行;窄栏换行,不缩字号(DESIGN §6) */
+.newchat-projectbar-inner:has(> .runloc),
+.hp-projectbar:has(> .runloc) { flex-wrap: wrap; gap: 6px; }

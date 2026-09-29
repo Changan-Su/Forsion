@@ -26,6 +26,7 @@ import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import { PluginLogo } from './PluginLogo'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   // 带主进程半身的内置包(Forsion Extend):开关改的是下次开机装不装那一半
@@ -90,7 +91,7 @@ function cascadeAfterToggle(
       if (userOwned.has(id)) continue // 用户手装同 id 胜出,不归本捆绑包管
       if (enginePlugins?.find((e) => e.id === id)?.source === 'builtin') continue // 首方内置同 id,绝不去动
       try {
-        await setPluginEnabled(cfg, id, on)
+        await setPluginEnabled(homeTarget(), id, on)
       } catch {
         failed += 1
       }
@@ -410,7 +411,7 @@ const PluginDetail: React.FC<{
     if (!window.confirm(t('settings.amadeusPlugins.uninstallConfirm', { name: pluginDisplayName(p, locale) }))) return
     const ids = p.bundle?.enginePlugins ?? []
     // 先级联关停内嵌引擎插件(尽力):目录一删设置落点就没了,先关能让工具即刻对模型不可见
-    if (cfg) for (const id of ids) await setPluginEnabled(cfg, id, false).catch(() => {})
+    if (cfg) for (const id of ids) await setPluginEnabled(homeTarget(), id, false).catch(() => {})
     try {
       await amadeus.uninstallPlugin?.(p.id)
     } catch (e: any) {

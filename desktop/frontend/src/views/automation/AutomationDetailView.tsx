@@ -13,6 +13,7 @@ import { AutomationExtension } from './AutomationExtension'
 import { automationListSource, subscribeAutomation } from './automationListSource'
 import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
+import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
 import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
@@ -25,6 +26,7 @@ import { AutomationRunsView } from './AutomationRunsView'
 import './messages'
 import type { AgentScheduleEntry, HistorianActivityItem, MuseTriggerInfo } from '../../types'
 import './automation.css'
+import { homeTarget } from '../../services/engine/targets'
 
 /** 监听列名单(cell_changed):表已加载就显示列名,否则/列已删显示 (id);多列 = 任一变化即命中。
  *  单独成组件:列名要订阅 dbStore,而 DetailView 主体在 tr 之前有多处早退,hook 不能放那里。 */
@@ -37,7 +39,6 @@ const WatchedColumns: React.FC<{ cond: Extract<MuseTriggerInfo['cond'], { type: 
 /** 试跑按钮:同一执行器立即执行动作链(旧式规则=起一次无人值守 run),结果行内展示。 */
 const FireButton: React.FC<{ tr: MuseTriggerInfo; onResult: () => void }> = ({ tr, onResult }) => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState('')
@@ -49,7 +50,7 @@ const FireButton: React.FC<{ tr: MuseTriggerInfo; onResult: () => void }> = ({ t
     setBusy(true)
     setResult('')
     try {
-      const r = await fireAutomationTrigger(cfg, tr.id)
+      const r = await fireAutomationTrigger(homeTarget(), tr.id)
       setResult(r.ok ? t('automation.fire.ok', { status: r.status }) : t('automation.fire.fail', { status: r.status }))
       st.bump()
     } catch (e: any) {
@@ -100,11 +101,11 @@ const SessionTranscript: React.FC<{ sessionId: string }> = ({ sessionId }) => {
 
 const HistorianFeed: React.FC = () => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
+  const cfg = useApp((s) => s.cfg) // 只作「换了引擎连接就重订」的依赖(请求本身打 homeTarget())
   const [items, setItems] = React.useState<HistorianActivityItem[]>([])
   useEffect(() => {
     let alive = true
-    const pull = (): void => void getHistorianActivity(cfg, 50).then((a) => alive && setItems(a)).catch(() => {})
+    const pull = (): void => void getHistorianActivity(homeTarget(), 50).then((a) => alive && setItems(a)).catch(() => {})
     pull()
     const timer = setInterval(pull, 8000)
     return () => { alive = false; clearInterval(timer) }
@@ -127,7 +128,6 @@ const HistorianFeed: React.FC = () => {
  * 条目退出自动化列表(列表只收 date&&prompt 条目),纯规划条目去 Calendar 建。 */
 const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: () => void }> = ({ slug, en, onDone }) => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
   const [name, setName] = useState(en.name)
   const [date, setDate] = useState(en.date)
@@ -139,7 +139,7 @@ const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: (
     setBusy(true)
     setError('')
     try {
-      await saveAgentScheduleEntry(cfg, slug, {
+      await saveAgentScheduleEntry(homeTarget(), slug, {
         id: en.id, name: name.trim(), date: date.trim(),
         repeat: repeat.trim(), auto: en.auto, prompt: prompt.trim(),
         description: en.description, todo: en.todo,
@@ -240,7 +240,7 @@ export const AutomationDetailView: React.FC<Partial<ViewProps>> = ({ extendView 
 
 const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns: () => void }> = ({ extendView, onRuns }) => {
   const { t } = useI18n()
-  const agentDefs = useApp((s) => s.agentDefs)
+  const agentDefs = useHomeAgentDefs() // 自动化是本端的(P1-K6)
   const st = useAutomation()
 
   if (st.builder) {

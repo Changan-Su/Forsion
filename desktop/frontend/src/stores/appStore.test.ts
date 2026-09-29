@@ -232,6 +232,29 @@ describe('appStore.reduceEvent', () => {
     expect(agentEditing('/vault/Note.md')).toBe(false)
   })
 
+  // P1-K3
+  it('审批 / 询问:localOnly 落卡;approval_result.by / inquiry_result.by 白名单清洗后成 answeredBy(旧引擎不带 → 不写)', () => {
+    const ref = { current: 'a1' }
+    const emit = (type: string, payload: Record<string, unknown> = {}) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    const unit = '6c1d7a4e-2b3f-4a5c-8d9e-0f1a2b3c4d5e'
+    emit('approval_request', { approvalId: 'lo', name: 'write_file', preview: 'write ~/.forsion/config.json', localOnly: true, reason: { kind: 'protected' } })
+    emit('approval_request', { approvalId: 'plain', name: 'run_bash', preview: '$ ls', localOnly: 'yes' })
+    emit('approval_request', { approvalId: 'old', name: 'run_bash', preview: '$ pwd' })
+    emit('approval_result', { approvalId: 'lo', action: 'reject', by: { via: 'tunnel', callerUnit: unit.toUpperCase(), callerName: '‮Pixel 9', extra: 'x' } })
+    emit('approval_result', { approvalId: 'plain', action: 'approve', by: { via: 'root', callerName: 'Evil' } })
+    emit('approval_result', { approvalId: 'old', action: 'approve' })
+    emit('inquiry_request', { inquiryId: 'q1', question: '?', options: [] })
+    emit('inquiry_result', { inquiryId: 'q1', answer: 'A', by: { via: 'channel' } })
+    const m = useApp.getState().messagesBySession.s1.find((x) => x.id === 'a1')!
+    const byId = Object.fromEntries((m.approvals || []).map((a) => [a.approvalId, a]))
+    expect(byId.lo).toMatchObject({ localOnly: true, status: 'rejected', answeredBy: { via: 'tunnel', callerUnit: unit, callerName: 'Pixel 9' } })
+    expect(Object.keys(byId.lo.answeredBy!)).toEqual(['via', 'callerUnit', 'callerName'])
+    expect(byId.plain.localOnly).toBeUndefined() // 只认 true
+    expect(byId.plain.answeredBy).toBeUndefined() // via 不在白名单 → 整个丢
+    expect(byId.old.answeredBy).toBeUndefined()
+    expect(m.inquiries?.[0]).toMatchObject({ status: 'answered', answeredBy: { via: 'channel' } })
+  })
+
   it('覆盖消息、工具、审批、询问、计划、群聊、用量、转向及子聊天事件', () => {
     const ref = { current: 'a1' } as { current: string; group?: boolean; groupSeen?: boolean; reuseNext?: boolean; groupEnded?: boolean }
     const emit = (type: string, payload: Record<string, unknown> = {}) => {
@@ -316,6 +339,21 @@ describe('appStore.reduceEvent', () => {
     a1 = useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')!
     expect(a1.toolEvents?.[0]).toMatchObject({ id: 'pk1', result: 'published', parked: undefined })
     expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'a2')?.toolEvents ?? []).toHaveLength(0)
+  })
+
+  it('P1-K1 approval_request.remote:reducer 存清洗后的值(畸形调用方丢掉);本机审批没有 remote', () => {
+    const ref = { current: 'a1' }
+    const emit = (type: string, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    const UNIT = '0f8e8c1e-9b7a-4c55-9d3e-3a1b2c4d5e6f'
+    emit('approval_request', { approvalId: 'rm1', name: 'run_bash', preview: '$ a', remote: { via: 'tunnel', callerUnit: UNIT, callerKind: 'phone', callerName: 'Pixel', marked: true, html: '<b>' } })
+    emit('approval_request', { approvalId: 'rm2', name: 'run_bash', preview: '$ b', remote: { via: 'lan', callerUnit: UNIT, callerKind: 'phone', callerName: 'Spoof' } })
+    emit('approval_request', { approvalId: 'rm3', name: 'run_bash', preview: '$ c', remote: 'tunnel' })
+    emit('approval_request', { approvalId: 'rm4', name: 'run_bash', preview: '$ d' })
+    const byId = Object.fromEntries((useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')!.approvals || []).map((a) => [a.approvalId, a]))
+    expect(byId.rm1.remote).toEqual({ via: 'tunnel', callerUnit: UNIT, callerKind: 'phone', callerName: 'Pixel' })
+    expect(byId.rm2.remote).toEqual({ via: 'lan' })
+    expect('remote' in byId.rm3).toBe(false)
+    expect('remote' in byId.rm4).toBe(false)
   })
 
   it('status llm_call 落 live(sending→accepted 续用 since);首帧/工具/收尾即清', () => {

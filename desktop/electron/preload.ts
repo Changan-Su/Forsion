@@ -6,6 +6,11 @@ import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
+import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
+import type { RemoteSafetyApi, RemoteSafetyState } from '../shared/remoteSafety' // P1-K2
+import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
+import { UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -74,6 +79,14 @@ const api = {
     ipcRenderer.on('inbox:open', listener)
     return () => ipcRenderer.removeListener('inbox:open', listener)
   },
+  // P1-K3:远程会话待批的系统通知被点击 → 主窗打开那条会话(main 进程 approvalDelivery → webContents.send('approval:open'))
+  onApprovalOpen: (cb: (p: ApprovalOpenPayload) => void): (() => void) => {
+    const listener = (_e: unknown, p: { sessionId?: unknown } | null): void => {
+      if (typeof p?.sessionId === 'string' && p.sessionId) cb({ sessionId: p.sessionId })
+    }
+    ipcRenderer.on(APPROVAL_OPEN_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(APPROVAL_OPEN_CHANNEL, listener)
+  },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
   unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
   /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(token 不进渲染层)。 */
@@ -88,6 +101,37 @@ const api = {
   unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
   unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),
   unitsProbeLan: (lanUrl: string): Promise<{ instanceId: string; name: string } | null> => ipcRenderer.invoke('units:probeLan', lanUrl),
+  // P1-K5 ── 设备凭据存储状态(降级 / 锁定提示;重试与重新登记只在本机,主进程校验发送方)──
+  secretStorageStatus: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:status'),
+  secretStorageRetry: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:retry'),
+  secretStorageResetUnitPairing: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:resetUnitPairing'),
+  secretStorageRelaunch: (): Promise<SecretStorageStatus> => ipcRenderer.invoke('secrets:relaunch'),
+  // P1-K4 ── 「允许远程会话」开关 / 信任列表 / 远程会话最高审批档(只在本机改;主进程校验发送方)──
+  remoteSessions: {
+    get: () => ipcRenderer.invoke('remoteSessions:get'),
+    setEnabled: (on) => ipcRenderer.invoke('remoteSessions:setEnabled', on),
+    setMaxApprovalMode: (mode) => ipcRenderer.invoke('remoteSessions:setMaxApprovalMode', mode),
+    revoke: (principal) => ipcRenderer.invoke('remoteSessions:revoke', principal),
+    allowAccount: () => ipcRenderer.invoke('remoteSessions:allowAccount'),
+    onChanged: (cb) => {
+      const listener = (_e: unknown, view: RemoteSessionsView): void => cb(view)
+      ipcRenderer.on('remoteSessions:changed', listener)
+      return () => ipcRenderer.removeListener('remoteSessions:changed', listener)
+    },
+  } satisfies RemoteSessionsApi,
+  // P1-K2 ── 急停 / 远程锁定(只在本机;解锁在主进程弹系统认证;主进程校验发送方)──
+  remoteSafety: {
+    get: () => ipcRenderer.invoke('remoteSafety:get'),
+    estop: () => ipcRenderer.invoke('remoteSafety:estop'),
+    unlock: () => ipcRenderer.invoke('remoteSafety:unlock'),
+    setHotkey: (accelerator) => ipcRenderer.invoke('remoteSafety:setHotkey', accelerator),
+    setHotkeyRecording: (on) => ipcRenderer.invoke('remoteSafety:setHotkeyRecording', on === true),
+    onChanged: (cb) => {
+      const listener = (_e: unknown, s: RemoteSafetyState): void => cb(s)
+      ipcRenderer.on('remoteSafety:changed', listener)
+      return () => ipcRenderer.removeListener('remoteSafety:changed', listener)
+    },
+  } satisfies RemoteSafetyApi,
   // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
@@ -383,6 +427,8 @@ const api = {
     ipcRenderer.on('ui:sync', listener)
     return () => ipcRenderer.removeListener('ui:sync', listener)
   },
+  // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
+  reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
@@ -486,9 +532,17 @@ const AGENT_KEYS = [
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
   'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
+  // P1-K5
+  'secretStorageStatus', 'secretStorageRetry', 'secretStorageResetUnitPairing', 'secretStorageRelaunch', // 设备凭据提示挂在设备互联脚部,同属 agent 后端
+  // P1-K4
+  'remoteSessions', // 远程会话开关 / 信任 / 审批档上限:只对 agent 后端的 /engine 有意义
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
   'computerHistory', // 电脑历史同理:读者是 agent 工具与 Muse(主进程也只在 agentBackend 下建控制器)
   'reportRunningSessions', // 无 agent 后端就没有 run
+  // P1-K3
+  'onApprovalOpen', // 审批送达的通知只在有 agent 后端(本机引擎)的产品里发
+  // P1-K2
+  'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]

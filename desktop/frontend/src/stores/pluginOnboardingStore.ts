@@ -23,6 +23,7 @@ import type { DesktopPermissionId, DesktopPermissionsSnapshot, DesktopPermission
 import { useApp } from './appStore'
 import { postInboxMessage } from '../services/backendService'
 import { hasDesktopPermissions } from '../components/DesktopPermissions'
+import { homeTarget } from '../services/engine/targets'
 
 export interface RequirementResult {
   state: ReadinessState
@@ -199,8 +200,8 @@ export function nudgeOnboardingOnce(p: AmadeusPlugin): void {
     if (localStorage.getItem(nudgedKey(p.id)) === '1') return
     localStorage.setItem(nudgedKey(p.id), '1')
   } catch { return }
-  const { cfg, tr } = useApp.getState()
-  void postInboxMessage(cfg, {
+  const { tr } = useApp.getState()
+  void postInboxMessage(homeTarget(), {
     title: tr('plugin.onboarding.nudgeTitle', { name: p.name }),
     body: tr('plugin.onboarding.nudgeBody', { name: p.name }),
     sender_id: `plugin:${p.id}`,

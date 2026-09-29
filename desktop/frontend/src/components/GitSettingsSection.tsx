@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { GitBranch } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { getGitSettings, setGitSettings } from '../services/backendService'
-import type { GitSettings, TanguDesktopConfig } from '../types'
+import type { GitSettings } from '../types'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'gitSettings.title': { zh: 'Git', en: 'Git' },
@@ -52,7 +53,7 @@ const PREFIX_OK = /^[A-Za-z0-9._/-]{0,40}$/
  * 设置 → 通用 → Git:引擎 config.json 的 git 段(GET / PUT /agent/git-settings)。
  * 文本框失焦才落盘(别每个字符打一次后端),开关立即落盘;对下一次动作 / 下一个 run 生效。
  */
-export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
+export function GitSettingsSection() {
   const { t } = useI18n()
   const [state, setState] = useState<{ settings: GitSettings; defaults: GitSettings; writable: boolean } | null>(null)
   const [prefix, setPrefix] = useState('')
@@ -63,15 +64,15 @@ export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
 
   useEffect(() => {
     let alive = true
-    getGitSettings(cfg)
+    getGitSettings(homeTarget())
       .then((r) => {
         if (!alive) return
         setState(r); setPrefix(r.settings.branchPrefix); setInstructions(r.settings.commitInstructions)
       })
       .catch(() => { if (alive) setUnavailable(true) })
     return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换引擎地址时重取;cfg 对象每次渲染可能是新引用
-  }, [cfg.backendUrl])
+    // 只在换引擎地址时重取(home 目标是同一个活对象,base 每次现读宿主配置)
+  }, [homeTarget().base])
 
   if (unavailable) return <SettingsPanel icon={<GitBranch size={16} />} title={t('gitSettings.title')} description={t('gitSettings.unavailable')} />
   if (!state) return null
@@ -83,7 +84,7 @@ export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
     const draft = { prefix, instructions }
     saveChain.current = saveChain.current.then(async () => {
       try {
-        const settings = await setGitSettings(cfg, patch)
+        const settings = await setGitSettings(homeTarget(), patch)
         setState((s) => (s ? { ...s, settings } : s))
         if ('branchPrefix' in patch) setPrefix((cur) => (cur === draft.prefix ? settings.branchPrefix : cur))
         if ('commitInstructions' in patch) setInstructions((cur) => (cur === draft.instructions ? settings.commitInstructions : cur))

@@ -547,9 +547,11 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           : hookCall;
         // 具名子代理:在它自己的记忆作用域内执行(remember/log_event 落它的文件夹),用完即恢复父作用域。
         // 展示/技能身份单独给实际 slug:use_skill 等在执行期按 displayAgentSlug 解析 agents/<slug>/skills。
+        // known-safe git 读命令(闸门 writeProtect)在写拒绝 profile 里跑,与主循环同口径(G5 方案 B)
+        const execCtx = decision?.writeProtect ? { ...subCtx, writeProtectShell: true } : subCtx;
         const r = def
-          ? await runWithAgentSlug(memSlug, () => executeTool(execCall, subCtx), skillSlug || undefined)
-          : await executeTool(execCall, subCtx);
+          ? await runWithAgentSlug(memSlug, () => executeTool(execCall, execCtx), skillSlug || undefined)
+          : await executeTool(execCall, execCtx);
         content = r.result;
         isError = r.isError;
         // —— PostToolUse hook:反馈 / 上下文追加进本条 tool 消息尾部(与主循环同款,不破坏消息序)——

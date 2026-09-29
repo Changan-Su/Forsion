@@ -10,6 +10,10 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { currentPlatform } from '../services/agentRunService'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from './sessionMode'
 import { showDetails } from '../stores/detailsSubject'
+import { useSessionAttention } from '../stores/attentionStore' // P1-K3
+import { isHomeSession } from '../types'
+import { runLocationsAvailable } from '../features/runtime'
+import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */
@@ -43,6 +47,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
     setSessionMode: state.setSessionMode,
   })))
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
+  const attentionIds = useSessionAttention() // P1-K3「等你处理」点
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
   // Chat/Work 模式(新对话行右侧胶囊)。桌面左栏是 WorkspaceView 挂的 sessions 面,另带一层本地/云端侧过滤(sideFilter):
@@ -58,8 +63,12 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
   // 侧过滤:会话的云/本地归属 = project_path 有无(appStore 同判据);工作区按 kind。
   const inSide = (p: string | null | undefined): boolean => (sideFilter === 'cloud' ? !p : !!p)
   const sideOf = sideFilter ? (x: { project_path?: string | null }) => inSide(x.project_path) : undefined
-  const sessions = useMemo(() => sessionsInMode(s.sessions, mode, sideOf), [s.sessions, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
-  const archivedSessions = useMemo(() => sessionsInMode(s.archivedSessions, mode, sideOf), [s.archivedSessions, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
+  // P1-K7a:本端分组只列本端会话;在「我的电脑」上的会话(已注入的那几条)归 DeviceSessionSections
+  const homeSessions = useMemo(() => s.sessions.filter(isHomeSession), [s.sessions])
+  const homeArchived = useMemo(() => s.archivedSessions.filter(isHomeSession), [s.archivedSessions])
+  const sessions = useMemo(() => sessionsInMode(homeSessions, mode, sideOf), [homeSessions, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
+  const archivedSessions = useMemo(() => sessionsInMode(homeArchived, mode, sideOf), [homeArchived, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
+  const deviceFilter = useMemo(() => (rows: typeof s.sessions) => sessionsInMode(rows, mode), [mode])
   const workspaces = useMemo(() => {
     const all = s.workspaces()
     const sideKeep = sideFilter ? (w: (typeof all)[number]) => (sideFilter === 'cloud' ? w.kind === 'cloud' || w.kind === 'rootless' : w.kind !== 'cloud' && w.kind !== 'rootless') : undefined
@@ -73,10 +82,11 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       sessions={sessions}
       archivedSessions={archivedSessions}
       // 右键菜单/拖拽/计数仍要拿未经过模式与侧过滤的全集;会话查找统一走全局快速查找(⌘P)。
-      allSessions={s.sessions}
-      allArchived={s.archivedSessions}
+      allSessions={homeSessions}
+      allArchived={homeArchived}
       activeId={s.activeId}
       runningIds={runningIds}
+      attentionIds={attentionIds}
       unreadIds={s.unread}
       cfg={s.cfg}
       modelId={activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''}
@@ -103,6 +113,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       onAuthChange={() => { setTimeout(() => void s.connect(s.cfg), 1500) }}
       activeWorkspaceKey={s.activeWorkspaceKey}
       onEnterWorkspace={(key) => s.setActiveWorkspaceKey(key)}
+      deviceSections={runLocationsAvailable() ? <DeviceSessionSections filter={deviceFilter} activeId={s.activeId} runningIds={runningIds} unreadIds={s.unread} rowBadge={(x) => attentionBadge(attentionIds, x.id)} /> : undefined}
     />
     </div>
   )

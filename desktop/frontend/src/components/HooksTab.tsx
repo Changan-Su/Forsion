@@ -10,6 +10,7 @@ import type { TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { Loader2, RefreshCw, Webhook } from 'lucide-react'
 import { SettingsState } from './SettingsPrimitives'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'hookstab.ev.PreToolUse': { zh: '工具执行前 · 可拦截 / 改写参数 / 注入上下文', en: 'Before a tool runs · block / rewrite args / inject context' },
@@ -72,7 +73,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
 
   // 字段缺省一律补空:老引擎 / 外部后端可能回一个不带 discovered 的壳,直接索引会让整页崩掉。
   const reload = useCallback(() => {
-    getHooks(cfg).then((d) => setData({ events: d?.events || {}, discovered: d?.discovered || {}, eventNames: Array.isArray(d?.eventNames) ? d.eventNames : [] }))
+    getHooks(homeTarget()).then((d) => setData({ events: d?.events || {}, discovered: d?.discovered || {}, eventNames: Array.isArray(d?.eventNames) ? d.eventNames : [] }))
       .catch((e) => setErr(String(e?.message || e)))
   }, [cfg])
   useEffect(() => { reload() }, [reload])
@@ -95,7 +96,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
 
   const persist = async (rows: Array<any>): Promise<void> => {
     setErr('')
-    try { const res = await saveHooks(cfg, rowsToEvents(rows)); setData((d) => (d ? { ...d, ...res } : d)) }
+    try { const res = await saveHooks(homeTarget(), rowsToEvents(rows)); setData((d) => (d ? { ...d, ...res } : d)) }
     catch (e: any) { setErr(e?.message || t('hookstab.saveFailed')) }
   }
   const submitDraft = async (): Promise<void> => {
@@ -109,10 +110,10 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
     await persist(allRows().filter((r) => r.key !== key))
   }
   const toggle = async (row: Row): Promise<void> => {
-    try { const r = await enableHookReq(cfg, row.key, !row.enabled); setData((d) => (d ? { ...d, discovered: r.discovered } : d)) } catch { /* ignore */ }
+    try { const r = await enableHookReq(homeTarget(), row.key, !row.enabled); setData((d) => (d ? { ...d, discovered: r.discovered } : d)) } catch { /* ignore */ }
   }
   const trust = async (row: Row): Promise<void> => {
-    try { const r = await trustHookReq(cfg, row.key); setData((d) => (d ? { ...d, discovered: r.discovered } : d)) } catch { /* ignore */ }
+    try { const r = await trustHookReq(homeTarget(), row.key); setData((d) => (d ? { ...d, discovered: r.discovered } : d)) } catch { /* ignore */ }
   }
   const startEdit = (row: Row): void => {
     setEditKey(row.key)

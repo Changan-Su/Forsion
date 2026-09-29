@@ -7,12 +7,14 @@ import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
 import { translate } from '../i18n'
 import { useApp } from './appStore'
+import { homeAgentDefs } from './homeCatalog'
 import { notifyApp } from './notificationStore'
 import {
   listInbox, getInboxUnreadCount, patchInboxMessage, readAllInbox, deleteInboxMessage, pullInbox, claimInboxAttachment,
   type InboxMessage, type InboxFilter,
 } from '../services/backendService'
 import { currentClientId } from '../services/agentRunService'
+import { homeTarget } from '../services/engine/targets'
 
 export type { InboxMessage, InboxFilter }
 
@@ -38,7 +40,7 @@ export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): st
   if (m.sender_kind === 'server') return 'Forsion'
   if (m.sender_kind === 'system') return translate('inbox.sender.system')
   if (isAutomationSender(m)) return translate('inbox.sender.automation')
-  const a = useApp.getState().agentDefs.find((x) => x.slug === m.sender_id)
+  const a = homeAgentDefs().find((x) => x.slug === m.sender_id) // 收件箱是本端的:焦点在我的电脑时也按本端的 Agent 认发件人
   return a?.name || m.sender_id || 'agent'
 }
 
@@ -74,7 +76,6 @@ interface InboxState {
   stopPolling(): void
 }
 
-const cfg = () => useApp.getState().cfg
 const fail = (e: any) => useApp.getState().toast(useApp.getState().tr('inbox.opFail', { e: e?.message || e }), true)
 const setBadge = (n: number) => { void window.tangu?.setInboxBadge?.(n) }
 /** 未归档 / 已归档两份里找一封(阅读面板可能开着已归档的那封)。 */
@@ -94,7 +95,7 @@ export const useInbox = create<InboxState>((set, get) => ({
   refreshList: async () => {
     set({ loading: true })
     try {
-      const messages = await listInbox(cfg(), 'all')
+      const messages = await listInbox(homeTarget(), 'all')
       set({ messages })
     } catch { /* 静默:断连/老后端 404 */ } finally {
       set({ loading: false })
@@ -106,11 +107,11 @@ export const useInbox = create<InboxState>((set, get) => ({
     if (unreadRun) { unreadAgain = true; return unreadRun }
     const once = async (): Promise<void> => {
       let r: { count: number; latestId: string | null }
-      try { r = await getInboxUnreadCount(cfg()) } catch { return }
+      try { r = await getInboxUnreadCount(homeTarget()) } catch { return }
       const isNew = lastLatestId !== undefined && r.latestId && r.latestId !== lastLatestId && r.count > lastServerCount
       if (isNew) {
         try {
-          const msgs = await listInbox(cfg(), 'all')
+          const msgs = await listInbox(homeTarget(), 'all')
           set({ messages: msgs })
           const m = msgs.find((x) => x.id === r.latestId)
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
@@ -134,7 +135,7 @@ export const useInbox = create<InboxState>((set, get) => ({
   },
 
   refreshArchived: async () => {
-    try { set({ archived: await listInbox(cfg(), 'archived'), archivedLoaded: true }) } catch { /* 静默:同 refreshList */ }
+    try { set({ archived: await listInbox(homeTarget(), 'archived'), archivedLoaded: true }) } catch { /* 静默:同 refreshList */ }
   },
 
   // 选中即乐观标已读(Gmail 语义);PATCH 失败以服务器为准回收。
@@ -150,7 +151,7 @@ export const useInbox = create<InboxState>((set, get) => ({
         unreadCount: m.archived_at ? s.unreadCount : Math.max(0, s.unreadCount - 1),
       }))
       setBadge(get().unreadCount)
-      void patchInboxMessage(cfg(), id, { read: true }).catch(() => void get().refreshUnread())
+      void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => void get().refreshUnread())
     }
   },
 
@@ -162,14 +163,14 @@ export const useInbox = create<InboxState>((set, get) => ({
       unreadCount: counted ? Math.max(0, s.unreadCount + (read ? -1 : 1)) : s.unreadCount,
     }))
     setBadge(get().unreadCount)
-    void patchInboxMessage(cfg(), id, { read }).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
+    void patchInboxMessage(homeTarget(), id, { read }).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
   },
 
   markArchived: (id, archived) => {
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
     // 先就地改字段(列表源按 archived_at 立即挪行),选中保留(reader 可「取消归档」);PATCH 后两份都以服务端为准。
     set((s) => mapBoth(s, (x) => (x.id === id ? { ...x, archived_at: archived ? now : null } : x)))
-    void patchInboxMessage(cfg(), id, { archived }).catch((e) => { fail(e) }).then(() => {
+    void patchInboxMessage(homeTarget(), id, { archived }).catch((e) => { fail(e) }).then(() => {
       void get().refreshList()
       void get().refreshUnread()
       void get().refreshArchived()
@@ -180,7 +181,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
     set((s) => ({ messages: s.messages.map((x) => (x.read_at ? x : { ...x, read_at: now })), unreadCount: 0 }))
     setBadge(0)
-    void readAllInbox(cfg()).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
+    void readAllInbox(homeTarget()).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
   },
 
   remove: (id) => {
@@ -192,7 +193,7 @@ export const useInbox = create<InboxState>((set, get) => ({
       unreadCount: Math.max(0, s.unreadCount - (wasUnread ? 1 : 0)),
     }))
     setBadge(get().unreadCount)
-    void deleteInboxMessage(cfg(), id).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
+    void deleteInboxMessage(homeTarget(), id).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
   },
 
   claiming: null,
@@ -203,7 +204,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     const t = useApp.getState().tr
     set({ claiming: id })
     try {
-      const r = await claimInboxAttachment(cfg(), id, currentClientId())
+      const r = await claimInboxAttachment(homeTarget(), id, currentClientId())
       set((s) => mapBoth(s, (x) =>
         x.id === id && x.attachments ? { ...x, attachments: { ...x.attachments, claimed: true } } : x))
       useApp.getState().toast(r.alreadyClaimed ? t('inbox.claim.already') : t('inbox.claim.ok'))
@@ -218,7 +219,7 @@ export const useInbox = create<InboxState>((set, get) => ({
   pull: async () => {
     const t = useApp.getState().tr
     try {
-      const r = await pullInbox(cfg())
+      const r = await pullInbox(homeTarget())
       if (!r.pulled && r.detail) { useApp.getState().toast(r.detail, true); return }
       useApp.getState().toast(r.added > 0 ? t('inbox.pullOk', { n: r.added }) : t('inbox.pullNone'))
       if (r.added > 0) { void get().refreshList(); void get().refreshUnread() }

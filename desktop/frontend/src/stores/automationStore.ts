@@ -19,9 +19,10 @@ import type {
   AutomationSessionInfo,
   MuseStatusInfo,
   MuseTriggerInfo,
-  SpecialAgentsConfig,
+  SpecialAgentsSummary,
   TanguDesktopConfig,
 } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 /** 左栏选中项:系统自动化(muse/historian)、watch 规则或某条 agent 日程(auto 条目)。 */
 export type AutomationSel =
@@ -32,7 +33,8 @@ export type AutomationSel =
 
 interface AutomationState {
   loaded: boolean
-  specialCfg: SpecialAgentsConfig | null
+  /** 只读开关与两个节奏值:设备页的 home 是那台电脑的引擎,远程来源只拿到这份摘要(P1-K10b);本机拿到的整份结构上同样满足。 */
+  specialCfg: SpecialAgentsSummary | null
   museStatus: MuseStatusInfo | null
   triggers: MuseTriggerInfo[]
   /** agent 自动化的常驻会话(triggerId → sessionId 映射来源;日程条目 triggerKey=`sched:<slug>:<rowId>`)。 */
@@ -71,12 +73,12 @@ export const useAutomation = create<AutomationState>((set, get) => ({
     // 端点在但响应形状不对(旧引擎 / 桩)时回落旧值,别把 undefined 存进列表字段 —— 列表 .map 会让整个 Space 崩掉。
     const list = <T,>(v: T[] | undefined, prev: T[]): T[] => (Array.isArray(v) ? v : prev)
     const [special, status, triggers, autoSessions, schedules, actionsCatalog] = await Promise.all([
-      getSpecialConfig(cfg).then((r) => r.config).catch(() => get().specialCfg),
-      getMuseStatus(cfg).catch(() => get().museStatus),
-      getMuseTriggers(cfg).then((v) => list(v, get().triggers)).catch(() => get().triggers),
-      getAutomationSessions(cfg).then((v) => list(v, get().autoSessions)).catch(() => get().autoSessions),
-      getAgentSchedules(cfg).then((v) => list(v, get().schedules)).catch(() => get().schedules),
-      getAutomationActions(cfg).then((v) => list(v, get().actionsCatalog)).catch(() => get().actionsCatalog),
+      getSpecialConfig(homeTarget()).then((r) => r.config).catch(() => get().specialCfg),
+      getMuseStatus(homeTarget()).catch(() => get().museStatus),
+      getMuseTriggers(homeTarget()).then((v) => list(v, get().triggers)).catch(() => get().triggers),
+      getAutomationSessions(homeTarget()).then((v) => list(v, get().autoSessions)).catch(() => get().autoSessions),
+      getAgentSchedules(homeTarget()).then((v) => list(v, get().schedules)).catch(() => get().schedules),
+      getAutomationActions(homeTarget()).then((v) => list(v, get().actionsCatalog)).catch(() => get().actionsCatalog),
     ])
     // A poll started before a save must not erase the saved rule or its selection.
     if (get().refreshNonce !== revision) return

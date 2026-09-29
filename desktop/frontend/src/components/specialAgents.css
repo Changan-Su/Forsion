@@ -1,11 +1,13 @@
 .special-agents { width: 100%; max-width: 760px; margin-inline: auto; container: special-settings / inline-size; color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body); }
 .special-intro { margin: 0 0 16px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
 .special-agent-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 22px; }
-.special-agent-nav > button { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 0; border-radius: var(--radius-md); background: var(--overlay-light); text-align: left; color: var(--text-muted); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+/* .special-agent-status:设备页(远程来源)的只读开关卡,与切换按钮同一张卡面,不可点(P1-K10b) */
+.special-agent-nav > button, .special-agent-nav > .special-agent-status { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 0; border-radius: var(--radius-md); background: var(--overlay-light); text-align: left; color: var(--text-muted); }
+.special-agent-nav > button { cursor: pointer; transition: background 160ms ease, color 160ms ease; }
 .special-agent-nav > button:hover { background: var(--overlay-medium); }
 .special-agent-nav > button[aria-selected=true] { background: var(--accent-light); color: var(--accent-ink); }
-.special-agent-nav > button > svg { flex-shrink: 0; }
-.special-agent-nav > button > span { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.special-agent-nav > button > svg, .special-agent-nav > .special-agent-status > svg { flex-shrink: 0; }
+.special-agent-nav > button > span, .special-agent-nav > .special-agent-status > span { display: grid; flex: 1; min-width: 0; gap: 3px; }
 .special-agent-nav strong { font-size: var(--ui-font-body); font-weight: 600; }
 .special-agent-nav small { font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
 .special-agent-nav i { font-size: var(--ui-font-caption); font-style: normal; white-space: nowrap; color: var(--text-muted); }
@@ -58,7 +60,7 @@
 @container special-settings (max-width: 480px) {
   .special-agent-nav { grid-template-columns: 1fr; }
   .special-field-grid { grid-template-columns: 1fr; }
-  .special-agent-nav > button { padding-block: 10px; }
+  .special-agent-nav > button, .special-agent-nav > .special-agent-status { padding-block: 10px; }
 }
 @keyframes special-content-enter { from { opacity: .3; translate: 0 3px; } to { opacity: 1; translate: 0 0; } }
 @media (prefers-reduced-motion: reduce) {

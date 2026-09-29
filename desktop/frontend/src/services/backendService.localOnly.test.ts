@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { authFetch } from './http'
 import { syncNow } from './backendService'
 import { translateFor } from '../i18n'
+import { connectionTarget } from './engine/targets'
 
 vi.mock('./http', () => ({ authFetch: vi.fn() }))
 const cfg = { backendUrl: 'http://unit/engine', token: 't' } as any
@@ -17,7 +18,7 @@ beforeEach(() => { vi.mocked(authFetch).mockReset() })
 describe('request() × LOCAL_ONLY', () => {
   it('403 LOCAL_ONLY → 本地化提示 + code/status 带给调用方(unitWeb 那句英文 detail 不上屏)', async () => {
     vi.mocked(authFetch).mockImplementation(() => json({ code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }, 403))
-    const err = await syncNow(cfg).catch((e) => e)
+    const err = await syncNow(connectionTarget(cfg)).catch((e) => e)
     expect(err).toBeInstanceOf(Error)
     expect(err.message).toBe(translateFor('zh', 'unitpage.localOnly'))
     expect(err.code).toBe('LOCAL_ONLY')
@@ -33,8 +34,27 @@ describe('request() × LOCAL_ONLY', () => {
 
   it('别的 403(配额 / 权限)不被改写', async () => {
     vi.mocked(authFetch).mockImplementation(() => json({ detail: 'quota exceeded', error: 'quota' }, 403))
-    const err = await syncNow(cfg).catch((e) => e)
+    const err = await syncNow(connectionTarget(cfg)).catch((e) => e)
     expect(err.message).toBe('quota exceeded')
     expect(err.code).toBe('quota')
   })
 })
+
+// P1-KF:设备页(浏览器里打开的那台电脑的页面,home 目标 = /engine)同一口径 —— 拒绝体里的 reason 先于 state。
+describe('request() × REMOTE_CALLER_UNCONFIRMED(设备页)', () => {
+  it('带 reason → reason 那句(zh / en);没有 reason 的 pending 才是「等待确认」', async () => {
+    const { setLocaleGlobal } = await import('../i18n')
+    for (const lang of ['zh', 'en'] as const) {
+      setLocaleGlobal(lang)
+      try {
+        vi.mocked(authFetch).mockImplementation(() => json({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: 'x', state: 'denied', reason: 'strict' }, 403))
+        const err = await syncNow(connectionTarget(cfg)).catch((e) => e)
+        expect(err.message).toBe(translateFor(lang, 'unitpage.remoteCallerStrict'))
+        expect(err.code).toBe('REMOTE_CALLER_UNCONFIRMED')
+        vi.mocked(authFetch).mockImplementation(() => json({ code: 'REMOTE_CALLER_UNCONFIRMED', detail: 'x', state: 'pending' }, 403))
+        expect((await syncNow(connectionTarget(cfg)).catch((e) => e)).message).toBe(translateFor(lang, 'unitpage.remoteCallerUnconfirmed'))
+      } finally { setLocaleGlobal('zh') }
+    }
+  })
+})
+

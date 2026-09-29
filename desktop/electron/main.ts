@@ -1,13 +1,13 @@
 import { unitConfigFace } from './unitConfigFace'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
-import { buildUnitScopeGuard, openUnitHostFile, withVerifiedUnitPath } from './unitHostScope'
+import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
-import { normalizeUiSync } from '../shared/uiSync'
+import { normalizeUiSync, UI_LOCALE_CHANNEL } from '../shared/uiSync'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -38,7 +38,13 @@ import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSetti
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
-import { createTray, refreshTrayMenu, setTrayLocale, UI_LOCALE_PREF_KEY } from './tray'
+import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
+import { initMainLocale, mt } from './mainI18n'
+import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
+import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
+import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
+import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
+import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
@@ -58,7 +64,14 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import { UnitHost } from './unitHost'
+import { UnitCapsReporter, engineCapsState } from './unitCaps' // P1-K7a
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
+import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
+import { normalizeCap } from '../shared/remoteSessions' // P1-K4
+import { createRemoteSafety } from './remoteSafety' // P1-K2
+import { registerRemoteSafetyIpc } from './remoteSafetyIpc' // P1-K2
+import { createSystemAuth } from './remoteSafetyAuth' // P1-K2
+import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
@@ -345,12 +358,12 @@ interface TanguStoredConfig {
    *  (历史:v1 曾有 mode='unit' attach 远端;v2 换成 B 端渲染后废除,loadConfig 把遗留值迁回 managed。) */
   mode: 'managed' | 'external'
   backendUrl: string // external 模式
-  token: string // external 模式
-  /** 「允许其他设备连接本机」:开=起 unitWeb(局域网面)+ unitHost(云通道,需登录)。 */
+  /** external 模式的 bearer。P1-K5 起落盘在 device-secrets.json(safeStorage),不在 shell 文件里;loadConfig 解密回填。 */
+  token: string
+  /** 「允许其他设备连接本机」:开=起 unitWeb(局域网面)+ unitHost(云通道,需登录)。
+   *  本机在名册里的设备配对凭据(unitHostId + unitHostSecret)P1-K5 起只在 device-secrets.json 的 unitPairing 槽里,
+   *  不进这份配置 —— 渲染层读不到、写不进。 */
   unitHostEnabled: boolean
-  /** 本机在名册里的设备配对凭据(入册时服务端下发;清空=下次开启重新入册)。 */
-  unitHostId: string
-  unitHostSecret: string
   /** unitWeb 服务端口(0=未定;首次启动选定后回写,保持稳定便于手输 IP 直连)。 */
   unitWebPort: number
   /** 本机安装实例 id(/unit/meta 自证身份,防 DHCP 换主后把别人的 Forsion 当成这台)。 */
@@ -455,8 +468,6 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   backendUrl: 'http://localhost:8787',
   token: '',
   unitHostEnabled: false,
-  unitHostId: '',
-  unitHostSecret: '',
   unitWebPort: 0,
   unitInstanceId: '',
   unitPairedDevices: [],
@@ -529,8 +540,8 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
 // desktop-shell 专属键(留 userData/tangu-desktop-config.json):连哪个后端 + 同步开关。CLI 无此概念。
 // 其余键(cloud/sandbox/workspace/browser/wechat)以 ~/.tangu/config.json 各段为权威,落盘亦写那里。
 const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
-  'mode', 'backendUrl', 'token',
-  'unitHostEnabled', 'unitHostId', 'unitHostSecret', 'unitWebPort', 'unitInstanceId', 'unitPairedDevices', 'unitP2pStun', // 设备互联(本机 Unit 侧状态)
+  'mode', 'backendUrl', // token 不在这里(P1-K5):进 device-secrets.json,见 writeConfigPatch
+  'unitHostEnabled', 'unitWebPort', 'unitInstanceId', 'unitPairedDevices', 'unitP2pStun', // 设备互联(本机 Unit 侧状态;配对密钥在 device-secrets.json)
 
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
@@ -566,6 +577,79 @@ const keepAwake = createKeepAwake({
   start: () => powerSaveBlocker.start('prevent-app-suspension'),
   stop: (id) => powerSaveBlocker.stop(id),
 })
+
+// P1-K4 ── 「允许远程会话」开关 / 调用方首次本机确认 / 远程会话最高审批档(electron/remoteSessions.ts)。
+// 只管 unitWeb 的 /engine(G9);开关与信任落 userData/remote-sessions.json,审批档只写 config.json 的 remote.maxApprovalMode。
+// init 在 deviceSecrets.init 之后(K5 门控要有状态);isLocked 接 K2 的 remoteSafety(R-26:锁定时不弹首次确认)。
+const remoteSessions = createRemoteSessions({
+  file: () => join(app.getPath('userData'), REMOTE_SESSIONS_FILE),
+  unitHostEnabled: async () => (await readShellConfig()).unitHostEnabled === true,
+  readCap: async () => normalizeCap((await readHomeConfig()).remote?.maxApprovalMode),
+  writeCap: (m) => configQueue(() => updateHomeConfig((home) => withRemoteCap(home, m))),
+  accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+  lookupUnit: async (unitId) => lookupRosterUnit({ base: (await loadConfig()).cloudUrl, token: loadTanguCreds().token || '' }, unitId),
+  confirm: async (opts, signal) => {
+    showMainWindow()
+    // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环 → unitWeb / 引擎代理全挂;拿不到窗就不弹
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+    if (!win) return null
+    const r = await dialog.showMessageBox(win, { ...opts, signal })
+    return signal.aborted ? null : r.response === 0
+  },
+  permitted: () => deviceSecrets.remoteSessionsPermitted(),
+  // P1-K2(R-26):remoteSafety 在下方定义,经 thunk 互引(不成环);K4 自己 try/catch → 读不出按锁定
+  isLocked: () => (PRODUCT.agentBackend ? remoteSafety.isLocked() : false),
+  onChanged: (view) => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('remoteSessions:changed', view)
+  },
+  log: (m) => console.log(m),
+})
+
+// P1-K2 ── 急停 + 远程锁定 + 远程活动指示(electron/remoteSafety.ts)。锁状态独占 userData/remote-lock.json(引擎经
+// FORSION_REMOTE_LOCK_FILE 每次现读);unitWeb 读内存镜像。backend / mainWindow 在下方定义 → 这里一律惰性 thunk。
+const remoteSafety = createRemoteSafety({
+  file: () => join(app.getPath('userData'), REMOTE_LOCK_FILE),
+  engine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
+  shortcuts: { register: (acc, cb) => globalShortcut.register(acc, cb), unregister: (acc) => globalShortcut.unregister(acc) },
+  notify: (title, body) => { if (Notification.isSupported()) new Notification({ title: title.slice(0, 200), body: body.slice(0, 300) }).show() },
+  refreshTray: (ind) => { refreshTrayMenu(); setTrayIndicator(ind.title, ind.tooltip) },
+  keepAwake,
+  systemAuth: createSystemAuth({
+    platform: process.platform,
+    touchId: { can: () => systemPreferences.canPromptTouchID(), prompt: (reason) => systemPreferences.promptTouchID(reason) },
+    isAdmin: () => new Promise((res) => execFile('id', ['-Gn'], (err, out) => res(!err && /(^|\s)admin(\s|$)/.test(String(out))))),
+    osascript: (script) => new Promise((res) => execFile('osascript', ['-e', script], (err, _out, stderr) => res(err
+      ? { ok: false, spawnError: (err as NodeJS.ErrnoException).code === 'ENOENT', stderr: String(stderr || err.message) }
+      : { ok: true }))),
+    confirm: async () => {
+      showMainWindow()
+      // ⚠️ 必须挂父窗(同 confirmPair / K4 confirm):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不弹(= 取消)
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      if (!win) return null
+      const r = await dialog.showMessageBox(win, {
+        type: 'warning', title: mt('main.remoteSafety.auth.dialogTitle'), message: mt('main.remoteSafety.auth.dialogMessage'),
+        detail: mt('main.remoteSafety.auth.dialogDetail'), buttons: [mt('main.remoteSafety.auth.unlock'), mt('main.remoteSafety.auth.cancel')],
+        defaultId: 1, cancelId: 1, noLink: true,
+      })
+      return r.response === 0
+    },
+    passwordPrompt: () => mt('main.remoteSafety.auth.dialogMessage'),
+    log: (m) => console.log(m),
+  }),
+  lang: () => trayLang(),
+  remoteCapable: () => remoteSessions.isEnabled(), // R-11
+  trustedCallerLabel: (id) => remoteSessions.trustedCaller(id)?.name ?? null, // R-11
+  mac: process.platform === 'darwin',
+  log: (m) => console.log(m),
+})
+remoteSafety.onChange((st) => {
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('remoteSafety:changed', st)
+})
+/** 托盘「更改快捷键…」:主窗前置 + 打开设置浮窗的「远程会话」页(K2 面板经 K4 的扩展槽挂在那页末尾)。 */
+function openRemoteSafetySettings(): void {
+  showMainWindow()
+  openFloatingPanel({ id: 'settings', title: mt('main.remoteSafety.settingsTitle'), builtin: 'settings', params: { tab: 'remote-sessions', skillKey: null } })
+}
 
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
   let cur: Partial<TanguStoredConfig> = {}
@@ -635,6 +719,11 @@ async function loadConfig(): Promise<TanguStoredConfig> {
   }
   // v1→v2 迁移:mode='unit'(A 渲染器 attach 远端)已废除,遗留值一律迁回 managed,防悬空启动态。
   if ((merged.mode as unknown) === 'unit') merged.mode = 'managed'
+  // P1-K5:设备密钥不在 shell 配置里了。降级旧版本写回来的残留也别让它经 `...shell` 进 config:get(渲染层)/ 设备页;
+  // external token 从加密存储解密回填(槽空不碰加密后端;锁定 = '')。
+  delete (merged as unknown as Record<string, unknown>).unitHostId
+  delete (merged as unknown as Record<string, unknown>).unitHostSecret
+  merged.token = await deviceSecrets.externalToken()
   // Account credentials and their server form one identity. A remembered endpoint
   // from settings must never send an active account's token to another server.
   const accountCreds = loadTanguCreds()
@@ -672,6 +761,9 @@ async function writeConfigPatch(patch: Partial<TanguStoredConfig>, accountCreds:
   if (Object.keys(accountPatch).length && (patch.forsionSyncAccountId === undefined || patch.forsionSyncAccountId === accountId)) {
     saveAccountCloudSettings(accountPatch, accountCreds)
   }
+  // P1-K5:external token 进加密存储(setExternalToken 顺带删掉 shell 里残留的旧原件)。下面读 shell 必须排在它之后,
+  // 否则写回的是删之前那份 → 下次启动迁移按「shell 为准」把旧 token 盖回来。
+  if ('token' in patch) await deviceSecrets.setExternalToken(String(patch.token ?? ''))
   // shell 键
   const shell = await readShellConfig()
   let shellTouched = false
@@ -795,6 +887,8 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 //   unitWeb(unitWeb.ts):局域网 web 面(0.0.0.0,无需登录;配对令牌鉴权)——把本机曝成网页。
 //   unitHost(unitHost.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb。
 let unitHost: UnitHost | null = null
+/** P1-K7a:caps 上报器(通道 ready 之后报本机引擎态,手机据此分「在线但引擎没起」);随 unitHost 一起换。 */
+let unitCaps: UnitCapsReporter | null = null
 let unitWeb: UnitWebHandle | null = null
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
@@ -806,6 +900,31 @@ let stopAmadeusSync: (() => Promise<void>) | null = null
 let amadeusSyncFactory: AmadeusSyncFactory | null = null
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+// P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
+const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
+// P1-K3:远程来源 run 的待批 → 系统通知(点击打开会话,通知上不放「批准」);60s 没人答 → 经 unit-hub 投收件箱给手机。逻辑全在 approvalDelivery.ts。
+// e2e 钩子双闸(非打包 + 显式 FORSION_E2E_APPROVAL_DELIVERY=1,同 FORSION_UNIT_AUTO_PAIR 口径;打包版 isPackaged 恒 true → 天然失效):
+// chat-events 台架是外部模式(桩引擎),这条订阅本该 idle —— 钩子让它改订 TANGU_BACKEND_URL,并把真 Notification 挂到
+// globalThis.__forsionE2E,台架据此读 pending()、在真通知上 emit('click') 走完「点击 → approval:open → 打开会话」整链。
+const approvalE2E = !app.isPackaged && process.env.FORSION_E2E_APPROVAL_DELIVERY === '1' && process.env.TANGU_BACKEND_URL
+  ? { engineUrl: process.env.TANGU_BACKEND_URL, notifications: [] as Array<{ n: Notification; closed: boolean }> } : null
+const approvalDelivery = createApprovalDelivery({
+  ...(approvalE2E ? { getEngine: () => ({ url: approvalE2E.engineUrl, token: '' }), onEngineStatus: () => () => {} } : engineFromBackend(backend)),
+  unitCreds: () => (unitHost?.status().connected && unitHostPairing
+    ? { cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '', unitId: unitHostPairing.unitId, secret: unitHostPairing.secret } : null),
+  t: mt,
+  notify: (o) => {
+    if (!Notification.isSupported()) return null
+    const n = new Notification({ title: o.title.slice(0, 200), body: o.body.slice(0, 300), timeoutType: 'never' })
+    const rec = { n, closed: false }
+    approvalE2E?.notifications.push(rec)
+    n.show()
+    return { close: () => { rec.closed = true; try { n.close() } catch { /* 已收走 */ } }, onClick: (cb) => { n.on('click', cb) } }
+  },
+  openSession: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
+  log: (m) => console.log(m),
+})
+if (approvalE2E) (globalThis as Record<string, unknown>).__forsionE2E = { approvalDelivery, notifications: approvalE2E.notifications }
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
 let unitTunnelPrefix = ''
 /** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,
@@ -937,7 +1056,7 @@ function unitSessionRootsSource(): UnitSessionRootsSource {
  *  会话根:无远程标记、且 realpath 落在本机根(工作区 / vault / Coding Studio 项目根 / 本机登记表)里的 project_path
  *  (unitLocalRoots.ts);再过 `/`、家目录、受保护目录祖先的过滤;受保护路径(Forsion 家目录 / 引擎 home / userData /
  *  通用凭据库)无条件拒(契约 C4,评审 A-desktop#1)。「校验和读取绑同一对象」的竞态防线在 unitHostScope.ts(vitest 直测):
- *  文件读走 openUnitHostFile,目录 / stat 走 withVerifiedUnitPath。 */
+ *  文件读走 openUnitHostRegularFile(经下面的 openUnitScopedFile),目录 / stat 走 withVerifiedUnitPath。 */
 async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: string[] }; env: { home: string }; guard: ReturnType<typeof buildUnitScopeGuard> }> {
   const stored = await loadConfig()
   const base: string[] = []
@@ -957,6 +1076,13 @@ async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: strin
   return { roots, env, guard }
 }
 
+/** /unit/hostfile(readHostFile)与 /unit/hostfile/download(openHostFile)的唯一文件解析(P1-DL):同一份根 / 凭据闸 / fd 绑定,
+ *  两条路永远同判。只认普通文件;句柄归调用方关闭。 */
+async function openUnitScopedFile(p: string): ReturnType<typeof openUnitHostRegularFile> {
+  const ctx = await unitScopeCtx()
+  return openUnitHostRegularFile(p, ctx.roots, ctx.env, ctx.guard)
+}
+
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
  *  串行化(同 ensureChain 的病):四个身份变化点 + config:set 可能连发,并发重建会让第二次
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
@@ -973,11 +1099,13 @@ async function doRefreshUnitHost(): Promise<void> {
   p2pStunCache = stored.unitP2pStun?.length ? stored.unitP2pStun : DEFAULT_STUN
   // P2P 全收(advisor P0):站着的信道不逐请求重验身份,登录/登出/换号/开关变化一律推倒重连。
   await closeAllP2p()
-  unitHostPairing = stored.unitHostId && stored.unitHostSecret
-    ? { unitId: stored.unitHostId, secret: stored.unitHostSecret }
-    : null
+  // P1-K5:配对从 device-secrets.json 读,只在互联开着时读(读 = 可能解密 = macOS 可能弹钥匙串)。
+  const pairing: deviceSecrets.PairingRead = stored.unitHostEnabled ? await deviceSecrets.unitPairing() : { state: 'ok', value: null }
+  unitHostPairing = pairing.state === 'ok' ? pairing.value : null
   if (unitHost) { unitHost.stop(); unitHost = null }
+  unitCaps = null // stop() 已让它停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
+  remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
   if (!stored.unitHostEnabled) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
@@ -986,7 +1114,7 @@ async function doRefreshUnitHost(): Promise<void> {
     await saveConfig({ unitInstanceId: instanceId })
   }
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
-  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded())
+  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitCaps?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
     getEngine: seedGatedEngine(() => {
       const st = backend.getStatus()
@@ -1007,10 +1135,10 @@ async function doRefreshUnitHost(): Promise<void> {
       // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
       const opts = {
         type: 'question' as const,
-        title: '设备连接请求',
-        message: `「${info.name}」(${info.ip})请求连接本机 Forsion`,
-        detail: `对方屏幕上显示同一组配对码,核对一致再允许:\n\n配对码:${info.code}\n\n允许后对方可远程使用这台设备的 Forsion(含执行任务、读写本机笔记库)。`,
-        buttons: ['允许', '拒绝'],
+        title: mt('main.pair.title'),
+        message: mt('main.pair.message', { name: info.name, ip: info.ip }),
+        detail: mt('main.pair.detail', { code: info.code }),
+        buttons: [mt('main.pair.allow'), mt('main.pair.deny')],
         defaultId: 1,
         cancelId: 1,
       }
@@ -1047,13 +1175,12 @@ async function doRefreshUnitHost(): Promise<void> {
     // 只钳默认工作区会让那些会话的 Desk/文件卡全 404;这些目录本就是 agent 的可达范围,只读不扩权)。
     // default-deny —— 越界/不存在一律 null(unitWeb 统一 404,不泄露存在性)。写/删一概不给(审计 C1)。
     readHostFile: async (p: string, maxBytes?: number) => {
-      const ctx = await unitScopeCtx()
       // 文件读:根本身是目录,不含。校验与读取绑在同一个 FileHandle 上(换软链的竞态读不到凭据,Codex 三轮 P1)。
-      const opened = await openUnitHostFile(p, ctx.roots, ctx.env, ctx.guard)
+      // 与下面的 openHostFile(/unit/hostfile/download)同一个解析,两条路判据不分叉。
+      const opened = await openUnitScopedFile(p)
       if (!opened) return null
       const { fh, real, st } = opened
       try {
-        if (!st.isFile()) return null
         // 上限:直连 50MB(同 fs:readFile);隧道路径由 unitWeb 按信封余量传入更小值(Codex P2:
         // base64 双重膨胀,10MB 信封实际只装得下 ~4MB 原文,超了会超时而不是优雅 tooLarge)。
         const UNIT_MAX_READ = Math.min(maxBytes || 50 * 1024 * 1024, 50 * 1024 * 1024)
@@ -1071,6 +1198,11 @@ async function doRefreshUnitHost(): Promise<void> {
       } finally {
         await fh.close().catch(() => {})
       }
+    },
+    // 主机文件下载(P1-DL,/unit/hostfile/download):与 readHostFile 同一个解析,拿到的句柄交 unitWeb 流式写出(它负责关)。
+    openHostFile: async (p: string) => {
+      const opened = await openUnitScopedFile(p)
+      return opened ? { fh: opened.fh, real: opened.real, size: opened.st.size } : null
     },
     // 主机目录/条目只读面(工作台文件面板/悬停提示的数据源):钳制同 hostfile,目录类可指根本身。
     // 与 fs:listDir / fs:stat 共用唯一真源实现(listDirImpl/statPathImpl)。写/删仍一概不给。
@@ -1114,9 +1246,12 @@ async function doRefreshUnitHost(): Promise<void> {
       return existsSync(dev) ? dev : null
     },
     log: (m: string) => console.log(m),
+    remoteAccess: remoteSessions.gate, // P1-K4:会话档闸(同步;K2 的 remoteLock 放在相邻一行)
+    ...(PRODUCT.agentBackend ? { remoteLock: () => remoteSafety.isLocked() } : {}), // P1-K2:急停后远端只剩读 + 中止(同步内存镜像)
   }
   // 配对名单在队列里现读,别用开头那份快照:上面几处 await 期间用户可能刚撤销了设备,旧快照会把它重新放行
   unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
+  await remoteSessions.ready // P1-K4:迁移读完再开门(之前闸本就 fail closed,这里只为首个请求拿到真状态)
   try {
     // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
     const want = stored.unitWebPort || 8791
@@ -1131,15 +1266,31 @@ async function doRefreshUnitHost(): Promise<void> {
     console.error('[unit-web] 启动失败:', e?.message || e)
     return
   }
-  const host: UnitHost = new UnitHost({
+  // P1-K5:配对读不出来(钥匙串拒绝 / 被重置 / 迁移校验没过)= 只起局域网面,不建设备通道,**绝不自动重新登记**
+  // (新 unit id 会让别的设备对本机的信任全部作废);等本机「重试」或「重新登记本机」(secrets:* IPC)。
+  if (deviceSecrets.unitHostStartPlan({ enabled: stored.unitHostEnabled, pairing: pairing.state }) === 'web-only-locked') {
+    console.warn('[unit] 设备凭据读不出来:只起局域网面,不建设备通道')
+    return
+  }
+  // P1-K7a(R-30):caps 上报器 —— 通道 ready 之后报一次,backend.onStatus / 种子做完再报变化(unitCaps.ts)
+  const caps = new UnitCapsReporter({
     getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
-    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+    getPairing: () => unitHostPairing,
+    current: () => engineCapsState({ agentBackend: PRODUCT.agentBackend, backend: backend.getStatus().state, seeded: unitSessionRootsSource().seeded() }),
+    log: (m) => console.log(m),
+  })
+  unitCaps = caps
+  const host: UnitHost = new UnitHost({
+    onChannelReady: () => caps.channelReady(),
+    onChannelDown: () => caps.channelDown(),
+    getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
+    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '', proxyCallerKey: unitWeb?.proxyCallerKey ?? '' }),
     getLanUrl: () => unitLanUrl(),
     getPairing: () => unitHostPairing,
     // 入册回包到达时这个 host 已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
     // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
-    savePairing: async (p) => { if (unitHost !== host) return; unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
-    clearPairing: async () => { if (unitHost !== host) return; unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
+    savePairing: async (p) => { if (unitHost !== host) return; unitHostPairing = p; await deviceSecrets.setUnitPairing(p) },
+    clearPairing: async () => { if (unitHost !== host) return; unitHostPairing = null; await deviceSecrets.setUnitPairing(null) },
     log: (m) => console.log(m),
   })
   unitHost = host
@@ -1361,13 +1512,9 @@ function createWindow(): void {
     deepLinkReady = false; mainPanelReady = false
     miniSession = { sessionId: null, runId: null }; miniAutoPanel?.refresh()
   })
-  // 托盘文案跟随界面语言:渲染层把结论落在 localStorage 这一个键(① 手选 / ③ IP 校正都写它;没写 = 跟随系统,
-  // 托盘的回落同口径)。只读不判,不在主进程另写一份语言判定;之后的切换经 ui:sync 转进来。
-  const localeWc = mainWindow.webContents
-  localeWc.on('did-finish-load', () => {
-    const read = `(() => { try { return localStorage.getItem(${JSON.stringify(UI_LOCALE_PREF_KEY)}) } catch { return null } })()`
-    localeWc.executeJavaScript(read, false).then(setTrayLocale, () => {})
-  })
+  // 主进程文案(托盘 / 对话框 / 通知,mainI18n)跟随界面语言:由渲染层挂载时与每次切换经 ui:locale 报上来的**生效**语言喂入
+  // (P1-KF,见 uiLocaleSync.ts)。这里刻意不再读 localStorage `tangu_locale`:那是「手选」键,② 系统 / ③ IP 判出的语言不写它,
+  // 读到 null 还会把渲染层已报上来的语言重置回系统。
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -1787,10 +1934,10 @@ function recoverRenderer(reason: string): void {
     dialog
       .showMessageBox(mainWindow, {
         type: 'error',
-        buttons: ['重新加载', '退出'],
+        buttons: [mt('main.crash.reload'), mt('main.crash.quit')],
         defaultId: 0,
-        message: '界面多次崩溃',
-        detail: `原因:${reason}\n可重新加载,或退出后重开 Tangu。`,
+        message: mt('main.crash.message'),
+        detail: mt('main.crash.detail', { reason }),
       })
       .then((r) => {
         if (r.response === 0 && mainWindow && !mainWindow.isDestroyed()) { reloadTimestamps = []; loadRenderer(mainWindow) }
@@ -1927,7 +2074,7 @@ app.whenReady().then(async () => {
       item.setSaveDialogOptions({ defaultPath: join(app.getPath('downloads'), item.getFilename()) })
       item.once('done', (_ev, state) => {
         if (state !== 'completed') return
-        try { new Notification({ title: item.getFilename(), body: '下载完成' }).show() } catch { /* 通知不可用 */ }
+        try { new Notification({ title: item.getFilename(), body: mt('main.download.done') }).show() } catch { /* 通知不可用 */ }
       })
     })
     // 设备互联 T2(方案 §11.2):内置浏览器打开「经 server 隧道的设备页」时,webview 的文档与子资源
@@ -1976,6 +2123,14 @@ app.whenReady().then(async () => {
   migrateEngineData() // 两层布局:顶层引擎条目 → ~/.forsion/tangu/ + ~/.tangu 软链改指(dev 家同法;须在 backend spawn/读盘之前)
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
   await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
+  // P1-K5:主进程文案(mt)的系统语言来源(界面语言之后由渲染层经 ui:locale 报上来,P1-KF)。托盘、对话框都在这之后才建。
+  initMainLocale({ systemLanguages: () => app.getPreferredSystemLanguages() })
+  uiLocale.seed() // P1-KF:窗口载入前(托盘、启动期的通知 / 对话框)先用上次渲染层报来的界面语言;首次运行才回落系统语言
+  // P1-K5:设备凭据(配对 / external token)迁出明文 shell 配置、进 safeStorage。必须是 configQueue 的第一个使用者:
+  // loadConfig 要等它(external token 从这里解密),排在它前面的队列任务若调 loadConfig 就会互等。
+  await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
+  void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
+  deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
@@ -2054,7 +2209,7 @@ app.whenReady().then(async () => {
   // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
   ipcMain.handle('plugins:setBundleEnabled', async (e, id: unknown, on: unknown) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
-    if (typeof id !== 'string' || !lockedPluginIds().has(id) || typeof on !== 'boolean') throw new Error('参数不完整')
+    if (typeof id !== 'string' || !lockedPluginIds().has(id) || typeof on !== 'boolean') throw new Error('invalid arguments') // 内部串:只有受信渲染层传错参才会到这
     await saveConfig((before) => {
       const next = new Set((Array.isArray(before.disabledBundles) ? before.disabledBundles : []).filter((x) => typeof x === 'string'))
       if (on) next.delete(id)
@@ -2163,6 +2318,9 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
+  deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
+  registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
+  registerRemoteSafetyIpc(ipcMain, remoteSafety, isTrustedSender) // P1-K2:remoteSafety:get / estop / unlock / setHotkey / setHotkeyRecording
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
     // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
@@ -2383,8 +2541,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('dialog:pickDirectory', async (_e, opts?: unknown) => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const r = win
-      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
-      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
+      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: mt('main.dialog.pickWorkdir') })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: mt('main.dialog.pickWorkdir') })
     if (r.canceled || !r.filePaths.length) return null
     // 「添加 / 导入项目」里本机原生选择框选的目录 = 本机确认过的项目根(设备页没有这个桥):/unit/host* 才认开在这里的会话
     // (unitLocalRoots.ts)。技能导入 / 同步目录 / 额外可写根等别的用途不登记 —— 选了个目录不等于同意设备页浏览它(Codex r3 #2)。
@@ -2395,7 +2553,7 @@ app.whenReady().then(async () => {
   // Chat Box「添加文件或文件夹」：一个系统面板允许多选文件 / 目录，并把类型一并回给 renderer。
   ipcMain.handle('dialog:pickPaths', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
-    const opts = { properties: ['openFile' as const, 'openDirectory' as const, 'multiSelections' as const], title: '添加文件或文件夹' }
+    const opts = { properties: ['openFile' as const, 'openDirectory' as const, 'multiSelections' as const], title: mt('main.dialog.pickPaths') }
     const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (r.canceled || !r.filePaths.length) return []
     return Promise.all(r.filePaths.map(async (path) => ({
@@ -2409,7 +2567,7 @@ app.whenReady().then(async () => {
     if (typeof content !== 'string') return { ok: false, path: null }
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const opts = {
-      title: '导出',
+      title: mt('main.dialog.export'),
       defaultPath: typeof defaultName === 'string' && defaultName ? defaultName : 'export.json',
       filters: [{ name: 'JSON', extensions: ['json'] }, { name: 'All Files', extensions: ['*'] }],
     }
@@ -2958,9 +3116,11 @@ app.whenReady().then(async () => {
         await chWipe?.afterWipe()
       }
       if (opts?.desktop) {
-        for (const f of ['tangu-desktop-config.json', 'amadeus-config.json']) {
+        // ⚠️ P1-K2 / G11:remote-lock.json **不在**清理列表 —— 清数据 = 不经系统认证解锁(远端锁定只能本机认证后解)
+        for (const f of ['tangu-desktop-config.json', 'amadeus-config.json', REMOTE_SESSIONS_FILE]) { // P1-K4:remote-sessions.json(重置远程会话开关与信任)
           await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
         }
+        await deviceSecrets.wipe().catch(() => {}) // P1-K5:device-secrets.json(配对 / external token)
       }
     })
     app.relaunch()
@@ -3169,6 +3329,8 @@ app.whenReady().then(async () => {
     for (const w of BrowserWindow.getAllWindows()) {
       w.webContents.send('backend:status', st)
     }
+    remoteSafety.engineStatusChanged() // P1-K2:重连活动流;有没送到的急停 / 解锁就补
+    unitCaps?.engineChanged() // P1-K7a:引擎起停 / 崩溃 → 名册的 caps.engine
   })
 
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证
@@ -3265,10 +3427,16 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return
     const state = normalizeUiSync(raw)
     if (!state) return
-    if (state.prefs && UI_LOCALE_PREF_KEY in state.prefs) setTrayLocale(state.prefs[UI_LOCALE_PREF_KEY]) // 托盘文案跟着切语言
+    // ⚠️ 不从 prefs['tangu_locale'] 取主进程语言(P1-KF):那是手选键,任何字体 / 缩放广播都带着它的 null → 曾把中文界面的主进程文案重置成系统英文。
+    // 语言走下面的 ui:locale(发方窗口自己切语言时 i18n.tsx 会报;收方重放后也会再报一次同值,主进程同值不动)。
     for (const w of BrowserWindow.getAllWindows()) {
       if (w.webContents !== e.sender && !w.webContents.isDestroyed()) w.webContents.send('ui:sync', state)
     }
+  })
+  // P1-KF:渲染层的生效界面语言(四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框 / 远程会话确认框,全走 mt())。
+  ipcMain.on(UI_LOCALE_CHANNEL, (e, v: unknown) => {
+    if (!isTrustedSender(e)) return
+    uiLocale.report(v)
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),
@@ -3408,6 +3576,8 @@ app.whenReady().then(async () => {
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
+  if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
+  if (PRODUCT.agentBackend) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
   // 启动即续期(2 周滑动窗口),且**必须先于 ensureBackend**:后端 token 走 env 快照,而本地端点鉴权
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
@@ -3444,6 +3614,7 @@ app.whenReady().then(async () => {
       pauseHour: () => { void ch.pause(3_600_000).catch(() => {}) },
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
+    remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
@@ -3466,6 +3637,8 @@ app.on('before-quit', (e) => {
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
+  approvalDelivery.stop() // P1-K3
+  remoteSafety.dispose() // P1-K2:断活动流、注销急停热键、放掉强制防休眠(锁文件原样留着 = 锁跨重启)
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。

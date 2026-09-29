@@ -43,6 +43,7 @@ import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { ProjectSelector } from '../components/ProjectSelector'
+import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
 import { useI18n, type Locale } from '../i18n'
@@ -187,6 +188,7 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         <AgentSelectStrip sessionId={null} cfg={config} />
       </div>
       <div className="hp-projectbar">
+        <RunLocationPicker />
         <ProjectSelector
           workspaces={workspaceList}
           value={targetWorkspace.key}

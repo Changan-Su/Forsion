@@ -144,7 +144,8 @@ export async function installUnitShim(): Promise<boolean> {
 
   const engineBase = new URL('engine', base()).href
   // 连接键恒为本页值(对方的 mode/backendUrl/token 绝不进来 —— 服务端白名单也不会下发它们)。
-  const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', sandbox: 'none' as const }
+  // cloudApiBase 显式置空(P1-K6 S1):局域网直连的设备页没有云端 API;连接键压在对方偏好之后,对方也写不进来。
+  const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', cloudApiBase: '', sandbox: 'none' as const }
   const authHeaders = (): Record<string, string> | undefined =>
     fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined
   /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig
@@ -237,6 +238,14 @@ export async function installUnitShim(): Promise<boolean> {
       const r = await fetch(new URL(`unit/hostfile?path=${encodeURIComponent(p)}`, base()), { headers: authHeaders() })
       if (!r.ok) throw new Error(`hostfile HTTP ${r.status}`)
       return r.json()
+    },
+    // 下载对方电脑上的原文件(P1-DL):/unit/hostfile/download 流式回原字节(钳制与 hostfile 同一个解析,不受预览的 4MB 隧道上限),
+    // 存成文件走与工作区下载同一个出口。设备页没有 revealHostPath —— 没有它,display_file 的卡片在这里就没有下载位。
+    downloadHostFile: async (p: string, name: string) => {
+      const r = await fetch(new URL(`unit/hostfile/download?path=${encodeURIComponent(p)}`, base()), { headers: authHeaders() })
+      const { hostDownloadError, saveResponseAs } = await import('@/services/nativeDownload')
+      if (!r.ok) throw await hostDownloadError(r)
+      await saveResponseAs(name, r)
     },
     // 主机目录列表/条目 stat(工作台文件面板/悬停提示):错误语义与桌面契约同形 —— listDir 失败=[],
     // statPath 失败=null(消费端按 null 省略提示行,不是 throw)。

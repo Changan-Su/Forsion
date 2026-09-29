@@ -43,6 +43,7 @@ import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
+import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
@@ -50,6 +51,8 @@ import { readDbOrNull } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { launchAutomationTriggers, launchDueSchedules, advanceSelfCursors } from './automation.js';
 import { drainAutomation } from './automationDrain.js';
+import { remoteLocked } from './remoteLock.js'; // P1-K2
+import { noteRemoteEntriesCarried } from './remoteCreated.js'; // P1-K2
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -486,11 +489,12 @@ async function folderHint(folders: string[]): Promise<string> {
   return `\n\nYou are authorized to read the following local folders; explore them with read_file/list_dir (absolute paths):\n${lines.join('\n')}`;
 }
 
-async function recentSessionTitles(userId: string): Promise<string> {
+/** 最近会话标题。远端驱动过的会话不列(P1 · M1A,G7):手机发第一句就把它截成标题,远端原话会经这里进 Muse 的周期提示词。 */
+export async function recentSessionTitles(userId: string): Promise<string> {
   try {
     const rows = await query<any[]>(
-      `SELECT title FROM chat_sessions WHERE user_id = ? AND kind = 'user' AND archived = FALSE
-       ORDER BY updated_at DESC LIMIT 15`,
+      `SELECT s.title FROM chat_sessions s WHERE s.user_id = ? AND s.kind = 'user' AND s.archived = FALSE AND ${notRemoteTaintedSql('s')}
+       ORDER BY s.updated_at DESC LIMIT 15`,
       [userId],
     );
     const titles = (rows || []).map((r) => String(r.title || '').trim()).filter(Boolean);
@@ -567,7 +571,8 @@ async function recentActivityHint(userId: string): Promise<string> {
   }
 }
 
-/** 用户应用内活动尾部(数据源见 userActivity.ts;桌面埋点+agent.edit 双写)。失败 → 空串。 */
+/** 用户应用内活动尾部(数据源见 userActivity.ts;桌面埋点+agent.edit 双写)。失败 → 空串。
+ *  远程 run 写的行(remote=1)readActivityLines 缺省不给(P1 · M1A,G7:文件路径 / agent 名是远端给的串)。 */
 async function activityTailHint(): Promise<string> {
   try {
     const lines = await readActivityLines({ hours: 12, limit: 60 });
@@ -641,7 +646,7 @@ export function buildCycleMessages(
   return { message, ephemeralHint: ephemeralHint.replace(/^\n+/, '') };
 }
 
-async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<void> {
+async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<string> {
   const userId = museUserId();
   const sessionId = await ensureMuseSession(userId, cfg.modelId);
   await ensureMuseDirs().catch(() => {});
@@ -687,6 +692,17 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
   lastRunning = true;
   pendingJournal = { runId, sessionId, trigger, mode: cfg.mode, startedAt: lastCycleAt };
   enqueueRun(sessionId, runId);
+  return runId;
+}
+
+/**
+ * 周期起跑之后写回到期条目的 lastRun。**先**在远端批准条目的台账里记下 carrier(P1-K2):lastRun 在起跑时就写了、不代表做完,
+ * 急停中止了这个周期时要按 carrier 撤回(独立评审 P2);顺序反了会有「lastRun 已写、carrier 还没记」的窗口,急停落在里面条目就丢。
+ */
+export async function markMuseEntriesFired(runId: string, due: ScheduleEntry[]): Promise<void> {
+  if (!due.length) return;
+  await noteRemoteEntriesCarried(MUSE_AGENT_SLUG, due.map((e) => e.id), runId).catch((err: any) => log(`远端批准条目记 carrier 失败:${err?.message || err}`));
+  for (const e of due) await markEntryFired(MUSE_AGENT_SLUG, e.id).catch((err: any) => log(`日程 ${e.id} 写回 lastRun 失败:${err?.message || err}`));
 }
 
 function rollWindow(cfg: MuseConfig): void {
@@ -705,6 +721,8 @@ let pendingKick = false;
  *  规则显示「已启用」却一次都不评估,用户零信号(H3)。 */
 let automationNotices: Record<string, string> = {};
 export function getAutomationNotices(): Record<string, string> { return automationNotices; }
+/** P1-K2:锁定期间整轮暂停的提示只打一次(每个锁定时段一次),解锁后复位。 */
+let lockPauseLogged = false;
 
 async function tick(): Promise<void> {
   // interval 与 kickMuse 的 setTimeout 会重叠(tick 内多处 await);重入=重复评估/重复起 run。
@@ -712,6 +730,15 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     if (!isLocal()) return;
+    // P1-K2(方案 §6.5):急停锁定了远程访问 → 盯任务规则、Agent 日程、Muse 周期整轮**推迟**(不丢:解锁后下一轮照常评估,
+    // 到期条目按 dueEntries 补跑)。急停的语义是「不是我在键盘前发起的一律停」;读不出锁 = 锁定。
+    let locked = true;
+    try { locked = remoteLocked(); } catch { locked = true; }
+    if (locked) {
+      if (!lockPauseLogged) { lockPauseLogged = true; log('remote lock on — Muse, watch rules and agent schedules paused until it is unlocked on this computer'); }
+      return;
+    }
+    lockPauseLogged = false;
     await loadMuseState(); // lastCycleAt 落盘值(只读一次):重启后心跳接着上次算,不再开机就跑
     await flushJournal(); // 上一周期若已收尾 → 记一行(run 终态会 kickMuse,所以通常紧跟着周期结束)
     // ── 盯任务规则评估(零 token 代码判定)。刻意放在 muse.enabled/activeHours 闸**之前**:
@@ -722,7 +749,9 @@ async function tick(): Promise<void> {
     try {
       const triggers = await loadTriggers();
       if (triggers.length) {
-        const activityLines = await readActivityLines({ hours: 24, limit: 500 });
+        // 盯任务规则照旧看远程 run 的行(includeRemote):event_seen 只拿用户自己写的 match 串比对、行文不进自动化 run 的提示词,
+        // 远端只能影响「什么时候触发」(M1A 报告残余一条)。
+        const activityLines = await readActivityLines({ hours: 24, limit: 500, includeRemote: true });
         // db_changed 的快照游标单独存文件(不进 triggers.json——那是全表规模的派生数据)。
         const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
         const r = await drainAutomation({
@@ -823,10 +852,10 @@ async function tick(): Promise<void> {
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
-    await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
+    const cycleRunId = await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
     if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
-    for (const e of dueMuse) await markEntryFired(MUSE_AGENT_SLUG, e.id).catch((err: any) => log(`日程 ${e.id} 写回 lastRun 失败:${err?.message || err}`));
+    await markMuseEntriesFired(cycleRunId, dueMuse);
   } catch (e: any) {
     lastError = e?.message || String(e);
     log(`tick 失败:${lastError}`);
@@ -871,6 +900,9 @@ export function kickMuse(): void {
   kickTimer = setTimeout(() => { void tick(); }, 1500);
   (kickTimer as any).unref?.();
 }
+
+/** @internal 测试用:跑一轮巡检(P1-K2 锁定测试)。 */
+export const __museTickForTests = (): Promise<void> => tick();
 
 export function stopMuseSupervisor(): void {
   if (timer) { clearTimeout(timer); timer = null; }

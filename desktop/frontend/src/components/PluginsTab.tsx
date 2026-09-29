@@ -11,6 +11,7 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PluginLogo } from './PluginLogo'
+import { homeTarget } from '../services/engine/targets'
 
 export const PluginsTab: React.FC<{
   cfg: TanguDesktopConfig
@@ -45,7 +46,7 @@ export const PluginsTab: React.FC<{
   const [installing, setInstalling] = useState(false)
 
   const toggle = async (p: PluginInfo): Promise<void> => {
-    try { await setPluginEnabled(cfg, p.id, !p.enabled); onReload() } catch { /* ignore */ }
+    try { await setPluginEnabled(homeTarget(), p.id, !p.enabled); onReload() } catch { /* ignore */ }
   }
 
   // 运行期重扫:发现新装入文件夹的插件(市场/手动拷贝)。已有插件的代码改动受 ESM 缓存影响,仍需重启后端。
@@ -53,7 +54,7 @@ export const PluginsTab: React.FC<{
   const doRescan = async (): Promise<void> => {
     setRescanning(true)
     try {
-      const r = await rescanPlugins(cfg)
+      const r = await rescanPlugins(homeTarget())
       const msg = r.addedIds.length
         ? t('settings.plugins.rescanAdded', { n: String(r.addedIds.length) })
         : t('settings.plugins.rescanNone')
@@ -67,7 +68,7 @@ export const PluginsTab: React.FC<{
   const uninstall = async (p: PluginInfo): Promise<void> => {
     if (!window.confirm(t('settings.plugins.uninstallConfirm', { name: nm(p) }))) return
     try {
-      await uninstallPlugin(cfg, p.id).catch(() => {}) // 后端不在也继续:剩孤儿设置好过卸不掉
+      await uninstallPlugin(homeTarget(), p.id).catch(() => {}) // 后端不在也继续:剩孤儿设置好过卸不掉
       await window.tangu?.pluginsUninstall?.(p.id)
       await window.tangu?.backendRestart?.() // 工具/路由无法运行期反注册,重启后 discoverPlugins 不再发现它
       panelToast(t('settings.plugins.uninstalled', { name: nm(p) }))
@@ -84,7 +85,7 @@ export const PluginsTab: React.FC<{
     if (!window.confirm(t('settings.plugins.npmInstallConfirm', { spec: norm }))) return
     setInstalling(true)
     try {
-      const r = await installPluginFromNpm(cfg, norm, preferMirror)
+      const r = await installPluginFromNpm(homeTarget(), norm, preferMirror)
       panelToast(t('settings.plugins.installed', { id: r.id, version: r.version }))
       setSpec('')
       onReload()

@@ -11,6 +11,10 @@
 //   I. 编辑器 / 嵌入层 / web·mobile 写通道的源码里,用户可见的字面量不许带汉字(JSX 文本、aria/title、报错与提示)
 //
 // 新增文案时这个文件红了,不要来这里加豁免 —— 去把 en 词条补上,那才是它存在的意义。
+//
+// M 段(P1-K5):主进程 desktop/electron 也纳入扫描(AST 扫描器 electron/i18nScan.testutil.ts)。
+// 主进程自己撰写的原生界面文案(对话框 / 通知 / 托盘 / 选择框标题)一律走 mainI18n 的 mt() + defineMainMessages 片段;
+// 片段并入下面的 zh / en 映射,A/B/E/F/G 自动覆盖。
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -19,6 +23,8 @@ import './i18n.generated' // 必须先注册,否则只看到 i18n.tsx 里的基�
 import { __dictSnapshot } from './i18n'
 // LCL 引擎自带的文案表(宿主装配期 registerMessages 进来;见 lcl/engine/i18nSeam.ts)。纯字面量,直接 import。
 import { LCL_MESSAGES } from '../../../lcl/engine/engineMessages'
+// P1-K5:主进程汉字扫描器(不依赖 electron,只读源码做 AST)
+import { scanElectronHan } from '../../electron/i18nScan.testutil'
 
 const HAN = /[一-龥]/
 const SRC = __dirname
@@ -30,6 +36,11 @@ const LCL_ENGINE = join(__dirname, '../../../lcl/engine')
  * ⚠️ 只并进 A/B/C/D/I;H/H2(日期格式)按 `relative(SRC, …)` 逐项登记,是桌面渲染层自己的账。
  */
 const BRIDGE_ROOTS = [join(__dirname, '../../../web/src/amadeus'), join(__dirname, '../../../mobile/src/amadeus')]
+/** P1-K5:主进程源码根(desktop/electron)。 */
+const ELECTRON_ROOT = join(__dirname, '../../electron')
+/** P1-K8:移动端自有源码根(mobile/src)。UnitsSheet 等模块级 registerMessages 片段、t('…') 用键此前不受检
+ *  (「红了去补 en」的保障在移动端不存在);settingsHarness.tsx 是台架页,不进产品。 */
+const MOBILE_SRC = join(__dirname, '../../../mobile/src')
 
 /**
  * 15 个组件在**模块作用域**自带 `registerMessages({...})` 片段,只有 import 了那个组件才会进字典。
@@ -78,11 +89,22 @@ const base = __dictSnapshot()
 const ALL_SRC = walk(SRC)
 const ENGINE_SRC = walk(LCL_ENGINE)
 const BRIDGE_SRC = BRIDGE_ROOTS.flatMap((d) => walk(d)).filter((f) => !f.endsWith('.d.ts'))
-const frag = collectFragments([...ALL_SRC, ...BRIDGE_SRC].filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
+// P1-K8
+const MOBILE_FILES = walk(MOBILE_SRC).filter((f) => !f.endsWith('settingsHarness.tsx'))
+/** 渲染层之外纳入扫描的源码(web / mobile 桥 + 移动端自有源码),去重:mobile/src/amadeus 两边都收。 */
+const EXTRA_SRC = [...new Set([...BRIDGE_SRC, ...MOBILE_FILES])]
+const frag = collectFragments([...ALL_SRC, ...EXTRA_SRC].filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
 const lclZh = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.zh]))
 const lclEn = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.en]))
-const zh = { ...base.zh, ...frag.zh, ...lclZh }
-const en = { ...base.en, ...frag.en, ...lclEn }
+/** 渲染层看得见的字典(C 段按它核对 t('…'):主进程片段的键在渲染层取不到,不许让它们替渲染层的缺键打掩护)。 */
+const rendererZh: Record<string, string> = { ...base.zh, ...frag.zh, ...lclZh }
+const rendererEn: Record<string, string> = { ...base.en, ...frag.en, ...lclEn }
+// P1-K5:主进程 defineMainMessages 片段并进来 —— A/B/E/F/G 对它们一视同仁。
+const electron = scanElectronHan(ELECTRON_ROOT)
+const mainZh = Object.fromEntries(Object.entries(electron.fragments).filter(([, v]) => typeof v.zh === 'string').map(([k, v]) => [k, v.zh as string]))
+const mainEn = Object.fromEntries(Object.entries(electron.fragments).filter(([, v]) => typeof v.en === 'string').map(([k, v]) => [k, v.en as string]))
+const zh = { ...rendererZh, ...mainZh }
+const en = { ...rendererEn, ...mainEn }
 
 /** 值里带汉字却**故意**如此的键:产品名/品牌/中文专有名词在英文界面下也该保持原样。 */
 const EN_MAY_CONTAIN_HAN = new Set<string>([
@@ -160,6 +182,12 @@ describe('i18n 覆盖', () => {
     expect(Object.keys(frag.zh).length).toBeGreaterThan(100)
   })
 
+  it('0c. 仪器自检:移动端源码(mobile/src)确实被扫到,UnitsSheet 的片段被收进来了(P1-K8)', () => {
+    expect(MOBILE_FILES.length, 'mobile/src 一个源文件都没扫到 —— 路径变了先来改 MOBILE_SRC').toBeGreaterThan(8)
+    expect(MOBILE_FILES.some((f) => f.endsWith('settingsHarness.tsx')), '台架页不该进扫描').toBe(false)
+    expect(frag.zh['unitm.runOn'], 'UnitsSheet 的 registerMessages 片段没被解析出来').toBeTruthy()
+  })
+
   it('0b. 仪器自检:引擎源码与引擎文案表确实被收进来了', () => {
     expect(ENGINE_SRC.length, 'lcl/engine 一个源文件都没扫到 —— 路径变了先来改 LCL_ENGINE').toBeGreaterThan(20)
     expect(Object.keys(LCL_MESSAGES).length).toBeGreaterThan(20)
@@ -196,13 +224,13 @@ describe('i18n 覆盖', () => {
     // t('a.b') / translate('a.b') / tr('a.b');只收字面量,模板串与变量键跳过(静态判不了)。
     const USE = /\b(?:t|tr|translate|engineTr)\(\s*(['"])([\w.-]+)\1/g
     const unknown = new Map<string, string[]>()
-    for (const file of [...ALL_SRC, ...ENGINE_SRC, ...BRIDGE_SRC]) {
+    for (const file of [...ALL_SRC, ...ENGINE_SRC, ...EXTRA_SRC]) {
       const text = readFileSync(file, 'utf8')
       for (const m of text.matchAll(USE)) {
         const key = m[2]
         // 只认带点的命名空间键;`t('x')` 这种单词多半是别的同名函数(误报源)。
         if (!key.includes('.')) continue
-        if (key in zh || key in en) continue
+        if (key in rendererZh || key in rendererEn) continue
         const list = unknown.get(key) ?? []
         list.push(relative(SRC, file))
         unknown.set(key, list)
@@ -456,5 +484,92 @@ describe('i18n 覆盖', () => {
     expect(stale, `登记了但源码里已经没有的项(删掉登记):\n  ${stale.join('\n  ')}`).toEqual([])
     expect(miscount, `登记次数与源码不符 —— 多出来的那处先确认接收者是数字(是日期改走 format/time.ts),再改次数:\n  ${miscount.join('\n  ')}`).toEqual([])
     expect(bad, `未登记的 .toLocaleString( —— 是日期就改走 format/time.ts;确认是数字就进 NUMBER_OK 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+})
+
+// ── P1-K5:主进程(desktop/electron)的 M 段 ────────────────────────────────────────────────────────
+/**
+ * M5 欠账台账:主进程里**日志、双语表、原生出口之外**剩下的汉字字面量,按文件记数(与 H2 的 NUMBER_OK 同形)。
+ * ⚠️ 只许减少,不是豁免表:新增的文案改成原因码(frontend/src/ipcError.ts 的约定,界面按码翻译)或 mt();
+ * 改掉一处就把这里的数减一(数多了红、数少了也红 —— 逼着台账跟着降)。红了别来加豁免,那违背 CLAUDE.md「红了去补 en」。
+ * 初值 = 基线 297408ab 实测 178 处 / 30 个文件。
+ */
+const ELECTRON_HAN_DEBT: Record<string, [count: number, reason: string]> = {
+  'main.ts': [38, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
+  'unitWeb.ts': [23, 'HTTP JSON detail(已带 code,设备页按 code 翻译)+ 未配对页的内联 HTML'],
+  'amadeus/fs/vaultHandlers.ts': [14, '笔记 IPC 的校验错误(throw),渲染层原样显示;待改原因码'],
+  'unitP2p.ts': [11, 'P2P 代理的 HTTP 错误 detail / 信道断开原因(throw)'],
+  'p2pWindow.ts': [9, 'P2P 打洞 / 信道状态的 Error 文案(调用方只拿来记日志与回落中转)'],
+  'unitHost.ts': [8, '设备通道 lastError(切换器诊断用)与 Error 文案'],
+  'amadeus/ipc.ts': [3, '示例插件模板(落盘文件内容)、插件 id 的 IPC 错误'],
+  'asrLocal.ts': [6, '本地语音模型下载 / 加载的 Error 文案'],
+  'cliInstall.ts': [6, '生成的 tangu CLI shell 脚本注释(落盘内容)与 CLI 安装错误'],
+  'netGuard.ts': [6, '订阅地址校验的 Error 文案(日历订阅 IPC)'],
+  'builtinPlugins.ts': [5, '内置包来源的诊断标签(日志 / 状态说明)'],
+  'backendManager.ts': [4, '引擎启动失败的 Error / lastError 文案'],
+  'codePreview.ts': [4, '预览根的诊断标签'],
+  'seedThemes.ts': [4, '种子主题的名称 / 描述 / CSS 注释(落盘的主题包内容,主题 id 永不改)'],
+  'amadeus/linkMeta.ts': [2, '链接卡片元数据里的站点名(哔哩哔哩)'],
+  'configWrite.ts': [2, '配置写锁超时的 Error 文案'],
+  'hostTextWrite.ts': [2, '写文件 IPC 的 Error 文案'],
+  'marketInstall.ts': [2, '市场压缩包校验的 Error 文案'],
+  'minitar.ts': [2, 'tar 解包的 Error 文案'],
+  'remotesync/fsWebdav.ts': [2, 'WebDAV 同步的 Error 文案'],
+  'asr.ts': [1, '云端转写失败的 Error 文案'],
+  'pty.ts': [1, '终端不可用的 Error 文案'],
+  'remotesync/engine.ts': [1, '同步中止原因(带原因码前缀 remote-empty-suspicious)'],
+  'remotesync/fsDropbox.ts': [1, 'OAuth 回调页的双语 HTML 正文'],
+  'remotesync/fsS3.ts': [1, 'S3 配置错误提示'],
+}
+
+describe('M. 主进程(desktop/electron)i18n —— P1-K5', () => {
+  it('M0. 仪器自检:electron 源码确实被扫到,已知的双语机制都认得出来', () => {
+    // 防假绿:根路径指错 / 扫描器坏了,M3–M5 会全绿但什么都没查。
+    expect(electron.files.length, `只扫到 ${electron.files.length} 个 electron 源文件 —— ELECTRON_ROOT 指错了?`).toBeGreaterThanOrEqual(80)
+    for (const f of ['tray.ts', 'permissionGuide.ts', 'desktopPermissions.ts', 'mainMessages.ts']) {
+      expect(electron.bilingualFiles, `${f} 的 {zh,en} 表 / 语言三元 / defineMainMessages 片段没被认出来 —— 扫描器失效`).toContain(f)
+    }
+    expect(electron.tables.filter((t) => t.shape === 'object').length, '一个 { zh: {…}, en: {…} } 表都没解析出来').toBeGreaterThanOrEqual(2)
+    expect(Object.keys(electron.fragments).length, 'defineMainMessages 片段一条都没取出来').toBeGreaterThanOrEqual(14)
+    expect(electron.logs.length, '一处中文日志都没归到 log 类 —— 分类器坏了').toBeGreaterThan(50)
+  })
+
+  it('M1. main.* 命名空间双向保留:渲染层字典不许有 main.*,主进程片段只许 main.*;片段可静态取值、不互相覆盖', () => {
+    const rendererMain = Object.keys(rendererZh).concat(Object.keys(rendererEn)).filter((k) => k.startsWith('main.'))
+    expect([...new Set(rendererMain)].sort(), '渲染层字典里出现了 main.* 键(那是主进程的命名空间)').toEqual([])
+    const notMain = Object.entries(electron.fragments).filter(([k]) => !k.startsWith('main.')).map(([k, v]) => `${k}  <- ${v.file}:${v.line}`)
+    expect(notMain, 'defineMainMessages 片段的键必须以 main.<模块>. 开头').toEqual([])
+    expect(electron.fragmentProblems, 'defineMainMessages 片段有问题').toEqual([])
+  })
+
+  it('M2. 主进程 mt(\'k\') / mtFor(l, \'k\') 用到的字面量键都在主进程片段里(主进程看不到渲染层字典)', () => {
+    const unknown = electron.mtKeys.filter((m) => !(m.key in electron.fragments)).map((m) => `${m.key}  <- ${m.file}:${m.line}`)
+    expect(electron.mtKeys.length, '一处 mt(\'…\') 都没扫到').toBeGreaterThan(0)
+    expect(unknown, `主进程片段里没有这些键,界面会直接显示键名:\n  ${unknown.join('\n  ')}`).toEqual([])
+  })
+
+  it('M3. 原生界面出口(对话框 / 通知 / 托盘 / 菜单 / 窗口标题)里没有硬编码中文', () => {
+    const report = electron.sinks.map((h) => `${h.file}:${h.line}  ${h.text}`)
+    expect(report, `这些原生界面文案只有中文,英文系统下照样弹中文 —— 改成 mt('main.<模块>.…') 并在 defineMainMessages 片段里补 zh/en:\n  ${report.join('\n  ')}`).toEqual([])
+  })
+
+  it('M4. 主进程的 { zh, en } 双语表键集一致、en 不含汉字', () => {
+    const bad: string[] = []
+    for (const t of electron.tables) {
+      if (t.onlyZh.length) bad.push(`${t.file}:${t.line} 只有 zh 的键:${t.onlyZh.join(', ')}`)
+      if (t.onlyEn.length) bad.push(`${t.file}:${t.line} 只有 en 的键:${t.onlyEn.join(', ')}`)
+      for (const e of t.enHan) bad.push(`${t.file}:${t.line} en 仍含中文:${e}`)
+    }
+    expect(bad, `双语表没对齐:\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('M5. 其余汉字字面量按文件计数,台账只许减少(新增的改原因码或 mt())', () => {
+    const found = Object.fromEntries(Object.entries(electron.debt).map(([f, hits]) => [f, hits.length]))
+    const unregistered = Object.entries(electron.debt).filter(([f]) => !ELECTRON_HAN_DEBT[f])
+      .map(([f, hits]) => `${f}(${hits.length} 处)\n      ${hits.slice(0, 5).map((h) => `${h.line}  ${h.text}`).join('\n      ')}`)
+    const miscount = Object.entries(ELECTRON_HAN_DEBT).filter(([f, [n]]) => (found[f] ?? 0) !== n)
+      .map(([f, [n]]) => `${f}  台账 ${n},源码 ${found[f] ?? 0}${(found[f] ?? 0) > n ? '  ← 多出来的改成原因码或 mt(),别加数' : '  ← 减少了:把台账的数改小(删到 0 就删掉这一行)'}`)
+    expect(unregistered, `这些文件新出现了硬编码中文(不是日志 / 双语表 / 原生出口):改成原因码或 mt(),不要登记进台账:\n  ${unregistered.join('\n  ')}`).toEqual([])
+    expect(miscount, `欠账台账与源码对不上:\n  ${miscount.join('\n  ')}`).toEqual([])
   })
 })

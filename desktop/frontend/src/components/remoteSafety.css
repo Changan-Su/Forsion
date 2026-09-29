@@ -1,0 +1,70 @@
+/*
+ * 设置 › 远程会话 › 急停与远程锁定(RemoteSafetyPanel,P1-K2)。外壳复用 base.css 的 .settings-panel / .settings-control-row,
+ * 这里只补页内结构;选择器一律挂 .rsf-* 前缀,不覆盖 base.css 的同名规则(DESIGN §7.2)。
+ * 字号只用 --ui-font-* 六档;按钮 / 徽标的描边是形状(DESIGN §5),不加阴影。与 remoteSessions.css 同一套语汇。
+ */
+.rsf-row .settings-control-copy { max-width: 100%; }
+.rsf-row-title { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; }
+.rsf-row-title > svg { flex: 0 0 auto; color: var(--text-faint); }
+.rsf-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rsf-meta { display: block; margin-top: 2px; }
+.rsf-danger { color: var(--danger); }
+
+.rsf-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.rsf-actions .btn { white-space: nowrap; }
+
+/* 热键键帽:与按钮同高,描边即形状;没注册上的键帽降一级颜色 + 删除线提示「当前不生效」。 */
+.rsf-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  border: var(--border-width) solid var(--overlay-medium);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--ui-font-meta, 12px);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.rsf-kbd--off { color: var(--text-faint); text-decoration: line-through; }
+.rsf-kbd--recording {
+  border-color: var(--accent);
+  color: var(--accent);
+  cursor: text;
+  letter-spacing: 0;
+}
+.rsf-kbd--recording:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.rsf-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 8px;
+  padding: 0 7px;
+  border: var(--border-width) solid var(--overlay-medium);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+/* 面板内的说明段 / 子标题:与面板头正文同一左缘(15px)。 */
+.rsf-note {
+  margin: 0;
+  padding: 11px 15px 12px;
+  color: var(--text-faint);
+  font-size: var(--ui-font-caption, 11px);
+  line-height: 1.5;
+}
+.rsf-note.rsf-danger { color: var(--danger); }
+.rsf-sub { padding-top: 4px; }
+.rsf-sub-title {
+  display: block;
+  padding: 10px 15px 2px;
+  color: var(--text-muted);
+  font-size: var(--ui-font-meta, 12px);
+  font-weight: 620;
+}

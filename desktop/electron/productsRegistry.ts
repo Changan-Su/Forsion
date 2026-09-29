@@ -358,7 +358,7 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
         if (f.files.get(rel) === sidecar.id) continue
         const wrote = await writeInto(f, sidecar, rel).catch((e) => {
           if (i <= lead) throw e
-          warnOnce(`${f.root}:${rel}`, `[products] 身份文件没能同步:${path.join(f.root, rel)}`, e)
+          warnOnce(`${f.root}:${rel}`, `[products] could not sync the identity file: ${path.join(f.root, rel)}`, e)
           return true
         })
         if (!wrote) { moved = true; break } // 期间目录被换了:这一轮不列,下次扫描重新认
@@ -368,7 +368,7 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
       // 写不进 sidecar(只读盘/权限):跳过,别给出一个落盘上不存在的临时身份。
       // ponytail: 行为不改(这一行就是会从栅格里消失),但**至少喊一声** —— 否则用户看到的是产物凭空没了,
       // 日志里一点线索都没有;预览那边还会静默退到一个一次性 origin。
-      warnOnce(f.root, `[products] 写不进产物身份(只读或无权限?),该项目不会出现在列表里:${f.root}`, e)
+      warnOnce(f.root, `[products] could not write the creation identity (read-only or no permission?); this project will not be listed: ${f.root}`, e)
     }
   }
   return indexed
@@ -498,7 +498,7 @@ export async function updateProduct(
     for (const [i, rel] of hit.targets.entries()) {
       const wrote = await writeInto(hit, next, rel).catch((e) => {
         if (i === 0) throw e
-        warnOnce(`${hit.root}:${rel}`, `[products] 身份文件没能同步:${path.join(hit.root, rel)}`, e)
+        warnOnce(`${hit.root}:${rel}`, `[products] could not sync the identity file: ${path.join(hit.root, rel)}`, e)
         return true
       })
       // 目录被换了(哪怕第一份已写进原目录):原路径上已经不是这个产物 —— 不给它出摘要,调用方更不能拿它去授权开发态加载

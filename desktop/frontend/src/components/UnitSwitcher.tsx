@@ -28,6 +28,10 @@ import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, useI18n } from '../i18n'
 import { ipcErrorText } from '../ipcError'
+import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
+import { remoteSessionsApi } from '../services/remoteSessionsApi' // P1-K4
+import { SECRET_STORE_INSECURE, type RemoteSessionsView } from '../../../shared/remoteSessions' // P1-K4
+import './remoteSessionsCopy' // P1-K4
 import type { UnitInfo, UnitPairedDevice } from '../types'
 import '../styles/unitSwitcher.css'
 
@@ -145,6 +149,18 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   /** LAN 探针结果(菜单每次展开时重探;true = 该设备的 lanUrl 此刻可达)。 */
   const [lanOk, setLanOk] = useState<Record<string, boolean>>({})
   const [ctxMenu, setCtxMenu] = useState<{ u: UnitInfo; x: number; y: number } | null>(null)
+  /** P1-K4:「允许远程会话」子开关的视图(主进程推送 remoteSessions:changed;没有这座桥的端 = null,不画那一行)。 */
+  const [remoteView, setRemoteView] = useState<RemoteSessionsView | null>(null)
+  useEffect(() => {
+    const api = remoteSessionsApi()
+    if (!api) return
+    let live = true
+    const off = api.onChanged((v) => { if (live) setRemoteView(v) })
+    // 只在互联开着时主动取(同 K5 提示:取视图会问设备凭据状态 = 判定钥匙串等级);关着时子开关那行本就不画。
+    // 父开关刚打开也在这里重取一次,不靠旧视图(旧视图的 permitted 可能是 null = 那时没问)。
+    if (hostEnabled) void api.get().then((v) => { if (live) setRemoteView(v) }).catch(() => {})
+    return () => { live = false; off() }
+  }, [hostEnabled])
 
   // 原 VaultSideSwitch 桌面分支负责的 vaultSide 初始化,随胶囊迁到这里。
   useEffect(() => { if (window.amadeusSync) void initSide() }, [initSide])
@@ -269,6 +285,23 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     })
   }
 
+  /** P1-K4:子开关只在本机改(主进程 IPC 校验发送方);设备凭据没加密时主进程拒绝,提示换成本地化那句。 */
+  const toggleRemoteSessions = (): void => {
+    const api = remoteSessionsApi()
+    if (!api || !remoteView) return
+    guard(async () => {
+      try {
+        setRemoteView(await api.setEnabled(!(remoteView.enabled && remoteView.permitted === true)))
+      } catch (e) {
+        const msg = ipcErrorText(e)
+        say(msg.includes(SECRET_STORE_INSECURE) ? t('remoteSessions.insecure') : t('remoteSessions.actionFailed', { error: msg }))
+      }
+    })
+  }
+  const remoteOn = !!remoteView && remoteView.enabled && remoteView.permitted === true
+  /** 设备凭据已加密(null = 视图是互联关着时取的、还没问过 —— 父开关一开就重取,这一瞬间按锁定画,点了主进程也会再判)。 */
+  const remotePermitted = remoteView?.permitted === true
+
   const removePaired = (d: UnitPairedDevice): void => {
     guard(async () => {
       await window.tangu?.unitsPairedRemove?.(d.id)
@@ -315,7 +348,8 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               {units === null && !!window.tangu?.forsionLogin && <button className="unitsw-row" onClick={() => { setOpen(false); useApp.getState().openSettings('forsion') }}>
                 <span className="unitsw-col"><span className="unitsw-desc">{t('unit.notLoggedIn')} ›</span></span>
               </button>}
-              {units?.filter((u) => u.id !== host?.unitId).flatMap((u) => {
+              {/* 手机在 P1 不开设备通道(它是调用方,不是执行设备):不滤掉的话名册里永远多一台「离线」的手机(P1-K1)。老 server 不回 kind → 照旧列出 */}
+              {units?.filter((u) => u.id !== host?.unitId && u.kind !== 'phone').flatMap((u) => {
                 // 一台设备 = 每条通路各一行。此前是一行 + 自动择路:LAN 探通就把「中转」那条路
                 // 悄悄顶掉,界面上等于不存在(用户找了两轮没找到)。拆开显式列,想走哪条点哪条。
                 // 直连行只在探通时出现(探不通的地址点了也是白点);中转行恒在,离线灰显 + 就地提示。
@@ -364,6 +398,22 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 <span className="unitsw-foot-label">{t('unit.hostToggle')}</span>
                 <span className="unitsw-switch" aria-hidden />
               </button>
+              {/* P1-K5:设备凭据降级 / 锁定提示(只在互联开着时才问状态 —— 问状态会判定钥匙串等级) */}
+              {hostEnabled && <SecretStorageNotice onChange={() => { void refresh() }} />}
+              {/* P1-K4:父开关 → K5 提示 → 远程会话子开关(INTEGRATION §2.2 脚部顺序);设备凭据没加密时置灰(K5 提示在上面说明原因) */}
+              {hostEnabled && remoteView && (
+                // 整行可点(同父开关);键盘 / 读屏走行尾那个 role=switch 按钮。开关与父开关右缘对齐,「设置 ›」在两者之间
+                <div className={`unitsw-subrow${remotePermitted ? '' : ' is-locked'}`} onClick={remotePermitted ? toggleRemoteSessions : undefined}>
+                  <span className="unitsw-foot-label">{t('remoteSessions.switch')}</span>
+                  <button className="unitsw-sublink" onClick={(e) => { e.stopPropagation(); setOpen(false); useApp.getState().openSettings('remote-sessions') }} data-unitsw-remote-settings="">
+                    {t('remoteSessions.openSettings')} ›
+                  </button>
+                  <button className="unitsw-subswitch" role="switch" aria-checked={remoteOn} aria-label={t('remoteSessions.switch')} data-on={remoteOn || undefined}
+                    disabled={!remotePermitted} onClick={(e) => { e.stopPropagation(); toggleRemoteSessions() }} data-unitsw-remote="">
+                    <span className="unitsw-switch" aria-hidden />
+                  </button>
+                </div>
+              )}
               {hostEnabled && (
                 <div className="unitsw-foot-hint">
                   {host?.lanUrl ? t('unit.lanAddr', { addr: host.lanUrl }) : host?.connected ? t('unit.hostConnected') : t('unit.hostStarting')}

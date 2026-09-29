@@ -3,6 +3,7 @@ import { useImageStudio } from '../../stores/imageStudioStore'
 import { createSession } from '../../services/backendService'
 import type { Attachment } from '../../types'
 import { useWorkspace } from '@lcl/engine'
+import { homeTarget } from '../../services/engine/targets'
 
 const pending = new Map<string, Promise<string>>()
 export async function ensureImageSession(boardId: string): Promise<string> {
@@ -14,7 +15,7 @@ export async function ensureImageSession(boardId: string): Promise<string> {
   const task = (async () => {
     const app = useApp.getState()
     const config = { ...applyPreset({ ...stickyDefaults(app.desktopConfig, false), execMode: 'sandbox' }, undefined), agentSlug: app.defaultAgentSlug }
-    const session = await createSession(app.cfg, { title: board.name, projectless: true, agent_config: config })
+    const session = await createSession(homeTarget(), { title: board.name, projectless: true, agent_config: config })
     app.adoptSession({ ...session, agent_config: session.agent_config || config }, { fresh: true })
     useImageStudio.getState().update(boardId, b => ({ ...b, sessionId: session.id }), false)
     return session.id

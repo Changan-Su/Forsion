@@ -26,6 +26,7 @@ import { migrateLegacyConfig } from '../core/config.js';
 import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
+import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
 
 /** --print-config:打印生效配置(config.json + env 叠加),token/apiKey 脱敏(仅留尾 4 位)。 */
 function maskSecret(s?: string): string {
@@ -164,6 +165,8 @@ async function main(): Promise<void> {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
+  // P1-K2:远程锁定的纵深防御 —— 锁定时远程来源的非只读请求(中止除外)一律 423,与 unitWeb 顶层闸同口径。
+  app.use((req, res, next) => remoteLockGuard(req, res, next));
   const version = engineVersion();
   const startedAt = new Date().toISOString();
   app.get('/health', (_req, res) =>

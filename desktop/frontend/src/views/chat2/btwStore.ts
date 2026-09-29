@@ -11,8 +11,9 @@
 import { create } from 'zustand'
 import { useWorkspace } from '@lcl/engine'
 import { registerMessages, translate } from '../../i18n'
-import { authFetch } from '../../services/http'
-import { AGENT_APP_ID, currentClientId } from '../../services/agentRunService'
+import { engineFetch, targetForSession } from '../../services/engine/targets'
+import { classify, classifyError, noteVerdict } from '../../services/engine/health'
+import { AGENT_APP_ID, currentClientId, noteExtra, unitFailureMessage } from '../../services/agentRunService'
 import { useApp } from '../../stores/appStore'
 import { windowKind } from '../../windowKind'
 
@@ -141,17 +142,35 @@ const readableError = (raw: string): string => (/token_quota_exceeded/i.test(raw
 type AsideEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean } | { type: 'error'; error?: string }
 
 async function streamAside(sessionId: string, body: Record<string, unknown>, onEvent: (ev: AsideEvent) => void, signal: AbortSignal): Promise<void> {
-  const cfg = useApp.getState().cfg
-  const r = await authFetch(`${cfg.backendUrl}/agent/sessions/${encodeURIComponent(sessionId)}/aside`, {
-    method: 'POST',
-    signal,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.token}` },
-    body: JSON.stringify({ ...body, app_id: AGENT_APP_ID, client: currentClientId() }),
-  })
+  // P1-K6:旁聊按会话所在的目标发(那台是「我的电脑」时走 hub 隧道);经解析层,不再自拼 URL / 鉴权头。
+  // 一次性流,不做续订:unit 离线 / 引擎没起 / 设备被移除直接给人话(engine.target.*)。
+  const t = targetForSession(sessionId)
+  let r: Response
+  try {
+    r = await engineFetch(t, `/agent/sessions/${encodeURIComponent(sessionId)}/aside`, {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({ ...body, app_id: AGENT_APP_ID, client: currentClientId() }),
+    })
+  } catch (e) {
+    if (t.via === 'unit' && !signal.aborted) {
+      const v = classifyError(e)
+      throw new Error(unitFailureMessage(t, v, (e as { code?: unknown })?.code) || String((e as Error)?.message || e))
+    }
+    throw e
+  }
   if (!r.ok || !r.body) {
     const raw = await r.text().catch(() => '')
     let detail = ''
-    try { detail = String(JSON.parse(raw)?.detail || '') } catch { /* 非 JSON = 老引擎没有这条路由(Express 的 Cannot POST 页) */ }
+    let code: string | undefined
+    let j: unknown = null
+    try { j = JSON.parse(raw); detail = String((j as { detail?: unknown })?.detail || ''); const c = (j as { code?: unknown })?.code; code = typeof c === 'string' ? c : undefined } catch { /* 非 JSON = 老引擎没有这条路由(Express 的 Cannot POST 页) */ }
+    if (t.via === 'unit') {
+      const v = classify(r.status, { code })
+      noteVerdict(t.key, v, noteExtra(j))
+      const msg = unitFailureMessage(t, v, code, j) // P1-KF:拒绝按 reason / state 分句
+      if (msg && v !== 'fatal') throw new Error(msg)
+    }
     throw new Error(detail || (r.status === 404 ? translate('btw.errUnsupported') : `HTTP ${r.status}`))
   }
   // 经网关代理时整段缓冲后一次到达也照样能解析,只是退化成非流式。
