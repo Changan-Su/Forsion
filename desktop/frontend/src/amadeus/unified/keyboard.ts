@@ -608,6 +608,12 @@ function codeExit(dir: 'down' | 'right'): Command {
   return (state, dispatch, view) => {
     const { $from, empty } = state.selection
     if (!empty || $from.parent.type.name !== 'code_block' || $from.depth < 1) return false
+    // 只认 PM 与 DOM 选区一致的时刻:紧挨着上一下原生移动(← / ↑)按下时,selectionchange 还没到,state 还停在旧位置 ——
+    // 这时按它判「在块尾」会凭空新起一段(与 codeExit.ts 的 I-11 同一类竞态)。不一致就交回原生。
+    const dom = view ? (view.root as Document).getSelection?.() : null
+    if (view && dom?.anchorNode && view.dom.contains(dom.anchorNode)) {
+      try { if (view.posAtDOM(dom.anchorNode, dom.anchorOffset) !== $from.pos) return false } catch { return false }
+    }
     if (dir === 'down' ? !view?.endOfTextblock('down') : $from.parentOffset !== $from.parent.content.size) return false
     const container = $from.node(-1)
     if ($from.index(-1) !== container.childCount - 1) return false
