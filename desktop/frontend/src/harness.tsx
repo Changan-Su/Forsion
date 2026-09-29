@@ -1701,7 +1701,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     // Infinity = 一直失败)—— 早先这里静默吞掉第三个参数,CAS 与写失败两条路在台架里根本造不出来。
     // 带 base 而文件已不在 → 拒写、current:null(同主进程,Codex 复核 inst P0-2:不重建被删的旧路径)。
     // `__upage.casDelayMs = n`:写到达「主进程」前先在路上走 n ms(已发出的 IPC)—— 仪器在这段里删文件,造「在途写 × 别处删除」。
-    writeTextFile: async (p: string, text: string, opts?: { base?: string }) => {
+    writeTextFile: async (p: string, text: string, opts?: { base?: string; create?: boolean }) => {
       const api = (window as unknown as { __upage?: { failWrites?: number; casDelayMs?: number } }).__upage
       if (api && (api.failWrites ?? 0) > 0) {
         api.failWrites = (api.failWrites ?? 0) - 1
@@ -1709,6 +1709,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       }
       if ((api?.casDelayMs ?? 0) > 0) await new Promise((r) => setTimeout(r, api!.casDelayMs))
       const cur = vault.get(p)
+      // create = 原子的仅新建(同主进程,Codex 复核返修 P1-1;优先于 base):已存在 → 不写、交回现文。
+      if (opts?.create) {
+        if (cur != null) return { ok: false as const, current: cur }
+        vault.set(p, text)
+        writes.push({ path: p, text })
+        return { ok: true as const }
+      }
       if (typeof opts?.base === 'string' && cur == null) {
         casRejects.push({ path: p, text, current: null })
         return { ok: false as const, current: null }

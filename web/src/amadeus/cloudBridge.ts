@@ -1373,15 +1373,23 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       return enqueue(held, async (): Promise<void | TextWriteResult> => {
         await ensureVault()
         if (opts?.create) {
-          // 新建意图(素文件出生 / 模板 / 种子笔记):按新文件创建,绕过「本会话见过、现 404 = 别处删了」的
-          // 重建禁令 —— 别处删了 untitled.md 后本端再新建一篇同名是合法的。已存在(别处刚建了同名)→ 落回普通写。
+          // 新建意图(素文件出生 / 模板 / 种子笔记 / 冲突副本):按新文件创建,绕过「本会话见过、现 404 = 别处删了」的
+          // 重建禁令 —— 别处删了 untitled.md 后本端再新建一篇同名是合法的。
+          // 仅新建(与桌面 / 移动同契约,Codex 复核返修 P1-1):已存在(别处刚建了同名)→ 不写,交回现文;此前落回普通写 =
+          // 把别人刚建的那篇整份盖掉(两个设备同时另存冲突副本时正好撞上)。现文取不到(又被删了)→ current:null。
           try {
             await putFile(p, text, 0)
             movedTo.delete(p)
             invalidateTree()
-            return done()
+            return { ok: true }
           } catch (e) {
             if (!is409(e)) throw e
+          }
+          try {
+            return { ok: false, current: (await getFile(p)).content }
+          } catch (e2) {
+            if (is404(e2)) return { ok: false, current: null }
+            throw e2
           }
         }
         // v4/unified 笔记的唯一落盘通道也是它:别处挪走 → 跟到新路径;别处删了 → 有正文就另存为 recovered 副本

@@ -36,6 +36,8 @@
 //   S2 源码 → 可视:编辑器还是同一个(没重建)、光标回原处、滚动回原位,切换前打的字 Cmd+Z 撤得掉(屏上、盘上)
 //   S3 源码里的改动回可视后是一步可撤的编辑:第一下 Cmd+Z 只撤源码里打的,第二下撤可视里打的
 //   S4 切换前 200ms 内打的字不丢(listener 防抖窗)· S5 源码模式里外部改动照常回灌到 textarea,回可视后编辑器是新内容、零冲突副本
+//  EC(Codex 复核返修 P0-4)改名后的补写带 CAS:改名 IPC 期间打了字、新路径随后被别处改过 → 不覆盖别处的改动,
+//   本实例的字另存为冲突副本并提示;对照:新路径没被动过 → 补写照常落到新路径(E 组那几条)
 //  E 组(D-17,标题回车改名 × 马上打正文):改名 IPC 延迟 300 / 800ms,回车后打不打字两档 ——
 //   「进入正文」只执行一次:顶部只一个空段、字序不乱、改名后接着打的字接在原处
 //
@@ -753,7 +755,37 @@ async function groupE(browser) {
   }
 }
 
-const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: groupE, X: async (b) => { await groupX(b); await groupXFault(b) }, M: groupM, S: groupS }
+async function groupEC(browser) {
+  const p = await open(browser, '# heading\n\nbody para\n')
+  await p.evaluate(() => {
+    window.__ecToasts = []
+    window.addEventListener('amadeus:toast', (e) => window.__ecToasts.push({ text: e.detail.text, level: e.detail.level }))
+    const o = window.amadeus.renamePageFile
+    // 改名 IPC 300ms;搬完之后、本实例补写之前,别的窗口改了新路径
+    window.amadeus.renamePageFile = (path, n) => new Promise((r) => setTimeout(r, 300)).then(() => o(path, n)).then((np) => {
+      window.__upage.vault.set(np, window.__upage.vault.get(np) + '\n别处改的一行\n')
+      return np
+    })
+  })
+  const title = await p.$('.amx-title-input')
+  await title.click()
+  await p.keyboard.press('Meta+a')
+  await p.keyboard.type('Meeting')
+  await p.keyboard.press('Enter')
+  await wait(60)
+  await p.keyboard.type('IPCWIN', { delay: 20 }) // 改名 IPC 窗口里打的字
+  await wait(2000)
+  const d = await disk(p, 'Meeting.md')
+  const cs = await p.evaluate(() => [...window.__upage.vault.entries()].filter(([k]) => /\(conflict /.test(k)))
+  const t = await p.evaluate(() => window.__ecToasts.filter((x) => x.level === 'error').map((x) => x.text))
+  record('EC 改名后补写带 CAS:新路径被别处改过 → 不覆盖(别处那行还在),改名期间打的字进了冲突副本、提示点名副本;旧名不复活',
+    d != null && d.includes('别处改的一行') && cs.length === 1 && cs[0][1].includes('IPCWIN') && t.some((x) => x.includes(cs[0][0].replace(/\.md$/, ''))) &&
+      (await disk(p, 'Unified.md')) == null,
+    JSON.stringify({ d, cs, t }))
+  await p.close()
+}
+
+const GROUPS = { K: groupK, D: groupD, F: groupF, R: async (b) => { await groupR(b); await groupR2(b) }, E: async (b) => { await groupE(b); await groupEC(b) }, X: async (b) => { await groupX(b); await groupXFault(b) }, M: groupM, S: groupS }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })

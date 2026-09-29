@@ -689,6 +689,8 @@ export interface AmadeusApi {
    *  不支持的宿主(分享页)忽略它、照旧无条件写,返回 void —— 调用方一律把 void 当「写成了」。
    *  移动端本地库自 G2-04 复核起支持(按路径串行锁内 读 → 比对 → 写)。
    *  不传 `base` 时所有宿主行为与从前逐字一致。 */
+  /** create:true = **仅新建**(原子;优先于 base):已存在 → 不写,{ ok:false, current:<现文> };现文取不到 → current:null
+   *  (调用方按「没建成」处理,绝不当成已存在)。建成 → ok:true。桌面 / Unit 主进程 `wx`,移动桥锁内判存在,云桥 seq 0 的 PUT。 */
   writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string }): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */
   listPageProps(folder: string): Promise<PageProps[]>

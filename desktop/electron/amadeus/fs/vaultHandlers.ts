@@ -117,6 +117,12 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     try { key = vault.absPath(rel) } catch { return fn() }
     return withTextWriteLock(key, fn)
   }
+  /** 同时持几条路径的写锁(Codex 复核返修 P0-3:改名 / 移动 / 删除要与同篇的 CAS 保存互斥)。按键排序后逐层嵌套取锁 ——
+   *  所有多锁调用方都按同一顺序取,不会互等成死锁;单锁的保存只拿一把,也成不了环。不可重入:fn 里别再拿这几把。 */
+  const withPathLocks = <T>(rels: string[], fn: () => Promise<T>): Promise<T> => {
+    const keys = [...new Set(rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } }))].sort()
+    return keys.reduceRight<() => Promise<T>>((inner, key) => () => withTextWriteLock(key, inner), fn)()
+  }
   handle(IPC.listPages, () => vault.listPages())
   handle(IPC.listFiles, () => vault.listFiles())
 
@@ -340,8 +346,21 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     }
   })
   handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string }) => {
-    const base = typeof opts?.base === 'string' ? opts.base : null // create 是云桥的语义,本地写盘不区分
+    const base = typeof opts?.base === 'string' ? opts.base : null
     return withPathLock(filePath, async () => {
+      if (opts?.create === true) {
+        // 仅新建(Codex 复核返修 P1-1,优先于 base):`wx` 独占创建,已存在 → 不写,交回现文(调用方据此打开它 / 换下一个名字);
+        // 现文读不出来 → current:null,调用方按「没建成」提示,绝不当成已存在。
+        try {
+          await vault.createTextFile(filePath, text)
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw err
+          return { ok: false as const, current: await fs.readFile(vault.absPath(filePath), 'utf8').catch(() => null) }
+        }
+        if (vault.isPagePath(filePath)) await index.update(filePath)
+        if (e != null && vault.isPagePath(filePath)) deps.notifyPeers?.(e, IPC.externalChange, filePath)
+        return { ok: true as const }
+      }
       if (base != null) {
         // 比对交换写(G1-01):盘上已不是调用方的基线 → 不写,把现文交回去(回灌 / 冲突副本由渲染层定)。
         // 文件不在(ENOENT)也拒写、current:null(Codex 复核 inst P0-2):base 是调用方**读到过的**那版的指纹 = 它以为文件在;
@@ -417,11 +436,15 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     if (base.toLowerCase().endsWith('.md')) base = base.slice(0, -3)
     const newPath = dir === '.' ? `${base}.md` : `${dir}/${base}.md`
     if (newPath === oldPath) return oldPath
-    if (await vault.pathExists(newPath)) throw new Error('目标笔记已存在')
     const pagesBefore = await vault.listPages()
-    await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
-    index.remove(oldPath)
-    await index.update(newPath)
+    // 物理改名持旧 / 新两条路径的写锁(Codex 复核返修 P0-3):与同篇的 CAS 保存互斥 —— 否则保存「读到基线 → 写」之间文件被挪走,
+    // 原子写照样落到旧路径 = 旧名复活成一篇幽灵笔记。引用重写在锁外(它按页自己拿锁,新路径也在其中,锁不可重入)。
+    await withPathLocks([oldPath, newPath], async () => {
+      if (await vault.pathExists(newPath)) throw new Error('目标笔记已存在')
+      await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
+      index.remove(oldPath)
+      await index.update(newPath)
+    })
     await propagateRenames({ [oldPath]: newPath }, pagesBefore)
     return newPath
   })
@@ -529,7 +552,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   handle(IPC.blockBacklinks, (_e, target: string) => index.blockBacklinks(target))
 
   handle(IPC.deletePage, async (_e, pagePath: string) => {
-    await vault.removeEntry(pagePath) // v3: a note is a single .md
+    await withPathLock(pagePath, () => vault.removeEntry(pagePath)) // v3: a note is a single .md;锁同改名(P0-3)
     index.remove(pagePath)
   })
 
@@ -540,7 +563,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     if (newPath === pagePath) return pagePath
     if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件')
     const pagesBefore = newPath.endsWith('.md') ? await vault.listPages() : []
-    await vault.moveEntry(pagePath, newPath)
+    await withPathLocks([pagePath, newPath], () => vault.moveEntry(pagePath, newPath)) // 锁同改名(P0-3)
     // 树里的附件(非 .md)也走本通道移动:不进索引(index.update 会把二进制按 utf8 读成巨串)、不记 lastPage。
     if (newPath.endsWith('.md')) {
       index.remove(pagePath)
@@ -599,7 +622,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   // ── 回收站:移入/列出/恢复/彻底删/清空(.trash 点目录对扫描天然隐身,动索引的只有移入与恢复) ──
   handle(IPC.trashEntry, async (_e, rel: string) => {
-    await vault.trashEntry(rel)
+    await withPathLock(rel, () => vault.trashEntry(rel)) // 锁同改名(P0-3):笔记删除走这条;文件夹的键碰不上任何笔记写,无害
     await index.build()
   })
   handle(IPC.listTrash, async () => vault.listTrash())

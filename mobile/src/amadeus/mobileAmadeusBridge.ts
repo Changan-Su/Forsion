@@ -60,9 +60,18 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
   /** base 缺省 = 老语义(无条件写,返回 void,可新建)。带 base 而文件已不在 → 不写、{ ok:false, current:null }(同桌面,
    *  Codex 复核 inst P0-2:base 是读到过的那版,没了 = 写发出后被删 / 挪走,照写就重建幽灵文件);existingOnly(改名重写专用)
    *  → 'gone'。 */
-  const writeText = (p: string, text: string, opts?: { base?: string; existingOnly?: boolean }): Promise<void | TextWriteResult | 'gone'> =>
+  const writeText = (p: string, text: string, opts?: { base?: string; existingOnly?: boolean; create?: boolean }): Promise<void | TextWriteResult | 'gone'> =>
     withPathLock(p, async () => {
       await ensureVault()
+      if (opts?.create) {
+        // 仅新建(与桌面同契约,Codex 复核返修 P1-1,优先于 base):锁内判存在 —— 已存在 → 不写、交回现文;
+        // 此前 create 被忽略:带 base 的新建(birthNoteFile)撞上「不在 = 拒写」,不带 base 的(冲突副本)照写覆盖。
+        if (await vault.pathExists(p)) {
+          return { ok: false as const, current: await vault.readTextAbs(vault.absPath(p)).catch(() => null) }
+        }
+        await vault.writeTextFile(p, text)
+        return { ok: true as const }
+      }
       const base = typeof opts?.base === 'string' ? opts.base : null
       if (base != null || opts?.existingOnly) {
         const exists = await vault.pathExists(p)
@@ -307,7 +316,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       try { return await vault.readTextAbs(vault.absPath(p)) } catch { return null }
     },
     // 带 base = 比对交换写(与桌面 / web 同契约);编辑器保存与改名重写同走一把按路径的锁(见 writeText)。
-    writeTextFile: (p, text, opts) => writeText(p, text, { base: opts?.base }) as Promise<void | TextWriteResult>,
+    writeTextFile: (p, text, opts) => writeText(p, text, { base: opts?.base, create: opts?.create }) as Promise<void | TextWriteResult>,
 
     // ---- 回收站(.trash 语义在 vaultManager;desktop 同款 trash 后全量重建索引) ----
     trashEntry: async (rel) => { await ensureVault(); await vault.trashEntry(rel); await index.build() },

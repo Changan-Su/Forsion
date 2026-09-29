@@ -46,9 +46,31 @@ describe('writeTextFile CAS(G1-01)', () => {
     await fs.writeFile(path.join(h.root, 'a.md'), 'disk')
     expect(await h.write(null, 'a.md', 'blind')).toBeUndefined()
     expect(await h.disk('a.md')).toBe('blind')
-    // create 是云桥的语义:本地写盘忽略它
-    expect(await h.write(null, 'a.md', 'again', { create: true })).toBeUndefined()
-    expect(await h.disk('a.md')).toBe('again')
+  })
+
+  // Codex 复核返修 P1-1 / P0-2:create = 原子的仅新建(优先于 base)。新建笔记(birthNoteFile 带空串基线)此前被
+  // 「带 base + ENOENT 拒写」拦下;冲突副本「查空位 → 写」跨窗口会互相盖掉。负对照(实跑过):删掉 create 分支 → 本组红。
+  it('create:不存在 → 建、回 ok:true(带 base 也照建);已存在 → 不写、交回现文;两发同名并发只有一个建成', async () => {
+    const h = await setup()
+    expect(await h.write(null, 'sub/new.md', '', { create: true, base: textFingerprint('') })).toEqual({ ok: true })
+    expect(await h.disk('sub/new.md')).toBe('')
+    await fs.writeFile(path.join(h.root, 'a.md'), 'mine')
+    expect(await h.write(null, 'a.md', 'again', { create: true })).toEqual({ ok: false, current: 'mine' })
+    expect(await h.disk('a.md')).toBe('mine')
+    const [r1, r2] = await Promise.all([
+      h.write({ sender: 'w1' }, 'copy.md', 'from-w1', { create: true }),
+      h.write({ sender: 'w2' }, 'copy.md', 'from-w2', { create: true }),
+    ])
+    const won = (r1 as { ok: boolean }).ok ? 'from-w1' : 'from-w2'
+    expect([r1, r2].filter((r) => (r as { ok: boolean }).ok)).toHaveLength(1)
+    expect([r1, r2]).toContainEqual({ ok: false, current: won })
+    expect(await h.disk('copy.md')).toBe(won)
+    // 跨进程(两个 VaultManager 同一库根,不共享路径锁):只剩 `wx` 在守,仍只有一个建成
+    const other = new VaultManager()
+    other.setRoot(h.root)
+    const both = await Promise.allSettled([h.vault.createTextFile('x.md', 'p1'), other.createTextFile('x.md', 'p2')])
+    expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect((both.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.code).toBe('EEXIST')
   })
 
   it('base 与盘上一致 → 写,回 ok:true;不一致 → 不写,回盘上现文', async () => {
@@ -121,6 +143,45 @@ describe('writeTextFile CAS(G1-01)', () => {
     await h.write(sender, 'data.json', '{}') // 非笔记
     await h.write(sender, 'board.excalidraw.md', 'x') // 画板不是笔记
     expect(h.peers).toHaveLength(1)
+  })
+})
+
+// Codex 复核返修 P0-3:物理改名 / 移动 / 移入回收站不在路径锁里 —— CAS 保存读完基线、正要原子写的那一刻文件被挪走,
+// 写照样落到旧路径 = 旧名复活成幽灵笔记(新路径还是保存前的旧内容)。时序做法:拦住保存那一发写(按内容认)到改名排上之后。
+// 负对照(实跑过):改名 / 回收站的锁摘掉 → 对应条红。
+describe('改名 / 移入回收站与在途 CAS 保存互斥(Codex 复核返修 P0-3)', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const holdSave = (h: Awaited<ReturnType<typeof setup>>, text: string) => {
+    const real = h.vault.writeTextFile.bind(h.vault)
+    vi.spyOn(h.vault, 'writeTextFile').mockImplementation(async (rel: string, t: string) => {
+      if (t === text) await sleep(120) // 保存已过比对、卡在写之前:改名在这段里发起
+      return real(rel, t)
+    })
+  }
+  const exists = (h: Awaited<ReturnType<typeof setup>>, rel: string) => fs.access(path.join(h.root, rel)).then(() => true, () => false)
+
+  it('renamePageFile:等在途保存落盘再搬 —— 旧名不复活,新名是保存后的内容', async () => {
+    const h = await setup()
+    await fs.writeFile(path.join(h.root, 'n.md'), 'v1')
+    holdSave(h, 'v2')
+    const saving = h.write({ sender: 'w1' }, 'n.md', 'v2', { base: textFingerprint('v1') })
+    await sleep(20)
+    const renaming = h.handlers.get(IPC.renamePageFile)!(null, 'n.md', 'm')
+    const [saved, renamed] = await Promise.all([saving, renaming])
+    expect(saved).toEqual({ ok: true })
+    expect(renamed).toBe('m.md')
+    expect(await exists(h, 'n.md')).toBe(false)
+    expect(await h.disk('m.md')).toBe('v2')
+  })
+
+  it('trashEntry:等在途保存落盘再移入回收站 —— 旧名不复活', async () => {
+    const h = await setup()
+    await fs.writeFile(path.join(h.root, 't.md'), 'v1')
+    holdSave(h, 'v2')
+    const saving = h.write({ sender: 'w1' }, 't.md', 'v2', { base: textFingerprint('v1') })
+    await sleep(20)
+    await Promise.all([saving, h.handlers.get(IPC.trashEntry)!(null, 't.md')])
+    expect(await exists(h, 't.md')).toBe(false)
   })
 })
 

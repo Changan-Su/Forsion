@@ -36,6 +36,10 @@ registerMessages({
     zh: '「{name}」已在别处被删除或移走，最后的改动没来得及保存，另存副本也没写成。可以把这篇的内容复制下来。',
     en: '"{name}" was deleted or moved elsewhere before your last changes were saved, and a backup copy couldn’t be written. You can copy its text.',
   },
+  'unisave.renameCopy.toast': {
+    zh: '「{name}」改名时已被别处改过，没有覆盖它。你改名期间打的字另存为「{copy}」。',
+    en: '"{name}" was changed elsewhere while it was being renamed, so it wasn’t overwritten. What you typed during the rename was saved as "{copy}".',
+  },
   'unisave.rescued.toast': {
     zh: '「{name}」已在别处被删除或移走。你还没保存的内容另存为「{copy}」。',
     en: '"{name}" was deleted or moved elsewhere. Your unsaved changes were saved as "{copy}".',
@@ -80,7 +84,15 @@ async function writeConflictCopyNow(path: string, content: string, now: Date): P
     const existing = await amadeus.readTextFile(candidate)
     if (existing === content) return candidate
     if (existing != null) continue
-    await amadeus.writeTextFile(candidate, content, { create: true })
+    // 占名用宿主原子的仅新建(Codex 复核返修 P0):「读到空位 → 写」之间别的窗口 / 设备可能刚占了这个名字 —— 照写就把人家的
+    // 副本整份盖掉(本窗的 copyQueue 挡不住跨窗口)。被占了 → 试下一个编号;占的恰好是同一份内容 → 复用;
+    // 宿主说没建成又拿不出现文 → 抛(调用方按写失败处理,不许覆盖原文件)。不认 create 的旧宿主回 void,照旧当写成。
+    const r = await amadeus.writeTextFile(candidate, content, { create: true })
+    if (r && r.ok === false) {
+      if (r.current === content) return candidate
+      if (r.current != null) continue
+      throw new Error('The conflict copy could not be created')
+    }
     return candidate
   }
   throw new Error('Too many conflict copies in one minute')
@@ -125,6 +137,19 @@ export function toastRescued(path: string, copy: string): void {
     level: 'error',
     dedupeKey: `amx-rescued:${copy}`,
     text: translate('unisave.rescued.toast', { name: noteName(path), copy: noteName(copy) }),
+    action: {
+      label: translate('unisave.conflict.open'),
+      run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },
+    },
+  })
+}
+
+/** 改名后补写撞上 CAS(Codex 复核返修 P0-4):新路径已被别处改过 / 没了,本实例改名期间打的字进了副本。 */
+export function toastRenameCopy(path: string, copy: string): void {
+  emitAmadeusToast({
+    level: 'error',
+    dedupeKey: `amx-renamecopy:${copy}`,
+    text: translate('unisave.renameCopy.toast', { name: noteName(path), copy: noteName(copy) }),
     action: {
       label: translate('unisave.conflict.open'),
       run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },
