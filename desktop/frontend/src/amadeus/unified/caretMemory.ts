@@ -3,8 +3,8 @@
  *  · 放:编辑器建好后一个微任务里(折叠记忆同一时机),restore() 允许才放 —— 有别的落点请求(新建流聚焦标题、
  *    标题回车进正文、改名「接着写」、画布模式、只读)一律让位;之后的显式跳转(大纲 / 锚点 / 搜索命中)照常覆盖它。
  *    按文本复核:位置越界或前后文字对不上(文档在别处被改过)就丢弃,绝不把光标放到别的字上。
- *  · 焦点:只在 focus() 说可以时给 —— 焦点掉在 body 上(换篇后旧编辑器被拆、刚启动)且本实例属于活动面板;
- *    侧栏 / 输入框里握着焦点时不抢。不进撤销栈、不滚动(滚动由滚动记忆负责)。 */
+ *  · 焦点:只在 focus() 说可以时给 —— 同一 leaf 上一个实例被拆时焦点还在它里面(键盘导航换篇),且此刻焦点无主;
+ *    点走 / 按 key 重建 / 启动 / 重载都不给,侧栏 / 输入框里握着焦点时不抢。不进撤销栈、不滚动(滚动由滚动记忆负责)。 */
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin, TextSelection, type Selection } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -38,11 +38,13 @@ export function createCaretMemory(opts: {
           const { vaultRoot, path } = opts.where()
           const c = readNoteCaret(vaultRoot, path)
           const doc = view.state.doc
-          if (!c || c.a > doc.content.size || c.h > doc.content.size || caretContext(doc, c.h) !== c.t) return
-          let sel: Selection
-          try { sel = TextSelection.between(doc.resolve(c.a), doc.resolve(c.h)) } catch { return }
-          if (sel.anchor !== c.a || sel.head !== c.h) return // 落不到原位(那里已不是文字位)→ 不猜
-          view.dispatch(view.state.tr.setSelection(sel).setMeta('addToHistory', false))
+          let sel: Selection | null = null
+          if (c && c.a <= doc.content.size && c.h <= doc.content.size && caretContext(doc, c.h) === c.t) {
+            try { sel = TextSelection.between(doc.resolve(c.a), doc.resolve(c.h)) } catch { sel = null }
+            if (sel && (sel.anchor !== c.a || sel.head !== c.h)) sel = null // 落不到原位(那里已不是文字位)→ 不猜
+          }
+          if (sel) view.dispatch(view.state.tr.setSelection(sel).setMeta('addToHistory', false))
+          // 焦点与有没有记忆无关:键盘导航换进来(焦点交接)就给,没记忆时光标在文首。
           if (opts.focus()) view.focus()
         })
         // 重载 / 关窗不走 React 卸载:防抖着的那一笔现在记、现在落(渲染进程无响应被重载时也只丢这 300ms 之前的)。

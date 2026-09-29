@@ -179,6 +179,10 @@ type BodyFocusReq = 'start' | 'end' | 'body-enter' | BodyCarry
  *  scope:发起改名的实例所属的 leaf(评审 G1-02 返修)。同一篇开在几个标签里时改名会让它们**全部**在新路径重挂,
  *  只按路径认领的话谁先挂上谁拿走 —— 别的标签抢走发起标签的正文与选区(后台标签甚至凭空顶插一个空段)。 */
 let pendingBodyFocus: { path: string; scope: string | null; req: BodyFocusReq; at: number } | null = null
+/** 焦点交接(C-23):实例被拆时焦点还在它里面(正文 / 标题)= 这是**键盘导航换篇**(Cmd+Alt+← / 关标签后顶上来的那篇),
+ *  同一 leaf 接着挂上的实例认领它才给焦点。焦点不在它里面(点了别处 / 点走 blur 改名后按 key 重建 / 刚启动 / 重载)不交接 ——
+ *  「焦点掉在 body 上」不等于「该给正文」:点走改名时焦点同样在 body(C49d:回放把焦点抢进了正文)。 */
+let focusHandoff: { scope: string | null; at: number } | null = null
 
 const NOOP_KEYS = {
   insertAfter: () => {},
@@ -2744,12 +2748,23 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  标题回车进正文、改名后「接着写」)时让位。 */
   const caretRestoreRef = useRef<() => boolean>(() => false)
   caretRestoreRef.current = () => !readOnly && !compact && !canvasModeRef.current && bodyFocusRef.current == null && titleFocus === 0
-  /** 回放后给不给焦点:焦点无主(掉在 body 上:换篇拆掉了旧编辑器 / 刚启动)且本实例属于活动面板才给,别处握着焦点不抢。 */
+  /** 给不给焦点:只认同一 leaf 上一个实例被拆时留下的焦点交接(见 focusHandoff),且焦点此刻无主、本实例属于活动面板;
+   *  别处握着焦点不抢。一次性认领。 */
   const caretFocusRef = useRef<() => boolean>(() => false)
   caretFocusRef.current = () => {
+    const h = focusHandoff
+    if (!h || h.scope !== scope || Date.now() - h.at > 5000) return false
+    focusHandoff = null
     const a = document.activeElement
     return (!a || a === document.body) && (scope == null || scope === activePageScope())
   }
+  // 被拆那一刻焦点还在本实例里 → 留一张交接单给同一 leaf 接着挂上的实例(layout cleanup:节点还没脱离,activeElement 仍可信)。
+  const docRef = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => () => {
+    const a = document.activeElement
+    if (a && a !== document.body && (bodyRef.current?.contains(a) || docRef.current?.contains(a))) focusHandoff = { scope, at: Date.now() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   /** 正文首行 ↑ / 首段段首 ← 回标题(K-24,titleNav 插件经它现读):画布满铺没有标题、只读标题不可编辑 → 不接。 */
   const titleUpRef = useRef<() => boolean>(() => false)
   titleUpRef.current = () => {
@@ -3022,7 +3037,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         />
       )}
       {fullCanvas ? null : (
-      <div className="amx-doc unified-page" data-unified-path={path} onFocusCapture={touchActive} onPointerDownCapture={touchActive}>
+      <div ref={docRef} className="amx-doc unified-page" data-unified-path={path} onFocusCapture={touchActive} onPointerDownCapture={touchActive}>
         <UnifiedTitle
           compact={compact}
           path={path}
