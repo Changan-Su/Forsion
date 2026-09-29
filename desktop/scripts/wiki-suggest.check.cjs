@@ -145,6 +145,10 @@ async function main() {
       const b = rects[rects.length - 1]
       return { x: b.right - 1, y: b.top + b.height / 2 }
     }, PM)
+    // 这一组测「补全不吞代码块里的 `[[` / Enter / Tab」,要把代码块的括号自动配对(R-27,设置 → 笔记,缺省开)关掉:
+    // 开着时敲 `[[` 当场补出 `]]`、回车把它推到下一行(与 VS Code 同),L-03c 用「代码里没有 `]]`」判定补全没有把
+    // `[[ab` 吞成 `[[…]]`,自动配对补出的 `]]` 会让这条判据失效 —— 两件事互不相干,这里只量补全。
+    await page.evaluate(() => localStorage.setItem('amadeus.notes.codeAutoPair', '0'))
     await page.mouse.click(c.x, c.y)
     await page.waitForTimeout(150)
     await page.keyboard.press('Enter')
@@ -165,6 +169,7 @@ async function main() {
     check('L-03c 代码块里 Enter/Tab 照常落进代码(不被补全吞成 [[…]])',
       typeof code === 'string' && code.startsWith('echo hi\nif [[ -f x\nx=[[ab') && code.includes('@Test\n') && !code.includes(']]'),
       JSON.stringify(code))
+    await page.evaluate(() => localStorage.removeItem('amadeus.notes.codeAutoPair'))
     await page.close()
 
     page = await open(browser, '# T\n\nuse `x` here\n', PAGES3)
