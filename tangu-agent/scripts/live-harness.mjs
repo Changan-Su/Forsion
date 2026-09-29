@@ -63,6 +63,7 @@
  *   npm run live:harness -- --only git                       # 「设置 → Git」(09-26):agent 自己起的分支名带前缀、提交照提交说明;PROJECT 详情「提交…」生成的信息也照做并能提交。
  *                                                           #   改 runtimeContext.gitPreferenceLines / gitActions 的提交信息提示词后跑;负对照 --git-prefs off(不写设置,须红)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
+ *   npm run live:harness -- --only embed                    # 内联嵌入(09-25):改 skills/show-time 后跑;三份文件(两图一音频)须各有一行独占的 `![[绝对路径]]`
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
@@ -110,17 +111,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human',
-  // P1-K1
-  'remotecaller',
-  // P1-K2
-  'estop',
-  // P1-K9
-  'remotesession',
-  // P1-G5
-  'remotebash',
-  // P1-DL
-  'deliver'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -135,7 +126,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed']);
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -1573,6 +1564,28 @@ Then reply with only the command output.`,
       detail: build.error || concept.error || script.error || `作品卡${name ? `「${name}」` : '没出'};出卡前${wrote.length ? `写了文件(${wrote.join(',')})` : '没写文件'};use_skill ${build.toolCalls.includes('use_skill') ? '调了' : '没调'};负对照${falseCards.length ? `误出卡:${falseCards.join('、')}` : '都没出卡'}`,
       output: `${build.content}\n\n--- 概念 ---\n${concept.content}\n\n--- 脚本 ---\n${script.content}`, ttftMs: ttft(build), tokens: tokensOf(build), toolCalls: build.toolCalls,
     };
+  });
+
+  // 内联嵌入(09-25):show-time 技能教 agent 把要给人看的图 / 音视频写成**独占一行**的 `![[绝对路径]]`,聊天就地渲出
+  // 图片与播放器(Desk 一次只摆两件,三份文件正好越过它)。判据只认「独占一行」—— 夹在句中的渲不成嵌入,只是一条文件链接。
+  // display_file / desk_present 不算违规,但不计入「展示了」:那说明技能那一节没被采纳,原话进报告给人读。
+  await scenario('embed', 'embed 回复里内联展示两图一音频', async () => {
+    const dir = join(workspace, `embed-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const wav = Buffer.alloc(44 + 8000); // 1 秒 8kHz 静音
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + 8000, 4); wav.write('WAVE', 8); wav.write('fmt ', 12); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32);
+    wav.writeUInt16LE(8, 34); wav.write('data', 36); wav.writeUInt32LE(8000, 40); wav.fill(128, 44);
+    const files = [['before.png', png], ['after.png', png], ['narration.wav', wav]].map(([n, b]) => { const f = join(dir, n); writeFileSync(f, b); return f; });
+    const ev = await run(`live-embed-${Date.now()}`, `我在 ${dir} 里放了改版前后的两张截图 before.png、after.png,还有一段配音 narration.wav。把这三个文件都直接摆在聊天里给我看,我要一起对比。`, 180_000);
+    const lines = ev.content.split('\n').map((l) => l.trim());
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const shown = files.filter((f) => lines.some((l) => new RegExp(`^!\\[\\[${esc(f)}(?:#[^\\]|]*)?(?:\\|\\d+)?\\]\\]$`).test(l)));
+    const other = ev.toolCalls.filter((t) => t === 'display_file' || t === 'desk_present');
+    return { ok: !ev.error && ev.done && shown.length === files.length,
+      detail: ev.error || `独占一行的嵌入 ${shown.length}/${files.length}${shown.length < files.length ? `(缺 ${files.filter((f) => !shown.includes(f)).map((f) => f.split('/').pop()).join(',')})` : ''}${other.length ? `;另调了 ${other.join(',')}` : ''}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // 名册 + 借用(09-22):系统提示的「Other Agents」要让缺省 agent 知道 Coding 存在;技能目录的「Skills shared by other agents」
