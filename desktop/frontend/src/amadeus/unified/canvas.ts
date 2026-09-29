@@ -30,10 +30,11 @@ import { undoDepth, isHistoryTransaction } from '@milkdown/kit/prose/history'
 import { Fragment, Slice } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { freshAnchorId, type LayoutV4 } from './columns'
-import { rawTree, pruneTree, depthOf, runEndOf } from './canvasEdit'
+import { rawTree, pruneTree, depthOf, runEndOf, canvasColorCss } from './canvasEdit'
 
-/** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。 */
-export interface CanvasCard { ref: string; x: number; y: number; w: number; h?: number }
+/** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。
+ *  color(V-08,拍板 #9)= JSON Canvas 编码(`"1"`–`"6"` / `#rrggbb`),省略 = 无色;与几何同住 PM attrs。 */
+export interface CanvasCard { ref: string; x: number; y: number; w: number; h?: number; color?: string }
 /** 主卡几何(未入卡的自然流全部)。h 省略 = 随内容自适应，与普通卡片同口径。 */
 export interface CanvasMain { x: number; y: number; w: number; h?: number }
 export interface CanvasV1 {
@@ -126,33 +127,41 @@ export const canvasCardSchema = $nodeSchema('amadeusCanvasCard', () => ({
   // 而卡片就是一个视觉单元,选中即删正是用户预期,且可撤销。更要紧的是:不可选 = 拿不到
   // NodeSelection = ⠿ 拖不动它、块菜单也对它无效,文档模式下就再没有任何办法把卡收回正文了。
   selectable: true,
-  attrs: { anchor: { default: '' }, x: { default: 0 }, y: { default: 0 }, w: { default: CARD_W }, h: { default: 0 } },
+  // color:'' = 无色。⚠️ 住在 attrs 而不是 fm 旁路:撤销删卡 / Alt 拖复制 / 粘贴整卡都靠 attrs 整体搬运,
+  //    颜色若另存一处,这三条路径都会把它丢在原地(V-08)。
+  attrs: { anchor: { default: '' }, x: { default: 0 }, y: { default: 0 }, w: { default: CARD_W }, h: { default: 0 }, color: { default: '' } },
   parseDOM: [{
     tag: 'div[data-amx-card]',
     getAttrs: (dom) => {
       const d = (dom as HTMLElement).dataset
-      return { anchor: d.anchor ?? '', x: int(Number(d.x), 0), y: int(Number(d.y), 0), w: int(Number(d.w), CARD_W) || CARD_W, h: int(Number(d.h), 0) }
+      return { anchor: d.anchor ?? '', x: int(Number(d.x), 0), y: int(Number(d.y), 0), w: int(Number(d.w), CARD_W) || CARD_W, h: int(Number(d.h), 0), color: d.color ?? '' }
     },
   }],
-  toDOM: (node) => ['div', {
+  toDOM: (node) => {
+    const css = canvasColorCss(node.attrs.color)
+    return ['div', {
     'data-amx-card': '',
     'data-anchor': String(node.attrs.anchor),
     'data-x': String(node.attrs.x),
     'data-y': String(node.attrs.y),
     'data-w': String(node.attrs.w),
     'data-h': String(node.attrs.h),
+    // 原值照抄(parseDOM 回读要逐字还原,认不出的值也不许在这一步丢);**能不能渲染**只看下面 style 里
+    // 有没有 --amx-color —— 那一步过 canvasColorCss 的正则,手改的怪值进不了样式。
+    'data-color': node.attrs.color ? String(node.attrs.color) : null,
     class: 'amx-ucard',
     // 几何走自定义属性而不是直接写 left/top/width:CSS 的 attr() 取不了长度值,而内联 left
     // 会在**文档模式**下也生效(卡片当场变绝对定位飞出正文)。自定义属性只被 .amx-canvas
     // 作用域下的规则消费,文档模式一个像素都不动。
     // h=0 保持随内容长高；用户从画布边缘调过高度后才落成显式 px。
-    style: `--amx-x:${node.attrs.x}px;--amx-y:${node.attrs.y}px;--amx-w:${node.attrs.w}px;--amx-h:${Number(node.attrs.h) > 0 ? `${node.attrs.h}px` : 'auto'}`,
-  }, 0],
+    style: `--amx-x:${node.attrs.x}px;--amx-y:${node.attrs.y}px;--amx-w:${node.attrs.w}px;--amx-h:${Number(node.attrs.h) > 0 ? `${node.attrs.h}px` : 'auto'}${css ? `;--amx-color:${css}` : ''}`,
+    }, 0]
+  },
   parseMarkdown: {
     match: ({ type }) => type === 'amadeusCanvasCard',
     runner: (state, node, type) => {
-      const n = node as { anchor?: string; x?: number; y?: number; w?: number; h?: number }
-      state.openNode(type, { anchor: n.anchor ?? '', x: n.x ?? 0, y: n.y ?? 0, w: n.w ?? CARD_W, h: n.h ?? 0 })
+      const n = node as { anchor?: string; x?: number; y?: number; w?: number; h?: number; color?: string }
+      state.openNode(type, { anchor: n.anchor ?? '', x: n.x ?? 0, y: n.y ?? 0, w: n.w ?? CARD_W, h: n.h ?? 0, color: n.color ?? '' })
       state.next(node.children)
       state.closeNode()
     },
@@ -241,6 +250,9 @@ function foldCanvas(tree: MdNode, canvas: CanvasV1 | null, taken: Set<string>, o
       type: 'amadeusCanvasCard',
       anchor: r.id,
       x: int(g.x, 0), y: int(g.y, 0), w: int(g.w, CARD_W) || CARD_W, h: int(g.h, 0),
+      // 手写 / 别的端写进来的 color 原样带进 attrs,派生时原样吐回(V-08:修前这里不带,下一次派生就被删)。
+      // 非字符串不认(JSON Canvas 规定是字符串)—— 与 cards 上其他未知字段同待遇,见 deriveCards。
+      color: typeof g.color === 'string' ? g.color : '',
       children: children.length ? children : [{ type: 'paragraph', children: [] }],
     })
     folded.unshift(r.id)
@@ -266,7 +278,9 @@ export function deriveCards(doc: ProseNode): CanvasCard[] {
     const anchor = String(node.attrs.anchor)
     if (!ID_RE.test(anchor)) return
     const h = int(node.attrs.h, 0)
-    cards.push({ ref: anchor, x: int(node.attrs.x, 0), y: int(node.attrs.y, 0), w: int(node.attrs.w, CARD_W) || CARD_W, ...(h > 0 ? { h } : {}) })
+    const color = node.attrs.color
+    // color 只在设过时才出现:没设色的卡逐字节与修前一致(旧笔记零改写)。
+    cards.push({ ref: anchor, x: int(node.attrs.x, 0), y: int(node.attrs.y, 0), w: int(node.attrs.w, CARD_W) || CARD_W, ...(h > 0 ? { h } : {}), ...(typeof color === 'string' && color ? { color } : {}) })
   })
   return cards
 }

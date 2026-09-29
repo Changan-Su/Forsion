@@ -26,7 +26,7 @@ import { NodeSelection, TextSelection, type Transaction } from '@milkdown/kit/pr
 import { closeHistory, undo as pmUndo, redo as pmRedo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse } from 'lucide-react'
+import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse, Palette } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
 // 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
 // dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
@@ -40,7 +40,7 @@ import {
   CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey,
   MAIN_KEY, MIN_EL, type AttachPreview, type El, type ElBox, type ElGhost, type FrameEl,
 } from './canvasElements'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, rawTree, setParent, childrenOf, isUnder, runEndOf, type ShapeKind } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, setElementColor, rawTree, setParent, childrenOf, isUnder, runEndOf, type ShapeKind } from './canvasEdit'
 import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
 import { OverlayPortal } from '../lib/overlayPortal'
@@ -80,7 +80,28 @@ registerMessages({
   'canvasstage.menu.delete': { zh: '删除', en: 'Delete' },
   'canvasstage.menu.newCard': { zh: '新建卡片', en: 'New card' },
   'canvasstage.menu.fit': { zh: '适应内容', en: 'Fit to content' },
+  'canvasstage.color.label': { zh: '颜色', en: 'Color' },
+  'canvasstage.color.none': { zh: '无颜色', en: 'No color' },
+  'canvasstage.color.red': { zh: '红色', en: 'Red' },
+  'canvasstage.color.orange': { zh: '橙色', en: 'Orange' },
+  'canvasstage.color.yellow': { zh: '黄色', en: 'Yellow' },
+  'canvasstage.color.green': { zh: '绿色', en: 'Green' },
+  'canvasstage.color.cyan': { zh: '青色', en: 'Cyan' },
+  'canvasstage.color.purple': { zh: '紫色', en: 'Purple' },
+  'canvasstage.color.custom': { zh: '自定义颜色…', en: 'Custom color…' },
 })
+
+/** 右键菜单的色板(V-08)。v = 盘上的 JSON Canvas 编码(Obsidian 同序),'' = 无色(删键)。
+ *  ⚠️ nameKey 存 i18n 键,渲染期再 t() —— 模块作用域求值会把文案冻死在加载时的语言上。 */
+const COLOR_SWATCHES: Array<{ v: string; nameKey: string }> = [
+  { v: '', nameKey: 'canvasstage.color.none' },
+  { v: '1', nameKey: 'canvasstage.color.red' },
+  { v: '2', nameKey: 'canvasstage.color.orange' },
+  { v: '3', nameKey: 'canvasstage.color.yellow' },
+  { v: '4', nameKey: 'canvasstage.color.green' },
+  { v: '5', nameKey: 'canvasstage.color.cyan' },
+  { v: '6', nameKey: 'canvasstage.color.purple' },
+]
 
 /** 低于这档正文已经不可扫读，改由恒定屏幕字号的标题/首行承担概览。 */
 /** Chromium 把触控板双指捏合作为 `ctrlKey + wheel` 送达；macOS 的 Cmd+滚轮则是
@@ -225,7 +246,7 @@ function commitGeo(view: EditorView, tr: Transaction): void {
 
 /** 一批卡片的几何**合成一笔**事务:多选整批搬时若逐卡 dispatch,一次拖拽会攒出 N 个撤销步。
  *  ⚠️ 位置从同一份快照取,且 setNodeMarkup 不改变节点尺寸 → 后面的 pos 不需要映射。 */
-function setCardAttrs(view: EditorView, patches: Map<string, Record<string, number>>, history = true): void {
+function setCardAttrs(view: EditorView, patches: Map<string, Record<string, number | string>>, history = true): void {
   const cards = cardsOf(view)
   let tr = view.state.tr
   let any = false
@@ -1049,6 +1070,34 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     if (!safeElements(cbRef.current.elements).some((e) => e.id === id)) return
     mutate((l) => setElementText(l, id, key, next.trim()))
   }, [mutate])
+
+  /** 设色(V-08,拍板 #9)。卡片 = PM attrs(与几何同一条撤销、同一次派生),元素 = fm 原始条目。
+   *  两域都有时照拖拽落笔的口径:PM + onCommit 在前(onCommit 会同步重写 canvas 行,先写 fm 会被它盖掉),
+   *  fm 在后,并成 'pair' 一击双退。`null` = 无色(删键,不写空串)。
+   *  主卡(m:)与层级线(t:)不设色:前者由 withMain 按几何重建,后者盘上没有条目 —— 调用方已滤掉。 */
+  const setColor = useCallback((keys: string[], color: string | null): void => {
+    const cb = cbRef.current
+    const view = cb.getView()
+    const anchors = new Set(keys.filter((k) => k.startsWith('c:')).map(keyId))
+    let pm = false
+    if (view && anchors.size) {
+      const want = color ?? ''
+      const patches = new Map<string, Record<string, string>>()
+      for (const c of cardsOf(view)) if (anchors.has(c.anchor) && String(c.node.attrs.color ?? '') !== want) patches.set(c.anchor, { color: want })
+      if (patches.size) {
+        setCardAttrs(view, patches)
+        cb.onCommit()
+        pm = true
+      }
+    }
+    const ids = new Set(keys.filter((k) => k.startsWith('e:')).map(keyId))
+    if (!ids.size) return
+    const cur = rawList(cbRef.current.elements)
+    const next = setElementColor(cur, ids, color)
+    if (next === cur) return
+    writeFm({ e: next })
+    if (pm) mergePair()
+  }, [writeFm, mergePair])
 
   // ── 新建 ──────────────────────────────────────────────────────────────────────────
   /** 新建卡片:空段落卡插在文末(x/y 是**左上角**,调用方自己让开指针中心)。返回新卡锚。
@@ -3021,7 +3070,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       const inMain = !card && !shape && !!target.closest('.ProseMirror')
       // 正在编辑的卡/正文让位给 PM/原生菜单(复制粘贴、拼写检查都在那儿)。
       if ((card?.dataset.anchor && editingRef.current === card.dataset.anchor) || (inMain && editingRef.current === MAIN_KEY)) return 'native'
-      const key = shape?.dataset.el
+      let key = shape?.dataset.el
         ? elKey(shape.dataset.el)
         : card?.dataset.anchor
           ? cardKey(card.dataset.anchor)
@@ -3029,6 +3078,21 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
             ? MAIN_KEY
             : null
       if (!key && !isBlank(target)) return 'skip' // 浮层 chrome(把手等,不在 PM 内):原生菜单
+      // 连线没有 DOM 命中面(元素层整层 pointer-events:none),空白处按数学补一次命中 —— 与单击 / 双击
+      // 同一把尺(hitEdge + 8px/z 容差)。修前右键连线落进「空白菜单」,连线没有任何菜单入口(V-08 设色无处下手)。
+      if (!key) {
+        const at = toStage(x, y)
+        const boxes = actRef.current.boxesNow(null)
+        const hit = safeElements(cbRef.current.elements).find((el) => {
+          if (el.kind !== 'connector') return false
+          const a = endKey(el.from)
+          const b = endKey(el.to)
+          const ba = a ? boxes.get(a) : null
+          const bb = b ? boxes.get(b) : null
+          return !!ba && !!bb && hitEdge(ba, bb, at, 8 / vpRef.current.z)
+        })
+        if (hit) key = elKey(hit.id)
+      }
       if (key && !selRef.current.includes(key)) setSel([key])
       setMenu({ x, y, key, at: toStage(x, y) })
       return 'open'
@@ -3465,6 +3529,25 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   // 点阵层的相位算法搬进了 canvasKit(与仪表盘共用同一份;见 gridLayerStyle 顶注)。
   const gridStyle = gridLayerStyle(vp)
 
+  // 右键菜单的对象身份与色板(V-08)。可设色 = 卡片 / 白板元素;主卡与层级线不在内(见 setColor)。
+  const menuEl = menu?.key?.startsWith('e:') ? els.find((x) => x.id === keyId(menu.key!)) ?? null : null
+  const menuConn = menuEl?.kind === 'connector'
+  const colorKeys = menu?.key ? (sel.length ? sel : [menu.key]).filter((k) => k.startsWith('c:') || k.startsWith('e:')) : []
+  /** 选中对象此刻的颜色(原值);大家不一致 = null(色板不标当前项)。 */
+  const menuColor = (() => {
+    if (!colorKeys.length) return null
+    const view = menu ? getView() : null
+    const raw = rawList(elements)
+    const of = (k: string): string => {
+      if (k.startsWith('c:')) return String((view ? cardsOf(view).find((c) => c.anchor === keyId(k))?.node.attrs.color : '') ?? '')
+      const it = raw.find((x) => !!x && typeof x === 'object' && (x as { id?: unknown }).id === keyId(k)) as { color?: unknown } | undefined
+      return typeof it?.color === 'string' ? it.color : ''
+    }
+    const first = of(colorKeys[0])
+    return colorKeys.every((k) => of(k) === first) ? first : null
+  })()
+  const menuHex = menuColor && menuColor.startsWith('#') ? menuColor : null
+
   // ⚠️ 文档模式下**不能**换成 `<>{children}</>`。那样这一槽位的元素类型在 Fragment 与 div 之间跳变,
   //    React 判定为不同类型 → 整棵子树卸载重挂 → **MilkdownProvider 重建,PM 的撤销栈当场销毁**:
   //    切一次模式,Cmd+Z 的历史就全没了(顺带白触发一次 onFinalFlush)。所以两种模式渲染同一棵树,
@@ -3587,6 +3670,46 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
           <OverlayAt className="ctx-menu amx-canvas-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
             {menu.key ? (
               <>
+                {colorKeys.length > 0 && (
+                  <>
+                    <div className="amx-color-row" role="group" aria-label={t('canvasstage.color.label')}>
+                      {COLOR_SWATCHES.map((c) => (
+                        <button
+                          key={c.v || 'none'}
+                          type="button"
+                          className="amx-color-swatch"
+                          data-swatch={c.v || 'none'}
+                          title={t(c.nameKey)}
+                          aria-label={t(c.nameKey)}
+                          aria-pressed={menuColor === c.v}
+                          style={c.v ? { ['--amx-swatch' as string]: `var(--amx-cv-${c.v})` } : undefined}
+                          onClick={() => { const keys = colorKeys; setMenu(null); setColor(keys, c.v || null) }}
+                        />
+                      ))}
+                      {/* 自定义色 = JSON Canvas 的 `#rrggbb`。取色器的 input 事件是拖动中的每一帧,只认 change(提交)那一下 ——
+                          逐帧写盘会把一次取色灌成几十格撤销。 */}
+                      <label
+                        className="amx-color-swatch is-custom"
+                        title={t('canvasstage.color.custom')}
+                        data-active={menuHex ? '' : undefined}
+                        style={menuHex ? { ['--amx-swatch' as string]: menuHex } : undefined}
+                      >
+                        {menuHex ? null : <Palette size={11} />}
+                        <input
+                          type="color"
+                          aria-label={t('canvasstage.color.custom')}
+                          defaultValue={menuHex ?? '#7b5ce5'}
+                          ref={(el) => {
+                            if (!el) return
+                            const keys = colorKeys
+                            el.onchange = () => { setMenu(null); setColor(keys, el.value) }
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <div className="ctx-separator" />
+                  </>
+                )}
                 {menu.key.startsWith('e:') && (
                   <button onClick={() => {
                     const el = els.find((x) => x.id === keyId(menu.key!))
@@ -3594,7 +3717,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
                     if (el) void editText(el.id, textKeyOf(el), textTitleOf(el))
                   }}>{t('canvasstage.menu.editText')}</button>
                 )}
-                <button onClick={() => { setConnFrom(menu.key); setTool('conn'); setMenu(null) }}>{t('canvasstage.menu.connectTo')}</button>
+                {/* 连线的端点只能是卡 / 主卡 / 形状:从一条连线再「连线到…」画出来的端点谁都解析不了。 */}
+                {!menuConn && <button onClick={() => { setConnFrom(menu.key); setTool('conn'); setMenu(null) }}>{t('canvasstage.menu.connectTo')}</button>}
                 {(menu.key === MAIN_KEY || menu.key.startsWith('c:')) && childrenOf(rawTree(tree), menu.key === MAIN_KEY ? MAIN_KEY : keyId(menu.key)).length > 0 && (
                   <button onClick={() => {
                     const root = menu.key === MAIN_KEY ? MAIN_KEY : keyId(menu.key!)
@@ -3602,7 +3726,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
                     arrangeChildren(root)
                   }}>{t('canvasstage.menu.arrange')}</button>
                 )}
-                <button onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); groupIntoFrame(keys) }}>{t('canvasstage.menu.groupFrame')}</button>
+                {!menuConn && <button onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); groupIntoFrame(keys) }}>{t('canvasstage.menu.groupFrame')}</button>}
                 {menu.key.startsWith('c:') && (
                   <button onClick={() => {
                     const a = keyId(menu.key!)

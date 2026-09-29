@@ -3743,6 +3743,102 @@ body.amx-marquee-active * {
 }
 .am-app .amx-el-frame.is-sel .amx-el-frame-bar { color: var(--primary); border-color: var(--primary); }
 .am-app .amx-el-text { border: 0; padding: 0; justify-content: flex-start; text-align: left; }
+/* ── 画布颜色(V-08,拍板 #9)──────────────────────────────────────────────────────────
+   盘上存 JSON Canvas 编码(`"1"`–`"6"` / `#rrggbb`),渲染侧把它换成 `--amx-color`(canvasEdit.canvasColorCss):
+   预设 → 下面这张色板,自定义 → 字面 hex。**只在画布模式消费** —— 卡片规则挂在 `.amx-canvas` 作用域下,
+   白板元素本来就只在画布模式渲染;文档模式一个像素都不动(C45 钉着文档模式零装饰)。
+   色板按明暗各一套(用户内容色,与行内高亮色同一种写法);底色一律与 `--bg` 调和,两种模式自动成立。
+   ⚠️ 描边类颜色规则一律带 `:not(.is-sel)`:与 `.is-sel` 同特异性,靠源码顺序定胜负的话选中态会被颜色盖掉
+   (DESIGN §7.2)。不加 box-shadow(check:shadowcontract)。 */
+.am-app {
+  --amx-cv-1: #e03e3e;
+  --amx-cv-2: #e8780f;
+  --amx-cv-3: #cf9a00;
+  --amx-cv-4: #2e9d57;
+  --amx-cv-5: #0e9fa6;
+  --amx-cv-6: #7b5ce5;
+}
+[data-mode='dark'] .am-app, .am-app[data-mode='dark'] {
+  --amx-cv-1: #f06a6a;
+  --amx-cv-2: #f29a4a;
+  --amx-cv-3: #e8c547;
+  --amx-cv-4: #5cc987;
+  --amx-cv-5: #4ccfd3;
+  --amx-cv-6: #a88bff;
+}
+/* 卡片:data-color 是原值(认不出的怪值也照抄,见 canvas.ts toDOM),所以两处都带回落 —— 认不出 = 原样观感。 */
+.am-app .amx-canvas .amx-ucard[data-color] {
+  border-color: var(--amx-color, var(--border));
+  background: color-mix(in srgb, var(--amx-color, var(--bg)) 10%, var(--bg));
+}
+.am-app .amx-el-shape[data-color]:not(.amx-el-text) {
+  border-color: var(--amx-color);
+  background: color-mix(in srgb, var(--amx-color) 14%, transparent);
+}
+.am-app .amx-el-text[data-color] { color: var(--amx-color); }
+.am-app .amx-el-frame[data-color] { background: color-mix(in srgb, var(--amx-color) 7%, transparent); }
+.am-app .amx-el-frame[data-color]:not(.is-sel) { border-color: color-mix(in srgb, var(--amx-color) 70%, transparent); }
+.am-app .amx-el-frame[data-color]:not(.is-sel) .amx-el-frame-bar {
+  color: var(--amx-color);
+  border-color: color-mix(in srgb, var(--amx-color) 55%, transparent);
+}
+.am-app .amx-el-conn[data-color]:not(.is-sel) path { stroke: var(--amx-color); }
+.am-app .amx-el-conn[data-color]:not(.is-sel) polygon { fill: var(--amx-color); }
+.am-app .amx-el-label[data-color] {
+  color: var(--amx-color);
+  border-color: color-mix(in srgb, var(--amx-color) 45%, var(--border));
+}
+/* 右键菜单里的色板行。⚠️ 选择器要压过 base.css 的 `.ctx-menu button`(整行宽 + flex + hover 换底)。 */
+/* 8 枚 × 16px + 7 × 4px 间距 + 两侧 6px = 168px,正好落在操作菜单的 --menu-action-min/max 之间,不撑宽菜单。 */
+.am-app .amx-canvas-menu .amx-color-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+}
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--amx-swatch, var(--bg));
+  color: var(--text-sec);
+  cursor: pointer;
+  transition: transform var(--dur-fast, 120ms) var(--ease-apple, ease-out);
+}
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch:hover { transform: scale(1.12); background: var(--amx-swatch, var(--bg)); }
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch[aria-pressed='true'],
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch[data-active] {
+  outline: 1.5px solid var(--text-sec);
+  outline-offset: 1.5px;
+}
+/* 「无颜色」= 底色圆 + 一道斜杠。 */
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch[data-swatch='none']::after {
+  content: '';
+  position: absolute;
+  inset: 50% 2px auto;
+  height: 1.5px;
+  background: var(--text-muted);
+  transform: rotate(-45deg);
+}
+/* 自定义色:label 包一个视觉隐藏的原生取色器(点圆 = 打开系统取色板)。 */
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch.is-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .amx-canvas-menu .amx-color-row .amx-color-swatch { transition: none; }
+}
 /* (2026-08-18 晚:主卡标题条已按用户拍板移除 —— 主卡**完全等同卡片**,两段式选中/编辑,
    手柄就是 padding 圈,不再有独立的「正文」条。别加回来。) */
 /* 主卡选中框里的调宽把手要能点(选中框本身 pointer-events:none)。 */

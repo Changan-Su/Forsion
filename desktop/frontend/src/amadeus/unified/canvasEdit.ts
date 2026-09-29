@@ -294,3 +294,34 @@ export function newFrame(id: string, x: number, y: number, w: number, h: number,
   if (title) out.title = title
   return out
 }
+
+// ── 颜色(V-08,拍板 #9:存进 `amadeus_canvas` 条目,编码沿用 JSON Canvas)────────────────────
+// 预设 `"1"`–`"6"`(Obsidian 同序:红 / 橙 / 黄 / 绿 / 青 / 紫)或 `#rrggbb`。卡片的 color 住在 PM attrs
+// (与 x/y/w/h 同轨,见 canvas.ts deriveCards),白板元素的 color 住在原始条目 —— 两边共用这一把尺。
+// 只在画布模式显示:文档模式没有任何一条规则消费它(styles.css 的 `.amx-canvas` 作用域)。
+const COLOR_RE = /^(?:[1-6]|#[0-9a-fA-F]{6})$/
+
+/** 盘上的 color → 可渲染的 CSS 值;认不出 → null(**不渲染,但原值逐字保留**,老端绝不吞新端)。
+ *  ⚠️ fm 可被手改 / 外部工具写:只有过了这条正则的值才会进 style,别放宽成「是字符串就行」。 */
+export function canvasColorCss(v: unknown): string | null {
+  if (typeof v !== 'string' || !COLOR_RE.test(v)) return null
+  return v.length === 1 ? `var(--amx-cv-${v})` : v
+}
+
+/** 一批元素设色;`null` = **删键**(而不是写 `color: ""`,与 setElementText 同口径)。
+ *  整体没变时原样返回同一个数组 —— 调用方据此一个字节不写。 */
+export function setElementColor(list: unknown[], ids: ReadonlySet<string>, color: string | null): unknown[] {
+  let changed = false
+  const out = list.map((it) => {
+    const id = idOf(it)
+    if (!id || !ids.has(id)) return it
+    const o = it as RawEl
+    if (color ? o.color === color : !('color' in o)) return it
+    changed = true
+    const next = { ...o }
+    if (color) next.color = color
+    else delete next.color
+    return next
+  })
+  return changed ? out : list
+}

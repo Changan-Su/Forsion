@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { parseCanvasJson, deriveCanvasJson, deriveCards, withMain } from './canvas'
+import { canvasColorCss, setElementColor } from './canvasEdit'
 
 /** deriveCards 只碰 doc.forEach / node.type.name / node.attrs —— 用最小替身即可诚实覆盖,
  *  不必为纯函数契约把整套 PM schema 搭起来。 */
@@ -121,5 +122,27 @@ describe('deriveCanvasJson', () => {
 
   it('deriveCards 跳过没有合法锚的卡(空锚落盘就是 `<!-- a  -->` 毁格式)', () => {
     expect(deriveCards(docOf({ anchor: '', x: 0, y: 0, w: 300 }, { anchor: 'c2', x: 1, y: 2, w: 300 }))).toEqual([{ ref: 'c2', x: 1, y: 2, w: 300 }])
+  })
+})
+
+describe('画布颜色(V-08,拍板 #9:存进 amadeus_canvas 条目,编码沿用 JSON Canvas)', () => {
+  it('deriveCards:设过色的卡原样吐 color,无色卡不长 color 键(旧笔记逐字不变)', () => {
+    const doc = docOf({ anchor: 'c1', x: 1, y: 2, w: 300, h: 0, color: '1' }, { anchor: 'c2', x: 1, y: 2, w: 300, h: 0, color: '' }, { anchor: 'c3', x: 0, y: 0, w: 300, h: 0, color: 'red' })
+    expect(deriveCards(doc)).toEqual([{ ref: 'c1', x: 1, y: 2, w: 300, color: '1' }, { ref: 'c2', x: 1, y: 2, w: 300 }, { ref: 'c3', x: 0, y: 0, w: 300, color: 'red' }])
+  })
+  it('canvasColorCss 只认预设 1–6 与 #rrggbb;认不出的一律不渲染(原值不动)', () => {
+    expect(canvasColorCss('3')).toBe('var(--amx-cv-3)')
+    expect(canvasColorCss('#12AB34')).toBe('#12AB34')
+    for (const bad of ['0', '7', 'red', '#abc', '#12ab34;x:y', 1, null, '']) expect(canvasColorCss(bad)).toBeNull()
+  })
+  it('setElementColor:设色 / null 删键;没变化时原样返回同一个数组(调用方据此零写入)', () => {
+    const list: unknown[] = [{ id: 'a', type: 'shape', note: 'x' }, { id: 'b', type: 'frame', color: '2' }, 'junk']
+    const set = setElementColor(list, new Set(['a']), '5')
+    expect(set[0]).toEqual({ id: 'a', type: 'shape', note: 'x', color: '5' })
+    expect(set[2]).toBe('junk')
+    const cleared = setElementColor(list, new Set(['b']), null)
+    expect(cleared[1]).toEqual({ id: 'b', type: 'frame' })
+    expect(setElementColor(list, new Set(['b']), '2')).toBe(list)
+    expect(setElementColor(list, new Set(['a']), null)).toBe(list)
   })
 })
