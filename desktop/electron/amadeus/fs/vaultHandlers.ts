@@ -340,8 +340,21 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     }
   })
   handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string }) => {
-    const base = typeof opts?.base === 'string' ? opts.base : null // create 是云桥的语义,本地写盘不区分
+    const base = typeof opts?.base === 'string' ? opts.base : null
     return withPathLock(filePath, async () => {
+      if (opts?.create === true) {
+        // 仅新建(Codex 复核返修 P1-1,优先于 base):`wx` 独占创建,已存在 → 不写,交回现文(调用方据此打开它 / 换下一个名字);
+        // 现文读不出来 → current:null,调用方按「没建成」提示,绝不当成已存在。
+        try {
+          await vault.createTextFile(filePath, text)
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw err
+          return { ok: false as const, current: await fs.readFile(vault.absPath(filePath), 'utf8').catch(() => null) }
+        }
+        if (vault.isPagePath(filePath)) await index.update(filePath)
+        if (e != null && vault.isPagePath(filePath)) deps.notifyPeers?.(e, IPC.externalChange, filePath)
+        return { ok: true as const }
+      }
       if (base != null) {
         // 比对交换写(G1-01):盘上已不是调用方的基线 → 不写,把现文交回去(回灌 / 冲突副本由渲染层定)。
         // 文件不在(ENOENT)也拒写、current:null(Codex 复核 inst P0-2):base 是调用方**读到过的**那版的指纹 = 它以为文件在;

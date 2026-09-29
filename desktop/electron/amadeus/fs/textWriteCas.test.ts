@@ -46,9 +46,31 @@ describe('writeTextFile CAS(G1-01)', () => {
     await fs.writeFile(path.join(h.root, 'a.md'), 'disk')
     expect(await h.write(null, 'a.md', 'blind')).toBeUndefined()
     expect(await h.disk('a.md')).toBe('blind')
-    // create 是云桥的语义:本地写盘忽略它
-    expect(await h.write(null, 'a.md', 'again', { create: true })).toBeUndefined()
-    expect(await h.disk('a.md')).toBe('again')
+  })
+
+  // Codex 复核返修 P1-1 / P0-2:create = 原子的仅新建(优先于 base)。新建笔记(birthNoteFile 带空串基线)此前被
+  // 「带 base + ENOENT 拒写」拦下;冲突副本「查空位 → 写」跨窗口会互相盖掉。负对照(实跑过):删掉 create 分支 → 本组红。
+  it('create:不存在 → 建、回 ok:true(带 base 也照建);已存在 → 不写、交回现文;两发同名并发只有一个建成', async () => {
+    const h = await setup()
+    expect(await h.write(null, 'sub/new.md', '', { create: true, base: textFingerprint('') })).toEqual({ ok: true })
+    expect(await h.disk('sub/new.md')).toBe('')
+    await fs.writeFile(path.join(h.root, 'a.md'), 'mine')
+    expect(await h.write(null, 'a.md', 'again', { create: true })).toEqual({ ok: false, current: 'mine' })
+    expect(await h.disk('a.md')).toBe('mine')
+    const [r1, r2] = await Promise.all([
+      h.write({ sender: 'w1' }, 'copy.md', 'from-w1', { create: true }),
+      h.write({ sender: 'w2' }, 'copy.md', 'from-w2', { create: true }),
+    ])
+    const won = (r1 as { ok: boolean }).ok ? 'from-w1' : 'from-w2'
+    expect([r1, r2].filter((r) => (r as { ok: boolean }).ok)).toHaveLength(1)
+    expect([r1, r2]).toContainEqual({ ok: false, current: won })
+    expect(await h.disk('copy.md')).toBe(won)
+    // 跨进程(两个 VaultManager 同一库根,不共享路径锁):只剩 `wx` 在守,仍只有一个建成
+    const other = new VaultManager()
+    other.setRoot(h.root)
+    const both = await Promise.allSettled([h.vault.createTextFile('x.md', 'p1'), other.createTextFile('x.md', 'p2')])
+    expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect((both.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.code).toBe('EEXIST')
   })
 
   it('base 与盘上一致 → 写,回 ok:true;不一致 → 不写,回盘上现文', async () => {
