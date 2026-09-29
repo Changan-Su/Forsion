@@ -14,7 +14,6 @@ export interface AccountQuotaView {
   weeklyPercent?: number
   weeklyResetAt?: string
   resetCards?: number
-  pointsAutoDeduct?: boolean
   /** 后台额度(Muse / 自动化;2026-09-24 起服务端才下发,旧服务端无此字段)。 */
   background?: BackgroundQuotaView
 }

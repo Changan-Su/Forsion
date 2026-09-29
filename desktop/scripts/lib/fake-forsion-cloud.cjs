@@ -19,7 +19,9 @@ async function startFakeForsionCloud(opts = {}) {
     bg: { daily: 120, weekly: 200, autoMain: false },
     nickname: '演示用户',
     avatar: null,
-    autoDeduct: false,
+    // 公告(opts.announcement 给了才有;形状 = server GET /api/announcements/pending 的 announcement)
+    announcement: opts.announcement || null,
+    seenAnnouncements: new Set(),
     tickets: [
       { id: 't1', user_id: 'u1', title: null, description: '笔记同步后图片丢了，重新打开才出现。', status: 'in_progress', user_unread: true, admin_unread: false, created_at: '2026-09-26T08:00:00Z', updated_at: '2026-09-27T10:00:00Z' },
       { id: 't2', user_id: 'u1', title: null, description: '希望 Muse 能按项目分开记忆。', status: 'resolved', user_unread: false, admin_unread: false, created_at: '2026-09-20T08:00:00Z', updated_at: '2026-09-21T09:00:00Z' },
@@ -34,7 +36,7 @@ async function startFakeForsionCloud(opts = {}) {
       dailyLimit: LIMIT.daily, dailyUsed: state.used.daily, dailyRemaining: Math.max(LIMIT.daily - state.used.daily, 0), dailyPercent: Math.round(state.used.daily / LIMIT.daily * 100),
       weeklyLimit: LIMIT.weekly, weeklyUsed: state.used.weekly, weeklyRemaining: Math.max(LIMIT.weekly - state.used.weekly, 0), weeklyPercent: Math.round(state.used.weekly / LIMIT.weekly * 100),
       weeklyResetAt: '2026-10-05', monthlyLimit: -1, monthlyUsed: 0, monthlyRemaining: -1, monthlyPercent: 0,
-      extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: state.autoDeduct,
+      extraTokenPoints: 0, tier: 'plus', hasOverride: false, pointsAutoDeduct: false,
       background: {
         sharePercent: 15, modelId: 'glm-bg', autoMain: state.bg.autoMain,
         dailyLimit: d, dailyUsed: state.bg.daily, dailyRemaining: Math.max(d - state.bg.daily, 0), dailyPercent: Math.round(state.bg.daily / d * 100),
@@ -91,7 +93,11 @@ async function startFakeForsionCloud(opts = {}) {
         state.cards += n
         return send(res, 200, { success: true, cardsGranted: n, pointsSpent: n * 100, pricePerCard: 100, newPointsBalance: 1234 - n * 100, resetCards: state.cards })
       }
-      if (p === '/api/token-quota/auto-deduct') { state.autoDeduct = !!body.enabled; return send(res, 200, { success: true, pointsAutoDeduct: state.autoDeduct }) }
+      // 积分自动抵扣 09-29 下线:服务端回 410
+      if (p === '/api/token-quota/auto-deduct') return send(res, 410, { error: 'auto_deduct_removed', detail: '积分自动抵扣已下线' })
+      // 公告:只回最新一条且没看过的
+      if (p === '/api/announcements/pending') return send(res, 200, { announcement: state.announcement && !state.seenAnnouncements.has(state.announcement.id) ? state.announcement : null })
+      { const m = /^\/api\/announcements\/([^/]+)\/seen$/.exec(p); if (m && req.method === 'POST') { state.seenAnnouncements.add(decodeURIComponent(m[1])); return send(res, 200, { success: true }) } }
       if (p === '/api/token-quota/background/auto-main') { state.bg.autoMain = !!body.enabled; return send(res, 200, { success: true, autoMain: state.bg.autoMain }) }
       if (p === '/api/token-quota/background/convert') return send(res, 200, { success: true, converted: { daily: 10, weekly: 50 }, quota: quota() })
       if (p === '/api/token-quota/my/logs') return send(res, 200, {

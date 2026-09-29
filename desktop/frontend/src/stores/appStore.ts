@@ -353,9 +353,7 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
     const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
     const state = weekly ? 'weekly' : daily ? 'daily' : ''
     if (state && state !== lastQuotaExhaustState) {
-      // 积分自动抵扣开着:额度虽尽但会自动扣积分续用,提示口径不同(且不算错误)
-      if (j.pointsAutoDeduct) toast(tr('quota.exhausted.autoDeduct'))
-      else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === authGeneration) quotaCheckBusy = false })
