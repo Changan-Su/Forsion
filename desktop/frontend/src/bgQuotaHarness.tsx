@@ -55,22 +55,13 @@ let quota: AccountQuotaView = {
 }
 window.tangu = {
   accountQuota: async () => ({ status: 200, json: quota }),
-  accountBgAutoMain: async (enabled: boolean) => {
-    quota = { ...quota, background: { ...quota.background!, autoMain: enabled } }
-    return { status: 200, json: { success: true, autoMain: enabled } }
-  },
-  accountBgConvert: async (percent: number) => {
-    const bg = quota.background!
-    const d = (100 * percent) / 100, w = (500 * percent) / 100
-    quota = {
-      ...quota, dailyRemaining: (quota.dailyRemaining || 0) - d, weeklyRemaining: (quota.weeklyRemaining || 0) - w,
-      background: { ...bg, dailyLimit: bg.dailyLimit + d, dailyRemaining: (bg.dailyRemaining || 0) + d, weeklyLimit: bg.weeklyLimit + w, weeklyRemaining: (bg.weeklyRemaining || 0) + w },
-    }
-    ;(window as unknown as { __bgHarness: { converted: number[] } }).__bgHarness.converted.push(percent)
-    return { status: 200, json: { success: true, converted: { daily: d, weekly: w }, quota } }
+  // 有 Extend 的桌面:剩余量与开关 / 转入都在「Forsion 云端 → 额度与积分」,Muse 页只给跳转(记下跳到哪)
+  cloudInvoke: async () => ({}),
+  openFloatingPanel: async (req: { params?: { tab?: string } }) => {
+    ;(window as unknown as { __bgHarness: { opened: string[] } }).__bgHarness.opened.push(String(req?.params?.tab))
   },
 } as unknown as NonNullable<Window['tangu']>
-;(window as unknown as { __bgHarness: { converted: number[]; posts: unknown[] } }).__bgHarness = { converted: [], posts: [] }
+;(window as unknown as { __bgHarness: { opened: string[]; posts: unknown[] } }).__bgHarness = { opened: [], posts: [] }
 
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>

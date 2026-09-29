@@ -98,78 +98,40 @@ it('shows working sign-in and sign-out actions for a minimal Unit without unavai
   expect(window.tangu!.forsionLogout).toHaveBeenCalledOnce()
 })
 
-it('keeps usage, invite, and account-center actions when the host provides those services', async () => {
-  window.tangu!.openAccountCenter = vi.fn().mockResolvedValue({ ok: true })
-  await mount()
-  await click('Alice')
-  await tick()
-  expect(document.body.textContent).toContain('额度剩余')
-  expect(document.body.textContent).toContain('邀请好友')
-  expect(document.body.textContent).toContain('用户中心')
-  await click('邀请好友')
-  expect(window.tangu!.openAccountCenter).toHaveBeenCalledWith('points-exchange')
-})
-
-it('shows the reset ceremony only after the card has been consumed', async () => {
+// 2026-09-28:菜单只留四样(头部 → 账号页、一行 AI 额度摘要 → 额度与积分、切换账号、退出登录);
+// 升级 / 重置卡 / 邀请 / 网页个人中心都收进「Forsion 云端」里 Extend 画的页,菜单里不再各放一份。
+it('keeps four things in the menu and sends account and quota to the Forsion Cloud pages', async () => {
+  const { useApp } = await import('../stores/appStore')
+  const openSettings = vi.fn()
+  useApp.setState({ openSettings } as any)
+  ;(window.tangu as any).cloudInvoke = vi.fn()
+  window.tangu!.openAccountCenter = vi.fn() as any
+  window.tangu!.openPayCenter = vi.fn() as any
   window.tangu!.accountQuota = vi.fn().mockResolvedValue({
     status: 200,
-    json: { dailyLimit: 100, dailyRemaining: 42, dailyPercent: 58, weeklyLimit: 100, weeklyRemaining: 8, weeklyPercent: 92, resetCards: 2 },
-  }) as any
-  window.tangu!.accountUseResetCard = vi.fn().mockResolvedValue({
-    status: 200,
-    json: { success: true, quota: { dailyLimit: 100, dailyRemaining: 100, dailyPercent: 0, weeklyLimit: 100, weeklyRemaining: 100, weeklyPercent: 0 }, resetCards: 1 },
+    json: { dailyLimit: 1000, dailyRemaining: 4, dailyPercent: 99.6, weeklyLimit: 1000, weeklyRemaining: 725, weeklyPercent: 27.5, resetCards: 2 },
   }) as any
   await mount()
   await click('Alice')
   await tick()
-  await click('额度剩余')
-  await click('2 张重置卡可用')
-  expect(window.tangu!.accountUseResetCard).not.toHaveBeenCalled()
-  await click('再点一次确认使用')
+  const text = document.body.textContent || ''
+  expect(text).toContain('今日 <1% · 本周 72%') // 统一口径:剩 0.4% 写 <1%(原来菜单写 0%)
+  for (const gone of ['额度剩余', '邀请好友', '用户中心', '升级会员', '重置卡']) expect(text).not.toContain(gone)
+  await click('AI 额度')
+  expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:quota')
+  await click('Alice')
   await tick()
-  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledWith('both')
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('额度已焕新')
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('重置卡剩余 1 张')
+  await act(async () => { document.querySelector<HTMLElement>('.ap-head--link')!.click() })
+  expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:account')
 })
 
-it('shows the background-agent quota row under usage on hosts with a local engine (tighter axis wins)', async () => {
-  window.tangu!.accountQuota = vi.fn().mockResolvedValue({
-    status: 200,
-    json: {
-      dailyLimit: 100, dailyRemaining: 60, dailyPercent: 40, weeklyLimit: 500, weeklyRemaining: 400, weeklyPercent: 20,
-      background: { modelId: 'm-cheap', sharePercent: 15, dailyLimit: 15, dailyRemaining: 3, weeklyLimit: 75, weeklyRemaining: 45 },
-    },
-  }) as any
-  ;(window.tangu as any).backendStatus = vi.fn()
-  await mount()
+it('does not offer the Forsion Cloud pages where Extend is not loaded (device page, old host)', async () => {
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: { dailyLimit: 100, dailyRemaining: 50, weeklyLimit: 100, weeklyRemaining: 50 } }) as any
+  await mount() // 没有 cloudInvoke
   await click('Alice')
   await tick()
-  await click('额度剩余')
-  await tick()
-  const row = document.querySelector('[data-row="background"]')
-  expect(row?.textContent).toContain('后台 Agent')
-  expect(row?.textContent).toContain('20%') // 今日 3/15 = 20%,比本周 45/75 = 60% 紧
-})
-
-it('hides the background row where Muse cannot run or before the server reports a counted model', async () => {
-  window.tangu!.accountQuota = vi.fn().mockResolvedValue({
-    status: 200,
-    json: { dailyLimit: 100, dailyPercent: 40, weeklyLimit: 500, weeklyPercent: 20, background: { modelId: 'm-cheap', dailyLimit: 15, dailyRemaining: 3, weeklyLimit: 75, weeklyRemaining: 45 } },
-  }) as any
-  await mount() // 没有 backendStatus = 没有本地引擎(网页 / 手机)
-  await click('Alice')
-  await tick()
-  await click('额度剩余')
-  await tick()
-  expect(document.querySelector('[data-row="background"]')).toBeNull()
-  await act(async () => root.unmount())
-  root = createRoot(host)
-  ;(window.tangu as any).backendStatus = vi.fn()
-  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: { dailyLimit: 100, dailyPercent: 40, weeklyLimit: 500, weeklyPercent: 20 } }) as any
-  await mount() // 旧服务端:视图里没有 background
-  await click('Alice')
-  await tick()
-  await click('额度剩余')
-  await tick()
-  expect(document.querySelector('[data-row="background"]')).toBeNull()
+  expect(document.querySelector('.ap-head--link')).toBeNull()
+  const quotaRow = [...document.querySelectorAll<HTMLButtonElement>('.ap-item')].find((b) => b.textContent?.includes('AI 额度'))
+  expect(quotaRow?.disabled).toBe(true)
+  expect(quotaRow?.textContent).toContain('今日 50% · 本周 50%')
 })

@@ -2,7 +2,7 @@
  * 设置页深链的**唯一**解析点:`openSettings(target)` 的 target 落到哪个一级页 + 哪个子页。
  *
  * 为什么要单独一份:旧 `normalizeTab` 只归一一级页 —— `'forsion'` → general 之后 sub 丢了,落回第一项「连接」,
- * 而登录按钮在 g-forsion(登录失效 / 订阅过期 / `/login` 三条入口全落错页,U-02)。
+ * 而登录按钮在 g-forsion(登录失效 / 订阅过期 / `/login` 三条入口全落错页,U-02)。2026-09-28 起 Forsion 自成一级页「Forsion 云端」。
  *
  * 两种写法:
  *  - 旧别名(持久化深链、插件、斜杠命令在用,永不删):见 LEGACY_TARGETS;
@@ -12,9 +12,12 @@
 
 /** 允许的旧别名 → [一级页, 子页?]。一级页 id 必须是 SettingsModal 的 StaticTab。 */
 export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?]>> = {
-  // 连接 / Forsion 合并进「常规」(general)
+  // 连接合并进「常规」(general);Forsion 账号自成一级页(随 Extend 出现),旧的二级落点照样认
   connection: ['general', 'g-conn'],
-  forsion: ['general', 'g-forsion'],
+  // 不带子页 = 落到第一个子页:Extend 自绘的「账号」(没装 Extend 0.5 时落到宿主的「同步」)
+  forsion: ['forsion'],
+  'general/g-forsion': ['forsion'],
+  'sync/s-cloud': ['forsion', 'f-sync'],
   // Agent CLI 并进 Agents 页
   'agent-clis': ['agents', 'ag-clis'],
   // 微信设置迁「通道」
