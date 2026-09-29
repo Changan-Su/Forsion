@@ -495,12 +495,11 @@ describe('i18n 覆盖', () => {
  * 初值 = 基线 297408ab 实测 178 处 / 30 个文件。
  */
 const ELECTRON_HAN_DEBT: Record<string, [count: number, reason: string]> = {
-  'main.ts': [38, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
+  'main.ts': [36, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
   'unitWeb.ts': [23, 'HTTP JSON detail(已带 code,设备页按 code 翻译)+ 未配对页的内联 HTML'],
   'amadeus/fs/vaultHandlers.ts': [14, '笔记 IPC 的校验错误(throw),渲染层原样显示;待改原因码'],
   'unitP2p.ts': [11, 'P2P 代理的 HTTP 错误 detail / 信道断开原因(throw)'],
   'p2pWindow.ts': [9, 'P2P 打洞 / 信道状态的 Error 文案(调用方只拿来记日志与回落中转)'],
-  'unitHost.ts': [8, '设备通道 lastError(切换器诊断用)与 Error 文案'],
   'amadeus/ipc.ts': [3, '示例插件模板(落盘文件内容)、插件 id 的 IPC 错误'],
   'asrLocal.ts': [6, '本地语音模型下载 / 加载的 Error 文案'],
   'cliInstall.ts': [6, '生成的 tangu CLI shell 脚本注释(落盘内容)与 CLI 安装错误'],

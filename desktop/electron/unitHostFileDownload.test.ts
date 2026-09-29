@@ -19,7 +19,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { startUnitWeb, HOST_DOWNLOAD_MAX_BYTES, type UnitWebDeps, type UnitWebHandle } from './unitWeb'
-import { UnitHost } from './unitHost'
+// @ts-expect-error 私有包不带类型;这里只用运行时导出(UnitHost 自 2026-09-28 住在 Forsion Extend 0.6,签名策略仍在宿主 unitCaller.ts)
+import { UnitHost } from '@forsion/extend/dist/desktop.mjs'
+import { makeCallerHeaders } from './unitCaller'
 import { buildUnitScopeGuard, openUnitHostRegularFile, type UnitScopeGuard } from './unitHostScope'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -184,7 +186,7 @@ describe('隧道流式回包:假 hub → 真 UnitHost → 真 unitWeb(>10MB 字�
   let hub: http.Server
   let channel: http.ServerResponse | null = null
   const replies = new Map<string, { leg: 'stream' | 'resp'; status: number; ct: string; body: Buffer }>()
-  let unitHost: UnitHost
+  let unitHost: { start(): void; stop(): void }
 
   beforeAll(async () => {
     hub = http.createServer((req, res) => {
@@ -218,7 +220,8 @@ describe('隧道流式回包:假 hub → 真 UnitHost → 真 unitWeb(>10MB 字�
     const hubUrl = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`
     unitHost = new UnitHost({
       getCreds: () => ({ cloudUrl: hubUrl, token: 'tok' }),
-      getUnitWeb: () => ({ url: base, internalSecret: web.internalSecret, proxyCallerKey: web.proxyCallerKey }),
+      getUnitWeb: () => ({ url: base, internalSecret: web.internalSecret }),
+      callerHeaders: makeCallerHeaders(() => web.proxyCallerKey, () => {}),
       getLanUrl: () => null,
       getPairing: () => ({ unitId: 'mac', secret: 's' }),
       savePairing: async () => {}, clearPairing: async () => {},

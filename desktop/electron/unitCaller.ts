@@ -1,6 +1,6 @@
 /**
  * 调用方断言(设备能力 MCP 方案 P1 · K1 §3.3.1 / INTEGRATION R-07 · R-09):「这次远端请求来自账号下的哪台设备」
- * 从 hub 一路传到本机引擎的那一段。刻意零 electron 依赖 —— unitHost 签、unitWeb 验,两边共用,vitest 直接跑。
+ * 从 hub 一路传到本机引擎的那一段。刻意零 electron 依赖 —— 隧道这一跳由 makeCallerHeaders 签、unitWeb 验,两边共用,vitest 直接跑。
  *
  * 逐跳(K1 §3.7):
  *   手机 → hub          X-Forsion-Caller: fuc1…(hub 验票、查库,票本身不转发)
@@ -114,6 +114,25 @@ export function proxyAssertionAllowed(pathname: string): boolean {
   try { p = decodeURIComponent(pathname) } catch { /* 坏百分号:按原串判 */ }
   p = p.replace(/[\\/]+/g, '/').toLowerCase()
   return !/^\/unit\/mcp(?:\/|$)/.test(p)
+}
+
+/** 隧道信封 → 发往本机 unitWeb 的调用方断言头。隧道客户端 UnitHost 自 2026-09-28 住在 Forsion Extend(unitHubSeam.ts),
+ *  它每个信封调一次这里产出的函数,只递信封字段与**实际发出**的目标 URL;钥、「哪些路径签」与验签(unitWeb)留在这一个文件里。
+ *  没有 / 畸形 proxyCaller(畸形只记一次日志:版本错配时每个请求都会带)、钥未就绪、/unit/mcp* → {}(按账号级未识别调用方转发)。
+ *  每次重建设备互联造一个(与搬迁前「每个 UnitHost 实例记一次」同口径)。 */
+export function makeCallerHeaders(getKey: () => string, log: (m: string) => void): (e: { dispatchId: string; method: string; target: URL; proxyCaller: unknown }) => Record<string, string> {
+  let warnedBadCaller = false
+  return ({ dispatchId, method, target, proxyCaller }): Record<string, string> => {
+    if (proxyCaller == null) return {}
+    const caller = sanitizeProxyCaller(proxyCaller)
+    if (!caller) {
+      if (!warnedBadCaller) { warnedBadCaller = true; log('[unit-host] 信封里的调用方字段不合法,已丢弃(按账号级未识别调用方转发)') }
+      return {}
+    }
+    const key = getKey()
+    if (!key || !proxyAssertionAllowed(target.pathname)) return {}
+    return { [UNIT_CALLER_HEADER]: signProxyCaller(key, { dispatchId, method, target: target.pathname + target.search, caller }) }
+  }
 }
 
 /** unitWeb → 引擎的调用方头:b64url(JSON {u,k,n,p,r}),ASCII 安全(名字可能是中文)。 */
