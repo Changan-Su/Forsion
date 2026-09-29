@@ -608,20 +608,24 @@ async function wave3(browser) {
   // ── C101 画布颜色(V-08,拍板 #9)──────────────────────────────────────────────────
   //  修前:卡片 color 只在盘上、派生按 PM attrs 重建 cards → 任何一次编辑就把手写的 color 删掉;元素的
   //  color 虽被原样保管但不渲染;也没有任何设色入口(连线连右键菜单都没有)。
+  //  落盘:卡片颜色在**顶层 cardColors**(不在 cards 条目里 —— 旧客户端会整份重建条目,见 canvas.ts CanvasV1.cardColors);
+  //  k3 是 JSON Canvas 式手写在条目里的 color,兜底读入,保存即迁到 cardColors。
   const CV101 = {
     v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
-    cards: [{ ref: 'k1', x: 480, y: 0, w: 300, color: '1' }, { ref: 'k2', x: 480, y: 200, w: 300 }],
+    cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 200, w: 300 }, { ref: 'k3', x: 860, y: 0, w: 200, color: '6' }],
+    cardColors: { k1: '1' },
     elements: [
       { id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '方块', color: '4' },
       { id: 's2', type: 'shape', shape: 'rect', x: 0, y: 500, w: 200, h: 120, text: '方块2' },
       { id: 'e1', type: 'connector', from: { id: 's1' }, to: { id: 's2' } },
     ],
   }
-  const body101 = ['# 颜色', '', '主卡一段。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '卡 K2', '', '<!-- /a k2 -->', '']
+  const body101 = ['# 颜色', '', '主卡一段。', '', ...['k1', 'k2', 'k3'].flatMap((k) => [`<!-- a ${k} -->`, '', `卡 ${k.toUpperCase()}`, '', `<!-- /a ${k} -->`, ''])]
+  const noEntryColor = (cv) => (cv?.cards ?? []).every((c) => !('color' in c))
   const p101 = await open(browser, ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV101)}`, '---', '', ...body101].join('\n'))
   await p101.waitForTimeout(800)
   const r101 = {
-    k1: await style(p101, '.amx-ucard[data-anchor="k1"]'), k2: await style(p101, '.amx-ucard[data-anchor="k2"]'),
+    k1: await style(p101, '.amx-ucard[data-anchor="k1"]'), k2: await style(p101, '.amx-ucard[data-anchor="k2"]'), k3: await style(p101, '.amx-ucard[data-anchor="k3"]'),
     s1: await style(p101, '.amx-el-shape[data-el="s1"]'), s2: await style(p101, '.amx-el-shape[data-el="s2"]'),
   }
   // 一次编辑(选中 k1 → 方向键微移):修前派生在这一步把 k1 的 color 删掉
@@ -630,11 +634,11 @@ async function wave3(browser) {
   await p101.keyboard.press('ArrowRight')
   await p101.waitForTimeout(700)
   const cvA = await cvOf(p101)
-  record('C101a 手写的 color 在画布上渲染(卡片 / 形状描边与无色的不同),一次编辑后卡片与形状的 color 都还在盘上',
-    r101.k1?.dc === '1' && r101.k1.border !== r101.k2.border && r101.k1.bg !== r101.k2.bg
+  record('C101a 手写的颜色在画布上渲染(卡片 / 形状描边与无色的不同);一次编辑后卡片颜色在顶层 cardColors(条目里的 JSON Canvas 式 color 迁过去)、形状 color 仍在',
+    r101.k1?.dc === '1' && r101.k1.border !== r101.k2.border && r101.k1.bg !== r101.k2.bg && r101.k3?.dc === '6'
       && r101.s1?.dc === '4' && r101.s1.border !== r101.s2.border
-      && cardsOfCv(cvA).k1?.color === '1' && cardsOfCv(cvA).k1?.x !== 480 && elsOfCv(cvA).s1?.color === '4' && !('color' in (cardsOfCv(cvA).k2 ?? {})),
-    JSON.stringify({ r101, cards: cvA?.cards, s1: elsOfCv(cvA).s1 }))
+      && JSON.stringify(cvA?.cardColors) === '{"k1":"1","k3":"6"}' && noEntryColor(cvA) && cardsOfCv(cvA).k1?.x !== 480 && elsOfCv(cvA).s1?.color === '4',
+    JSON.stringify({ r101, cards: cvA?.cards, cardColors: cvA?.cardColors, s1: elsOfCv(cvA).s1 }))
 
   // 右键卡片 → 色板设色(PM attrs,进撤销);Cmd+Z 一击撤回
   pt = await p101.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k2"]').getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } })
@@ -655,9 +659,9 @@ async function wave3(browser) {
   await p101.keyboard.press(`${MOD}+z`)
   await p101.waitForTimeout(600)
   const cvB2 = await cvOf(p101)
-  record('C101b 右键卡片 → 色板:写进该卡的 color(DOM 同步),Cmd+Z 一击撤回(color 键消失)',
-    seenCard.swatches.join(',') === 'none,1,2,3,4,5,6,custom' && cardsOfCv(cvB).k2?.color === '2' && domB === '2' && !('color' in (cardsOfCv(cvB2).k2 ?? {})),
-    JSON.stringify({ seenCard, k2: cardsOfCv(cvB).k2, domB, after: cardsOfCv(cvB2).k2, blank }))
+  record('C101b 右键卡片 → 色板:写进顶层 cardColors(DOM 同步),Cmd+Z 一击撤回(该卡的颜色条目消失)',
+    seenCard.swatches.join(',') === 'none,1,2,3,4,5,6,custom' && cvB?.cardColors?.k2 === '2' && noEntryColor(cvB) && domB === '2' && !('k2' in (cvB2?.cardColors ?? {})),
+    JSON.stringify({ seenCard, colors: cvB?.cardColors, domB, after: cvB2?.cardColors, blank }))
 
   // 右键连线(元素层整层不吃指针,修前落进空白菜单)→ 设色;再选「无颜色」= 删键(不写空串)
   const mid = await stageToClient(p101, 100, 460)
@@ -684,8 +688,8 @@ async function wave3(browser) {
   await p101.waitForTimeout(600)
   const cvD2 = await cvOf(p101)
   record('C101d 卡 + 形状混选设色:两边同时上色,一次 Cmd+Z 两边一起退回(卡回到原来的红,形状回到无色)',
-    cardsOfCv(cvD).k1?.color === '5' && elsOfCv(cvD).s2?.color === '5' && cardsOfCv(cvD2).k1?.color === '1' && !('color' in (elsOfCv(cvD2).s2 ?? {})),
-    JSON.stringify({ d: [cardsOfCv(cvD).k1, elsOfCv(cvD).s2], undo: [cardsOfCv(cvD2).k1, elsOfCv(cvD2).s2] }))
+    cvD?.cardColors?.k1 === '5' && elsOfCv(cvD).s2?.color === '5' && cvD2?.cardColors?.k1 === '1' && !('color' in (elsOfCv(cvD2).s2 ?? {})),
+    JSON.stringify({ d: [cvD?.cardColors, elsOfCv(cvD).s2], undo: [cvD2?.cardColors, elsOfCv(cvD2).s2] }))
 
   // 自定义色 = JSON Canvas 的 #rrggbb(原生取色器只认 change 那一下)
   await p101.mouse.click(s2pt.x, s2pt.y, { button: 'right' })
@@ -704,10 +708,10 @@ async function wave3(browser) {
     elsOfCv(cvE).s2?.color === '#12ab34' && s2css === '#12ab34', JSON.stringify({ s2: elsOfCv(cvE).s2, s2css }))
 
   // 文档模式不受影响 + 旧笔记零改写:mode=doc 打开,带色卡与无色卡观感一致;正文打一个字,canvas 行逐字不变
-  //  (无色的卡不长出 color 键,认不出的怪值 "red" 与手写的 color 都原样保留)。
-  const L101 = JSON.stringify({ v: 1, mode: 'doc', main: { x: 0, y: 0, w: 400 }, cards: [{ ref: 'k1', x: 480, y: 0, w: 300, color: '1' }, { ref: 'k2', x: 480, y: 200, w: 300 }, { ref: 'k3', x: 480, y: 400, w: 300, color: 'red' }] })
+  //  (无色的卡不长出颜色条目;cardColors 里的原值 —— 含非字符串 7 与认不出的串 "red" —— 原样保留,Codex P2)。
+  const L101 = JSON.stringify({ v: 1, mode: 'doc', main: { x: 0, y: 0, w: 400 }, cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 200, w: 300 }, { ref: 'k3', x: 480, y: 400, w: 300 }, { ref: 'k4', x: 480, y: 600, w: 300 }], cardColors: { k1: '1', k3: 7, k4: 'red' } })
   const pF = await open(browser, ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${L101}`, '---', '', '# 颜色', '', '主卡一段。', '',
-    ...['k1', 'k2', 'k3'].flatMap((k) => [`<!-- a ${k} -->`, '', `卡 ${k}`, '', `<!-- /a ${k} -->`, ''])].join('\n'))
+    ...['k1', 'k2', 'k3', 'k4'].flatMap((k) => [`<!-- a ${k} -->`, '', `卡 ${k}`, '', `<!-- /a ${k} -->`, ''])].join('\n'))
   await pF.waitForTimeout(700)
   const docMode = await pF.evaluate(() => { const s = document.querySelector('.amx-stage'); return !!s && s.classList.contains('amx-stage-off') })
   await pF.mouse.move(2, 2)
@@ -720,7 +724,7 @@ async function wave3(browser) {
   const lineF = canvasLine(await fmOf(pF))
   const bodyF = await pF.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
   await pF.close()
-  record('C101f 文档模式:带色卡与无色卡观感一致(颜色只在画布模式显示);正文打字后 canvas 行逐字不变(无色卡不长 color 键,怪值原样留)',
+  record('C101f 文档模式:带色卡与无色卡观感一致(颜色只在画布模式显示);正文打字后 canvas 行逐字不变(无色卡不长条目,非字符串 / 怪值原样留)',
     docMode && f1?.dc === '1' && f1.border === f2?.border && f1.bg === f2?.bg && lineF === L101 && bodyF.includes('主卡一段。x'),
     JSON.stringify({ docMode, f1, f2, same: lineF === L101, lineF }))
 

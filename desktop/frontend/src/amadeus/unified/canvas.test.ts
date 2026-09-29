@@ -4,7 +4,7 @@
 //   3. 懒物化 —— 没卡片且磁盘上本来没这个键 → 一个字节都不写(用户 2026-08-16 拍板)
 import { describe, expect, it } from 'vitest'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import { parseCanvasJson, deriveCanvasJson, deriveCards, withMain } from './canvas'
+import { parseCanvasJson, deriveCanvasJson, deriveCards, deriveCardColors, withMain } from './canvas'
 import { canvasColorCss, setElementColor } from './canvasEdit'
 
 /** deriveCards 只碰 doc.forEach / node.type.name / node.attrs —— 用最小替身即可诚实覆盖,
@@ -125,11 +125,47 @@ describe('deriveCanvasJson', () => {
   })
 })
 
-describe('画布颜色(V-08,拍板 #9:存进 amadeus_canvas 条目,编码沿用 JSON Canvas)', () => {
-  it('deriveCards:设过色的卡原样吐 color,无色卡不长 color 键(旧笔记逐字不变)', () => {
-    const doc = docOf({ anchor: 'c1', x: 1, y: 2, w: 300, h: 0, color: '1' }, { anchor: 'c2', x: 1, y: 2, w: 300, h: 0, color: '' }, { anchor: 'c3', x: 0, y: 0, w: 300, h: 0, color: 'red' })
-    expect(deriveCards(doc)).toEqual([{ ref: 'c1', x: 1, y: 2, w: 300, color: '1' }, { ref: 'c2', x: 1, y: 2, w: 300 }, { ref: 'c3', x: 0, y: 0, w: 300, color: 'red' }])
+describe('画布颜色(V-08,拍板 #9:存进 amadeus_canvas 顶层 cardColors,编码沿用 JSON Canvas)', () => {
+  const C1 = { anchor: 'c1', x: 1, y: 2, w: 300, h: 0, color: '1' }
+  const C2 = { anchor: 'c2', x: 1, y: 2, w: 300, h: 0, color: '' }
+  const C3 = { anchor: 'c3', x: 0, y: 0, w: 300, h: 0, color: 7 } // 非字符串原值:原样保管,渲染时才收窄
+  const OWN = new Set(['c1', 'c2', 'c3'])
+  it('cards 条目里永远不带 color;颜色进顶层 cardColors(只含设过色的在场卡,原值原样)', () => {
+    const doc = docOf(C1, C2, C3)
+    expect(deriveCards(doc)).toEqual([{ ref: 'c1', x: 1, y: 2, w: 300 }, { ref: 'c2', x: 1, y: 2, w: 300 }, { ref: 'c3', x: 0, y: 0, w: 300 }])
+    expect({ ...deriveCardColors(doc) }).toEqual({ c1: '1', c3: 7 })
+    const line = '{"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":720},"cards":[{"ref":"c1","x":1,"y":2,"w":300},{"ref":"c2","x":1,"y":2,"w":300},{"ref":"c3","x":0,"y":0,"w":300}],"cardColors":{"c1":"1","c3":7,"gone":"2"}}'
+    // 键序不动;不在场的孤儿条目(旧端删卡留下的)剪掉
+    expect(deriveCanvasJson(doc, line, null, OWN)).toBe(line.replace(',"gone":"2"', ''))
   })
+  it('全部无色 → 剥掉 cardColors 键;盘上没有该键、也没有颜色 → 一个字节不多(旧笔记零改写)', () => {
+    const plain = '{"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":720},"cards":[{"ref":"c2","x":1,"y":2,"w":300}]}'
+    expect(deriveCanvasJson(docOf(C2), plain, null, new Set(['c2']))).toBe(plain)
+    expect(deriveCanvasJson(docOf(C2), plain.replace('}]}', '}],"cardColors":{"c2":"3"}}'), null, new Set(['c2']))).toBe(plain)
+  })
+  it('盘上 cardColors 不是对象(手改坏)且此刻没有颜色要写 → 原样留着;有颜色要写才换成派生值', () => {
+    const bad = '{"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":720},"cards":[{"ref":"c2","x":1,"y":2,"w":300}],"cardColors":"??"}'
+    expect(deriveCanvasJson(docOf(C2), bad, null, new Set(['c2']))).toBe(bad)
+    expect(JSON.parse(deriveCanvasJson(docOf({ ...C2, color: '4' }), bad, null, new Set(['c2']))!).cardColors).toEqual({ c2: '4' })
+  })
+  it('首次物化(盘上无画布键)时有色卡同样写进 cardColors', () => {
+    expect(JSON.parse(deriveCanvasJson(docOf(C1), null, null, new Set())!).cardColors).toEqual({ c1: '1' })
+  })
+  it('旧端存活(Codex P1):旧客户端的派生 = `{ ...stored, v, cards: 从 PM 节点重建 }`(45fc56d1 起至今) —— 颜色必须活过这一步', () => {
+    // 逐字模拟旧端:条目只有 ref/x/y/w/h,其余一律重建丢失;顶层未知键随 `...stored` 原样搬运。
+    const oldDerive = (line: string): string => {
+      const stored = JSON.parse(line) as { cards: Array<{ ref: string; x: number; y: number; w: number; h?: number }> }
+      return JSON.stringify({ ...stored, v: 1, cards: stored.cards.map(({ ref, x, y, w, h }) => ({ ref, x, y, w, ...(h ? { h } : {}) })) })
+    }
+    // 两条写路径都要过:首次物化,以及盘上已有画布行时的常规派生
+    const doc = docOf(C1, C2, C3)
+    const first = deriveCanvasJson(doc, null, 'canvas', OWN)!
+    const again = deriveCanvasJson(doc, first, null, OWN)!
+    for (const mine of [first, again]) expect(JSON.parse(oldDerive(mine)).cardColors).toEqual({ c1: '1', c3: 7 })
+  })
+})
+
+describe('画布颜色(V-08)· 渲染收窄与元素写侧', () => {
   it('canvasColorCss 只认预设 1–6 与 #rrggbb;认不出的一律不渲染(原值不动)', () => {
     expect(canvasColorCss('3')).toBe('var(--amx-cv-3)')
     expect(canvasColorCss('#12AB34')).toBe('#12AB34')
