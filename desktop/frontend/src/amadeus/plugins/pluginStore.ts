@@ -442,6 +442,13 @@ const AGENT_POLL_MS = 20_000
 const lastGesture = new Map<string, number>()
 const GESTURE_WINDOW_MS = 1500
 export function notePluginGesture(pluginId: string): void { lastGesture.set(pluginId, Date.now()) }
+/** agent 自建 Space 代码的 sourceURL:栈帧里写的就是它(行号比 main.js 多 2 —— new Function 在函数体前包了两行头)。
+ *  builtins/agentSpaceSync 据此把挂载之后的运行时错误归到这个 Space 身上、回写给 agent。
+ *  带加载序号,且只返回**正在运行的那一版**(没在跑 → null):旧版漏清的定时器在重载后还会抛,新版没跑起来(来源没了 /
+ *  被门禁挡)时也一样 —— 都不许算成「当前的 Space」(Codex 09-27 两轮)。setup 时登记,teardown 时摘掉。 */
+const agentLoads = new Map<string, number>()
+const agentLive = new Map<string, string>()
+export const agentSpaceSourceUrl = (pluginId: string): string | null => agentLive.get(pluginId) ?? null
 
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
@@ -491,9 +498,22 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
       // 已安装插件:求值路径与从前**逐字相同**(一个形参、一个实参)。开发态那条多带一个 console ——
       // new Function 的栈帧是 <anonymous>,不在求值时把按插件记账的 console 塞进作用域,
       // 事后没有任何办法把一行输出归到是哪个插件说的(window.onerror 也归不了)。
+      // 例外只有 agent 自建 Space(src.agent):末尾打一行 sourceURL,栈帧才认得出是它 —— 挂载之后在异步回调 / 事件处理里
+      // 抛的错(宿主的 try/catch 与 mount 的 Promise 都罩不住)才能回写给 agent(09-27 live:选择器拿到 null,数据卡全空,
+      // 报错只进控制台,Muse 一无所知)。
       if (!src.dev) {
-        const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
+        let code = src.code
+        let url: string | null = null
+        if (src.agent) {
+          const n = (agentLoads.get(src.id) ?? 0) + 1
+          url = `forsion-agent-space/${src.id}/${n}/main.js`
+          agentLoads.set(src.id, n)
+          code = `${src.code}\n//# sourceURL=${url}`
+        }
+        const fn = new Function('ctx', code) as (c: PluginContext) => unknown
         const d = fn(ctx)
+        // 跑成功了才算「正在运行的那一版」:同步 setup 抛错 → 由加载失败那条回写负责,它残留的定时器不再另报(Codex 09-27 三轮)
+        if (url) agentLive.set(src.id, url)
         return typeof d === 'function' ? (d as () => void) : undefined
       }
       const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => unknown
@@ -865,7 +885,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       let lastKey: string | null = null
       const fire = (): void => {
         for (const cb of Array.from(listeners)) {
-          try { cb() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" ctx.agent subscriber failed`, e) }
+          // reportError = 当成未捕获错误派给窗口(同时打控制台):订阅回调是 agent Space 的代码,吞成一行日志它就永远不知道
+          try { cb() } catch (e) { if (typeof globalThis.reportError === 'function') globalThis.reportError(e); else console.error(`[amadeus] plugin "${pluginId}" ctx.agent subscriber failed`, e) }
         }
       }
       const check = async (): Promise<void> => {
@@ -1411,6 +1432,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
 
   /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
   const teardown = (id: string): void => {
+    agentLive.delete(id) // 拆掉了就不再是「正在运行的那一版」(agentSpaceSourceUrl)
     try {
       get().disposers[id]?.()
     } catch (e) {

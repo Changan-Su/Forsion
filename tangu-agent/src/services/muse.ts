@@ -609,7 +609,8 @@ function spaceKickoff(): string {
     'Colors come only from the host theme variables var(--bg), var(--bg-card), var(--text), var(--text-muted), var(--border), var(--accent) — ' +
     'no hex values, no other variable names — so light and dark themes both work; your view shares the app\'s page, so prefix every CSS selector with your own root class. ' +
     'Plain JS, no build step, no CDN. It starts empty: build it, then improve what it shows across cycles — never edit it just to refresh status or timestamps. ' +
-    'It is reloaded after your cycle ends; a load failure or a missing "home" view reaches you as a [feedback] entry mentioning the Space.';
+    'It is reloaded after your cycle ends; a load failure, a missing "home" view, or a later runtime error (with its main.js line) ' +
+    'reaches you as a [feedback] entry mentioning the Space.';
 }
 
 /**
