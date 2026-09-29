@@ -13,7 +13,7 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { registerMessages, translate } from '../../i18n'
+import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
   'headfold.expandSection': { zh: '展开小节', en: 'Expand section' },
@@ -98,7 +98,12 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           b.className = 'amx-fold-caret'
           b.textContent = '▸'
           b.contentEditable = 'false'
-          b.title = translate('headfold.expandSection')
+          // 可达名 + 展开态(P-10):按钮文字是字形 ▸;这颗钮只出现在已折叠的标题上,恒 aria-expanded=false。
+          // widget 带 key、切语言不重建 DOM,所以订语言变更刷文案(spec.destroy 退订)。
+          const label = (): void => { b.title = translate('headfold.expandSection'); b.setAttribute('aria-label', b.title) }
+          label()
+          b.setAttribute('aria-expanded', 'false')
+          ;(b as unknown as { __off?: () => void }).__off = subscribeLocale(label)
           b.addEventListener('mousedown', (e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -112,7 +117,7 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           })
           return b
         },
-        { side: -1, ignoreSelection: true, key: `amxfold:${fp}` },
+        { side: -1, ignoreSelection: true, key: `amxfold:${fp}`, destroy: (dom) => { (dom as unknown as { __off?: () => void }).__off?.() } },
       ),
     )
   }
@@ -156,6 +161,16 @@ export function hiddenRanges(doc: ProseNode, folded: number[]): Array<{ start: n
     out.push({ start: at[site.index + 1], after: at[end] + site.parent.child(end).nodeSize })
   }
   return out
+}
+
+/** 标题**结构上**的小节末尾之后那个位置(不管折没折):到下一个 level ≤ 本级的标题或容器末为止;
+ *  空小节 = 标题自己的后位。不是标题返回 null。键盘搬「折起的小节」时按整节跟邻居换位用(B-04)。 */
+export function sectionEnd(doc: ProseNode, headingPos: number): number | null {
+  const site = headingSiteAt(doc, headingPos)
+  if (!site) return null
+  const end = sectionEndIndex(site.parent, site.index) ?? site.index
+  const at = childPositions(site)
+  return at[end] + site.parent.child(end).nodeSize
 }
 
 /** 折叠标题的小节末尾之后那个位置(顶层坐标);该标题没折叠或不可折叠返回 null。

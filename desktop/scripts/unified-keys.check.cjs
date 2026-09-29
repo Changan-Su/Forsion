@@ -1,5 +1,8 @@
 // v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
 // 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
+// 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制);R-17(块公式多行);R-27(代码块出口 / 自动配对 / 横滚工具条)。
+// 波次 2 serial 包:K-19(标题里 Shift+Enter 同回车,不再落盘丢换行)。
+// 波次 2 shell 包:K-16(mac ⌘↑/⌘↓ 越过代码块 / 嵌入到文首文末);K-17(块选中态 Shift+↑↓ / Shift+点击按块扩选、Mod-Alt-/ 转换、Mod-]/[ 缩进)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -42,7 +45,7 @@ const shape = (page) => page.evaluate(() => {
   const v = window.__upage.probe.view()
   const out = []
   const walk = (n, depth) => n.forEach((c) => {
-    let label = c.type.name + (c.type.name === 'heading' ? c.attrs.level : '')
+    let label = c.type.name + (c.type.name === 'heading' ? c.attrs.level : '') + (c.attrs.checked != null ? (c.attrs.checked ? '[x]' : '[ ]') : '')
     if (c.isTextblock) out.push('  '.repeat(depth) + label + ':' + JSON.stringify(c.textContent))
     else if (c.isLeaf) out.push('  '.repeat(depth) + label)
     else { out.push('  '.repeat(depth) + label); walk(c, depth + 1) }
@@ -68,6 +71,34 @@ const caretIn = (page, type, { nth = 0, atStart = false } = {}) => page.evaluate
   v.focus()
   return hit
 }, { type, nth, atStart })
+/** 光标放进第一个含 text 的文本块:偏移 = text 在块内的起点 + off(缺省 = text 末尾)。 */
+const caretAtText = (page, text, off = null) => page.evaluate(({ text, off }) => {
+  const v = window.__upage.probe.view()
+  let hit = null
+  v.state.doc.descendants((n, p) => {
+    if (hit != null) return false
+    if (n.isTextblock && n.textContent.includes(text)) {
+      const i = n.textContent.indexOf(text)
+      hit = p + 1 + i + (off == null ? text.length : off)
+      return false
+    }
+    return true
+  })
+  const S = v.state.selection.constructor
+  v.dispatch(v.state.tr.setSelection(S.near(v.state.doc.resolve(hit))))
+  v.focus()
+  return hit
+}, { text, off })
+/** 落盘 → 切走 → 切回(整实例按 key 重挂,initial = 盘上那份),返回重开后的结构(enter-semantics cycle() 同法)。 */
+async function reopenShape(page) {
+  await page.evaluate(() => window.__upage.probe.flush?.())
+  await page.waitForTimeout(300)
+  await page.evaluate(() => window.__upage.switchFile('Other.md', '# 别处\n'))
+  await page.waitForTimeout(600)
+  await page.evaluate(() => window.__upage.switchFile('Unified.md'))
+  await page.waitForTimeout(900)
+  return shape(page)
+}
 const lastWrite = (page) => page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : null })
 async function typeSeq(page, seq) {
   for (const ch of seq) {
@@ -186,11 +217,12 @@ async function main() {
     if (want('K02')) {
       const cases = [
         // [名, 种子, 光标所在 {type,nth,atStart}, 选块按键, 期望块选中的节点, 打的字, 期望结构]
-        ['↓ 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'code_block', 'kk',
+        // 代码块/表格的块选中入口:块尾 Delete / 行首退格(K-09 起 ↑↓ 直接进块内,不再整块选中)。
+        ['块尾 Delete 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph' }, 'Delete', 'code_block', 'kk',
           'paragraph:"上段。" / code_block:"line1kk" / paragraph:"下段。"'],
-        ['↑ 撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph', nth: 1, atStart: true }, 'ArrowUp', 'code_block', 'k',
+        ['行首退格撞代码块', '上段。\n\n```js\nline1\n```\n\n下段。\n', { type: 'paragraph', nth: 1, atStart: true }, 'Backspace', 'code_block', 'k',
           'paragraph:"上段。" / code_block:"line1k" / paragraph:"下段。"'],
-        ['↓ 撞表格', '上段。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'table', 'k', null],
+        ['块尾 Delete 撞表格', '上段。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段。\n', { type: 'paragraph' }, 'Delete', 'table', 'k', null],
         ['↓ 撞嵌入', '上段。\n\n![[Embedded]]\n\n下段。\n', { type: 'paragraph' }, 'ArrowDown', 'paragraph', 'k',
           'paragraph:"上段。" / paragraph:"![[Embedded]]" / paragraph:"k" / paragraph:"下段。"'],
         ['Esc 选段', '甲段很长的一段内容。\n\n乙段。\n', { type: 'paragraph' }, 'Escape', 'paragraph', 'k',
@@ -237,7 +269,7 @@ async function main() {
         const page = await open(browser, '上段。\n\n```js\nline1\n```\n\n下段。\n')
         const cdp = await page.context().newCDPSession(page)
         await caretIn(page, 'paragraph')
-        await page.keyboard.press('ArrowDown')
+        await page.keyboard.press('Delete')
         await page.waitForTimeout(120)
         const s0 = await selInfo(page)
         await act(cdp)
@@ -553,6 +585,746 @@ async function main() {
       check('B13 标题被外部改名 → 该处记忆作废、不误折别处;列表项记忆照旧', h7 === '子项', h7)
       await pg3.close()
       await ctx.close()
+    }
+
+    // ── 波次 2 keys 包 ──────────────────────────────────────────────────────────────
+    // K-07:已勾选待办上回车,新项一律未勾选(行尾 / 行中 / 嵌套);行首回车时文字随光标下移,
+    //       已完成的那条仍勾着,上面空出的新项不勾。
+    if (want('K07')) {
+      for (const [name, md, text, off, expect, disk] of [
+        ['行尾', '- [x] 已完成\n- [ ] 未完成\n', '已完成', null,
+          'bullet_list / list_item[x] / paragraph:"已完成" / list_item[ ] / paragraph:"X" / list_item[ ] / paragraph:"未完成"',
+          /^- \[x\] 已完成\n- \[ \] X\n- \[ \] 未完成\n$/],
+        ['行中拆分', '- [x] 甲乙\n', '甲乙', 1, 'bullet_list / list_item[x] / paragraph:"甲" / list_item[ ] / paragraph:"X乙"',
+          /^- \[x\] 甲\n- \[ \] X乙\n$/],
+        ['嵌套项行尾', '- [ ] 父\n    - [x] 子已完成\n', '子已完成', null,
+          'bullet_list / list_item[ ] / paragraph:"父" / bullet_list / list_item[x] / paragraph:"子已完成" / list_item[ ] / paragraph:"X"',
+          /^- \[ \] 父\n {2}- \[x\] 子已完成\n {2}- \[ \] X\n$/],
+        // 行首回车 = 上方新空项(enter-semantics B1),光标随文字留在原项;已完成的内容仍勾着。
+        // 同时钉住「紧接着打的字落在原项」—— Chrome 在光标节点前插兄弟后会把字插进上面的空项(见 enterTaskItem)。
+        ['行首', '- [x] 甲乙\n', '甲乙', 0, 'bullet_list / list_item[ ] / paragraph:"" / list_item[x] / paragraph:"X甲乙"',
+          /^- \[ \][^\n]*\n- \[x\] X甲乙\n$/],
+        ['未勾选对照', '- [ ] 未完\n', '未完', null, 'bullet_list / list_item[ ] / paragraph:"未完" / list_item[ ] / paragraph:"X"',
+          /^- \[ \] 未完\n- \[ \] X\n$/],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text, off)
+        await page.waitForTimeout(120)
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('X')
+        await page.waitForTimeout(1300)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const w = await lastWrite(page)
+        check(`K07 已勾选待办${name}回车:新项未勾选`, s === expect && disk.test(w || ''), `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+    }
+
+    // K-09:↑/↓ 纵向直接进代码块、表格(首行/首格或末行/末格,保持列位置);分割线与嵌入仍整块选中。
+    if (want('K09')) {
+      const CODE = '上段文字很长一些。\n\n```js\nline1 abc\nline2 def\n```\n\n下段文字。\n'
+      const TABLE = '上段文字很长一些。\n\n| a | b |\n| --- | --- |\n| c | d |\n\n下段文字。\n'
+      for (const [name, md, at, key, want09] of [
+        ['↓ 进代码块首行且保持列', CODE, { text: '上段文字很长一些。', off: 2 }, 'ArrowDown', (s) => s.json === 'text' && s.parent === 'code_block' && s.col === 2 && s.line === 0],
+        ['↑ 进代码块末行', CODE, { text: '下段文字。', off: 2 }, 'ArrowUp', (s) => s.json === 'text' && s.parent === 'code_block' && s.line === 1],
+        ['↓ 进表格首格', TABLE, { text: '上段文字很长一些。', off: 1 }, 'ArrowDown', (s) => s.json === 'text' && s.cell === 'a'],
+        ['↑ 进表格末行', TABLE, { text: '下段文字。', off: 1 }, 'ArrowUp', (s) => s.json === 'text' && (s.cell === 'c' || s.cell === 'd')],
+        ['↓ 撞分割线仍整块选中', '上段。\n\n***\n\n下段。\n', { text: '上段。', off: 1 }, 'ArrowDown', (s) => s.json === 'node' && /^(hr|horizontal_rule)$/.test(s.node)],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, at.text, at.off)
+        await page.waitForTimeout(150)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(200)
+        const s = await page.evaluate(() => {
+          const sel = window.__upage.probe.view().state.selection
+          const $f = sel.$from
+          let cell = null
+          for (let d = $f.depth; d > 0; d--) if (/^table_(cell|header)$/.test($f.node(d).type.name)) { cell = $f.node(d).textContent; break }
+          const before = $f.parent.textContent.slice(0, $f.parentOffset)
+          return { json: sel.toJSON().type, node: sel.node ? sel.node.type.name : null, parent: $f.parent.type.name, cell,
+            line: before.split('\n').length - 1, col: before.length - before.lastIndexOf('\n') - 1 }
+        })
+        const doc = await shape(page)
+        check(`K09 ${name}`, want09(s) && doc === (await shape(page)), JSON.stringify(s))
+        await page.close()
+      }
+    }
+
+    // K-08:结构前缀 input 不再是键盘陷阱 —— 第 0 位 ←/退格、任意位置 ↑/↓ 都能离开。
+    if (want('K08')) {
+      const where = (page) => page.evaluate(() => {
+        const a = document.activeElement
+        const s = window.__upage.probe.view().state.selection
+        return a && a.classList.contains('amx-struct-prefix') ? `INPUT@${a.selectionStart}` : `PM ${s.$from.parent.type.name}:${s.$from.parent.textContent}@${s.$from.parentOffset}`
+      })
+      for (const [kind, line, text, bsExpect] of [
+        ['标题', '## 标题', '标题', 'paragraph:"前段。" / paragraph:"标题" / paragraph:"后段。"'],
+        ['列表', '- 列表项', '列表项', 'paragraph:"前段。" / paragraph:"列表项" / paragraph:"后段。"'],
+        ['待办', '- [ ] 待办', '待办', 'paragraph:"前段。" / paragraph:"待办" / paragraph:"后段。"'],
+        ['引用', '> 引用', '引用', null],
+      ]) {
+        const md = `前段。\n\n${line}\n\n后段。\n`
+        const got = {}
+        for (const [label, keys] of [['←', ['ArrowLeft', 'Meta+ArrowLeft', 'ArrowLeft']], ['↑', ['ArrowLeft', 'ArrowUp']], ['↓', ['ArrowLeft', 'Meta+ArrowLeft', 'ArrowDown']], ['退格', ['ArrowLeft', 'Meta+ArrowLeft', 'Backspace']]]) {
+          const page = await open(browser, md)
+          await caretAtText(page, text, 0)
+          await page.waitForTimeout(150)
+          const trail = []
+          for (const k of keys) { await page.keyboard.press(k); await page.waitForTimeout(90); trail.push(await where(page)) }
+          got[label] = { trail, doc: await shape(page) }
+          await page.close()
+        }
+        const inPrefix = (t) => t.startsWith('INPUT')
+        check(`K08 ${kind}前缀第 0 位 ← 回到上一段末`, inPrefix(got['←'].trail[1]) && got['←'].trail[2] === 'PM paragraph:前段。@3', JSON.stringify(got['←'].trail))
+        check(`K08 ${kind}前缀里 ↑ 回到上一段`, inPrefix(got['↑'].trail[0]) && got['↑'].trail[1].startsWith('PM paragraph:前段。@'), JSON.stringify(got['↑'].trail))
+        check(`K08 ${kind}前缀里 ↓ 去下一段行首`, got['↓'].trail[2] === 'PM paragraph:后段。@0', JSON.stringify(got['↓'].trail))
+        if (bsExpect) check(`K08 ${kind}前缀第 0 位退格 = 一步转正文(不困在 input)`, got['退格'].doc === bsExpect && !inPrefix(got['退格'].trail[2]), `${got['退格'].doc} | ${JSON.stringify(got['退格'].trail)}`)
+        else check(`K08 ${kind}前缀第 0 位退格离开 input`, !inPrefix(got['退格'].trail[2]), `${got['退格'].doc} | ${JSON.stringify(got['退格'].trail)}`)
+      }
+    }
+
+    // K-12 / K-12d(拍板 #5:不回退 K11,只修可逆性):callout / 引用首段行首退格得到字面 `>…`(K11 钉住),
+    // 补回空格 = 按引用处理并与紧邻的 blockquote 合回一只 —— 回到原样,盘上逐字不变。空行 `> ` 仍是折叠。
+    if (want('K12')) {
+      const bqInfo = (page) => page.evaluate((PM) => [...document.querySelectorAll(PM + ' > blockquote')].map((b) => b.className || '(plain)').join(','), PM)
+      for (const [name, md, text, expect, cls] of [
+        ['callout 首段', '前段。\n\n> [!note] 标题\n>\n> 内容\n\n丙段。\n', '[!note] 标题',
+          'paragraph:"前段。" / blockquote / paragraph:"[!note] 标题" / paragraph:"内容" / paragraph:"丙段。"', /callout-note/],
+        ['两段普通引用首段(K-12d)', '前段。\n\n> 甲\n>\n> 乙\n\n丙段。\n', '甲',
+          'paragraph:"前段。" / blockquote / paragraph:"甲" / paragraph:"乙" / paragraph:"丙段。"', /^\(plain\)$/],
+        ['两段普通引用次段', '前段。\n\n> 甲\n>\n> 乙\n\n丙段。\n', '乙',
+          'paragraph:"前段。" / blockquote / paragraph:"甲" / paragraph:"乙" / paragraph:"丙段。"', /^\(plain\)$/],
+        ['单段普通引用(K-12d)', '前段。\n\n> 引用甲\n\n丙段。\n', '引用甲',
+          'paragraph:"前段。" / blockquote / paragraph:"引用甲" / paragraph:"丙段。"', /^\(plain\)$/],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text, 0)
+        await page.waitForTimeout(150)
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const lit = (await shape(page)).replace(/ \/ +/g, ' / ')
+        await page.keyboard.type(' ')
+        await page.waitForTimeout(1300)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const c = await bqInfo(page)
+        await page.evaluate(() => window.__upage.probe.flush?.())
+        await page.waitForTimeout(300)
+        const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
+        check(`K12 ${name}:行首退格字面化后补空格 = 原样合回`, lit.includes(`paragraph:">${text}"`) && s === expect && cls.test(c) && disk === md,
+          `${lit} → ${s} | bq=${c} | disk=${JSON.stringify(disk)}`)
+        await page.close()
+      }
+      // 07-29 键位不变:空行敲 `> ` 仍是折叠块。
+      const page = await open(browser, '前段。\n')
+      await caretAtText(page, '前段。')
+      await page.keyboard.press('Enter')
+      await typeSeq(page, '> X')
+      await page.waitForTimeout(300)
+      const s = await shape(page)
+      check('K12 空行 `> ` 仍是折叠(07-29 键位)', /blockquote \/ +paragraph:"\[!fold\]-X"/.test(s), s)
+      await page.close()
+    }
+
+    // K-13:按 Obsidian 习惯逐字敲 `> [!note] 标题` 得到 note callout,不是 `[!fold]-\[!note] 标题`。
+    if (want('K13')) {
+      for (const [name, typed, expect, disk, viaCdp] of [
+        ['`> [!note] 标题`', '> [!note] 标题', 'paragraph:"[!note] 标题"', '> [!note] 标题\n', false],
+        ['`> [!note]- 标题`(收起)', '> [!note]- 标题', 'paragraph:"[!note]- 标题"', '> [!note]- 标题\n', false],
+        ['输入法逐字提交 `> [!tip] 甲`', '> [!tip] 甲', 'paragraph:"[!tip] 甲"', '> [!tip] 甲\n', true],
+        ['`> 标题` 对照(仍是折叠)', '> 标题', 'paragraph:"[!fold]-标题"', '> [!fold]-标题\n', false],
+      ]) {
+        const page = await open(browser, '前段。\n')
+        const cdp = viaCdp ? await page.context().newCDPSession(page) : null
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        for (const ch of typed) {
+          if (cdp && ch !== ' ' && ch !== '>') await cdp.send('Input.insertText', { text: ch })
+          else await page.keyboard.type(ch)
+          await page.waitForTimeout(40)
+        }
+        await page.waitForTimeout(1300)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const w = await lastWrite(page)
+        check(`K13 ${name}`, s === `paragraph:"前段。" / blockquote / ${expect}` && w === `前段。\n\n${disk}`, `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+    }
+
+    // K-14:中文输入法直出的全角标点(逐字 insertText,不经组字)整行恰好是触发符时,空格 / 回车照样触发。
+    if (want('K14')) {
+      for (const [chars, key, expect] of [
+        [['【', '】'], ' ', /^paragraph:"前段。" \/ bullet_list \/ +list_item\[ \] \/ +paragraph:"X"$/],
+        [['＃', '＃'], ' ', /^paragraph:"前段。" \/ heading2:"X"$/],
+        [['1', '。'], ' ', /^paragraph:"前段。" \/ ordered_list \/ +list_item \/ +paragraph:"X"$/],
+        [['·', '·', '·'], 'Enter', /^paragraph:"前段。" \/ code_block:"X"$/],
+        [['、'], ' ', /^paragraph:"前段。" \/ paragraph:"、 X"$/], // 顿号不映射(对照)
+      ]) {
+        const page = await open(browser, '前段。\n')
+        const cdp = await page.context().newCDPSession(page)
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        for (const ch of chars) await cdp.send('Input.insertText', { text: ch })
+        await page.waitForTimeout(60)
+        await page.keyboard.press(key === ' ' ? 'Space' : key)
+        await page.keyboard.type('X')
+        await page.waitForTimeout(200)
+        const s = await shape(page)
+        check(`K14 全角 ${JSON.stringify(chars.join(''))} + ${key === ' ' ? '空格' : '回车'}`, expect.test(s), s)
+        await page.close()
+      }
+    }
+
+    // K-20:空的待办 / 编号 / 列表 / 标题 / 引用,退格一下就脱壳成正文,第二下与上一块合并(Notion 同)。
+    //       非空块仍是 T28 的字面还原(对照)。
+    if (want('K20')) {
+      for (const [name, md, typed, one] of [
+        ['空列表项', '- 甲\n', '\n', 'bullet_list / list_item / paragraph:"甲" / paragraph:""'],
+        ['空待办', '- [ ] 甲\n', '\n', 'bullet_list / list_item[ ] / paragraph:"甲" / paragraph:""'],
+        ['空编号', '1. 甲\n', '\n', 'ordered_list / list_item / paragraph:"甲" / paragraph:""'],
+        ['空 H2', '甲\n', '\n## ', 'paragraph:"甲" / paragraph:""'],
+        ['空引用', '甲\n', '\n| ', 'paragraph:"甲" / paragraph:""'],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, '甲')
+        await typeSeq(page, typed)
+        await page.waitForTimeout(150)
+        const s0 = (await shape(page)).replace(/ \/ +/g, ' / ')
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const s1 = (await shape(page)).replace(/ \/ +/g, ' / ')
+        const a1 = await page.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix'))
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const s2 = (await shape(page)).replace(/ \/ +/g, ' / ')
+        check(`K20 ${name}:退格一下转正文、两下并回上一块`, s1 === one && !a1 && s2 === one.replace(/ \/ paragraph:""$/, ''), `${s0} → ${s1} → ${s2}`)
+        await page.close()
+      }
+      const page = await open(browser, '前段。\n\n- 乙项\n')
+      await caretAtText(page, '乙项', 0)
+      await page.waitForTimeout(150)
+      await page.keyboard.press('Backspace')
+      await page.waitForTimeout(150)
+      const s = await shape(page)
+      check('K20 非空列表项行首退格仍是字面还原(T28 对照)', s === 'paragraph:"前段。" / paragraph:"-乙项"', s)
+      await page.close()
+    }
+
+    // K-20b:段落里的字面 `- ` / `1. ` 等(删字符删出来的)落盘必须转义,重开仍是段落,不变成空列表。
+    //        根因在 milkdown 的 text handler(以空白结尾的文本整段跳过转义),修在 textSafe.ts。
+    if (want('K20b')) {
+      for (const [name, md, text, want20b] of [
+        ['`\\- ab` 退两格', '甲段。\n\n\\- ab\n', '- ab', /^paragraph:"甲段。" \/ paragraph:"-"$/],
+        ['`1\\. ab` 退两格', '甲段。\n\n1\\. ab\n', '1. ab', /^paragraph:"甲段。" \/ paragraph:"1\."$/],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text)
+        await page.waitForTimeout(150)
+        await page.keyboard.press('Backspace')
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(300)
+        const s0 = await shape(page)
+        const s1 = await reopenShape(page)
+        check(`K20b ${name}:编辑器里是段落,重开仍是段落`, /paragraph:"(-|1\.) "$/.test(s0) && want20b.test(s1), `${s0} → 重开 ${s1}`)
+        await page.close()
+      }
+    }
+
+    // K-21:撤销自动格式回到字面触发符(Notion 同):快打 `# ` 撤一下 = `# `、再撤 = 空行;回车入口 `#⏎` 撤一下 = `#`。
+    //       撤回来的字面 `# ` 落盘后重开仍是段落(依赖 K-20b 的 textSafe)。
+    if (want('K21')) {
+      const last = async (page) => (await shape(page)).split(' / ').slice(1).join(' / ')
+      for (const [name, typed, lit] of [['`# `', '# ', 'paragraph:"# "'], ['`- `', '- ', 'paragraph:"- "'], ['`1. `', '1. ', 'paragraph:"1. "']]) {
+        const page = await open(browser, '前段。\n')
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(700) // 与回车那组隔开
+        await page.keyboard.type(typed)
+        await page.waitForTimeout(100)
+        const after = await last(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(150)
+        const u1 = await last(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(150)
+        const u2 = await last(page)
+        check(`K21 快打 ${name} 后撤销:一下回到字面、两下回到空行`, !/^paragraph/.test(after) && u1 === lit && u2 === 'paragraph:""', `${after} → ${u1} → ${u2}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '前段。\n')
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(700)
+        await page.keyboard.type('#')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(100)
+        const after = await last(page)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(150)
+        const u1 = await last(page)
+        check('K21 回车入口 `#⏎` 后撤销一下 = 字面 `#`', after === 'heading1:""' && u1 === 'paragraph:"#"', `${after} → ${u1}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '前段。\n')
+        await caretAtText(page, '前段。')
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(700)
+        await page.keyboard.type('# ')
+        await page.waitForTimeout(100)
+        await page.keyboard.press('Meta+z')
+        await page.waitForTimeout(200)
+        const s = await reopenShape(page)
+        check('K21 撤回来的字面 `# ` 落盘重开仍是段落', s === 'paragraph:"前段。" / paragraph:"#"', s)
+        await page.close()
+      }
+    }
+
+    // K-22:块尾 Delete = 把下一块的文字并到本块末尾(Notion 同),被掏空的列表项 / 引用随之消失;
+    //       下一块是 callout 标题 → 整块选中不合并;同层段↔段仍走 base 的合并(对照)。
+    if (want('K22')) {
+      for (const [name, md, text, expect, selWant] of [
+        ['段尾撞列表首项', '甲段。\n\n- 乙\n- 丙\n', '甲段。', 'paragraph:"甲段。X乙" / bullet_list / list_item / paragraph:"丙"', null],
+        ['列表末项尾撞段落', '- 甲\n\n乙段。\n', '甲', 'bullet_list / list_item / paragraph:"甲X乙段。"', null],
+        ['段尾撞引用', '甲段。\n\n> 乙\n', '甲段。', 'paragraph:"甲段。X乙"', null],
+        ['列表项尾撞子项', '- 甲\n    - 子\n', '甲', 'bullet_list / list_item / paragraph:"甲X子"', null],
+        ['段尾撞 callout 标题 = 整块选中', '甲段。\n\n> [!note] 标题\n> 内容\n', '甲段。', 'paragraph:"甲段。" / blockquote / paragraph:"[!note] 标题" / paragraph:"内容"', 'blockquote'],
+        ['段↔段对照', '甲段。\n\n乙段。\n', '甲段。', 'paragraph:"甲段。X乙段。"', null],
+      ]) {
+        const page = await open(browser, md)
+        await caretAtText(page, text)
+        await page.waitForTimeout(150)
+        await page.keyboard.press('Delete')
+        await page.waitForTimeout(150)
+        const sel = await selInfo(page)
+        if (!selWant) await page.keyboard.type('X')
+        await page.waitForTimeout(200)
+        const s = (await shape(page)).replace(/ \/ +/g, ' / ')
+        check(`K22 ${name}`, s === expect && (selWant ? sel.node === selWant : sel.json === 'text'), `${s} | sel=${JSON.stringify(sel)}`)
+        await page.close()
+      }
+    }
+
+    // B-03:键盘搬块按选区类型分三路 —— 块选中(Esc / ⠿)搬该节点且仍块选中、到头吞键(不扩选到文首);
+    //       跨块选区整批搬;⠿ 选中列表项只在列表内换位。
+    if (want('B03')) {
+      /** 文本块序列(含嵌套),顶层非段落类型前缀一个标记,足够看出谁挪到了哪。 */
+      const order = (page) => page.evaluate(() => {
+        const out = []
+        window.__upage.probe.view().state.doc.forEach((n) => {
+          if (n.isTextblock) out.push(n.textContent)
+          else { const a = []; n.descendants((c) => { if (c.isTextblock) { a.push(c.textContent); return false } return true }); out.push(n.type.name + '[' + a.join(',') + ']') }
+        })
+        return out.join(' | ')
+      })
+      const sel = (page) => page.evaluate(() => {
+        const v = window.__upage.probe.view()
+        const s = v.state.selection
+        return { type: s.toJSON().type, node: s.node ? s.node.type.name + ':' + s.node.textContent : null, text: v.state.doc.textBetween(s.from, s.to, '|') }
+      })
+      /** 程序化块选中(⠿ 点击的等价物):第 nth 个 type 节点。 */
+      const nodeSel = (page, type, nth = 0) => page.evaluate(({ type, nth }) => {
+        const v = window.__upage.probe.view()
+        let at = -1, k = 0
+        v.state.doc.descendants((n, p) => { if (at >= 0) return false; if (n.type.name === type && k++ === nth) { at = p; return false } return true })
+        let Base = v.state.selection.constructor
+        while (Object.getPrototypeOf(Base) !== Function.prototype) Base = Object.getPrototypeOf(Base)
+        v.dispatch(v.state.tr.setSelection(Base.fromJSON(v.state.doc, { type: 'node', anchor: at })))
+        v.focus()
+      }, { type, nth })
+      const across = (page, a, b) => page.evaluate(({ a, b }) => {
+        const v = window.__upage.probe.view()
+        let from = -1, to = -1
+        v.state.doc.descendants((n, p) => {
+          if (!n.isTextblock) return true
+          if (from < 0 && n.textContent.startsWith(a)) from = p + 1
+          if (n.textContent.startsWith(b)) to = p + n.nodeSize - 1
+          return false
+        })
+        const S = v.state.selection.constructor
+        v.dispatch(v.state.tr.setSelection(S.create(v.state.doc, from, to)))
+        v.focus()
+      }, { a, b })
+      const SEED = '段甲。\n\n段乙。\n\n段丙。\n\n段丁。\n'
+      for (const key of ['Meta+Shift+ArrowUp', 'Meta+Alt+ArrowUp']) {
+        const page = await open(browser, SEED)
+        await caretAtText(page, '段丙。')
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(120)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(150)
+        const o = await order(page), s = await sel(page)
+        check(`B03 Esc 块选中 → ${key}:该块上移一格,仍块选中`, o === '段甲。 | 段丙。 | 段乙。 | 段丁。' && s.type === 'node' && s.node === 'paragraph:段丙。', `${o} | ${JSON.stringify(s)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, SEED)
+        await nodeSel(page, 'paragraph', 0)
+        await page.keyboard.press('Meta+Shift+ArrowUp')
+        await page.waitForTimeout(150)
+        const s = await sel(page)
+        await page.keyboard.press('Backspace')
+        await page.waitForTimeout(150)
+        const o = await order(page)
+        check('B03 首块块选中再 Mod-Shift-↑:到头吞键,不扩选到文首(退格只删这一块)', s.type === 'node' && o === '段乙。 | 段丙。 | 段丁。', `${JSON.stringify(s)} → ${o}`)
+        await page.close()
+      }
+      for (const [a, b, key, want] of [
+        ['段乙。', '段丙。', 'Meta+Shift+ArrowUp', '段乙。 | 段丙。 | 段甲。 | 段丁。'],
+        ['段甲。', '段乙。', 'Meta+Alt+ArrowDown', '段丙。 | 段甲。 | 段乙。 | 段丁。'],
+      ]) {
+        const page = await open(browser, SEED)
+        await across(page, a, b)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(150)
+        const o = await order(page), s = await sel(page)
+        check(`B03 跨块选区 ${a}..${b} ${key}:整批搬、选区跟着走`, o === want && s.type === 'text' && s.text === `${a}|${b}`, `${o} | ${JSON.stringify(s)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '上段。\n\n- 项一\n- 项二\n- 项三\n- 项四\n')
+        await nodeSel(page, 'list_item', 1)
+        await page.keyboard.press('Meta+Shift+ArrowUp')
+        await page.waitForTimeout(150)
+        const o = await order(page), s = await sel(page)
+        check('B03 ⠿ 选中列表第二项 Mod-Shift-↑:只在列表内换位,不连整只列表', o === '上段。 | bullet_list[项二,项一,项三,项四]' && s.node === 'list_item:项二', `${o} | ${JSON.stringify(s)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '上段。\n\n- 项一\n- 项二\n- 项三\n- 项四\n')
+        await across(page, '项二', '项三')
+        await page.keyboard.press('Meta+Alt+ArrowDown')
+        await page.waitForTimeout(150)
+        const o = await order(page)
+        check('B03 跨列表项选区 Mod-Alt-↓:两项一起在列表内下移', o === '上段。 | bullet_list[项一,项四,项二,项三]', o)
+        await page.close()
+      }
+    }
+
+    // B-04:折起的标题 = 标题 + 藏着的小节一个整体 —— 键盘搬按小节对小节换位且保持折着;邻居标题不「继承」折叠;
+    //       Mod+D 复制出一份同样折着的整节;无标题前言被并进小节时展开而不是把块藏起来(md 小节是结构)。
+    if (want('B04')) {
+      /** 顶层块速写:标题带 #级,藏着的块前缀 ~,折起的标题后缀 ▸。 */
+      const view = (page) => page.evaluate((PM) => {
+        const v = window.__upage.probe.view()
+        const out = []
+        v.state.doc.forEach((n, off) => {
+          const el = v.nodeDOM(off)
+          const hidden = !(el instanceof HTMLElement) || getComputedStyle(el).display === 'none'
+          const folded = el instanceof HTMLElement && el.classList.contains('amx-heading-folded')
+          out.push((hidden ? '~' : '') + (n.type.name === 'heading' ? '#'.repeat(n.attrs.level) + ' ' : '') + n.textContent + (folded ? '▸' : ''))
+        })
+        return out.join(' | ')
+      }, PM)
+      const foldH = async (page, name) => {
+        const h = await page.evaluate(({ PM, name }) => {
+          const el = [...document.querySelectorAll(PM + ' > h1, ' + PM + ' > h2, ' + PM + ' > h3')].find((e) => e.textContent.includes(name))
+          const r = el.getBoundingClientRect()
+          return { x: r.left + 15, y: r.top + r.height / 2 }
+        }, { PM, name })
+        await page.mouse.move(h.x, h.y, { steps: 3 })
+        await page.waitForTimeout(300)
+        const ok = await page.evaluate(() => {
+          const f = document.querySelector('.unified-gutter .block-fold')
+          if (!f || f.style.display === 'none') return false
+          f.click()
+          return true
+        })
+        await page.waitForTimeout(150)
+        if (!ok) throw new Error('折叠钮没出现:' + name)
+      }
+      const SEED = '前段。\n\n## 小节\n\n节内一。\n\n节内二。\n\n## 下节\n\n下节正文。\n'
+      for (const [name, fold, at, how, key, want] of [
+        ['光标在折起的标题 Mod-Shift-↓:整节越过下一节,仍折着;下节不继承折叠', '小节', '小节', 'caret', 'Meta+Shift+ArrowDown',
+          '前段。 | ## 下节 | 下节正文。 | ## 小节▸ | ~节内一。 | ~节内二。'],
+        ['Esc 块选中折起的标题 Mod-Alt-↓:同上,仍块选中', '小节', '小节', 'esc', 'Meta+Alt+ArrowDown',
+          '前段。 | ## 下节 | 下节正文。 | ## 小节▸ | ~节内一。 | ~节内二。'],
+        ['折起的下节 Mod-Shift-↑:整节越过上一节,仍折着;小节不继承折叠', '下节', '下节', 'caret', 'Meta+Shift+ArrowUp',
+          '前段。 | ## 下节▸ | ~下节正文。 | ## 小节 | 节内一。 | 节内二。'],
+        ['折起的小节 Mod-Shift-↑ 越过无标题前言:前言并进小节 → 展开,不藏块', '小节', '小节', 'caret', 'Meta+Shift+ArrowUp',
+          '## 小节 | 节内一。 | 节内二。 | 前段。 | ## 下节 | 下节正文。'],
+        ['普通段 Mod-Shift-↓ 撞折起的标题:落进那一节 → 那一节展开,段落看得见', '小节', '前段。', 'caret', 'Meta+Shift+ArrowDown',
+          '## 小节 | 前段。 | 节内一。 | 节内二。 | ## 下节 | 下节正文。'],
+        ['光标在折起的标题 Mod+D:复制出同样折着的整节', '小节', '小节', 'caret', 'Meta+d',
+          '前段。 | ## 小节▸ | ~节内一。 | ~节内二。 | ## 小节▸ | ~节内一。 | ~节内二。 | ## 下节 | 下节正文。'],
+      ]) {
+        const page = await open(browser, SEED)
+        await foldH(page, fold)
+        await caretAtText(page, at)
+        if (how === 'esc') { await page.keyboard.press('Escape'); await page.waitForTimeout(120) }
+        await page.keyboard.press(key)
+        await page.waitForTimeout(200)
+        const v = await view(page), s = await selInfo(page)
+        const selOk = how === 'esc' ? s.json === 'node' && s.node === 'heading' : s.json === 'text'
+        check(`B04 ${name}`, v === want && selOk, `${v} | sel=${JSON.stringify(s)}`)
+        await page.close()
+      }
+    }
+
+    // R-17:块公式 `$$…$$` 里回车 / Shift+回车 = 公式内换行(段落里的软换行,落盘裸换行),不拆段、不写 `\` 硬换行;
+    //       磁盘上原有的多行公式行末回车同样;/math 光标落在两对 `$$` 之间,/code 后面还有块时光标留在代码块里。
+    if (want('R17')) {
+      const blocks = (page) => page.evaluate((PM) => document.querySelectorAll(PM + ' .math-rendered--block').length, PM)
+      for (const key of ['Enter', 'Shift+Enter']) {
+        const page = await open(browser, '段一\n\n$$\na = b\n$$\n\n段尾\n')
+        await caretAtText(page, 'a = b')
+        await page.keyboard.press(key)
+        await page.keyboard.type('c = d')
+        await caretAtText(page, '段尾')
+        await page.waitForTimeout(1300)
+        const s = await shape(page), w = await lastWrite(page), n = await blocks(page)
+        check(`R17 盘上多行公式行末 ${key}:仍是同一段公式、落盘裸换行、照常渲染`, s === 'paragraph:"段一" / paragraph:"$$\\na = b\\nc = d\\n$$" / paragraph:"段尾"' && w === '段一\n\n$$\na = b\nc = d\n$$\n\n段尾\n' && n === 1, `${s} | ${JSON.stringify(w)} | blocks=${n}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n段尾\n')
+        await caretAtText(page, '段一')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('/math')
+        await page.waitForTimeout(300)
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(200)
+        const at = await page.evaluate(() => { const $f = window.__upage.probe.view().state.selection.$from; return { t: $f.parent.textContent, off: $f.parentOffset } })
+        await page.keyboard.type('x')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('y')
+        await caretAtText(page, '段尾')
+        await page.waitForTimeout(1300)
+        const w = await lastWrite(page)
+        check('R17 /math:光标落在两对 `$$` 之间,接着回车就是公式内换行', at.t === '$$  $$' && at.off === 3 && w === '段一\n\n$$ x\ny $$\n\n段尾\n', `${JSON.stringify(at)} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n段尾\n')
+        await caretAtText(page, '段一')
+        await page.keyboard.press('Enter')
+        await page.keyboard.type('/code')
+        await page.waitForTimeout(300)
+        await page.keyboard.press('Enter')
+        await page.waitForTimeout(200)
+        const sl = await selInfo(page)
+        check('R17 /code 后面还有块:光标留在新代码块里,不跑进下一段', sl.parent === 'code_block', JSON.stringify(sl))
+        await page.close()
+      }
+    }
+
+    // R-27:代码块打磨 —— 文末代码块 ↓ / → 出得去(后面还有块时不接管);Shift+回车 = 代码内换行;
+    //       括号 / 引号自动配对(可在设置里关);横向滚动后工具条仍在块内。
+    if (want('R27')) {
+      const TAIL = '段一\n\n```js\nlet x = 1\n```\n'
+      for (const key of ['ArrowDown', 'ArrowRight']) {
+        const page = await open(browser, TAIL)
+        await caretAtText(page, 'let x = 1')
+        await page.waitForTimeout(100)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(100)
+        await page.keyboard.type('Q')
+        await page.waitForTimeout(1300)
+        const w = await lastWrite(page)
+        check(`R27 文末代码块在末行按 ${key}:在后面新起一段,光标过去`, w === '段一\n\n```js\nlet x = 1\n```\n\nQ\n', JSON.stringify(w))
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n```js\nlet x = 1\n```\n\n段二\n')
+        await caretAtText(page, 'let x = 1')
+        await page.waitForTimeout(100)
+        await page.keyboard.press('ArrowDown')
+        await page.waitForTimeout(150)
+        const s1 = await shape(page)
+        check('R27 代码块后面还有块:↓ 不新建段(交回原生进下一块)', s1 === 'paragraph:"段一" / code_block:"let x = 1" / paragraph:"段二"', s1)
+        await page.close()
+      }
+      {
+        const page = await open(browser, TAIL)
+        await caretAtText(page, 'let x = 1')
+        await page.keyboard.press('Shift+Enter')
+        await page.keyboard.type('y')
+        await page.waitForTimeout(150)
+        const s1 = await shape(page)
+        check('R27 代码块里 Shift+回车 = 换行', s1 === 'paragraph:"段一" / code_block:"let x = 1\\ny"', s1)
+        await page.close()
+      }
+      {
+        const page = await open(browser, TAIL)
+        const code = () => page.evaluate(() => { let t = ''; window.__upage.probe.view().state.doc.descendants((n) => { if (n.type.name === 'code_block') t = n.textContent; return true }); return t })
+        await caretAtText(page, 'let x = 1')
+        await page.keyboard.type(' + f(')
+        const a = await code()
+        await page.keyboard.type('a)')
+        const b = await code()
+        await page.keyboard.type(' // don\'t [')
+        await page.keyboard.press('Backspace')
+        const c = await code()
+        check('R27 代码块自动配对:`(` 补 `)`、敲 `)` 跨过、单词后的引号不配、退格删空的一对',
+          a === 'let x = 1 + f()' && b === 'let x = 1 + f(a)' && c === "let x = 1 + f(a) // don't ", JSON.stringify({ a, b, c }))
+        await page.close()
+      }
+      {
+        const page = await open(browser, TAIL)
+        await page.evaluate(() => { localStorage.setItem('amadeus.notes.codeAutoPair', '0') })
+        await caretAtText(page, 'let x = 1')
+        await page.keyboard.type('(')
+        await page.waitForTimeout(100)
+        const t = await page.evaluate(() => { let t = ''; window.__upage.probe.view().state.doc.descendants((n) => { if (n.type.name === 'code_block') t = n.textContent; return true }); return t })
+        await page.evaluate(() => { localStorage.removeItem('amadeus.notes.codeAutoPair') })
+        check('R27 设置关掉自动配对后不补', t === 'let x = 1(', JSON.stringify(t))
+        await page.close()
+      }
+      {
+        const page = await open(browser, '段一\n\n```js\n' + 'const longLine = ' + 'x'.repeat(400) + '\n```\n')
+        const r = await page.evaluate((PM) => {
+          const pre = document.querySelector(PM + ' pre')
+          const code = pre.querySelector('code')
+          code.scrollLeft = 2000
+          pre.scrollLeft = 2000
+          const bar = pre.querySelector('.amx-code-tools').getBoundingClientRect()
+          const box = pre.getBoundingClientRect()
+          return { scrolled: code.scrollLeft, preScroll: pre.scrollLeft, barL: Math.round(bar.left), barR: Math.round(bar.right), preL: Math.round(box.left), preR: Math.round(box.right) }
+        }, PM)
+        check('R27 长行横向滚动后工具条仍在代码块内(滚动收进 <code>)', r.scrolled > 0 && r.preScroll === 0 && r.barL >= r.preL && r.barR <= r.preR, JSON.stringify(r))
+        await page.close()
+      }
+    }
+
+    if (want('K19')) {
+      // K19(评审 K-19):标题里 Shift+Enter 同回车 —— ATX 标题容不下换行,放行硬换行时 H3 及以下落盘成 `### 甲 乙`
+      //   (所见非所存),H1/H2 落 setext。现在:行中 = 从光标切出正文;行首 = 上方插空正文、标题整条保留;正文里仍是硬换行。
+      const at = (page, type, off) => page.evaluate(({ type, off }) => {
+        const v = window.__upage.probe.view()
+        let hit = null
+        v.state.doc.descendants((n, p) => { if (hit == null && n.type.name === type) { hit = p + 1 + off; return false } return hit == null })
+        v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(hit))))
+        v.focus()
+      }, { type, off })
+      for (const level of [3, 2]) {
+        const page = await open(browser, `${'#'.repeat(level)} 甲乙\n\n正文。\n`)
+        await at(page, 'heading', 1)
+        await page.waitForTimeout(80)
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForTimeout(1300)
+        const s = await shape(page)
+        const w = await lastWrite(page)
+        check(`K19 H${level} 行中 Shift+Enter:切出正文,落盘不丢换行`, s === `heading${level}:"甲" / paragraph:"乙" / paragraph:"正文。"` && w === `${'#'.repeat(level)} 甲\n\n乙\n\n正文。\n`, `${s} | ${JSON.stringify(w)}`)
+        await page.close()
+      }
+      {
+        const page = await open(browser, '### 甲乙\n\n正文。\n')
+        await at(page, 'heading', 0)
+        await page.waitForTimeout(80)
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForTimeout(200)
+        const s = await shape(page)
+        check('K19 标题行首 Shift+Enter:上方插空正文,标题整条保留', s === 'paragraph:"" / heading3:"甲乙" / paragraph:"正文。"', s)
+        const para = await page.evaluate(() => {
+          const v = window.__upage.probe.view()
+          let hit = null
+          v.state.doc.descendants((n, p) => { if (hit == null && n.type.name === 'paragraph' && n.textContent === '正文。') hit = p + 2; return hit == null })
+          v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(hit))))
+          return hit
+        })
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForTimeout(200)
+        const br = await page.evaluate(() => {
+          let n = 0
+          window.__upage.probe.view().state.doc.descendants((c) => { if (c.type.name === 'hardbreak') n++; return true })
+          return n
+        })
+        check('K19 对照:正文里 Shift+Enter 仍是段内硬换行', br === 1 && para != null, `hardbreaks=${br}`)
+        await page.close()
+      }
+    }
+    // ── K-16:mac ⌘↑ / ⌘↓ 到文首 / 文末。原生做法在「文首是代码块 / 嵌入」「文末是嵌入」时原地不动(代码块首子节点是
+    //    contenteditable=false 工具条、嵌入首子节点是 widget)。嵌入 = 整块选中,代码块 = 光标进块首;普通段对照照旧到得了。
+    //    负对照:摘掉 docEdge 的 keymap 行 → 三条嵌入 / 代码块用例全红(已实跑)。
+    if (want('K16')) {
+      for (const [name, md, from, key, expect] of [
+        ['文首是代码块 ⌘↑ → 进代码块首', '```js\ncode\n```\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'code_block', from: 1 }],
+        ['文首是嵌入 ⌘↑ → 整块选中嵌入', '![[Embedded]]\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'node', node: 'paragraph', from: 0 }],
+        ['文末是嵌入 ⌘↓ → 整块选中嵌入', '甲段。\n\n乙段。\n\n![[Embedded]]\n', '甲段。', 'Meta+ArrowDown', { json: 'node', node: 'paragraph', from: 10 }],
+        ['对照:文首是普通段 ⌘↑ → 段首', '甲段。\n\n乙段。\n\n丙段末。\n', '丙段末。', 'Meta+ArrowUp', { json: 'text', parent: 'paragraph', from: 1 }],
+      ]) {
+        const page = await open(browser, md)
+        // 真鼠标点到起点段末(原生 ⌘↑ 要浏览器自己的 DOM 选区在场;程序化放选区时对照组的原生移动不生效)
+        const at = await page.evaluate(([s, t]) => {
+          const p = [...document.querySelectorAll(s + ' > p')].find((x) => x.textContent.includes(t))
+          const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect()
+          return { x: b.right - 1, y: b.top + b.height / 2 }
+        }, [PM, from])
+        await page.mouse.click(at.x, at.y)
+        await page.waitForTimeout(200)
+        await page.keyboard.press(key)
+        await page.waitForTimeout(150)
+        const sel = await selInfo(page)
+        const ok = Object.entries(expect).every(([k, v]) => sel[k] === v)
+        check(`K16 ${name}`, ok, JSON.stringify(sel))
+        await page.close()
+      }
+    }
+    // ── K-17:块选中态的键盘。此前只有 Esc 两段式:Esc 选中块后 Shift+↓ 扩出来的是文字选区、Shift+点击只延伸字符;
+    //    「转换为」没有键盘入口;Mod-] / Mod-[ 对段落无效。负对照:摘掉 blockKbKeymap → a/b/c/d/e 全红(已实跑)。
+    if (want('K17')) {
+      const MD = '甲段。\n\n乙段。\n\n丙段。\n\n丁段。\n'
+      const blk = (page) => page.evaluate(() => {
+        const d = document.querySelector('.unified-body .ProseMirror')
+        const s = window.__upage.probe.view().state.selection
+        return { sel: s.toJSON().type, blocksel: d.getAttribute('data-blocksel'), selected: [...d.querySelectorAll('.amx-block-selected')].map((e) => e.textContent), node: s.node ? s.node.textContent : null }
+      })
+      // a:Esc 选中乙 → Shift+↓ 两块(乙丙,整块呈现)→ Shift+↑ 回单块 → Shift+↑ 向上扩(甲乙)
+      let page = await open(browser, MD)
+      await caretAtText(page, '乙段。')
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(100)
+      const a0 = await blk(page)
+      await page.keyboard.press('Shift+ArrowDown'); await page.waitForTimeout(100)
+      const a1 = await blk(page)
+      await page.keyboard.press('Shift+ArrowUp'); await page.waitForTimeout(100)
+      const a2 = await blk(page)
+      await page.keyboard.press('Shift+ArrowUp'); await page.waitForTimeout(100)
+      const a3 = await blk(page)
+      check('K17a Esc 选块后 Shift+↓/↑ 按整块扩选(下扩两块 → 收回单块 → 上扩两块)',
+        a0.sel === 'node' && a0.node === '乙段。' && a1.blocksel === 'true' && a1.selected.join('|') === '乙段。|丙段。' &&
+          a2.sel === 'node' && a2.node === '乙段。' && a3.blocksel === 'true' && a3.selected.join('|') === '甲段。|乙段。',
+        JSON.stringify({ a0, a1, a2, a3 }))
+      // b:块选后 Shift+点击丁 → 乙丙丁;接着 Delete 整批删掉
+      await page.keyboard.press('Escape'); await page.waitForTimeout(60)
+      await caretAtText(page, '乙段。')
+      await page.keyboard.press('Escape'); await page.waitForTimeout(100)
+      const at = await page.evaluate(() => { const p = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => x.textContent === '丁段。'); const r = p.getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 } })
+      await page.keyboard.down('Shift'); await page.mouse.click(at.x, at.y); await page.keyboard.up('Shift')
+      await page.waitForTimeout(150)
+      const b1 = await blk(page)
+      await page.keyboard.press('Delete'); await page.waitForTimeout(150)
+      const b2 = await shape(page)
+      check('K17b 块选后 Shift+点击按整块延伸到点中的块,Delete 整批删',
+        b1.blocksel === 'true' && b1.selected.join('|') === '乙段。|丙段。|丁段。' && !b2.includes('乙段') && !b2.includes('丁段') && b2.includes('甲段'),
+        JSON.stringify({ b1, b2 }))
+      await page.close()
+      // c:Mod-Alt-/ 打开块菜单,焦点在「转换为」第一项;选「标题 1」即转换
+      page = await open(browser, MD)
+      await caretAtText(page, '丙段。')
+      await page.keyboard.press('Meta+Alt+Slash'); await page.waitForTimeout(250)
+      const c1 = await page.evaluate(() => ({ menu: !!document.querySelector('.unified-block-menu'), focused: document.activeElement?.textContent?.trim() ?? '' }))
+      await page.keyboard.press('ArrowDown'); await page.waitForTimeout(80)
+      await page.keyboard.press('Enter'); await page.waitForTimeout(250)
+      const c2 = await shape(page)
+      check('K17c Mod-Alt-/ 打开块菜单、焦点在「转换为」首项,↓ 回车转成标题 1',
+        c1.menu && c1.focused === '正文' && c2.includes('heading1:"丙段。"'), JSON.stringify({ c1, c2 }))
+      await page.close()
+      // d:Mod-] / Mod-[ 在段落上 = 缩进档 +1 / −1
+      page = await open(browser, MD)
+      await caretAtText(page, '丙段。')
+      await page.keyboard.press('Meta+BracketRight'); await page.waitForTimeout(150)
+      const d1 = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.attrs.indent)
+      await page.keyboard.press('Meta+BracketLeft'); await page.waitForTimeout(150)
+      const d2 = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.attrs.indent)
+      check('K17d Mod-] / Mod-[ 在段落上接缩进档', d1 === 1 && d2 === 0, JSON.stringify({ d1, d2 }))
+      // e:对照 —— 不在块模式时 Shift+↓ 仍是浏览器的文字扩选(不被块扩选劫持)
+      await caretAtText(page, '甲段。', 1)
+      await page.keyboard.press('Shift+ArrowDown'); await page.waitForTimeout(120)
+      const e1 = await blk(page)
+      check('K17e 对照:文字光标下 Shift+↓ 仍是文字选区', e1.sel === 'text' && e1.blocksel === null, JSON.stringify(e1))
+      await page.close()
     }
   } finally {
     await browser.close()

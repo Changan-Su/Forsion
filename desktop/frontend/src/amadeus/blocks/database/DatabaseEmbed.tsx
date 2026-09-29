@@ -824,7 +824,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           const col = db.columns.find((c) => c.id === k)
           if (col && col.type !== 'page') nv().setProp(noteFolder as string, p, k, v, resolveBaseType(col.type))
         }
-      })
+      }, () => { /* 没建成:birthNoteFile 已提示 */ })
       return
     }
     // ⚠️ id 必须在回调**外**定下:冲突重放会重跑这个回调(见 dbStore 的 pendingOps),

@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
+const menus = vi.hoisted(() => [] as unknown[])
 vi.mock('electron', () => ({
   app: { getPreferredSystemLanguages: () => ['zh-Hans-CN'], isPackaged: false },
-  Tray: class {}, Menu: { buildFromTemplate: (t: unknown) => t }, nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
+  // 托盘桩:只记下每次 setContextMenu 收到的模板(Menu.buildFromTemplate 原样回传),供「切语言重建菜单」断言
+  Tray: class { setToolTip(): void {} setContextMenu(m: unknown): void { menus.push(m) } on(): void {} },
+  Menu: { buildFromTemplate: (t: unknown) => t }, nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }))
 
-import { setTrayLocale, trayLang, trayMenuTemplate, type TrayHandlers } from './tray'
+import { createTray, setTrayLocale, trayLang, trayMenuTemplate, type TrayHandlers } from './tray'
+import { initMainLocale, setMainLocale } from './mainI18n'
 import type { ComputerHistoryState } from '../shared/computerHistory'
 
 const base: TrayHandlers = { show: vi.fn(), checkUpdates: vi.fn(), quit: vi.fn() }
@@ -31,7 +35,7 @@ describe('tray', () => {
       setTrayLocale('fr')
       expect(trayLang()).toBe('zh') // 非 zh/en = 没设 → 系统(mock 为 zh-Hans-CN)
       setTrayLocale('en')
-      setTrayLocale(null) // ui:sync 里的 null = 删键 = 回到跟随系统
+      setTrayLocale(null) // null = 回到跟随系统(渲染层的报告入口 uiLocaleSync 只转 zh/en,不会发 null)
       expect(trayLang()).toBe('zh')
     } finally {
       setTrayLocale(null)
@@ -63,5 +67,80 @@ describe('tray', () => {
     expect(resume).toHaveBeenCalled()
     state = st({ status: 'paused', pausedUntil: new Date(2026, 8, 28, 0, 0).getTime() })
     expect(labels(trayMenuTemplate(h, 'en', now))).toContain('Computer history: paused until 9/28 00:00')
+  })
+
+  it('语言来源是 mainI18n:setMainLocale 切语言 → 托盘菜单自动重建为对应语言(P1-K5)', () => {
+    initMainLocale({ systemLanguages: () => ['zh-Hans-CN'] }) // 同 main.ts:注入系统首选语言
+    try {
+      createTray(base)
+      const last = () => labels(menus[menus.length - 1] as Electron.MenuItemConstructorOptions[])
+      expect(last()).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+      setMainLocale('en')
+      expect(trayLang()).toBe('en')
+      expect(last()).toEqual(['Show Forsion', 'Check for updates', 'Quit Forsion'])
+      const n = menus.length
+      setMainLocale('en') // 同值不重建
+      expect(menus.length).toBe(n)
+      setTrayLocale(null) // 旧名仍可用(= setMainLocale),回到跟随系统
+      expect(last()).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+    } finally {
+      setMainLocale(null)
+      initMainLocale({ systemLanguages: () => [] })
+    }
+  })
+})
+
+// P1-K2:远程段(文案 main.remoteSafety.tray.*,zh / en 同构)
+import type { RemoteTrayView } from './remoteSafety'
+describe('tray 远程段(P1-K2)', () => {
+  const view = (over: Partial<RemoteTrayView> = {}): RemoteTrayView => ({
+    capable: true, locked: false, activeLabel: null, activeCount: 0, waitingApproval: false,
+    hotkey: { accelerator: 'Control+Alt+Shift+.', registered: true }, ...over,
+  })
+  const remote = (v: RemoteTrayView) => ({ view: () => v, stopAll: vi.fn(), unlock: vi.fn(), openSettings: vi.fn() })
+
+  it('空闲 + 能远程:只有「停止全部远程任务」,热键只显示不注册;在最前面、后跟分隔线', () => {
+    const r = remote(view())
+    const items = trayMenuTemplate({ ...base, remote: r }, 'zh')
+    expect(items[0]).toMatchObject({ label: '停止全部远程任务', accelerator: 'Control+Alt+Shift+.', registerAccelerator: false })
+    expect(items[1]).toEqual({ type: 'separator' })
+    ;(items[0].click as () => void)()
+    expect(r.stopAll).toHaveBeenCalled()
+  })
+
+  it('不能远程、没在跑、没锁 → 不出远程段', () => {
+    expect(labels(trayMenuTemplate({ ...base, remote: remote(view({ capable: false })) }, 'en'))).toEqual(['Show Forsion', 'Check for updates', 'Quit Forsion'])
+  })
+
+  it('在跑:禁用标签带设备名 / 多个 / 等待', () => {
+    expect(labels(trayMenuTemplate({ ...base, remote: remote(view({ activeLabel: 'Pixel', activeCount: 1 })) }, 'en')).slice(0, 2))
+      .toEqual(['Remote session running · Pixel', 'Stop all remote tasks'])
+    const zh = trayMenuTemplate({ ...base, remote: remote(view({ activeLabel: 'Pixel', activeCount: 3, waitingApproval: true })) }, 'zh')
+    expect(zh[0]).toMatchObject({ label: '远程会话运行中 · Pixel 等 2 个（等你处理）', enabled: false })
+    expect(trayMenuTemplate({ ...base, remote: remote(view({ activeLabel: 'Pixel', activeCount: 2, waitingApproval: true })) }, 'en')[0].label)
+      .toBe('Remote session running · Pixel and 1 more (waiting for you)')
+  })
+
+  it('锁定:常驻「停止全部」+「远程访问已锁定」+「解锁远程访问…」(即使不能远程)', () => {
+    const r = remote(view({ capable: false, locked: true }))
+    const items = trayMenuTemplate({ ...base, remote: r }, 'en')
+    expect(labels(items).slice(0, 3)).toEqual(['Stop all remote tasks', 'Remote access locked', 'Unlock remote access…'])
+    expect(items[1].enabled).toBe(false)
+    ;(items[2].click as () => void)()
+    expect(r.unlock).toHaveBeenCalled()
+  })
+
+  it('热键没注册上 → 失败可见 + 「更改快捷键…」打开设置;「停止全部」不带 accelerator', () => {
+    const r = remote(view({ hotkey: { accelerator: 'Control+Alt+Shift+.', registered: false } }))
+    const items = trayMenuTemplate({ ...base, remote: r }, 'zh')
+    expect(labels(items).slice(0, 3)).toEqual(['停止全部远程任务', '急停快捷键不可用', '更改快捷键…'])
+    expect(items[0].accelerator).toBeUndefined()
+    ;(items[2].click as () => void)()
+    expect(r.openSettings).toHaveBeenCalled()
+  })
+
+  it('view 抛异常 → 不出远程段(菜单照常)', () => {
+    expect(labels(trayMenuTemplate({ ...base, remote: { view: () => { throw new Error('x') }, stopAll: vi.fn(), unlock: vi.fn(), openSettings: vi.fn() } }, 'en')))
+      .toEqual(['Show Forsion', 'Check for updates', 'Quit Forsion'])
   })
 })

@@ -1,6 +1,7 @@
 /**
  * Dev-only visual harness:Muse 设置里的「后台额度」区块 —— 真 SpecialAgentsTab + 生产 CSS;引擎端点与账号额度都是桩,
- * 不连任何后端、不碰凭证。?dark / ?lang=en / ?other(Muse 显式选了不计入后台额度的模型)/ ?cloud(云端引擎:只露按轮 Historian 四项)。
+ * 不连任何后端、不碰凭证。?dark / ?lang=en / ?other(Muse 显式选了不计入后台额度的模型)/ ?cloud(云端引擎:只露按轮 Historian 四项)/
+ * ?remote(设备页:引擎对远程来源只回开关摘要 + remote:true,P1-K10b —— 只读说明 + 两张开关卡)。
  * 跑法:node scripts/e2e-editor.cjs --check=bgquota-settings --shot
  */
 import { createRoot } from 'react-dom/client'
@@ -35,6 +36,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       const body = JSON.parse(String(init.body || '{}'))
       ;(window as unknown as { __bgHarness: { posts: unknown[] } }).__bgHarness.posts.push(body)
       Object.assign(config.historian, body.historian || {})
+    }
+    if (params.has('remote')) {
+      return json({ config: { historian: { enabled: config.historian.enabled, everyRounds: config.historian.everyRounds }, muse: { enabled: false, supervisorPollMinutes: config.muse.supervisorPollMinutes } }, remote: true })
     }
     return json({ config, defaults: { historianPrompt: '' }, ...(params.has('cloud') ? { cloud: true } : {}) })
   }

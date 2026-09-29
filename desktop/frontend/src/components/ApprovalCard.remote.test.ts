@@ -20,6 +20,7 @@ import { authFetch } from '../services/http'
 import { resolveApproval } from '../services/agentRunService'
 import { syncNow } from '../services/backendService'
 import { useApp } from '../stores/appStore'
+import { resetFocusForTests, useEngineFocus, connectionTarget } from '../services/engine/targets'
 
 const req: ApprovalRequest = {
   approvalId: 'a1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }),
@@ -78,15 +79,15 @@ const reply = (body: unknown, status: number): Promise<Response> => Promise.reso
 describe('远端拒绝码上屏(zh/en)', () => {
   it('resolveApproval:400 REMOTE_ARGS_OVERRIDE_FORBIDDEN → ok=false、gone=false、本地化 message', async () => {
     vi.mocked(authFetch).mockImplementation(() => reply({ code: 'REMOTE_ARGS_OVERRIDE_FORBIDDEN', detail: 'Editing the arguments of an approval is only available on the host computer.' }, 400))
-    const r = await resolveApproval(cfg, 'r1', 'a1', 'approve', { command: 'x' })
+    const r = await resolveApproval(connectionTarget(cfg), 'r1', 'a1', 'approve', { command: 'x' })
     expect(r).toEqual({ ok: false, gone: false, code: 'REMOTE_ARGS_OVERRIDE_FORBIDDEN', message: translateFor('zh', 'unitpage.remoteArgsOverride') })
     vi.mocked(authFetch).mockImplementation(() => reply({ detail: 'gone' }, 410))
-    expect(await resolveApproval(cfg, 'r1', 'a1', 'approve')).toEqual({ ok: false, gone: true })
+    expect(await resolveApproval(connectionTarget(cfg), 'r1', 'a1', 'approve')).toEqual({ ok: false, gone: true })
   })
 
   it('request():400 REMOTE_CWD_FORBIDDEN → 本地化提示 + code(英文 detail 不上屏)', async () => {
     vi.mocked(authFetch).mockImplementation(() => reply({ code: 'REMOTE_CWD_FORBIDDEN', detail: 'A remote session cannot use /Users/x as its working directory' }, 400))
-    const err = await syncNow(cfg).catch((e) => e)
+    const err = await syncNow(connectionTarget(cfg)).catch((e) => e)
     expect(err.message).toBe(translateFor('zh', 'unitpage.remoteCwd'))
     expect(err.code).toBe('REMOTE_CWD_FORBIDDEN')
   })
@@ -134,5 +135,96 @@ describe('decideApproval 不再静默吞掉失败', () => {
     await useApp.getState().decideApproval('m', 'a1', 'approve')
     expect(toast).not.toHaveBeenCalled()
     expect(useApp.getState().messagesBySession.s[0].approvals?.[0].status).toBe('expired')
+  })
+})
+
+// ── P1-K3:受保护项只在本机批准 + 收起时「在哪答的」──────────────────────────────────────────────
+describe('P1-K3 ApprovalCard × localOnly / answeredBy', () => {
+  const UNIT = '6c1d7a4e-2b3f-4a5c-8d9e-0f1a2b3c4d5e'
+  const prot: ApprovalRequest = {
+    approvalId: 'p1', runId: 'r1', name: 'write_file', arguments: JSON.stringify({ path: '~/.forsion/config.json', content: '{}' }),
+    preview: '⚠ 受保护的配置 / 凭据 · write ~/.forsion/config.json', status: 'pending', reason: { kind: 'protected', mode: 'auto-edit' }, localOnly: true,
+  }
+  const renderReq = async (r: ApprovalRequest): Promise<void> => {
+    await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(ApprovalCard, { req: r, onDecide }) })))
+  }
+  const suffix = (): string | null => host.querySelector('[data-answered-by]')?.textContent ?? null
+
+  it('远端页 + localOnly:没有「批准 / 总允许」,写明只能在执行它的电脑上批准;「拒绝」照留且可用', async () => {
+    setRemote(true)
+    await renderReq(prot)
+    expect(buttons()).toEqual([translateFor('zh', 'approval.reject')])
+    expect(host.querySelector('[data-local-only]')?.textContent).toBe(translateFor('zh', 'approval.localOnly'))
+    expect(host.querySelector('[data-remote-readonly]')).toBeNull()
+    await act(async () => (host.querySelector('.approval-actions .btn.danger') as HTMLButtonElement).click())
+    expect(onDecide).toHaveBeenCalledWith('reject', undefined)
+  })
+
+  it('本机页 + localOnly:照常能批准(受保护项本就要在本机批),没有「总允许」(protected 不落总允许)', async () => {
+    setRemote(false)
+    await renderReq(prot)
+    expect(buttons()).toEqual([translateFor('zh', 'approval.approve'), translateFor('zh', 'approval.reject')])
+    expect(host.querySelector('[data-local-only]')).toBeNull()
+  })
+
+  it('收起后缀:已验证设备 → 名字 / 名字空 → 已登记设备;本机答 × 远端页 → 在执行的电脑上;通道;别的远端;本机页看本机答 → 不写', async () => {
+    const done = (by: ApprovalRequest['answeredBy'], id: string): ApprovalRequest => ({ ...req, approvalId: id, status: 'approved', answeredBy: by })
+    setRemote(false)
+    await renderReq(done({ via: 'tunnel', callerUnit: UNIT, callerName: 'Pixel 9' }, 's1'))
+    expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byDevice', { device: 'Pixel 9' })}`)
+    await renderReq(done({ via: 'tunnel', callerUnit: UNIT }, 's2'))
+    expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byRegisteredDevice')}`)
+    await renderReq(done({ via: 'channel' }, 's3'))
+    expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byChannel')}`)
+    await renderReq(done({ via: 'lan' }, 's4'))
+    expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byOther')}`)
+    await renderReq(done({ via: 'local' }, 's5'))
+    expect(suffix()).toBeNull()
+    await renderReq(done(undefined, 's6'))
+    expect(suffix()).toBeNull()
+    setRemote(true)
+    await renderReq(done({ via: 'local' }, 's7'))
+    expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byHost')}`)
+    // M1B:手机把整端切到那台电脑(焦点 = unit,带名册名)→ 写上电脑名
+    await act(async () => { useEngineFocus.setState({ ref: Object.freeze({ kind: 'unit' as const, unitId: UNIT }), name: 'K9 Studio Mac' }) })
+    try {
+      await renderReq(done({ via: 'local' }, 's8'))
+      expect(suffix()).toBe(` · ${translateFor('zh', 'approval.byHostNamed', { device: 'K9 Studio Mac' })}`)
+    } finally { await act(async () => { resetFocusForTests() }) }
+  })
+
+  it('本页就是答复方 → 不写后缀(自己点的不用告诉自己)', async () => {
+    setRemote(true)
+    const mine: ApprovalRequest = { ...req, approvalId: 'mine' }
+    await renderReq(mine)
+    await act(async () => (host.querySelector('.approval-actions .btn.primary') as HTMLButtonElement).click())
+    await renderReq({ ...mine, status: 'approved', answeredBy: { via: 'tunnel', callerUnit: UNIT, callerName: 'Pixel 9' } })
+    expect(suffix()).toBeNull()
+  })
+
+  it('新文案 zh / en 成对,英文不含汉字', () => {
+    for (const k of ['approval.localOnly', 'approval.localOnlyToast', 'approval.byHost', 'approval.byHostNamed', 'approval.byDevice', 'approval.byRegisteredDevice', 'approval.byOther', 'approval.byChannel']) {
+      expect(translateFor('zh', k), k).not.toBe(k)
+      const en = translateFor('en', k)
+      expect(en, k).not.toBe(k)
+      expect(/[一-龥]/.test(en), k).toBe(false)
+    }
+  })
+})
+
+describe('P1-K3 decideApproval × 403 APPROVAL_LOCAL_ONLY', () => {
+  const initial = useApp.getState()
+  afterEach(() => { useApp.setState(initial, true) })
+
+  it('→ toast「只能在执行它的电脑上批准」(不是「发送失败」),卡保持待批、还能拒绝', async () => {
+    const toast = vi.fn()
+    useApp.setState({
+      activeId: 's', cfg, toast, tr: (k: string) => k,
+      messagesBySession: { s: [{ id: 'm', role: 'assistant', content: '', timestamp: 1, status: 'streaming', approvals: [{ ...req, localOnly: true }] }] } as any,
+    })
+    vi.mocked(authFetch).mockImplementation(() => reply({ code: 'APPROVAL_LOCAL_ONLY', detail: 'This action touches protected configuration…' }, 403))
+    await expect(useApp.getState().decideApproval('m', 'a1', 'approve')).resolves.toBe(false)
+    expect(toast).toHaveBeenCalledWith('approval.localOnlyToast', true)
+    expect(useApp.getState().messagesBySession.s[0].approvals?.[0].status).toBe('pending')
   })
 })

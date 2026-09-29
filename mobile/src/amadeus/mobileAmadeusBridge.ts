@@ -20,6 +20,8 @@ import { VaultIndex } from './vaultIndex'
 import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
+import { translate } from '@/i18n'
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案与 web 桥共用一份(G2-14)
 
 const ROOT = '/vault' // 虚拟绝对根;实际落 Capacitor Data/vault/
 const LAST_PAGE_KEY = 'amadeus_last_page'
@@ -55,15 +57,26 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     void tail.then(() => { if (pathChains.get(key) === tail) pathChains.delete(key) })
     return run
   }
-  /** base 缺省 = 老语义(无条件写,返回 void)。文件不在 = 无冲突(同桌面)—— 除非 existingOnly(改名重写专用):
-   *  目标已不在 → 'gone',绝不把别处刚删 / 挪走的笔记按旧路径重建。 */
-  const writeText = (p: string, text: string, opts?: { base?: string; existingOnly?: boolean }): Promise<void | TextWriteResult | 'gone'> =>
+  /** base 缺省 = 老语义(无条件写,返回 void,可新建)。带 base 而文件已不在 → 不写、{ ok:false, current:null }(同桌面,
+   *  Codex 复核 inst P0-2:base 是读到过的那版,没了 = 写发出后被删 / 挪走,照写就重建幽灵文件);existingOnly(改名重写专用)
+   *  → 'gone'。 */
+  const writeText = (p: string, text: string, opts?: { base?: string; existingOnly?: boolean; create?: boolean }): Promise<void | TextWriteResult | 'gone'> =>
     withPathLock(p, async () => {
       await ensureVault()
+      if (opts?.create) {
+        // 仅新建(与桌面同契约,Codex 复核返修 P1-1,优先于 base):锁内判存在 —— 已存在 → 不写、交回现文;
+        // 此前 create 被忽略:带 base 的新建(birthNoteFile)撞上「不在 = 拒写」,不带 base 的(冲突副本)照写覆盖。
+        if (await vault.pathExists(p)) {
+          return { ok: false as const, current: await vault.readTextAbs(vault.absPath(p)).catch(() => null) }
+        }
+        await vault.writeTextFile(p, text)
+        return { ok: true as const }
+      }
       const base = typeof opts?.base === 'string' ? opts.base : null
       if (base != null || opts?.existingOnly) {
         const exists = await vault.pathExists(p)
         if (!exists && opts?.existingOnly) return 'gone' as const
+        if (!exists && base != null) return { ok: false as const, current: null }
         const cur = exists ? await vault.readTextAbs(vault.absPath(p)) : null
         if (base != null && cur != null && textFingerprint(cur) !== base) return { ok: false as const, current: cur }
       }
@@ -144,13 +157,13 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       const dir = path.dirname(oldPath)
       let base = newName.trim().replace(/[\\/]/g, '')
-      if (!base) throw new Error('页面名不能为空')
+      if (!base) throw new Error(translate('amxbridge.pageNameEmpty'))
       if (base.toLowerCase().endsWith('.md')) base = base.slice(0, -3)
       const newPath = dir === '.' ? `${base}.md` : `${dir}/${base}.md`
       if (newPath === oldPath) {
         return { newPath: oldPath, page: await loadPage(vault.pageIO(oldPath), oldPath, nowIso()) }
       }
-      if (await vault.pathExists(newPath)) throw new Error('目标页面已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.pageExists'))
       const pagesBefore = await vault.listPages() // 引用重写要的「操作前」快照,须在移动前取
       await savePage(vault.pageIO(oldPath), oldPath, manifest, { contents })
       await vault.moveEntry(oldPath, newPath)
@@ -177,7 +190,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
       if (newPath === pagePath) return pagePath
-      if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.fileExistsAtTarget'))
       const pagesBefore = newPath.endsWith('.md') ? await vault.listPages() : []
       await vault.moveEntry(pagePath, newPath)
       if (newPath.endsWith('.md')) {
@@ -191,22 +204,22 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     createFolder: async (parentFolder, name) => {
       await ensureVault()
       const clean = name.trim().replace(/[\\/]/g, '')
-      if (!clean) throw new Error('文件夹名不能为空')
+      if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parent = parentFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const rel = parent ? `${parent}/${clean}` : clean
-      if (await vault.pathExists(rel)) throw new Error('同名文件夹已存在')
+      if (await vault.pathExists(rel)) throw new Error(translate('amxbridge.folderExists'))
       await vault.makeDir(rel)
       return rel
     },
     renameFolder: async (folderPath, newName) => {
       await ensureVault()
       const clean = newName.trim().replace(/[\\/]/g, '')
-      if (!clean) throw new Error('文件夹名不能为空')
+      if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parentDir = path.dirname(folderPath)
       const parentRel = parentDir === '.' ? '' : parentDir
       const newPath = parentRel ? `${parentRel}/${clean}` : clean
       if (newPath === folderPath) return folderPath
-      if (await vault.pathExists(newPath)) throw new Error('同名文件夹已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.folderExists'))
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(folderPath, newPath)
       await index.build()
@@ -218,12 +231,12 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       const src = folderPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const name = src.split('/').pop()
-      if (!name) throw new Error('文件夹路径不能为空')
+      if (!name) throw new Error(translate('amxbridge.folderPathEmpty'))
       const dst = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
-      if (dst === src || dst.startsWith(`${src}/`)) throw new Error('不能移动到自身内部')
-      if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件夹')
+      if (dst === src || dst.startsWith(`${src}/`)) throw new Error(translate('amxbridge.moveIntoSelf'))
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.folderExistsAtTarget'))
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(src, newPath)
       await index.build()
@@ -303,7 +316,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       try { return await vault.readTextAbs(vault.absPath(p)) } catch { return null }
     },
     // 带 base = 比对交换写(与桌面 / web 同契约);编辑器保存与改名重写同走一把按路径的锁(见 writeText)。
-    writeTextFile: (p, text, opts) => writeText(p, text, { base: opts?.base }) as Promise<void | TextWriteResult>,
+    writeTextFile: (p, text, opts) => writeText(p, text, { base: opts?.base, create: opts?.create }) as Promise<void | TextWriteResult>,
 
     // ---- 回收站(.trash 语义在 vaultManager;desktop 同款 trash 后全量重建索引) ----
     trashEntry: async (rel) => { await ensureVault(); await vault.trashEntry(rel); await index.build() },
@@ -341,11 +354,11 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await ensureVault()
       const dir = path.dirname(oldPath)
       let base = newBaseName.trim().replace(/[\\/]/g, '')
-      if (!base) throw new Error('笔记名不能为空')
+      if (!base) throw new Error(translate('amxbridge.noteNameEmpty'))
       if (base.toLowerCase().endsWith('.md')) base = base.slice(0, -3)
       const newPath = dir === '.' ? `${base}.md` : `${dir}/${base}.md`
       if (newPath === oldPath) return oldPath
-      if (await vault.pathExists(newPath)) throw new Error('目标笔记已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.noteExists'))
       const pagesBefore = await vault.listPages()
       await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
       index.remove(oldPath)
@@ -359,11 +372,11 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       const oldRel = norm(oldPath)
       let base = newBaseName.trim().replace(/[\\/]/g, '')
       if (base.toLowerCase().endsWith('.db')) base = base.slice(0, -3)
-      if (!base) throw new Error('名称不能为空')
+      if (!base) throw new Error(translate('amxbridge.nameEmpty'))
       const dir = path.dirname(oldRel)
       const newPath = dir === '.' ? `${base}.db` : `${dir}/${base}.db`
       if (newPath === oldRel) return { newPath, rewrittenPages: [] }
-      if (await vault.pathExists(newPath)) throw new Error('目标文件已存在')
+      if (await vault.pathExists(newPath)) throw new Error(translate('amxbridge.fileExists'))
       await vault.moveEntry(oldRel, newPath)
       // title 同步:name = 新 basename。parseDb 失败(损坏文件)只移动不动内容。
       try {
@@ -417,6 +430,8 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
 
     // OS 集成 / 事件 —— 移动端 no-op(渲染层已 `?.` 兜底)。图片经原生 amadeus-asset 拦截,不走这里。
+    // 这三件 no-op 的入口一律不渲染(评审 G2-13:⋯ 菜单与附件卡上的死键),判据单源 amadeus/lib/hostCaps.ts。
+    hostCaps: { revealInFileManager: false, exportPdf: false, openAttachment: false },
     openAttachment: async () => { /* no-op(可后续接系统分享) */ },
     openVaultFile: async () => { /* no-op */ },
     exportPdf: async () => null,

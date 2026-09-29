@@ -14,7 +14,8 @@ import { deps } from '../seams/runtime.js';
 import { createRun } from '../services/runStore.js';
 import { abortRun, enqueueRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
-import { resolveApproval } from '../services/approvals.js';
+import { approvalLocalOnly, resolveApproval } from '../services/approvals.js';
+import { remoteLocked } from '../services/remoteLock.js'; // P1-K2
 import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
@@ -64,6 +65,17 @@ export function parseJson(v: any): any {
   try { return JSON.parse(v); } catch { return null; }
 }
 
+/** P1 · K3:受保护路径的审批只能在电脑上批准(方案 §6.3)。通道没有语言设置 → 双语同一条。 */
+/** P1-K2:锁定时通道的回执。通道没有语言设置(引擎无 locale)→ 双语同一条。 */
+export const REMOTE_LOCKED_CHANNEL_REPLY = '这台电脑已锁定远程访问，请在电脑上解锁后再试。\nRemote access to this computer is locked. Unlock it on the computer and try again.';
+const lockedNow = (): boolean => { try { return remoteLocked(); } catch { return true; } };
+
+const LOCAL_ONLY_EN = 'This touches protected configuration and can only be approved on the computer running it. Once you approve it there, the result will be sent here.';
+function localOnlyPrompt(preview: string): string {
+  return `⚠️ 这个操作涉及受保护的配置,只能在电脑上批准:\n${preview}\n\n在电脑上批准后,结果会发到这里;回复「拒绝」取消,或「停止」结束任务。\n\n${LOCAL_ONLY_EN} Reply "reject" to cancel or "stop" to end the task.`;
+}
+const LOCAL_ONLY_REFUSAL = `此操作涉及受保护的配置,只能在电脑上批准;在电脑上批准后,结果会发到这里。回复「拒绝」可取消。\n${LOCAL_ONLY_EN} Reply "reject" to cancel.`;
+
 export class ChannelService {
   readonly kind: ChannelKind;
   readonly driver: ChannelDriver;
@@ -71,11 +83,15 @@ export class ChannelService {
   private readonly hostClientTag?: string;
   private readonly activeRunsByPeer = new Map<string, string>();
   // 通道内审批:peer → 当前待批操作(收到 approval_request 时登记;用户回「批准/拒绝」时取用)。
-  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string }>();
+  /** approvalRunId = 审批条目所属的 run(团队成员的审批经团队 run 转发,payload.runId 是成员子 run);runId = 通道自己起的那条(等回复用)。 */
+  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string; approvalRunId?: string }>();
   // typing 指示:peer → 周期性重发「正在输入」的定时器(run 期间开启,出回复时关闭)。
   private readonly typingTimers = new Map<string, ReturnType<typeof setInterval>>();
   // 挂起的 waitForRunReply 强制结束器:stop()/服务重载时把所有等待中的回复 settle 掉,避免泄漏。
   private readonly pendingSettlers = new Set<() => void>();
+  // P1 · K3:受保护审批(只能在电脑上批)挂着时**不退订**的那次等待:run → 结束它的句柄。电脑上批准后 run 接着跑,结果照样经它送回通道。
+  // 通道自己兑现(批准 / 拒绝)、放弃(发新任务)、停止之前先撤它 —— 否则新起的等待与它各送一遍。
+  private readonly detachedWaits = new Map<string, () => void>();
 
   constructor(opts: ChannelServiceOpts) {
     this.kind = opts.kind;
@@ -92,6 +108,11 @@ export class ChannelService {
     return dir;
   }
   private peerKey(accountId: string, peerId: string): string { return `${accountId}:${peerId}`; }
+  /** 撤掉某条 run 仍挂着的受保护审批等待(见 detachedWaits);没有 = 空操作。 */
+  private releaseDetachedWait(runId: string | undefined): void {
+    const release = runId ? this.detachedWaits.get(runId) : undefined;
+    if (release) release();
+  }
 
   /** 结束所有挂起等待 + 定时器(通道停止/重载时)。 */
   releasePending(): void {
@@ -269,6 +290,7 @@ export class ChannelService {
     const activeRun = this.activeRunsByPeer.get(key);
     if (/^(stop|停止|取消|中止)$/i.test(text)) {
       if (activeRun) {
+        this.releaseDetachedWait(activeRun); // 下面这句就是回复;别让挂着的等待再补一条「任务已停止」
         abortRun(activeRun);
         this.activeRunsByPeer.delete(key);
         return '已停止当前 Tangu Agent 任务。';
@@ -276,17 +298,28 @@ export class ChannelService {
       return '当前没有正在运行的 Tangu Agent 任务。';
     }
 
+    // P1-K2(方案 §6.5):这台电脑急停后锁定了远程访问 → 通道只剩「停止」(上面,只会中止);批准 / 拒绝 / slash / 新任务一律回锁定提示,
+    // 不 resolveApproval、不 createRun。通道 run 没有远程污点(只有 input.source.channel),锁定判定只能在这里现查。读不出锁 = 锁定。
+    if (lockedNow()) return REMOTE_LOCKED_CHANNEL_REPLY;
+
     // 通道内审批:有待批操作时,「批准/拒绝」直接放行或取消(无需回桌面)。
     const pendingApproval = this.pendingApprovalByPeer.get(key);
     if (pendingApproval) {
       if (/^(批准|同意|确认|可以|好的?|是的?|yes|y|ok|approve|👍)$/i.test(text)) {
+        // P1 · K3(方案 §6.3):受保护路径(凭据 / ~/.forsion 配置)的审批只在执行设备本机批准。**不删**待批登记、不撤挂着的等待:
+        // 用户在通道里仍可回「拒绝」;在电脑上批准后,挂着的等待把结果送回通道。通道没有语言设置 → 双语同一条。
+        if (approvalLocalOnly(pendingApproval.approvalId, pendingApproval.approvalRunId ?? pendingApproval.runId) === true) {
+          return LOCAL_ONLY_REFUSAL;
+        }
         this.pendingApprovalByPeer.delete(key);
-        const ok = resolveApproval(pendingApproval.approvalId, { action: 'approve' });
+        this.releaseDetachedWait(pendingApproval.runId);
+        const ok = resolveApproval(pendingApproval.approvalId, { action: 'approve' }, undefined, { via: 'channel' });
         return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.peerId, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
       }
       if (/^(拒绝|不同意|不行|否|不|no|n|reject)$/i.test(text)) {
         this.pendingApprovalByPeer.delete(key);
-        const ok = resolveApproval(pendingApproval.approvalId, { action: 'reject' });
+        this.releaseDetachedWait(pendingApproval.runId); // 下面重新订阅拿回复;挂着的那次先撤,否则结果送两遍
+        const ok = resolveApproval(pendingApproval.approvalId, { action: 'reject' }, undefined, { via: 'channel' });
         return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.peerId, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
       }
     }
@@ -302,7 +335,11 @@ export class ChannelService {
 
     // 上一个待批操作未处理就发来新任务 → 视为放弃,拒绝旧审批,避免旧 run 永久挂起等审批。
     const stale = this.pendingApprovalByPeer.get(key);
-    if (stale) { resolveApproval(stale.approvalId, { action: 'reject' }); this.pendingApprovalByPeer.delete(key); }
+    if (stale) {
+      this.releaseDetachedWait(stale.runId); // 放弃的旧 run 之后的结果不再推给通道(与普通审批一致)
+      resolveApproval(stale.approvalId, { action: 'reject' }, undefined, { via: 'channel' });
+      this.pendingApprovalByPeer.delete(key);
+    }
 
     const runId = uuidv4();
     const assistantMessageId = uuidv4();
@@ -390,10 +427,13 @@ export class ChannelService {
         if (!settled) { settled = true; resolve(text); }
         else void this.driver.send(accountId, peerId, text);
       };
+      // 撤掉「受保护审批挂着」的这次等待(见 detachedWaits)。
+      const detach = (): void => close(false);
       // 结束本次等待:退订 + 停 typing;terminal 时清 peer 运行态。
       const close = (terminal: boolean): void => {
         if (closed) return;
         closed = true;
+        if (this.detachedWaits.get(runId) === detach) this.detachedWaits.delete(runId);
         clearTimeout(timer);
         unsubscribe?.();
         this.stopTyping(accountId, peerId, key);
@@ -402,7 +442,8 @@ export class ChannelService {
           // 只清「本 run」的登记:新消息可能已把 activeRunsByPeer 指向新 run,别把它误删——
           // 否则新 run 的分段循环会因 activeRunsByPeer 变 undefined 而中断(只发第一条)。
           if (this.activeRunsByPeer.get(key) === runId) this.activeRunsByPeer.delete(key);
-          this.pendingApprovalByPeer.delete(key);
+          // 同理只清本 run 的待批:电脑上批过受保护审批的旧 run 可能在新 run 等「批准」时才跑完(P1 · K3)
+          if (this.pendingApprovalByPeer.get(key)?.runId === runId) this.pendingApprovalByPeer.delete(key);
         }
       };
       // stop()/服务重载时强制结束挂起的等待。
@@ -417,9 +458,23 @@ export class ChannelService {
         if (ev.type === 'approval_request') {
           const approvalId = String(ev.payload?.approvalId || '');
           const preview = String(ev.payload?.preview || ev.payload?.name || '操作');
-          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview, agentSlug });
+          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview, agentSlug, approvalRunId: String(ev.payload?.runId || runId) });
+          if (ev.payload?.localOnly === true) {
+            // P1 · K3:受保护路径只能在电脑上批准 —— 不邀请「批准」;也**不退订**:电脑上批准后 run 接着跑,结果仍经这次等待送回通道
+            // (以前在这里退订 → 电脑上批了,通道这头永远收不到结果)。回「拒绝」/ 发新任务 / 「停止」会先撤掉它。
+            deliver(localOnlyPrompt(preview));
+            this.stopTyping(accountId, peerId, key);
+            this.detachedWaits.set(runId, detach);
+            return;
+          }
           deliver(`⚠️ 需要你批准这个操作:\n${preview}\n\n回复「批准」执行,「拒绝」取消,或「停止」结束任务。`);
           close(false); // 退订(用户回「批准」时会新建一次等待重新订阅);保留 run + 待批登记
+          return;
+        }
+        if (ev.type === 'approval_result') {
+          // 通道登记的那条在别处(电脑上)先被答了 → 撤登记:下一条消息别再按「放弃旧审批」去拒一个已兑现的 id、悄悄起新任务。
+          const pa = this.pendingApprovalByPeer.get(key);
+          if (pa && pa.approvalId === String(ev.payload?.approvalId || '')) this.pendingApprovalByPeer.delete(key);
           return;
         }
         if (ev.type === 'done') {

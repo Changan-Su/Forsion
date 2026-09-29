@@ -37,6 +37,7 @@ import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
 import { MobileUnitsSheet } from './UnitsSheet'
+import { homeTarget } from '@/services/engine/targets'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
 function useInboxAutoPull(): void {
@@ -44,7 +45,7 @@ function useInboxAutoPull(): void {
     const doPull = async () => {
       if (!window.tangu?.mobile || useApp.getState().connState !== 'ok') return
       try {
-        const r = await pullInbox(useApp.getState().cfg)
+        const r = await pullInbox(homeTarget())
         if (r.added) { void useInbox.getState().refreshList(); void useInbox.getState().refreshUnread() }
       } catch { /* 静默 */ }
     }
@@ -52,7 +53,10 @@ function useInboxAutoPull(): void {
     const timer = window.setInterval(doPull, 5 * 60_000)
     let prev = useApp.getState().connState
     const unsub = useApp.subscribe((s) => { if (s.connState === 'ok' && prev !== 'ok') void doPull(); prev = s.connState })
-    return () => { window.clearInterval(timer); unsub() }
+    // P1-K3:回到前台立即拉(电脑上的远程会话等你批准时投的提醒信,要一打开 App 就看得到,别等 5 分钟那一轮)
+    const onVisible = (): void => { if (!document.hidden) void doPull() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { window.clearInterval(timer); unsub(); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
 }
 

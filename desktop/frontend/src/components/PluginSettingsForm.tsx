@@ -11,6 +11,7 @@ import {
 } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { homeTarget } from '../services/engine/targets'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -36,14 +37,14 @@ export const PluginSettingsForm: React.FC<{
   const hasImageList = fields.some((f) => f.type === 'image-list')
 
   useEffect(() => {
-    void getPluginSettings(cfg, pluginId, scope).then(setValues).catch(() => setValues({}))
-    if (hasImageList) void listPluginFiles(cfg, pluginId, scope).then(setFiles).catch(() => setFiles([]))
+    void getPluginSettings(homeTarget(), pluginId, scope).then(setValues).catch(() => setValues({}))
+    if (hasImageList) void listPluginFiles(homeTarget(), pluginId, scope).then(setFiles).catch(() => setFiles([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pluginId, scope])
 
   const persist = async (next: Record<string, any>): Promise<void> => {
     setValues(next); setErr('')
-    try { await putPluginSettings(cfg, pluginId, scope, next); setSaved(true); setTimeout(() => setSaved(false), 1200) }
+    try { await putPluginSettings(homeTarget(), pluginId, scope, next); setSaved(true); setTimeout(() => setSaved(false), 1200) }
     catch (e: any) { setErr(e?.message || 'save failed') }
   }
   const setLocal = (key: string, v: any): void => setValues((p) => ({ ...p, [key]: v }))
@@ -57,19 +58,19 @@ export const PluginSettingsForm: React.FC<{
     if (!file.type.startsWith('image/')) { setErr(t('settings.plugins.onlyImage')); return }
     setBusy(true); setErr('')
     try {
-      await addPluginFile(cfg, pluginId, scope, file.name, await fileToBase64(file))
+      await addPluginFile(homeTarget(), pluginId, scope, file.name, await fileToBase64(file))
       const items = (Array.isArray(values[key]) ? values[key] : []).filter((it: any) => it.file !== file.name)
       await persist({ ...values, [key]: [...items, { file: file.name }] })
-      setFiles(await listPluginFiles(cfg, pluginId, scope))
+      setFiles(await listPluginFiles(homeTarget(), pluginId, scope))
     } catch (e: any) { setErr(e?.message || 'upload failed') }
     finally { setBusy(false) }
   }
   const onDelItem = async (key: string, name: string): Promise<void> => {
     if (!window.confirm(t('settings.plugins.deleteConfirm', { name }))) return
     try {
-      await deletePluginFile(cfg, pluginId, scope, name)
+      await deletePluginFile(homeTarget(), pluginId, scope, name)
       await persist({ ...values, [key]: (values[key] || []).filter((it: any) => it.file !== name) })
-      setFiles(await listPluginFiles(cfg, pluginId, scope))
+      setFiles(await listPluginFiles(homeTarget(), pluginId, scope))
     } catch (e: any) { setErr(e?.message || 'delete failed') }
   }
   const setItemField = (key: string, name: string, ikey: string, v: string): void =>

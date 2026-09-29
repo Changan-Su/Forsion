@@ -3,8 +3,12 @@
     <!-- enableOnBackInvokedCallback:Android 13+ 预测性返回。@capacitor/app 走 androidx
          OnBackPressedDispatcher(会自动桥接新 API),JS 侧 backButton 链不受影响;
          系统返回预览动画只出现在链底「挂起 app」那一档(MobileRoot.useAndroidBack)。 -->
+    <!-- P1-K8:手机作为 Unit 的身份条目(shared_prefs/forsion_unit.xml,Keystore 包裹)不进备份、不随设备迁移:
+         API ≤ 30 读 fullBackupContent,31+ 读 dataExtractionRules。钥匙本来也不随备份走,排除是为了不带走一份解不开的死条目。 -->
     <application
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

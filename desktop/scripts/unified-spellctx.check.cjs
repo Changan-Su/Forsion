@@ -90,7 +90,7 @@ async function groupS(ctx) {
     inlineCode: await spellOf(p, 'constt'),
     math: await spellOf(p, '$E=mc^2$'), // 公式源码那段(KaTeX 渲染件里的 annotation 也含 mc^2,带定界符才认得准)
     codeBlock: await spellOf(p, 'mispeled'),
-    title: await p.evaluate(() => document.querySelector('input.amx-title-input').spellcheck),
+    title: await p.evaluate(() => document.querySelector('.amx-title-input').spellcheck),
   }
   record('S1 缺省开:正文 / 标题查,代码块 / 行内代码 / 公式源码不查',
     s1.root === true && s1.para === true && s1.title === true && s1.inlineCode === false && s1.math === false && s1.codeBlock === false, JSON.stringify(s1))
@@ -103,7 +103,7 @@ async function groupS(ctx) {
   await wait(200)
   const off = {
     para: await spellOf(p, 'quikc'),
-    title: await p.evaluate(() => document.querySelector('input.amx-title-input').spellcheck),
+    title: await p.evaluate(() => document.querySelector('.amx-title-input').spellcheck),
   }
   await p.evaluate(() => window.__upage.setEditorMode('source'))
   await p.waitForSelector('textarea.amx-source', { timeout: 5000 })

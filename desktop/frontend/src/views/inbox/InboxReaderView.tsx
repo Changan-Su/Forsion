@@ -10,11 +10,16 @@ import { registerMessages, useI18n } from '../../i18n'
 import { formatDate, formatDateTime } from '../../format/time'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
+import { useHomeAgentAvatars, useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace, setActiveSpace } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
 import { FeedbackThread, feedbackThreadAvailable } from './FeedbackThread'
 import { inboxThreadOf } from './feedbackThreadLib'
+import { approvalThreadOf } from './approvalThreadLib'
+import { openSessionFromApproval } from '../../stores/attentionOpen'
+import { openRemoteSession } from '../../stores/deviceSessionsStore' // P1-K7a
+import { runLocationsAvailable } from '../../features/runtime'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
 import './inbox.css'
 
@@ -24,6 +29,9 @@ const ATTACH_ICONS: Record<string, string> = {
 }
 
 registerMessages({
+  // P1-K3:审批提醒信的「打开会话」
+  'inbox.approvalOpen': { zh: '打开会话', en: 'Open session' },
+  'inbox.approvalOpenFail': { zh: '这台设备现在连不上那台电脑', en: "Can't reach that computer right now" },
   'inbox.reader.unread': { zh: '{n} 封未读', en: '{n} unread' },
   'inbox.reader.readLatest': { zh: '阅读最新一封', en: 'Read latest' },
   'inbox.reader.caughtUp': { zh: '没有未读消息', en: "You're all caught up" },
@@ -65,8 +73,8 @@ function InboxReaderEmpty() {
 export function InboxReaderView() {
   const { t, locale } = useI18n()
   const { messages, archived, selectedId, markRead, markArchived, remove } = useInbox()
-  const agentDefs = useApp((s) => s.agentDefs)
-  const avatars = useApp((s) => s.agentAvatars)
+  const agentDefs = useHomeAgentDefs() // 收件箱是本端的(P1-K6:焦点在我的电脑时也按本端的 Agent)
+  const avatars = useHomeAgentAvatars()
   // 工作区里点开的可能是「已归档」文件夹里的一封 —— 两份都找。
   const msg = selectedId ? (messages.find((m) => m.id === selectedId) ?? archived.find((m) => m.id === selectedId)) : null
 
@@ -81,6 +89,16 @@ export function InboxReaderView() {
   const expired = !!expiresAt && expiresAt.getTime() <= Date.now()
   // 反馈线程:服务端投递的定向信(thread 判别列)+ 桌面壳有云端接缝才挂;Web / 移动端只看正文。
   const thread = feedbackThreadAvailable() ? inboxThreadOf(msg) : null
+  // P1-K3:电脑上的远程会话在等人 → 一键打开那条会话。
+  // P1-K7a(R-20):手机上按 (那台电脑, 会话 id) 打开 —— 设备分组里列着就注入,没列出来就经那台拉一次 /detail 再注入(openRemoteSession);
+  // 那个 id 其实是本端会话 / 这一端不能连别的电脑 → 退回本端已知会话的打开方式。
+  const approvalThread = approvalThreadOf(msg)
+  const openApprovalSession = async (): Promise<void> => {
+    if (!approvalThread) return
+    const opened = (runLocationsAvailable() && await openRemoteSession(approvalThread.unitId, approvalThread.sessionId))
+      || await openSessionFromApproval(approvalThread.sessionId)
+    if (!opened) useApp.getState().toast(t('inbox.approvalOpenFail'), true)
+  }
 
   /** 与发件 agent 开新聊天:切 Tangu Space + blankNewChat 等价序列(不 import bootstrapEngine 防环)+ 选中该 agent。 */
   const chatWithSender = () => {
@@ -149,6 +167,11 @@ export function InboxReaderView() {
           <InboxBody msg={msg} />
         </div>
         <InboxAttachments msg={msg} expired={expired} />
+        {approvalThread && !expired && (
+          <div className="ibx-approval-open">
+            <button type="button" className="btn primary sm" data-action="approval-open" onClick={() => { void openApprovalSession() }}>{t('inbox.approvalOpen')}</button>
+          </div>
+        )}
         {thread && <FeedbackThread key={thread.ticketId} ticketId={thread.ticketId} event={thread.event} />}
       </div>
     </div>

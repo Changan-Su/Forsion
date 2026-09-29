@@ -29,10 +29,14 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed } from './embedLayer'
 import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
-import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
+import { applyTypedTrigger, canAutoTriggerFromBlock, triggerAtCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 import { tableKeyPlugins } from './tableKeys'
+import { commandsCtx } from '@milkdown/kit/core'
+import { toggleInlineCodeCommand } from '@milkdown/kit/preset/commonmark'
 import { toggleTaskTr } from '../blocks/markdown/taskList'
+import { buildBlockString } from '../blocks/markdown/mathLivePreview'
+import { removeEmptyColumnTr } from './columns'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -47,6 +51,16 @@ export function isAtomBlock(node: ProseNode | null | undefined): boolean {
   if (!node) return false
   const n = node.type.name
   if (n === 'code_block' || n === 'hr' || n === 'horizontal_rule' || n === 'table') return true
+  return classifyEmbed(node) != null
+}
+
+/** 竖直方向键要**整块选中**而不是钻进去的块:分割线与嵌入段(K-09)。代码块、表格不在此列 ——
+ *  它们有可编辑的行/格,↑/↓ 交给浏览器原生纵向移动直接进首行/首格并保持列位置(Notion 同)。
+ *  退格/Delete 的「撞上只选中、不合并」仍按 isAtomBlock(含代码块/表格),两个谓词故意不同。 */
+function isArrowAtomBlock(node: ProseNode | null | undefined): boolean {
+  if (!node) return false
+  const n = node.type.name
+  if (n === 'hr' || n === 'horizontal_rule') return true
   return classifyEmbed(node) != null
 }
 
@@ -136,9 +150,9 @@ const enterOnBlockSelection: Command = (state, dispatch) => {
 const enterRunsTrigger: Command = (state, dispatch, view) => {
   const { $from, empty } = state.selection
   if (!empty || !view || !dispatch) return false
-  const trig = matchTrigger(textBeforeCursor($from))
+  const trig = triggerAtCursor($from)
   if (!trig || !canAutoTriggerFromBlock($from.parent.type.name, trig)) return false
-  return applyTrigger(view, trig, { from: $from.start(), to: $from.pos })
+  return applyTypedTrigger(view, trig) // 撤销一下回到字面触发符(K-21)
 }
 
 // 故意不接管「引用内回车 = 软换行」:AFFiNE 那样落到 md 是 `> a\\\n> b`(反斜杠续行),
@@ -235,14 +249,89 @@ const enterKeepIndent: Command = (state, dispatch) => {
   return true
 }
 
+/** 已勾选待办上回车:新项一律**未勾选**(K-07,Notion/Obsidian 同)。PM 的 splitListItem 行中拆分走
+ *  node.copy()、行尾拆分不传 itemAttrs 时也复制原项 —— 两条都会把 checked:true 带给新项。这里照常用它拆,
+ *  再把**空出来的那一项**改回未勾选;嵌套项同理(只看最内层)。空项回车仍由 enterEmptyListItem 脱出。
+ *  「空出来的那一项」通常是光标所在的新项;唯一例外是非空项的行首回车 —— 文字整条跟着光标下移,
+ *  上面留下的空项才是新的,已完成的那条内容不能因为多了一行就被翻回未完成。这一格直接在上方插一个
+ *  未勾选的空项(结果与 splitListItem 相同)。
+ *  ⚠️ 插完要把 DOM 选区原样重设一次:Chrome 在「光标所在节点之前插入兄弟节点」后,Selection 对象报告的
+ *  位置(仍在原文字行首)与真正插字的位置(上面那个新空项)分叉 —— 实测紧接着打的字落进上面的空项。
+ *  PM 自己对这类问题(源码注释 #710/#973)只在光标所在节点被改写时才强制重设,这一格漏了。 */
+const enterTaskItem: Command = (state, dispatch, view) => {
+  const { $from, empty } = state.selection
+  const li = listItemDepth($from)
+  if (li == null || $from.node(li).attrs.checked !== true) return false
+  const listItem = state.schema.nodes.list_item
+  if (!listItem) return false
+  if (empty && li === $from.depth - 1 && $from.index(li) === 0 && $from.parentOffset === 0 && $from.parent.content.size > 0) {
+    const fresh = listItem.createAndFill({ ...$from.node(li).attrs, checked: false })
+    if (!fresh) return false
+    if (!dispatch) return true
+    dispatch(state.tr.insert($from.before(li), fresh).scrollIntoView())
+    const sel = view ? (view.root as Document).getSelection?.() : null
+    if (sel && sel.rangeCount) {
+      const range = sel.getRangeAt(0)
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }
+    return true
+  }
+  if (!dispatch) return splitListItem(listItem)(state)
+  let out: Transaction | null = null
+  if (!splitListItem(listItem)(state, (t) => { out = t })) return false
+  const tr = out as Transaction | null
+  if (!tr) return false
+  const $n = tr.selection.$from
+  const nli = listItemDepth($n)
+  if (nli != null && $n.node(nli).attrs.checked === true) {
+    tr.setNodeMarkup($n.before(nli), undefined, { ...$n.node(nli).attrs, checked: false })
+  }
+  dispatch(tr)
+  return true
+}
+
+/** 块公式 `$$…$$` 里按回车 / Shift+回车 = 公式内换行(R-17)。公式在文档里是段落纯文本,实况预览只在**一个文本块内**
+ *  配对 `$$`:回车拆段 = 公式被劈成两半、不再渲染(磁盘上原有的多行公式在行末回车也一样);Shift+回车给的是硬换行,
+ *  落盘成 `\` + 换行,混进 LaTeX 成了控制符。这里插 isInline 的 hardbreak —— 与 remark-line-break 读回来的软换行同形,
+ *  落盘就是裸换行,重开照样是同一段里的多行公式。
+ *  配对口径与 scanMath 的块级分支一致(`$$$` 不起手、代码文本已抹空),只是**空骨架 `$$  $$` 也算** —— `/math`、`$$`+空格
+ *  刚插出来的就是它,第一下回车就得是换行。未闭合的 `$$` 不算(还在打字,回车照常拆段)。 */
+const displayMathSpans = (s: string): Array<[number, number]> => {
+  const out: Array<[number, number]> = []
+  for (let i = 0; ;) {
+    const o = s.indexOf('$$', i)
+    if (o < 0) break
+    if (s[o + 2] === '$') { i = o + 3; continue }
+    const c = s.indexOf('$$', o + 2)
+    if (c < 0) break
+    out.push([o, c + 2])
+    i = c + 2
+  }
+  return out
+}
+const enterInDisplayMath: Command = (state, dispatch) => {
+  const { $from, $to } = state.selection
+  if (!$from.sameParent($to) || !$from.parent.isTextblock || $from.parent.type.spec.code) return false
+  const br = state.schema.nodes.hardbreak
+  if (!br || !$from.parent.textContent.includes('$$')) return false
+  const a = $from.parentOffset
+  const b = $to.parentOffset
+  if (!displayMathSpans(buildBlockString($from.parent)).some(([o, c]) => a >= o + 2 && b <= c - 2)) return false
+  dispatch?.(state.tr.replaceSelectionWith(br.create({ isInline: true }), false).scrollIntoView())
+  return true
+}
+
 const enterCmd: Command = chain(
   enterFoldedHeading,
   enterHeadingToParagraph,
   enterOnBlockSelection,
+  enterInDisplayMath,
   enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
   enterEmptyListItem,
   enterFoldedListItem,
   enterSplitIntoChild,
+  enterTaskItem,
   enterKeepIndent,
 )
 
@@ -372,7 +461,18 @@ const bsOutdentParagraph: Command = (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
+/** 已经空了的列里再按退格 / Delete = 删掉这一列(B-08,Notion 同:空列没内容就收起)。此前两颗键都无效,
+ *  ⠿「删除」又会补出一个空段 —— 空列没有任何删除办法。锚转惰性标记、不足两列解散,见 removeEmptyColumnTr。 */
+const deleteEmptyColumn = (dir: -1 | 1): Command => (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.depth < 2 || $from.node(-1).type.name !== 'amadeusColumnCell') return false
+  const tr = removeEmptyColumnTr(state, $from.before(-1), dir)
+  if (!tr) return false
+  dispatch?.(tr)
+  return true
+}
+
+const backspaceCmd: Command = chain(deleteEmptyColumn(-1), bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
@@ -426,9 +526,61 @@ const deleteSelectNextAtom: Command = (state, dispatch) => {
   return true
 }
 
+/** 块尾 Delete:把**下一个文本块的文字**接到本块末尾,被掏空的列表项/引用随之消失(K-22,Notion 同)。
+ *  base 的 joinForward 遇到「下一块在列表/引用里」只会 lift 或 wrap:段尾 Delete 撞列表只把首项拆壳、
+ *  列表末项尾 Delete 把下面的段落包成新列表项 —— 与反方向「退格一次就并对」不对称。
+ *  只接管跨容器的那几种;同层相邻兄弟(段↔段、段↔标题)base 本来就并对,原样交回。
+ *  下一块是 callout 标题 → 整块选中(与撞上代码块同一口径),不把 `[!note]` 令牌拉成正文;
+ *  中间夹着分割线等叶子、代码块、表格、折叠藏起来的块 → 交回原路。 */
+const CALLOUT_HEAD = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09)
+const deleteJoinNextText: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false
+  if ($from.parent.type.name === 'code_block' || $from.depth < 1) return false
+  const inTable = ($p: ResolvedPos): boolean => {
+    for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.name === 'table') return true
+    return false
+  }
+  if (inTable($from)) return false
+  const after = $from.after()
+  const next = Selection.findFrom(state.doc.resolve(after), 1, true)
+  if (!(next instanceof TextSelection)) return false
+  const $n = next.$from
+  if ($n.parentOffset !== 0 || !$n.parent.isTextblock || $n.parent.type.name === 'code_block' || inTable($n)) return false
+  if ($n.depth === $from.depth && $n.before() === after) return false // 同层相邻兄弟:base 的 joinForward 就对
+  if (hiddenAt(state, $n.pos)) return false
+  // 不跨隔离边界(分栏的列、画布卡):列里最后一段按 Delete 会把行后的正文拽进列里(B-08 探针实测)。
+  // 列是 isolating —— 退格本来就不跨,Delete 同一口径;表格单元格上面已单独挡过。
+  const isolated = ($p: ResolvedPos): number => {
+    for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.spec.isolating) return $p.before(d)
+    return -1
+  }
+  if (isolated($from) !== isolated($n)) return false
+  let blocked = false
+  state.doc.nodesBetween(after, $n.before(), (node, pos) => {
+    if (pos >= after && pos + node.nodeSize <= $n.before() && (node.isLeaf || node.isTextblock)) blocked = true
+    return !blocked
+  })
+  if (blocked) return false
+  const bq = $n.depth >= 2 && $n.node(-1).type.name === 'blockquote' && $n.index(-1) === 0 ? $n.before(-1) : null
+  if (bq != null && CALLOUT_HEAD.test($n.parent.textContent)) {
+    const node = state.doc.nodeAt(bq)
+    if (!node || !NodeSelection.isSelectable(node)) return false
+    dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, bq)).scrollIntoView())
+    return true
+  }
+  const joined = $from.parent.textContent + $n.parent.textContent
+  const tr = state.tr.delete($from.pos, $n.pos)
+  // 不盲信 Fitter:合并后光标所在块的文字必须恰好是「本块 + 下一块」,否则交回原路。
+  const $j = tr.doc.resolve(tr.mapping.map($from.pos))
+  if (!$j.parent.isTextblock || $j.parent.textContent !== joined || tr.doc.textContent !== state.doc.textContent) return false
+  dispatch?.(tr.setSelection(TextSelection.create(tr.doc, $j.pos)).scrollIntoView())
+  return true
+}
+
 // ── 方向键 ───────────────────────────────────────────────────────────────────
 
-/** 竖直方向键撞上整块型 → 变成块选中,而不是钻进它的隐藏源码(嵌入段)或停在没有行盒的地方。 */
+/** 竖直方向键撞上分割线/嵌入 → 变成块选中,而不是钻进它的隐藏源码(嵌入段)或停在没有行盒的地方。 */
 function arrowToAtom(dir: 'up' | 'down'): Command {
   return (state, dispatch, view) => {
     const sel = state.selection
@@ -439,7 +591,7 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
     if (d < 1) return false
     const at = dir === 'down' ? $from.after(d) : $from.before(d)
     const target = dir === 'down' ? state.doc.resolve(at).nodeAfter : state.doc.resolve(at).nodeBefore
-    if (!isAtomBlock(target) || !target) return false
+    if (!isArrowAtomBlock(target) || !target) return false
     const pos = dir === 'down' ? at : at - target.nodeSize
     const atomNode = state.doc.nodeAt(pos)
     if (!atomNode || !NodeSelection.isSelectable(atomNode)) return false
@@ -449,15 +601,72 @@ function arrowToAtom(dir: 'up' | 'down'): Command {
   }
 }
 
+/** 代码块是所在容器的最后一块(典型:文末的代码块)时,在最后一行按 ↓ / 在块尾按 → = 在它后面新起一段(R-27,
+ *  TipTap exitOnArrowDown 同款)。此前后面没有块可去,只有 Mod+Enter 能出去 —— 连按回车只会在代码里加空行。
+ *  后面还有块时不接管,交回原生纵向移动(进下一块)。 */
+function codeExit(dir: 'down' | 'right'): Command {
+  return (state, dispatch, view) => {
+    const { $from, empty } = state.selection
+    if (!empty || $from.parent.type.name !== 'code_block' || $from.depth < 1) return false
+    // 只认 PM 与 DOM 选区一致的时刻:紧挨着上一下原生移动(← / ↑)按下时,selectionchange 还没到,state 还停在旧位置 ——
+    // 这时按它判「在块尾」会凭空新起一段(与 codeExit.ts 的 I-11 同一类竞态)。不一致就交回原生。
+    const dom = view ? (view.root as Document).getSelection?.() : null
+    if (view && dom?.anchorNode && view.dom.contains(dom.anchorNode)) {
+      try { if (view.posAtDOM(dom.anchorNode, dom.anchorOffset) !== $from.pos) return false } catch { return false }
+    }
+    if (dir === 'down' ? !view?.endOfTextblock('down') : $from.parentOffset !== $from.parent.content.size) return false
+    const container = $from.node(-1)
+    if ($from.index(-1) !== container.childCount - 1) return false
+    const paragraph = state.schema.nodes.paragraph
+    const after = $from.after()
+    if (!paragraph || !container.canReplaceWith($from.index(-1) + 1, $from.index(-1) + 1, paragraph)) return false
+    if (!dispatch) return true
+    const tr = state.tr.insert(after, paragraph.create())
+    dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView())
+    return true
+  }
+}
+
+/** 代码块里 Shift+回车 = 换行(与回车相同;此前是空操作 —— 硬换行进不了代码块)。 */
+const codeShiftEnter: Command = (state, dispatch) => {
+  if (state.selection.$from.parent.type.name !== 'code_block') return false
+  dispatch?.(state.tr.insertText('\n').scrollIntoView())
+  return true
+}
+
+/** mac 的 ⌘↑ / ⌘↓ = 到文首 / 文末(评审 K-16)。浏览器原生做法在两种首尾块上原地不动:代码块首子节点是
+ *  contenteditable=false 的工具条、嵌入段首子节点是 widget。只接这两种 —— 嵌入是整块型,NodeSelection 选中它
+ *  (与 ↑/↓ 撞上嵌入同口径);代码块有可编辑的行,光标进块首 / 块尾。其余首尾块(段落 / 分割线 / 表格)原生都到得了,
+ *  照旧放行。只在 mac 挂(见 keyboardPlugins):别的平台 Ctrl+↑ 是按段落跳,不能吞。 */
+function docEdge(dir: 'up' | 'down'): Command {
+  return (state, dispatch) => {
+    const doc = state.doc
+    const edge = dir === 'up' ? doc.firstChild : doc.lastChild
+    if (!edge) return false
+    const pos = dir === 'up' ? 0 : doc.content.size - edge.nodeSize
+    if (classifyEmbed(edge) != null) {
+      if (!NodeSelection.isSelectable(edge) || hiddenAt(state, pos)) return false
+      dispatch?.(state.tr.setSelection(NodeSelection.create(doc, pos)).scrollIntoView())
+      return true
+    }
+    if (edge.type.name === 'code_block') {
+      dispatch?.(state.tr.setSelection(TextSelection.create(doc, dir === 'up' ? pos + 1 : pos + edge.nodeSize - 1)).scrollIntoView())
+      return true
+    }
+    return false
+  }
+}
+
 /** 有选区时按成对符号 = **包裹**选中文字而不是替换掉它(AFFiNE 的 PAIRS 同款)。
- *  反引号直接套行内代码(md 里 `x` 就是行内代码,不必再走 mark);其余按字面成对包。
- *  包完保持选中,可以继续再包一层。没有选区时一律放行 —— 正常打字不受影响。 */
+ *  反引号 = 行内代码(I-09 / K-18b):与 ⌘E、工具栏 </> 走**同一条** toggleInlineCode 命令。
+ *  ⚠️ 别改回按字面插两个反引号 —— 字面 `x` 在编辑器里只是文字,落盘被转义成 \`x\`,永远成不了代码。
+ *  其余按字面成对包。包完保持选中,可以继续再包一层。没有选区时一律放行 —— 正常打字不受影响。 */
 const PAIRS: Record<string, string> = {
   '(': ')', '[': ']', '{': '}', '<': '>', '"': '"', "'": "'", '`': '`',
   '（': '）', '【': '】', '「': '」', '《': '》', '“': '”', '‘': '’',
 }
 const wrapSelectionPlugin = $prose(
-  () =>
+  (ctx) =>
     new Plugin({
       props: {
         handleTextInput: (view, from, to, text) => {
@@ -467,6 +676,7 @@ const wrapSelectionPlugin = $prose(
           if (!(sel instanceof TextSelection) || sel.empty) return false
           if (!sel.$from.sameParent(sel.$to)) return false // 跨块选区不包(会拆坏结构)
           if (sel.$from.parent.type.name === 'code_block') return false // 代码块里符号就是符号
+          if (text === '`' && view.state.schema.marks.inlineCode) return ctx.get(commandsCtx).call(toggleInlineCodeCommand.key)
           const tr = view.state.tr.insertText(close, to).insertText(text, from)
           tr.setSelection(TextSelection.create(tr.doc, from + 1, to + 1))
           view.dispatch(tr.scrollIntoView())
@@ -478,7 +688,7 @@ const wrapSelectionPlugin = $prose(
 
 // ── 整块选中时打字(K-02)────────────────────────────────────────────────────────
 
-/** 块选中(NodeSelection:↓/↑ 撞上代码块/表格/嵌入、Esc 选块、文末 `---` 生成的 hr)时,打出来的
+/** 块选中(NodeSelection:退格/Delete 撞上代码块/表格、↓/↑ 撞上嵌入/分割线、Esc 选块、文末 `---` 生成的 hr)时,打出来的
  *  字该落在哪。PM 的默认是「用输入替换选区」—— 整块被一个字替换并落盘,输入法组字开头的
  *  deleteSelection 同样删块。块选中是「看着这个块」,不是「要换掉它」(Notion 同):
  *   · 代码块 → 进块尾;表格 → 进首格(末尾);
@@ -556,15 +766,21 @@ export const keyboardPlugins: MilkdownPlugin[] = [
   $prose(() =>
     keymap({
       Enter: enterCmd,
+      // 标题里的 Shift+Enter 同回车(K-19):ATX 标题容不下换行,放行硬换行 = H3 及以下落盘成 `### 甲 乙`、所见非所存。
+      // 不在标题里返回 false,照旧交给 preset 的硬换行(段内换行);表格格内的 Shift+Enter 由排在前面的 tableKeyPlugins 先接。
+      // 代码块里 = 代码内换行(R-27);块公式 `$$…$$` 里 = 公式内软换行(R-17);其余仍交回 preset 的硬换行。
+      'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath),
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
-      Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom),
+      Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText),
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
-      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom) } : {}),
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteSelectNextAtom, deleteJoinNextText) } : {}),
       ArrowUp: arrowToAtom('up'),
-      ArrowDown: arrowToAtom('down'),
+      ArrowDown: chain(codeExit('down'), arrowToAtom('down')),
+      ArrowRight: codeExit('right'),
+      ...(IS_MAC ? { 'Meta-ArrowUp': docEdge('up'), 'Meta-ArrowDown': docEdge('down') } : {}),
     }),
   ),
 ].flat()

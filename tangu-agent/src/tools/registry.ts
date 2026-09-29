@@ -11,6 +11,7 @@ import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
 import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
+import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
 import { webSearchProvider } from './builtin/webSearch.js';
@@ -221,7 +222,8 @@ function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext,
   if (ctx.execMode !== 'host' || !AGENT_EDIT_TOOLS.has(name)) return;
   if (result.startsWith('Error')) return;
   const f = String(args.path || args.file_path || '').trim();
-  appendActivityLine('agent.edit', { tool: name, agent: ctx.agentSlug, f: f || undefined, o: ctx.automationOrigin || undefined });
+  // 远程污点 run 的行带 remote=1(路径是远端给的串):Muse 活动尾部 / read_activity 缺省不给(P1 · M1A,见 userActivity.isRemoteActivityLine)
+  appendActivityLine('agent.edit', { tool: name, agent: ctx.agentSlug, f: f || undefined, o: ctx.automationOrigin || undefined, remote: effectiveRemote(ctx) ? 1 : undefined });
 }
 
 // CODING_PRESET_DEFERRED / isDeferredIn 已迁 toolRegistry.ts(load_tools 也要用同一判定,留在

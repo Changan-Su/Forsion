@@ -7,6 +7,11 @@ import { protectedHostPaths, protectedAncestors, canonicalFuturePath } from './h
 import type { ToolContext } from '../tools/toolTypes.js';
 import { writableRoots } from '../tools/fsPolicy.js';
 import { toolSubprocessEnv } from './credentialEnv.js';
+import { effectiveRemote } from '../services/remoteOrigin.js';
+import { remoteShellProfile, RemoteShellProtectionError } from './remoteShellSeatbelt.js';
+
+/** 起进程时要看的 ctx 字段:工作区 / 宿主沙箱策略,加远程污点(起跑时的 remote 或中途被 steer 染上的,按 runId 现查)。 */
+type HostExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'remote' | 'runId' | 'writeProtectShell'>;
 
 export interface HostSandboxConfig {
   mode: 'off' | 'workspace-write' | 'read-only';
@@ -95,11 +100,37 @@ function localWritableRoots(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostS
   const configured = process.platform === 'linux' ? [cwd, ...(ctx.extraRoots || [])] : writableRoots(ctx as ToolContext);
   return [...new Set(configured.filter(existsSync).map(canonical))].sort((a, b) => a.length - b.length);
 }
+/**
+ * P1 · G5 方案 A:宿主沙箱关 + macOS + 远程污点(含起跑后被远端 steer 染上的,每条命令现查)→ 套远程 shell 写拒绝 profile。
+ * 本机 run、宿主沙箱开(沿用它自己的 profile)、Linux / Windows(方案 C,设置页与 CHANGELOG 如实写明)都不走这里。
+ */
+export function remoteShellSeatbeltApplies(ctx: HostExecContext | undefined, platform = process.platform): boolean {
+  return platform === 'darwin' && !!ctx && normalizeHostSandbox(ctx.hostSandbox).mode === 'off' && !!effectiveRemote(ctx);
+}
+/**
+ * 起进程时套不套写拒绝 profile:远程污点(上面那条),或 P1 · G5 方案 B 的 writeProtectShell —— 引擎自己的 git 与按 known-safe
+ * 免审批放行的 git 读命令,本机 run 也套(仓库里被远程命令摆下的 filter / fsmonitor / 钩子由它们以用户身份执行)。
+ * 只 macOS + 宿主沙箱关;宿主沙箱开时沿用那一档自己的 profile。remoteShellSeatbeltApplies 仍只管「远程」那一半
+ * (后台进程 stdin 闸、写保护失败提示的文案都是远程专属)。
+ */
+export function shellWriteProtectApplies(ctx: HostExecContext | undefined, platform = process.platform): boolean {
+  return platform === 'darwin' && !!ctx && normalizeHostSandbox(ctx.hostSandbox).mode === 'off' && (!!ctx.writeProtectShell || !!effectiveRemote(ctx));
+}
+/** 写保护包装。sandbox-exec 缺失 / 名单渲染失败 → 抛 RemoteShellProtectionError,**绝不**退回不包的命令。
+ *  sandbox_apply 在子进程里失败(引擎自己跑在别的沙箱里)时 sandbox-exec 不 exec 目标命令、以 71 退出 —— 同样不会裸跑。 */
+function remoteSeatbeltCommand(cwd: string, argv: string[], local: boolean): PreparedHostCommand {
+  const backend = hostSandboxBackend('darwin');
+  if (!backend.available || !backend.executable) throw new RemoteShellProtectionError(backend.reason || 'sandbox-exec is unavailable', local);
+  const profile = remoteShellProfile(local);
+  // 环境与本机 run 相同(toolSubprocessEnv:只剥引擎凭据),不换成沙箱开时的白名单 —— 这一层只管写。
+  return { file: backend.executable, args: ['-p', profile, '--', ...argv], options: { cwd, env: toolSubprocessEnv(), detached: true }, cleanup() {} };
+}
 /** Prepare a process launch. Restricted modes never fall back to an unrestricted command. */
-export function prepareHostCommand(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox'>, argv: string[]): PreparedHostCommand {
+export function prepareHostCommand(ctx: HostExecContext, argv: string[]): PreparedHostCommand {
   if (!argv.length || argv.some((a) => typeof a !== 'string' || a.includes('\0'))) throw new Error('Invalid command argv');
   const config = normalizeHostSandbox(ctx.hostSandbox);
   const cwd = path.resolve(ctx.cwd || process.cwd());
+  if (config.mode === 'off' && shellWriteProtectApplies(ctx)) return remoteSeatbeltCommand(cwd, argv, !effectiveRemote(ctx));
   // 沙箱关:照旧继承环境,但剥掉引擎凭据(C2 —— verifyCommand / runGit / 沙箱辅助进程都走这里);沙箱开:safeEnvironment 本就只留白名单。
   if (config.mode === 'off') return { file: argv[0], args: argv.slice(1), options: { cwd, env: toolSubprocessEnv(), detached: process.platform !== 'win32' }, cleanup() {} };
   const backend = hostSandboxBackend();
@@ -135,7 +166,7 @@ function bubblewrapArgs(roots: string[], scratch: string, cwd: string, network: 
   args.push('--chdir', cwd, '--', ...argv);
   return args;
 }
-export function spawnHostCommand(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox'>, argv: string[], options: SpawnOptions = {}): ChildProcess {
+export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: SpawnOptions = {}): ChildProcess {
   const command = prepareHostCommand(ctx, argv);
   try {
     const child = spawn(command.file, command.args, { ...options, ...command.options });
@@ -145,8 +176,9 @@ export function spawnHostCommand(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | '
   } catch (e) { command.cleanup(); throw e; }
 }
 
-/** Preserve Node's platform-specific shell quoting in compatibility mode. */
-export function spawnHostShell(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox'>, command: string): ChildProcess {
-  if (!hostSandboxEnabled(ctx)) return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: true, env: toolSubprocessEnv() });
+/** Preserve Node's platform-specific shell quoting in compatibility mode.
+ *  远程写保护那条路(macOS)同样是 `/bin/sh -c command` —— 与 Node 在 darwin 上 shell:true 的展开一致,只是外面多一层 sandbox-exec。 */
+export function spawnHostShell(ctx: HostExecContext, command: string): ChildProcess {
+  if (!hostSandboxEnabled(ctx) && !shellWriteProtectApplies(ctx)) return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: true, env: toolSubprocessEnv() });
   return spawnHostCommand(ctx, ['/bin/sh', '-c', command]);
 }

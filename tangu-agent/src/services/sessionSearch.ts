@@ -147,6 +147,9 @@ export interface SessionSearchInput {
   /** Runtime-only(与 toolScope 同为可信调用方字段,模型实参给不了):有任一消息调过此工具的会话整段排除。
    *  read_computer_history 过不了门禁的 run(关掉 / 通道 / 远程 / 团队…)用它藏起复述过电脑历史的会话,见 computerHistoryRecallHide。 */
   excludeSessionsWithTool?: string;
+  /** Runtime-only(可信调用方字段):远端驱动过的会话(remoteTaint.notRemoteTaintedSql)整段排除 —— 本机无污点 run 的自动召回、
+   *  Muse / 无人值守 / 通道 run 的检索工具据此不吃远端原话(P1 · M1A,G7)。 */
+  excludeRemoteSessions?: boolean;
   /** Trusted caller may choose smaller automatic-recall windows; never increases hard caps. */
   candidateLimit?: number;
   messagesPerSession?: number;
@@ -170,6 +173,8 @@ export interface SessionTranscriptInput {
   beforeMessageId?: string;
   /** 同 SessionSearchInput.excludeSessionsWithTool:调过此工具的会话按「范围内无此会话」处理。 */
   excludeSessionsWithTool?: string;
+  /** 同 SessionSearchInput.excludeRemoteSessions:远端驱动过的会话按「范围内无此会话」处理。 */
+  excludeRemoteSessions?: boolean;
   signal?: AbortSignal;
 }
 export interface SessionTranscriptRow {

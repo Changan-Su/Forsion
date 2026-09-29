@@ -17,6 +17,7 @@ import { pageKey, resolvePageName } from '@amadeus-shared/links'
 import { parseBlockSubpath, parsePdfLinkInner, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { amadeus } from '../api'
 import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../lib/fd'
 import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
@@ -35,6 +36,8 @@ registerMessages({
   'pagestore.error.fdExistsAtDest': { zh: '目标位置已存在同名 .fd 文件夹', en: 'A .fd folder with the same name already exists at the destination' },
   'pagestore.error.fdMoveFailed': { zh: '子页面文件夹未跟随移动：{err}', en: "The subpage folder didn't move along with the note: {err}" },
   'pagestore.notify.movedToTrash': { zh: '已移入回收站', en: 'Moved to trash' },
+  'pagestore.birth.failed': { zh: '没能新建「{name}」：{reason}', en: 'Couldn’t create "{name}": {reason}' },
+  'pagestore.birth.unknown': { zh: '文件没有建成', en: 'the file wasn’t created' },
   'pagestore.confirm.deleteEmbeddedBlock': {
     zh: '有 {n} 处笔记嵌入了这个块，删除后那些嵌入会显示「丢失」。仍要删除？',
     en: 'This block is embedded in {n} place(s). Those embeds will show as missing once it is deleted. Delete anyway?',
@@ -294,8 +297,10 @@ interface PageState {
   /** 打开某路径的笔记;不存在则先创建(日记等「打开或新建」语义)。 */
   openOrCreate(path: string): Promise<void>
   renamePage(newName: string): Promise<boolean>
-  /** Open the page named by a [[wikilink]];未解析 → 记入 pendingWikiCreate 询问,不再静默创建。 */
-  openWikiLink(name: string, sourcePath?: string): void
+  /** Open the page named by a [[wikilink]];未解析 → 记入 pendingWikiCreate 询问,不再静默创建。
+   *  opts.newTab(⌘/Ctrl+点击、中键,L-11):命中的**笔记**(含 `笔记#锚点`)在新标签页打开;其余目标(PDF / 多维表 /
+   *  附件 / 外链 / 未解析)照原路径开,newTab 不适用。 */
+  openWikiLink(name: string, sourcePath?: string, opts?: { newTab?: boolean }): void
   /** 未解析 [[链接]] 点击后的待确认创建请求(确认框据此渲染)。 */
   pendingWikiCreate: { name: string; sourcePath: string | null } | null
   /** 确认创建:裸名 → 源笔记 .fd 子笔记;带路径 → 按链接写明的精确路径;无源 → vault 根。 */
@@ -303,6 +308,9 @@ interface PageState {
   cancelWikiCreate(): void
   /** 显式创建意图(QuickSwitcher 新建):vault 根、不询问(= 历史 openWikiLink 的创建分支)。 */
   createWikiPage(name: string): Promise<void>
+  /** 新建笔记的统一出生 + 打开(评审 G4-12):素文件出生(已存在则不写、只打开)→ 刷新结构 →
+   *  新建才发标题聚焦 → 宿主 openNote 门面导航(无人接管才就地 loadPage)。 */
+  birthAndOpen(path: string): Promise<void>
   /** 在 parentPath 的 .fd 里建子笔记(名字对全库 pageKey 与 .fd 内文件双重去重,同步父 children),
    *  返回新 vault 相对路径;不导航。「在笔记内创建文件」的统一落点。 */
   createChildNote(parentPath: string, name: string): Promise<string>
@@ -699,12 +707,17 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // v4(2026-08-13):新建笔记以**素文件**出生(空纯 md,零 frontmatter 零标记)——
       // amadeusViews 的绞杀者路由把它送进统一实例编辑器,不再用 newPage 造 v3(amadeus_page+标记)。
       // 素文件对旧端=外来 md(照常可编辑,混装矩阵见 spec §5.2),不受「手机闸」限制。
-      await amadeus.writeTextFile(path, '', { create: true })
-      track('note.create'); act('note.create', { f: path })
-      await get().refreshPages()
+      // 出生 + 打开统一走 birthAndOpen(评审 G4-12:其余新建入口此前各自调 newPage 造 v3、绕开门面)。
+      await get().birthAndOpen(path)
+    },
+
+    async birthAndOpen(path) {
+      const r = await birthNoteFile(path)
+      await get().refreshStructure()
+      if (r === 'failed') return // 没建成(已提示):绝不导航到一篇不存在的笔记
       // 聚焦请求必须先于导航:后设时 UnifiedPage 已经挂载并跑完一次性消费 effect,
-      // 信号永远等不到下一次 path 变化,表现成"新笔记偶尔不进标题编辑"。
-      requestTitleFocus(path)
+      // 信号永远等不到下一次 path 变化,表现成"新笔记偶尔不进标题编辑"。已存在的笔记 = 打开,不抢标题。
+      if (r === 'created') requestTitleFocus(path)
       // ⚠️ 导航必须交给宿主的 openNote 门面,别在这里直调 loadPage:loadPage 装的是**活动 scope**,
       // 而活动 scope 只跟着编辑器面板走(amadeusViews effect ②)—— 站在主页/聊天/新标签上新建时,
       // 它指着一个后台的编辑器 tab:笔记静默装进看不见的那份 store(当前 view 不跳),还会被那个 tab
@@ -830,7 +843,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
     },
 
-    openWikiLink(name, sourcePath) {
+    openWikiLink(name, sourcePath, opts) {
       const raw = name.trim()
       if (!raw) return
       const src = sourcePath ?? get().activePage ?? undefined
@@ -893,13 +906,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const sub = anchor.subpath
         const owner = anchor.target ? resolvePageName(anchor.target, get().pages, src) : src && isNoteMd(src) ? src : null
         if (owner) {
-          if (owner !== src) void get().loadPage(owner)
+          if (owner !== src && !opts?.newTab) void get().loadPage(owner)
           // 定位走聊天引用条同一套(amadeusNav 的 reveal*WhenReady:等实例挂上、600ms 补跳、找不到就不动)。
           // 动态 import 同上面的媒体分支(amadeusNav 反向 import 本模块)。`^` 开头却不合块锚字符集的
-          // 畸形形态不当标题(与 ChatWikiLink 同口径):只开笔记不动。
+          // 畸形形态不当标题(与 ChatWikiLink 同口径):只开笔记不动。newTab:先在新标签页开,再定位。
           const block = parseBlockSubpath(sub)
-          void import('../../amadeusNav').then((m) =>
-            block ? m.revealBlockWhenReady(owner, block) : sub.startsWith('^') ? undefined : m.revealHeadingWhenReady(owner, sub))
+          void import('../../amadeusNav').then(async (m) => {
+            if (opts?.newTab) await m.openNote(owner, { newTab: true })
+            if (block) await m.revealBlockWhenReady(owner, block)
+            else if (!sub.startsWith('^')) await m.revealHeadingWhenReady(owner, sub)
+          })
           return
         }
         if (!anchor.target) return // 本页锚点却没有可定位的来源页:无处可跳,也绝不落「创建」兜底
@@ -907,7 +923,9 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
       const match = resolvePageName(wanted, get().pages, src)
       if (match) {
-        void get().loadPage(match)
+        // newTab 走 openNote 门面(动态 import 同上);就地打开仍装进本 scope 的 store。
+        if (opts?.newTab) void import('../../amadeusNav').then((m) => m.openNote(match, { newTab: true }))
+        else void get().loadPage(match)
         return
       }
       // 文件命名空间([[xxx.db]]/[[photo.png]],页面未命中才轮到):.db 应用内开
@@ -938,12 +956,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       if (!base) return
       try {
         await get().flushSave() // 换页前落盘,防待存的上一页内容被丢/写错对象
-        const path = `${base}.md`
-        const page = await amadeus.newPage(path)
-        track('note.create'); act('note.create', { f: path })
-        await get().refreshPages()
-        requestTitleFocus(path)
-        set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
+        await get().birthAndOpen(`${base}.md`)
       } catch (e) {
         set({ error: String(e) })
       }
@@ -960,17 +973,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
           const clean = name.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
           if (!clean) return
           await get().flushSave()
-          const path = /\.md$/i.test(clean) ? clean : `${clean}.md`
-          const page = await amadeus.newPage(path)
-          track('note.create'); act('note.create', { f: path })
-          await get().refreshStructure()
-          requestTitleFocus(path)
-          set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
+          await get().birthAndOpen(/\.md$/i.test(clean) ? clean : `${clean}.md`)
           return
         }
         if (sourcePath) {
           const p = await get().createChildNote(sourcePath, name)
-          await get().loadPage(p)
+          // 导航交给宿主 openNote 门面(同 createPageInFolder 的理由);无人接管才就地装载。
+          if (!navigateToNote(p)) await get().loadPage(p)
           return
         }
         await get().createWikiPage(name)
@@ -996,8 +1005,9 @@ function makePageStore(opts: PageStoreOptions = {}) {
       let base = stem
       for (let i = 1; globalKeys.has(pageKey(base)) || inFd.has(`${base}.md`.toLowerCase()); i++) base = `${stem}-${i}`
       const path = `${fd}/${base}.md`
-      await amadeus.newPage(path) // mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile 同
-      track('note.create'); act('note.create', { f: path })
+      // 素文件出生(G4-12);mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile recursive。
+      // 没建成(已提示)→ 抛:调用方都会拿这个路径去插链接 / 打开,不许交出一篇不存在的笔记。
+      if ((await birthNoteFile(path)) === 'failed') throw new Error(`create failed: ${path}`)
       await get().syncFdChildren(parentPath) // 内含 refreshStructure
       requestTitleFocus(path) // 打开后落光标到标题栏(调用方负责导航)
       return path
@@ -1587,6 +1597,34 @@ export function navigateToNote(path: string): boolean {
   // cancelable + preventDefault:平台自带的「有人接管了吗」握手,不用再自己发明标志位。
   const ev = typeof CustomEvent === 'function' ? new CustomEvent('amadeus:navigate-note', { detail: { path }, cancelable: true }) : null
   return !!ev && window.dispatchEvent?.(ev) === false
+}
+
+/** 新建笔记的**唯一**出生动作(评审 G4-12):空纯 md,零 frontmatter 零块标记 —— v4「素文件出生」约定。
+ *  老入口(快切新建 / 未解析链接确认 / 子笔记 / 笔记视图加行)此前调 `amadeus.newPage`,生出的是 v3
+ *  (amadeus_page 三键 + `<!-- a 1 -->`),而且主进程 newPage 对已存在的文件照写 = 覆盖风险。
+ *  已存在(以**磁盘**为准:pages[] 可能落后于磁盘)→ 不写,回 'exists',调用方照常打开它。
+ *  写用 create:true = 宿主原子的**仅新建**(Codex 复核返修 P1-1):「读后写前」那道窄缝里别处刚建了同名 → 宿主不写、交回现文
+ *  → 'exists'。宿主说没建成且拿不出现文(current:null)/ 写抛错 → 'failed' 并提示 —— **绝不当成已存在**去导航到一篇不存在的笔记
+ *  (上一轮就是这么回归的:带 base 的新建被「文件不在 = 拒写」拦下,却按已存在打开)。base 留着给只认比对交换写的旧宿主兜底。 */
+export async function birthNoteFile(path: string): Promise<'created' | 'exists' | 'failed'> {
+  const cur = await amadeus.readTextFile?.(path)?.catch(() => null)
+  if (cur != null) return 'exists'
+  const failed = (reason: string): 'failed' => {
+    const name = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { level: 'error', text: translate('pagestore.birth.failed', { name, reason }) } }))
+    }
+    return 'failed'
+  }
+  let r: Awaited<ReturnType<typeof amadeus.writeTextFile>>
+  try {
+    r = await amadeus.writeTextFile(path, '', { create: true, base: textFingerprint('') })
+  } catch (e) {
+    return failed(e instanceof Error && e.message ? e.message : translate('pagestore.birth.unknown'))
+  }
+  if (r && r.ok === false) return r.current != null ? 'exists' : failed(translate('pagestore.birth.unknown'))
+  track('note.create'); act('note.create', { f: path })
+  return 'created'
 }
 
 /** 标题聚焦请求(Notion 式:新建即先命名)。一次性,由装到该篇的编辑器认领。 */

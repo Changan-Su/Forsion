@@ -4,9 +4,8 @@
  * SSE 读法照旁聊(btwStore.streamAside):经网关整段缓冲后一次到达也照样能解析,只是退化成非流式。
  */
 import { registerMessages, translate } from '../i18n'
-import { authFetch } from './http'
+import { engineFetch, homeTarget } from './engine/targets'
 import { AGENT_APP_ID, currentClientId } from './agentRunService'
-import { useApp } from '../stores/appStore'
 import type { TanguCompleteOptions, TanguCompleteRequest, TanguCompleteResult } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
@@ -23,12 +22,12 @@ const readable = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? t
 export async function completeInline(req: TanguCompleteRequest, modelId: string | null, opts: TanguCompleteOptions = {}): Promise<TanguCompleteResult> {
   const model = req.modelId || modelId
   if (!model) throw new Error(translate('inlineai.errNoModel'))
-  const cfg = useApp.getState().cfg
   const { modelId: _drop, ...body } = req
-  const r = await authFetch(`${cfg.backendUrl}/agent/inline`, {
+  // 本端引擎(P1-K6:基址与鉴权头归目标解析层;正文 AI 只打本机,不跟会话走)
+  const r = await engineFetch(homeTarget(), '/agent/inline', {
     method: 'POST',
     signal: opts.signal,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.token}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...body, model_id: model, app_id: AGENT_APP_ID, client: currentClientId() }),
   })
   if (!r.ok || !r.body) {

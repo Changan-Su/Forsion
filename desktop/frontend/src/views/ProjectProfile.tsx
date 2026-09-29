@@ -27,6 +27,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { homeTarget } from '../services/engine/targets'
 
 type Tab = 'agents' | 'settings' | 'git' | 'human'
 const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'human', icon: FileText }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
@@ -158,7 +159,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   useEffect(() => {
     let alive = true
     setLoadError('')
-    void getProjectContext(s.cfg, session.id).then((value) => {
+    void getProjectContext(homeTarget(), session.id).then((value) => {
       if (!alive) return
       setCtx(value)
       useApp.getState().rememberProjectSettings(dir, value.settings)
@@ -208,7 +209,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy) return
     setBusy('default'); clear()
     try {
-      const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
+      const saved = await putProjectSettings(homeTarget(), session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
       setCtx((c) => (c ? { ...c, settings: saved } : c))
       setSettingsDraft(saved ?? {}); setSettingsDirty(false)
       useApp.getState().rememberProjectSettings(dir, saved)
@@ -237,7 +238,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         reader.onerror = () => reject(reader.error || new Error('read failed'))
         reader.readAsDataURL(file)
       })
-      applyIcon(await uploadProjectIcon(s.cfg, session.id, dataUrl))
+      applyIcon(await uploadProjectIcon(homeTarget(), session.id, dataUrl))
       setNotice(t('projectProfile.iconSaved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
@@ -247,7 +248,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy || (emoji ?? undefined) === icon) return
     setBusy('icon'); clear()
     try {
-      applyIcon(await (emoji ? setProjectIconEmoji(s.cfg, session.id, emoji) : deleteProjectIcon(s.cfg, session.id)))
+      applyIcon(await (emoji ? setProjectIconEmoji(homeTarget(), session.id, emoji) : deleteProjectIcon(homeTarget(), session.id)))
       setNotice(t(emoji ? 'projectProfile.iconSaved' : 'projectProfile.iconRemoved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
@@ -264,7 +265,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy) return
     setBusy('init'); clear()
     try {
-      const r = await initProjectContext(s.cfg, session.id)
+      const r = await initProjectContext(homeTarget(), session.id)
       setCtx(r.context)
       setNotice(t('projectProfile.initialized', { dir: r.context.workspaceDirName }))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
@@ -299,11 +300,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     catch (e: any) { setGitErr(gitErrorOf(e, () => { void gitRun(key, action, done, true) })) }
     finally { setBusy('') }
   }
-  const gitInit = () => gitRun('git-init', () => gitInitProject(s.cfg, session.id), (r) => {
+  const gitInit = () => gitRun('git-init', () => gitInitProject(homeTarget(), session.id), (r) => {
     applyContext(r.context)
     setNotice(t(r.createdGitignore ? 'projectProfile.git.initDoneIgnore' : 'projectProfile.git.initDone'))
   })
-  const trustRepo = () => gitRun('git-trust', () => gitTrustProject(s.cfg, session.id), (r) => {
+  const trustRepo = () => gitRun('git-trust', () => gitTrustProject(homeTarget(), session.id), (r) => {
     applyContext(r.context)
     setNotice(t('projectProfile.git.trustedNotice'))
   })
@@ -312,7 +313,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     const seq = ++genSeq.current
     setGenerating(true); setGitErr(null)
     try {
-      const message = await generateGitCommitMessage(s.cfg, session.id, trust)
+      const message = await generateGitCommitMessage(homeTarget(), session.id, trust)
       if (seq === genSeq.current) setCommitDraft((d) => (d === null ? d : message))
     } catch (e: any) {
       if (seq === genSeq.current) setGitErr(gitErrorOf(e, () => { void generateMessage(true) }))
@@ -326,11 +327,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     const seq = ++genSeq.current
     setGenerating(true)
     try {
-      const list = await gitPendingProject(s.cfg, session.id, trust)
+      const list = await gitPendingProject(homeTarget(), session.id, trust)
       if (seq !== genSeq.current) return
       setPending(list)
       if (!list.total) { setCommitDraft(null); setGitErr({ message: t('projectProfile.git.err.nothing_to_commit') }); return }
-      const message = await generateGitCommitMessage(s.cfg, session.id, trust)
+      const message = await generateGitCommitMessage(homeTarget(), session.id, trust)
       if (seq === genSeq.current) setCommitDraft((d) => (d === null ? d : message))
     } catch (e: any) {
       if (seq === genSeq.current) setGitErr(gitErrorOf(e, () => { void openCommit(true) }))
@@ -342,9 +343,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const commit = () => {
     const message = commitDraft?.trim()
     if (!message) return
-    void gitRun('git-commit', (trust) => gitCommitProject(s.cfg, session.id, message, pending?.token, trust).catch(async (e) => {
+    void gitRun('git-commit', (trust) => gitCommitProject(homeTarget(), session.id, message, pending?.token, trust).catch(async (e) => {
       // 看完之后改动又变了:重新列出这次会提交的东西(保留已写好的信息),让用户再过目一次
-      if (e?.code === 'changes_changed') await gitPendingProject(s.cfg, session.id).then(setPending).catch(() => {})
+      if (e?.code === 'changes_changed') await gitPendingProject(homeTarget(), session.id).then(setPending).catch(() => {})
       // 提交可能已经落下(复核不过 / 没法确认 / 超时 / 断连 / 5xx):收起提交框,再点一次 = 重复提交
       const landed = ['hook_changed_commit', 'commit_unverified', 'git_timeout'].includes(e?.code) || !(e?.status && e.status < 500)
       if (landed) { setCommitDraft(null); setPending(null) }
@@ -356,15 +357,15 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   }
   const newBranch = async () => {
     if (busy) return
-    const prefix = await getGitSettings(s.cfg).then((r) => r.settings.branchPrefix).catch(() => '')
+    const prefix = await getGitSettings(homeTarget()).then((r) => r.settings.branchPrefix).catch(() => '')
     const name = (await askString(t('projectProfile.git.newBranchTitle'), prefix, { label: t('projectProfile.git.newBranchLabel'), confirmLabel: t('projectProfile.git.newBranchConfirm') }))?.trim()
     if (!name || name === prefix) return
-    await gitRun('git-branch', (trust) => gitCreateProjectBranch(s.cfg, session.id, name, trust), (r) => {
+    await gitRun('git-branch', (trust) => gitCreateProjectBranch(homeTarget(), session.id, name, trust), (r) => {
       applyContext(r.context)
       setNotice(t('projectProfile.git.branched', { branch: r.branch }))
     })
   }
-  const push = () => gitRun('git-push', (trust) => gitPushProject(s.cfg, session.id, trust), (r) => {
+  const push = () => gitRun('git-push', (trust) => gitPushProject(homeTarget(), session.id, trust), (r) => {
     applyContext(r.context)
     setNotice(t('projectProfile.git.pushed', { target: r.target }))
   })
@@ -381,12 +382,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     setBusy('save'); clear()
     try {
       if (docDirty) {
-        const r = await putProjectDoc(s.cfg, session.id, docDraft, ctx.doc.mtimeMs)
+        const r = await putProjectDoc(homeTarget(), session.id, docDraft, ctx.doc.mtimeMs)
         setCtx((c) => (c ? { ...c, doc: { ...c.doc, path: r.path, exists: true, content: docDraft, mtimeMs: r.mtimeMs, bytes: new TextEncoder().encode(docDraft).length } } : c))
         setDocDirty(false)
       }
       if (settingsDirty) {
-        const saved = await putProjectSettings(s.cfg, session.id, settingsDraft)
+        const saved = await putProjectSettings(homeTarget(), session.id, settingsDraft)
         setCtx((c) => (c ? { ...c, settings: saved } : c))
         useApp.getState().rememberProjectSettings(dir, saved)
         setSettingsDirty(false)
@@ -398,7 +399,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (!skillForm || busy) return
     setBusy('skill'); clear()
     try {
-      await createProjectSkill(s.cfg, session.id, skillForm)
+      await createProjectSkill(homeTarget(), session.id, skillForm)
       setSkillForm(null)
       setReloadAt((n) => n + 1)
       setNotice(t('projectProfile.skillCreated'))
@@ -532,7 +533,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>
           <section className="project-card" data-project-skills>
             <div className="project-card-head"><div><h3><Sparkles size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('projectProfile.skills')}</h3><small>{t('projectProfile.skillsHint', { dir: skillsDir })}</small></div>
-              <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(s.cfg, session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
+              <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(homeTarget(), session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
             {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <button type="button" key={`${skill.id}:${skill.legacy}`} className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>)}</div>
               : <p className="agent-profile-muted">{t('projectProfile.noSkills')}</p>}
             {skillForm ? <form className="project-skill-form" onSubmit={(e) => { e.preventDefault(); void submitSkill() }}>

@@ -17,6 +17,7 @@ import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
 import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
+import { isImeKeyEvent } from '@lcl/engine/ime'
 import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 import { openTagView } from './amadeusPanels'
@@ -173,7 +174,6 @@ export function AmadeusOverlays() {
   }, [])
   return (
     <>
-      {overlay === 'switcher' && <QuickSwitcher />}
       {overlay === 'template' && templateCtx && <TemplatePicker ctx={templateCtx} />}
       <WikiCreateConfirm />
       <WikiHoverPreview />
@@ -230,6 +230,7 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
     if (tpl) insertTemplate(tpl, ctx).catch(() => { /* ignore */ })
   }
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (isImeKeyEvent(e)) return // 组字中的 Enter/↑↓/Esc 归输入法(G4-02)
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, templates.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)) }
     else if (e.key === 'Enter') { e.preventDefault(); choose(active) }
@@ -276,68 +277,3 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
   )
 }
 
-/** ⌘P 快速切换:模糊跳转任意笔记;无匹配时可就地新建(走 openWikiLink,与 [[ ]] 同语义)。 */
-function QuickSwitcher() {
-  const pages = usePageStore((s) => s.pages)
-  const close = useUiOverlay((s) => s.close)
-  const { t } = useI18n()
-  const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
-
-  const results = fuzzyRank(query, pages, pageKey).slice(0, 30)
-  const q = query.trim()
-  const showCreate = q.length > 0 && !pages.some((p) => pageKey(p) === pageKey(q))
-  const total = results.length + (showCreate ? 1 : 0)
-
-  const choose = (i: number): void => {
-    // 「新建」是显式创建意图:直接建在 vault 根,不走未解析询问流程。
-    if (showCreate && i === results.length) void usePageStore.getState().createWikiPage(q)
-    else if (results[i]) void openNote(results[i])
-    close()
-  }
-
-  const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, total - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)) }
-    else if (e.key === 'Enter') { e.preventDefault(); choose(active) }
-    else if (e.key === 'Escape') { e.preventDefault(); close() }
-  }
-
-  return (
-    <div className="cmd-overlay" onMouseDown={close}>
-      <div className="cmd-panel" onMouseDown={(e) => e.stopPropagation()}>
-        <input
-          className="cmd-input"
-          autoFocus
-          placeholder={t('amoverlay.switcherPlaceholder')}
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setActive(0) }}
-          onKeyDown={onKeyDown}
-        />
-        <div className="cmd-list">
-          {results.map((p, i) => (
-            <button key={p} className="cmd-item" data-active={i === active || undefined} onMouseEnter={() => setActive(i)} onClick={() => choose(i)}>
-              <span className="cmd-row">
-                <span className="cmd-title">{baseName(p)}</span>
-                <span className="cmd-path">{p}</span>
-              </span>
-            </button>
-          ))}
-          {showCreate && (
-            <button className="cmd-item" data-active={active === results.length || undefined} onMouseEnter={() => setActive(results.length)} onClick={() => choose(results.length)}>
-              <span className="cmd-row">
-                <span className="cmd-title">{t('amoverlay.createNamed', { name: q })}</span>
-                <span className="cmd-path">{t('amoverlay.newNote')}</span>
-              </span>
-            </button>
-          )}
-          {total === 0 && <div className="cmd-empty">{t('amoverlay.noMatch')}</div>}
-        </div>
-        <div className="cmd-foot">
-          <span><kbd>↑↓</kbd> {t('amoverlay.footSelect')} <kbd>↵</kbd> {t('amoverlay.footOpen')} <kbd>esc</kbd> {t('amoverlay.footClose')}</span>
-          <span className="cmd-foot-count">{t('amoverlay.resultCount', { n: total })}</span>
-        </div>
-      </div>
-    </div>
-  )
-}

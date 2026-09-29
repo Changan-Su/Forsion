@@ -44,7 +44,7 @@ export interface BlockEditorProps {
   /** Ask for the caret to (re)enter THIS block — e.g. after a slash transform. */
   requestSelfFocus(place: FocusPlace): void
   /** Open the page named by a clicked [[wikilink]]. */
-  onOpenWiki(name: string): void
+  onOpenWiki(name: string, opts?: { newTab?: boolean }): void
   /** All page paths in the vault — for [[ autocomplete suggestions. */
   getPageNames(): string[]
 }

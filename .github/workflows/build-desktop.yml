@@ -243,6 +243,17 @@ jobs:
           npm install --no-audit --no-fund
           npm run typecheck
 
+      # P1-K8 手机 Unit 身份与原生中继的纯逻辑单测(node + esbuild,不用 build):中继 URL 语法(与 JVM 共用用例表)、
+      # JS 中继适配(假原生 → 本进程假 hub,判的是 hub 收到的头)、UnitsSheet「在哪运行」模型与唯一生效出口、
+      # 手机 Unit 桥的启动握手(原生 apiBase ≠ cloudApiBase → 失败关闭;web 路径不装中继)与两份 native API 基址逐字相等。
+      - name: Mobile unit tests (relay / units sheet)
+        working-directory: mobile
+        run: |
+          npm run test:relaypaths
+          npm run test:unitrelay
+          npm run test:unitbridge
+          npm run test:unitssheet
+
       - name: Build web bundle + cap sync
         working-directory: mobile
         run: |
@@ -274,6 +285,15 @@ jobs:
           npm run e2e:unitsentry
           npm run e2e:settingscfg
           npm run e2e:update
+          npm run e2e:runon
+
+      # P1-K8:原生身份 / 换票 / 中继的 JVM 单测(RelayPathsTest 等;android.jar 的 org.json 是桩,测试 classpath 另带真实现)。
+      # 此前 CI 只 assemble、从不跑 gradle 单测(分支里的 PhoneVerbsTest 同样不受保护)。
+      - name: Android JVM unit tests
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon
 
       - name: Build APK
         working-directory: mobile/android

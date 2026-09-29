@@ -35,6 +35,8 @@ Linux 只读挂载仅保护各可写根直属且已存在的 `.git/.agents/.code
 
 原有 Python/JavaScript **Docker 沙箱是另一条执行路径**，不会被本地 OS 沙箱设置替代。
 
+远程会话(设备页 / 手机)在沙箱关闭时经 `run_bash` 写保护路径的残余风险与处置评估，见 [remote-bash-protected-paths.md](remote-bash-protected-paths.md)。
+
 ## 停止、重试与压缩
 
 - 搜索只在 `rg` 不存在时回落；取消、超时及真实执行错误不会引发另一轮全盘扫描。回落正则在可终止 Worker 中执行，限制文件数、读取大小和内存，等待 Worker 退出再返回。

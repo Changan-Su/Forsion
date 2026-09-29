@@ -57,6 +57,8 @@ import { startCloudEvents } from './cloudEvents'
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { pushPresence, setRoster } from './cloudPresence'
 import { buildAssetUrl, installCloudAssetUrls } from './cloudAssets'
+import { translate } from '@/i18n'
+import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案(G2-14)
 import {
   attachmentPaths,
   basenamePosix,
@@ -105,8 +107,6 @@ const notify = (text: string, isError = false): void => {
 }
 
 const nowIso = (): string => new Date().toISOString()
-const DESKTOP_ONLY = '此操作仅桌面端可用'
-const CONFLICT_TOAST = '云端已有更新，已加载最新版本（本次未保存的修改被覆盖）'
 
 // ── 活动 vault(P2 共享:可以打开别人的共享库)───────────────────────────────────
 /** localStorage 覆盖键:存 vault id;缺省/失效 → 自己的 default vault。 */
@@ -217,14 +217,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     const target = resolveMoved(path)
     if (target !== path && !vanishedToasted.has(path)) {
       vanishedToasted.add(path)
-      notify(`这篇笔记已在别处改名为「${target.split('/').pop()}」,本次修改已保存到新名字`)
+      notify(translate('amxbridge.renamedElsewhere', { name: target.split('/').pop() }))
     }
     return { target, base: await baseSeqFor(target) }
   }
   const noteVanished = (path: string): void => {
     if (vanishedToasted.has(path)) return
     vanishedToasted.add(path)
-    notify('这篇笔记已在别处被删除或移走,本次修改没有写到云端(请另存为新笔记)', true)
+    notify(translate('amxbridge.deletedElsewhere'), true)
   }
   /** 别名链跟到底(A→B→C;有环/超长即止)。 */
   const resolveMoved = (path: string): string => {
@@ -272,7 +272,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       invalidateTree()
       if (!vanishedToasted.has(path)) {
         vanishedToasted.add(path)
-        notify(`这篇笔记已在别处被删除或移走,本端未保存的修改已另存为「${rp.split('/').pop()}」`, true)
+        notify(translate('amxbridge.deletedElsewhereSaved', { name: rp.split('/').pop() }), true)
       }
       return rp
     }
@@ -649,7 +649,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             return
           } catch {
             if (cfg.signal?.aborted) return
-            if (attempt >= 2) { notify('云端连接失败,内容可能不是最新 —— 请刷新页面', true); return }
+            if (attempt >= 2) { notify(translate('amxbridge.connectFailed'), true); return }
             await new Promise<void>((resolve) => {
               const done = () => { clearTimeout(timer); cfg.signal?.removeEventListener('abort', done); resolve() }
               const timer = setTimeout(done, [3000, 10000][attempt])
@@ -821,13 +821,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             // (onExternalChange → pageStore.reconcileExternal 重载服务端版本)。
             if (body && typeof body.seq === 'number') noteSeq(target, body.seq)
             pageCache.delete(pagePath) // 服务端为准,reconcile 会重拉
-            notify(CONFLICT_TOAST, true)
+            notify(translate('amxbridge.conflictReloaded'), true)
             // 必须晚于 pageStore.save() 的收尾 set(否则本地旧 manifest 会盖回 reconcile 结果)。
             setTimeout(() => fireExternal(pagePath), 0)
             return // savePage 正常 resolve(镜像桌面「保存不抛」体感)
           }
           if (e instanceof HttpError && e.status === 413) {
-            notify('笔记过大，云端拒绝保存', true)
+            notify(translate('amxbridge.tooLarge'), true)
           }
           throw e
         }
@@ -839,16 +839,16 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       let pagesBefore: string[] | null = null // 引用重写要的「操作前」页表(G2-04),须在移动前取
       return enqueue(
         // 新旧两个 key 都占位;新名要先算 —— 与任务体内保持同一清洗逻辑。
-        [oldPath, sanitizedSiblingPath(oldPath, newName, '页面名不能为空')],
+        [oldPath, sanitizedSiblingPath(oldPath, newName, translate('amxbridge.pageNameEmpty'))],
         async () => {
           await ensureVault()
-          const newPath = sanitizedSiblingPath(oldPath, newName, '页面名不能为空')
+          const newPath = sanitizedSiblingPath(oldPath, newName, translate('amxbridge.pageNameEmpty'))
           if (newPath === oldPath) {
             return { newPath: oldPath, page: await fetchAndParse(oldPath) }
           }
           const tree = await fetchTree(true)
           pagesBefore = tree.pages.filter(visiblePath) // 点目录(.trash 等)与桌面 listPages 同样不算:否则裸名链接会被解析到回收站那份
-          if (allTreePaths(tree).includes(newPath) || tree.folders.includes(newPath)) throw new Error('目标页面已存在')
+          if (allTreePaths(tree).includes(newPath) || tree.folders.includes(newPath)) throw new Error(translate('amxbridge.pageExists'))
           // v3 单文件:先把在途编辑落到旧路径(重命名是显式用户动作 → force,桌面同款「无条件落盘再移动」)。
           const content = compile(manifest, contents)
           await putFile(oldPath, content, await baseSeqFor(oldPath), true)
@@ -856,7 +856,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           try {
             moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })
           } catch (e) {
-            if (is409(e)) throw new Error('目标页面已存在')
+            if (is409(e)) throw new Error(translate('amxbridge.pageExists'))
             throw e
           }
           migrateSeq(oldPath, newPath, moved.seq)
@@ -898,7 +898,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           throw e
         }
       }
-      throw new Error('无法为图片分配文件名')
+      throw new Error(translate('amxbridge.imageNameFailed'))
     },
 
     // 拖入附件:保留原名、撞名 -1/-2(镜像 vaultManager.writeAttachment + uniqueName)。
@@ -930,7 +930,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           throw e
         }
       }
-      throw new Error('无法为附件分配文件名')
+      throw new Error(translate('amxbridge.attachmentNameFailed'))
     },
 
     // 浏览器没有「系统默认程序」:新标签页打开资源 URL(服务端给对 MIME,PDF/图片/音视频原生呈现)。
@@ -1034,7 +1034,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: pagePath, to: newPath })
         } catch (e) {
-          if (is409(e)) throw new Error('目标位置已存在同名文件')
+          if (is409(e)) throw new Error(translate('amxbridge.fileExistsAtTarget'))
           throw e
         }
         migrateSeq(pagePath, newPath, moved.seq)
@@ -1050,14 +1050,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     createFolder: async (parentFolder, name) => {
       await ensureVault()
       const clean = name.trim().replace(/[\\/]/g, '')
-      if (!clean) throw new Error('文件夹名不能为空')
+      if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parent = parentFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       try {
         const r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders`, { parent, name: clean })
         invalidateTree()
         return r.path
       } catch (e) {
-        if (is409(e)) throw new Error('同名文件夹已存在')
+        if (is409(e)) throw new Error(translate('amxbridge.folderExists'))
         throw e
       }
     },
@@ -1065,7 +1065,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     renameFolder: async (folderPath, newName) => {
       await ensureVault()
       const clean = newName.trim().replace(/[\\/]/g, '')
-      if (!clean) throw new Error('文件夹名不能为空')
+      if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parent = dirnamePosix(folderPath)
       const newPath = parent ? `${parent}/${clean}` : clean
       if (newPath === folderPath) return folderPath
@@ -1074,7 +1074,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: folderPath, newName: clean })
       } catch (e) {
-        if (is409(e)) throw new Error('同名文件夹已存在')
+        if (is409(e)) throw new Error(translate('amxbridge.folderExists'))
         throw e
       }
       migrateSeqPrefix(folderPath, r.path)
@@ -1097,17 +1097,17 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       await ensureVault()
       const src = folderPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const name = basenamePosix(src)
-      if (!name) throw new Error('文件夹路径不能为空')
+      if (!name) throw new Error(translate('amxbridge.folderPathEmpty'))
       const dst = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       const newPath = dst ? `${dst}/${name}` : name
       if (newPath === src) return src
-      if (dst === src || dst.startsWith(`${src}/`)) throw new Error('不能移动到自身内部')
+      if (dst === src || dst.startsWith(`${src}/`)) throw new Error(translate('amxbridge.moveIntoSelf'))
       const pagesBefore = (await fetchTree(true)).pages.filter(visiblePath) // G2-04 引用重写的「操作前」页表(点目录不算)
       let r: { path: string }
       try {
         r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: dst })
       } catch (e) {
-        if (is409(e)) throw new Error('目标位置已存在同名文件夹')
+        if (is409(e)) throw new Error(translate('amxbridge.folderExistsAtTarget'))
         throw e
       }
       migrateSeqPrefix(src, r.path)
@@ -1123,7 +1123,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     trashEntry: async (rel) => {
       await ensureVault()
       const norm = rel.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-      if (!norm || norm === TRASH_DIR || norm.startsWith(`${TRASH_DIR}/`)) throw new Error('无效路径')
+      if (!norm || norm === TRASH_DIR || norm.startsWith(`${TRASH_DIR}/`)) throw new Error(translate('amxbridge.invalidPath'))
       const tree = await fetchTree(true)
       const isDir = tree.folders.includes(norm)
       const stamp = Date.now().toString(36)
@@ -1169,7 +1169,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       await ensureVault()
       const { meta } = await readTrashMeta()
       const rec = meta[name]
-      if (!rec) throw new Error('回收站条目不存在')
+      if (!rec) throw new Error(translate('amxbridge.trashMissing'))
       const tree = await fetchTree(true)
       const taken = (p: string): boolean => allTreePaths(tree).includes(p) || tree.folders.includes(p)
       // 原位被占 → 占位加 " (N)"(桌面同款;文件夹整名加,文件在扩展名前加)。
@@ -1222,7 +1222,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     saveVaultBytes: async (vaultRel, bytes) => {
       await ensureVault()
       const norm = normalizePosix(vaultRel.replace(/\\/g, '/'))
-      if (!norm) throw new Error('路径越出 vault')
+      if (!norm) throw new Error(translate('amxbridge.pathOutsideVault'))
       await postBinary(norm, basenamePosix(norm), bytes, false) // 无 ifAbsent = 原地覆盖
     },
     readVaultBytes: async (vaultRel) => {
@@ -1231,7 +1231,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?path=${encodeURIComponent(vaultRel)}`,
         { headers: { Authorization: `Bearer ${cfg.getToken()}` } }, // assetAuth 收 Bearer 主 token,无需等 asset-token
       )
-      if (!r.ok) throw new Error(`读取文件失败(HTTP ${r.status})`)
+      if (!r.ok) throw new Error(translate('amxbridge.readFailed', { status: r.status }))
       return new Uint8Array(await r.arrayBuffer())
     },
 
@@ -1260,9 +1260,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
     // ---- 插件 / OS 集成:web 端 no-op(渲染层 `?.` 兜底 / 明确提示) --------------
     listPlugins: async () => [],
-    openPluginsFolder: async () => { notify(DESKTOP_ONLY) },
-    scaffoldSamplePlugin: async () => { notify(DESKTOP_ONLY) },
-    revealInFileManager: async () => { notify(DESKTOP_ONLY) },
+    openPluginsFolder: async () => { notify(translate('amxbridge.desktopOnly')) },
+    scaffoldSamplePlugin: async () => { notify(translate('amxbridge.desktopOnly')) },
+    revealInFileManager: async () => { notify(translate('amxbridge.desktopOnly')) },
+    // 网页 / 移动端云模式没有文件管理器:入口不渲染(G2-13;上面的提示只兜老调用方)。
+    hostCaps: { revealInFileManager: false },
 
     // ---- Database(.db) ---------------------------------------------------------
     readDatabase: async (pagePath, ref): Promise<DbReadResult> => {
@@ -1274,7 +1276,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         f = await getFile(resolved)
       } catch (e) {
         if (is404(e)) return { status: 'missing' }
-        if (e instanceof HttpError && e.status === 400) return { status: 'corrupt', path: resolved, message: '不是文本文件' }
+        if (e instanceof HttpError && e.status === 400) return { status: 'corrupt', path: resolved, message: translate('amxbridge.notText') }
         throw e
       }
       const r = parseDb(f.content)
@@ -1371,15 +1373,23 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       return enqueue(held, async (): Promise<void | TextWriteResult> => {
         await ensureVault()
         if (opts?.create) {
-          // 新建意图(素文件出生 / 模板 / 种子笔记):按新文件创建,绕过「本会话见过、现 404 = 别处删了」的
-          // 重建禁令 —— 别处删了 untitled.md 后本端再新建一篇同名是合法的。已存在(别处刚建了同名)→ 落回普通写。
+          // 新建意图(素文件出生 / 模板 / 种子笔记 / 冲突副本):按新文件创建,绕过「本会话见过、现 404 = 别处删了」的
+          // 重建禁令 —— 别处删了 untitled.md 后本端再新建一篇同名是合法的。
+          // 仅新建(与桌面 / 移动同契约,Codex 复核返修 P1-1):已存在(别处刚建了同名)→ 不写,交回现文;此前落回普通写 =
+          // 把别人刚建的那篇整份盖掉(两个设备同时另存冲突副本时正好撞上)。现文取不到(又被删了)→ current:null。
           try {
             await putFile(p, text, 0)
             movedTo.delete(p)
             invalidateTree()
-            return done()
+            return { ok: true }
           } catch (e) {
             if (!is409(e)) throw e
+          }
+          try {
+            return { ok: false, current: (await getFile(p)).content }
+          } catch (e2) {
+            if (is404(e2)) return { ok: false, current: null }
+            throw e2
           }
         }
         // v4/unified 笔记的唯一落盘通道也是它:别处挪走 → 跟到新路径;别处删了 → 有正文就另存为 recovered 副本
@@ -1506,16 +1516,16 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     // 同目录纯重命名(不落 v3、外来 .md 不被收编 —— move 是纯移动,服务端不重写内容)。
     renamePageFile: (oldPath, newBaseName) => {
       let pagesBefore: string[] | null = null // G2-04 引用重写的「操作前」页表,须在移动前取
-      return enqueue([oldPath, sanitizedSiblingPath(oldPath, newBaseName, '笔记名不能为空')], async () => {
+      return enqueue([oldPath, sanitizedSiblingPath(oldPath, newBaseName, translate('amxbridge.noteNameEmpty'))], async () => {
         await ensureVault()
-        const newPath = sanitizedSiblingPath(oldPath, newBaseName, '笔记名不能为空')
+        const newPath = sanitizedSiblingPath(oldPath, newBaseName, translate('amxbridge.noteNameEmpty'))
         if (newPath === oldPath) return oldPath
         pagesBefore = (await fetchTree(true)).pages.filter(visiblePath)
         let moved: MoveResultDto
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })
         } catch (e) {
-          if (is409(e)) throw new Error('目标笔记已存在')
+          if (is409(e)) throw new Error(translate('amxbridge.noteExists'))
           throw e
         }
         migrateSeq(oldPath, newPath, moved.seq)
@@ -1536,7 +1546,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const norm = oldPath.replace(/\\/g, '/')
         let base = newBaseName.trim().replace(/[\\/]/g, '')
         if (base.toLowerCase().endsWith('.db')) base = base.slice(0, -3)
-        if (!base) throw new Error('名称不能为空')
+        if (!base) throw new Error(translate('amxbridge.nameEmpty'))
         const dir = dirnamePosix(norm)
         const newPath = dir ? `${dir}/${base}.db` : `${base}.db`
         if (newPath === norm) return { newPath, rewrittenPages: [] }
@@ -1544,7 +1554,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         try {
           moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: norm, to: newPath })
         } catch (e) {
-          if (is409(e)) throw new Error('目标文件已存在')
+          if (is409(e)) throw new Error(translate('amxbridge.fileExists'))
           throw e
         }
         migrateSeq(norm, newPath, moved.seq)

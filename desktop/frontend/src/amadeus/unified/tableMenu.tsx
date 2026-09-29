@@ -74,15 +74,15 @@ export function TableMenuSection({ view, cell, onDone }: { view: EditorView; cel
   }
   return (
     <>
-      <div className="ubm-sep" />
-      <div className="ubm-label">{t('unipage.table.label')}</div>
+      <div className="ubm-sep" role="separator" />
+      <div className="ubm-label" role="presentation">{t('unipage.table.label')}</div>
       {OPS.filter((o) => model.ops.includes(o.op)).map(({ op, key, Icon }) => (
-        <button key={op} data-table-op={op} onClick={() => run(() => tableOpTr(view.state, model.cellPos, op))}>
+        <button key={op} data-table-op={op} role="menuitem" tabIndex={-1} onClick={() => run(() => tableOpTr(view.state, model.cellPos, op))}>
           <Icon size={13} /> {t(key)}
         </button>
       ))}
       {model.align && ALIGNS.map(({ align, key, Icon }) => (
-        <button key={align} data-table-align={align} aria-checked={model.align === align} role="menuitemcheckbox"
+        <button key={align} data-table-align={align} aria-checked={model.align === align} role="menuitemcheckbox" tabIndex={-1}
           onClick={() => run(() => tableAlignTr(view.state, model.cellPos, align))}>
           <Icon size={13} /> {t(key)}
           {model.align === align && <Check size={13} className="ubm-check" />}

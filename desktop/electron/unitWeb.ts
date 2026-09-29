@@ -12,6 +12,8 @@
  * (engineRoutes.generated.ts),只放行 allow 行;其余一律 403 LOCAL_ONLY。放行的请求盖远端来源标记
  * `x-forsion-remote: tunnel|p2p|lan` + `x-forsion-remote-mark`(per-boot 密钥,引擎据 TANGU_REMOTE_MARK_SECRET 验),
  * 入站同名头一律不透传(契约 C1)。
+ * 调用方身份(P1 · K1):隧道来路带 unitHost 签的 x-unit-caller → resolveCaller 验签(每请求只调一次、一次性消费),
+ * 通过才在从零重建的头表里盖 x-forsion-remote-caller;验不过 403 BAD_CALLER_ASSERTION(不降级);局域网 / P2P 来路的该头一律无视。
  *
  * ⚠️ 刻意零 electron 依赖(deps 注入):vitest 直接跑真 HTTP 全链(scripts 之外的脊柱测试
  * electron/unitWeb.test.ts —— 配对/鉴权/反代盖章/SSE 直通都在那里钉)。
@@ -19,7 +21,7 @@
 import http from 'node:http'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { extname, normalize, sep } from 'node:path'
-import { readFile, realpath } from 'node:fs/promises'
+import { readFile, realpath, type FileHandle } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -27,6 +29,10 @@ import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { PRODUCT, type ProductProfile } from './product'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
+import { callerOf, encodeEngineCaller, ENGINE_CALLER_HEADER, gcSeenCallers, UNIT_CALLER_HEADER, verifyProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
+import { baseTierOnly } from './remoteSessionGate' // P1-K4
+import { lockedEngineAllowed, lockedRequestAllowed, REMOTE_LOCKED_BODY, VAULT_RPC_READ } from './remoteLockGate' // P1-K2
+import type { GateResult, RemoteAccessStatus } from '../shared/remoteSessions' // P1-K4
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
 
@@ -63,6 +69,8 @@ export const UNIT_P2P_HEADER = 'x-unit-p2p'
 
 /** 引擎路由里远端不许用的回包(设备页据 code 出本地化提示,见 frontend services/localOnly.ts)。 */
 const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }
+/** 隧道上的调用方断言验不过(R-08):403 不是 401(渲染层 401 = 重新登录),也不降级成「未识别」放行(INV-MONO)。 */
+const BAD_CALLER_BODY = { code: 'BAD_CALLER_ASSERTION', detail: 'Invalid caller assertion' }
 
 /**
  * 路径里**只认** RFC 3986 的 pchar(未保留字符 + sub-delims + `:` `@`)和 `/`,百分号必须带两位十六进制。
@@ -167,6 +175,10 @@ export interface UnitWebDeps {
   /** 主机文件只读(Desk/文件卡数据源):deps 层 realpath 钳制工作区根∪vault 根∪host 会话根;
    *  越界/不存在=null。maxBytes:隧道路径信封余量(b64 双重膨胀),超限回 tooLarge 而非撑爆信封。 */
   readHostFile: (p: string, maxBytes?: number) => Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean } | null>
+  /** 主机文件下载(P1-DL,/unit/hostfile/download):与 readHostFile **同一个解析**(main.ts openUnitScopedFile ——
+   *  realpath 钳制 + 凭据硬拒 + 校验与读取绑同一 FileHandle,只认普通文件);越界 / 不存在 / 不可读 = null(统一 404)。
+   *  返回已打开的句柄,unitWeb 流式写出并负责关闭。缺省 = 这台不提供下载(501)。 */
+  openHostFile?: (p: string) => Promise<{ fh: FileHandle; real: string; size: number } | null>
   /** 主机目录列表/条目 stat(工作台文件面板/悬停提示):钳制同上,目录类可指根本身;越界=null。 */
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
@@ -181,6 +193,17 @@ export interface UnitWebDeps {
   /** 本地 vault 面(registerAmadeusIpc 返回;懒取 —— unitWeb 可能先于它起)。null = /vault/* 回 503。 */
   vault: () => VaultFace | null
   log: (m: string) => void
+  // P1-K4 ── 「允许远程会话」会话档闸(remoteSessions.ts 的 gate;INTEGRATION R-07:同步,绝不等弹框)。
+  //   缺省且非 ownerProjection → /engine 只放基础档(fail closed),/unit/remote-access 回「未开启」。
+  //   只管 /engine(G9):/unit/host*、/vault/* 维持 P0 现状。
+  remoteAccess?: {
+    gateEngine: (q: { method: string; path: string; via: UnitIngress | null; caller: UnitCaller }) => GateResult
+    status: (caller: UnitCaller) => RemoteAccessStatus
+    request: (caller: UnitCaller) => Promise<RemoteAccessStatus>
+  }
+  // P1-K2 ── 急停后的远程锁定(remoteSafety.isLocked,同步内存镜像;每请求现查)。缺省 = 未锁(便携 Unit 不传)。
+  //   锁定时非本机入口只剩读 + 中止(remoteLockGate.ts);工作区主人(projection local)不受影响。
+  remoteLock?: () => boolean
 }
 
 export interface UnitWebHandle {
@@ -189,6 +212,8 @@ export interface UnitWebHandle {
   internalSecret: string
   /** P2P 执行器(attachHostChannel)专用的 per-boot 密钥(x-unit-p2p);与隧道分钥,仅 loopback 有效。 */
   p2pSecret: string
+  /** unitHost 签调用方断言(x-unit-caller)用的 per-boot 钥(P1 · K1);与上面两把、将来 /unit/mcp 的钥都不同。 */
+  proxyCallerKey: string
   close: () => Promise<void>
 }
 
@@ -207,6 +232,28 @@ const MIME: Record<string, string> = {
   '.gif': 'image/gif', '.jpeg': 'image/jpeg', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
   '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
   '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.md': 'text/markdown; charset=utf-8',
+}
+
+/** 远程下载主机文件的单文件上限(与手机原生中继 UnitRelay.MAX_RESPONSE_BYTES 同档)。超了回 413,不开流。 */
+export const HOST_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
+
+/** 下载的 Content-Type:按扩展名(静态资产表 + 常见办公 / 归档类型),认不出 = octet-stream。 */
+const DOWNLOAD_MIME: Record<string, string> = {
+  ...MIME,
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.doc': 'application/msword', '.xls': 'application/vnd.ms-excel', '.ppt': 'application/vnd.ms-powerpoint',
+  '.csv': 'text/csv; charset=utf-8', '.zip': 'application/zip', '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
+}
+
+/** RFC 6266 / 5987:ASCII 兜底名(非 ASCII、引号、反斜杠换成 _)+ filename* 原名(UTF-8 百分号编码)。
+ *  中文文件名(`介绍….docx`)只放在 filename* 里 —— 头值必须是 latin1,原样塞进去 Node 直接抛。 */
+export function attachmentDisposition(name: string): string {
+  const safe = name.replace(/[\r\n]/g, '') || 'download'
+  const ascii = safe.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  const utf8 = encodeURIComponent(safe).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`
 }
 
 const isLoopback = (addr: string | undefined): boolean =>
@@ -235,6 +282,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   }
   const internalSecret = randomUUID()
   const p2pSecret = randomBytes(32).toString('hex')
+  const proxyCallerKey = randomBytes(32).toString('hex')
+  /** 调用方断言的重放表:派发 id → 过期时刻(gc() 清理)。只记验签全过的,表长 ≤ 合法请求速率 × 120s。 */
+  const seenCallerDispatch = new Map<string, number>()
   /** 便携 Unit 的本地投影(projection local)里,唯一能过鉴权的是工作区主人的访问密钥 —— 那是主人自己的界面,
    *  不是「另一台设备」:/engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。桌面(main.ts)从不传 projection,
    *  所以桌面的三条远端通路恒走允许清单(unitWeb.test 两个方向都钉住)。 */
@@ -256,6 +306,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       }
     }
     for (const [t, rec] of assetTokens) if (rec.exp < now) assetTokens.delete(t)
+    gcSeenCallers(seenCallerDispatch, now)
   }
 
   /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
@@ -272,6 +323,28 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     return { ok: hit, pairHash: hit ? h : null, via: hit ? 'lan' : null }
   }
   const authed = (req: http.IncomingMessage): boolean => authInfo(req).ok
+  /** 局域网来路命中的配对记录(K4:paired 调用方的 pairId / 名字);隧道 / P2P 恒 null。 */
+  const pairInfo = (info: { pairHash: string | null }): { pairId: string; name: string } | null => {
+    if (!info.pairHash) return null
+    const d = deps.pairedDevices.list().find((x) => x.tokenHash === info.pairHash)
+    return d ? { pairId: d.id, name: d.name } : null
+  }
+
+  /**
+   * 调用方断言(P1 · K1,INTEGRATION §1.2):**每个请求只调一次** —— 验过即消费重放表,第二次调必回失败。
+   * 只对隧道来路验;局域网 / P2P 来路的 x-unit-caller 一律无视(不验、不转):那两条路没有 hub 盖章,
+   * 就算带着用正确钥签出的断言也不作数(K1 S5)。隧道上缺头 = 账号级未识别(caller:null);在场却验不过 → ok:false
+   * (调用方回 403 BAD_CALLER_ASSERTION,不降级)。/engine 分支与 K4 的 /unit/remote-access* 共用。
+   */
+  const resolveCaller = (req: http.IncomingMessage, info: { via: UnitIngress | null }): { ok: true; caller: ProxyCaller | null } | { ok: false } => {
+    if (info.via !== 'tunnel') return { ok: true, caller: null }
+    const raw = req.headers[UNIT_CALLER_HEADER]
+    if (raw === undefined) return { ok: true, caller: null }
+    if (typeof raw !== 'string') return { ok: false }
+    const r = verifyProxyCaller(proxyCallerKey, raw, { method: req.method || 'GET', url: req.url || '' }, seenCallerDispatch)
+    if (!r.ok) { deps.log(`[unit-web] 调用方断言无效(${r.reason}),已拒绝`); return { ok: false } }
+    return { ok: true, caller: r.caller }
+  }
 
   /** 资源令牌活性:未过期 + 发行者(若为配对设备)仍在已配对列表里。 */
   const assetTokenLive = (at: string): boolean => {
@@ -312,9 +385,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     })
 
   /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。
-   *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote*
-   *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。 */
-  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null): void => {
+   *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote* / x-unit-caller
+   *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。
+   *  caller = resolveCaller 验过的调用方:只在隧道来路盖 x-forsion-remote-caller(引擎在 marked && tunnel 时才读)。 */
+  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
@@ -328,6 +402,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (via) {
       headers['x-forsion-remote'] = via
       if (engine.remoteMark) headers['x-forsion-remote-mark'] = engine.remoteMark
+      if (via === 'tunnel' && caller) headers[ENGINE_CALLER_HEADER] = encodeEngineCaller(caller)
     }
     const up = http.request({
       host: target.hostname,
@@ -401,7 +476,70 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
   }
 
+  /**
+   * /unit/hostfile 与 /unit/hostfile/download 共用的请求闸(P1-DL,两条永不分叉):鉴权(配对令牌 / 隧道 / P2P 内部密钥)→ 取 path。
+   * 急停锁定(K2)在 handler 顶层对二者同判(GET = 读,放行);K4 会话档闸按 G9 只管 /engine,/unit/host* 都不过它。
+   * 文件解析(realpath 钳制 / 凭据硬拒 / fd 绑定)在 deps 层同一个函数里(main.ts openUnitScopedFile)。
+   */
+  const hostFileRequest = (req: http.IncomingMessage, res: http.ServerResponse, url: string): { p: string; via: UnitIngress | null } | null => {
+    const info = authInfo(req)
+    if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return null }
+    return { p: String(new URL(url, 'http://x').searchParams.get('path') || ''), via: info.via }
+  }
+
+  /** 把主机文件原样流出去(下载)。句柄来自 deps.openHostFile,这里负责关(流结束 / 出错 / 客户端断开都关)。 */
+  const sendHostDownload = async (res: http.ServerResponse, p: string): Promise<void> => {
+    if (!deps.openHostFile) { json(res, 501, { detail: 'Host file download is not available on this device', code: 'HOST_DOWNLOAD_UNSUPPORTED' }); return }
+    const f = await deps.openHostFile(p)
+    if (!f) { json(res, 404, { detail: 'not readable' }); return }
+    if (f.size > HOST_DOWNLOAD_MAX_BYTES) {
+      await f.fh.close().catch(() => {})
+      json(res, 413, { detail: `File is larger than the ${HOST_DOWNLOAD_MAX_BYTES / 1048576} MB remote download limit`, code: 'HOST_DOWNLOAD_TOO_LARGE', size: f.size, limit: HOST_DOWNLOAD_MAX_BYTES })
+      return
+    }
+    const name = p.split(/[\\/]/).filter(Boolean).pop() || 'download'
+    res.writeHead(200, {
+      'Content-Type': DOWNLOAD_MIME[extname(f.real).toLowerCase()] || 'application/octet-stream',
+      'Content-Length': f.size,
+      'Content-Disposition': attachmentDisposition(name),
+      // 同 /vault/asset:主机文件是不受信内容。隧道的 /stream 面不转 Content-Disposition,有人把下载链接当页面直开时,
+      // HTML / SVG 会在鉴权过的 proxy origin 上执行 —— nosniff + CSP sandbox 惰化(网关宣告 stream-sec-headers 才走流式,见 unitHost.streamWorthy)。
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': 'sandbox',
+      'Cache-Control': 'no-store',
+    })
+    if (f.size === 0) { await f.fh.close().catch(() => {}); res.end(); return }
+    // 读到 stat 时的长度为止:文件还在写也不会多出 Content-Length 之外的字节(少了 = 连接提前断,客户端当失败)。
+    const stream = f.fh.createReadStream({ start: 0, end: f.size - 1 }) // autoClose:结束 / destroy 即关句柄
+    stream.on('error', () => res.destroy())
+    res.on('close', () => stream.destroy())
+    stream.pipe(res)
+  }
+
+  /** 请求路径(剥掉 projection 前缀、去 query)—— 顶层锁定闸用;不做 308 之类的副作用,那些仍在下面原位。 */
+  const plainPath = (req: http.IncomingMessage): string => {
+    let u = req.url || '/'
+    if (deps.projection) {
+      const prefix = deps.projection.basePath.replace(/\/$/, '')
+      if (u.startsWith(prefix + '/')) u = u.slice(prefix.length)
+    }
+    return u.split('?')[0]
+  }
+  /** P1-K2:锁状态读不出按锁定(fail closed)。 */
+  const lockedNow = (): boolean => {
+    if (!deps.remoteLock) return false
+    try { return deps.remoteLock() } catch { return true }
+  }
+
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
+    if (!ownerProjection && lockedNow()) {
+      const p = plainPath(req)
+      if (!(p === '/engine' || p.startsWith('/engine/')) && p !== '/vault/rpc' && !lockedRequestAllowed(req.method || 'GET', p)) {
+        json(res, 423, REMOTE_LOCKED_BODY)
+        return
+      }
+    }
     if (await deps.routeRequest?.(req, res)) return
     gc()
     let url = req.url || '/'
@@ -519,13 +657,16 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       return
     }
     // 主机文件只读(钳制在 deps 层):越界与不存在同样 404,不泄露存在性。
-    if (path === '/unit/hostfile' && req.method === 'GET') {
-      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      const p = String(new URL(url, 'http://x').searchParams.get('path') || '')
+    //   /unit/hostfile          = 预览(base64 JSON,隧道上 4MB 封顶走 tooLarge);
+    //   /unit/hostfile/download = 下载原文件(P1-DL:流式;隧道上 > 256KB 的走 unitHost 的 stream 回包,不进 10MB 信封)。
+    // 两条共用同一道请求闸(hostFileRequest)与 deps 层同一个文件解析(openUnitScopedFile),判据永不分叉。
+    if ((path === '/unit/hostfile' || path === '/unit/hostfile/download') && req.method === 'GET') {
+      const q = hostFileRequest(req, res, url)
+      if (!q) return
+      if (path === '/unit/hostfile/download') { await sendHostDownload(res, q.p); return }
       // 隧道来的请求(unitHost 带内部密钥):响应还要整体再 base64 进 10MB 信封,原文超 ~4MB 就撑爆
       // → 传更小上限,超限走 tooLarge(渲染层有兜底 UI)而不是超时(Codex P2)。
-      const viaTunnel = authInfo(req).via === 'tunnel'
-      const f = await deps.readHostFile(p, viaTunnel ? 4 * 1024 * 1024 : undefined)
+      const f = await deps.readHostFile(q.p, q.via === 'tunnel' ? 4 * 1024 * 1024 : undefined)
       if (!f) { json(res, 404, { detail: 'not readable' }); return }
       json(res, 200, f)
       return
@@ -548,16 +689,41 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       json(res, 200, { config: await deps.writeConfig(patch && typeof patch === 'object' ? patch : {}) })
       return
     }
+    // P1-K4 ── 调用方看自己的远程会话状态 / 主动请求本机确认(手机「选在这台电脑上运行」先拿到「等待确认」)。
+    // 只回调用方自己的状态,永不回信任列表;同 /engine 的 authInfo → resolveCaller → callerOf(断言验不过 403,不降级)。
+    if ((path === '/unit/remote-access' && req.method === 'GET') || (path === '/unit/remote-access/request' && req.method === 'POST')) {
+      const info = authInfo(req)
+      if (!info.ok) { json(res, 401, { detail: 'Not paired', code: 'UNPAIRED' }); return }
+      const rc = resolveCaller(req, info)
+      if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
+      const caller = callerOf(info.via, pairInfo(info), rc.caller)
+      const ra = deps.remoteAccess
+      if (!ra) { // 没有闸 = 只有基础档(fail closed),如实报「未开启」
+        json(res, 200, { remoteSessions: false, principal: caller.kind === 'paired' ? 'lan' : caller.kind, caller: caller.kind === 'paired' ? 'paired' : 'unconfirmed', maxApprovalMode: 'auto-edit' } satisfies RemoteAccessStatus)
+        return
+      }
+      json(res, 200, path === '/unit/remote-access' ? ra.status(caller) : await ra.request(caller))
+      return
+    }
+    // /engine 分支的次序由 INTEGRATION §2.3 钉死(K1 → K4 → K2 按此插入,不自行调序):
+    // 鉴权 → 投影主人直通 → 路径规整 → 允许清单 → 调用方断言(K1)→ 急停锁定(K2)→ 会话档闸(K4)→ 反代。
     if (path === '/engine' || path.startsWith('/engine/')) {
+      const method = req.method || 'GET'
       const info = authInfo(req)
       if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null); return }
+      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
       // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
       const target = engineTarget(url.slice('/engine'.length))
       if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
-      if (engineRouteAccess(req.method || 'GET', target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
-      proxyEngine(req, res, target.path + target.query, info.via)
+      if (engineRouteAccess(method, target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
+      const rc = resolveCaller(req, info) // K1:每请求只调一次(重放表一次性消费)
+      if (!rc.ok) { json(res, 403, BAD_CALLER_BODY); return }
+      if (lockedNow() && !lockedEngineAllowed(method, target.path)) { json(res, 423, REMOTE_LOCKED_BODY); return } // K2:锁定只剩读 + 中止(先于 K4 闸,R-26)
+      const caller = callerOf(info.via, pairInfo(info), rc.caller) // K4:会话档闸(同步;缺省只放基础档)
+      const g = deps.remoteAccess ? deps.remoteAccess.gateEngine({ method, path: target.path, via: info.via, caller }) : baseTierOnly(method, target.path)
+      if (!g.ok) { json(res, g.status, g.body); return }
+      proxyEngine(req, res, target.path + target.query, info.via, rc.caller)
       return
     }
 
@@ -577,6 +743,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
         if (!ownerProjection && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
+        if (!ownerProjection && lockedNow() && !VAULT_RPC_READ.has(ch)) { json(res, 423, REMOTE_LOCKED_BODY); return } // P1-K2:锁定只剩只读通道
         // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);走 body 因为隧道信封不带自定义头;限长防注水。
         const origin = String(body.client || '').slice(0, 64) || null
         try {
@@ -683,6 +850,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         port,
         internalSecret,
         p2pSecret,
+        proxyCallerKey,
         close: () => new Promise<void>((r) => { server.close(() => r()); for (const socket of sockets) socket.destroy() }),
       })
     })

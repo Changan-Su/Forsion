@@ -153,7 +153,10 @@ describe('ctx.automation.ensure', () => {
     cur = { ...CFG, token: 'later' }
     const { saveMuseTrigger } = await import('../../services/backendService')
     await ctx.automation!.ensure([rule()])
-    expect(vi.mocked(saveMuseTrigger).mock.calls.at(-1)![0]).toEqual(cur)
+    // P1-K6 S3:服务函数收的是目标(connectionTarget(探针现取的那份配置)):按它的基址与现读的鉴权头认
+    const t = vi.mocked(saveMuseTrigger).mock.calls.at(-1)![0]
+    expect(t.base).toBe(cur.backendUrl)
+    expect((await t.headers()).Authorization).toBe('Bearer later')
   })
 })
 

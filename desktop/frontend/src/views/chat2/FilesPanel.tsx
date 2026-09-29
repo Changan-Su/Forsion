@@ -6,8 +6,11 @@
  *  shift 单击选范围、option/alt 单击逐个加减选;右键菜单与拖拽对**整批选中**生效。
  *  右键菜单(打开/系统默认打开/新建文件/文件夹/重命名/复制路径/文件管理器显示/回收站);
  *  行拖进文件夹=移动、Alt+拖=原生拖出、OS 文件拖入=复制;行内重命名/新建。
- *  云端 Project 工作区(kind='cloud',无磁盘路径)走 workspace API 按 project 取数(CloudGroup):
- *  只读呈现(预览/下载/删除),web/移动云端无 fs IPC 也可用;run 结束自动刷新。 */
+ *  云端 Project 工作区(kind='cloud',无磁盘路径)走 workspace API 按 project 取数(ScopeGroup):
+ *  只读呈现(预览/下载/删除),web/移动云端无 fs IPC 也可用;run 结束自动刷新。
+ *  M1B:当前会话在别的电脑上(手机 / web 把整端切到「我的电脑」,refForSession = unit)→ 顶上多一组「本会话的文件」
+ *  = 那个会话的引擎沙箱(手机发的附件、agent 的产物),同一个 ScopeGroup 按 sessionId 取数,经 K6 目标路由到那台电脑;
+ *  行尾常显下载键(触屏没有右键 / 悬浮)。host 工作区那几组列的是那台电脑的真目录,看不到会话沙箱。 */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ChevronRight, Folder, FolderOpen, RefreshCw, Download,
@@ -22,6 +25,8 @@ import { listWorkspace, readWorkspaceFile, downloadWorkspaceFile, deleteWorkspac
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { useApp } from '../../stores/appStore'
 import { hostTargetFor } from '../wsFileNav'
+import { refForSession, targetForSession, useComposerRef } from '../../services/engine/targets'
+import { capsForRef } from '../../services/engine/targetCaps'
 import { tipProps, fsTipLines } from '../../hoverTip'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { useItemSelect, type ClickAct, type ItemSelect } from '../itemSelect'
@@ -30,6 +35,9 @@ import './sidebar2.css'
 
 registerMessages({
   'panel.files.showAllWs': { zh: '显示全部项目', en: 'Show all projects' },
+  // M1B:远端会话的引擎沙箱(附件 / 产物)
+  'panel.files.sessionFiles': { zh: '本会话的文件', en: 'Session files' },
+  'panel.files.sessionEmpty': { zh: '还没有附件或产物', en: 'No attachments or outputs yet' },
 })
 
 interface Entry { name: string; isDir: boolean; size: number; path: string }
@@ -191,30 +199,46 @@ function DirRow({ entry, depth, ctx, forceOpen }: { entry: Entry; depth: number;
   )
 }
 
-/** 云端 Project 组:文件在 Penzor 云(files 表),经 workspace API 按 project 取数;fs IPC 不可用 →
- *  只读呈现(双击预览 / 右键 预览・下载・删除)。
+/** 经 workspace API 取数的一组文件(不走 fs IPC;只读呈现:单击预览 / 右键 预览・下载・删除)。两种范围:
+ *  - 云端 Project(scope.project,文件在 Penzor 云,跨会话共享;sessionId 传 '__project__' 哑值);
+ *  - 会话沙箱(M1B,scope.sessionId = 当前会话):远端会话的附件 / 产物,按会话路由到那台电脑;rowDownload 给行尾常显的下载键。
+ *  删除按目标能力(unit 上 workspaceDelete=false → 不给)。
  *  ponytail: 平铺相对路径,文件多层级复杂了再做树。 */
-function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
-  ws: WorkspaceDescriptor
+function ScopeGroup({ label, title, scope, kind, open, onToggle, onOpenPreview, sel, rowDownload = false, emptyText }: {
+  label: string
+  title?: string
+  scope: { sessionId: string; project?: string }
+  /** DOM 标记(data-ws-scope):台架与样式按它认组。 */
+  kind: 'project' | 'session'
   open: boolean
   onToggle: () => void
   onOpenPreview: (t: PreviewTarget, opts?: { newTab?: boolean }) => void
   /** 与本地工作区共用同一个多选(同一个滚动容器里,范围选要能跨过去)。 */
   sel: ItemSelect
+  rowDownload?: boolean
+  emptyText?: string
 }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
-  const running = useApp((s) => Object.keys(s.runningBySession).length > 0)
+  const { sessionId, project } = scope
+  // 会话沙箱只看本会话的 run;Project 跨会话共享,任一 run 结束都可能落新产物
+  const running = useApp((s) => (project ? Object.keys(s.runningBySession).length > 0 : !!s.runningBySession[sessionId]))
   const [files, setFiles] = useState<WorkspaceFileMeta[] | null>(null)
   const [menu, setMenu] = useState<CtxMenu>(null)
-  const project = ws.project!
+  const deletable = capsForRef(refForSession(sessionId)).workspaceDelete
+  // 范围换了(切会话 / 换 Project)→ 丢掉旧列表;在途的旧请求回来也不许覆盖新范围
+  const sig = `${sessionId}\n${project ?? ''}`
+  const sigRef = useRef(sig)
+  sigRef.current = sig
+  useEffect(() => { setFiles(null) }, [sig])
   const refresh = useCallback(() => {
-    void listWorkspace(cfg, '__project__', project)
-      .then((fs) => setFiles([...fs].sort((a, b) => a.path.localeCompare(b.path))))
-      .catch(() => setFiles([]))
-  }, [cfg, project])
+    const mine = sig
+    void listWorkspace(targetForSession(sessionId), sessionId, project)
+      .then((fs) => { if (sigRef.current === mine) setFiles([...fs].sort((a, b) => a.path.localeCompare(b.path))) })
+      .catch(() => { if (sigRef.current === mine) setFiles([]) })
+  }, [cfg, sessionId, project, sig])
   useEffect(() => { if (open && files === null) refresh() }, [open, files, refresh])
-  // run 结束 → 刷新(agent 产物落云端后可见)
+  // run 结束 → 刷新(agent 产物落地后可见)
   const prevRunning = useRef(running)
   useEffect(() => {
     if (prevRunning.current && !running && open) refresh()
@@ -222,14 +246,14 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
   }, [running, open, refresh])
 
   const download = (f: WorkspaceFileMeta): void => {
-    void downloadWorkspaceFile(cfg, '__project__', f.path, project)
+    void downloadWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project)
       .catch((err) => useApp.getState().toast(err?.message || String(err), true))
   }
   const preview = (f: WorkspaceFileMeta, newTab?: boolean): void => {
     onOpenPreview({
       name: f.path,
       load: async () => {
-        const r = await readWorkspaceFile(cfg, '__project__', f.path, project)
+        const r = await readWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project)
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
       },
       download: () => download(f),
@@ -237,13 +261,13 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
   }
   const del = async (f: WorkspaceFileMeta): Promise<void> => {
     if (!window.confirm(t('panel.confirm.delete', { name: f.path }))) return
-    try { await deleteWorkspaceFile(cfg, '__project__', f.path, project); refresh() }
+    try { await deleteWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project); refresh() }
     catch (err: any) { useApp.getState().toast(err?.message || String(err), true) }
   }
   /** 整批删除(云端文件无回收站 → 一次确认后逐个 DELETE)。 */
   const delMany = async (fs: WorkspaceFileMeta[]): Promise<void> => {
     if (!fs.length || !window.confirm(t('panel.confirm.deleteN', { n: String(fs.length) }))) return
-    try { for (const f of fs) await deleteWorkspaceFile(cfg, '__project__', f.path, project) }
+    try { for (const f of fs) await deleteWorkspaceFile(targetForSession(sessionId), sessionId, f.path, project) }
     catch (err: any) { useApp.getState().toast(err?.message || String(err), true) }
     sel.clear()
     refresh()
@@ -253,6 +277,7 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
     const paths = sel.batch(f.path)
     if (paths.length === 1) sel.only(f.path)
     if (paths.length > 1) {
+      if (!deletable) return
       const targets = (files ?? []).filter((x) => paths.includes(x.path))
       const items: CtxItem[] = [{
         label: t('panel.action.deleteN', { n: String(targets.length) }),
@@ -265,27 +290,27 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
     const items: CtxItem[] = [
       { label: t('panel.action.preview'), icon: <Eye size={13} />, run: () => preview(f) },
       { label: t('panel.action.download'), icon: <Download size={13} />, run: () => download(f) },
-      { label: t('panel.action.delete'), icon: <Trash2 size={13} />, danger: true, run: () => void del(f) },
+      ...(deletable ? [{ label: t('panel.action.delete'), icon: <Trash2 size={13} />, danger: true, run: () => void del(f) }] : []),
     ]
     setMenu({ ...menuPos(ev, items.length), items })
   }
 
   return (
-    <div>
+    <div data-ws-scope={kind}>
       <div className="t2s-group" style={{ paddingLeft: folderPadLeft(0) }}>
-        <button className="t2s-group-toggle t2s-folder-row" onClick={onToggle} title={project}>
+        <button className="t2s-group-toggle t2s-folder-row" onClick={onToggle} title={title}>
           <span className="t2s-lead">
             {open ? <FolderOpen className="t2s-lead-icon" /> : <Folder className="t2s-lead-icon" />}
             <span className={`t2s-chev t2s-lead-chev${open ? ' open' : ''}`}><ChevronRight size={12} /></span>
           </span>
-          <span className="t2s-group-label">{ws.name}</span>
+          <span className="t2s-group-label">{label}</span>
         </button>
         <button className="t2s-group-add" title={t('panel.files.refresh')} onClick={refresh}><RefreshCw size={13} /></button>
       </div>
       <AnimatedCollapse open={open}>
         <div className="t2sf-tree">
           {files == null ? <div className="t2sf-loading" style={{ paddingLeft: nameLeft(1) }}>…</div>
-            : files.length === 0 ? <div className="t2sf-empty">{t('panel.files.empty')}</div>
+            : files.length === 0 ? <div className="t2sf-empty">{emptyText || t('panel.files.empty')}</div>
             : files.map((f) => {
               const Icon = iconForFile(mimeForExt(f.path) || '', f.path)
               return (
@@ -293,14 +318,27 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
                   key={f.path}
                   className={`t2sf-row t2sf-file${sel.has(f.path) ? ' sel' : ''}`}
                   data-sel-id={f.path}
+                  data-ws-file={f.path}
                   style={{ paddingLeft: rowPadLeft(1) }}
                   onClick={(e) => { const act = sel.click(f.path, e); if (act.open !== 'none') preview(f, act.open === 'new') }}
                   onDoubleClick={() => preview(f)}
                   onContextMenu={(e) => onRowMenu(e, f)}
                 >
                   <span className="t2s-lead"><Icon className="t2s-lead-icon t2sf-fic" /></span>
-                  <span className="t2sf-name">{f.path}</span>
+                  <span className="t2sf-name">{f.path.replace(/^\//, '')}</span>
                   {f.size > 0 && <span className="t2sf-size">{fmtSize(f.size)}</span>}
+                  {rowDownload && (
+                    <button
+                      className="t2sf-row-act"
+                      data-download
+                      aria-label={t('panel.action.download')}
+                      title={t('panel.action.download')}
+                      onClick={(e) => { e.stopPropagation(); download(f) }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
+                      <Download size={14} />
+                    </button>
+                  )}
                 </div>
               )
             })}
@@ -330,6 +368,10 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   const toggleOpenWorkspace = useApp((s) => s.toggleOpenWorkspace)
   const locals = workspaces.filter((w) => w.kind === 'local' && !!w.path)
   const clouds = workspaces.filter((w) => w.kind === 'cloud' && !!w.project)
+  // M1B:当前会话在别的电脑上 → 顶上一组「本会话的文件」(那台电脑上的会话沙箱)。S4 起按会话的绑定判(订阅绑定表:绑上 / 忘掉时重算)
+  const activeId = useApp((s) => s.activeId)
+  const remoteSid = useComposerRef(activeId).kind === 'unit' ? activeId : null
+  const [sessionOpen, setSessionOpen] = useState(true)
   const [rootsByKey, setRootsByKey] = useState<Record<string, Entry[] | null>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
   const sel = useItemSelect(scrollRef) // 多选(范围选按 DOM 顺序,故要给容器 ref)
@@ -565,14 +607,35 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     }
   }, [openKeys, locals, rootsByKey, loadRoot])
 
-  if (!locals.length && !clouds.length) return <div className="t2s-hint" style={{ padding: '18px 12px' }}>{t('panel.files.noLocalWs')}</div>
+  const sessionGroup = remoteSid ? (
+    <ScopeGroup
+      key={`session:${remoteSid}`}
+      label={t('panel.files.sessionFiles')}
+      scope={{ sessionId: remoteSid }}
+      kind="session"
+      open={sessionOpen}
+      onToggle={() => setSessionOpen((v) => !v)}
+      onOpenPreview={onOpenPreview}
+      sel={sel}
+      rowDownload
+      emptyText={t('panel.files.sessionEmpty')}
+    />
+  ) : null
+
+  if (!locals.length && !clouds.length) {
+    if (!sessionGroup) return <div className="t2s-hint" style={{ padding: '18px 12px' }}>{t('panel.files.noLocalWs')}</div>
+    return <aside className="t2s-side"><div ref={scrollRef} className="t2s-scroll">{sessionGroup}</div></aside>
+  }
 
   const renderWs = (ws: WorkspaceDescriptor): ReactNode => {
     if (ws.kind === 'cloud') {
       return (
-        <CloudGroup
+        <ScopeGroup
           key={ws.key}
-          ws={ws}
+          label={ws.name}
+          title={ws.project}
+          scope={{ sessionId: '__project__', project: ws.project! }}
+          kind="project"
           open={openKeys.includes(ws.key)}
           onToggle={() => toggleWs(ws)}
           onOpenPreview={onOpenPreview}
@@ -634,6 +697,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   return (
     <aside className="t2s-side">
       <div ref={scrollRef} className="t2s-scroll" onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }}>
+        {sessionGroup}
         {ordered.filter((w) => w.key === pinKey).map(renderWs)}
         {rest.length > 0 && (
           <>

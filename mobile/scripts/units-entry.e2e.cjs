@@ -151,9 +151,10 @@ async function main() {
         if (t) t.openUnitPage = (u) => { window.__unitOpened.push(String(u)); return Promise.resolve({ ok: true }) }
       })
       await tap(page.locator(`.mb-foot-row .mb-icon-btn[aria-label="${(foot.btns || [])[foot.unitIdx]}"]`))
+      // P1-K8:弹层改成三段(在哪运行 / 打开设备界面 / 本机),标题在 .us-head-title
       const sheetOn = await page.evaluate((labels) => {
-        const strongs = [...document.querySelectorAll('strong')]
-        return strongs.some((s) => labels.includes((s.textContent || '').trim()))
+        const title = document.querySelector('[data-units-sheet] .us-head-title')
+        return !!title && labels.includes((title.textContent || '').trim())
       }, UNIT_LABELS)
       if (sheetOn) pass('点入口打开设备弹层')
       else fail('点入口打开设备弹层')
@@ -161,7 +162,9 @@ async function main() {
       // ④ 两条通路行都必须走 **app 内 WebView**(openUnitPage),不是系统浏览器。
       //    2026-09-03 用户实报「直连开在浏览器里,不是替换应用界面」——回归了就是又被弹出去。
       //    行按 DOM 序取(vias = ['lan','tunnel']),不按文案,免得机器语言不同就假红。
-      const rows = page.locator('button').filter({ hasText: 'E2E Mac' })
+      // P1-K8:直连 / 中转两行住在缺省折叠的「打开设备界面」段里,先展开;「在哪运行」段那一行不算
+      await tap(page.locator('[data-open-screen] .us-section-toggle'))
+      const rows = page.locator('[data-open-screen] button').filter({ hasText: 'E2E Mac' })
       const rowCount = await rows.count()
       if (rowCount !== 2) {
         fail('一台设备拆成直连/中转两行', `实得 ${rowCount} 行`)

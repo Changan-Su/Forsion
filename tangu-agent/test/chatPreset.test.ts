@@ -52,12 +52,14 @@ const HARD_REJECTED = [
 describe('registry 级:chat 正向工具面', () => {
   const base: ToolContext = { userId: 'u1', sessionId: 's1', appId: cloud.appId, profile: cloud, execMode: 'sandbox', unlockTools: () => {} };
 
-  it('云端 sandbox:常驻面恰为 A 档 + 显式记忆共 11 个(注册序不重排),≤ 8,500 B;GUI 端共 12 个,≤ 11,900 B', () => {
+  it('云端 sandbox:常驻面恰为 A 档 + 显式记忆共 11 个(注册序不重排),≤ 8,750 B;GUI 端共 12 个,≤ 12,000 B', () => {
     configureTangu({ host: stub, brain: stub, billing: stub, profile: cloud });
     const chat = names({ ...base, preset: 'chat' });
     expect(chat).toEqual(['get_datetime', 'remember', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools']);
     // 09-22:remember 描述带上形状规则(何时记 / 何时不记 / 取代旧条目用 update)+136 B,预算 8,500 → 8,600、11,900 → 12,000。
-    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(8_600);
+    // 09-28 P1-DL:display_file 描述写明这是把文件交给用户的方式(手机上要文件 → 出卡片下载,live deliver 场景钉着)+160 B,
+    // 实测 8,727 → 预算 8,600 → 8,750;GUI 端实测 10,640,仍在 12,000 内。
+    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(8_750);
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
     expect(gui).toEqual([...chat, 'sketch']);
     expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(12_000);

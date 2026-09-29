@@ -37,6 +37,7 @@ import { BtwHost } from './views/chat2/BtwPanel'
 import { quoteInMainChat } from './views/chat2/btwStore'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { closeWebFloatingPanel, getWebFloatingPanel, subscribeWebFloatingPanel } from './pluginPanelSeam'
+import { homeTarget } from './services/engine/targets'
 
 const PREVIEW_SIZES: Array<[number, string]> = [[390, 'iPhone'], [414, 'Max'], [768, 'iPad']]
 /** 桌面/web 移动预览「手机框」:套在整个 app 外(引擎壳 + 设置/商店/成就等 fixed 浮层),
@@ -82,7 +83,7 @@ export function Root() {
       window.dispatchEvent(new Event('forsion:agents-changed'))
     }
     if (action === 'skills-changed') {
-      void listSkills(useApp.getState().cfg).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
+      void listSkills(homeTarget()).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
       window.dispatchEvent(new Event('forsion:skills-changed'))
     }
     if (action === 'open-agents') openAgentProfile(useApp.getState().defaultAgentSlug || '')

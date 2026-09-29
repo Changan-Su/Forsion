@@ -11,6 +11,16 @@
 //  M3 连点两次撤销不越界、不报错(历史到底 = no-op)
 //  M4 缩进 / 提升两颗键(G2-06,软键盘没有 Tab):排在画布键之后;点「增加缩进」= Tab(乙成为甲的子项并落盘)、
 //     「减少缩进」= Shift-Tab(提回同级);点键不抢编辑器焦点;加了两颗键后 390 / 窄机 360 下最后一颗仍在药丸内
+//  M5 宿主能力门控(G2-13):移动本地库桥声明 hostCaps 三件 false → 「⋯」里没有导出 PDF / 在文件管理器中显示,
+//     视频卡没有「打开」、其他文件卡不是按钮(点了没反应的死键);PDF 卡照旧能开。对照:不声明(桌面桥)时它们都在。
+//  M6 Android 返回(G2-12):MobileRoot 派发的可取消 forsion:mobile-back 先关编辑器最上层的浮层 —— 胶囊「⋯」弹层、
+//     「+」块面板、⠿ 块菜单、图片大图、askString 对话框;一次只关一层(后开的先关),关完了才轮到壳(不再被拦)。
+//  M7 选区格式条 × 窄屏触屏(G2-10):390 / 360 宽下格式条整条在视口内,键那一行可横滑,滑到头最后一颗(右对齐)
+//     完整露在视口里、点得中(修前约 465px 宽,右侧 2–4 颗键越界够不着)。环境变量 SHOT_DIR 给了就存一张 390 截图。
+//  M8 软键盘弹起(APK adjustResize ≈ 390×430)时在文中连续回车打字:光标所在行始终在悬浮胶囊之上(G2-11:
+//     修前第 3 行起被胶囊盖住 —— PM 的 scrollMargin 只留 5px)。
+//  M9 窄屏触屏的 ⠿(P-14):390 / 360 宽下点一段(与一个可折叠的标题),⠿ 整颗在屏内、中心点得中,点它开块菜单
+//     (修前 ⠿ 可见宽度 0、那一点命中的是「＋」,文档模式没有别的块菜单入口);桌面鼠标对照:「＋」照旧在。
 //
 // 用法:npm run check:mobilebar(= node scripts/e2e-editor.cjs --check=mobile-bar;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -167,6 +177,224 @@ async function main() {
       const f360 = await fitsAt(360)
       record('M4d 加两颗键后 390 / 360 下药丸不破(最后一颗键仍在药丸内)', f390.n === 9 && f390.inScreen && f390.spill <= 1 && f360.inScreen && f360.spill <= 1, JSON.stringify({ f390, f360 }))
       await pg.close()
+    }
+    // ── M5:宿主能力门控(G2-13)──
+    for (const caps of [null, { revealInFileManager: false, exportPdf: false, openAttachment: false }]) {
+      const pg = await ctx.newPage()
+      pg.on('pageerror', (e) => { errs.push(e.message); console.log('[pageerror]', e.message) })
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      // 与生产同一个 window.amadeus 对象上声明(api.ts 抓的是这个引用,整份替换会失联)
+      await pg.evaluate((caps) => { if (caps) window.amadeus.hostCaps = caps; else delete window.amadeus.hostCaps }, caps)
+      await mount(pg, '# 移动标题\n\n第一段。\n\n![[clip.mp4]]\n\n![[pack.zip]]\n\n![[doc.pdf]]\n')
+      await pg.waitForSelector(MOB, { timeout: 60000 })
+      await pg.waitForTimeout(1000)
+      await pg.locator('#mob-host .amx-mbar button[title="更多操作"]').click()
+      await pg.waitForTimeout(300)
+      const st = await pg.evaluate(() => ({
+        rows: [...document.querySelectorAll('.mb-sheet .mb-sheet-row span')].map((e) => e.textContent),
+        mediaOpen: [...document.querySelectorAll('#mob-host .embed-media')].map((m) => `${m.querySelector('.embed-file-name')?.textContent}:${[...m.querySelectorAll('.embed-media-btn')].some((b) => b.textContent.startsWith('打开'))}`),
+        otherIsButton: [...document.querySelectorAll('#mob-host .embed-file')].map((e) => e.tagName),
+      }))
+      const hasPdf = st.rows.includes('导出为 PDF'), hasReveal = st.rows.includes('在文件管理器中显示')
+      const mp4Open = st.mediaOpen.includes('clip.mp4:true'), pdfOpen = st.mediaOpen.includes('doc.pdf:true')
+      if (!caps) record('M5a 对照:桥不声明 hostCaps(桌面)→ 导出 PDF / 在文件管理器中显示 / 视频「打开」/ 文件卡按钮都在',
+        hasPdf && hasReveal && mp4Open && pdfOpen && st.otherIsButton.includes('BUTTON'), JSON.stringify(st))
+      else record('M5b 移动本地库(hostCaps 三件 false)→ 这些死键都不渲染,PDF 卡「打开」照旧',
+        !hasPdf && !hasReveal && !mp4Open && pdfOpen && !st.otherIsButton.includes('BUTTON') && st.rows.includes('删除笔记'), JSON.stringify(st))
+      await pg.close()
+    }
+    // ── M6:Android 返回先关编辑器浮层(G2-12)──
+    {
+      const back = () => { const ev = new Event('forsion:mobile-back', { cancelable: true }); window.dispatchEvent(ev); return ev.defaultPrevented }
+      const pg = await ctx.newPage()
+      pg.on('pageerror', (e) => { errs.push(e.message); console.log('[pageerror]', e.message) })
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      await mount(pg)
+      await pg.waitForSelector(MOB, { timeout: 60000 })
+      await pg.waitForTimeout(800)
+      await pg.locator('#mob-host .amx-mbar button[title="更多操作"]').click()
+      await pg.waitForTimeout(200)
+      const sheetOpen = await pg.evaluate(() => !!document.querySelector('.mb-sheet'))
+      const b1 = await pg.evaluate(back)
+      await pg.waitForTimeout(200)
+      const sheetAfter = await pg.evaluate(() => !!document.querySelector('.mb-sheet'))
+      if (sheetAfter) { await pg.mouse.click(195, 40); await pg.waitForTimeout(200) } // 没关掉(回归):点遮罩收掉,别让下一步卡死
+      // 「+」块面板
+      await pg.locator('#mob-host .amx-mbar button[title="插入块"]').click()
+      await pg.waitForTimeout(300)
+      const pickOpen = await pg.evaluate(() => !!document.querySelector('.amx-bpick'))
+      const b2 = await pg.evaluate(back)
+      await pg.waitForTimeout(200)
+      const pickAfter = await pg.evaluate(() => !!document.querySelector('.amx-bpick'))
+      const b3 = await pg.evaluate(back) // 什么都没开:不拦,交给壳
+      record('M6a 胶囊「⋯」弹层 / 「+」块面板:返回先关它们(拦下),都关了之后不再拦',
+        sheetOpen && b1 && !sheetAfter && pickOpen && b2 && !pickAfter && !b3, JSON.stringify({ sheetOpen, b1, sheetAfter, pickOpen, b2, pickAfter, b3 }))
+      await pg.close()
+
+      // 块菜单 / 大图 / askString:与指针形态无关,桌面尺寸页面里点 ⠿ 更稳(手机上 ⠿ 的可达性是 P-14 那一条)
+      const dp = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+      const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAQ0lEQVR42u3PAQ0AAAgDoL9/aYOLMZgFkA4mJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiZ2WlUBfgdx1f8AAAAASUVORK5CYII='
+      await dp.goto(`${URL}?upage&useed=${encodeURIComponent(`# T\n\nfirst para.\n\n![](${PNG})\n\nafter.\n`)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await dp.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await dp.waitForTimeout(500)
+      const p = await dp.evaluate(() => { const b = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: b.left + 20, y: b.top + b.height / 2 } })
+      await dp.mouse.move(p.x, p.y); await dp.waitForTimeout(150); await dp.mouse.move(p.x + 2, p.y + 1); await dp.waitForTimeout(300)
+      const h = await dp.evaluate(() => { const el = [...document.querySelectorAll('.drag-handle')].find((e) => e.getBoundingClientRect().width > 0); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } })
+      if (h) { await dp.mouse.click(h.x, h.y); await dp.waitForTimeout(300) }
+      const menuOpen = await dp.evaluate(() => !!document.querySelector('.unified-block-menu'))
+      // 菜单开着时再弹 askString(后开的在上):第一次返回只关对话框(取消 = null),第二次才关菜单
+      await dp.evaluate(async () => {
+        const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/components/askString.tsx')) ?? '/src/amadeus/components/askString.tsx'
+        const m = await import(url)
+        window.__askResult = 'pending'
+        m.askString('Rename', 'abc').then((v) => { window.__askResult = v })
+      })
+      await dp.waitForTimeout(300)
+      const askOpen = await dp.evaluate(() => !!document.querySelector('.dialog'))
+      const r1 = await dp.evaluate(back)
+      await dp.waitForTimeout(200)
+      const s1 = await dp.evaluate(() => ({ ask: !!document.querySelector('.dialog'), menu: !!document.querySelector('.unified-block-menu'), result: window.__askResult }))
+      const r2 = await dp.evaluate(back)
+      await dp.waitForTimeout(200)
+      const s2 = await dp.evaluate(() => ({ menu: !!document.querySelector('.unified-block-menu') }))
+      record('M6b askString 压在块菜单上:第一次返回只关对话框(取消),第二次关块菜单',
+        menuOpen && askOpen && r1 && !s1.ask && s1.menu && s1.result === null && r2 && !s2.menu, JSON.stringify({ menuOpen, askOpen, r1, s1, r2, s2 }))
+      const img = await dp.evaluate(() => { const el = document.querySelector('.unified-body img'); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } })
+      if (img) { await dp.mouse.dblclick(img.x, img.y); await dp.waitForTimeout(300) }
+      const lbOpen = await dp.evaluate(() => !!document.querySelector('.amx-lightbox'))
+      const r3 = await dp.evaluate(back)
+      await dp.waitForTimeout(200)
+      const lbAfter = await dp.evaluate(() => !!document.querySelector('.amx-lightbox'))
+      record('M6c 图片大图:返回关大图', lbOpen && r3 && !lbAfter, JSON.stringify({ lbOpen, r3, lbAfter }))
+      await dp.close()
+    }
+    // ── M7:选区格式条 × 窄屏触屏(G2-10)──
+    for (const vw of [390, 360]) {
+      const tctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: vw, height: 800 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+      const pg = await tctx.newPage()
+      await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# 标题\n\n段落 hello world 文本。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(500)
+      const p0 = await pg.evaluate(() => { const b = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: b.left + 10, y: b.top + 8 } })
+      await pg.touchscreen.tap(p0.x, p0.y)
+      await pg.waitForTimeout(250)
+      await pg.evaluate(() => {
+        const el = document.querySelector('.unified-body .ProseMirror > p')
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+        let n, t
+        while ((n = w.nextNode())) if (n.data.includes('hello')) { t = n; break }
+        const i = t.data.indexOf('hello')
+        const r = document.createRange(); r.setStart(t, i); r.setEnd(t, i + 5)
+        const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r)
+      })
+      await pg.waitForTimeout(700)
+      const m = await pg.evaluate(() => {
+        const tb = document.querySelector('.inline-toolbar')
+        if (!tb) return null
+        const row = tb.querySelector('.itb-row')
+        const r = tb.getBoundingClientRect()
+        const inView = r.left >= -0.5 && r.right <= innerWidth + 0.5
+        const scrollable = row.scrollWidth > row.clientWidth + 1
+        row.scrollLeft = row.scrollWidth
+        const last = [...row.querySelectorAll('button')].pop()
+        const lr = last.getBoundingClientRect()
+        const cx = (lr.left + lr.right) / 2, cy = (lr.top + lr.bottom) / 2
+        const hit = document.elementFromPoint(cx, cy)
+        return { vw: innerWidth, tb: [Math.round(r.left), Math.round(r.right)], inView, scrollable, last: last.getAttribute('aria-label'), lastRect: [Math.round(lr.left), Math.round(lr.right)], lastIn: lr.left >= -0.5 && lr.right <= innerWidth + 0.5, lastHit: !!hit && (hit === last || last.contains(hit)) }
+      })
+      if (vw === 390 && process.env.SHOT_DIR) await pg.screenshot({ path: path.join(process.env.SHOT_DIR, 'g210-toolbar-390.png'), clip: { x: 0, y: 0, width: 390, height: 360 } })
+      record(`M7 ${vw} 宽触屏:格式条整条在视口内,键行可横滑,滑到头「右对齐」露全且点得中`,
+        !!m && m.inView && m.scrollable && m.last === '右对齐' && m.lastIn && m.lastHit, JSON.stringify(m))
+      await tctx.close()
+    }
+    // ── M8:光标行不被悬浮胶囊盖住(G2-11)──
+    {
+      const kctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 430 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+      const pg = await kctx.newPage()
+      await pg.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(400)
+      const paras = Array.from({ length: 40 }, (_, i) => `第 ${i} 段正文内容。`).join('\n\n')
+      await mount(pg, '# T\n\n' + paras + '\n')
+      await pg.waitForSelector(MOB, { timeout: 60000 })
+      await pg.waitForTimeout(800)
+      // 第 10 段滚到视口下部(离底 ~130px),点它行尾 —— 与评审探针 g211 同一个起点
+      const at = await pg.evaluate((s) => {
+        const p = [...document.querySelectorAll(s + ' > p')][10]
+        let sc = p.parentElement
+        while (sc && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement
+        if (sc) sc.scrollTop += p.getBoundingClientRect().top - (innerHeight - 130)
+        const r = document.createRange(); r.selectNodeContents(p); const b = r.getBoundingClientRect()
+        return { x: b.right - 2, y: b.top + b.height / 2 }
+      }, MOB)
+      await pg.touchscreen.tap(at.x, at.y)
+      await pg.waitForTimeout(250)
+      const rows = []
+      for (let i = 0; i < 7; i++) {
+        await pg.keyboard.press('Enter')
+        await pg.keyboard.type('新行' + i)
+        await pg.waitForTimeout(150)
+        rows.push(await pg.evaluate(() => {
+          const bar = document.querySelector('#mob-host .amx-mbar').getBoundingClientRect()
+          const node = getSelection().anchorNode
+          const para = (node.nodeType === 3 ? node.parentElement : node).closest('p')
+          const pr = para.getBoundingClientRect()
+          return { line: [Math.round(pr.top), Math.round(pr.bottom)], bar: Math.round(bar.top), under: pr.bottom > bar.top + 0.5 }
+        }))
+      }
+      record('M8 键盘弹起时文中连续回车打字:光标行始终在胶囊之上', rows.every((r) => !r.under), JSON.stringify(rows))
+      await kctx.close()
+    }
+    // ── M9:窄屏触屏的 ⠿ 把手(P-14)──
+    for (const vw of [390, 360]) {
+      const tctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: vw, height: 800 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+      const pg = await tctx.newPage()
+      await pg.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# 手机标题\n\n第一段正文。\n\n## 小节\n\n小节正文。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await pg.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await pg.waitForTimeout(500)
+      const out = {}
+      for (const [key, sel] of [['p', '.unified-body .ProseMirror > p'], ['h2', '.unified-body .ProseMirror > h2']]) {
+        const at = await pg.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } }, sel)
+        await pg.touchscreen.tap(at.x, at.y)
+        await pg.waitForTimeout(400)
+        out[key] = await pg.evaluate(() => {
+          const d = [...document.querySelectorAll('.unified-gutter .drag-handle')].find((e) => e.getBoundingClientRect().width > 0)
+          if (!d) return null
+          const r = d.getBoundingClientRect()
+          const vis = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0))
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+          return { l: +r.left.toFixed(1), r: +r.right.toFixed(1), vis: +vis.toFixed(1), hit: hit === d || d.contains(hit), c: { x: r.left + r.width / 2, y: r.top + r.height / 2 } }
+        })
+      }
+      let menu = false
+      if (out.p?.hit) {
+        const at = await pg.evaluate(() => { const r = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } })
+        await pg.touchscreen.tap(at.x, at.y)
+        await pg.waitForTimeout(400)
+        const c = await pg.evaluate(() => { const d = [...document.querySelectorAll('.unified-gutter .drag-handle')].find((e) => e.getBoundingClientRect().width > 0); const r = d.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+        await pg.touchscreen.tap(c.x, c.y)
+        await pg.waitForTimeout(400)
+        menu = await pg.evaluate(() => !!document.querySelector('.unified-block-menu'))
+      }
+      const whole = (m) => !!m && m.l >= 0 && m.r <= vw && m.vis >= 20 && m.hit
+      if (vw === 390 && process.env.SHOT_DIR) await pg.screenshot({ path: path.join(process.env.SHOT_DIR, 'p14-handle-390.png'), clip: { x: 0, y: 0, width: 390, height: 520 } })
+      record(`M9 ${vw} 宽触屏:⠿ 整颗在屏内且点得中(段落 / 可折叠标题),点它开块菜单`, whole(out.p) && whole(out.h2) && menu, JSON.stringify({ ...out, menu }))
+      await tctx.close()
+    }
+    {
+      const dp = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+      await dp.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# T\n\n第一段正文。\n')}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+      await dp.waitForSelector('.unified-body .ProseMirror', { timeout: 120000 })
+      await dp.waitForTimeout(400)
+      const at = await dp.evaluate(() => { const r = document.querySelector('.unified-body .ProseMirror > p').getBoundingClientRect(); return { x: r.left + 30, y: r.top + r.height / 2 } })
+      await dp.mouse.move(at.x, at.y); await dp.waitForTimeout(150); await dp.mouse.move(at.x + 3, at.y); await dp.waitForTimeout(300)
+      const kids = await dp.evaluate(() => [...document.querySelectorAll('.unified-gutter > *')].filter((e) => getComputedStyle(e).display !== 'none').map((e) => e.className))
+      record('M9 对照:桌面鼠标把手栏照旧 ⠿ + ＋', kids.includes('drag-handle') && kids.includes('block-add'), JSON.stringify(kids))
+      await dp.close()
     }
   } finally {
     await browser.close()

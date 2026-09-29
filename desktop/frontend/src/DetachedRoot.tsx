@@ -13,6 +13,7 @@ import { FindBar } from './findInPage'
 import { detachedId } from './windowKind'
 import { installFileDropGuard } from './fileDropGuard'
 import { listSkills } from './services/backendService'
+import { homeTarget } from './services/engine/targets'
 
 /** 独立窗默认布局 = 主区空占位(home,不可关);真正的视图随后由 detachedReady 注入或从持久化恢复。 */
 function buildDetachedDefault(): void {
@@ -34,7 +35,7 @@ export function DetachedRoot() {
       window.dispatchEvent(new Event('forsion:agents-changed'))
     }
     if (action === 'skills-changed') {
-      void listSkills(useApp.getState().cfg).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
+      void listSkills(homeTarget()).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
       window.dispatchEvent(new Event('forsion:skills-changed'))
     }
   }), [])

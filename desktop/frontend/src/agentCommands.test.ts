@@ -65,6 +65,15 @@ describe('渲染端设置表的安全纪律', () => {
     expect(src, "accent/background 不许直接用 listSkins().map").not.toMatch(/values: \(\) => listSkins\(\)\.map/)
   })
 
+  // P1-K4(方案 §6.1 / §6.3):「允许远程会话」、调用方信任、远程会话最高审批档只能在执行设备本机改 ——
+  // 不给任何 agent 工具,不进 set_ui_setting 目录,也没有声明 invoke 的命令能碰 window.tangu.remoteSessions。
+  it('远程会话的开关 / 信任 / 审批档上限不在 agent 可达的界面面里', () => {
+    const keys = [...engineKeys(), ...rendererKeys()]
+    expect(keys.filter((k) => /remote|approval|trust/i.test(k)), 'set_ui_setting 目录里出现了远程会话 / 审批相关的键').toEqual([])
+    expect(src, 'agentCommands.ts 碰到了 window.tangu.remoteSessions').not.toMatch(/remoteSessions/)
+    expect(readFileSync(ENGINE, 'utf-8'), '引擎 ui_commands 工具碰到了远程会话').not.toMatch(/remoteSessions|maxApprovalMode/)
+  })
+
   it('ui_zoom 的下界收窄到 0.8:setUiZoom 自己只夹到 0.5,而 0.5 是可读性锁死', () => {
     const m = src.match(/const ZOOM_MIN = ([\d.]+)/)
     expect(m).toBeTruthy()

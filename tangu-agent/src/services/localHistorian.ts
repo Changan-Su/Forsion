@@ -47,6 +47,7 @@ import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
+import { sessionRemoteTainted } from './remoteTaint.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -501,11 +502,20 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     earlyTitles.delete(earlyKey);
     const titleDue = due && !(early && (await early));
     // 远程来源的一轮不写长期记忆(09-27 终审 P1 延伸):记忆会注入之后每一次会话(含本机 full-auto),远端 run 自己的
-    // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要 / 日志照常。
-    const remoteRound = historianRoundRemote(sk, opts?.runRemote);
-    if (remoteRound) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
+    // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要照常(会话自有资产)。
+    // 日志(LOG)与工作笔记候选同样不写(P1 · M1A,G7):LOG 按日进 Muse 周期提示词的活动摘要、read_log,远端原话经它流进 Muse;
+    // 工作笔记候选进 Agent 的收件箱,之后 /refine 摆到本机 run 面前。远程 run 自己的 log_event 同样硬拒(remoteOrigin.remoteManagementDenied)。
+    // 会话级污点一并算(P1 · M1A 复审 P1):手机接着聊桌面的会话、用户回到桌面再跑一轮本机 run —— 这一轮本身无污点,
+    // 但判官读的最近 30 条里就有远端原话,只看「轮」会把远程轮刚跳过的内容原样收回去。会话里有过远程 run(input.remote /
+    // remoteTainted)、远端建 / 改过项目路径(remoteOrigin)或远端改过标题(remoteContent)→ 此后每一轮都按远程处理。
+    // 取舍:这类会话从此与带 remoteOrigin 的会话一样,不再自动写 LOG / 记忆候选 / 工作笔记候选、不拉辅助讨论;标题 / 摘要照常。
+    const roundRemote = historianRoundRemote(sk, opts?.runRemote);
+    const remoteRound = roundRemote || (await sessionRemoteTainted(sessionId));
+    // 两句日志分开写(desktop check:remotechain 按第一句的原文认「远程轮」)
+    if (roundRemote) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
+    else if (remoteRound) log(`第 ${roundN} 轮所在会话经远端驱动过(远程 run / 远端改过标题),本轮不写长期记忆`);
     const memoryDue = due && !remoteRound;
-    const logDue = due;
+    const logDue = due && !remoteRound;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
@@ -536,7 +546,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 辅助模式也提名(09-19 放开):辅助模式让出的是 LOG / 记忆的**写入**(交主 Agent 定夺);提名只进收件箱、不写 HARNESS.md,
     // 采纳仍要 /refine + 审批,让出写入权的理由套不到它身上。判官这次调用在辅助模式下本来就为标题 / 摘要在跑,多的只是一个字段。
     // 从前挡在 !assistMode 后面 → 辅助模式用户每个会话只有首轮(恒走独立判断)会提名。
-    const judgeHarness = due && cfg.harnessCandidates && !chIsolated;
+    const judgeHarness = due && cfg.harnessCandidates && !chIsolated && !remoteRound;
     log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
 
     const transcriptSnapshot = await recentTranscript(sessionId);

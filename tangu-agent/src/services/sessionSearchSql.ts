@@ -10,6 +10,7 @@
  */
 import { getDbType, query } from '../core/db.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { notRemoteTaintedSql } from './remoteTaint.js';
 import {
   likePattern, snippetAround, tsDate, tsNum, MAX_TERM_CHARS,
   SESSION_RECALL_MAX_SESSIONS, SESSION_RECALL_MAX_MESSAGES, SESSION_RECALL_MESSAGE_CHARS,
@@ -71,6 +72,7 @@ async function searchScopedSessions(input: SessionSearchInput): Promise<SessionH
     const hide = noToolCallPredicate(input.excludeSessionsWithTool);
     conditions.push(hide.sql); params.push(...hide.params);
   }
+  if (input.excludeRemoteSessions) conditions.push(notRemoteTaintedSql('s'));
   if (input.before) { conditions.push('s.updated_at < ?'); params.push(input.before); }
   if (input.after) { conditions.push('s.updated_at >= ?'); params.push(input.after); }
   conditions.push("(COALESCE(s.title, '') <> '' OR COALESCE(s.summary, '') <> '')");
@@ -234,8 +236,9 @@ export async function readSessionTranscriptInDb(input: SessionTranscriptInput): 
   const beforeId = String(input.beforeMessageId || '').trim();
   input.signal?.throwIfAborted();
   const hide = input.excludeSessionsWithTool ? noToolCallPredicate(input.excludeSessionsWithTool) : null;
+  const noRemote = input.excludeRemoteSessions ? ` AND ${notRemoteTaintedSql('s')}` : '';
   const sess = await query<any[]>(
-    `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 2000) AS summary FROM chat_sessions s WHERE ${scope}${hide ? ` AND ${hide.sql}` : ''}`,
+    `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 2000) AS summary FROM chat_sessions s WHERE ${scope}${hide ? ` AND ${hide.sql}` : ''}${noRemote}`,
     [...scopeParams, ...(hide ? hide.params : [])],
   );
   input.signal?.throwIfAborted();

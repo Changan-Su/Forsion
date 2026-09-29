@@ -4,9 +4,12 @@
  * 前缀缓存只失效最短尾巴),不落库不上屏,纯 harness 脚手架。
  */
 import { prepareHostCommand } from '../sandbox/hostSandbox.js';
+import { engineGitBlocked } from './gitRepoPrograms.js';
 import { runBoundedProcess } from '../utils/boundedProcess.js';
 import type { ToolContext } from '../tools/toolTypes.js';
-export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal'>;
+/** remote / runId:远程污点(prepareHostCommand 据此套写保护)。git 现场收集方案 B 起不看它 —— runGit 每条都 writeProtectShell
+ *  (被批准的远程命令能在工作区仓库摆 clean filter,引擎自己的 `git status` 会执行它;P1-G5 评审 → 方案 B)。 */
+export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal' | 'remote' | 'runId' | 'writeProtectShell'>;
 import { renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { gitSettings } from './gitSettings.js';
 import { GIT_SCRUBBED_ENV, READ_ONLY_GIT_ARGS, gitExecutable } from './gitExec.js';
@@ -66,14 +69,26 @@ export async function runVerifyCommand(command: string, cwd?: string, signal?: A
 const GIT_TIMEOUT_MS = 800;
 const GIT_STATUS_MAX_LINES = 20; // ponytail: 大仓 status 截断到 20 行 + 计数,模型要全量自己跑 git status
 
-
 export interface GitRunResult { code: number; stdout: string; stderr: string; reason?: 'aborted' | 'timeout' | 'output-limit' | 'spawn-error' }
+
+/** 引擎自己的 git 这一次不跑(失败即关):调用方各自按「没有」处理 —— git 现场不注入、面板显示不可用。 */
+export class EngineGitSkipped extends Error {
+  constructor(reason: string) { super(`Engine git skipped: ${reason}`); this.name = 'EngineGitSkipped'; }
+}
 
 /** 跑一条**只读** git 命令,返回退出码与输出(非零不抛:仓库状态天生靠退出码判;项目详情面板据此区分「非仓库 / 无上游」)。
  *  固定前缀:不分页、不跑 fsmonitor / 钩子 / 外部 diff、不验签也不调 gpg —— 外来仓的 `.git/config` 能借这几处执行任意程序。
+ *  前缀关不掉 filter(没有通配写法)。P1 · G5 方案 B:
+ *   · macOS:每一条都套写拒绝 profile(writeProtectShell,不看远程污点;宿主沙箱开时沿用那一档的 profile)。
+ *     sandbox-exec 缺失 / 名单渲不出 → prepareHostCommand 抛错,这一条不跑,绝不裸跑。
+ *   · Linux / Windows 没有这一层:仓库配了前缀中和不了的程序(filter / include / …,见 engineGitBlocked)→ 抛 EngineGitSkipped,不跑。
+ *  两种「不跑」都是**抛**:collectGitState 吞成 null,projectContext 吞成 available:false。
+ *  --no-optional-locks:`git status` 不顺手刷新写回 index —— 800 ms 超时 SIGKILL 掉正在写 index 的 git 会留下 index.lock,
+ *  用户自己的下一条 git 就报「Another git process seems to be running」(方案 B 测延迟时在高负载下实际撞上过)。
  *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
 export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
-  const prepared = prepareHostCommand({ ...ctx, cwd }, [gitExecutable(), ...READ_ONLY_GIT_ARGS, '-C', cwd, ...args]);
+  if (process.platform !== 'darwin' && engineGitBlocked(cwd)) throw new EngineGitSkipped('the repository configures programs git would run (filter, include, …) and this platform has no write-protection sandbox');
+  const prepared = prepareHostCommand({ ...ctx, cwd, writeProtectShell: true }, [gitExecutable(), ...READ_ONLY_GIT_ARGS, '-C', cwd, ...args]);
   try {
     const env: NodeJS.ProcessEnv = { ...(prepared.options.env ?? process.env), GIT_TERMINAL_PROMPT: '0' };
     for (const key of GIT_SCRUBBED_ENV) delete env[key];

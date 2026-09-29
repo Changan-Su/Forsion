@@ -21,6 +21,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
+import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
 import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
@@ -298,6 +299,8 @@ export class BackendManager {
       // 电脑历史的第二道闸:桌面壳配置(userData,随产品名 / dev 变,引擎猜不到)的绝对路径。引擎除了 state.json 还要求这份
       // 文件里 computerHistoryEnabled === true —— state.json 写不进也删不掉时,已落进这里的「关」照样让引擎按关(见 shared 契约)
       env[COMPUTER_HISTORY_DESKTOP_CONFIG_ENV] = join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)
+      // P1-K2 远程锁定:主进程独占的 remote-lock.json(急停后锁、本机系统认证后解)。引擎每次现读,读错即锁(services/remoteLock.ts)
+      env[REMOTE_LOCK_FILE_ENV] = join(app.getPath('userData'), REMOTE_LOCK_FILE)
 
       // PATH 装配(内置 Python 前置 / 用户 bin 目录补全 / 内置 Node 末尾兜底 / 内置 git 兜底)一次算完,顺序见
       // composeEnginePath 与 withBundledGit。⚠️ 补全用户 bin 目录这步不能省:GUI 启动的 app 只有精简 PATH,

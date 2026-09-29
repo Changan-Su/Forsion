@@ -122,6 +122,9 @@ export const memoryLogProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
+        // 远程污点 run 不写每日日志(审批闸已硬拒;这里是同一判定的兜底,P1 · M1A)
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('log_event', undefined) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         const text = String(args.text ?? '').trim();
         if (!text) return 'Error: text is required';
         const r = await appendLogEntry(ctx.userId, text, ctx.signal);

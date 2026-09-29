@@ -13,8 +13,15 @@ import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot, TeamDef } from '../types'
-import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
+import { clearDeviceSticky, noteDeviceRefusal } from '../services/deviceMarks' // P1-K7a
+import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
+import { bindSession, clearSessionBindings, connectionKey, focusName, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, installEngineHost, knownTargets, nameOfRef, refForSession, restoreFocus, restoreSessionBindings, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../services/engine/targets'
+import { capsForRef } from '../services/engine/targetCaps'
+import { healthOf, isRecoverable, isTerminal, noteHealth, probeTarget, resetHealth, useTargetHealth, waitReady } from '../services/engine/health'
+import { catalogFor, ensureCatalog, forgetCatalog, rememberCatalog } from '../services/engine/catalog'
+import { unitHostProfile } from '../services/engine/hostFs'
+import '../services/engine/messages'
 import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleUltra } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
@@ -32,12 +39,12 @@ import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { finishRunStats, stepRunStats, type RunStats } from './runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
-import { noteAgentWriteEnd, noteAgentWriteStart } from './agentWriteLedger'
+import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
 import { publishAccountQuota } from '../services/accountQuota'
-import { sanitizeApprovalReason } from '../approvalReason'
+import { sanitizeAnswerBy, sanitizeApprovalReason, sanitizeApprovalRemote } from '../approvalReason'
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
@@ -327,6 +334,10 @@ const MAX_DONE_ACKS = 2000
 let quotaCheckBusy = false
 let lastQuotaExhaustState = ''
 let authGeneration = 0
+/** P1-K6 S4:焦点代。换焦点不再清会话(会话按绑定走,别的会话照常跑),只换「新会话建在哪」和它的目录 ——
+ *  目录类加载(Agent / 模型 / 技能 / 团队 / 云项目 / 特殊 Agent / 家目录)按「账号代 + 焦点代」丢弃过期结果。 */
+let focusGeneration = 0
+const catalogToken = (): string => `${authGeneration}:${focusGeneration}`
 function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: string) => string): void {
   if (typeof window === 'undefined' || !window.tangu?.accountQuota) return
   if (quotaCheckBusy) return
@@ -402,7 +413,144 @@ const projectRef = (s: Pick<AppState, 'sessions' | 'archivedSessions'>, path: st
 }
 
 const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
-  s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
+  // P1-K6 S2:焦点在「我的电脑」→ 引擎是那台电脑的 managed 引擎,有真实 host FS(按目标能力判,不看本端的 desktopMode)。
+  // 只用于「新会话建在哪」(焦点)这一侧;已有会话的 host 能力按它自己的目标判(capsForRef(refForSession(sid)))。
+  focusRef().kind === 'unit' ? capsForRef(focusRef()).hostFs
+    : s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
+
+/** P1-K6 S4:项目端点按载体会话所在的目标发(项目图标 / 项目默认项是那台引擎上的记录);没有载体会话 → 焦点(新会话会建在那)。 */
+const projectTarget = (ref: { sessionId: string } | { cwd: string }): EngineTarget =>
+  'sessionId' in ref ? targetForSession(ref.sessionId) : focusTarget()
+
+/**
+ * 这个会话所在的引擎此刻能不能用(P1-K6 S4:会话按绑定走,不再一律等于焦点):
+ * - 会话就在焦点上 → 焦点的连接态(connState,S2 语义原样:焦点那台没连上就等它);
+ * - 本端会话而焦点在别的电脑 → 可用(本端 = 云端,失败照常 toast;焦点那台连不上不该锁住本端会话);
+ * - 绑在另一台(非焦点)电脑 → 看它的健康格:未知 / ready = 先试,离线 / 终局 = 不可用(轮询暂停、历史不拉)。
+ */
+export function sessionReachable(s: Pick<AppState, 'connState'>, sessionId: string): boolean {
+  const ref = refForSession(sessionId)
+  if (sameRef(ref, focusRef())) return s.connState === 'ok'
+  if (ref.kind === 'home') return true
+  const st = healthOf(targetKeyOf(ref)).state
+  return st === 'ready' || st === 'unknown'
+}
+
+/** 输入框能不能发(P1-K6 S4):空白新对话 = 建在焦点上 → 焦点的连接态;已有会话 → 它自己的目标。
+ *  非焦点的那台只在终局态(设备被移除 / 身份 / 凭据 / 拒绝)锁输入框 —— 离线类照 S2 焦点 run 中断线时的口径不锁(发出去会给人话)。 */
+export function composerReady(s: Pick<AppState, 'connState'>, sessionId: string | null | undefined): boolean {
+  if (!sessionId) return s.connState === 'ok'
+  const ref = refForSession(sessionId)
+  if (sameRef(ref, focusRef())) return s.connState === 'ok'
+  if (ref.kind === 'home') return true
+  return !isTerminal(healthOf(targetKeyOf(ref)))
+}
+
+// ── P1-K6 S2:焦点目标(整端切到一台电脑)在 store 里的落点 ──
+/** 焦点的目标键(home / unit:<id>)。 */
+const focusKey = (): TargetKey => targetKeyOf(focusRef())
+/** unit 会话的轮询间隔(home 仍是 bootstrap 的 4s):经 hub 的每条请求都吃全局限流。按目标记上次轮询的时刻(S4:会话可能在不同的电脑上)。 */
+const UNIT_POLL_MS = 12_000
+const unitPollAt = new Map<TargetKey, number>()
+
+/** 焦点代的中止器:换焦点 / 换账号时 abort,挂在它上面的后台等恢复随之撤掉(探针环没人等 → 当场收工,不再经 hub 探旧那台)。 */
+let focusAbort = new AbortController()
+/** 当前焦点代上挂着的那个后台等恢复(同一代只挂一个;探针环本就按目标共用)。 */
+let focusRecovery: { signal: AbortSignal } | null = null
+
+/** 结束当前焦点代:撤掉后台等恢复。句柄同步清空 —— waitReady 的拒绝在微任务里才到,紧接着的 ensureFocusRecovery 不能看见旧句柄。 */
+function endFocusGeneration(): void {
+  focusAbort.abort()
+  focusAbort = new AbortController()
+  focusRecovery = null
+}
+
+/**
+ * 焦点那台掉进可恢复态(离线 / 引擎没起 / 限流,或 connect 撞上瞬态、健康还是 unknown)→ 挂一个后台 waitReady
+ * (与 SSE 暂停共用一条探针环),转好时:connect 失败过 → 再 connect 一次;已连上 → 放开轮询(lastUnitPollAt 归零,下一拍就拉带外消息)。
+ * 提示条说的「恢复连接后会自动继续」不能只靠「恰好有 SSE 在等 / connect 失败时挂的那个等待者」(K6-S2 评审 F1:
+ * 空闲时一次 502 就让轮询永久停摆)。终局态不挂(R-32 不无限重试;手动出口 = retryFocusTarget / 再选一次同一台)。
+ */
+function ensureFocusRecovery(): void {
+  if (focusRef().kind !== 'unit') return
+  const signal = focusAbort.signal
+  if (focusRecovery?.signal === signal) return
+  const key = focusKey()
+  const h = healthOf(key)
+  if (h.state === 'ready' || isTerminal(h)) return
+  const handle = { signal }
+  focusRecovery = handle
+  waitReady(key, signal).then(() => {
+    if (signal.aborted || focusKey() !== key) return
+    unitPollAt.delete(key)
+    // 只接「连过、失败了」的:idle = 正在连(refocus / boot 的 connect 在飞),不插第二条
+    const st = useApp.getState()
+    if (st.connState === 'err') void st.connect(st.cfg)
+  }, () => { /* 中止(换了焦点)或转成终局(提示条给「重试」)*/ }).finally(() => { if (focusRecovery === handle) focusRecovery = null })
+}
+/** P1-K6 S4:**非焦点**的那台(打开的会话绑在它上面)掉进可恢复态时的后台等恢复 —— 同焦点那条(评审 F1 的教训:空闲时一次 502
+ *  就让轮询永久停摆),只是它不重连焦点,转好了放开这台的轮询。只给「在用」的那台挂:打开的会话在它上面;换会话 / 换焦点时撤掉不在用的。 */
+const sessionRecoveries = new Map<TargetKey, AbortController>()
+/** 正在用的 unit 键:焦点 + 打开的会话所在的那台(轮询 / 恢复只为它们跑,别的电脑不经 hub 空探)。 */
+function unitKeysInUse(): Set<TargetKey> {
+  const keys = new Set<TargetKey>()
+  if (focusRef().kind === 'unit') keys.add(focusKey())
+  const active = useApp.getState().activeId
+  const ref = active ? refForSession(active) : HOME_REF
+  if (ref.kind === 'unit') keys.add(targetKeyOf(ref))
+  return keys
+}
+function ensureUnitRecovery(key: TargetKey): void {
+  if (key === 'home') return
+  if (focusRef().kind === 'unit' && key === focusKey()) { ensureFocusRecovery(); return }
+  if (sessionRecoveries.has(key) || !unitKeysInUse().has(key)) return
+  const h = healthOf(key)
+  if (h.state === 'ready' || isTerminal(h)) return
+  const ac = new AbortController()
+  sessionRecoveries.set(key, ac)
+  waitReady(key, ac.signal).then(() => { if (!ac.signal.aborted) unitPollAt.delete(key) }, () => { /* 中止 / 转成终局 */ })
+    .finally(() => { if (sessionRecoveries.get(key) === ac) sessionRecoveries.delete(key) })
+}
+/** 撤掉不再在用的那几台的后台等恢复(探针环没人等 → 当场收工)。 */
+function pruneSessionRecoveries(): void {
+  const keep = unitKeysInUse()
+  for (const [key, ac] of sessionRecoveries) if (!keep.has(key)) { ac.abort(); sessionRecoveries.delete(key) }
+}
+
+/** 换焦点前 home 的家目录 / 默认工作区(web / 手机上本就为空;桌面不会有 unit 焦点)。回 home 时还原。 */
+let homeProfile: { homeDir: string | undefined; defaultWsDir: string } | null = null
+/** unit 焦点的「上次用的模型」(按设备记):手机自己的 cfg.modelId 在那台电脑上未必存在。 */
+const FOCUS_MODELS_KEY = 'forsion_engine_models'
+function readFocusModel(ref: TargetRef): string {
+  if (ref.kind !== 'unit') return ''
+  try {
+    const m = JSON.parse(localStorage.getItem(FOCUS_MODELS_KEY) || '{}') as Record<string, unknown>
+    return typeof m[ref.unitId] === 'string' ? (m[ref.unitId] as string) : ''
+  } catch { return '' }
+}
+function writeFocusModel(ref: TargetRef, modelId: string): void {
+  if (ref.kind !== 'unit') return
+  try {
+    const m = JSON.parse(localStorage.getItem(FOCUS_MODELS_KEY) || '{}') as Record<string, string>
+    delete m[ref.unitId]
+    m[ref.unitId] = modelId
+    const keys = Object.keys(m)
+    for (const k of keys.slice(0, Math.max(0, keys.length - 50))) delete m[k] // 只留最近 50 台
+    localStorage.setItem(FOCUS_MODELS_KEY, JSON.stringify(m))
+  } catch { /* 隐私模式:只活在内存 */ }
+}
+/** 新会话的「默认模型」(newChatModelId / activeChatModelId / send 的回退链共用):home = cfg.modelId(不变);
+ *  unit 焦点 = 按设备记的那个 → 手机偏好 → 都不在那台电脑的模型表里就不给(回落目标的 defaultModelId)。 */
+function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId?: string }, ref: TargetRef = focusRef()): string | undefined {
+  if (ref.kind === 'home') return s.cfg.modelId || undefined
+  // P1-K6 S4:会话可能在一台已经不是焦点的电脑上 —— 用那台的目录缓存与按设备记的模型(顶层 modelsResp / focusModelId 只属于焦点)
+  const onFocus = sameRef(ref, focusRef())
+  const models = onFocus ? s.modelsResp?.models : catalogFor(targetKeyOf(ref))?.models?.models
+  const remembered = onFocus ? s.focusModelId : readFocusModel(ref)
+  const has = (id: string | undefined): id is string => !!id && !!models?.some((m) => m.id === id)
+  if (has(remembered)) return remembered
+  return has(s.cfg.modelId) ? s.cfg.modelId : undefined
+}
 
 /** 新对话在「没有显式 Project 选择」时的真实落点。
  *
@@ -482,23 +630,32 @@ export function withAmadeusWorkspace(config: AgentConfig, vaultRoot: string | nu
 }
 
 const activeAmadeusRoot = (): string | null => usePageStore.getState().vaultRoot || null
+
+/** P1-K7a(K7 §3.6 / S6):建在「我的电脑」上的会话,手机本地的这些键一律不带 —— 手机的 Amadeus 根(extraRoots)、云端项目名、
+ *  外部引擎、验证命令、轨道身份。引擎侧(C7 / C8)也会剥 / 拒,这里不依赖它;cwd 只可能是在那台上选的项目(调用方给的 path)。 */
+const REMOTE_DROP_INIT_KEYS = ['extraRoots', 'workspaceProject', 'engineId', 'engineModelId', 'verifyCommand', 'soloAgentSlug', 'teamSlug'] as const
+export function remoteSafeInit(c: AgentConfig): AgentConfig {
+  const out = { ...c } as Record<string, unknown>
+  for (const k of REMOTE_DROP_INIT_KEYS) delete out[k]
+  return out as AgentConfig
+}
 /** 新会话「这条消息实际会用哪个模型」的**唯一**回退链:本次空态显式选的 → 全局记忆
  *  (cfg.modelId 就是「新会话用哪个模型」的真源,在会话里换模型也会写它)→ 后端默认。
  *  ⚠️ 输入栏药丸(ChatView)、建会话时落库、startRun 三处必须同源。三份各写各的时出过的 bug:
  *  建会话不传 model_id → 引擎按 profile.defaultModelId 落库(tangu-agent routes/sessions.ts),
  *  而药丸显示的是 cfg.modelId → 发出去药丸当场跳回默认,第二轮还真的换成默认模型跑
  *  (第二轮读的是会话自己的 model_id)。仪器:appStore.test.ts 的「新会话固化模型」。 */
-export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'>): string | undefined {
-  return s.newChatModel || s.cfg.modelId || s.modelsResp?.defaultModelId || undefined
+export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'> & { focusModelId?: string }): string | undefined {
+  return s.newChatModel || defaultModelOf(s) || s.modelsResp?.defaultModelId || undefined
 }
 /** 主区聊天此刻**实际会用**的模型 id(有会话 → 会话的;空白新对话 → newChatModelId)。
  *  = 输入栏药丸显示的那个(ChatView 的 mvModelId)。插件接缝 `ctx.tangu.activeModel()` 也读它 ——
  *  这条回退链已经被就地展开过三份、出过「发出去药丸跳回默认」的 bug,**别再抄第四份**。 */
 export function activeChatModelId(
-  s: Pick<AppState, 'activeId' | 'newChatModel' | 'cfg' | 'modelsResp'> & { activeSession?: SessionRecord | null },
+  s: Pick<AppState, 'activeId' | 'newChatModel' | 'cfg' | 'modelsResp'> & { activeSession?: SessionRecord | null; focusModelId?: string },
 ): string {
   if (!s.activeId) return newChatModelId(s) || ''
-  return s.activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''
+  return s.activeSession?.model_id || defaultModelOf(s) || s.modelsResp?.defaultModelId || ''
 }
 /** 记住「上次用的」审批档/思考档:**新会话据此起步**。先落内存(web/mobile 无 window.tangu,
  *  至少本次会期内粘住),再异步写盘(桌面跨重启)。 */
@@ -530,7 +687,7 @@ const markSending = (sid: string, delta: 1 | -1): void => {
 }
 
 function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
-  return api.patchSessionConfig(useApp.getState().cfg, sid, patch, () => useApp.getState().configBySession[sid] || {})
+  return api.patchSessionConfig(targetForSession(sid), sid, patch, () => useApp.getState().configBySession[sid] || {})
 }
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
@@ -547,7 +704,9 @@ let connectInflight: { key: string; p: Promise<void> } | null = null
  *  否则老 token 那次 connectOnce 晚到的 401 会盖掉新 token 已成功的 ok,还把 lastConnectAuthRejected 置真停掉重试环(Codex 评审抓的)。 */
 let connectGen = 0
 let lastOkConnectKey = ''
-const connectKey = (c: { backendUrl: string; token: string }): string => `${c.backendUrl}|${c.token}`
+// 焦点在 unit 时连的是那台电脑(基址不在 cfg 里):键按焦点算,否则换焦点后 inflight 复用 / lastOkConnectKey 会误判「已连同一个」。
+const connectKey = (c: { backendUrl: string; token: string }): string =>
+  focusRef().kind === 'home' ? connectionKey(c) : `${focusKey()}|${c.token}`
 let lastEngineResyncAt = 0 // 凭据不同步时的引擎重启节流:401 持续不断也不许变成重启风暴
 const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
 const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
@@ -638,6 +797,8 @@ export interface AppState {
   channelWorkspaces: WorkspaceDescriptor[]
   newChatCfg: AgentConfig
   newChatModel: string | null
+  /** P1-K6 S2:焦点在「我的电脑」时按设备记住的「上次用的模型」(home 恒 '')。新会话的默认模型回退链读它。 */
+  focusModelId: string
   /** 空态暂存的「下一个新会话」模式(DSH staged pick):null = Work/工作区默认;建会话时消费并清空。 */
   /** 侧栏 Chat/Work 模式(新对话行右侧胶囊;持久化 localStorage,web/mobile 也有):决定新会话的 preset 与侧栏列表的过滤。
    *  null = 用户没手选过 → 默认 Work(effectiveSessionMode),读时解析。已创建会话的模式仍是会话事实(空白会话锁),不随它变。 */
@@ -853,8 +1014,9 @@ export interface AppState {
   ensureEngineCaps(engineId: string | undefined): void
   openSettings(tab?: SettingsTab, skillKey?: string): void
   closeSettings(): void
-  /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。 */
-  handleAuthExpired(): void
+  /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。
+   *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
+  handleAuthExpired(target?: TargetKey): void
   openMarket(): void
   closeMarket(): void
   openAchievements(): void
@@ -889,8 +1051,10 @@ const soloRotateInflight = new Map<string, Promise<{ session: SessionRecord; mem
 async function rotateSoloImpl(get: () => AppState, set: (fn: (st: AppState) => Partial<AppState> | AppState) => void, kind: 'agent' | 'engine', id: string): Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null> {
     const t = get().tr
     try {
-      const r = await api.soloRotate(get().cfg, kind, id)
+      const loc = focusRef()
+      const r = await api.soloRotate(targetForRef(loc) ?? focusTarget(), kind, id)
       if (!r?.session?.id) throw new Error(t('solo.engineTooOld'))
+      if (bindSession(r.session.id, loc) === 'conflict') throw new Error(t('app.cannotCreateSession')) // S4:私聊会话在焦点那台上
       // 旧的活动私聊会话已在引擎侧归档:本地列表同步挪到归档区(不重拉整表)。
       const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId'
       set((st) => {
@@ -954,6 +1118,7 @@ export const useApp = create<AppState>((set, get) => ({
   channelWorkspaces: [],
   newChatCfg: {},
   newChatModel: null,
+  focusModelId: '',
   sessionMode: loadSessionMode(),
   pendingDraft: null,
   pendingChatQuote: null,
@@ -1094,6 +1259,17 @@ export const useApp = create<AppState>((set, get) => ({
         })
         // Agent Desk 直播:编辑参数还在流式生成就上台(state 只动上台/路径就位两次,内容 LivePane 自己订)。
         if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name))) get().deskLiveSync(sessionId, assistantId, String(pl.id), String(pl.name))
+        // 「Tangu 正在改这篇」(评审 G3-05):目标路径一完整流出来就登记进归属账本的提示区(不参与归属认领),
+        // 打开着这篇的编辑器据此挂一个不阻塞的胶囊。登记过就不再每个 delta 重扫参数。
+        if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name)) && !agentWriteKnown(String(pl.id))) {
+          const ev = (get().messagesBySession[sessionId] || []).find((m) => m.id === assistantId)?.toolEvents?.find((tt) => tt.id === pl.id)
+          const raw = extractStreamingString(ev?.arguments || '', 'path')
+          if (raw?.done) {
+            const cfg = get().configBySession[sessionId] || {}
+            const abs = resolveDeskPath(raw.value, cfg.cwd || get().sessions.find((x) => x.id === sessionId)?.project_path || undefined)
+            if (abs) noteAgentWriteLive(String(pl.id), abs)
+          }
+        }
         break
       case 'tool_call':
         if (pl.name === 'generate_image') { track('image.generate'); act('image.generate') }
@@ -1165,7 +1341,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (drop) { recordUiAction({ runId, ackId, ...req, drop }); break }
         if (uiActionDoneAcks.size >= MAX_DONE_ACKS) uiActionDoneAcks.clear()
         uiActionDoneAcks.add(ackId)
-        const cfg = get().cfg
+        const target = targetForSession(sessionId) // run 的回执打到会话所在的引擎(S4:绑定表;未绑 = home)
         void (async () => {
           const [{ applyUiSetting, runAgentCommand, readUiValues }, { sendUiAck }] = await Promise.all([
             import('../agentCommands'),
@@ -1180,25 +1356,25 @@ export const useApp = create<AppState>((set, get) => ({
             : await runAgentCommand(pl.id, pl.args && typeof pl.args === 'object' ? pl.args : undefined)
           // 回执带全份设置新值(在 setter 落地**之后**读):引擎据此刷新 run 内快照,同 run 里再 list 才是新值。
           // pending(setter 没在时限内落地)就不带:那一刻读到的还是旧值,写进引擎等于把病换个出口再犯一次。
-          const ack = await sendUiAck(cfg, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
+          const ack = await sendUiAck(target, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
           recordUiAction({ runId, ackId, ...req, ok: r.ok, error: r.error, state: r.state, ack })
         })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
         break
       }
       case 'desk_capture_request':
         if (pl.shotId) {
-          const cfg = get().cfg
-          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(cfg, String(pl.runId || runId), sessionId, String(pl.shotId)))
+          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(String(pl.runId || runId), sessionId, String(pl.shotId)))
         }
         break
       case 'approval_request': {
         // reason 白名单清洗:审批事件会持久化重放,一条畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律)
         const reason = sanitizeApprovalReason(pl.reason)
+        const remote = sanitizeApprovalRemote(pl.remote) // P1-K1:远程会话来源(同样白名单清洗)
         // 落点:团队成员的转发事件带 messageId(它本次激活的占位气泡)与子 runId;普通 run 落当前气泡(群聊里首位发言人的占位已被改名成持久 id,
         // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, live: undefined, work: m.work ? { ...m.work, waiting: true } : m.work,
-          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
+          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(remote ? { remote } : {}), ...(pl.localOnly === true ? { localOnly: true } : {}) /* P1-K3 */, ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         break
@@ -1208,7 +1384,8 @@ export const useApp = create<AppState>((set, get) => ({
         const owner = (get().messagesBySession[sessionId] || []).find((m) => m.approvals?.some((a) => a.approvalId === pl.approvalId))?.id ?? targetOf(pl)
         patchMessage(sessionId, owner, (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
-          approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
+          // P1-K3:by = 谁答的(白名单清洗);卡片收起时写「在 X 上」
+          approvals: (m.approvals || []).map((a) => { if (a.approvalId !== pl.approvalId) return a; const answeredBy = sanitizeAnswerBy(pl.by); return { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const), ...(answeredBy ? { answeredBy } : {}) } }),
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
@@ -1253,7 +1430,7 @@ export const useApp = create<AppState>((set, get) => ({
       case 'inquiry_result':
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
-          inquiries: (m.inquiries || []).map((q) => q.inquiryId === pl.inquiryId ? { ...q, status: 'answered' as const, answer: String(pl.answer ?? '') } : q),
+          inquiries: (m.inquiries || []).map((q) => { if (q.inquiryId !== pl.inquiryId) return q; const answeredBy = sanitizeAnswerBy(pl.by); return { ...q, status: 'answered' as const, answer: String(pl.answer ?? ''), ...(answeredBy ? { answeredBy } : {}) } }), // P1-K3
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
@@ -1355,11 +1532,14 @@ export const useApp = create<AppState>((set, get) => ({
         } else if (pl.phase === 'end' && mid && pl.reason === 'aborted') {
           patchMessage(sessionId, mid, (m) => ({ ...m, status: 'stopped', work: undefined }))
         }
+        // S4:成员这次的工作会话在团队会话那台上 → 路由跟它走;撞上本端会话 / 别处的 id(R-16)不收,留原来那条
+        const reported = pl.phase === 'start' ? String(pl.sessionId || '') : ''
+        const memberSid = reported && inheritChildRows([{ sessionId: reported }], sessionId).length ? reported : ''
         set((s) => {
           const cur = s.teamWorkBySession[sessionId] || {}
           const prev = cur[slug] || { slug, name, status: 'idle' as const, since: Date.now() }
           const next = pl.phase === 'start'
-            ? { ...prev, name, sessionId: String(pl.sessionId || prev.sessionId || ''), runId: String(pl.runId || ''), messageId: mid, status: 'working' as const, task: String(pl.task || ''), activity: undefined, since: Date.now() }
+            ? { ...prev, name, sessionId: String(memberSid || prev.sessionId || ''), runId: String(pl.runId || ''), messageId: mid, status: 'working' as const, task: String(pl.task || ''), activity: undefined, since: Date.now() }
             : { ...prev, name, runId: String(pl.runId || prev.runId || ''), messageId: mid || prev.messageId, status: (pl.reason === 'failed' ? 'failed' : pl.reason === 'aborted' ? 'idle' : 'done') as TeamWorkMember['status'], activity: undefined, since: Date.now() }
           return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: { ...cur, [slug]: next } } }
         })
@@ -1510,7 +1690,7 @@ export const useApp = create<AppState>((set, get) => ({
             // 把「forsion-suggest」和反引号念出来 —— 同一条消息两个入口读出两样东西。
             const spoken = msg?.content ? splitSuggestions(msg.content, { kinds: ['suggest', 'task', 'creation'] }).text : ''
             if (spoken.trim()) {
-              speakMessage(st.cfg, dc, assistantId, spoken).catch((e: any) => {
+              speakMessage(homeTarget(), dc, assistantId, spoken).catch((e: any) => {
                 if (e?.message !== 'EMPTY') get().toast(get().tr('tts.failed', { e: e?.message || e }), true)
               })
             }
@@ -1694,17 +1874,21 @@ export const useApp = create<AppState>((set, get) => ({
     })
     // 看门狗:每 30s 查一次。仅当助手消息仍在 streaming、且后端活跃集已无此 run(终止帧丢失 / 被判失败)
     // 才兜底收尾——后端还在跑(慢模型/长任务)时 run 仍在活跃集,绝不误杀。
+    // P1-K6 S2:run 的目标在订阅时定一次(S2 = 焦点);unit 目标不健康(离线 / 引擎没起)时看门狗不收尾 ——
+    // 查不到活跃集是因为连不上,不是 run 没了(SSE 那边正暂停等恢复)。
+    const runKey = targetForSession(sessionId).key
     runWatchdogs.set(runId, setInterval(() => { void (async () => {
       if (get().runningBySession[sessionId] !== runId) return
       if (stoppedRuns.has(runId)) return // 停止请求的退出确认归 stop() 管,DB 终态不等于清理完毕。
+      if (runKey !== 'home' && healthOf(runKey).state !== 'ready') return
       const cur = (get().messagesBySession[sessionId] || []).find((m) => m.id === assistantRef.current)
       if (!cur || cur.status !== 'streaming') return
       let active: Array<{ id: string; status?: string }> = []
-      try { active = await listActiveRuns(get().cfg, sessionId) } catch { return }
+      try { active = await listActiveRuns(targetForSession(sessionId), sessionId) } catch { return }
       if (active.some((r) => r.id === runId && (r.status === 'running' || r.status === 'queued' || !r.status))) return
       // 后端已不跑此 run,但 UI 还卡 streaming → 重载消息收尾。
       let rec: any
-      try { rec = (await api.listMessages(get().cfg, sessionId)).find((r: any) => r.id === assistantRef.current) } catch { return }
+      try { rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current) } catch { return }
       get().patchMessage(sessionId, assistantRef.current, (m) => {
         const content = rec?.content || m.content
         return content
@@ -1716,7 +1900,7 @@ export const useApp = create<AppState>((set, get) => ({
       expireRunPrompts(set, sessionId, runId) // 引擎查实已不跑:它那边的审批早没了,托盘里别留死卡
       endRun(set, get, sessionId, runId)
     })() }, 30000))
-    void subscribeRunEvents(get().cfg, runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
+    void subscribeRunEvents(targetForSession(sessionId), runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
       .catch((e) => {
         if (get().runningBySession[sessionId] !== runId || stoppedRuns.has(runId)) return
         if (!stoppedRuns.has(runId)) {
@@ -1727,19 +1911,32 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   refreshSessions: async (c) => {
+    void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
     const generation = authGeneration
-    const [act, arch] = await Promise.all([api.listSessions(c, false), api.listSessions(c, true)])
+    // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
+    // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
+    const t = homeTarget()
+    const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== authGeneration) return []
+    // 本端列表 = 本端会话的权威证据:早先被设备自报的同 id 抢绑到那台的(启动时列表还没回来就绑上了),撤回本端;
+    // 那条会话此前按那台拉过的历史作废,下次打开从本端重拉。
+    for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) loadedHistory.delete(id)
+    let merged: SessionRecord[] = act
     set((s) => {
       // 列表行自带 agent_config:本地还没有的会话先用它预填。重载/切入会话时 loadSessionHistory 到达前不再按 {} 渲染成 work,
       // 加载窗口里的任何配置写也从存值起步而不是从 {} 起步把 preset 冲掉(creview 09-07 F3;服务端 PUT 另有锁兜底)。
       const configBySession = { ...s.configBySession }
       for (const x of [...act, ...arch]) if (x.agent_config && !configBySession[x.id]) configBySession[x.id] = x.agent_config
-      return { sessions: act, archivedSessions: arch, configBySession }
+      const listed = new Set([...act, ...arch].map((x) => x.id))
+      const keep = (x: SessionRecord): boolean => x.location?.kind === 'unit' && !listed.has(x.id)
+      merged = [...act, ...s.sessions.filter((x) => keep(x) && !x.archived)]
+      return { sessions: merged, archivedSessions: [...arch, ...s.archivedSessions.filter(keep)], configBySession }
     })
-    return act
+    return merged
   },
 
+  // P1-K6 S3:请求走目标解析层(焦点 / homeTarget() 活目标现读 store.cfg);c 只作去重键。调用方先把 cfg 落进 store 再 connect
+  // (patchConfig → onReconnect、boot / 引导回调、账号切换都是这个顺序)。
   connect: async (c) => {
     const key = connectKey(c)
     if (connectInflight?.key === key) return connectInflight.p
@@ -1755,11 +1952,29 @@ export const useApp = create<AppState>((set, get) => ({
     // 换了连接目标(托管切外部、改外部地址 / 令牌):旧目标的 ok 不代表新目标连得上,结果回来前先退回「连接中」,
     // 别让状态条在这段时间把新地址报成已连通(Codex 第三轮 R2-g-1)。同一目标的重连不动 ok。
     if (get().connState === 'ok' && connectKey(c) !== lastOkConnectKey) set({ connState: 'idle', connMessage: '' })
-    const r = await testConnection(c)
+    // S2:焦点在「我的电脑」→ 探的、拉的都是那台(目录 + 会话类);焦点在 home = 原样用 c(与改造前逐字一致)
+    const target = focusTarget()
+    const onUnit = focusRef().kind === 'unit'
+    const r = await testConnection(target)
     if (!latest()) return // 已有更新的 connect 在飞/已完成:这条的结果(尤其老 token 的 401)一律作废
     set({ connState: r.ok ? 'ok' : 'err', connMessage: r.message })
     lastConnectAuthRejected = !!r.authRejected
-    if (!r.ok) return
+    if (!r.ok) {
+      // 那台电脑已从账号移除(404 UNIT_NOT_FOUND):id 不会再回来,留在这个焦点上只剩一屏报错 → 切回本端
+      if (onUnit && r.verdict === 'gone') {
+        get().toast(`${t('engine.target.gone')} · ${t('engine.target.fallbackHome')}`, true)
+        void setFocusTarget(HOME_REF).catch(() => {})
+      }
+      // 可恢复的(不在线 / 引擎没起 / 限流 / 网关 5xx):提示说了「恢复连接后会自动继续」就得真的自己连回去 ——
+      // 挂到焦点代的后台等恢复上(探针转好再 connect 一次;换了焦点即中止,不再探旧那台)。瞬态不写健康表(还是 unknown),
+      // 健康表的订阅看不见它,所以这里显式挂;终局(设备移除 / 身份 / 拒绝)由提示条说明、给重试,不自动重连。
+      if (onUnit && (r.verdict === 'offline' || r.verdict === 'engine-unavailable' || r.verdict === 'rate-limited' || r.verdict === 'transient')) {
+        ensureFocusRecovery()
+      }
+      // P1-K6 S4:会话列表只拉本端(R-17)—— 焦点那台连不上不妨碍列出 / 打开本端的会话
+      if (onUnit) void get().refreshSessions(c).catch(() => {})
+      return
+    }
     lastOkConnectKey = connectKey(c)
     try {
       const act = await get().refreshSessions(c)
@@ -1776,9 +1991,12 @@ export const useApp = create<AppState>((set, get) => ({
     if (!latest()) return
     void get().refreshCloudProjects(c)
     // 后续三条列表也只认最新代:老 token 的 401 会把 modelsResp/skillsList 置空,盖掉新 token 刚拉到的
-    void api.listModels(c).then((m) => { if (latest()) set({ modelsResp: m }) }).catch(() => { if (latest()) set({ modelsResp: null }) })
-    void api.listSkills(c).then((s) => { if (latest()) set({ skillsList: s }) }).catch(() => { if (latest()) set({ skillsList: null }) })
-    void api.listEngines(c).then((e) => { if (latest()) set({ engines: e }) }).catch(() => { if (latest()) set({ engines: [] }) })
+    const key = focusKey()
+    void api.listModels(target).then((m) => { if (latest()) { set({ modelsResp: m }); rememberCatalog(key, { models: m }) } }).catch(() => { if (latest()) set({ modelsResp: null }) })
+    void api.listSkills(target).then((s) => { if (latest()) { set({ skillsList: s }); rememberCatalog(key, { skills: s }) } }).catch(() => { if (latest()) set({ skillsList: null }) })
+    // 外部引擎(ACP)远端 deny-remote:unit 焦点不问(targetCaps.externalEngines = false)
+    if (onUnit) set({ engines: [] })
+    else void api.listEngines(homeTarget()).then((e) => { if (latest()) set({ engines: e }) }).catch(() => { if (latest()) set({ engines: [] }) })
     void get().refreshSpecialEnabled(c)
     get().refreshAgents()
     void get().refreshTeams()
@@ -1786,14 +2004,15 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   refreshSpecialEnabled: async (c) => {
-    const generation = authGeneration
+    void c
+    const generation = catalogToken()
     try {
-      const r = await api.getSpecialConfig(c)
-      if (generation !== authGeneration) return
+      const r = await api.getSpecialConfig(focusTarget())
+      if (generation !== catalogToken()) return
       // 云端按轮 Historian 只在后台跑,没有本地的状态条 / 工作视图 / 子会话记录(那些端点在云端 404)→ 不点亮那些入口。
       set({ specialEnabled: { historian: !!r.config?.historian?.enabled && !r.cloud, muse: !!r.config?.muse?.enabled && !r.cloud } })
     } catch {
-      if (generation === authGeneration) set({ specialEnabled: { historian: false, muse: false } })
+      if (generation === catalogToken()) set({ specialEnabled: { historian: false, muse: false } })
     }
   },
 
@@ -1803,7 +2022,8 @@ export const useApp = create<AppState>((set, get) => ({
     if (path in cached) return cached[path]
     if (!isHostCapable(get())) return null
     try {
-      const settings = await api.getProjectSettings(get().cfg, projectRef(get(), path), { timeoutMs: 1500 })
+      const ref = projectRef(get(), path)
+      const settings = await api.getProjectSettings(projectTarget(ref), ref, { timeoutMs: 1500 })
       get().rememberProjectSettings(path, settings)
       return settings
     } catch { return null }
@@ -1814,7 +2034,8 @@ export const useApp = create<AppState>((set, get) => ({
     const gen = (projectIconLoads.get(path) ?? 0) + 1
     projectIconLoads.set(path, gen)
     set((st) => ({ projectIconUrls: { ...st.projectIconUrls, [path]: st.projectIconUrls[path] ?? '' } })) // 在途占位:两个侧栏实例不双发
-    const url = await api.fetchProjectIcon(get().cfg, projectRef(get(), path))
+    const iconRef = projectRef(get(), path)
+    const url = await api.fetchProjectIcon(projectTarget(iconRef), iconRef)
     // 换图后的强制重拉与更早的一次并发时,先发的晚到不能盖掉新图
     if (projectIconLoads.get(path) !== gen) { if (url) URL.revokeObjectURL(url); return }
     set((st) => {
@@ -1829,7 +2050,8 @@ export const useApp = create<AppState>((set, get) => ({
   hydrateTeamWork: async (sessionId) => {
     // 打开 / 重载团队会话:成员的工作会话与最近一次 run 从持久端点复原(实时事件只覆盖本客户端订阅着的团队 run)。已有实时状态的成员不覆盖。
     let rows: api.BackgroundSessionInfo[] = []
-    try { rows = await api.getBackgroundSessions(get().cfg, sessionId, 'teamwork') } catch { return }
+    try { rows = await api.getBackgroundSessions(targetForSession(sessionId), sessionId, 'teamwork') } catch { return }
+    rows = inheritChildRows(rows, sessionId) // 成员工作会话在父会话那台上(S4);撞上本端会话 / 别处的行丢掉(R-16)
     set((s) => {
       const cur = s.teamWorkBySession[sessionId] || {}
       const next = { ...cur }
@@ -1865,22 +2087,24 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   refreshAgents: () => {
-    const c = get().cfg
-    const generation = authGeneration
+    const c = focusTarget() // S2:Agent 目录随焦点(管理面板读 home 那份:stores/homeCatalog.ts)
+    const key = focusKey()
+    const generation = catalogToken()
     void api.listAgents(c).then((defs) => {
-      if (generation !== authGeneration) return
+      if (generation !== catalogToken()) return
       set({ agentDefs: defs })
+      rememberCatalog(key, { agents: defs })
       void Promise.all(defs.filter((a) => a.avatar).map(async (a) => [a.slug, await api.fetchAgentAvatar(c, a.slug)] as const))
         .then((pairs) => set((s) => {
-          if (generation !== authGeneration) {
+          if (generation !== catalogToken()) {
             pairs.forEach(([, url]) => { if (url) URL.revokeObjectURL(url) })
             return {}
           }
           Object.values(s.agentAvatars).forEach((u) => { try { URL.revokeObjectURL(u) } catch { /* ignore */ } })
           return { agentAvatars: Object.fromEntries(pairs.filter(([, u]) => u) as Array<[string, string]>) }
         }))
-    }).catch(() => { if (generation === authGeneration) set({ agentDefs: [] }) })
-    void api.getAgentsMeta(c).then((m) => { if (generation === authGeneration) set({ defaultAgentSlug: m.defaultSlug || 'xyra' }) }).catch(() => { /* ignore */ })
+    }).catch(() => { if (generation === catalogToken()) set({ agentDefs: [] }) })
+    void api.getAgentsMeta(c).then((m) => { if (generation === catalogToken()) { set({ defaultAgentSlug: m.defaultSlug || 'xyra' }); rememberCatalog(key, { defaultAgentSlug: m.defaultSlug || 'xyra' }) } }).catch(() => { /* ignore */ })
   },
 
   boot: async () => {
@@ -1944,6 +2168,10 @@ export const useApp = create<AppState>((set, get) => ({
       imageModelId: stored?.imageModelId ?? prev.imageModelId,
     }
     set({ cfg: merged, cfgLoaded: true })
+    // P1-K6 S2:恢复上次的焦点(只有手机 / 网页版可能是「我的电脑」;桌面 / 设备页恒 home)。首次 connect 本来就按焦点连。
+    // S4:连同会话 → 电脑的绑定一起读回(按账号落盘),重载后打开那台上的会话仍打那台。
+    restoreSessionBindings()
+    if (restoreFocus().kind === 'unit') applyFocusEffects(HOME_REF)
     if (stored?.mode === 'managed') {
       if (stored.backendState?.state === 'ready') void get().connect(merged)
       else if (get().connState !== 'ok') set({ connState: 'idle', connMessage: t('app.managedBackendStarting') })
@@ -2023,6 +2251,15 @@ export const useApp = create<AppState>((set, get) => ({
         if (generation !== authGeneration) return
         const effective = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId, imageModelId: c.imageModelId }
         set({ desktopConfig: c, cfg: effective })
+        // P1-K6 S2:焦点按账号落盘 —— 换了号就读新账号的那份(没有 = home);绑定表 / 健康 / 目录缓存都是上个账号的
+        clearSessionBindings()
+        endFocusGeneration()
+        resetHealth()
+        forgetCatalog()
+        restoreSessionBindings()
+        const prevFocus = focusRef()
+        if (restoreFocus().kind === 'unit') applyFocusEffects(prevFocus)
+        else restoreHomeProfile(prevFocus)
         if (effective.token) void get().connect(effective)
       })
     })
@@ -2031,7 +2268,7 @@ export const useApp = create<AppState>((set, get) => ({
   loadSessionHistory: async (sessionId) => {
     const generation = authGeneration
     const t = get().tr
-    if (!sessionId || get().connState !== 'ok') return
+    if (!sessionId || !sessionReachable(get(), sessionId)) return // S4:按会话所在的引擎判,不一律看焦点的连接态
     if (get().unread.has(sessionId)) {
       const next = new Set(get().unread)
       next.delete(sessionId)
@@ -2044,9 +2281,9 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const c = get().cfg
       const [records, config, active] = await Promise.all([
-        api.listMessages(c, sessionId),
-        api.getSessionConfig(c, sessionId).catch(() => ({} as AgentConfig)),
-        listActiveRuns(c, sessionId),
+        api.listMessages(targetForSession(sessionId), sessionId),
+        api.getSessionConfig(targetForSession(sessionId), sessionId).catch(() => ({} as AgentConfig)),
+        listActiveRuns(targetForSession(sessionId), sessionId),
       ])
       if (generation !== authGeneration) return
       // 配置拉取失败/为空时,别把本机(project_path)会话降级成非 host——否则 execMode 缺失,拖文件走
@@ -2061,7 +2298,7 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))
       // ctx 只有流式 usage 事件会喂,重开会话后本地是空的 → 用服务端回放的「最近一次上下文占用」兜底
       // (本地已有值更新,不覆盖:历史加载可能与正在跑的 run 竞速)。
-      void api.getSessionUsage(c, sessionId)
+      void api.getSessionUsage(targetForSession(sessionId), sessionId)
         .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...s.usageBySession[sessionId], ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
         .catch(() => {})
       set((s) => {
@@ -2101,11 +2338,23 @@ export const useApp = create<AppState>((set, get) => ({
 
   pollSession: async (sessionId) => {
     if (!sessionId || get().activeId !== sessionId || get().runningBySession[sessionId]) return
+    // P1-K6:会话在「我的电脑」上 → 每 12s 一次(bootstrap 的全局轮询是 4s;经 hub 的请求吃全局限流),那台不健康时暂停。
+    // S4 起按**会话所在的那台**判(不再看焦点)。不因 SSE 在线而跳过:它还负责拉带外消息(有人在那台电脑本机往同一会话打字)。
+    const pollRef = refForSession(sessionId)
+    if (pollRef.kind === 'unit') {
+      const key = targetKeyOf(pollRef)
+      const st = healthOf(key).state
+      if (st !== 'ready' && st !== 'unknown') { ensureUnitRecovery(key); return } // 暂停,但确保有人在等它恢复
+      if (sameRef(pollRef, focusRef()) && get().connState !== 'ok') return // 焦点那台还在连 / 没连上:connect 自己会拉
+      const now = Date.now()
+      if (now - (unitPollAt.get(key) ?? 0) < UNIT_POLL_MS) return
+      unitPollAt.set(key, now)
+    }
     try {
       const c = get().cfg
       const [records, active] = await Promise.all([
-        api.listMessages(c, sessionId),
-        listActiveRuns(c, sessionId).catch(() => []),
+        api.listMessages(targetForSession(sessionId), sessionId),
+        listActiveRuns(targetForSession(sessionId), sessionId).catch(() => []),
       ])
       if (get().activeId !== sessionId || get().runningBySession[sessionId]) return
       set((s) => {
@@ -2197,7 +2446,8 @@ export const useApp = create<AppState>((set, get) => ({
     // 从旧默认目录建好会话后才就位，下次 config:get 会把默认目录切到 Vault/Sessions。
     // 保留会话的真实 project_path，但把各语言下以「默认工作区」创建过的路径都收为同组别名。
     const defaultNames = new Set([defaultName, ...translationValues('app.defaultWorkspace')])
-    const allSessions = [...sessions, ...archivedSessions]
+    // P1-K7a(K7 §3.4):只看本端会话 —— 已注入的「我的电脑」上的会话带着 Mac 的路径,并进来就是手机上的「幽灵本地项目」
+    const allSessions = [...sessions, ...archivedSessions].filter(isHomeSession)
     const defaultSessionKeys = new Set<string>(defPath ? [defPath] : [])
     for (const s of allSessions) {
       if (s.project_path && s.project_name && defaultNames.has(s.project_name)) defaultSessionKeys.add(s.project_path)
@@ -2245,7 +2495,7 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       // 通道文件夹:走引擎通道会话接口(盖默认 Agent/模型 + 切为正在连接),不是普通 createSession。
       if (ws.kind === 'channel' && ws.channel) {
-        const sid = await api.newChannelSession(get().cfg, ws.channel)
+        const sid = await api.newChannelSession(homeTarget(), ws.channel)
         act('chat.new', { s: sid.slice(0, 6) })
         await get().refreshSessions(get().cfg)
         loadedHistory.add(sid)
@@ -2263,13 +2513,17 @@ export const useApp = create<AppState>((set, get) => ({
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
-      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
+      // S4:新会话建在焦点上 —— 位置在发请求**之前**定下(回来时焦点可能已换),回来即绑定(路由真源),插列表前经 withLocation 打标
+      const loc = focusRef()
+      const base = applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
-        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
+        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
+      // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根等(remoteSafeInit)
+      const init: AgentConfig = settleUltra(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
       if (preset === 'chat' && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
-      const s = await api.createSession(get().cfg, {
+      const created = await api.createSession(targetForRef(loc) ?? focusTarget(), {
         ...(path
           ? { project_path: path, project_name: ws.name }
           : cloudProject ? { project_name: cloudProject }
@@ -2277,13 +2531,19 @@ export const useApp = create<AppState>((set, get) => ({
         ...(projectDefaults.model ? { model_id: projectDefaults.model } : {}),
         agent_config: init,
       })
+      if (bindSession(created.id, loc) === 'conflict') throw new Error(t('app.cannotCreateSession'))
+      if (loc.kind === 'unit') clearDeviceSticky(loc.unitId) // P1-K7a:建成了 = 那台先前的拒绝已不成立
+      const s = withLocation(created)
       act('chat.new', { s: s.id.slice(0, 6) })
       set((st) => ({ sessions: [s, ...st.sessions] }))
       loadedHistory.add(s.id) // 先标记再 setActiveId(其内部 loadSessionHistory 会拉空配置冲掉 init,同 send)
       get().setActiveId(s.id)
       set((st) => ({ messagesBySession: { ...st.messagesBySession, [s.id]: [] }, configBySession: { ...st.configBySession, [s.id]: init } }))
-      if (!s.agent_config) void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
+      if (!s.agent_config) void backfillSessionConfig(s.id, init)
     } catch (e: any) {
+      // P1-K7a:在那台电脑上建会话被拒(开关关 / 没被允许)→ 记成粘滞拒绝,设备分组与「在哪运行」据此显示那台的状态
+      const where = focusRef()
+      if (where.kind === 'unit') noteDeviceRefusal(where.unitId, e)
       get().toast(t('app.createSessionFail', { e: e?.message || e }), true)
     }
   },
@@ -2302,10 +2562,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   refreshCloudProjects: async (c) => {
-    const generation = authGeneration
+    const generation = catalogToken()
     try {
-      const names = await api.listProjects(c)
-      if (generation === authGeneration) set({ cloudProjects: names })
+      const names = await api.listProjects(focusTarget())
+      if (generation === catalogToken()) set({ cloudProjects: names })
     } catch { /* 云端不可用/standalone → 保持现值(workspaces() 恒补默认 Tangu) */ }
   },
 
@@ -2314,7 +2574,7 @@ export const useApp = create<AppState>((set, get) => ({
     const clean = name.trim().slice(0, 100)
     if (!clean) return
     try {
-      await api.createProject(get().cfg, clean)
+      await api.createProject(homeTarget(), clean)
       set((st) => ({ cloudProjects: st.cloudProjects.includes(clean) ? st.cloudProjects : [...st.cloudProjects, clean] }))
       const ws = get().workspaces().find((w) => w.kind === 'cloud' && w.project === clean)
       if (ws) set({ newChatWs: ws })
@@ -2328,12 +2588,21 @@ export const useApp = create<AppState>((set, get) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(get().cfg, id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    try { await api.updateSession(targetForSession(id), id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
   },
 
   archiveSession: async (id, archived) => {
     try {
-      await api.updateSession(get().cfg, id, { archived })
+      await api.updateSession(targetForSession(id), id, { archived })
+      // S4:在别的电脑上的会话不在本端列表里,refreshSessions 拉不到它 —— 本地挪到归档区 / 挪回来(打标沿用)
+      if (refForSession(id).kind === 'unit') set((s) => {
+        const rec = [...s.sessions, ...s.archivedSessions].find((x) => x.id === id)
+        if (!rec) return {}
+        const moved = { ...rec, archived }
+        return archived
+          ? { sessions: s.sessions.filter((x) => x.id !== id), archivedSessions: [moved, ...s.archivedSessions.filter((x) => x.id !== id)] }
+          : { archivedSessions: s.archivedSessions.filter((x) => x.id !== id), sessions: [moved, ...s.sessions.filter((x) => x.id !== id)] }
+      })
       await get().refreshSessions(get().cfg)
       if (archived && get().activeId === id) get().setActiveId(null)
     } catch (e: any) { get().toast(get().tr('app.operationFail', { e: e?.message || e }), true) }
@@ -2341,7 +2610,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   deleteSession: async (id) => {
     try {
-      await api.deleteSession(get().cfg, id)
+      await api.deleteSession(targetForSession(id), id)
+      forgetSession(id)
       set((s) => ({ sessions: s.sessions.filter((x) => x.id !== id), archivedSessions: s.archivedSessions.filter((x) => x.id !== id) }))
       loadedHistory.delete(id)
       if (get().activeId === id) get().setActiveId(null)
@@ -2358,7 +2628,7 @@ export const useApp = create<AppState>((set, get) => ({
       sessions: s.sessions.map((x) => (x.project_path === ws.key ? { ...x, project_name: newName } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.project_path === ws.key ? { ...x, project_name: newName } : x)),
     }))
-    try { await Promise.all(targets.map((s) => api.updateSession(get().cfg, s.id, { project_name: newName }))) }
+    try { await Promise.all(targets.map((s) => api.updateSession(targetForSession(s.id), s.id, { project_name: newName }))) }
     catch (e: any) { get().toast(t('app.wsRenameFail', { e: e?.message || e }), true) }
   },
 
@@ -2383,13 +2653,13 @@ export const useApp = create<AppState>((set, get) => ({
     // 配置没存上就把已改的会话改回去(尽力),不留「分组在新目录、重载后 cwd 还是旧目录」的半截状态。
     let sessionSaved = false
     try {
-      await api.updateSession(get().cfg, sessionId, { project_path: dir, project_name: name, projectless: false })
+      await api.updateSession(targetForSession(sessionId), sessionId, { project_path: dir, project_name: name, projectless: false })
       sessionSaved = true
       await saveSessionConfig(sessionId, { cwd: dir, execMode: 'host' })
       return 'moved'
     } catch (e: any) {
       // 会话已改、配置没存上:把会话改回去;改不回去就如实说「挪了一半」,本地留服务端的真实状态(会话在新项目、工作目录还是旧的)
-      const reverted = !sessionSaved || await api.updateSession(get().cfg, sessionId, prev).then(() => true, () => false)
+      const reverted = !sessionSaved || await api.updateSession(targetForSession(sessionId), sessionId, prev).then(() => true, () => false)
       if (reverted) restore()
       else set((s) => {
         const configBySession = { ...s.configBySession }
@@ -2407,8 +2677,9 @@ export const useApp = create<AppState>((set, get) => ({
     const targets = [...get().sessions, ...get().archivedSessions].filter((s) => s.project_path === ws.key)
     if (!targets.length) return
     try {
-      await Promise.all(targets.map((s) => api.deleteSession(get().cfg, s.id)))
+      await Promise.all(targets.map((s) => api.deleteSession(targetForSession(s.id), s.id)))
       const ids = new Set(targets.map((s) => s.id))
+      ids.forEach(forgetSession)
       set((s) => ({ sessions: s.sessions.filter((x) => !ids.has(x.id)), archivedSessions: s.archivedSessions.filter((x) => !ids.has(x.id)) }))
       ids.forEach((id) => loadedHistory.delete(id))
       if (get().activeId && ids.has(get().activeId!)) get().setActiveId(null)
@@ -2432,7 +2703,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 没有废纸篓接口时退回引擎直接删;云端 Agent 没有本机文件,直接删。
     const trash = window.tangu?.trashHostPath
     const keep = !!agent.libraryDir && (!deleteFiles || !!trash)
-    const r = await api.deleteAgentDef(get().cfg, agent.slug, keep ? { keepFiles: true } : undefined)
+    const r = await api.deleteAgentDef(homeTarget(), agent.slug, keep ? { keepFiles: true } : undefined)
     if (!r?.ok) throw new Error(t('agentProfile.deleteFailed'))
     if (keep && deleteFiles && r.keptAt) await trash!(r.keptAt).catch(() => get().toast(t('app.agentTrashFail', { path: r.keptAt! }), true))
     set((s) => {
@@ -2588,6 +2859,9 @@ export const useApp = create<AppState>((set, get) => ({
     let implicitInit: AgentConfig | null = null
     let implicitModelId: string | undefined // 隐式建会话时定下的模型(含项目默认):首轮 run 必须用同一个,否则「会话记的是项目模型、第一句却跑在全局模型上」
     if (!sid) {
+      // S2:焦点刚切到「我的电脑」时,它的家目录 / 默认工作区还在路上(/unit/config):等一下(≤3s),
+      // 否则第一条消息会按「没有 host FS 路径」建出沙箱会话
+      if (focusRef().kind === 'unit' && focusProfilePending) await Promise.race([focusProfilePending, delay(3000)])
       const ws = resolveNewSessionWorkspace(get(), currentPlatform())
       // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
       // 已经 /unit/config 透传)。判成 external 会把新对话全建成云端 sandbox —— host 工具整个消失
@@ -2615,21 +2889,35 @@ export const useApp = create<AppState>((set, get) => ({
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
       const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
-      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
+      // S4:位置在发请求之前定下,回来即绑定(见 createInWorkspace)
+      const loc = focusRef()
+      const base = applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
+        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset)
+      // P1-K7a(S6):在那台电脑上建的会话不带手机本地的 Amadeus 根 / 云端项目名 / 外部引擎等(remoteSafeInit)
+      const init: AgentConfig = settleUltra(loc.kind === 'unit' ? remoteSafeInit(base) : withAmadeusWorkspace(base, activeAmadeusRoot()))
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!init.agentSlug && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
-      const s = await api.createSession(get().cfg, {
+      let createErr: unknown = null
+      const created = await api.createSession(targetForRef(loc) ?? focusTarget(), {
         ...(path
           ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
           : rootless ? { projectless: true }
           : { project_name: cloudProject! }),
         ...(model_id ? { model_id } : {}),
         agent_config: init,
-      }).catch(() => null)
-      if (!s) { get().toast(t('app.cannotCreateSession'), true); return false }
+      }).catch((e) => { createErr = e; return null })
+      if (!created || bindSession(created.id, loc) === 'conflict') {
+        // P1-K7a:在那台电脑上被拒 → 粘滞拒绝(设备状态)+ 那句本地化的拒绝原因(开关关着 / 等那台允许 …),而不是笼统的「建不了」
+        if (loc.kind === 'unit' && createErr) {
+          noteDeviceRefusal(loc.unitId, createErr)
+          get().toast((createErr as Error)?.message || t('app.cannotCreateSession'), true)
+        } else get().toast(t('app.cannotCreateSession'), true)
+        return false
+      }
+      if (loc.kind === 'unit') clearDeviceSticky(loc.unitId)
+      const s = withLocation(created)
       set((st) => ({ sessions: [s, ...st.sessions] }))
       // 必须先标记再 setActiveId:setActiveId 内部会 void loadSessionHistory,新会话此刻服务端
       // 配置还是空的,拉回来会把下面刚写入的 init(含选中的 agentSlug/thinkingLevel)整体
@@ -2640,13 +2928,15 @@ export const useApp = create<AppState>((set, get) => ({
       implicitInit = init
       implicitModelId = model_id
       set((st) => ({ configBySession: { ...st.configBySession, [s.id]: init } }))
-      if (!s.agent_config) void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
+      if (!s.agent_config) void backfillSessionConfig(s.id, init)
     }
     const sessionId = sid
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
     // Agent Desk:新一条用户消息解除「用户关过面板」的静音。
     const storedAgentConfig = implicitInit || get().configBySession[sessionId] || {}
-    const scopedAgentConfig = withAmadeusWorkspace(storedAgentConfig, activeAmadeusRoot())
+    // P1-K7a(K7 §4.1 run 路径字段):会话在「我的电脑」上 → 不并手机的 Amadeus 根、不带手机设置里的生图 / 视觉模型(那台有它自己的)
+    const onUnit = refForSession(sessionId).kind === 'unit'
+    const scopedAgentConfig = onUnit ? storedAgentConfig : withAmadeusWorkspace(storedAgentConfig, activeAmadeusRoot())
     let agentConfig = { ...scopedAgentConfig }
     // 09-16 起团队模式没有轮数上限 / 强度(成员各自以 DONE 表态收场):老会话存下来的这两个键不再随 run 发出,
     // 否则引擎会把 groupMaxRounds 当成显式硬上限(那是留给讨论 / Historian 辅助等内部调用方的)。存值不动,只是不带。
@@ -2674,15 +2964,15 @@ export const useApp = create<AppState>((set, get) => ({
     if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
     // Ultra 的资格按本条 run 的实际配置结算(换过引擎 / 进了团队模式 / 档位不是 max 的会话不带它),与药丸显示同一口径。
     agentConfig = settleUltra(agentConfig)
-    if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
+    if (!onUnit && !agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
-    if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
+    if (!onUnit && !agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
     // 同理带上「何时转写」档:云端会话的引擎读不到本机 config.json,不带就永远按 auto 跑。
-    if (!agentConfig.visionMode && get().cfg.visionMode) agentConfig.visionMode = get().cfg.visionMode
+    if (!onUnit && !agentConfig.visionMode && get().cfg.visionMode) agentConfig.visionMode = get().cfg.visionMode
     try { if (localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1') agentConfig.debugSystemPrompt = true } catch { /* ignore */ }
     if (workspaceFiles?.length) {
       try {
-        await api.uploadWorkspaceFiles(get().cfg, sessionId, workspaceFiles.map((f) => ({ path: f.name, content: f.data, encoding: 'base64' as const, mimeType: f.mimeType })))
+        await api.uploadWorkspaceFiles(targetForSession(sessionId), sessionId, workspaceFiles.map((f) => ({ path: f.name, content: f.data, encoding: 'base64' as const, mimeType: f.mimeType })))
         get().toast(t('app.filesUploaded', { count: workspaceFiles.length }))
       } catch (e: any) { get().toast(t('app.workspaceUploadFail', { e: e?.message || e }), true) }
     }
@@ -2698,7 +2988,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (activeRunId) {
       try {
-        const sr = await steerRun(get().cfg, activeRunId, { message: text, attachments })
+        const sr = await steerRun(targetForSession(sessionId), activeRunId, { message: text, attachments })
         if (sr.ok) {
           // G2 所有权转移:用户此刻在**这个**窗口/这台设备说话,界面动作就该落在这里。
           // 只在 startRun 处认领的话,「A 设备起 run、用户换到 B 设备追一句」会让 A 替 B 执行并
@@ -2717,9 +3007,9 @@ export const useApp = create<AppState>((set, get) => ({
     // 否则新会话(未显式选模型、cloud.defaultModel 又空)会发出空 model_id → 后端 400「model_id required」。
     const sessionModelId = wasNewChat
       ? (implicitModelId || newChatModelId(get()))
-      : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || undefined)
+      : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || defaultModelOf(get(), refForSession(sessionId)) || get().modelsResp?.defaultModelId || undefined)
     try {
-      const r = await startRun(get().cfg, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
+      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
@@ -2746,7 +3036,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!item) return null
     const runId = get().runningBySession[sessionId]
     if (runId && !item.localOnly) {
-      const r = await cancelSteer(get().cfg, runId, msgId).catch(() => ({ ok: false, gone: false }))
+      const r = await cancelSteer(targetForSession(sessionId), runId, msgId).catch(() => ({ ok: false, gone: false }))
       // 来不及(已注入/引擎已收尾):等待区的这条交给 turn_boundary 或 endRun 收拾,别在这里硬拔。
       if (!r.ok) return null
     }
@@ -2760,7 +3050,7 @@ export const useApp = create<AppState>((set, get) => ({
     const runId = get().runningBySession[sid]
     if (!runId || !(get().steerPendingBySession[sid] || []).some((p) => !p.localOnly) || get().stoppingBySession[sid]) return
     try {
-      const result = await expediteSteer(get().cfg, runId)
+      const result = await expediteSteer(targetForSession(sid), runId)
       if (result.ok && get().runningBySession[sid] === runId) get().toast(translate('appstore.steerQueued'))
       // Only turn_boundary removes the queued messages, including their attachments.
     } catch (e: any) {
@@ -2781,7 +3071,7 @@ export const useApp = create<AppState>((set, get) => ({
     get().toast(translate('appstore.stopping'))
     const request = (async () => {
       try {
-        const status = await abortRunAndWait(get().cfg, runId, sid)
+        const status = await abortRunAndWait(targetForSession(sid), runId, sid)
         if (get().runningBySession[sid] !== runId) return true
         set((s) => ({ stoppingBySession: { ...s.stoppingBySession, [sid]: undefined } }))
         const terminal = stopTerminals.get(runId)
@@ -2817,7 +3107,7 @@ export const useApp = create<AppState>((set, get) => ({
     const list = get().messagesBySession[sid] || []
     if (fromIndex < 0 || fromIndex >= list.length) return false
     const removed = list.slice(fromIndex)
-    try { await api.deleteMessages(get().cfg, sid, removed.map((m) => m.id)) }
+    try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
     catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return false }
     set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, fromIndex) } }))
     // 正在朗读的消息被删(重新生成/编辑重发)→ 停播,否则音频没了停止按钮还在响。
@@ -2882,7 +3172,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 代码先回滚:失败就整体中止 —— 对话删了没法重来,而代码没回滚的话「回退」是假的。
     if (mode !== 'conversation') {
       try {
-        const r = await api.restoreCheckpoint(get().cfg, sid, at)
+        const r = await api.restoreCheckpoint(targetForSession(sid), sid, at)
         const n = r.restored.length + r.deleted.length
         // 逐路径失败是装在 200 响应里的,不抛异常 —— 不看它就会「代码没回滚成功、对话已经删掉」。
         if (r.failed.length) {
@@ -2898,7 +3188,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (mode !== 'code') {
       const removed = list.slice(idx)
-      try { await api.deleteMessages(get().cfg, sid, removed.map((m) => m.id)) }
+      try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
       catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return }
       const speaking = ttsState()
       if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
@@ -2928,7 +3218,10 @@ export const useApp = create<AppState>((set, get) => ({
     if (!id) { get().toast(t('chat.branchEmpty'), true); return }
     const srcTitle = get().sessions.find((s) => s.id === sid)?.title || ''
     try {
-      const s = await api.branchSession(get().cfg, sid, id, srcTitle ? t('chat.branchTitle', { title: srcTitle }) : undefined)
+      const branched = await api.branchSession(targetForSession(sid), sid, id, srcTitle ? t('chat.branchTitle', { title: srcTitle }) : undefined)
+      // S4:分支在父会话那台引擎上建(远程污点同向传播,C5)→ 路由跟父会话走
+      if (inheritBinding(branched.id, sid) === 'conflict') throw new Error(t('app.cannotCreateSession'))
+      const s = withLocation(branched)
       set((st) => ({ sessions: [s, ...st.sessions] }))
       get().setActiveId(s.id)
       get().toast(t('chat.branched'))
@@ -2957,7 +3250,7 @@ export const useApp = create<AppState>((set, get) => ({
     const t0 = Date.now()
     const timer = setInterval(() => setPct(Math.round(90 * (1 - Math.exp(-(Date.now() - t0) / 8000)))), 120)
     try {
-      const r = await api.compactSession(get().cfg, sid, modelId, instructions)
+      const r = await api.compactSession(targetForSession(sid), sid, modelId, instructions)
       // 进度环读的是「最近一条主循环 usage」,手动压缩不产生 usage:不就地改,环会停在压缩前的值上(看着像没压下去),下一条消息才自愈。
       if (r.ok && Number(r.contextTokens) > 0) set((st) => ({ usageBySession: { ...st.usageBySession, [sid]: { ...(st.usageBySession[sid] || { base: 0, live: 0 }), ctx: Number(r.contextTokens) } } }))
       get().pushNotice(r.ok ? t('input.compactDone', { n: r.summarizedCount || 0 }) : t('input.compactSkip', { reason: r.reason || '' }))
@@ -2981,7 +3274,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!approval?.runId) return false
     let r: Awaited<ReturnType<typeof resolveApproval>>
     try {
-      r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
+      r = await resolveApproval(targetForSession(sid), approval.runId, approvalId, action, argsOverride)
     } catch (e: any) {
       get().toast(get().tr('approval.sendFail', { e: e?.message || e }), true)
       return false
@@ -2992,6 +3285,8 @@ export const useApp = create<AppState>((set, get) => ({
       get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId && a.status === 'pending' ? { ...a, status: 'expired' as const } : a)) }))
       return true
     }
+    // P1-K3:受保护路径的审批只能在执行它的电脑上批准(引擎 403 APPROVAL_LOCAL_ONLY)—— 卡保持待批(还能拒绝),不写成「发送失败」
+    if (!r.ok && r.code === 'APPROVAL_LOCAL_ONLY') { get().toast(get().tr('approval.localOnlyToast'), true); return false }
     // 其余失败必须上屏(设备页改了命令 → 引擎 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN;以前静默吞掉,卡片挂着、按钮像没反应)
     if (!r.ok) { get().toast(get().tr('approval.sendFail', { e: r.message || 'HTTP' }), true); return false }
     return true
@@ -3005,7 +3300,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!inquiry?.runId) return false
     let r: Awaited<ReturnType<typeof resolveApproval>>
     try {
-      r = await resolveInquiry(get().cfg, inquiry.runId, inquiryId, answer)
+      r = await resolveInquiry(targetForSession(sid), inquiry.runId, inquiryId, answer)
     } catch (e: any) {
       get().toast(t('inquiry.sendFail', { e: e?.message || e }), true)
       return false // 没送达:卡片解锁,用户能重试(否则决策按钮永久置灰=死路)
@@ -3057,7 +3352,13 @@ export const useApp = create<AppState>((set, get) => ({
   setSessionModel: (modelId, targetSessionId, remember = true) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     // 在会话里换模型 = 也换掉全局默认(新会话延续);cfg.modelId 本来就是「新会话用哪个模型」的真源。
-    if (remember) set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+    if (remember) {
+      // S2:会话在「我的电脑」上时记在那台设备名下(那台的模型表不是这台手机的;别把手机自己的缺省模型改成那边的)。
+      // S4:按会话所在的位置记(空白新对话 = 焦点),不再一律看焦点。
+      const where = sid ? refForSession(sid) : focusRef()
+      if (where.kind === 'unit') { writeFocusModel(where, modelId); if (sameRef(where, focusRef())) set({ focusModelId: modelId }) }
+      else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+    }
     if (!sid) { set({ newChatModel: modelId }); return }
     const child = useChildChat.getState().sessions[sid]
     if (child) useChildChat.getState().remember({ ...child, model_id: modelId })
@@ -3070,7 +3371,7 @@ export const useApp = create<AppState>((set, get) => ({
         ctxInfoBySession: ctxRest,
       }
     })
-    void api.updateSession(get().cfg, sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
+    void api.updateSession(targetForSession(sid), sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 
   setSessionThinking: (level, targetSessionId, remember = true, ultra) => {
@@ -3088,8 +3389,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   setModelContextWindow: async (modelId, tokens) => {
     try {
-      await api.setModelContextWindow(get().cfg, modelId, tokens)
-      const next = await api.listModels(get().cfg)
+      await api.setModelContextWindow(homeTarget(), modelId, tokens)
+      // 写的是本端(home 类);焦点在「我的电脑」时顶层 modelsResp 是那台的目录,别拿 home 的覆盖它
+      if (focusRef().kind === 'unit') { void ensureCatalog('home', { force: true }); return }
+      const next = await api.listModels(homeTarget())
       // 进度环优先读上一轮 run 的 context_info(只在切模型时清):不一并作废,改完还显示旧分母直到下一条消息。
       // 在飞的会话留着:这一轮开跑时定的窗口 / 压缩线不会变,换了分母环就和真在用的预算对不上(Codex 09-22 #2)。
       set((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([sid, v]) => v.modelId !== modelId || !!s.runningBySession[sid])) }))
@@ -3115,13 +3418,12 @@ export const useApp = create<AppState>((set, get) => ({
     // 连接拒绝的请求(控制台红噪音)且把失败缓存成关 —— 云端直接视为关,不发请求。
     if ((window as any).tangu?.cloudWeb) return
     if (!slug || get().voiceOnByAgent[slug] !== undefined) return // 已缓存不重复拉
-    const cfg = get().cfg
     try {
-      const plugins = await api.listPlugins(cfg)
+      const plugins = await api.listPlugins(homeTarget())
       const enabled = !!plugins.find((p) => p.id === VOICE_MESSAGE_PLUGIN_ID)?.enabled
       let on = false
       if (enabled) {
-        const v = await api.getPluginSettings(cfg, VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`).catch(() => ({} as Record<string, any>))
+        const v = await api.getPluginSettings(homeTarget(), VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`).catch(() => ({} as Record<string, any>))
         on = v?.apply !== false // apply 默认开
       }
       set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: on } }))
@@ -3130,10 +3432,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   setVoiceMode: async (slug, on) => {
     set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: on } })) // 乐观更新
-    const cfg = get().cfg
     try {
-      if (on) await api.setPluginEnabled(cfg, VOICE_MESSAGE_PLUGIN_ID, true).catch(() => {}) // 确保插件启用
-      await api.putPluginSettings(cfg, VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`, { apply: on })
+      if (on) await api.setPluginEnabled(homeTarget(), VOICE_MESSAGE_PLUGIN_ID, true).catch(() => {}) // 确保插件启用
+      await api.putPluginSettings(homeTarget(), VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`, { apply: on })
     } catch (e: any) {
       set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: !on } })) // 失败回滚
       get().toast(get().tr('voice.toggleFailed', { e: e?.message || String(e) }), true)
@@ -3158,8 +3459,10 @@ export const useApp = create<AppState>((set, get) => ({
   teams: [],
   teamAvatars: {},
   refreshTeams: async () => {
-    const c = get().cfg
+    const c = focusTarget() // S2:团队目录随焦点
+    const generation = catalogToken()
     const listed = await api.listTeams(c)
+    if (generation !== catalogToken()) return // S4:换焦点不再清会话,旧焦点慢到的目录别盖新焦点的
     const teams = Array.isArray(listed) ? listed : []
     set({ teams })
     // 图片头像要带鉴权拉成 objectURL(同 refreshAgents);整表替换,旧 URL 一并回收。
@@ -3172,8 +3475,10 @@ export const useApp = create<AppState>((set, get) => ({
   ensureTeamSession: async (slug) => {
     const t = get().tr
     try {
-      const { session, created } = await api.teamSessionOpen(get().cfg, slug)
+      const loc = focusRef()
+      const { session, created } = await api.teamSessionOpen(targetForRef(loc) ?? focusTarget(), slug)
       if (!session?.id) throw new Error(t('solo.engineTooOld'))
+      if (bindSession(session.id, loc) === 'conflict') throw new Error(t('app.cannotCreateSession')) // S4:团队会话在焦点那台上
       get().adoptSession(session, { fresh: created === true })
       return session
     } catch (e: any) {
@@ -3185,8 +3490,10 @@ export const useApp = create<AppState>((set, get) => ({
   ensureSoloSession: async (kind, id) => {
     const t = get().tr
     try {
-      const { session, created } = await api.soloOpen(get().cfg, kind, id)
+      const loc = focusRef()
+      const { session, created } = await api.soloOpen(targetForRef(loc) ?? focusTarget(), kind, id)
       if (!session?.id) throw new Error(t('solo.engineTooOld')) // 老引擎对未知路由回 200 空对象:别把 undefined 并进列表
+      if (bindSession(session.id, loc) === 'conflict') throw new Error(t('app.cannotCreateSession')) // S4:私聊会话在焦点那台上
       get().adoptSession(session, { fresh: created === true })
       return session
     } catch (e: any) {
@@ -3213,7 +3520,8 @@ export const useApp = create<AppState>((set, get) => ({
     void saveSessionConfig(sid, patch).catch(() => {})
   },
 
-  adoptSession: (session, opts) => {
+  adoptSession: (raw, opts) => {
+    const session = withLocation(raw) // S4(R-15):插进 appStore.sessions 的记录一律经 withLocation 打标(位置只从绑定表派生)
     if (opts?.fresh) loadedHistory.add(session.id) // 冷启动打开既有私聊/团队会话:必须正常 loadSessionHistory(历史 + 活跃 run 订阅)
     set((st) => {
       const existing = st.sessions.findIndex((s) => s.id === session.id)
@@ -3308,7 +3616,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   ensureEngineCaps: (engineId) => {
     if (!engineId || get().engineCaps[engineId]) return
-    void api.getEngineCapabilities(get().cfg, engineId).then((caps) => set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } })))
+    void api.getEngineCapabilities(homeTarget(), engineId).then((caps) => set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } })))
   },
 
   openSettings: (tab, skillKey) => {
@@ -3341,7 +3649,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 装了新技能/智能体/插件 → 刷新本地 Agent 目录 + 技能列表(让 /skill 选择器即时反映新技能,
     // 无需手动刷新桌面;system prompt 的技能段由托管后端每轮按需重扫,已即时生效)。
     get().refreshAgents()
-    void api.listSkills(get().cfg).then((s) => set({ skillsList: s })).catch(() => { /* ignore */ })
+    void api.listSkills(focusTarget()).then((s) => set({ skillsList: s })).catch(() => { /* ignore */ })
   },
 
   onPluginInstalled: async (notify, updated) => {
@@ -3350,8 +3658,8 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       // 重扫让后端立刻发现新插件(免重启);装即启用;提示可能需重启。
       // 不再自动关市场 / 跳设置:装完只 toast「已安装」,用户在插件详情里自行「打开设置」。
-      const r = await api.rescanPlugins(get().cfg)
-      for (const id of r.addedIds) await api.setPluginEnabled(get().cfg, id, true).catch(() => {})
+      const r = await api.rescanPlugins(homeTarget())
+      for (const id of r.addedIds) await api.setPluginEnabled(homeTarget(), id, true).catch(() => {})
       // 引擎重扫只激活「全新 id」(activateNewPlugins):原地更新时老代码还在跑,不重启就报「已生效」是谎报。
       const needsRestart = r.needsRestart || !!updated
       say(needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
@@ -3371,7 +3679,10 @@ export const useApp = create<AppState>((set, get) => ({
     get().refreshAgents()
   },
 
-  handleAuthExpired: () => {
+  handleAuthExpired: (target) => {
+    // P1-K6 S2(§3.5):经 hub 打「我的电脑」回的 401。hub 401 体无 code,与那台引擎的 401 分不开 → 先复检账号:
+    // 账号无效 → 走下面 home 的过期流程;账号有效 → 只记那台「引擎鉴权」、提示一次,**绝不**重启本机引擎 / 误登出。
+    if (target && target !== 'home') { void unitAuthExpired(target); return }
     const s = get()
     if (!s.authInfo?.loggedIn) return // standalone/未登录:绝不踢去 Forsion 登录
     const now = Date.now()
@@ -3426,6 +3737,162 @@ export const useApp = create<AppState>((set, get) => ({
   setDetailWsKey: (k) => set({ detailWsKey: k }),
   setActiveSpecial: (k) => set({ activeSpecial: k }),
 }))
+
+// ═══ P1-K6 S2:焦点目标(整端切到一台电脑)的编排 ═══
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const revoke = (url: string): void => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } }
+
+/** unit 焦点的家目录 / 默认工作区正在拉(/unit/config):send() 建第一个会话前等它一下。 */
+let focusProfilePending: Promise<void> | null = null
+
+/**
+ * 焦点落到某台电脑之后的附带动作(换焦点与启动恢复共用):拉那台电脑的家目录 / 默认工作区(新会话落点要它 ——
+ * 手机自己没有),读按设备记的模型,预热 home 的目录缓存(管理面板 / 收件箱 / 自动化读 home 那份,K6 待定 4)。
+ * prev = 换焦点之前的位置:从 home 离开时先记下 home 的家目录,回来时还原。
+ */
+function applyFocusEffects(prev: TargetRef): void {
+  const next = focusRef()
+  if (next.kind !== 'unit') return
+  const st = useApp.getState()
+  if (prev.kind === 'home') homeProfile = { homeDir: st.homeDir, defaultWsDir: st.defaultWsDir }
+  const generation = catalogToken()
+  useApp.setState({ homeDir: undefined, defaultWsDir: '', focusModelId: readFocusModel(next) })
+  const pending: Promise<void> = unitHostProfile(focusTarget()).then((profile) => {
+    if (generation !== catalogToken() || !profile) return
+    useApp.setState({ homeDir: profile.homeDir ?? undefined, defaultWsDir: profile.defaultWorkspaceDir || '' })
+  }).finally(() => { if (focusProfilePending === pending) focusProfilePending = null })
+  focusProfilePending = pending
+  void ensureCatalog('home', { force: true })
+}
+
+/** 焦点回到 home:还原 home 的家目录 / 默认工作区,丢掉 home 的独立目录缓存(顶层目录又是 home 的了)。 */
+function restoreHomeProfile(prev: TargetRef): void {
+  if (prev.kind !== 'unit') return
+  if (homeProfile) useApp.setState({ homeDir: homeProfile.homeDir, defaultWsDir: homeProfile.defaultWsDir })
+  homeProfile = null
+  focusProfilePending = null
+  useApp.setState({ focusModelId: '' })
+  forgetCatalog('home')
+}
+
+/** 某台电脑此刻是否还有会话在用(打开着 / 有 run 在跑):S4 起换焦点不再掐会话,离开的那台若还有会话在用,它的健康格与恢复都留着。 */
+function unitKeyBusy(key: TargetKey): boolean {
+  if (key === 'home') return false
+  if (unitKeysInUse().has(key)) return true
+  const running = useApp.getState().runningBySession
+  return Object.keys(running).some((sid) => !!running[sid] && refForSession(sid).kind === 'unit' && targetKeyOf(refForSession(sid)) === key)
+}
+
+/**
+ * setFocusTarget 的宿主半身。
+ * S2(整端切换)时这里清空全部会话 / 消息 / SSE 再按新焦点重连;**S4 起会话按绑定走**(targetForSession = 绑定 ?? home,R-19),
+ * 焦点只剩「新会话建在哪」与它那一侧的目录 / 连接态:
+ *  ① 递增焦点代(连带 connectGen / inflight / lastOkConnectKey):旧焦点慢到的目录(Agent / 模型 / 技能 / 团队 / 云项目 / 家目录)
+ *     与 connect 结果一律作废 —— 会话类加载(列表只拉 home、历史按会话目标)不受影响,**不动 authGeneration**;
+ *  ② **不中止任何 SSE、不清会话 / 消息 / 绑定**:绑在别的电脑上的会话照常跑、照常批审批(两台并存,一台断线不影响另一台);
+ *     只清焦点作用域的目录态,回到空白新对话(activeId = null:选了「在哪运行」,接下来打的字就建在那);
+ *  ③ 按新焦点重连(connect:探焦点、拉焦点的目录、刷新本端列表)。
+ */
+async function refocusEngine(next: TargetRef, prev: TargetRef): Promise<void> {
+  ++focusGeneration
+  ++connectGen
+  connectInflight = null
+  lastOkConnectKey = ''
+  lastConnectAuthRejected = false
+  if (next.kind === 'unit' && !unitKeyBusy(targetKeyOf(next))) resetHealth(targetKeyOf(next))
+  // 旧焦点的后台等恢复 / connect 挂的等待者一并撤掉 → 探针环没人等,当场收工(在飞的探针也撤)。离开的那台若已没有会话在用,
+  // 健康格也清掉(没人再探它,留着就是过期的「离线」给 K3 / K7 读);还有会话在用(run 在跑)就留着。gone 是永久事实,留着。
+  endFocusGeneration()
+  const st = useApp.getState()
+  Object.values(st.agentAvatars).forEach(revoke)
+  Object.values(st.teamAvatars).forEach(revoke)
+  useApp.setState({
+    activeId: null,
+    modelsResp: null, skillsList: null, agentDefs: [], agentAvatars: {}, defaultAgentSlug: 'xyra', engines: [], engineCaps: {},
+    teams: [], teamAvatars: {}, cloudProjects: [],
+    specialEnabled: { historian: false, muse: false },
+    newChatModel: null, newChatWs: null,
+    connState: 'idle',
+    connMessage: next.kind === 'unit' ? translate('engine.target.connecting', { name: focusName() || '' }) : '',
+  })
+  pruneSessionRecoveries()
+  if (prev.kind === 'unit' && !sameRef(prev, next)) {
+    const pk = targetKeyOf(prev)
+    if (!unitKeyBusy(pk) && healthOf(pk).state !== 'gone') resetHealth(pk)
+  }
+  if (next.kind === 'unit') applyFocusEffects(prev)
+  else restoreHomeProfile(prev)
+  await useApp.getState().connect(useApp.getState().cfg)
+}
+
+let lastUnitAuthToastAt = 0
+/** unit 目标回 401(§3.5):账号复检 → 无效走 home 的过期流程;有效只记那台「引擎鉴权」,提示一次(10s 去抖)。 */
+async function unitAuthExpired(key: TargetKey): Promise<void> {
+  const a = await (window.tangu?.authStatus?.().catch(() => null) ?? Promise.resolve(null))
+  if (a && (a.loggedIn === false || a.tokenValid === false)) {
+    useApp.getState().handleAuthExpired('home')
+    return
+  }
+  noteHealth(key, { state: 'engine-auth', since: Date.now() })
+  const now = Date.now()
+  if (now - lastUnitAuthToastAt < 10_000) return
+  lastUnitAuthToastAt = now
+  const name = (key.startsWith('unit:') ? nameOfRef({ kind: 'unit', unitId: key.slice('unit:'.length) }) : null) || translate('engine.target.defaultName')
+  useApp.getState().toast(translate('engine.target.engineAuth', { name }), true)
+}
+
+/** 新会话的初始配置补写(老引擎 POST 不收 agent_config):远端目标没有整对象 PUT(deny-remote)→ 按键 PATCH。
+ *  S4:按会话所在的目标判(建会话那一刻已绑好),不看此刻的焦点。 */
+function backfillSessionConfig(sessionId: string, init: AgentConfig): Promise<unknown> {
+  const t = targetForSession(sessionId)
+  if (!capsForRef(refForSession(sessionId)).putSessionConfig) {
+    return api.patchSessionConfig(t, sessionId, init, () => init).catch(() => {})
+  }
+  return api.putSessionConfig(t, sessionId, init).catch(() => {})
+}
+
+/**
+ * 焦点没换、手动重试那台(setFocusTarget(同一台) / retryFocusTarget;K8 UnitsSheet 再点一次同一台、提示条的「重试」):
+ * 没连上 → connect(testConnection 本身就是一次探针,结果写回健康表);已连上但健康不是 ready(终局 / 离线)→ 探一次,
+ * 转好了轮询自己续上。已连上且健康 → 什么都不做。终局态只在这里由用户触发重试(R-32)。
+ */
+async function reconnectFocus(ref: TargetRef): Promise<void> {
+  if (ref.kind !== 'unit' || !sameRef(focusRef(), ref)) return
+  const key = focusKey()
+  const st = useApp.getState()
+  if (st.connState !== 'ok') { await st.connect(st.cfg); return }
+  if (healthOf(key).state === 'ready') return
+  const h = await probeTarget(focusTarget()).catch(() => null)
+  if (h?.state === 'ready' && sameRef(focusRef(), ref)) unitPollAt.delete(key)
+}
+
+// P1-K6:引擎目标解析层读本端连接配置的唯一接缝(homeTarget / knownTargets / cloudApiBase 每次现读);
+// S2 起还接 setFocusTarget 的宿主半身(refocus)与焦点不变时的手动重试(reconnect)。
+installEngineHost({
+  cfg: () => useApp.getState().cfg,
+  desktopConfig: () => useApp.getState().desktopConfig,
+  refocus: refocusEngine,
+  reconnect: reconnectFocus,
+  // R-16:本端列表 / 归档区里没打 unit 标的会话 = 本端会话(它们从不 bindSession,绑定表里没有)。设备自报撞上它们的 id 一律 conflict。
+  isHomeSession: (sid) => {
+    const st = useApp.getState()
+    return st.sessions.some((x) => x.id === sid && isHomeSession(x)) || st.archivedSessions.some((x) => x.id === sid && isHomeSession(x))
+  },
+})
+
+// 焦点那台的健康格被任何人(轮询 / 服务层 / SSE / 探针)写进可恢复态 → 确保有个后台等恢复(评审 F1:
+// 空闲时一次 502、或 run 进行中并行请求吃到 504,原先只要没有 SSE 恰好在等,就再也没人把它写回 ready)。
+useTargetHealth.subscribe((s, prev) => {
+  // S4:焦点那台 + 打开的会话所在的那台(可能不是焦点)都要有人等恢复
+  for (const key of unitKeysInUse()) {
+    const h = s.byKey[key]
+    if (!h || h === prev.byKey[key] || !isRecoverable(h)) continue
+    ensureUnitRecovery(key)
+  }
+})
+// 换了打开的会话 → 撤掉不再在用的那几台的后台等恢复(不经 hub 空探别的电脑)
+useApp.subscribe((s, p) => { if (s.activeId !== p.activeId) pruneSessionRecoveries() })
 
 /** steer 被引擎受理后的等待区落位(Codex 评审 #1):turn_boundary 走 SSE,可能抢在 POST 响应之前
  *  到达——消息已上屏、或 run 已易主/终结时**不进等待区**(否则 chip 永久残留,run 终结还会把已
@@ -3571,4 +4038,17 @@ function drainQueued(get: () => AppState, set: SetFn, sessionId: string): void {
 // typeof window 守卫不能省:一部分单测跑在 node 环境(非 happy-dom),少了它 14 个测试文件当场 ReferenceError。
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__forsionStore = useApp
+  // P1-K6 S2:整端切换台架(desktop/scripts/engine-target.check.cjs)的驱动口 —— 选「在哪运行」的 UI 归 K8,
+  // 台架在它之前经这里切焦点、看健康表;生产构建同样没有这行。
+  ;(window as unknown as Record<string, unknown>).__forsionEngineTargets = {
+    setFocusTarget, focusRef,
+    // S4:两台并存台架看「这条会话绑在哪」与已知目标集合(R-20)
+    locationOf: (sid: string) => refForSession(sid),
+    known: () => knownTargets().map((t) => t.key),
+    health: () => useTargetHealth.getState().byKey,
+    probe: () => probeTarget(focusTarget()),
+    // P1-K9:check:remotechain 的「下载产物」一步 —— 手机上没有列出远端会话沙箱的 UI 入口,台架经这里调**同一个**服务层函数
+    // (按会话路由目标 → 头 → 中继 → blob 保存),与上传(uploadWorkspaceFiles(get().cfg, …))同一份 cfg。
+    downloadWorkspaceFile: (sessionId: string, path: string) => api.downloadWorkspaceFile(targetForSession(sessionId), sessionId, path),
+  }
 }

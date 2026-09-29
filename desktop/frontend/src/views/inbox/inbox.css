@@ -264,3 +264,6 @@
 .ibx-fb-spacer { flex: 1; }
 .ibx-fb-err { font-size: var(--ui-font-caption, 11px); color: var(--danger, #c4554d); }
 .ibx-fb-send { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ── P1-K3 审批提醒信:正文下一颗「打开会话」(与附件块同一上边距)── */
+.ibx-approval-open { margin-top: 18px; display: flex; gap: 8px; }

@@ -113,6 +113,8 @@ export interface FindReplaceProvider {
   attach?: () => () => void
   /** 把这些命中(文档序)换掉,**一次可撤销**;返回实际换掉的条数(对不上原文的跳过)。 */
   replace: (items: FindReplaceItem[]) => number
+  /** Esc 收条时把焦点与选区落到这条命中上(命中不在真文字里时用,如 textarea 镜像);返回是否接手。 */
+  focusAt?: (range: Range) => boolean
 }
 const providers = new Set<FindReplaceProvider>()
 const bumpProviders = (): void => useFind.setState((s) => ({ providerVer: s.providerVer + 1 }))
@@ -228,6 +230,13 @@ export function textareaFindProvider(ta: HTMLTextAreaElement): FindReplaceProvid
       sync()
       return edits.length
     },
+    // 镜像是单个文字节点、内容 = ta.value,命中的偏移就是 textarea 里的偏移。
+    focusAt: (range) => {
+      if (!mirror?.contains(range.startContainer)) return false
+      ta.focus({ preventScroll: true })
+      ta.setSelectionRange(range.startOffset, range.endOffset)
+      return true
+    },
   }
 }
 
@@ -257,6 +266,57 @@ function selectedQuery(): string | null {
   return t.trim() && !/[\r\n]/.test(t) && t.length <= 200 ? t : null
 }
 
+/** 开条那一刻焦点在哪(连同它里面的选区):收条时交还,焦点不许掉到 body(评审 C-17)。
+ *  开条后输入框 autoFocus 会把 activeElement 抢走,只能在开条这一刻记。 */
+let openedFrom: { el: HTMLElement; range: Range | null } | null = null
+
+function rememberOrigin(): void {
+  const a = document.activeElement
+  if (!(a instanceof HTMLElement) || a === document.body || a.closest('.amx-findbar')) { openedFrom = null; return }
+  const sel = window.getSelection()
+  const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null
+  openedFrom = { el: a, range: a.isContentEditable && r && a.contains(r.startContainer) ? r.cloneRange() : null }
+}
+
+/** 命中所在的可编辑区(contenteditable 的真文字;嵌入卡等 contenteditable=false 的岛不算)。 */
+function editableOf(r: Range): HTMLElement | null {
+  const el = r.startContainer.parentElement
+  if (!el?.isContentEditable) return null
+  let host: HTMLElement = el
+  while (host.parentElement?.isContentEditable) host = host.parentElement
+  return host
+}
+
+/** 收条后的焦点(评审 C-17;查找条是全局组件,只动 DOM 焦点 / 选区,不认识 PM):
+ *  Esc(键盘)且当前命中在可编辑区 → 选区落在命中上并聚焦(Obsidian 同款:接着打字就在命中处);
+ *  否则(× 点击 / 命中在只读处 / 没有命中)→ 回到开条时的焦点,连同它原来的选区。
+ *  焦点已被别处接走(点进了另一面)就不抢。 */
+function restoreFocus(hit: Range | null): void {
+  const from = openedFrom
+  openedFrom = null
+  const a = document.activeElement
+  if (a && a !== document.body && !a.closest('.amx-findbar')) return
+  if (hit) {
+    const p = providerOf(hit)
+    if (p?.focusAt?.(hit)) return
+    const ed = editableOf(hit)
+    if (ed) {
+      ed.focus({ preventScroll: true })
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(hit)
+      return
+    }
+  }
+  if (!from?.el.isConnected) return
+  from.el.focus({ preventScroll: true })
+  if (from.range && from.range.startContainer.isConnected) {
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(from.range)
+  }
+}
+
 export function openFindBar(opts: { replace?: boolean } = {}): void {
   if (!findSupported) return
   const pre = selectedQuery()
@@ -269,14 +329,19 @@ export function openFindBar(opts: { replace?: boolean } = {}): void {
     inp?.select()
     return
   }
+  rememberOrigin()
   useFind.setState({ open: true, root: pickRoot(), ...(pre ? { query: pre } : {}), ...(opts.replace ? { replaceOpen: true } : {}) })
 }
 
-export function closeFindBar(): void {
+/** how:用户亲手收条('keyboard' = Esc,'pointer' = 点 ×)才交还焦点;面被摘掉等自动收条不动焦点。 */
+export function closeFindBar(how?: 'keyboard' | 'pointer'): void {
+  const hit = how === 'keyboard' ? (hits[useFind.getState().active] ?? null) : null
   hits = []
   hitGroups = []
   paint(-1)
   useFind.setState({ open: false, query: '', active: 0, total: 0, root: null, bad: false, replaceable: 0 })
+  if (how) restoreFocus(hit)
+  else openedFrom = null
 }
 
 /* ── 扫描 ─────────────────────────────────────────────────────────── */
@@ -549,7 +614,7 @@ function FindBarBody(): React.ReactElement {
   }
 
   const keys = (e: React.KeyboardEvent): boolean => {
-    if (e.key === 'Escape') { closeFindBar(); return true }
+    if (e.key === 'Escape') { closeFindBar('keyboard'); return true }
     if ((e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyF') {
       e.preventDefault()
       if (canReplace) useFind.setState({ replaceOpen: !useFind.getState().replaceOpen })
@@ -601,7 +666,7 @@ function FindBarBody(): React.ReactElement {
           <span className="amx-findbar-count">{total ? `${active + 1}/${total}` : query.trim() ? '0' : ''}</span>
           <button onClick={() => step(-1)} title={t('find.prev')} aria-label={t('find.prev')}>‹</button>
           <button onClick={() => step(1)} title={t('find.next')} aria-label={t('find.next')}>›</button>
-          <button onClick={closeFindBar} title={t('find.close')} aria-label={t('find.close')}>✕</button>
+          <button onClick={() => closeFindBar('pointer')} title={t('find.close')} aria-label={t('find.close')}>✕</button>
         </div>
         {replaceOpen && canReplace && (
           <div className="amx-findbar-row">

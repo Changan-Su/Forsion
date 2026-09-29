@@ -107,10 +107,11 @@ describe('首屏语言优先级链', () => {
         value: async (u: string) => { fetched.push(String(u)); return { ok: true, json: async () => ({ country }) } },
       })
     }
-    const stubTangu = (cloudUrl: string): void => {
+    /** extra = 垫片额外给的字段(web / 手机垫片自 P1-K6 S1 起给 cloudApiBase;桌面主进程只给纯源 cloudUrl)。 */
+    const stubTangu = (cloudUrl: string, extra: Record<string, unknown> = {}): void => {
       Object.defineProperty(globalThis, 'window', {
         configurable: true,
-        value: { tangu: { getConfig: async () => ({ cloudUrl }) } },
+        value: { tangu: { getConfig: async () => ({ cloudUrl, ...extra }) } },
       })
     }
 
@@ -140,10 +141,22 @@ describe('首屏语言优先级链', () => {
       setLocaleGlobal('zh')
     })
 
-    it('⚠️ cloudUrl 已含 /api(web/mobile 垫片形态)→ 不重复拼 /api', async () => {
-      stubNavigator(['en-US']); stubTangu('https://forsion.net/api'); stubFetch('US')
+    it('⚠️ web/mobile 垫片形态(cloudUrl 已含 /api,另给 cloudApiBase)→ 按 cloudApiBase 拼,不重复拼 /api', async () => {
+      stubNavigator(['en-US']); stubTangu('https://forsion.net/api', { cloudApiBase: 'https://forsion.net/api' }); stubFetch('US')
       await correctLocaleByRegion()
       expect(fetched).toEqual(['https://forsion.net/api/auth/region'])
+    })
+
+    it('桌面纯源 cloudUrl 带尾斜杠 → 去斜杠再拼 /api(与主进程同口径)', async () => {
+      stubNavigator(['en-US']); stubTangu('https://api.forsion.net/'); stubFetch('US')
+      await correctLocaleByRegion()
+      expect(fetched).toEqual(['https://api.forsion.net/api/auth/region'])
+    })
+
+    it('设备页局域网直连(cloudUrl 与 cloudApiBase 都为空)→ 不外呼', async () => {
+      stubNavigator(['en-US']); stubTangu('', { cloudApiBase: '' }); stubFetch('US')
+      await correctLocaleByRegion()
+      expect(fetched).toEqual([])
     })
 
     it('geo 查不到(country=null)→ 不缓存,同步链结论不动', async () => {

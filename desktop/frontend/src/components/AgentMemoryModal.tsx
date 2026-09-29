@@ -13,6 +13,7 @@ import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { AgentMemoryPanel } from './AgentMemoryPanel'
 import { AgentHarnessPanel } from './AgentHarnessPanel'
+import { homeTarget, connectionKey } from '../services/engine/targets'
 
 // 与后端 agentRegistry 的文本扩展名口径一致(决定上传走 content 还是 dataBase64)。
 const LIB_TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'text', 'json', 'jsonl', 'toml', 'yaml', 'yml', 'csv', 'tsv', 'xml', 'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'log', 'ini', 'env', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'rb', 'php', 'sql'])
@@ -40,7 +41,7 @@ type AgentMemoryModalProps = {
 }
 
 export const AgentMemoryModal: React.FC<AgentMemoryModalProps> = (props) =>
-  <AgentMemoryModalBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug, props.shareDefaultMemory])} {...props} />
+  <AgentMemoryModalBody key={JSON.stringify([connectionKey(props.cfg), props.slug, props.shareDefaultMemory])} {...props} />
 
 const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name, shareDefaultMemory, onClose }) => {
   const { t } = useI18n()
@@ -71,10 +72,10 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
   const [libErr, setLibErr] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
 
-  const reloadLib = async (): Promise<void> => { try { setLibFiles(await listAgentLibrary(cfg, slug)) } catch { /* ignore */ } }
+  const reloadLib = async (): Promise<void> => { try { setLibFiles(await listAgentLibrary(homeTarget(), slug)) } catch { /* ignore */ } }
 
   useEffect(() => {
-    void listAgentLogDates(cfg, slug).then((ds) => { if (alive.current) { setDates(ds); if (ds.length) setLogDate(ds[ds.length - 1]) } }).catch((e) => { if (alive.current) setLogError(e.message) })
+    void listAgentLogDates(homeTarget(), slug).then((ds) => { if (alive.current) { setDates(ds); if (ds.length) setLogDate(ds[ds.length - 1]) } }).catch((e) => { if (alive.current) setLogError(e.message) })
     void reloadLib()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
@@ -84,7 +85,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
     setLogVersion(null); setLogSaved(false); setLogError(''); setLogContent('')
     if (!logDate) return
     setLogBusy(true)
-    void getAgentLogSnapshot(cfg, slug, logDate).then((result) => {
+    void getAgentLogSnapshot(homeTarget(), slug, logDate).then((result) => {
       if (alive.current && request === logRequest.current) { setLogContent(result.content); setLogVersion(result.version) }
     }).catch((e) => { if (alive.current && request === logRequest.current) setLogError(e.message) })
       .finally(() => { if (alive.current && request === logRequest.current) setLogBusy(false) })
@@ -98,8 +99,8 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
     const request = logRequest.current
     setLogBusy(true); setLogSaved(false); setLogError('')
     try {
-      await putAgentLog(cfg, slug, logDate, logContent, logVersion)
-      const result = await getAgentLogSnapshot(cfg, slug, logDate)
+      await putAgentLog(homeTarget(), slug, logDate, logContent, logVersion)
+      const result = await getAgentLogSnapshot(homeTarget(), slug, logDate)
       if (alive.current && request === logRequest.current) { setLogContent(result.content); setLogVersion(result.version); setLogSaved(true) }
     } catch (e: any) { if (alive.current && request === logRequest.current) setLogError(e?.message || t('agentMemory.error')) }
     finally { logWriteLock.current = false; if (alive.current && request === logRequest.current) setLogBusy(false) }
@@ -108,7 +109,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
   const openLib = async (fname: string): Promise<void> => {
     setLibSel(fname); setLibErr(''); setLibPreview(null); setLibText(''); setLibBinary(false)
     try {
-      const f = await getAgentLibraryFile(cfg, slug, fname)
+      const f = await getAgentLibraryFile(homeTarget(), slug, fname)
       if (f.isBinary) {
         setLibBinary(true)
         if (f.dataBase64 && (f.mimeType || '').startsWith('image/')) setLibPreview(`data:${f.mimeType};base64,${f.dataBase64}`)
@@ -118,14 +119,14 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
   const saveLibText = async (): Promise<void> => {
     if (!libSel) return
     setLibBusy(true); setLibErr('')
-    try { await putAgentLibraryFile(cfg, slug, libSel, { content: libText, isBinary: false }); await reloadLib() }
+    try { await putAgentLibraryFile(homeTarget(), slug, libSel, { content: libText, isBinary: false }); await reloadLib() }
     catch (e: any) { setLibErr(e?.message || 'save failed') }
     finally { setLibBusy(false) }
   }
   const delLib = async (fname: string): Promise<void> => {
     if (!window.confirm(t('settings.agents.libraryDeleteConfirm', { name: fname }))) return
     try {
-      await deleteAgentLibraryFile(cfg, slug, fname)
+      await deleteAgentLibraryFile(homeTarget(), slug, fname)
       if (libSel === fname) { setLibSel(null); setLibText(''); setLibPreview(null); setLibBinary(false) }
       await reloadLib()
     } catch (e: any) { setLibErr(e?.message || 'delete failed') }
@@ -136,8 +137,8 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
     if (file.size > 5 * 1024 * 1024) { setLibErr(t('settings.agents.libraryTooLarge')); return }
     setLibBusy(true); setLibErr('')
     try {
-      if (isTextName(file.name)) await putAgentLibraryFile(cfg, slug, file.name, { content: await file.text(), isBinary: false })
-      else await putAgentLibraryFile(cfg, slug, file.name, { dataBase64: await fileToBase64(file), isBinary: true })
+      if (isTextName(file.name)) await putAgentLibraryFile(homeTarget(), slug, file.name, { content: await file.text(), isBinary: false })
+      else await putAgentLibraryFile(homeTarget(), slug, file.name, { dataBase64: await fileToBase64(file), isBinary: true })
       await reloadLib(); await openLib(file.name)
     } catch (e: any) { setLibErr(e?.message || 'upload failed') }
     finally { setLibBusy(false) }

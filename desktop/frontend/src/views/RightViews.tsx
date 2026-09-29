@@ -10,6 +10,7 @@ import { useApp } from '../stores/appStore'
 import { useWorkspace } from '@lcl/engine'
 import { useShallow } from 'zustand/react/shallow'
 import { getBackgroundSessions } from '../services/backendService'
+import { targetForSession } from '../services/engine/targets'
 
 type View = 'workspace' | 'toc' | 'memory' | 'subchats'
 const EMPTY_PANEL_PARAMS: Record<string, unknown> = {}
@@ -47,7 +48,7 @@ function RightView({ view }: { view: View }) {
     if (view !== 'subchats' || !sessionId) return
     let stopped = false
     const load = (): void => {
-      void getBackgroundSessions(s.cfg, sessionId)
+      void getBackgroundSessions(targetForSession(sessionId), sessionId)
         .then((items) => {
           if (stopped || !items.length) return
           mergeBackgroundSubChats(sessionId, items

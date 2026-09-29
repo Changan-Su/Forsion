@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API ≤ 30 的自动备份规则(AndroidManifest android:fullBackupContent)。P1-K8:手机 Unit 身份条目不进备份。 -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="forsion_unit.xml" />
+</full-backup-content>

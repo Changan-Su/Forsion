@@ -360,7 +360,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -906,7 +906,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1324,7 +1324,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1701,7 +1701,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2247,7 +2247,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2895,7 +2895,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3716,7 +3716,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4651,7 +4651,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5334,7 +5334,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5941,7 +5941,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6762,7 +6762,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7697,7 +7697,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8613,7 +8613,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9162,7 +9162,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9561,7 +9561,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9957,7 +9957,7 @@
       "type": "function",
       "function": {
         "name": "display_file",
-        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
         "parameters": {
           "type": "object",
           "properties": {
