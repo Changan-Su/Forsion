@@ -32,7 +32,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 // macOS:一个 Electron 实例被强杀后,系统会在下一次启动时先弹「是否恢复窗口」的模态框(崩溃历史,所有未打包的 Electron 共用 com.github.Electron),

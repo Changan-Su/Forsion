@@ -12,7 +12,7 @@ const fs = require('fs')
 const http = require('http')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./launch-electron.cjs')
 const { startStubEngine } = require('./stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..', '..')

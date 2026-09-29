@@ -11,7 +11,7 @@
  * 跑:npm run check:achtoast   (先 npm run build)
  */
 const fs = require('fs'), os = require('os'), path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const ROOT = path.join(__dirname, '..')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const r = []

@@ -20,7 +20,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
 const OUT = process.env.TODO_VIEW_ARTIFACT_DIR || path.join(os.tmpdir(), 'forsion-todo-view')

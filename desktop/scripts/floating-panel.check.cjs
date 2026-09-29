@@ -1,7 +1,8 @@
 /** Real Electron contract for the sixth panel surface: native window behavior + rendered settings. */
 const fs = require('fs'), os = require('os'), path = require('path')
 const { spawn } = require('child_process')
-const { _electron: electron, chromium } = require('playwright-core')
+const { chromium } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const ROOT = path.resolve(__dirname, '..')

@@ -27,7 +27,7 @@
  */
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
 const JSZip = require('jszip')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 

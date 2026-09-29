@@ -9,7 +9,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const PLUGIN_SRC = process.env.BLUEBIRD_PLUGIN_SRC || path.join(ROOT, '..', '..', 'Forsion-Instrumentality-Project', 'bluebird')

@@ -20,7 +20,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -80,8 +80,7 @@ async function main() {
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ultra-'))
   const app = await electron.launch({
-    // -ApplePersistenceIgnoreState:开发版 Electron 被强杀过后,macOS 启动时会先弹「重新打开窗口」模态框把主线程卡住(放在 ROOT 之后)
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
   })
