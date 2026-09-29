@@ -760,7 +760,8 @@ export const Composer2: React.FC<{
       '/agent': () => { app().openSettings('agents'); close() },
       '/mcp': () => { app().openSettings('mcp'); close() },
       '/plugins': () => { app().openSettings('plugins'); close() },
-      '/memory': () => { app().openSettings('sync'); close() },
+      // 记忆 / 技能的云端同步 2026-09-28 起在「Forsion 云端 → 云端同步」;「同步」一级页只剩远程存储(没有 Forsion 云端时落回第一页)
+      '/memory': () => { app().openSettings('forsion/f-sync'); close() },
       '/config': () => { app().openSettings('general'); close() },
       '/login': window.tangu?.forsionLogin ? () => { app().openSettings('forsion'); close() } : undefined, // Forsion 账号面随 Extend 出现
       // Historian / Muse 的桌面入口在「特殊 Agent」名册页(没有各自独立的视图)。

@@ -286,6 +286,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     toggleMode: () => void toggleMode(),
     setTheme: (t) => applyAccent(t),
     openSearch: () => useUiStore.getState().setPalette('search'),
+    // 插件层不依赖应用层 store:发窗口事件,应用层(bootstrapEngine)接住转给 openSettings
+    openSettings: (target) => { if (ok() && typeof target === 'string' && target) window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: target })) },
     openSwitcher: () => useUiStore.getState().setPalette('switch'),
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),
@@ -466,6 +468,8 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     builtin: false,
     preinstalled: !!src.preinstalled,
     locked: !!src.locked,
+    bundleOff: !!src.bundleOff,
+    restartPending: !!src.restartPending,
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
@@ -1450,6 +1454,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
   }
 
   const applyPref = (id: string): void => {
+    // 带主进程半身的首方内置包(Forsion Extend):渲染半身跟着主进程那一半的开关走(桌面配置 disabledBundles),不看 localStorage ——
+    // 旧开关拨下的「关」会一直留在那儿,而主进程半身其实在跑,它挂进「Forsion 云端」的设置页就永远出不来。enable 顺手把旧的「关」擦掉。
+    const plugin = get().plugins.find((p) => p.id === id)
+    if (plugin?.locked) {
+      if (!plugin.bundleOff) get().enable(id)
+      return
+    }
     if (!get().disabledIds.includes(id)) get().enable(id)
   }
 
@@ -1559,8 +1570,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     syncDisabledPreferences() {
       const disabledIds = readDisabled()
       set({ disabledIds })
-      for (const id of [...get().activeIds]) if (disabledIds.includes(id)) teardown(id)
-      for (const plugin of get().plugins) if (!disabledIds.includes(plugin.id)) applyPref(plugin.id)
+      // locked 包(Forsion Extend)的开关在主进程(bundleOff),不跟 localStorage:别的窗口(设置浮窗就是另一个窗口)拨了它,
+      // 本窗口按自己手里旧的 bundleOff 先拆再装、再把「开」写回 localStorage,两窗来回翻。它的开关到重启才生效,本窗口不跟着拆装。
+      const locked = new Set(get().plugins.filter((p) => p.locked).map((p) => p.id))
+      for (const id of [...get().activeIds]) if (disabledIds.includes(id) && !locked.has(id)) teardown(id)
+      for (const plugin of get().plugins) if (!plugin.locked && !disabledIds.includes(plugin.id)) applyPref(plugin.id)
     },
 
     toggle(id) {

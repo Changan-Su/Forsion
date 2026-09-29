@@ -138,6 +138,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   toggleMode(): void
   setTheme(theme: string): void
   openSearch(): void
+  /** 2026-09-28+:打开设置到某一页或某个子页,口径同宿主深链(如 'model/m-providers'、'forsion/fx:forsion-extend:quota')。
+   *  旧宿主 / 没有设置页的宿主没有:`ctx.app.openSettings?.(…)`。 */
+  openSettings?(target: string): void
   openSwitcher(): void
   /** Show a transient toast. */
   notify(message: string): void
@@ -675,8 +678,12 @@ export interface ReadinessContribution {
 export interface SettingsViewContribution {
   /** 本插件内唯一(同 id 重注册即覆盖)。 */
   id: string
-  /** 可选小标题;省略则不画标题行。 */
-  title?: string
+  /** 可选小标题;省略则不画标题行。传函数则每次渲染求值(切语言即时跟上,按 ctx.getLocale() 选文案)。 */
+  title?: string | (() => string)
+  /** 2026-09-28+:挂进设置里的宿主一级页当子页(左栏子项 + 整页正文),不画在插件详情页。
+   *  目前只有 'forsion'(「Forsion 云端」,随 Forsion Extend 的主进程半身出现)。只认带主进程半身的首方内置包(locked),
+   *  别的插件写了照旧画在详情页;给了 category 就要给 title(左栏子项的文字)。多个子页按注册顺序排,宿主自己的子页在前。 */
+  category?: 'forsion'
   /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
    *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
   mount(el: HTMLElement): void | (() => void)
@@ -1194,9 +1201,13 @@ export interface AmadeusPlugin {
   /** External source that the app seeds itself (electron/builtinPlugins.ts): shown as 「内置」, no uninstall,
    *  but still an external source for load/reload purposes (never set `builtin` for these). */
   preinstalled?: boolean
-  /** Preinstalled bundle whose main-process half is loaded on every launch (Forsion Extend): the enable toggle would be a
-   *  no-op for that half, so the settings card shows no toggle. */
+  /** Preinstalled bundle with a main-process half (Forsion Extend): that half loads before any window and can't be unloaded,
+   *  so its settings toggle decides whether it loads on the next launch (`bundleOff`), and flipping it needs a restart. */
   locked?: boolean
+  /** Locked bundle: the main-process half is off for the next launch. */
+  bundleOff?: boolean
+  /** Locked bundle: the toggle changed since this launch, so a restart is needed. */
+  restartPending?: boolean
   /** Manifest apiVersion (missing → 1). */
   apiVersion?: number
   minAppVersion?: string

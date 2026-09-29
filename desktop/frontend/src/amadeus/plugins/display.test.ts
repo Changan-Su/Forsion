@@ -81,13 +81,18 @@ describe('够格进设置左栏的插件', () => {
     { pluginId: 'latex', item: { key: 'workFolder' } },
     { pluginId: 'off', item: { key: 'anything' } },
   ]
-  const views = [{ pluginId: 'latex' }]
+  const views = [{ pluginId: 'latex', item: {} }]
 
   it('只有自动那行 workFolder 的插件不进左栏', () => {
     expect(pluginsWithSettingsPanel(plugins, active, settings, views).map((p) => p.id)).not.toContain('hello')
   })
   it('声明式设置行与自绘面板都算,未启用的一律不进', () => {
     expect(pluginsWithSettingsPanel(plugins, active, settings, views).map((p) => p.id)).toEqual(['pomodoro', 'latex'])
+  })
+  it('首方内置包挂进「Forsion 云端」的面板不再单占一项;第三方插件写了 category 照旧算详情页的设置', () => {
+    const ps = [{ id: 'forsion-extend', locked: true }, { id: 'third' }]
+    const vs = [{ pluginId: 'forsion-extend', item: { category: 'forsion' } }, { pluginId: 'third', item: { category: 'forsion' } }]
+    expect(pluginsWithSettingsPanel(ps, ['forsion-extend', 'third'], [], vs).map((p) => p.id)).toEqual(['third'])
   })
 })
 

@@ -68,15 +68,28 @@ export function remainingPercent(
   remainingValue: unknown,
   usedPercentValue: unknown,
 ): number | null {
-  const limit = Number(limitValue)
+  // null / 空串按缺失算:Number(null) === 0 会把「没给 remaining」当成剩 0、走不到下面的已用百分比回退(与 Extend quota.ts 的 toNum 同口径)
+  const num = (v: unknown): number => (v == null || v === '' ? NaN : Number(v))
+  const limit = num(limitValue)
   if (!Number.isFinite(limit) || limit < 0) return null // -1 = unlimited
   if (limit === 0) return 0
-  const remaining = Number(remainingValue)
+  const remaining = num(remainingValue)
   if (Number.isFinite(remaining)) return Math.max(0, Math.min(100, (remaining / limit) * 100))
   // 兼容只返回旧 percent 字段的宿主；percent 的语义是「已用」。
   const usedPercent = Number(usedPercentValue)
   if (!Number.isFinite(usedPercent)) return null
   return Math.max(0, Math.min(100, 100 - usedPercent))
+}
+
+/**
+ * 剩余百分比的**唯一**显示口径(2026-09-28,个人中心盘点 C4:同一个数原来四种算法,剩 0.4% 时有的写 0%、有的写 <1%):
+ * 向下取整、夹到 0–100;还有剩余但不足 1% 写「<1%」;null(不限)写 unlimited。
+ * 头像菜单、提醒条、用卡前后对比、Muse 页、Extend 的额度页与网页个人中心都照此显示,别再各算各的。
+ */
+export function formatRemaining(pct: number | null, unlimited: string): string {
+  if (pct === null) return unlimited
+  const floor = Math.max(0, Math.min(100, Math.floor(pct)))
+  return pct > 0 && floor === 0 ? '<1%' : `${floor}%`
 }
 
 /**
