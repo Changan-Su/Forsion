@@ -1,8 +1,10 @@
 {
   "bpm": 150,
   "beatsPerBar": 4,
-  "length": 87.2,
+  "lead": 3,
+  "length": 94.4,
   "sections": [
+    { "id": "warning", "bar": -3, "bars": 3 },
     { "id": "boot", "bar": 0, "bars": 2 },
     { "id": "cards", "bar": 2, "bars": 4 },
     { "id": "years", "bar": 6, "bars": 2 },
@@ -12,13 +14,14 @@
     { "id": "twosides", "bar": 13, "bars": 1 },
     { "id": "humanmd", "bar": 14, "bars": 2 },
     { "id": "asks", "bar": 16, "bars": 2 },
-    { "id": "memory", "bar": 18, "bars": 2 },
+    { "id": "agents", "bar": 18, "bars": 2 },
     { "id": "magi", "bar": 20, "bars": 3 },
     { "id": "layers", "bar": 23, "bars": 4 },
     { "id": "evolve", "bar": 27, "bars": 5 },
     { "id": "interface", "bar": 32, "bars": 3 },
     { "id": "montage", "bar": 35, "bars": 8 },
     { "id": "finale", "bar": 43, "bars": 9 },
-    { "id": "release", "bar": 52, "bars": 2 }
+    { "id": "release", "bar": 52, "bars": 2 },
+    { "id": "credit", "bar": 54, "bars": 2 }
   ]
 }

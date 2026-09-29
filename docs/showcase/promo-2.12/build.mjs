@@ -20,6 +20,11 @@ const assets = {
   LOGO: `data:image/png;base64,${readFileSync(join(repo, 'desktop/build/icon.png')).toString('base64')}`,
 };
 
+// Special edition emblem: the logo's tree-F, split along the trunk (logo/special.svg).
+const tree = read('.github/assets/showcase/logo.svg').match(/fill="#bd866c" d="([^"]+)"/)[1].replace(/\s+/g, ' ').trim();
+const special = readFileSync(join(here, 'logo/special.svg'), 'utf8').replace(/%%TREE%%/g, tree);
+assets.EMBLEM = special.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
+
 const engine = readFileSync(join(here, 'stage-engine.js'), 'utf8');
 const page = readFileSync(join(here, 'index.src.html'), 'utf8').replace('/*%%STAGE_ENGINE%%*/', () => engine).replace(/%%([A-Z]+)%%/g, (m, k) => {
   if (!assets[k]) throw new Error(`unknown asset ${m}`);
@@ -64,5 +69,6 @@ const film = readFileSync(join(here, 'film.src.html'), 'utf8')
     return assets[k];
   });
 writeFileSync(join(here, 'dist/film.html'), film);
+writeFileSync(join(here, 'dist/logo-2.12-special.svg'), special);
 writeFileSync(join(here, 'dist/film-capture.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body>${film}</body></html>`);
 console.log(`dist/film.html ${(film.length / 1024).toFixed(0)} KB`);

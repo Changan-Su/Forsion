@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="190 110 630 745" width="630" height="745">
+  <!-- Forsion 2.12 special edition: the logo's tree in the film's red, with no plate behind it. -->
+  <path class="fs-line" d="%%TREE%%" fill="none" stroke="#e3161b" stroke-width="3" pathLength="1"/>
+  <path class="fs-fill" d="%%TREE%%" fill="#e3161b"/>
+</svg>

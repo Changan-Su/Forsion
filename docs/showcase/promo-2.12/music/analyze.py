@@ -17,8 +17,9 @@ for f in sys.argv[2:]:
         cue = json.load(open(os.path.join(os.path.dirname(__file__), '..', 'film', 'cuesheet.json')))
         bar = 60 / cue['bpm'] * cue['beatsPerBar']
         for sct in cue['sections']:
-            for a in ax: a.axvline(sct['bar'] * bar, color='cyan', lw=.7, alpha=.8)
-            ax[0].text(sct['bar'] * bar + .2, 6500, sct['id'], color='cyan', fontsize=7, rotation=90, va='top')
+            x0 = (sct['bar'] + cue.get('lead', 0)) * bar
+            for a in ax: a.axvline(x0, color='cyan', lw=.7, alpha=.8)
+            ax[0].text(x0 + .2, 6500, sct['id'], color='cyan', fontsize=7, rotation=90, va='top')
     if 'cue' in f:
         for c in CARDS + [QUESTION, HUD, EPISODE, TITLE] + MAGI:
             for a in ax: a.axvline(c, color='cyan', lw=.7, alpha=.8)

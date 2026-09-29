@@ -18,19 +18,20 @@ HERE = os.path.dirname(__file__)
 CUE = json.load(open(os.path.join(HERE, '..', 'film', 'cuesheet.json')))
 BAR = 4 * BEAT
 LEN = CUE['length']
-SEC = {s['id']: (s['bar'] * BAR, (s['bar'] + s['bars']) * BAR) for s in CUE['sections']}
+LEAD = CUE.get('lead', 0)  # bars of silence for the photosensitivity warning before bar 0
+SEC = {s['id']: ((s['bar'] + LEAD) * BAR, (s['bar'] + s['bars'] + LEAD) * BAR) for s in CUE['sections']}
 MG, R2 = SEC['magi'][0], SEC['magi'][0] + BAR
 
 
 def B(bar, beat=0.0):
-    return (bar * 4 + beat) * BEAT
+    return ((bar + LEAD) * 4 + beat) * BEAT
 
 
 def common_sfx():
     """Interface sounds shared by both scores: boot beeps, HUMAN.md update chirps, sub hits on the big reveals."""
     ui = Audio('ui', gain=0.3, send=0.15, fx=[HighpassFilter(300)])
     for i in range(7):
-        ui.add(0.12 + i * 0.36, beep(1760 if i < 6 else 740, 0.05 if i < 6 else 0.18, shape='sine' if i < 6 else 'square'), 0.5 if i < 6 else 0.7)
+        ui.add(SEC['boot'][0] + 0.12 + i * 0.36, beep(1760 if i < 6 else 740, 0.05 if i < 6 else 0.18, shape='sine' if i < 6 else 'square'), 0.5 if i < 6 else 0.7)
     for i in range(3):
         ui.add(SEC['evolve'][0] + i * BAR + 0.45, beep(2093, 0.06), 0.5)
         ui.add(SEC['evolve'][0] + i * BAR + 0.55, beep(2637, 0.06), 0.45)
@@ -153,12 +154,18 @@ def film_battle():
     _pad(b, B(47), BAR, 'D', 108)
     b['hn'].ramp(B(47), B(48), 11, 70, 127)
     roll(b, B(47, 2), B(48) - 0.02, 50, 124, timp='D3')
-    final(b, B(48), 'E', hold=4.6)
-    # release card: a quiet E major
-    b['hn'].chord(B(52), 1.5 * BAR, 'E3 G#3 B3', 78)
-    b['vln'].chord(B(52), 1.5 * BAR, 'G#4 B4 E5', 70)
-    b['cb'].note(B(52), 1.5 * BAR, 'E1', 80)
+    final(b, B(48), 'E', hold=5.8)
+    # release: a quiet E major while the emblem draws, a lift when its red half lands, then the credit
+    b['hn'].chord(B(52), 2 * BAR, 'E3 G#3 B3', 78)
+    b['vln'].chord(B(52), 2 * BAR, 'G#4 B4 E5', 70)
+    b['cb'].note(B(52), 2 * BAR, 'E1', 80)
     b['timp'].note(B(52), 0.5, 'E3', 70)
+    b['tpt'].chord(B(53), BAR, 'G#4 B4 E5', 92)
+    b['timp'].note(B(53), 0.5, 'E3', 96)
+    b['cym'].note(B(53), 2, 60, 88)
+    b['hn'].chord(B(54), 1.5 * BAR, 'E3 B3 E4', 70)
+    b['cb'].note(B(54), 0.3, 'E1', 90)
+    b['timp'].note(B(54), 0.5, 'E2', 84)
     gates = [(B(11), B(11, 2), -60, {'violins-trem', 'cym-roll'}),
              (B(43), B(45), -40, {'celli', 'basses', 'horns', 'violins', 'timpani', 'snare', 'ui', 'sub'})]
     curve = [(0, -14), (B(2), -5), (B(6) - .05, -5), (B(6), -9), (B(8), -6), (B(10), -2), (B(12), -3), (B(20), -2), (B(23), -1.5),
@@ -284,16 +291,20 @@ def film_choral():
     b['cbell'].note(B(45), 2.5, 'A3', 116)
     b['perc'].note(B(45), 2.5, KIT['cym'], 112)
     _lay(b, B(46), PHRASE_D, 112)
-    b['organ2'].chord(B(48), 4.6, 'D2 D3 A3 D4 F#4 A4 D5', 118)
-    _voice(b, B(48), 4.6, FINAL, 120)
-    b['choir'].note(B(48), 4.6, 'D5', 116)
+    b['organ2'].chord(B(48), 5.8, 'D2 D3 A3 D4 F#4 A4 D5', 118)
+    _voice(b, B(48), 5.8, FINAL, 120)
+    b['choir'].note(B(48), 5.8, 'D5', 116)
     b['cbell'].note(B(48), 5, 'D4', 118).note(B(48) + 1.6, 4, 'A3', 100)
     for i in range(34):
         b['timp'].note(B(48) + i * 0.07, 0.07, 'D2', int(118 - i * 2.4))
     b['perc'].note(B(48), 4.0, KIT['cym'], 116)
-    # release card: a quiet D major and one bell
-    b['organ'].chord(B(52), 1.5 * BAR, 'D3 A3 F#4', 72)
-    b['cbell'].note(B(52), 3, 'D5', 84)
+    # release: a quiet D major while the emblem draws, a bell when its red half lands, then the credit
+    b['organ'].chord(B(52), 2 * BAR, 'D3 A3 F#4', 72)
+    b['cbell'].note(B(52), 3, 'D5', 80)
+    b['choir'].chord(B(53), BAR, 'D4 F#4 A4', 84)
+    b['cbell'].note(B(53), 3, 'A4', 96)
+    b['organ'].chord(B(54), 1.5 * BAR, 'D3 A3 D4', 66)
+    b['cbell'].note(B(54), 3.5, 'D4', 84)
     gates = [(B(10), B(11), -60, {'solo'}), (B(11), B(11, 2), -60, {'sfx'})]
     curve = [(0, -12), (B(2), -5), (B(6), -8), (B(10), -3), (B(11, 2), 0), (B(13), -4), (B(20), -2.5), (B(23), -2), (B(32), -9),
              (B(35) - .05, -6), (B(35), 0), (B(43) - .05, 0), (B(43), -9), (B(45), -1), (B(46), -2), (B(48), 0), (B(52), -6)]

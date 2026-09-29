@@ -1,5 +1,5 @@
 // Render each study to MP4 frame by frame (deterministic: the page exposes __stage.seek(t)).
-// Usage: NODE_PATH=$(npm root -g) node render.cjs [a b c film] [--fps 30] [--dur 6.5] [--workers 3] [--frames-only]
+// Usage: NODE_PATH=$(npm root -g) node render.cjs [a b c film] [--fps 30] [--dur 6.5] [--workers 3] [--frames-only] [--range 88,91.2]
 // Needs: playwright, CJK fonts installed locally (Noto Serif SC / Noto Sans SC), an ffmpeg with libx264 (FFMPEG env or PATH).
 const { chromium } = require('playwright');
 const { execFileSync } = require('node:child_process');
@@ -15,6 +15,8 @@ const wAt = args.indexOf('--workers');
 const workers = wAt >= 0 ? +args.splice(wAt, 2)[1] : 1;
 const foAt = args.indexOf('--frames-only');
 const framesOnly = foAt >= 0 && !!args.splice(foAt, 1);
+const rAt = args.indexOf('--range');  // re-render only these seconds into the existing frames folder
+const range = rAt >= 0 ? args.splice(rAt, 2)[1].split(',').map(Number) : null;
 const ids = args.length ? args : ['a', 'b', 'c'];
 const ffmpeg = process.env.FFMPEG || 'ffmpeg';
 const out = path.join(__dirname, 'out');
@@ -25,7 +27,8 @@ const pageFor = id => (id === 'film' ? 'dist/film-capture.html' : 'dist/capture.
   const browser = await chromium.launch();
   for (const id of ids) {
     const frames = path.join(out, `frames-${id}`);
-    rmSync(frames, { recursive: true, force: true }); mkdirSync(frames, { recursive: true });
+    if (!range) rmSync(frames, { recursive: true, force: true });
+    mkdirSync(frames, { recursive: true });
     const open = async () => {
       const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
       // Google Fonts is unreachable offline; the same families are installed locally.
@@ -40,7 +43,8 @@ const pageFor = id => (id === 'film' ? 'dist/film-capture.html' : 'dist/capture.
     const total = Math.round((durOverride || pages[0].st.dur) * fps);
     // every frame is a pure function of t, so workers can take interleaved frames
     await Promise.all(pages.map(async ({ page }, k) => {
-      for (let f = k; f <= total; f += workers) {
+      const [f0, f1] = range ? [Math.ceil(range[0] * fps), Math.min(total, Math.floor(range[1] * fps))] : [0, total];
+      for (let f = f0 + k; f <= f1; f += workers) {
         await page.evaluate(t => window.__stage.seek(t), f / fps);
         await page.screenshot({ path: path.join(frames, `${String(f).padStart(5, '0')}.png`) });
       }
