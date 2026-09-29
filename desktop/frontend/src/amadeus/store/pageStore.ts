@@ -25,6 +25,7 @@ import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
 import { flushUnifiedScopes, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
+import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
@@ -1705,6 +1706,13 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
   // 退休与路径广播必须是同一个入口的职责,否则笔记视图等调用者只 remap、漏停旧的 unified 写管线。
   // 带上新路径:实例把还没落盘的字存成新路径的草稿(评审 G2-03 —— 别处改名经 onPathGone 进这里,不许静默丢字)。
   retireUnifiedPath(oldP, kind, newP)
+  // 本机视图记忆(模式 / 滚动 / 锁定 / 排版选项,评审 C-21)跟着新路径走:侧栏改名、移动、文件夹改名都经这里。
+  // 只由发起的窗口搬:localStorage 各窗共用,转播过来的窗口再搬一遍会拿自己缓存里的旧条目盖掉刚搬好的新条目。
+  if (!relayingRemote) {
+    const root = usePageStore.getState().vaultRoot
+    if (kind === 'file') remapNoteViewMemory(root, oldP, newP)
+    else remapNotePageStylePrefix(root, oldP, newP)
+  }
   const hit = (a: string): boolean => (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`))
   const to = (a: string): string => (kind === 'file' ? newP : newP + a.slice(oldP.length))
   for (const s of stores.values()) {
