@@ -6,7 +6,10 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 
 const disk = new Map<string, string>()
 const writes: Array<{ path: string; text: string; opts?: { create?: boolean; base?: string } }> = []
-const dispatched: Array<{ type: string; path?: string }> = []
+const dispatched: Array<{ type: string; path?: string; text?: string }> = []
+/** 宿主写口的行为开关:'ok' = 仅新建语义照常建;'raced' = 读后写前别处刚建了同名(交回现文);'failed' = 没建成且拿不出现文;
+ *  'throw' = 写抛错。 */
+let hostMode: 'ok' | 'raced' | 'failed' | 'throw' = 'ok'
 const newPage = vi.fn(async () => {
   throw new Error('新建入口不许再走 newPage(v3 出生)')
 })
@@ -23,6 +26,7 @@ async function fresh(opts: { hostNavigates?: boolean } = {}) {
   disk.clear()
   writes.length = 0
   dispatched.length = 0
+  hostMode = 'ok'
   newPage.mockClear()
   loadPage.mockClear()
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
@@ -35,7 +39,11 @@ async function fresh(opts: { hostNavigates?: boolean } = {}) {
       readTextFile: async (p: string) => disk.get(p) ?? null,
       writeTextFile: async (p: string, text: string, o?: { create?: boolean; base?: string }) => {
         writes.push({ path: p, text, opts: o })
+        if (hostMode === 'throw') throw new Error('EACCES: permission denied')
+        if (hostMode === 'failed') return { ok: false, current: null }
+        if (hostMode === 'raced') { disk.set(p, '# 别处刚建的\n'); return { ok: false, current: '# 别处刚建的\n' } }
         disk.set(p, text)
+        return o?.create ? { ok: true } : undefined
       },
       newPage,
       loadPage,
@@ -48,8 +56,8 @@ async function fresh(opts: { hostNavigates?: boolean } = {}) {
     },
     addEventListener: () => {},
     removeEventListener: () => {},
-    dispatchEvent: (e: { type: string; detail?: { path?: string }; defaultPrevented: boolean }) => {
-      dispatched.push({ type: e.type, path: e.detail?.path })
+    dispatchEvent: (e: { type: string; detail?: { path?: string; text?: string }; defaultPrevented: boolean }) => {
+      dispatched.push({ type: e.type, path: e.detail?.path, ...(e.detail?.text ? { text: e.detail.text } : {}) })
       return opts.hostNavigates ? false : !e.defaultPrevented
     },
   })
@@ -119,4 +127,30 @@ describe('G4-12 新建入口素文件出生', () => {
     expect(dispatched).toContainEqual({ type: 'amadeus:navigate-note', path: 'Exists.md' })
     expect(claimTitleFocus('Exists.md')).toBe(false)
   })
+
+  // Codex 复核返修 P1-1:宿主的 create = 原子仅新建。只有「交回了现文」才算已存在;没建成又拿不出现文 / 写抛错 = 失败:
+  // 提示,**不导航**到一篇不存在的笔记(上一轮的回归:新建被宿主拒掉,却按已存在打开)。
+  // 负对照(实跑过):birthNoteFile 换回「ok:false 一律 exists」→ failed / throw 两条红。
+  it('读后写前别处刚建了同名(宿主交回现文)→ 按已存在打开,不抢标题焦点', async () => {
+    const { usePageStore, claimTitleFocus } = await fresh({ hostNavigates: true })
+    hostMode = 'raced'
+    await usePageStore.getState().createWikiPage('Raced')
+    expect(dispatched).toContainEqual({ type: 'amadeus:navigate-note', path: 'Raced.md' })
+    expect(claimTitleFocus('Raced.md')).toBe(false)
+  })
+  for (const mode of ['failed', 'throw'] as const) {
+    it(`宿主没建成(${mode === 'failed' ? 'current:null' : '写抛错'})→ 提示,不导航、不抢标题;子笔记 / 笔记视图加行抛错不交出路径`, async () => {
+      const { usePageStore, claimTitleFocus, birthNoteFile } = await fresh({ hostNavigates: true })
+      hostMode = mode
+      expect(await birthNoteFile('Nope.md')).toBe('failed')
+      await usePageStore.getState().createWikiPage('Nope2')
+      expect(dispatched.some((d) => d.type === 'amadeus:navigate-note')).toBe(false)
+      expect(dispatched.filter((d) => d.type === 'amadeus:toast' && d.text?.includes('Nope'))).toHaveLength(2)
+      expect(claimTitleFocus('Nope2.md')).toBe(false)
+      usePageStore.setState({ pages: ['A.md'] })
+      await expect(usePageStore.getState().createChildNote('A.md', 'Child')).rejects.toThrow(/create failed/)
+      const { useNoteViewStore } = await import('./noteViewStore')
+      await expect(useNoteViewStore.getState().addNote('Folder')).rejects.toThrow(/create failed/)
+    })
+  }
 })

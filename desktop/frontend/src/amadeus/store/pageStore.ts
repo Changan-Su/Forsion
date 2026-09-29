@@ -36,6 +36,8 @@ registerMessages({
   'pagestore.error.fdExistsAtDest': { zh: '目标位置已存在同名 .fd 文件夹', en: 'A .fd folder with the same name already exists at the destination' },
   'pagestore.error.fdMoveFailed': { zh: '子页面文件夹未跟随移动：{err}', en: "The subpage folder didn't move along with the note: {err}" },
   'pagestore.notify.movedToTrash': { zh: '已移入回收站', en: 'Moved to trash' },
+  'pagestore.birth.failed': { zh: '没能新建「{name}」：{reason}', en: 'Couldn’t create "{name}": {reason}' },
+  'pagestore.birth.unknown': { zh: '文件没有建成', en: 'the file wasn’t created' },
   'pagestore.confirm.deleteEmbeddedBlock': {
     zh: '有 {n} 处笔记嵌入了这个块，删除后那些嵌入会显示「丢失」。仍要删除？',
     en: 'This block is embedded in {n} place(s). Those embeds will show as missing once it is deleted. Delete anyway?',
@@ -712,6 +714,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
     async birthAndOpen(path) {
       const r = await birthNoteFile(path)
       await get().refreshStructure()
+      if (r === 'failed') return // 没建成(已提示):绝不导航到一篇不存在的笔记
       // 聚焦请求必须先于导航:后设时 UnifiedPage 已经挂载并跑完一次性消费 effect,
       // 信号永远等不到下一次 path 变化,表现成"新笔记偶尔不进标题编辑"。已存在的笔记 = 打开,不抢标题。
       if (r === 'created') requestTitleFocus(path)
@@ -1002,7 +1005,9 @@ function makePageStore(opts: PageStoreOptions = {}) {
       let base = stem
       for (let i = 1; globalKeys.has(pageKey(base)) || inFd.has(`${base}.md`.toLowerCase()); i++) base = `${stem}-${i}`
       const path = `${fd}/${base}.md`
-      await birthNoteFile(path) // 素文件出生(G4-12);mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile recursive
+      // 素文件出生(G4-12);mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile recursive。
+      // 没建成(已提示)→ 抛:调用方都会拿这个路径去插链接 / 打开,不许交出一篇不存在的笔记。
+      if ((await birthNoteFile(path)) === 'failed') throw new Error(`create failed: ${path}`)
       await get().syncFdChildren(parentPath) // 内含 refreshStructure
       requestTitleFocus(path) // 打开后落光标到标题栏(调用方负责导航)
       return path
@@ -1598,13 +1603,26 @@ export function navigateToNote(path: string): boolean {
  *  老入口(快切新建 / 未解析链接确认 / 子笔记 / 笔记视图加行)此前调 `amadeus.newPage`,生出的是 v3
  *  (amadeus_page 三键 + `<!-- a 1 -->`),而且主进程 newPage 对已存在的文件照写 = 覆盖风险。
  *  已存在(以**磁盘**为准:pages[] 可能落后于磁盘)→ 不写,回 'exists',调用方照常打开它。
- *  写带 base = 空串指纹:支持比对交换写的宿主(桌面主进程 / 云桥 / 移动本地库)在「读后写前」那道窄缝里
- *  别处刚建了同名且有内容的文件时也不覆盖(回 ok:false → 按已存在处理)。 */
-export async function birthNoteFile(path: string): Promise<'created' | 'exists'> {
+ *  写用 create:true = 宿主原子的**仅新建**(Codex 复核返修 P1-1):「读后写前」那道窄缝里别处刚建了同名 → 宿主不写、交回现文
+ *  → 'exists'。宿主说没建成且拿不出现文(current:null)/ 写抛错 → 'failed' 并提示 —— **绝不当成已存在**去导航到一篇不存在的笔记
+ *  (上一轮就是这么回归的:带 base 的新建被「文件不在 = 拒写」拦下,却按已存在打开)。base 留着给只认比对交换写的旧宿主兜底。 */
+export async function birthNoteFile(path: string): Promise<'created' | 'exists' | 'failed'> {
   const cur = await amadeus.readTextFile?.(path)?.catch(() => null)
   if (cur != null) return 'exists'
-  const r = await amadeus.writeTextFile(path, '', { create: true, base: textFingerprint('') })
-  if (r && r.ok === false) return 'exists'
+  const failed = (reason: string): 'failed' => {
+    const name = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { level: 'error', text: translate('pagestore.birth.failed', { name, reason }) } }))
+    }
+    return 'failed'
+  }
+  let r: Awaited<ReturnType<typeof amadeus.writeTextFile>>
+  try {
+    r = await amadeus.writeTextFile(path, '', { create: true, base: textFingerprint('') })
+  } catch (e) {
+    return failed(e instanceof Error && e.message ? e.message : translate('pagestore.birth.unknown'))
+  }
+  if (r && r.ok === false) return r.current != null ? 'exists' : failed(translate('pagestore.birth.unknown'))
   track('note.create'); act('note.create', { f: path })
   return 'created'
 }

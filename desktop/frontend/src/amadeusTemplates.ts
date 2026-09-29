@@ -8,7 +8,7 @@
  *    unified/lifecycle 的 `insertMarkdown` 接缝插在光标处(空块由 UnifiedPage 的 insertMd
  *    原地替换,「首块填进空块」的语义在那边免费拿到)。 */
 import { amadeus } from '@amadeus/api'
-import { noteOf, usePageStore } from '@amadeus/store/pageStore'
+import { birthNoteFile, noteOf, usePageStore } from '@amadeus/store/pageStore'
 import { unifiedFmNow, unifiedInsertMarkdown, unifiedPatchFm } from '@amadeus/unified/lifecycle'
 import { BLOCK_MARKER_RE } from '@amadeus-shared/compiler/markers'
 import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
@@ -137,14 +137,14 @@ export async function openDailyNote(): Promise<void> {
   ])
   const path = dailyNotePath(new Date(), cfg?.notesDailyFolder, daily, currentLocale())
   // 「已经有没有」以**磁盘**为准:pages[] 可能落后于磁盘,照它判会把已有日记当新的再套一遍模板。
-  const existed = (await amadeus.readTextFile(path).catch(() => null)) != null
-  if (!existed) {
-    // 素文件出生(与 createPageInFolder 同规)。老路 openOrCreate → 主进程 newPage 生的是 v3
-    // (amadeus_page + 块标记),而「打开即升」默认开 → 路由当场把它交给 UnifiedPage,模板往
-    // 交出去的 v3 store 里写,写完即被冲掉:日记建出来但一个字都没有(2026-08-21 真机实测)。
-    await amadeus.writeTextFile(path, '', { create: true })
-    await ps().refreshStructure()
-  }
+  // 素文件出生(与 createPageInFolder 同规,走同一个 birthNoteFile)。老路 openOrCreate → 主进程 newPage 生的是 v3
+  // (amadeus_page + 块标记),而「打开即升」默认开 → 路由当场把它交给 UnifiedPage,模板往
+  // 交出去的 v3 store 里写,写完即被冲掉:日记建出来但一个字都没有(2026-08-21 真机实测)。
+  // 别处刚建了同名(宿主仅新建交回现文)= 已存在,照常打开、不套模板;没建成(已提示)→ 不打开一篇不存在的笔记。
+  const born = await birthNoteFile(path)
+  if (born === 'failed') return
+  const existed = born === 'exists'
+  if (!existed) await ps().refreshStructure()
   // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记。focus:'body' = 进来就能打字(G4-06;新日记没套模板时同样要)。
   await openNote(path, { focus: 'body' })
   if (existed) return

@@ -128,3 +128,29 @@ describe('mobile bridge: rename / move rewrites [[links]] (G2-04)', () => {
     expect(disk.get('A.md')).toBe('x [[D]]\n')
   })
 })
+
+// Codex 复核返修 P1-1 / P0-2:移动桥的 writeTextFile 与桌面同契约 —— create = 锁内判存在的仅新建(优先于 base);
+// 带 base 而文件已不在 → 拒写 current:null(不重建被删的旧路径)。负对照(实跑过):去掉 create 分支 → 前两条红。
+describe('mobile bridge: writeTextFile create / base 契约(同桌面)', () => {
+  it('create:不存在 → 建(带空串 base 的新建笔记也建得成);已存在 → 不写、交回现文', async () => {
+    const { bridge } = await boot({ 'Mine.md': 'mine' })
+    expect(await bridge.writeTextFile('New.md', '', { create: true, base: textFingerprint('') })).toEqual({ ok: true })
+    expect(disk.get('New.md')).toBe('')
+    expect(await bridge.writeTextFile('Mine.md', 'copy', { create: true })).toEqual({ ok: false, current: 'mine' })
+    expect(disk.get('Mine.md')).toBe('mine')
+  })
+  it('两发同名 create 并发:只有一个建成,另一个拿到对方的内容', async () => {
+    const { bridge } = await boot({})
+    const [a, b] = await Promise.all([
+      bridge.writeTextFile('C.md', 'one', { create: true }),
+      bridge.writeTextFile('C.md', 'two', { create: true }),
+    ])
+    expect([a, b]).toEqual([{ ok: true }, { ok: false, current: 'one' }])
+    expect(disk.get('C.md')).toBe('one')
+  })
+  it('带 base 而文件已不在 → 拒写 current:null,不重建', async () => {
+    const { bridge } = await boot({})
+    expect(await bridge.writeTextFile('Gone.md', 'x', { base: textFingerprint('old') })).toEqual({ ok: false, current: null })
+    expect(disk.has('Gone.md')).toBe(false)
+  })
+})

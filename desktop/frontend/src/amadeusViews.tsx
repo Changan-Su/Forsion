@@ -1208,7 +1208,7 @@ export function AmadeusPagesView() {
     void ps().createChildNote(p, translate('amadeus.default.note')).then((np) => {
       setExpanded((prev) => new Set([...prev, ...prefixesOf(fdDirOf(p))]))
       void openNote(np) // 勿直调 loadPage:那装的是活动 scope,站在主页/聊天上建子笔记同样不跳(见 createPageInFolder 注)
-    })
+    }, () => { /* 没建成:birthNoteFile 已提示 */ })
   }
 
   /** 按路径类型打开对的视图。**判定顺序是毁档防线**:白板(.excalidraw.md)/仪表盘(.dashboard.md)/
