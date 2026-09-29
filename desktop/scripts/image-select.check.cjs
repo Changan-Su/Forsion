@@ -97,20 +97,37 @@ const stubClipboard = (p) =>
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const open = async (query, ready) => {
+  const open = async (query, ready, { loadable = false } = {}) => {
     const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 700 } })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    // loadable:`![[pic.png]]` 形态要一张**真能加载**的图(与上面 IMG 同一个理由)。台架没有 amadeus-asset:// 协议,
+    // R-21 之后加载失败的图换成「图片无法加载」占位(失败态由 media-embed 的 F 组钉着)—— 而这里测的是**正常**图片的
+    // 选中 / 拖宽 / 灯箱。harness 一挂出 window.__assets 就把资源 URL 构建器指到 IMG(在首次渲染之前)。
+    // 只给 `![[…]]` 形态用:`![](path)` 节点的 src 是落盘路径的来源(fromAssetUrl 只认 amadeus-asset://),
+    // 换成 data URL 会改掉 I14 / I16 量的落盘字节。
+    if (loadable) {
+      await p.addInitScript((img) => {
+        let v
+        Object.defineProperty(window, '__assets', {
+          configurable: true,
+          get: () => v,
+          set: (next) => { v = next; next.setUrlBuilder(() => img) },
+        })
+      }, IMG)
+    }
     await p.goto(`${URL}?${query}`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector(ready, { timeout: 20000 })
     await p.waitForTimeout(900)
     return p
   }
   const UBODY = '.unified-body .ProseMirror'
-  const U4 = `upage&useed=${encodeURIComponent('前言。\n\n![[pic.png|200]]\n\n后语。\n')}`
+  const U4_SEED = '前言。\n\n![[pic.png|200]]\n\n后语。\n'
+  const U4 = `upage&useed=${encodeURIComponent(U4_SEED)}`
+  const openLoadable = (seed) => open(`upage&useed=${encodeURIComponent(seed)}`, '.unified-body', { loadable: true })
   const vault = (p) => p.evaluate(() => window.__upage.vault.get('Unified.md'))
 
   // ── I1 v4:单击 → 选中(不露源码) ───────────────────────────────────────────
-  let p = await open(U4, '.unified-body')
+  let p = await openLoadable(U4_SEED)
   let r = await rectOf(p, '.wiki-inline-img-wrap')
   check('I1 图片先渲染出来', !!r && r.w === 200, JSON.stringify(r))
   await p.mouse.click(r.x + 40, r.cy)
@@ -161,7 +178,7 @@ async function main() {
   await p.close()
 
   // ── I5 v4:剪切 → 源码从盘上消失,剪贴板留着字面源码 ─────────────────────────
-  p = await open(U4, '.unified-body')
+  p = await openLoadable(U4_SEED)
   r = await rectOf(p, '.wiki-inline-img-wrap')
   await p.mouse.click(r.x + 40, r.cy)
   await p.waitForTimeout(350)
@@ -173,7 +190,7 @@ async function main() {
 
   // ── I6 v3 行内(混在文字里):同一套 widget ────────────────────────────────
   //    ⚠️ 图片行不能是最后一行:harness 默认把光标放文末,同一行会露源码(设计如此)。
-  p = await open(`seed=${encodeURIComponent('文字 ![[pic.png|120]] 更多文字\n\n最后一行')}`, '.md-block .ProseMirror')
+  p = await open(`seed=${encodeURIComponent('文字 ![[pic.png|120]] 更多文字\n\n最后一行')}`, '.md-block .ProseMirror', { loadable: true })
   r = await rectOf(p, '.wiki-inline-img-wrap')
   await p.mouse.click(r.x + 30, r.cy)
   await p.waitForTimeout(400)
@@ -254,7 +271,7 @@ async function main() {
   //    `translate() scale(z)` 裹住同一个编辑器)。验的是坐标换算本身,与缩放由谁施加无关。
   //    ⚠️ 必须是 transform 而不是 CSS zoom:`currentCSSZoom` 不含 transform,只有 transform
   //    这一档能钉住「别退回 zoomOf()」这条约束。
-  p = await open(U4, '.unified-body')
+  p = await openLoadable(U4_SEED)
   await p.evaluate(() => {
     const el = document.getElementById('root')
     el.style.transformOrigin = '0 0'
@@ -348,7 +365,7 @@ async function main() {
     ['md 图片节点', `前言。\n\n![](${IMG})\n\n后语。\n`],
     ['`![[…]]` 形态', '前言。\n\n![[pic.png|200]]\n\n后语。\n'],
   ]) {
-    p = await open(`upage&useed=${encodeURIComponent(seed)}`, '.unified-body')
+    p = seed.includes('![[') ? await openLoadable(seed) : await open(`upage&useed=${encodeURIComponent(seed)}`, '.unified-body')
     r = await rectOf(p, '.wiki-inline-img-wrap')
     if (!r) { skipRest([`I15 ${label}:选中图片不弹格式工具栏`]); await p.close(); continue }
     await p.mouse.click(r.x + 20, r.cy)
@@ -368,11 +385,16 @@ async function main() {
   } else {
     let bs = await p.evaluate(() => { const b = document.querySelector('.wiki-inline-img-wrap .amx-src-btn'); if (!b) return null; const cs = getComputedStyle(b); return { text: b.textContent, opacity: +cs.opacity, pe: cs.pointerEvents } })
     check('I16 `![](path)` 挂了 `</>` 且不悬停时不吃点击', !!bs && bs.text === '</>' && bs.opacity === 0 && bs.pe === 'none', JSON.stringify(bs))
-    await p.mouse.dblclick(r.x + 20, r.cy)
-    await p.waitForTimeout(600)
-    check('I16 双击 = 看大图(灯箱),不弹源码行', await p.evaluate(() => !!document.querySelector('.amx-lightbox') && !document.querySelector('.amx-img-srcline')))
-    await p.click('.amx-lightbox')
-    await p.waitForTimeout(400)
+    // 双击 = 灯箱要一张**能加载**的图:这里的 `attachments/a b.png` 在台架里加载不出来,R-21 之后是失败态占位
+    // (没东西可看,不开灯箱)。灯箱这一条换到同形态的 `![封面|200](IMG)` 上验,本页只验源码行的提交 / 取消。
+    {
+      const q = await open(`upage&useed=${encodeURIComponent(`前言。\n\n![封面|200](${IMG})\n\n后语。\n`)}`, '.unified-body')
+      const rq = await rectOf(q, '.wiki-inline-img-wrap')
+      if (rq) await q.mouse.dblclick(rq.x + 20, rq.cy)
+      await q.waitForTimeout(600)
+      check('I16 双击 = 看大图(灯箱),不弹源码行', !!rq && await q.evaluate(() => !!document.querySelector('.amx-lightbox') && !document.querySelector('.amx-img-srcline')))
+      await q.close()
+    }
     await p.mouse.move(r.x + 20, r.cy)
     await p.waitForTimeout(300)
     await p.click('.wiki-inline-img-wrap .amx-src-btn')
@@ -390,7 +412,10 @@ async function main() {
     await p.waitForTimeout(1600)
     const md5 = await vault(p)
     check('I16 提交后落盘重新编码成 %20(没让裸空格写进盘)', md5.includes('![新说明|150](attachments/x%20y.png)'), JSON.stringify(md5))
-    check('I16 新宽度立刻生效', (await rectOf(p, '.wiki-inline-img')).w === 150)
+    // 新路径 `attachments/x y.png` 在台架里加载不出来 → R-21 失败态占位,<img> 不占版面、量不到渲染宽度。
+    // 这一条钉的是「源码行提交后 NodeView 当场把新宽度应用到图片上」(mdImage.apply 写 style.width);
+    // 能加载的图按宽度真实显示由 I12 / I13(`![…|w](IMG)`)量渲染几何钉着。
+    check('I16 新宽度立刻生效', (await p.evaluate(() => document.querySelector('.wiki-inline-img')?.style.width)) === '150px')
     const rr = await rectOf(p, '.wiki-inline-img-wrap')
     await p.mouse.move(rr.x + 20, rr.cy) // 源码入口是 `</>`,不是双击(双击已归灯箱)
     await p.waitForTimeout(300)
@@ -407,7 +432,7 @@ async function main() {
   }
 
   // ── I17 独占段图片是顶层块选区,可直接走通用「移到新列」 ──────────────────────
-  p = await open(U4, '.unified-body')
+  p = await openLoadable(U4_SEED)
   r = await rectOf(p, '.wiki-inline-img-wrap')
   if (!r) {
     skipRest(['I17 图片右键菜单可分栏', 'I17 分栏后图片仍渲染'])
