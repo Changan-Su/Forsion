@@ -68,3 +68,25 @@ describe('插件语言接缝', () => {
     expect(seen).toEqual([])
   })
 })
+
+describe('内置 callout 的 slash 项跟随界面语言(B-20)', () => {
+  beforeEach(() => {
+    setLocaleGlobal('zh')
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, slashItems: [] })
+  })
+
+  it('label / group 在渲染期求值:setup 之后切语言,取到的是新语言', async () => {
+    const { calloutBlocks } = await import('./builtins')
+    const { textOf } = await import('../blocks/markdown/MarkdownBlock')
+    usePluginStore.getState().init([calloutBlocks])
+    const note = usePluginStore.getState().slashItems.find((o) => o.item.id === 'callout-note')!.item
+    const zh = [textOf(note.label), textOf(note.group)]
+    setLocaleGlobal('en')
+    const en = [textOf(note.label), textOf(note.group)]
+    expect(typeof note.label).toBe('function') // 字符串 = setup 那一刻定格(此前的 bug)
+    expect(zh[0]).not.toBe(en[0])
+    expect(en[0]).not.toMatch(/[\u4e00-\u9fff]/)
+    expect(zh[1]).not.toBe(en[1])
+  })
+})
+

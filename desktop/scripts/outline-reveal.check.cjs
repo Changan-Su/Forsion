@@ -28,6 +28,10 @@
 //  S3 命中在折起的列表子项里 → 先展开那一项再定位
 //  S4 标签边界:`#work` 落在真正的 #work 上,不落在前面的 #workshop 上
 //
+//  —— 浮动目录(评审 C-04:LCL FloatingToc 用缺省 topOffset=24,顶栏 37px 高 → 跳完标题被盖住 14px)——
+//  F1 `&utoc` 挂生产的 NoteFloatingToc,真鼠标悬停展开、点「小节 4」→ 标题落在顶栏下 12px,且高亮的就是「小节 4」
+//  F2 再往上点「小节 2」→ 同样落在顶栏下 12px、高亮「小节 2」
+//
 // 用法:npm run check:outlinereveal(= node scripts/e2e-editor.cjs --check=outline-reveal;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -272,9 +276,36 @@ async function textReveal(browser) {
   await p.close()
 }
 
+// ── C-04:浮动目录跳转落点(生产 NoteFloatingToc,台架 &upane&utoc)────────────────────────────────
+async function floatingToc(browser) {
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+  p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  await p.goto(`${URL}?upage&upane&utoc&useed=${encodeURIComponent(MD)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+  await p.waitForSelector(PM, { timeout: 120000 })
+  await p.waitForSelector('.lcl-ftoc-item', { state: 'attached', timeout: 20000 })
+  await p.waitForTimeout(400)
+  const jump = async (text) => {
+    const fb = await (await p.$('.lcl-ftoc')).boundingBox()
+    await p.mouse.move(fb.x + fb.width / 2, fb.y + fb.height / 2)
+    await p.waitForTimeout(400)
+    await p.click(`.lcl-ftoc-item:has-text("${text}")`)
+    await p.waitForTimeout(1200) // smooth 滚动走完
+    await p.mouse.move(600, 500)
+    const m = await measure(p, H, text)
+    m.active = await p.evaluate(() => document.querySelector('.lcl-ftoc-item.active')?.textContent ?? null)
+    return m
+  }
+  const f1 = await jump('小节 4')
+  record('F1 浮动目录往下跳 → 标题落在顶栏下 12px,高亮正是这一节(C-04)', f1.scroll > 0 && landed(f1) && f1.active === '小节 4', JSON.stringify(f1))
+  const f2 = await jump('小节 2')
+  record('F2 浮动目录往上跳 → 同样不被顶栏盖住、高亮跟上', f2.top >= f2.bar && landed(f2) && f2.active === '小节 2', JSON.stringify(f2))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
+    await floatingToc(browser)
     let p = await open(browser)
     await clickOl(p, '小节 4')
     const m1 = await measure(p, H, '小节 4')

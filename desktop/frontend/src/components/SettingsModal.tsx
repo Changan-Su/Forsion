@@ -85,6 +85,7 @@ import { setActiveWindowCommand } from '../activeWindowCommand'
 import { requestDevCommandsSync } from '../devCommands'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setNotesSpellcheckEnabled, useNotesSpellcheck } from '@amadeus/blocks/markdown/spellcheck'
+import { setCodeAutoPairEnabled, useCodeAutoPair } from '@amadeus/blocks/markdown/codeAutoPair'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
@@ -371,6 +372,7 @@ export const SettingsModal: React.FC<{
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
   const notesSpellcheck = useNotesSpellcheck() // 笔记拼写检查(本机偏好,G4-07)
+  const codeAutoPair = useCodeAutoPair() // 代码块括号自动配对(本机偏好,R-27)
   const [canvasOverviewZ, setCanvasOverviewZ] = useState<number>(canvasOverviewZoom)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
@@ -1876,6 +1878,7 @@ export const SettingsModal: React.FC<{
                         <SettingsRow label={t('settings.notes.wikiFilesLabel')} description={t('settings.notes.wikiFilesHint')} control={<SettingsSwitch checked={stored.notesWikiIncludeFiles !== false} onChange={(on) => { setWikiFilesEnabled(on); void window.tangu!.setConfig({ notesWikiIncludeFiles: on }).then(setStored) }} label={t('settings.notes.wikiFilesLabel')} />} />
                         <SettingsRow label={t('settings.notes.aiSpaceLabel')} description={t('settings.notes.aiSpaceHint')} control={<SettingsSwitch checked={aiSpaceTrigger} onChange={(on) => { setAiSpaceTrigger(on); setAiSpaceTriggerEnabled(on) }} label={t('settings.notes.aiSpaceLabel')} />} />
                         <SettingsRow label={t('settings.notes.spellcheckLabel')} description={t('settings.notes.spellcheckHint')} control={<SettingsSwitch checked={notesSpellcheck} onChange={setNotesSpellcheckEnabled} label={t('settings.notes.spellcheckLabel')} />} />
+                        <SettingsRow label={t('settings.notes.codeAutoPairLabel')} description={t('settings.notes.codeAutoPairHint')} control={<SettingsSwitch checked={codeAutoPair} onChange={setCodeAutoPairEnabled} label={t('settings.notes.codeAutoPairLabel')} />} />
                         <SettingsRow
                           label={t('settings.notes.canvasDoubleClickFocusLabel')}
                           description={t('settings.notes.canvasDoubleClickFocusHint')}

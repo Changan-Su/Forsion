@@ -187,7 +187,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | 贡献点 | 给用户的入口 | 备注 |
 |---|---|---|
 | `registerCommand` | 命令面板(+ 可选 agent 面) | id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
-| `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
+| `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法);`label` / `group` 传函数则跟随界面语言 |
 | `registerSelectionAction` | 选中文字后工具栏「AI ▾」里的「插件」组 | `run(cx)` 返回要提议的 markdown,**只进宿主的预览面板**,用户点「替换 / 插入下方」才写(见下「正文 AI」) |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
@@ -560,7 +560,9 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   逐个 `split('{k}').join(v)` 会让先替进去的值被后面轮次再吃一遍(用户把卡组命名成 `{n}` → 自己的数据被当占位符)。
 - ⚠️**会落盘的兜底默认名(文件名、frontmatter 值)一律钉死中文常量,不许取 `t()`** —— 否则英文界面建出来的
   文件名与中文界面对不上,同一个库里冒出两套。
-- 贡献点的**标题是注册时的单字符串**(命令 title / slash label / view title / setting label / 成就标题),
+- **slash 项的 `label` / `group` 可以传函数**(`label: () => t('…')`,2026-09-28 起):宿主每次渲染 slash 菜单时求值,
+  切语言即时跟上 —— 传字符串会定格在注册那一刻(首次启动的 IP 语言校正还发生在插件 setup 之后)。
+  其余贡献点的**标题仍是注册时的单字符串**(命令 title / view title / setting label / 成就标题),
   宿主不做运行时重解析 → 切语言要等重启。**不许**用「语言变了就 teardown 重注册」绕(会打断录音、写队列、已开的视图)。
 - `icon` 一律写宿主词表里的名字(`'template'` / `'pin'` / `'callout-warning'`…),**别塞 emoji** ——
   命中词表宿主就画和内置项同一套 SVG。全表见正典文档「图标」节与 `components/icons` 的 `PLUGIN_ICONS`;

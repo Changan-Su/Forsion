@@ -8,7 +8,8 @@
  *  (实例挂载/卸载)。即 v4 的大纲/字数在停手约 1s 后跟上,与反链/图谱同一节拍。 */
 import { useMemo, useSyncExternalStore } from 'react'
 import { usePageStore, v4PathOf } from '../store/pageStore'
-import { subscribeUnified, unifiedBody, unifiedGen, unifiedHeadings, unifiedRevealHeading } from '../unified/lifecycle'
+import { subscribeUnified, subscribeUnifiedStats, unifiedBody, unifiedGen, unifiedHeadings, unifiedRevealHeading, unifiedStats, unifiedStatsVer } from '../unified/lifecycle'
+import { countText, type TextCount } from './textCount'
 
 export interface OutlineHead {
   level: number
@@ -61,20 +62,31 @@ export function useNoteOutline(): OutlineHead[] {
   }, [v4Path, manifest, blocks, version, instances])
 }
 
-/** 当前这篇的字符数(不计空白);没有打开的笔记 → null。 */
-export function useNoteChars(): number | null {
+/** 当前这篇的计数(评审 C-22):字(不计空白)/ 词,有选区时另给选区的;没有打开的笔记 → null。
+ *  v4 数**可见文字**(编辑器现数,文档或选区一变下一帧就跟上,见 unified/noteStats);源码模式没有编辑器,回落
+ *  数原文。v3 仍数块的原文(块世界没有统一的可见文字,且 v3 只剩旧笔记)。 */
+export function useNoteCount(): { all: TextCount; sel: TextCount | null } | null {
   const v4Path = useV4Path()
   const activePage = usePageStore((s) => s.activePage)
   const blocks = usePageStore((s) => s.blocks)
   const version = usePageStore((s) => s.linkGraphVersion)
   const instances = useSyncExternalStore(subscribeUnified, unifiedGen, unifiedGen)
+  const live = useSyncExternalStore(subscribeUnifiedStats, unifiedStatsVer, unifiedStatsVer)
   return useMemo(() => {
     if (v4Path) {
+      const st = unifiedStats(v4Path)
+      if (st) return st
       const body = unifiedBody(v4Path)
-      return body == null ? null : body.replace(/\s/g, '').length
+      return body == null ? null : { all: countText(body), sel: null }
     }
     if (!activePage) return null
-    return Object.values(blocks).map((b) => b.content).join(' ').replace(/\s/g, '').length
+    return { all: countText(Object.values(blocks).map((b) => b.content).join('\n')), sel: null }
+    // version / instances / live 只作刷新触发器。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v4Path, activePage, blocks, version, instances])
+  }, [v4Path, activePage, blocks, version, instances, live])
+}
+
+/** 当前这篇的字符数(不计空白);没有打开的笔记 → null。 */
+export function useNoteChars(): number | null {
+  return useNoteCount()?.all.chars ?? null
 }

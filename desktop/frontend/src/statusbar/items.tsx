@@ -10,13 +10,13 @@ import {
   effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts,
 } from '@lcl/engine'
 import type { StatusItem } from '@lcl/engine'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import '../shellMessages'
 import { useApp } from '../stores/appStore'
 import { useInbox } from '../stores/inboxStore'
 import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStore'
 import { usePageStore } from '@amadeus/store/pageStore'
-import { useNoteChars } from '@amadeus/lib/activeNote'
+import { useNoteCount } from '@amadeus/lib/activeNote'
 import { amadeus } from '@amadeus/api'
 import { useSbPrefs } from './prefs'
 import { ipcErrorText } from '../ipcError'
@@ -156,13 +156,20 @@ function BacklinksItem() {
   )
 }
 
-/** 右:当前笔记字数(仅 Amadeus 编辑器视图;从编辑器工具条迁入,原 word-count 插件状态项)。 */
+registerMessages({
+  'sb.count': { zh: '{words} 词 · {chars} 字', en: '{words} words · {chars} chars' },
+  'sb.countSel': { zh: '已选 {words} 词 · {chars} 字', en: 'Selected {words} words · {chars} chars' },
+})
+
+/** 右:当前笔记词数 / 字数,有选区时换成选区的(仅 Amadeus 编辑器视图;从编辑器工具条迁入,原 word-count 插件状态项)。
+ *  v4 数可见文字、选区一变就跟上(评审 C-22,见 lib/activeNote.useNoteCount)。 */
 function WordCountItem() {
   const { t } = useI18n()
   const type = useActiveMainType()
-  const chars = useNoteChars() // v3 读 blocks,v4 问 unified 实例(正文不进 store)
-  if (type !== 'amadeus-editor' || chars == null) return null
-  return <span className="sb-plain">{t('sb.chars', { n: chars })}</span>
+  const count = useNoteCount() // v3 读 blocks,v4 问 unified 实例(正文不进 store)
+  if (type !== 'amadeus-editor' || count == null) return null
+  const c = count.sel ?? count.all
+  return <span className="sb-plain" data-count={count.sel ? 'sel' : 'all'}>{t(count.sel ? 'sb.countSel' : 'sb.count', { words: c.words, chars: c.chars })}</span>
 }
 
 /** 右:收件箱未读数(0 时隐藏);点击进 Inbox Space。只显示一个数字 → 名字与含义放进可访问名 / 悬停说明

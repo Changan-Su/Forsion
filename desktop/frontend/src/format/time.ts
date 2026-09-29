@@ -146,6 +146,14 @@ export function formatLongDate(at: TimeInput, opts: TimeOpts = {}): string {
   return `${new Intl.DateTimeFormat(tag, { month: 'long', day: 'numeric' }).format(d)} ${new Intl.DateTimeFormat(tag, { weekday: 'long' }).format(d)}`
 }
 
+/** 月 / 星期的名字(模板变量 `{{date:MMMM dddd}}` 这类 moment 名字令牌,评审 G4-10):口径同本文件其余函数,走界面语言。
+ *  month「九月 / September」、monthShort「9月 / Sep」、weekday「星期一 / Monday」、weekdayShort「周一 / Mon」、weekdayNarrow「一 / M」。 */
+export function formatDateName(at: Date, part: 'month' | 'monthShort' | 'weekday' | 'weekdayShort' | 'weekdayNarrow', locale: Locale = currentLocale()): string {
+  const opt: Intl.DateTimeFormatOptions = part === 'month' ? { month: 'long' } : part === 'monthShort' ? { month: 'short' }
+    : part === 'weekday' ? { weekday: 'long' } : part === 'weekdayShort' ? { weekday: 'short' } : { weekday: 'narrow' }
+  return new Intl.DateTimeFormat(intlLocale(locale), opt).format(at)
+}
+
 /** 仪表盘时钟卡片:指定时区的「14:05:09」与「9月17日周三」。时区写错时 Intl 抛 RangeError,由调用方兜底。 */
 export function formatZonedClock(at: Date, opts: { locale?: Locale; timeZone?: string } = {}): { time: string; date: string } {
   const tag = intlLocale(opts.locale ?? currentLocale())

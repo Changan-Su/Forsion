@@ -176,6 +176,18 @@ export class VaultManager {
     this.emitMutate(abs, 'write')
   }
 
+  /** 仅新建(writeTextFile 的 create 语义,Codex 复核返修 P1-1 / P0-2):文件已在 → 抛 EEXIST、一个字节不动。
+   *  `wx` 独占创建由内核保证原子 —— 同名的两发(两个窗口 / 两个进程)只有一个建得成,另一个拿到 EEXIST;
+   *  「先查在不在、再写」那种两步做法在两步之间会被别人抢先,后写的整份盖掉先写的。 */
+  async createTextFile(rel: string, text: string): Promise<void> {
+    const abs = this.resolveInVault(rel)
+    await fs.mkdir(path.dirname(abs), { recursive: true })
+    await fs.writeFile(abs, text, { encoding: 'utf8', flag: 'wx' })
+    this.lastWritten.set(abs, text)
+    if (this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(text) })
+    this.emitMutate(abs, 'write')
+  }
+
   /** Write a UTF-8 text file at a vault-relative path (clamped + atomic;供 .db 等非页面文件写回)。 */
   async writeTextFile(rel: string, text: string): Promise<void> {
     await this.atomicWrite(this.resolveInVault(rel), text)

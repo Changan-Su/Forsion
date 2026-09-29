@@ -5,6 +5,8 @@
 //      新行的空格子落盘为空(不是 `<br />`)。
 //   M  块菜单:右键单元格出「表格」区、不列文字类「转换为」;段落上照旧;插行/插列/删行/删列/对齐 → 落盘 md;
 //      表头行不给「上方插入行 / 删除行」;只剩一行正文不给删行、一列不给删列;⠿ 打开只给追加行列;斜杠建的表能长大。
+//   S  落盘:格内文字以空格结尾且含 `|` 照样转义(L-09b)。
+//   L  `/表格` 骨架的表头跟界面语言落盘(R-16):英文界面 `| Column 1 | Column 2 |`,中文界面 `| 列 1 | 列 2 |`。
 // 用法:npm run check:table(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。`--only=E,M` 只跑指定组。
 const fs = require('fs')
 const os = require('os')
@@ -397,6 +399,38 @@ async function main() {
         check('M8 ⠿ 打开(无格子上下文)只给追加行列', m && m.ops.join(',') === 'rowBelow,colRight' && m.aligns.length === 0, JSON.stringify(m))
         check('M8 斜杠建的表能长大(⠿ 追加一行 + 末行 Enter 再加一行)', made && made.length === 2 && r.length === 4 && r[3][1] === 'G' && (md || '').split('\n').filter((l) => l.startsWith('|')).length === 5 && !/<br/i.test(md || ''), `${JSON.stringify({ made, r })} md=${JSON.stringify(md)}`)
       }
+    }
+    if (want('S')) {
+      // S1 单元格文字以空格结尾且含 `|`(L-09b):milkdown 的 text handler 对这种文本整段跳过转义 → `|` 裸写,
+      //    重开单元格被拆成两格。别名双链同病(`[[Alpha|别名]] `)。落盘必须转义成 `\|`,重开仍是两列。
+      for (const typed of [' A | B ', ' [[Alpha|别名]] ']) {
+        const nm = await load(page, '# T\n\n| a | b |\n| --- | --- |\n| c1 | x |\n\n尾段\n')
+        await caretInCell(page, 'c1')
+        await page.keyboard.type(typed)
+        const md = await mdOf(page, nm)
+        await load(page, md || '')
+        const r = await rows(page)
+        check(`S1 格内以空格结尾且含 |(${JSON.stringify(typed)}):落盘转义,重开仍是两列`, /\\\|/.test(md || '') && r && r[1].length === 2 && r[1][0].startsWith('c1'), `${JSON.stringify(r)} md=${JSON.stringify(md)}`)
+      }
+    }
+    if (want('L')) {
+      // L1/L2 表头是落盘产物命名(CLAUDE.md 双语准则):以前表里写死「列 1 | 列 2」,英文界面照样把中文表头写进磁盘。
+      for (const [lang, trigger, head] of [['en', '/table', '| Column 1 | Column 2 |'], ['zh', '/表格', '| 列 1 | 列 2 |']]) {
+        await page.evaluate((l) => window.__upage.setLocale(l), lang)
+        const nm = await load(page, '# T\n\n前段。\n')
+        await page.evaluate(() => {
+          const v = window.__upage.probe.view()
+          v.focus()
+          v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.atEnd(v.state.doc)))
+        })
+        await page.keyboard.press('Enter')
+        await page.keyboard.type(trigger)
+        await page.waitForTimeout(300)
+        await page.keyboard.press('Enter')
+        const md = await mdOf(page, nm)
+        check(`L ${lang} 界面 ${trigger} → 表头落盘 ${head}`, (md || '').split('\n').includes(head), JSON.stringify(md))
+      }
+      await page.evaluate(() => window.__upage.setLocale('zh'))
     }
     await page.close()
   } finally {

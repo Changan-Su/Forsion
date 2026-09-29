@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { blockLabel, canAutoTriggerFromBlock, matchTrigger, triggerFromStructuralPrefix } from './blockTriggers'
+import { setLocaleGlobal } from '../../../i18n'
 
 describe('matchTrigger(光标前文本 → 块触发)', () => {
   it('标题 1-6 级;7 个 # 不触发', () => {
@@ -25,6 +26,26 @@ describe('matchTrigger(光标前文本 → 块触发)', () => {
   })
   it('nbsp 空格("[ ]" 在 contenteditable 里的真实形态)也识别', () => {
     expect(matchTrigger('[ ]')).toEqual({ kind: 'task', checked: false })
+  })
+  it('全角标点(中文输入法直出)整行恰好是触发符时照样触发(K-14)', () => {
+    expect(matchTrigger('【】')).toEqual({ kind: 'task', checked: false })
+    expect(matchTrigger('【x】')).toEqual({ kind: 'task', checked: true })
+    expect(matchTrigger('》')).toEqual({ kind: 'fold' })
+    expect(matchTrigger('｜')).toEqual({ kind: 'quote' })
+    expect(matchTrigger('···')).toEqual({ kind: 'code', lang: '' })
+    expect(matchTrigger('···py')).toEqual({ kind: 'code', lang: 'py' })
+    expect(matchTrigger('￥￥')).toEqual({ kind: 'math' })
+    expect(matchTrigger('＃')).toEqual({ kind: 'heading', level: 1 })
+    expect(matchTrigger('＃＃＃')).toEqual({ kind: 'heading', level: 3 })
+    expect(matchTrigger('1。')).toEqual({ kind: 'ordered', order: 1 })
+    expect(matchTrigger('12。')).toEqual({ kind: 'ordered', order: 12 })
+  })
+  it('全角只在整行恰好是触发符时换算;顿号不映射', () => {
+    expect(matchTrigger('、')).toBeNull()
+    expect(matchTrigger('见【】')).toBeNull()
+    expect(matchTrigger('好。')).toBeNull()
+    expect(matchTrigger('1。2')).toBeNull()
+    expect(matchTrigger('＃标题')).toBeNull()
   })
   it('非行首触发符/夹杂内容一律不触发', () => {
     expect(matchTrigger('a#')).toBeNull()
@@ -73,6 +94,16 @@ describe('canAutoTriggerFromBlock(键盘前缀触发范围)', () => {
 const N = (name: string, extra: Record<string, unknown> = {}) => ({ name, ...extra })
 
 describe('blockLabel', () => {
+  it('跟随界面语言(I-19:此前写死中文,英文界面照样显示「标题 2」)', () => {
+    setLocaleGlobal('en')
+    try {
+      expect(blockLabel([N('heading', { level: 2 })])).toBe('Heading 2')
+      expect(blockLabel([N('paragraph'), N('list_item', { checked: false }), N('bullet_list')])).toBe('To-do')
+      expect(blockLabel([N('paragraph')])).toBe('Text')
+    } finally {
+      setLocaleGlobal('zh')
+    }
+  })
   it('普通段落 = 正文', () => expect(blockLabel([N('paragraph')])).toBe('正文'))
   it('标题带级别', () => expect(blockLabel([N('heading', { level: 3 })])).toBe('标题 3'))
   it('列表项先于列表被扫到,但自己没 checked 时继续外扫到列表类型', () =>

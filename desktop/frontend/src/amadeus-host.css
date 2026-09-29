@@ -92,6 +92,10 @@
 }
 /* 未命名笔记标题占位(Notion 式虚化 New Page):比正文更淡。 */
 .amx-title-input::placeholder { color: var(--text-faint, var(--text-muted)); opacity: 0.45; font-weight: 700; }
+/* v4 标题是 textarea(评审 C-12:单行 input 把长标题截断):按内容撑高(组件设 height),长串无空格也折;
+   只读页的静态 h1 同样折。 */
+textarea.amx-title-input { display: block; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.amx-title-static { overflow-wrap: anywhere; }
 
 /* 编辑器正文排版:两边留白 + Obsidian 式贴左对齐。Amadeus 块默认左侧有 edge-zone(14)+列内距(2)+
  * 拖拽槽(22)+块体(4)≈42px 缩进,把正文文字推得很靠右。这里将其归零 → 正文文字贴到内容最左边(与标题齐),
@@ -377,7 +381,10 @@
   background: color-mix(in srgb, var(--callout-color) 8%, transparent);
   border-radius: 8px;
   padding: 10px 14px;
-  margin-inline: 0;
+  /* 只归零右侧:左外边距归 Tab 缩进档(styles.css 的 `[data-indent]`,同特异性)。写 margin-inline 会在
+     本文件 @import styles.css 之后的级联里把缩进档压成 0 —— 缩进落盘了、callout / 折叠块却一动不动。
+     不缩进时左边距本来就是通用 blockquote 规则给的 0。 */
+  margin-right: 0;
 }
 /* callout 左边一条竖线都不留(平铺色块);普通 `>` 引用的细竖条照旧 —— 那条是 styles.css 的
    `blockquote::before`,这里只对 callout 关掉,别去动通用规则。 */
@@ -394,6 +401,27 @@
 .am-app .milkdown .ProseMirror blockquote.callout-bug { --callout-color: #f50057; }
 .am-app .milkdown .ProseMirror blockquote.callout-example { --callout-color: #7c4dff; }
 .am-app .milkdown .ProseMirror blockquote.callout-quote { --callout-color: #9e9e9e; }
+/* R-09:Obsidian 其余正名的配色(别名由 callout.ts 另挂正名 class:`[!faq]` → .callout-question,只按正名写一份)。 */
+.am-app .milkdown .ProseMirror blockquote.callout-abstract { --callout-color: #00b0ff; }
+.am-app .milkdown .ProseMirror blockquote.callout-todo { --callout-color: #00b8d4; }
+.am-app .milkdown .ProseMirror blockquote.callout-success { --callout-color: #00c853; }
+.am-app .milkdown .ProseMirror blockquote.callout-question { --callout-color: #ffab00; }
+.am-app .milkdown .ProseMirror blockquote.callout-failure { --callout-color: #ff5252; }
+/* 有色标注的标题行 = [类型图标] 标题(没写标题时显示类型名)[折叠箭头,仅 +/-]。标题加粗、偏标注色,
+   与底色一起把「这是一条警告 / 提示」说清楚(此前只有底色,没写标题时标题行空空如也)。折叠块([!fold])不在此列。 */
+.am-app .milkdown .ProseMirror blockquote.callout:not(.callout-fold) > p:first-child {
+  font-weight: 600;
+  color: color-mix(in srgb, var(--callout-color) 72%, var(--text));
+}
+.am-app .milkdown .ProseMirror .callout-icon {
+  display: inline-flex;
+  vertical-align: -0.14em;
+  margin-right: 6px;
+  color: var(--callout-color, #448aff);
+  user-select: none;
+}
+.am-app .milkdown .ProseMirror .callout-icon svg { width: 1em; height: 1em; }
+.am-app .milkdown .ProseMirror .callout-default-title { user-select: none; pointer-events: none; }
 .am-app .milkdown .ProseMirror .callout-token {
   color: var(--callout-color, #448aff);
   background: color-mix(in srgb, var(--callout-color, #448aff) 14%, transparent);
@@ -1069,6 +1097,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 /* 「调整位置」模式:图片解锁可上下拖(否则默认锁定不可拖);激活时工具常显 + 内描边提示激活态。 */
 .amx-cover-repo { cursor: ns-resize; box-shadow: inset 0 0 0 2px var(--accent); }
 .amx-cover-repo .amx-cover-tools { opacity: 1; }
+.amx-cover-repo img { touch-action: none; } /* 调位模式:触屏拖动交给 pointer 事件,不让页面滚走(C-11) */
 .amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: var(--ui-font-caption, 11px); color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
 /* 底部柔和渐变:从中下部起逐渐融入页面背景色(--bg),与正文自然过渡;克制、不纯色底、无硬分界 */

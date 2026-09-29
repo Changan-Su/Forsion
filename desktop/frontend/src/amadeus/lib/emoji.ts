@@ -6,15 +6,30 @@
 // 与 components/icons.tsx 同一条路子。想要全量 Unicode 的用户仍可在输入框直接粘贴任意字符。
 //
 // 每条 = [emoji, 关键词]。关键词空格分隔、中英混排(拼音只给最常搜的几个),小写匹配。
+// 分组名存 i18n 键、渲染期取词(评审 C-15):写死中文的分组名在英文界面照样显示中文。
+
+import { registerMessages } from '../../i18n'
+
+registerMessages({
+  'emoji.group.frequent': { zh: '常用', en: 'Frequently used' },
+  'emoji.group.smileys': { zh: '表情', en: 'Smileys' },
+  'emoji.group.people': { zh: '手势人物', en: 'People & gestures' },
+  'emoji.group.nature': { zh: '动物自然', en: 'Animals & nature' },
+  'emoji.group.food': { zh: '食物', en: 'Food' },
+  'emoji.group.activity': { zh: '活动旅行', en: 'Activities & travel' },
+  'emoji.group.objects': { zh: '物品', en: 'Objects' },
+  'emoji.group.symbols': { zh: '符号', en: 'Symbols' },
+})
 
 export interface EmojiGroup {
-  name: string
+  /** 分组名的 i18n 键(`t(nameKey)` 取词);也用作 React key,不随语言变。 */
+  nameKey: string
   items: Array<[string, string]>
 }
 
 export const EMOJI_GROUPS: EmojiGroup[] = [
   {
-    name: '常用',
+    nameKey: 'emoji.group.frequent',
     items: [
       ['📄', '文档 页面 文件 doc page file'], ['📝', '备忘 笔记 memo note write 写'],
       ['📌', '图钉 置顶 pin'], ['⭐', '星 收藏 star favorite'], ['✅', '完成 勾 对 check done'],
@@ -27,7 +42,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '表情',
+    nameKey: 'emoji.group.smileys',
     items: [
       ['😀', '笑 开心 grin happy'], ['😃', '笑 开心 smile'], ['😄', '大笑 laugh'], ['😁', '龇牙 beam'],
       ['😆', '大笑 眯眼 laughing'], ['😅', '苦笑 汗 sweat smile'], ['🤣', '笑翻 rofl'],
@@ -52,7 +67,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '手势人物',
+    nameKey: 'emoji.group.people',
     items: [
       ['👍', '赞 好 thumbs up'], ['👎', '踩 差 thumbs down'], ['👌', 'ok 好 okay'],
       ['✌️', '胜利 victory peace'], ['🤞', '祈祷 交叉手指 fingers crossed'], ['🤝', '握手 合作 handshake'],
@@ -71,7 +86,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '动物自然',
+    nameKey: 'emoji.group.nature',
     items: [
       ['🐶', '狗 dog'], ['🐱', '猫 cat'], ['🐭', '鼠 mouse'], ['🐹', '仓鼠 hamster'],
       ['🐰', '兔 rabbit'], ['🦊', '狐狸 fox'], ['🐻', '熊 bear'], ['🐼', '熊猫 panda'],
@@ -93,7 +108,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '食物',
+    nameKey: 'emoji.group.food',
     items: [
       ['🍎', '苹果 apple'], ['🍊', '橙子 orange'], ['🍋', '柠檬 lemon'], ['🍌', '香蕉 banana'],
       ['🍉', '西瓜 watermelon'], ['🍇', '葡萄 grapes'], ['🍓', '草莓 strawberry'],
@@ -113,7 +128,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '活动旅行',
+    nameKey: 'emoji.group.activity',
     items: [
       ['⚽', '足球 soccer'], ['🏀', '篮球 basketball'], ['🏈', '橄榄球 football'],
       ['⚾', '棒球 baseball'], ['🎾', '网球 tennis'], ['🏐', '排球 volleyball'],
@@ -135,7 +150,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '物品',
+    nameKey: 'emoji.group.objects',
     items: [
       ['💻', '电脑 笔记本 laptop computer'], ['🖥️', '台式机 显示器 desktop monitor'],
       ['⌨️', '键盘 keyboard'], ['🖱️', '鼠标 mouse'], ['📱', '手机 phone mobile'],
@@ -163,7 +178,7 @@ export const EMOJI_GROUPS: EmojiGroup[] = [
     ],
   },
   {
-    name: '符号',
+    nameKey: 'emoji.group.symbols',
     items: [
       ['✅', '完成 对勾 check done'], ['☑️', '勾选框 checkbox'], ['❌', '错 删除 cross wrong'],
       ['❗', '感叹号 重要 important'], ['❓', '问号 疑问 question'], ['⚠️', '警告 warning'],

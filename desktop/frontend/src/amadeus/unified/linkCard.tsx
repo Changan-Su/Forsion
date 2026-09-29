@@ -7,9 +7,19 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import type { Mark, MarkType, Node as ProseNode } from '@milkdown/kit/prose/model'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { hrefKind, normalizeHref } from '../blocks/markdown/linkHref'
+import { registerMessages, useI18n } from '../../i18n'
+
+// 取消 / 保存 / 编辑 / 删除复用 common.*;这里只登记卡片自己的(评审 C-14:原来全是 JSX 裸中文)。
+registerMessages({
+  'linkcard.text': { zh: '文字', en: 'Text' },
+  'linkcard.link': { zh: '链接', en: 'Link' },
+  'linkcard.copy': { zh: '复制链接', en: 'Copy link' },
+  'linkcard.unlink': { zh: '移除链接', en: 'Remove link' },
+})
 
 const OPEN_DELAY = 500
 const CLOSE_DELAY = 250
@@ -24,7 +34,30 @@ interface Hover {
   y: number
 }
 
-/** 从 DOM 的 <a> 反查它在文档里的范围:posAtDOM 拿到起点,再按 link mark 往两边扩。 */
+/** 文档位 pos 处那条链接的**整条**范围(I-07):先找 pos 所在、带 link mark 的行内节点,再沿**同一个** link mark
+ *  (`isInSet` 按 eq 比:href、title 都相同)往两边扩到相邻行内节点 —— `[**粗**普通](url)` 在文档里是两段文字、
+ *  DOM 里是两个 `<a>`,但它是一条链接;只取悬停那一段,「编辑 / 移除 / 删除」就只作用于半条(还把链接劈成两条)。
+ *  导出给同文件以外的链接编辑入口复用(⌘K 编辑已有链接等),口径只此一份。 */
+export function linkRangeAt(doc: ProseNode, pos: number, linkType: MarkType): { from: number; to: number; mark: Mark } | null {
+  const $p = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)))
+  if (!$p.parent.isTextblock) return null
+  const start = $p.start()
+  const kids: Array<{ node: ProseNode; from: number; to: number }> = []
+  $p.parent.forEach((node, offset) => kids.push({ node, from: start + offset, to: start + offset + node.nodeSize }))
+  const linked = (k: { node: ProseNode }): boolean => !!linkType.isInSet(k.node.marks)
+  // 优先 pos 落在节点内部(半开区间);落在两段交界时退回右端点相接的那段。
+  let i = kids.findIndex((k) => linked(k) && pos >= k.from && pos < k.to)
+  if (i < 0) i = kids.findIndex((k) => linked(k) && pos >= k.from && pos <= k.to)
+  if (i < 0) return null
+  const mark = linkType.isInSet(kids[i].node.marks) as Mark
+  let a = i
+  let b = i
+  while (a > 0 && mark.isInSet(kids[a - 1].node.marks)) a--
+  while (b < kids.length - 1 && mark.isInSet(kids[b + 1].node.marks)) b++
+  return { from: kids[a].from, to: kids[b].to, mark }
+}
+
+/** 从 DOM 的 <a> 反查它所属整条链接在文档里的范围:posAtDOM 拿到悬停那一段的起点,再交给 linkRangeAt 扩。 */
 function rangeOfLink(view: EditorView, el: HTMLElement): { from: number; to: number } | null {
   const linkType = view.state.schema.marks.link
   if (!linkType) return null
@@ -34,21 +67,8 @@ function rangeOfLink(view: EditorView, el: HTMLElement): { from: number; to: num
   } catch {
     return null
   }
-  const $p = view.state.doc.resolve(Math.min(pos, view.state.doc.content.size))
-  if (!$p.parent.isTextblock) return null
-  const start = $p.start()
-  let from = pos
-  let to = pos
-  $p.parent.forEach((child, offset) => {
-    if (!child.isText || !linkType.isInSet(child.marks)) return
-    const a = start + offset
-    const b = a + child.nodeSize
-    if (pos >= a && pos <= b) {
-      from = a
-      to = b
-    }
-  })
-  return from === to ? null : { from, to }
+  const r = linkRangeAt(view.state.doc, pos, linkType)
+  return r && r.from < r.to ? { from: r.from, to: r.to } : null
 }
 
 export function LinkHoverCard({ getView, onOpenNote }: {
@@ -56,8 +76,9 @@ export function LinkHoverCard({ getView, onOpenNote }: {
   /** 库内笔记链接 `[t](笔记.md)` 的打开(与编辑器点击同路,L-07);不给就退回 window.open。 */
   onOpenNote?: (href: string) => void
 }): ReactElement | null {
+  const { t } = useI18n()
   const [hover, setHover] = useState<Hover | null>(null)
-  const [edit, setEdit] = useState<{ from: number; to: number; text: string; href: string } | null>(null)
+  const [edit, setEdit] = useState<{ from: number; to: number; text: string; href: string; wasHref: string } | null>(null)
   const openT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const closeT = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -89,7 +110,8 @@ export function LinkHoverCard({ getView, onOpenNote }: {
         const rg = view ? rangeOfLink(view, a) : null
         setHover({
           href: a.getAttribute('href') ?? '',
-          text: a.textContent ?? '',
+          // 整条链接的文字(不是悬停那个 <a> 的):编辑框里看到、改到的都是整条
+          text: rg && view ? view.state.doc.textBetween(rg.from, rg.to) : a.textContent ?? '',
           from: rg?.from ?? -1,
           to: rg?.to ?? -1,
           x: r.left,
@@ -123,27 +145,42 @@ export function LinkHoverCard({ getView, onOpenNote }: {
     return () => document.removeEventListener('scroll', close, true)
   }, [hover, edit])
 
-  /** 改写选定链接:href=null 表示只摘掉链接(留文字);text 变了就整段替换文字。
-   *  ⚠️ from/to 是悬停那一刻的快照:开着卡片期间可能有外部回灌/协同事务改过文档,动手前**重新校验**
-   *  这段范围还带不带 link mark,不对就放弃 —— 宁可什么都不做,也不能改错一段文字。 */
-  const rewrite = (from: number, to: number, text: string | null, href: string | null): void => {
+  /** 改写选定的整条链接:href=null 表示只摘掉链接(留文字与其余格式);text=''  连文字一起删;
+   *  text 与原文相同 = 只改地址 → removeMark/addMark,**不重建文字**(code / 斜体 / 粗体原样留着,I-07);
+   *  text 变了才整段重建,保留整条链接处处都有的格式(交集:整条加粗的改完仍加粗,半条加粗的无从归属就不带)。
+   *  ⚠️ from/to/wasHref 是悬停那一刻的快照:开着卡片期间可能有外部回灌/协同事务改过文档,动手前**重新校验**
+   *  这段仍恰好是那一条链接,不对就放弃 —— 宁可什么都不做,也不能改错一段文字。 */
+  const rewrite = (from: number, to: number, wasHref: string, text: string | null, href: string | null): void => {
     const view = getView()
     const linkType = view?.state.schema.marks.link
     if (!view || !linkType) return
-    if (to > view.state.doc.content.size || from >= to) return
-    if (!view.state.doc.rangeHasMark(from, to, linkType)) return
+    const { doc } = view.state
+    if (to > doc.content.size || from >= to) return
+    const cur = linkRangeAt(doc, from, linkType)
+    if (!cur || cur.from !== from || cur.to !== to || cur.mark.attrs.href !== wasHref) return
+    const oldText = doc.textBetween(from, to)
+    // 换地址时引用形(`[t][ref]`)的 ref 不再准确:清掉,落盘退成行内链接(与 refDefinitions 的写回口径一致)。
+    const nextLink = (h: string): Mark => linkType.create({ ...cur.mark.attrs, href: h, ...('ref' in cur.mark.attrs ? { ref: null } : {}) })
     // ⚠️ 空串不能走 schema.text('')(prosemirror-model 直接抛 RangeError:Empty text nodes are
     //    not allowed)——「删除」按钮就是 text='' 这条路,评审实测必炸。空串 = 连文字一起删。
     let tr = view.state.tr
     if (text === '') {
       tr = tr.delete(from, to)
-    } else if (text !== null) {
-      tr = tr.replaceWith(from, to, view.state.schema.text(text, href ? [linkType.create({ href })] : []))
+    } else if (text !== null && text !== oldText) {
+      let common: readonly Mark[] | null = null
+      doc.nodesBetween(from, to, (n) => {
+        if (!n.isInline) return true
+        common = common === null ? n.marks : common.filter((m) => m.isInSet(n.marks))
+        return false
+      })
+      const keep = ((common ?? []) as readonly Mark[]).filter((m) => m.type !== linkType)
+      tr = tr.replaceWith(from, to, view.state.schema.text(text, href ? nextLink(href).addToSet(keep) : keep))
       tr.setSelection(TextSelection.near(tr.doc.resolve(from + text.length)))
     } else if (href) {
-      tr = tr.removeMark(from, to, linkType).addMark(from, to, linkType.create({ href }))
+      if (href === cur.mark.attrs.href) { view.focus(); return } // 什么都没改:不派事务、不写盘
+      tr = tr.removeMark(from, to, cur.mark).addMark(from, to, nextLink(href))
     } else {
-      tr = tr.removeMark(from, to, linkType)
+      tr = tr.removeMark(from, to, cur.mark)
     }
     view.dispatch(tr.scrollIntoView())
     view.focus()
@@ -167,7 +204,7 @@ export function LinkHoverCard({ getView, onOpenNote }: {
               e.preventDefault()
               const href = normalizeHref(edit.href)
               if (!href || !edit.text.trim()) return
-              rewrite(edit.from, edit.to, edit.text, href)
+              rewrite(edit.from, edit.to, edit.wasHref, edit.text, href)
               setEdit(null)
               setHover(null)
             }}
@@ -179,7 +216,7 @@ export function LinkHoverCard({ getView, onOpenNote }: {
             }}
           >
           <label>
-            文字
+            {t('linkcard.text')}
             <input
               autoFocus
               value={edit.text}
@@ -188,13 +225,13 @@ export function LinkHoverCard({ getView, onOpenNote }: {
             />
           </label>
           <label>
-            链接
+            {t('linkcard.link')}
             <input value={edit.href} onChange={(e) => setEdit({ ...edit, href: e.target.value })} />
           </label>
           <div className="amx-linkedit-row">
-            <button type="button" onClick={close}>取消</button>
+            <button type="button" onClick={close}>{t('common.cancel')}</button>
             <button type="submit" className="primary" disabled={!canSave}>
-              保存
+              {t('common.save')}
             </button>
           </div>
           </form>
@@ -238,15 +275,15 @@ export function LinkHoverCard({ getView, onOpenNote }: {
           {host}
         </button>
         <span className="amx-linkcard-sep" />
-        <button onClick={() => void navigator.clipboard.writeText(hover.href)}>复制链接</button>
+        <button onClick={() => void navigator.clipboard.writeText(hover.href)}>{t('linkcard.copy')}</button>
         {editable && (
-          <button onClick={() => setEdit({ from: hover.from, to: hover.to, text: hover.text, href: hover.href })}>编辑</button>
+          <button onClick={() => setEdit({ from: hover.from, to: hover.to, text: hover.text, href: hover.href, wasHref: hover.href })}>{t('common.edit')}</button>
         )}
         {editable && (
-          <button onClick={() => { rewrite(hover.from, hover.to, null, null); setHover(null) }}>移除链接</button>
+          <button onClick={() => { rewrite(hover.from, hover.to, hover.href, null, null); setHover(null) }}>{t('linkcard.unlink')}</button>
         )}
         {editable && (
-          <button className="danger" onClick={() => { rewrite(hover.from, hover.to, '', null); setHover(null) }}>删除</button>
+          <button className="danger" onClick={() => { rewrite(hover.from, hover.to, hover.href, '', null); setHover(null) }}>{t('common.delete')}</button>
         )}
       </OverlayAt>
     </OverlayPortal>

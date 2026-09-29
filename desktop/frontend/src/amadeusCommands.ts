@@ -5,7 +5,7 @@ import { amadeusAvailable } from './features/runtime'
  *  若进入时 new-chat 尚未注册(启动即恢复到 Amadeus),它随后注册也排在本命令集之后,分发仍先命中这里。 */
 import { useCommandStore, useSpaceStore, useWorkspace } from '@lcl/engine'
 import type { Command } from '@lcl/engine'
-import { usePageStore } from '@amadeus/store/pageStore'
+import { noteOf, usePageStore } from '@amadeus/store/pageStore'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
 import { openDailyNote } from './amadeusTemplates'
@@ -16,24 +16,30 @@ import { createDashboard, createDrawing } from './amadeusNav'
 import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { translate } from './i18n'
 import { FOLD_COMMANDS } from '@amadeus/unified/foldCommands'
+import { canRevealInFileManager } from '@amadeus/lib/hostCaps'
+import { LINK_COMMANDS } from '@amadeus/unified/linkCommands'
+import { CANVAS_COMMANDS } from '@amadeus/unified/canvasToggleCommand'
 
+// 「当前这篇」一律 noteOf(v4 统一页不设 activePage,只有 activeNotePath;评审 C-10)。
 const ps = () => usePageStore.getState()
 const ws = () => useWorkspace.getState()
 const cs = () => useCommandStore.getState()
 
-const CMDS: Command[] = [
+/** 导出给单测(C-10:收藏 / 在文件管理器中显示作用于 v4 笔记)。 */
+export const CMDS: Command[] = [
   { id: 'amadeus-new-note', title: () => translate('amadeus.new.note'), keywords: 'new note create 新建 笔记', hotkey: 'mod+n', run: () => { if (ps().vaultRoot) void ps().createPage() } },
   { id: 'amadeus-new-drawing', title: () => translate('amadeus.new.drawing'), keywords: 'new drawing whiteboard canvas excalidraw 新建 白板 画板 baiban', run: () => { if (ps().vaultRoot) void createDrawing('') } },
   { id: 'amadeus-new-dashboard', title: () => translate('amadeus.new.dashboard'), keywords: 'new dashboard canvas grid widget 新建 仪表盘 面板 看板 yibiaopan', run: () => { if (ps().vaultRoot) void createDashboard('') } },
-  { id: 'amadeus-quick-switcher', title: () => translate('amadeus.cmd.quickSwitch'), keywords: 'quick switcher open jump 快速 切换 跳转', hotkey: 'mod+p', run: () => useUiOverlay.getState().open('switcher') },
+  // (「快速切换」amadeus-quick-switcher 已并入全局快速查找 quick-find(bootstrapEngine,mod+p):两条命令同绑 mod+p,
+  //  分发取先注册的那条,能新建笔记的这个切换器永远按不出来(评审 G4-11)。新建 / ⌘Enter 新标签都搬进了 quickFind.tsx。)
   { id: 'amadeus-search', title: () => translate('amadeus.cmd.search'), keywords: 'search full text 搜索 全文', hotkey: 'mod+shift+f', run: () => openSearchView() },
   { id: 'amadeus-tutorial', title: () => translate('amadeus.cmd.tutorial'), keywords: 'tutorial guide help onboarding 教程 使用教程 帮助 入门 新手 jiaocheng bangzhu', run: () => void openTutorial() },
   { id: 'amadeus-manual', title: () => translate('amadeus.cmd.manual'), keywords: 'manual handbook reference docs help 手册 使用手册 说明书 参考 帮助 文档 shouce cankao', run: () => void openManual() },
   { id: 'amadeus-daily-note', title: () => translate('amadeus.cmd.dailyNote'), keywords: 'daily note today journal 日记 今天 riji', run: () => void openDailyNote() },
-  { id: 'amadeus-toggle-star', title: () => translate('amadeus.cmd.toggleStar'), keywords: 'star favorite bookmark 收藏 星标 shoucang', run: () => { const p = ps().activePage; if (p) useAmadeusPrefs.getState().toggleStar(p) } },
+  { id: 'amadeus-toggle-star', title: () => translate('amadeus.cmd.toggleStar'), keywords: 'star favorite bookmark 收藏 星标 shoucang', run: () => { const p = noteOf(ps()); if (p) useAmadeusPrefs.getState().toggleStar(p) } },
   { id: 'amadeus-toggle-source', title: () => translate('amadeus.cmd.toggleSource'), keywords: 'source markdown wysiwyg toggle 源码 可视', run: () => useUiOverlay.getState().toggleEditorMode() },
   { id: 'amadeus-open-vault', title: () => translate('amadeus.cmd.openVault'), keywords: 'vault open folder 打开 仓库 文件夹', run: () => void ps().openVault() },
-  { id: 'amadeus-reveal', title: () => translate('amadeus.cmd.reveal'), keywords: 'reveal finder explorer 文件管理器 显示', run: () => { const p = ps().activePage; if (p) void amadeus.revealInFileManager(p) } },
+  { id: 'amadeus-reveal', title: () => translate('amadeus.cmd.reveal'), keywords: 'reveal finder explorer 文件管理器 显示', run: () => { const p = noteOf(ps()); if (p) void amadeus.revealInFileManager(p) } },
   { id: 'amadeus-reindex', title: () => translate('amadeus.cmd.reindex'), keywords: 'reindex search index 索引 重建', run: () => void amadeus.reindex() },
   {
     id: 'amadeus-toggle-wiki-files',
@@ -48,6 +54,10 @@ const CMDS: Command[] = [
   },
   // 标题 / 列表折叠:切换(mod+alt+enter)/ 全部折叠 / 全部展开(B-13;动作懒取,本模块不连 Milkdown)。
   ...FOLD_COMMANDS,
+  // 打开光标处链接(alt+enter)/ 在新标签页打开(alt+shift+enter)(L-20;动作懒取,本模块不连 Milkdown)。
+  ...LINK_COMMANDS,
+  // 文档 / 画布切换(V-20;落点 = 最近用过的那一篇,见 canvasToggleCommand)。
+  ...CANVAS_COMMANDS,
 ]
 
 /** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。 */
@@ -67,7 +77,9 @@ function enter(): void {
   const st = cs()
   stashedNewChat = st.commands.find((c) => c.id === 'new-chat')
   if (stashedNewChat) st.removeCommand('new-chat')
-  for (const c of CMDS) st.addCommand(c)
+  // 宿主做不了的不注册(G2-13:没有文件管理器的宿主上「在文件管理器中显示」是死键)。进 Space 时现判 —— 模块加载那一刻
+  // 桥未必已就位。leave 照旧按全表摘,摘一条没注册过的命令是 no-op。
+  for (const c of CMDS) if (c.id !== 'amadeus-reveal' || canRevealInFileManager()) st.addCommand(c)
 }
 
 function leave(): void {

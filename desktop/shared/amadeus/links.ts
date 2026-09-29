@@ -16,10 +16,18 @@ export const EMBED_RE = /!\[\[([^\]\n]+)\]\]/g
 /** Matches #tag preceded by start-or-whitespace; capture = tag text. */
 export const TAG_RE = /(?:^|\s)#([\p{L}\p{N}_/-]+)/gu
 
-/** Reduce a wikilink's inner text to its target page name: "Name|alias" / "Name#heading" → "Name". */
+/** 别名分隔符的位置:`|`,或表格单元格里的 `\|`(GFM 单元格里 `|` 必须转义,Obsidian 同款写法)—— 指向反斜杠(L-09)。
+ *  没有 = -1。调用方按「分隔符之前 = 笔记名」切,两种写法一个口径。 */
+export function aliasBarIndex(inner: string): number {
+  const i = inner.indexOf('|')
+  return i > 0 && inner[i - 1] === '\\' ? i - 1 : i
+}
+
+/** Reduce a wikilink's inner text to its target page name: "Name|alias" / "Name#heading" → "Name".
+ *  表格里的 `Name\|alias` 同样认(L-09:此前取成 `Name\`,反链不计、改名不跟)。 */
 export function linkTarget(inner: string): string {
   let s = inner.trim()
-  const bar = s.indexOf('|')
+  const bar = aliasBarIndex(s)
   if (bar >= 0) s = s.slice(0, bar)
   const hash = s.indexOf('#')
   if (hash >= 0) s = s.slice(0, hash)
@@ -335,8 +343,9 @@ export function decodeCharRefs(md: string): string {
 
 /** `[[Name|alias]]` → alias;`[[Name#h]]` → `Name › h`(`#^id` 同);`[[Name]]` → Name。反链 / 提及摘录用。 */
 function wikiLabel(inner: string): string {
-  const bar = inner.indexOf('|')
-  if (bar >= 0 && inner.slice(bar + 1).trim()) return inner.slice(bar + 1).trim()
+  const bar = aliasBarIndex(inner)
+  const alias = bar >= 0 ? inner.slice(inner.indexOf('|', bar) + 1).trim() : ''
+  if (alias) return alias
   const base = (bar >= 0 ? inner.slice(0, bar) : inner).trim()
   return base.replace(/\s*#\^?\s*/, ' › ').replace(/^ › /, '')
 }

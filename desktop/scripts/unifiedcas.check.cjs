@@ -30,6 +30,12 @@
 //      要么落盘、要么进冲突副本,绝不静默消失;新属性与写者的字同理
 //   H7 草稿槽位的归属(Codex 复核 P1):B 还开着时它槽里的草稿不许被 A 读到(A 重挂不出恢复条);
 //      主人已不在的孤槽照旧提示给 A,A 丢弃只删那一格,B 的草稿原样留着
+//  W 组(Codex 复核 inst P0-2,在途 CAS 写 × 别处删除):写已发出(`__upage.casDelayMs` 造在途)、随后文件被删而删除通知还没到 ——
+//   W1 旧路径不被重建;没落盘的全文另存为冲突副本、提示点名副本;之后接着打的字不写旧路径,删除通知随后到(retire)时把它们另存一份
+//  V 组(评审 G2-08,离场即时落盘):打字后(防抖窗内)visibilitychange→hidden / pagehide / freeze / Cordova pause / 窗口失焦
+//   → 150ms 内落盘(不等 800ms);V6 盘上被悄悄改过(无回灌通知)时隐藏 → 走 CAS:盘上那版进冲突副本、本地版落盘,绝不裸写;
+//   V7 失焦节流:1s 内第二次失焦不重复写;V8 没有改动时隐藏 → 零写
+//   V9(Codex 复核 inst P2-4)节流窗内的失焦不被吞:当场同步存草稿(含最新的字),窗口一过补写落盘(早于防抖到点)
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -190,10 +196,11 @@ async function groupC(browser) {
     await p.close()
   }
   // C2:本实例没有用户改动(只是编辑器把 __粗__ 规范化成 **粗**)。
-  // D-18 起未编辑的块逐字写回,LF 源打开后 flush 已不再产生规范化写;用 CRLF 源(逐字对含 CR 的来源整体关闭,
+  // D-18 起未编辑的块逐字写回,LF 源打开后 flush 已不再产生规范化写;用**行尾混杂**的源(逐字对含 CR 的来源整体关闭,
   // 统一写成 LF)造出「只是规范化」的那一发写,CAS 拒写 → isPristine → 让位回灌这条路径照旧要钉住。
+  // ⚠️ 不能再用纯 CRLF:D-19 起纯 CRLF 在磁盘边界归一成 LF、写回还原,逐字照常生效,flush 不再有规范化写。
   {
-    const p = await open(browser, '# T\r\n\r\n__粗__ 与 _斜_\r\n')
+    const p = await open(browser, '# T\r\n\r\n__粗__ 与 _斜_\n')
     const X = '# T\n\n__粗__ 与 _斜_ 别处追加\n'
     await p.evaluate((X) => window.__upage.vault.set('Unified.md', X), X)
     await p.evaluate(() => window.__upage.probe.flush()) // 规范化写:syncFromEditor 让 body ≠ 基线
@@ -762,10 +769,121 @@ async function groupH7(browser) {
   await p.close()
 }
 
+// ─────────────────────────────── G2-08 ───────────────────────────────
+/** 在 A 里打字后(不等防抖)立刻派发离场事件,150ms 内看写盘次数。 */
+async function leaveAndCount(p, kind) {
+  return p.evaluate(async (kind) => {
+    const n0 = window.__upage.writes.length
+    if (kind === 'hidden') {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    if (kind === 'pagehide') window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    if (kind === 'freeze') document.dispatchEvent(new Event('freeze'))
+    if (kind === 'pause') document.dispatchEvent(new Event('pause'))
+    if (kind === 'blur') window.dispatchEvent(new Event('blur'))
+    await new Promise((r) => setTimeout(r, 150))
+    return window.__upage.writes.length - n0
+  }, kind)
+}
+async function groupV(browser) {
+  const seed = '# 标题\n\n第一段。\n'
+  const names = { hidden: 'V1 visibilitychange→hidden', pagehide: 'V2 pagehide', freeze: 'V3 freeze', pause: 'V4 Cordova pause', blur: 'V5 窗口失焦' }
+  for (const kind of Object.keys(names)) {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', '离场前')
+    const n = await leaveAndCount(p, kind)
+    const d = await disk(p)
+    record(`${names[kind]} → 150ms 内落盘(不等防抖)`, n === 1 && d.includes('第一段。离场前'), JSON.stringify({ n, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', '本地')
+    // 别的窗口悄悄改了盘(回灌通知还在路上):离场冲洗必须带基线走 CAS,不许拿本地版直接盖掉
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', '# 标题\n\n第一段。别处写的。\n'))
+    await leaveAndCount(p, 'hidden')
+    await wait(600)
+    const d = await disk(p)
+    const cs = await copies(p)
+    const rejects = await p.evaluate(() => window.__upage.casRejects.length)
+    record('V6 盘上被悄悄改过时隐藏 → 走 CAS:被拒后盘上那版进冲突副本、本地版落盘',
+      rejects >= 1 && d.includes('第一段。本地') && cs.length === 1 && cs[0][1].includes('别处写的'), JSON.stringify({ rejects, d, cs }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', 'a')
+    const n1 = await leaveAndCount(p, 'blur')
+    await typeIn(p, 0, '第一段。a', 'b')
+    const n2 = await leaveAndCount(p, 'blur') // 1s 内第二次失焦:节流,等防抖照常写
+    await wait(1200)
+    const d = await disk(p)
+    record('V7 失焦节流:1s 内第二次失焦不重复写,改动仍由防抖落盘', n1 === 1 && n2 === 0 && d.includes('第一段。ab'), JSON.stringify({ n1, n2, d }))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    await typeIn(p, 0, '第一段。', 'a')
+    const r = await p.evaluate(async () => {
+      const sleep = (ms) => new Promise((res) => setTimeout(res, ms))
+      const v = window.__upage.probe.view()
+      window.dispatchEvent(new Event('blur')) // 第一次失焦:当场写
+      await sleep(850)
+      v.dispatch(v.state.tr.insertText('b')) // 节流窗快结束时又打了一个字(listener 200ms + 防抖 800ms 之后才轮到自动保存)
+      window.dispatchEvent(new Event('blur')) // 窗内第二次失焦
+      const drafts = Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')).map((k) => JSON.parse(localStorage.getItem(k)).text)
+      await sleep(420) // 窗口已过、防抖还远没到点
+      return { drafts, disk: window.__upage.vault.get('Unified.md') }
+    })
+    record('V9 节流窗内的失焦:当场同步存草稿(含最新的字),窗口一过补写落盘(不等防抖)',
+      r.drafts.some((t) => t.includes('第一段。ab')) && r.disk.includes('第一段。ab'), JSON.stringify(r))
+    await p.close()
+  }
+  {
+    const p = await open(browser, seed)
+    const n = await leaveAndCount(p, 'hidden')
+    await wait(900)
+    record('V8 没有改动时隐藏 → 零写', n === 0 && (await writeCount(p)) === 0, JSON.stringify({ n, writes: await writeCount(p) }))
+    await p.close()
+  }
+}
+
+// ─────────────────────────────── P0-2 ───────────────────────────────
+async function groupW(browser) {
+  const p = await open(browser, '# 标题\n\n第一段。\n')
+  await typeIn(p, 0, '第一段。', '在途的字')
+  await p.evaluate(() => { window.__upage.casDelayMs = 400 })
+  const flushing = p.evaluate(() => window.__upage.probe.flush().catch((e) => String(e))) // 立即发出这发写(防抖到点同理)
+  await wait(100)
+  await p.evaluate(() => window.__upage.vault.delete('Unified.md')) // 写还在路上,别处把文件删了(删除通知未到)
+  await flushing
+  await wait(600)
+  const r1 = {
+    disk: await disk(p),
+    rejects: await p.evaluate(() => window.__upage.casRejects.map((x) => x.current)),
+    copies: await copies(p),
+    toasts: (await toasts(p)).filter((t) => t.level === 'error').map((t) => t.text),
+  }
+  await p.evaluate(() => { window.__upage.casDelayMs = 0 })
+  await typeIn(p, 0, '在途的字', '又打')
+  await wait(1500)
+  await p.evaluate(() => window.__upage.lifecycle.retireUnifiedPath('Unified.md')) // 删除通知这时才到
+  await wait(600)
+  const r2 = { disk: await disk(p), copies: (await copies(p)).map(([, v]) => v), toasts: (await toasts(p)).filter((t) => t.level === 'error').length }
+  record('W1 在途 CAS 写撞上别处删除 → 旧路径不重建;全文另存副本、提示点名副本;之后接着打的字不写旧路径,删除通知到时另存一份(不静默丢)',
+    r1.disk == null && r1.rejects.includes(null) && r1.copies.length === 1 && r1.copies[0][1].includes('第一段。在途的字') &&
+      r1.toasts.length === 1 && r1.toasts[0].includes(r1.copies[0][0].replace(/\.md$/, '')) &&
+      r2.disk == null && r2.copies.length === 2 && r2.copies.some((v) => v.includes('第一段。在途的字又打')) && r2.toasts === 2,
+    JSON.stringify({ r1, r2 }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL, V: groupV, W: groupW }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()

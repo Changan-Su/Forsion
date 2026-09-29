@@ -17,6 +17,11 @@ export async function seedNoteIfAbsent(path: string, source: string): Promise<bo
   const listed = await amadeus.listPages().catch(() => [path])
   const exists = listed.includes(path) || (await amadeus.readTextFile(path)) != null
   if (exists) return false
-  await amadeus.writeTextFile(path, source, { create: true })
+  // create = 宿主原子的仅新建(Codex 复核返修 P1-1,即上面 ponytail 说的真解):两次检查之后别处刚建了同名 → 宿主不写、交回现文。
+  const r = await amadeus.writeTextFile(path, source, { create: true })
+  if (r && r.ok === false) {
+    if (r.current != null) return false
+    throw new Error(`create failed: ${path}`)
+  }
   return true
 }

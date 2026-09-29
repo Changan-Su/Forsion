@@ -103,6 +103,13 @@ describe('stripEmptyLineBr', () => {
     expect(stripEmptyLineBr('~~~\n<br />\n~~~\n<br />')).toBe('~~~\n<br />\n~~~\n')
   })
 
+  it('空待办的 <br />(R-10):留下待办前缀 `- [ ] `(Obsidian 原样),行内 / 有字的不动', () => {
+    expect(stripEmptyLineBr('- [ ] a\n- [ ] <br />\n- [x] <br />')).toBe('- [ ] a\n- [ ] \n- [x] ')
+    expect(stripEmptyLineBr('  * [X] <br />\n> 1. [ ] <br />')).toBe('  * [X] \n> 1. [ ] ')
+    expect(stripEmptyLineBr('- [ ] a<br />b')).toBe('- [ ] a<br />b')
+    expect(stripEmptyLineBr('* <br />')).toBe('*') // 普通空列表项照旧
+  })
+
   it('没有 br 时原样返回(零开销)', () => {
     const md = 'a\n\nb'
     expect(stripEmptyLineBr(md)).toBe(md)

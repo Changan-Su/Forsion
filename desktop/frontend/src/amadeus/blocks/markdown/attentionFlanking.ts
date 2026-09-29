@@ -38,6 +38,7 @@
 // 修法:外侧是代理对的一半时一律不请求外侧编码 —— 删除线在 encodeSides 里直接判,
 // strong/emphasis 走 `guardSurrogate()` 包一层上游 handler(不复刻四×四表)。
 // 代价:这些情况下 mark 退化成字面(= 修复前的行为),但一个字符都不会被改坏。
+import { handleText as handleTextSafe } from './textSafe'
 import { config, remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { defaultHandlers } from 'mdast-util-to-markdown'
 import { classifyCharacter } from 'micromark-util-classify-character'
@@ -308,9 +309,18 @@ const handleRoot = (node: any, parent: unknown, state: any, info: any): string =
   return defaultHandlers.root(node, parent as any, state, info)
 }
 
-/** attention mark 的落盘 handler(+ root 预处理)。测试直接吃这个对象,与生产同一份。 */
+/** L-09b:milkdown 自带的 text handler(`remarkHandlers.text`)对「以空白结尾、不含 `*` `_` `\\`」的文本**整段跳过
+ *  safe 转义**原样输出 —— 表格单元格文本以空格结尾(`c1 A | B `)时 `|` 不转义,重开单元格被拆开;段首 `#` / `>` /
+ *  `1.`、行内 `<b>` 之类同理裸写,重开变结构。它跳过 safe 是为了不把尾随空白编成 `&#x20;`(打字中每次防抖保存都会落
+ *  这种垢),所以只改这条直通分支:正文照常过 safe(`after` = 尾随空白的首字,转义判据与整段一致),尾随空白原样接回。
+ *  其余文本与 milkdown 原版同口径(`encode: []`)。 */
+// 实现唯一一份在 ./textSafe(K-20b 与 L-09b 同根,合并时收成一处)。
+const handleText = handleTextSafe
+
+/** attention mark 的落盘 handler(+ root 预处理 + text 直通分支的转义修正)。测试直接吃这个对象,与生产同一份。 */
 export const attentionHandlers = {
   root: handleRoot,
+  text: handleText,
   delete: handleDelete,
   strong: handleStrong,
   emphasis: handleEmphasis,

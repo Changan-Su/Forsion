@@ -22,6 +22,11 @@ describe('rewriteNoteRefs — 改名', () => {
     expect(rewriteNoteRefs('![[Foo]]', 'S.md', 'S.md', P)).toBe('![[Bar]]')
   })
 
+  it('表格里的别名 `\\|`(L-09):跟随改名,尾巴 `\\|别名` 原样(不拆单元格)', () => {
+    expect(rewriteNoteRefs('| [[Foo\\|展示名]] | x |', 'S.md', 'S.md', P)).toBe('| [[Bar\\|展示名]] | x |')
+    expect(rewriteNoteRefs('| [[Foo#标题\\|展示名]] |', 'S.md', 'S.md', P)).toBe('| [[Bar#标题\\|展示名]] |')
+  })
+
   it('断链/文件引用/本页锚不接手', () => {
     const src = '[[不存在]] ![[img.png|200]] [[#本页锚]] ![[#blockid]]'
     expect(rewriteNoteRefs(src, 'S.md', 'S.md', P)).toBe(src)

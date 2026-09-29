@@ -18,7 +18,9 @@ export type PropertyTypeContribution = PropertyTypeDef
 /** A slash-menu entry a plugin can contribute. */
 export interface SlashContribution {
   id: string
-  label: string
+  /** 菜单里的名字。**传函数则每次渲染求值**(`() => t('…')`):切语言即时跟上 —— 字符串在注册那一刻就定格了
+   *  (宿主首次启动时按 IP 校正语言,就发生在插件 setup 之后)。老插件传字符串照旧可用。 */
+  label: string | (() => string)
   hint?: string
   /**
    * 图标。**首选写宿主图标词表里的名字**(`'template'` / `'callout-warning'` / `'pin'` …,
@@ -28,8 +30,8 @@ export interface SlashContribution {
    * 写了个本宿主还不认识的**键名**(形如 `[a-z0-9-]`)则退到该处的兜底图标 —— 不会把键名当文案画出来。
    */
   icon?: string
-  /** Section label; defaults to "插件". */
-  group?: string
+  /** Section label; defaults to "插件". Same as `label`: pass a function to follow the UI language. */
+  group?: string | (() => string)
   /** Static markdown scaffold inserted on pick. Omit when using `run`. */
   scaffold?: string
   /**

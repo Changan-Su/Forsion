@@ -133,8 +133,12 @@ export function stripEmptyLineBr(md: string): string {
     if (fence) continue
     // 空段落也可能长在列表项 / 引用里(列表中连按两次回车就是),那时整行是 `* <br />` / `> <br />`。
     // 留下前缀本身(`*` = 空列表项,`>` = 空引用行)——那才是这行原本的意思。
-    const m = /^(\s*(?:(?:[-*+]|\d+[.)])\s+|>\s?)*)<br\s*\/?>\s*$/i.exec(lines[i])
-    if (m) lines[i] = m[1].replace(/\s+$/, '')
+    // 空待办(R-10):`- [ ] <br />` → `- [ ] `(Obsidian 新建空待办的原样;读侧由 taskList.ts markEmptyTasks 认回空待办)。
+    const m = /^(\s*(?:(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|>\s?)*)<br\s*\/?>\s*$/i.exec(lines[i])
+    if (m) {
+      const kept = m[1].replace(/\s+$/, '')
+      lines[i] = /\[[ xX]\]$/.test(kept) ? `${kept} ` : kept
+    }
   }
   return lines.join('\n')
 }

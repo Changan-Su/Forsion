@@ -8,7 +8,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { bootEditor } from './parseFidelity.testkit'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
-import { STRIKETHROUGH_RE, UNDERSCORE_EMPHASIS_RE, endsAtCursor } from './anchoredMarkRules'
+import { STRIKETHROUGH_RE, STRONG_RE, UNDERSCORE_EMPHASIS_RE, endsAtCursor } from './anchoredMarkRules'
 
 /** 在光标处「键入」:先问输入规则(handleTextInput),没人接就按默认插入 —— 同 ProseMirror 处理 beforeinput。 */
 function type(view: EditorView, text: string): void {
@@ -26,7 +26,11 @@ const caretToEnd = (view: EditorView): void => {
 function firstPara(view: EditorView): { text: string; marked: string[] } {
   const p = view.state.doc.firstChild!
   const marked: string[] = []
-  p.forEach((n) => { if (n.isText && n.marks.length) marked.push(`${n.marks.map((m) => m.type.name).join('+')}:${n.text}`) })
+  // amadeusEscaped 是「源文里带反斜杠」的记账 mark(D-11,./literalEscape),不是格式,不计。
+  p.forEach((n) => {
+    const ms = n.isText ? n.marks.filter((m) => m.type.name !== 'amadeusEscaped') : []
+    if (ms.length) marked.push(`${ms.map((m) => m.type.name).join('+')}:${n.text}`)
+  })
   return { text: p.textContent, marked }
 }
 
@@ -96,6 +100,35 @@ describe('正常的 markdown 快捷输入照旧触发', () => {
   })
 })
 
+describe('I-18:`**` 紧贴字母 / 数字照样成粗体(词内 `__` 仍是字面)', () => {
+  it.each([
+    ['字母后', ' API**注意**后', 'strong:注意', 'x API**注意**后\n'],
+    ['数字后', ' v2**重要**', 'strong:重要', 'x v2**重要**\n'],
+  ])('%s', async (_label, keys, mark, md) => {
+    const r = await typed('x\n', keys)
+    expect(r.marked).toEqual([mark])
+    expect(r.md).toBe(md)
+  })
+
+  it.each([
+    ['词内 `__`(CommonMark 字面)', ' foo__bar__'],
+    ['`:` `/` 之后不触发', ' https://**x**'],
+    ['开合定界符不同种不触发', ' a **b__'],
+  ])('%s', async (_label, keys) => {
+    const r = await typed('x\n', keys)
+    expect(r.marked).toEqual([])
+  })
+
+  it('正文以标点开头(`API**「注意」**后`):落盘经边界编码后重开仍是粗体(cjk-flanking 口径不回退)', async () => {
+    const r = await typed('x\n', ' API**「注意」**后')
+    expect(r.marked).toEqual(['strong:「注意」'])
+    const b = await bootEditor(r.md)
+    try {
+      expect(firstPara(b.view)).toEqual({ text: 'x API「注意」后', marked: ['strong:「注意」'] })
+    } finally { await b.destroy() }
+  })
+})
+
 describe('endsAtCursor(所有 mark 规则外面那一层)', () => {
   it('匹配不贴光标就放弃 —— 以后谁再加一条无锚规则,也删不到远处的字', () => {
     const hits: string[] = []
@@ -110,6 +143,15 @@ describe('endsAtCursor(所有 mark 规则外面那一层)', () => {
 })
 
 describe('正则本身', () => {
+  it('加粗(I-18):`**` 只排除 `:` `/`;`__` 词内不认;收尾须与开头同种', () => {
+    expect(STRONG_RE.test('API**注意**')).toBe(true)
+    expect(STRONG_RE.test('v2**重要**')).toBe(true)
+    expect(STRONG_RE.test('a __b__')).toBe(true)
+    expect(STRONG_RE.test('foo__bar__')).toBe(false)
+    expect(STRONG_RE.test('https://**x**')).toBe(false)
+    expect(STRONG_RE.test('a **b__')).toBe(false)
+    expect(STRONG_RE.test('a __b**')).toBe(false)
+  })
   it('删除线:带锚、首尾非空白、内容不含 `~`', () => {
     expect(STRIKETHROUGH_RE.test('今天好累~ 明天继续~ 加油!')).toBe(false)
     expect(STRIKETHROUGH_RE.test('今天好累~ 明天继续~')).toBe(false) // 内容以空格开头

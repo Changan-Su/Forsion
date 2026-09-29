@@ -22,6 +22,7 @@ import { linkWithRefSchema, literalRawFromDom, pristineRaw, refDefinitionsRemark
 import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
 import { listFormatPlugins } from './listFormat'
 import { verbatimDocSchema, verbatimPlugins } from './verbatim'
+import { literalEscapePlugins, literalEscapeRemark } from './literalEscape'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -188,6 +189,7 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
 const PARSE_FIDELITY = [
   ...inlineBrRemark, // D-06:行内 / 单元格里的 `<br>` → 带原文的 break(否则被 preserve-empty-line 删掉)
   ...mathEscapeRemark, // R-01:公式里被 markdown 当转义吃掉的反斜杠补回(按源串认公式,与落盘 unescapeMathSource 同一口径)
+  ...literalEscapeRemark, // D-11:公式外的转义拆成转义字面(记录由上一步留下,见 ./literalEscape)
   ...refDefinitionsRemark, // D-12:定义行 → 字面段落、引用 → 带 ref 的链接(须在 remark-inline-links 之前,它会删定义)
 ]
 const presetWithReplacements = commonmark.map((p) =>
@@ -214,6 +216,7 @@ export const commonmarkWithIndent = [
     (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p]),
   ...listFormatPlugins, // D-05:列表 spread 收布尔 + 原列表符写回沿用(./listFormat)
   ...verbatimPlugins, // D-18:源文印章 + 逐字占位 handler(./verbatim)
+  ...literalEscapePlugins, // D-11:转义字面 mark + 落盘 handler(./literalEscape)
 ]
 
 /** 缩进档的适用面:列表项/引用块的**任意深度祖先**内一律不适用 —— 列表是 sink/lift 的地盘;

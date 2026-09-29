@@ -57,6 +57,9 @@ export interface FloatingTocProps extends FloatingTocOptions {
   contentRoot?: FloatingTocElementSource
   /** Optional explicit invalidation; MutationObserver already covers ordinary DOM/text changes. */
   scanTrigger?: unknown
+  /** Height of sticky chrome covering the top of the scroll container (read at use time), added to
+   *  `topOffset` for both the jump target and the active-section line. Pass a stable function. */
+  topInset?: (scrollContainer: HTMLElement) => number
   /** `overlay` anchors to a non-scrolling positioned parent; `sticky` lives in the scroll surface. */
   placement?: 'overlay' | 'sticky'
 }
@@ -106,6 +109,7 @@ export function FloatingToc({
   minItems = 2,
   hideBelow = 520,
   topOffset = 24,
+  topInset,
   side = 'left',
   scanTrigger,
   placement = 'overlay',
@@ -200,7 +204,7 @@ export function FloatingToc({
     let frame = 0
     const sync = (): void => {
       frame = 0
-      const line = root.getBoundingClientRect().top + topOffset + 1
+      const line = root.getBoundingClientRect().top + topOffset + (topInset?.(root) ?? 0) + 1
       let active = items[0]
       for (const item of items) {
         if (!item.target.isConnected || !root.contains(item.target)) continue
@@ -220,7 +224,7 @@ export function FloatingToc({
       root.removeEventListener('scroll', schedule)
       window.removeEventListener('resize', schedule)
     }
-  }, [items, scrollContainer, topOffset])
+  }, [items, scrollContainer, topOffset, topInset])
 
   useEffect(() => () => {
     if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)
@@ -233,10 +237,10 @@ export function FloatingToc({
       try { item.onSelect() } catch (error) { console.error('[lcl] FloatingToc navigation failed', error) }
     } else if (root.contains(item.target)) {
       const top = item.target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-      root.scrollTo({ top: Math.max(0, top - topOffset), behavior: 'smooth' })
+      root.scrollTo({ top: Math.max(0, top - topOffset - (topInset?.(root) ?? 0)), behavior: 'smooth' })
     }
     setActiveKey(item.key)
-  }, [scrollContainer, topOffset])
+  }, [scrollContainer, topOffset, topInset])
 
   const enter = (): void => {
     if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)

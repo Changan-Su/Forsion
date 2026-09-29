@@ -22,6 +22,8 @@ export interface UnifiedPipeHandle {
   bodyNow?: () => string
   /** 大纲:从 PM doc 现取标题(与渲染同源)。 */
   headings?: () => Array<{ level: number; text: string; pos: number }>
+  /** 字 / 词 / 选区计数(C-22):按可见文字现数;编辑器不在(源码模式)→ null,调用方回落 bodyNow。 */
+  statsNow?: () => import('./noteStats').NoteStats | null
   /** 大纲跳转:把第 index 个标题滚进视野。⚠️ 这是**另一次**遍历(点击发生在渲染之后,期间文档
    *  可能已增删标题),故必须带上记录时的 text 复核:对不上就按文本找,再找不到就不跳 ——
    *  宁可不动,也不要静默跳到另一个标题上(Codex 评审 medium)。 */
@@ -33,6 +35,9 @@ export interface UnifiedPipeHandle {
    *  命中藏在会话折叠(标题小节 / 列表子项)里先展开,再选中命中文字并亮到阅读位置。找不到返回 false(同块锚)。
    *  tag=true:needle 是 `#标签`,按标签边界匹配(`#work` 不落在 `#workshop` 上)。 */
   revealText?: (needles: string[], opts?: { tag?: boolean; flash?: boolean }) => boolean
+  /** 让正文拿焦点、**不动选区**(评审 G4-06:从快速查找 / 日记进入已有笔记后直接打字)。编辑器还没建好 → false
+   *  (调用方重试);只读 / 已退休 → true(没什么可做,别让调用方空转)。 */
+  focusBody?: () => boolean
   /** 外来 frontmatter 原文(插件的每页数据存这儿)。v3 那份在 manifest.fmExtra,v4 在 pipe.fm 里。
    *  **只读**:写口本轮不做(不带 bind 的块表面上零消费者,且 v4 fm 写要与结构键派生同场竞技,
    *  见 docs/ToBeImproved/块表面v4适配方案_2026-08-20.md §6.3)。 */
@@ -190,6 +195,28 @@ export function unifiedBody(path: string): string | null {
   return null
 }
 
+/** 状态栏问 path 上那篇的计数(C-22);没有 v4 实例 / 编辑器不在 → null。 */
+export function unifiedStats(path: string): import('./noteStats').NoteStats | null {
+  for (const h of byRecency(path)) if (h.statsNow) return h.statsNow()
+  return null
+}
+
+// 计数的刷新节拍(C-22):编辑器里文档或选区变了就 bump(noteStats 的 ticker,一帧最多一次)。与 gen 分开 ——
+// 选区每动一下都 bump,不该连带大纲等只关心实例增减的面板一起重算。
+let statsVer = 0
+const statsListeners = new Set<() => void>()
+export function bumpUnifiedStats(): void {
+  statsVer++
+  for (const f of statsListeners) f()
+}
+export function unifiedStatsVer(): number {
+  return statsVer
+}
+export function subscribeUnifiedStats(f: () => void): () => void {
+  statsListeners.add(f)
+  return () => statsListeners.delete(f)
+}
+
 /** 只读面板问 path 上那篇的大纲;没有 v4 实例 → null(调用方回落 v3 的 manifest/blocks)。 */
 export function unifiedHeadings(path: string): Array<{ level: number; text: string; pos: number }> | null {
   for (const h of byRecency(path)) if (h.headings) return h.headings()
@@ -207,6 +234,19 @@ export function unifiedFm(path: string): string | null {
 export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' | 'start' | 'end'): boolean {
   for (const h of byRecency(path)) if (h.insertMarkdown?.(md, where)) return true
   return false
+}
+
+/** 正文聚焦(G4-06):落到 path 上最近用过的那个实例(同篇多开时 = 刚被 openNote 激活的那个,G1-02)。
+ *  没有实例 / 实例的编辑器还没建好 → false(调用方 focusBodyWhenReady 据此重试几拍)。 */
+export function unifiedFocusBody(path: string): boolean {
+  for (const h of byRecency(path)) if (h.focusBody) return h.focusBody()
+  return false
+}
+
+/** path 上最近用过的实例手里的外来 fm 原文(插模板合并属性用,G4-09);没有实例 = null。 */
+export function unifiedFmNow(path: string): string | null {
+  for (const h of byRecency(path)) if (h.fmNow) return h.fmNow()
+  return null
 }
 
 /** 块锚点击:让 path 上那篇把尾部挂着 `^id` 的块滚进视野。没有 v4 实例、或那篇里没有这个块 →

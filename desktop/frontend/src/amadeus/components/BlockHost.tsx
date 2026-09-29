@@ -856,7 +856,7 @@ export const BlockHost = memo(function BlockHost({
               focusPlace={null}
               onFocused={noop}
               requestSelfFocus={noop}
-              onOpenWiki={(name) => openWikiLink(name, embed.owner)} // 嵌入内容里的链接按其所有者解析
+              onOpenWiki={(name, o) => openWikiLink(name, embed.owner, o)} // 嵌入内容里的链接按其所有者解析
               getPageNames={() => ps.getState().pages}
             />
           ) : (
@@ -909,7 +909,7 @@ export const BlockHost = memo(function BlockHost({
             focusAnchor={focusAnchor}
             onFocused={() => consumeFocus(blockId)}
             requestSelfFocus={(place) => requestFocus(blockId, place)}
-            onOpenWiki={(name) => openWikiLink(name, pagePath)}
+            onOpenWiki={(name, o) => openWikiLink(name, pagePath, o)}
             // 宿主接管时,`/嵌入块引用` 也必须交给宿主:store.insertEmbed 会把嵌入块追加到页尾,
             // 在导图里那是一个游离的新中心,而不是当前节点下的一条(Codex)。
             onInsertEmbed={(t) => (surface ? surface.insertAfter(blockId, `![[${t}]]`) : ps.getState().insertEmbed(t))}

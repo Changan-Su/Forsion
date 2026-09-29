@@ -8,7 +8,7 @@ import { cellToFmValue } from '@amadeus-shared/db/pageFrontmatter'
 import type { CellValue, ColumnType } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
 import { translate } from '../../i18n'
-import { cascadeFdAfterRename, flushAllScopes, remapScopePaths, usePageStore } from './pageStore'
+import { birthNoteFile, cascadeFdAfterRename, flushAllScopes, remapScopePaths, usePageStore } from './pageStore'
 import { unifiedPatchFm } from '../unified/lifecycle'
 
 export interface FolderView {
@@ -105,7 +105,8 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
     let i = 1
     while (titles.has(name.toLowerCase())) name = `${base} ${++i}`
     const notePath = folder ? `${folder}/${name}.md` : `${name}.md`
-    await amadeus.newPage(notePath)
+    // 素文件出生(评审 G4-12;此前 newPage 生 v3)。没建成(已提示)→ 抛,调用方不拿不存在的路径去写属性 / 打开。
+    if ((await birthNoteFile(notePath)) === 'failed') throw new Error(`create failed: ${notePath}`)
     await get().refresh(folder)
     return notePath
   },

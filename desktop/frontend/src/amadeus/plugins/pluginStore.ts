@@ -1080,7 +1080,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }))
     },
     // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
-    registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts),
+    // 名字给扩展隔离的提示用(评审 G1-07:哪个插件的扩展坏了要点名)。
+    registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId),
     // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
     // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
     loadData: async () => {
@@ -1432,7 +1433,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
     unregisterPluginAchievements(id)
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
-    clearEditorExtensions(id) // 代次 +1 → 已建好的编辑器重建,当场摘掉这个插件的 PM 插件
+    clearEditorExtensions(id) // 代次 +1 → 已建好的编辑器原地重配(G1-06),当场摘掉这个插件的 PM 插件
     set((s) => ({
       activeIds: s.activeIds.filter((x) => x !== id),
       slashItems: s.slashItems.filter((o) => o.pluginId !== id),

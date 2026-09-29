@@ -9,6 +9,7 @@
 //  T3 两条相邻 hr,拖到第二条下半 → 落在第二条之后(修前:错一格,落在两条之间)
 //  T4 OS 文件拖到 hr 上 → 线画在 hr 下沿、文件落在 hr 之后(修前:不出线/线停在上一块、文件进上一块之后)
 //  T5 OS 文件拖到「前面也是 hr」的 hr 上 → 同上(修前:光标被吸成 hr 的 NodeSelection,文件落到文末)
+//  T4b OS 文件拖到块缝里(外边距,不在任何块矩形内)→ 取纵向最近的块(修前:落点回 null,线与文件都停在上一次经过的块)
 //  ② 折叠小节:落点在隐藏区里 = 块一落下就被 display:none 吞掉(「线在明处、块进暗处」)。
 //  T6 文末是折叠小节,⠿ 拖到折叠标题下半(落点插件那条路)→ 小节展开、块紧跟标题且看得见
 //  T6b 外部拖入两条 hr(PM 默认 drop)到折叠标题行尾 → 展开(落下全是原子块时选区会退回标题,落点要取插入 step)
@@ -17,6 +18,9 @@
 //  T8 多块选区拖到折叠标题下半(executeMoveBlocks 那条路)→ 展开,块看得见
 //  T8b 多块选区拖到嵌套折叠之后的下一节标题上缘 → 逐层展开(只展开外层,块仍在内层小节里看不见)
 //  T9 OS 文件拖到折叠标题上 → 文件落在标题之后且看得见
+//  ③ 折起的标题整节拖(B-04)
+//  T10 折着拖:拖动中不展开、整节落下仍折着、邻居标题不继承折叠
+//  T10b 整节拖到无标题前言之前:前言成了它的正文 → 展开,不把前言藏起来
 // 用法:node scripts/e2e-editor.cjs --check=toplevel-realdrag(或 npm run check:topdrag)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -267,6 +271,22 @@ async function main() {
     await p.close()
   }
 
+  // ── T4b OS 文件拖到块缝里(不在任何块的矩形内):先经过段甲,再停在段乙下沿之下 1px 的外边距里 ──────────
+  //    拖拽事件的 clientY 是整数、块矩形常在小数像素上,1px 高的 hr 与块缝都会「判不中任何块」;修前落点解析回 null,
+  //    线停在段甲、文件落在段甲之后(T4/T5 在标题框改 textarea 后整页错开零点几像素时正是这样红的)。现在取纵向最近的块。
+  {
+    const p = await openPage(browser, SEED_HR, 'Hr.md', READY_HR)
+    const via = await elRect(p, 'p', '段甲')
+    const yi = await elRect(p, 'p', '段乙')
+    const r = await fileDrop(p, 'Hr.md', { x: yi.x + 40, y: Math.ceil(yi.b) + 1 }, { x: via.x + 40, y: via.y + via.h / 2 })
+    await p.waitForTimeout(400)
+    const doc = await shape(p)
+    check('T4b 文件拖到块缝里:线画在最近那块(段乙)的下沿,不停在经过的段甲',
+      r.line.length === 1 && Math.abs(r.line[0].y - (yi.b + 6)) <= 2, JSON.stringify({ line: r.line, yiBottom: Math.round(yi.b) }))
+    check('T4b 文件落在段乙之后', r.handed && JSON.stringify(doc.slice(0, 4)) === JSON.stringify(['段甲。', '段乙。', '![[dro', '段丙。']), JSON.stringify({ handed: r.handed, doc }))
+    await p.close()
+  }
+
   // ── T6 文末折叠小节 → ⠿ 拖到折叠标题下半(落点插件那条路)───────────────────────────────────
   {
     const p = await openPage(browser, SEED_TAIL, 'Tail.md', READY_H)
@@ -374,6 +394,43 @@ async function main() {
     await p.waitForTimeout(400)
     const doc = await shape(p)
     check('T9 文件拖到折叠标题上 → 落在标题之后且看得见', folded && r.handed && JSON.stringify(doc.slice(2, 4)) === JSON.stringify(['#末节', '![[dro']), JSON.stringify({ folded, doc, line: r.line }))
+    await p.close()
+  }
+
+  // ── T10 折起的标题整节拖(B-04):折着拖、整节落下、落下后仍折着;拖动中正文不展开跳动;邻居标题不继承折叠 ──
+  const SEED_SECT = '前段。\n\n## 小节\n\n节内一。\n\n节内二。\n\n## 下节\n\n下节正文。\n'
+  {
+    const p = await openPage(browser, SEED_SECT, 'Sect.md', READY_H)
+    const folded = await foldHeading(p, '小节')
+    const head = await elRect(p, 'h2', '小节')
+    const h = head ? await handleAt(p, head.x + 30, head.y + head.h / 2) : null
+    const tgt0 = await elRect(p, 'p', '下节正文')
+    let during = null
+    if (h && tgt0) {
+      await p.mouse.move(h.x, h.y)
+      await p.mouse.down()
+      await p.mouse.move(h.x + 5, h.y + 5, { steps: 2 })
+      await p.mouse.move(tgt0.x + 40, tgt0.b - 3, { steps: 10 })
+      await idle(p, tgt0.x + 40, tgt0.b - 3)
+      during = { y: (await elRect(p, 'p', '下节正文'))?.y, doc: await shape(p) }
+      await p.mouse.up()
+      await p.waitForTimeout(450)
+    }
+    const doc = await shape(p)
+    check('T10 拖动中折起的小节不展开(正文不在指针下方跳动)', folded && !!during && Math.abs(during.y - tgt0.y) < 2 && during.doc.includes('~节内一。'), JSON.stringify({ y0: tgt0?.y, during }))
+    check('T10 折起的标题整节落下,仍折着;下节不继承折叠', JSON.stringify(doc) === JSON.stringify(['前段。', '#下节', '下节正文。', '#小节', '~节内一。', '~节内二。']) && JSON.stringify(await foldedSet(p)) === JSON.stringify(['小节']), JSON.stringify({ doc, folded: await foldedSet(p) }))
+    await p.close()
+  }
+  // ── T10b 折起的小节拖到无标题前言之前:前言成了它的正文 → 展开,绝不把前言藏起来 ──
+  {
+    const p = await openPage(browser, SEED_SECT, 'Sect2.md', READY_H)
+    await foldHeading(p, '小节')
+    const head = await elRect(p, 'h2', '小节')
+    const h = head ? await handleAt(p, head.x + 30, head.y + head.h / 2) : null
+    const top = await elRect(p, 'p', '前段')
+    if (h && top) await drag(p, h, { x: top.x + 40, y: top.y + 3 })
+    const doc = await shape(p)
+    check('T10b 折起的小节拖到前言之前 → 整节落下、展开,前言看得见', JSON.stringify(doc) === JSON.stringify(['#小节', '节内一。', '节内二。', '前段。', '#下节', '下节正文。']), JSON.stringify(doc))
     await p.close()
   }
 
