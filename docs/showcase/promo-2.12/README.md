@@ -30,3 +30,13 @@ node build.mjs                                               # → dist/music.ht
 ```
 
 发布试听页时，把 `out/score/*.mp3` 作为 `audio/` 目录下的附带文件一起发布。
+
+### 05 决战 II（真实采样）
+
+`music/battle.py` 按参考曲测出的风格参数写成：约 150 BPM、E 小调带多利亚 / 弗里几亚色彩、连续八分音符军鼓（重音在第 2 拍与第 4 拍后半拍）、低音 1 · 2 · 2& · 3& · 4& 重击、能量集中在 80–250 Hz。旋律与和声全部原创。乐器来自 [VSCO 2 CE](https://github.com/sgossner/VSCO-2-CE)（CC0），由 `music/sampler.py` 按音高、力度层和轮换挑选采样。
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/sgossner/VSCO-2-CE.git ~/vsco
+# 在 ~/vsco 里执行 git sparse-checkout set，目录列表见 sampler.orchestra() 用到的各个文件夹
+VSCO=~/vsco python3 music/make.py 5-battle && bash music/mux.sh 5-battle && node build.mjs
+```

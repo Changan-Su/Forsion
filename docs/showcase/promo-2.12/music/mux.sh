@@ -5,7 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../out"
 FF=${FFMPEG:-ffmpeg}
 mkdir -p score
-for id in 1-march 2-magi 3-choral 4-ballad; do
+ids=("$@")
+[ ${#ids[@]} -eq 0 ] && ids=(1-march 2-magi 3-choral 4-ballad 5-battle)
+for id in "${ids[@]}"; do
   "$FF" -y -loglevel error -framerate 30 -i frames-b/%05d.png -i "audio/$id-cue.wav" -c:v libx264 -preset slow -b:v 9M -maxrate 12M -bufsize 18M \
     -pix_fmt yuv420p -c:a aac -b:a 256k -shortest -movflags +faststart "score/B-score-$id.mp4"
   "$FF" -y -loglevel error -i "audio/$id-full.wav" -c:a libmp3lame -b:a 192k "score/B-score-$id-full.mp3"

@@ -17,6 +17,7 @@
 .hint { margin: 0; color: var(--muted); font-size: 13px; }
 .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px 22px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.card.featured { grid-column: 1 / -1; border-color: var(--orange); }
 .card header { display: flex; align-items: baseline; gap: 12px; }
 .card .no { font: 700 30px/1 var(--f-cond); color: var(--orange); letter-spacing: .04em; }
 .card h3 { margin: 0; font-size: 19px; font-weight: 700; }
@@ -38,11 +39,12 @@
   <header class="intro">
     <p class="eyebrow">Forsion 2.12 · 第 2.12 话</p>
     <h1>配乐小样</h1>
-    <p>四个配乐方向，都按 B 的剪辑点写：四张标题卡、「人类？」、HUD、三联面板翻转、EPISODE 卡、标题卡。选一个方向，画面和音乐会一起播放。下面是每个方向约 30 秒的完整版。旋律全部原创，用 General MIDI 音色库制作，只用来判断方向。</p>
+    <p>05「决战 II」是按你给的参考曲新做的：速度、调性、军鼓节奏、低音重击的位置和频段分布都对着参考曲测过，乐器换成真实录音采样，旋律与和声全部原创。01–04 是上一轮用 General MIDI 音色做的方向小样。所有配乐都按 B 的剪辑点写，选一个方向，画面和音乐会一起播放。</p>
   </header>
 
   <section class="score-stage" aria-label="画面对位播放">
     <div class="picker" role="group" aria-label="选择配乐方向">
+      <button type="button" id="pick-5-battle" data-cue="5-battle" aria-pressed="false"><span class="no">05</span>决战 II</button>
       <button type="button" id="pick-1-march" data-cue="1-march" aria-pressed="false"><span class="no">01</span>决战</button>
       <button type="button" id="pick-2-magi" data-cue="2-magi" aria-pressed="false"><span class="no">02</span>MAGI</button>
       <button type="button" id="pick-3-choral" data-cue="3-choral" aria-pressed="false"><span class="no">03</span>补完</button>
@@ -57,7 +59,15 @@
     <p class="hint">画面延长到 6.5 秒，让结尾和弦的余音能响完。点画面可暂停或继续。</p>
   </section>
 
-  <section class="cards" aria-label="四个配乐方向">
+  <section class="cards" aria-label="配乐方向">
+    <article class="card featured">
+      <header><span class="no">05</span><h3>决战 II · 采样管弦</h3></header>
+      <p class="spec">E 小调 · 150 BPM · 真实采样铜管 / 弦乐 / 定音鼓 / 军鼓 / 锣 · 49 秒</p>
+      <p>按参考曲测出的风格参数来写：军鼓是连续的八分音符，重音在第 2 拍和第 4 拍后半拍；大鼓、定音鼓和低音铜管砸在 1 · 2 · 2& · 3& · 4&；E 小调里借多利亚的升 C 和弗里几亚的 F；能量集中在 80–250 Hz。主题由圆号和长号齐奏，副主题交给小号并带三连音装饰，中段收一口气，再全体奏回主题，最后经 ♭VI–♭VII 落到 E 大调。</p>
+      <p class="use"><b>适合</b>：正片主配乐。这版可以直接当 1–2 分钟正片的配乐骨架，结构可以按分镜伸缩。</p>
+      <audio controls preload="none" src="audio/B-score-5-battle-full.mp3" aria-label="决战 II 完整版"></audio>
+      <div class="row"><button type="button" data-cue="5-battle">对位 B 画面播放</button></div>
+    </article>
     <article class="card">
       <header><span class="no">01</span><h3>决战 · 管弦进行曲</h3></header>
       <p class="spec">D 小调 · 148 BPM · 小号 / 铜管 / 军鼓 / 定音鼓</p>
@@ -105,6 +115,7 @@
   <p class="note">四段完整版和对位版都是方向小样。定稿建议交给作曲，用真实乐器或高品质音源重做，保留选定方向的结构和剪辑点。</p>
 
   <div hidden>
+    <audio id="cue-5-battle" preload="auto" src="audio/B-score-5-battle-cue.mp3"></audio>
     <audio id="cue-1-march" preload="auto" src="audio/B-score-1-march-cue.mp3"></audio>
     <audio id="cue-2-magi" preload="auto" src="audio/B-score-2-magi-cue.mp3"></audio>
     <audio id="cue-3-choral" preload="auto" src="audio/B-score-3-choral-cue.mp3"></audio>
@@ -127,7 +138,7 @@
   const cues = {};
   document.querySelectorAll('audio[id^="cue-"]').forEach(a => { cues[a.id.slice(4)] = a; });
   let current = null;
-  const names = { '1-march': '决战', '2-magi': 'MAGI', '3-choral': '补完', '4-ballad': '彼此' };
+  const names = { '5-battle': '决战 II', '1-march': '决战', '2-magi': 'MAGI', '3-choral': '补完', '4-ballad': '彼此' };
   const mark = id => pickers.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cue === id)));
   const stopCues = () => Object.values(cues).forEach(a => a.pause());
   function play(id) {
@@ -144,7 +155,7 @@
     if (b.closest('.card')) frame.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }));
   frame.addEventListener('click', () => {
-    if (!current) return play('1-march');
+    if (!current) return play('5-battle');
     const a = cues[current];
     if (a.paused) { if (a.ended || a.currentTime >= a.duration - 0.05) a.currentTime = 0; fulls.forEach(x => x.pause()); a.play().catch(() => {}); } else a.pause();
   });
