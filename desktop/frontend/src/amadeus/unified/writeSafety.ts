@@ -36,6 +36,10 @@ registerMessages({
     zh: '「{name}」已在别处被删除或移走，最后的改动没来得及保存，另存副本也没写成。可以把这篇的内容复制下来。',
     en: '"{name}" was deleted or moved elsewhere before your last changes were saved, and a backup copy couldn’t be written. You can copy its text.',
   },
+  'unisave.renameCopy.toast': {
+    zh: '「{name}」改名时已被别处改过，没有覆盖它。你改名期间打的字另存为「{copy}」。',
+    en: '"{name}" was changed elsewhere while it was being renamed, so it wasn’t overwritten. What you typed during the rename was saved as "{copy}".',
+  },
   'unisave.rescued.toast': {
     zh: '「{name}」已在别处被删除或移走。你还没保存的内容另存为「{copy}」。',
     en: '"{name}" was deleted or moved elsewhere. Your unsaved changes were saved as "{copy}".',
@@ -133,6 +137,19 @@ export function toastRescued(path: string, copy: string): void {
     level: 'error',
     dedupeKey: `amx-rescued:${copy}`,
     text: translate('unisave.rescued.toast', { name: noteName(path), copy: noteName(copy) }),
+    action: {
+      label: translate('unisave.conflict.open'),
+      run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },
+    },
+  })
+}
+
+/** 改名后补写撞上 CAS(Codex 复核返修 P0-4):新路径已被别处改过 / 没了,本实例改名期间打的字进了副本。 */
+export function toastRenameCopy(path: string, copy: string): void {
+  emitAmadeusToast({
+    level: 'error',
+    dedupeKey: `amx-renamecopy:${copy}`,
+    text: translate('unisave.renameCopy.toast', { name: noteName(path), copy: noteName(copy) }),
     action: {
       label: translate('unisave.conflict.open'),
       run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },

@@ -48,7 +48,7 @@ import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -2752,8 +2752,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const text = composeFm(pipe.fm, pipe.body)
         const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
         if (text !== pipe.lastSaved) {
-          // 补写失败不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。
-          await amadeus.writeTextFile(newPath, toDisk(text, pipe.eol)).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot); toastSaveFailed(newPath, e) })
+          // 补写带 CAS(Codex 复核返修 P0-4):基线 = 搬过去的那份原文(= 本实例最后落盘的 lastSaved,按磁盘行尾)。对不上 =
+          // 改名 IPC 期间别的窗口 / 改名传播改过新路径,或它又没了 → 不覆盖,把本实例的全文另存为冲突副本并提示;
+          // 补写抛错不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。交接落定之后才改指标签、退休别的实例。
+          try {
+            const r = await amadeus.writeTextFile(newPath, toDisk(text, pipe.eol), { base: textFingerprint(toDisk(pipe.lastSaved, pipe.eol)) })
+            if (r && r.ok === false && r.current !== toDisk(text, pipe.eol)) {
+              try {
+                toastRenameCopy(newPath, await writeConflictCopy(newPath, toDisk(text, pipe.eol)))
+                void usePageStore.getState().refreshPages()
+              } catch (e) {
+                stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot)
+                toastSaveFailed(newPath, e)
+              }
+            }
+          } catch (e) {
+            stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot)
+            toastSaveFailed(newPath, e)
+          }
         }
         // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
         // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;
