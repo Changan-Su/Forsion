@@ -77,7 +77,7 @@ export interface CloudHost {
   setTokenRefresher(fn: (timeoutMs?: number) => Promise<void>): void
   // ── 0.4 起(Amadeus 云同步 + collab:引擎与 11 个通道住在 Extend,宿主在 registerAmadeusIpc 里 vault 建好后调工厂)──
   setAmadeusSyncFactory(factory: AmadeusSyncFactory): void
-  // ── 0.5 起(设备互联的云端通道:隧道 + caps 上报 + units:* 名册四通道住在 Extend;宿主每次 doRefreshUnitHost 重建设备互联时调工厂)──
+  // ── 0.6 起(设备互联的云端通道:隧道 + caps 上报 + units:* 名册四通道住在 Extend;宿主每次 doRefreshUnitHost 重建设备互联时调工厂)──
   setUnitHubFactory(factory: UnitHubFactory): void
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>

@@ -322,7 +322,7 @@ export function installEngine(): void {
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ rb-unit 在移动端照样注册,
   // 但 SingleColumnHost 只渲染 side=bottom 的项,head 上的它不可见(无害;移动端入口是 rb-units-mobile)。
   // webShim / unitShim 无此方法 → 不注册;vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态。
-  // 名册(unitsList)自 Forsion Extend 0.5 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
+  // 名册(unitsList)自 Forsion Extend 0.6 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
   // 只是不列账号名下的设备:本地 / 按地址直连 / 「允许其他设备连接本机」与已配对设备都不经云端。
   if (window.tangu?.unitsList || window.tangu?.unitHostStatus) addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
   if (window.tangu?.submitFeedback) {

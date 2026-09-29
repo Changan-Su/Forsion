@@ -1,5 +1,5 @@
 /**
- * 设备互联云端通道的宿主接缝(2026-09-28,Forsion Extend 0.5):隧道客户端 UnitHost(出站 SSE 通道 + 整包 / 流式回包)、
+ * 设备互联云端通道的宿主接缝(2026-09-28,Forsion Extend 0.6):隧道客户端 UnitHost(出站 SSE 通道 + 整包 / 流式回包)、
  * caps 上报器与名册四通道 units:list / update / remove / openInBrowser 住在 Extend 的主进程半身。
  * 宿主留:局域网面 unitWeb、配对落盘(deviceSecrets)、调用方断言的签发与校验(unitCaller.ts)、P2P、设备页的鉴权注入、远程会话 ——
  * 没有 Extend 时「允许其他设备连接本机」只起局域网面。

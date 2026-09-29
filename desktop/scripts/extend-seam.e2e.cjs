@@ -9,7 +9,7 @@
  *  ③ 已装副本被改过(用户目录可写:版本抬高、入口改动、没重签)→ 下次启动播种把它换回可信的随包那份(永不降级的唯一例外),
  *     装载的是换回来的已装副本,账号面仍在;
  *  ④ 负对照 --absent:随包缺席 → preload 按 cloud:present 删键,四个键全 undefined(渲染层门控自动隐藏,不是 reject)。
- *  ⑤ 设备互联的云端通道(0.5 起):已登录 + 打开「允许其他设备连接本机」+ 本机假 hub → 设备通道经 Extend 登记的工厂入册、连上通道、
+ *  ⑤ 设备互联的云端通道(0.6 起):已登录 + 打开「允许其他设备连接本机」+ 本机假 hub → 设备通道经 Extend 登记的工厂入册、连上通道、
  *     报 caps;名册四键随包出现,切换器里列出账号名下的另一台设备。④d 负对照:同样配置、随包缺席 → 一个请求都不打 hub,
  *     局域网面照起(unitHostStatus 有端口)、切换器照样上架但没有名册行。
  *
@@ -112,7 +112,7 @@ async function launch(home, stubUrl) {
       authStatus: typeof t.authStatus, forsionLogin: typeof t.forsionLogin, authAccounts: typeof t.authAccounts, forsionSwitchAccount: typeof t.forsionSwitchAccount,
       // 云同步 + collab(Extend 0.4 起):两个桥随通道存在
       amadeusSync: typeof window.amadeusSync, amadeusCollab: typeof window.amadeusCollab,
-      // 设备名册(Extend 0.5 起);unitHostStatus 留宿主(局域网面)
+      // 设备名册(Extend 0.6 起);unitHostStatus 留宿主(局域网面)
       unitsList: typeof t.unitsList, unitsUpdate: typeof t.unitsUpdate, unitsRemove: typeof t.unitsRemove, unitsOpenInBrowser: typeof t.unitsOpenInBrowser,
       unitHostStatus: typeof t.unitHostStatus,
       // 渲染层门控的可见结果:账号卡(ribbon 底部)与设置里的 Forsion 子页是否存在
@@ -152,7 +152,7 @@ async function launch(home, stubUrl) {
       const rows = await switcherRows(win)
       await app.close().catch(() => {})
       const unitHits = hub.hits.filter((h) => h.url.startsWith('/api/units'))
-      check('④d 设备名册与云端通道(0.5 起)也随包消失:名册四键 undefined、一个请求都不打 hub;局域网面照起(unitHostStatus 有端口、通道未运行)',
+      check('④d 设备名册与云端通道(0.6 起)也随包消失:名册四键 undefined、一个请求都不打 hub;局域网面照起(unitHostStatus 有端口、通道未运行)',
         bridge.unitsList === 'undefined' && bridge.unitsUpdate === 'undefined' && bridge.unitsRemove === 'undefined' && bridge.unitsOpenInBrowser === 'undefined'
         && bridge.unitHostStatus === 'function' && unitHits.length === 0 && hostStatus?.running === false && typeof hostStatus?.webPort === 'number'
         && logs().includes('没有 Forsion Extend 的设备通道'),
@@ -178,7 +178,7 @@ async function launch(home, stubUrl) {
       check('②d 云同步 + collab(0.4 起)由 Extend 注册:amadeusSync / amadeusCollab 两个桥都在;未登录 sync:get → auth-required / side=local', run1.bridge.amadeusSync === 'object' && run1.bridge.amadeusCollab === 'object' && run1.bridge.syncStatus?.state === 'auth-required' && run1.bridge.syncStatus?.side === 'local' && run1.logs().includes('[forsion-extend] amadeus cloud sync registered'), JSON.stringify(run1.bridge.syncStatus))
       check('②c 账号核心(0.3 起)由 Extend 注册:authStatus 未登录 → loggedIn=false / tokenSource=null / 不含 token;authAccounts=[];账号卡画出来了', run1.bridge.authStatus === 'function' && run1.bridge.forsionLogin === 'function' && run1.bridge.status?.loggedIn === false && run1.bridge.status?.tokenSource === null && !('token' in (run1.bridge.status || {})) && Array.isArray(run1.bridge.accounts) && run1.bridge.accounts.length === 0 && run1.bridge.dom?.accountCard === true && run1.logs().includes('[forsion-extend] account core registered'), JSON.stringify({ status: run1.bridge.status, accounts: run1.bridge.accounts, dom: run1.bridge.dom }))
 
-      check('②e 设备名册(0.5 起)由 Extend 注册:名册四键在;未登录 unitsList → 401;装载日志有 unit hub registered;切换器上架',
+      check('②e 设备名册(0.6 起)由 Extend 注册:名册四键在;未登录 unitsList → 401;装载日志有 unit hub registered;切换器上架',
         run1.bridge.unitsList === 'function' && run1.bridge.unitsUpdate === 'function' && run1.bridge.unitsRemove === 'function' && run1.bridge.unitsOpenInBrowser === 'function'
         && run1.bridge.units?.status === 401 && run1.logs().includes('[forsion-extend] unit hub registered') && run1.bridge.dom?.unitSwitcher === true,
         JSON.stringify({ units: run1.bridge.units, unitsList: run1.bridge.unitsList }))

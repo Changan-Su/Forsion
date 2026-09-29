@@ -62,7 +62,7 @@ import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
-import { engineCapsState, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.5 起)
+import { engineCapsState, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
@@ -880,7 +880,7 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 
 // ── 设备互联(方案 §11,B 端渲染):「允许其他设备连接本机」开关起停两件东西 ──────────────
 //   unitWeb(unitWeb.ts):局域网 web 面(0.0.0.0,无需登录;配对令牌鉴权)——把本机曝成网页。
-//   unitHub(Forsion Extend 0.5 起,见 unitHubSeam.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb;
+//   unitHub(Forsion Extend 0.6 起,见 unitHubSeam.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb;
 //     带着 P1-K7a 的 caps 上报器(通道 ready 之后报本机引擎态,手机据此分「在线但引擎没起」)。没有 Extend = 只起局域网面。
 let unitHub: UnitHubInstance | null = null
 let unitHubFactory: UnitHubFactory | null = null // Extend 装载时登记(setUnitHubFactory),doRefreshUnitHost 每次重建时调
@@ -1266,7 +1266,7 @@ async function doRefreshUnitHost(): Promise<void> {
     console.warn('[unit] 设备凭据读不出来:只起局域网面,不建设备通道')
     return
   }
-  // 云端设备通道(隧道 + P1-K7a caps 上报器)住在 Forsion Extend(0.5 起,unitHubSeam.ts):没装载 = 只起局域网面。
+  // 云端设备通道(隧道 + P1-K7a caps 上报器)住在 Forsion Extend(0.6 起,unitHubSeam.ts):没装载 = 只起局域网面。
   if (!unitHubFactory) {
     console.log('[unit] 没有 Forsion Extend 的设备通道:只起局域网面,不经云端中转')
     return
@@ -2185,7 +2185,7 @@ app.whenReady().then(async () => {
       setTokenRefresher: (fn) => accountCore.setRefresher(fn),
       // ── 0.4 起:Amadeus 云同步工厂(引擎与 11 个通道住在 Extend;宿主 registerAmadeusIpc 里 vault 建好后调)──
       setAmadeusSyncFactory: (factory) => { amadeusSyncFactory = factory },
-      // ── 0.5 起:设备互联的云端通道工厂(隧道 + caps 上报器;units:* 名册四通道也由 Extend 注册)。doRefreshUnitHost 每次重建时调 ──
+      // ── 0.6 起:设备互联的云端通道工厂(隧道 + caps 上报器;units:* 名册四通道也由 Extend 注册)。doRefreshUnitHost 每次重建时调 ──
       setUnitHubFactory: (factory) => { unitHubFactory = factory },
     }
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
@@ -2330,7 +2330,7 @@ app.whenReady().then(async () => {
   })
 
   // ── 设备互联(Forsion Unit):名册 CRUD(units:list / update / remove)与「在浏览器中打开」(units:openInBrowser,代拼 #token=)
-  // 自 2026-09-28 起住在内置包 Forsion Extend 的主进程半身里(0.5,unit/index.ts);没有 Extend = preload 删掉这四个桥键,渲染层不列名册。
+  // 自 2026-09-28 起住在内置包 Forsion Extend 的主进程半身里(0.6,unit/index.ts);没有 Extend = preload 删掉这四个桥键,渲染层不列名册。
   // 下面留在宿主的是不经云端名册也成立的那几条:P2P 直连、本机通道状态、局域网探针与已配对设备。
 
   // `cloud:fetch`(插件以当前用户身份调 Forsion 云端 API 的通用接缝)、个人中心 / 会员页、额度与重置卡、反馈提交

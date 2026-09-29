@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { startUnitWeb, HOST_DOWNLOAD_MAX_BYTES, type UnitWebDeps, type UnitWebHandle } from './unitWeb'
-// @ts-expect-error 私有包不带类型;这里只用运行时导出(UnitHost 自 2026-09-28 住在 Forsion Extend 0.5,签名策略仍在宿主 unitCaller.ts)
+// @ts-expect-error 私有包不带类型;这里只用运行时导出(UnitHost 自 2026-09-28 住在 Forsion Extend 0.6,签名策略仍在宿主 unitCaller.ts)
 import { UnitHost } from '@forsion/extend/dist/desktop.mjs'
 import { makeCallerHeaders } from './unitCaller'
 import { buildUnitScopeGuard, openUnitHostRegularFile, type UnitScopeGuard } from './unitHostScope'

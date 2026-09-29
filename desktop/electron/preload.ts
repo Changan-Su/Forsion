@@ -546,7 +546,7 @@ const CLOUD_KEYS: Record<string, string> = {
   submitFeedback: 'feedback:submit', cloudFetch: 'cloud:fetch',
   connectMeta: 'connect:meta', connectList: 'connect:list', connectPublish: 'connect:publish', connectUnpublish: 'connect:unpublish',
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
-  // 设备名册(0.5 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
+  // 设备名册(0.6 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
