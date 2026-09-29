@@ -721,6 +721,20 @@ export interface GitSummary {
   changesTotal?: number
   commits?: GitCommitInfo[]
   remote?: string | null
+  /** 远端个数(没有 origin、只有一个远端时也能推)。 */
+  remotes?: number
+  /** 仓库自带会执行程序的配置项与钩子;空 = 没有。 */
+  configRisks?: string[]
+  /** 用户在面板上信任过这个仓的配置。 */
+  trusted?: boolean
+  /** 读工作区会跑仓库自带的过滤器且未信任 → 这次没读改动(changes 为空不代表干净)。 */
+  changesUnread?: boolean
+}
+/** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
+export interface GitSettings {
+  branchPrefix: string
+  commitInstructions: string
+  forceWithLease: boolean
 }
 export interface ProjectContext {
   cwd: string
@@ -1328,7 +1342,8 @@ declare global {
       /** 头像菜单额度视图(GET /api/token-quota/my 透传,含 resetCards)。 */
       accountQuota?(): Promise<{ status: number; json: any }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
-      accountUseResetCard?(type?: 'both' | 'weekly'): Promise<{ status: number; json: any }>
+      /** 周卡 2026-08-05 下线,只收缺省或 'both'。 */
+      accountUseResetCard?(type?: 'both'): Promise<{ status: number; json: any }>
       /** 后台额度:从主额度等额转入 limit×percent%(本周期有效;POST /api/token-quota/background/convert)。 */
       accountBgConvert?(percent: number): Promise<{ status: number; json: any }>
       /** 后台额度用尽后改用主额度继续(开关;POST /api/token-quota/background/auto-main)。 */
@@ -1336,6 +1351,8 @@ declare global {
       /** 以当前用户身份调 Forsion 云端 API(只收相对路径,主进程拼 cloudUrl 并盖 token;token 不下发渲染层)。
        *  返回 { status, json } 或 { status: 0, error }(0 = 没发出去:未登录 / 地址非法 / 网络断)。timeoutMs 缺省 15s,上限 120s。 */
       cloudFetch?(req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }>
+      /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
+      cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
@@ -1350,6 +1367,10 @@ declare global {
       onUpdaterStatus?(cb: (st: UpdaterStatusInfo) => void): () => void
       /** 应用内清空数据(卸载/重置);清完主进程 relaunch。 */
       clearAppData?(opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }>
+      /** 走正常退出链后重新拉起(插件页「重启以生效」)。 */
+      relaunchApp?(): Promise<void>
+      /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。设备页没有这座桥。 */
+      setBundleEnabled?(id: string, on: boolean): Promise<{ restartPending: boolean }>
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
       setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
@@ -1410,7 +1431,15 @@ declare global {
       productsServe?(id: string): Promise<{ origin: string; url: string; product: ProductSummary }>
       /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
       productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
-      productsTrash?(id: string): Promise<{ ok: boolean }>
+      /** 托管根里的 = 移进废纸篓;原地加入的外部造物 = 只取消登记(unregistered),文件夹不动。
+       *  expect = 用户在确认框里同意的那件事(动作 + 卡片列出时那个目录的身份);宿主重解后对不上(期间被挪过 / 换过)就拒绝,得刷新后重新确认。 */
+      productsTrash?(id: string, expect: { action: 'trash' | 'unregister'; dirId?: string }): Promise<{ ok: boolean; unregistered?: boolean }>
+      /** 在造物的托管根里建一个新作品文件夹(名字宿主清洗 + 撞名接序号)。 */
+      productsCreate?(name: string): Promise<{ dir: string; name: string; product: ProductSummary }>
+      /** 原地加入造物(不复制、不移动)。within:源的真实路径必须在它里面(strict = 不能就是它本身)。 */
+      productsRegister?(source: string, within: string, strict: boolean): Promise<{ ok: true; dir: string; name: string; product: ProductSummary } | { ok: false; code: 'invalid_source' | 'forbidden_source' | 'outside' | 'nested'; detail?: string }>
+      /** 这个目录是不是造物(托管根的直接子目录 / 原地加入的外部文件夹);只读,不铸身份。 */
+      productsIsCreation?(dir: string): Promise<boolean>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void

@@ -70,6 +70,10 @@ export interface BlockLayer {
   getView: () => EditorView | null
   /** 跨块选区覆盖到的顶层块边界(整节点对齐、两端同父);⠿ 菜单的整批动作与拖拽共用这一份判定。 */
   topRangeOf: (view: EditorView) => { from: number; to: number } | null
+  /** 复制块(⠿ 菜单「复制块」与 Mod-D 同一份,B-12):跨块选区 / 块选中 / 光标所在块。没东西可复制返回 false。 */
+  duplicate: (view: EditorView) => boolean
+  /** 缩进 / 提升一档,与 Tab / Shift-Tab 同一条阶梯(含列表折叠钩子)。移动端胶囊用(G2-06:软键盘没有 Tab)。 */
+  indent: (view: EditorView, dir: 1 | -1) => boolean
 }
 
 /** 元素的**累计视觉缩放**(CSS zoom × 全部祖先的 transform scale)。`rect` 是视口 px、`offsetWidth`
@@ -1471,21 +1475,60 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         editorView.dom.addEventListener('keydown', onKeyDown)
 
-        // 右键块 → 选中 + 同一份 ⠿ 菜单(v3 BlockHost onCtxMenu 对位;审计缺口 #11)。
+        // 右键 → 块菜单,只在「已经是块」的地方接管(评审 G4-08 / B-09):右键落在已选中的块上(点 ⠿ 选中的
+        // NodeSelection、框选 / 缩进子树的整块选区),或落在非文字的块件上(图片 / 嵌入卡 / 分割线这类
+        // contenteditable=false 的东西 —— 那里没有文字可剪可查,系统菜单给不了什么),才出 ⠿ 同一份菜单
+        // (v3 BlockHost onCtxMenu 的手感保留);**文字上的右键交给系统菜单**(剪切 / 复制 / 粘贴 / 拼写建议 / 查询,
+        // Electron 主进程的 editContextMenu)—— 此前一律把文字选区换成整块、吞掉原生菜单,拖选了几个字想复制
+        // 却只能拿到块菜单。把手上的右键见 gutter 那条。
         const onCtxMenu = (e: MouseEvent): void => {
           const view = viewRef
           if (!view) return
           // 只读实例(分享页/收件箱/Muse 预览)不接管右键:原生菜单(复制/查词)照旧,编辑块菜单
           // 不出现 —— 与 show() 不给把手同一口径(B-02:此前菜单里的「删除/转换」真的会改文档)。
           if (!view.editable) return
-          const a = pickBlockAt(view, { x: e.clientX, y: e.clientY })
-          if (!a || !NodeSelection.isSelectable(a.node)) return
+          const sel = view.state.selection
+          const range = sel instanceof NodeSelection
+            ? { from: sel.from, to: sel.to }
+            : blockSelectionKey.getState(view.state) ? topRangeOf(view) : null
+          let onSelected = false
+          if (range) {
+            const selDom = sel instanceof NodeSelection ? view.nodeDOM(sel.from) : null
+            const at = view.posAtCoords({ left: e.clientX, top: e.clientY })
+            onSelected = (selDom instanceof Node && e.target instanceof Node && selDom.contains(e.target))
+              || (!!at && at.pos >= range.from && at.pos <= range.to)
+          }
+          if (!onSelected) {
+            const t = e.target instanceof Element ? e.target : null
+            const island = t?.closest('[contenteditable="false"]')
+            const nonText = !!t && ((!!island && island !== view.dom && view.dom.contains(island)) || /^(IMG|VIDEO|AUDIO|HR|CANVAS|IFRAME)$/.test(t.tagName))
+            // 表格单元格里、没拖选文字:系统菜单只剩「粘贴」,增删行列又得锚在指针下那一格 → 整表块菜单
+            // (表格区,K-10;Obsidian 表格右键同样给行列操作)。选了字照旧交给系统菜单(复制)。
+            const cellEl = view.state.selection.empty ? t?.closest('td, th') : null
+            let tablePos: number | null = null
+            if (cellEl && view.dom.contains(cellEl)) {
+              const $c = view.state.doc.resolve(view.posAtDOM(cellEl, 0))
+              for (let d = $c.depth; d > 0; d--) if ($c.node(d).type.spec.tableRole === 'table') { tablePos = $c.before(d); break }
+            }
+            if (!nonText && tablePos == null) return
+            const pos = tablePos ?? pickBlockAt(view, { x: e.clientX, y: e.clientY })?.pos
+            const node = pos == null ? null : view.state.doc.nodeAt(pos)
+            if (pos == null || !node || !NodeSelection.isSelectable(node)) return
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
+          }
           e.preventDefault()
-          view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, a.pos)))
           view.focus()
           hooks.onMenu({ x: e.clientX, y: e.clientY })
         }
         editorView.dom.addEventListener('contextmenu', onCtxMenu)
+        // 把手区域(⠿ / ＋ / 折叠钮)上的右键 = 这一块的块菜单:右键的 mousedown 已经走 selectDragUnit 把块选好了。
+        content.addEventListener('contextmenu', (e) => {
+          const view = viewRef
+          if (!view || !view.editable || !activeRef) return
+          e.preventDefault()
+          if (!isCoarsePointer()) view.focus()
+          hooks.onMenu({ x: e.clientX, y: e.clientY })
+        })
 
         // 滚动即藏(定位只在 pointermove 时算,滚动中把手会原地漂着不动)。
         const onScroll = (): void => {
@@ -2140,6 +2183,62 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     }),
   )
 
+  // ── 复制块 Mod-D(B-12:v3 块世界有这颗键,v4 迁移时漏了)。────────────────────────
+  // ⠿ 菜单「复制块」与键盘共用这一份(UnifiedPage 经 BlockLayer.duplicate 调)。四种选区一个口径:
+  //  · 跨块选区(拖选跨段 / 框选 / 把手子树)→ 按 topRangeOf 的整块边界整批复制到范围之后;
+  //  · 块选中(Esc / 点 ⠿,NodeSelection)→ 复制该节点(列表项就在本列表里复制一项);
+  //  · 光标 / 块内选区 → 复制光标所在的块,单位与键盘搬块一致(顶层块 / 列内块 / 列表里的单项;
+  //    引用 / callout 整只),另加卡内逐块(与把手在卡内的逐行粒度一致)。
+  // 画布卡的副本**当场铸新锚**并报宿主(理由见 mintCardCopies 顶注:原样复制 = 两个同锚卡,下次打开
+  // 整个 canvas 键作废;漏报 ownedCards = 派生冻结),单卡再错开 40px,免得在画布上与原卡完全重叠。
+  // 副本插在原块之后,选区跟到副本上(Notion 同):连按一路往下复制,屏幕上也看得到新块在哪。
+  const duplicateBlocks = (state: EditorState, dispatch?: (tr: Transaction) => void, view?: EditorView): boolean => {
+    const sel = state.selection
+    const range = view ? topRangeOf(view) : null
+    if (range) {
+      if (!dispatch) return true
+      const { content, minted } = mintCardCopies(state.doc, state.doc.slice(range.from, range.to).content)
+      if (minted.length) hooks.onCardsMinted?.(minted)
+      const shift = range.to - range.from
+      const tr = state.tr.insert(range.to, content)
+      tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
+      if (blockSelectionKey.getState(state)) tr.setMeta(blockSelectionKey, true) // 框选副本仍按整块呈现
+      dispatch(tr.scrollIntoView())
+      return true
+    }
+    if (sel instanceof NodeSelection) {
+      if (!sel.node.isBlock) return false // 行内原子(图片 / 公式)不归块复制
+      if (!dispatch) return true
+      let copy = sel.node
+      if (copy.type.name === 'amadeusCanvasCard') {
+        const { content, minted } = mintCardCopies(state.doc, Fragment.from(copy))
+        const c = content.firstChild ?? copy
+        copy = c.type.create({ ...c.attrs, x: Number(c.attrs.x) + 40, y: Number(c.attrs.y) + 40 }, c.content, c.marks)
+        if (minted.length) hooks.onCardsMinted?.(minted)
+      }
+      const tr = state.tr.insert(sel.to, copy)
+      tr.setSelection(NodeSelection.create(tr.doc, sel.to))
+      dispatch(tr.scrollIntoView())
+      return true
+    }
+    if (!(sel instanceof TextSelection) || !sel.$from.sameParent(sel.$to)) return false
+    const { $from } = sel
+    let d = $from.depth
+    while (d >= 1 && !['doc', 'amadeusColumnCell', 'amadeusCanvasCard', 'bullet_list', 'ordered_list'].includes($from.node(d - 1).type.name)) d--
+    if (d < 1) return false
+    const from = $from.before(d)
+    const to = $from.after(d)
+    const node = state.doc.nodeAt(from)
+    if (!node) return false
+    if (!dispatch) return true
+    const shift = to - from
+    const tr = state.tr.insert(to, node)
+    tr.setSelection(TextSelection.create(tr.doc, sel.anchor + shift, sel.head + shift))
+    dispatch(tr.scrollIntoView())
+    return true
+  }
+  const duplicateKeymap = $prose(() => keymap({ 'Mod-d': duplicateBlocks }))
+
   // ── Mod+A 分级全选(AFFiNE/Notion 对齐)。──────────────────────────────────────
   // 一级=光标所在文本块的内容;二级=它所属的顶层块(列表整只 / 引用整只 / 列内那一块);
   // 三级=整篇。PM 原生只有「整篇」一级 —— 整页一实例之后,那一下会把别的段落一起吞掉,
@@ -2304,8 +2403,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   return {
-    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, keyboardPlugins].flat(),
+    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, duplicateKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
+    duplicate: (view) => duplicateBlocks(view.state, view.dispatch.bind(view), view),
+    indent: (view, dir) => (dir > 0 ? tabIndent(view.state, view.dispatch.bind(view), view, tabFoldHooks) : tabOutdent(view.state, view.dispatch.bind(view))),
   }
 }

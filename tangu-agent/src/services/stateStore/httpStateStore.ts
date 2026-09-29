@@ -30,10 +30,14 @@ import type { SessionHit, SessionTranscript } from '../sessionSearch.js';
 interface TokenEntry { token: string; }
 const byRun = new Map<string, TokenEntry>();
 const bySession = new Map<string, TokenEntry>();
-const requestToken = new AsyncLocalStorage<string>();
+const requestToken = new AsyncLocalStorage<string | undefined>();
 
-/** 网关派发的请求期:把 Authorization token 注入本请求异步子树(handler 期 state 调用回退取它)。 */
-export function enterRequestToken(token: string): void { requestToken.enterWith(token); }
+/**
+ * 网关派发的请求期:在 token 作用域内跑 fn(handler 期 state 调用回退取它);无 Authorization 传 undefined。
+ * ⚠️ 不能用 enterWith:请求中间件的同步帧跑在按连接复用的 HTTP parser 资源上,Node < 24 会把 token 留在
+ * 连接上,同一条 keep-alive 连接的下一个请求(可能是别的用户)不带 Authorization 时就读到它。
+ */
+export function runWithRequestToken<T>(token: string | undefined, fn: () => T): T { return requestToken.run(token, fn); }
 /** createRun 时把 token 绑到 runId + sessionId(异步 loop 期据此取)。 */
 export function bindRunToken(runId: string, sessionId: string, token: string): void {
   const e: TokenEntry = { token };

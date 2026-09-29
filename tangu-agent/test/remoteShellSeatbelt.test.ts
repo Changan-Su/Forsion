@@ -19,6 +19,7 @@ import { remoteShellWriteDenySpec } from '../src/sandbox/hostSandboxProtection.j
 import { taintRunRemote, clearRunRemoteTaint } from '../src/services/remoteOrigin.js';
 import { collectGitState } from '../src/services/runtimeContext.js';
 import { configFile } from '../src/core/tanguHome.js';
+import { repoConfigRisks, trustRepo } from '../src/services/gitTrust.js';
 import type { ToolContext } from '../src/tools/toolTypes.js';
 
 const REMOTE = { via: 'tunnel' as const, marked: true };
@@ -221,6 +222,9 @@ describe.skipIf(!seatbelt)('远程 shell 写保护:真 sandbox-exec(仅 macOS)',
     writeFileSync(join(repo, 'f.txt'), 'a');
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'f.txt'], { cwd: repo });
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'i'], { cwd: repo });
+    // 合并 main 后:未信任的仓 main 的 gitTrust 根本不读工作区(见 src/services/gitTrust.test.ts)。这里钉的是另一半 —— 用户早先信任过
+    // 这个仓(信任按目录身份绑定、不看配置内容),之后远程命令摆进 filter:git 现场照常读工作区,写保护是最后一道。
+    await trustRepo((await repoConfigRisks(repo))!.commonDir);
     writeFileSync(cfgPath, CFG0);
     writeFileSync(join(repo, 'payload.sh'), `cp /dev/null ${q(cfgPath)}; cat\n`); // 远程 run 用 write_file 在工作区里就能写
     const plant = await bash(remoteCtx({ cwd: repo }), `git config filter.x.clean ${q(`sh ${join(repo, 'payload.sh')}`)} && printf '* filter=x\\n' > .gitattributes && printf b > f.txt`);

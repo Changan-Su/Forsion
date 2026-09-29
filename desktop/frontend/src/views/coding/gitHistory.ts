@@ -20,7 +20,8 @@ export function historyMode(status: GitPanelStatus | null | undefined): HistoryM
   if (!status) return { mode: 'unsupported', reasonKey: '' }
   if (!status.available) return { mode: 'install', reasonKey: 'studio.history.gitWhy' }
   // 尚未建仓的可写项目要提前告知「保存会在项目里创建 .git」——事后才发现多出个目录会吓到人。
-  if (status.writable) return { mode: 'writable', reasonKey: status.state === 'none' ? 'studio.history.firstVersionNote' : '' }
+  // 原地加入的外部造物(auto=false)还没有仓:第一个版本得用户手动保存,保存之后才每轮自动存 —— 提示说清这一点。
+  if (status.writable) return { mode: 'writable', reasonKey: status.state === 'none' ? (status.auto === false ? 'studio.history.enableNote' : 'studio.history.firstVersionNote') : '' }
   return {
     mode: 'readonly',
     reasonKey: status.state === 'foreign' ? 'studio.history.readonlyForeign'

@@ -207,7 +207,7 @@ describe('retired instances never leave drafts behind (N-5)', () => {
   const unmountFlush = source.slice(source.indexOf('    const flush = (): void => {\n      syncFromEditor()'), source.indexOf('    const onUnload ='))
   const noteFailed = source.slice(source.indexOf('  const noteWriteFailed = '), source.indexOf('  /** 本地与盘上重新一致'))
   function load() {
-    const pipe = { retired: true, readOnly: false, fm: '', body: 'Typed during the rename IPC window', lastSaved: 'Old note', pending: true, timer: null as unknown, writing: 0, stashed: null as string | null, failed: false, retryTimer: null as unknown, retryN: 0, dead: false }
+    const pipe = { retired: true, readOnly: false, fm: '', body: 'Typed during the rename IPC window', lastSaved: 'Old note', pending: true, timer: null as unknown, writing: 0, stashed: null as string | null, failed: false, retryTimer: null as unknown, retryN: 0, dead: false, slot: 'leaf-1' as string | null }
     const stubs = {
       stashDraft: vi.fn(), clearDraft: vi.fn(), writeNow: vi.fn(async () => {}), settleUnsaved: vi.fn(), isPristine: vi.fn(() => false),
       setSaveFailed: vi.fn(), toastSaveFailed: vi.fn(),
@@ -224,7 +224,7 @@ describe('retired instances never leave drafts behind (N-5)', () => {
     h.flush()
     expect(h.stashDraft).not.toHaveBeenCalled()
     expect(h.writeNow).not.toHaveBeenCalled()
-    expect(h.clearDraft).toHaveBeenCalledWith('/vault', 'Untitled.md', 'Stashed after an earlier failed save')
+    expect(h.clearDraft).toHaveBeenCalledWith('/vault', 'Untitled.md', 'Stashed after an earlier failed save', 'leaf-1')
     expect(h.pipe.stashed).toBeNull()
   })
 
@@ -239,7 +239,8 @@ describe('retired instances never leave drafts behind (N-5)', () => {
     const h = load()
     h.pipe.retired = false
     h.flush()
-    expect(h.stashDraft).toHaveBeenCalledWith('/vault', 'Untitled.md', composeFm('', 'Typed during the rename IPC window'), 'Old note')
+    // 草稿存进本实例的槽位(= 所属 leaf,评审 G1-02 返修:同篇多开的两份草稿不互相覆盖)。
+    expect(h.stashDraft).toHaveBeenCalledWith('/vault', 'Untitled.md', composeFm('', 'Typed during the rename IPC window'), 'Old note', 'leaf-1')
     expect(h.writeNow).toHaveBeenCalledTimes(1)
     h.noteWriteFailed(new Error('Offline'))
     expect(h.stashDraft).toHaveBeenCalledTimes(2)

@@ -7,10 +7,12 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { decodeCharRefs, linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { decodeCharRefs, pageKey, parseEmbeds, parseTags, parseWikiLinks, plainSnippet, resolvePageName, stripForIndex, tagMatches } from '@amadeus-shared/links'
+import { backlinkHits, mentionHits, noteFmMeta, type FmLinkProp } from '@amadeus-shared/linkIndex'
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
+import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { assetKey, assetRefs } from '@amadeus-shared/assets'
-import type { BacklinkRef, SearchHit, TagCount } from '@amadeus-shared/ipc'
+import type { BacklinkHit, BacklinkRef, SearchHit, TagCount, UnlinkedMention } from '@amadeus-shared/ipc'
 import { parseMdMarks, type MdMark } from '@amadeus-shared/mdMarks'
 import type { VaultManager } from './vaultManager'
 
@@ -23,9 +25,13 @@ interface Entry {
   /** text 解开数字字符引用后的副本(与 text 逐行对齐):搜索 / 摘要 / 标签 / 双链读它,见 decodeCharRefs。 */
   plain: string
   lower: string
-  links: string[] // distinct outgoing [[link]] targets
+  links: string[] // distinct outgoing [[link]] targets(正文 + fm 属性值里的,代码里的不算)
   embeds: string[] // distinct raw `![[note#id]]` targets this note embeds
-  tags: string[]
+  tags: string[] // 正文 #标签 + fm `tags:`(L-14)
+  /** fm `aliases:`(L-13 补全 / L-16 未链接提及)。 */
+  aliases: string[]
+  /** fm 里值带 `[[ ]]` 的属性(C-19):反链逐处命中要把它们列成「属性」那一条。 */
+  fmLinks: FmLinkProp[]
   blocks: { id: string; content: string }[] // inline blocks this note owns
   /** fm `icon:` 的页面 emoji(树/标题展示);缺 = 无。 */
   icon?: string
@@ -160,6 +166,7 @@ export class VaultIndex {
       .filter((b) => b.id)
       .map((b) => ({ id: b.id!.toLowerCase(), content: b.content }))
     const title = (p.split(/[\\/]/).pop() ?? p).replace(/\.md$/i, '')
+    const meta = noteFmMeta(raw) // fm 的 tags / aliases / 链接属性(stripForIndex 已把 fm 剥掉,只能从原文取)
     return {
       path: p,
       title,
@@ -167,9 +174,11 @@ export class VaultIndex {
       text,
       plain,
       lower: plain.toLowerCase(),
-      links: parseWikiLinks(plain),
+      links: mergeCi(parseWikiLinks(plain), meta.links.flatMap((l) => l.targets)),
       embeds: parseEmbeds(raw), // raw `note#id` targets (matched note-scoped on demand)
-      tags: parseTags(plain),
+      tags: mergeCi(parseTags(plain), meta.tags),
+      aliases: meta.aliases,
+      fmLinks: meta.links,
       blocks,
       icon: parseFmIcon(raw),
     }
@@ -179,6 +188,13 @@ export class VaultIndex {
   pageIcons(): Record<string, string> {
     const out: Record<string, string> = {}
     for (const e of this.entries.values()) if (e.icon) out[e.path] = e.icon
+    return out
+  }
+
+  /** 全库 fm 别名(path → aliases;只含设置了的)。`[[` 补全按别名命中(L-13)。 */
+  pageAliases(): Record<string, string[]> {
+    const out: Record<string, string[]> = {}
+    for (const e of this.entries.values()) if (e.aliases.length) out[e.path] = e.aliases
     return out
   }
 
@@ -260,23 +276,32 @@ export class VaultIndex {
   }
 
   /** Resolve a `![[note#id]]` embed to its content + owning note (note-scoped by id). */
-  resolveBlock(target: string): { path: string; content: string; type: string } | null {
-    const { noteKey, id } = parseEmbedTarget(target)
+  resolveBlock(target: string, sourcePath?: string): { path: string; content: string; type: string } | null {
+    // `|别名` / `|宽度` 不参与解析(评审 L-15:`![[笔记|300]]` 原先整条拿去匹配 → 恒「嵌入丢失」)。
+    const { note, subpath } = splitNoteEmbed(target)
+    const bare = subpath ? `${note}#${subpath}` : note
+    // 被嵌笔记按**源笔记所在处**就近解析(同目录 → 源的 .fd 子笔记 → 全库,四级规则同 `[[链接]]`);
+    // 原先不带 sourcePath,同名笔记一律取全库第一篇 = 嵌错。笔记名为空(`![[#标题]]`)= 源笔记自己。
+    const pages = [...this.entries.keys()].sort()
+    const ownerPath = note ? resolvePageName(note, pages, sourcePath) : sourcePath && this.entries.has(sourcePath) ? sourcePath : null
+    const owner = ownerPath ? this.entries.get(ownerPath) : undefined
+    // ① v3 标记块 `![[笔记#3]]`(按 id,笔记名限域):先看就近解析到的那篇,再退回按名扫全库(与从前逐字一致)。
+    const { noteKey, id } = parseEmbedTarget(bare)
+    const own = owner?.blocks.find((x) => x.id === id)
+    if (owner && own) return { path: owner.path, content: own.content, type: 'markdown' }
     for (const e of this.entries.values()) {
       if (noteKey && e.key !== noteKey) continue
       const b = e.blocks.find((x) => x.id === id)
       if (b) return { path: e.path, content: b.content, type: 'markdown' }
     }
-    // 整篇笔记转写:`![[笔记名]]` 无 `#` 块锚 → 按名(四级规则,同 `[[链接]]`)解析到笔记,返回整篇正文
-    // (`text` 已剥 frontmatter/marker → 干净 md,交前端 markdown 块只读渲染)。
-    // ponytail: 被嵌笔记里的 `![[db]]`/画板/二次嵌入只作源码行渲染(块级重解析在 BlockHost,不在本层);
-    //           要活块级需满血多块渲染,现不值当。
-    if (!target.includes('#')) {
-      const notePath = resolvePageName(target, [...this.entries.keys()].sort())
-      const e = notePath ? this.entries.get(notePath) : undefined
-      if (e) return { path: e.path, content: e.text, type: 'markdown' }
+    // ② v4 素文件:`#标题` 只读切出那一节,`#^块` 只读解析已有的块锚(shared/noteEmbed)。
+    if (subpath) {
+      const content = owner ? sliceEmbedSubpath(owner.text, subpath) : null
+      return content != null && owner ? { path: owner.path, content, type: 'markdown' } : null
     }
-    return null
+    // ③ 整篇笔记转写:`text` 已剥 frontmatter/marker → 干净 md,交前端 markdown 块只读渲染。
+    // ponytail: 被嵌笔记里的 `![[db]]`/画板/二次嵌入只作源码行渲染(块级重解析在 BlockHost,不在本层)。
+    return owner ? { path: owner.path, content: owner.text, type: 'markdown' } : null
   }
 
   /** Notes that embed the given block (passed as its own `note#id`), for safe-delete warnings. */
@@ -362,9 +387,29 @@ export class VaultIndex {
     const out: BacklinkRef[] = []
     for (const e of this.entries.values()) {
       if (e.path === targetPath) continue
-      const hits = (l: string): boolean => resolvePageName(l, pages, e.path) === targetPath
-      if (!e.links.some(hits)) continue
-      out.push({ path: e.path, title: e.title, snippet: backlinkSnippet(e.plain, hits) })
+      const isMatch = (l: string): boolean => resolvePageName(l, pages, e.path) === targetPath
+      if (!e.links.some(isMatch)) continue
+      // 逐处命中(L-16):属性区的链接排最前(line 0),正文按行;摘录去掉 md 语法。
+      const hits: BacklinkHit[] = [
+        ...e.fmLinks.filter((l) => l.targets.some(isMatch)).map((l) => ({ line: 0, text: `${l.key}: ${plainSnippet(l.text)}` })),
+        ...backlinkHits(e.plain, isMatch),
+      ]
+      out.push({ path: e.path, title: e.title, snippet: hits[0]?.text ?? '', hits })
+    }
+    out.sort((a, b) => a.title.localeCompare(b.title))
+    return out
+  }
+
+  /** 提到目标页标题 / 别名、却没加 [[ ]] 的笔记(L-16 未链接提及)。代码、已有链接、URL 里的不算;fm 不参与。 */
+  unlinkedMentions(targetPath: string): UnlinkedMention[] {
+    const target = this.entries.get(targetPath)
+    if (!target) return []
+    const names = [target.title, ...target.aliases]
+    const out: UnlinkedMention[] = []
+    for (const e of this.entries.values()) {
+      if (e.path === targetPath) continue
+      const hits = mentionHits(e.plain, e.text, names)
+      if (hits.length) out.push({ path: e.path, title: e.title, hits })
     }
     out.sort((a, b) => a.title.localeCompare(b.title))
     return out
@@ -415,11 +460,11 @@ export class VaultIndex {
     return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
   }
 
+  /** 带该标签的笔记。嵌套标签按前缀(L-14,Obsidian 口径):查 `work` 也命中 `work/urgent`。 */
   pagesByTag(tag: string): string[] {
-    const k = tag.toLowerCase()
     const out: string[] = []
     for (const e of this.entries.values()) {
-      if (e.tags.some((t) => t.toLowerCase() === k)) out.push(e.path)
+      if (e.tags.some((t) => tagMatches(t, tag))) out.push(e.path)
     }
     return out.sort()
   }
@@ -439,17 +484,15 @@ function countNewlines(s: string, end: number): number {
   return n
 }
 
-/** The line containing the first [[link]] whose target satisfies `isMatch`(与 backlinks 同一解析判据,摘录引对重名)。 */
-function backlinkSnippet(text: string, isMatch: (target: string) => boolean): string {
-  const re = /\[\[([^\]\n]+)\]\]/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text))) {
-    if (!isMatch(linkTarget(m[1]))) continue
-    let start = text.lastIndexOf('\n', m.index)
-    start = start < 0 ? 0 : start + 1
-    let end = text.indexOf('\n', m.index)
-    if (end < 0) end = text.length
-    return text.slice(start, end).replace(/\s+/g, ' ').trim().slice(0, 160)
+/** 大小写不敏感去重合并(保首见写法与顺序)。 */
+function mergeCi(a: string[], b: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const x of [...a, ...b]) {
+    const k = x.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(x)
   }
-  return ''
+  return out
 }

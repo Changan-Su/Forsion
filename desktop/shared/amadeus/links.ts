@@ -26,8 +26,10 @@ export function linkTarget(inner: string): string {
   return s.trim()
 }
 
-/** Distinct, order-preserving wikilink targets found in markdown. */
+/** Distinct, order-preserving wikilink targets found in markdown.
+ *  代码(围栏 / 行内)里的 `[[x]]` 是示例文本,不是链接(docs/amadeus/links-and-properties.md;L-16):先 maskCode。 */
 export function parseWikiLinks(md: string): string[] {
+  md = maskCode(md)
   const re = new RegExp(WIKILINK_RE.source, WIKILINK_RE.flags)
   const out: string[] = []
   const seen = new Set<string>()
@@ -60,8 +62,10 @@ export function parseEmbeds(md: string): string[] {
   return out
 }
 
-/** Distinct, order-preserving #tags found in markdown (pure-numeric tokens are ignored). */
+/** Distinct, order-preserving #tags found in markdown (pure-numeric tokens are ignored).
+ *  代码里的 `#include`、`#!/bin/sh` 不是标签(L-14):先 maskCode。 */
 export function parseTags(md: string): string[] {
+  md = maskCode(md)
   const re = new RegExp(TAG_RE.source, TAG_RE.flags)
   const out: string[] = []
   const seen = new Set<string>()
@@ -75,6 +79,20 @@ export function parseTags(md: string): string[] {
     out.push(t)
   }
   return out
+}
+
+/** 标签归一(fm `tags:` 的值、查询串):去首尾空白与前导 `#`;不合 TAG_RE 字符集或纯数字 → null(口径同 parseTags)。 */
+export function normTag(raw: string): string | null {
+  const t = raw.trim().replace(/^#/, '')
+  if (!t || !/^[\p{L}\p{N}_/-]+$/u.test(t) || /^[0-9/]+$/.test(t)) return null
+  return t
+}
+
+/** 嵌套标签前缀匹配(Obsidian 口径,L-14):查 `work` 命中 `work` 与 `work/urgent`,不命中 `workshop`。大小写不敏感。 */
+export function tagMatches(tag: string, query: string): boolean {
+  const t = tag.toLowerCase()
+  const q = query.trim().replace(/^#/, '').replace(/\/+$/, '').toLowerCase()
+  return !!q && (t === q || t.startsWith(`${q}/`))
 }
 
 /** Normalized key for matching a page by name: basename, without .md, lowercased. */
@@ -162,6 +180,35 @@ export function mapOutsideFences(md: string, fn: (line: string) => string): stri
   return lines.join('\n')
 }
 
+/** maskCode 的填充字符:既非空白(不让 `` `x`#t `` 凭空多出「空白 + #」的标签)、也非字母数字(不把相邻标签续长)、
+ *  也不是 `[` `]`(不拼出链接)。 */
+export const CODE_MASK = '\u0001'
+
+/**
+ * 索引口径(L-14 / L-16):**配对的**围栏代码块整块置空行、行内代码逐字符换成 CODE_MASK —— 行数与列位都不变
+ * (行号 / 列号仍对得上原文)。代码里的 `#include`、`[[x]]` 从此不算标签、不算反链。
+ * 围栏配对与 mapOutsideFences 同一套(配不上对的开围栏当普通行);行内代码与 outsideCodeSpans 同一套。
+ * ponytail: 缩进代码块、跨行的行内代码不认(按行处理)—— 只多几条标签 / 反链,不落盘。
+ */
+export function maskCode(md: string): string {
+  if (!md.includes('`') && !md.includes('~~~')) return md
+  const lines = md.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const open = fenceOpen(lines[i])
+    if (open) {
+      let j = i + 1
+      while (j < lines.length && !fenceCloses(lines[j], open)) j++
+      if (j < lines.length) {
+        for (let k = i; k <= j; k++) lines[k] = ''
+        i = j
+        continue
+      }
+    }
+    if (lines[i].includes('`')) lines[i] = outsideCodeSpans(lines[i], (seg) => seg, (span) => CODE_MASK.repeat(span.length))
+  }
+  return lines.join('\n')
+}
+
 /**
  * Undo remark-stringify's escaping of plain-text `[[` (it emits `\[\[` for wikilinks that were
  * typed but not yet re-parsed into nodes — the index regex above then never matches, so freshly
@@ -234,8 +281,9 @@ export function refDecodable(cp: number): boolean {
 // micromark 的长度上限:十六进制 ≤6 位、十进制 ≤7 位,超了就不是字符引用。
 const NUMERIC_REF = /&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));/g
 
-/** 一行里行内代码(`` ` `` 串到同长 `` ` `` 串)之外的段交给 fn;没配上对的反引号按字面处理。 */
-export function outsideCodeSpans(line: string, fn: (seg: string) => string): string {
+/** 一行里行内代码(`` ` `` 串到同长 `` ` `` 串)之外的段交给 fn;没配上对的反引号按字面处理。
+ *  onCode(可选)= 行内代码段(含两端反引号)的改写,缺省逐字保留。 */
+export function outsideCodeSpans(line: string, fn: (seg: string) => string, onCode: (span: string) => string = (x) => x): string {
   let out = ''
   let last = 0
   let i = 0
@@ -254,7 +302,7 @@ export function outsideCodeSpans(line: string, fn: (seg: string) => string): str
       j += k
     }
     if (close < 0) { i += n; continue }
-    out += fn(line.slice(last, i)) + line.slice(i, close + n)
+    out += fn(line.slice(last, i)) + onCode(line.slice(i, close + n))
     last = i = close + n
   }
   return out + fn(line.slice(last))
@@ -283,6 +331,35 @@ export function decodeCharRefs(md: string): string {
     })
   // 围栏见 mapOutsideFences(只认配对的:在代码里多解几个只多几条搜索命中,状态错位则后文全不解)。
   return mapOutsideFences(md, (line) => (line.includes('&#') ? outsideCodeSpans(line, decode) : line))
+}
+
+/** `[[Name|alias]]` → alias;`[[Name#h]]` → `Name › h`(`#^id` 同);`[[Name]]` → Name。反链 / 提及摘录用。 */
+function wikiLabel(inner: string): string {
+  const bar = inner.indexOf('|')
+  if (bar >= 0 && inner.slice(bar + 1).trim()) return inner.slice(bar + 1).trim()
+  const base = (bar >= 0 ? inner.slice(0, bar) : inner).trim()
+  return base.replace(/\s*#\^?\s*/, ' › ').replace(/^ › /, '')
+}
+
+/**
+ * 反链 / 未链接提及的摘录(L-16):一行 markdown → 去掉语法的可读文本。**有损,只用于展示**。
+ * 剥:行首引用 / 列表 / 任务框 / 标题井号,`[[ ]]`(显示别名或「笔记 › 标题」)、md 链接与图片(留文字)、HTML 标签、
+ * `**` `__` `~~` `==` `*` `_` 强调、行内代码反引号、反斜杠转义、`%%注释%%`、行尾 `^块 id`。
+ */
+export function plainSnippet(line: string): string {
+  return line
+    .replace(/^\s*(?:>\s*)*(?:(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?|#{1,6}\s+)?/, '')
+    .replace(/!?\[\[([^\]\n]+)\]\]/g, (_m, inner: string) => wikiLabel(inner))
+    .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
+    .replace(/%%.*?%%/g, '')
+    .replace(/<\/?[A-Za-z][^>\n]*>/g, '')
+    .replace(/(\*\*|__|~~|==)(?=\S)(.+?)(?<=\S)\1/g, '$2')
+    .replace(/(^|[^\p{L}\p{N}*_])[*_](?=\S)(.+?)(?<=\S)[*_](?![\p{L}\p{N}*_])/gu, '$1$2')
+    .replace(/(`+)([^`]*?)\1/g, '$2')
+    .replace(/\\([\\`*_{}[\]()#+\-.!~|>=])/g, '$1')
+    .replace(/\s\^[A-Za-z0-9-]+\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /**

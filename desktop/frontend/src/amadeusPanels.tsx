@@ -7,12 +7,13 @@ import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
 import { decodeCharRefs, parseWikiLinks, resolvePageName } from '@amadeus-shared/links'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
-import { openNote } from './amadeusNav'
+import { openNote, revealTextWhenReady } from './amadeusNav'
 import { create } from 'zustand'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from './i18n'
 import { graphTopology } from '@amadeus/lib/localGraph'
+import { useWorkspace } from '@lcl/engine'
 
 registerMessages({
   'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
@@ -70,13 +71,20 @@ export function AmadeusSearchView() {
       if (!q) return
       // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
       const hit = Object.values(ps().blocks).find((b) => decodeCharRefs(b.content).toLowerCase().includes(q))
-      if (!hit) return
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-block-id="${hit.id}"]`)
-        if (!el) return
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        el.classList.add('amx-block-flash')
-        setTimeout(() => el.classList.remove('amx-block-flash'), 1300)
+        const el = hit ? document.querySelector(`[data-block-id="${hit.id}"]`) : null
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          el.classList.add('amx-block-flash')
+          setTimeout(() => el.classList.remove('amx-block-flash'), 1300)
+          return
+        }
+        // v4(评审 G4-01):正文不进 pageStore —— blocks 要么空,要么是 v4 文件打开途中被临时水合的 v3 快照
+        // (DOM 里没有 data-block-id)。不能拿「此刻有没有 unified 实例」当分流判据:openNote 在那份临时快照上
+        // 就已经放行了,实例可能还没挂上。一律交给实例的 revealText 接缝(自带重试;v3 笔记自然放弃)。
+        // 整串优先、切词兜底 —— 多词查询是「全部词都出现」即命中,整串未必连着出现(切法同 vaultIndex.searchTerms)。
+        const terms = q.split(/[\s\-_/.]+/).filter(Boolean)
+        void revealTextWhenReady(h.path, terms.length > 1 ? [q, ...terms] : [q])
       })
     })
   }
@@ -137,6 +145,22 @@ function highlight(snippet: string, q: string): ReactNode {
 
 // ─────────────────────────────── 标签(左栏 tab;#tag 计数 + 展开跳转) ───────────────────────────────
 
+/** 正文胶囊点击 → 标签视图定位到该标签(singleton 视图,经种子 store 解耦;n 自增以重触发同一标签)。L-14。 */
+export const useTagSeed = create<{ seed: { tag: string; n: number } | null; request(tag: string): void }>((set) => ({
+  seed: null,
+  request: (tag) => set((s) => ({ seed: { tag, n: (s.seed?.n ?? 0) + 1 } })),
+}))
+
+/** 打开(或聚焦)左栏标签视图并展开 tag(编辑器 `amadeus:open-tag` 事件的落点,见 amadeusOverlays)。 */
+export function openTagView(tag: string): void {
+  useTagSeed.getState().request(tag.replace(/^#/, ''))
+  const ws = useWorkspace.getState()
+  ws.showSideView('left', 'amadeus-tags')
+  const st = useWorkspace.getState()
+  const api = (st as unknown as { api?: { panels: Array<{ params?: Record<string, unknown> }> } }).api
+  if (st.leftVisible && !api?.panels.some((p) => p.params?.__type === 'amadeus-tags')) ws.openView('amadeus-tags', {}, 'left')
+}
+
 export function AmadeusTagsView() {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
@@ -144,6 +168,12 @@ export function AmadeusTagsView() {
   const [tags, setTags] = useState<TagCount[]>([])
   const [openTag, setOpenTag] = useState<string | null>(null)
   const [tagPages, setTagPages] = useState<string[]>([])
+  const seed = useTagSeed((s) => s.seed)
+  useEffect(() => { if (seed) setOpenTag(seed.tag) }, [seed])
+  // 定位的标签可能不在列表里(只有 `#work/urgent`,点的是父级 `#work`)→ 置顶补一行;列表按嵌套前缀查页面。
+  const shown: TagCount[] = openTag && !tags.some((tc) => tc.tag.toLowerCase() === openTag.toLowerCase())
+    ? [{ tag: openTag, count: tagPages.length }, ...tags]
+    : tags
 
   useEffect(() => {
     let live = true
@@ -163,21 +193,28 @@ export function AmadeusTagsView() {
       <div className="amx-panel-head">{t('amxpanel.tagsHead', { n: tags.length })}</div>
       {!vaultRoot ? (
         <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
-      ) : tags.length === 0 ? (
+      ) : shown.length === 0 ? (
         <div className="amx-panel-empty">{t('amxpanel.tagsEmpty')}</div>
       ) : (
         <div className="amx-list">
-          {tags.map((tc) => (
+          {shown.map((tc) => (
             <div key={tc.tag}>
               <button
                 className={`amx-list-item amx-tag${openTag === tc.tag ? ' active' : ''}`}
+                ref={openTag === tc.tag && seed ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                 onClick={() => setOpenTag((cur) => (cur === tc.tag ? null : tc.tag))}
               >
                 <span className="amx-tag-name">#{tc.tag}</span>
                 <span className="amx-tag-count">{tc.count}</span>
               </button>
               {openTag === tc.tag && tagPages.map((p) => (
-                <button key={p} className="amx-list-item amx-tag-page" onClick={() => void openNote(p)} title={p}>
+                <button
+                  key={p}
+                  className="amx-list-item amx-tag-page"
+                  // 打开后定位到这个标签第一次出现的地方(评审 G4-01「标签面板同」;标签只在 frontmatter 里时就停在文首)。
+                  onClick={() => void openNote(p).then(() => revealTextWhenReady(p, [`#${tc.tag}`], { tag: true }))}
+                  title={p}
+                >
                   {baseName(p)}
                 </button>
               ))}

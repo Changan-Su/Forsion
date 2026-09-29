@@ -35,6 +35,7 @@ import wechatRouter from './routes/wechat.js';
 import channelsRouter from './routes/channels.js';
 import inboxRouter from './routes/inbox.js';
 import ttsRouter from './routes/tts.js';
+import inlineRouter from './routes/inline.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { failStaleRuns } from './services/runStore.js';
@@ -104,6 +105,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(channelsRouter);
   dataRouter.use(inboxRouter);
   dataRouter.use(ttsRouter);
+  dataRouter.use(inlineRouter); // 正文生成式 AI(G3-07):POST /agent/inline
   dataRouter.use(remoteRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {

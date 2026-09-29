@@ -31,6 +31,8 @@ import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
+import { tableKeyPlugins } from './tableKeys'
+import { toggleTaskTr } from '../blocks/markdown/taskList'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -244,10 +246,21 @@ const enterCmd: Command = chain(
   enterKeepIndent,
 )
 
-/** Mod+Enter:引用内 = 块内换行;列表内 = 等同回车(拆项);其余 = 下方直接新建空段落(不拆分文本)。 */
+/** Mod+Enter:待办内 = 翻转勾选;引用内 = 块内换行;列表内 = 等同回车(拆项);其余 = 下方直接新建空段落(不拆分文本)。
+ *  待办那条是拍板 #3(K-11,对齐 Notion 的 Cmd+Enter):此前唯一的键盘路径是 ← ← Shift+← x Enter,
+ *  几乎无从发现。只认**最内层**列表项是待办(与鼠标点方框同一个 toggleTaskTr);普通列表照旧拆项,
+ *  Mod-L 仍是左对齐(不跟 Obsidian 抢那颗键)。待办包在引用/callout 里时,离光标更近的那层赢。 */
 const modEnterCmd: Command = (state, dispatch) => {
   const { $from } = state.selection
-  if (blockquoteDepth($from) != null) {
+  const li = listItemDepth($from)
+  const bq = blockquoteDepth($from)
+  if (li != null && (bq == null || li > bq) && $from.node(li).attrs.checked != null) {
+    const tr = toggleTaskTr(state, $from.pos)
+    if (!tr) return false
+    dispatch?.(tr.scrollIntoView())
+    return true
+  }
+  if (bq != null) {
     const br = state.schema.nodes.hardbreak
     if (!br) return false
     dispatch?.(state.tr.replaceSelectionWith(br.create(), false).scrollIntoView())
@@ -533,7 +546,11 @@ const blockSelectionTypingPlugin = $prose(
     }),
 )
 
+/** 与 prosemirror-keymap 判「Mod 是 Cmd 还是 Ctrl」同一口径(它按 navigator.platform)。 */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
+
 export const keyboardPlugins: MilkdownPlugin[] = [
+  tableKeyPlugins, // 表格回车族(K-10):必须排在下面的 Enter 链之前,见 tableKeys.ts
   blockSelectionTypingPlugin,
   wrapSelectionPlugin,
   $prose(() =>
@@ -543,7 +560,9 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       Backspace: backspaceCmd,
       'Mod-Backspace': modBackspaceCmd,
       Delete: chain(deleteUnfoldHeading, deleteSelectNextAtom),
-      'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom), // mac 习惯键,与 Delete 同一支
+      // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
+      // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
+      ...(IS_MAC ? { 'Ctrl-d': chain(deleteUnfoldHeading, deleteSelectNextAtom) } : {}),
       ArrowUp: arrowToAtom('up'),
       ArrowDown: arrowToAtom('down'),
     }),

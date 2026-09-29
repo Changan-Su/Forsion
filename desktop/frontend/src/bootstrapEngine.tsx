@@ -204,6 +204,11 @@ export function installEngine(): void {
   // ctx.tangu 的有无是在建 plugin context 那一刻定的。见 amadeus/plugins/tanguSeam.ts。
   if (PRODUCT.nativeFeatures === undefined || hasNativeFeature('tangu') || hasNativeFeature('automation')) installTanguProbe()
   if (window.amadeus || window.tangu?.unitPage) installAmadeusPlugins()
+  // 插件的 ctx.app.openSettings(插件层发窗口事件,这里转给应用层;口径同宿主深链)
+  window.addEventListener('forsion:open-settings', (e) => {
+    const target = (e as CustomEvent<unknown>).detail
+    if (typeof target === 'string' && target) useApp.getState().openSettings(target as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
+  })
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
   // 上面的同步策略跑在装载之前,若目标是某个用户 Space,那时它还没注册 → 装载完成后补定位。两种补法:
   //  · 固定启动 Space:走正常切换(此时已晚于 onReady,api 就绪),它会存出回退 Space 的布局并还原目标

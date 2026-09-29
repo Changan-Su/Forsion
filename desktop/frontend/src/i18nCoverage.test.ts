@@ -381,7 +381,6 @@ const ELECTRON_HAN_DEBT: Record<string, [count: number, reason: string]> = {
   'minitar.ts': [2, 'tar 解包的 Error 文案'],
   'remotesync/fsWebdav.ts': [2, 'WebDAV 同步的 Error 文案'],
   'asr.ts': [1, '云端转写失败的 Error 文案'],
-  'productsRegistry.ts': [1, '产物登记失败的 warn 文案(经 log 回调)'],
   'pty.ts': [1, '终端不可用的 Error 文案'],
   'remotesync/engine.ts': [1, '同步中止原因(带原因码前缀 remote-empty-suspicious)'],
   'remotesync/fsDropbox.ts': [1, 'OAuth 回调页的双语 HTML 正文'],

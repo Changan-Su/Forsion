@@ -17,16 +17,9 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { metadataSegment } from '../tools/fsPolicy.js';
 import { canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
+// 用哪个 git、剥哪些环境变量:与 runGit / gitTrust / gitActions 同一处(gitExec.ts;P1 分支与 main 各抽过一份同样的,合并时收成一份)
+import { gitExecutable, GIT_SCRUBBED_ENV } from './gitExec.js';
 
-/** Apple 的 /usr/bin/git 是 xcrun 垫片,每个私有沙箱缓存都可能起 xcodebuild —— 直接用开发者工具里的真 git(runGit 同款)。 */
-export function gitExecutable(): string {
-  return process.platform === 'darwin'
-    ? ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git'].find(existsSync) || 'git'
-    : 'git';
-}
-
-/** 这几个环境变量会把 git 整个指到别的仓去(GIT_DIR 泄进来时 `-C cwd` 形同虚设);引擎自己跑 git 时一律剥掉(同 desktop gitHistory.ts)。 */
-export const GIT_SCRUBBED_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_NAMESPACE'];
 /** 模型的 `git …` 继承引擎环境:这些变量在时,git 用的仓 / index / 配置不是下面按目录推出来的那份 → 分类器不认(unvetted)。 */
 const GIT_REDIRECT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT'];
 

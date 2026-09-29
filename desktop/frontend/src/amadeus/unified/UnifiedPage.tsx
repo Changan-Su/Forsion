@@ -9,7 +9,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote, MessageSquarePlus } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -35,19 +35,22 @@ import { askString } from '../components/askString'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
-import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedScopeLive } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
+import { Lock as LockIcon } from 'lucide-react'
+import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
 import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
+import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
@@ -60,19 +63,34 @@ import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn } from './columns'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
-import { reconcileTr } from './reconcileDiff'
+import { reconcileTr, type ReconcileChange } from './reconcileDiff'
+import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
+import { AgentChangeCapsule } from './AgentChangeCapsule'
+import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
+import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
+import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
+import type { TanguInlineAction } from '../plugins/tanguSeam'
+import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
+import { claimAgentWrite } from '../../stores/agentWriteLedger'
+import { askTanguQuote } from './askTangu'
+import { readTangu } from '../plugins/tanguSeam'
+import { usePluginStore } from '../plugins/pluginStore'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
+import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { noteLinkTarget } from '../blocks/markdown/linkHref'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
+import { createFoldMemory, remapFoldMemory } from './foldActions'
 import { registerMessages, translate, useI18n } from '../../i18n'
+import { registerFindProvider, textareaFindProvider } from '../../findInPage'
+import { pmFindProvider } from './findReplace'
 
 registerMessages({
   'unipage.upload.uploading': { zh: '上传中 {name}', en: 'Uploading {name}' },
@@ -115,6 +133,8 @@ registerMessages({
   'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
   'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
   'unipage.menu.delete': { zh: '删除', en: 'Delete' },
+  'unipage.lock.bar': { zh: '页面已锁定，防止误改。', en: 'This page is locked to prevent accidental edits.' },
+  'unipage.lock.unlock': { zh: '解锁', en: 'Unlock' },
 })
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
@@ -135,8 +155,10 @@ type BodyFocusReq = 'start' | 'end' | 'body-enter' | BodyCarry
 
 /** 标题回车的聚焦请求要跨「改名 → 实例随 key 重建」存活(重建清零一切组件态,只能挂模块级)。
  *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。
- *  at:没人认领的请求 10s 后作废 —— 否则下次打开同一篇时凭空执行一次(顶插空段、抢焦点)。 */
-let pendingBodyFocus: { path: string; req: BodyFocusReq; at: number } | null = null
+ *  at:没人认领的请求 10s 后作废 —— 否则下次打开同一篇时凭空执行一次(顶插空段、抢焦点)。
+ *  scope:发起改名的实例所属的 leaf(评审 G1-02 返修)。同一篇开在几个标签里时改名会让它们**全部**在新路径重挂,
+ *  只按路径认领的话谁先挂上谁拿走 —— 别的标签抢走发起标签的正文与选区(后台标签甚至凭空顶插一个空段)。 */
+let pendingBodyFocus: { path: string; scope: string | null; req: BodyFocusReq; at: number } | null = null
 
 const NOOP_KEYS = {
   insertAfter: () => {},
@@ -207,9 +229,11 @@ function flashCiteTip(r: DOMRect): void {
 /** 外部回灌 → 同实例最小差异事务:顶层块级对齐 + 块内字符级多段替换,选区 / 折叠随 mapping 保住;
  *  不进撤销栈(K-05)。算法与理由见 reconcileDiff.ts(评审 D-08)。
  *  恢复草稿(restoreDraft)也走 applyBody:同样不可撤销 —— 它是「装载一份内容」,被盖掉的那版已另存冲突副本。 */
-function applyMinimalDiff(view: EditorView, next: ProseNode): void {
-  const tr = reconcileTr(view.state, next)
-  if (tr) view.dispatch(tr)
+function applyMinimalDiff(view: EditorView, next: ProseNode, agent = false): void {
+  // agent = 这次外部改动是 Tangu 写的(G3-03):顺带交出每一处改动(新区间 + 旧片段),打标给 agentChanges 画出来。
+  const changes: ReconcileChange[] = []
+  const tr = reconcileTr(view.state, next, agent ? changes : undefined)
+  if (tr) view.dispatch(agent ? markAgentChanges(tr, view.state.doc, changes) : tr)
 }
 
 /** 保存/回灌管线的可变心脏(ref 持有,渲染无关)。 */
@@ -255,11 +279,20 @@ interface Pipe {
   /** 只读实例(公开分享页):writeNow / 生命周期 flush 在此短路。挂在 pipe 上而不是闭包读 prop ——
    *  writeFailures.test 把 writeNow 与 flush 两段源码切出来单独求值,闭包里的自由标识符会让它炸。 */
   readOnly: boolean
+  /** 本实例的草稿槽位(= 所属 leaf,见 writeSafety 的 draftKey;评审 G1-02 返修)。同样挂在 pipe 上(理由同 readOnly)。 */
+  slot: string | null
+  /** 同篇另一个实例替两边写的 fm 补丁(unifiedPatchFm 的 follow,G1-02 返修),多次 follow 累积。isPristine 只豁免
+   *  **这部分**:基线 fm 打上它恰好等于 pipe.fm → fm 这一半不算本实例的改动(否则本实例卸载冲洗 / CAS 让位时会拿
+   *  「旧正文 + 新 fm」抢着写,盖掉写者的字)。本实例自己的 fm 改动不在里面,照旧算改动(Codex 复核 P0:早先记成
+   *  「补丁后的整份 fm」,把本实例没落盘的 fm 修改一并豁免了,回灌随即用盘上版本整份换掉,既不保存也不留副本)。
+   *  回灌采纳盘上版本、本实例写成功后清掉。 */
+  peerPatch: Record<string, unknown> | null
 }
 
 interface HostApi {
-  /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。 */
-  applyBody: (stored: string) => boolean
+  /** 外部回灌正文(stored md)→ 同实例最小差异事务;编辑器未挂载返回 false。
+   *  agent = 改动出自 Tangu(G3-03):只有回灌路径会传,恢复草稿那条绝不传(那不是「Tangu 修改」)。 */
+  applyBody: (stored: string, agent?: boolean) => boolean
   /** 当前 doc 立即序列化为 stored md(编辑器未挂载 = null)。flush 路径必用:listener 的
    *  markdownUpdated 有 200ms 防抖,pipe.body 可能落后最后几击(Codex A4:快打字后立刻
    *  改名/关页,不强制序列化就丢字)。 */
@@ -290,7 +323,7 @@ interface HostApi {
   revealSelection: () => void
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false, onAskTangu, aiMenu, onAiPrompt }: {
   path: string
   pageDir: string
   body: string
@@ -311,6 +344,12 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onCard: (view: EditorView) => void
   /** 只读:PM `editable=false`、不挂键盘/粘贴/slash/工具栏(MilkdownInner 同一道门)。 */
   readOnly?: boolean
+  /** 选区工具栏「问 Tangu」(G3-04);缺 = 宿主没有侧栏对话,不出按钮。 */
+  onAskTangu?: (view: EditorView) => void
+  /** 选区工具栏「AI ▾」(G3-07);缺 = 宿主做不了正文 AI。 */
+  aiMenu?: { items: ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
+  /** `/ai`(G3-07):消费掉 '/ai' 之后在光标处开 AI 面板。 */
+  onAiPrompt?: (view: EditorView) => void
 }): ReactElement {
   const [, getInstance] = useInstance()
   const store = useScopedPageStore()
@@ -321,16 +360,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   finalFlushRef.current = { onFinalFlush, skipFinalFlush }
   const onCardRef = useRef(onCard)
   onCardRef.current = onCard
+  const onAiPromptRef = useRef(onAiPrompt)
+  onAiPromptRef.current = onAiPrompt
   useEffect(() => {
     apiRef.current = {
       applySlashItem: (it) => applySlashRef.current(it),
-      applyBody: (stored) => {
+      applyBody: (stored, agent) => {
         let ok = false
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
           if (!doc) return
-          applyMinimalDiff(view, doc as ProseNode)
+          applyMinimalDiff(view, doc as ProseNode, agent)
           adoptOrigins(view.state.doc, doc as ProseNode) // D-18:保留下来的块改记到新盘上文本的来源
           ok = true
           if (probe) probe.reconciled = ((probe.reconciled as number) ?? 0) + 1
@@ -586,6 +627,11 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       getInstance()?.action((ctx) => onCardRef.current(ctx.get(editorViewCtx)))
       return
     }
+    if (item.scaffold === S.ai) {
+      // `/ai`(G3-07):'/ai' 已被 consume 掉,光标留在原处 → 宿主在这里开 AI 面板(先问一句指令,留空 = 续写)。
+      getInstance()?.action((ctx) => onAiPromptRef.current?.(ctx.get(editorViewCtx)))
+      return
+    }
     if (item.run) {
       // 插件注册的「先干活再插入」项。插件是 new Function 装载的第三方 JS,返回值一律当外部输入校验
       // (与 v3 同一套闸:非字符串会毒化文档,NUL/控制字符会污染笔记文件)。
@@ -741,6 +787,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         attachmentPagePath={path}
         extraPlugins={extraPlugins}
         readOnly={readOnly}
+        onAskTangu={onAskTangu}
+        aiMenu={aiMenu}
       />
       {dbPick && (
         <OverlayPortal><DbLinkPicker
@@ -775,6 +823,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   focusSignal: boolean
 }): ReactElement {
   const { t } = useI18n()
+  const spell = useNotesSpellcheck() // 标题与正文同一个拼写检查开关(G4-07)
   const current = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
   const shown = UNTITLED_RE.test(current) ? '' : current
   const [val, setVal] = useState(shown)
@@ -838,6 +887,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
         <input
           ref={ref}
           className="amx-title-input"
+          spellCheck={spell}
           value={val}
           placeholder="New Page"
           onChange={(e) => setVal(e.target.value)}
@@ -882,9 +932,11 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
 export interface UnifiedHistory {
   undo: () => boolean
   redo: () => boolean
+  /** 缩进 / 提升一档(= Tab / Shift-Tab)。挂在同一只句柄上,是因为宿主的移动端胶囊只握这一只(G2-06)。 */
+  indent?: (dir: 1 | -1) => boolean
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, compact = false, readOnly = false, hardBreaks = false }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, onUnlock, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -903,6 +955,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 撤销 / 重做的出口(G2-05)。v4 不进 pageStore,宿主按 activePage 门控的 `myPs().undo()` 在这里是死键;
    *  宿主(NoteView)给本 leaf 自己的 ref,不按路径全局查找。卸载时清空。 */
   historyRef?: { current: UnifiedHistory | null }
+  /** 本 leaf 自己的文件写口(评审 G1-02):宿主的 OS 拖入 / 上传按钮直接递给**这个**实例(存附件 + 光标处插 `![[base]]`),
+   *  不按路径全局查找 —— 同篇双开时按路径找到的是另一个标签:指示线画在这边,文件却插进那边、随即被这边的写入盖掉。
+   *  返回 false = 本实例不接(只读 / 已退休)。卸载时清空。 */
+  filesRef?: { current: ((files: File[]) => boolean) | null }
+  /** 锁定页面(评审 C-07,拍板 #15):宿主按本机记忆把自己的笔记锁成只读时给;只读下显示「已锁定」条与解锁键。
+   *  分享页 / 收件箱这类天生只读的宿主不给 —— 那里没有「解锁」可言。锁定态由宿主放进本组件的 key(pipe.readOnly
+   *  只在首次渲染写入,换锁定态必须重挂)。 */
+  onUnlock?: () => void
   /** 只读实例(公开分享页 /share/<token>,2026-09-07):同一套渲染(块/分栏/卡片/画布/嵌入/chrome),
    *  但**一个字节都不写**:PM editable=false,writeNow/schedule/setFm/改名/生命周期 flush 全部短路,
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
@@ -915,18 +975,31 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
   const vaultRoot = scoped.getState().vaultRoot
+  /** 所属 leaf(不在面板里 = null):同篇多开时的实例身份 —— 草稿槽位、改名聚焦的认领、openNote 落点都认它(G1-02)。 */
+  const scope = useContext(PageScopeCtx)
+  const activeScope = useActivePageScope()
   // 源码模式是全局开关(`</>`):只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
   // 什么也不会落盘,切走即丢,等于假编辑(Codex 09-11 P1)。
   const globalMode = useUiOverlay((s) => s.editorMode)
   const mode = readOnly ? 'wysiwyg' : globalMode
   const { t } = useI18n()
+  // 源码模式与可视模式同一个拼写检查开关(G4-07:此前源码恒关、可视恒开,两种模式口径相反)。
+  const spellcheck = useNotesSpellcheck()
 
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerPatch: null }
   }
   const pipe = pipeRef.current
+  /** 最近一次被用户用到的时刻(评审 G1-02):焦点 / 指针进入本实例、或所属 leaf 成为活动面板时记一笔。
+   *  lifecycle 按它给同路径实例排序 —— 按路径的操作(插模板 / 大纲 / 跳转 / 树行拖入 / fm 补丁)落到最近用过的那个。 */
+  const lastActive = useRef(0)
+  const touchActive = (): void => { lastActive.current = performance.now() }
+  useEffect(() => {
+    // 切标签只激活 leaf、未必把焦点给编辑器(命令面板插模板就是这个形态):活动面板本身也算「正在用」。
+    if (scope != null && scope === activeScope) touchActive()
+  }, [scope, activeScope])
   // 属性面板里还没失焦的草稿(C-02):落盘冲洗(卸载 / beforeunload / 换库 / 退出握手)先把它们提交进 pipe.fm。
   const [propDrafts] = useState(() => new Set<() => void>())
   const flushPropDrafts = (): void => { for (const f of [...propDrafts]) f() }
@@ -1040,7 +1113,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const v = layer.getView()
       return !!v && (dir === 'undo' ? pmUndo : pmRedo)(v.state, v.dispatch)
     }
-    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo') }
+    const indent = (dir: 1 | -1): boolean => {
+      const v = layer.getView()
+      return !pipe.readOnly && !!v && layer.indent(v, dir)
+    }
+    const h: UnifiedHistory = { undo: () => step('undo'), redo: () => step('redo'), indent }
     historyRef.current = h
     return () => { if (historyRef.current === h) historyRef.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1166,7 +1243,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
   const [bodyFocus, setBodyFocus] = useState<BodyFocusReq | null>(() => {
     const p = pendingBodyFocus
-    if (p?.path === path) {
+    if (p?.path === path && p.scope === scope) {
       pendingBodyFocus = null
       return Date.now() - p.at < 10_000 ? p.req : null
     }
@@ -1179,13 +1256,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const outgoingCarry = useRef<BodyCarry | null>(null)
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
-  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
+  // cell:右键单元格打开时指针下的那一格(K-10 表格区的锚格;打开那一刻记下,浮层一出来就盖住那个点)。
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; cell?: number | null } | null>(null)
   const onBlocksDeletedRef = useRef<(content: Fragment) => void>(() => {})
   // 文档模式卡片拖拽的层级上下文(2026-08-31)。layer 是 useMemo([]) 的终身单例,而 pipe 随
   // path 换新 —— 闭包必须经 ref 现读(与 onBlocksDeletedRef 同一条纪律),否则捏着首篇的 fm。
   const cardDragCtxRef = useRef<{ tree: () => Record<string, unknown>; detach: (anchors: string[]) => void; minted: (anchors: string[]) => void }>({ tree: () => ({}), detach: () => {}, minted: () => {} })
   const layer = useMemo(() => createBlockLayer({
-    onMenu: (at) => setBlockMenu(at),
+    onMenu: (at) => setBlockMenu({ ...at, cell: tableCellAtPoint(layer.getView(), at.x, at.y) }),
     onBlocksDeleted: (content) => onBlocksDeletedRef.current(content),
     canvasTree: () => cardDragCtxRef.current.tree(),
     onCardDetach: (anchors) => cardDragCtxRef.current.detach(anchors),
@@ -1217,6 +1295,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 「stored ⊆ owned」判据 fail-closed,画布派生冻结到重开)。与 makeCard 的 ownedCards.add 同源。
     minted: (anchors) => { for (const a of anchors) pipe.ownedCards.add(a) },
   }
+  /** 折叠本机记忆的键(B-13):插件是稳定引用,智库 / 路径经 ref 现读。 */
+  const foldWhere = useRef({ vaultRoot, path })
+  foldWhere.current = { vaultRoot, path }
+  // 正文 AI(G3-07):入口可用性与空格唤起的回调经 ref 现读(editorPlugins 只建一次)。
+  const canAiRef = useRef(false)
+  const aiSpaceRef = useRef<(view: EditorView) => void>(() => {})
+  // Agent 改动呈现(G3-03):插件状态 → 胶囊的 N / 当前第几处。回调经 ref 现读(editorPlugins 只建一次)。
+  const [agentView, setAgentView] = useState<{ count: number; index: number }>({ count: 0, index: 0 })
+  const agentStateRef = useRef<(st: AgentChangesState) => void>(() => {})
+  agentStateRef.current = (st) => {
+    const index = st.current == null ? 0 : st.changes.findIndex((c) => c.id === st.current) + 1
+    setAgentView((v) => (v.count === st.changes.length && v.index === index ? v : { count: st.changes.length, index }))
+  }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -1247,8 +1338,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createCardActiveDeco(),
       // 文档模式的层级缩进档位(同一份 pipe.fm 闭包;tree 变了要补一笔空事务推醒,见下面的 effect)。
       ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
+      // Tangu 改了这篇 → 装饰 + 胶囊(G3-03)。装饰与旧片段只在插件状态里,不进序列化。
+      ...createAgentChanges(agentStateRef),
+      // 正文 AI(G3-07):目标区间随编辑映射 + 空行按空格唤起(缺省关、IME 守卫,见 inlineAi.ts)。
+      ...createInlineAi({ spaceTrigger: () => aiSpaceTriggerEnabled() && canAiRef.current, onSpace: aiSpaceRef }),
       ...headingFoldPlugins,
       ...listFoldPlugins,
+      ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
       // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
       ...(hardBreaks ? hardBreakRemark : []),
@@ -1302,6 +1398,123 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (r) multi(view, r)
     else if (view.state.selection instanceof NodeSelection) single(view, view.state.selection)
     view.focus()
+  }
+  /** 「问 Tangu」(评审 G3-04):选区 / 块的文字 + 最近标题的锚点交给侧栏对话(挂成引用,不发送)。
+   *  笔记一个字不动 —— 不铸 `^id`,锚点只到标题(askTangu.ts)。入口只在宿主给了 askInChat(= 注册了侧栏
+   *  对话)时出现:纯 Amadeus 壳、automation-only 档案、台架都不给,不画一个点了没反应的按钮。 */
+  const canAskTangu = !readOnly && !!readTangu()?.askInChat
+  const askTangu = (view: EditorView, from: number, to: number): void => {
+    const quote = askTanguQuote(view.state.doc, from, to, path)
+    if (quote) readTangu()?.askInChat?.(quote)
+  }
+  // ── 正文 AI(评审 G3-07,拍板 #13)───────────────────────────────────────────────
+  // 入口:选区工具栏「AI ▾」(内置动作 + 插件 registerSelectionAction)、`/ai`、空行按空格(缺省关)。不进右键菜单。
+  // 宿主能做才出现(探针给了 complete);结果先进 InlineAiPanel 预览,确认后才写(applyAiResult:一个事务、纯 md)。
+  const canAi = !readOnly && !!readTangu()?.complete
+  canAiRef.current = canAi
+  const pluginSelActions = usePluginStore((s) => s.selectionActions)
+  const [aiPanel, setAiPanel] = useState<null | { key: number; x: number; y: number; top: number; title: string; hasSelection: boolean; askFirst: boolean; action: TanguInlineAction | 'prompt'; plugin?: string }>(null)
+  const AI_ACTIONS: TanguInlineAction[] = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom']
+  const aiMenuItems: ToolbarAiItem[] = [
+    ...AI_ACTIONS.map((a) => ({ id: a, label: t(`inlineai.action.${a}`) })),
+    ...pluginSelActions.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}`, label: o.item.title, plugin: true })),
+  ]
+  /** 开面板:记目标区间(选区 / 光标一点),面板贴在目标下方。kind = 内置动作 / `plugin:<插件>:<项>` / 'prompt'(光标处先问一句)。 */
+  const openAi = (view: EditorView, kind: string): void => {
+    if (!canAi) return
+    const sel = view.state.selection
+    const cursor = kind === 'prompt'
+    const from = cursor ? sel.head : sel.from
+    const to = cursor ? sel.head : sel.to
+    if (!cursor && to <= from) return
+    setAiTarget(view, from, to)
+    const a = view.coordsAtPos(from)
+    const b = view.coordsAtPos(to)
+    const plugin = kind.startsWith('plugin:') ? kind.slice('plugin:'.length) : undefined
+    const action = (plugin || cursor ? (cursor ? 'prompt' : 'custom') : kind) as TanguInlineAction | 'prompt'
+    const title = plugin
+      ? (pluginSelActions.find((o) => `${o.pluginId}:${o.item.id}` === plugin)?.item.title ?? t('inlineai.label'))
+      : cursor ? t('inlineai.label') : t(`inlineai.action.${kind}`)
+    setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin })
+  }
+  aiSpaceRef.current = (view) => openAi(view, 'prompt')
+  /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
+  const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal) => {
+    const view = layer.getView()
+    const target = view ? aiTargetOf(view) : null
+    if (!view || !target) throw new Error(translate('unipage.toast.insertPointLost'))
+    const selMd = target.to > target.from
+      ? (hostApi.current?.serializeMd(view.state.doc.slice(target.from, target.to).content) ?? target.text)
+      : ''
+    if (panel.plugin) {
+      const owned = usePluginStore.getState().selectionActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin)
+      if (!owned) throw new Error(translate('unipage.toast.insertPointLost'))
+      const md = await owned.item.run({ text: target.text, markdown: selMd, pagePath: path })
+      if (md == null || md === '') return { text: '' }
+      if (typeof md !== 'string') throw new Error(translate('unipage.plugin.notString', { type: typeof md }))
+      if (Array.from(md).some((c) => c.charCodeAt(0) < 32 && c !== String.fromCharCode(9) && c !== String.fromCharCode(10))) {
+        throw new Error(translate('unipage.plugin.controlChars'))
+      }
+      return { text: md }
+    }
+    const probe = readTangu()
+    if (!probe?.complete) throw new Error(translate('inlineai.unavailable'))
+    const { before, after } = aiContextOf(view.state.doc, target.from, target.to)
+    const action: TanguInlineAction = panel.action === 'prompt' ? (instruction ? 'custom' : 'continue') : panel.action
+    return probe.complete({
+      action,
+      ...(instruction ? { instruction } : {}),
+      ...(selMd ? { selection: selMd } : {}),
+      ...(before ? { before } : {}),
+      ...(after ? { after } : {}),
+      title: path.split('/').pop()!.replace(/\.md$/i, ''),
+      ...(action === 'translate' ? { language: translateTargetOf(target.text) } : {}),
+    }, { signal, onDelta })
+  }
+  const closeAi = (): void => {
+    setAiPanel(null)
+    const view = layer.getView()
+    if (!view) return
+    clearAiTarget(view)
+    view.focus()
+  }
+  /** 确认写入:结果按 markdown 经本编辑器的 parser 解析,一个事务落进文档(普通用户编辑:进撤销栈、走防抖 + CAS 保存)。 */
+  const applyAi = (how: AiApply, text: string): void => {
+    const view = layer.getView()
+    const target = view ? aiTargetOf(view) : null
+    const content = hostApi.current?.parseMd(text)
+    setAiPanel(null)
+    if (!view || !target || !content) {
+      if (view) clearAiTarget(view)
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
+      return
+    }
+    const used = applyAiResult(view, target, content, how)
+    view.focus()
+    syncFromEditor()
+    schedule()
+    if (how === 'replace' && used === 'below') {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('inlineai.targetChanged') } }))
+    }
+  }
+  /** 胶囊「逐处查看」:停到下一处(循环),把那一处滚到阅读位置(装饰带 data-agent-change,定位与大纲跳转同一套)。 */
+  const onAgentReview = (): void => {
+    const view = layer.getView()
+    if (!view) return
+    const c = nextAgentChange(view)
+    const el = c ? bodyRef.current?.querySelector(`[data-agent-change="${c.id}"]`) : null
+    if (el instanceof HTMLElement) revealBlockAtTop(el, 48)
+  }
+  /** 胶囊「全部撤回」:一次普通的用户编辑(进撤销栈),照常走防抖 + CAS 保存链。用户已改过的那几处不撤。 */
+  const onAgentRevert = (): void => {
+    const view = layer.getView()
+    if (!view) return
+    const { skipped } = revertAgentChanges(view)
+    syncFromEditor()
+    schedule()
+    if (skipped) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('agentchg.skipped', { n: String(skipped) }) } }))
+    }
   }
   const turnInto = (trig: Trigger): void => withSelectedNode((view, sel) => {
     // applyTrigger 作用在光标所在文本块:先把光标落进节点首个文本块,再走 v3 同一套转换引擎。
@@ -1373,7 +1586,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。 */
   const isPristine = (): boolean => {
     const base = splitFm(pipe.lastSaved)
-    if (base.fmText !== pipe.fm) return false
+    // 同篇另一个实例正替两边写的 fm 补丁不算本实例的改动(G1-02 返修,见 Pipe.peerPatch)—— 只豁免那一份补丁。
+    if (base.fmText !== pipe.fm && (pipe.peerPatch == null || patchFm(base.fmText, pipe.peerPatch) !== pipe.fm)) return false
     if (base.body === pipe.body) return true
     if (layoutLineOf(pipe.fm) != null || canvasLineOf(pipe.fm) != null) return false
     const canon = hostApi.current?.canonical(base.body)
@@ -1399,7 +1613,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
     if (!pipe.retired) {
       pipe.stashed = composeFm(pipe.fm, pipe.body)
-      stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved)
+      stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved, pipe.slot)
     }
     if (!pipe.failed) {
       pipe.failed = true
@@ -1433,13 +1647,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
     // 只删**本实例存的**那份(别的会话留下、恢复条还在等用户决定的草稿不碰)。
     if (pipe.stashed != null && (written == null || pipe.stashed === written || composeFm(pipe.fm, pipe.body) === written)) {
-      clearDraft(vaultRoot, path, pipe.stashed)
+      clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
       pipe.stashed = null
     }
   }
 
   /** 写成功:收掉「未保存」;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
   const noteWriteOk = (written: string): void => {
+    pipe.peerPatch = null // 自己写成功:盘上 fm 已是本实例的,别人的补丁记录作废
     settleUnsaved(written)
     announceUnifiedWrite(path, pipe)
   }
@@ -1666,10 +1881,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 结构键行变没变要在换 pipe.fm **之前**判(Codex P0-4)。
         const structChanged = layoutLineOf(fmText) !== layoutLineOf(pipe.fm) || canvasLineOf(fmText) !== canvasLineOf(pipe.fm)
         pipe.fm = fmText // fold 闭包现读 pipe.fm:此行必须先于 applyBody 的重 parse(advisor)
+        pipe.peerPatch = null // 采纳了盘上版本:同篇写者替我们写的那笔已经在里面了
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
           pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
-          if (hostApi.current?.applyBody(body)) {
+          // 归属(G3-03):写类工具在途或刚结束、目标就是这篇、且盘上正文核得上这次写入 → 按 Tangu 的改动画出来。
+          // 每次写入只认领一次(Codex 复核 P0):之后同路径的别的改动不再算 Tangu 的。
+          // 查不到 = 别人改的 / 云同步 / 外部编辑器 —— 照旧静默回灌。
+          const agent = !pipe.readOnly && claimAgentWrite(vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}/${path}` : path, raw)
+          if (hostApi.current?.applyBody(body, agent)) {
             pipe.body = body
           } else {
             pipe.body = body
@@ -1722,7 +1942,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 就是一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。改名 IPC 窗口里打的字由 doRename 按新路径
       // 补写;本实例此前写失败存下的那份也一并清掉(只删自己存的,别的会话留的不碰)。
       if (pipe.retired) {
-        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed)
+        if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
         pipe.stashed = null
         return
       }
@@ -1744,7 +1964,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // D-04:写是异步的,切走 / 关窗后未必来得及完成,也可能失败 —— 先同步把草稿存进本机,写成功再删
       // (noteWriteOk);下次打开同一篇若草稿 ≠ 盘上内容,提示恢复,绝不自动覆盖。
       pipe.stashed = text
-      stashDraft(vaultRoot, path, text, pipe.lastSaved)
+      stashDraft(vaultRoot, path, text, pipe.lastSaved, pipe.slot)
       void writeNow()
     }
     const onUnload = (e: BeforeUnloadEvent): void => {
@@ -1802,6 +2022,21 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
+  /** OS 文件进本实例(存附件 + 光标处插 `![[base]]`)。只读 / 已退休 / 编辑器不在 = 不接(false),宿主据此不另找实例。 */
+  const insertFilesHere = (files: File[]): boolean => {
+    if (pipe.readOnly || pipe.retired || pipe.dead || !hostApi.current) return false
+    hostApi.current.insertFiles(files)
+    return true
+  }
+  // 本 leaf 自己的文件写口交给宿主(G1-02:拖入 / 上传不按路径全局找实例)。
+  useEffect(() => {
+    if (!filesRef) return
+    const f = (files: File[]): boolean => insertFilesHere(files)
+    filesRef.current = f
+    return () => { if (filesRef.current === f) filesRef.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesRef])
+
   // 生命周期登记(Codex P0):换库前 flushAllScopes 要等我们落盘;删除/改名/移动要能叫停本实例
   // (防抖写复活刚删/刚移走的文件)。
   useLayoutEffect(() => {
@@ -1809,6 +2044,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       path,
       owner: pipe, // 同窗同篇通知时排除自己(announceUnifiedWrite)
       peerWrote: () => reconcileNow(), // 同窗另一实例刚写盘:与外部改动同一条回灌路径
+      // ── 同篇多开的路由依据(G1-02):按路径的操作落到最近用过的实例;fm 补丁交给手里有待写的那个写。 ──
+      scope,
+      lastActive: () => lastActive.current,
+      dirty: () => {
+        if (pipe.readOnly || pipe.retired || pipe.dead) return false
+        syncFromEditor() // 防抖窗里的最后几击也算
+        return composeFm(pipe.fm, pipe.body) !== pipe.lastSaved && !isPristine()
+      },
       flush: (strict = false) => {
         if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
         syncFromEditor()
@@ -1819,18 +2062,26 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         return writeNow(strict)
       },
-      insertFiles: (files) => {
-        hostApi.current?.insertFiles(files)
-      },
+      insertFiles: (files) => insertFilesHere(files),
       // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
-      patchFm: (patch) => {
+      patchFm: (patch, follow = false) => {
         if (pipe.readOnly || pipe.retired || pipe.dead) return null
+        if (follow) {
+          // G1-02 返修:同篇另一个实例在写这一笔 —— 只并进本实例的 fm(chrome / 源码草稿跟上),不写;
+          // 记进 peerPatch(只记外来这一份,本实例自己的 fm 差异不混进去):写者落盘后本实例经 peerWrote 回灌对齐,
+          // 期间卸载 / CAS 让位都不拿旧正文抢着写;本实例若另有自己的改动,照旧按冲突策略处理。
+          pipe.fm = patchFm(pipe.fm, patch)
+          pipe.peerPatch = { ...(pipe.peerPatch ?? {}), ...patch }
+          setFmVer((v) => v + 1)
+          syncSrcDraft()
+          return Promise.resolve()
+        }
         setFm(patch)
         return pipe.chain // setFm 刚把这发写排上链:链尾 = 它落定(恒不 reject)
       },
       // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
       fmNow: () => foreignFmText(pipe.fm),
-      insertMarkdown: (md, where) => (pipe.retired ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      insertMarkdown: (md, where) => (pipe.retired || pipe.readOnly ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
       // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
       bodyNow: () => pipe.body,
       headings: () => {
@@ -1888,6 +2139,29 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         }
         return true
       },
+      revealText: (needles, opts) => {
+        const v = layer.getView()
+        if (!v) return false
+        const hit = findTextHit(v.state.doc, needles, !!opts?.tag)
+        if (!hit) return false // 命中只在标题 / 属性里,或这篇还没装上正文:不动(调用方据此重试 / 放弃)
+        // 顺序是死的(G4-01 / C-03):① 先展开藏着命中的会话折叠 —— 两个折叠插件的光标守卫会把放进隐藏区的
+        // 选区弹回标题;② focus;③ 选中命中文字;④ 显式贴顶滚动。
+        unfoldToReveal(v, hit.from)
+        v.focus()
+        v.dispatch(v.state.tr.setSelection(TextSelection.create(v.state.doc, hit.from, hit.to)))
+        // 命中在折起的 callout 里(那是 md 标记,展开 = 写盘,点搜索结果不许动文件)时文本块没有盒子:
+        // 退到最近一个看得见的祖先(callout 本身)去亮,至少把用户带到那一块。
+        let el: Node | null = v.nodeDOM(hit.block)
+        while (el instanceof HTMLElement && el !== v.dom) {
+          const r = el.getBoundingClientRect()
+          if (r.width || r.height) break
+          el = el.parentElement
+        }
+        if (!(el instanceof HTMLElement) || el === v.dom) return true
+        revealBlockAtTop(el)
+        if (opts?.flash) flashCiteTip(el.getBoundingClientRect())
+        return true
+      },
       retire: (movedTo) => {
         dropCiteTip() // 视图退休时把还挂着的落点覆盖片撤掉(它住在 body 上,不随组件卸载)
         // 被挪走 / 改名(评审 G2-03:别处改名经 onPathGone → remapScopePaths 到这里;本端树上移动同理):退休之后
@@ -1897,7 +2171,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         if (movedTo && !pipe.retired && !pipe.readOnly && !pipe.dead) {
           syncFromEditor()
           const text = composeFm(pipe.fm, pipe.body)
-          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved)
+          if (text !== pipe.lastSaved && !isPristine()) stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
         }
         pipe.retired = true
         if (pipe.timer) {
@@ -1915,24 +2189,32 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // D-04 草稿恢复:上次卸载冲洗没写成(磁盘满 / 无权限 / 离线 / 窗口先关了)时存在本机的那份。
   // 只提示,**绝不自动覆盖**盘上内容;草稿 = 盘上内容(其实写成了)时静默删掉。
+  // 同篇多开时草稿按实例分槽(G1-02 返修):先认本 leaf 的那份,见 writeSafety.readDraft。别的槽位只认领主人已不在的
+  // (leaf 已关 / 没有活实例)—— 活槽归它自己的标签,这里绝不拿来丢弃或恢复(Codex 复核 P1)。
   const [draft, setDraft] = useState<UnsavedDraft | null>(() => {
     if (readOnly) return null
-    const d = readDraft(vaultRoot, path)
+    const slotLive = (s: string | null): boolean => (s == null ? unifiedScopeLive(path, null) : hasPageScope(s) || unifiedScopeLive(path, s))
+    const d = readDraft(vaultRoot, path, pipe.slot, slotLive)
     if (!d) return null
     if (d.text === (diskRaw ?? initial)) {
-      clearDraft(vaultRoot, path)
+      clearDraft(vaultRoot, path, undefined, d.slot)
       return null
     }
     return d
   })
   const discardDraft = (): void => {
-    clearDraft(vaultRoot, path)
+    if (draft) clearDraft(vaultRoot, path, undefined, draft.slot)
     setDraft(null)
   }
   const restoreDraft = (): void => {
     const d = draft
     setDraft(null)
     if (!d || readOnly || pipe.retired) return
+    // 别的槽位留下的(那个标签已关 / 重启换了 leaf):认领 = 挪进本实例的槽位,之后的删除 / 失败重存都按本槽走。
+    if ((d.slot ?? null) !== pipe.slot) {
+      clearDraft(vaultRoot, path, d.text, d.slot)
+      stashDraft(vaultRoot, path, d.text, pipe.lastSaved, pipe.slot)
+    }
     syncFromEditor()
     const disk = pipe.lastSaved
     const local = composeFm(pipe.fm, pipe.body)
@@ -1964,6 +2246,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       return writeNow()
     }
     probe.fmState = () => ({ fm: pipe.fm, body: pipe.body })
+    probe.setFm = (patch: Record<string, unknown>) => setFm(patch, false) // 仪器造「本实例有未落盘的 fm 改动」(防抖写)
     probe.view = () => layer.getView() // 仪器直驱 PM 事务(分栏 spike/检查用)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probe])
@@ -2006,6 +2289,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       const newPath = await amadeus.renamePageFile(path, next)
       if (newPath !== path) {
         remapNoteViewMemory(vaultRoot, path, newPath)
+        remapFoldMemory(vaultRoot, path, newPath)
         pipe.retired = true // 本实例退休:再写旧路径 = 复活幽灵文件
         // 改名 IPC 窗口里刚打的字不该丢(Codex P0):按新路径补一发,随 key 重建被读回。
         // IPC await 期间可能又打了字(200ms 监听窗)→ 补写前再拉平一次(Codex 终审 P0)。
@@ -2014,7 +2298,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const writtenBody = pipe.body // 同步取:await 期间监听器还会改 pipe.body
         if (text !== pipe.lastSaved) {
           // 补写失败不能吞(Codex 0b):存成新路径草稿 + 提示,新实例打开时会提示恢复。
-          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved); toastSaveFailed(newPath, e) })
+          await amadeus.writeTextFile(newPath, text).catch((e) => { stashDraft(vaultRoot, newPath, text, pipe.lastSaved, pipe.slot); toastSaveFailed(newPath, e) })
         }
         // D-17:聚焦请求跨重建带给新实例 —— 必须在 remapScopePaths 之前落下(生产里它同步广播,标签当场改指、
         // 新实例可能在下面的 await 期间就挂上)。「进入正文」还没执行(源码模式等编辑器不在)→ 交给新实例执行这一次;
@@ -2024,11 +2308,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const pending = bodyFocusRef.current
         const view = layer.getView()
         if (focusKind && pending != null && typeof pending !== 'object') {
-          pendingBodyFocus = { path: newPath, req: pending, at: Date.now() }
+          pendingBodyFocus = { path: newPath, scope, req: pending, at: Date.now() }
         } else if (view?.hasFocus()) {
           const carry: BodyCarry = { place: 'restore', body: writtenBody, doc: view.state.doc.toJSON(), anchor: view.state.selection.anchor, head: view.state.selection.head }
           outgoingCarry.current = carry
-          pendingBodyFocus = { path: newPath, req: carry, at: Date.now() }
+          pendingBodyFocus = { path: newPath, scope, req: carry, at: Date.now() }
         }
         retireUnifiedPath(path, 'file', newPath) // 别的标签开着同一篇:一并停写旧路径(它们未落盘的字存成新路径的草稿,G2-03)
         remapScopePaths(path, newPath, 'file')
@@ -2092,6 +2376,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       el.style.height = `${el.scrollHeight}px`
     }
   }, [mode, srcDraft, srcText])
+  // 页内查找替换(C-18):可编辑实例把本篇注册成 replace provider —— 所见即所得映射成 PM 事务(findReplace.ts),
+  // 源码模式走 textarea(textareaFindProvider,保原生撤销栈)。只读实例不注册 = 查找条不给替换行。
+  useEffect(() => {
+    if (readOnly) return
+    if (mode === 'source') {
+      const ta = srcTaRef.current
+      return ta ? registerFindProvider(textareaFindProvider(ta)) : undefined
+    }
+    const el = bodyRef.current
+    return el ? registerFindProvider(pmFindProvider(el, () => layer.getView())) : undefined
+  }, [readOnly, mode, layer])
 
   return (
     <>
@@ -2115,7 +2410,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         />
       )}
       {fullCanvas ? null : (
-      <div className="amx-doc unified-page" data-unified-path={path}>
+      <div className="amx-doc unified-page" data-unified-path={path} onFocusCapture={touchActive} onPointerDownCapture={touchActive}>
         <UnifiedTitle
           compact={compact}
           path={path}
@@ -2131,6 +2426,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         {!compact && <PropsDraftFlushContext.Provider value={propDrafts}><AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
           readOnly={readOnly}
+          notePath={path}
           onCommit={(yaml) => {
             pipe.fm = setForeignFm(pipe.fm, yaml)
             setFmVer((v) => v + 1)
@@ -2139,6 +2435,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             void writeNow()
           }}
         /></PropsDraftFlushContext.Provider>}
+        {/* 锁定条(C-07):锁着的笔记一眼看得出为什么打不了字,解锁就在手边。样式复用写盘状态条。 */}
+        {readOnly && onUnlock && (
+          <div className="mk-notice unified-savebar" data-lock="on" role="status">
+            <LockIcon size={15} />
+            <div className="mk-notice-body"><span>{t('unipage.lock.bar')}</span></div>
+            <button type="button" className="btn sm" onClick={onUnlock}>{t('unipage.lock.unlock')}</button>
+          </div>
+        )}
         {/* 写盘状态条(D-04):写失败 → 常驻「未保存」+ 立即重试;上次没写成的草稿 → 恢复 / 丢弃。
             样式复用全局 `.mk-notice` 提示条(base.css),本处只在 amadeus-host.css 里改宽度与外距。 */}
         {!readOnly && saveFailed && (
@@ -2172,7 +2476,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           ref={srcTaRef}
           className="amx-source"
           value={srcDraft ?? srcText}
-          spellCheck={false}
+          spellCheck={spellcheck}
+          onFocus={touchActive}
           onChange={(e) => {
             const v = e.target.value
             setSrcDraft(v)
@@ -2191,7 +2496,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-bare
-          onFocusCapture={() => setFocusedBlockApply(stableApply)}
+          onFocusCapture={() => { touchActive(); setFocusedBlockApply(stableApply) }}
+          onPointerDownCapture={touchActive}
         >
           {/* 模式钮(AFFiNE 同位:页面右上)。整篇零画布数据时也照常显示 —— 画布是任意笔记随时
               可用的能力,不是某种文件类型的特权;点进去只是换视角,不写盘(见 toggleCanvas)。 */}
@@ -2248,10 +2554,22 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 }}
                 onCard={makeCard}
                 readOnly={readOnly}
+                onAskTangu={canAskTangu ? (view) => askTangu(view, view.state.selection.from, view.state.selection.to) : undefined}
+                aiMenu={canAi ? { items: aiMenuItems, onPick: (id, view) => openAi(view, id) } : undefined}
+                onAiPrompt={canAi ? (view) => openAi(view, 'prompt') : undefined}
               />
             </MilkdownProvider>
           </CanvasStage>
           {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
+          {!readOnly && agentView.count > 0 && (
+            <AgentChangeCapsule
+              count={agentView.count}
+              index={agentView.index}
+              onReview={onAgentReview}
+              onRevert={onAgentRevert}
+              onKeep={() => { const v = layer.getView(); if (v) keepAgentChanges(v) }}
+            />
+          )}
         </div>
       )}
       <LinkHoverCard
@@ -2265,20 +2583,60 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           </div>
         </OverlayPortal>
       )}
+      {aiPanel && canAi && (
+        <OverlayPortal>
+          <InlineAiPanel
+            key={aiPanel.key}
+            x={aiPanel.x}
+            y={aiPanel.y}
+            anchorTop={aiPanel.top}
+            title={aiPanel.title}
+            hasSelection={aiPanel.hasSelection}
+            askFirst={aiPanel.askFirst}
+            run={runAi(aiPanel)}
+            onApply={applyAi}
+            onClose={closeAi}
+            editorEl={bodyRef.current}
+          />
+        </OverlayPortal>
+      )}
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
+            {canAskTangu && (
+              <>
+                {/* 块级 AI 入口排首位(Notion ⋮⋮ 的 Ask AI 同位)。不走 withBlocks:那条收尾会把焦点拽回编辑器,
+                    而这里焦点该留给侧栏输入框(引用落地后它自己 focus)。 */}
+                <button data-act="ask" onClick={() => {
+                  setBlockMenu(null)
+                  const view = layer.getView()
+                  if (!view) return
+                  const r = layer.topRangeOf(view)
+                  const sel = view.state.selection
+                  if (r) askTangu(view, r.from, r.to)
+                  else if (sel instanceof NodeSelection) askTangu(view, sel.from, sel.to)
+                }}>
+                  <MessageSquarePlus size={13} /> {t('unipage.menu.askTangu')}
+                </button>
+                <div className="ubm-sep" />
+              </>
+            )}
             <div className="ubm-label">{t('unipage.menu.turnInto')}</div>
-            <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
-            <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> {t('unipage.menu.bullet')}</button>
-            <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
-            <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
-            <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
-            <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+            {/* 文字类转换对整张表静默无效(K-10):表格上不列出,换成下面的表格区;「卡片」对表格照常可用。 */}
+            {!isTableSelected(layer.getView()) && (
+              <>
+                <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
+                <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
+                <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> {t('unipage.menu.bullet')}</button>
+                <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
+                <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
+                <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
+                <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
+              </>
+            )}
             {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
             {(() => {
               const view = layer.getView()
@@ -2295,6 +2653,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 </button>
               )
             })()}
+            {isTableSelected(layer.getView()) && (
+              <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
+            )}
             <div className="ubm-sep" />
             <button onClick={() => withSelectedNode((view, sel) => {
               splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
@@ -2314,30 +2675,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 <Undo2 size={13} /> {t('unipage.menu.backToDoc')}
               </button>
             )}
-            <button onClick={() => withBlocks(
-              // 跨块选区:整批复制(AFFiNE 的 Duplicate 也是「只选半行也复制整块」)。范围可能盖到
-              // 整卡(topRangeOf 对卡内选区爬升到卡边界)—— 与单卡支同款:铸新锚 + 进归属集合
-              // (漏登记 = 首次派生落盘后归属判据 fail-closed,派生冻结;C89b 修前红)。
-              (view, r) => {
-                const { content, minted } = mintCardCopies(view.state.doc, view.state.doc.slice(r.from, r.to).content)
-                view.dispatch(view.state.tr.insert(r.to, content).scrollIntoView())
-                for (const a of minted) pipe.ownedCards.add(a)
-              },
-              (view, sel) => {
-                // ⚠️ 画布卡片必须换新锚再复制(Codex P0-6):原样插入会得到两个 anchor=c1,派生写出
-                // 重复 ref,下次打开 parseCanvasJson 判歧义**整键作废** —— 全部画布卡一起失效。
-                if (sel.node.type.name === 'amadeusCanvasCard') {
-                  const anchor = freshAnchorId(view.state.doc)
-                  const copy = sel.node.type.create({ ...sel.node.attrs, anchor, x: Number(sel.node.attrs.x) + 40, y: Number(sel.node.attrs.y) + 40 }, sel.node.content)
-                  view.dispatch(view.state.tr.insert(sel.to, copy).setMeta('amxCanvas', true))
-                  pipe.ownedCards.add(anchor)
-                  syncFromEditor()
-                  schedule()
-                  return
-                }
-                view.dispatch(view.state.tr.insert(sel.to, sel.node))
-              },
-            )}>
+            {/* 与 Mod-D 同一份(blockLayer.duplicate,B-12):跨块选区整批(AFFiNE 的 Duplicate 也是「只选半行
+                也复制整块」)、块选中复制该节点。画布卡(含跨块选区盖到的整卡)一律当场铸新锚并经 onCardsMinted
+                进归属集合 —— 原样插入 = 两个同锚卡、整个 canvas 键作废(Codex P0-6);漏登记 = 派生冻结(C89b)。
+                菜单这条再立刻拉平一次派生 + 排保存(原单卡支的做法),键盘那条走编辑器 onChange 的常规链。 */}
+            <button onClick={() => {
+              setBlockMenu(null)
+              const view = layer.getView()
+              if (!view) return
+              if (layer.duplicate(view)) {
+                syncFromEditor()
+                schedule()
+              }
+              view.focus()
+            }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
             <button className="danger" onClick={() => withBlocks(

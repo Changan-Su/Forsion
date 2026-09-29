@@ -15,9 +15,10 @@ import { VaultIndex } from './fs/vaultIndex'
 import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
+import { externalCreations } from '../productTrust'
 import { effectivePluginId } from '../../shared/products'
 import { isDevLoaded, readDevLoads } from '../devLoadStore'
-import { builtinPluginIds, lockedPluginIds } from '../builtinPlugins'
+import { builtinPluginIds, bundleOff, bundleRestartPending, lockedPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
@@ -591,7 +592,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
     const loads = readDevLoads(forsionHomeDir())
     for (const [pid, grant] of Object.entries(loads)) {
-      const product = await getProduct(projectsRootDir(), pid).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
+      // 原地加入的外部插件项目也在造物里:同一份经目录身份核过的登记(productTrust),否则授权过的外部插件永远加载不出来
+      const product = await getProduct(projectsRootDir(), pid, externalCreations(forsionHomeDir())).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
       // 按目录身份(dev+ino)核,不比路径:项目文件夹改了名授权照旧;同 id 的 sidecar 搬进别的文件夹不算。
       if (product && isDevLoaded(loads, product)) { products.push(product); authorizedPluginId.set(product.id, grant.pluginId) }
     }
@@ -775,7 +777,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           blocked: blocked ?? undefined,
           bundle,
           preinstalled: builtinPluginIds().has(id) || undefined, // 随 App 播种的捆绑包(electron/builtinPlugins.ts)
-          locked: lockedPluginIds().has(id) || undefined, // 其中带主进程半身的(Forsion Extend):不给启停开关
+          // 其中带主进程半身的(Forsion Extend):开关管的是下次开机装不装那一半(桌面配置 disabledBundles),拨了要重启
+          ...(lockedPluginIds().has(id) ? { locked: true, bundleOff: bundleOff(id), restartPending: bundleRestartPending(id) } : {}),
         })
       } catch {
         /* skip malformed plugin */

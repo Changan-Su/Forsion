@@ -1,5 +1,7 @@
 // 三个自定义行内标记(下划线 / 文字色 / 背景色),落盘为 Obsidian 可渲染的 HTML:
 //   <u>x</u> / <span style="color:X">x</span> / <mark style="background:X">x</mark>
+// 另有三个无属性的语义标签(I-17):<kbd>x</kbd> / <sub>x</sub> / <sup>x</sup> —— 原先各被拆成开、合两个不可编辑的
+// html 原子,现在折叠成可编辑的 mark。**只认小写、无属性**的写法:大小写或属性一变,往返就写不回原字节,那些照旧留原子。
 // 仓库首个 schema mark。难点在“解析回来”:remark 把行内 HTML 拆成开合两个 html 兄弟节点
 // (见 tmp/remark-roundtrip 探针),逐节点 runner 无法配对 → 自建 remark 桥:
 //   parse 侧:transformer 用栈把 [<tag>,…,</tag>](含嵌套)折叠成单个带 children 的 mdast 节点;
@@ -14,6 +16,11 @@ import type { MarkType } from '@milkdown/kit/prose/model'
 const U = 'amadeusU'
 const FG = 'amadeusFg'
 const BG = 'amadeusBg'
+const KBD = 'amadeusKbd'
+const SUB = 'amadeusSub'
+const SUP = 'amadeusSup'
+/** 无属性语义标签:字面 `<tag>` / `</tag>`(只认小写,见文件头)→ mdast 类型。 */
+const PLAIN_TAGS = new Map<string, string>([['kbd', KBD], ['sub', SUB], ['sup', SUP]])
 
 // mdast 节点是动态形状(remark AST),这层统一按 any 处理,不值得为它铺一套精确类型。
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -30,6 +37,9 @@ function openTag(n: MdNode): Folded | null {
   if (n?.type !== 'html' || typeof n.value !== 'string') return null
   const s = n.value.trim()
   if (/^<u>$/i.test(s)) return { type: U }
+  const plain = /^<([a-z]+)>$/.exec(s)
+  const plainType = plain && PLAIN_TAGS.get(plain[1])
+  if (plainType) return { type: plainType }
   // `(?:[^"]*;\s*)?color:` 要求 color 起一条声明(串首或分号后)→ 不误吃 border-color/background-color(Codex M4)。
   let m = s.match(/^<span\s+style\s*=\s*"(?:[^"]*;\s*)?color\s*:\s*([^;"]+)[^"]*"\s*>$/i)
   if (m) {
@@ -50,7 +60,8 @@ function closeTag(n: MdNode): string | null {
   if (/^<\/u>$/i.test(s)) return U
   if (/^<\/span>$/i.test(s)) return FG
   if (/^<\/mark>$/i.test(s)) return BG
-  return null
+  const plain = /^<\/([a-z]+)>$/.exec(s)
+  return (plain && PLAIN_TAGS.get(plain[1])) || null
 }
 
 // 把一层 children 里的 <tag>…</tag> 折叠成 mark 节点(栈式)。三条硬约束(Codex):
@@ -60,13 +71,46 @@ function closeTag(n: MdNode): string | null {
 //  · 未闭合的 real 帧 → 撤销折叠,还原成 [原始<open> 字面, …已收 children] —— 不丢开标签、不吞内容(L1)。
 const FOLD_DEPTH_CAP = 16
 type Frame = { tgt: MdNode[]; type: string | null; kind: 'real' | 'phantom' | 'literal'; raw: MdNode; node: MdNode }
-function foldTags(children: MdNode[]): MdNode[] {
+const PLAIN_TYPES = new Set(PLAIN_TAGS.values())
+/** 行内内容的根(一段的 phrasing 从这里起):同型嵌套按这一层整段判。 */
+const PHRASING_ROOTS = new Set(['paragraph', 'heading', 'tableCell'])
+/**
+ * 这段里(含加粗 / 链接等子层)出现**同型嵌套**的 kbd/sub/sup 类型。上面的幽灵帧对 u/span/mark 是既定降级(内层并入外层),
+ * 但 `<kbd>a<kbd>b</kbd>c</kbd>` 一旦折成 mark,编辑该段别处就整段写成 `<kbd>abc</kbd>`,内层标签丢了(Codex 复核)。
+ * 这三种是 I-17 新接的,不背那条既定降级:同型嵌套的类型在这一段里**不折叠**,开合标签照旧是原子 —— 与接入前逐字一致。
+ */
+function nestedPlainTypes(nodes: MdNode[]): Set<string> {
+  const depth = new Map<string, number>()
+  const out = new Set<string>()
+  const walk = (list: MdNode[]): void => {
+    for (const n of list) {
+      const open = openTag(n)?.type
+      if (open && PLAIN_TYPES.has(open)) {
+        const d = (depth.get(open) ?? 0) + 1
+        depth.set(open, d)
+        if (d > 1) out.add(open)
+        continue
+      }
+      const close = closeTag(n)
+      if (close && PLAIN_TYPES.has(close)) {
+        depth.set(close, Math.max(0, (depth.get(close) ?? 0) - 1))
+        continue
+      }
+      if (Array.isArray(n?.children)) walk(n.children)
+    }
+  }
+  walk(nodes)
+  return out
+}
+function foldTags(children: MdNode[], literalTypes: Set<string> = new Set()): MdNode[] {
   const rootTgt: MdNode[] = []
   const stack: Frame[] = [{ tgt: rootTgt, type: null, kind: 'real', raw: null, node: null }]
   const top = (): Frame => stack[stack.length - 1]
   for (const n of children) {
-    const open = openTag(n)
-    const close = closeTag(n)
+    const open0 = openTag(n)
+    const open = open0 && !literalTypes.has(open0.type) ? open0 : null
+    const close0 = closeTag(n)
+    const close = close0 && !literalTypes.has(close0) ? close0 : null
     if (open) {
       const depth = stack.length - 1
       const sameTypeOpen = stack.some((f) => f.kind === 'real' && f.type === open.type)
@@ -84,7 +128,10 @@ function foldTags(children: MdNode[]): MdNode[] {
       const f = stack.pop() as Frame
       if (f.kind === 'literal') top().tgt.push(n) // 字面 close 配字面 open
     } else {
-      if (Array.isArray(n?.children)) n.children = foldTags(n.children)
+      if (Array.isArray(n?.children)) {
+        const lit = PHRASING_ROOTS.has(n.type) ? new Set([...literalTypes, ...nestedPlainTypes(n.children)]) : literalTypes
+        n.children = foldTags(n.children, lit)
+      }
       top().tgt.push(n)
     }
   }
@@ -126,6 +173,9 @@ export function inlineHtmlMarksPlugin(this: any) {
       [U]: htmlWrap(() => '<u>', '</u>'),
       [FG]: htmlWrap((n: MdNode) => `<span style="color:${n.color}">`, '</span>'),
       [BG]: htmlWrap((n: MdNode) => `<mark style="background:${n.bg}">`, '</mark>'),
+      [KBD]: htmlWrap(() => '<kbd>', '</kbd>'),
+      [SUB]: htmlWrap(() => '<sub>', '</sub>'),
+      [SUP]: htmlWrap(() => '<sup>', '</sup>'),
     },
   })
   return (tree: MdNode): void => {
@@ -153,6 +203,31 @@ export const underlineSchema = $markSchema('amadeusUnderline', () => ({
     },
   },
 }))
+
+/** `<kbd>` / `<sub>` / `<sup>`:无属性 mark,解析 / 序列化与下划线同形。 */
+function plainTagSchema(id: string, tag: string, mdType: string) {
+  return $markSchema(id, () => ({
+    parseDOM: [{ tag }],
+    toDOM: () => [tag, 0],
+    parseMarkdown: {
+      match: (node) => node.type === mdType,
+      runner: (state, node, markType) => {
+        state.openMark(markType)
+        state.next(node.children)
+        state.closeMark(markType)
+      },
+    },
+    toMarkdown: {
+      match: (mark) => mark.type.name === id,
+      runner: (state, mark) => {
+        state.withMark(mark, mdType)
+      },
+    },
+  }))
+}
+export const kbdSchema = plainTagSchema('amadeusKbd', 'kbd', KBD)
+export const subSchema = plainTagSchema('amadeusSub', 'sub', SUB)
+export const supSchema = plainTagSchema('amadeusSup', 'sup', SUP)
 
 // AFFiNE theme v2 高亮色 → 语义名(亮色 hex 落盘保 Obsidian 可渲染;in-app 暗色靠 data-hl/data-hlc
 // 语义名走 styles.css 的 [data-mode='dark'] 覆盖)。与 InlineToolbar 色板同源,改一处必须三处同步。

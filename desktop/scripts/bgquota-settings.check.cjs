@@ -47,26 +47,18 @@ async function main() {
   const navCard = await page.locator('#special-historian-tab').evaluate((e) => ({ h: Math.round(e.getBoundingClientRect().height), bg: getComputedStyle(e).backgroundColor })) // open() 选中的是 Muse,Historian 这张是未选中的卡面
   const block = page.locator('.special-bgquota')
   const text = await block.textContent()
-  check('说明写清额外赠送、份额与计入模型', text.includes('相当于你额度的 15%') && text.includes('Luna Lite'))
-  check('两轴剩余按精确比例', text.includes('剩余 13%') && text.includes('剩余 60%'))
-  check('低于 15% 的那条换警示色', await block.locator('[data-axis="daily"] em[data-low]').count() === 1 && await block.locator('[data-axis="weekly"] em[data-low]').count() === 0)
+  // 2026-09-28:剩余量、「用 AI 额度继续」开关与转入挪进「Forsion 云端 → 额度与积分」(Extend 画的页,测试在 Extend 仓);这里只留说明 + 跳转
+  check('说明写清计入模型,并指向额度与积分', text.includes('Luna Lite') && text.includes('额度与积分'))
   check('跟随云端时不提示「别的模型」', !text.includes('不计入后台额度'))
+  check('账号级那几样(剩余 / 开关 / 转入)已不在 Muse 页', await block.locator('[role="switch"]').count() === 0 && !text.includes('+10%') && !/剩余 \d/.test(text))
   if (shot) await block.screenshot({ path: path.join(out, 'bgquota-light.png') })
-
-  await block.getByRole('switch', { name: '用完后改用主额度继续' }).click()
-  await page.waitForFunction(() => document.querySelector('.special-bgquota [role="switch"]')?.getAttribute('aria-checked') === 'true')
-  check('「用主额度继续」开关立即生效', true)
-
-  await block.getByRole('button', { name: '+10%' }).click()
-  check('转入需要二次确认', await block.getByRole('button', { name: '再点确认' }).isVisible())
-  await block.getByRole('button', { name: '再点确认' }).click()
-  await block.getByText('已转入，本周期有效').waitFor()
-  const converted = await page.evaluate(() => window.__bgHarness.converted)
-  check('确认后按 10% 转入并刷新余量', converted.length === 1 && converted[0] === 10 && (await block.textContent()).includes('剩余 48%'), converted)
-  check('账号级操作不弄脏引擎设置的草稿', (await page.locator('.special-save').textContent()).includes('修改后保存'))
+  await block.getByRole('button', { name: '打开额度与积分' }).click()
+  const opened = await page.evaluate(() => window.__bgHarness.opened)
+  check('「打开额度与积分」跳到 Forsion 云端 → 额度与积分', opened.includes('forsion/fx:forsion-extend:quota'), opened)
+  check('账号级跳转不弄脏引擎设置的草稿', (await page.locator('.special-save').textContent()).includes('修改后保存'))
 
   await open('?other')
-  check('Muse 显式选了别的模型 → 提示会走主额度', (await page.locator('.special-bgquota').textContent()).includes('Muse 当前用的是 Opus 5.5，不计入后台额度'))
+  check('Muse 显式选了别的模型 → 提示会走 AI 额度', (await page.locator('.special-bgquota').textContent()).includes('Muse 当前用的是 Opus 5.5，不计入后台额度'))
 
   await page.setViewportSize({ width: 420, height: 1100 })
   const narrow = await page.locator('.special-bgquota').evaluate((el) => {

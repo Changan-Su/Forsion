@@ -12,6 +12,12 @@
 //  K4 对照:嵌入上方插一段 → 照常渲染(这一路旧版就没坏)
 //  K5 拆除仍然生效:整段删掉嵌入 → 嵌入 DOM 归零且旧根真的卸了;撤销 → 新根重新渲染出内容(持有计数不许把根「钉死」)
 //
+//  —— 跨笔记嵌入的目标(评审 L-15:`|x` / `#标题` / `#^块` 一律「嵌入丢失」、不按源目录就近解析、丢失壳没有「创建」)——
+//  K6 交给 resolveEmbed 的目标剥掉了 `|300`,并带上 sourcePath = 本篇(`![[Embedded|300]]` 直接渲染出正文)
+//  K7 丢失壳:笔记本身不存在(`![[Nope]]`)才有「创建」,点了直接确认创建「Nope」、落在本篇之下;笔记在、只是
+//     小节找不到(`![[Embedded#Sec]]`,台架的 resolveEmbed 只认整篇)不给「创建」
+//  K8 只读实例(&uro,分享页形态)的丢失壳不给「创建」
+//
 // 用法:npm run check:embedkeep(= node scripts/e2e-editor.cjs --check=embed-keep;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
@@ -36,10 +42,10 @@ const record = (name, ok, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-async function open(browser, seed) {
+async function open(browser, seed, flags = '') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
-  await p.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+  await p.goto(`${URL}?upage${flags}&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await p.waitForSelector(PM, { timeout: 120000 })
   await p.waitForFunction((t) => [...document.querySelectorAll('.unified-embed')].some((e) => e.textContent.includes(t)), EMBED_TEXT, { timeout: 20000 })
   await p.waitForTimeout(300)
@@ -132,6 +138,48 @@ async function main() {
     const fresh = await p.evaluate(() => { const d = document.querySelector('.unified-embed'); return !!d && d !== window.__oldEmbed })
     record('K5 整段删掉嵌入 → 嵌入 DOM 归零、旧根已卸;撤销 → 新根重新渲染', gone.length === 0 && oldBodyKids === 0 && fresh && alive(e),
       `after-delete=${JSON.stringify(gone)} oldBodyKids=${oldBodyKids} fresh=${fresh} after-undo=${JSON.stringify(e)}`)
+    await p.close()
+
+    // K6–K8(L-15)
+    const TARGETS = '# T\n\n![[Embedded|300]]\n\n![[Embedded#Sec]]\n\n![[Nope]]\n'
+    p = await open(browser, TARGETS)
+    await p.evaluate(() => {
+      const up = window.__upage
+      window.__embedCalls = []
+      const orig = window.amadeus.resolveEmbed
+      window.amadeus.resolveEmbed = (...a) => { window.__embedCalls.push(a); return orig(...a) }
+      window.__confirmed = null
+      up.pageStore.setState({
+        pages: ['Embedded.md', 'Unified.md'],
+        confirmWikiCreate: async () => { window.__confirmed = up.pageStore.getState().pendingWikiCreate },
+        linkGraphVersion: (up.pageStore.getState().linkGraphVersion ?? 0) + 1, // 让嵌入按新 spy 重解析一遍
+      })
+    })
+    await p.waitForTimeout(800)
+    const calls = await p.evaluate(() => window.__embedCalls)
+    const want = [['Embedded', 'Unified.md'], ['Embedded#Sec', 'Unified.md'], ['Nope', 'Unified.md']]
+    record('K6 resolveEmbed 收到剥掉 |300 的目标 + sourcePath=本篇',
+      want.every((w) => calls.some((c) => c[0] === w[0] && c[1] === w[1])) && !calls.some((c) => String(c[0]).includes('|')),
+      JSON.stringify(calls))
+    const shells = await p.evaluate(() => [...document.querySelectorAll('.unified-embed')].map((e) => ({
+      missing: !!e.querySelector('.embed-missing'), create: !!e.querySelector('.embed-create'), text: e.textContent.replace(/\s+/g, ' ').slice(0, 40),
+    })))
+    const nope = shells.find((x) => x.text.includes('Nope'))
+    const sec = shells.find((x) => x.text.includes('Embedded#Sec'))
+    await p.click('.embed-create')
+    await p.waitForTimeout(200)
+    const conf = await p.evaluate(() => window.__confirmed)
+    record('K7 笔记不存在才给「创建」,点了直接确认创建 Nope(落在本篇之下);小节找不到不给',
+      !!nope?.create && !!sec?.missing && !sec?.create && conf?.name === 'Nope' && conf?.sourcePath === 'Unified.md',
+      JSON.stringify({ shells, conf }))
+    await p.close()
+
+    p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+    await p.goto(`${URL}?upage&uro&useed=${encodeURIComponent(TARGETS)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+    await p.waitForSelector(PM, { timeout: 120000 })
+    await p.waitForFunction(() => document.querySelectorAll('.embed-missing').length >= 1, null, { timeout: 20000 })
+    const ro = await p.evaluate(() => ({ missing: document.querySelectorAll('.embed-missing').length, create: document.querySelectorAll('.embed-create').length }))
+    record('K8 只读实例的丢失壳不给「创建」', ro.missing >= 1 && ro.create === 0, JSON.stringify(ro))
     await p.close()
   } finally {
     await browser.close()

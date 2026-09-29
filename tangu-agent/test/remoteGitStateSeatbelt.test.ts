@@ -30,6 +30,7 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
 import { hostSandboxBackend } from '../src/sandbox/hostSandbox.js';
 import { configFile } from '../src/core/tanguHome.js';
+import { repoConfigRisks, trustRepo } from '../src/services/gitTrust.js';
 
 const USER = 'u1';
 const REMOTE = { via: 'tunnel', marked: true };
@@ -82,6 +83,9 @@ beforeAll(async () => {
   writeFileSync(join(repo, 'f.txt'), 'a');
   git('add', 'f.txt');
   git('commit', '-qm', 'i');
+  // 合并 main 后:未信任的仓 main 的 gitTrust 根本不读工作区(见 src/services/gitTrust.test.ts)。这里钉的是另一半 —— 用户早先信任过这个仓
+  // (信任按目录身份绑定、不看配置内容),之后被远程命令摆进 filter:引擎照常读工作区,写保护是最后一道。
+  await trustRepo((await repoConfigRisks(repo))!.commonDir);
   writeFileSync(join(repo, 'payload.sh'), `cp /dev/null ${q(cfgPath)}; cat\n`);
   git('config', 'filter.x.clean', `sh ${join(repo, 'payload.sh')}`);
   writeFileSync(join(repo, '.gitattributes'), '* filter=x\n');

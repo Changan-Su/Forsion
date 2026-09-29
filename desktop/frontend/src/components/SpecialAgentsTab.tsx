@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
@@ -6,7 +6,7 @@ import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAge
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
 import { CapabilityMenu } from './CapabilityMenu'
-import { publishAccountQuota, subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
+import { subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
 import './specialAgents.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
 
@@ -37,35 +37,15 @@ registerMessages({
   },
   'bgQuota.title': { zh: '后台额度', en: 'Background quota' },
   'bgQuota.lead': {
-    zh: '主额度之外额外送的一份，相当于你额度的 {share}%；只计 Muse 与自动化用云端默认后台模型（{model}）的用量。这里的改动立即生效。',
-    en: 'An extra allowance on top of your main quota, worth {share}% of your limit. Only Muse and automations running on the cloud default background model ({model}) draw from it. Changes here apply immediately.',
+    zh: 'AI 额度之外额外的一份，只计 Muse 与自动化用云端默认后台模型（{model}）的用量。剩余多少、用完后是否改用 AI 额度继续、从 AI 额度转入，都在「Forsion 云端 → 额度与积分」里。',
+    en: 'An extra allowance on top of your AI quota, used only by Muse and automations on the cloud default background model ({model}). What is left, whether to continue on your AI quota when it runs out, and moving quota in are all under Forsion Cloud → Quota & points.',
   },
-  'bgQuota.daily': { zh: '今日', en: 'Today' },
-  'bgQuota.weekly': { zh: '本周', en: 'This week' },
-  'bgQuota.remaining': { zh: '剩余 {percent}%', en: '{percent}% left' },
-  'bgQuota.unlimited': { zh: '不限', en: 'Unlimited' },
   'bgQuota.otherModel': {
-    zh: 'Muse 当前用的是 {model}，不计入后台额度，会消耗主额度。',
-    en: 'Muse is set to {model}, which does not count toward the background quota and uses your main quota instead.',
+    zh: 'Muse 当前用的是 {model}，不计入后台额度，会消耗 AI 额度。',
+    en: 'Muse is set to {model}, which does not count toward the background quota and uses your AI quota instead.',
   },
-  'bgQuota.autoMain': { zh: '用完后改用主额度继续', en: 'Continue on main quota when used up' },
-  'bgQuota.autoMainHint': {
-    zh: '关闭时，后台额度用完后 Muse 与自动化会暂停到下个周期。',
-    en: 'When off, Muse and automations pause until the next period once the background quota runs out.',
-  },
-  'bgQuota.convert': { zh: '从主额度转入', en: 'Move from main quota' },
-  'bgQuota.convertHint': {
-    zh: '按你额度的百分比等额转入，仅本周期有效，不超过主额度剩余。',
-    en: 'Moves an equal amount, as a share of your limit, for this period only and never more than your main quota has left.',
-  },
-  'bgQuota.confirm': { zh: '再点确认', en: 'Click to confirm' },
-  'bgQuota.converted': { zh: '已转入，本周期有效', en: 'Moved for this period' },
-  'bgQuota.noMain': { zh: '主额度已用完，没有可转入的额度', en: 'Your main quota is used up; there is nothing to move' },
-  'bgQuota.failed': { zh: '操作失败：{e}', en: 'Action failed: {e}' },
+  'bgQuota.manage': { zh: '打开额度与积分', en: 'Open Quota & points' },
 })
-
-/** 转入档位(限额的百分比);横幅上的一键转入固定用 10。 */
-const BG_CONVERT_STEPS = [5, 10, 20] as const
 
 function Toggle({ value, onChange, label, disabled = false }: { value: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean }) {
   return <button type="button" className="special-toggle" role="switch" aria-checked={value} aria-label={label} disabled={disabled} onClick={() => onChange(!value)}><span /></button>
@@ -85,84 +65,32 @@ function NumberField({ label, value, onChange, min, max, hint }: { label: string
  * Forsion 后台额度(账号级,服务端真源;不走本页的草稿 / 保存流程,点了就生效)。
  * 只在宿主有额度接口、且服务端配了计入模型(background.modelId)时出现。museModelId = Muse 显式选的模型('' = 跟随云端)。
  */
+/** 后台额度:剩余量与操作(用完改用 AI 额度继续 / 从 AI 额度转入)2026-09-28 起都在「Forsion 云端 → 额度与积分」(Extend 画的页),
+ *  这里只留说明、Muse 专属的「当前模型不计入后台额度」提示和一个跳转 —— 同一组开关原来在这、网页、提醒条三处各有一份。 */
 function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: string; modelLabel: (id: string) => string }) {
   const { t } = useI18n()
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [confirm, setConfirm] = useState<number | null>(null)
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
-  // 异步回调里拿「此刻最新」的额度:每个写入点**同步**更新(只在渲染时回填的话,广播与开关回包夹在同一帧里,
-  // apply 读到的还是旧快照、再把它广播出去 —— Codex 09-24 复审)
-  const latest = useRef<AccountQuotaView | null>(null)
-  const put = (q: AccountQuotaView): void => { latest.current = q; setQuota(q) }
   useEffect(() => {
     let alive = true
     let pushed = false // 首拉回来之前已经收到过广播(转入 / 切账号后别处刷新)→ 首拉那份是旧快照,丢掉
-    const off = subscribeAccountQuota((q) => { if (alive && q) { pushed = true; put(q) } })
-    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) put(r.json) }).catch(() => {})
+    const off = subscribeAccountQuota((q) => { if (alive && q) { pushed = true; setQuota(q) } })
+    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) setQuota(r.json) }).catch(() => {})
     return () => { alive = false; off() }
   }, [])
   const bg = quota?.background
   if (!window.tangu?.accountQuota || !bg?.modelId) return null
-  /** 服务端回来的新视图:并进**最新**状态(重置卡数等视图里没有的字段沿用),再广播给别的额度 UI。 */
-  const apply = (patch: (cur: AccountQuotaView) => AccountQuotaView): void => {
-    const cur = latest.current
-    if (!cur) return
-    const merged = patch(cur)
-    put(merged)
-    publishAccountQuota(merged)
-  }
-  const axis = (key: 'daily' | 'weekly') => {
-    const limit = Number(bg[`${key}Limit`])
-    const left = limit < 0 ? null : limit === 0 ? 0 : Math.max(0, Math.min(100, (Number(bg[`${key}Remaining`]) / limit) * 100))
-    return (
-      <div className="special-bgquota-axis" key={key} data-axis={key}>
-        <span>{t(`bgQuota.${key}`)}</span>
-        <b>{left === null ? t('bgQuota.unlimited') : t('bgQuota.remaining', { percent: String(Math.floor(left)) })}</b>
-        {left !== null && <i aria-hidden="true"><em style={{ width: `${left}%` }} data-low={left <= 15 ? '1' : undefined} /></i>}
-      </div>
-    )
-  }
-  const setAutoMain = async (enabled: boolean): Promise<void> => {
-    if (busy || !window.tangu?.accountBgAutoMain) return
-    setBusy(true); setMsg(null)
-    try {
-      const r = await window.tangu.accountBgAutoMain(enabled)
-      if (r?.status === 200 && r.json?.success) apply((cur) => ({ ...cur, background: cur.background && { ...cur.background, autoMain: enabled } }))
-      else setMsg({ text: t('bgQuota.failed', { e: String(r?.json?.detail || r?.status) }), error: true })
-    } catch (e: any) { setMsg({ text: t('bgQuota.failed', { e: String(e?.message || e) }), error: true }) } finally { setBusy(false) }
-  }
-  const convert = async (percent: number): Promise<void> => {
-    if (busy || !window.tangu?.accountBgConvert) return
-    if (confirm !== percent) { setConfirm(percent); return } // 两击确认,与重置卡同一姿势
-    setBusy(true); setMsg(null); setConfirm(null)
-    try {
-      const r = await window.tangu.accountBgConvert(percent)
-      if (r?.status === 200 && r.json?.success && r.json.quota) { const next = r.json.quota as AccountQuotaView; apply((cur) => ({ ...next, resetCards: cur.resetCards })); setMsg({ text: t('bgQuota.converted') }) }
-      else setMsg({ text: r?.json?.error === 'insufficient_main_quota' ? t('bgQuota.noMain') : t('bgQuota.failed', { e: String(r?.json?.detail || r?.status) }), error: true })
-    } catch (e: any) { setMsg({ text: t('bgQuota.failed', { e: String(e?.message || e) }), error: true }) } finally { setBusy(false) }
-  }
   return <>
     <div className="special-section-title">{t('bgQuota.title')}</div>
-    <div className="special-bgquota" data-busy={busy ? '1' : undefined}>
-      <p className="special-bgquota-lead">{t('bgQuota.lead', { share: String(bg.sharePercent ?? 15), model: modelLabel(bg.modelId) })}</p>
-      <div className="special-bgquota-axes">{axis('daily')}{axis('weekly')}</div>
-      {/* ponytail: 只看 Muse 显式选的模型;「设置 → 模型」里本机改过辅助模型槽(config.json models.background)时 Muse 也会走主额度,
+    <div className="special-bgquota">
+      <p className="special-bgquota-lead">{t('bgQuota.lead', { model: modelLabel(bg.modelId) })}</p>
+      {/* ponytail: 只看 Muse 显式选的模型;「设置 → 模型」里本机改过辅助模型槽(config.json models.background)时 Muse 也会走 AI 额度,
           这里不提醒 —— 要提醒得让 /agent/models 带回本机槽位 */}
       {!!museModelId && museModelId !== bg.modelId && <p className="special-bgquota-warn">{t('bgQuota.otherModel', { model: modelLabel(museModelId) })}</p>}
-      {!!window.tangu?.accountBgAutoMain && (
-        <div className="special-toggle-row"><div><strong>{t('bgQuota.autoMain')}</strong><p>{t('bgQuota.autoMainHint')}</p></div>
-          <Toggle label={t('bgQuota.autoMain')} value={!!bg.autoMain} disabled={busy} onChange={(v) => void setAutoMain(v)} /></div>
+      {!!window.tangu?.cloudInvoke && (
+        <button type="button" className="btn ghost sm" onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+          {t('bgQuota.manage')} <ChevronRight size={12} aria-hidden="true" />
+        </button>
       )}
-      {/* 两轴都不限(主额度不限)时后台也不限,转入无意义 —— 不给按钮,免得点了报「主额度已用完」 */}
-      {!!window.tangu?.accountBgConvert && (Number(bg.dailyLimit) >= 0 || Number(bg.weeklyLimit) >= 0) && (
-        <Field label={t('bgQuota.convert')} hint={t('bgQuota.convertHint')}>
-          <div className="special-choices">{BG_CONVERT_STEPS.map((p) => (
-            <button type="button" key={p} aria-pressed={confirm === p} disabled={busy} onClick={() => void convert(p)}>{confirm === p ? t('bgQuota.confirm') : `+${p}%`}</button>
-          ))}</div>
-        </Field>
-      )}
-      {msg && <p className={msg.error ? 'special-error' : 'special-bgquota-note'} role={msg.error ? 'alert' : 'status'}>{msg.text}</p>}
     </div>
   </>
 }

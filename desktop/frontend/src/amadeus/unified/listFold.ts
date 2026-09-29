@@ -1,7 +1,7 @@
 // v4 统一编辑器的**列表项折叠**(2026-08-14,AFFiNE `blocks/list` 的 toggle 对位)。
-// 与 headingFold 同一套取舍:**会话内纯装饰,不落盘** —— 磁盘上的 md 一个字都不变,
-// 重开笔记/切源码后全展开。AFFiNE 那边 collapsed 是持久化块属性(list-model.ts),我们做不到
-// 也不想做(那会往纯 md 里加 amadeus_* 键),这是刻意的偏差,别当 bug 报。
+// 与 headingFold 同一套取舍:**纯装饰,不落盘** —— 磁盘上的 md 一个字都不变。AFFiNE 那边 collapsed
+// 是持久化块属性(list-model.ts),我们做不到也不想做(那会往纯 md 里加 amadeus_* 键),这是刻意的偏差。
+// 跨重开保留走本机记忆(B-13,拍板 #4:foldActions 按「智库 + 路径」存 localStorage,重建时 meta `set` 复原)。
 //
 // 锚 = list_item 的文档 pos,随事务 mapping 存活;项被删/子列表被掏空即自动失效。
 // 折叠 = 把该项的子列表整只 display:none,并给项加一层 class 让 CSS 画箭头位。
@@ -72,6 +72,16 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
   return DecorationSet.create(doc, decos)
 }
 
+/** 文档里所有「带子列表」的列表项前位,文档序(全部折叠 / 本机记忆复原用)。 */
+export function foldableListItems(doc: ProseNode): number[] {
+  const out: number[] = []
+  doc.descendants((n, pos) => {
+    if (n.type.name === 'list_item' && foldableAt(doc, pos)) out.push(pos)
+    return true
+  })
+  return out
+}
+
 export function toggleListFoldAt(view: EditorView, itemPos: number): void {
   view.dispatch(view.state.tr.setMeta(listFoldKey, { toggle: itemPos }))
 }
@@ -85,13 +95,28 @@ export function listFoldStateAt(view: EditorView, pos: number): 'foldable' | 'fo
 /** 折叠隐藏区间(供光标守卫与「折叠态回车不带走子项」用)。 */
 export function listHiddenRanges(state: EditorState): Array<{ start: number; after: number }> {
   const st = listFoldKey.getState(state)
-  if (!st?.folded.length) return []
+  return st?.folded.length ? listHiddenRangesOf(state.doc, st.folded) : []
+}
+
+/** 给定一组折叠锚时的隐藏区间(还没进插件状态的那组,如 foldActions 定死整组前先算光标会不会被藏)。 */
+export function listHiddenRangesOf(doc: ProseNode, folded: number[]): Array<{ start: number; after: number }> {
   const out: Array<{ start: number; after: number }> = []
-  for (const p of st.folded) {
-    const f = foldableAt(state.doc, p)
+  for (const p of folded) {
+    const f = foldableAt(doc, p)
     if (f) out.push({ start: f.from, after: f.to })
   }
   return out
+}
+
+/** 把 pos 藏起来的那些折叠项(项前位;嵌套折叠可能不止一层)。搜索 / 标签命中落在折起的子项里时,
+ *  定位前要先把它们展开(unified/revealText.ts)—— 光标守卫会把放进隐藏区的选区弹出去。 */
+export function listFoldsHiding(state: EditorState, pos: number): number[] {
+  const st = listFoldKey.getState(state)
+  if (!st?.folded.length) return []
+  return st.folded.filter((p) => {
+    const f = foldableAt(state.doc, p)
+    return !!f && pos > f.from && pos < f.to
+  })
 }
 
 /** 该 list_item 当前是否折叠(键盘层用:折叠态回车只拆兄弟,子项留在原项里)。 */
@@ -113,7 +138,8 @@ export const listFoldPlugins: MilkdownPlugin[] = [
                 .map((p) => tr.mapping.mapResult(p))
                 .filter((r) => !r.deleted || foldableAt(tr.doc, r.pos) != null)
                 .map((r) => r.pos)
-            const meta = tr.getMeta(listFoldKey) as { toggle?: number } | undefined
+            const meta = tr.getMeta(listFoldKey) as { toggle?: number; set?: number[] } | undefined
+            if (meta?.set) folded = meta.set.slice() // 整组定死(全部折叠 / 全部展开 / 本机记忆复原)
             if (meta?.toggle != null) {
               const p = meta.toggle
               folded = folded.includes(p) ? folded.filter((x) => x !== p) : [...folded, p]

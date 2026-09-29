@@ -21,14 +21,21 @@
  *  时按 Esc 就清掉一行草稿 = 用户一按手滑、Cmd+Z 也找不回;坏 YAML 原文框**从不**以 Esc 放弃(一段多行修复
  *  一键全没),冲突时撤销回原样再失焦即采用外部版本。不放弃的 Esc 原样冒泡(不吞)。输入法组合中的 Esc 只取消
  *  候选,不动草稿。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
- *  (DOM)、unified-page.check 的 PR 组(真浏览器三变体)。 */
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+ *  (DOM)、unified-page.check 的 PR 组(真浏览器三变体)。
+ *
+ *  **C-19(评审 2026-09-27)**:新增属性先选类型(文本 / 数字 / 勾选 / 日期 / 列表),写盘为对应的 YAML 类型
+ *  ('' / 0 / false / 今天 / []);键名是 tags / aliases 时缺省列表。仍是行级提交(setKey → patchYamlText),
+ *  别的键逐字不动。展开状态按库记在本机(viewMemory.readPropsOpen),不写 md。新增后焦点落到新行的值框。
+ *  值里的 `[[x]]` 渲染成可点的双链(点空白处进入编辑);索引侧把它们计入反链(shared/amadeus/linkIndex)。
+ *  仪器:amadeusProperties.c19.test.ts。 */
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import { Plus, X } from 'lucide-react'
+import { Check, Plus, X } from 'lucide-react'
 import { usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { matchFileType } from '@amadeus/plugins/pluginStore'
-import { askString } from '@amadeus/components/askString'
+import { readPropsOpen, writePropsOpen } from '@amadeus/unified/viewMemory'
 import { patchYamlText, renameYamlKey } from '@amadeus-shared/db/pageFrontmatter'
+import { linkTarget } from '@amadeus-shared/links'
 import { registerMessages, useI18n } from './i18n'
 
 registerMessages({
@@ -45,7 +52,39 @@ registerMessages({
   'amprops.chipsPlaceholder': { zh: '回车添加…', en: 'Press Enter to add…' },
   'amprops.conflict': { zh: '此处已在别处改为「{v}」。失焦后以你的输入为准，按 Esc 放弃你的输入。', en: 'Changed elsewhere to "{v}". Leaving the field keeps your input; press Esc to discard it.' },
   'amprops.conflictRaw': { zh: '这段已在别处被改动。失焦后以你的输入为准；撤销你的改动再失焦则采用别处的版本。', en: 'Changed elsewhere. Leaving the field keeps your input; undo your edits first to take the other version.' },
+  'amprops.keyPlaceholder': { zh: '属性名', en: 'Property name' },
+  'amprops.type': { zh: '属性类型', en: 'Property type' },
+  'amprops.type.text': { zh: '文本', en: 'Text' },
+  'amprops.type.number': { zh: '数字', en: 'Number' },
+  'amprops.type.checkbox': { zh: '勾选', en: 'Checkbox' },
+  'amprops.type.date': { zh: '日期', en: 'Date' },
+  'amprops.type.list': { zh: '列表', en: 'List' },
+  'amprops.addConfirm': { zh: '添加', en: 'Add' },
+  'amprops.addCancel': { zh: '取消', en: 'Cancel' },
+  'amprops.linksHint': { zh: '点链接跳转，点空白处编辑', en: 'Click a link to open it; click elsewhere to edit' },
 })
+
+/** 新增属性可选的类型(C-19)。 */
+export type PropType = 'text' | 'number' | 'checkbox' | 'date' | 'list'
+export const PROP_TYPES: PropType[] = ['text', 'number', 'checkbox', 'date', 'list']
+
+/** 按类型写入的空值:YAML 里就是对应类型(`n: 0`、`done: false`、`due: 2026-09-28`、`tags: []`),
+ *  值编辑器按值的运行时类型派发控件 —— 写对类型,控件就对。日期取本机今天。 */
+export function emptyValueFor(type: PropType, now: Date = new Date()): unknown {
+  switch (type) {
+    case 'number': return 0
+    case 'checkbox': return false
+    case 'date': return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    case 'list': return []
+    default: return ''
+  }
+}
+
+/** 键名的缺省类型:tags / aliases(及单数写法)是列表(接 L-14 / L-13 的索引口径),其余文本。 */
+export const defaultTypeForKey = (key: string): PropType => (/^(tags?|alias(es)?|cssclass(es)?)$/i.test(key.trim()) ? 'list' : 'text')
+
+/** 值里是否含 `[[x]]` 双链(C-19:渲染成可点链接)。 */
+const hasWikiLink = (s: string): boolean => /\[\[[^\]\n]+\]\]/.test(s)
 
 export interface FmEntry { key: string; value: unknown }
 
@@ -173,15 +212,18 @@ function useFieldDraft(current: string, commit: (v: string) => void, { escDiscar
   }
 }
 
-export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = false }: {
+export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = false, notePath }: {
   /** 缺省 = pageStore.manifest.fmExtra(v3 老路径);unified 传显式 fm 文本 + onCommit 走自己的管线。 */
   fmExtra?: string
   onCommit?: (yaml: string) => void
   /** 只读(公开分享页):只展示键值,不出添加/删除/编辑控件;坏 YAML 原文也只展示不可改。 */
   readOnly?: boolean
+  /** 本面板所属笔记(值里的 `[[x]]` 按它就近解析);缺 = activePage(v4 不设 activePage,unified 显式传)。 */
+  notePath?: string
 } = {}) {
   const { t } = useI18n()
   const activePage = usePageStore((s) => s.activePage)
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
   const storeFm = usePageStore((s) => s.manifest?.fmExtra ?? '')
   // 写操作走本面板的 store:插件文件视图(画布文档模式)也挂这面板,活动面板门面
   // usePageStore.getState() 在那里解析到隔壁编辑器面板,fm 会写进别人那篇。
@@ -193,8 +235,25 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
   // 要等到 mutation 之后,来不及。
   const fmNow = useRef(fmExtra)
   fmNow.current = fmExtra
-  const [open, setOpen] = useState(false)
-  useEffect(() => { setOpen(false) }, [activePage])
+  // 展开状态按库记在本机(C-19):原先是组件局部 state、换篇即重置(v4 按路径重建实例)→ 每打开一篇都折叠。
+  const [open, setOpenState] = useState(() => readPropsOpen(vaultRoot) ?? false)
+  useEffect(() => { setOpenState(readPropsOpen(vaultRoot) ?? false) }, [vaultRoot])
+  const setOpen = (next: boolean | ((o: boolean) => boolean)): void => {
+    setOpenState((o) => {
+      const v = typeof next === 'function' ? next(o) : next
+      writePropsOpen(vaultRoot, v)
+      return v
+    })
+  }
+  const [adding, setAdding] = useState(false)
+  /** 刚新增的键:渲染后把焦点送进它那一行的值框(fm 经 onCommit 异步回来,新行下一轮才出现)。 */
+  const [focusKey, setFocusKey] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const sourcePath = notePath ?? activePage ?? undefined
+  const openLink = (inner: string): void => {
+    const name = linkTarget(inner)
+    if (name) scoped.getState().openWikiLink(name, sourcePath)
+  }
 
   const parsed = useMemo(() => parseFmEntries(fmExtra), [fmExtra])
   // 插件文件类型声明的 fm 键只做**展示隐藏**(用户手改会弄坏插件数据,普通笔记也没这些键);
@@ -207,6 +266,15 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
     () => parsed.entries.map((e, idx) => ({ ...e, idx })).filter((e) => !hiddenKeys.has(e.key)),
     [parsed, hiddenKeys],
   )
+  useEffect(() => {
+    if (!focusKey) return
+    const row = [...(rootRef.current?.querySelectorAll<HTMLElement>('.amx-prop-row[data-key]') ?? [])].find((r) => r.dataset.key === focusKey)
+    const el = row?.querySelector<HTMLElement>('input:not(.amx-prop-key), textarea, .amx-prop-links')
+    if (!el) return // 行还没回来(v3 store 异步)→ 下一轮 parsed 变了再试
+    el.focus()
+    if (el.classList.contains('amx-prop-links')) el.click() // 链接展示态:点一下进编辑
+    setFocusKey(null)
+  }, [focusKey, parsed])
 
   if (!external && !activePage) return null
 
@@ -221,29 +289,30 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
   }
   const setKey = (key: string, v: unknown): void => commit(patchYamlText(fmNow.current, { [key]: v }))
 
-  const addProp = async (): Promise<void> => {
-    const name = (await askString(t('amprops.add'), '', { label: t('amprops.addLabel') }))?.trim()
-    if (!name) return
-    if (/^amadeus_/.test(name)) { window.alert(t('amprops.reservedKey')); return }
-    if (hiddenKeys.has(name)) { window.alert(t('amprops.pluginManaged')); return }
-    if (parseFmEntries(fmNow.current).entries.some((e) => e.key === name)) return
-    setKey(name, '')
-    setOpen(true)
+  /** 新增一行(C-19):键名 + 类型 → 按类型写空值(行级提交),焦点送进新行的值框。返回 false = 没加(留在新增行)。 */
+  const addProp = (rawName: string, type: PropType): boolean => {
+    const name = rawName.trim()
+    if (!name) return false
+    if (/^amadeus_/.test(name)) { window.alert(t('amprops.reservedKey')); return false }
+    if (hiddenKeys.has(name)) { window.alert(t('amprops.pluginManaged')); return false }
+    if (!parseFmEntries(fmNow.current).entries.some((e) => e.key === name)) setKey(name, emptyValueFor(type))
+    setFocusKey(name) // 已存在 = 直接去编辑那一行
+    return true
   }
 
   const count = parsed.ok ? visible.length : null
 
   return (
-    <div className="amx-props">
+    <div className="amx-props" ref={rootRef}>
       <div className="amx-props-bar">
         <button className="amx-props-chip" onClick={() => setOpen((o) => !o)}>
           {count === null ? t('amprops.chipRaw') : t('amprops.chipCount', { n: count })}{open ? ' ▾' : ' ▸'}
         </button>
-        {!readOnly && <button className="amx-props-add" title={t('amprops.add')} onClick={() => void addProp()}><Plus size={12} /></button>}
+        {!readOnly && <button className="amx-props-add" title={t('amprops.add')} onClick={() => { setOpen(true); if (parsed.ok) setAdding(true) }}><Plus size={12} /></button>}
       </div>
       {open && (parsed.ok ? (
         <div className="amx-props-rows">
-          {visible.length === 0 && <div className="amx-props-empty">{t('amprops.empty')}</div>}
+          {visible.length === 0 && !adding && <div className="amx-props-empty">{t('amprops.empty')}</div>}
           {visible.map((e) => readOnly ? (
             <div className="amx-prop-row amx-prop-row-ro" key={`${activePage}:${e.idx}:${e.key}`}>
               <span className="amx-prop-key">{e.key}</span>
@@ -252,7 +321,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
           ) : (
             // 行身份 = 键名(YAML 映射里唯一;重复键解析失败走原文模式)。不带 idx:别处插/删一个键
             // 会让下方各行 idx 平移,带 idx 就整片重挂、正在打的草稿被静默丢掉。提交按键名、基于此刻的 fm(fmNow)。
-            <div className="amx-prop-row" key={`${activePage}:${e.key}`}>
+            <div className="amx-prop-row" key={`${activePage}:${e.key}`} data-key={e.key}>
               <KeyNameInput
                 name={e.key}
                 onRename={(k) => {
@@ -264,10 +333,16 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
                   commit(renameYamlKey(fmNow.current, e.key, k))
                 }}
               />
-              <ValueEditor value={e.value} onCommit={(v) => setKey(e.key, v)} />
+              <ValueEditor value={e.value} onCommit={(v) => setKey(e.key, v)} onOpenLink={openLink} />
               <button className="amx-prop-del" title={t('amprops.delete')} onClick={() => setKey(e.key, undefined)}><X size={12} /></button>
             </div>
           ))}
+          {adding && !readOnly && (
+            <NewPropRow
+              onAdd={(name, type) => { if (addProp(name, type)) setAdding(false) }}
+              onCancel={() => setAdding(false)}
+            />
+          )}
         </div>
       ) : (
         // YAML 解析不了(罕见写法)→ 原文直编,不破坏内容。未改动不提交(白点一下不应重写文件)。
@@ -337,13 +412,94 @@ function ValueStatic({ value }: { value: unknown }) {
   return <span className="amx-prop-input">{String(value)}</span>
 }
 
-function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknown) => void }) {
+/** 新增属性行(C-19):键名框 + 类型选择。回车(非组字)/ ✓ 提交,Esc / × 放弃;键名是 tags / aliases 时类型缺省列表
+ *  (用户动过类型选择之后不再跟着键名改)。 */
+function NewPropRow({ onAdd, onCancel }: { onAdd: (name: string, type: PropType) => void; onCancel: () => void }) {
+  const { t } = useI18n()
+  const [name, setName] = useState('')
+  const [type, setType] = useState<PropType>('text')
+  const [typeTouched, setTypeTouched] = useState(false)
+  const shownType = typeTouched ? type : defaultTypeForKey(name)
+  return (
+    <div className="amx-prop-row amx-prop-new">
+      <input
+        className="amx-prop-key"
+        autoFocus
+        value={name}
+        placeholder={t('amprops.keyPlaceholder')}
+        aria-label={t('amprops.addLabel')}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return // 输入法选词回车不是提交
+          if (e.key === 'Enter') { e.preventDefault(); onAdd(name, shownType) } else if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+        }}
+      />
+      <select
+        className="amx-prop-type"
+        aria-label={t('amprops.type')}
+        value={shownType}
+        onChange={(e) => { setType(e.target.value as PropType); setTypeTouched(true) }}
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); onCancel() } }}
+      >
+        {PROP_TYPES.map((ty) => <option key={ty} value={ty}>{t(`amprops.type.${ty}`)}</option>)}
+      </select>
+      <button className="amx-prop-del amx-prop-new-btn" title={t('amprops.addConfirm')} aria-label={t('amprops.addConfirm')} onClick={() => onAdd(name, shownType)}><Check size={12} /></button>
+      <button className="amx-prop-del amx-prop-new-btn" title={t('amprops.addCancel')} aria-label={t('amprops.addCancel')} onClick={onCancel}><X size={12} /></button>
+    </div>
+  )
+}
+
+/** 值里的 `[[x]]` 拆段渲染:链接可点(按下即开、不进编辑),其余是纯文本。 */
+function WikiText({ text, onOpenLink }: { text: string; onOpenLink: (inner: string) => void }) {
+  const parts: ReactNode[] = []
+  const re = /\[\[([^\]\n]+)\]\]/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    const inner = m[1]
+    const bar = inner.indexOf('|')
+    parts.push(
+      <span
+        key={m.index}
+        className="amx-prop-link"
+        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onOpenLink(inner) }}
+        onClick={(e) => e.stopPropagation()} // 不让随后的 click 冒到展示框 → 进编辑态
+      >
+        {bar >= 0 ? inner.slice(bar + 1) : inner}
+      </span>,
+    )
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return <>{parts}</>
+}
+
+/** 含 `[[x]]` 的文本值:平时渲染成双链(可点),点空白处 / 聚焦回车进入原来的文本框编辑(草稿契约不分叉,仍走 TextValueInput)。 */
+function LinkTextValue({ value, onCommit, onOpenLink }: { value: string; onCommit: (v: string) => void; onOpenLink: (inner: string) => void }) {
+  const { t } = useI18n()
+  const [editing, setEditing] = useState(false)
+  if (editing) return <TextValueInput current={value} autoFocus onCommit={onCommit} onDone={() => setEditing(false)} />
+  return (
+    <div
+      className="amx-prop-input amx-prop-links"
+      tabIndex={0}
+      title={t('amprops.linksHint')}
+      onClick={() => setEditing(true)}
+      onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); setEditing(true) } }}
+    >
+      <WikiText text={value} onOpenLink={onOpenLink} />
+    </div>
+  )
+}
+
+function ValueEditor({ value, onCommit, onOpenLink }: { value: unknown; onCommit: (v: unknown) => void; onOpenLink: (inner: string) => void }) {
   const { t } = useI18n()
   if (typeof value === 'boolean') {
     return <input type="checkbox" className="amx-prop-check" checked={value} onChange={(e) => onCommit(e.target.checked)} />
   }
   if (isScalarArray(value)) {
-    return <ChipsEditor items={value.map((x) => String(x ?? ''))} onCommit={onCommit} />
+    return <ChipsEditor items={value.map((x) => String(x ?? ''))} onCommit={onCommit} onOpenLink={onOpenLink} />
   }
   if (typeof value === 'number') {
     return (
@@ -360,6 +516,9 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return <DateValueInput value={value} onCommit={onCommit} />
   }
+  if (typeof value === 'string' && !value.includes('\n') && hasWikiLink(value)) {
+    return <LinkTextValue value={value} onCommit={onCommit} onOpenLink={onOpenLink} />
+  }
   if (typeof value === 'string' || value == null) {
     // 多行字符串(`desc: |` 之类)用多行框:单行框会把换行吃掉,一改就把整段压成一行(D-20)
     return <TextValueInput current={value ?? ''} multiline={typeof value === 'string' && value.includes('\n')} onCommit={onCommit} />
@@ -367,18 +526,21 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
   return <span className="amx-prop-nested" title={t('amprops.nestedHint')}>{stringifyYaml(value).trimEnd()}</span>
 }
 
-/** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。multiline = 多行字符串,换成多行框(D-20)。 */
-function TextValueInput({ current, norm, multiline = false, onCommit }: { current: string; norm?: (s: string) => string; multiline?: boolean; onCommit: (v: string) => void }) {
+/** 字符串/数字值框:受控草稿,失焦只在真改了时提交(见文件头 C-01)。multiline = 多行字符串,换成多行框(D-20)。
+ *  autoFocus / onDone:含双链的值从展示态切进来编辑(C-19),失焦提交后交回展示态。 */
+function TextValueInput({ current, norm, multiline = false, autoFocus, onCommit, onDone }: { current: string; norm?: (s: string) => string; multiline?: boolean; autoFocus?: boolean; onCommit: (v: string) => void; onDone?: () => void }) {
   const { t } = useI18n()
   const f = useFieldDraft(current, onCommit, { norm, enterCommits: !multiline })
   const props = {
     className: `amx-prop-input${multiline ? ' amx-prop-multiline' : ''}${f.conflict ? ' amx-prop-conflict' : ''}`,
     value: f.shown,
     title: f.conflict ? t('amprops.conflict', { v: current }) : undefined,
+    autoFocus,
     onKeyDown: f.onKeyDown,
     onBlur: () => {
       const next = f.settle()
       if (next !== null) onCommit(next)
+      onDone?.()
     },
   }
   return multiline
@@ -405,8 +567,8 @@ function DateValueInput({ value, onCommit }: { value: string; onCommit: (v: stri
   )
 }
 
-/** 字符串数组(tags 等):chips + 回车追加、× 移除。 */
-function ChipsEditor({ items, onCommit }: { items: string[]; onCommit: (v: string[]) => void }) {
+/** 字符串数组(tags 等):chips + 回车追加、× 移除。项是 `[[x]]` 时渲染成可点双链(C-19)。 */
+function ChipsEditor({ items, onCommit, onOpenLink }: { items: string[]; onCommit: (v: string[]) => void; onOpenLink?: (inner: string) => void }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
   const add = (): void => {
@@ -415,6 +577,7 @@ function ChipsEditor({ items, onCommit }: { items: string[]; onCommit: (v: strin
     if (next && !items.includes(next)) onCommit([...items, next])
   }
   const onKey = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return // 输入法选词的回车 / 逗号不是提交(C-19)
     if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add() }
     else if (e.key === 'Backspace' && !draft && items.length) onCommit(items.slice(0, -1))
   }
@@ -422,7 +585,7 @@ function ChipsEditor({ items, onCommit }: { items: string[]; onCommit: (v: strin
     <div className="amx-prop-chips">
       {items.map((tag, i) => (
         <span className="amx-chip" key={`${i}:${tag}`}>
-          {tag}
+          {onOpenLink && hasWikiLink(tag) ? <WikiText text={tag} onOpenLink={onOpenLink} /> : tag}
           <button className="amx-chip-x" onClick={() => onCommit(items.filter((_, j) => j !== i))}><X size={10} /></button>
         </span>
       ))}

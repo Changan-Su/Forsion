@@ -1,6 +1,7 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
+import { GitSettingsSection } from './GitSettingsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
 /**
@@ -8,9 +9,8 @@ import { ErrorBoundary } from './ErrorBoundary'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
-import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
@@ -56,16 +56,15 @@ import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
-import { AmadeusPluginsTab } from './AmadeusPluginsTab'
+import { AmadeusPluginsTab, PluginSettingsView } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
+import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
 import { PanelNotice } from './PanelNotice'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
 import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
-import { QrImage } from './QrImage'
 import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
@@ -85,9 +84,11 @@ import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewComman
 import { setActiveWindowCommand } from '../activeWindowCommand'
 import { requestDevCommandsSync } from '../devCommands'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
+import { setNotesSpellcheckEnabled, useNotesSpellcheck } from '@amadeus/blocks/markdown/spellcheck'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
+import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { ipcErrorText } from '../ipcError'
@@ -103,6 +104,17 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  // 「Forsion 云端」一级页:账号 + 云端地址 + 记忆同步 + 笔记在线同步,整页随内置插件 Forsion Extend 出现 / 消失
+  'settings.tab.forsionCloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
+  'settings.page.forsionCloudDescription': {
+    zh: '管理 Forsion 账号、会员、额度与安全，以及笔记与记忆的云端同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
+    en: 'Manage your Forsion account, membership, quota and security, plus cloud sync for notes and memory. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
+  },
+  // 不叫「同步」:下面就是一级页「同步」(远程同步),左栏会出现两个同名项
+  'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
+  'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
+  'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
+  'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
   'settings.tools.title': { zh: '开发工具', en: 'Developer tools' },
   'settings.tools.description': { zh: '检测编码任务需要的本机工具，缺少时可一键安装。', en: 'Check the local tools coding tasks need, and install missing ones in one step.' },
   'settings.runtime.backendTitle': { zh: '内置后端', en: 'Built-in backend' },
@@ -218,10 +230,13 @@ export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+/** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
+const ACCOUNT_SUB = 'fx:forsion-extend:account'
 
 
 // 侧栏项图标(固定 tab 全配;外置 agent 插件的动态 plugin:<id> 项刻意无图标)。
 const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
+  forsion: <Cloud size={14} />,
   general: <Settings2 size={14} />,
   spaces: <LayoutGrid size={14} />,
   theme: <Palette size={14} />,
@@ -354,6 +369,8 @@ export const SettingsModal: React.FC<{
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
+  const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
+  const notesSpellcheck = useNotesSpellcheck() // 笔记拼写检查(本机偏好,G4-07)
   const [canvasOverviewZ, setCanvasOverviewZ] = useState<number>(canvasOverviewZoom)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
@@ -412,7 +429,10 @@ export const SettingsModal: React.FC<{
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(isDesktop || unitPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')], ['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
+    // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
+    ...(isDesktop && cloudAccount ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
     ['shortcuts', t('settings.tab.shortcuts')],
@@ -531,12 +551,8 @@ export const SettingsModal: React.FC<{
   const [logs, setLogs] = useState<string[] | null>(null)
   // Forsion 账号 / provider OAuth 登录态
   const [authSt, setAuthSt] = useState<AuthStatusInfo | null>(null)
-  const [loggingIn, setLoggingIn] = useState(false)
   const authRequest = useRef(0)
   const syncRequest = useRef(0)
-  const authAction = useRef(0)
-  const authBusy = useRef(false)
-  const [device, setDevice] = useState<{ url: string; userCode: string } | null>(null)
   const [providers, setProviders] = useState<Array<{ id: string; loggedIn: boolean }> | null>(null)
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   // 直连 provider 配置(~/.tangu/providers.json)
@@ -659,6 +675,11 @@ export const SettingsModal: React.FC<{
   const forsionNavItems: Array<[Tab, string]> = !((isDesktop || unitPage) && window.amadeus) ? []
     : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
       .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
+  // 首方内置包(Forsion Extend)挂进「Forsion 云端」的自绘子页:插件启用、面板声明了 category。设备页不挂(那边不是本机账号)。
+  const cloudViews = isDesktop && cloudAccount && !unitPage
+    ? amxSettingsViews.filter((o) => amxActiveIds.includes(o.pluginId) && isPlacedSettingsView(amxPlugins.find((pl) => pl.id === o.pluginId), o.item))
+    : []
+  const cloudViewKey = (o: { pluginId: string; item: { id: string } }): string => `fx:${o.pluginId}:${o.item.id}`
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
   useEffect(() => { if (tab === 'plugins') setTab('amadeus-plugins') }, [tab])
@@ -700,29 +721,6 @@ export const SettingsModal: React.FC<{
     const off = api.onStatus((value) => { pending = false; setNoteSync(value) })
     return () => { pending = false; off() }
   }, [])
-
-  const doForsionLogout = async (): Promise<void> => {
-    if (!window.tangu?.forsionLogout) return
-    const action = ++authAction.current
-    ++authRequest.current
-    ++syncRequest.current
-    authBusy.current = true
-    setLoggingIn(true)
-    setDevice(null)
-    try {
-      await window.tangu.forsionLogout()
-      if (action !== authAction.current) return
-      setAuthSt(null)
-      setSyncSt(null)
-      setSyncMsg('')
-      refreshAuth()
-      p.onReconnect()
-    } catch (e: any) {
-      setTestResult(t('accountSwitcher.failed', { error: String(e?.message || e) }))
-    } finally {
-      if (action === authAction.current) { authBusy.current = false; setLoggingIn(false) }
-    }
-  }
 
   const refreshSyncStatus = (): void => {
     const request = ++syncRequest.current
@@ -818,7 +816,6 @@ export const SettingsModal: React.FC<{
       setDraft(p.cfg)
       setTestResult('')
       setLogs(null)
-      setDevice(null)
       if (isDesktop) {
         setCfgLoadError('')
         void window.tangu!.getConfig().then((s) => {
@@ -837,7 +834,6 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!p.open || !isDesktop) return
     const off1 = window.tangu!.onBackendStatus?.((st) => setBackendSt(st))
-    const off2 = window.tangu!.onAuthDevice?.((info) => setDevice(info))
     const off3 = window.tangu!.onAuthChanged?.(() => {
       ++authRequest.current
       ++syncRequest.current
@@ -845,7 +841,6 @@ export const SettingsModal: React.FC<{
       setSyncSt(null)
       setSyncMsg('')
       setSyncing(false)
-      setDevice(null)
       refreshAuth()
       const request = authRequest.current
       void window.tangu!.getConfig().then((value) => {
@@ -856,39 +851,9 @@ export const SettingsModal: React.FC<{
       ++authRequest.current
       ++syncRequest.current
       off1?.()
-      off2?.()
       off3?.()
     }
   }, [p.open, isDesktop])
-
-  const doForsionLogin = async (accountId?: string): Promise<void> => {
-    if (!window.tangu?.forsionLogin) return
-    if (authBusy.current) return
-    authBusy.current = true
-    const action = ++authAction.current
-    ++authRequest.current
-    ++syncRequest.current
-    setLoggingIn(true)
-    setDevice(null)
-    setTestResult('')
-    try {
-      const r = accountId
-        ? await window.tangu.forsionSwitchAccount!(accountId)
-        : await window.tangu.forsionLogin(stored?.cloudUrl || undefined)
-      if (action !== authAction.current) return
-      setStored((s) => (s ? { ...s, cloudUrl: r.cloudUrl } : s))
-      refreshAuth()
-      p.onReconnect()
-    } catch (e: any) {
-      if (action === authAction.current) setTestResult(String(e?.message || e).replace(/^Error invoking remote method '[^']+': Error: /, ''))
-    } finally {
-      if (action === authAction.current) {
-        authBusy.current = false
-        setLoggingIn(false)
-        setDevice(null)
-      }
-    }
-  }
 
   const doProviderLogin = async (id: string): Promise<void> => {
     if (!window.tangu?.providerLogin) return
@@ -1066,6 +1031,7 @@ export const SettingsModal: React.FC<{
     ? ([...forsionNavItems, ...pluginNavItems].find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
     : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
   const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
+    forsion: 'settings.page.forsionCloudDescription',
     general: 'settings.page.generalDescription',
     spaces: 'settings.page.spacesDescription',
     notes: 'settings.page.notesDescription',
@@ -1111,7 +1077,8 @@ export const SettingsModal: React.FC<{
       ['g-conn', t('settings.sub.connection')],
       // 本机运行环境单列(原先埋在「连接」页最底部,2.11.4 用户找不到);条件与下方正文块一致。
       ...(isDesktop && stored ? [['g-runtime', t('settings.runtime.title')] as [string, string]] : []),
-      ...(isDesktop && cloudAccount ? [['g-forsion', 'Forsion'] as [string, string]] : []),
+      // Git 设置写的是引擎 config.json;连着云端 / 别人的引擎时组件自己显示只读说明,不会是白板。
+      ...(isDesktop && stored ? [['g-git', 'Git'] as [string, string]] : []),
       ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
     ],
     model: [
@@ -1146,10 +1113,15 @@ export const SettingsModal: React.FC<{
       ['k-library', t('globalSkills.title')],
       ...(isDesktop && !!window.tangu?.discoveryScan ? [['k-discovery', t('settings.discovery.label')] as [string, string]] : []),
     ],
+    forsion: [
+      // Extend 渲染半身自绘的子页(账号 / 额度与积分 / 安全 / 用量记录 / 反馈),随 Extend 的 npm 版本更新
+      ...cloudViews.map((o) => [cloudViewKey(o), (typeof o.item.title === 'function' ? o.item.title() : o.item.title) || o.item.id] as [string, string]),
+      // 宿主自己的两页:同步(笔记在线同步 + Brain 记忆同步)、连接(云端地址)。条目条件与正文块一致,免得点进去是白板。
+      ...(window.amadeusSync || stored ? [['f-sync', t('settings.forsionCloud.sync')] as [string, string]] : []),
+      ...(stored ? [['f-conn', t('settings.forsionCloud.connection')] as [string, string]] : []),
+    ],
     sync: [
-      // 「在线同步」整块都在 window.amadeusSync 后面:没这个能力就别挂栏目,否则点进去是白板。
-      ...(window.amadeusSync ? [['s-cloud', t('settings.sync.cloudSec')] as [string, string]] : []),
-      // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走。
+      // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走(一级页也按它门控)。
       ...(window.remoteSync ? [['s-remote', t('settings.sync.remoteSec')] as [string, string]] : []),
     ],
   } as Record<string, Array<[string, string]>>)
@@ -1185,7 +1157,7 @@ export const SettingsModal: React.FC<{
   // Forsion 品牌独立放在导航顶部,不再用一个额外的大类标题重复占据滚动区。
   const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[] }> }> = [
     { key: 'settings', label: '', groups: [
-      { key: 'workspace', label: t('settings.group.workspace'), tabs: ['general', 'spaces', 'notes', 'sync'] },
+      { key: 'workspace', label: t('settings.group.workspace'), tabs: ['forsion', 'general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
@@ -1237,7 +1209,7 @@ export const SettingsModal: React.FC<{
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
-      : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(g-forsion)
+      : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
       : need === 'managed' ? isDesktop && mode === 'managed' // 托管参数只在已落盘为托管时渲染(g-runtime)
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
   }
@@ -1574,7 +1546,7 @@ export const SettingsModal: React.FC<{
                         {cloudAccount && <span>{t('settingsmodal.status.account', { state: authSt?.loggedIn && authSt.tokenValid !== false ? t('settings.overview.signedIn') : t('settings.overview.signedOut') })}</span>}
                       </span>
                       {isDesktop && cloudAccount && !(authSt?.loggedIn && authSt.tokenValid !== false) && (
-                        <button type="button" className="btn ghost sm" disabled={loggingIn} onClick={() => { openSubPage('general', 'g-forsion'); void doForsionLogin() }}>
+                        <button type="button" className="btn ghost sm" onClick={() => openSubPage('forsion', ACCOUNT_SUB)}>
                           <LogIn size={12} /> {t('settings.forsion.login')}
                         </button>
                       )}
@@ -1830,109 +1802,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'general' && isDesktop && cloudAccount && activeSub === 'g-forsion' && (
-                  <>
-                    {/* 账号 */}
-                    <div className="field" data-setting-anchor="forsion-account">
-                      <label>{t('settings.forsion.accountLabel')}</label>
-                      {authSt?.loggedIn && authSt?.tokenValid !== false ? (
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <span className="conn-pill ok"><span className="dot" />
-                            {t('settings.forsion.loggedInAs', { name: authSt.nickname || authSt.username || '' })}
-                          </span>
-                          <button className="btn ghost sm" onClick={() => void doForsionLogout()}>
-                            {loggingIn ? <Loader2 size={12} className="spin" /> : <LogOut size={12} />} {t('settings.forsion.logout')}
-                          </button>
-                        </div>
-                      ) : (
-                        <div>
-                          {/* token 仍在但失效 → 不当「已登录」,显式提示过期 + 重新登录(forsionLogin 会 ensureBackend 重连)。 */}
-                          {authSt?.loggedIn && authSt?.tokenValid === false && (
-                            <div className="hint" style={{ color: 'var(--danger)', marginBottom: 8 }}>{t('settings.forsion.expired')}</div>
-                          )}
-                          <button className="btn primary sm" onClick={() => void doForsionLogin()} disabled={loggingIn}>
-                            {loggingIn ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />} {authSt?.loggedIn && authSt?.tokenValid === false ? t('settings.forsion.relogin') : t('settings.forsion.login')}
-                          </button>
-                          {device && (
-                            <div style={{ marginTop: 10 }}>
-                              <QrImage value={device.url} />
-                              <div className="hint">{device.url} · {device.userCode}</div>
-                            </div>
-                          )}
-                          <div className="hint" style={{ marginTop: 6 }}>{t('settings.forsion.needLoginHint')}</div>
-                        </div>
-                      )}
-                    </div>
-
-                    <AccountSwitcher busy={loggingIn} onSelect={(id) => void doForsionLogin(id)} onAdd={() => void doForsionLogin()} />
-                    {authSt?.loggedIn && device && (
-                      <div className="field"><QrImage value={device.url} /><div className="hint">{device.url} · {device.userCode}</div></div>
-                    )}
-                    {testResult && <div className="hint" role="status">{testResult}</div>}
-
-                    {/* 云端地址(一等设置;原仅在开发者选项) */}
-                    {stored && (
-                      <div className="field" data-setting-anchor="cloud-url">
-                        <label><Globe2 size={11} style={{ verticalAlign: -1 }} /> {t('settings.forsion.cloudUrlLabel')}</label>
-                        <div className="settings-inline-row">
-                          {/* cloudUrl 是 managedKey(写 = 重启后端 + 重建 unit host):保留显式保存,不做失焦提交。 */}
-                          <input
-                            type="text"
-                            value={stored.cloudUrl}
-                            onChange={(e) => edit({ cloudUrl: e.target.value })}
-                            placeholder="https://api.forsion.net"
-                          />
-                          <button
-                            className="btn primary sm"
-                            onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
-                          >
-                            {t('settings.forsion.save')}
-                          </button>
-                        </div>
-                        {commitErrorHint('cloudUrl')}
-                        <div className="hint">{t('settings.forsion.cloudUrlHint')}</div>
-                      </div>
-                    )}
-
-                    {/* Brain 记忆同步 */}
-                    {stored && (
-                      <div className="field" data-setting-anchor="memory-sync">
-                        <label>{t('settings.forsion.syncLabel')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.forsion.syncHint')}</div>
-                        <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-                          <input
-                            type="checkbox"
-                            checked={!!stored.forsionSyncEnabled}
-                            onChange={(e) => void window.tangu!.setConfig({ forsionSyncEnabled: e.target.checked, forsionSyncAccountId: stored.forsionSyncAccountId }).then(setStored)}
-                          />
-                          {t('settings.forsion.autoSync')}
-                        </label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.forsion.autoSyncHint')}</div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          {/* 没登录点了必失败;整页主按钮只留「登录 Forsion」一个(W-02) */}
-                          <button className="btn sm" onClick={() => void doSyncNow()} disabled={syncing || !(authSt?.loggedIn && authSt?.tokenValid !== false)}>
-                            {syncing ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {syncing ? t('settings.forsion.syncing') : t('settings.forsion.syncNow')}
-                          </button>
-                          <span className="hint">
-                            {t('settings.forsion.lastSynced', {
-                              time: stored.forsionLastSyncedAt
-                                ? formatDateTime(stored.forsionLastSyncedAt)
-                                : (syncSt?.lastAt ? formatDateTime(syncSt.lastAt) : t('settings.forsion.never')),
-                            })}
-                          </span>
-                        </div>
-                        {syncMsg && <div className="hint" style={{ marginTop: 6 }}>{syncMsg}</div>}
-                      </div>
-                    )}
-
-                    {/* 哪些功能需要登录 */}
-                    <div className="field">
-                      <label>{t('settings.forsion.gatedTitle')}</label>
-                      <div className="hint">{t('settings.forsion.gatedList')}</div>
-                    </div>
-                  </>
-                )}
-
+                {tab === 'general' && activeSub === 'g-git' && isDesktop && stored && <GitSettingsSection />}
                 {/* 收件箱(Inbox Space):系统通知开关。非 managedKeys,保存即生效不重启后端。 */}
                 {tab === 'general' && isDesktop && stored && activeSub === 'g-inbox' && (
                   <>
@@ -2004,6 +1874,8 @@ export const SettingsModal: React.FC<{
                         <SettingsRow label={t('settings.notes.previewLabel')} description={t('settings.notes.previewHint')} control={<SettingsSwitch checked={stored.notesImportPreview !== false} onChange={(on) => void window.tangu!.setConfig({ notesImportPreview: on }).then(setStored)} label={t('settings.notes.previewLabel')} />} />
                         <SettingsRow label={t('settings.notes.upgradeV4Label')} description={t('settings.notes.upgradeV4Hint')} control={<SettingsSwitch checked={stored.notesUpgradeV4 !== false} onChange={(on) => { setUpgradeV4Enabled(on); void window.tangu!.setConfig({ notesUpgradeV4: on }).then(setStored) }} label={t('settings.notes.upgradeV4Label')} />} />
                         <SettingsRow label={t('settings.notes.wikiFilesLabel')} description={t('settings.notes.wikiFilesHint')} control={<SettingsSwitch checked={stored.notesWikiIncludeFiles !== false} onChange={(on) => { setWikiFilesEnabled(on); void window.tangu!.setConfig({ notesWikiIncludeFiles: on }).then(setStored) }} label={t('settings.notes.wikiFilesLabel')} />} />
+                        <SettingsRow label={t('settings.notes.aiSpaceLabel')} description={t('settings.notes.aiSpaceHint')} control={<SettingsSwitch checked={aiSpaceTrigger} onChange={(on) => { setAiSpaceTrigger(on); setAiSpaceTriggerEnabled(on) }} label={t('settings.notes.aiSpaceLabel')} />} />
+                        <SettingsRow label={t('settings.notes.spellcheckLabel')} description={t('settings.notes.spellcheckHint')} control={<SettingsSwitch checked={notesSpellcheck} onChange={setNotesSpellcheckEnabled} label={t('settings.notes.spellcheckLabel')} />} />
                         <SettingsRow
                           label={t('settings.notes.canvasDoubleClickFocusLabel')}
                           description={t('settings.notes.canvasDoubleClickFocusHint')}
@@ -2040,86 +1912,153 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'sync' && activeSub === 's-cloud' && (
+                {/* Forsion 云端 → 同步:与 Extend 画的五页同一套卡片(SettingsPanel / SettingsRow),同一分类里别一半新一半旧 */}
+                {tab === 'forsion' && activeSub === 'f-sync' && (
                   <>
                     {window.amadeusSync && noteSync && (
-                      <div className="field">
-                        <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                          <input
-                            type="checkbox"
-                            checked={noteSync.enabled}
-                            disabled={noteSyncBusy}
-                            onChange={(e) => {
-                              setNoteSyncBusy(true)
-                              void window.amadeusSync!.setEnabled(e.target.checked)
-                                .then(setNoteSync)
-                                .finally(() => setNoteSyncBusy(false))
-                            }}
-                          />
-                          {t('settings.notes.cloudSyncLabel')}
-                        </label>
-                        <div className="hint">{t('settings.notes.cloudSyncHint')}</div>
-                        {noteSync.enabled && (
-                          <>
-                            <div className="settings-inline-row" style={{ marginTop: 6 }}>
-                              {/* 未登录:给登录入口、禁掉「立即同步」,下面的红字错误行也不再重复同一句话(W-02) */}
-                              {noteSync.state === 'auth-required' && (
-                                <button className="btn primary sm" onClick={() => void doForsionLogin()} disabled={loggingIn}>
-                                  <LogIn size={12} /> {t('settings.forsion.login')}
-                                </button>
-                              )}
-                              <button
-                                className="btn sm"
-                                disabled={noteSyncBusy || noteSync.state === 'syncing' || noteSync.state === 'auth-required'}
-                                onClick={() => {
+                      <SettingsPanel icon={<NotebookPen size={16} />} title={t('settings.notes.cloudSyncLabel')} description={t('settings.notes.cloudSyncHint')}>
+                        <div className="settings-control-list">
+                          <SettingsRow
+                            label={t('settings.forsionCloud.noteSyncOn')}
+                            control={(
+                              <SettingsSwitch
+                                checked={noteSync.enabled}
+                                disabled={noteSyncBusy}
+                                label={t('settings.forsionCloud.noteSyncOn')}
+                                onChange={(on) => {
                                   setNoteSyncBusy(true)
-                                  void window.amadeusSync!.syncNow().then(setNoteSync).finally(() => setNoteSyncBusy(false))
+                                  void window.amadeusSync!.setEnabled(on).then(setNoteSync).finally(() => setNoteSyncBusy(false))
                                 }}
-                              >
-                                {noteSync.state === 'syncing' ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}{' '}
-                                {noteSync.state === 'syncing' ? t('settings.notes.cloudSyncSyncing') : t('settings.notes.cloudSyncNow')}
-                              </button>
-                              <span className="hint">
-                                {t(`settings.notes.cloudSyncState.${noteSync.state}`)}
-                                {noteSync.pending > 0 ? ` · ${t('settings.notes.cloudSyncPending', { n: String(noteSync.pending) })}` : ''}
-                                {' · '}
-                                {t('settings.forsion.lastSynced', {
-                                  time: noteSync.lastSyncAt ? formatDateTime(noteSync.lastSyncAt) : t('settings.forsion.never'),
-                                })}
-                              </span>
+                              />
+                            )}
+                          />
+                          {noteSync.enabled && (
+                            <SettingsRow
+                              label={t(`settings.notes.cloudSyncState.${noteSync.state}`)}
+                              description={`${noteSync.pending > 0 ? `${t('settings.notes.cloudSyncPending', { n: String(noteSync.pending) })} · ` : ''}${t('settings.forsion.lastSynced', {
+                                time: noteSync.lastSyncAt ? formatDateTime(noteSync.lastSyncAt) : t('settings.forsion.never'),
+                              })}`}
+                              control={(
+                                <div className="settings-inline-row">
+                                  {/* 未登录:给登录入口(带到账号页)、禁掉「立即同步」,下面的红字错误行也不再重复同一句话(W-02) */}
+                                  {noteSync.state === 'auth-required' && (
+                                    <button className="btn primary sm" onClick={() => openSubPage('forsion', ACCOUNT_SUB)}>
+                                      <LogIn size={12} /> {t('settings.forsion.login')}
+                                    </button>
+                                  )}
+                                  <button
+                                    className="btn sm"
+                                    disabled={noteSyncBusy || noteSync.state === 'syncing' || noteSync.state === 'auth-required'}
+                                    onClick={() => {
+                                      setNoteSyncBusy(true)
+                                      void window.amadeusSync!.syncNow().then(setNoteSync).finally(() => setNoteSyncBusy(false))
+                                    }}
+                                  >
+                                    {noteSync.state === 'syncing' ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}{' '}
+                                    {noteSync.state === 'syncing' ? t('settings.notes.cloudSyncSyncing') : t('settings.notes.cloudSyncNow')}
+                                  </button>
+                                </div>
+                              )}
+                            />
+                          )}
+                          {/* 行是不换行的 flex:错误 / 待确认删除 / 跳过的文件另起一块放在行下面,别挤到按钮右边 */}
+                          {noteSync.enabled && ((noteSync.error && noteSync.state !== 'auth-required') || (noteSync.pendingDeletions ?? 0) > 0 || noteSync.skipped.length > 0) && (
+                            <div className="settings-row-notes">
+                              {noteSync.error && noteSync.state !== 'auth-required' && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
+                              {(noteSync.pendingDeletions ?? 0) > 0 && (
+                                <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
+                                  {t('settings.notes.cloudSyncPendingDel', { n: String(noteSync.pendingDeletions) })}{' '}
+                                  <button
+                                    className="btn sm"
+                                    disabled={noteSyncBusy || !window.amadeusSync?.confirmDeletions}
+                                    onClick={() => {
+                                      setNoteSyncBusy(true)
+                                      void window.amadeusSync!.confirmDeletions!()
+                                        .then(setNoteSync)
+                                        .finally(() => setNoteSyncBusy(false))
+                                    }}
+                                  >
+                                    {t('settings.notes.cloudSyncConfirmDel')}
+                                  </button>
+                                </div>
+                              )}
+                              {noteSync.skipped.length > 0 && (
+                                <div className="hint">
+                                  {t('settings.notes.cloudSyncSkipped', { n: String(noteSync.skipped.length) })}:{' '}
+                                  {noteSync.skipped.slice(0, 3).map((s) => s.path).join(', ')}
+                                  {noteSync.skipped.length > 3 ? '…' : ''}
+                                </div>
+                              )}
                             </div>
-                            {noteSync.error && noteSync.state !== 'auth-required' && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
-                            {(noteSync.pendingDeletions ?? 0) > 0 && (
-                              <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
-                                {t('settings.notes.cloudSyncPendingDel', { n: String(noteSync.pendingDeletions) })}{' '}
-                                <button
-                                  className="btn sm"
-                                  disabled={noteSyncBusy || !window.amadeusSync?.confirmDeletions}
-                                  onClick={() => {
-                                    setNoteSyncBusy(true)
-                                    void window.amadeusSync!.confirmDeletions!()
-                                      .then(setNoteSync)
-                                      .finally(() => setNoteSyncBusy(false))
-                                  }}
-                                >
-                                  {t('settings.notes.cloudSyncConfirmDel')}
-                                </button>
-                              </div>
-                            )}
-                            {noteSync.skipped.length > 0 && (
-                              <div className="hint">
-                                {t('settings.notes.cloudSyncSkipped', { n: String(noteSync.skipped.length) })}:{' '}
-                                {noteSync.skipped.slice(0, 3).map((s) => s.path).join(', ')}
-                                {noteSync.skipped.length > 3 ? '…' : ''}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      </SettingsPanel>
                     )}
 
+                    {/* Brain 记忆同步 */}
+                    {stored && (
+                      <SettingsPanel anchor="memory-sync" icon={<Brain size={16} />} title={t('settings.forsion.syncLabel')} description={t('settings.forsion.syncHint')}>
+                        <div className="settings-control-list">
+                          <SettingsRow
+                            label={t('settings.forsion.autoSync')}
+                            description={t('settings.forsion.autoSyncHint')}
+                            control={(
+                              <SettingsSwitch
+                                checked={!!stored.forsionSyncEnabled}
+                                label={t('settings.forsion.autoSync')}
+                                onChange={(on) => void window.tangu!.setConfig({ forsionSyncEnabled: on, forsionSyncAccountId: stored.forsionSyncAccountId }).then(setStored)}
+                              />
+                            )}
+                          />
+                          <SettingsRow
+                            label={t('settings.forsion.lastSynced', {
+                              time: stored.forsionLastSyncedAt
+                                ? formatDateTime(stored.forsionLastSyncedAt)
+                                : (syncSt?.lastAt ? formatDateTime(syncSt.lastAt) : t('settings.forsion.never')),
+                            })}
+                            control={(
+                              /* 没登录点了必失败;整页主按钮只留「登录 Forsion」一个(W-02) */
+                              <button className="btn sm" onClick={() => void doSyncNow()} disabled={syncing || !(authSt?.loggedIn && authSt?.tokenValid !== false)}>
+                                {syncing ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {syncing ? t('settings.forsion.syncing') : t('settings.forsion.syncNow')}
+                              </button>
+                            )}
+                          />
+                          {syncMsg && <div className="settings-row-notes"><div className="hint">{syncMsg}</div></div>}
+                        </div>
+                      </SettingsPanel>
+                    )}
                   </>
                 )}
+
+                {/* Forsion 云端 → 连接:云端地址(自建服务才用;cloudUrl 是 managedKey —— 写 = 重启后端 + 重建 unit host,保留显式保存,不做失焦提交) */}
+                {tab === 'forsion' && activeSub === 'f-conn' && stored && (
+                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t('settings.forsion.cloudUrlHint')}>
+                    <div className="settings-control-list">
+                      <SettingsRow label={t('settings.forsionCloud.address')}>
+                        <div className="settings-inline-row settings-row-wide-control">
+                          <input
+                            type="text"
+                            value={stored.cloudUrl}
+                            onChange={(e) => edit({ cloudUrl: e.target.value })}
+                            placeholder="https://api.forsion.net"
+                            aria-label={t('settings.forsion.cloudUrlLabel')}
+                          />
+                          <button
+                            className="btn primary sm"
+                            onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
+                          >
+                            {t('settings.forsion.save')}
+                          </button>
+                        </div>
+                        {commitErrorHint('cloudUrl')}
+                      </SettingsRow>
+                    </div>
+                  </SettingsPanel>
+                )}
+
+                {tab === 'forsion' && activeSub.startsWith('fx:') && cloudViews.filter((o) => cloudViewKey(o) === activeSub).map((o) => (
+                  <PluginSettingsView key={activeSub} pluginId={o.pluginId} def={o.item} bare />
+                ))}
 
                 {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}
 

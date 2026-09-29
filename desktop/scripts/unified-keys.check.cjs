@@ -1,4 +1,5 @@
-// v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04。
+// v4 统一编辑器键盘层回归(Amadeus 评审 2026-09-27 波次 0b · keys 包):K-02 / K-03 / K-04 / R-04;
+// 波次 1 keys 包:B-12(Mod+D 复制块,四种选区 + Ctrl+D 平台归属);B-13(折叠命令 / 热键 / 本机记忆)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -310,6 +311,248 @@ async function main() {
         check('R04 行号栏在 <code> 之外、首行与代码首行对齐', geo.text === '1\n2' && geo.outside && geo.dy <= 2, JSON.stringify(geo))
         await page.close()
       }
+    }
+
+    // ── B-12:Mod+D 复制块(光标 / Esc 块选 / ⠿ 选中 / 跨块选区四种),与 ⠿ 菜单「复制块」同一份;
+    //    拍板 #8:Ctrl+D 各平台都作复制块(非 mac 上 Ctrl 即 Mod),向前删除只留在 mac。──
+    if (want('B12')) {
+      /** 光标放到文字恰为 text 的文本块里第 off 个字符处(off 省略 = 末尾),再等一帧。 */
+      const placeAt = async (page, text, off) => {
+        await page.evaluate(({ text, off }) => {
+          const v = window.__upage.probe.view()
+          let at = null
+          v.state.doc.descendants((n, p) => {
+            if (at != null) return false
+            if (n.isTextblock && n.textContent === text) { at = p + 1 + (off ?? n.content.size); return false }
+            return true
+          })
+          v.focus()
+          v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+        }, { text, off })
+        await page.waitForTimeout(120)
+      }
+      /** 选区落在第几个顶层块(列表则再报第几项)+ 块内偏移。 */
+      const where = (page) => page.evaluate(() => {
+        const s = window.__upage.probe.view().state.selection
+        const $f = s.$from
+        const node = s.node ? s.node.type.name : null
+        return { type: s.toJSON().type, node, top: $f.index(0), item: $f.depth >= 2 ? $f.index(1) : null, off: s.node ? null : $f.parentOffset }
+      })
+      const SEED = '段甲。\n\n段乙。\n\n- 项一\n- 项二\n\n段丙。\n'
+      const page = await open(browser, SEED)
+      // ① 光标态:复制光标所在段,光标跟到副本同一偏移。
+      await placeAt(page, '段乙。', 1)
+      await page.keyboard.press('Meta+d')
+      await page.waitForTimeout(1300)
+      let s = await shape(page)
+      let w = await where(page)
+      check('B12 光标态 Mod+D:复制所在段,光标进副本同一偏移并落盘',
+        s === 'paragraph:"段甲。" / paragraph:"段乙。" / paragraph:"段乙。" / bullet_list /   list_item /     paragraph:"项一" /   list_item /     paragraph:"项二" / paragraph:"段丙。"'
+          && w.top === 2 && w.off === 1 && /段乙。\n\n段乙。/.test(await lastWrite(page) || ''), `${s} | ${JSON.stringify(w)}`)
+      // ② 列表项里:只复制这一项,留在同一只列表里。
+      await placeAt(page, '项一')
+      await page.keyboard.press('Meta+d')
+      await page.waitForTimeout(150)
+      s = await shape(page)
+      w = await where(page)
+      check('B12 列表项里 Mod+D:同一列表里复制该项', /bullet_list \/   list_item \/     paragraph:"项一" \/   list_item \/     paragraph:"项一" \/   list_item \/     paragraph:"项二"/.test(s) && w.item === 1, `${s} | ${JSON.stringify(w)}`)
+      // ③ Esc 块选中:复制该块,副本成为新的块选中。
+      await placeAt(page, '段甲。')
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(120)
+      const w0 = await where(page)
+      await page.keyboard.press('Meta+d')
+      await page.waitForTimeout(150)
+      s = await shape(page)
+      w = await where(page)
+      check('B12 Esc 块选 Mod+D:复制该块,选中跟到副本', w0.type === 'node' && s.startsWith('paragraph:"段甲。" / paragraph:"段甲。" / paragraph:"段乙。"') && w.type === 'node' && w.top === 1,
+        `${s} | before=${JSON.stringify(w0)} after=${JSON.stringify(w)}`)
+      // ④ ⠿ 选中:点把手(开菜单 + 块选中)→ Esc 关菜单 → Mod+D。
+      const r = await page.evaluate((PM) => {
+        const el = [...document.querySelectorAll(PM + ' > p')].find((e) => e.textContent === '段丙。')
+        const b = el.getBoundingClientRect()
+        return { x: b.left + 20, y: b.top + b.height / 2 }
+      }, PM)
+      await page.mouse.move(r.x, r.y, { steps: 4 })
+      await page.waitForTimeout(300)
+      const h = await page.evaluate(() => {
+        const g = document.querySelector('.unified-gutter')
+        const el = g && g.querySelector('.drag-handle')
+        if (!el || g.dataset.show !== 'true') return null
+        const b = el.getBoundingClientRect()
+        return { x: b.x + b.width / 2, y: b.y + Math.min(10, b.height / 2) }
+      })
+      if (h) {
+        await page.mouse.click(h.x, h.y)
+        await page.waitForTimeout(250)
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(150)
+      }
+      const wh = await where(page)
+      await page.keyboard.press('Meta+d')
+      await page.waitForTimeout(150)
+      s = await shape(page)
+      check('B12 ⠿ 选中 Mod+D:复制该块', !!h && wh.type === 'node' && s.endsWith('paragraph:"段丙。" / paragraph:"段丙。"'), `${s} | handle=${JSON.stringify(h)} sel=${JSON.stringify(wh)}`)
+      await page.close()
+      // ⑤ 跨块选区:整批复制到范围之后(与 ⠿ 菜单 M3 同一判定)。
+      {
+        const pg = await open(browser, '段甲。\n\n段乙。\n\n段丙。\n')
+        await pg.evaluate(() => {
+          const v = window.__upage.probe.view()
+          v.focus()
+          v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.create(v.state.doc, 2, 7)))
+        })
+        await pg.waitForTimeout(120)
+        await pg.keyboard.press('Meta+d')
+        await pg.waitForTimeout(150)
+        const t = await pg.evaluate((PM) => [...document.querySelectorAll(PM + ' > p')].map((e) => e.textContent).join('|'), PM)
+        check('B12 跨块选区 Mod+D:整批复制到范围之后', t === '段甲。|段乙。|段甲。|段乙。|段丙。', t)
+        await pg.close()
+      }
+      // ⑥ mac 上 Ctrl+D 仍是向前删除那一支(块尾撞代码块 = 选中不吞),不复制。
+      const DEL_SEED = '前段。\n\n```js\ncode\n```\n'
+      {
+        const pg = await open(browser, DEL_SEED)
+        await placeAt(pg, '前段。')
+        await pg.keyboard.press('Control+d')
+        await pg.waitForTimeout(150)
+        const st = await selInfo(pg)
+        const t = await shape(pg)
+        check('B12 mac:Ctrl+D 仍是向前删除(块尾撞代码块 = 选中),不复制', st.node === 'code_block' && t === 'paragraph:"前段。" / code_block:"code"', `${t} | ${JSON.stringify(st)}`)
+        await pg.close()
+      }
+      // ⑦ 非 mac(navigator.platform=Win32,prosemirror-keymap 据此把 Mod 解成 Ctrl):Ctrl+D = 复制块。
+      {
+        const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+        await pg.addInitScript(() => Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'Win32' }))
+        pg.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+        await pg.goto(`${URL}?upage&useed=${encodeURIComponent(DEL_SEED)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+        await pg.waitForSelector(PM, { timeout: 120000 })
+        await pg.waitForTimeout(400)
+        await placeAt(pg, '前段。')
+        await pg.keyboard.press('Control+d')
+        await pg.waitForTimeout(150)
+        const t = await shape(pg)
+        check('B12 Windows:Ctrl+D = 复制块,不再是向前删除', t === 'paragraph:"前段。" / paragraph:"前段。" / code_block:"code"', t)
+        await pg.close()
+      }
+    }
+
+    // ── B-13:折叠的键盘入口(引擎命令 + 缺省热键 mod+alt+enter)与本机记忆(拍板 #4:不写 md)。
+    //    `&ucmds` = 台架按生产装上 FOLD_COMMANDS + 引擎全局热键分发(amadeusCommands 在台架里不跑)。──
+    if (want('B13')) {
+      const SEED = '# 甲\n\n段一。\n\n## 乙\n\n段二。\n\n- 父项\n    - 子项\n\n尾段。\n'
+      const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+      const openIn = async (md) => {
+        const pg = await ctx.newPage()
+        pg.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+        await pg.goto(`${URL}?upage&ucmds&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
+        await pg.waitForSelector(PM, { timeout: 120000 })
+        await pg.waitForFunction(() => Array.isArray(window.__upage.foldCommands), null, { timeout: 30000 })
+        await pg.waitForTimeout(400)
+        return pg
+      }
+      /** 被藏起来的文本块(display:none 祖先)的文字,按文档序。 */
+      const hidden = (pg) => pg.evaluate((PM) => [...document.querySelectorAll(PM + ' p, ' + PM + ' h1, ' + PM + ' h2')]
+        .filter((e) => e.offsetParent === null).map((e) => e.textContent.replace('▸', '')).join('|'), PM)
+      const placeAt = async (pg, text) => {
+        await pg.evaluate((text) => {
+          const v = window.__upage.probe.view()
+          let at = null
+          v.state.doc.descendants((n, p) => {
+            if (at != null) return false
+            if (n.isTextblock && n.textContent === text) { at = p + 1 + Math.min(1, n.content.size); return false }
+            return true
+          })
+          v.focus()
+          v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+        }, text)
+        await pg.waitForTimeout(120)
+      }
+      const caretText = (pg) => pg.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.textContent)
+      const runCmd = (pg, id) => pg.evaluate((id) => window.__upage.foldCommands.find((c) => c.id === id).run(), id)
+      const pg = await openIn(SEED)
+      const meta = await pg.evaluate(() => window.__upage.foldCommands.map((c) => `${c.id}=${typeof c.title === 'function' ? c.title() : 'STATIC'}@${c.hotkey || ''}`).join(' '))
+      check('B13 三条命令注册(title 渲染期求值);切换折叠缺省 mod+alt+enter',
+        meta === 'amadeus-fold-toggle=切换折叠@mod+alt+enter amadeus-fold-all=全部折叠@ amadeus-unfold-all=全部展开@', meta)
+      const w0 = await pg.evaluate(() => window.__upage.writes.length)
+      // ① 标题上热键:折 / 再按展开
+      await placeAt(pg, '乙')
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(150)
+      const h1 = await hidden(pg)
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(150)
+      const h1b = await hidden(pg)
+      check('B13 标题上 ⌘⌥↵ 折叠小节,再按展开', h1 === '段二。|父项|子项|尾段。' && h1b === '', `${h1} → ${JSON.stringify(h1b)}`)
+      // ② 正文里:收起所在小节,光标停在该小节标题末尾(看得见)
+      await placeAt(pg, '段一。')
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(150)
+      const h2 = await hidden(pg)
+      const c2 = await caretText(pg)
+      check('B13 正文里 ⌘⌥↵ 收起所在小节,光标回到标题', h2 === '段一。|乙|段二。|父项|子项|尾段。' && c2 === '甲', `${h2} caret=${c2}`)
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(150)
+      // ③ 列表项:只收子项
+      await placeAt(pg, '父项')
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(150)
+      const h3 = await hidden(pg)
+      check('B13 有子项的列表项上 ⌘⌥↵ 收起子项', h3 === '子项', h3)
+      // ④ 焦点不在正文(面板输入框抢走):热键走引擎全局分发、命令面板直调 run(),都作用在最近聚焦的那篇
+      await pg.evaluate(() => { const i = document.createElement('input'); i.id = 'steal'; document.body.appendChild(i); i.focus() })
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(150)
+      const h4 = await hidden(pg)
+      check('B13 焦点不在正文时 ⌘⌥↵ 经引擎热键作用在最近那篇(展开刚折的列表项)', h4 === '', JSON.stringify(h4))
+      await pg.evaluate(() => document.getElementById('steal').focus())
+      await runCmd(pg, 'amadeus-unfold-all')
+      await pg.waitForTimeout(150)
+      const h4a = await hidden(pg)
+      await pg.evaluate(() => document.getElementById('steal').focus())
+      await runCmd(pg, 'amadeus-fold-all')
+      await pg.waitForTimeout(150)
+      const h4b = await hidden(pg)
+      check('B13 命令面板:全部展开 / 全部折叠(焦点不在编辑器也作用在最近那篇)', h4a === '' && h4b === '段一。|乙|段二。|父项|子项|尾段。', `${JSON.stringify(h4a)} → ${h4b}`)
+      await runCmd(pg, 'amadeus-unfold-all')
+      await pg.waitForTimeout(150)
+      // ⑤ 折叠只是视图态:整段操作零写盘
+      await pg.waitForTimeout(1200)
+      const w1 = await pg.evaluate(() => window.__upage.writes.length)
+      check('B13 折叠 / 展开不写 md(零写盘)', w1 === w0, `writes ${w0} → ${w1}`)
+      // ⑥ 本机记忆:折「乙」与「父项」→ 切源码再切回 / 切走再切回 / 整页重开,都复原
+      await placeAt(pg, '父项')
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await placeAt(pg, '乙')
+      await pg.keyboard.press('Meta+Alt+Enter')
+      await pg.waitForTimeout(600)
+      const want6 = '段二。|父项|子项|尾段。'
+      const before6 = await hidden(pg)
+      await pg.evaluate(() => window.__upage.setEditorMode('source'))
+      await pg.waitForTimeout(600)
+      await pg.evaluate(() => window.__upage.setEditorMode('wysiwyg'))
+      await pg.waitForSelector(PM)
+      await pg.waitForTimeout(700)
+      const src6 = await hidden(pg)
+      await pg.evaluate(() => window.__upage.switchFile('Other.md', '别的。\n'))
+      await pg.waitForTimeout(800)
+      await pg.evaluate(() => window.__upage.switchFile('Unified.md'))
+      await pg.waitForTimeout(900)
+      const sw6 = await hidden(pg)
+      await pg.close()
+      const pg2 = await openIn(SEED)
+      await pg2.waitForTimeout(300)
+      const re6 = await hidden(pg2)
+      check('B13 折叠记在本机:切源码回来 / 切走再回 / 整页重开都复原', before6 === want6 && src6 === want6 && sw6 === want6 && re6 === want6,
+        JSON.stringify({ before6, src6, sw6, re6 }))
+      await pg2.close()
+      // ⑦ 指纹对不上(外部把「乙」改名)就不折,宁少勿错
+      const pg3 = await openIn(SEED.replace('## 乙', '## 丙'))
+      const h7 = await hidden(pg3)
+      check('B13 标题被外部改名 → 该处记忆作废、不误折别处;列表项记忆照旧', h7 === '子项', h7)
+      await pg3.close()
+      await ctx.close()
     }
   } finally {
     await browser.close()

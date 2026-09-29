@@ -60,7 +60,7 @@ registerMessages({
   'canvasstage.toast.needEdit': { zh: '双击卡片（或选中后按空格）进入编辑模式，才能勾选待办、点开双链', en: 'Double-click a card (or select it and press Space) to edit — then you can tick to-dos and open backlinks' },
   'canvasstage.toolbar.label': { zh: '画布工具', en: 'Canvas tools' },
   'canvasstage.tool.select': { zh: '选择 (Esc)', en: 'Select (Esc)' },
-  'canvasstage.tool.pan': { zh: '抓手（或按住 Alt 拖）', en: 'Pan (or hold Alt and drag)' },
+  'canvasstage.tool.pan': { zh: '抓手（或按住空格 / Alt 拖）', en: 'Pan (or hold Space or Alt and drag)' },
   'canvasstage.tool.card': { zh: '新建卡片（双击空白同）', en: 'New card (or double-click empty space)' },
   'canvasstage.tool.frame': { zh: 'Frame：拖出范围（或点一下取默认大小）', en: 'Frame: drag to size (or click for the default size)' },
   'canvasstage.tool.conn': { zh: '箭头：依次点父节点、子节点（Shift 或形状=自由连线）', en: 'Arrow: click the parent, then the child (Shift or a shape = free connector)' },
@@ -453,6 +453,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   const [editing, setEditingState] = useState<string | null>(null)
   const editingRef = useRef<string | null>(null)
   const setEditing = useCallback((v: string | null): void => { editingRef.current = v; setEditingState(v) }, [])
+  /** 按住空格 = 临时抓手(V-05,Figma/Obsidian 同款)。`held` = 空格正按着;`used` = 按住期间按过指针
+   *  (拖了就是平移,松开空格不再进编辑)。ref 给只依赖 [active] 的手势 effect 现读,state 只管光标 class。 */
+  const spaceRef = useRef({ held: false, used: false })
+  const [spacePan, setSpacePan] = useState(false)
 
   /** 编辑态光标(2026-08-19 用户实报:双击进编辑后鼠标还是抓手)。与 dragCss 同一条纪律:
    *  PM 的 DOM 一个属性都不碰,走按 data-anchor 命中的独立样式表;只写单元素规则(不写通配),
@@ -1029,6 +1033,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     commitGeo(view, view.state.tr.insert(at, made))
     cbRef.current.onCommit(anchor) // ⚠️ 必须报锚:不进归属集合的话派生会把这张卡当「代表不了全貌」
     setSel([cardKey(anchor)])
+    // **刚建的空卡直接进编辑**(V-04,v3 导图 07-25「新节点直接进编辑」的对标):只选中的话,接着打的字
+    // 落在舞台上被吞掉、盘上留一枚空锚。带内容的(上传占位 / 粘贴卡)不进 —— 那是搬东西,不是要写字。
+    // ⚠️ 调用方在这之后别再 focusStage(),那会把焦点从 PM 抢回舞台(卡片工具那两支已按返回值跳过)。
+    if (!text && !content?.childCount) actRef.current.enterNodeEdit(cardKey(anchor))
     return anchor
   }, [boxesNow])
 
@@ -1533,7 +1541,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       if (p && inNode?.(p.pos)) at = p.pos
     }
     // 空格进编辑后把光标落在节点尾部：用户可直接续写；落在开头会让 Backspace 看似失效。
-    try { view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(at), -1))) } catch { /* 只聚焦 */ }
+    // closeHistory = 进编辑是撤销组的边界:新建空卡后 500ms 内打的字不再并进建卡那一组(V-04),
+    // Cmd+Z 先退字、再退卡。
+    try { view.dispatch(closeHistory(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(at), -1)))) } catch { /* 只聚焦 */ }
     setEditing(key === MAIN_KEY ? MAIN_KEY : keyId(key))
     view.focus()
   }, [])
@@ -2226,7 +2236,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         return
       }
       const cur = editingRef.current
-      const panIntent = t === 'pan' || e.altKey || middle
+      // 按住空格时按下 = 平移(V-05),并记下「这次按住拖过」—— 松开空格就不再进编辑。
+      const spaceHeld = spaceRef.current.held
+      if (spaceHeld) spaceRef.current.used = true
+      const panIntent = t === 'pan' || e.altKey || middle || spaceHeld
       const otherIntent = t !== 'select' && !panIntent
       // 「还在原地」判据分身份:卡=还在那张卡里;主卡=还在正文里(在 .ProseMirror 内**且不在任何
       // 卡里** —— 卡片的 DOM 就住在 PM 根之内,少了后半句,编辑主卡时点卡片会被当成「还在主卡」)。
@@ -2270,9 +2283,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       }
       if (t === 'card') {
         e.preventDefault()
-        actRef.current.addCardAt(at.x - CARD_W / 2, at.y - 24)
+        const made = actRef.current.addCardAt(at.x - CARD_W / 2, at.y - 24)
         setTool('select')
-        focusStage()
+        if (!made) focusStage() // 建成了 = 新空卡已进编辑、焦点在 PM(V-04),别抢回舞台
         return
       }
 
@@ -2437,7 +2450,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       const addEl = target.closest<HTMLElement>('[data-add]')
       if (addEl?.dataset.add && addEl.dataset.node) {
         e.preventDefault()
-        focusStage() // 建完焦点留在舞台:接着按 Tab/回车能继续长下一枚
+        focusStage() // 建卡失败时焦点留在舞台;建成了新空卡会进编辑、焦点转给 PM(V-04,与 Tab/回车同一条)
         actRef.current.addRelated(addEl.dataset.node, addEl.dataset.add === 'child' ? 'child' : 'sibling')
         return
       }
@@ -2727,16 +2740,17 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         // 尺寸只归 DRAW_TOOLS:触屏的 card/text 也走这条通道(见 onDown 的告警),但它们本来就
         // 只有「一击建默认大小」这一种形态,拖出来的框不该变成它们的尺寸。
         const box = DRAW_TOOLS.has(d.tool) && w >= MIN_EL && h >= MIN_EL ? { x: Math.min(d.x0, d.x1), y: Math.min(d.y0, d.y1), w, h } : null
+        let made: string | null = null
         if (d.tool === 'frame') {
           if (box) actRef.current.addFrame(box.x, box.y, box.w, box.h)
           else actRef.current.addFrame(d.x0 - FRAME_SIZE.w / 2, d.y0 - FRAME_SIZE.h / 2)
         } else if (d.tool === 'card') {
-          actRef.current.addCardAt(d.x0 - CARD_W / 2, d.y0 - 24)
+          made = actRef.current.addCardAt(d.x0 - CARD_W / 2, d.y0 - 24)
         } else if (SHAPE_TOOLS[d.tool]) {
           actRef.current.addShapeAt(SHAPE_TOOLS[d.tool], d.x0, d.y0, box ?? undefined)
         }
         setTool('select')
-        focusStage()
+        if (!made) focusStage() // 新空卡已进编辑(V-04),焦点留在 PM
         clearVisuals(d)
         return
       }
@@ -3211,6 +3225,36 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
   }, [active, toStage])
 
+  // 空格松开 = 「按下、没拖、松开」才进编辑(V-05)。挂 window 捕获期:按住期间焦点可能被别的东西带走,
+  // keyup 不一定回到舞台;窗口失焦(Cmd+Tab)时 keyup 根本不来,不收尾就会卡在抓手态。
+  useEffect(() => {
+    if (!active) return
+    const end = (): void => {
+      spaceRef.current = { held: false, used: false }
+      setSpacePan(false)
+    }
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (e.code !== 'Space' || !spaceRef.current.held) return
+      const { used } = spaceRef.current
+      end()
+      e.preventDefault()
+      const host = hostRef.current
+      const t = e.target as HTMLElement | null
+      if (used || readOnlyRef.current || !host || !t || !host.contains(t) || t.closest('.ProseMirror')) return
+      // ⚠️ 不看 editingRef:点正在编辑那张卡的 chrome 圈会把焦点交回舞台而 editing 仍挂着它,
+      //    这时空格就该把光标送回去(与修前 keydown 即进编辑同口径;block-file-ops B13 钉着)。
+      const s = selRef.current
+      if (s.length === 1 && (s[0].startsWith('c:') || s[0] === MAIN_KEY)) actRef.current.enterNodeEdit(s[0])
+    }
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', end)
+    return () => {
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', end)
+      end()
+    }
+  }, [active])
+
   /** 捕获期键盘:统一撤销 + 编辑中的 Esc。
    *  ⚠️ 必须挂**捕获期**的两个理由:Esc 那条是 PM 的 escKeymap 会抢(冒泡期拦不到);Cmd+Z 那条
    *  是**卡内打字时**焦点在 PM 里,冒泡期第一句就让路了 —— 而统一时间线的意义恰恰是「卡内卡外
@@ -3238,10 +3282,22 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   /** 画布态键盘(冒泡期)。⚠️ 第一句就得放行卡内打字 —— keydown 从 PM 冒泡到舞台,不挡的话在
    *  卡里按 Backspace 会把「选中的形状」删掉。(Cmd+Z 已在捕获期由统一时间线接管,这里没有它。) */
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!active || readOnly) return // 只读:没有选中集合,删除/搬动/建子卡/进编辑一律不接
+    if (!active) return
     const t = e.target as HTMLElement
     if (t.closest('.ProseMirror') || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
     const mod = e.metaKey || e.ctrlKey
+    // 视口键(V-06,Figma 同款):Cmd/Ctrl + = / - / 0 = 放大 / 缩小 / 回 100%,Shift+1 = 适应内容。
+    // 只看视口,只读画布同样要能缩放,所以排在只读闸之前;卡内打字早在上一句让路(Shift+1 照常是「!」,
+    // Cmd+= 仍归整窗缩放)。⚠️ preventDefault 就是接管的全部手段:uiZoom 与命令系统的 Cmd+=/-/0
+    // 都挂在 window 冒泡期、第一句先看 defaultPrevented —— 不拦,缩的是整窗 UI 而不是画布。
+    if (!e.altKey && (mod ? e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0' : e.shiftKey && e.code === 'Digit1')) {
+      e.preventDefault()
+      if (!mod) fit()
+      else if (e.key === '0') zoomBy(1 / vpRef.current.z)
+      else zoomBy(e.key === '-' ? 1 / 1.2 : 1.2)
+      return
+    }
+    if (readOnly) return // 只读:没有选中集合,删除/搬动/建子卡/进编辑一律不接
     if (mod && (e.key === 'a' || e.key === 'A')) {
       e.preventDefault()
       setSel([...measureCards(hostRef.current).keys()].map(cardKey).concat(els.filter((x) => x.kind !== 'connector').map((x) => elKey(x.id)), [MAIN_KEY]))
@@ -3257,9 +3313,16 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       else setSel([])
       return
     }
-    if (e.code === 'Space' && !mod && sel.length === 1 && (sel[0].startsWith('c:') || sel[0] === MAIN_KEY)) {
+    // 按住空格 = 临时抓手(V-05)。「选中卡按空格进编辑」挪到**松开**时判(见上面 keyup 那个 effect):
+    // 修前在第一下 keydown 就进编辑、焦点落进 PM,之后自动重复的 keydown 全被写成空格落盘。
+    // 重复 keydown 一律吞掉;无选中时也吞(舞台外层的滚动容器不许被空格翻页)。
+    // 焦点在 HUD / 工具栏按钮上:空格归按钮本身(键盘用户按下它),不进抓手。
+    if (e.code === 'Space' && !mod && !(e.target as Element | null)?.closest?.('button')) {
       e.preventDefault()
-      enterNodeEdit(sel[0])
+      if (!e.repeat && !spaceRef.current.held) {
+        spaceRef.current = { held: true, used: false }
+        setSpacePan(true)
+      }
       return
     }
     if (!sel.length) return
@@ -3278,6 +3341,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // **主卡同样吃这一条**(2026-08-19 用户实报;主卡自 08-18 起完全等同卡片)。
     // ⚠️ 只在**焦点在舞台上**时生效 —— 卡内打字的 Tab/回车早在本函数第一句就让位给 PM 了
     //    (那边 Tab=缩进档、回车=新段落,是 08-19 上午刚落地的两条,不能被这里抢走)。
+    // 新卡建成即进编辑(V-04,XMind 同款):写完 Esc 退回选中,再 Tab/回车接着长下一枚。
     if ((e.key === 'Tab' || e.key === 'Enter') && sel.length === 1 && (sel[0].startsWith('c:') || sel[0] === MAIN_KEY)) {
       e.preventDefault()
       addRelated(sel[0] === MAIN_KEY ? MAIN_KEY : keyId(sel[0]), e.key === 'Tab' ? 'child' : 'sibling')
@@ -3336,7 +3400,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   //    往上找包含块的 —— 留着 relative 就会挑中这个没有盒子的祖先,浮层整体偏一个容器位。
   return (
     <div
-      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${readOnly ? 'pan' : tool}` : ''}${readOnly ? ' amx-stage-ro' : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
+      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${readOnly ? 'pan' : tool}` : ''}${readOnly ? ' amx-stage-ro' : ''}${active && spacePan ? ' amx-space-pan' : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
       ref={hostRef}
       tabIndex={-1}
       onKeyDownCapture={onKeyDownCapture}

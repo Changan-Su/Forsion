@@ -9,7 +9,7 @@ import { $prose } from '@milkdown/kit/utils'
 import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
-import { isPdfLinkInner, parseMediaLinkInner } from '@amadeus-shared/pdfLink'
+import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner } from '@amadeus-shared/pdfLink'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { attachSourceButton } from './sourceToggle'
@@ -31,9 +31,20 @@ function imageEmbed(inner: string, bang: boolean): { url: string; width?: number
 interface WikiState { focus: boolean; sourceFrom: number | null }
 const wikiKey = new PluginKey<WikiState>('amadeus-wikilink-live')
 
-/** [[Name|alias]] → 显示 alias;[[Name#heading]] / [[Name]] → 显示原样内文(仅去两端 [[ ]])。 */
-function displayLabel(inner: string): string {
+/** [[Name|alias]] → 显示 alias;[[Name]] → 原样内文(仅去两端 [[ ]])。
+ *  笔记内锚点(评审 L-05,口径同聊天引用条 ChatWikiLink):[[笔记#标题]] → 「笔记 › 标题」,
+ *  [[笔记#^块]] → 「笔记 › ^块」,嵌套链 [[笔记#H1#H2]] 逐段用 › 连;本页锚点 [[#标题]] 只显示锚点本身。
+ *  anchor = 调用方已判定这是笔记锚点(PDF 页码 / 媒体时刻等别的 `#` 形态不走这条,维持原样)。 */
+function displayLabel(inner: string, anchor: { target: string; subpath: string } | null): string {
   const bar = inner.indexOf('|')
+  if (bar !== -1) {
+    const alias = inner.slice(bar + 1).trim()
+    if (alias) return alias
+  }
+  if (anchor) {
+    const tail = parseBlockSubpath(anchor.subpath) ? anchor.subpath : anchor.subpath.split('#').map((x) => x.trim()).filter(Boolean).join(' › ')
+    return anchor.target ? `${anchor.target} › ${tail}` : tail
+  }
   const l = (bar === -1 ? inner : inner.slice(bar + 1)).trim()
   return l || inner.trim()
 }
@@ -146,14 +157,18 @@ function buildDecorations(
         continue
       }
       const target = linkTarget(m[1])
-      const label = displayLabel(m[1])
-      const ok = isResolved(target)
-      const emoji = ok ? iconOf?.(target) : undefined // 目标笔记的 emoji 图标,渲染在链接文字前
-      // PDF 链接点击要保留 #page= 子路径(openWikiLink 据此跳页);m 是循环变量,须逐条捕获(勿在闭包里读 m)。
-      // 保留 subpath 的白名单:PDF 页码 `#page=` / 媒体时刻 `#t=`。**这是笔记正文里唯一保留
-      // subpath 的地方** —— linkTarget 会把 `#…` 砍掉,不改这行时间戳就静默蒸发(看起来一切
-      // 正常,只是永远从 0 秒开始)。
-      const openArg = isPdfLinkInner(m[1]) || parseMediaLinkInner(m[1]) ? m[1] : target
+      const fileAnchor = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
+      // 笔记内锚点(评审 L-05):`[[笔记#标题]]` / `[[笔记#^块]]` / `[[#标题]]`。空笔记名 = 本页,恒算已解析
+      // (此前 linkTarget 给空串 → isResolved('') 为假 → 本页锚点一律画成虚线坏链,点了也没反应)。
+      const split = fileAnchor ? null : splitLinkInner(m[1])
+      const anchor = split?.subpath ? { target: split.target, subpath: split.subpath } : null
+      const label = displayLabel(m[1], anchor)
+      const ok = anchor && !anchor.target ? true : isResolved(target)
+      const emoji = ok && target ? iconOf?.(target) : undefined // 目标笔记的 emoji 图标,渲染在链接文字前
+      // 点击要保留的 subpath(m 是循环变量,须逐条捕获,勿在闭包里读 m):PDF 页码 `#page=` / 媒体时刻 `#t=`
+      // 原样交给 openWikiLink(据此跳页 / 起播);笔记锚点交「笔记#锚点」(别名剥掉),openWikiLink 拆开后
+      // 打开并定位。linkTarget 会把 `#…` 砍掉 —— 不走这里就是锚点静默蒸发(打开的永远是文首 / 0 秒)。
+      const openArg = fileAnchor ? m[1] : anchor ? `${anchor.target}#${anchor.subpath}` : target
       decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
       decos.push(
         Decoration.widget(

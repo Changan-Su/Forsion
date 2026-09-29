@@ -83,6 +83,8 @@
 //      新卡插在父卡那一段之后 + tree 记上父子 + 文档模式当场缩进,父卡内容一个字不动
 //   C86 Shift+点/拖卡 = 连整支(选中它与全部子卡;Cmd/Ctrl 仍是单张加选)
 //   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
+//   C91 按住空格 = 临时抓手:重复 keydown 不写进卡、松开(没拖)才进编辑、拖 = 平移(V-05)
+//   C92 画布键盘缩放 Cmd+=/-/0 + Shift+1 适应,舞台焦点才接管;HUD 百分比 = 重置 100% 按钮(V-06)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -1284,11 +1286,27 @@ async function main() {
   await p28.close()
 
   // ── C29 Tab/回车 = 子/兄弟节点,层级存 tree 且**不进正文**,层级线画得出来 ──────────────
+  // V-04(2026-09-28):新建的空卡**直接进编辑**(v3 导图 07-25「新节点直接进编辑」/ XMind 同款)。
+  // 修前只选中:Tab 之后接着打的字落在舞台上被吞,盘上留一枚空锚。所以这里钉三件事:
+  // Tab 后新卡在编辑态且焦点在 PM、打的字进了新卡;Esc 退回选中后回车照样建兄弟(同样进编辑);
+  // 层级照旧两条都指向 k1、正文除了打进去的字零污染。
   const ONE = [
     '---', 'amadeus_schema: amadeus.page/4',
     'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":40,"y":40,"w":300}]}',
     '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一。', '',
   ].join('\n')
+  const edit29 = (p) => p.evaluate(() => {
+    const box = document.querySelector('.amx-el-selbox.is-editing')
+    const a = box?.dataset.anchor ?? null
+    const card = a ? [...document.querySelectorAll('.amx-ucard')].find((c) => c.dataset.anchor === a) : null
+    const ae = document.activeElement
+    return {
+      editing: a,
+      pmFocus: !!ae?.closest?.('.ProseMirror'),
+      caretIn: !!card && !!window.getSelection()?.anchorNode && card.contains(window.getSelection().anchorNode),
+      text: card?.textContent ?? null,
+    }
+  })
   const p29 = await open(browser, ONE)
   await p29.waitForTimeout(500)
   const body29before = (await p29.evaluate(() => window.__upage.probe.fmState?.().body ?? ''))
@@ -1301,8 +1319,15 @@ async function main() {
   await p29.waitForTimeout(200)
   await p29.keyboard.press('Tab')
   await p29.waitForTimeout(900)
+  const tab29 = await edit29(p29)
+  await p29.keyboard.type('abc')
+  await p29.waitForTimeout(300)
+  const typed29 = await edit29(p29)
+  await p29.keyboard.press('Escape') // 退回选中(新卡),回车才归舞台
+  await p29.waitForTimeout(250)
   await p29.keyboard.press('Enter')
   await p29.waitForTimeout(1500)
+  const enter29 = await edit29(p29)
   const c29 = await p29.evaluate(() => {
     window.__upage.probe.flush?.()
     const st = window.__upage.probe.fmState?.() ?? {}
@@ -1318,15 +1343,57 @@ async function main() {
   // ⚠️「层级不进正文」不能只搜 `tree|parent` —— 写侧完全可以往正文追加 `{"k2":"k1"}` 或 `k2→k1`
   //    而这个断言照绿(Codex 评审 P2-5)。改成**逐行白名单**:相对建两个节点之前,正文里新增的行
   //    只允许是锚行或空行,任何别的新增都算把层级漏进了正文。
+  //    (V-04 起多一行:Tab 后打进新卡的 `abc`,它是用户的字,白名单单独放行这一行。)
   const before29 = new Set(body29before.split('\n'))
   const added29 = c29.body.split('\n').filter((l) => !before29.has(l))
   // 闭合锚(2026-08-19):新增行白名单 = 开锚 / 闭合符 / 空行(保存迁移会给既有卡补闭合符)。
-  const bodyClean29 = added29.every((l) => l.trim() === '' || /^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->$/.test(l.trim()))
+  const bodyClean29 = added29.every((l) => l.trim() === '' || l.trim() === 'abc' || /^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->$/.test(l.trim()))
   const kids = c29.tree ? Object.entries(c29.tree) : []
-  record('C29 Tab=子节点 / 回车=兄弟节点:两条层级都记在 tree 且指向 k1,画出两条层级线,正文零污染',
-    c29.cards === 3 && kids.length === 2 && kids.every(([, p]) => p === 'k1') && c29.treeLines === 2 && bodyClean29,
-    JSON.stringify({ ...c29, body: undefined, added29 }))
+  const kid1 = tab29.editing
+  record('C29 Tab=子节点(新空卡直接进编辑、字进新卡)/ Esc 后回车=兄弟节点(同样进编辑):两条层级都记在 tree 且指向 k1,画出两条层级线,正文零污染',
+    !!kid1 && kid1 !== 'k1' && tab29.pmFocus && tab29.caretIn
+      && typed29.editing === kid1 && (typed29.text ?? '').trim() === 'abc'
+      && !!enter29.editing && enter29.editing !== kid1 && enter29.editing !== 'k1' && enter29.pmFocus && enter29.caretIn
+      && c29.cards === 3 && kids.length === 2 && kids.every(([, p]) => p === 'k1') && c29.treeLines === 2 && bodyClean29,
+    JSON.stringify({ tab29, typed29, enter29, ...c29, body: undefined, added29 }))
   await p29.close()
+
+  // C29b 进编辑 = 撤销组边界:双击空白建卡后 500ms 内接着打字,Cmd+Z 先只退字(卡还在),再按一次才
+  //   退掉卡。建卡事务只在**前沿**封口,字落在刚插入的范围里 → isAdjacentTo 判相邻、并进建卡那一组,
+  //   一次 Cmd+Z 连卡带字全没。⚠️ 故意走双击空白而不是 Tab:Tab 那条中间还有一笔 fm(层级)写入,
+  //   writeFm 自带断组,拿它测这道边界恒绿(负对照实跑过)。
+  const p29b = await open(browser, ONE)
+  await p29b.waitForTimeout(500)
+  const blank29b = await p29b.evaluate(() => {
+    const r = document.querySelector('.amx-stage').getBoundingClientRect()
+    const at = { x: r.left + r.width - 160, y: r.top + 120 }
+    const hit = document.elementFromPoint(at.x, at.y)
+    return { ...at, blank: !!hit && (hit.classList.contains('amx-stage') || hit.classList.contains('amx-stage-inner') || hit.classList.contains('amx-el-layer')) }
+  })
+  await p29b.mouse.dblclick(blank29b.x, blank29b.y)
+  await p29b.waitForTimeout(120)
+  await p29b.keyboard.type('xy')
+  await p29b.waitForTimeout(700)
+  const cv29b = () => p29b.evaluate(() => {
+    window.__upage.probe.flush?.()
+    let doc = null
+    try { doc = JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { /* null */ }
+    const cards = [...document.querySelectorAll('.amx-ucard')]
+    return { cards: cards.length, texts: cards.map((c) => (c.textContent ?? '').trim()), tree: Object.keys(doc?.tree ?? {}).length }
+  })
+  const b29b0 = await cv29b()
+  await p29b.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p29b.waitForTimeout(700)
+  const b29b1 = await cv29b()
+  await p29b.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p29b.waitForTimeout(700)
+  const b29b2 = await cv29b()
+  await p29b.close()
+  record('C29b 新卡进编辑是撤销边界:双击空白建卡后立刻打字,第一次 Cmd+Z 只退字,第二次才退卡',
+    blank29b.blank && b29b0.cards === 2 && b29b0.texts.includes('xy')
+      && b29b1.cards === 2 && !b29b1.texts.includes('xy')
+      && b29b2.cards === 1,
+    JSON.stringify({ blank: blank29b.blank, typed: b29b0, undo1: b29b1, undo2: b29b2 }))
 
   // ── C30 Frame:拖标题条 = 连辖域一起搬(完全落在框内的才算) ──────────────────────────
   // 顺带钉住「框体不吃指针」:框盖住了主卡,能不能在主卡里正常点出光标就是那条纪律的体检。
@@ -2157,7 +2224,17 @@ async function main() {
   // 卡内**块级** NodeSelection(⠿ 右键=blockLayer 设块级选中,文档模式的真实路径)光标作用域仍
   // 在卡里 → 约束框必须还在(Codex 评审 2026-08-18 晚:修前 NodeSelection 分支只认整卡,恰好在
   // 搬/删块时框消失)。`.ProseMirror-selectednode` 同时在场 = 真的设上了块级选中,防空转假绿。
-  await p45.mouse.click(cpt45.x, cpt45.y, { button: 'right' })
+  // ⚠️ 2026-09-28 起(评审 G4-08 / B-09)正文文字上的右键交给系统菜单、不再改成块选,块级选中改由 ⠿ 把手右键设:
+  //    悬停卡内段落 → 把手出现 → 右键它(按下即选中所在块,同一条真实路径)。
+  await p45.mouse.move(cpt45.x, cpt45.y, { steps: 2 })
+  await p45.waitForTimeout(250)
+  const grip45 = await p45.evaluate(() => {
+    const el = document.querySelector('.unified-gutter[data-show="true"] .drag-handle')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  if (grip45) await p45.mouse.click(grip45.x, grip45.y, { button: 'right' })
   await p45.waitForTimeout(250)
   const blockSel45 = await p45.evaluate(() => ({
     active: !!document.querySelector('.amx-ucard.amx-card-active'),
@@ -5437,6 +5514,160 @@ async function main() {
     offFind === true && aFind.hits === 1 && aFind.transform !== tFind0 && aFind.inView,
     JSON.stringify({ wasOffscreen: offFind, ...aFind, tFind0 }))
   await pFind.close()
+
+  // ── C91 按住空格 = 临时抓手(V-05,Figma/Obsidian 同款)────────────────────────────────
+  //  修前:没有空格平移;选中卡时按住空格,第一下 keydown 就进了编辑、焦点落进 PM,后面自动重复的
+  //  keydown 全被写成空格落盘(`卡 K1     `)。现在:按住 = 平移态(整片抓手光标、拖哪儿都是平移,
+  //  压在卡上也不搬卡),重复 keydown 一律吞;「空格进编辑」挪到**松开**时判 —— 按下、没拖、松开才进。
+  const SEED91 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}',
+    '---', '', '# 画布页', '', '主卡一段。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const vp91 = (p) => p.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f), z: +m.a.toFixed(3) } })
+  const st91 = (p) => p.evaluate(() => {
+    const card = document.querySelector('.amx-ucard[data-anchor="k1"]')
+    return {
+      text: card?.textContent ?? null,
+      x: card?.dataset.x ?? null,
+      editing: document.querySelector('.amx-el-selbox.is-editing')?.dataset.anchor ?? null,
+      pmFocus: !!document.activeElement?.closest?.('.ProseMirror'),
+      sel: [...document.querySelectorAll('.amx-el-selbox')].map((b) => b.dataset.anchor || (b.dataset.mainSel != null ? 'main' : b.dataset.el || '?')),
+      spaceCls: document.querySelector('.amx-stage')?.classList.contains('amx-space-pan') ?? false,
+      cursorCard: card ? getComputedStyle(card.querySelector('p') ?? card).cursor : null,
+    }
+  })
+  const p91 = await open(browser, SEED91)
+  await p91.waitForTimeout(700)
+  const k191 = await p91.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  const blank91 = await p91.evaluate(() => { const s = document.querySelector('.amx-stage').getBoundingClientRect(); return { x: s.left + 150, y: s.top + 200 } })
+  const writes91 = () => p91.evaluate(() => window.__upage.writes.length)
+  // a) 选中 k1 后按住空格(自动重复 ×6)再松开、没拖:一个空格都不进卡,松开才进编辑
+  await p91.mouse.click(k191.x, k191.y)
+  await p91.waitForTimeout(250)
+  const w91a = await writes91()
+  for (let i = 0; i < 6; i++) { await p91.keyboard.down('Space'); await p91.waitForTimeout(40) } // 第 2 次起 repeat=true
+  const hold91 = await st91(p91)
+  await p91.keyboard.up('Space')
+  await p91.waitForTimeout(1200)
+  const up91 = await st91(p91)
+  const w91b = await writes91()
+  // b) Esc 退回选中 → 按住空格、**从 k1 身上**拖:平移视口,k1 不动、不框选、松开不进编辑
+  await p91.keyboard.press('Escape')
+  await p91.waitForTimeout(250)
+  const pre91b = await st91(p91)
+  let v0 = await vp91(p91)
+  await p91.keyboard.down('Space')
+  await p91.mouse.move(k191.x, k191.y)
+  await p91.mouse.down()
+  let marq91 = false
+  for (let i = 1; i <= 12; i++) { await p91.mouse.move(k191.x - 15 * i, k191.y + 8 * i); if (!marq91) marq91 = await p91.evaluate(() => !!document.querySelector('.amx-el-marquee')) }
+  await p91.mouse.up()
+  await p91.keyboard.up('Space')
+  await p91.waitForTimeout(400)
+  const v91b = await vp91(p91)
+  const drag91 = await st91(p91)
+  // c) 空白点一下清选中 → 按住空格在空白拖 = 平移(修前是框选)
+  await p91.mouse.click(blank91.x, blank91.y)
+  await p91.waitForTimeout(200)
+  const v1 = await vp91(p91)
+  await p91.keyboard.down('Space')
+  await p91.mouse.move(blank91.x, blank91.y)
+  await p91.mouse.down()
+  let marq91c = false
+  for (let i = 1; i <= 12; i++) { await p91.mouse.move(blank91.x + 20 * i, blank91.y - 10 * i); if (!marq91c) marq91c = await p91.evaluate(() => !!document.querySelector('.amx-el-marquee')) }
+  await p91.mouse.up()
+  await p91.keyboard.up('Space')
+  await p91.waitForTimeout(300)
+  const v91c = await vp91(p91)
+  const end91 = await st91(p91)
+  await p91.close()
+  record('C91a 选中卡按住空格(自动重复)再松开:卡里一个空格都没进、零写盘;按住期间是抓手态(卡上也是 grab)且不进编辑,松开才进编辑',
+    hold91.text === '卡 K1' && hold91.editing === null && !hold91.pmFocus && hold91.spaceCls && hold91.cursorCard === 'grab'
+      && up91.text === '卡 K1' && up91.editing === 'k1' && up91.pmFocus && !up91.spaceCls && w91b === w91a,
+    JSON.stringify({ hold91, up91, writes: [w91a, w91b] }))
+  record('C91b 空格+从卡上拖 = 平移视口(k1 坐标不动、零框选),松开空格不进编辑、选中还在',
+    pre91b.editing === null && JSON.stringify(pre91b.sel) === '["k1"]'
+      && v91b.x - v0.x <= -150 && v91b.y - v0.y >= 80 && v91b.z === v0.z && !marq91
+      && drag91.x === pre91b.x && drag91.editing === null && !drag91.pmFocus && JSON.stringify(drag91.sel) === '["k1"]' && drag91.text === '卡 K1',
+    JSON.stringify({ pre91b, v0, v91b, marq91, drag91 }))
+  record('C91c 无选中时空格+空白拖 = 平移(不再是框选),松开后抓手态收起',
+    v91c.x - v1.x >= 200 && v1.y - v91c.y >= 100 && !marq91c && end91.sel.length === 0 && !end91.spaceCls && end91.editing === null,
+    JSON.stringify({ v1, v91c, marq91c, end91 }))
+
+  // ── C92 画布键盘缩放与适应(V-06,Figma 同款)──────────────────────────────────────────
+  //  修前:Cmd+=/-/0 冒泡到 window,被 uiZoom / 命令系统当成「整窗 UI 缩放」吃掉,画布纹丝不动;
+  //  Shift+1 什么都不做;HUD 的百分比是个 span。现在舞台(冒泡期、React 根上)先接管并 preventDefault
+  //  —— window 那两个监听都先看 defaultPrevented。卡内编辑时一律让路:Shift+1 照常打出「!」,
+  //  Cmd+= 仍归整窗缩放(不 preventDefault)。
+  const p92 = await open(browser, SEED91)
+  await p92.waitForTimeout(700)
+  await p92.evaluate(() => { window.__kd92 = []; window.addEventListener('keydown', (e) => { if (!['Meta', 'Control', 'Shift'].includes(e.key)) window.__kd92.push(e.defaultPrevented) }) })
+  const blank92 = await p92.evaluate(() => { const s = document.querySelector('.amx-stage').getBoundingClientRect(); return { x: s.left + 150, y: s.top + 200 } })
+  await p92.mouse.click(blank92.x, blank92.y) // 焦点落舞台、清选中
+  await p92.waitForTimeout(200)
+  const MOD92 = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const key92 = async (k) => { await p92.keyboard.press(k); await p92.waitForTimeout(200); return vp91(p92) }
+  const z0 = await vp91(p92)
+  const zIn = await key92(`${MOD92}+Equal`)
+  const zOut = await key92(`${MOD92}+Minus`)
+  const zOut2 = await key92(`${MOD92}+Minus`)
+  const zReset = await key92(`${MOD92}+Digit0`)
+  await key92(`${MOD92}+Equal`)
+  const zBig = await key92(`${MOD92}+Equal`)
+  const fitKey = await key92('Shift+Digit1')
+  const prevented92 = await p92.evaluate(() => window.__kd92.slice())
+  // 对照:HUD 的「适应内容」按钮给出的视口必须与 Shift+1 一致(同一个 fit)
+  await key92(`${MOD92}+Equal`)
+  await p92.click('.amx-stage-hud button[title="适应内容"]')
+  await p92.waitForTimeout(250)
+  const fitBtn = await vp91(p92)
+  // HUD 百分比 = 可点按钮:放大后点它回 100%
+  await key92(`${MOD92}+Equal`)
+  const pct92 = await p92.evaluate(() => {
+    const b = [...document.querySelectorAll('.amx-stage-hud > *')].find((e) => /%$/.test((e.textContent ?? '').trim()))
+    return b ? { tag: b.tagName, title: b.getAttribute('title'), text: b.textContent.trim() } : null
+  })
+  // 按钮不在(回退成 span)时别让 locator 超时把整套带崩 —— 记一格 FAIL 就够了
+  const pctBtn92 = await p92.evaluate(() => { const b = document.querySelector('.amx-stage-hud button[title="重置为 100%"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  if (pctBtn92) await p92.mouse.click(pctBtn92.x, pctBtn92.y)
+  await p92.waitForTimeout(250)
+  const pctAfter = await vp91(p92)
+  const pctText = await p92.evaluate(() => [...document.querySelectorAll('.amx-stage-hud > *')].find((e) => /%$/.test((e.textContent ?? '').trim()))?.textContent.trim() ?? null)
+  // 卡内编辑:Shift+1 打字、Cmd+= 不被舞台吃(视口不动、不 preventDefault)
+  const k192 = await p92.evaluate(() => { const r = document.querySelector('.amx-ucard[data-anchor="k1"] p').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+  await p92.mouse.click(k192.x, k192.y)
+  await p92.waitForTimeout(200)
+  await p92.keyboard.press('Space')
+  await p92.waitForTimeout(300)
+  await p92.evaluate(() => { window.__kd92 = [] })
+  const vEdit0 = await vp91(p92)
+  await p92.keyboard.press('Shift+Digit1')
+  await p92.waitForTimeout(200)
+  await p92.keyboard.press(`${MOD92}+Equal`)
+  await p92.waitForTimeout(250)
+  const vEdit1 = await vp91(p92)
+  const inCard92 = await p92.evaluate(() => ({
+    text: document.querySelector('.amx-ucard[data-anchor="k1"]')?.textContent ?? null,
+    prevented: window.__kd92.slice(),
+    pmFocus: !!document.activeElement?.closest?.('.ProseMirror'),
+  }))
+  await p92.close()
+  const r3 = (v) => Math.round(v * 1000) / 1000
+  record('C92a 舞台焦点下 Cmd+= / Cmd+- / Cmd+0 缩放画布(1.2 倍步进,0 = 回 100%)且全部 preventDefault(不再缩整窗)',
+    z0.z === 1 && r3(zIn.z) === 1.2 && r3(zOut.z) === 1 && r3(zOut2.z) === r3(1 / 1.2) && zReset.z === 1 && r3(zBig.z) === 1.44
+      && prevented92.length === 7 && prevented92.every(Boolean),
+    JSON.stringify({ z0, zIn, zOut, zOut2, zReset, zBig, prevented92 }))
+  record('C92b Shift+1 = 适应内容(与 HUD 的适应按钮同一个视口)',
+    fitKey.z !== zBig.z && JSON.stringify(fitKey) === JSON.stringify(fitBtn),
+    JSON.stringify({ zBig, fitKey, fitBtn }))
+  record('C92c HUD 百分比是可点按钮(title=重置为 100%),点击回到 100%',
+    pct92?.tag === 'BUTTON' && pct92.title === '重置为 100%' && pct92.text !== '100%' && pctAfter.z === 1 && pctText === '100%',
+    JSON.stringify({ pct92, pctAfter, pctText }))
+  record('C92d 卡内编辑时让路:Shift+1 打出「!」、Cmd+= 视口不动且不 preventDefault(交还整窗缩放)',
+    inCard92.pmFocus && (inCard92.text ?? '').includes('!') && JSON.stringify(vEdit0) === JSON.stringify(vEdit1)
+      && inCard92.prevented.length === 2 && inCard92.prevented[1] === false,
+    JSON.stringify({ vEdit0, vEdit1, inCard92 }))
 
   await browser.close()
   const ok = results.filter(Boolean).length

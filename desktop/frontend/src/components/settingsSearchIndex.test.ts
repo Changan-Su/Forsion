@@ -28,6 +28,8 @@ describe('settings search index', () => {
 
   it('每个 sub 都是 subItemsByTab 里真实存在的子页 key', () => {
     for (const e of SETTINGS_SEARCH_INDEX.filter((x) => x.sub)) {
+      // fx:<pluginId>:<viewId> = 首方内置包运行期注册的自绘子页(「Forsion 云端」),源码里没有字面量,只核格式
+      if (e.sub!.startsWith('fx:')) { expect(e.sub, e.id).toMatch(/^fx:[a-z0-9-]+:[a-z0-9-]+$/); continue }
       expect(SRC.includes(`['${e.sub}',`), `${e.id} → ${e.sub}`).toBe(true)
     }
   })

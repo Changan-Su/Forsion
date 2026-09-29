@@ -236,6 +236,23 @@
 }
 .amx-list-item:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 .amx-backlink-snippet { display: block; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: normal; margin-top: 2px; }
+/* 反链逐处上下文 + 未链接提及(L-16,amadeusBacklinks.tsx):来源一行,命中缩进换行显示;「链接」按钮悬停才亮。 */
+.amx-backlink-group { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; }
+.amx-backlink-src { font-weight: 500; }
+.amx-backlink-hit { padding-left: 22px; white-space: normal; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); line-height: 1.5; }
+.amx-backlink-prop { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text-faint, var(--text-muted)); }
+.amx-backlink-toggle { display: block; width: 100%; text-align: left; border: none; background: transparent; cursor: pointer; margin-top: 6px; }
+.amx-backlink-toggle:hover { color: var(--text); }
+.amx-mention { display: flex; align-items: flex-start; gap: 4px; padding-left: 12px; }
+.amx-mention .amx-mention-text { flex: 1; min-width: 0; white-space: normal; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 5px 10px; }
+.amx-mention mark { background: var(--accent-light, rgba(127, 127, 127, 0.25)); color: inherit; border-radius: 3px; padding: 0 1px; }
+.amx-backlink-link {
+  flex: 0 0 auto; align-self: center; border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+  font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.4; padding: 1px 8px; border-radius: var(--radius-sm, 6px);
+  cursor: pointer; opacity: 0;
+}
+.amx-mention:hover .amx-backlink-link, .amx-backlink-link:focus-visible { opacity: 1; }
+.amx-backlink-link:hover { color: var(--accent-ink, var(--text)); border-color: var(--accent-ink, var(--border)); }
 
 /* 图片嵌入块 `![[pic.png]]`:满宽自适应,圆角贴合块。宽度可选 `![[pic.png|300]]` 由内联 style 覆盖。 */
 .am-app .embed-image-body { padding: 2px 4px; }
@@ -282,6 +299,16 @@
   text-decoration-style: dashed;
   text-decoration-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
 }
+/* 正文 #标签 胶囊(L-14,tagPill.ts):零 schema 装饰,光标所在行不装饰(露字面源码)。只加底色与圆角,
+ * 不改字号 / 行高 —— 胶囊与正文同一基线,打字行与非打字行切换时不跳行。 */
+.am-app .milkdown .ProseMirror .amx-tag-pill {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  padding: 0 0.35em;
+  cursor: pointer;
+}
+.am-app .milkdown .ProseMirror .amx-tag-pill:hover { background: color-mix(in srgb, var(--accent-ink) 20%, transparent); }
 
 /* ── 快速切换浮层(复用 engine 的 cmd-* 外观;这两个双行类 engine.css 没有) ── */
 .cmd-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
@@ -649,6 +676,20 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-chip-x { display: inline-flex; border: none; background: transparent; color: var(--text-faint); cursor: pointer; padding: 0; }
 .amx-chip-x:hover { color: var(--danger, #e5484d); }
 .amx-prop-chips input { flex: 1; min-width: 60px; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); }
+/* 新增属性行(C-19):键名 + 类型选择 + ✓ ×(常显,不像删除键那样悬停才亮)。 */
+.amx-prop-type {
+  flex: 0 0 auto; align-self: center; border: 1px solid var(--border); outline: none; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 2px 4px; border-radius: var(--radius-sm, 6px);
+}
+.amx-prop-type:focus-visible { border-color: var(--accent-ink, var(--border)); }
+.amx-prop-new .amx-prop-new-btn { opacity: 1; }
+.amx-prop-new .amx-prop-new-btn:first-of-type:hover { color: var(--accent-ink, var(--text)); }
+/* 值里的 [[x]]:展示态渲染成双链(点链接跳转、点空白处进编辑)。 */
+.amx-prop-links { cursor: text; white-space: pre-wrap; }
+.amx-prop-link {
+  color: var(--accent-ink); cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--accent-ink) 45%, transparent);
+}
 .amx-props-raw {
   display: block; width: 100%; min-height: 80px; margin-top: 4px; resize: vertical;
   border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); outline: none;
@@ -1089,10 +1130,12 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-mbar button {
   /* 可收缩 + 下限:胶囊是 width:max-content + max-width:calc(100% - 24px),而按钮此前 flex:0 0 auto
      —— 窄机(≈360pt,再摊上 body zoom 1.15)上多加一颗就顶穿药丸背景往外溢。给一档收缩空间,
-     图标本身 19px,收到 34 仍留得住内边距(2026-08-20 加画布键时补;负对照:退回 0 0 auto 后
-     360pt 下最后一颗键溢出药丸 8px,e2e 的 4a2 当场变红)。 */
+     图标本身 19px(2026-08-20 加画布键时补;负对照:退回 0 0 auto 后 360pt 下最后一颗键溢出药丸 8px,
+     e2e 的 4a2 当场变红)。下限 34 → 28(09-28 G2-06 加缩进 / 提升两颗,v4 共九颗):9×28 + 间隙 + 内边距
+     ≈ 276,窄机 360pt 的 ≈289 装得下;只在挤不下时才收,390pt 下约 33、更宽的机型仍是 40。
+     再加键就该换思路(分组 / 横滑),别再压这个下限(check:mobilebar 的 M4d 与 e2e 4a2 钉宽度账)。 */
   flex: 0 1 auto;
-  min-width: 34px;
+  min-width: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

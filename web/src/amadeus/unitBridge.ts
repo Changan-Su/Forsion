@@ -229,7 +229,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     pagesByTag: (tag) => rpc(IPC.pagesByTag, [tag]),
     deletePage: (pagePath) => rpc(IPC.deletePage, [pagePath]),
     movePage: (pagePath, destFolder) => rpc(IPC.movePage, [pagePath, destFolder]),
-    resolveEmbed: (target) => rpc(IPC.resolveEmbed, [target]),
+    resolveEmbed: (target, sourcePath) => rpc(IPC.resolveEmbed, sourcePath ? [target, sourcePath] : [target]),
     blockBacklinks: (target) => rpc(IPC.blockBacklinks, [target]),
     listFolders: () => rpc(IPC.listFolders),
     createFolder: (parentFolder, name) => rpc(IPC.createFolder, [parentFolder, name]),

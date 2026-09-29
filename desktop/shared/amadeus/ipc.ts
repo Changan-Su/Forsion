@@ -48,6 +48,9 @@ export const IPC = {
   deleteTrashEntry: 'trash:delete',
   emptyTrash: 'trash:empty',
   pageIcons: 'vault:page-icons',
+  pageAliases: 'vault:page-aliases',
+  unlinkedMentions: 'vault:unlinked-mentions',
+  linkMention: 'vault:link-mention',
   fetchLinkMeta: 'web:link-meta',
   searchImages: 'web:search-images',
   structureChange: 'vault:structure-change',
@@ -319,8 +322,12 @@ export interface ExternalPluginSource {
    *  ⚠️ 名字不叫 builtin:渲染层 pluginStore 用 `builtin` 区分「代码里注册的内置插件」与外置来源(reload 时按它筛),
    *  播种来的仍是外置来源,只是不可卸载。 */
   preinstalled?: boolean
-  /** 内置且带主进程半身(Forsion Extend):渲染半身的启停开关对主进程半身是空操作(每次启动都装),设置页不给开关。 */
+  /** 内置且带主进程半身(Forsion Extend):主进程半身开机前装载、不能热卸,设置页的开关改的是下次开机装不装(bundleOff)。 */
   locked?: boolean
+  /** locked 包下次开机不装主进程半身(桌面配置 disabledBundles)。 */
+  bundleOff?: boolean
+  /** locked 包的开关自本次开机以来改过 → 重启才生效。 */
+  restartPending?: boolean
   /** Agent 自建 Space 插件(2026-09-11):来源 `<tangu>/agents/<slug>/Space/`,id 固定 `agent-<slug>`;不可卸载(关开关即可),
    *  capabilities / fileExtensions / requiresApp / onboarding / bundle 一律不带(没有「用户点安装」这一步授权)。值 = agent slug。 */
   agent?: string
@@ -369,12 +376,41 @@ export interface SearchHit {
   score: number
 }
 
+/** 反链 / 提及的一处命中(L-16)。line = 清洗文本(剥 fm 与注释)里的 1-based 行号,0 = 属性区;
+ *  text = 该行去掉 md 语法后的摘录(links.plainSnippet)。 */
+export interface BacklinkHit {
+  line: number
+  text: string
+}
+
 /** A note that links to the active page via a [[wikilink]]. */
 export interface BacklinkRef {
   path: string
   title: string
   /** The sentence/line containing the [[link]]. */
   snippet: string
+  /** 逐处命中(每行一条,属性区的链接 line=0)。缺 = 旧宿主(云端 / Unit 旧版)只给 snippet。 */
+  hits?: BacklinkHit[]
+}
+
+/** 未链接提及的一处:raw / occ / col / match 齐全才可一键链接(linkMention 按内容定位,同 patchMark);
+ *  缺 = 只展示(该行含字符引用,解码副本与原文列位对不上)。 */
+export interface MentionHit extends BacklinkHit {
+  /** 清洗文本里的原文整行(未解字符引用)。 */
+  raw?: string
+  /** 同文行序号(第几条内容等于 raw 的行,口径同 mdMarks.findMarkLine)。 */
+  occ?: number
+  /** 提及在 raw 里的起始列(UTF-16)。 */
+  col?: number
+  /** raw 里 [col, col+match.length) 的原文(大小写照原样)。 */
+  match?: string
+}
+
+/** 提到了本页标题 / 别名、却没加 [[ ]] 的笔记(L-16)。 */
+export interface UnlinkedMention {
+  path: string
+  title: string
+  hits: MentionHit[]
 }
 
 /** Where a dragged-in attachment is stored (from Tangu notes settings). */
@@ -553,8 +589,10 @@ export interface AmadeusApi {
   deletePage(pagePath: string): Promise<void>
   /** Move a page into another folder ('' = vault root); returns its new path. */
   movePage(pagePath: string, destFolder: string): Promise<string>
-  /** Resolve a `![[ ]]` block embed target (by basename) to its content + owning note. */
-  resolveEmbed(target: string): Promise<EmbedResolved | null>
+  /** Resolve a `![[ ]]` block embed target (by basename) to its content + owning note.
+   *  sourcePath = 嵌入所在的笔记(评审 L-15):被嵌笔记按它就近解析(同目录 → .fd 子笔记 → 全库,同 `[[链接]]`),
+   *  `![[#标题]]` 的空笔记名也指它。可选:旧宿主 / 旧调用方不传 = 全库第一篇(历史行为)。 */
+  resolveEmbed(target: string, sourcePath?: string): Promise<EmbedResolved | null>
   /** Notes that embed the given block basename (for safe-delete warnings). */
   blockBacklinks(target: string): Promise<BacklinkRef[]>
   /** All sub-folders (incl. empty), vault-relative. */
@@ -579,6 +617,13 @@ export interface AmadeusApi {
   emptyTrash?(): Promise<void>
   /** 页面 emoji 图标表(fm icon: 键;可选:桌面索引提供,其余端优雅缺位)。 */
   pageIcons?(): Promise<Record<string, string>>
+  /** fm `aliases:` 表(path → 别名;只含设置了的)。`[[` 补全用(L-13);可选:缺位端补全不含别名。 */
+  pageAliases?(): Promise<Record<string, string[]>>
+  /** 提到 pagePath 的标题 / 别名、却没加 [[ ]] 的笔记(L-16);可选:缺位端反链面板不出这一区。 */
+  unlinkedMentions?(pagePath: string): Promise<UnlinkedMention[]>
+  /** 把一处未链接提及改写成 `[[inner]]`(按 raw+occ 定位行、再核 col/match,对不上 = false 不写;同 patchMark 的
+   *  行级写盘 + externalChange 广播)。可选:缺位端不出「链接」按钮。 */
+  linkMention?(pagePath: string, hit: { raw: string; occ: number; col: number; match: string }, inner: string): Promise<boolean>
   /** 抓取链接 og 元数据(书签卡;可选:桌面主进程实现,缺位端卡片降级纯链接)。 */
   fetchLinkMeta?(url: string): Promise<LinkMeta | null>
   /** 封面图搜索(Openverse 免 key;可选:桌面主进程实现,缺位端只留 URL/上传两来源)。 */
@@ -630,7 +675,8 @@ export interface AmadeusApi {
    *  `base` = 比对交换写(G1-01,同 dbWriteCas 的思路):调用方认为盘上现在的内容的 `textFingerprint`。
    *  支持的宿主(桌面主进程 / 经它的 Unit RPC / web 与移动端的云桥)比对不上就**不写**,回 `{ ok:false, current }`
    *  交调用方回灌或另存冲突副本;文件不在 = 无冲突照写(云桥例外:本会话见过、现已被别处删掉 → 照旧另存 recovered 副本)。
-   *  不支持的宿主(移动端本地库 / 分享页)忽略它、照旧无条件写,返回 void —— 调用方一律把 void 当「写成了」。
+   *  不支持的宿主(分享页)忽略它、照旧无条件写,返回 void —— 调用方一律把 void 当「写成了」。
+   *  移动端本地库自 G2-04 复核起支持(按路径串行锁内 读 → 比对 → 写)。
    *  不传 `base` 时所有宿主行为与从前逐字一致。 */
   writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string }): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */

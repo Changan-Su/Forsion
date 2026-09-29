@@ -4,7 +4,7 @@
 import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
-import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading } from '@amadeus/unified/lifecycle'
+import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
 import { findHeadingIndex } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
@@ -82,7 +82,15 @@ export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey
     else await waitForActive(path)
     return
   }
-  const hit = editors.find((p) => p.params?.notePath === path)
+  // 同一篇开在几个标签里(评审 G1-02):落到当前活动的那个,其次最近用过的(实例自报)、再其次各组的前台标签 ——
+  // 此前恒取第一个,于是「打开已开着的笔记」总把人拽回最早那个标签,跳转 / 大纲随后也作用在它身上。
+  const hits = editors.filter((p) => p.params?.notePath === path)
+  const activeId = ws.api ? activeMainPanel(ws.api)?.id : undefined
+  const recentScope = hits.length > 1 ? unifiedScopeFor(path) : null
+  const hit = hits.find((p) => p.id === activeId)
+    ?? hits.find((p) => p.id === recentScope)
+    ?? hits.find((p) => ws.mainTabs?.some((t) => t.id === p.id && t.front))
+    ?? hits[0]
   // ⚠️ newTab 要**先于**「已开着就激活」判定:⌘/Ctrl 点击的语义是「再开一个标签」,
   //    目标恰好已经开着时如果只是切过去,用户按了修饰键却什么新东西都没得到(Codex 评审实证)。
   if (hit && !opts?.newTab) {
@@ -120,6 +128,13 @@ export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey
  *  (unifiedHeadings 给空)—— 重试几拍再放弃。v3 渲染的笔记没有 unified 实例,同样自然放弃。 */
 export async function openNoteAtHeading(path: string, heading: string): Promise<void> {
   await openNote(path)
+  await revealHeadingWhenReady(path, heading)
+}
+
+/** openNoteAtHeading 的后半段(「已经在打开了,等实例挂上再滚到标题」),单独导出给不走 openNote 门面的
+ *  打开路径复用 —— 编辑器里点 `[[笔记#标题]]` / `[[#标题]]`(pageStore.openWikiLink,评审 L-05)。
+ *  重试节拍、600ms 补跳、「找不到就不动」全部与聊天引用条同一份,别在调用方另写一套。 */
+export async function revealHeadingWhenReady(path: string, heading: string): Promise<void> {
   for (let tries = 0; tries < 5; tries++) {
     const hs = unifiedHeadings(path)
     if (hs && hs.length) {
@@ -148,6 +163,11 @@ export async function openNoteAtHeading(path: string, heading: string): Promise<
  *     自然停在「只开了笔记」,与本轮之前的行为一致。 */
 export async function openNoteAtBlock(path: string, blockId: string): Promise<void> {
   await openNote(path)
+  await revealBlockWhenReady(path, blockId)
+}
+
+/** openNoteAtBlock 的后半段,复用口径同 revealHeadingWhenReady(编辑器里点 `[[笔记#^块]]`,评审 L-05)。 */
+export async function revealBlockWhenReady(path: string, blockId: string): Promise<void> {
   for (let tries = 0; tries < 5; tries++) {
     // 一次调用同时回答「实例挂上了吗」与「这篇里有没有这个块」—— 两种 false 都该再等一拍
     // (编辑器刚挂载时 doc 常常还是空的,与 openNoteAtHeading 轮询 headings 同一个理由)。
@@ -159,6 +179,20 @@ export async function openNoteAtBlock(path: string, blockId: string): Promise<vo
     }
     await new Promise((r) => setTimeout(r, 250))
   }
+}
+
+/** 全智库搜索 / 标签面板点命中之后的定位(评审 G4-01):笔记已经在打开了,等 v4 实例挂上再把第一处命中
+ *  亮出来(命中在会话折叠里先展开)。节拍与补跳同 revealHeadingWhenReady;v3 笔记没有 unified 实例,
+ *  重试几拍后自然放弃(v3 那条定位在调用方,按 data-block-id 找)。needles 依次尝试:整串优先,切词兜底。 */
+export async function revealTextWhenReady(path: string, needles: string[], opts?: { tag?: boolean }): Promise<boolean> {
+  for (let tries = 0; tries < 5; tries++) {
+    if (unifiedRevealText(path, needles, opts)) {
+      setTimeout(() => unifiedRevealText(path, needles, { ...opts, flash: true }), 600)
+      return true
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return false
 }
 
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */

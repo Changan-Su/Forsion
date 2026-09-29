@@ -26,6 +26,7 @@ import { gitSummary } from '../src/services/projectContext.js';
 import { prepareHostCommand, hostSandboxBackend } from '../src/sandbox/hostSandbox.js';
 import { HOST_TOOLS } from '../src/tools/hostExec.js';
 import { configFile } from '../src/core/tanguHome.js';
+import { repoConfigRisks, trustRepo } from '../src/services/gitTrust.js';
 import type { ToolCall } from '../src/core/types.js';
 import type { ToolContext } from '../src/tools/toolTypes.js';
 
@@ -195,8 +196,11 @@ describe('① 分类器:仓库配置了 git 会替人跑的程序 → known-safe
 
 describe.skipIf(!seatbelt)('② 执行:引擎的 git 与免审批的 git 读命令套写保护(macOS,宿主沙箱关,真 sandbox-exec)', { timeout: 30_000 }, () => {
   /** 仓库 + 摆好的 clean filter(改写 config.json);每次调用前挪 mtime,git status 必须重新 hash → 必走 filter。 */
-  function plantedRepo(name: string): { dir: string; touch: () => void } {
+  async function plantedRepo(name: string): Promise<{ dir: string; touch: () => void }> {
     const dir = repoAt(join(base, name));
+    // 合并 main 后:未信任的仓 main 的 gitTrust 根本不读工作区(见 src/services/gitTrust.test.ts)。这里钉的是另一半 —— 用户早先信任过这个仓
+    // (信任按目录身份绑定、不看配置内容),之后被摆进 filter:面板照常读工作区,写保护是最后一道。
+    await trustRepo((await repoConfigRisks(dir))!.commonDir);
     git(dir, 'config', 'filter.x.clean', `sh ${payload}`);
     writeFileSync(join(dir, '.gitattributes'), '* filter=x\n');
     writeFileSync(join(dir, 'f.txt'), 'b');
@@ -206,7 +210,7 @@ describe.skipIf(!seatbelt)('② 执行:引擎的 git 与免审批的 git 读命�
   }
 
   it('项目详情面板(runGit 不带 ctx):照常出仓库信息,摆下的 filter 改不动 config.json;不套时这条链是真的', async () => {
-    const { dir, touch } = plantedRepo('panel');
+    const { dir, touch } = await plantedRepo('panel');
     const s = await gitSummary(dir);
     expect(s).toMatchObject({ available: true, repo: true });
     expect(s.changes?.some((c) => c.path === 'f.txt')).toBe(true);
@@ -227,7 +231,7 @@ describe.skipIf(!seatbelt)('② 执行:引擎的 git 与免审批的 git 读命�
   });
 
   it('run_bash 带 writeProtectShell(闸门放行的 known-safe git):filter 改不动 config.json;用户亲手批的(不带)照旧不包', async () => {
-    const { dir, touch } = plantedRepo('bash');
+    const { dir, touch } = await plantedRepo('bash');
     const ctx = { userId: 'u1', sessionId: 'EG', appId: 'test', cwd: dir, execMode: 'host' } as ToolContext;
     const out = await HOST_TOOLS.run_bash.execute({ command: 'git status --porcelain' }, { ...ctx, writeProtectShell: true });
     expect(out).toMatch(/f\.txt/);

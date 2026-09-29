@@ -612,6 +612,11 @@
   font-size: var(--ui-font-body, 13px);
   font-style: italic;
 }
+/* 丢失壳里的「创建」(评审 L-15):复用嵌入工具钮 .embed-media-btn,只把丢失提示的斜体摘掉、留一点间距。 */
+.am-app .embed-missing .embed-create {
+  margin-left: 8px;
+  font-style: normal;
+}
 .am-app .embed-body .md-block :is(.ProseMirror) {
   cursor: default;
 }
@@ -1504,6 +1509,13 @@ body.amx-marquee-active * {
 .am-app .itb-turn {
   font-size: var(--ui-font-meta, 12px);
   color: var(--text);
+  white-space: nowrap;
+}
+/* 「问 Tangu」(G3-04):文字按钮,关键操作用中等字重;色值只消费语义 token。 */
+.am-app .itb-ask {
+  font-size: var(--ui-font-meta, 12px);
+  font-weight: 500;
+  color: var(--accent);
   white-space: nowrap;
 }
 .am-app .itb-sep {
@@ -2714,6 +2726,41 @@ body.amx-marquee-active * {
 .math-src-hidden { display: none; }
 /* 双链实况(见 blocks/markdown/wikilink.ts):离行时隐藏 [[ ]] 源码、就地渲染成链接;在行时露源码可编辑。 */
 .wikilink-src-hidden { display: none; }
+/* Obsidian 行内语法实况(见 blocks/markdown/obsidianInline.ts):`==高亮==` / `%%注释%%` 是纯文本 + 装饰。
+   光标不在该处时定界符 / 整条注释藏起来;高亮底与无色 <mark> 同一档(上方 .ProseMirror mark),不另起色板。 */
+.amx-obs-hidden { display: none; }
+.am-app .ProseMirror .amx-obs-hl {
+  background: color-mix(in srgb, var(--primary, var(--accent)) 18%, transparent);
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.am-app .ProseMirror .amx-obs-delim,
+.am-app .ProseMirror .amx-obs-cmt { color: var(--text-muted); }
+.am-app .ProseMirror .amx-obs-cmt-badge {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 4px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  line-height: 1.4;
+  vertical-align: 0.1em;
+  cursor: text;
+  user-select: none;
+}
+/* <kbd>(marks.ts kbdSchema):与命令面板底栏的键帽同一套 token,字号随正文。 */
+.am-app .ProseMirror kbd {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm, 6px);
+  padding: 0 4px;
+}
 /* 行内 `![[pic.png]]`:混在文字里的图片嵌入(整块只有它一条时走块级 embed,见 BlockHost)。
    照 Obsidian 的观感:原尺寸随行排版、只限宽不限高;`|200` 写死的宽度由 inline style 接管。 */
 .wiki-inline-img {
@@ -2965,6 +3012,11 @@ body.amx-marquee-active * {
   height: 1px;
   background: var(--border);
   margin: 3px 4px;
+}
+/* 块菜单里的当前态(表格区的列对齐,K-10):勾放末列(DESIGN §3 菜单几何:状态置于末列)。 */
+.ubm-check {
+  margin-left: auto;
+  color: var(--accent-ink);
 }
 
 /* 列表项折叠(unified/listFold.ts,会话态):折起时子列表整只藏起,项上留一个常驻展开箭头。
@@ -3798,6 +3850,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm, 6px);
 }
 .am-app .amx-stage-hud button:hover { background: var(--surface-2); color: var(--text); }
+/* 百分比按钮(V-06):按钮的 UA 字体是 13.33px,不继承就比两侧的 caption 字大一号;等宽数字防跳宽。 */
+.am-app .amx-stage-hud button.amx-hud-zoom { font: inherit; font-variant-numeric: tabular-nums; padding: 2px 4px; }
 .am-app .amx-stage-hud button.is-on {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
@@ -3957,3 +4011,132 @@ body.amx-marquee-active * {
   cursor: default;
   overflow: visible;
 }
+/* 按住空格 = 临时抓手(V-05,canvasStage 的 spacePan)。整片连卡带正文一律抓手光标 —— 卡片自己的
+   grab、正文的 I 型光标、形状/把手的光标都得压住,否则「按着空格却显示成可打字」。放文件末尾:
+   同特异性的覆盖靠源码顺序(DESIGN §7.2)。 */
+.am-app .amx-stage.amx-space-pan,
+.am-app .amx-stage.amx-space-pan * { cursor: grab; }
+
+/* ── Agent 改动呈现(评审 G3-03)──────────────────────────────────────────────────────
+   装饰只在内存(agentChanges.ts),不进序列化。色值一律走语义 token:改动 = --green 的淡底 + 下划线
+   (diff 的「新增」语义),当前查看的那一处加深。胶囊贴在正文底部 sticky,不挡正文、不阻塞编辑;
+   画布模式没有滚动正文,改为贴舞台底边居中。 */
+.am-app .am-agent-change {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--green) 55%, transparent);
+  border-radius: 2px;
+  transition: background var(--dur-fast) var(--ease-apple);
+}
+.am-app .am-agent-change.is-current {
+  background: color-mix(in srgb, var(--green) 30%, transparent);
+  box-shadow: inset 0 -2px 0 var(--green);
+}
+.am-app .am-agent-change.am-agent-change-block {
+  outline: 1px solid color-mix(in srgb, var(--green) 55%, transparent);
+  outline-offset: 2px;
+}
+.am-app .am-agent-del {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin: 0 1px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: var(--danger);
+}
+.am-app .am-agent-del.is-current {
+  width: 3px;
+}
+.am-app .am-agent-capsule {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  margin: 12px auto 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 6px 5px 12px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+}
+.am-app .am-agent-capsule > svg { flex: 0 0 auto; color: var(--green); }
+.am-app .am-agent-capsule-text { font-weight: 500; white-space: nowrap; }
+.am-app .am-agent-capsule-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--border); }
+.am-app .am-agent-capsule .btn.sm { border-radius: var(--radius-pill); }
+/* 画布底边正中是舞台的元素工具条:胶囊抬到它上方,别压住。 */
+.am-app .amx-canvas .am-agent-capsule {
+  position: absolute;
+  left: 50%;
+  bottom: 72px;
+  margin: 0;
+  translate: -50% 0;
+}
+
+/* ── 正文 AI(评审 G3-07):目标淡底 + 预览面板。面板外壳走共享 `.ui-popover`(字体 / 描边 / 圆角 / 阴影),
+   这里只管内容布局;色值只消费语义 token。 */
+.am-app .am-ai-target {
+  background: var(--sel-fill, var(--accent-light));
+  border-radius: 2px;
+}
+.am-ai-panel {
+  z-index: 100;
+  width: min(440px, calc(100vw - 32px));
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.am-ai-panel .am-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+  color: var(--text-muted);
+}
+.am-ai-panel .am-ai-head > svg { flex: 0 0 auto; color: var(--accent-ink); }
+.am-ai-panel .am-ai-title { font-weight: 500; color: var(--text); }
+.am-ai-panel .am-ai-hint { margin-left: auto; white-space: nowrap; }
+.am-ai-panel .am-ai-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  padding: 6px 8px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg-card));
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-font-body, 13px);
+  line-height: var(--ui-line-body, 1.5);
+}
+.am-ai-panel .am-ai-preview {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-light);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--ui-font-body, 13px);
+  line-height: var(--ui-line-body, 1.5);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.am-ai-panel .am-ai-error {
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+  color: var(--danger);
+}
+.am-ai-panel .am-ai-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+/* 「AI ▾」菜单:内置八项 + 插件组,比「转换为」长,放宽一档免得插件组总要滚出来。 */
+.am-app .itb-panel.itb-ai-menu { max-height: 440px; }

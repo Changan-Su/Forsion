@@ -4,13 +4,16 @@
  * 前缀缓存只失效最短尾巴),不落库不上屏,纯 harness 脚手架。
  */
 import { prepareHostCommand } from '../sandbox/hostSandbox.js';
-import { engineGitBlocked, gitExecutable, GIT_SCRUBBED_ENV } from './gitRepoPrograms.js';
+import { engineGitBlocked } from './gitRepoPrograms.js';
 import { runBoundedProcess } from '../utils/boundedProcess.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 /** remote / runId:远程污点(prepareHostCommand 据此套写保护)。git 现场收集方案 B 起不看它 —— runGit 每条都 writeProtectShell
  *  (被批准的远程命令能在工作区仓库摆 clean filter,引擎自己的 `git status` 会执行它;P1-G5 评审 → 方案 B)。 */
 export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal' | 'remote' | 'runId' | 'writeProtectShell'>;
 import { renderTodos, type TodoItem } from '../tools/builtin/todo.js';
+import { gitSettings } from './gitSettings.js';
+import { GIT_SCRUBBED_ENV, READ_ONLY_GIT_ARGS, gitExecutable } from './gitExec.js';
+import { untrustedRisks } from './gitTrust.js';
 
 /** todo 现场段:有未完项才注入(全完成/空单=null,别拿旧清单占 token)。 */
 export function renderTodoState(todos: TodoItem[]): string | null {
@@ -85,13 +88,7 @@ export class EngineGitSkipped extends Error {
  *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
 export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
   if (process.platform !== 'darwin' && engineGitBlocked(cwd)) throw new EngineGitSkipped('the repository configures programs git would run (filter, include, …) and this platform has no write-protection sandbox');
-  // Apple's /usr/bin/git shim can start xcodebuild for each private sandbox cache.
-  // These fixed native developer-tool locations avoid an unsandboxed xcrun probe.
-  const executable = gitExecutable();
-  const prepared = prepareHostCommand({ ...ctx, cwd, writeProtectShell: true }, [
-    executable, '--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-    '-c', 'diff.external=', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-C', cwd, ...args,
-  ]);
+  const prepared = prepareHostCommand({ ...ctx, cwd, writeProtectShell: true }, [gitExecutable(), ...READ_ONLY_GIT_ARGS, '-C', cwd, ...args]);
   try {
     const env: NodeJS.ProcessEnv = { ...(prepared.options.env ?? process.env), GIT_TERMINAL_PROMPT: '0' };
     for (const key of GIT_SCRUBBED_ENV) delete env[key];
@@ -109,23 +106,42 @@ async function git(cwd: string, args: string[], ctx?: RuntimeExecContext): Promi
   return result.stdout.trim();
 }
 
+/** 用户在「设置 → Git」里定的偏好。只在 git 仓里才有意义,所以挂在这一段;agent 自己建分支 / 写提交时照做。 */
+export function gitPreferenceLines(): string {
+  const s = gitSettings();
+  const lines: string[] = [];
+  if (s.branchPrefix) lines.push(`- When you choose a branch name yourself, start it with "${s.branchPrefix}". Use a branch name the user gives exactly as given.`);
+  if (s.commitInstructions) lines.push(`- Commit message instructions:\n${s.commitInstructions}`);
+  return lines.length ? `user git preferences (Settings → Git). They are not a request to create branches or commits; apply them only when the user asks you to:\n${lines.join('\n')}` : '';
+}
+
 /** git 现场段(host 会话专用):分支 + 脏文件摘要 + 最近提交。非 git 仓 / 无 git / 超时 → null 静默跳过。 */
 export async function collectGitState(cwd?: string, ctx?: RuntimeExecContext): Promise<string | null> {
   if (!cwd) return null;
   try {
     const branch = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], ctx);
+    // status 读工作区时会跑仓库自带的过滤器:未经用户信任就不读(gitTrust;每个 run 开头自动跑,没有人点过任何东西)
+    const blocked = await untrustedRisks(cwd, 'read').catch(() => ({ commonDir: '', risks: ['config (unreadable)'] }));
     const [status, log] = await Promise.all([
-      git(cwd, ['status', '--porcelain'], ctx),
+      blocked ? Promise.resolve(null) : git(cwd, ['status', '--porcelain'], ctx),
       git(cwd, ['log', '--oneline', '-3'], ctx).catch(() => ''),
     ]);
+    if (status === null) {
+      const prefs = gitPreferenceLines();
+      return '[Git state]\n' + `branch: ${branch}\n` +
+        `working tree: not read — this repository's own git config would run programs (${blocked!.risks.slice(0, 3).join(', ')}) and the user has not trusted it in Project details` +
+        (log ? `\nrecent commits:\n${log}` : '') + (prefs ? `\n${prefs}` : '');
+    }
     const statusLines = status ? status.split('\n').filter(Boolean) : [];
     const shown = statusLines.slice(0, GIT_STATUS_MAX_LINES).join('\n');
     const more = statusLines.length > GIT_STATUS_MAX_LINES ? `\n… and ${statusLines.length - GIT_STATUS_MAX_LINES} more` : '';
+    const prefs = gitPreferenceLines();
     return (
       '[Git state]\n' +
       `branch: ${branch}\n` +
       (statusLines.length ? `dirty files (${statusLines.length}):\n${shown}${more}` : 'working tree clean') +
-      (log ? `\nrecent commits:\n${log}` : '')
+      (log ? `\nrecent commits:\n${log}` : '') +
+      (prefs ? `\n${prefs}` : '')
     );
   } catch {
     return null;

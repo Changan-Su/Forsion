@@ -5,6 +5,8 @@
  *                        落点三档:在此执行 / 新会话执行 / 交给 Muse 追踪(2026-09-10,对标 Claude Code 的 spawn_task)。
  *   ```forsion-approval 一条待审批引用(`{"id":"…"}`,引擎在 ask 档排队时写进收件箱消息,2026-09-11)→ 渲染成审批卡;
  *                        卡上的工具/预览/理由按 id 从 pending_approvals 读,**正文里的字一个不信**(见 InboxBody)。
+ *   ```forsion-creation 把这条对话里做的东西变成「造物」(`name:` + 可选 `path:`,2026-09-27;写法教在内置技能 forsion-creations)→
+ *                        渲染成作品卡(CreationCard);点了宿主才建文件夹 / 复制并把会话挪过去。只有桌面端认(按钮要宿主 IPC)。
  * 这里把它们从正文摘出来 —— 正文照常走 Markdown,芯片/卡片单独渲染(见 EditorialMessage / InboxBody)。
  * 调用方用 `kinds` 声明自己认哪几种(缺省 suggest+task):收件箱传 task+approval —— 没有会话,不认 suggest(芯片没处发);
  * 聊天不认 approval(没有渲染它的卡)。不认的围栏原样留在正文当代码块;**超过上限的合法卡也还回正文**,绝不静默吞掉。
@@ -36,9 +38,13 @@ const TITLE_MAX = 120
 const TLDR_MAX = 200
 export const PROMPT_MAX = 8000
 
-export type FenceKind = 'suggest' | 'task' | 'approval'
+export type FenceKind = 'suggest' | 'task' | 'approval' | 'creation'
 /** 缺省(聊天)不认 approval:聊天链只渲染芯片与任务卡,认了就等于把围栏悄悄吃掉(Codex 09-11 P1);收件箱显式开。 */
 const DEFAULT_KINDS: FenceKind[] = ['suggest', 'task']
+/** 作品卡:每条消息最多一张;名字 / 路径各自封顶(名字还会过 Launchpad 的文件夹名校验)。 */
+const MAX_CREATIONS = 1
+const CREATION_NAME_MAX = 100
+const CREATION_PATH_MAX = 500
 /** 审批 id 只认引擎生成的形态(uuid / 短 id);别的一律当写坏还回正文。 */
 const APPROVAL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 const MAX_APPROVALS = 2
@@ -55,6 +61,13 @@ export interface TaskCard {
   prompt: string
 }
 
+/** 作品卡:name = 作品名(也是文件夹名的来源);path = 已经做好的东西在会话工作目录里的相对位置(有 = 「加入造物」,没有 = 「做成作品」)。
+ *  ⚠️两个字段都是模型写的:path 由卡片在渲染层限定在会话工作目录之内,宿主复制时再过一遍目录闸。 */
+export interface CreationCard {
+  name: string
+  path?: string
+}
+
 /** 跨段续读用的围栏状态(段之间可能插着工具块,一道围栏会被切断)。 */
 export interface SuggestState {
   /** 当前打开的围栏字符数;0 = 不在围栏里。 */
@@ -65,6 +78,8 @@ export interface SuggestState {
   kind: FenceKind | null
   /** 未收口的建议/任务围栏原文(含开栏行)——收口才认;没收口要么丢弃要么还回正文。 */
   pending: string[]
+  /** 前面各段已经收下的卡数:按段续读时上限按整条消息算(超出的还回正文,不在后面的段里凭空消失)。 */
+  taken?: { tasks: number; creations: number }
 }
 
 export interface Suggestions {
@@ -74,6 +89,8 @@ export interface Suggestions {
   tasks: TaskCard[]
   /** 待审批行 id(forsion-approval 围栏;去重)。 */
   approvals: string[]
+  /** 作品卡(forsion-creation 围栏;调用方 kinds 里带 creation 才解析)。 */
+  creations: CreationCard[]
   /** 喂给下一段的续读状态(每次调用返回新对象,不改调用方传入的那份)。 */
   state: SuggestState
 }
@@ -119,6 +136,23 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), prompt }
 }
 
+/** 围栏正文 → 作品卡:只认 `key: value` 行(name 必填,path 可选,未知键忽略);写坏的 → null(整块还回正文)。 */
+export function parseCreationCard(lines: string[]): CreationCard | null {
+  let name = ''
+  let path = ''
+  for (const line of lines) {
+    if (!line.trim()) continue
+    const m = HEADER.exec(line)
+    if (!m) return null
+    const k = m[1].toLowerCase()
+    if (k === 'name') name = m[2].trim()
+    else if (k === 'path') path = m[2].trim().replace(/^["'`]|["'`]$/g, '')
+  }
+  if (!name || name.length > CREATION_NAME_MAX || /[\u0000-\u001f\u007f]/.test(name)) return null
+  if (path.length > CREATION_PATH_MAX || /[\u0000-\u001f\u007f]/.test(path)) return null
+  return path ? { name, path } : { name }
+}
+
 /** 围栏正文 → 审批行 id:认 `{"id":"…"}` JSON、`id: …` 行、或单独一行裸 id;别的 → null(整块还回正文)。 */
 export function parseApprovalId(lines: string[]): string | null {
   const text = lines.join('\n').trim()
@@ -147,11 +181,14 @@ export function splitSuggestions(
   const kinds = opts?.kinds ?? DEFAULT_KINDS
   // 续读状态深拷贝 pending:调用方常把上一段的 state 存起来复用,这里就地 push 会污染它。
   const st: SuggestState = opts?.state ? { ...opts.state, pending: [...opts.state.pending] } : FRESH()
-  if (!st.fence && !raw.includes('forsion-suggest') && !raw.includes('forsion-task') && !raw.includes('forsion-approval')) return { text: raw, items: [], tasks: [], approvals: [], state: st } // 绝大多数消息走这条快路
+  const taken = { tasks: 0, creations: 0, ...opts?.state?.taken }
+  st.taken = taken
+  if (!st.fence && !raw.includes('forsion-suggest') && !raw.includes('forsion-task') && !raw.includes('forsion-approval') && !raw.includes('forsion-creation')) return { text: raw, items: [], tasks: [], approvals: [], creations: [], state: st } // 绝大多数消息走这条快路
   const body: string[] = []
   const items: string[] = []
   const tasks: TaskCard[] = []
   const approvals: string[] = []
+  const creations: CreationCard[] = []
 
   const take = (line: string): void => {
     const s = line.replace(BULLET, '').trim()
@@ -162,12 +199,16 @@ export function splitSuggestions(
     if (st.kind === 'suggest') for (const l of st.pending.slice(1)) take(l)
     else if (st.kind === 'task') {
       const card = parseTaskCard(st.pending.slice(1), { todo: opts?.todo })
-      if (card && tasks.length < MAX_TASKS) tasks.push(card)
+      if (card && taken.tasks < MAX_TASKS) { tasks.push(card); taken.tasks += 1 }
       else body.push(...st.pending, closingLine) // 写坏的、或超过上限的:原样还回正文(Codex 09-11 P2:第三张不能凭空消失)
     } else if (st.kind === 'approval') {
       const id = parseApprovalId(st.pending.slice(1))
       if (id && approvals.includes(id)) { /* 同 id 重复:只渲染一张卡,围栏也不必还回 */ }
       else if (id && approvals.length < MAX_APPROVALS) approvals.push(id)
+      else body.push(...st.pending, closingLine)
+    } else if (st.kind === 'creation') {
+      const card = parseCreationCard(st.pending.slice(1))
+      if (card && taken.creations < MAX_CREATIONS) { creations.push(card); taken.creations += 1 }
       else body.push(...st.pending, closingLine)
     }
     st.pending = []
@@ -180,7 +221,7 @@ export function splitSuggestions(
       if (m && (m[1][0] === '~' || !m[2].includes('`'))) {
         st.fence = m[1].length
         st.fenceChar = m[1][0] as '`' | '~'
-        const kind: FenceKind | null = m[2] === 'forsion-suggest' ? 'suggest' : m[2] === 'forsion-task' ? 'task' : m[2] === 'forsion-approval' ? 'approval' : null
+        const kind: FenceKind | null = m[2] === 'forsion-suggest' ? 'suggest' : m[2] === 'forsion-task' ? 'task' : m[2] === 'forsion-approval' ? 'approval' : m[2] === 'forsion-creation' ? 'creation' : null
         st.kind = kind && kinds.includes(kind) ? kind : null
         if (st.kind) { st.pending = [line]; continue }
       }
@@ -208,5 +249,5 @@ export function splitSuggestions(
     st.kind = null
   }
   // 只削掉围栏留下的空行,不动行内缩进(4 空格缩进代码块的语义靠它)。
-  return { text: body.join('\n').replace(/^\n+|\s+$/g, ''), items, tasks, approvals, state: st }
+  return { text: body.join('\n').replace(/^\n+|\s+$/g, ''), items, tasks, approvals, creations, state: st }
 }

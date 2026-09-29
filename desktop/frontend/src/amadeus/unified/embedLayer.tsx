@@ -11,7 +11,7 @@
 import { Suspense, useEffect, useRef, useState, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { $prose } from '@milkdown/kit/utils'
-import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -21,6 +21,8 @@ import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
+import { resolvePageName } from '@amadeus-shared/links'
+import { splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { parseMediaLinkInner, VIDEO_EXT_RE, mediaLabel, embedWidthOf, withEmbedWidth, embedUrlOf, wikiSafeUrl, type MediaLoc } from '@amadeus-shared/pdfLink'
 import type { EmbedResolved } from '@amadeus-shared/ipc'
 import { getBlockType } from '../blocks/registry'
@@ -60,6 +62,8 @@ registerMessages({
   'uembed.editAtSource': { zh: '去源头编辑', en: 'Edit at the source' },
   'uembed.resolving': { zh: '解析中…', en: 'Resolving…' },
   'uembed.embedMissing': { zh: '嵌入丢失：', en: 'Embed missing: ' },
+  'uembed.create': { zh: '创建', en: 'Create' },
+  'uembed.createTip': { zh: '新建笔记「{name}」', en: 'Create the note “{name}”' },
 })
 
 /**
@@ -230,22 +234,35 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
   )
 }
 
-function CrossNoteEmbed({ target }: { target: string }): ReactElement {
+function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePath: string; readOnly: boolean }): ReactElement {
   const t = useT()
   const openWikiLink = usePageStore((s) => s.openWikiLink)
   const loadPage = usePageStore((s) => s.loadPage)
   const pages = usePageStore((s) => s.pages)
   const linkVersion = usePageStore((s) => s.linkGraphVersion)
   const [embed, setEmbed] = useState<EmbedResolved | null | 'loading'>('loading')
+  // 评审 L-15:`|别名 / |宽度` 在这里就剥掉(不止靠各宿主的解析器 —— 没跟上的后端也不再对 `![[笔记|300]]`
+  // 报「嵌入丢失」);sourcePath = 本篇,被嵌笔记按它就近解析、`![[#标题]]` 的空笔记名也指它。
+  const { note, subpath } = splitNoteEmbed(target)
+  const wire = subpath ? `${note}#${subpath}` : note
   useEffect(() => {
     let alive = true
     setEmbed('loading')
     // IPC 面可选调用:web/harness 环境没有 resolveEmbed 时按「未解析」降级,不炸组件。
-    Promise.resolve(amadeus.resolveEmbed?.(target) ?? null)
+    Promise.resolve(wire ? amadeus.resolveEmbed?.(wire, pagePath) ?? null : null)
       .then((r) => { if (alive) setEmbed(r) })
       .catch(() => { if (alive) setEmbed(null) })
     return () => { alive = false }
-  }, [target, linkVersion])
+  }, [wire, pagePath, linkVersion])
+  // 丢失壳的「创建」(Obsidian 同款):只在**笔记本身不存在**时给 —— 笔记在、只是标题 / 块锚找不到,新建笔记帮不上忙;
+  // 只读宿主(分享页)不给。走 openWikiLink 的全套闸(已有文件 / 画板 / 插件文件类型绝不被覆盖成空笔记),
+  // 它落到「询问创建」时直接确认(用户点的就是「创建」,不再问第二遍),新笔记落在本篇的 .fd 下,嵌入随即就近解析到它。
+  const creatable = !readOnly && embed === null && !!note && !resolvePageName(note, pages, pagePath)
+  const create = (): void => {
+    const st = usePageStore.getState()
+    st.openWikiLink(note, pagePath)
+    if (usePageStore.getState().pendingWikiCreate?.name === note) void usePageStore.getState().confirmWikiCreate()
+  }
   const et = embed && embed !== 'loading' ? getBlockType(embed.type) : undefined
   const EmbedEditor = et?.Editor
   return (
@@ -279,7 +296,14 @@ function CrossNoteEmbed({ target }: { target: string }): ReactElement {
           getPageNames={() => pages}
         />
       ) : (
-        <div className="embed-missing">{t('uembed.embedMissing')}<code>{target}</code></div>
+        <div className="embed-missing">
+          {t('uembed.embedMissing')}<code>{target}</code>
+          {creatable && (
+            <button type="button" className="embed-media-btn embed-create" title={t('uembed.createTip', { name: note })} onClick={create}>
+              {t('uembed.create')}
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -320,7 +344,7 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
         />
       )
     case 'note':
-      return <CrossNoteEmbed target={kind.target} />
+      return <CrossNoteEmbed target={kind.target} pagePath={pagePath} readOnly={readOnly} />
     case 'bookmark':
       // 卡片 ⇄ 内嵌互转就是同一行文本的两种字面,可逆无损(Notion / AFFiNE 的三态互转同款)。
       // 只读语境按 BookmarkCard 的契约**不传**回调(传 noop = 铅笔照给、改完静默丢,见其 props 注)。
@@ -364,6 +388,20 @@ const widgetIdentity = (kind: EmbedKind, text: string): string =>
 interface EmbedLayerState {
   decos: DecorationSet
   sourcePos: number | null
+  /** 正在键入的「整段一个 URL」段落(I-13):光标还在里面时不交给书签卡,离开(或失焦)才落成卡片。 */
+  pendingPos: number | null
+}
+
+/** 这次事务的全部改动都落在 [from, to](新文档坐标)之内 —— 即「就地键入」,不是回灌 / 整块替换 / 插入新段。 */
+function changedOnlyWithin(tr: Transaction, from: number, to: number): boolean {
+  let ok = true
+  tr.mapping.maps.forEach((map, i) => {
+    const rest = tr.mapping.slice(i + 1)
+    map.forEach((_os, _oe, ns, ne) => {
+      if (rest.map(ns, -1) < from || rest.map(ne, 1) > to) ok = false
+    })
+  })
+  return ok
 }
 
 export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): MilkdownPlugin[] {
@@ -371,7 +409,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
 
-    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null): DecorationSet => {
+    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null, pendingPos: number | null = null): DecorationSet => {
       const decos: Decoration[] = []
       const seen = new Map<string, number>() // 同文嵌入按出现序号区分身份(Codex 终审 P1:同 key 共享 DOM 会互相拆台)
       const visit = (node: ProseNode, pos: number): void => {
@@ -383,6 +421,8 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         // 只有 `</>` 写下的显式 sourcePos 才让位;方向键/普通点击即使把选区落进隐藏文本,
         // 也继续呈现附件整体(难源码编辑块契约)。
         if (sourcePos === pos && selTo > pos && selFrom < pos + node.nodeSize) return
+        // 正在键入的裸 URL 段(I-13):还没写完(`https://f` 就已经匹配 URL_RE),此刻变卡 = 源码被藏、光标被弹走。
+        if (pendingPos === pos) return
         const dkey = `${baseKey}#${nth}`
         const entry = roots.get(dkey)
         if (entry && entry.text !== node.textContent) {
@@ -564,9 +604,9 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         }
       },
       state: {
-        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null }),
+        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null, pendingPos: null }),
         apply: (tr, old, _oldState, newState) => {
-          const meta = tr.getMeta(key) as { sourcePos?: number } | undefined
+          const meta = tr.getMeta(key) as { sourcePos?: number; commit?: boolean } | undefined
           let sourcePos = old.sourcePos
           if (sourcePos != null && tr.docChanged) sourcePos = tr.mapping.map(sourcePos)
           if (meta && typeof meta.sourcePos === 'number') sourcePos = meta.sourcePos
@@ -574,16 +614,41 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
             const node = newState.doc.nodeAt(sourcePos)
             if (!node || newState.selection.to <= sourcePos || newState.selection.from >= sourcePos + node.nodeSize) sourcePos = null
           }
-          if (!tr.docChanged && !tr.selectionSet && !meta) return { sourcePos, decos: old.decos.map(tr.mapping, tr.doc) }
+          // 键入中的裸 URL 段(I-13):就地键入(改动全落在光标所在段内,粘贴 / 拖放除外)把一段变成「整段一个 URL」
+          // → 记下,光标离开该段 / 失焦(commit)才交给书签卡。回灌、整块替换、插入新段的改动范围不在单段内,不进这里;
+          // 粘贴走 uiEvent=paste(「粘贴为」菜单要的正是当场成卡)。
+          let pendingPos = old.pendingPos
+          if (pendingPos != null && tr.docChanged) pendingPos = tr.mapping.map(pendingPos, -1)
+          if (meta?.commit) pendingPos = null
+          else if (tr.docChanged && newState.selection.empty && !/^(paste|drop)$/.test(String(tr.getMeta('uiEvent') ?? ''))) {
+            const $h = newState.selection.$head
+            const at = $h.depth > 0 ? $h.before() : -1
+            if (at >= 0 && $h.parent.type.name === 'paragraph' && classifyEmbed($h.parent)?.k === 'bookmark' &&
+                changedOnlyWithin(tr, at + 1, at + $h.parent.nodeSize - 1)) pendingPos = at
+          }
+          if (pendingPos != null) {
+            const node = newState.doc.nodeAt(pendingPos)
+            const { from, to } = newState.selection
+            if (!node || node.type.name !== 'paragraph' || to < pendingPos + 1 || from > pendingPos + node.nodeSize - 1) pendingPos = null
+          }
+          if (!tr.docChanged && !tr.selectionSet && !meta && pendingPos === old.pendingPos) return { sourcePos, pendingPos, decos: old.decos.map(tr.mapping, tr.doc) }
           return {
             sourcePos,
-            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos),
+            pendingPos,
+            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos, pendingPos),
           }
         },
       },
       props: {
         decorations(state) {
           return key.getState(state)?.decos ?? null
+        },
+        // 键入中的裸 URL 段在失焦时落成书签卡(点到编辑器外 = 写完了)。
+        handleDOMEvents: {
+          blur: (view) => {
+            if (key.getState(view.state)?.pendingPos != null) view.dispatch(view.state.tr.setMeta(key, { commit: true }))
+            return false
+          },
         },
       },
     })

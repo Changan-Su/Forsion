@@ -25,3 +25,19 @@ export function unescapeTagAtLineStart(md: string): string {
   if (!md.includes('\\#')) return md
   return mapOutsideFences(md, (line) => line.replace(TAG_AT_LINE_START, '$1#'))
 }
+
+/**
+ * 行首 `==高亮==` 的 `\==` 还原成 `==`(I-17,评审 2026-09-27)。
+ *
+ * 同一张 unsafe 表还有 `{atBreak: true, character: '='}`(防读成 setext 标题下划线):段落 / 列表项 / 引用开头的
+ * `==重点==` 一经编辑就落成 `\==重点==` —— Obsidian 按转义显示成字面 `=` 加半截高亮,高亮当场失效。
+ * setext 下划线要求**整行只有 `=`**;`\==` 后面紧跟非空白、非 `=` 的字符,这一行就不可能是下划线,转义纯属多余。
+ * 前缀口径同 TAG_AT_LINE_START(缩进 / 列表标记 / 任务框 / 引用,可叠加);围栏代码整块跳过。
+ * 公式块里 LaTeX 的 `\=` 此时还是序列化器写出的 `\\=`,不匹配。
+ */
+const HL_AT_LINE_START = /^((?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|[ \t]*>[ \t]?)*[ \t]*)\\==(?=[^\s=])/
+
+export function unescapeHighlightAtLineStart(md: string): string {
+  if (!md.includes('\\==')) return md
+  return mapOutsideFences(md, (line) => line.replace(HL_AT_LINE_START, '$1=='))
+}

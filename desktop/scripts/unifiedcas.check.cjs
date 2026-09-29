@@ -20,6 +20,16 @@
 //   F8/F9 失败中把改动撤回到盘上那版(恢复信号到达 / 没等重试就切走)→ 条收掉、旧草稿删掉、切回不提示恢复
 //   F10 同上、随后外部改动被回灌采纳(收口 N-4)→ 条收掉、旧草稿删掉
 //   F11 改名 IPC 窗口里打字(收口 N-5)→ 退休实例卸载不在旧路径留孤儿草稿,同名新笔记不误弹恢复
+//  H 组(评审 G1-02,同篇多开的**路由**:按路径的操作落到最近用过的实例,不是第一个登记的):
+//   H1 焦点在 B:insertMarkdown 进 B、焦点留在 B、大纲给 B 的标题、跳转落在 B;焦点回 A 后插入改进 A
+//   H2 `&udrop` 宿主拖入(镜像 EditorScope 的 onDrop,走本宿主的 filesRef):A 刚用过、文件拖进 B → 插进 B 的落点
+//   H3 fm 补丁:A 有未落盘的字、B 是最近用过的 → 新属性与 A 的字都在盘上,零冲突副本零提示,两边都看得见新属性
+//   H4 A 标题回车改名、B 同篇跟着改指(先挂上):「进入正文」由 A 认领,接着打的字进 A、焦点在 A
+//   H5 两边都有未落盘的字时被别处改名:新路径上两份草稿分槽保存,A / B 各自恢复出自己的那份
+//   H6 fm 补丁 × 跟随者**自己也有未落盘的 fm 改动**(Codex 复核 P0):它那笔 fm 不许被当成外来补丁豁免 ——
+//      要么落盘、要么进冲突副本,绝不静默消失;新属性与写者的字同理
+//   H7 草稿槽位的归属(Codex 复核 P1):B 还开着时它槽里的草稿不许被 A 读到(A 重挂不出恢复条);
+//      主人已不在的孤槽照旧提示给 A,A 丢弃只删那一格,B 的草稿原样留着
 //  L 组(在途自写 × 撤回,返修 R1;`__upage.writeLagMs` 造「盘先落、ack 晚回」):写在路上时用户把字删回旧基线 ——
 //   L1 接着切走(卸载冲洗)→ 撤回落盘;两发写之间本机草稿一直在(前一发的 ack 不许删掉比它新的草稿)、零提示
 //   L2 停在原页(schedule)→ 撤回同样落盘
@@ -564,10 +574,198 @@ async function groupL(browser) {
   }
 }
 
+async function groupH(browser) {
+  const SEED = '# 标题\n\n第一段。\n\n## 小节\n\n第二段。\n'
+  const which = (p, text) => p.evaluate(([s, text]) => {
+    const eds = document.querySelectorAll(s)
+    return [0, 1].filter((i) => eds[i].innerText.includes(text)).map((i) => 'AB'[i]).join('')
+  }, [PM, text])
+  const activeIn = (p) => p.evaluate((s) => {
+    const eds = document.querySelectorAll(s)
+    return eds[0].contains(document.activeElement) ? 'A' : eds[1].contains(document.activeElement) ? 'B' : 'other'
+  }, PM)
+  const selIn = (p) => p.evaluate((s) => {
+    const eds = document.querySelectorAll(s)
+    const n = window.getSelection()?.anchorNode
+    return eds[0].contains(n) ? 'A' : eds[1].contains(n) ? 'B' : 'none'
+  }, PM)
+  const settle = () => wait(80) // selectionchange 异步:放光标后先等一拍(0b 台架时序教训)
+
+  // H1
+  {
+    const p = await open(browser, SEED, '&udual')
+    await caretAfter(p, 1, '第二段。')
+    await settle()
+    const r = await p.evaluate(() => {
+      const lc = window.__upage.lifecycle
+      const ok = lc.unifiedInsertMarkdown('Unified.md', '## 只在B的标题', 'cursor')
+      return { ok, hs: lc.unifiedHeadings('Unified.md').map((h) => h.text) }
+    })
+    const act1 = await activeIn(p)
+    const where1 = await which(p, '只在B的标题')
+    const jumped = await p.evaluate(() => window.__upage.lifecycle.unifiedRevealHeading('Unified.md', 1, '小节'))
+    await settle()
+    const sel1 = await selIn(p)
+    await caretAfter(p, 0, '第一段。')
+    await settle()
+    await p.evaluate(() => window.__upage.lifecycle.unifiedInsertMarkdown('Unified.md', 'A-INSERTED', 'cursor'))
+    const where2 = await which(p, 'A-INSERTED')
+    record('H1 焦点在 B:插入进 B、焦点留 B、大纲是 B 的、跳转落 B;回到 A 后插入进 A',
+      r.ok && where1 === 'B' && act1 === 'B' && r.hs.includes('只在B的标题') && jumped && sel1 === 'B' && where2 === 'A',
+      JSON.stringify({ r, where1, act1, jumped, sel1, where2 }))
+    await p.close()
+  }
+  // H2
+  {
+    const p = await open(browser, '# 页\n\n段一。\n\n段二。\n\n段三。\n', '&udual&udrop')
+    await p.evaluate(() => { window.amadeus.saveAttachment = (_page, name) => Promise.resolve({ base: name, pageRel: name }) })
+    await caretAfter(p, 0, '段一。') // A 是最近用过的那个
+    await settle()
+    const drop = await p.evaluate((s) => {
+      const pm = document.querySelectorAll(s)[1]
+      const el = [...pm.querySelectorAll('p')].find((x) => x.textContent.includes('段三'))
+      el.scrollIntoView({ block: 'center' })
+      const rr = el.getBoundingClientRect()
+      const x = rr.left + 20, y = rr.bottom - 3
+      const dt = new DataTransfer()
+      dt.items.add(new File(['PNGDATA'], 'shot.png', { type: 'image/png' }))
+      const at = document.elementFromPoint(x, y)
+      const fire = (t) => at.dispatchEvent(new DragEvent(t, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }))
+      fire('dragenter'); fire('dragover'); fire('drop')
+      return { inB: pm.contains(at) }
+    }, PM)
+    await wait(600)
+    const shape = (idx) => p.evaluate((idx) => {
+      const v = (idx ? window.__upage.probe2 : window.__upage.probe).view()
+      const out = []
+      v.state.doc.forEach((n) => out.push(n.textContent.replace(/\u200b/g, '')))
+      return out
+    }, idx)
+    const a = await shape(0), b = await shape(1)
+    const bi = b.findIndex((x) => x.includes('shot.png'))
+    await wait(1800)
+    const d = await disk(p)
+    record('H2 拖进 B(A 刚用过):文件插进 B 的落点之后,A 不被插,随后落盘',
+      drop.inB && bi > 0 && b[bi - 1].includes('段三') && !a.some((x) => x.includes('shot.png')) && d.includes('![[shot.png]]'),
+      JSON.stringify({ drop, a, b, d }))
+    await p.close()
+  }
+  // H3
+  {
+    const p = await open(browser, SEED, '&udual')
+    // ⚠️ 台架里 B 的 React 根先挂、先登记:脏的必须是**后登记**的 A、最近用过的是 B —— 「交给第一个登记的」与
+    //    「交给最近用过的」两种错法都会把写交给干净的 B,A 的字随后按冲突策略出一份多余的副本(或新属性被旧 fm 盖掉)。
+    await typeIn(p, 0, '第一段。', 'AAA') // A 手里有未落盘的字
+    await caretAfter(p, 1, '第二段。') // B 是最近用过的
+    await settle()
+    await p.evaluate(() => window.__upage.lifecycle.unifiedPatchFm('Unified.md', { status: 'done' }))
+    await wait(2500)
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    const fms = await p.evaluate(() => [window.__upage.probe.fmState().fm, window.__upage.probe2.fmState().fm])
+    record('H3 fm 补丁 × A 有未落盘的字、B 最近用过:新属性与 A 的字都在盘上,零冲突副本零提示,两边 fm 一致',
+      d.includes('status: done') && d.includes('第一段。AAA') && c.length === 0 && t.length === 0 && fms.every((f) => f.includes('status: done')) && (await domText(p, 1)).includes('AAA'),
+      JSON.stringify({ d, copies: c.map(([k]) => k), toasts: t.map((x) => x.text), fms }))
+    await p.close()
+  }
+  // H4
+  {
+    const p = await open(browser, SEED, '&udual')
+    await p.evaluate(() => window.__upage.vault.set('Unified.md', window.__upage.vault.get('Unified.md'))) // 基线不动
+    const title = p.locator('#root .amx-title-input')
+    await title.click()
+    await title.fill('改名后')
+    await p.keyboard.press('Enter')
+    await p.waitForFunction(() => document.querySelectorAll('.unified-page[data-unified-path="改名后.md"]').length === 2, null, { timeout: 8000 })
+    await wait(700)
+    const act = await activeIn(p)
+    await p.keyboard.type('XYZ')
+    await wait(300)
+    const where = await which(p, 'XYZ')
+    record('H4 A 标题回车改名、B 同篇先挂上:「进入正文」归 A,焦点在 A,接着打的字进 A',
+      act === 'A' && where.startsWith('A'), JSON.stringify({ act, where, a: await domText(p, 0), b: await domText(p, 1) }))
+    await p.close()
+  }
+  // H5
+  {
+    const p = await open(browser, SEED, '&udual')
+    await p.evaluate(() => localStorage.clear())
+    await typeIn(p, 0, '第一段。', 'AAA')
+    await typeIn(p, 1, '第二段。', 'BBB')
+    await p.evaluate(() => {
+      const u = window.__upage
+      u.vault.set('搬走.md', u.vault.get('Unified.md'))
+      u.vault.delete('Unified.md')
+      u.remapScopePaths('Unified.md', '搬走.md', 'file') // B 听广播改指;A 由台架 switchFile 改指(生产里同一条广播)
+      u.switchFile('搬走.md')
+    })
+    await p.waitForFunction(() => document.querySelectorAll('.unified-page[data-unified-path="搬走.md"]').length === 2, null, { timeout: 8000 })
+    await wait(500)
+    const drafts = await p.evaluate(() => Object.entries(localStorage).filter(([k]) => k.startsWith('amadeus.unsavedDraft:') && k.includes('搬走.md')).map(([, v]) => JSON.parse(v).text))
+    const bars = await p.evaluate(() => [...document.querySelectorAll('.unified-page')].map((x) => !!x.querySelector('[data-save="draft"]')))
+    await p.locator('#root [data-save="draft"] .btn.primary').click()
+    await wait(300)
+    const aGot = await domText(p, 0)
+    await p.locator('[data-instance="B"] [data-save="draft"] .btn.primary').click()
+    await wait(300)
+    const bGot = await domText(p, 1)
+    record('H5 两边都有未落盘的字时被别处改名:两份草稿分槽保存,A / B 各自恢复出自己的那份',
+      drafts.length === 2 && drafts.some((x) => x.includes('AAA')) && drafts.some((x) => x.includes('BBB')) && bars.every(Boolean) && aGot.includes('AAA') && bGot.includes('BBB'),
+      JSON.stringify({ drafts, bars, aGot, bGot }))
+    await p.close()
+  }
+  // H6
+  {
+    const p = await open(browser, SEED, '&udual')
+    await p.evaluate(() => window.__upage.probe2.setFm({ mine: 'B' })) // B:只有 fm 改动,还在防抖窗里
+    await typeIn(p, 0, '第一段。', 'AAA') // A:正文改动、最近用过 → 被选为补丁写者,B 跟随
+    await p.evaluate(() => window.__upage.lifecycle.unifiedPatchFm('Unified.md', { status: 'done' }))
+    await wait(3000)
+    const d = await disk(p)
+    const c = await copies(p)
+    const everywhere = [d, ...c.map(([, v]) => v)]
+    const kept = (x) => everywhere.some((t) => t.includes(x))
+    record('H6 fm 补丁 × 跟随者自己有未落盘的 fm 改动:它的 fm、新属性、写者的字都没有静默消失(盘上或冲突副本)',
+      kept('mine: B') && d.includes('status: done') && kept('第一段。AAA'),
+      JSON.stringify({ d, copies: c.map(([k, v]) => [k, v]) }))
+    await p.close()
+  }
+}
+
+async function groupH7(browser) {
+  const p = await open(browser, '# 标题\n\n第一段。\n\n## 小节\n\n第二段。\n', '&udual')
+  await p.evaluate(() => { localStorage.clear(); window.__upage.failWrites = Infinity })
+  await typeIn(p, 1, '第二段。', 'BBB') // B 写不进去 → 草稿进 B 自己的槽(harness-B),B 还开着
+  await wait(1500)
+  const bKeys = await p.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:') && k.endsWith('\u0000harness-B')))
+  const remountA = async () => {
+    await p.evaluate(() => window.__upage.switchFile('Other.md', '# 别的\n\nx\n'))
+    await wait(300)
+    await p.evaluate(() => window.__upage.switchFile('Unified.md'))
+    await p.waitForFunction(() => document.querySelector('#root .unified-page')?.getAttribute('data-unified-path') === 'Unified.md', null, { timeout: 8000 })
+    await wait(400)
+  }
+  await remountA()
+  const aBar1 = await p.evaluate(() => !!document.querySelector('#root [data-save="draft"]'))
+  // 孤槽:主人(gone-leaf)已不在
+  await p.evaluate(() => localStorage.setItem('amadeus.unsavedDraft::Unified.md\u0000gone-leaf', JSON.stringify({ text: '# 标题\n\n孤儿草稿。\n', base: 'x', at: Date.now() })))
+  await remountA()
+  const aBar2 = await p.evaluate(() => !!document.querySelector('#root [data-save="draft"]'))
+  if (aBar2) await p.locator('#root [data-save="draft"] .btn:not(.primary)').click()
+  await wait(200)
+  const left = await p.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('amadeus.unsavedDraft:')).map((k) => k.split('\u0000')[1] ?? '(plain)'))
+  await p.evaluate(() => { window.__upage.failWrites = 0 })
+  record('H7 活槽不给别人:B 还开着时 A 重挂不出 B 的草稿;孤槽照旧提示给 A,丢弃只删孤槽、B 的留着',
+    bKeys.length === 1 && !aBar1 && aBar2 && left.length === 1 && left[0] === 'harness-B',
+    JSON.stringify({ bKeys: bKeys.length, aBar1, aBar2, left }))
+  await p.close()
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const groups = { G: groupG, C: groupC, D: groupD, F: groupF, L: groupL }
+    const groups = { G: groupG, H: async (b) => { await groupH(b); await groupH7(b) }, C: groupC, D: groupD, F: groupF, L: groupL }
     for (const [k, fn] of Object.entries(groups)) if (!only.length || only.includes(k)) await fn(browser)
   } finally {
     await browser.close()

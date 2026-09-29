@@ -160,6 +160,10 @@ const api = {
   /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
   clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('app:clearData', opts),
+  /** 走正常退出链后重新拉起(插件页「重启以生效」)。 */
+  relaunchApp: (): Promise<void> => ipcRenderer.invoke('app:relaunch'),
+  /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。 */
+  setBundleEnabled: (id: string, on: boolean): Promise<{ restartPending: boolean }> => ipcRenderer.invoke('plugins:setBundleEnabled', id, on),
   onUpdaterStatus: (cb: (st: any) => void): (() => void) => {
     const listener = (_e: unknown, st: any): void => cb(st)
     ipcRenderer.on('updater:status', listener)
@@ -246,7 +250,10 @@ const api = {
   productsUpdate: (id: string, patch: Record<string, unknown>) => ipcRenderer.invoke('products:update', id, patch),
   productsServe: (id: string) => ipcRenderer.invoke('products:serve', id),
   productsShortcut: (id: string, fallbackName?: string) => ipcRenderer.invoke('products:shortcut', id, fallbackName),
-  productsTrash: (id: string) => ipcRenderer.invoke('products:trash', id),
+  productsTrash: (id: string, expect: { action: 'trash' | 'unregister'; dirId?: string }) => ipcRenderer.invoke('products:trash', id, expect),
+  productsCreate: (name: string) => ipcRenderer.invoke('products:create', name),
+  productsRegister: (source: string, within: string, strict: boolean) => ipcRenderer.invoke('products:register', source, within, strict),
+  productsIsCreation: (dir: string): Promise<boolean> => ipcRenderer.invoke('products:isCreation', dir),
   productsExternalLaunchAllowed: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchAllowed', id),
   /** 开发态插件的加载 / 卸载由主进程向**每个窗口**广播:收到就重载这些插件 id(卸载 = 来源没了 → 拆掉)。 */
   onDevPluginsChanged: (cb: (change: { pluginIds: string[] }) => void) => {
@@ -450,6 +457,12 @@ const api = {
    */
   cloudFetch: (req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }> =>
     ipcRenderer.invoke('cloud:fetch', req),
+  /** Forsion Extend 的渲染半身调它自己主进程半身注册的通道(2026-09-28):只放行 cloud:present 列出的通道,宿主自己的通道一律拒。
+   *  Extend 以后新加的通道随它的 npm 版本走,不用等 Genesis 加专门的桥键。没装载 Extend 时整个键被删(见下)。 */
+  cloudInvoke: (channel: string, ...args: unknown[]): Promise<unknown> =>
+    typeof channel === 'string' && cloudPresent().has(channel)
+      ? ipcRenderer.invoke(channel, ...args)
+      : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
   /** 可共享的屏幕/窗口(带 dataURL 缩略图)。选源 UI 由调用方自己画 —— 宿主不提供选择器。 */
@@ -550,5 +563,6 @@ const CLOUD_KEYS: Record<string, string> = {
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
+if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
 
 contextBridge.exposeInMainWorld('tangu', api)

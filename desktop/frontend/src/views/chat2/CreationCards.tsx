@@ -1,0 +1,161 @@
+/** 作品卡(```forsion-creation,2026-09-27):agent 提议把这条对话里做的东西变成「造物」,用户点了宿主才动手 ——
+ *   无 path = 做成作品:在托管根建文件夹 → 把这条会话挪进去 → 替用户发一句「接着做」,agent 下一轮就在作品文件夹里写;
+ *   有 path = 加入造物:把会话工作目录里那个文件夹**原地**加入造物(不复制、不移动;宿主侧登记 + 写身份 sidecar),
+ *   会话的工作目录切到它(本来就在它里面就不用切)。
+ * 完成态不另存:会话的工作目录已经是造物(宿主 products:isCreation 判,只读)= 已在造物里(重载后自然还是完成态)。
+ * 私聊 / 独立团队 / Chat 预设的会话挪不动(工作目录被身份锁住或没有本机文件工具)→ 退化成在作品里开一个新对话。
+ * 只有桌面端渲染(按钮要宿主 IPC);卡片里的 path 是模型写的,先经 resolveInside 限定在会话工作目录内。 */
+import { useEffect, useState } from 'react'
+import { AppWindow, Code2, FolderInput, Loader2, Sparkles } from 'lucide-react'
+import { setActiveSpace } from '@lcl/engine'
+import { registerMessages, translate, useI18n } from '../../i18n'
+import { lockSessionMove, unlockSessionMove, useApp } from '../../stores/appStore'
+import { useCodeStudio } from '../../stores/codeStudioStore'
+import { normPath } from '../coding/studioModel'
+import { resolveInside } from './creationPath'
+import type { CreationCard } from './suggest'
+
+registerMessages({
+  'creation.card.createTitle': { zh: '做成作品：{name}', en: 'Make it a creation: {name}' },
+  'creation.card.createBody': {
+    zh: '在「造物」里给它建一个文件夹，把这条对话的工作目录切过去，接着在里面做。之后它会出现在造物里，有稳定的预览、桌面快捷方式和版本历史。',
+    en: 'Creates a folder for it in Creations, moves this conversation into that folder and keeps building there. It then shows up in Creations with a stable preview, a desktop shortcut and version history.',
+  },
+  'creation.card.addTitle': { zh: '加入造物：{name}', en: 'Add to Creations: {name}' },
+  'creation.card.addBody': {
+    zh: '把「{path}」原地加入造物，不复制也不移动。这条对话之后在它里面继续，它会出现在造物里，有稳定的预览和桌面快捷方式。',
+    en: 'Adds “{path}” to Creations where it is, without copying or moving it. This conversation continues in it, and it shows up in Creations with a stable preview and a desktop shortcut.',
+  },
+  'creation.card.create': { zh: '做成作品', en: 'Make it a creation' },
+  'creation.card.add': { zh: '加入造物', en: 'Add to Creations' },
+  'creation.card.done': { zh: '已在造物里：{name}', en: 'In Creations: {name}' },
+  'creation.card.doneNewChat': {
+    zh: '已在造物里建好「{name}」。这条对话没有挪过去，已切到在它里面新建对话。',
+    en: 'Created “{name}” in Creations. This conversation was not moved there, so a new conversation in it is ready.',
+  },
+  'creation.card.openStudio': { zh: '在编码工作室中打开', en: 'Open in Coding Studio' },
+  'creation.card.openCreations': { zh: '在造物中查看', en: 'View in Creations' },
+  'creation.continuePrompt': {
+    zh: '作品文件夹「{name}」已经建好，这条对话的工作目录已经切过去了。请在这里接着做。',
+    en: 'The creation folder “{name}” is ready and this conversation now works in it. Please continue building here.',
+  },
+  'creation.err.running': {
+    zh: '这条对话还在运行，等这一轮结束再点。',
+    en: 'This conversation is still running. Try again when this turn has finished.',
+  },
+  'creation.err.outside': {
+    zh: '卡片里的文件夹不在这条对话的工作目录里，不能从这里加入。',
+    en: 'The folder in this card is outside this conversation’s working folder, so it cannot be added from here.',
+  },
+  'creation.err.invalid_source': { zh: '找不到要加入的文件夹。', en: 'The folder to add was not found.' },
+  'creation.err.forbidden_source': {
+    zh: '这个文件夹不能加入造物（比如家目录、造物自己的文件夹这类位置）。',
+    en: 'This folder cannot be added to Creations (for example your home folder or the Creations folder itself).',
+  },
+  'creation.err.nested': {
+    zh: '这个文件夹在另一个造物里面，或者里面已经有造物了，不能再单独加入。',
+    en: 'This folder is inside another creation, or already contains one, so it cannot be added on its own.',
+  },
+})
+
+/** 把一个文件夹原地加入造物(不复制、不移动);失败抛出已翻译的原因。作品卡与 PROJECT 详情共用。
+ *  within / strict:宿主按真实路径判「源在这个目录里(strict = 且不是它本身)」—— 字符串判定挡不住里面指向别处的软链。 */
+export async function addToCreations(source: string, within: string, strict: boolean): Promise<{ dir: string; name: string }> {
+  const r = await window.tangu!.productsRegister!(source, within, strict)
+  if (!r.ok) throw new Error(translate(`creation.err.${r.code}`))
+  return { dir: r.dir, name: r.name }
+}
+
+export function CreationCards({ cards, sessionId }: { cards: CreationCard[]; sessionId?: string }) {
+  if (!cards.length || !window.tangu?.productsCreate || !window.tangu?.productsRegister) return null
+  return <div className="t2-tasks">{cards.map((card, i) => <CreationCardView key={`${i}:${card.name}:${card.path || ''}`} card={card} sessionId={sessionId} />)}</div>
+}
+
+function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?: string }) {
+  const { t } = useI18n()
+  const session = useApp((s) => (sessionId ? s.sessions.find((x) => x.id === sessionId) : undefined))
+  const configCwd = useApp((s) => (sessionId ? s.configBySession[sessionId]?.cwd : undefined))
+  const defaultWs = useApp((s) => s.defaultWsDir)
+  const cwd = configCwd || session?.project_path || ''
+  const [inCreation, setInCreation] = useState(false)
+  useEffect(() => {
+    let alive = true
+    setInCreation(false)
+    if (cwd) void window.tangu?.productsIsCreation?.(cwd).then((v) => { if (alive) setInCreation(!!v) }).catch(() => {})
+    return () => { alive = false }
+  }, [cwd])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [made, setMade] = useState<{ dir: string; name: string; moved: boolean } | null>(null)
+  const adding = !!card.path
+  // 整个工作目录加入造物只对真项目放行;默认工作区是所有不在项目里的对话共用的大目录
+  const allowSelf = !!cwd && normPath(cwd) !== normPath(defaultWs || '')
+  const source = adding ? resolveInside(cwd, card.path!, allowSelf) : null
+  const done = made ?? (inCreation ? { dir: cwd, name: session?.project_name || card.name, moved: true } : null)
+
+  const accept = async (): Promise<void> => {
+    const api = window.tangu
+    if (!api?.productsCreate || !api.productsRegister || busy) return
+    setBusy(true); setError('')
+    // 跑着 / 正在发送 / 另一张作品卡正在挪它的时候不动:agent 正往原目录写,挪过去续话还会被当成插话塞进这一轮。
+    // 占住之后到挪完(含复制那几秒)这条会话发不了新消息
+    if (sessionId && (useApp.getState().runningBySession[sessionId] || !lockSessionMove(sessionId))) { setError(t('creation.err.running')); setBusy(false); return }
+    let moved = false
+    let created = ''
+    try {
+      let dir: string
+      let name: string
+      if (adding) {
+        if (!source) throw new Error(t('creation.err.outside'))
+        ;({ dir, name } = await addToCreations(source, cwd, !allowSelf))
+      } else {
+        const r = await api.productsCreate(card.name)
+        dir = r.dir; name = r.name
+      }
+      const app = useApp.getState()
+      // 原地加入的就是会话自己的工作目录:本来就在里面,不用挪
+      const here = !!cwd && normPath(dir) === normPath(cwd)
+      moved = here || (sessionId ? (await app.moveSessionToProject(sessionId, dir, name)) === 'moved' : false)
+      if (!moved) { app.setNewChatWs({ key: dir, name, kind: 'local', path: dir }); app.setActiveId(null) }
+      setMade({ dir, name, moved })
+      created = name
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      if (sessionId) unlockSessionMove(sessionId)
+      setBusy(false)
+    }
+    // 新做的作品:点按钮就是「好,做成作品」—— 替用户接一句,agent 下一轮就在作品文件夹里写(新的 cwd 在系统提示里)
+    if (moved && !adding && sessionId) void useApp.getState().send(t('creation.continuePrompt', { name: created }), [], undefined, undefined, undefined, sessionId)
+  }
+  const openStudio = (): void => {
+    if (!done) return
+    setActiveSpace('coding')
+    requestAnimationFrame(() => { useCodeStudio.getState().openProject(done.dir, done.name) })
+  }
+
+  return (
+    <div className={`t2-taskcard t2-creationcard${done ? ' done' : ''}${busy ? ' busy' : ''}`} data-creation-card={adding ? 'add' : 'create'}>
+      <div className="t2-taskcard-head">{adding ? <FolderInput size={13} /> : <Sparkles size={13} />} <b>{t(adding ? 'creation.card.addTitle' : 'creation.card.createTitle', { name: card.name })}</b></div>
+      <div className="t2-taskcard-tldr">{t(adding ? 'creation.card.addBody' : 'creation.card.createBody', { path: card.path || '' })}</div>
+      {done ? (
+        <div className="t2-taskcard-done" data-creation-done>
+          {t(done.moved ? 'creation.card.done' : 'creation.card.doneNewChat', { name: done.name })}
+          <div className="t2-taskcard-actions">
+            <button onClick={openStudio}><Code2 size={12} /> {t('creation.card.openStudio')}</button>
+            <button onClick={() => setActiveSpace('artificial')}><AppWindow size={12} /> {t('creation.card.openCreations')}</button>
+          </div>
+        </div>
+      ) : adding && !source ? (
+        <div className="t2-taskcard-done" role="alert">{t('creation.err.outside')}</div>
+      ) : (
+        <div className="t2-taskcard-actions">
+          <button className="primary" disabled={busy} onClick={() => void accept()} data-creation-accept>
+            {busy ? <Loader2 size={12} className="spin" /> : adding ? <FolderInput size={12} /> : <Sparkles size={12} />} {t(adding ? 'creation.card.add' : 'creation.card.create')}
+          </button>
+        </div>
+      )}
+      {error && <div className="t2-taskcard-done" role="alert" data-creation-error>{error}</div>}
+    </div>
+  )
+}

@@ -26,6 +26,12 @@ interface RunCtx {
 }
 
 const als = new AsyncLocalStorage<RunCtx>();
+// ⚠️ 模块加载时就启用(Node < 24 的 ALS 基于 async_hooks,首次 run/enterWith 才装钩子):懒启用时,钩子装上之前
+// 建好的 promise 不受追踪,续延跑在进程级兜底资源(eid 0)上 —— 第一个 run 的 enterRunContext 就把它的
+// {userId, runId, clientTag} 写进了兜底资源,之后顶层代码与开机就起的长跑循环(渠道轮询、TUI)都会读到它,
+// createRun 再把 clientTag 盖进它们起的 run。必须传非 undefined 的 store:run(undefined) 与当前 store 相同会直接
+// 返回、不装钩子。Node 24+(AsyncContextFrame)不走这条路,这一行无害。复现:test/runContextClientTagLeak.test.ts。
+als.run({ userId: '' }, () => {});
 
 /**
  * 在当前 run 的异步子树建立上下文(runLoop 顶部调用一次;slug 解析出来后可再调一次覆盖)。
@@ -46,7 +52,9 @@ export function enterRunContext(
     agentSlug,
     displayAgentSlug: displayAgentSlug ?? agentSlug,
     // 同一 run 解析 agentSlug 时会再次 enter；未显式覆盖就保留已解析出的客户端标签。
-    clientTag: clientTag ?? prev?.clientTag,
+    // 只在同一个 run 内沿用(runId 相同,或不指定 runId 的作用域细化如 Historian):排队接力的下一个 run 是在
+    // 上一个 run 的收尾上下文里起的,不能继承它的标签(外部引擎 loop 之后不再设 client,会一直带着)。
+    clientTag: clientTag ?? (runId === undefined || runId === prev?.runId ? prev?.clientTag : undefined),
   });
 }
 

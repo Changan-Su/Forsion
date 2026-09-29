@@ -13,7 +13,7 @@ import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugi
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
-import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding } from '../amadeus/plugins/display'
+import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { setPluginEnabled, type PluginInfo } from '../services/backendService'
@@ -29,6 +29,13 @@ import { PluginLogo } from './PluginLogo'
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
+  // 带主进程半身的内置包(Forsion Extend):开关改的是下次开机装不装那一半
+  'settings.amadeusPlugins.lockedHint': {
+    zh: '关闭后，从下次启动起不再加载 Forsion 云端功能（账号、云同步、Connect 等），本机数据不受影响。',
+    en: 'When turned off, Forsion cloud features (account, cloud sync, Connect, and more) stop loading from the next launch. Local data is not affected.',
+  },
+  'settings.amadeusPlugins.restartPending': { zh: '重启 Forsion 后生效。', en: 'Takes effect after Forsion restarts.' },
+  'settings.amadeusPlugins.restartNow': { zh: '立即重启', en: 'Restart now' },
   'settings.amadeusPlugins.unitIntro': { zh: '查看已安装的功能和编辑器扩展。', en: 'View installed features and editor extensions.' },
   'settings.amadeusPlugins.unitBuiltinTitle': { zh: '编辑器扩展', en: 'Editor extensions' },
   'settings.amadeusPlugins.unitBuiltinHint': { zh: '此处开关仅控制编辑器扩展。Unit 已安装功能由部署配置管理。', en: 'These toggles control editor extensions. Installed Unit features are managed through deployment configuration.' },
@@ -169,7 +176,7 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
  *    重挂一次面板(用户正在输入的内容当场清零)。
  *  ②**dispose 必须接异常**:第三方 dispose 抛错不能把 React 的 cleanup 链带崩,否则下一个面板
  *    挂不上去。 */
-const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribution }> = ({ pluginId, def }) => {
+export const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribution; bare?: boolean }> = ({ pluginId, def, bare }) => {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const el = ref.current
@@ -191,9 +198,12 @@ const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribu
       el.textContent = '' // 插件没清干净也不给下一次挂载留残渣
     }
   }, [pluginId, def])
+  // bare:挂进宿主一级页当整页(「Forsion 云端」的子页),版式归插件 —— 不套卡片、不画小标题(左栏子项就是标题)
+  if (bare) return <div className="plugin-settings-page" data-plugin-settings={`${pluginId}:${def.id}`} ref={ref} />
+  const title = typeof def.title === 'function' ? def.title() : def.title
   return (
     <>
-      {def.title && <div className="hint">{def.title}</div>}
+      {title && <div className="hint">{title}</div>}
       <div className="plugin-card" ref={ref} />
     </>
   )
@@ -324,6 +334,51 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
   )
 }
 
+/** 带主进程半身的内置包(Forsion Extend)的开关:那一半开窗前就装好、没法热卸,开关改的是**下次开机**装不装。
+ *  读主进程的状态,不看渲染半身的 activeIds —— 本机 localStorage 里可能留着旧开关拨下的「关」,主进程半身其实在跑。 */
+const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const [busy, setBusy] = useState(false)
+  const flip = async (on: boolean): Promise<void> => {
+    setBusy(true)
+    try {
+      const { restartPending } = await window.tangu!.setBundleEnabled!(p.id, on)
+      usePluginStore.setState((s) => ({ plugins: s.plugins.map((x) => (x.id === p.id ? { ...x, bundleOff: !on, restartPending } : x)) }))
+      // 渲染半身跟着走:朝目标拨,别用 toggle(localStorage 里旧的「关」会让它反着来)
+      if (on) usePluginStore.getState().enable(p.id)
+      else usePluginStore.getState().disable(p.id)
+    } catch (e) {
+      panelToast(ipcErrorText(e), true)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <input
+      type="checkbox"
+      data-bundle-switch
+      checked={!p.bundleOff}
+      disabled={busy || !!p.blocked}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => void flip(e.target.checked)}
+      style={{ cursor: busy || p.blocked ? 'not-allowed' : 'pointer' }}
+    />
+  )
+}
+
+/** 拨过 locked 包的开关、还没重启:就地给「立即重启」。 */
+const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  if (!p.restartPending) return null
+  return (
+    <div className="hint" data-restart-pending style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+      <span>{t('settings.amadeusPlugins.restartPending')}</span>
+      {window.tangu?.relaunchApp && (
+        <button type="button" className="btn sm" onClick={() => void window.tangu!.relaunchApp!()}>{t('settings.amadeusPlugins.restartNow')}</button>
+      )}
+    </div>
+  )
+}
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -336,7 +391,8 @@ const PluginDetail: React.FC<{
   const toggle = usePluginStore((s) => s.toggle)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
   const settings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
-  const settingsViews = usePluginStore((s) => s.settingsViews).filter((o) => o.pluginId === p.id)
+  // 挂进「Forsion 云端」的面板在那一页画,详情页不重复
+  const settingsViews = usePluginStore((s) => s.settingsViews).filter((o) => o.pluginId === p.id && !isPlacedSettingsView(p, o.item))
   usePluginOnboarding((s) => s.version) // 实测结果一变,徽标即时跟上
   const on = activeIds.includes(p.id)
   // 进详情页实测一次本地两类(设置 / 授权):徽标以「此刻」为准,不以上次打开设置页时为准。
@@ -442,9 +498,17 @@ const PluginDetail: React.FC<{
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
-        {/* 带主进程半身的内置包(Forsion Extend):开关对主进程半身是空操作(每次启动都装),不给开关免得像能关 */}
-        {!p.locked && <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />}
+        {/* 带主进程半身的内置包(Forsion Extend):开关管下次开机装不装那一半;没有这座桥(设备页 / 旧壳)就不给开关 */}
+        {p.locked
+          ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
+          : <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />}
       </div>
+      {p.locked && !!window.tangu?.setBundleEnabled && (
+        <div className="hint">
+          {t('settings.amadeusPlugins.lockedHint')}
+          <RestartPending p={p} />
+        </div>
+      )}
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
       {p.dev && (
         <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' }}>
@@ -581,15 +645,19 @@ export const AmadeusPluginsTab: React.FC<{
               <BundleChips p={p} />
             </div>
             {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{pluginDisplayDescription(p, locale)}</div>}
+            {p.locked && <RestartPending p={p} />}
           </div>
-          <input
-            type="checkbox"
-            checked={on}
-            disabled={!!p.blocked}
-            onClick={(e) => e.stopPropagation()}
-            onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) void promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
-            style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
-          />
+          {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
+          {p.locked ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} /> : (
+            <input
+              type="checkbox"
+              checked={on}
+              disabled={!!p.blocked}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) void promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
+              style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
+            />
+          )}
         </div>
       </div>
     )

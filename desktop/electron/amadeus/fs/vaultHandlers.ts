@@ -12,6 +12,7 @@ import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontm
 import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { loadPage, newPage, pageFileName, savePage, type PageManifest } from '@amadeus-shared/compiler'
 import { findMarkLine } from '@amadeus-shared/mdMarks'
+import { linkMentionInText } from '@amadeus-shared/linkIndex'
 import type { VaultManager } from './vaultManager'
 import type { VaultIndex } from './vaultIndex'
 import { withDbLock } from './dbLock'
@@ -516,9 +517,10 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   handle(IPC.listFolders, () => vault.listFolders())
 
-  handle(IPC.resolveEmbed, (_e, target: string) => {
+  handle(IPC.resolveEmbed, (_e, target: string, sourcePath?: string) => {
     // The inline index already holds each block's content + owning note.
-    const hit = index.resolveBlock(target)
+    // sourcePath(可选,评审 L-15):嵌入所在笔记 → 被嵌笔记就近解析;旧 preload / 远端 RPC 不带时照旧全库解析。
+    const hit = index.resolveBlock(target, typeof sourcePath === 'string' && sourcePath ? sourcePath : undefined)
     return hit ? { owner: hit.path, content: hit.content, type: hit.type } : null
   })
 
@@ -607,4 +609,20 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   handle(IPC.deleteTrashEntry, async (_e, name: string) => vault.deleteTrashEntry(name))
   handle(IPC.emptyTrash, async () => vault.emptyTrash())
   handle(IPC.pageIcons, () => index.pageIcons())
+  handle(IPC.pageAliases, () => index.pageAliases())
+  handle(IPC.unlinkedMentions, (_e, pagePath: string) => index.unlinkedMentions(pagePath))
+  /** 未链接提及 → `[[inner]]`(L-16):按内容定位(同 patchMark),对不上返回 false 不写;写盘 → 更索引 → externalChange 广播。 */
+  handle(IPC.linkMention, async (_e, pagePath: string, hit: { raw: string; occ: number; col: number; match: string }, inner: string) => {
+    if (!vault.isPagePath(pagePath)) return false
+    const wrote = await withPathLock(pagePath, async (): Promise<boolean> => {
+      let text: string
+      try { text = await fs.readFile(vault.absPath(pagePath), 'utf8') } catch { return false }
+      const next = linkMentionInText(text, hit, inner)
+      if (next === null || next === text) return false
+      await writeVaultText(vault, index, pagePath, next)
+      return true
+    })
+    if (wrote) notifyAll(IPC.externalChange, pagePath)
+    return wrote
+  })
 }

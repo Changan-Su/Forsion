@@ -4,7 +4,7 @@
  * 404(老网关没这条路由)、网络错、5xx、畸形响应都只该让回放退回扁平形态,绝不能抛进 hydrate。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createHttpStateStore, enterRequestToken } from './httpStateStore.js';
+import { createHttpStateStore, runWithRequestToken } from './httpStateStore.js';
 
 const calls: Array<{ url: string; init: any }> = [];
 function stubFetch(status: number, body: unknown): void {
@@ -24,8 +24,7 @@ describe('HttpStateStore.listStepsForMessages', () => {
   it('posts the message ids to the gateway with the session token and maps the rows back', async () => {
     stubFetch(200, ROWS);
     const store = createHttpStateStore({ cloudUrl: 'http://gw/', fleetSecret: 'fleet-key' });
-    enterRequestToken('tok-1');
-    const steps = await store.listStepsForMessages!('a/b', ['a1', 'a2']);
+    const steps = await runWithRequestToken('tok-1', () => store.listStepsForMessages!('a/b', ['a1', 'a2']));
     expect(steps).toEqual(ROWS);
     expect(calls[0].url).toBe('http://gw/api/agent-state/sessions/a%2Fb/steps-for-messages');
     expect(calls[0].init.method).toBe('POST');

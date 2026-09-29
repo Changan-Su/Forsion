@@ -6,7 +6,10 @@ describe('resolveSettingsTarget', () => {
   it.each([
     [undefined, { tab: 'general' }],
     ['', { tab: 'general' }],
-    ['forsion', { tab: 'general', sub: 'g-forsion' }], // appStore handleAuthExpired、/login
+    ['forsion', { tab: 'forsion' }], // appStore handleAuthExpired、/login:落到第一个子页(Extend 的「账号」)
+    ['general/g-forsion', { tab: 'forsion' }], // 2026-09-28 前的二级落点
+    ['sync/s-cloud', { tab: 'forsion', sub: 'f-sync' }],
+    ['forsion/fx:forsion-extend:quota', { tab: 'forsion', sub: 'fx:forsion-extend:quota' }], // Extend 自绘子页的深链
     ['connection', { tab: 'general', sub: 'g-conn' }],
     ['agent-clis', { tab: 'agents', sub: 'ag-clis' }],
     ['wechat', { tab: 'channels' }],
@@ -22,7 +25,7 @@ describe('resolveSettingsTarget', () => {
   })
 
   it('别名里的一级页都是真实存在的 StaticTab', () => {
-    const known = new Set(['general', 'model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'amadeus-plugins', 'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'remote-sessions', 'advanced', 'developer', 'about'])
+    const known = new Set(['forsion', 'general', 'model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'amadeus-plugins', 'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'remote-sessions', 'advanced', 'developer', 'about'])
     for (const [alias, [tab]] of Object.entries(LEGACY_TARGETS)) expect(known.has(tab), alias).toBe(true)
   })
 })

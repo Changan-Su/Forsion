@@ -107,6 +107,14 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
           state.closeNode()
           return
         }
+        // 空单元格(K-10):preset 把「非文末的空段落」一律写成 `<br />` 空行记号,stripEmptyLineBr 只抹整行的那种 ——
+        // 落在表格行里就成了 `| a | <br /> |`,重开还被 D-06 读成格内换行。单元格里的空段落就是空格子,什么都不写。
+        // (state.top() = 正在构建的父 mdast 节点;单元格的 toMarkdown 是 openNode('tableCell').next(content)。)
+        if (node.content.size === 0 && (state as unknown as { top(): { type?: string } | undefined }).top()?.type === 'tableCell') {
+          state.openNode('paragraph')
+          state.closeNode()
+          return
+        }
         const indent = clampIndent(node.attrs.indent as number)
         const align = normalizeTextAlignment(node.attrs.align)
         // 末尾是带原文的 `<br>`(D-06,见 ./inlineBr):不走 preset 的 serializeText,它会把尾随 hardbreak 掐掉。

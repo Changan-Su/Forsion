@@ -45,8 +45,9 @@ import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' /
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
 import './mainMessages' // P1-K5:登记 main.* 原生界面文案(配对框 / 崩溃框 / 下载通知 / 选择框标题)
 import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / external token)进 safeStorage
+import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
-import { builtinBundleSources, builtinPluginIds, seedBuiltinBundles } from './builtinPlugins'
+import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, type DownloadProgress } from './marketInstall'
@@ -450,6 +451,8 @@ interface TanguStoredConfig {
   agentDeskEnabled: boolean
   /** 任务概览里点来源/产物文件时开在哪:新标签页(默认)或 Agent Desk 演出格。 */
   summaryOpenIn: 'tab' | 'desk'
+  /** 在插件页停用的内置包主进程半身(Forsion Extend):开机装载前读,改了要重启才生效(builtinPlugins.ts 的开关名单)。 */
+  disabledBundles: string[]
 }
 
 /**
@@ -511,6 +514,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   keepAwakeWhileRunning: false,
   agentDeskEnabled: true,
   summaryOpenIn: 'tab',
+  disabledBundles: [],
 }
 
 /** 默认工作区目录(配置未填时兜底):优先落在本地笔记库(Vault)内的 Sessions/ ——
@@ -547,6 +551,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'keepAwakeWhileRunning', // 桌面专属(powerSaveBlocker 由 main 持有)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
+  'disabledBundles', // 桌面专属(内置包主进程半身由 main 开机装载)
   'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
 // 文件名是与引擎的契约(电脑历史第二道闸经 FORSION_DESKTOP_CONFIG 读它,见 shared/computerHistory.ts),改名三处同步
@@ -1360,6 +1365,11 @@ function ensureBackend(): Promise<void> {
 const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
   ? process.env.TANGU_HARNESS_QUIET === '1'
   : typeof (globalThis as { __playwright_run?: unknown }).__playwright_run === 'function'
+
+// 台架跳过 macOS「重新打开窗口」询问:台架与 dev 共用 com.github.Electron,它崩过后 AppKit 在 -[NSApplication run] →
+// _handleAEOpenEvent 里弹 NSAlert 模态框,ready 永不来 → 台架零输出挂死(09-27 多会话同时中招)。注册域只在内存、不落盘;
+// AppKit 在主脚本同步段之后才读这个键(09-28 注入探针实证,仪器 npm run check:persistignore)。
+if (QUIET_WINDOWS && process.platform === 'darwin') systemPreferences.registerDefaults({ ApplePersistenceIgnoreState: true })
 
 function present(win: BrowserWindow): void {
   if (QUIET_WINDOWS) win.showInactive()
@@ -2188,10 +2198,33 @@ app.whenReady().then(async () => {
       // ── 0.6 起:设备互联的云端通道工厂(隧道 + caps 上报器;units:* 名册四通道也由 Extend 注册)。doRefreshUnitHost 每次重建时调 ──
       setUnitHubFactory: (factory) => { unitHubFactory = factory },
     }
-    const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
+    // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
+    const off = (await loadConfig()).disabledBundles
+    initBundleSwitches(Array.isArray(off) ? off.filter((x): x is string => typeof x === 'string') : [])
+    for (const s of bundleSources) if (s.desktop && bundleOff(s.id)) console.log(`[cloud-host] ${s.id} 已在插件页停用,不装载主进程半身`)
+    const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources.filter((s) => !bundleOff(s.id)), appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) cloudChannels.clear()
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
+  // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
+  ipcMain.handle('plugins:setBundleEnabled', async (e, id: unknown, on: unknown) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    if (typeof id !== 'string' || !lockedPluginIds().has(id) || typeof on !== 'boolean') throw new Error('invalid arguments') // 内部串:只有受信渲染层传错参才会到这
+    await saveConfig((before) => {
+      const next = new Set((Array.isArray(before.disabledBundles) ? before.disabledBundles : []).filter((x) => typeof x === 'string'))
+      if (on) next.delete(id)
+      else next.add(id)
+      return { disabledBundles: [...next] }
+    })
+    setBundleOff(id, !on)
+    return { restartPending: bundleRestartPending(id) }
+  })
+  // 「重启以生效」:走正常退出链(引擎 / 同步收尾),退完再拉起。dev(electron-vite)下拉不起来就手动重跑 npm run dev。
+  ipcMain.handle('app:relaunch', (e) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    app.relaunch()
+    app.quit()
+  })
   // 内置捆绑包的 npm 更新(builtinUpdates.ts):启动 1 分钟后查一次、之后每 6 小时一次,新版只下载进暂存区,
   // 由下次启动的上面那次播种换上。只在打包版跑:dev 的随包来源就是 node_modules,跟着 npm install 走。
   if (app.isPackaged) {
@@ -2548,7 +2581,7 @@ app.whenReady().then(async () => {
     if (!(await stat(rootDir)).isDirectory()) throw new Error('Preview root is not a directory')
     // Each project gets its own origin: localStorage and simultaneous preview windows stay isolated.
     // 托管根下的项目 = 产物 → 稳定源(跨重启同源,本地数据不丢);其余走一次性令牌根。
-    return previewOriginFor(join(forsionWorkspaceDir(), 'Project'), rootDir)
+    return previewOriginFor(join(forsionWorkspaceDir(), 'Project'), rootDir, forsionHomeDir())
   })
   const studioWatchers = new Map<number, ReturnType<typeof createCodeStudioProjectWatcher>>()
   ipcMain.handle('codeStudio:watch', async (e, rootDir: string | null) => {

@@ -188,6 +188,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 |---|---|---|
 | `registerCommand` | 命令面板(+ 可选 agent 面) | id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
+| `registerSelectionAction` | 选中文字后工具栏「AI ▾」里的「插件」组 | `run(cx)` 返回要提议的 markdown,**只进宿主的预览面板**,用户点「替换 / 插入下方」才写(见下「正文 AI」) |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | 320×420 Mini Panel | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
@@ -294,7 +295,8 @@ ctx.registerCommand({
 - 宿主**不订阅**你的状态:Ribbon 在点击后、悬停进出时重读;别处(快捷键、设置页)改了状态,
   按钮要等下一次重渲才跟上。旧宿主没有这个字段 = 静默忽略,不用做特性检测。
 
-| `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例 |
+| `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例;`title` 可传函数(切语言跟上)。`category: 'forsion'`(2026-09-28 起)只对带主进程半身的首方内置包(Forsion Extend)生效:面板成为设置「Forsion 云端」的一个子页,别的插件写了照旧画在详情页 |
+| `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
 | `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
@@ -308,7 +310,7 @@ ctx.registerCommand({
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
 | `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
-| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
+| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
@@ -659,6 +661,37 @@ else if (!r.ok) ctx.notify(r.error)    // 'unknown agent: x' / 'send failed' / '
 - Agent 名册里没有这个 slug 时,宿主会先刷一次名册再等最多 3s(插件刚装、捆绑 Agent 刚播种进引擎的情况),仍没有才回
   `unknown agent`。提示词上限 20000 字符,超了直接拒(不截断)。
 - **别在 `setup` 里调**,只在用户点了按钮之后调 —— 它会切走用户当前的主区聊天。
+
+## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
+
+**别再直连 `POST /agent/runs` 做「改写这段」**:那是 Agent 的 run(带工具、落会话、slash 结果还有 8192 字符上限),又重又会
+在用户的会话列表里留痕。正式接口是一次性补全(引擎 `POST /agent/inline`:**无工具、不落库、不进任何会话**):
+
+```js
+const r = await ctx.tangu?.complete?.({
+  prompt: 'Turn this into a checklist',   // 给模型的指令(英文最稳;模型读的)
+  selection: cx.markdown,                 // 可选:要处理的正文(按数据对待,不当指令)
+  before, after,                          // 可选:前后文
+  signal: ac.signal,                      // 可选:取消
+  onDelta: (d) => preview.append(d),      // 可选:流式增量
+})                                        // → { text } —— 待插入的 markdown;旧宿主 / 非 Tangu 宿主没有这个方法
+```
+
+写进笔记**必须经用户确认**:把「拿结果」包进 `registerSelectionAction`,宿主替你开预览面板(与内置的「润色 / 翻译…」同一块),
+用户点「替换 / 插入下方」才写,Esc / 丢弃 = 一个字不动:
+
+```js
+ctx.registerSelectionAction({
+  id: 'checklist',
+  title: ctx.getLocale?.() === 'en' ? 'To checklist' : '转成清单',
+  run: async (cx) => (await ctx.tangu.complete({ prompt: 'Turn this into a markdown checklist', selection: cx.markdown })).text,
+})
+```
+
+- `cx` = `{ text, markdown, pagePath }`:选区纯文本、选区的 markdown(保留加粗 / 链接 / 列表符)、笔记库相对路径。
+- `run` 返回 `''` = 什么都不提议;返回值按 slash `run` 同一套校验(必须是字符串、不许控制字符)。
+- 模型缺省 = 主区聊天当前用的那个;额度与用量照主聊天口径扣、记。插件被停用时在飞的 `complete` 会被中止并 reject。
+- 只有 v4 笔记的选区工具栏有「AI ▾」;宿主做不了(探针没有 `complete`)时整个菜单不出现,你的项也不会出现。
 
 ## Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 

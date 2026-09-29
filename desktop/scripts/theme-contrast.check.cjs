@@ -126,7 +126,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 </style></head><body>
 <main class="matrix">
   <section class="surface surface-bg"><span class="probe text">正文</span><span class="probe text-light">次要正文</span><span class="probe text-muted">辅助信息</span><span class="probe text-faint">弱信息</span><span class="probe accent-ink">强调文字</span><span class="probe green">成功</span><span class="probe danger">危险</span></section>
-  <section class="surface surface-card"><span class="probe text">正文</span><span class="probe text-light">次要正文</span><span class="probe text-muted">辅助信息</span><span class="probe text-faint">弱信息</span><span class="probe accent-ink">强调文字</span><span class="probe green">成功</span><span class="probe danger">危险</span><div class="tool">工具信息</div></section>
+  <section class="surface surface-card"><button class="settings-switch" role="switch" aria-checked="false"><span></span></button><span class="probe text">正文</span><span class="probe text-light">次要正文</span><span class="probe text-muted">辅助信息</span><span class="probe text-faint">弱信息</span><span class="probe accent-ink">强调文字</span><span class="probe green">成功</span><span class="probe danger">危险</span><div class="tool">工具信息</div></section>
   <aside class="surface surface-sidebar"><span class="probe text">正文</span><span class="probe text-light">次要正文</span><span class="probe text-muted">辅助信息</span><span class="probe text-faint">弱信息</span><span class="probe accent-ink">强调文字</span><span class="probe green">成功</span><span class="probe danger">危险</span></aside>
 </main>
 <div class="buttons surface-card">
@@ -339,6 +339,7 @@ function filesUnder(dir, out = []) {
   ]
   const failures = []
   let worst = { ratio: Infinity, id: '' }
+  let worstSwitch = { ratio: Infinity, id: '' }
 
   for (const lang of LANGS) {
     for (const accentCombo of accentCombos) {
@@ -376,6 +377,11 @@ function filesUnder(dir, out = []) {
           for (const el of document.querySelectorAll('.highlight-fg [data-hlc], .highlight-bg [data-hl]')) {
             out.push({ id: `rich-text/${el.dataset.hlc || `mark-${el.dataset.hl}`}`, ratio: textRatio(el) })
           }
+          // 设置开关「关」:旋钮对(半透明轨道合成到卡面后的)轨道色 —— 非文字 UI,WCAG 1.4.11 的 3:1;只钉暗色(浅色靠旋钮阴影成形,不在本契约内)
+          if (document.documentElement.dataset.mode === 'dark') {
+            const knob = document.querySelector('.surface-card .settings-switch > span')
+            out.push({ id: 'switch-off/knob-vs-track', min: 3, ratio: contrast(surfaceUnder(knob), surfaceUnder(knob.parentElement)) })
+          }
 
           // Amadeus 内层必须和 Genesis 根契约一致；否则数字可能都过 AA，却还是串成另一套配色。
           const colorOf = (selector) => getComputedStyle(document.querySelector(selector)).color
@@ -395,8 +401,9 @@ function filesUnder(dir, out = []) {
 
           const prefix = `${lang}/${accentCombo.label}+${backgroundCombo.label}/${mode}`
           for (const probe of probes.out) {
-            if (probe.ratio < worst.ratio) worst = { ratio: probe.ratio, id: `${prefix}/${probe.id}` }
-            if (probe.ratio < 4.5) failures.push(`${prefix}/${probe.id}=${probe.ratio.toFixed(2)}`)
+            if (!probe.min && probe.ratio < worst.ratio) worst = { ratio: probe.ratio, id: `${prefix}/${probe.id}` }
+            if (probe.min && probe.ratio < worstSwitch.ratio) worstSwitch = { ratio: probe.ratio, id: `${prefix}/${probe.id}` }
+            if (probe.ratio < (probe.min ?? 4.5)) failures.push(`${prefix}/${probe.id}=${probe.ratio.toFixed(2)}`)
           }
           for (const [key, ok] of Object.entries(probes.bridge)) {
             if (!ok) failures.push(`${prefix}/amadeus-${key}=串色`)
@@ -410,7 +417,7 @@ function filesUnder(dir, out = []) {
   const total = LANGS.length * accentCombos.length * backgroundCombos.length * 2
   const matrixOk = pass(`主题可读性矩阵：${total} 个语言×主题色×背景色×明暗组合`, failures.length === 0,
     failures.length ? failures.slice(0, 10).join(' ; ') + (failures.length > 10 ? ` …共 ${failures.length} 条` : '')
-      : `最低 ${worst.ratio.toFixed(2)}:1 @ ${worst.id}`)
+      : `最低 ${worst.ratio.toFixed(2)}:1 @ ${worst.id};暗色开关「关」最低 ${worstSwitch.ratio.toFixed(2)}:1 @ ${worstSwitch.id}`)
   process.exit(axisOk && disjointOk && semanticOk && fillSemanticOk && surfaceInkOk && previewOk && backgroundAestheticOk && matrixOk ? 0 : 1)
 })().catch((error) => {
   console.error(error)

@@ -1,4 +1,5 @@
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
+import { Lock as LockIcon } from 'lucide-react'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
@@ -9,12 +10,14 @@ import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen, BookMarked,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
-  Undo2, Redo2, ChevronsDown, Frame,
+  Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
+import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
+import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
@@ -168,6 +171,8 @@ registerMessages({
   'amxv.mbar.toCanvas': { zh: '切换到画布', en: 'Switch to canvas' },
   'amxv.mbar.undo': { zh: '撤销', en: 'Undo' },
   'amxv.mbar.redo': { zh: '重做', en: 'Redo' },
+  'amxv.mbar.outdent': { zh: '减少缩进', en: 'Outdent' },
+  'amxv.mbar.indent': { zh: '增加缩进', en: 'Indent' },
   'amxv.moreActions': { zh: '更多操作', en: 'More actions' },
   'amxv.mbar.hideKeyboard': { zh: '收起键盘', en: 'Hide keyboard' },
 
@@ -1761,11 +1766,13 @@ function AmxBlockPicker({ height, onClose }: { height: number; onClose: () => vo
  *    故用差值 translateY 顶上去。差值是视口 px,元素在 body zoom 里 → 除以 zoomOf 反补偿(老坑)。
  *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
  *  - 「+」:先记下键盘高度再收键盘,块面板正好补上键盘让出的那块地。 */
-function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, canvas }: {
+function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode, onNeedFocus, canvas }: {
   actions: AmxAction[]
   onUpload: () => void
   undo: () => void
   redo: () => void
+  /** 缩进 / 提升(= Tab / Shift-Tab;软键盘没有 Tab,G2-06)。只有 v4 统一页交得出来;v3 笔记为 null 不出键。 */
+  indent: ((dir: 1 | -1) => void) | null
   sourceMode: boolean
   onNeedFocus: () => void
   /** v4 统一页交出来的画布模式(用户 2026-08-20 拍板:常驻在胶囊里、排上传后面,不进「⋯」)。 */
@@ -1801,6 +1808,13 @@ function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, 
           <button onPointerDown={keep} onClick={canvas.toggle} className={canvas.on ? 'on' : undefined}
             title={canvas.on ? t('amxv.mbar.toDocument') : t('amxv.mbar.toCanvas')}><Frame size={19} /></button>
         )}
+        {/* 缩进一对排在画布键之后(画布键紧跟上传是 08-20 拍板的顺序,editor-capsule e2e 的 4a 钉着)。 */}
+        {!sourceMode && indent && (
+          <button onPointerDown={keep} onClick={() => indent(-1)} title={t('amxv.mbar.outdent')}><ListIndentDecrease size={19} /></button>
+        )}
+        {!sourceMode && indent && (
+          <button onPointerDown={keep} onClick={() => indent(1)} title={t('amxv.mbar.indent')}><ListIndentIncrease size={19} /></button>
+        )}
         {!sourceMode && <button onPointerDown={keep} onClick={undo} title={t('amxv.mbar.undo')}><Undo2 size={19} /></button>}
         {!sourceMode && <button onPointerDown={keep} onClick={redo} title={t('amxv.mbar.redo')}><Redo2 size={19} /></button>}
         <button onPointerDown={keep} onClick={() => setSheet(true)} title={t('amxv.moreActions')}><MoreHorizontal size={19} /></button>
@@ -1826,6 +1840,19 @@ function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, 
       )}
     </>
   )
+}
+
+// ── 锁定页面(评审 C-07,拍板 #15)的宿主一半:状态存本机(viewMemory),锁定态进 UnifiedPage 的 key 触发重挂。 ──
+registerMessages({
+  'amxv.menu.lockPage': { zh: '锁定页面', en: 'Lock page' },
+  'amxv.menu.unlockPage': { zh: '解锁页面', en: 'Unlock page' },
+})
+
+/** path 这篇在本机是否锁定(随任一标签 / 窗口的锁定切换刷新)。 */
+function useNoteLocked(vaultRoot: string | null, path: string | null): boolean {
+  const [, bump] = useState(0)
+  useEffect(() => onNoteLockChange(() => bump((n) => n + 1)), [])
+  return !!path && readNoteLocked(vaultRoot, path)
 }
 
 function EditorScope({
@@ -2097,6 +2124,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void } | null>(null)
   /** v4 统一页交出来的撤销 / 重做(G2-05:移动端胶囊的两颗键;v4 不设 activePage,pageStore 的 undo 够不着它)。 */
   const unifiedHistRef = useRef<UnifiedHistory | null>(null)
+  /** 本 leaf 的 v4 实例的文件写口(G1-02):拖入 / 上传直接交给它,不按路径全局找 —— 同篇双开时那会找到另一个标签。 */
+  const unifiedFilesRef = useRef<((files: File[]) => boolean) | null>(null)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
@@ -2222,6 +2251,38 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const missingNote = routed?.editor === 'missing' && !!notePath && !unreadableNote
   // 编辑器实例身份 = 库根 + 路径:切侧后同路径的判定即使仍是 unified 也必须换实例(旧实例持有旧库正文)。
   const routeRoot = route && route.forPath === notePath ? route.root ?? '' : ''
+
+  // 锁定页面(C-07):锁定态进 UnifiedPage 的 key(pipe.readOnly 只在首次渲染写入)。**换实例前先严格落盘、再读到盘上现文**
+  // (noteLock.readForRemount)—— 路由里的 initial 是打开那一刻读的,直接换 key 等于把几分钟前的正文当基线交给新实例;
+  // 落盘或重读失败(Codex 复核 P1)就保留当前实例、不切锁定态,提示重试。切到别的笔记时不走这一套(新路径本来就重读、
+  // 重挂),直接取它自己的锁定态。发起切换的一方(⋯ 菜单 / 解锁键)在 switchNoteLock 里先验过同样两步才写锁定态;
+  // 这里接的是它写下之后(或别的窗口切了之后)本标签自己的换实例。
+  const lockWanted = useNoteLocked(vaultRoot, notePath)
+  const [lockApplied, setLockApplied] = useState<{ path: string | null; on: boolean }>({ path: notePath, on: lockWanted })
+  const [lockTick, setLockTick] = useState(0)
+  const lockOn = lockApplied.path === notePath ? lockApplied.on : lockWanted
+  useEffect(() => {
+    if (lockApplied.path !== notePath) {
+      setLockApplied({ path: notePath, on: lockWanted })
+      return
+    }
+    if (lockApplied.on === lockWanted || !notePath) return
+    let alive = true
+    void (async () => {
+      const r = await readForRemount(notePath)
+      if (!alive) return
+      if (!r.ok) {
+        toastLockFailed(notePath, lockWanted, r.reason, () => setLockTick((n) => n + 1))
+        return
+      }
+      const decision = routeNote(notePath, r.raw, upgradeV4Enabled(), new Date().toISOString())
+      if (decision.editor === 'unified') setRoute((cur) => (cur && cur.forPath === notePath ? { ...cur, decision } : cur))
+      setLockApplied({ path: notePath, on: lockWanted })
+    })()
+    return () => { alive = false }
+  }, [lockWanted, lockApplied, notePath, lockTick])
+  // 以本标签**实际显示的**锁定态为准切换(另一个标签刚切了、本标签还没换过来时,点的就是眼前看到的那个状态)。
+  const toggleLock = (): void => { if (notePath) void switchNoteLock(vaultRoot, notePath, !lockOn) }
 
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
   // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
@@ -2379,9 +2440,10 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (!files.length) return
     e.preventDefault()
-    // unified 笔记不走 pageStore:文件经 lifecycle 递给 UnifiedPage(存附件+光标处插 ![[base]];
-    // 此前事件被 preventDefault 后静默吞掉,Codex 终审 P1)。
-    if (unifiedRoute && notePath && insertFilesForPath(notePath, files)) return
+    // unified 笔记不走 pageStore:文件递给**本 leaf** 的 UnifiedPage(存附件+光标处插 ![[base]];
+    // 此前事件被 preventDefault 后静默吞掉,Codex 终审 P1)。按路径找实例只作兜底(实例还没交出写口):
+    // 同篇双开时按路径找到的是另一个标签,指示线画在这边、文件插进那边(评审 G1-02)。
+    if (unifiedRoute && notePath && (unifiedFilesRef.current ? unifiedFilesRef.current(files) : insertFilesForPath(notePath, files))) return
     const page = myPs().activePage
     if (!page) return
     await importToPage(files, page) // 存到配置的附件位置 + 插入嵌入/链接(本地/云端/web 统一;失败与超限走 toast)
@@ -2455,7 +2517,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           const files = Array.from(e.currentTarget.files ?? [])
           e.currentTarget.value = ''
           if (!files.length) return
-          if (unifiedRoute && notePath && insertFilesForPath(notePath, files)) return // unified:经 lifecycle 递入
+          if (unifiedRoute && notePath && (unifiedFilesRef.current ? unifiedFilesRef.current(files) : insertFilesForPath(notePath, files))) return // unified:本 leaf 的实例(G1-02)
           const page = myPs().activePage
           if (page) void importToPage(files, page)
         }}
@@ -2541,6 +2603,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
             <Star size={13} /> {starred ? t('amxv.menu.unstar') : t('amxv.menu.star')}
           </button>
           <button onClick={() => { void amadeus.revealInFileManager(barPath); setNoteMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>
+          {unifiedRoute && (
+            <button onClick={() => { setNoteMenu(null); toggleLock() }}><LockIcon size={13} /> {lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage')}</button>
+          )}
           <button className="danger" onClick={() => { const p = barPath; setNoteMenu(null); void deleteNoteFlow(p, myPs) }}>
             <Trash2 size={13} /> {t('amxv.menu.deleteNote')}
           </button>
@@ -2554,12 +2619,15 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
            页面 chrome(封面/图标/标题/属性)在 UnifiedPage 内部;顶栏/菜单走上面的 barPath 门。 */
         <UnifiedPage
           compact={!!leaf.params.miniSurface}
-          key={`${routeRoot}\u0000${notePath}`}
+          key={`${routeRoot}\u0000${notePath}${lockOn ? '\u0000locked' : ''}`}
+          readOnly={lockOn}
+          onUnlock={lockOn ? toggleLock : undefined}
           path={notePath}
           initial={unifiedRoute.initial}
           diskRaw={unifiedRoute.diskRaw}
           onCanvasMode={setCanvasSeg}
           historyRef={unifiedHistRef}
+          filesRef={unifiedFilesRef}
           onRenamed={(np) => {
             leaf.setParams({ ...leaf.params, notePath: np })
             leaf.setTitle(baseName(np))
@@ -2645,12 +2713,15 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         // 先问本 leaf 的 v4 实例(挂着才有);v3 笔记退回 pageStore 的块级历史。
         undo={() => { if (unifiedHistRef.current) unifiedHistRef.current.undo(); else if (activePage) myPs().undo() }}
         redo={() => { if (unifiedHistRef.current) unifiedHistRef.current.redo(); else if (activePage) myPs().redo() }}
+        // canvasSeg 非空 = 本 leaf 挂着 v4 统一页(它经 onCanvasMode 交上来),缩进句柄同在 unifiedHistRef 上。
+        indent={canvasSeg ? (dir) => { unifiedHistRef.current?.indent?.(dir) } : null}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource'), run: () => useUiOverlay.getState().toggleEditorMode() },
           // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
-          ...(barPath ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(barPath && !lockOn ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
+          ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn'), on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),
@@ -2715,36 +2786,5 @@ function ScopedPageOutlineInner({ path, scope }: { path: string; scope: string }
   return <AmadeusOutlineView />
 }
 
-export function AmadeusBacklinksView() {
-  const { t } = useI18n()
-  // v4 笔记不设 activePage → 回落到 activeNotePath,否则本视图对 v4 恒显示「未打开笔记」。
-  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath)
-  const version = usePageStore((s) => s.linkGraphVersion)
-  const [refs, setRefs] = useState<Array<{ path: string; title: string; snippet: string }>>([])
-  useEffect(() => {
-    let live = true
-    if (!activePage) { setRefs([]); return }
-    void amadeus.backlinks(activePage).then((r) => { if (live) setRefs(r) })
-    return () => { live = false }
-  }, [activePage, version])
-
-  return (
-    <div className="amx-panel">
-      <div className="amx-panel-head">{t('amadeus.backlinks')} · {refs.length}</div>
-      {!activePage ? (
-        <div className="amx-panel-empty">{t('amxv.backlinks.noNote')}</div>
-      ) : refs.length === 0 ? (
-        <div className="amx-panel-empty">{t('amxv.backlinks.empty')}</div>
-      ) : (
-        <div className="amx-list">
-          {refs.map((r) => (
-            <button key={r.path} className="amx-list-item" onClick={() => void openNote(r.path)} title={r.path}>
-              {r.title}
-              {r.snippet && <span className="amx-backlink-snippet">{r.snippet}</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
+// 反链面板(逐处上下文 + 未链接提及,L-16)在 ./amadeusBacklinks;此处保留导出名,注册处不动。
+export { AmadeusBacklinksView } from './amadeusBacklinks'

@@ -18,6 +18,7 @@ import { PluginOnboardingHost } from './components/PluginOnboardingModal'
 import { BtwPanel } from './views/chat2/BtwPanel'
 import { btwSeedOf } from './views/chat2/btwStore'
 import { listSkills } from './services/backendService'
+import { floatingPanelTitle } from './floatingPanelTitle'
 import { homeTarget } from './services/engine/targets'
 
 export function FloatingRoot() {
@@ -34,6 +35,9 @@ export function FloatingRoot() {
   const panelSession = (target?.params?.session as SessionRecord | undefined)?.id ? target!.params!.session as SessionRecord : null
   const close = (): void => window.tangu?.closeSelf?.()
   const btwSeed = target?.builtin === 'btw' ? btwSeedOf(target.params) : null
+  // 内置面板的标题每次渲染按当前语言现译(切语言后标题栏与原生窗口标题跟着变);document.title 驱动原生窗口标题
+  const title = target ? floatingPanelTitle(target, t) : ''
+  useEffect(() => { if (target?.builtin && title) document.title = title }, [target?.builtin, title])
 
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
   useEffect(() => { void useApp.getState().boot() }, [])
@@ -69,7 +73,7 @@ export function FloatingRoot() {
   const onAchievementsClose = (): void => { app.closeAchievements(); close() }
   const onFeedbackClose = (): void => { app.closeFeedback(); close() }
   return <div className="floating-native-root">
-    {window.tangu?.platform === 'darwin' && <header className="floating-native-chrome"><span title={target.title}>{target.builtin === 'btw' ? t('btw.title') : target.title}</span></header>}
+    {window.tangu?.platform === 'darwin' && <header className="floating-native-chrome"><span title={title}>{title}</span></header>}
     <main className="floating-native-content">
       {target.builtin === 'settings' && <SettingsModal key={JSON.stringify(target.params ?? {})}
         open initialTab={typeof target.params?.tab === 'string' ? target.params.tab as never : undefined}

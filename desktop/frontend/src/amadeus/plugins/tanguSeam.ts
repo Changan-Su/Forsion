@@ -138,6 +138,44 @@ export interface TanguProbe {
   /** agent 自建 Space 读写自家数据(2026-09-27+);slug 没有数据源 → null(今天只有 muse)。
    *  可选:台架假探针 / 纯 Amadeus 壳不给 = 插件那边整个没有 `ctx.agent`。 */
   agentSelf?(slug: string): TanguAgentSelf | null
+  /** 编辑器「问 Tangu」(评审 G3-04,2026-09-28):把一段引用交给侧栏对话(挂成输入框上方的引用,不发送),
+   *  侧栏没在前台就把它揭出来。**宿主内部接缝,不进 `ctx.tangu`**(pluginStore 按字段挑着暴露)。
+   *  存在性 = 宿主注册了 `chat-panel` 视图(与 features/tangu.tsx 同一个谓词);没有侧栏对话的宿主不给 →
+   *  编辑器里整个入口不出现,不画一个点了没反应的按钮。 */
+  askInChat?(text: string): void
+  /** 正文生成式 AI 的一次性补全(评审 G3-07,2026-09-28):引擎 `POST /agent/inline`(不落库、无工具)。
+   *  编辑器的「AI ▾」/ `/ai` / 空行空格与插件的 `ctx.tangu.complete` 都走这一条。模型缺省 = 主区聊天此刻用的那个。
+   *  可选:纯 Amadeus 壳 / 台架假探针不给 = 编辑器里没有 AI 入口、插件那边没有 `ctx.tangu.complete`。 */
+  complete?(req: TanguCompleteRequest, opts?: TanguCompleteOptions): Promise<TanguCompleteResult>
+}
+
+/** 正文 AI 的动作(与引擎 services/inlineAi.ts 的 INLINE_ACTIONS 同表)。改写类(前六个)必须带 selection。 */
+export type TanguInlineAction = 'improve' | 'fix' | 'shorter' | 'longer' | 'summarize' | 'translate' | 'continue' | 'custom'
+export interface TanguCompleteRequest {
+  action: TanguInlineAction
+  /** 自定义指令(custom 必填)。 */
+  instruction?: string
+  selection?: string
+  /** 光标 / 选区前后的一段正文(上下文,不改写)。 */
+  before?: string
+  after?: string
+  /** 笔记标题。 */
+  title?: string
+  /** translate 的目标语言(如 "English")。 */
+  language?: string
+  /** 不给 = 主区聊天当前模型。 */
+  modelId?: string
+}
+export interface TanguCompleteOptions {
+  signal?: AbortSignal
+  /** 流式增量(整段累计请自己拼);done 前可能回调多次,也可能一次都不回(网关缓冲)。 */
+  onDelta?: (delta: string) => void
+}
+export interface TanguCompleteResult {
+  /** 待插入的 markdown(引擎已剥掉整段包裹的 ```markdown 围栏)。 */
+  text: string
+  /** 模型把工具调用写成了文本(它没有工具,什么都没执行)。 */
+  toolCallText: boolean
 }
 
 /** agent 自建 Space 读写自家数据(2026-09-27+):`ctx.agent` 的宿主实现。字段都是插件可见的契约,别塞绝对路径。 */
