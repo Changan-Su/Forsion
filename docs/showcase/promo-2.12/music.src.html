@@ -1,0 +1,162 @@
+<title>第 2.12 话配乐小样</title>
+%%FONTS%%
+%%STYLE%%
+<style>
+/* Listening room: the B study plays on top, synced to whichever score direction is chosen; full demos below. */
+:root { --red: #e3161b; --orange: #ff6a13; }
+.score-stage { display: grid; gap: 14px; }
+.score-stage .player { width: 100%; max-width: 860px; }
+.picker { display: flex; flex-wrap: wrap; gap: 8px; max-width: 860px; width: 100%; align-items: center; }
+.picker button { font: 600 14px var(--f-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; height: 38px; padding: 0 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.picker button .no { font: 700 13px var(--f-cond); letter-spacing: .08em; color: var(--muted); }
+.picker button:hover { border-color: var(--muted); }
+.picker button[aria-pressed="true"] { border-color: var(--orange); box-shadow: inset 0 0 0 1px var(--orange); }
+.picker button[aria-pressed="true"] .no { color: var(--orange); }
+.picker button:focus-visible, .card button:focus-visible, audio:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.picker output { margin-left: auto; font: 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.hint { margin: 0; color: var(--muted); font-size: 13px; }
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px 22px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.card header { display: flex; align-items: baseline; gap: 12px; }
+.card .no { font: 700 30px/1 var(--f-cond); color: var(--orange); letter-spacing: .04em; }
+.card h3 { margin: 0; font-size: 19px; font-weight: 700; }
+.card .spec { margin: 0; font: 12px var(--f-mono); color: var(--muted); letter-spacing: .04em; }
+.card p { margin: 0; font-size: 14px; line-height: 1.75; color: var(--fg); }
+.card .use { color: var(--muted); }
+.card .use b { color: var(--fg); font-weight: 600; }
+.card .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.card audio { width: 100%; min-width: 0; height: 36px; }
+.card button { font: 600 13px var(--f-body); color: var(--bg); background: var(--fg); border: 0; border-radius: 6px; height: 32px; padding: 0 12px; cursor: pointer; }
+.plan { display: grid; gap: 10px; }
+.plan h2 { margin: 0; font-size: 20px; }
+.plan ol { margin: 0; padding-left: 1.4em; display: grid; gap: 6px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+.plan ol b { color: var(--fg); font-weight: 600; }
+@media (max-width: 760px) { .cards { grid-template-columns: 1fr; } .picker output { margin-left: 0; width: 100%; } }
+</style>
+
+<main class="page">
+  <header class="intro">
+    <p class="eyebrow">Forsion 2.12 · 第 2.12 话</p>
+    <h1>配乐小样</h1>
+    <p>四个配乐方向，都按 B 的剪辑点写：四张标题卡、「人类？」、HUD、三联面板翻转、EPISODE 卡、标题卡。选一个方向，画面和音乐会一起播放。下面是每个方向约 30 秒的完整版。旋律全部原创，用 General MIDI 音色库制作，只用来判断方向。</p>
+  </header>
+
+  <section class="score-stage" aria-label="画面对位播放">
+    <div class="picker" role="group" aria-label="选择配乐方向">
+      <button type="button" id="pick-1-march" data-cue="1-march" aria-pressed="false"><span class="no">01</span>决战</button>
+      <button type="button" id="pick-2-magi" data-cue="2-magi" aria-pressed="false"><span class="no">02</span>MAGI</button>
+      <button type="button" id="pick-3-choral" data-cue="3-choral" aria-pressed="false"><span class="no">03</span>补完</button>
+      <button type="button" id="pick-4-ballad" data-cue="4-ballad" aria-pressed="false"><span class="no">04</span>彼此</button>
+      <output id="score-time">点一个方向开始播放</output>
+    </div>
+    <div class="player r43" data-player="b" data-external>
+      <div class="frame r43">
+%%STAGE_B%%
+      </div>
+    </div>
+    <p class="hint">画面延长到 6.5 秒，让结尾和弦的余音能响完。点画面可暂停或继续。</p>
+  </section>
+
+  <section class="cards" aria-label="四个配乐方向">
+    <article class="card">
+      <header><span class="no">01</span><h3>决战 · 管弦进行曲</h3></header>
+      <p class="spec">D 小调 · 148 BPM · 小号 / 铜管 / 军鼓 / 定音鼓</p>
+      <p>四张标题卡各砸一记铜管和弦（Dm、B♭、Gm、A），「人类？」处用一个不协和的降 E 大三和弦撞上去，军鼓滚奏推进 HUD。三联面板翻转是三连击。标题卡落在 D 大调，小调走到大调，对应「补完」。</p>
+      <p class="use"><b>适合</b>：HUD、MAGI 审议、功能快切。最像 EVA 战斗场面的配乐。</p>
+      <audio controls preload="none" src="audio/B-score-1-march-full.mp3" aria-label="决战完整版"></audio>
+      <div class="row"><button type="button" data-cue="1-march">对位 B 画面播放</button></div>
+    </article>
+    <article class="card">
+      <header><span class="no">02</span><h3>MAGI · 电子悬疑</h3></header>
+      <p class="spec">D 小调 · 128 BPM · 低频嗡鸣 / 心跳 / 合成器脉冲 / 警报</p>
+      <p>标题卡用故障音和钟声切。「人类？」处所有声音断掉，只剩一声平直的提示音。HUD 段落是十六分音符脉冲，终端每打一行响一个提示音，同步率上升时有一条上滑音。警报跟画面的红色闪烁同频，EPISODE 卡只剩耳鸣声，接着超低频下坠砸进标题。</p>
+      <p class="use"><b>适合</b>：开场、HUMAN.md 被写入、同步率上升。最冷，最有悬念。</p>
+      <audio controls preload="none" src="audio/B-score-2-magi-full.mp3" aria-label="MAGI 完整版"></audio>
+      <div class="row"><button type="button" data-cue="2-magi">对位 B 画面播放</button></div>
+    </article>
+    <article class="card">
+      <header><span class="no">03</span><h3>补完 · 圣咏与管风琴</h3></header>
+      <p class="spec">D 小调 → D 大调 · 66 BPM · 管风琴 / 合唱 / 羽管键琴 / 教堂钟</p>
+      <p>管风琴和合唱唱一段原创四声部众赞歌。HUD 段落换成羽管键琴的巴洛克十六分音符：危机画面配巴洛克音乐，这种反差是 EVA 的招牌。「人类？」处只留一个女高音。结尾是大调和弦加定音鼓滚奏和钟声。</p>
+      <p class="use"><b>适合</b>：「人类补完计划」标题、片尾、价值表达。最庄严。</p>
+      <audio controls preload="none" src="audio/B-score-3-choral-full.mp3" aria-label="补完完整版"></audio>
+      <div class="row"><button type="button" data-cue="3-choral">对位 B 画面播放</button></div>
+    </article>
+    <article class="card">
+      <header><span class="no">04</span><h3>彼此 · 萨克斯哀歌</h3></header>
+      <p class="spec">D 小调 → D 大九 · 70 BPM · 中音萨克斯 / 弦乐 / 无品贝斯 / 刷子鼓</p>
+      <p>标题卡只用钢琴单音轻轻点过。HUD 处萨克斯进来，贝斯和弦乐托住。标题卡落在温暖的 D 大九和弦，萨克斯停在升 F 上。这是 EVA 里抒情萨克斯的那一面。</p>
+      <p class="use"><b>适合</b>：「不是让人类适应 AI，而是让人与 AI 学会彼此适应」这类收尾段落。最温暖。</p>
+      <audio controls preload="none" src="audio/B-score-4-ballad-full.mp3" aria-label="彼此完整版"></audio>
+      <div class="row"><button type="button" data-cue="4-ballad">对位 B 画面播放</button></div>
+    </article>
+  </section>
+
+  <section class="plan">
+    <h2>组合建议（1–2 分钟正片）</h2>
+    <ol>
+      <li><b>开场，MAGI</b>：嗡鸣、心跳、提示音，Agent 的各层依次亮起，「人类？」处断掉。</li>
+      <li><b>标题卡与 HUD，决战</b>：HUMAN.md、双层 Human Harness、三联审议面板，进行曲推着快切走。</li>
+      <li><b>协作进化，彼此</b>：纠正被写进 HUMAN.md、可查看可撤销，节奏放慢，萨克斯接手。</li>
+      <li><b>片尾，补完</b>：人类补完计划、Complete the Other Half.，管风琴和合唱收在 D 大调。</li>
+    </ol>
+  </section>
+
+  <p class="note">四段完整版和对位版都是方向小样。定稿建议交给作曲，用真实乐器或高品质音源重做，保留选定方向的结构和剪辑点。</p>
+
+  <div hidden>
+    <audio id="cue-1-march" preload="auto" src="audio/B-score-1-march-cue.mp3"></audio>
+    <audio id="cue-2-magi" preload="auto" src="audio/B-score-2-magi-cue.mp3"></audio>
+    <audio id="cue-3-choral" preload="auto" src="audio/B-score-3-choral-cue.mp3"></audio>
+    <audio id="cue-4-ballad" preload="auto" src="audio/B-score-4-ballad-cue.mp3"></audio>
+  </div>
+</main>
+%%ENGINE%%
+<script>
+/* Drive study B from the chosen cue's audio clock so every hit lands on its cut. */
+(() => {
+  const st = window.__stages && window.__stages.b;
+  if (!st) return;
+  const frame = st.root.parentElement, LEN = 6.5, POSTER = 2.9;
+  const fit = () => { st.root.style.transform = `scale(${frame.clientWidth / st.w})`; };
+  new ResizeObserver(fit).observe(frame); fit();
+  st.render(POSTER);
+  const time = document.getElementById('score-time');
+  const pickers = [...document.querySelectorAll('.picker [data-cue]')];
+  const fulls = [...document.querySelectorAll('.card audio')];
+  const cues = {};
+  document.querySelectorAll('audio[id^="cue-"]').forEach(a => { cues[a.id.slice(4)] = a; });
+  let current = null;
+  const names = { '1-march': '决战', '2-magi': 'MAGI', '3-choral': '补完', '4-ballad': '彼此' };
+  const mark = id => pickers.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cue === id)));
+  const stopCues = () => Object.values(cues).forEach(a => a.pause());
+  function play(id) {
+    fulls.forEach(a => a.pause());
+    stopCues();
+    current = id;
+    mark(id);
+    const a = cues[id];
+    a.currentTime = 0;
+    a.play().catch(() => { time.textContent = '浏览器拦截了播放，请再点一次'; });
+  }
+  document.querySelectorAll('[data-cue]').forEach(b => b.addEventListener('click', () => {
+    play(b.dataset.cue);
+    if (b.closest('.card')) frame.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }));
+  frame.addEventListener('click', () => {
+    if (!current) return play('1-march');
+    const a = cues[current];
+    if (a.paused) { if (a.ended || a.currentTime >= a.duration - 0.05) a.currentTime = 0; fulls.forEach(x => x.pause()); a.play().catch(() => {}); } else a.pause();
+  });
+  fulls.forEach(a => a.addEventListener('play', () => { stopCues(); fulls.forEach(x => { if (x !== a) x.pause(); }); }));
+  const tick = () => {
+    if (current) {
+      const a = cues[current], t = Math.min(a.currentTime, LEN);
+      st.render(t);
+      time.textContent = `${names[current]} · ${t.toFixed(2)} / ${LEN.toFixed(2)}s${a.paused ? ' · 已暂停' : ''}`;
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})();
+</script>

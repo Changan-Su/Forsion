@@ -1,7 +1,9 @@
 <title>人类补完计划样片</title>
+<!-- fonts -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@500;700;900&display=swap">
+<!-- /fonts -->
 <style>
 /* Screening room: one dark page, three players stacked, each with its own label and transport. */
 :root {
@@ -258,6 +260,7 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
     </div>
     <div class="player r43" data-player="b">
       <div class="frame r43">
+        <!-- stage:b -->
         <div class="stage sb">
           <div class="sb-card sb-c1"><span class="k">人格</span><span class="e">SOUL</span></div>
           <div class="sb-card sb-c2"><span class="k">记忆</span><span class="e">MEMORY</span></div>
@@ -283,6 +286,7 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
           <div class="sb-card sb-title"><span class="no">第 2.12 话</span><span class="big1">人类</span><span class="big2">补完计划</span><p class="en">EPISODE 2.12<br><span>COMPLETE THE OTHER HALF.</span></p><span class="brand">FORSION</span></div>
           <div class="sb-scan"></div><div class="sb-vig"></div><div class="grain"></div><div class="sb-flash"></div>
         </div>
+        <!-- /stage:b -->
       </div>
     </div>
   </section>
@@ -339,6 +343,7 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
   <p class="note">画面使用 Forsion 真实的 Logo、内置 Agent 头像（Arioso、Aria、Recita）和 2.12 界面元素（协作说明卡片、Agent 详情的「协作」页）还原。暂无音乐。空格键或按钮控制播放，拖动进度条可逐帧查看。</p>
 </main>
 
+<!-- engine -->
 <script>
 /* Deterministic keyframe engine: every visual is a pure function of t, so the page can play live or be captured frame by frame. */
 (() => {
@@ -506,6 +511,7 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
   const stages = {};
   document.querySelectorAll('[data-player]').forEach(p => { const id = p.dataset.player; stages[id] = builders[id](p.querySelector('.stage')); });
 
+  window.__stages = stages;
   const capture = new URLSearchParams(location.search).get('capture');
   if (capture && stages[capture]) {
     const st = stages[capture];
@@ -520,7 +526,7 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
 
   const HOLD = .7, reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const players = [];
-  document.querySelectorAll('[data-player]').forEach(el => {
+  document.querySelectorAll('[data-player]:not([data-external])').forEach(el => {
     const st = stages[el.dataset.player], frame = el.querySelector('.frame');
     const ctr = document.createElement('div'); ctr.className = 'controls';
     const id = el.dataset.player;
@@ -548,6 +554,7 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
     if (e.code !== 'Space' || e.target.closest('input,button')) return;
     e.preventDefault();
     const vis = players.find(p => { const r = p.st.root.parentElement.getBoundingClientRect(); return r.top < innerHeight / 2 && r.bottom > innerHeight / 2; }) || players[0];
+    if (!vis) return;
     vis.playing = !vis.playing; vis.show();
   });
   let last = null;
@@ -556,3 +563,4 @@ body { font-family: var(--f-body); -webkit-font-smoothing: antialiased; }
   Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1500))]).then(start);
 })();
 </script>
+<!-- /engine -->
