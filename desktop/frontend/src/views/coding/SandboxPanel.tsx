@@ -111,6 +111,7 @@ export function SandboxPanel({ root, product, onPrompt, onProductChanged }: Sand
   return <div className="csu-panel-body csu-sandbox" data-sandbox-state={state} data-plugin-id={pluginId}>
     <section className="csu-sandbox-head">
       <p className="csu-sandbox-status" role="status"><strong data-sandbox-state-label>{stateLabel}</strong><span>{stateHint}</span></p>
+      {!devLoad && product?.devLoadStale && <p className="csu-hint" role="status" data-sandbox-stale>{t('studio.sandbox.staleGrant')}</p>}
       {dev.shadowsInstalled && <p className="csu-hint" data-sandbox-shadow>{t('studio.sandbox.shadow')}</p>}
       {/* 不可关闭、不可折叠:这是按下「加载」之前必须读到的那一段。 */}
       <p className="csu-sandbox-trust" data-sandbox-trust><ShieldAlert size={14} aria-hidden="true" /><span>{t('studio.sandbox.trust')}</span></p>

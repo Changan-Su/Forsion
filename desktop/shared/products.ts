@@ -44,6 +44,8 @@ export interface ProductSummary {
   pluginId?: string
   /** kind==='plugin':已选择「在 Forsion 中加载」(开发态加载,非隔离)。 */
   devLoad?: boolean
+  /** 有「在 Forsion 中加载」的授权、但目录身份对不上了(旧记录没有创建时间 / 文件夹重建或跨卷挪过):授权不生效,Sandbox 提示再点一次加载。 */
+  devLoadStale?: boolean
 }
 
 /** products:serve 的永久性拒绝(这类产物没有可当网页打开的入口)。渲染层据此判「重试无意义」——

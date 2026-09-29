@@ -11,8 +11,8 @@ import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { PRODUCT_NO_WEB_ENTRY, type GitPanelStatus, type ProductKind, type ProductSummary, type ShortcutResult } from '../shared/products'
 import { ensureProduct, getProduct, isProductId, scanProducts, updateProduct } from './productsRegistry'
 import { createProductShortcut } from './productShortcut'
-import { isDevLoaded, readDevLoads, setDevLoad } from './devLoadStore'
-import { addExternalCreation, allowExternalLaunch, externalCreationFor, externalCreations, gitOwners, isExternalLaunchAllowed, removeExternalCreation, revokeExternalLaunch } from './productTrust'
+import { isDevLoaded, isDevLoadStale, readDevLoads, setDevLoad } from './devLoadStore'
+import { addExternalCreation, allowExternalLaunch, externalCreationFor, externalCreations, externalLaunchNeedsReauth, gitOwners, isExternalLaunchAllowed, removeExternalCreation, revokeExternalLaunch } from './productTrust'
 import { commitGitVersion, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import { serveProductRoot, servePathRoot, setPreviewPersistence, type PreviewPersistedState } from './codePreview'
 import { AdoptError, checkAdoptable, createCreationDir } from './productAdopt'
@@ -118,7 +118,7 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
   //  用户既看不到报错也卸不掉它。授权在 → devLoad 恒 true,pluginId 沿用授权当时的那个。
   const withDevLoad = <T extends ProductSummary | null>(p: T, loads = readDevLoads(d.homeDir())): T => {
     if (!p) return p
-    if (!isDevLoaded(loads, p)) return (p.kind === 'plugin' ? { ...p, devLoad: false } : p)
+    if (!isDevLoaded(loads, p)) return (p.kind === 'plugin' ? { ...p, devLoad: false, ...(isDevLoadStale(loads, p) ? { devLoadStale: true } : {}) } : p)
     return { ...p, devLoad: true, pluginId: p.pluginId ?? loads[p.id]?.pluginId ?? undefined }
   }
   /** 渲染层传来的本地化标签:只收短字符串,其余当没传(各模块有英文兜底)。 */
@@ -180,6 +180,13 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     if (!isProductId(id)) return false
     const p = await getProduct(d.projectsRoot(), id, externals()).catch(() => null)
     return !!p && p.kind === 'web' && !!p.entry && isExternalLaunchAllowed(d.homeDir(), p)
+  }))
+  // 深链被上面那一问拒掉之后再问:是不是「授权还在、只是目录身份对不上了」(2.11.3 / 2.11.4 的旧记录没有创建时间、文件夹重建或跨卷挪过)。
+  // 是 → 渲染层提示回 Forsion 里再添加一次到桌面,而不是笼统的「链接目标不可用」。只出提示,绝不放行。
+  d.ipcMain.handle('products:externalLaunchNeedsReauth', guard(async (id: unknown) => {
+    if (!isProductId(id)) return false
+    const p = await getProduct(d.projectsRoot(), id, externals()).catch(() => null)
+    return !!p && p.kind === 'web' && !!p.entry && externalLaunchNeedsReauth(d.homeDir(), p)
   }))
   // 「进造物」(09-27):在托管根建一个新作品文件夹;或把已有的文件夹**原地**加入(不复制、不移动),都当场铸身份再回摘要。
   //   源目录可能来自聊天里模型写的作品卡:渲染层先按字符串限定在会话工作目录内,productAdopt 再按真实路径过一遍目录闸。

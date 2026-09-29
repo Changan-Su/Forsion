@@ -43,6 +43,23 @@ describe('product deep link', () => {
     expect(openDetached).not.toHaveBeenCalled()
   })
 
+  it('授权还在、只是目录身份对不上了(旧版本记下的 / 文件夹重建过)→ 不开窗,toast 说清楚怎么重新添加到桌面', async () => {
+    const { useApp } = await import('../stores/appStore')
+    const toast = vi.fn()
+    useApp.setState({ toast })
+    allowed.mockResolvedValue(false)
+    const needsReauth = vi.fn(async () => true)
+    ;(window.tangu as unknown as Record<string, unknown>).productsExternalLaunchNeedsReauth = needsReauth
+    expect(await seen.opener!({ id: ID })).toBe(true) // 已处理:不再叠一条「链接目标不可用」
+    expect(needsReauth).toHaveBeenCalledWith(ID)
+    expect(openDetached).not.toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('添加到桌面'))
+    needsReauth.mockResolvedValue(false)
+    toast.mockClear()
+    expect(await seen.opener!({ id: ID })).toBe(false) // 从没建过快捷方式 → 照旧交回「不可用」
+    expect(toast).not.toHaveBeenCalled()
+  })
+
   it('宿主那一问抛错 / 老宿主没有这道闸 → 同样不开窗(fail closed)', async () => {
     allowed.mockRejectedValue(new Error('ipc down'))
     expect(await seen.opener!({ id: ID })).toBe(false)

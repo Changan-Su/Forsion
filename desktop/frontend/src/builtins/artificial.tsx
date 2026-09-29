@@ -31,6 +31,7 @@ import { SpaceButton } from '../components/SpaceButton'
 import { registerDeepLinkOpener } from '../deepLinkInstall'
 import { productIdFromParams } from '../views/artificial/productKinds'
 import '../views/artificial/artificialMessages' // 插件卡的说明文案在启动期就要在场(视图是懒载的)
+import { translate } from '../i18n'
 
 const ArtificialView = lazyRetry(() => import('../views/artificial/ArtificialView').then((m) => ({ default: m.ArtificialView })))
 const ProductView = lazyRetry(() => import('../views/artificial/ProductView').then((m) => ({ default: m.ProductView })))
@@ -94,7 +95,14 @@ export function installArtificialViews(): void {
       const open = window.tangu?.openDetached
       const allowed = window.tangu?.productsExternalLaunchAllowed
       if (!id || !open || !allowed) return false // 形态不合 / 没有开窗能力 / 老宿主没有这道闸 → 「链接目标不可用」
-      if (!(await allowed(id).catch(() => false))) return false
+      if (!(await allowed(id).catch(() => false))) {
+        // 授权还在、只是目录身份对不上了(旧版本记下的、文件夹重建或跨卷挪过):说清楚怎么重新授权,别只报「链接目标不可用」
+        if (await window.tangu?.productsExternalLaunchNeedsReauth?.(id).catch(() => false)) {
+          app().toast(translate('artificial.launchReauth'))
+          return true
+        }
+        return false
+      }
       void open([{ type: 'product', params: { id } }])
       return true
     })

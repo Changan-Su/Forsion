@@ -6,7 +6,7 @@
  *  · gitNonces —— Forsion 自己 `git init` 时发出去的 nonce(见 gitHistory.GitOwners)。标记文件在 `.git/` 里,
  *    nonce 在这里,两边对上才算我方仓;外来文件夹自带一个标记文件没用。
  *  · externalLaunch —— 允许**从应用外**(桌面快捷方式 / forsion:// 深链)拉起的产物:产物 id + 授权当时那个目录的身份
- *    (dev+ino,见 dirIdentity.ts:改名 / 同卷挪位置后快捷方式照样有效;同 id 的 sidecar 搬进别的文件夹不算)。
+ *    (dev+ino+创建时间,见 dirIdentity.ts:改名 / 同卷挪位置后快捷方式照样有效;同 id 的 sidecar 搬进别的文件夹不算)。
  *    只有「添加到桌面」成功时才登记。深链是任意网页可达的输入,而产物页面手里有 Forsion Connect 代理
  *    (读账号、花额度):一个下载来的文件夹配上一条链接,不该零点击跑起来。应用内点开不受此限。
  *  · externalCreations —— 用户在本机亲手「原地加入造物」的托管根之外的文件夹(路径 + 目录身份)。项目里的
@@ -18,7 +18,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
-import { dirIdentity, isDirIdentity, matchesDirIdentity, type DirIdentity } from './dirIdentity'
+import { dirIdentity, isDirIdentity, matchesDirIdentity, sameDevIno, sameDirIdentity, type DirIdentity } from './dirIdentity'
 
 const FILE = 'product-trust.json'
 const NONCE = /^[0-9a-f]{32}$/
@@ -87,14 +87,19 @@ export function isExternalLaunchAllowed(homeDir: string, product: { id: string; 
   return !!grant && matchesDirIdentity(product.root, grant.dir)
 }
 
+/** 有这个产物的授权、但目录身份对不上了(2.11.3 / 2.11.4 写的旧记录没有创建时间、目录重建过、跨卷挪过):
+ *  深链落地时据此提示「回 Forsion 里再添加一次到桌面」,而不是笼统的「链接目标不可用」。只用来出提示,绝不放行。 */
+export function externalLaunchNeedsReauth(homeDir: string, product: { id: string; root: string }): boolean {
+  const grant = read(homeDir).externalLaunch[product.id]
+  return !!grant && !matchesDirIdentity(product.root, grant.dir)
+}
+
 export function revokeExternalLaunch(homeDir: string, id: string): void {
   const trust = read(homeDir)
   if (!(id in trust.externalLaunch)) return
   delete trust.externalLaunch[id]
   write(homeDir, trust)
 }
-
-const sameDir = (a: DirIdentity, b: DirIdentity): boolean => a.dev === b.dev && a.ino === b.ino
 
 export interface ExternalCreation { root: string; dir: DirIdentity }
 
@@ -106,16 +111,17 @@ export function externalCreations(homeDir: string): ExternalCreation[] {
 /** dir 是不是一个此刻有效的外部造物:**按目录身份比,不比路径字符串**(大小写敏感的 APFS 上 `app` 与 `App` 是两个目录)。 */
 export function externalCreationFor(homeDir: string, dir: string): ExternalCreation | null {
   const id = dirIdentity(dir)
-  return id ? externalCreations(homeDir).find((e) => sameDir(e.dir, id)) ?? null : null
+  return id ? externalCreations(homeDir).find((e) => sameDirIdentity(e.dir, id)) ?? null : null
 }
 
-/** 把 root(调用方给真实路径)登记成外部造物。同一个目录身份(改过名)/ 同一路径(换过文件夹)的旧条目先替换掉。 */
+/** 把 root(调用方给真实路径)登记成外部造物。同一个目录(改过名;按 dev/ino 认,没记创建时间的旧条目也算)/ 同一路径(换过文件夹)的旧条目先替换掉
+ *  —— 旧条目认不出时(externalCreations 不列它),用户再「原地加入」一次就是重新授权。 */
 export function addExternalCreation(homeDir: string, root: string): void {
   if (!isAbsolute(root)) throw new Error('invalid creation folder')
   const dir = dirIdentity(root)
   if (!dir) throw new Error('creation folder is unavailable')
   const trust = read(homeDir)
-  const rest = trust.externalCreations.filter((e) => !sameDir(e.dir, dir) && e.root !== root)
+  const rest = trust.externalCreations.filter((e) => !sameDevIno(e.dir, dir) && e.root !== root)
   if (rest.length >= MAX_EXTERNAL) throw new Error('too many external creations')
   trust.externalCreations = [...rest, { root, dir }]
   write(homeDir, trust)
@@ -125,7 +131,7 @@ export function addExternalCreation(homeDir: string, root: string): void {
 export function removeExternalCreation(homeDir: string, root: string): void {
   const dir = dirIdentity(root)
   const trust = read(homeDir)
-  const rest = trust.externalCreations.filter((e) => e.root !== root && !(dir && sameDir(e.dir, dir)))
+  const rest = trust.externalCreations.filter((e) => e.root !== root && !(dir && sameDevIno(e.dir, dir)))
   if (rest.length === trust.externalCreations.length) return
   trust.externalCreations = rest
   write(homeDir, trust)

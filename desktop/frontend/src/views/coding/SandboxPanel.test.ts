@@ -129,6 +129,13 @@ describe('sandbox states', () => {
     await mount()
     expect(panel().textContent).toContain('当前版本的应用')
   })
+  it('says a stale load permission needs one more Load, instead of silently showing Not loaded', async () => {
+    await mount(product({ devLoadStale: true }))
+    expect(host.querySelector('[data-sandbox-stale]')!.textContent).toContain('再点一次「加载」')
+    expect(button('sandbox-load')!.disabled).toBe(false)
+    await mount(product())
+    expect(host.querySelector('[data-sandbox-stale]')).toBeNull()
+  })
   it('warns that the installed copy is shadowed while the dev copy runs', async () => {
     Object.assign(devState, { loaded: true, active: true, shadowsInstalled: true })
     await mount(product({ devLoad: true }))
