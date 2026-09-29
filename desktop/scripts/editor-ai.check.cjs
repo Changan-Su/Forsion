@@ -788,8 +788,11 @@ async function mountChat(page, { quote, question = '帮我改改', reply }) {
     const ins = await imp('/src/views/chat2/insertToNote\\.ts(\\?|$)', '/src/views/chat2/insertToNote.ts')
     const { useNotifications } = await imp('/src/stores/notificationStore\\.ts(\\?|$)', '/src/stores/notificationStore.ts')
     window.__ntf = []
-    const orig = useNotifications.getState().notify
-    useNotifications.setState({ notify: (i) => { window.__ntf.push(i); return orig(i) } })
+    if (!window.__ntfPatched) { // 同页多次挂载只包一层,否则一条回执记两遍
+      window.__ntfPatched = true
+      const orig = useNotifications.getState().notify
+      useNotifications.setState({ notify: (i) => { window.__ntf.push(i); return orig(i) } })
+    }
     // 与 Composer2.composeOutgoing 同形:引用条逐行 `> `,空一行接正文(insertToNote.test 钉着两边同形)。
     const user = quote ? `${quote.split('\n').map((l) => `> ${l}`).join('\n')}\n\n${question}` : question
     const msgs = [
