@@ -1,4 +1,4 @@
-import { HUMAN_GUIDANCE, readHuman } from '../agents/humanStore.js';
+import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
 /**
  * 服务端 agent loop（进程内异步，run 生命周期 > HTTP 连接）。
@@ -1205,17 +1205,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
+    const humanCorrections: string[] = [];
+    const humanCurrentBlocks: string[] = [];
     if (profile.capabilities.hostExec && !inlineMemberDef) {
       systemParts.push(HUMAN_GUIDANCE);
       try {
         const human = await readHuman({ kind: 'agent', slug: activeAgentSlug });
-        if (human.content) systemParts.push('Agent collaboration context (user-editable):\n' + human.content);
+        const humanBlock = renderHumanContext(human);
+        if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
+        if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
       } catch (e) { console.warn('[human] Cannot load Agent collaboration context:', e instanceof Error ? e.message : e); }
       try {
         const projectScope = await humanProjectScope(userId, sessionId);
         if (projectScope) {
           const projectHuman = await readHuman(projectScope);
-          if (projectHuman.content) systemParts.push('Current project collaboration context (user-editable; specific to this project):\n' + projectHuman.content);
+          const projectBlock = renderHumanContext(projectHuman);
+          if (projectBlock) { systemParts.push(projectBlock); humanCurrentBlocks.push(projectBlock); }
+          if (projectBlock && (projectHuman.history[0]?.actor === 'user' || (projectHuman.history[0] && projectHuman.history[0].afterVersion !== projectHuman.version))) humanCorrections.push(projectBlock);
         }
       } catch (e) { console.warn('[human] Cannot load collaboration context:', e instanceof Error ? e.message : e); }
     }
@@ -1636,6 +1642,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return '';
     };
     // B1:记忆易变段(§2/§3)+ sketch 本轮信号走尾部通道。放在 /skill 等之前 —— 它们比运行时现场稳定。
+    // UI edits/undo are newer than old successful write receipts. Surface the current
+    // user-edited state through the existing transient runtime channel as well; it is
+    // never persisted as a fabricated chat message and never grants tool permissions.
+    if (humanCorrections.length) appendToLastUserMessage('[Collaboration settings updated outside this chat. The following are separate scopes: an empty project handbook does not cancel the Agent handbook. Current saved context, not tool authorization.]\n' + humanCurrentBlocks.join('\n\n'));
     if (volatilePlacement === 'tail') {
       if (volatileMemory) appendToLastUserMessage(RECALLED_MEMORY_HEADER + volatileMemory);
       if (sketchTurnSignal) appendToLastUserMessage(sketchTurnSignal.section);

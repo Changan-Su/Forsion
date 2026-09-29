@@ -881,9 +881,9 @@ try {
       await api('/agent/project-context/human/undo', { method: 'POST', body: JSON.stringify({ sessionId: session.id, expectedVersion: change.afterVersion, changeId: change.id }) });
     }
     const undo = await api(`/agent/project-context/human?sessionId=${session.id}`);
-    const after = await mkSession(project, 'Human after undo');
-    const removed = await run(after.id, '回复 OK，不调用工具。', 120_000, cfg);
-    const reverted = undo.history.some(h => h.undoOf === receipts.find(c => c.scope.kind === 'project').id) && !removed.systemPrompt?.includes(pMark);
+    // Same original conversation still contains successful old tool receipts: UI undo must supersede those too.
+    const removed = await run(session.id, '只列出当前仍生效的已保存协作约定的完整名称（含后缀），不调用工具。', 120_000, cfg);
+    const reverted = undo.history.some(h => h.undoOf === receipts.find(c => c.scope.kind === 'project').id) && !removed.systemPrompt?.includes(pMark) && removed.content.includes(aMark) && !removed.content.includes(pMark);
     return { ok: recalled && isolated && reverted && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}`, toolCalls: ev.toolCalls, tokens: [ev, recall, negative, removed].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
 

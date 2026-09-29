@@ -455,7 +455,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await profile.waitFor()
   await profile.locator('[data-project-executor]').first().waitFor()
   const enHead = await profile.evaluate((el) => ({ kind: (el.querySelector('.team-profile-identity h3') || {}).textContent, tabs: Array.from(el.querySelectorAll('.agent-section-nav [role=tab]')).map((b) => b.textContent) }))
-  check('9 英文界面:标题 Project、标签 Agents / Settings / Git', enHead.kind === 'Project' && enHead.tabs.join(',') === 'Agents,Settings,Git', JSON.stringify(enHead))
+  check('9 英文界面:标题 Project、标签 Agents / Collaboration / Settings / Git', enHead.kind === 'Project' && enHead.tabs.join(',') === 'Agents,Collaboration,Settings,Git', JSON.stringify(enHead))
   // 英文「Current conversation」标签很长:名字曾被压成 0 宽,行里只剩标签和星标。名字必须完整可见(没被截断),标签放不下就换行
   const names = await profile.locator('[data-project-executor] .team-member-open > strong > span:first-child').evaluateAll((els) => els.map((el) => ({ text: el.textContent, w: Math.round(el.getBoundingClientRect().width), need: el.scrollWidth })))
   // 标签成组换行:当前会话标签与星标在同一行(星标单独掉到第三行 = 没成组)

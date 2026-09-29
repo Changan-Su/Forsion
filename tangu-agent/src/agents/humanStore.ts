@@ -119,6 +119,16 @@ export async function writeHuman(scope: HumanScope, input: {
   });
 }
 
+/** Even an emptied/removed handbook must be represented: an undo in the UI is a
+ * newer user decision than successful tool receipts remaining in the chat history. */
+export function renderHumanContext(doc: HumanDocument): string {
+  if (!doc.exists && !doc.history.length) return '';
+  const scope = doc.scope.kind === 'agent' ? 'Agent' : 'project';
+  return `Current ${scope} collaboration handbook (user-editable):
+This snapshot was refreshed from disk AFTER all prior conversation messages. It supersedes earlier saved versions and tool receipts. Edits and undo in the interface are newer corrections; do not revive removed agreements from older messages. Explicit NEW instructions in the user's latest message still take priority.
+${doc.content || 'EMPTY — No saved collaboration agreements are currently active in this scope. Any previously saved agreements for this scope have been WITHDRAWN. Earlier chat requests to retain them and successful write receipts are now stale. Do not apply them or report them as active. Only a renewed instruction in the latest user message can reintroduce them.'}`;
+}
+
 export const HUMAN_GUIDANCE = `## Collaboration with the human (HUMAN.md)
 HUMAN.md describes how you and this human can work together: your adjustments, the input/decisions they can contribute, and optional learning that helps their current goals. It is a concise evolving collaboration document, not a personality assessment or a new permission policy.
 When explicit feedback or recurring collaboration friction reveals a useful improvement, use manage_human (load it if needed) to read the current document and make a small, evidence-based update. Updates apply immediately by default; the interface shows a change card with edit and undo. Do not request adoption, wait for silence, or create an approval loop. Do not update after every turn, infer stable traits from a single failure, assign unsolicited homework, or recreate advice the user removed. Explain your own adjustment before asking the human to contribute. Match the user's language.

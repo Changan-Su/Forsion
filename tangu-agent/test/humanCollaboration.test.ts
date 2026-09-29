@@ -16,7 +16,7 @@ import { query } from '../src/core/db.js';
 import { runMigration } from '../src/db/migrate.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
-import { readHuman, writeHuman } from '../src/agents/humanStore.js';
+import { readHuman, writeHuman, renderHumanContext } from '../src/agents/humanStore.js';
 import { manageHumanProvider } from '../src/tools/builtin/manageHuman.js';
 import { humanProjectScope } from '../src/services/humanContext.js';
 import { checkWritePath } from '../src/tools/fsPolicy.js';
@@ -97,6 +97,18 @@ describe('HUMAN.md collaboration lifecycle', () => {
     expect(r.status).toBe(200); expect(r.body.document.path).toBe(join(project, '.tangu', 'HUMAN.md'));
     expect((await readHuman(scope)).content).not.toContain('Desktop first');
     expect(await humanProjectScope('owner', 'project')).toEqual({ kind: 'project', cwd: project });
+  });
+  it('keeps an empty post-undo scope explicit so old chat receipts do not reactivate it', async () => {
+    const cwd = mkdtempSync(join(home, 'undo-empty-'));
+    const target = { kind: 'project' as const, cwd };
+    const before = await readHuman(target);
+    expect(renderHumanContext(before)).toBe('');
+    const saved = await writeHuman(target, { expectedVersion: before.version, content: 'Removed agreement', summary: 'Add agreement' }, 'user');
+    const undone = await writeHuman(target, { expectedVersion: saved.document.version, undoId: saved.change!.id }, 'user');
+    const block = renderHumanContext(undone.document);
+    expect(block).toContain('No saved collaboration agreements are currently active');
+    expect(block).toContain('supersedes earlier saved versions');
+    expect(block).not.toContain('Removed agreement');
   });
   it('respects existing root and legacy HUMAN.md files', async () => {
     for (const rel of ['HUMAN.md', '.forsion/HUMAN.md']) {
