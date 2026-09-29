@@ -1,5 +1,5 @@
 // Render each study to MP4 frame by frame (deterministic: the page exposes __stage.seek(t)).
-// Usage: NODE_PATH=$(npm root -g) node render.cjs [a b c] [--fps 30] [--dur 6.5]
+// Usage: NODE_PATH=$(npm root -g) node render.cjs [a b c film] [--fps 30] [--dur 6.5] [--workers 3] [--frames-only]
 // Needs: playwright, CJK fonts installed locally (Noto Serif SC / Noto Sans SC), an ffmpeg with libx264 (FFMPEG env or PATH).
 const { chromium } = require('playwright');
 const { execFileSync } = require('node:child_process');
@@ -11,28 +11,42 @@ const fpsAt = args.indexOf('--fps');
 const fps = fpsAt >= 0 ? +args.splice(fpsAt, 2)[1] : 30;
 const durAt = args.indexOf('--dur');
 const durOverride = durAt >= 0 ? +args.splice(durAt, 2)[1] : null;
+const wAt = args.indexOf('--workers');
+const workers = wAt >= 0 ? +args.splice(wAt, 2)[1] : 1;
+const foAt = args.indexOf('--frames-only');
+const framesOnly = foAt >= 0 && !!args.splice(foAt, 1);
 const ids = args.length ? args : ['a', 'b', 'c'];
 const ffmpeg = process.env.FFMPEG || 'ffmpeg';
 const out = path.join(__dirname, 'out');
-const names = { a: 'A-the-other-half', b: 'B-episode-2.12', c: 'C-collaboration-evolves' };
+const names = { a: 'A-the-other-half', b: 'B-episode-2.12', c: 'C-collaboration-evolves', film: 'B-full-film' };
+const pageFor = id => (id === 'film' ? 'dist/film-capture.html' : 'dist/capture.html');
 
 (async () => {
   const browser = await chromium.launch();
   for (const id of ids) {
     const frames = path.join(out, `frames-${id}`);
     rmSync(frames, { recursive: true, force: true }); mkdirSync(frames, { recursive: true });
-    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-    // Google Fonts is unreachable offline; the same families are installed locally.
-    await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-    await page.goto(`file://${path.join(__dirname, 'dist/capture.html')}?capture=${id}`);
-    const { w, h, dur } = await page.evaluate(async () => { await document.fonts.ready; return window.__stage; });
-    await page.setViewportSize({ width: w, height: h });
-    const total = Math.round((durOverride || dur) * fps);
-    for (let f = 0; f <= total; f++) {
-      await page.evaluate(t => window.__stage.seek(t), f / fps);
-      await page.screenshot({ path: path.join(frames, `${String(f).padStart(5, '0')}.png`) });
-    }
-    await page.close();
+    const open = async () => {
+      const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+      // Google Fonts is unreachable offline; the same families are installed locally.
+      await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+      await page.route(/\.mp3$/, r => r.abort());
+      await page.goto(`file://${path.join(__dirname, pageFor(id))}?capture=${id}`);
+      const st = await page.evaluate(async () => { await document.fonts.ready; return window.__stage; });
+      await page.setViewportSize({ width: st.w, height: st.h });
+      return { page, st };
+    };
+    const pages = await Promise.all([...Array(workers)].map(open));
+    const total = Math.round((durOverride || pages[0].st.dur) * fps);
+    // every frame is a pure function of t, so workers can take interleaved frames
+    await Promise.all(pages.map(async ({ page }, k) => {
+      for (let f = k; f <= total; f += workers) {
+        await page.evaluate(t => window.__stage.seek(t), f / fps);
+        await page.screenshot({ path: path.join(frames, `${String(f).padStart(5, '0')}.png`) });
+      }
+      await page.close();
+    }));
+    if (framesOnly) { console.log(`${id}: ${total + 1} frames → ${frames}`); continue; }
     const file = path.join(out, `forsion-2.12-${names[id]}${durOverride ? `-${durOverride}s` : ''}.mp4`);
     execFileSync(ffmpeg, ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', path.join(frames, '%05d.png'),
       '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', file]);

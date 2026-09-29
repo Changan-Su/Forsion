@@ -20,7 +20,8 @@ const assets = {
   LOGO: `data:image/png;base64,${readFileSync(join(repo, 'desktop/build/icon.png')).toString('base64')}`,
 };
 
-const page = readFileSync(join(here, 'index.src.html'), 'utf8').replace(/%%([A-Z]+)%%/g, (m, k) => {
+const engine = readFileSync(join(here, 'stage-engine.js'), 'utf8');
+const page = readFileSync(join(here, 'index.src.html'), 'utf8').replace('/*%%STAGE_ENGINE%%*/', () => engine).replace(/%%([A-Z]+)%%/g, (m, k) => {
   if (!assets[k]) throw new Error(`unknown asset ${m}`);
   return assets[k];
 });
@@ -50,3 +51,18 @@ if (existsSync(score)) {
   for (const f of readdirSync(score)) if (f.endsWith('.mp3')) copyFileSync(join(score, f), join(here, 'dist/audio', f));
 }
 console.log(`dist/music.html ${(music.length / 1024).toFixed(0)} KB`);
+
+// Full film (study B, ~87 s): shared fonts, styles and engine, the cue sheet, and the real assets.
+const cues = readFileSync(join(here, 'film/cuesheet.json'), 'utf8').trim();
+const film = readFileSync(join(here, 'film.src.html'), 'utf8')
+  .replace('%%FONTS%%', () => cut('fonts'))
+  .replace('%%STYLE%%', () => style)
+  .replace('/*%%STAGE_ENGINE%%*/', () => engine)
+  .replace('/*%%CUES%%*/', () => cues)
+  .replace(/%%([A-Z]+)%%/g, (m, k) => {
+    if (!assets[k]) throw new Error(`unknown asset ${m}`);
+    return assets[k];
+  });
+writeFileSync(join(here, 'dist/film.html'), film);
+writeFileSync(join(here, 'dist/film-capture.html'), `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body>${film}</body></html>`);
+console.log(`dist/film.html ${(film.length / 1024).toFixed(0)} KB`);

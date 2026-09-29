@@ -40,3 +40,14 @@ git clone --depth 1 --filter=blob:none --sparse https://github.com/sgossner/VSCO
 # 在 ~/vsco 里执行 git sparse-checkout set，目录列表见 sampler.orchestra() 用到的各个文件夹
 VSCO=~/vsco python3 music/make.py 5-battle && bash music/mux.sh 5-battle && node build.mjs
 ```
+
+## 完整版（`film.src.html`）
+
+《第 2.12 话 · 人类补完计划》，4:3，约 87 秒。画面与两条配乐共用一张剪辑点表 `film/cuesheet.json`（150 BPM 的小节编号）：画面按小节切，「决战 II」就是 150 BPM，「补完」用 75 BPM，它的一拍正好是半小节，所以两条配乐的重音落在同一批帧上。关键帧引擎核心在 `stage-engine.js`，由 `build.mjs` 内联进各个页面。
+
+```bash
+node build.mjs                                               # → dist/film.html（可切换两条配乐的播放页）与 dist/film-capture.html
+NODE_PATH=$(npm root -g) node render.cjs film --workers 4 --frames-only   # → out/frames-film（2617 帧）
+VSCO=~/vsco python3 music/film_scores.py                     # → out/audio/film-battle.wav / film-choral.wav（响度已对齐）
+FFMPEG=/path/to/ffmpeg bash music/mux_film.sh                # → out/film/*.mp4 与播放页用的 MP3
+```

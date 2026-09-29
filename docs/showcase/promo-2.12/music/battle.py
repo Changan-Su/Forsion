@@ -44,7 +44,7 @@ CHORDS = {  # root (bass octave), triad pitch classes as intervals, brass voicin
 def band():
     o = orchestra()
     T = lambda name, sus, short=None, **k: SampleTrack(name, o[sus], short=o[short] if short else None, **k)
-    P = lambda name, bank, **k: SampleTrack(name, o[bank], pitched_=False, natural=True, **k)
+    P = lambda name, bank, natural=True, **k: SampleTrack(name, o[bank], pitched_=False, natural=natural, **k)
     return dict(
         tpt=T('trumpets', 'tpt_sus', 'tpt_stac', gain=0.9, pan=0.25, send=0.26),
         hn=T('horns', 'hn_sus', 'hn_stac', gain=1.1, pan=-0.3, send=0.32),
@@ -58,9 +58,9 @@ def band():
         timp=SampleTrack('timpani', o['timp'], natural=True, gain=1.1, send=0.22),
         snare=P('snare', 'snare', gain=0.55, pan=-0.05, send=0.16),
         bd=P('bass-drum', 'bd', gain=1.0, send=0.2),
-        cym=P('cymbals', 'cym', gain=1.3, pan=0.15, send=0.22),
+        cym=P('cymbals', 'cym', natural=False, gain=1.3, pan=0.15, send=0.22),
         cymroll=P('cym-roll', 'cymroll', gain=0.6, send=0.25),
-        gong=P('gong', 'gong', gain=0.9, send=0.3),
+        gong=P('gong', 'gong', natural=False, gain=0.9, send=0.3),
         sfx=Audio('sfx', gain=0.6, send=0.1),
     )
 

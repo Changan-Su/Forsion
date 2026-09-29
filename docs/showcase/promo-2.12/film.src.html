@@ -1,0 +1,607 @@
+<title>第 2.12 话完整版</title>
+%%FONTS%%
+%%STYLE%%
+<style>
+/* Screening page for the full B film: one 4:3 stage driven by whichever score is playing. */
+:root { --red: #e3161b; --orange: #ff6a13; }
+.film-stage { display: grid; gap: 14px; }
+.film-stage .player { width: 100%; max-width: 960px; }
+.film-stage .frame { max-width: 960px; }
+.transport { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: 960px; width: 100%; }
+.transport button { font: 600 14px var(--f-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; height: 38px; padding: 0 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.transport button .no { font: 700 13px var(--f-cond); letter-spacing: .08em; color: var(--muted); }
+.transport button:hover { border-color: var(--muted); }
+.transport button[aria-pressed="true"] { border-color: var(--orange); box-shadow: inset 0 0 0 1px var(--orange); }
+.transport button[aria-pressed="true"] .no { color: var(--orange); }
+.transport button:focus-visible, .transport input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.transport .play { background: var(--fg); color: var(--bg); border-color: var(--fg); min-width: 84px; justify-content: center; }
+.transport input[type=range] { flex: 1 1 200px; min-width: 0; accent-color: var(--orange); }
+.transport output { font: 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 12ch; text-align: right; }
+.chapters { display: flex; flex-wrap: wrap; gap: 6px 14px; max-width: 960px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+.chapters button { font: inherit; color: inherit; background: none; border: 0; padding: 2px 0; cursor: pointer; }
+.chapters button:hover, .chapters button.on { color: var(--fg); }
+.chapters b { font: 600 12px var(--f-mono); color: var(--orange); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+/* ───────── film stage (1440 × 1080) ───────── */
+.fb { width: 1440px; height: 1080px; background: var(--b-black); }
+.fb .fb-hexbg { position: absolute; inset: 0; }
+.fb .fb-scenes { position: absolute; inset: 0; }
+.fb .scene { position: absolute; inset: 0; overflow: hidden; }
+.fb .solid { background: var(--b-black); }
+.fb .inv { background: var(--b-white); }
+.fb .fk { position: absolute; font: 900 100px/1 var(--f-display); color: var(--b-white); white-space: nowrap; transform: scaleX(.8); transform-origin: 0 0; }
+.fb .fk.mid { left: 0; right: 0; text-align: center; transform-origin: 50% 0; }
+.fb .fk.right { text-align: right; transform-origin: 100% 0; }
+.fb .fk.vert { writing-mode: vertical-rl; transform: scaleY(.86); }
+.fb .fe { position: absolute; font: 700 44px/1.35 var(--f-display); letter-spacing: .05em; color: var(--b-white); white-space: nowrap; }
+.fb .fe.mid { left: 0; right: 0; text-align: center; }
+.fb .inv .fk, .fb .inv .fe { color: var(--b-black); }
+.fb .red { color: var(--b-red) !important; }
+.fb .org { color: var(--b-orange) !important; }
+.fb .dim { color: #8c8c8c !important; }
+.fb .cond { font-family: var(--f-cond); font-weight: 700; letter-spacing: .2em; }
+.fb .mono { font-family: var(--f-mono); }
+.fb .sub { position: absolute; left: 0; right: 0; text-align: center; font: 900 54px/1.3 var(--f-display); color: var(--b-white); text-shadow: 0 0 8px #000, 3px 3px 0 #000, -2px -2px 0 #000; }
+.fb .sub small { display: block; font: 700 34px/1.4 var(--f-display); color: #cfcfcf; letter-spacing: .03em; }
+.fb .hud { color: var(--b-orange); font-family: var(--f-cond); }
+.fb .panel { position: absolute; border: 2px solid rgba(255, 106, 19, .75); background: rgba(0, 0, 0, .8); }
+.fb .panel > .lbl { position: absolute; left: 16px; top: 10px; font: 700 22px var(--f-cond); letter-spacing: .18em; color: var(--b-orange); }
+.fb .top { position: absolute; left: 70px; right: 70px; top: 46px; height: 58px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--b-orange); font: 700 30px var(--f-cond); letter-spacing: .16em; color: var(--b-orange); }
+.fb .top .alt { color: var(--b-red); }
+
+/* boot */
+.fb-boot { background: var(--b-black); }
+.fb-bootlines { position: absolute; left: 110px; top: 200px; display: grid; gap: 10px; }
+.fb-bootlines p { font: 500 34px/1.4 var(--f-mono); color: var(--b-green); white-space: pre; min-height: 1.4em; }
+.fb-bootlines p.bad { color: var(--b-red); }
+.fb-bootmark { position: absolute; right: 60px; bottom: -40px; font: 700 420px/1 var(--f-cond); color: transparent; -webkit-text-stroke: 2px rgba(56, 255, 139, .18); }
+
+/* half: agent vs human */
+.fb .sysbox { top: 140px; width: 610px; height: 600px; padding: 90px 30px 0; display: grid; align-content: start; gap: 22px; }
+.fb .sysbox h3 { position: absolute; left: 28px; top: 20px; margin: 0; font: 700 64px/1 var(--f-cond); letter-spacing: .12em; }
+.fb .sysrow { display: grid; grid-template-columns: 170px 1fr 70px; align-items: center; gap: 16px; font: 700 30px var(--f-cond); letter-spacing: .12em; color: var(--b-white); }
+.fb .sysrow i { display: block; height: 22px; border: 2px solid rgba(56, 255, 139, .5); position: relative; }
+.fb .sysrow i::after { content: ''; position: absolute; inset: 2px; right: calc(2px + (1 - var(--f, 0)) * (100% - 4px)); background: var(--b-green); }
+.fb .sysrow b { color: var(--b-green); text-align: right; }
+.fb .sysbox.human { border-color: var(--b-red); }
+.fb .sysbox.human h3 { color: var(--b-red); }
+.fb .sysbox.human .sysrow i { border-color: rgba(227, 22, 27, .45); }
+.fb .sysbox.human .sysrow b { color: var(--b-red); }
+.fb .nodata { position: absolute; left: 0; right: 0; top: 270px; text-align: center; font: 700 110px/1 var(--f-cond); letter-spacing: .1em; color: var(--b-red); }
+.fb .link { position: absolute; left: 70px; right: 70px; top: 766px; height: 44px; border: 2px dashed rgba(227, 22, 27, .8); display: flex; align-items: center; justify-content: center; font: 700 28px var(--f-cond); letter-spacing: .3em; color: var(--b-red); }
+
+/* HUMAN.md */
+.fb .hm-title { position: absolute; left: 0; right: 0; top: 230px; text-align: center; font: 700 180px/1 var(--f-mono); color: var(--b-white); letter-spacing: -.02em; white-space: pre; min-height: 1em; }
+.fb .hm-sub { position: absolute; left: 0; right: 0; top: 452px; text-align: center; font: 700 44px var(--f-cond); letter-spacing: .4em; color: var(--b-orange); }
+.fb .hm-q { position: absolute; left: 0; right: 0; top: 540px; text-align: center; font: 900 92px/1 var(--f-display); color: var(--b-white); }
+.fb .hm-term { left: 250px; top: 720px; width: 940px; height: 270px; padding: 54px 26px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 30px; }
+.fb .hm-term p { font: 500 28px/1.6 var(--f-mono); color: var(--b-green); white-space: pre; min-height: 1.6em; }
+
+/* memory vs HUMAN.md */
+.fb .half-l, .fb .half-r { position: absolute; top: 0; bottom: 0; width: 720px; }
+.fb .half-l { left: 0; background: #101010; }
+.fb .half-r { left: 720px; background: var(--b-black); box-shadow: inset 0 0 0 3px var(--b-orange); }
+.fb .half-l .fe, .fb .half-r .fe { font-family: var(--f-cond); font-size: 96px; letter-spacing: .08em; }
+
+/* layers */
+.fb .gauge { position: absolute; left: 70px; top: 140px; width: 130px; height: 860px; border: 2px solid rgba(255, 106, 19, .6); }
+.fb .gauge span { position: absolute; left: 12px; font: 700 20px/1.2 var(--f-cond); letter-spacing: .12em; color: var(--b-orange); }
+.fb .gauge i { position: absolute; left: 0; right: 0; height: 2px; background: rgba(255, 106, 19, .35); }
+.fb .gauge .mark { position: absolute; left: -2px; right: -2px; height: 90px; border: 3px solid var(--b-red); background: rgba(227, 22, 27, .2); }
+.fb .layer { position: absolute; left: 240px; top: 140px; width: 1130px; height: 860px; }
+.fb .layer .head { position: absolute; left: 0; top: 0; font: 700 40px var(--f-cond); letter-spacing: .16em; color: var(--b-orange); }
+.fb .layer .file { position: absolute; left: 0; top: 56px; font: 700 34px var(--f-mono); color: var(--b-white); }
+.fb .idcard { left: 0; top: 130px; width: 330px; height: 470px; }
+.fb .idcard img { position: absolute; left: 40px; top: 60px; width: 250px; height: 250px; border-radius: 50%; filter: grayscale(1) contrast(1.25); border: 2px solid rgba(255, 106, 19, .6); }
+.fb .idcard .big { position: absolute; left: 0; right: 0; text-align: center; font: 700 52px/1.1 var(--f-cond); letter-spacing: .1em; color: var(--b-white); }
+.fb .idcard .small { position: absolute; left: 0; right: 0; text-align: center; font: 500 24px/1.3 var(--f-body); color: var(--b-orange); letter-spacing: .1em; }
+.fb .rules { position: absolute; left: 380px; top: 150px; right: 0; display: grid; gap: 26px; }
+.fb .rules p { font: 900 44px/1.25 var(--f-display); color: var(--b-white); white-space: nowrap; }
+.fb .rules p::before { content: '▶'; color: var(--b-orange); font-size: 30px; margin-right: 18px; vertical-align: 6px; }
+.fb .layer .cap { position: absolute; left: 0; right: 0; top: 700px; font: 900 76px/1 var(--f-display); color: var(--b-white); }
+.fb .layer .cap small { display: block; margin-top: 14px; font: 700 28px var(--f-cond); letter-spacing: .3em; color: var(--b-orange); }
+
+/* evolve */
+.fb .ev-sync { left: 560px; top: 140px; width: 810px; height: 520px; }
+.fb .ev-sync .num { position: absolute; left: 30px; top: 70px; font: 700 220px/1 var(--f-mono); color: var(--b-white); font-variant-numeric: tabular-nums; }
+.fb .ev-sync .num small { font-size: 90px; color: var(--b-orange); margin-left: 8px; }
+.fb .ev-sync canvas { position: absolute; left: 0; bottom: 10px; width: 806px; height: 170px; }
+.fb .ev-log { left: 70px; top: 140px; width: 460px; height: 520px; padding: 60px 20px 0; display: grid; align-content: start; gap: 16px; }
+.fb .ev-log p { font: 500 24px/1.4 var(--f-mono); color: var(--b-green); white-space: nowrap; }
+.fb .ev-log p b { color: var(--b-orange); font-weight: 700; margin-right: 12px; }
+.fb .stamp { position: absolute; left: 70px; top: 690px; padding: 10px 22px; border: 3px solid var(--b-orange); font: 700 40px var(--f-cond); letter-spacing: .2em; color: var(--b-orange); }
+.fb .hexes { position: absolute; left: 0; right: 0; top: 210px; display: flex; justify-content: center; gap: 30px; }
+.fb .hexes div { width: 290px; height: 330px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); background: rgba(255, 106, 19, calc(.15 + var(--on, 0) * .85)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.fb .hexes b { font: 900 60px/1 var(--f-display); color: var(--b-black); }
+.fb .hexes i { font: 700 26px var(--f-cond); letter-spacing: .2em; color: var(--b-black); font-style: normal; }
+.fb .final-ctl { position: absolute; left: 70px; right: 70px; top: 660px; height: 250px; background: var(--b-black); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.fb .final-ctl::before, .fb .final-ctl::after { content: ''; position: absolute; left: 0; right: 0; height: 22px; background: repeating-linear-gradient(-45deg, var(--b-orange) 0 18px, var(--b-black) 18px 36px); }
+.fb .final-ctl::before { top: 0; } .fb .final-ctl::after { bottom: 0; }
+.fb .final-ctl .zh { font: 900 84px/1 var(--f-display); color: var(--b-white); }
+.fb .final-ctl .en { font: 700 44px/1 var(--f-cond); letter-spacing: .2em; color: var(--b-orange); }
+
+/* MAGI: the waiting state */
+.fb .sb-magi .wait { border: 2px solid var(--b-orange); color: var(--b-orange); }
+
+/* interface field */
+.fb .field { position: absolute; inset: 0; }
+
+/* montage */
+.fb .files { position: absolute; left: 70px; right: 70px; top: 140px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+.fb .files .panel { position: relative; height: 560px; }
+.fb .files img, .fb .files .noimg { position: absolute; left: 22px; right: 22px; top: 70px; aspect-ratio: 1; width: calc(100% - 44px); border-radius: 50%; filter: grayscale(1) contrast(1.2); border: 2px solid rgba(255, 106, 19, .6); }
+.fb .files .noimg { display: flex; align-items: center; justify-content: center; font: 700 110px var(--f-cond); color: rgba(255, 106, 19, .8); filter: none; }
+.fb .files .nm { position: absolute; left: 0; right: 0; top: 320px; text-align: center; font: 700 42px var(--f-cond); letter-spacing: .12em; color: var(--b-white); }
+.fb .files .rl { position: absolute; left: 0; right: 0; top: 374px; text-align: center; font: 500 22px var(--f-body); color: var(--b-orange); }
+.fb .files .tabs { position: absolute; left: 14px; right: 14px; top: 430px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.fb .files .tabs span { font: 500 18px/1 var(--f-body); color: rgba(255, 255, 255, .6); border: 1px solid rgba(255, 106, 19, .45); padding: 7px 0; text-align: center; }
+.fb .files .tabs span.on { background: var(--b-orange); color: var(--b-black); font-weight: 700; }
+.fb .skills { left: 70px; top: 140px; width: 1300px; height: 880px; padding: 70px 30px 0; }
+.fb .skills .ops { display: flex; gap: 10px; margin-bottom: 26px; }
+.fb .skills .ops span { font: 700 26px var(--f-body); padding: 8px 18px; border: 2px solid rgba(255, 106, 19, .6); color: var(--b-orange); }
+.fb .skills .ops span.on { background: var(--b-orange); color: var(--b-black); }
+.fb .skills .row { display: grid; grid-template-columns: 80px 1fr 220px; align-items: center; font: 500 36px/2.05 var(--f-mono); color: var(--b-white); border-bottom: 1px solid rgba(255, 106, 19, .25); }
+.fb .skills .row b { font: 700 24px var(--f-cond); letter-spacing: .2em; color: var(--b-green); text-align: right; }
+.fb .skills .row b.off { color: #777; }
+.fb .skills .row i { font: 700 22px var(--f-cond); color: var(--b-orange); font-style: normal; }
+.fb .graph { position: absolute; left: 0; top: 0; width: 1440px; height: 1080px; }
+.fb .graph path { fill: none; stroke: var(--b-orange); stroke-width: 3; stroke-dasharray: 1; stroke-dashoffset: var(--d, 1); }
+.fb .node-a { position: absolute; left: 150px; width: 170px; height: 170px; border-radius: 50%; filter: grayscale(1) contrast(1.2); border: 3px solid var(--b-orange); }
+.fb .node-s { position: absolute; left: 930px; width: 440px; height: 76px; border: 2px solid var(--b-orange); background: var(--b-black); font: 500 30px/72px var(--f-mono); color: var(--b-white); padding-left: 20px; }
+.fb .chat { left: 70px; top: 200px; width: 560px; height: 520px; border-style: dashed; padding: 70px 26px 0; }
+.fb .chat .bub { font: 500 28px/1.55 var(--f-body); color: var(--b-white); background: rgba(255, 255, 255, .08); padding: 16px 20px; margin-bottom: 18px; }
+.fb .chat .bub.me { background: rgba(255, 106, 19, .18); margin-left: 80px; }
+.fb .note { left: 760px; top: 170px; width: 610px; height: 620px; background: #0b0b0b; padding: 70px 30px 0; border-color: var(--b-green); }
+.fb .note .lbl { color: var(--b-green) !important; }
+.fb .note h4 { margin: 0 0 18px; font: 900 44px/1.2 var(--f-display); color: var(--b-white); }
+.fb .note .ln { height: 14px; background: rgba(255, 255, 255, .22); margin: 12px 0; }
+.fb .note .todo { font: 500 26px/1.6 var(--f-body); color: var(--b-white); }
+.fb .note .todo::before { content: '☐ '; color: var(--b-green); }
+.fb .note table { width: 100%; border-collapse: collapse; margin-top: 16px; font: 500 22px var(--f-mono); color: var(--b-white); }
+.fb .note td { border: 1px solid rgba(56, 255, 139, .45); padding: 6px 10px; }
+.fb .arrow { position: absolute; left: 640px; top: 430px; font: 700 90px var(--f-cond); color: var(--b-orange); }
+.fb .slots { position: absolute; left: 70px; right: 70px; top: 170px; display: grid; gap: 22px; }
+.fb .slot { position: relative; height: 150px; border: 2px solid rgba(255, 106, 19, .7); display: flex; align-items: center; padding: 0 40px; font: 700 88px var(--f-cond); letter-spacing: .1em; color: var(--b-white); background: rgba(0, 0, 0, .8); }
+.fb .slot b { margin-left: auto; font-size: 32px; letter-spacing: .25em; color: var(--b-green); }
+.fb .slot.ctx { height: 90px; font-size: 44px; color: var(--b-orange); }
+.fb .device { position: absolute; border: 3px solid var(--b-orange); background: rgba(0, 0, 0, .85); }
+.fb .device.pc { left: 130px; top: 240px; width: 700px; height: 440px; }
+.fb .device.pc::after { content: ''; position: absolute; left: -60px; right: -60px; bottom: -40px; height: 24px; border: 3px solid var(--b-orange); border-top: 0; }
+.fb .device.ph { left: 1050px; top: 250px; width: 230px; height: 440px; border-radius: 30px; }
+.fb .device p { position: absolute; left: 0; right: 0; text-align: center; font: 700 30px/1.3 var(--f-cond); letter-spacing: .15em; color: var(--b-orange); }
+.fb .device .scr { position: absolute; inset: 30px; display: grid; align-content: start; gap: 10px; }
+.fb .device .scr i { display: block; height: 16px; background: rgba(56, 255, 139, .35); }
+.fb .wire { position: absolute; left: 830px; top: 450px; width: 220px; height: 4px; background: repeating-linear-gradient(90deg, var(--b-orange) 0 16px, transparent 16px 28px); background-position-x: calc(var(--p, 0) * 280px); }
+
+/* release */
+.fb .rel { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; }
+.fb .rel img { width: 150px; height: 150px; }
+.fb .rel .nm { font: 700 76px/1 var(--f-cond); letter-spacing: .3em; padding-left: .3em; color: var(--b-white); }
+.fb .rel .zh { font: 900 72px/1 var(--f-display); color: var(--b-white); }
+.fb .rel .url { font: 500 30px var(--f-mono); color: #8c8c8c; }
+
+@media (max-width: 640px) { .transport output { min-width: 0; margin-left: auto; } }
+</style>
+
+<main class="page">
+  <header class="intro">
+    <p class="eyebrow">Forsion 2.12 · 第 2.12 话</p>
+    <h1>人类补完计划</h1>
+    <p>B 方向完整版，约 87 秒。同一版画面配两条配乐：05 决战 II 和 03 补完。两条配乐都按同一张剪辑点表写，切换后从头播放。</p>
+  </header>
+
+  <section class="film-stage" aria-label="完整版播放">
+    <div class="transport" role="group" aria-label="配乐与播放">
+      <button type="button" id="score-battle-btn" data-score="battle" aria-pressed="true"><span class="no">05</span>决战 II</button>
+      <button type="button" id="score-choral-btn" data-score="choral" aria-pressed="false"><span class="no">03</span>补完</button>
+      <button type="button" id="film-play" class="play">播放</button>
+      <input type="range" id="film-seek" min="0" max="87.2" step="0.01" value="0" aria-label="进度">
+      <output id="film-time">0.0 / 87.2s</output>
+    </div>
+    <div class="player r43" data-film>
+      <div class="frame r43">
+        <div class="stage sb fb">
+          <canvas class="fb-hexbg" width="1440" height="1080"></canvas>
+          <div class="fb-scenes"></div>
+          <div class="sb-scan"></div><div class="sb-vig"></div><div class="grain"></div><div class="sb-flash"></div>
+        </div>
+      </div>
+    </div>
+    <ul class="chapters" aria-label="段落"></ul>
+  </section>
+
+  <p class="note">音色来自 VSCO 2 CE 采样库和 General MIDI 音色库，旋律全部原创，只用来判断方向。画面里的界面元素是示意，不是实机录屏。</p>
+
+  <div hidden>
+    <audio id="score-battle" preload="auto" src="audio/film-battle.mp3"></audio>
+    <audio id="score-choral" preload="auto" src="audio/film-choral.mp3"></audio>
+  </div>
+</main>
+
+<script>
+(() => {
+  /*%%STAGE_ENGINE%%*/
+
+  const CUES = /*%%CUES%%*/;
+  const BEAT = 60 / CUES.bpm, BAR = BEAT * CUES.beatsPerBar, LEN = CUES.length;
+  const SEC = {};
+  for (const s of CUES.sections) SEC[s.id] = { t: s.bar * BAR, end: (s.bar + s.bars) * BAR };
+  const at = (id, beats = 0) => SEC[id].t + beats * BEAT;
+
+  const root = document.querySelector('.stage.fb');
+  const box = root.querySelector('.fb-scenes');
+  const F = createStage(root, 1440, 1080, LEN);
+  grain(F);
+  const AV = { aria: '%%ARIA%%', recita: '%%RECITA%%', arioso: '%%ARIOSO%%' };
+  const LOGO = '%%LOGO%%';
+
+  let sid = 0;
+  /* a scene is a full-frame layer shown only inside [a, b) */
+  function scene(a, b, cls, html) {
+    const id = `s${sid++}`;
+    box.insertAdjacentHTML('beforeend', `<div class="scene ${cls}" id="${id}">${html}</div>`);
+    F.S(`#${id}`, a, b);
+    return `#${id}`;
+  }
+  /* EVA intertitle: parts are [text, inline style, extra classes] */
+  const P = ([t, style, cls = 'fk']) => `<span class="${cls}" style="${style}">${t}</span>`;
+  const card = (a, b, parts, cls = 'solid') => scene(a, b, `fb-card ${cls}`, parts.map(P).join(''));
+  const flashes = [];
+  const flash = (t, o = .85) => flashes.push([t, o]);
+
+  // ───────── boot (0 – 3.2) ─────────
+  const BOOT = [
+    ['FORSION SYSTEM 2.12'],
+    ['AGENT HARNESS ........ OK'],
+    ['SOUL ................. OK'],
+    ['MEMORY ............... OK'],
+    ['SKILLS ............... OK'],
+    ['TOOLS · TEAMS ........ OK'],
+    ['HUMAN ................ ??', 'bad'],
+  ];
+  const boot = scene(0, SEC.boot.end, 'fb-boot', `<div class="fb-bootlines">${BOOT.map(([l, c]) => `<p class="${c || ''}">${l}</p>`).join('')}</div><div class="fb-bootmark">2.12</div>`);
+  F.type(`${boot} .fb-bootlines p`, 0.12, 80, 0.36);
+  const bad = root.querySelector(`${boot} .bad`);
+  F.H(t => { bad.style.opacity = t > 2.45 && Math.floor(t * 6) % 2 ? .25 : 1; });
+
+  // ───────── cards (3.2 – 9.6): what we kept telling the Agent ─────────
+  const C0 = SEC.cards.t, H = BAR / 2;
+  const CARDS = [
+    [['人格', 'left:110px;top:250px;font-size:340px'], ['SOUL', 'left:760px;top:650px', 'fe']],
+    [['记忆', 'left:1010px;top:70px;font-size:300px', 'fk vert'], ['MEMORY', 'left:110px;top:900px', 'fe']],
+    [['SKILLS', 'top:190px;font-size:46px', 'fe mid'], ['技能', 'top:330px;font-size:380px', 'fk mid']],
+    [['工具', 'right:110px;top:180px;font-size:320px', 'fk right'], ['TOOLS', 'left:118px;top:820px', 'fe']],
+    [['HARNESS', 'left:118px;top:420px;font-size:48px', 'fe'], ['进化', 'left:110px;top:540px;font-size:360px']],
+    [['团队', 'top:260px;font-size:360px', 'fk mid'], ['TEAMS', 'top:760px', 'fe mid']],
+    [['PROJECTS', 'right:110px;top:120px;font-size:48px;text-align:right', 'fe'], ['项目', 'left:110px;top:560px;font-size:360px']],
+  ];
+  CARDS.forEach((parts, i) => card(C0 + i * H, C0 + (i + 1) * H, parts, i === 5 ? 'inv' : 'solid'));
+  flash(C0, .6);
+  const ticker = card(C0 + 7 * H, SEC.cards.end, [
+    ['更强的模型', 'left:120px;top:250px;font-size:64px'], ['更长的上下文', 'left:120px;top:370px;font-size:64px'],
+    ['更丰富的 Skills', 'left:120px;top:490px;font-size:64px'], ['更完善的 Memory', 'left:120px;top:610px;font-size:64px'],
+    ['更复杂的 Harness', 'left:120px;top:730px;font-size:64px'],
+  ]);
+  F.K(`${ticker} .fk`, [[C0 + 7 * H, { o: 0 }], [C0 + 7 * H + .01, { o: 1 }, 'step']], { stagger: .11 });
+
+  // ───────── years (9.6 – 12.8) ─────────
+  const Y = SEC.years.t;
+  const years = card(Y, SEC.years.end, [
+    ['多年来，', 'left:110px;top:200px;font-size:210px'], ['我们一直在建造', 'left:112px;top:470px;font-size:130px'],
+    ['更好的 Agent。', 'left:112px;top:640px;font-size:130px'], ['FOR YEARS, WE HAVE BEEN BUILDING BETTER AGENTS.', 'right:110px;top:900px;font-size:34px', 'fe'],
+  ]);
+  root.querySelectorAll(`${years} span`).forEach((el, i) => F.K(el, [[Y + [0, .8, 1.2, 1.9][i], { o: 0 }], [Y + [0, .8, 1.2, 1.9][i] + .01, { o: 1 }, 'step']]));
+
+  // ───────── half (12.8 – 16.0): the Agent was only half the system ─────────
+  const HF = SEC.half.t;
+  const ROWS = ['SOUL', 'MEMORY', 'SKILLS', 'TOOLS', 'HARNESS', 'TEAMS'];
+  const half = scene(HF, SEC.half.end, 'hud', `
+    <div class="top"><span>HUMAN–AGENT SYSTEM / 系统构成</span><span class="alt">● CHECK</span></div>
+    <div class="panel sysbox" style="left:70px"><h3 class="org">AGENT</h3>${ROWS.map(r => `<div class="sysrow"><span>${r}</span><i></i><b>OK</b></div>`).join('')}</div>
+    <div class="panel sysbox human" style="left:760px"><h3>HUMAN</h3>${ROWS.map(() => `<div class="sysrow"><span>——</span><i style="--f:0"></i><b>—</b></div>`).join('')}<div class="nodata">NO DATA</div></div>
+    <div class="link">INTERFACE ▸ UNDEFINED / 协作方式：未定义</div>
+    <p class="sub" style="top:850px">The Agent was only half the system.<small>Agent，只是系统的一半。</small></p>`);
+  F.K(`${half} .sysbox:not(.human) .sysrow i`, [[HF + .15, { '--f': 0 }], [HF + .55, { '--f': 1 }, 'out']], { stagger: .1 });
+  F.K(`${half} .sub`, [[HF + 1.2, { o: 0 }], [HF + 1.21, { o: 1 }, 'step']]);
+  const nod = root.querySelector(`${half} .nodata`);
+  F.H(t => { nod.style.opacity = Math.floor(t * 4) % 2 ? .2 : 1; });
+  flash(HF, .5);
+
+  // ───────── 人类？ (16.0 – 17.6) ─────────
+  card(SEC.question.t, SEC.question.end, [['人类', 'left:104px;top:220px;font-size:380px;color:#000'], ['？', 'left:720px;top:220px;font-size:380px', 'fk red'], ['HUMAN — UNDEFINED', 'left:112px;top:760px;font:700 64px/1 var(--f-cond);letter-spacing:.22em', 'fe red']], 'inv');
+  flash(SEC.question.t, .9);
+
+  // ───────── title (17.6 – 20.8) ─────────
+  const TI = SEC.title.t;
+  card(TI, TI + H, [['EPISODE 2.12', 'top:430px;font-size:44px', 'fe mid'], ['COMPLETE THE OTHER HALF.', 'top:500px;font-size:64px', 'fe mid']]);
+  card(TI + H, SEC.title.end, [['第 2.12 话', 'left:112px;top:112px;font-size:76px'], ['人类', 'left:96px;top:222px;font-size:350px'],
+    ['补完计划', 'left:100px;top:578px;font-size:250px;transform:scaleX(.74)'], ['EPISODE 2.12<br><span style="font-size:48px">COMPLETE THE OTHER HALF.</span>', 'right:110px;top:876px;font-size:34px;text-align:right', 'fe'],
+    ['FORSION', 'left:114px;top:982px;font:600 26px var(--f-cond);letter-spacing:.6em;color:#8c8c8c', 'fe']]);
+  flash(TI + H, .85);
+
+  // ───────── two sides (20.8 – 22.4) ─────────
+  const TS = SEC.twosides.t;
+  const two = card(TS, SEC.twosides.end, [['但协作，', 'left:110px;top:220px;font-size:240px'], ['有两面。', 'left:110px;top:520px;font-size:240px'], ['BUT COLLABORATION HAS TWO SIDES.', 'right:110px;top:890px', 'fe']]);
+  root.querySelectorAll(`${two} span`).forEach((el, i) => F.K(el, [[TS + [0, .6, .9][i], { o: 0 }], [TS + [0, .6, .9][i] + .01, { o: 1 }, 'step']]));
+
+  // ───────── HUMAN.md (22.4 – 25.6) ─────────
+  const HM = SEC.humanmd.t;
+  const hm = scene(HM, SEC.humanmd.end, 'hud', `
+    <p class="hm-title">HUMAN.md</p><p class="hm-sub">THE HUMAN HARNESS</p><p class="hm-q">我们应该怎样一起工作？</p>
+    <div class="panel hm-term"><span class="lbl">HUMAN.md · 结构</span><p>## 我会怎样调整</p><p>## 需要你来决定</p><p>## 需要你补充</p><p>## 可选学习</p></div>`);
+  F.type(`${hm} .hm-title`, HM + .05, 22);
+  F.K(`${hm} .hm-sub`, [[HM + .5, { o: 0 }], [HM + .51, { o: 1 }, 'step']]);
+  F.K(`${hm} .hm-q`, [[HM + .8, { o: 0, y: 14 }], [HM + 1.1, { o: 1, y: 0 }, 'out']]);
+  F.K(`${hm} .hm-term`, [[HM + 1.2, { o: 0 }], [HM + 1.22, { o: 1 }, 'step']]);
+  F.type(`${hm} .hm-term p`, HM + 1.3, 40, .3);
+  flash(HM, .5);
+
+  // ───────── asks (25.6 – 28.8): what HUMAN.md answers ─────────
+  const AS = SEC.asks.t, Q = (SEC.asks.end - AS) / 5;
+  const ASKS = [
+    [['什么事情，', 'left:110px;top:260px;font-size:110px'], ['Agent 应该自己判断？', 'left:110px;top:420px;font-size:150px']],
+    [['什么事情，', 'right:110px;top:140px;font-size:110px', 'fk right'], ['需要', 'left:110px;top:420px;font-size:230px'], ['人类确认？', 'left:110px;top:680px;font-size:230px']],
+    [['人类，', 'left:1060px;top:90px;font-size:200px', 'fk vert'], ['应该补充哪些信息？', 'left:110px;top:620px;font-size:130px']],
+    [['怎样沟通，', 'top:220px;font-size:130px', 'fk mid'], ['才能减少反复？', 'top:470px;font-size:170px', 'fk mid']],
+    [['双方，', 'left:110px;top:180px;font-size:180px'], ['如何分工？', 'left:110px;top:460px;font-size:300px']],
+  ];
+  ASKS.forEach((parts, i) => card(AS + i * Q, AS + (i + 1) * Q, parts, i === 2 ? 'inv' : 'solid'));
+
+  // ───────── MEMORY vs HUMAN.md (28.8 – 32.0) ─────────
+  const ME = SEC.memory.t;
+  const mem = scene(ME, SEC.memory.end, 'solid', `
+    <div class="half-l"><span class="fe dim" style="left:80px;top:270px">MEMORY</span><span class="fk" style="left:80px;top:420px;font-size:92px;color:#bdbdbd">我知道</span><span class="fk" style="left:80px;top:540px;font-size:92px;color:#bdbdbd">你什么。</span></div>
+    <div class="half-r"><span class="fe org mono" style="left:70px;top:270px;font-family:var(--f-mono)">HUMAN.md</span><span class="fk" style="left:70px;top:420px;font-size:92px">我们怎样</span><span class="fk" style="left:70px;top:540px;font-size:92px">合作得更好。</span></div>`);
+  F.K(`${mem} .half-r`, [[ME + BAR - .01, { o: 0 }], [ME + BAR, { o: 1 }, 'step']]);
+  F.K(`${mem} .half-l`, [[ME + BAR, { o: 1 }], [ME + BAR + .3, { o: .35 }]]);
+  flash(ME + BAR, .7);
+
+  // ───────── MAGI deliberation (32.0 – 36.8) ─────────
+  const MG = SEC.magi.t, R2 = MG + BAR;
+  const magiPanel = (name, role, img, left) => `<div class="sb-box sb-magi" style="left:${left}px"><span class="name">${name}</span><span class="role">${role}</span><img src="${img}" alt=""><div class="st wait"><b>审议</b><i>VOTING</i></div><div class="st ok"><b>承认</b><i>APPROVE</i></div><div class="st hand"><b>移交</b><i>TO HUMAN</i></div></div>`;
+  const magi = scene(MG, SEC.magi.end, 'hud', `
+    <div class="sb-top"><span>MAGI · 协作审议 / DELIBERATION</span><span class="live">● HUMAN.md</span></div>
+    <div class="sb-box sb-term r1"><span class="lbl">提案 01 · PROPOSAL</span><p>按钮圆角 8px → 10px</p><p>类别：技术实现</p><p>规则：技术实现可以自主选择</p></div>
+    <div class="sb-box sb-term r2"><span class="lbl">提案 02 · PROPOSAL</span><p>调整定价方案</p><p>类别：产品决策</p><p>规则：产品决策必须让我确认</p></div>
+    <div class="sb-box sb-sync"><span class="lbl">判断归属 · OWNER</span><div class="num own1" style="color:var(--b-green)">AGENT</div><div class="num own2" style="color:var(--b-red)">HUMAN</div></div>
+    <div class="sb-box sb-warn"><div class="go g1" style="--c:var(--b-green)"><span class="en" style="color:var(--b-green)">APPROVED · AUTONOMOUS</span><span class="zh">技术实现 · Agent 自主判断</span></div><div class="go g2"><span class="en">HUMAN CONFIRMATION REQUIRED</span><span class="zh">需要人类确认 · 产品决策</span></div></div>
+    ${magiPanel('ARIA · 1', '情感 · 表达', AV.aria, 70)}${magiPanel('RECITA · 2', '证据 · 可行性', AV.recita, 513)}${magiPanel('ARIOSO · 3', '目标 · 取舍', AV.arioso, 956)}`);
+  F.S(`${magi} .r1, ${magi} .own1, ${magi} .g1`, 0, R2);
+  F.S(`${magi} .r2, ${magi} .own2, ${magi} .g2`, R2, 999);
+  F.type(`${magi} .r1 p`, MG + .1, 50, .25);
+  F.type(`${magi} .r2 p`, R2 + .1, 50, .25);
+  F.K(`${magi} .sb-sync .num`, [[MG + .9, { o: 0 }], [MG + .91, { o: 1 }, 'step'], [R2, { o: 0 }, 'step'], [R2 + .9, { o: 0 }], [R2 + .91, { o: 1 }, 'step']]);
+  const g2 = root.querySelector(`${magi} .g2`), g1 = root.querySelector(`${magi} .g1`);
+  F.H(t => { g1.style.opacity = t < MG + .9 ? 0 : 1; g2.style.opacity = t < R2 + .6 ? 0 : (Math.floor((t - R2) * 6) % 2 ? .3 : 1); });
+  root.querySelectorAll(`${magi} .sb-magi`).forEach((el, i) => {
+    const ok = MG + .5 + i * .1, hand = R2 + .35 + i * .12;
+    F.S(el.querySelector('.wait'), 0, ok);
+    F.S(el.querySelector('.ok'), ok, hand);
+    F.S(el.querySelector('.hand'), hand, 999);
+  });
+  flash(MG, .5); flash(R2, .5);
+
+  // ───────── two layers (36.8 – 43.2) ─────────
+  const LA = SEC.layers.t, L2 = LA + 2 * BAR;
+  const layer = (head, file, card, rules, cap, en) => `<div class="layer"><span class="head">${head}</span><span class="file">${file}</span>${card}<div class="rules">${rules.map(r => `<p>${r}</p>`).join('')}</div><div class="cap">${cap}<small>${en}</small></div></div>`;
+  const lay = scene(LA, SEC.layers.end, 'hud', `
+    <div class="gauge"><span style="top:14px">DEPTH</span><i style="top:300px"></i><span style="top:190px">01<br>AGENT</span><i style="top:560px"></i><span style="top:450px">02<br>PROJECT</span><div class="mark"></div></div>
+    <div class="l1">${layer('LAYER 01 · AGENT-LEVEL', 'HUMAN.md', `<div class="panel idcard"><img src="${AV.arioso}" alt=""><span class="big" style="top:330px">ARIOSO</span><span class="small" style="top:392px">长期协作 · LONG-TERM</span></div>`,
+      ['不要频繁询问实现细节', '产品决策必须让我确认', '技术实现可以自主选择', '汇报时先给结论', '不确定时说明风险，别停下'], '长期的人机关系', 'AGENT LAYER · 随长期协作逐渐积累')}</div>
+    <div class="l2">${layer('LAYER 02 · PROJECT-LEVEL', '.tangu/HUMAN.md', `<div class="panel idcard"><span class="small" style="top:70px">PROJECT</span><span class="big" style="top:160px;font-size:64px">FORSION<br>2.12</span><span class="small" style="top:392px">本项目 · THIS PROJECT</span></div>`,
+      ['当前版本优先保证 macOS', '发布前需要真人视觉验收', '架构修改需要先讨论', '某些领域由 Human 最终判断'], '具体项目中的工作方式', 'PROJECT LAYER · 只属于当前项目')}</div>`);
+  F.S(`${lay} .l1`, 0, L2); F.S(`${lay} .l2`, L2, 999);
+  F.K(`${lay} .l1 .rules p`, [[LA + .4, { o: 0, x: -20 }], [LA + .6, { o: 1, x: 0 }, 'out']], { stagger: .28 });
+  F.K(`${lay} .l2 .rules p`, [[L2 + .4, { o: 0, x: -20 }], [L2 + .6, { o: 1, x: 0 }, 'out']], { stagger: .32 });
+  F.K(`${lay} .l1 .cap`, [[LA + 2.2, { o: 0 }], [LA + 2.21, { o: 1 }, 'step']]);
+  F.K(`${lay} .l2 .cap`, [[L2 + 2.2, { o: 0 }], [L2 + 2.21, { o: 1 }, 'step']]);
+  F.K(`${lay} .gauge .mark`, [[LA, { y: 150 }], [L2 - .1, { y: 150 }], [L2 + .35, { y: 410 }, 'io']]);
+  flash(LA, .5); flash(L2, .6);
+
+  // ───────── collaboration evolves (43.2 – 48.0) + final control (48.0 – 51.2) ─────────
+  const EV = SEC.evolve.t, CT = EV + 3 * BAR;
+  const QUOTES = ['「这种事情以后不用再问我。」', '「以后这种报告先给结论。」', '「UI 方案先做出来让我选，不要一直讨论。」'];
+  const LOG = [['v09', '实现细节 → 不再逐项询问'], ['v10', '汇报 → 先给结论'], ['v11', 'UI 方案 → 先做出来再选']];
+  const SYNC = [41.3, 67.2, 84.6, 99.8];
+  const ev = scene(EV, CT, 'hud', `
+    <div class="top"><span>HUMAN.md · 协作进化 / EVOLUTION</span><span class="alt">● LEARNING</span></div>
+    <div class="panel ev-log"><span class="lbl">修改历史 · HISTORY</span>${LOG.map(([v, s]) => `<p><b>${v}</b>${s}</p>`).join('')}</div>
+    <div class="panel ev-sync"><span class="lbl">人机同步率 · SYNC RATIO</span><div class="num"><span class="n">41.3</span><small>%</small></div><canvas width="1612" height="340"></canvas></div>
+    <div class="stamp">HUMAN.md UPDATED</div>
+    ${QUOTES.map(q => `<p class="sub q" style="top:840px">${q}</p>`).join('')}`);
+  root.querySelectorAll(`${ev} .sub.q`).forEach((el, i) => F.S(el, EV + i * BAR, EV + (i + 1) * BAR));
+  F.K(`${ev} .ev-log p`, [[EV + .5, { o: 0 }], [EV + .51, { o: 1 }, 'step']], { stagger: BAR });
+  const stamp = root.querySelector(`${ev} .stamp`);
+  F.H(t => { const k = (t - EV) % BAR; stamp.style.opacity = t >= EV + .45 && k > .45 && k < 1.25 ? (Math.floor(k * 8) % 2 ? .35 : 1) : 0; });
+  const evn = root.querySelector(`${ev} .n`);
+  F.H(t => {
+    let v = SYNC[0];
+    for (let i = 0; i < 3; i++) v += (SYNC[i + 1] - SYNC[i]) * prog(t, EV + i * BAR + .45, EV + i * BAR + 1.4, 'out');
+    evn.textContent = v.toFixed(1);
+  });
+  const wave = root.querySelector(`${ev} canvas`), wg = wave.getContext('2d');
+  F.H(t => {
+    if (t < EV - .1 || t > CT + .1) return;
+    const W = wave.width, Hh = wave.height, sync = (parseFloat(evn.textContent) - 41.3) / (99.8 - 41.3), ph = 2.8 * (1 - sync);
+    wg.clearRect(0, 0, W, Hh);
+    wg.strokeStyle = 'rgba(255,106,19,.25)'; wg.lineWidth = 2;
+    for (let x = 0; x < W; x += 64) { wg.beginPath(); wg.moveTo(x, 0); wg.lineTo(x, Hh); wg.stroke(); }
+    const line = (c, off) => { wg.strokeStyle = c; wg.lineWidth = 7; wg.beginPath(); for (let x = 0; x <= W; x += 8) { const y = Hh / 2 + Math.sin(x / 90 + t * 6 + off) * Hh * .34; x ? wg.lineTo(x, y) : wg.moveTo(x, y); } wg.stroke(); };
+    line('#ff6a13', 0); line('#38ff8b', ph);
+  });
+  const CTL = [['可查看', 'VIEW'], ['可编辑', 'EDIT'], ['可追踪', 'HISTORY'], ['可撤销', 'UNDO']];
+  const ctl = scene(CT, SEC.evolve.end, 'hud', `
+    <div class="top"><span>HUMAN.md · 控制权 / CONTROL</span><span class="alt">● HUMAN</span></div>
+    <div class="hexes">${CTL.map(([z, e]) => `<div><b>${z}</b><i>${e}</i></div>`).join('')}</div>
+    <div class="final-ctl"><span class="zh">最终控制权，属于人类</span><span class="en">HUMAN HAS FINAL CONTROL</span></div>`);
+  F.K(`${ctl} .hexes div`, [[CT, { '--on': 0, s: .9 }], [CT + .01, { '--on': 1, s: 1 }, 'step'], [CT + .3, { '--on': .55 }]], { stagger: BEAT });
+  F.K(`${ctl} .final-ctl`, [[CT + 4 * BEAT, { o: 0 }], [CT + 4 * BEAT + .01, { o: 1 }, 'step']]);
+  flash(EV, .5); flash(CT, .5);
+
+  // ───────── interface (51.2 – 56.0) ─────────
+  const IF = SEC.interface.t;
+  card(IF, IF + BAR, [['不是 AI', 'left:110px;top:230px;font-size:260px'], ['训练人类。', 'left:110px;top:540px;font-size:260px']]);
+  card(IF + BAR, IF + 2 * BAR, [['也不是人类', 'left:110px;top:230px;font-size:220px'], ['训练 AI。', 'left:110px;top:520px;font-size:260px']]);
+  const fld = scene(IF + 2 * BAR, SEC.interface.end, 'solid fb-card', `<canvas class="field" width="1440" height="1080"></canvas>
+    <span class="fe org cond" style="left:0;right:0;text-align:center;top:150px;font-size:40px;letter-spacing:.4em">INTERFACE FIELD</span>
+    <span class="fk mid" style="top:340px;font-size:140px">而是，共同优化</span><span class="fk mid" style="top:530px;font-size:132px">彼此之间的 Interface。</span>`);
+  const fc = root.querySelector(`${fld} canvas`), fg = fc.getContext('2d');
+  F.H(t => {
+    const t0 = IF + 2 * BAR;
+    if (t < t0 || t > SEC.interface.end) return;
+    fg.clearRect(0, 0, 1440, 1080);
+    for (let k = 0; k < 9; k++) {
+      const r = ((t - t0) * 420 + k * 130) % 1170 + 20, a = Math.max(0, 1 - r / 1170);
+      fg.strokeStyle = `rgba(255,106,19,${a * .85})`; fg.lineWidth = 8;
+      fg.beginPath();
+      for (let i = 0; i <= 8; i++) { const ang = Math.PI / 8 + i * Math.PI / 4; const x = 720 + r * Math.cos(ang), y = 540 + r * Math.sin(ang) * .92; i ? fg.lineTo(x, y) : fg.moveTo(x, y); }
+      fg.stroke();
+    }
+  });
+  flash(IF + 2 * BAR, .8);
+
+  // ───────── montage (56.0 – 68.8) ─────────
+  const MO = SEC.montage.t;
+  const FILES = [['ARIOSO', '目标 · 取舍', AV.arioso], ['ARIA', '情感 · 表达', AV.aria], ['RECITA', '证据 · 可行性', AV.recita], ['CODING', '代码 · 实现', null], ['MUSE', '主动 · 跟进', null]];
+  const TABS = ['人格', '技能', 'MCP', '协作', '成长', '日程'];
+  const space = scene(MO, MO + 2 * BAR, 'hud', `
+    <div class="top"><span>AGENT SPACE / 人员档案</span><span>PERSONNEL FILES</span></div>
+    <div class="files">${FILES.map(([nm, rl, img]) => `<div class="panel">${img ? `<img src="${img}" alt="">` : `<div class="noimg">${nm[0]}</div>`}<span class="nm">${nm}</span><span class="rl">${rl}</span><div class="tabs">${TABS.map(x => `<span class="${x === '协作' ? 'on' : ''}">${x}</span>`).join('')}</div></div>`).join('')}</div>
+    <p class="sub s1" style="top:760px">Agent 不再只是一个 Prompt。</p><p class="sub s2" style="top:760px">而是在 Forsion 中长期存在的数字协作者。</p>`);
+  F.K(`${space} .files .panel`, [[MO, { o: 0, y: 30 }], [MO + .3, { o: 1, y: 0 }, 'out']], { stagger: .12 });
+  F.S(`${space} .s1`, MO + .9, MO + BAR + .4); F.S(`${space} .s2`, MO + BAR + .4, 999);
+  const SKILLS = [['amadeus-note-format', 1], ['web-research', 1], ['document-writing-cn', 1], ['data-analysis-python', 1], ['code-review', 1], ['self-brainstorm', 1], ['automation-suggest', 0], ['skill-creator', 1]];
+  const OPS = ['查看', '搜索', '导入', '新建', '编辑', '复制', '停用'];
+  const sk = scene(MO + 2 * BAR, MO + 3 * BAR, 'hud', `
+    <div class="top"><span>GLOBAL SKILLS / 能力资产</span><span>15 SKILLS</span></div>
+    <div class="panel skills"><span class="lbl">SKILLS · 全局</span><div class="ops">${OPS.map(o => `<span>${o}</span>`).join('')}</div>
+    ${SKILLS.map(([s, on], i) => `<div class="row"><i>${String(i + 1).padStart(2, '0')}</i><span>${s}</span><b class="${on ? '' : 'off'}">${on ? 'ENABLED' : 'DISABLED'}</b></div>`).join('')}</div>`);
+  F.K(`${sk} .row`, [[MO + 2 * BAR, { o: 0 }], [MO + 2 * BAR + .01, { o: 1 }, 'step']], { stagger: .06 });
+  const opEls = root.querySelectorAll(`${sk} .ops span`);
+  F.H(t => { const i = Math.floor((t - MO - 2 * BAR - .2) / .19); opEls.forEach((el, k) => el.classList.toggle('on', k === i)); });
+  const SH = MO + 3 * BAR;
+  const sy = [220, 450, 680], ky = [180, 320, 460, 600, 740];
+  const EDGES = [[0, 0], [0, 1], [0, 3], [1, 1], [1, 2], [1, 4], [2, 0], [2, 2], [2, 3], [2, 4]];
+  const shared = scene(SH, SH + BAR, 'hud', `
+    <div class="top"><span>SHARED SKILLS / AGENT × SKILLS</span><span>共享 · 借用</span></div>
+    <svg class="graph" viewBox="0 0 1440 1080" aria-hidden="true">${EDGES.map(([a, s]) => `<path pathLength="1" d="M320 ${sy[a] + 85} C 620 ${sy[a] + 85}, 640 ${ky[s] + 38}, 930 ${ky[s] + 38}"/>`).join('')}</svg>
+    ${[AV.arioso, AV.aria, AV.recita].map((img, i) => `<img class="node-a" src="${img}" alt="" style="top:${sy[i]}px">`).join('')}
+    ${['web-research', 'document-writing-cn', 'code-review', 'data-analysis-python', 'self-brainstorm'].map((s, i) => `<div class="node-s" style="top:${ky[i]}px">${s}</div>`).join('')}
+    <p class="sub" style="top:900px">能力，不再绑定某一个 Agent。</p>`);
+  F.K(`${shared} .graph path`, [[SH + .1, { '--d': 1 }], [SH + .6, { '--d': 0 }, 'out']], { stagger: .07 });
+  const AM = MO + 4 * BAR;
+  const am = scene(AM, AM + 2 * BAR, 'hud', `
+    <div class="top"><span>TANGU → AMADEUS / 对话 → 成果</span><span>KNOWLEDGE</span></div>
+    <div class="panel chat"><span class="lbl">CONVERSATION · 临时</span><div class="bub me">把今天的发布结论整理一下。</div><div class="bub">结论：HUMAN.md 双层协作说明上线；Skills 可共享；新模型接入。已写入笔记。</div></div>
+    <div class="arrow">▶▶</div>
+    <div class="panel note"><span class="lbl">AMADEUS · NOTE</span><h4>Forsion 2.12 发布纪要</h4><div class="ln" style="width:92%"></div><div class="ln" style="width:78%"></div>
+      <p class="todo">发布前真人视觉验收</p><p class="todo">更新 HUMAN.md 示例</p>
+      <table><tr><td>模块</td><td>负责人</td><td>状态</td></tr><tr><td>HUMAN.md</td><td>Arioso</td><td>完成</td></tr><tr><td>Skills</td><td>Recita</td><td>验收</td></tr></table></div>
+    <p class="sub" style="top:830px">Conversation is temporary. Work should remain.<small>对话会过去，成果应当留下。</small></p>`);
+  F.K(`${am} .chat`, [[AM + .9, { o: 1 }], [AM + 1.6, { o: .3 }]]);
+  F.K(`${am} .note`, [[AM + .5, { o: 0, x: -60 }], [AM + 1.0, { o: 1, x: 0 }, 'out']]);
+  F.K(`${am} .note > *:not(.lbl)`, [[AM + 1.0, { o: 0 }], [AM + 1.01, { o: 1 }, 'step']], { stagger: .09 });
+  F.K(`${am} .arrow`, [[AM + .3, { o: 0, x: -20 }], [AM + .7, { o: 1, x: 20 }, 'out']]);
+  F.K(`${am} .sub`, [[AM + 1.6, { o: 0 }], [AM + 1.61, { o: 1 }, 'step']]);
+  const MD = MO + 6 * BAR;
+  const models = scene(MD, MD + BAR, 'hud', `
+    <div class="top"><span>INTELLIGENCE LAYER / 智能层</span><span>MODELS</span></div>
+    <div class="slots"><div class="slot">GPT-6 SOL<b>ONLINE</b></div><div class="slot">GPT-6 LUNA<b>ONLINE</b></div><div class="slot">CLAUDE OPUS 5.5<b>ONLINE</b></div><div class="slot ctx">CONTEXT · 更灵活的上下文管理</div></div>
+    <p class="sub" style="top:880px">Bring the intelligence you want.</p>`);
+  F.K(`${models} .slot`, [[MD + .05, { o: 0, x: -40 }], [MD + .25, { o: 1, x: 0 }, 'out']], { stagger: .15 });
+  const DV = MO + 7 * BAR;
+  const dev = scene(DV, SEC.montage.end, 'hud', `
+    <div class="top"><span>REMOTE · MOBILE / 多设备</span><span class="alt">● LINKED</span></div>
+    <div class="device pc"><div class="scr"><i style="width:80%"></i><i style="width:60%"></i><i style="width:72%"></i><i style="width:40%"></i></div><p style="top:470px">WORKSTATION · 项目 · 文件 · 工具</p></div>
+    <div class="wire"></div>
+    <div class="device ph"><div class="scr"><i style="width:90%"></i><i style="width:70%"></i></div><p style="top:470px">MOBILE</p></div>
+    <p class="sub" style="top:840px">协作，不被一台设备限制。</p>`);
+  F.K(`${dev} .wire`, [[DV, { '--p': 0 }], [SEC.montage.end, { '--p': 4 }, 'lin']]);
+  [MO, MO + 2 * BAR, SH, AM, MD, DV].forEach(t => flash(t, .45));
+
+  // ───────── finale (68.8 – 83.2) ─────────
+  const FI = SEC.finale.t;
+  card(FI, FI + BAR, [['For years, we have been building better Agents.', 'top:430px;font-size:48px;font-family:var(--f-display)', 'fe mid'], ['多年来，我们一直在建造更好的 Agent。', 'top:520px;font-size:42px;color:#9a9a9a', 'fe mid']]);
+  card(FI + BAR, FI + 2 * BAR, [['Forsion 2.12 begins working on the other half.', 'top:430px;font-size:48px', 'fe mid'], ['Forsion 2.12，开始补完另一半。', 'top:520px;font-size:42px;color:#9a9a9a', 'fe mid']]);
+  card(FI + 2 * BAR, FI + 3 * BAR, [['人类', 'left:112px;top:120px;font-size:90px'], ['HUMAN.', 'top:360px;font:900 250px/1 var(--f-display);letter-spacing:.02em', 'fe mid red']]);
+  flash(FI + 2 * BAR, .9);
+  card(FI + 3 * BAR, FI + 4 * BAR, [['不是让人类', 'left:110px;top:230px;font-size:220px'], ['适应 AI。', 'left:110px;top:520px;font-size:260px']]);
+  card(FI + 4 * BAR, FI + 5 * BAR, [['而是让人与 AI，', 'left:110px;top:230px;font-size:190px'], ['学会彼此适应。', 'left:110px;top:500px;font-size:240px']]);
+  card(FI + 5 * BAR, SEC.finale.end, [['第 2.12 话', 'left:112px;top:112px;font-size:76px'], ['人类', 'left:96px;top:222px;font-size:350px'],
+    ['补完计划', 'left:100px;top:578px;font-size:250px;transform:scaleX(.74)'], ['EPISODE 2.12<br><span style="font-size:48px">COMPLETE THE OTHER HALF.</span>', 'right:110px;top:876px;font-size:34px;text-align:right', 'fe'],
+    ['FORSION', 'left:114px;top:982px;font:600 26px var(--f-cond);letter-spacing:.6em;color:#8c8c8c', 'fe']]);
+  flash(FI + 5 * BAR, .9);
+
+  // ───────── release (83.2 – 86.4), then black ─────────
+  const RL = SEC.release.t;
+  const rel = scene(RL, LEN, 'solid', `<div class="rel"><img src="${LOGO}" alt=""><span class="nm">FORSION 2.12</span><span class="zh">现已发布</span><span class="url">forsion.net</span></div>`);
+  F.K(`${rel} .rel`, [[RL, { o: 0 }], [RL + .5, { o: 1 }], [SEC.release.end - .3, { o: 1 }], [LEN - .2, { o: 0 }]]);
+
+  // ───────── hex backdrop for the HUD scenes, flashes, projector weave ─────────
+  const hex = root.querySelector('.fb-hexbg'), hg = hex.getContext('2d'), hr = rng(12), R = 36;
+  for (let row = 0, y = 0; y < 1120; row++, y += R * 1.5) for (let x = (row % 2) * R * .866; x < 1480; x += R * 1.732) {
+    hg.beginPath(); for (let i = 0; i < 6; i++) { const a = Math.PI / 3 * i + Math.PI / 6; hg.lineTo(x + R * .94 * Math.cos(a), y + R * .94 * Math.sin(a)); } hg.closePath();
+    if (hr() > .965) { hg.fillStyle = 'rgba(227,22,27,.3)'; hg.fill(); }
+    hg.strokeStyle = 'rgba(255,106,19,.14)'; hg.lineWidth = 1.5; hg.stroke();
+  }
+  const HUD = ['half', 'humanmd', 'magi', 'layers', 'evolve', 'montage'].map(id => [SEC[id].t, SEC[id].end]);
+  F.H(t => { hex.style.display = HUD.some(([a, b]) => t >= a && t < b) ? '' : 'none'; });
+  flashes.sort((a, b) => a[0] - b[0]);
+  const fl = root.querySelector('.sb-flash');
+  F.H(t => { let o = 0; for (const [ft, fo] of flashes) if (t >= ft && t < ft + .18) o = Math.max(o, fo * (1 - (t - ft) / .18) ** 2); fl.style.opacity = o; });
+  const cards = F.q('.fb-card'), huds = F.q('.hud'), wr = rng(3), weave = [...Array(240)].map(() => [wr() * 2.4 - 1.2, wr() * 2.4 - 1.2, wr()]);
+  F.H(t => { const [jx, jy, f] = weave[Math.floor(t * 24) % 240]; for (const c of cards) c.style.translate = `${jx}px ${jy}px`; for (const h of huds) h.style.filter = `brightness(${.94 + f * .12})`; });
+
+  // ───────── capture or player ─────────
+  const capture = new URLSearchParams(location.search).get('capture');
+  if (capture) {
+    document.head.append(...document.querySelectorAll('body style, body link'));
+    document.body.replaceChildren(root);
+    document.body.style.margin = '0';
+    root.style.transform = 'none';
+    window.__stage = { w: 1440, h: 1080, dur: LEN, seek: t => F.render(t) };
+    F.render(0);
+    return;
+  }
+  const frame = root.parentElement;
+  const fit = () => { root.style.transform = `scale(${frame.clientWidth / 1440})`; };
+  new ResizeObserver(fit).observe(frame); fit();
+  const POSTER = SEC.title.t + BAR;
+  F.render(POSTER);
+  const audios = { battle: document.getElementById('score-battle'), choral: document.getElementById('score-choral') };
+  const playBtn = document.getElementById('film-play'), seek = document.getElementById('film-seek'), out = document.getElementById('film-time');
+  const scoreBtns = [...document.querySelectorAll('[data-score]')];
+  let score = 'battle', started = false;
+  const cur = () => audios[score];
+  const NAMES = { boot: '启动', cards: '标题卡', years: '多年来', half: '一半', question: '人类？', title: '片名', twosides: '两面', humanmd: 'HUMAN.md', asks: '问题', memory: 'MEMORY', magi: 'MAGI', layers: '双层', evolve: '进化', interface: 'Interface', montage: '系统', finale: '补完', release: '发布' };
+  const chapters = document.querySelector('.chapters');
+  chapters.innerHTML = CUES.sections.map(s => `<li><button type="button" data-t="${SEC[s.id].t}"><b>${SEC[s.id].t.toFixed(1)}</b>${NAMES[s.id]}</button></li>`).join('');
+  const chapterBtns = [...chapters.querySelectorAll('button')];
+  const go = t => { const a = cur(); a.currentTime = Math.max(0, Math.min(LEN, t)); started = true; F.render(a.currentTime); };
+  playBtn.addEventListener('click', () => { const a = cur(); if (a.paused) { if (a.ended) a.currentTime = 0; started = true; a.play().catch(() => { out.textContent = '浏览器拦截了播放，请再点一次'; }); } else a.pause(); });
+  frame.addEventListener('click', () => playBtn.click());
+  seek.addEventListener('input', () => go(+seek.value));
+  chapterBtns.forEach(b => b.addEventListener('click', () => { go(+b.dataset.t); cur().play().catch(() => {}); }));
+  scoreBtns.forEach(b => b.addEventListener('click', () => {
+    Object.values(audios).forEach(a => a.pause());
+    score = b.dataset.score;
+    scoreBtns.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    const a = cur(); a.currentTime = 0; started = true;
+    a.play().catch(() => {});
+  }));
+  const tick = () => {
+    const a = cur();
+    if (started) {
+      const t = Math.min(a.currentTime, LEN);
+      F.render(t);
+      seek.value = t;
+      out.textContent = `${t.toFixed(1)} / ${LEN.toFixed(1)}s`;
+      chapterBtns.forEach(b => b.classList.toggle('on', t >= +b.dataset.t && !chapterBtns.some(o => +o.dataset.t > +b.dataset.t && t >= +o.dataset.t)));
+    }
+    playBtn.textContent = a.paused ? '播放' : '暂停';
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  document.addEventListener('keydown', e => { if (e.code === 'Space' && !e.target.closest('input,button')) { e.preventDefault(); playBtn.click(); } });
+})();
+</script>

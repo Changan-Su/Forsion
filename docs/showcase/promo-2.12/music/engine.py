@@ -141,7 +141,9 @@ def mix(layers, length, reverb=None, master=None, target_peak_db=-1.0, fade_out=
         if gates:
             x = x * gate_env(total, gates, L.name)
         if os.environ.get('REPORT'):
-            rms = np.sqrt((x ** 2).mean()) + 1e-12
+            w = os.environ.get('REPORT_WIN')  # e.g. "69.2,72" to measure one passage
+            seg = x[int(float(w.split(',')[0]) * SR):int(float(w.split(',')[1]) * SR)] if w else x
+            rms = np.sqrt((seg ** 2).mean()) + 1e-12
             print(f'    {L.name:14s} rms {20 * np.log10(rms):6.1f} dB  peak {20 * np.log10(np.abs(x).max() + 1e-12):6.1f} dB')
         dry += x
         bus += x * L.send

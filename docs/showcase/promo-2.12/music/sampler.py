@@ -160,8 +160,10 @@ class SampleTrack:
             j = min(total, i + len(x))
             out[i:j] += x[: j - i]
         if self.ccs:
+            # like a MIDI channel: full expression until the first CC, then each value holds until the next
             ts, vs = zip(*sorted(self.ccs))
-            out *= np.interp(np.arange(total) / SR, ts, vs).astype(np.float32)[:, None]
+            idx = np.searchsorted(np.array(ts), np.arange(total) / SR, side='right') - 1
+            out *= np.where(idx >= 0, np.array(vs, np.float32)[np.maximum(idx, 0)], 1.0).astype(np.float32)[:, None]
         return out
 
 
