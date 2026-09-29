@@ -20,7 +20,6 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
-import { setRunClientTag } from '../src/seams/runContext.js';
 import { computerHistoryDir, COMPUTER_HISTORY_PERSIST_PLACEHOLDER, CH_DESKTOP_CONFIG_ENV } from '../src/services/computerHistory.js';
 import { normalizeHooksConfig, saveHooksConfig, syncUserTrust } from '../src/hooks/index.js';
 
@@ -117,8 +116,6 @@ afterEach(() => {
 });
 
 async function runToSettled(id: string, msg: string, extraInput: Record<string, unknown> = {}): Promise<any> {
-  // 前一个 run 的 clientTag 会经 ALS 渗进测试自己的上下文(createRun 会把它抄进没带 client 的 input)—— 先清掉
-  setRunClientTag(undefined);
   await createRun({
     id, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `A-${id}`,
     input: { message: msg, userMessageId: `U-${id}`, attachments: [], agentConfig: {}, ...extraInput },

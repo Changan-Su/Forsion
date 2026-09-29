@@ -7,7 +7,7 @@
  * - **write 级**风险(再加钩子、sshCommand、凭据助手等):提交 / 建分支 / 推送会执行 —— 未信任时拒,用户点「信任」后照他自己的配置跑。
  * 只看仓库级(local)配置与钩子目录:全局 / 系统配置是用户自己写的,本来就信。
  *
- * 信任记录住宿主家目录 `tanguHome()/git-trust.json`,按 git common dir 的 realpath + dev/ino 绑定 ——
+ * 信任记录住宿主家目录 `tanguHome()/git-trust.json`,按 git common dir 的 realpath + dev/ino + 创建时间绑定 ——
  * 授权绝不住在被授权的目录里;目录删了重建 / 换成另一个仓 = 不再信任(同 desktop dirIdentity 的口径)。
  */
 import { promises as fs } from 'node:fs';
@@ -84,7 +84,7 @@ export async function repoConfigRisks(cwd: string): Promise<RepoRisk | null> {
 
 // ── 信任记录 ──────────────────────────────────────────────────────────────
 
-interface TrustEntry { dev: number; ino: number; at: number }
+interface TrustEntry { dev: number; ino: number; birth?: number; at: number }
 const storeFile = (): string => path.join(tanguHome(), 'git-trust.json');
 
 async function readStore(): Promise<Record<string, TrustEntry>> {
@@ -94,16 +94,19 @@ async function readStore(): Promise<Record<string, TrustEntry>> {
   } catch { return {}; }
 }
 
-async function identity(commonDir: string): Promise<{ key: string; dev: number; ino: number } | null> {
+// 再绑目录的创建时间:Linux(ext4 等)删掉 .git 立刻重建,常会复用刚释放的 inode —— 只比 dev/ino 的话,
+// 同一路径删了重建 / 重新克隆的仓会继承旧信任(CI 的 Linux runner 上实测)。没记创建时间的旧记录一律不认(再问一遍)。
+// ponytail: 没有 birthtime 的文件系统 Node 回 0 或 ctime;回 ctime 时 .git 里增删文件就会让信任失效、再问一遍 —— 只会多问,不会误信。
+async function identity(commonDir: string): Promise<{ key: string; dev: number; ino: number; birth: number } | null> {
   const key = await fs.realpath(commonDir).catch(() => null);
   const st = key ? await fs.stat(key).catch(() => null) : null;
-  return key && st ? { key, dev: st.dev, ino: st.ino } : null;
+  return key && st ? { key, dev: st.dev, ino: st.ino, birth: st.birthtimeMs } : null;
 }
 
 export async function isRepoTrusted(commonDir: string): Promise<boolean> {
   const id = await identity(commonDir);
   const entry = id ? (await readStore())[id.key] : undefined;
-  return !!id && !!entry && entry.dev === id.dev && entry.ino === id.ino;
+  return !!id && !!entry && entry.dev === id.dev && entry.ino === id.ino && entry.birth === id.birth;
 }
 
 /** 记下「用户信任这个仓的配置」。ponytail: 读改写不加锁 —— 两个窗口同一毫秒各信任一个仓,后写的会盖掉先写的那条,
@@ -112,7 +115,7 @@ export async function trustRepo(commonDir: string): Promise<void> {
   const id = await identity(commonDir);
   if (!id) throw new Error('repository not found');
   const repos = await readStore();
-  repos[id.key] = { dev: id.dev, ino: id.ino, at: Date.now() };
+  repos[id.key] = { dev: id.dev, ino: id.ino, birth: id.birth, at: Date.now() };
   const file = storeFile();
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;

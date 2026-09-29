@@ -74,6 +74,7 @@ const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
   'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
+  'input.steer.queuedHint': { zh: '排队项在本轮结束后依次执行 · ↑ 取回编辑', en: 'Queued items run in order after this turn · ↑ to recall' },
   'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
   'input.tip.switchChat': { zh: '可以先切去别的会话，运行不会中断，侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
   'input.tip.quote': { zh: '划选回复里的文字，点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
@@ -209,6 +210,15 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
 
 export { fmtTokens } from './ContextUsagePop'
 
+/** 发出的正文:引用 token 行 + 引文 + 正文(上下文在前)。例外:/refine 必须留在最前 —— 引擎只认开头的 /refine
+ *  (isRefineInvocation);开着「自动引用当前笔记」时几乎每条都带引用行,前置会让 /refine 静默失效。 */
+export function composeOutgoing(refs: string, quoted: string, text: string): string {
+  // 前缀归一成小写:引擎检测大小写敏感,/Refine 会静默不触发(TUI 同口径)
+  if (/^\/refine(\s|$)/i.test(text)) text = '/refine' + text.slice('/refine'.length)
+  if (/^\/refine(\s|$)/.test(text) && (refs || quoted)) return `${text}\n\n${refs}${quoted}`.trimEnd()
+  return refs + quoted + text
+}
+
 /**
  * 输入框 autosize 的目标 style.height。**scrollHeight ≤ 0 = 元素当前没被布局**
  * (挂载时机处于 dockview 用 display:none 藏起的非激活面板 / 首启引导期隐藏的外壳里)——
@@ -325,8 +335,9 @@ export const Composer2: React.FC<{
   autoRefFromMain?: boolean
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
   sentHistory?: string[]
-  /** steer 等待区:run 跑动中已发出、还没被引擎注入的消息(注入即从这里消失并上屏)。 */
-  pendingSteer?: Array<{ id: string; text: string }>
+  /** steer 等待区:run 跑动中已发出、还没被引擎注入的消息(注入即从这里消失并上屏)。
+   *  localOnly = 排队项(/compact、/refine 及排在其后的消息),本轮结束后才执行。 */
+  pendingSteer?: Array<{ id: string; text: string; localOnly?: boolean }>
   /** 删除一条等待中的插话(文本仍留在 ↑ 历史)。 */
   onCancelSteer?: (msgId: string) => void
   /** ↑ 撤回:取回最新一条等待中的插话放回输入框。返回文本;来不及则 null。 */
@@ -456,7 +467,7 @@ export const Composer2: React.FC<{
     const msgs = sid ? st.messagesBySession[sid] || [] : []
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
     if (!lastUser) { st.toast(t('input.slash.nothingToRetry'), true); return }
-    st.regenerate(lastUser.id, sid)
+    await st.retry(sid) // 运行中排到本轮结束后,到时重跑那时的最后一条用户消息
   }
 
   // /export 高保真:经 REST 拉全量消息(含 tool_calls;内存 messagesBySession 只是渲染态切片),
@@ -734,9 +745,9 @@ export const Composer2: React.FC<{
       // 补成不带空格的「/think」:斜杠词还在,菜单保持打开并列出七档(带空格的话斜杠词就断了,菜单直接关掉 —— Codex r3a-4)
       '/think': onThinkingChange ? () => { replaceSlash('/think'); setSlashIndex(0) } : undefined,
       // /refine:插入原文让用户可补充说明,回车走普通发送——引擎检测 /refine 前缀注入复盘指令(agentLoop)。
-      // 仅 host 会话(工作笔记写在本机 agent 目录,manage_harness 也是 host-only);运行中不露出——
-      // 此时发送会变成 steer 注入,引擎的 refine 检测只在 run 开头跑一次,steer 进去的 /refine 不生效。
-      '/refine': isHost && !running ? () => { replaceSlash('/refine '); setSlashIndex(0) } : undefined,
+      // 仅 host 会话(工作笔记写在本机 agent 目录,manage_harness 也是 host-only)。引擎的 refine 检测只在
+      // run 开头跑,所以运行中发出的 /refine 不走 steer,由 store.send 排到本轮结束后(见 queueAfterRun)。
+      '/refine': isHost ? () => { replaceSlash('/refine '); setSlashIndex(0) } : undefined,
       '/approval': () => { setOpenMenu('mode'); close() },
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
       '/help': () => { app().openSettings('about'); close() },
@@ -749,7 +760,8 @@ export const Composer2: React.FC<{
       '/agent': () => { app().openSettings('agents'); close() },
       '/mcp': () => { app().openSettings('mcp'); close() },
       '/plugins': () => { app().openSettings('plugins'); close() },
-      '/memory': () => { app().openSettings('sync'); close() },
+      // 记忆 / 技能的云端同步 2026-09-28 起在「Forsion 云端 → 云端同步」;「同步」一级页只剩远程存储(没有 Forsion 云端时落回第一页)
+      '/memory': () => { app().openSettings('forsion/f-sync'); close() },
       '/config': () => { app().openSettings('general'); close() },
       '/login': window.tangu?.forsionLogin ? () => { app().openSettings('forsion'); close() } : undefined, // Forsion 账号面随 Extend 出现
       // Historian / Muse 的桌面入口在「特殊 Agent」名册页(没有各自独立的视图)。
@@ -1173,7 +1185,7 @@ export const Composer2: React.FC<{
     const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     const refs = allRefChips.length ? allRefChips.map((c) => c.token).join(' ') + '\n' : ''
-    const outgoing = refs + quoted + text
+    const outgoing = composeOutgoing(refs, quoted, text)
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
       return
@@ -1370,8 +1382,8 @@ export const Composer2: React.FC<{
               </div>
             ))}
             <div className="t2c-steer-foot">
-              <span className="t2c-steer-hint">{t('input.steer.hint')}</span>
-              {onSteerNow && (
+              <span className="t2c-steer-hint">{t(pendingSteer.some((p) => p.localOnly) ? 'input.steer.queuedHint' : 'input.steer.hint')}</span>
+              {onSteerNow && pendingSteer.some((p) => !p.localOnly) && (
                 <button className="t2c-steer-now" onClick={onSteerNow}><Zap size={11} /> {t('input.steer.now')}</button>
               )}
             </div>

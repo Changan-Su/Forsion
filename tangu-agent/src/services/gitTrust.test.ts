@@ -1,12 +1,12 @@
 /**
  * 仓库自带会执行程序的配置 × 用户信任(Codex 评审 09-27 P0):
  *   - 识别:过滤器 / include → read + write;hooksPath / sshCommand / 凭据助手 / 有执行位的钩子 → write;.sample 与没执行位的钩子不算
- *   - 信任记在宿主家目录,按 git common dir 的 dev/ino 绑定:删了重建的同名仓 = 不再信任
+ *   - 信任记在宿主家目录,按 git common dir 的 dev/ino + 创建时间绑定:删了重建的同名仓 = 不再信任(Linux 会复用 inode,只比 dev/ino 不够)
  *   - **零点击路径**:打开项目详情就跑的摘要、每个 run 开头的 [Git state],未信任时都不读改动 —— clean 过滤器一次都不跑
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isRepoTrusted, repoConfigRisks, trustRepo } from './gitTrust.js';
@@ -97,6 +97,23 @@ describe('信任记录', () => {
     expect(existsSync(path.join(process.env.TANGU_HOME!, 'git-trust.json'))).toBe(true);
     rmSync(path.join(cwd, '.git'), { recursive: true, force: true });
     git(cwd, 'init', '-q');
+    expect(await isRepoTrusted(common)).toBe(false);
+  });
+
+  it('inode 被复用也不认:dev/ino 相同、创建时间不同 → 不信任;没记创建时间的旧记录同样不认', async () => {
+    // Linux(ext4)删掉 .git 立刻重建常复用同一个 inode —— macOS 上复现不出来,这里直接改记录模拟「同 dev/ino、不同目录」
+    const cwd = repo('inode-reuse');
+    const common = (await repoConfigRisks(cwd))!.commonDir;
+    await trustRepo(common);
+    expect(await isRepoTrusted(common)).toBe(true);
+    const file = path.join(process.env.TANGU_HOME!, 'git-trust.json');
+    const store = JSON.parse(readFileSync(file, 'utf8'));
+    const key = Object.keys(store.repos).find((k) => k.endsWith(path.join('inode-reuse', '.git')))!;
+    store.repos[key].birth += 1;
+    writeFileSync(file, JSON.stringify(store));
+    expect(await isRepoTrusted(common)).toBe(false);
+    delete store.repos[key].birth;
+    writeFileSync(file, JSON.stringify(store));
     expect(await isRepoTrusted(common)).toBe(false);
   });
 });

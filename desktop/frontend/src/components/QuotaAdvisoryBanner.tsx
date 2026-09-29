@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowLeftRight, ArrowUpRight, RotateCcw, Settings2, X } 
 import { registerMessages, useI18n } from '../i18n'
 import {
   backgroundAdvisoryFor,
+  formatRemaining,
   pickQuotaAdvisory,
   publishAccountQuota,
   quotaAdvisoryFor,
@@ -13,32 +14,32 @@ import { museAvailable } from '../features/runtime'
 import { useApp } from '../stores/appStore'
 import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
 
-/** 横幅上「从主额度转入」一次转限额的这个百分比(本周期有效;设置页另有 5 / 10 / 20 可选)。 */
+/** 横幅上「从 AI 额度转入」一次转限额的这个百分比(本周期有效;「Forsion 云端 → 额度与积分」另有 5 / 10 / 20 可选)。 */
 const BANNER_CONVERT_PERCENT = 10
 
 registerMessages({
-  'quota.banner.period.daily': { zh: '今日托管 AI 额度', en: "Today's managed AI quota" },
-  'quota.banner.period.weekly': { zh: '本周托管 AI 额度', en: 'Weekly managed AI quota' },
-  'quota.banner.low': { zh: '{period}剩余 {percent}%', en: '{period} has {percent}% remaining' },
-  'quota.banner.near': { zh: '{period}即将用尽，仅剩 {percent}%', en: '{period} is almost used up, with {percent}% remaining' },
-  'quota.banner.critical': { zh: '{period}严重不足，仅剩 {percent}%', en: '{period} is critically low, with {percent}% remaining' },
+  // 用词与口径全端统一(2026-09-28 个人中心盘点 C4 / C8):AI 额度 / 后台额度 / 额度重置卡;{percent} 已带 %(<1% 也在内)
+  'quota.banner.period.daily': { zh: '今日 AI 额度', en: "Today's AI quota" },
+  'quota.banner.period.weekly': { zh: '本周 AI 额度', en: "This week's AI quota" },
+  'quota.banner.low': { zh: '{period}剩余 {percent}', en: '{period} has {percent} remaining' },
+  'quota.banner.near': { zh: '{period}即将用尽，仅剩 {percent}', en: '{period} is almost used up, with {percent} remaining' },
+  'quota.banner.critical': { zh: '{period}严重不足，仅剩 {percent}', en: '{period} is critically low, with {percent} remaining' },
   'quota.banner.exhausted': { zh: '{period}已用尽', en: '{period} is exhausted' },
   'quota.banner.autoDeduct': { zh: '{period}已用尽，正在使用积分自动抵扣', en: '{period} is exhausted; automatic points deduction is active' },
   'quota.banner.upgrade': { zh: '升级会员', en: 'Upgrade membership' },
-  'quota.banner.useReset': { zh: '使用重置卡 ({n})', en: 'Use reset card ({n})' },
-  'quota.banner.noReset': { zh: '暂无重置卡', en: 'No reset card' },
+  'quota.banner.useReset': { zh: '使用额度重置卡（{n}）', en: 'Use a quota reset card ({n})' },
+  'quota.banner.noReset': { zh: '暂无额度重置卡', en: 'No quota reset card' },
   'quota.banner.confirmReset': { zh: '再次点击确认', en: 'Click again to confirm' },
-  'quota.banner.resetDone': { zh: '已恢复今日与本周额度', en: "Today's and this week's quota has been restored" },
   'quota.banner.resetFail': { zh: '重置额度失败', en: 'Failed to reset quota' },
   'quota.banner.close': { zh: '关闭额度提示', en: 'Dismiss quota notice' },
-  'quota.banner.bg.period.daily': { zh: '后台 Agent 今日额度', en: "Background agents' daily quota" },
-  'quota.banner.bg.period.weekly': { zh: '后台 Agent 本周额度', en: "Background agents' weekly quota" },
+  'quota.banner.bg.period.daily': { zh: '今日后台额度', en: "Today's background quota" },
+  'quota.banner.bg.period.weekly': { zh: '本周后台额度', en: "This week's background quota" },
   'quota.banner.bg.exhausted': { zh: '{period}已用尽，Muse 与自动化已暂停', en: '{period} is exhausted; Muse and automations are paused' },
-  'quota.banner.bg.autoMain': { zh: '{period}已用尽，正在用主额度继续', en: '{period} is exhausted; continuing on your main quota' },
-  'quota.banner.bg.convert': { zh: '从主额度转入 {percent}%', en: 'Move {percent}% from main quota' },
-  'quota.banner.bg.convertDone': { zh: '已从主额度转入 {percent}%，本周期有效', en: 'Moved {percent}% from your main quota for this period' },
+  'quota.banner.bg.autoMain': { zh: '{period}已用尽，正在用 AI 额度继续', en: '{period} is exhausted; continuing on your AI quota' },
+  'quota.banner.bg.convert': { zh: '从 AI 额度转入 {percent}%', en: 'Move {percent}% from AI quota' },
+  'quota.banner.bg.convertDone': { zh: '已从 AI 额度转入 {percent}%，本周期有效', en: 'Moved {percent}% from your AI quota for this period' },
   'quota.banner.bg.convertFail': { zh: '转入失败', en: 'Failed to move quota' },
-  'quota.banner.bg.noMain': { zh: '主额度已用完，没有可转入的额度', en: 'Your main quota is used up; there is nothing to move' },
+  'quota.banner.bg.noMain': { zh: 'AI 额度已用完，没有可转入的额度', en: 'Your AI quota is used up; there is nothing to move' },
   'quota.banner.bg.settings': { zh: '后台额度设置', en: 'Background quota settings' },
 })
 
@@ -120,9 +121,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   if (dismissedKey === advisoryKey) return ceremonyEl
 
   const period = t(isBg ? `quota.banner.bg.period.${advisory.period}` : `quota.banner.period.${advisory.period}`)
-  const percent = advisory.remainingPercent > 0 && advisory.remainingPercent < 1
-    ? '<1'
-    : String(Math.max(0, Math.floor(advisory.remainingPercent)))
+  const percent = formatRemaining(advisory.remainingPercent, '')
   const messageKey = advisory.exhausted
     ? (isBg
       ? (quota.background?.autoMain ? 'quota.banner.bg.autoMain' : 'quota.banner.bg.exhausted')
@@ -214,7 +213,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
             {confirmConvert ? t('quota.banner.confirmReset') : t('quota.banner.bg.convert', { percent: String(BANNER_CONVERT_PERCENT) })}
           </button>
         )}
-        <button className="t2-quota-action settings" onClick={() => useApp.getState().openSettings('agents')}>
+        <button className="t2-quota-action settings" onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
           <Settings2 size={12} aria-hidden="true" /> {t('quota.banner.bg.settings')}
         </button>
       </span> : <span className="t2-quota-advisory-actions">

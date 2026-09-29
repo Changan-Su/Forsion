@@ -4,7 +4,7 @@
  * 裸 404 = 网关没这条路由 → 抛明确错误,绝不当「无结果」(否则模型会把「搜不到」当成「没聊过」)。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createHttpStateStore, enterRequestToken } from './httpStateStore.js';
+import { createHttpStateStore, runWithRequestToken } from './httpStateStore.js';
 
 const calls: Array<{ url: string; init: any }> = [];
 function stubFetch(status: number, body: unknown): void {
@@ -19,10 +19,9 @@ describe('HttpStateStore session recall', () => {
   it('posts the search to the gateway with the run token, without the abort signal in the body', async () => {
     stubFetch(200, [{ id: 's1', title: 't', summary: '', archived: 0, updated_at: '2026-09-13' }]);
     const store = createHttpStateStore({ cloudUrl: 'http://gw/', fleetSecret: 'fleet-key' });
-    enterRequestToken('tok-1');
     const ac = new AbortController();
-    const hits = await store.searchSessions({ userId: 'u1', appId: 'tangu', terms: ['插件'], limit: 3,
-      toolScope: { agentSlug: 'alpha' }, matchAny: true, signal: ac.signal });
+    const hits = await runWithRequestToken('tok-1', () => store.searchSessions({ userId: 'u1', appId: 'tangu', terms: ['插件'], limit: 3,
+      toolScope: { agentSlug: 'alpha' }, matchAny: true, signal: ac.signal }));
     expect(hits.map((h) => h.id)).toEqual(['s1']);
     expect(calls[0].url).toBe('http://gw/api/agent-state/sessions/search');
     expect(calls[0].init.method).toBe('POST');

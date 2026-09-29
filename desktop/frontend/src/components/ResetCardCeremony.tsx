@@ -2,22 +2,22 @@ import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, RotateCcw, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
-import type { AccountQuotaView } from '../services/accountQuota'
+import { formatRemaining, remainingPercent as remainingOf, type AccountQuotaView } from '../services/accountQuota'
 import './resetCardCeremony.css'
 
 registerMessages({
   'reset.ceremony.eyebrow': { zh: 'FORSION · 额度重置卡', en: 'FORSION · Quota reset card' },
   'reset.ceremony.title': { zh: '额度已焕新', en: 'Quota restored' },
   'reset.ceremony.both': { zh: '今日与本周额度已恢复', en: "Today's and this week's quota has been restored" },
-  'reset.ceremony.weekly': { zh: '本周额度已恢复', en: "This week's quota has been restored" },
   'reset.ceremony.dailyLabel': { zh: '今日', en: 'Today' },
   'reset.ceremony.weeklyLabel': { zh: '本周', en: 'This week' },
-  'reset.ceremony.remaining': { zh: '重置卡剩余 {n} 张', en: '{n} reset cards remaining' },
+  'reset.ceremony.remaining': { zh: '额度重置卡剩余 {n} 张', en: '{n} quota reset cards remaining' },
   'reset.ceremony.continue': { zh: '继续使用', en: 'Continue' },
   'reset.ceremony.close': { zh: '关闭', en: 'Close' },
 })
 
-export type ResetCardScope = 'both' | 'weekly'
+/** 服务端只收 'both'(周卡 2026-08-05 下线);保留类型名是给调用方一个显式的口径。 */
+export type ResetCardScope = 'both'
 
 export interface ResetCardResult {
   scope: ResetCardScope
@@ -26,18 +26,9 @@ export interface ResetCardResult {
   remainingCards?: number
 }
 
-/** 百分比以服务端剩余量为准；旧宿主只有「已用百分比」时才回退。 */
-function remainingPercent(quota: AccountQuotaView, period: 'daily' | 'weekly'): number | null {
-  const limit = Number(quota[`${period}Limit`])
-  if (!Number.isFinite(limit) || limit < 0) return null
-  if (limit === 0) return 0
-  const remainingValue = quota[`${period}Remaining`]
-  const remaining = remainingValue == null ? NaN : Number(remainingValue)
-  const usedValue = quota[`${period}Percent`]
-  const used = usedValue == null ? NaN : Number(usedValue)
-  const percent = Number.isFinite(remaining) ? remaining / limit * 100 : 100 - used
-  return Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null
-}
+/** 百分比与全端同一口径(services/accountQuota):以服务端剩余量为准,旧宿主只有「已用百分比」时才回退。 */
+const remainingPercent = (quota: AccountQuotaView, period: 'daily' | 'weekly'): number | null =>
+  remainingOf(quota[`${period}Limit`], quota[`${period}Remaining`], quota[`${period}Percent`])
 
 export function ResetCardCeremony({ result, onClose, returnFocusSelector }: { result: ResetCardResult; onClose: () => void; returnFocusSelector: string }) {
   const { t } = useI18n()
@@ -46,8 +37,7 @@ export function ResetCardCeremony({ result, onClose, returnFocusSelector }: { re
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const rows = useMemo(() => {
-    const periods: Array<'daily' | 'weekly'> = result.scope === 'weekly' ? ['weekly'] : ['daily', 'weekly']
-    return periods.map((period) => ({
+    return (['daily', 'weekly'] as const).map((period) => ({
       period,
       before: remainingPercent(result.before, period),
       after: remainingPercent(result.after, period),
@@ -96,12 +86,12 @@ export function ResetCardCeremony({ result, onClose, returnFocusSelector }: { re
         </div>
         <div className="reset-ceremony-eyebrow">{t('reset.ceremony.eyebrow')}</div>
         <h2 id="reset-ceremony-title">{t('reset.ceremony.title')}</h2>
-        <p id="reset-ceremony-description">{t(result.scope === 'weekly' ? 'reset.ceremony.weekly' : 'reset.ceremony.both')}</p>
+        <p id="reset-ceremony-description">{t('reset.ceremony.both')}</p>
         {rows.length > 0 && <div className="reset-ceremony-quotas">
           {rows.map(({ period, before, after }) => <div className="reset-ceremony-quota" key={period}>
             <div className="reset-ceremony-quota-copy">
               <span>{t(`reset.ceremony.${period}Label`)}</span>
-              <span className="reset-ceremony-values"><span>{before == null ? '—' : `${Math.round(before)}%`}</span><span aria-hidden="true">→</span><strong>{Math.round(after!)}%</strong></span>
+              <span className="reset-ceremony-values"><span>{before == null ? '—' : formatRemaining(before, '—')}</span><span aria-hidden="true">→</span><strong>{formatRemaining(after, '—')}</strong></span>
             </div>
             <div className="reset-ceremony-track" aria-hidden="true"><span style={{ '--reset-before': `${before ?? 0}%`, '--reset-after': `${after}%` } as React.CSSProperties} /></div>
           </div>)}

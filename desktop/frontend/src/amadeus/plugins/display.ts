@@ -35,18 +35,22 @@ export function localizedOnboarding(
 /** pluginStore.enable() 自动给每个启用插件塞的「工作文件夹」设置行的 key。人人都有 → 不算「有设置面板」。 */
 export const AUTO_WORK_FOLDER_KEY = 'workFolder'
 
+/** 首方内置包(locked)声明了 category 的自绘面板:挂进设置里的宿主一级页(「Forsion 云端」),不算详情页里的设置。 */
+export const isPlacedSettingsView = (plugin: { locked?: boolean } | undefined, view: { category?: string }): boolean =>
+  !!plugin?.locked && view.category === 'forsion'
+
 /** 够格在设置左栏单独占一项的插件:已启用,且除了自动那行 workFolder 之外还有真设置
- *  (声明式 registerSetting 行 或 registerSettingsView 自绘面板)。
+ *  (声明式 registerSetting 行 或 registerSettingsView 自绘面板;挂进宿主一级页的面板不算)。
  *  不这么滤的话每个启用插件都「有设置」,左栏会被几十个条目冲垮 —— 那比藏起来更糟。 */
-export function pluginsWithSettingsPanel<T extends { id: string }>(
+export function pluginsWithSettingsPanel<T extends { id: string; locked?: boolean }>(
   plugins: readonly T[],
   activeIds: readonly string[],
   settings: ReadonlyArray<{ pluginId: string; item: { key: string } }>,
-  settingsViews: ReadonlyArray<{ pluginId: string }>,
+  settingsViews: ReadonlyArray<{ pluginId: string; item: { category?: string } }>,
 ): T[] {
   return plugins.filter((p) => activeIds.includes(p.id) && (
     settings.some((o) => o.pluginId === p.id && o.item.key !== AUTO_WORK_FOLDER_KEY)
-    || settingsViews.some((o) => o.pluginId === p.id)
+    || settingsViews.some((o) => o.pluginId === p.id && !isPlacedSettingsView(p, o.item))
   ))
 }
 
