@@ -1369,13 +1369,15 @@ async function main() {
     sel: document.querySelectorAll('.amx-el-selbox, .amx-el-shape.is-sel').length,
     tf: getComputedStyle(document.querySelector('.amx-stage-inner')).transform,
   }))
+  // ⚠️ 终点停在舞台边缘 **40px 以内侧**(V-13 之后):贴边 32px 的边带里停着 = 拖到边缘自动平移(设计行为),
+  //    「视口没被平移」这条断言钉的是「空白拖不是平移手势」,不是「边带不许自动平移」—— 那一条由 C102 管。
   await p19.evaluate(() => {
     const stage = document.querySelector('.amx-stage')
     const r = stage.getBoundingClientRect()
     const mk = (t, x, y) => new PointerEvent(t, { bubbles: true, cancelable: true, pointerId: 8, button: 0, clientX: x, clientY: y })
     window.__r = r
     stage.dispatchEvent(mk('pointerdown', r.left + 3, r.top + 3))
-    stage.dispatchEvent(mk('pointermove', r.right - 3, r.bottom - 3))
+    stage.dispatchEvent(mk('pointermove', r.right - 40, r.bottom - 40))
   })
   await p19.waitForTimeout(120)
   const c21mid = await p19.evaluate(() => ({
@@ -1386,7 +1388,7 @@ async function main() {
   await p19.evaluate(() => {
     const stage = document.querySelector('.amx-stage')
     const r = window.__r
-    stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 8, button: 0, clientX: r.right - 3, clientY: r.bottom - 3 }))
+    stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 8, button: 0, clientX: r.right - 40, clientY: r.bottom - 40 }))
   })
   await p19.waitForTimeout(150)
   const c21 = await p19.evaluate(() => ({
@@ -3972,10 +3974,12 @@ async function main() {
   }
   const b1 = await box59()
   // 再把 NW 一路拖过对角:MIN_EL 夹住之后**对角必须还钉在原处**(拿增量硬夹会整体跟着指针走)
+  // ⚠️ 终点留在视口内、离边缘 > 32px(V-13):原来的 +400 会把指针拖出窗口底边,贴边即自动平移,
+  //    屏幕坐标上的「对角」就跟着视口挪了(盘上的几何仍对),断言量的是屏幕盒。
   if (g59.at) {
     await p59.mouse.move(b1.x - 5, b1.y - 5)
     await p59.mouse.down()
-    await p59.mouse.move(b1.x + 400, b1.y + 400, { steps: 8 })
+    await p59.mouse.move(b1.x + 300, b1.y + 200, { steps: 8 })
     await p59.mouse.up()
     await p59.waitForTimeout(300)
   }
