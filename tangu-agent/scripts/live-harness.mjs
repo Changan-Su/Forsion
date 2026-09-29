@@ -118,8 +118,6 @@ const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', '
   'remotesession',
   // P1-G5
   'remotebash',
-  // G3-02
-  'stalewrite',
   // P1-DL
   'deliver'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
