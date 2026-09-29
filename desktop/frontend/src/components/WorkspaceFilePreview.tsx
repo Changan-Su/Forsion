@@ -341,6 +341,8 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
   else if (error || !data) body = (
     <div className="wsfile-center wsfile-fallback">
       <FileWarning size={26} /><div>{error === 'not-found' ? t('preview.notFound') : t('preview.loadFailed')}</div>
+      {/* 预览失败不等于下载也不行(P1-DL):与 tooLarge 那格一样给下载位 */}
+      {target.download && <button className="btn ghost sm" onClick={target.download}><Download size={13} /> {t('preview.download')}</button>}
     </div>
   )
   else if (kind === 'image') body = blobUrl ? <ImageView src={blobUrl} alt={target.name} view={imgView} setView={setImgView} /> : null

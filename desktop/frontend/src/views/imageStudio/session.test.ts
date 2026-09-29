@@ -9,6 +9,7 @@ vi.mock('../../stores/imageStudioStore', () => ({ useImageStudio: { getState: ()
 vi.mock('../../services/backendService', () => ({ createSession: state.createSession }))
 vi.mock('@lcl/engine', () => ({ useWorkspace: { getState: () => ({ openView: state.openView }) } }))
 import { ensureImageSession, promptImageStudio } from './session'
+import { homeTarget } from '../../services/engine/targets'
 beforeEach(() => {
   vi.clearAllMocks()
   state.studio.boards = { a: { id: 'a', name: 'A', sessionId: null }, b: { id: 'b', name: 'B', sessionId: 'session-b' } }
@@ -20,7 +21,10 @@ describe('Image Studio native session seam', () => {
     state.createSession.mockResolvedValue({ id: 'session-a' })
     expect(await Promise.all([ensureImageSession('a'), ensureImageSession('a')])).toEqual(['session-a', 'session-a'])
     expect(state.createSession).toHaveBeenCalledTimes(1)
-    expect(state.createSession).toHaveBeenCalledWith({}, expect.objectContaining({ title: 'A', projectless: true, agent_config: { execMode: 'sandbox', agentSlug: 'designer' } }))
+    // P1-K6 S3:图片工作室的会话建在本端(home 类:homeTarget() 活目标,按对象身份比)
+    const [target, init] = state.createSession.mock.calls[0]
+    expect(target).toBe(homeTarget())
+    expect(init).toEqual(expect.objectContaining({ title: 'A', projectless: true, agent_config: { execMode: 'sandbox', agentSlug: 'designer' } }))
     expect(state.studio.boards.a.sessionId).toBe('session-a')
   })
   it('keeps a late session result with the source project and never injects into a switched composer', async () => {

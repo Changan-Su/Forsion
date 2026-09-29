@@ -13,6 +13,7 @@ import { startWechatLogin, pollWechatLogin, type ChannelConfigPatch } from '../s
 import { QrImage } from './QrImage'
 import type { ChannelKind, TanguDesktopConfig } from '../types'
 import { SettingsState } from './SettingsPrimitives'
+import { homeTarget } from '../services/engine/targets'
 
 const ICONS: Record<ChannelKind, React.ReactNode> = {
   wechat: <MessageCircle size={16} />,
@@ -45,7 +46,7 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
     const timer = window.setInterval(() => {
       void (async () => {
         try {
-          const r = await pollWechatLogin(p.cfg, qr.loginId)
+          const r = await pollWechatLogin(homeTarget(), qr.loginId)
           if (canceled) return
           if (r.status === 'confirmed') {
             setQr(null)
@@ -88,7 +89,7 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
   const doConnect = (ch: ChannelStatus) => void withBusy(ch.kind, async () => {
     if (ch.kind === 'wechat') {
       if (!ch.enabled) await useChannels.getState().save('wechat', { enabled: true })
-      const r = await startWechatLogin(p.cfg, { approval_mode: ch.approvalMode })
+      const r = await startWechatLogin(homeTarget(), { approval_mode: ch.approvalMode })
       setQr({ loginId: r.loginId, img: r.qrcodeImg, status: 'pending' })
     } else {
       const r = await useChannels.getState().connect(ch.kind)

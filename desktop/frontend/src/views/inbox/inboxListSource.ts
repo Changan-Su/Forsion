@@ -20,6 +20,7 @@ import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugi
 import { translate } from '../../i18n'
 import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
+import { homeAgentAvatars, subscribeHomeAgents } from '../../stores/homeCatalog'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
 
@@ -48,7 +49,7 @@ const sourceKind = (m: InboxMessage): SourceKind => {
 const sourceKey = (m: InboxMessage): string => `${SOURCE}${sourceKind(m)}`
 
 function toItem(m: InboxMessage): ListItem {
-  const avatar = m.sender_kind === 'agent' && m.sender_id ? useApp.getState().agentAvatars[m.sender_id] : undefined
+  const avatar = m.sender_kind === 'agent' && m.sender_id ? homeAgentAvatars()[m.sender_id] : undefined
   return {
     key: m.id,
     title: m.title,
@@ -105,8 +106,8 @@ export const inboxListSource: ListSourceContribution = {
     void st.refreshUnread()
     void st.refreshArchived()
     const offInbox = useInbox.subscribe(cb)
-    // 发信人名字 / 头像来自 appStore:只在这两样变了才通知(appStore 流式时变得很勤,别跟着整表重渲)。
-    const offApp = useApp.subscribe((s, p) => { if (s.agentDefs !== p.agentDefs || s.agentAvatars !== p.agentAvatars) cb() })
+    // 发信人名字 / 头像来自本端的 Agent 目录(stores/homeCatalog):只在这两样变了才通知(appStore 流式时变得很勤,别跟着整表重渲)。
+    const offApp = subscribeHomeAgents(cb)
     return () => { offInbox(); offApp() }
   },
   actions: [

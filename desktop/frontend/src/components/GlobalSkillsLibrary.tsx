@@ -10,6 +10,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { CapabilityMenu } from './CapabilityMenu'
 import { Markdown } from './Markdown'
 import './globalSkillsLibrary.css'
+import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
   'globalSkills.title': { zh: '全局技能', en: 'Global skills' },
@@ -134,7 +135,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    const [localResult, cloudResult] = await Promise.allSettled([listSkillCatalog(cfg), listSkills(cfg)])
+    const [localResult, cloudResult] = await Promise.allSettled([listSkillCatalog(homeTarget()), listSkills(homeTarget())])
     if (localResult.status === 'fulfilled') {
       setCatalog(localResult.value.filter((skill) => skill.scope === 'user'))
       setCatalogError('')
@@ -176,7 +177,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
     setDetail(null)
     setDetailError('')
     setDetailLoading(true)
-    void getSkillCatalogEntry(cfg, selected.key)
+    void getSkillCatalogEntry(homeTarget(), selected.key)
       .then((skill) => { if (active) setDetail(skill) })
       .catch((error) => { if (active) setDetailError(t('globalSkills.loadFailed', { error: String(error?.message || error) })) })
       .finally(() => { if (active) setDetailLoading(false) })
@@ -219,24 +220,24 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
     const draft = editor
     if (draft.kind === 'create') {
       if (!draft.name.trim() || !draft.slug.trim() || !draft.description.trim() || !draft.content.trim()) return
-      await run(async () => { const created = await createSkillCatalogEntry(cfg, { scope: 'user', slug: draft.slug.trim(), name: draft.name.trim(), description: draft.description.trim(), content: draft.content }); setSelected({ kind: 'catalog', key: created.key }) }, t('globalSkills.saved'))
+      await run(async () => { const created = await createSkillCatalogEntry(homeTarget(), { scope: 'user', slug: draft.slug.trim(), name: draft.name.trim(), description: draft.description.trim(), content: draft.content }); setSelected({ kind: 'catalog', key: created.key }) }, t('globalSkills.saved'))
     } else if (draft.kind === 'edit') {
       if (!draft.name.trim() || !draft.description.trim() || !draft.content.trim()) return
       await run(async () => {
-        const latest = await getSkillCatalogEntry(cfg, draft.key)
+        const latest = await getSkillCatalogEntry(homeTarget(), draft.key)
         if (latest.name !== draft.baseline.name || latest.description !== draft.baseline.description || latest.content !== draft.baseline.content) throw new Error(t('globalSkills.editConflict'))
-        return updateSkillCatalogEntry(cfg, draft.key, { name: draft.name.trim(), description: draft.description.trim(), content: draft.content })
+        return updateSkillCatalogEntry(homeTarget(), draft.key, { name: draft.name.trim(), description: draft.description.trim(), content: draft.content })
       }, t('globalSkills.saved'))
-      const updated = await getSkillCatalogEntry(cfg, draft.key).catch(() => null)
+      const updated = await getSkillCatalogEntry(homeTarget(), draft.key).catch(() => null)
       if (updated) setDetail(updated)
     } else if (draft.kind === 'import') {
       if (!draft.sourcePath) return
-      await run(async () => { const imported = await importSkillCatalogEntry(cfg, { scope: 'user', sourcePath: draft.sourcePath, ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}) }); setSelected({ kind: 'catalog', key: imported.key }) }, t('globalSkills.imported'))
+      await run(async () => { const imported = await importSkillCatalogEntry(homeTarget(), { scope: 'user', sourcePath: draft.sourcePath, ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}) }); setSelected({ kind: 'catalog', key: imported.key }) }, t('globalSkills.imported'))
     } else {
       if (draft.target === 'agent' && !draft.agentSlug) return
       const targetName = draft.target === 'user' ? t('globalSkills.mine') : agents.find((a) => a.slug === draft.agentSlug)?.name || draft.agentSlug
       await run(async () => {
-        const copied = await copySkillCatalogEntry(cfg, draft.key, { scope: draft.target, ...(draft.target === 'agent' ? { agentSlug: draft.agentSlug } : {}), ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}) })
+        const copied = await copySkillCatalogEntry(homeTarget(), draft.key, { scope: draft.target, ...(draft.target === 'agent' ? { agentSlug: draft.agentSlug } : {}), ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}) })
         if (draft.target === 'user') setSelected({ kind: 'catalog', key: copied.key })
       }, t('globalSkills.copied', { name: targetName }))
     }
@@ -249,17 +250,17 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   }
   const startCopy = async (skill: SkillCatalogEntry, target: 'user' | 'agent'): Promise<void> => {
     try {
-      const available = target === 'agent' ? await listAgents(cfg) : []
+      const available = target === 'agent' ? await listAgents(homeTarget()) : []
       setAgents(available)
       setEditor({ kind: 'copy', key: skill.key, target, agentSlug: available[0]?.slug || '', slug: skill.compatibility ? slugFromName(skill.name, '') : target === 'user' ? `${skill.slug}-custom` : '' })
       setMessage('')
     } catch (error: any) { setMessage(t('globalSkills.actionFailed', { error: String(error?.message || error) })) }
   }
   const publish = async (skill: SkillCatalogEntry): Promise<void> => {
-    const detailed = detail?.key === skill.key ? detail : await getSkillCatalogEntry(cfg, skill.key)
+    const detailed = detail?.key === skill.key ? detail : await getSkillCatalogEntry(homeTarget(), skill.key)
     const attached = (detailed.files || []).filter((file) => file.path !== 'SKILL.md')
     if (attached.length && !window.confirm(t('globalSkills.publishWarning', { count: attached.length }))) return
-    await run(() => uploadSkillToCloud(cfg, skill.id), t('globalSkills.published'))
+    await run(() => uploadSkillToCloud(homeTarget(), skill.id), t('globalSkills.published'))
   }
   const provenanceLabel = (skill: SkillCatalogEntry): string => t(skill.provenance === 'user' ? 'globalSkills.fromUser' : skill.provenance === 'bundle' ? 'globalSkills.fromBundle' : 'globalSkills.fromBuiltin')
   const statusLabel = (skill: SkillCatalogEntry): string => t(skill.availability === 'disabled' ? 'globalSkills.disabled' : skill.availability === 'shadowed' ? 'globalSkills.shadowed' : 'globalSkills.available')
@@ -319,8 +320,8 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
             {selectedCatalog.readOnly && <button type="button" className="btn ghost sm" onClick={() => void startCopy(selectedCatalog, 'user')}><Copy size={13} />{t('globalSkills.copyToMine')}</button>}
             {selectedCatalog.provenance === 'user' && selectedCatalog.availability === 'available' && <button type="button" className="btn ghost sm" onClick={() => void publish(selectedCatalog)} disabled={busy}><UploadCloud size={13} />{t('globalSkills.publish')}</button>}
             {!selectedCatalog.compatibility && <div className="gsk-more"><CapabilityMenu label={t('globalSkills.more')} className="icon-btn" items={[
-              ...(selectedCatalog.availability !== 'shadowed' ? [{ id: 'pause', label: t(selectedCatalog.disabled ? 'globalSkills.resume' : 'globalSkills.pause'), onSelect: () => void run(() => setSkillCatalogEntryDisabled(cfg, selectedCatalog.key, !selectedCatalog.disabled), t('globalSkills.saved')) }] : []),
-              ...(!selectedCatalog.readOnly ? [{ id: 'delete', label: t('globalSkills.delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => { if (window.confirm(t('globalSkills.deleteConfirm', { name: selectedCatalog.name }))) void run(() => deleteSkillCatalogEntry(cfg, selectedCatalog.key), (result) => t('globalSkills.deleted', { path: result.backupPath || '' }), null) } }] : []),
+              ...(selectedCatalog.availability !== 'shadowed' ? [{ id: 'pause', label: t(selectedCatalog.disabled ? 'globalSkills.resume' : 'globalSkills.pause'), onSelect: () => void run(() => setSkillCatalogEntryDisabled(homeTarget(), selectedCatalog.key, !selectedCatalog.disabled), t('globalSkills.saved')) }] : []),
+              ...(!selectedCatalog.readOnly ? [{ id: 'delete', label: t('globalSkills.delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => { if (window.confirm(t('globalSkills.deleteConfirm', { name: selectedCatalog.name }))) void run(() => deleteSkillCatalogEntry(homeTarget(), selectedCatalog.key), (result) => t('globalSkills.deleted', { path: result.backupPath || '' }), null) } }] : []),
             ]}><MoreHorizontal size={16} /></CapabilityMenu></div>}
 
           </div>
@@ -330,7 +331,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
         </> : selectedCloud ? <>
           <div className="gsk-detail-head"><div><span>{t('globalSkills.cloud')}</span><h3>{selectedCloud.name}</h3><p>{selectedCloud.description}</p></div></div>
           <p className="gsk-cloud-note">{t('globalSkills.cloudExplanation')}</p><p className="gsk-cloud-note">{t('globalSkills.cloudPreview')}</p>
-          <div className="gsk-actions"><button className="btn ghost sm" type="button" disabled={busy} onClick={() => { if (window.confirm(t('globalSkills.deleteCloudConfirm', { name: selectedCloud.name }))) void run(() => deleteUserCloudSkill(cfg, selectedCloud.id), t('globalSkills.cloudDeleted'), null) }}><Trash2 size={13} />{t('globalSkills.delete')}</button></div>
+          <div className="gsk-actions"><button className="btn ghost sm" type="button" disabled={busy} onClick={() => { if (window.confirm(t('globalSkills.deleteCloudConfirm', { name: selectedCloud.name }))) void run(() => deleteUserCloudSkill(homeTarget(), selectedCloud.id), t('globalSkills.cloudDeleted'), null) }}><Trash2 size={13} />{t('globalSkills.delete')}</button></div>
         </> : <div className="gsk-placeholder"><Sparkles size={22} /><p>{t('globalSkills.pick')}</p></div>}
       </div>
     </div>

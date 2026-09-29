@@ -1,0 +1,30 @@
+/* P1-K7a 侧栏「我的电脑」分组。几何全部派生工作区组头 / 会话行(.t2s-group / .t2s-srow,sidebar2.css),
+   这里只加状态说明与空态。字号只用六档角色(check:uiscale)。 */
+.t2d-sections { display: flex; flex-direction: column; margin-top: 4.5px; }
+/* 组头:名字照组头的大写小字,状态说明是普通 meta 文本(不大写、不加粗),靠右、可省略 */
+.t2d-toggle { gap: 6px; }
+.t2d-name { flex: 0 1 auto; }
+.t2d-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ui-font-caption, 11px);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-faint, var(--text-muted));
+}
+.t2d-status[data-tone='warn'] { color: var(--warning, var(--text-muted)); }
+.t2d-emoji { display: inline-flex; width: 1em; justify-content: center; font-size: var(--ui-font-body, 13px); line-height: 1; }
+.t2d-empty {
+  padding: 4.5px 6px 6px 30px;
+  color: var(--text-faint, var(--text-muted));
+  font-size: var(--ui-font-meta, 12px);
+}
+/* 触屏没有 hover:行菜单常显(DESIGN §6「工作区共享列表」) */
+@media (pointer: coarse) {
+  .t2d-section .t2s-srow-menu { opacity: 0.7; }
+}

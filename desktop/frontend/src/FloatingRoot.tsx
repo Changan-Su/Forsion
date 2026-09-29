@@ -19,6 +19,7 @@ import { BtwPanel } from './views/chat2/BtwPanel'
 import { btwSeedOf } from './views/chat2/btwStore'
 import { listSkills } from './services/backendService'
 import { floatingPanelTitle } from './floatingPanelTitle'
+import { homeTarget } from './services/engine/targets'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -48,7 +49,7 @@ export function FloatingRoot() {
       window.dispatchEvent(new Event('forsion:agents-changed'))
     }
     if (action === 'skills-changed') {
-      void listSkills(useApp.getState().cfg).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
+      void listSkills(homeTarget()).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
       window.dispatchEvent(new Event('forsion:skills-changed'))
     }
   }), [])

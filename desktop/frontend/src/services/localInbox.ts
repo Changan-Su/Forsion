@@ -10,7 +10,7 @@
  * 类型经 `import type` 引自 backendService(仅类型、编译期擦除,无运行时循环依赖)。
  */
 import type { InboxMessage, InboxFilter } from './backendService'
-import type { TanguDesktopConfig } from '../types'
+import { cloudApiBase, type EngineTarget } from './engine/targets'
 
 const KEY = 'tangu_inbox_msgs'
 
@@ -42,6 +42,21 @@ const cmp = (a: string | null, b: string | null): number => (a || '').localeComp
 const byCreatedDesc = (a: StoredMsg, b: StoredMsg): number => cmp(b.created_at, a.created_at)
 const byArchivedDesc = (a: StoredMsg, b: StoredMsg): number => cmp(b.archived_at, a.archived_at)
 
+/** P1-K3:到期惰性归档(与引擎读端 routes/inbox.ts 同口径):expires_at ≤ now 且未归档 → 写 archived_at。两侧都是 UTC 秒级串,字典序即时间序。
+ *  list 与 unreadCount 都先过它 —— 只在 list 里做的话,未读角标会一直数着过期的审批提醒。返回是否改了(调用方据此落盘)。 */
+function archiveExpired(rows: StoredMsg[], now: string): boolean {
+  let changed = false
+  for (const m of rows) {
+    if (!m.deleted_at && !m.archived_at && m.expires_at && m.expires_at <= now) { m.archived_at = now; changed = true }
+  }
+  return changed
+}
+function loadLive(now: string): StoredMsg[] {
+  const rows = loadAll()
+  if (archiveExpired(rows, now)) saveAll(rows)
+  return rows
+}
+
 /** 广播游标 = 本地广播来源(origin_broadcast_id 非空)消息的 max created_at(含软删,微秒原文;对齐后端 pull 语义)。 */
 function broadcastCursor(rows: StoredMsg[]): string {
   let max = ''
@@ -53,7 +68,7 @@ export const localInbox = {
   /** = listInbox。filter 语义照抄 routes/inbox.ts:60-107。 */
   async list(filter: InboxFilter = 'all'): Promise<InboxMessage[]> {
     const now = nowStr()
-    const live = loadAll().filter((m) => !m.deleted_at)
+    const live = loadLive(now).filter((m) => !m.deleted_at)
     let rows: StoredMsg[]
     if (filter === 'unread') rows = live.filter((m) => !m.archived_at && delivered(m, now) && !m.read_at).sort(byCreatedDesc)
     else if (filter === 'archived') rows = live.filter((m) => !!m.archived_at).sort(byArchivedDesc)
@@ -64,7 +79,7 @@ export const localInbox = {
   /** = getInboxUnreadCount。count=未读且已投递未归档;latestId=已投递非归档里 created_at 最新(含已读)。 */
   async unreadCount(): Promise<{ count: number; latestId: string | null }> {
     const now = nowStr()
-    const visible = loadAll().filter((m) => !m.deleted_at && !m.archived_at && delivered(m, now))
+    const visible = loadLive(now).filter((m) => !m.deleted_at && !m.archived_at && delivered(m, now))
     const count = visible.filter((m) => !m.read_at).length
     const latest = [...visible].sort(byCreatedDesc)[0]
     return { count, latestId: latest?.id ?? null }
@@ -100,15 +115,18 @@ export const localInbox = {
     return { ok: true }
   },
 
-  /** = pullInbox。拉云端可达的 /brain/inbox/broadcasts(JWT,零 server 改)upsert 进本地。 */
-  async pull(cfg: TanguDesktopConfig): Promise<{ pulled: boolean; added: number; detail?: string }> {
-    const base = (cfg.backendUrl || '').replace(/\/$/, '')
-    if (!base || !cfg.token) return { pulled: false, added: 0, detail: 'no backend/token' }
+  /** = pullInbox。拉云端可达的 /brain/inbox/broadcasts(JWT,零 server 改)upsert 进本地。
+   *  P1-K6:广播是**云端 API**,基址读 cloudApiBase()(引擎切到「我的电脑」后 backendUrl 就不是云网关了);
+   *  凭据仍是移动端 home 目标的鉴权头(= forsion_token)。 */
+  async pull(t: EngineTarget): Promise<{ pulled: boolean; added: number; detail?: string }> {
+    const base = cloudApiBase()
+    const auth = (await t.headers(false)).Authorization || ''
+    if (!base || !/^Bearer \S/.test(auth)) return { pulled: false, added: 0, detail: 'no backend/token' }
     const cursor = broadcastCursor(loadAll())
     const url = `${base}/brain/inbox/broadcasts${cursor ? `?since=${encodeURIComponent(cursor)}` : ''}`
-    let data: { broadcasts?: Array<{ id: string; title: string; body: string; created_at: string }> }
+    let data: { broadcasts?: Array<{ id: string; title: string; body: string; created_at: string; thread?: unknown; expires_at?: unknown }> }
     try {
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${cfg.token}` } })
+      const r = await fetch(url, { headers: { Authorization: auth } })
       if (!r.ok) return { pulled: false, added: 0, detail: `broadcasts ${r.status}` }
       data = await r.json()
     } catch (e: any) { return { pulled: false, added: 0, detail: e?.message || 'network' } }
@@ -122,6 +140,9 @@ export const localInbox = {
         id: `bc:${b.id}`, title: b.title, body: b.body,
         sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: b.id,
         read_at: null, archived_at: null, created_at: b.created_at, deleted_at: null,
+        // P1-K3:线程判别(审批提醒 / 反馈线程)原文串照存,解析与信任裁决在读端(approvalThreadOf / inboxThreadOf);有效期 UTC 秒级串
+        ...(typeof b.thread === 'string' && b.thread && b.thread.length <= 2000 ? { thread: b.thread } : {}),
+        ...(typeof b.expires_at === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(b.expires_at) ? { expires_at: b.expires_at } : {}),
       })
       seen.add(b.id)
       added++

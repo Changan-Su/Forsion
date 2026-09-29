@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startRun } from './agentRunService'
+import { connectionTarget } from './engine/targets'
 
 const cfg = {
   backendUrl: 'https://example.test',
@@ -24,7 +25,7 @@ describe('startRun client tag', () => {
     // agentRunService 可能先被其它共享模块求值；端类型不能在模块加载时永久冻结。
     vi.stubGlobal('window', { tangu })
 
-    await startRun(cfg, { sessionId: 's', message: 'hello' })
+    await startRun(connectionTarget(cfg), { sessionId: 's', message: 'hello' })
 
     const init = vi.mocked(fetch).mock.calls[0]?.[1]
     const body = JSON.parse(String(init?.body || '{}'))

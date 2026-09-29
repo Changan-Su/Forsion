@@ -14,14 +14,15 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { getRunForUser } from '../services/runStore.js';
-import { resolveApproval, customRules, type ApprovalAction, type CustomApprovalRules } from '../services/approvals.js';
+import { resolveApproval, approvalLocalOnly, customRules, APPROVAL_LOCAL_ONLY_BODY, type ApprovalAction, type CustomApprovalRules } from '../services/approvals.js';
 import { saveSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { parseDeskShotBody, resolveDeskShot } from '../services/deskCapture.js';
 import { resolveUiAction } from '../services/uiAck.js';
 import { normalizeUiValues, sanitizeText } from './runs.js';
-import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody, taintRunRemote } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody, taintRunRemote, type RemoteInfo } from '../services/remoteOrigin.js';
+import { listPrompts, onPromptChange, promptsRev, sessionAttention, sweepTerminal, type AnswerBy, type PendingPrompt } from '../services/pendingPromptIndex.js';
 
 const router = Router();
 
@@ -91,6 +92,75 @@ router.put('/agent/approval-rules', authMiddleware, async (req, res) => {
   }
 });
 
+// ── 待批索引(P1 · K3,services/pendingPromptIndex.ts)──────────────────────────────────────────
+// 两条都 host-only(同 approval-rules:云端 worker 没有进程内审批,也不该暴露跨用户的进程级视图)。
+
+/** 兑现请求从哪来:无 x-forsion-remote = 本机;有 = 来路(不在契约内 → 'remote'),K1 验过的调用方才带设备。 */
+function answerByOf(remote: RemoteInfo | undefined): AnswerBy {
+  if (!remote) return { via: 'local' };
+  return {
+    via: remote.via ?? 'remote',
+    ...(remote.callerUnit ? { callerUnit: remote.callerUnit, ...(remote.callerName ? { callerName: remote.callerName } : {}) } : {}),
+  };
+}
+
+//   GET /agent/approvals/pending[?rev=<rev>] → { rev, unchanged: true } | { rev, sessions: SessionAttention[] }
+// 远端可读(会话列表「等你处理」点):**只给计数** —— 不给审批 id / preview / 参数 / 工具名;卡片内容照旧来自 run 事件流。
+router.get('/agent/approvals/pending', authMiddleware, async (req, res) => {
+  try {
+    if (!localOnly()) return res.status(404).json({ detail: 'not available in this deployment' });
+    await sweepTerminal();
+    const rev = promptsRev();
+    if (typeof req.query.rev === 'string' && req.query.rev === rev) return res.json({ rev, unchanged: true });
+    // 逐字段重建(不透传 sessionAttention 的对象):响应形状由这里钉死,明天索引加字段也不会顺手外泄。
+    const sessions = sessionAttention().map((a) => ({
+      sessionId: a.sessionId, approvals: a.approvals, inquiries: a.inquiries, localOnly: a.localOnly, oldestAt: a.oldestAt, remote: a.remote,
+    }));
+    res.json({ rev, sessions });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'pending approvals failed' });
+  }
+});
+
+/** 流里的条目:不含 preview / 参数(通知不展示命令 —— 锁屏可见,截断的命令会误导批准)。createdAt 转 ISO。 */
+function wireOf(p: PendingPrompt): Record<string, unknown> {
+  return {
+    id: p.id, kind: p.kind, runId: p.runId, sessionId: p.sessionId, sessionTitle: p.sessionTitle, tool: p.tool,
+    localOnly: p.localOnly, remote: p.remote, createdAt: new Date(p.createdAt).toISOString(),
+  };
+}
+
+//   GET /agent/approvals/stream → text/event-stream
+// 本机专用(桌面主进程订阅远程 run 的待批弹系统通知):unitWeb 允许清单之外的第二道 —— 带 x-forsion-remote 一律 403。
+// 帧:snapshot {rev, items} → added {rev, item} / removed {rev, id, sessionId, outcome, by?};15s 一次 `: hb`。
+router.get('/agent/approvals/stream', authMiddleware, async (req, res) => {
+  if (!localOnly()) return res.status(404).json({ detail: 'not available in this deployment' });
+  if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'This feed is only available on the computer running the engine.' });
+  // 先清理再订阅:之后「订阅 + 写快照」在同一段同步代码里,中间不可能插进变更(不需要缓冲 / 去重)。
+  try { await sweepTerminal(); } catch { /* 清理失败不挡订阅 */ }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  let ended = false;
+  const safeWrite = (s: string): void => {
+    if (ended || res.writableEnded) return;
+    try { res.write(s); (res as any).flush?.(); } catch { /* socket closed */ }
+  };
+  const unsub = onPromptChange((c) => {
+    safeWrite(`data: ${JSON.stringify(c.type === 'added' ? { type: 'added', rev: c.rev, item: wireOf(c.item) } : c)}\n\n`);
+  });
+  const heartbeat = setInterval(() => safeWrite(': hb\n\n'), 15_000);
+  if (typeof heartbeat.unref === 'function') heartbeat.unref();
+  req.on('close', () => {
+    ended = true;
+    unsub();
+    clearInterval(heartbeat);
+  });
+  safeWrite(': open\n\n');
+  safeWrite(`data: ${JSON.stringify({ type: 'snapshot', rev: promptsRev(), items: listPrompts().map(wireOf) })}\n\n`);
+});
+
 router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -103,13 +173,20 @@ router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (r
     // 契约 C9:远端(x-forsion-remote)答审批 —— 批准 / 拒绝照收(D1),但「总允许」按单次批准算(记下来 = 远端改了本机会话的
     // 审批面,本机 run 随后也吃它;与 run 本身带不带远程污点无关,看的是**答复**从哪来),改参数一律 400。
     if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
-    const remoteAnswer = !!parseRemoteOrigin(req.headers);
+    const remote = parseRemoteOrigin(req.headers);
+    const remoteAnswer = !!remote;
+    const effective: ApprovalAction = remoteAnswer && action === 'approve_always' ? 'approve' : action;
+    // P1 · K3(方案 §6.3):受保护路径(凭据 / ~/.forsion 配置)的审批只在执行设备本机批准 —— 远端的批准(含降级后的总允许)
+    // 一律 403,条目照旧在等;拒绝照收。不在等 / 不属于这条 run(null)落到下面的 410,不在这里泄露存在性。
+    if (remoteAnswer && effective !== 'reject' && approvalLocalOnly(req.params.approvalId, req.params.runId) === true) {
+      return res.status(403).json(APPROVAL_LOCAL_ONLY_BODY);
+    }
 
     const raw = req.body?.argsOverride;
     // 只收普通对象(typeof [] 也是 'object');改写后的参数由 gateToolCall 重新过闸,这里不做语义判定。
     const argsOverride = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : undefined;
     // 必须带上 URL 的 runId:getRunForUser 只证明这条 run 是调用者的,审批条目属于哪条 run 由登记表比对。
-    const ok = resolveApproval(req.params.approvalId, { action: remoteAnswer && action === 'approve_always' ? 'approve' : action, argsOverride }, req.params.runId);
+    const ok = resolveApproval(req.params.approvalId, { action: effective, argsOverride }, req.params.runId, answerByOf(remote));
     if (!ok) return res.status(410).json({ detail: 'approval is no longer pending' });
     res.json({ ok: true });
   } catch (e: any) {
@@ -154,11 +231,11 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
     if (!answer) return res.status(400).json({ detail: 'answer required' });
     const run = await getRunForUser(req.params.runId, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
-    const ok = resolveInquiry(req.params.inquiryId, answer.slice(0, 4000), req.params.runId);
+    const remote = parseRemoteOrigin(req.headers);
+    const ok = resolveInquiry(req.params.inquiryId, answer.slice(0, 4000), req.params.runId, answerByOf(remote));
     if (!ok) return res.status(410).json({ detail: 'inquiry is no longer pending' });
     // 远端的答案(最长 4000 字自由文本)从这一刻起就在驱动这条 run —— 与远端 steer 同理染色(P0 第三轮 E8,评审 F#1):
     // 之后的审批按远程钳、保护路径写入硬拒。只在兑现成功后登记;与 resolveInquiry 同一同步段,run 的续跑(微任务)必在其后。
-    const remote = parseRemoteOrigin(req.headers);
     if (remote) taintRunRemote(req.params.runId, remote);
     res.json({ ok: true });
   } catch (e: any) {

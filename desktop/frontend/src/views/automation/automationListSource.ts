@@ -4,12 +4,14 @@ import { usePluginStore } from '../../amadeus/plugins/pluginStore'
 import type { ListItem, ListSourceContribution } from '../../amadeus/plugins/types'
 import { translate as t } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { homeAgentDefs, subscribeHomeAgents } from '../../stores/homeCatalog'
 import { notifyApp } from '../../stores/notificationStore'
 import { windowKind } from '../../windowKind'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
 import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry } from '../../services/backendService'
 import { actionsText, condText, isFinishedTrigger, triggerToUpsert } from './lib'
 import './messages'
+import { homeTarget } from '../../services/engine/targets'
 
 export const AUTOMATION_WORKSPACE_MODE = 'plugin:automation:rules' as const
 const keyOf = (sel: AutomationSel | null): string | null => sel ? JSON.stringify(sel) : null
@@ -61,7 +63,7 @@ let stopPolling: (() => void) | undefined
 /** Shared polling survives a hidden sidebar; each mounted consumer releases its subscription. */
 export function subscribeAutomation(cb: () => void): () => void {
   const off = useAutomation.subscribe(cb)
-  const offAgents = useApp.subscribe((s, p) => { if (s.agentDefs !== p.agentDefs) cb() })
+  const offAgents = subscribeHomeAgents(cb) // 自动化是本端的:焦点在我的电脑时也按本端的 Agent 目录
   if (readers++ === 0) {
     const refresh = () => void useAutomation.getState().refresh(useApp.getState().cfg)
     const offState = useAutomation.subscribe((s, p) => { if (s.refreshNonce !== p.refreshNonce) refresh() })
@@ -78,7 +80,7 @@ export const automationListSource: ListSourceContribution = {
   activeKey: () => useAutomation.getState().builder ? null : keyOf(useAutomation.getState().sel),
   subscribe: subscribeAutomation,
   items(filter) {
-    const state = useAutomation.getState(), defs = useApp.getState().agentDefs
+    const state = useAutomation.getState(), defs = homeAgentDefs()
     const q = filter?.query?.trim().toLowerCase()
     const rows: Array<ListItem & { category: string; searchText?: string }> = state.triggers.map((tr) => ({
       key: keyOf({ kind: 'trigger', triggerId: tr.id })!, title: tr.desc, icon: 'today',
@@ -112,21 +114,21 @@ export const automationListSource: ListSourceContribution = {
       if (!tr) return []
       return [
         { id: 'edit', label: t('common.edit'), run() { state.openBuilder(tr.id); openDetail() } },
-        { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveMuseTrigger(cfg, { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })) } },
-        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, tr.desc, () => deleteMuseTrigger(cfg, tr.id)) } },
+        { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveMuseTrigger(homeTarget(), { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })) } },
+        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, tr.desc, () => deleteMuseTrigger(homeTarget(), tr.id)) } },
       ]
     }
     if (sel.kind === 'schedule') {
       const en = state.schedules.find((s) => s.slug === sel.slug)?.entries.find((e) => e.id === sel.rowId)
       if (!en) return []
       return [
-        { id: 'toggle', label: t(en.auto ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveAgentScheduleEntry(cfg, sel.slug, { id: en.id, name: en.name, date: en.date, repeat: en.repeat, auto: !en.auto, prompt: en.prompt, description: en.description, todo: en.todo })) } },
-        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, en.name, () => deleteAgentScheduleEntry(cfg, sel.slug, en.id)) } },
+        { id: 'toggle', label: t(en.auto ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveAgentScheduleEntry(homeTarget(), sel.slug, { id: en.id, name: en.name, date: en.date, repeat: en.repeat, auto: !en.auto, prompt: en.prompt, description: en.description, todo: en.todo })) } },
+        { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, en.name, () => deleteAgentScheduleEntry(homeTarget(), sel.slug, en.id)) } },
       ]
     }
     const config = state.specialCfg?.[sel.kind]
     return config ? [{ id: 'toggle', label: t(config.enabled ? 'automation.ux.pause' : 'automation.ux.enable'),
-      run() { void mutate(() => saveSpecialConfig(cfg, { [sel.kind]: { ...config, enabled: !config.enabled } })) } }] : []
+      run() { void mutate(() => saveSpecialConfig(homeTarget(), { [sel.kind]: { ...config, enabled: !config.enabled } })) } }] : []
   },
 }
 

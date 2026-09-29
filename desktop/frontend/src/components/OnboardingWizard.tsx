@@ -25,6 +25,7 @@ import { OnboardingModelChoice } from './OnboardingModelChoice'
 import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
 import './onboarding.css'
+import { connectionTarget } from '../services/engine/targets'
 
 export const likelyMainlandChina = (): boolean => {
   try {
@@ -220,7 +221,7 @@ export const OnboardingWizard: React.FC<{
     try {
       if (!window.tangu?.getConfig) throw new Error('Host unavailable')
       const c = await window.tangu.getConfig()
-      const result = await listModels({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
+      const result = await listModels(connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' }))
       if (request !== modelRequest.current) return
       setModels(result)
       setChosenModel((draft) => draft ?? c.modelId ?? '')
@@ -400,7 +401,7 @@ export const OnboardingWizard: React.FC<{
                       disabled={!purl}
                       onClick={() => {
                         void window.tangu?.getConfig().then((c) =>
-                          testProviderConnection({ backendUrl: c.backendUrl, token: c.token, modelId: '' }, {
+                          testProviderConnection(connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' }), {
                             baseUrl: purl, apiKey: pkey || undefined,
                             modelId: pmodels.split(',').map((s) => s.trim()).filter(Boolean)[0],
                           }).then((r) => setConnectMsg(`${r.success ? '✓' : '✗'} ${r.message}`))

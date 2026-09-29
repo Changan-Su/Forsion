@@ -174,6 +174,24 @@ export async function openUnitHostFile(
   }
 }
 
+/**
+ * /unit/hostfile(预览,base64 JSON)与 /unit/hostfile/download(下载原文件,流式)共用的**唯一**文件解析(P1-DL):
+ * openUnitHostFile(realpath 钳制在根内 ∪ 受保护 / 凭据路径硬拒 ∪ 校验与读取绑同一 FileHandle)再要求普通文件。
+ * 两条路只许经它拿文件,判据永不分叉(main.ts 的 readHostFile / openHostFile 都调它)。句柄归调用方关闭。
+ */
+export async function openUnitHostRegularFile(
+  p: unknown,
+  roots: { base: string[]; session: string[] },
+  env: Pick<UnitScopeEnv, 'home' | 'platform'>,
+  guard: UnitScopeGuard,
+  hooks?: UnitRaceHooks,
+): Promise<{ fh: FileHandle; real: string; st: Stats } | null> {
+  const opened = await openUnitHostFile(p, roots, env, guard, hooks)
+  if (!opened) return null
+  if (!opened.st.isFile()) { await opened.fh.close().catch(() => {}); return null }
+  return opened
+}
+
 /** real 所在的(最深的)可读根;没有 = null。 */
 function matchedUnitRoot(
   real: string,

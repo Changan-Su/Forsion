@@ -61,3 +61,13 @@ export function parseApprovalUpdate(text: string): ApprovalOutcome[] {
   return [...text.matchAll(/^\[(approved|rejected|failed)\] (\S+) \(call ([^)]*)\) — (.*)$/gm)]
     .map((m) => ({ status: m[1] as ApprovalOutcome['status'], name: m[2], callId: m[3], preview: m[4] }))
 }
+
+/** 结局行里的一张(callId = 工具调用 id)对应的审批(approval_request.toolCallId;挂起的审批拍板时 run 往往已切到后面的段,
+ *  所以翻全会话)。结局行据它的 answeredBy 写「在哪答的」(M1B)—— 这份信息只在渲染层,不进给模型看的 <approval_update> 正文。
+ *  多张同 callId(旧事件没有 toolCallId 的不算)取最后一张。 */
+export function approvalForCall(list: UiMessage[] | undefined, callId: string): ApprovalRequest | undefined {
+  if (!callId) return undefined
+  let hit: ApprovalRequest | undefined
+  for (const m of list || []) for (const a of m.approvals || []) if (a.toolCallId === callId) hit = a
+  return hit
+}

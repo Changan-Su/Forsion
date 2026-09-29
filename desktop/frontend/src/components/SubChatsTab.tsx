@@ -5,8 +5,9 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Users, Bot, Loader2 } from 'lucide-react'
-import type { AgentRunEvent, SubChat, SubChatSeg, TanguDesktopConfig } from '../types'
+import type { AgentRunEvent, SubChat, SubChatSeg } from '../types'
 import { subscribeRunEvents } from '../services/agentRunService'
+import { targetForSession } from '../services/engine/targets'
 import { Markdown } from './Markdown'
 import { useI18n } from '../i18n'
 
@@ -44,7 +45,7 @@ export const SegList: React.FC<{ segs: SubChatSeg[] }> = ({ segs }) => (
 )
 
 /** discussion:订阅独立 run 的事件流,归约成多发言人转录(选中时实时;已结束则 SSE 重放全程)。 */
-const DiscussionView: React.FC<{ cfg: TanguDesktopConfig; runId: string }> = ({ cfg, runId }) => {
+const DiscussionView: React.FC<{ sessionId: string; runId: string }> = ({ sessionId, runId }) => {
   const { t } = useI18n()
   const [segs, setSegs] = useState<SubChatSeg[]>([])
   const [streaming, setStreaming] = useState(true)
@@ -58,7 +59,7 @@ const DiscussionView: React.FC<{ cfg: TanguDesktopConfig; runId: string }> = ({ 
       if (last && last.t === 'text') return [...s.slice(0, -1), { ...last, text: last.text + delta }]
       return [...s, { t: 'text', speaker, color: col, text: delta }]
     })
-    void subscribeRunEvents(cfg, runId, (ev: AgentRunEvent) => {
+    void subscribeRunEvents(targetForSession(sessionId), runId, (ev: AgentRunEvent) => {
       const p = ev.payload || {}
       switch (ev.type) {
         case 'group_speaker':
@@ -71,7 +72,7 @@ const DiscussionView: React.FC<{ cfg: TanguDesktopConfig; runId: string }> = ({ 
       }
     }, ac.signal).catch(() => setStreaming(false))
     return () => ac.abort()
-  }, [cfg, runId, t])
+  }, [sessionId, runId, t])
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [segs])
   return (
     <div>
@@ -83,7 +84,7 @@ const DiscussionView: React.FC<{ cfg: TanguDesktopConfig; runId: string }> = ({ 
   )
 }
 
-export const SubChatsTab: React.FC<{ cfg: TanguDesktopConfig; subChats?: SubChat[] }> = ({ cfg, subChats }) => {
+export const SubChatsTab: React.FC<{ sessionId: string; subChats?: SubChat[] }> = ({ sessionId, subChats }) => {
   const { t } = useI18n()
   const list = subChats || []
   const [selId, setSelId] = useState<string | null>(null)
@@ -106,7 +107,7 @@ export const SubChatsTab: React.FC<{ cfg: TanguDesktopConfig; subChats?: SubChat
       {sel && (
         <div style={{ padding: '0 4px' }}>
           {sel.kind === 'discussion' && sel.runId
-            ? <DiscussionView cfg={cfg} runId={sel.runId} />
+            ? <DiscussionView sessionId={sessionId} runId={sel.runId} />
             : (
               <>
                 <SegList segs={sel.segs} />

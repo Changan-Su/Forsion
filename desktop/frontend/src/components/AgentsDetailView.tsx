@@ -9,6 +9,7 @@ import type { HistorianActivityItem, SessionRecord, TanguDesktopConfig } from '.
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { MuseView } from './MuseView'
+import { homeTarget } from '../services/engine/targets'
 
 const ACTION_KEY: Record<string, string> = {
   title_updated: 'special.action.title_updated',
@@ -29,7 +30,7 @@ export const AgentsDetailView: React.FC<{
   const [activity, setActivity] = useState<HistorianActivityItem[] | null>(null)
 
   const load = (): void => {
-    void getHistorianActivity(cfg, 50).then(setActivity).catch(() => setActivity([]))
+    void getHistorianActivity(homeTarget(), 50).then(setActivity).catch(() => setActivity([]))
   }
   useEffect(() => {
     if (connState !== 'ok') return // 未连上后端前不发请求(避免启动期 ERR_CONNECTION_REFUSED;连上后重跑)

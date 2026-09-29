@@ -20,6 +20,7 @@ import { getMuseLibrary } from '../services/backendService'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import type { MuseLibraryEntry } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 /** 真 Amadeus 只读渲染(懒加载:Milkdown 很重,不进 Muse Space 不付这笔账)。 */
 const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
@@ -84,7 +85,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
   }
   const load = async (): Promise<void> => {
     try {
-      const r = await getMuseLibrary(cfg)
+      const r = await getMuseLibrary(homeTarget())
       const files = Array.isArray(r?.files) ? r.files : [] // 老引擎 / 外部后端回空壳:当空库,别让渲染里的 files.filter 崩
       setRoot(r?.root || '')
       setFiles(files)

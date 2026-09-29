@@ -17,6 +17,7 @@ import {
 } from '../services/backendService'
 import { EngineIcon } from './EngineIcon'
 import type { TanguDesktopConfig } from '../types'
+import { homeTarget } from '../services/engine/targets'
 
 type EngineStatus = 'available' | 'needs-signin' | 'not-installed'
 type EngineRow = { id: string; name: string; available?: boolean; status?: EngineStatus; defaultModel?: string; setup?: string }
@@ -31,18 +32,18 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
 
   useEffect(() => {
     let alive = true
-    void listEngines(cfg)
+    void listEngines(homeTarget())
       .then((list) => {
         if (!alive) return
         setEngines(list)
         // 为已检测到的引擎拉模型 + 已装资产(逐个 loading;首次 spawn 略慢,后端缓存)。
         for (const e of list.filter((x) => x.available)) {
           setCaps((p) => ({ ...p, [e.id]: 'loading' }))
-          void getEngineCapabilities(cfg, e.id).then((c) => {
+          void getEngineCapabilities(homeTarget(), e.id).then((c) => {
             if (alive) setCaps((p) => ({ ...p, [e.id]: { models: c.models } }))
           })
           setAssets((p) => ({ ...p, [e.id]: 'loading' }))
-          void listEngineAssets(cfg, e.id).then((a) => {
+          void listEngineAssets(homeTarget(), e.id).then((a) => {
             if (alive) setAssets((p) => ({ ...p, [e.id]: a }))
           })
         }
@@ -57,13 +58,13 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
 
   const onPickModel = (id: string, modelId: string): void => {
     setEngines((list) => (list || []).map((e) => (e.id === id ? { ...e, defaultModel: modelId || undefined } : e)))
-    void setEngineDefaultModel(cfg, id, modelId).catch(() => {})
+    void setEngineDefaultModel(homeTarget(), id, modelId).catch(() => {})
   }
 
   const doImport = (engineId: string, kind: 'skill' | 'mcp', name: string): void => {
     const key = `${engineId}:${kind}:${name}`
     setBusy(key)
-    void importEngineAsset(cfg, engineId, kind, name)
+    void importEngineAsset(homeTarget(), engineId, kind, name)
       .then(() => {
         setAssets((p) => {
           const a = p[engineId]

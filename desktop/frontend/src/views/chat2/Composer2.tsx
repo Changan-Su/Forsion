@@ -44,6 +44,7 @@ import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import { ContextUsagePop } from './ContextUsagePop'
 import './composer2.css'
+import { homeTarget, targetForSession } from '../../services/engine/targets'
 
 registerMessages({
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
@@ -444,7 +445,7 @@ export const Composer2: React.FC<{
 
   useEffect(() => {
     let alive = true
-    void getCustomCommands(useApp.getState().cfg).then((list) => { if (alive) setCustomCommands(list) })
+    void getCustomCommands(homeTarget()).then((list) => { if (alive) setCustomCommands(list) })
     return () => { alive = false }
   }, [])
 
@@ -482,7 +483,7 @@ export const Composer2: React.FC<{
       // 服务端单页硬限 500 且只回最近一页 —— 长会话必须用 before 游标向前翻页,否则早期内容静默丢失。
       let before = 0
       for (let page = 0; page < 20; page++) { // 防御上限 1 万条
-        const batch = await listMessages(st.cfg, sid, 500, before || undefined)
+        const batch = await listMessages(targetForSession(sid), sid, 500, before || undefined)
         if (!batch.length) break
         msgs = [...batch, ...msgs]
         if (batch.length < 500) break
@@ -1176,7 +1177,7 @@ export const Composer2: React.FC<{
       const args = customMatch[2] || ''
       setDraft('')
       requestAnimationFrame(autoGrow)
-      void expandCustomCommand(useApp.getState().cfg, name, args)
+      void expandCustomCommand(homeTarget(), name, args)
         .then((expanded) => onSend(expanded, [], [], undefined, undefined))
         .catch((e: any) => setHint(String(e?.message || e)))
       return

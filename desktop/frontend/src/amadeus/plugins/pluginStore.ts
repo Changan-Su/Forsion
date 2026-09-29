@@ -70,6 +70,7 @@ import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
+import { connectionTarget } from '../../services/engine/targets'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -664,7 +665,7 @@ export async function syncDisabledBundleEngines(attempt = 0): Promise<void> {
   try {
     userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.()) ?? []).map((x) => x.id))
   } catch { /* 桥缺位按空集 */ }
-  const engine = await listPlugins(cfg) // 拉失败也回 [],与「一个都没有」分不开 → 按失败补
+  const engine = await listPlugins(connectionTarget(cfg)) // 拉失败也回 [],与「一个都没有」分不开 → 按失败补
   let failed = !engine.length
   const on = new Set(engine.filter((e) => e.enabled && e.source !== 'builtin' && !userOwned.has(e.id)).map((e) => e.id))
   for (const p of parents) {
@@ -672,7 +673,7 @@ export async function syncDisabledBundleEngines(attempt = 0): Promise<void> {
     await serialBundleEngines(p.id, async () => {
       if (!isOff(p.id)) return
       for (const id of p.bundle?.enginePlugins ?? []) {
-        if (on.has(id)) await setPluginEnabled(cfg, id, false).catch(() => { failed = true })
+        if (on.has(id)) await setPluginEnabled(connectionTarget(cfg), id, false).catch(() => { failed = true })
       }
     })
   }
@@ -727,7 +728,7 @@ async function ensurePluginAutomationOnce(pluginId: string, rules: PluginAutomat
     if (!usePluginStore.getState().activeIds.includes(pluginId)) return { ok: false, errors: [...errors, 'plugin disabled before rules were ensured'] }
     for (const u of upserts) {
       try {
-        await saveMuseTrigger(cfg, u)
+        await saveMuseTrigger(connectionTarget(cfg), u)
       } catch (e) {
         errors.push(`${u.id}: ${errMsg(e)}`)
       }
@@ -757,7 +758,7 @@ async function disablePluginRules(pluginId: string, replay = false): Promise<voi
       if (usePluginStore.getState().activeIds.includes(pluginId)) return
       let list: Awaited<ReturnType<typeof getMuseTriggers>>
       try {
-        list = await getMuseTriggers(cfg)
+        list = await getMuseTriggers(connectionTarget(cfg))
       } catch (e) {
         errors.push(errMsg(e))
         return
@@ -765,7 +766,7 @@ async function disablePluginRules(pluginId: string, replay = false): Promise<voi
       for (const t of list) {
         if (!isPluginOwnedRule(pluginId, t.id) || !t.enabled) continue
         try {
-          await saveMuseTrigger(cfg, { ...triggerToUpsert(t), enabled: false })
+          await saveMuseTrigger(connectionTarget(cfg), { ...triggerToUpsert(t), enabled: false })
         } catch (e) {
           errors.push(`${t.id}: ${errMsg(e)}`)
         }

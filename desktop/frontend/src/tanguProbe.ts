@@ -23,6 +23,7 @@ import { getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, g
 import { hasNativeFeature } from './features/runtime'
 import { quoteInChatPanel } from './views/chat2/chatPanelQuote'
 import { completeInline } from './services/inlineAi'
+import { connectionTarget } from './services/engine/targets'
 
 function readActiveModel(): TanguModelInfo | null {
   const s = useApp.getState()
@@ -255,28 +256,28 @@ function museSelf(): TanguAgentSelf {
   }
   return {
     status: async () => {
-      const s = await getMuseStatus(await cfg())
+      const s = await getMuseStatus(connectionTarget(await cfg()))
       if (!s) return null
       return {
         running: !!s.running, lastCycleAt: s.lastCycleAt ?? null, sleepUntil: s.sleepUntil ?? null, sleepReason: s.sleepReason ?? null,
         mode: s.mode ?? 'ask', heartbeatMinutes: s.heartbeatMinutes ?? 120, pendingApprovals: s.pendingApprovals ?? 0,
       }
     },
-    todos: async (status) => (await getMuseTodos(await cfg(), status)).map((t) => ({
+    todos: async (status) => (await getMuseTodos(connectionTarget(await cfg()), status)).map((t) => ({
       id: t.id, title: t.title, detail: t.detail ?? null, status: t.status, createdAt: t.created_at,
     })),
     updateTodo: async (id, status, alive) => {
       const c = await cfg()
       if (alive && !alive()) throw new Error('plugin disabled')
-      await patchMuseTodo(c, id, status, 'pending')
+      await patchMuseTodo(connectionTarget(c), id, status, 'pending')
     },
     schedule: async () => {
-      const all = await getAgentSchedules(await cfg())
+      const all = await getAgentSchedules(connectionTarget(await cfg()))
       const own = (Array.isArray(all) ? all : []).find((x) => x.slug === 'muse')?.entries ?? []
       return own.map((e) => ({ id: e.id, name: e.name, date: e.date, repeat: e.repeat, auto: e.auto, description: e.description, lastRun: e.lastRun }))
     },
-    libraryList: async () => (await getMuseLibrary(await cfg())).files,
-    libraryRead: async (path) => (await getMuseLibraryFile(await cfg(), path)).content,
+    libraryList: async () => (await getMuseLibrary(connectionTarget(await cfg()))).files,
+    libraryRead: async (path) => (await getMuseLibraryFile(connectionTarget(await cfg()), path)).content,
   }
 }
 

@@ -119,6 +119,9 @@ describe('信任记录', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('零点击路径:未信任就不读工作区', () => {
+  // 合并 P1(G5 方案 B)之后:Linux 没有写保护沙箱,仓库配了会执行的程序时引擎自己的 git 一条都不跑(engineGitBlocked),
+  // 信任也不放开 —— 信任按目录身份绑定,挡不住事后被远程命令摆进来的过滤器。macOS 每条套写保护,走下面信任前后两段。
+  const engineGitBlocked = process.platform !== 'darwin';
   const evil = (name: string): { cwd: string; marker: string } => {
     const cwd = repo(name);
     const marker = path.join(root, `${name}-filter-ran`);
@@ -131,6 +134,13 @@ describe.skipIf(process.platform === 'win32')('零点击路径:未信任就不�
 
   it('项目详情的摘要:分支 / 提交照读,改动标成未读取,过滤器没跑;信任后才读', async () => {
     const { cwd, marker } = evil('summary');
+    if (engineGitBlocked) {
+      await expect(gitSummary(cwd)).rejects.toThrow(/Engine git skipped/); // 面板那层吞成 available:false
+      await trustRepo((await repoConfigRisks(cwd))!.commonDir);
+      await expect(gitSummary(cwd)).rejects.toThrow(/Engine git skipped/);
+      expect(existsSync(marker)).toBe(false);
+      return;
+    }
     const s = await gitSummary(cwd);
     expect(s).toMatchObject({ repo: true, branch: 'main', changesUnread: true, trusted: false });
     expect(s.commits?.[0]?.subject).toBe('base');
@@ -145,6 +155,13 @@ describe.skipIf(process.platform === 'win32')('零点击路径:未信任就不�
 
   it('每个 run 开头的 [Git state]:不列脏文件、说明原因,过滤器没跑', async () => {
     const { cwd, marker } = evil('runtime');
+    if (engineGitBlocked) {
+      expect(await collectGitState(cwd)).toBeNull(); // 整段 [Git state] 不注入
+      await trustRepo((await repoConfigRisks(cwd))!.commonDir);
+      expect(await collectGitState(cwd)).toBeNull();
+      expect(existsSync(marker)).toBe(false);
+      return;
+    }
     const state = (await collectGitState(cwd))!;
     expect(state).toContain('branch: main');
     expect(state).toContain('working tree: not read');

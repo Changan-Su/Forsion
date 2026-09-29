@@ -279,15 +279,24 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     // 都不能把项目顶到最近活动首位;它只由消息落库路径刷新。
     // 远端把项目路径改成别的目录 → 同一条 UPDATE 里给会话盖远程标记(已有标记保留原样):桌面设备页的主机文件读范围
     // 不认带标记的会话目录(D1)—— 否则远端 PATCH 一个本机会话的 project_path 就能把任意目录变成「本机会话根」。
-    // 读存值 → 合并 → 落库与 writeSessionConfig 同一把锁,不盖掉并发的配置写;分两条 UPDATE 会有「新路径、无标记」的窗口。
+    // 远端改标题 → 同理盖 remoteContent(P1 · M1A 复审 P1):标题是远端给的串,会进 Muse 的「最近会话标题」、无人值守 / 通道 run 的
+    // 检索与本机 run 的自动召回;带这个键的会话由 remoteTaint.notRemoteTaintedSql 挡在这些自动上下文外。**不**盖 remoteOrigin:
+    // 那个键还管 D1 的读范围,盖上会让手机改个名字的本机项目会话在设备页读不了自己的项目。
+    // 读存值 → 合并 → 落库与 writeSessionConfig 同一把锁,不盖掉并发的配置写;分两条 UPDATE 会有「新值、无标记」的窗口。
     const newPath = typeof project_path === 'string' && project_path.trim() ? String(project_path).slice(0, 1000) : null;
-    if (remote && newPath && newPath !== s.project_path) {
+    const pathChanged = !!(remote && newPath && newPath !== s.project_path);
+    const titleChanged = !!(remote && typeof title === 'string' && title.trim().slice(0, 200) !== String(s.title ?? ''));
+    if (remote && (pathChanged || titleChanged)) {
       await withKeyLock(`session:config:${req.params.id}`, async () => {
         const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [req.params.id]);
         const cfg = parseMaybeJson(row?.agent_config);
         const base = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
-        const markSets = base.remoteOrigin != null ? [] : ['agent_config = ?'];
-        const markParams = base.remoteOrigin != null ? [] : [JSON.stringify({ ...base, remoteOrigin: remoteOriginMarker(remote) })];
+        const marks: Record<string, unknown> = {};
+        if (pathChanged && base.remoteOrigin == null) marks.remoteOrigin = remoteOriginMarker(remote);
+        if (titleChanged && base.remoteContent == null) marks.remoteContent = remoteOriginMarker(remote);
+        const marked = Object.keys(marks).length > 0;
+        const markSets = marked ? ['agent_config = ?'] : [];
+        const markParams = marked ? [JSON.stringify({ ...base, ...marks })] : [];
         await query(`UPDATE chat_sessions SET ${[...sets, ...markSets].join(', ')} WHERE id = ?`, [...params, ...markParams, req.params.id]);
       });
     } else {
@@ -781,9 +790,16 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
     // 远程标记是引擎盖的(见 services/remoteOrigin.remoteOriginMarker):远程写走白名单本就动不了它;本机写(尤其 PUT 整对象替换、
     // 客户端拿不带标记的旧缓存写回)也不许把已有标记抹掉 —— 桌面设备页的主机文件读范围按它排除远端动过的会话目录(D1)。
     // 本机写**加**标记不拦(只会收紧)。
-    const storedMarker = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as any).remoteOrigin : undefined;
-    const cfg = remote ? applyRemoteConfigWrite(stored, merged)
-      : storedMarker != null ? { ...merged, remoteOrigin: storedMarker } : merged;
+    const storedObj: Record<string, any> = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as any) : {};
+    const storedMarker = storedObj.remoteOrigin;
+    // remoteContent(远端改过标题类的键,见上面 PATCH /agent/sessions/:id)同理:本机写抹不掉;远程写走白名单本就保留存值。
+    const storedContentMarker = storedObj.remoteContent;
+    let cfg = remote ? applyRemoteConfigWrite(stored, merged)
+      : { ...merged, ...(storedMarker != null ? { remoteOrigin: storedMarker } : {}), ...(storedContentMarker != null ? { remoteContent: storedContentMarker } : {}) };
+    // 远端改了配置里的 title / name(白名单里仅有的两个「远端给的串」键)→ 同一次写里盖 remoteContent(已有则保留原值)。
+    if (remote && storedContentMarker == null && (['title', 'name'] as const).some((k) => cfg[k] !== storedObj[k])) {
+      cfg = { ...cfg, remoteContent: remoteOriginMarker(remote) };
+    }
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return void res.status(400).json({ detail: mergedErr });

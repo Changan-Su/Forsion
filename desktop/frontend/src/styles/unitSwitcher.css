@@ -92,6 +92,18 @@
 .unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
 .unitsw-refresh:hover { background: var(--overlay-light); color: var(--text-muted); }
 
+/* P1-K5 设备凭据存储提示(SecretStorageNotice):降级 / 锁定时挂在「允许其他设备连接本机」之下。只用已有 token。 */
+.secnotice { display: flex; gap: 7px; margin: 2px 9px 5px; padding: 7px 8px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.secnotice-ic { flex: none; display: inline-flex; padding-top: 1px; color: var(--warning); }
+.secnotice[data-secrets='locked'] .secnotice-ic,
+.secnotice[data-secrets='restart'] .secnotice-ic { color: var(--danger); }
+/* 设置页外部连接面板里(与 .settings-external-panel > .field 的 15px 横向内边距对齐) */
+.secnotice.secnotice-inpanel { margin: 12px 15px 0; }
+.secnotice-body { flex: 1; min-width: 0; }
+.secnotice-title { color: var(--text-light); font-weight: 500; }
+.secnotice-hint { margin-top: 2px; }
+.secnotice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
 /* 已配对来访设备(T1 回收面) */
 .unitsw-pairedbox { padding: 2px 9px 5px; }
 .unitsw-paired-head { font-size: var(--ui-font-caption, 11px); color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 0; }
@@ -112,3 +124,17 @@
 /* 无 Shell 形态(harness / 极端兜底):没有 .shell-work 可 portal → fixed 覆盖,贴 ribbon 缺省宽。
  * 用「父级不是 .shell-work」判形态,portal 正身(.shell-work > .unitrs)不受此条影响。 */
 :not(.shell-work) > .unitrs { position: fixed; left: 44px; }
+
+/* P1-K4 「允许远程会话」子开关(父开关 → K5 提示 → 本行):标签缩进到父开关标签的左缘(9px 内距 + 7px 状态点 + 8px 间距),
+ * 开关与父开关的开关右缘对齐,「设置 ›」深链夹在两者之间。设备凭据没加密时置灰(原因在上面的 K5 提示里)。 */
+.unitsw-subrow { display: flex; align-items: center; gap: 6px; padding: 4px 9px 4px 24px; border-radius: var(--radius-sm); color: var(--text-light); font-size: var(--ui-font-caption, 11px); cursor: pointer; }
+.unitsw-subrow:hover { background: var(--overlay-light); }
+.unitsw-subrow.is-locked { cursor: default; }
+.unitsw-subrow.is-locked > :not(.unitsw-sublink) { opacity: .48; } /* 深链照常可读可点:设置页里有原因与出路 */
+.unitsw-subrow.is-locked:hover { background: transparent; }
+.unitsw-sublink { flex: none; padding: 2px 5px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); white-space: nowrap; cursor: pointer; }
+.unitsw-sublink:hover { background: var(--overlay-medium); color: var(--text-muted); }
+.unitsw-subswitch { flex: none; display: inline-flex; padding: 0; border: none; background: transparent; cursor: pointer; }
+.unitsw-subswitch:disabled { cursor: default; }
+.unitsw-subswitch[data-on] .unitsw-switch { background: var(--accent); }
+.unitsw-subswitch[data-on] .unitsw-switch::after { transform: translateX(11px); }
