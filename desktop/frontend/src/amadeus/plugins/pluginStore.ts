@@ -1136,6 +1136,28 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
+      mountMarkdownEditor: (el, opts) => {
+        const pending = { ...opts }
+        let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null
+        let cancelled = !ctxAlive, focusPending = false
+        if (!(el instanceof HTMLElement) || typeof opts?.value !== 'string') throw new TypeError('mountMarkdownEditor needs an HTMLElement and Markdown value')
+        const dispose = (): void => { cancelled = true; uiMounts.delete(dispose); if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null }
+        if (!cancelled) {
+          uiMounts.add(dispose)
+          void import('./markdownEditorSurface').then(m => {
+            if (cancelled) return
+            mounted = m.mountPluginMarkdownEditor(el, pending)
+            if (focusPending) mounted.focus()
+          }).catch(e => { if (!cancelled) { el.textContent = String(e); console.error('[amadeus] Markdown editor mount failed', e) } })
+        }
+        return {
+          getValue() { return mounted?.getValue() ?? pending.value },
+          update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
+          insertMarkdown(markdown) { if (!cancelled && !pending.readOnly) { if (mounted) mounted.insertMarkdown(markdown); else { pending.value += '\n\n' + markdown; pending.onChange?.(pending.value) } } },
+          focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
+          dispose,
+        }
+      },
       mountChatBox: (el, opts) => {
         if (!ctxAlive) return { update() {}, focus() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')

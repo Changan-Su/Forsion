@@ -7,6 +7,8 @@ vi.mock('@lcl/engine', () => ({ OverlayAt: ({ children }: any) => React.createEl
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 const { AccountCard } = await import('./AccountCard')
 const { LocaleProvider } = await import('../i18n')
+const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
+const originalPlugins = usePluginStore.getState()
 
 let host: HTMLDivElement
 let root: Root
@@ -24,6 +26,7 @@ function click(text: string): Promise<void> {
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   onToast.mockReset()
+  usePluginStore.setState({ activeIds: ['forsion-extend'], settingsViews: [{ pluginId: 'forsion-extend', item: { id: 'backpack', category: 'forsion', mount() {} } }] })
   window.tangu = {
     authStatus: vi.fn().mockResolvedValue(alice),
     authAccounts: vi.fn().mockResolvedValue([
@@ -43,6 +46,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   delete window.tangu
+  usePluginStore.setState({ activeIds: originalPlugins.activeIds, settingsViews: originalPlugins.settingsViews })
 })
 async function mount() {
   await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(AccountCard, { onToast }) })))
@@ -131,6 +135,10 @@ it('expands the AI quota row into today, this week, a reset card, upgrade and th
   expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:quota')
   await click('Alice')
   await tick()
+  await click('背包')
+  expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:backpack')
+  await click('Alice')
+  await tick()
   await act(async () => { document.querySelector<HTMLElement>('.ap-head--link')!.click() })
   expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:account')
 })
@@ -212,9 +220,34 @@ it('does not offer the Forsion Cloud pages where Extend is not loaded (device pa
   await click('Alice')
   await tick()
   expect(document.querySelector('.ap-head--link')).toBeNull()
+  expect(document.body.textContent).not.toContain('背包')
   expect(document.body.textContent).toContain('今日 50% · 本周 50%')
   await click('AI 额度')
   expect(document.querySelector('[data-testid="account-quota-detail"]')).not.toBeNull()
   expect(document.body.textContent).not.toContain('额度与积分')
   expect(document.body.textContent).not.toContain('使用额度重置卡') // 没有 accountUseResetCard 桥
+})
+
+it('waits for the backpack page contribution when an older Extend is loaded', async () => {
+  ;(window.tangu as any).cloudInvoke = vi.fn()
+  usePluginStore.setState({ settingsViews: [] })
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.body.textContent).not.toContain('背包')
+  await act(async () => usePluginStore.setState({ settingsViews: [{ pluginId: 'forsion-extend', item: { id: 'backpack', category: 'forsion', mount() {} } }] }))
+  expect(document.body.textContent).toContain('背包')
+  await act(async () => usePluginStore.setState({ activeIds: [] }))
+  expect(document.body.textContent).not.toContain('背包')
+})
+
+it('opens the contributed backpack page from the account menu', async () => {
+  const { useApp } = await import('../stores/appStore')
+  const openSettings = vi.fn()
+  useApp.setState({ openSettings } as any)
+  ;(window.tangu as any).cloudInvoke = vi.fn()
+  await mount()
+  await click('Alice')
+  await click('背包')
+  expect(openSettings).toHaveBeenCalledWith('forsion/fx:forsion-extend:backpack')
 })

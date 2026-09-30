@@ -889,6 +889,11 @@ export interface PluginContext {
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member. */
   ui?: {
+    /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access. */
+    mountMarkdownEditor?(
+      el: HTMLElement,
+      opts: import('../../../../shared/markdownEditor').PluginMarkdownEditorOptions,
+    ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
     mountChatBox?(

@@ -2,7 +2,7 @@
  * 侧栏左下角 Forsion 账号卡(forsion-ui UserProfileCard 规范):
  *  - 已登录:36px 头像(URL,或渐变圆+首字母)+ 昵称 + 会员徽章(TierBadge);
  *    点击弹出账号菜单:头部(→ 设置「Forsion 云端 → 账号」)、AI 额度(点开看今日 / 本周 / 后台额度、用额度重置卡、
- *    升级会员、去「额度与积分」)、切换账号、退出登录。邀请、网页个人中心在 Extend 画的那几页里。悬停露出「退出登录」。
+ *    升级会员、去「额度与积分」)、背包、切换账号、退出登录。邀请、网页个人中心在 Extend 画的那几页里。悬停露出「退出登录」。
  *    09-28 曾把额度详情和用卡收进设置页,09-29 用户要回:额度随手看、卡随手用,用完弹用卡动画。
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OverlayAt } from '@lcl/engine'
-import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react'
+import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
 import type { AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
@@ -20,6 +20,7 @@ import { formatRemaining, publishAccountQuota, remainingPercent, type AccountQuo
 import { useApp } from '../stores/appStore'
 import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
+import { usePluginStore } from '../amadeus/plugins/pluginStore'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -27,6 +28,7 @@ registerMessages({
   'sidebar.account.menu.quota': { zh: 'AI 额度', en: 'AI quota' },
   'sidebar.account.menu.quotaLine': { zh: '今日 {daily} · 本周 {weekly}', en: 'Today {daily} · This week {weekly}' },
   'sidebar.account.menu.openAccount': { zh: '账号设置', en: 'Account settings' },
+  'sidebar.account.menu.backpack': { zh: '背包', en: 'Backpack' },
   'sidebar.account.menu.background': { zh: '后台额度', en: 'Background quota' },
   'sidebar.account.menu.backgroundHint': {
     zh: '主额度之外额外的一份，只计 Muse 与自动化用云端默认后台模型的用量',
@@ -53,7 +55,7 @@ const shortDate = (d?: string): string => {
 }
 
 /** 「Forsion 云端」里 Extend 画的子页(registerSettingsView category 'forsion')。没有 Extend 的设备页 / 旧宿主不给跳。 */
-const openCloudPage = (id: 'account' | 'quota'): void =>
+const openCloudPage = (id: 'account' | 'quota' | 'backpack'): void =>
   useApp.getState().openSettings(`forsion/fx:forsion-extend:${id}` as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
 
 export const AccountCard: React.FC<{
@@ -69,6 +71,8 @@ export const AccountCard: React.FC<{
   const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
+  const hasBackpackPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
+    s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'backpack' && v.item.category === 'forsion'))
   const [quotaOpen, setQuotaOpen] = useState(false)
   const [confirmCard, setConfirmCard] = useState(false)
   const [usingCard, setUsingCard] = useState(false)
@@ -346,6 +350,11 @@ export const AccountCard: React.FC<{
           </div>}
         </>
       })()}
+      {loggedIn && hasCloudPages && hasBackpackPage && (
+        <button className="ap-item" onClick={() => { setMenu(null); openCloudPage('backpack') }}>
+          <Backpack size={14} /><span>{t('sidebar.account.menu.backpack')}</span>
+        </button>
+      )}
       <AccountSwitcher menu busy={loggingIn} onSelect={(id) => void login(id)} onAdd={() => void login()} />
       {loggedIn && <button className="ap-item ap-danger" onClick={() => { setMenu(null); void logout() }}>
         <LogOut size={14} /><span>{t('sidebar.account.logout')}</span>
