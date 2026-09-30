@@ -56,3 +56,7 @@ python3 music/sync_check.py                                  # 检查画面切�
 ```
 
 特别版 Logo 在 `logo/special.svg`：Logo 的树形 F 换成片中的红色，去掉底板，直接融进黑色画面。`node build.mjs` 会从 `.github/assets/showcase/logo.svg` 填入树形路径并写出 `dist/logo-2.12-special.svg`；`NODE_PATH=$(npm root -g) node logo/render-logo.cjs` 输出黑底与透明底 PNG。
+
+## 成为 Forsion Video Studio 工程
+
+这部完整版已经移植成 Forsion Video Studio 的示例工程：[`plugins/forsion-video-studio/examples/episode-2.12`](../../../plugins/forsion-video-studio/examples/episode-2.12/episode-2.12.fvs.md)。同一部片子、同一张拍点表，写成一份可以在编辑器里改文字和时间线、让 AI 接着写的 `.fvs.md` 文件。用 `node plugins/forsion-video-studio/tools/fvs.mjs render` 渲染出的 2832 帧与这里 `render.cjs` 的输出逐像素一致；`tools/music/score_episode_212.py` 从工程的拍点表重新生成「决战 II」。

@@ -1,0 +1,6 @@
+numpy
+scipy
+soundfile
+pedalboard
+# optional: General MIDI tracks through a SoundFont (engine.Track)
+# tinysoundfont

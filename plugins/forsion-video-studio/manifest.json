@@ -1,0 +1,30 @@
+{
+  "id": "forsion-video-studio",
+  "name": "Forsion Video Studio",
+  "nameEn": "Forsion Video Studio",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "author": "Forsion",
+  "description": "AI 辅助的网页动画视频编辑器。视频就是一份 .fvs.md 工程文件：场景是网页，时间线踩在音乐的拍子上。可以手动改文字、内容和时间线，让 AI 写场景、配乐和检查卡点，再导出网页视频或 MP4。",
+  "descriptionEn": "An AI-assisted editor for videos made of animated web pages. A video is one .fvs.md project file: scenes are web pages and the timeline sits on the music's beat grid. Edit text, content and timing by hand, have the AI write scenes, compose the score and check the sync, then export a web video or an MP4.",
+  "main": "main.js",
+  "fileExtensions": [".fvs.md"],
+  "onboarding": {
+    "intro": "打开或新建一个 .fvs.md 工程就能编辑和导出网页视频。导出 MP4 和 AI 配乐由内置的「Video Studio 导演」Agent 在本机完成，需要 Chrome 或 Edge、ffmpeg；配乐还需要 Python。",
+    "steps": [
+      { "title": "新建工程", "description": "文件树右键「新建视频工程」，或命令面板「Video Studio：新建视频工程」。也可以先看示例：命令面板「Video Studio：打开示例 · 第 2.12 话」。" },
+      { "title": "手动编辑", "description": "点时间线上的场景选中它；双击画面里的文字直接改；拖场景的右边缘改长度（相邻场景一起让位，后面的切点不动），拖拍点改切点。右侧面板可以改场景设置、全部文字和代码。" },
+      { "title": "交给 AI", "description": "顶栏「问 AI」把工程交给 Video Studio 导演：写新场景、改节奏、生成配乐、检查卡点。它直接改这份文件，编辑器会自动载入改动。" },
+      { "title": "导出", "description": "「导出网页视频」立刻在同一文件夹写出一个可以单独打开的 .html；「导出 MP4」由导演 Agent 在本机渲染，完成后视频出现在工程旁边。" }
+    ],
+    "en": {
+      "intro": "Open or create a .fvs.md project to edit and export web videos. MP4 export and AI scoring run on this computer through the bundled Video Studio Director agent, which needs Chrome or Edge and ffmpeg; scoring also needs Python.",
+      "steps": [
+        { "title": "Create a project", "description": "Right-click in the file tree and choose New video project, or run \"Video Studio: New video project\" from the command palette. To look around first, run \"Video Studio: Open the 2.12 example\"." },
+        { "title": "Edit by hand", "description": "Click a scene on the timeline to select it. Double-click text in the picture to change it. Drag a scene's right edge to change its length (the next scene gives way, so later cuts stay put) and drag hit markers to move cuts. The side panel edits scene settings, all text and the code." },
+        { "title": "Hand it to the AI", "description": "Ask AI in the top bar gives the project to the Video Studio Director: new scenes, pacing, a score, a sync check. It edits this file directly and the editor reloads its changes." },
+        { "title": "Export", "description": "Export web video writes a standalone .html next to the project at once. Export MP4 has the Director render on this computer; the video appears next to the project when it is done." }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "forsion-video-studio",
+  "private": true,
+  "type": "module",
+  "description": "Build tooling for the Forsion Video Studio bundle. Installing the plugin needs none of this: main.js, runtime/ and tools/ are committed build outputs.",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
