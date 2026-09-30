@@ -11,6 +11,7 @@ import type { AppProfile } from '../seams/appProfile.js';
 import { presetOf } from '../core/presetTable.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
+import { toolDefinitionIssue, warnInvalidTool } from './toolDefinitionValidation.js';
 
 /**
  * 操控整台电脑桌面的工具(Computer Use)。唯一的现成声明是 capabilities.concurrencyKey === 'computer-use' —— 内置捆绑的
@@ -207,6 +208,26 @@ const isGatedTool = (t: ToolDef): boolean => !!t.isEnabledFor || t.clientCapabil
 const providers: ToolProvider[] = [];
 const providerIndex = new Map<string, number>();
 
+/** Validate every read, so dynamic plugin tools and repaired definitions take effect immediately. */
+function providerTools(p: ToolProvider): ToolDef[] {
+  const raw = p.tools();
+  const source = `${p.origin || 'provider'}:${p.id}`;
+  if (!Array.isArray(raw)) {
+    warnInvalidTool(source, '(provider)', 'tools() must return an array');
+    return [];
+  }
+  return raw.filter((t, i) => {
+    const name = typeof t?.name === 'string' && t.name.trim() ? t.name : `tools[${i}]`;
+    const issue = !t || typeof t !== 'object' || Array.isArray(t) ? 'tool must be an object'
+      : typeof t.name !== 'string' || !t.name.trim() ? 'registered name must be a non-empty string'
+      : typeof t.execute !== 'function' ? 'execute must be a function'
+      : toolDefinitionIssue(t.definition, t.name);
+    if (!issue) return true;
+    warnInvalidTool(source, name, issue);
+    return false;
+  });
+}
+
 /**
  * 计划模式白名单:只读探查 + 规划辅助。写文件/跑命令/沙箱执行/记忆写入一律不可见;
  * custom/MCP 工具(外部副作用不可知)由 agentLoop 在 planMode 下整体跳过。
@@ -249,7 +270,8 @@ export function registerToolProvider(p: ToolProvider): void {
 }
 
 export function listToolProviders(): ToolProvider[] {
-  return [...providers];
+  // Profile discovery and approval readers also consume this public directory at startup.
+  return providers.map((p) => ({ ...p, tools: () => providerTools(p) }));
 }
 
 /**
@@ -273,7 +295,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
   // 否则目录还在、唯一解锁入口没了,deferred 工具永久不可达(还可能被同名 custom 工具顶替)。
   if (builtins !== 'all' && !builtins.includes('load_tools')) {
     const wl = new Set(builtins);
-    const hasDeferred = providers.some((p) => p.tools().some((t) => isDeferredIn(ctx, t.name, t.deferred) && wl.has(t.name)));
+    const hasDeferred = providers.some((p) => providerTools(p).some((t) => isDeferredIn(ctx, t.name, t.deferred) && wl.has(t.name)));
     if (hasDeferred) builtins = [...builtins, 'load_tools'];
   }
   const out = new Map<string, ToolDef>();
@@ -317,8 +339,8 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     if (t.isEnabledFor && !t.isEnabledFor(profile, enabledForCtx)) return;
     out.set(t.name, t);
   };
-  for (const p of providers) for (const t of p.tools()) add(t, true, p.origin === 'plugin');
-  for (const p of profile.toolLoadout.providers ?? []) for (const t of p.tools()) add(t, false);
+  for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin');
+  for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false);
   return out;
 }
 
@@ -327,7 +349,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
 export function listLoadoutTools(): { name: string; description: string }[] {
   const seen = new Map<string, string>();
   for (const p of providers) {
-    for (const t of p.tools()) {
+    for (const t of providerTools(p)) {
       if ((isGatedTool(t) && !LOADOUT_GATED.has(t.name)) || LOADOUT_EXEMPT.has(t.name)) continue;
       const d = t.definition?.function?.description || '';
       seen.set(t.name, d.split('\n')[0].slice(0, 160));
@@ -345,7 +367,7 @@ export function listLoadoutTools(): { name: string; description: string }[] {
 export function declaredApproval(name: string): 'command' | undefined {
   let found: 'command' | undefined;
   for (const p of providers) {
-    for (const t of p.tools()) {
+    for (const t of providerTools(p)) {
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
     }
   }
@@ -360,7 +382,7 @@ export function declaredApproval(name: string): 'command' | undefined {
 export function declaredPersistPlaceholder(name: string): string | undefined {
   let found: string | undefined;
   for (const p of providers) {
-    for (const t of p.tools()) {
+    for (const t of providerTools(p)) {
       if (t.name === name && typeof t.capabilities?.persistPlaceholder === 'string') found = t.capabilities.persistPlaceholder;
     }
   }
@@ -371,7 +393,7 @@ export function declaredPersistPlaceholder(name: string): string | undefined {
 export function declaredAutomationSafe(name: string): boolean {
   let found = false;
   for (const p of providers) {
-    for (const t of p.tools()) {
+    for (const t of providerTools(p)) {
       if (t.name === name && t.capabilities?.automationSafe !== undefined) found = !!t.capabilities.automationSafe;
     }
   }

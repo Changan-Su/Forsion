@@ -63,6 +63,7 @@ import { WRITE_TOOLS, writeTargetsOf } from './writeTargets.js';
 import { withWriteLock } from './writeLock.js';
 import path from 'node:path';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
+import { usableToolDefinition } from './toolDefinitionValidation.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
 export type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
@@ -274,6 +275,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx);
   if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
+      if (!usableToolDefinition(t?.definition, 'custom', t?.name)) continue;
       if (taken.has(t.name)) continue; // 内置同名优先
       taken.add(t.name);
       defs.push(t.definition);
@@ -282,6 +284,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   // MCP 工具(ctx 运行时注入,manager 已按 (server, tool) 排序 → defs 字节级稳定)
   if (externalOk && ctx.mcpTools && ctx.mcpTools.size) {
     for (const t of ctx.mcpTools.values()) {
+      if (!usableToolDefinition(t?.definition, `mcp:${t?.serverName || '(unknown)'}`, t?.name)) continue;
       if (taken.has(t.name)) continue; // mcp__ 前缀理论上不冲突,保险跳过
       taken.add(t.name);
       defs.push(t.definition);
@@ -390,7 +393,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
 
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx); // 与 getToolDefinitions 同判
   const custom = externalOk ? ctx.customTools?.get(name) : undefined;
-  if (custom) {
+  if (custom && usableToolDefinition(custom.definition, 'custom', custom.name)) {
     try {
       const result = await executeCustomTool(custom, args, ctx);
       const isError = typeof result === 'string' && result.startsWith('Error:');
@@ -404,7 +407,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   // 第三级 fallback:MCP 工具(经 deps().mcp 调远端;仅 standalone/TUI 装配了 mcp)。
   // 结果是第三方内容:文本已在 manager 圈进不可信围栏;图片经 collectImage 回灌并带不可信前言(M6)。
   const mcpTool = externalOk ? ctx.mcpTools?.get(name) : undefined;
-  if (mcpTool && deps().mcp) {
+  if (mcpTool && usableToolDefinition(mcpTool.definition, `mcp:${mcpTool.serverName}`, mcpTool.name) && deps().mcp) {
     const r = await deps().mcp!.callTool(mcpTool, args, ctx.signal);
     return { toolCallId: call.id, name, result: mcpResultForModel(r, mcpTool, ctx.collectImage), isError: r.isError };
   }

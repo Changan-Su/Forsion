@@ -1,5 +1,9 @@
 # Forsion 更新日志
 
+## Unreleased (2026-09-30)
+
+- 修复：插件或自定义工具缺少有效定义时会拖累整次对话。现在会隔离异常工具，让其他工具继续可用，并在反馈日志中标明异常工具的名称和来源。
+
 ## 2.12.0 (2026-09-29)
 
 - **桌面安装包增加 NoExtend 版本**：macOS、Windows、Linux 均可选择标准包（自带 Forsion Extend）或 NoExtend 包（不捆 Extend）。两种包保留相同的应用身份与本机数据；NoExtend 使用独立的更新清单，后续更新仍留在 NoExtend 版本。

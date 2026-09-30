@@ -231,6 +231,8 @@ Common commands:
 | `tangu-agent/` | `npm run build` | Compile the Agent runtime. |
 | `tangu-agent/` | `npm run typecheck` | Check types and plugin-API sync status. |
 | `tangu-agent/` | `npm test` | Run the runtime tests. |
+| `tangu-agent/` | `npm run build && npm run smoke:tooldefs` | Reproduce missing tool definitions and verify isolation before model requests. |
+| `tangu-agent/` | `TANGU_PLUGINS_DIR="$PWD/test/fixtures" npm run live:harness -- --only chat,tool` | Verify chat and file tools with an invalid plugin loaded, using the dev model credentials. |
 | `desktop/` | `npm run dev` | Start the desktop dev environment. |
 | `desktop/` | `npm run typecheck` | Check desktop types. |
 | `desktop/` | `npm test` | Run desktop unit tests. |

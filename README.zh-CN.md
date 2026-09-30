@@ -231,6 +231,8 @@ npm run dev
 | `tangu-agent/` | `npm run build` | 编译 Agent 运行时。 |
 | `tangu-agent/` | `npm run typecheck` | 检查类型与插件 API 同步状态。 |
 | `tangu-agent/` | `npm test` | 运行运行时测试。 |
+| `tangu-agent/` | `npm run build && npm run smoke:tooldefs` | 复现工具定义缺失，验证异常工具隔离与请求前校验。 |
+| `tangu-agent/` | `TANGU_PLUGINS_DIR="$PWD/test/fixtures" npm run live:harness -- --only chat,tool` | 用开发模型凭证验证：注入异常插件后，聊天与文件工具仍可完成。 |
 | `desktop/` | `npm run dev` | 启动桌面开发环境。 |
 | `desktop/` | `npm run typecheck` | 检查桌面端类型。 |
 | `desktop/` | `npm test` | 运行桌面端单元测试。 |

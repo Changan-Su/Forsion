@@ -17,6 +17,7 @@ import { parseTextToolCalls } from './textToolCalls.js';
 import { applyThinking, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
+import { assertToolDefinitions } from '../tools/toolDefinitionValidation.js';
 
 /** 直连 payload 的私有标记:multiBrain 据此把 stream 分发到本实现而非 httpBrain。 */
 export const DIRECT_MARK = '__tangu_direct';
@@ -100,6 +101,7 @@ function applyAttachments(finalMessages: any[], attachments: any[]): any[] {
  * 标记 DIRECT_MARK 供 streamProviderCompletion 分发;发请求前由 streamOpenAiCompat 剥掉。
  */
 export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
+  assertToolDefinitions(opts.tools, 'direct payload');
   const {
     apiModelId,
     messages,
@@ -248,6 +250,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   const isGrokBuild = protocol === 'grok-build';
   // 剥掉私有标记,再发给 provider。prompt_cache_key 一并摘下,只在官方 host 上补回(见下)。
   const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: _omitRun, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
+  assertToolDefinitions(clean.tools, 'direct request');
   const streamPayload = {
     ...clean,
     messages: compatWireMessages(clean, { baseUrl, provider: opts.provider }),

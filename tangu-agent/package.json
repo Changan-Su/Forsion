@@ -34,6 +34,7 @@
     "prelive:harness": "npm run build",
     "live:harness": "node scripts/live-harness.mjs",
     "smoke:tuiqueue": "bash scripts/tui-queue.smoke.sh",
+    "smoke:tooldefs": "node scripts/tool-definition-validation.smoke.mjs",
     "smoke:projectctx": "node scripts/project-context.smoke.mjs",
     "stall:timeline": "node scripts/stall-timeline.mjs",
     "cache:report": "node scripts/cache-hit-report.mjs",

@@ -2,6 +2,10 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## Unreleased (2026-09-30)
+
+- Fixed conversations failing when a plugin or custom tool has an invalid definition. Invalid tools are now isolated so other tools remain available, and feedback logs identify the affected tool and its source.
+
 ## 2.12.0 (2026-09-29)
 
 - **A NoExtend desktop installer is now available** on macOS, Windows and Linux alongside the standard installer with Forsion Extend. Both variants keep the same app identity and local data. NoExtend has its own update feed, so later updates stay on that variant.
