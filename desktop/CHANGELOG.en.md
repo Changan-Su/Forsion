@@ -2,7 +2,7 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
-## Unreleased (2026-09-30)
+## 2.12.1 (2026-09-30)
 
 - Fixed conversations failing when a plugin or custom tool has an invalid definition. Invalid tools are now isolated so other tools remain available, and feedback logs identify the affected tool and its source.
 
