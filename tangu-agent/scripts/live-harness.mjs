@@ -660,7 +660,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
   const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -678,7 +678,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           const p = e.payload || {};
           // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
           if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
-          else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); }
+          else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}) }); }
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
