@@ -127,6 +127,29 @@ describe('versioned Agent memory management', () => {
     expect(full).toContain('Current entries:'); expect(full).toContain('expectedVersion');
   });
 
+  it('requires an explicit fact in model calls and makes an incomplete update recoverable without writing', async () => {
+    await saveAgent({ slug: 'name-fixture', name: 'Name fixture', systemPrompt: 'fixture' });
+    const tool = memoryLogProvider.tools().find(t => t.name === 'remember')!;
+    expect((tool.definition as any).function.parameters.required).toEqual(['action', 'fact']);
+    const ctx = { userId: 'fixture-user', sessionId: 'name-session', runId: 'name-run', appId: 'tangu' };
+    const run = (args: any) => runWithAgentSlug('name-fixture', () => tool.execute(args, ctx)) as Promise<string>;
+    const added = JSON.parse(await run({ action: 'add', fact: '用户名字叫旧名字' }));
+    const args = { action: 'update', id: added.entry.id, expectedVersion: added.version };
+    const original = JSON.parse(await run({ action: 'list', fact: null }));
+    for (const fact of [undefined, null, '', '  ', 123, { content: 'bad shape' }]) {
+      const error = await run({ ...args, fact });
+      expect(error).toContain('fact is required for update');
+      expect(error).toContain('replacement durable sentence');
+      expect(error).toContain('Nothing was written');
+    }
+    const before = JSON.parse(await run({ action: 'list', fact: null }));
+    expect(before.version).toBe(added.version);
+    expect(before).toEqual(original);
+    const updated = JSON.parse(await run({ ...args, fact: '用户名字叫一十四画生' }));
+    expect(updated).toMatchObject({ ok: true, count: added.count, entry: { id: added.entry.id, content: '用户名字叫一十四画生' } });
+    expect(updated.version).not.toBe(added.version);
+  });
+
   it('propagates log cancellation while reporting a confirmed remote write truthfully', async () => {
     const tools = memoryLogProvider.tools();
     const logTool = tools.find(t => t.name === 'log_event')!;

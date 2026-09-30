@@ -5,6 +5,8 @@
 ## 使用
 
 - 对话里的 `remember` 支持 `add`（默认）、`list`、`update`、`forget`。更新/遗忘先取得条目 ID；工具回执只含实际持久化后的版本与**受影响的那一条**（不再整份 entries 回灌上下文；重复写入回 `duplicate: true`）。Chat 模式也可用。失败不能宣称“已记住”。
+- 模型调用必须显式提供 `action` 和 `fact`：`add/update` 的 `fact` 是非空、最多 300 字符的持久事实，`list/forget` 用 `fact: null`。更新须同时带 `id` 和 `expectedVersion`。漏传或类型错误时不写入，回执给出带原 ID/版本的纠正示例；执行入口仍兼容历史 `add` 默认动作及不带 `fact` 的读取/遗忘调用。
+- 前台主循环中，若整轮工具均失败，且调用参数与错误连续三轮相同，下一轮关闭工具并说明相关操作未完成。比较忽略 JSON 空白、对象键顺序和工具调用 ID；纠正参数、改变错误、任一成功结果或用户追加指令都会重置计数，不影响正常多步任务。
 - **形状闸（2026-09-22，借 Hermes memory 工具）**：单条 `fact` 超过 300 字直接拒绝并指向 `log_event`（与 Historian 候选采集的 300 字截断同口径）；描述与运行时指引明说「记忆 = 下个月仍成立的事；进度 / 交付物 / 版本号 / 带日期的进度汇报归日志」（生日、财年截止这类带日期的稳定事实照记），新事实取代旧条目时 `list` → `update` 原地替换而不是再加一条「更正」；记忆满（20,000 字）时回执列出现有条目与版本，让模型一次删旧加新。**为什么**：一份终端用户导出里 41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式更正——显式路径此前没有任何闸，而候选路径 12 天只出 8 条一句话；措辞已经写在该 Agent 的 developer_instructions 里却挡不住，只有执行层挡得住。辅助模式讨论同步注入整份记忆（受同一 20k 帽）而非头 3,000 字，否则主 Agent 看不到最新条目。
 - 设置 → 智能体 → 某个 Agent 的记忆：查看/编辑/遗忘条目、检查来源、编辑原文、查看版本与恢复。原文和日志编辑必须提交读取时的版本；409 保留草稿，先刷新后合并。
 - Dream 在同一面板中操作。可单次“立即整理”，也可单独关闭此 Agent 的自动整理，设置模型、最小间隔、总时限与输出预算。模型留空沿用已配置的后台模型（与 Historian 同一条解析链）。
@@ -57,6 +59,8 @@ Agent 定义已有有效本地快照时立即开跑，云文件同步在后台�
 ## 验证入口
 
 - `npm run typecheck` / `npm test`（tangu-agent）：存储中断/EIO/CAS、双 Agent/双方言检索隔离、来源覆盖、截断/超长、取消/迟到、同步撤销和路径验证。
+- `npm test -- test/memoryManagementRoutes.test.ts test/agentLoopRuntimeSafety.test.ts src/services/repeatedToolFailure.test.ts`：复现漏 `fact` 的重复更新、验证失败不写入/纠正后原地更新、三次重复失败收尾及收尾期间追加指令恢复。
+- `npm run live:harness -- --only chat,tool,remember,loop`：隔离 home 的真模型改名原地更新、故意传一次 `fact: null` 后按错误回执纠正保存，以及正常工具与轮数收尾回归。
 - desktop 的 `AgentMemoryPanel.test.ts`、`AgentMemoryModal.log.test.ts`、`backendService.memory.test.ts`：晚回包隔离、409 草稿、单次写入与日志版本。
 - `desktop/scripts/agent-memory.check.cjs`：真实 Electron + 生产记忆/Dream 路由 + SQLite/临时 home，验证界面到持久化、遗忘/恢复、Agent 切换和中英/明暗截图。其他引擎端点和模型返回为可控替身，不读写个人记忆或发真实模型请求。
 

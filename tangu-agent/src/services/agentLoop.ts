@@ -64,6 +64,7 @@ import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCa
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
+import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
@@ -957,6 +958,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       'If the request truly needs tools, say so briefly.',
   };
   const finalTurnNoteFor = (iteration: number): ChatMessage => (iteration > 0 ? FINAL_TURN_NOTE : FINAL_TURN_NOTE_SINGLE);
+  const toolFailureGuard = new RepeatedToolFailureGuard();
+  let repeatedToolFailure = false;
+  const TOOL_FAILURE_FINAL_NOTE: ChatMessage = {
+    role: 'user',
+    content: '[System] Tool calls have failed three consecutive times with unchanged arguments and the same error. Tools are unavailable for this final response. Explain the failure and what remains incomplete in the user\'s language. Do not claim the failed operation succeeded, call tools, or write tool calls as text.',
+  };
   // 截断恢复独立预算:模型对同一大输出反复顶到 max_tokens 时,不许拿整个 maxIterations(默认 90)空转。
   const MAX_TRUNCATION_RECOVERY = 3;
   let truncationRecoveryUsed = 0;
@@ -1889,6 +1896,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
+      toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
@@ -2430,7 +2438,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
-      const lastIter = iteration === maxIterations - 1;
+      const lastIter = iteration === maxIterations - 1 || repeatedToolFailure;
       // 本轮**真实上 wire** 的工具头文本:末轮不发 tools;空集也不发(openaiCompat 的 `tools && tools.length` 闸,
       // 记 `[]` 的 2 字节等于谎报)。toolsBytes 与探针的 tools 段都以它为准。
       const effectiveToolsText = lastIter || !toolDefs?.length ? '' : toolsJson;
@@ -2449,7 +2457,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         model,
         apiModelId,
         // 末轮追加「本轮无工具」说明(副本,不落 workingMessages);首轮即末轮用短版。
-        messages: lastIter ? [...workingMessages, finalTurnNoteFor(iteration)] : workingMessages,
+        messages: lastIter ? [...workingMessages, repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages,
         projectSource: appId,
         client: clientTag,
         temperature: 0.7,
@@ -2887,7 +2895,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 循环耗尽提示:① 顶到 lastIter ② 本 run 用过工具、或末轮仍在试图调用(泄漏/被丢弃)—— 纯聊天/maxIterations=1
         // 一上来就 lastIter 且没碰工具的不报。
         // 注:极少数"恰好在最后一轮自然收尾"会误报,故措辞为"可能尚未完成";完全消歧需不强制 toolChoice='none',成本更高,暂不做。
-        if (lastIter && (usedTools || leakedText || droppedCalls)) {
+        if (repeatedToolFailure) {
+          const notice = /[\u3400-\u9fff]/.test(String(input.message || ''))
+            ? `⚠️ 工具调用以相同参数连续失败 ${MAX_REPEATED_TOOL_FAILURES} 次，已停止重复执行；相关操作尚未完成。`
+            : `⚠️ Tool calls failed ${MAX_REPEATED_TOOL_FAILURES} times with unchanged arguments. Repeated execution has stopped; the affected operation remains incomplete.`;
+          finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n> ${notice}` : notice;
+        } else if (lastIter && (usedTools || leakedText || droppedCalls)) {
           // 点名上限来源:此前一律写「本会话」,Agent 定义里的 3 轮让用户以为是会话设置、又在 /status 里看到 90。
           const origin = maxIterationsSource === 'session' ? '本会话 /loop 设置'
             : maxIterationsSource === 'agent' ? `Agent「${activeAgentSlug}」定义的 max_iterations`
@@ -2992,6 +3005,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         toolCalls: res.toolCalls,
         toolResults,
       });
+      repeatedToolFailure = toolFailureGuard.record(res.toolCalls, toolResults);
+      if (repeatedToolFailure) await publish(runId, 'status', { phase: 'tool_failure_loop', iteration, failures: MAX_REPEATED_TOOL_FAILURES });
     }
 
     await finalizeAssistantMessage(

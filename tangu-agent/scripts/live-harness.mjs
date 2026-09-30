@@ -110,7 +110,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human',
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human',
   // P1-K1
   'remotecaller',
   // P1-K2
@@ -135,7 +135,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['remember', 'musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -731,7 +731,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -965,6 +965,30 @@ try {
     return { ok: !ev.error && ev.content.length > 0, detail: ev.error || `${ev.content.length} 字`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
+
+  // 09-30 用户反馈:改名时 remember.update 漏 fact,相同参数失败 30 次。真模型须原地更新且能从参数错误恢复。
+  await scenario('remember', 'remember 改名与参数纠正', async () => {
+    const oldName = `OldName-${MARKER}`;
+    await api('/agent/memory', { method: 'POST', body: JSON.stringify({ text: `The user's name is ${oldName}.` }) });
+    const before = await api('/agent/memory');
+    const entry = before.entries.find((e) => e.content.includes(oldName));
+    if (!entry) throw new Error('name seed did not persist');
+    const ev = await run(`live-remember-${Date.now()}`, '其实我叫做一十四画生，请把记忆里的旧名字改成这个，以后按这个名字称呼我。');
+    const after = await api('/agent/memory');
+    const update = ev.toolArgs.find((c) => c.name === 'remember' && JSON.parse(c.arguments || '{}').action === 'update');
+    const renamed = !ev.error && ev.done && !!update && after.entries.length === before.entries.length
+      && after.entries.some((e) => e.id === entry.id && e.content.includes('一十四画生')) && !after.content.includes(oldName);
+    // 明确诱发一次参数错误,然后看真模型是否读回执、补 fact、原地保存;不依赖模型恰好犯错。
+    const ev2 = await run(`live-remember-recovery-${Date.now()}`,
+      `This is an isolated memory validation. First call remember exactly once with action update, id ${entry.id}, expectedVersion ${after.version}, and fact null. This should return a validation error. Then correct that call by setting fact to "The user's name is 一十四画生 and they prefer concise replies." Use the same id and version. Finish by reporting whether the corrected update succeeded.`);
+    const saved = await api('/agent/memory');
+    const errors = ev2.toolResults.filter((r) => r.name === 'remember' && r.isError);
+    const recovered = !ev2.error && ev2.done && errors.length === 1 && errors[0].result.includes('fact is required')
+      && saved.entries.length === before.entries.length && saved.entries.some((e) => e.id === entry.id && e.content.includes('concise replies'))
+      && ![...ev.statuses, ...ev2.statuses].some((s) => s.phase === 'tool_failure_loop');
+    return { ok: renamed && recovered, detail: `改名原地保存=${renamed};参数错误=${errors.length};纠正后保存=${recovered}`,
+      output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2), toolCalls: [...ev.toolCalls, ...ev2.toolCalls] };
+  });
 
   await scenario('tool', 'tool 工具回合', async () => {
     const ev = await run(sessA, `请用工具读取文件 ${markerFile},把文件里 code = 后面的值原样回复给我,不要多说。`);

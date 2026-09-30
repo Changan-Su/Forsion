@@ -29,20 +29,21 @@ export const memoryLogProvider: ToolProvider = {
         function: {
           name: 'remember',
           description:
-            'Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. ' +
-            'WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. ' +
-            'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. ' +
+            'Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. ' +
+            'WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. ' +
+            'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
             'FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
-            'ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.',
+            'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ' +
+            'Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.',
           parameters: {
             type: 'object',
             properties: {
-              action: { type: 'string', enum: ['add', 'list', 'update', 'forget'], description: 'Defaults to add. List before update/forget to obtain the current entry ID.' },
-              fact: { type: 'string', description: 'One durable sentence, at most 300 characters; required for add/update.' },
+              action: { type: 'string', enum: ['add', 'list', 'update', 'forget'], description: 'The operation to perform. List before update/forget to obtain the current entry ID and version.' },
+              fact: { type: ['string', 'null'], description: 'For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails.' },
               id: { type: 'string', description: 'An entry ID returned by list for this Agent; required for update/forget.' },
               expectedVersion: { type: 'string', description: 'Version returned by list; include when modifying an existing entry.' },
             },
-            required: [],
+            required: ['action', 'fact'],
           },
         },
       },
@@ -58,8 +59,13 @@ export const memoryLogProvider: ToolProvider = {
           const snapshot = await brain.getMemorySnapshot(ctx.userId);
           return JSON.stringify({ version: snapshot.version, entries: snapshot.entries, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET });
         }
-        const fact = String(args.fact ?? '').trim();
-        if (action !== 'forget' && !fact) return 'Error: fact is required';
+        const fact = typeof args.fact === 'string' ? args.fact.trim() : '';
+        if (action !== 'forget' && !fact) {
+          const example = action === 'update'
+            ? { action, fact: '<replacement durable sentence>', id: args.id, expectedVersion: args.expectedVersion }
+            : { action, fact: '<durable sentence>' };
+          return `Error: fact is required for ${action} and must be a non-empty string. Include the actual sentence to save in the fact field, then retry with corrected arguments: ${JSON.stringify(example)}. Do not repeat the same incomplete call. Nothing was written.`;
+        }
         // 形状闸(借 Hermes memory 工具):超长直接拒、让模型提炼——静默截断只会留下半句话。
         if (action !== 'forget' && fact.length > REMEMBER_FACT_MAX_CHARS) {
           return `Error: fact is ${fact.length} characters; long-term memory takes one durable sentence of at most ${REMEMBER_FACT_MAX_CHARS}. Keep only what will still be true next month, or record progress with log_event instead.`;

@@ -52,7 +52,7 @@ beforeEach(async () => {
     brain: {
       llm: {
         resolveModelAndKey: async () => ({ model: { provider: 'test', context_window: contextWindow }, apiKey: '', baseUrl: '', apiModelId: 'test' }),
-        buildProviderPayload: async (opts: any) => ({ messages: structuredClone(opts.messages) }),
+        buildProviderPayload: async (opts: any) => ({ messages: structuredClone(opts.messages), tools: opts.tools }),
         streamProviderCompletion: stream,
       },
       users: { getUserById: async () => ({ id: 'u', username: 'test' }) },
@@ -90,6 +90,61 @@ async function settled(runId = 'runtime-r'): Promise<any> {
 }
 
 describe('main loop runtime safety', () => {
+  const missingFact = (id: string, args = '{"action":"update","id":"entry","expectedVersion":"version"}') => ({
+    content: '', reasoning: '', toolCalls: [{ id, type: 'function', function: { name: 'remember', arguments: args } }],
+    usage: { prompt_tokens: 1, completion_tokens: 1 },
+  });
+
+  it('stops the exported missing-fact loop after three failures and persists a tool-free final response', async () => {
+    for (let i = 0; i < 5; i++) stream.mockResolvedValueOnce(missingFact(`missing-${i}`));
+    stream.mockResolvedValue({ content: 'The memory update failed.', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    await launch({ maxIterations: 90 });
+    expect((await settled()).status).toBe('done');
+    expect(stream).toHaveBeenCalledTimes(4); // 三个错误回合 + 一次不带工具的收尾；原实现会继续调用。
+    const finalPayload = stream.mock.calls[3][0].payload;
+    expect(finalPayload.tools).toBeUndefined();
+    expect(JSON.stringify(finalPayload.messages.at(-1))).toContain('unchanged arguments');
+    const messages = await query<any[]>(`SELECT content, tool_calls, tool_results FROM chat_messages WHERE session_id = 'runtime-s' AND role = 'model'`);
+    const last = messages.at(-1)!;
+    expect(last.content).toContain('affected operation remains incomplete');
+    expect(last.content).not.toContain('最大循环轮数');
+    expect(JSON.parse(last.tool_calls)).toHaveLength(3);
+    expect(JSON.parse(last.tool_results).every((result: any) => result.isError && result.content.includes('fact is required'))).toBe(true);
+    const events = await query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'runtime-r' AND type = 'status'`);
+    expect(events.map((e) => JSON.parse(e.payload))).toContainEqual(expect.objectContaining({ phase: 'tool_failure_loop', failures: 3 }));
+  });
+
+  it('allows a corrected call after two failures and resets the failure streak on success', async () => {
+    const mutate = vi.fn(async () => ({ version: 'next', entries: [{ id: 'entry', content: 'New name' }], content: 'New name' }));
+    const { deps } = await import('../src/seams/runtime.js');
+    deps().brain.memory.mutateMemory = mutate;
+    stream.mockResolvedValueOnce(missingFact('m1')).mockResolvedValueOnce(missingFact('m2'))
+      .mockResolvedValueOnce(missingFact('fixed', '{"action":"update","id":"entry","expectedVersion":"version","fact":"New name"}'))
+      .mockResolvedValueOnce(missingFact('m3')).mockResolvedValueOnce(missingFact('m4'))
+      .mockResolvedValueOnce({ content: 'Done', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    await launch();
+    expect((await settled()).status).toBe('done');
+    expect(stream).toHaveBeenCalledTimes(6);
+    expect(mutate).toHaveBeenCalledOnce();
+    expect(mutate.mock.calls[0][1]).toMatchObject({ fact: 'New name', action: 'update' });
+    const events = await query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'runtime-r' AND type = 'status'`);
+    expect(events.some((e) => JSON.parse(e.payload).phase === 'tool_failure_loop')).toBe(false);
+  });
+
+  it('restores tools when new user input arrives during failure-loop finalization', async () => {
+    for (let i = 0; i < 3; i++) stream.mockResolvedValueOnce(missingFact(`failure-${i}`));
+    stream.mockImplementationOnce(async () => {
+      loop.enqueueSteer('runtime-r', { id: 'correction', content: 'Use the name New name instead' });
+      return { content: 'Update incomplete', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+    });
+    await launch();
+    expect((await settled()).status).toBe('done');
+    expect(stream).toHaveBeenCalledTimes(5);
+    expect(stream.mock.calls[3][0].payload.tools).toBeUndefined();
+    expect(stream.mock.calls[4][0].payload.tools.length).toBeGreaterThan(0);
+    expect(JSON.stringify(stream.mock.calls[4][0].payload.messages)).toContain('Use the name New name instead');
+  });
+
   it('reports cleanup failure rather than a successful stop when cancellation and cleanup failure coincide', async () => {
     stream.mockImplementation(async () => {
       abortRun('runtime-r');
