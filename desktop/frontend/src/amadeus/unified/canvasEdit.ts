@@ -147,6 +147,66 @@ export function addConnector(list: unknown[], fromKey: string, toKey: string): u
   return [...list, { id: freshElId(list, 'e'), type: 'connector', from, to }]
 }
 
+// ── 连线的箭头样式与改连(V-17)───────────────────────────────────────────────────────
+/** 两端箭头样式,与 JSON Canvas **同名同义**(`fromEnd` / `toEnd`,值 `none` | `arrow`)。缺省 = 规范缺省 = 修前的固定画法
+ *  (起点无箭头、终点有箭头)。 */
+export type ConnEnd = 'none' | 'arrow'
+export const CONN_END_DEFAULT = { fromEnd: 'none', toEnd: 'arrow' } as const
+
+/** 一批连线改箭头样式。写回**缺省值 = 删键**:没动过的条目逐字不变,改回缺省的条目也回到修前的字节形态
+ *  (旧端读到的仍是它认得的样子)。整体没变时原样返回同一个数组(调用方据此一个字节不写)。 */
+export function setConnectorEnds(list: unknown[], ids: ReadonlySet<string>, patch: { fromEnd?: ConnEnd; toEnd?: ConnEnd }): unknown[] {
+  let changed = false
+  const out = list.map((it) => {
+    const id = idOf(it)
+    if (!id || !ids.has(id) || (it as RawEl).type !== 'connector') return it
+    const o = it as RawEl
+    let next: RawEl | null = null
+    for (const k of ['fromEnd', 'toEnd'] as const) {
+      const v = patch[k]
+      if (v == null) continue
+      const isDefault = v === CONN_END_DEFAULT[k]
+      if (isDefault ? !(k in o) : o[k] === v) continue
+      next ??= { ...o }
+      if (isDefault) delete next[k]
+      else next[k] = v
+    }
+    if (!next) return it
+    changed = true
+    return next
+  })
+  return changed ? out : list
+}
+
+/** 两个端点对象是不是指同一个对象(`{ref}` / `{id}` / `{main:true}` 三形态)。 */
+const sameEndpoint = (a: unknown, b: unknown): boolean => {
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+  const x = a as RawEl
+  const y = b as RawEl
+  if (typeof x.ref === 'string' || typeof y.ref === 'string') return x.ref === y.ref
+  if (typeof x.id === 'string' || typeof y.id === 'string') return x.id === y.id
+  return x.main === true && y.main === true
+}
+
+/** 改连(V-17):把连线 `id` 的一端(`end`)换成选中键 `key` 所指的对象。拒绝(原样返回)的四种:端点认不出 /
+ *  没变 / 两端成了同一个对象 / 与别的连线成了同一对端点(无向,与 addConnector 判重同口径)。
+ *  只换那一个端点对象,条目上其余字段(label / color / fromEnd·toEnd / 未知键)逐字保留。 */
+export function reconnectEnd(list: unknown[], id: string, end: 'from' | 'to', key: string): unknown[] {
+  const ep = endpointOf(key)
+  if (!ep) return list
+  const self = list.find((it) => idOf(it) === id) as RawEl | undefined
+  if (!self || self.type !== 'connector') return list
+  const other = end === 'from' ? self.to : self.from
+  if (sameEndpoint(ep, self[end]) || sameEndpoint(ep, other)) return list
+  const dup = list.some((it) => {
+    if (idOf(it) === id || !it || typeof it !== 'object' || (it as RawEl).type !== 'connector') return false
+    const o = it as RawEl
+    return (sameEndpoint(ep, o.from) && sameEndpoint(other, o.to)) || (sameEndpoint(ep, o.to) && sameEndpoint(other, o.from))
+  })
+  if (dup) return list
+  return patchElement(list, id, { [end]: ep })
+}
+
 /** 文字/标签:空串 = 删键(而不是写 `text: ""` —— 磁盘上多一个空键,读侧还得当有文字处理)。 */
 export function setElementText(list: unknown[], id: string, key: 'text' | 'label' | 'title', text: string): unknown[] {
   return list.map((it) => {

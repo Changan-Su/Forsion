@@ -98,6 +98,16 @@
 //   C101 画布颜色(V-08,拍板 #9):手写 color 渲染且编辑后不丢;右键卡片 / 连线 / 混选设色(撤销一击);
 //        「无颜色」删键;自定义 #rrggbb;文档模式不显色、旧笔记正文编辑后 canvas 行逐字不变
 //   C102 拖到视口边缘自动平移(V-13):拖卡 / 框选 / 连线橡皮筋贴边即跑、松手或离边即停;按住不拖不跑;只读不跑
+//   —— 波次 4(评审 2026-09-27 新功能)在 wave4();`UCANVAS_ONLY=w4` 只跑这一段 ——
+//   C103 复制 / 重复(V-07):形状 / Frame / 连线进剪贴板(未知字段原样、连线与层级按新锚 / 新 id 改写、一击撤销);
+//        只选主卡复制 = 清剪贴板(不粘回旧卡);Mod+D 舞台上 = 重复选中、卡内编辑 = PM 复制块;右键「复制」「重复」;跨笔记粘贴保阵形
+//   C104 侧栏拖笔记进画布(V-09):缺省 = `![[路径]]` 嵌入卡(内容渲染出来)、按住 Alt = `[[链接]]` 卡;空白右键「添加笔记…」= 复用 NotePicker,选中即落嵌入卡
+//   C105 对齐参考线(V-14):拖卡 / 拖边贴近别的对象的边就吸过去并画线,松手落在线上(压过点阵吸附);
+//        HUD 开关关掉 = 不吸不画、回到点阵;开关只存本机(localStorage,不写盘)、跨重载记住
+//   C106 连线能力(V-17):fromEnd / toEnd 两端箭头(JSON Canvas 同名;缺省值删键、未动条目逐字不变)右键可改;
+//        选中连线拖端点 = 改连(落空白 / 自连 / 判重 = 不写,一击撤销);从选中卡的边口圆点拖出 = 新连线(卡↔卡默认父子、Shift 自由连)
+//   C107 导出 JSON Canvas(V-19,拍板 #10 单向):画布右键 / ⋯ 菜单(onCanvasMode.exportCanvas)写同目录 `<笔记名>.canvas`,
+//        卡 → text(恰为一个能解析的嵌入 → file)、Frame → group、形状 → text、连线 / 层级 → edge;重名加后缀不覆盖;笔记本身零写入
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -819,6 +829,555 @@ async function wave3(browser) {
   record('C102e 只读画布不自动平移:贴边停住期间视口只随 1px 抖动', Math.abs(vR1.x - vR0.x) <= 2 && Math.abs(vR1.y - vR0.y) <= 2, JSON.stringify({ vR0, vR1 }))
 }
 
+/** 波次 4(评审 2026-09-27 新功能:V-07 复制重复 / V-09 拖笔记 / V-14 参考线 / V-17 连线 / V-19 导出)。
+ *  默认跟在全套后面跑;`UCANVAS_ONLY=w4` 只跑这里(`UCANVAS_W4=C103,C104` 再挑格子)。 */
+async function wave4(browser) {
+  const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const pick = (id) => !process.env.UCANVAS_W4 || process.env.UCANVAS_W4.split(',').includes(id)
+  /** 一格中途抛错(元素没出来 / 等待超时)记成这一格的 FAIL,后面的格子照跑 —— 负对照与回退时看得到全貌。 */
+  const guard = async (id, fn) => { try { await fn() } catch (err) { record(`${id} 运行中断(视作失败)`, false, String(err?.message ?? err).split('\n')[0].slice(0, 300)) } }
+  const elsOfCv = (cv) => Object.fromEntries((cv?.elements ?? []).map((e) => [e.id, e]))
+  const cardsOfCv = (cv) => Object.fromEntries((cv?.cards ?? []).map((c) => [c.ref, c]))
+  const padOf = (pg, a) => pg.evaluate((a) => { const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } }, a)
+  const centerOf = (pg, sel) => pg.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, sel)
+  /** 视口内一处真空白(点它 = 焦点回舞台、清选中)。 */
+  const blankOf = (pg) => pg.evaluate(() => {
+    const s = document.querySelector('.amx-stage').getBoundingClientRect()
+    for (let y = s.top + 60; y < s.bottom - 60; y += 40)
+      for (let x = s.left + 60; x < s.right - 60; x += 40) {
+        const t = document.elementFromPoint(x, y)
+        if (t && (t.classList.contains('amx-stage') || t.classList.contains('amx-stage-inner') || t.classList.contains('amx-el-layer'))) return { x, y }
+      }
+    return null
+  })
+  const CLIP = 'application/x-amx-canvas'
+  /** 剪贴板事件派发给**当前焦点元素**(真人路径),`reuse` = 复用上一次 copy 那个 DataTransfer(系统剪贴板语义,见 C71 的 fire71)。 */
+  const clip = (pg, kind, { text = null, reuse = false, mine = null } = {}) => pg.evaluate(({ kind, text, reuse, mine, MIME }) => {
+    const dt = reuse && window.__clipW4 ? window.__clipW4 : new DataTransfer()
+    if (text != null) dt.setData('text/plain', text)
+    if (mine != null) dt.setData(MIME, mine)
+    const ev = new ClipboardEvent(kind, { bubbles: true, cancelable: true, clipboardData: dt })
+    const el = document.activeElement ?? document.body
+    el.dispatchEvent(ev)
+    if (kind === 'copy' || kind === 'cut') window.__clipW4 = dt
+    return { focus: `${el.tagName}.${el.className}`.slice(0, 40), prevented: ev.defaultPrevented, text: dt.getData('text/plain'), mine: dt.getData(MIME) }
+  }, { kind, text, reuse, mine, MIME: CLIP })
+  const menuItems = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-canvas-menu > button')].map((b) => b.textContent.trim()))
+  const clickMenu = async (pg, label) => {
+    const i = await pg.evaluate((l) => [...document.querySelectorAll('.amx-canvas-menu > button')].findIndex((b) => b.textContent.trim() === l), label)
+    if (i < 0) return false
+    await pg.click(`.amx-canvas-menu > button:nth-of-type(${i + 1})`)
+    return true
+  }
+
+  // ── C103 复制 / 重复(V-07)──────────────────────────────────────────────────────
+  //  修前:onCopy 只认卡片,选中形状时在 preventDefault 之前 return → 系统剪贴板原封不动,粘贴认领上一次的令牌 = 粘出旧卡;
+  //  没有 Mod+D;右键菜单没有复制 / 重复。
+  if (pick('C103')) await guard('C103', async () => {
+    const CV103 = {
+      v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
+      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 880, y: 0, w: 300 }],
+      cardColors: { k2: '3' },
+      tree: { k2: 'k1' },
+      elements: [
+        { id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '方块', note: 'future-field' },
+        { id: 'f1', type: 'frame', x: 1300, y: 300, w: 300, h: 200, title: '区域' },
+        { id: 's2', type: 'shape', shape: 'ellipse', x: 1340, y: 360, w: 120, h: 80 },
+        { id: 'c1', type: 'connector', from: { id: 's1' }, to: { ref: 'k1' }, label: '关系' },
+      ],
+    }
+    const body103 = ['# 复制', '', '主卡一段。', '', '<!-- a k1 -->', '', '## 卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '卡 K2', '', '<!-- /a k2 -->', '']
+    const seed103 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV103)}`, '---', '', ...body103].join('\n')
+    const p = await open(browser, seed103)
+    await p.waitForTimeout(800)
+    // 先复制一张卡(留下一枚旧令牌),再选形状复制 → 粘贴:必须粘出形状,不许是那张旧卡
+    await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+    await clip(p, 'copy')
+    const s1 = await centerOf(p, '.amx-el-shape[data-el="s1"]')
+    await p.mouse.click(s1.x, s1.y)
+    const c0 = await clip(p, 'copy')
+    const pasted = await clip(p, 'paste', { reuse: true })
+    await p.waitForTimeout(500)
+    const cvA = await cvOf(p)
+    const newShapes = (cvA?.elements ?? []).filter((e) => !['s1', 'f1', 's2', 'c1'].includes(e.id))
+    const selA = await p.evaluate(() => [...document.querySelectorAll('.amx-el-shape.is-sel')].map((e) => e.dataset.el))
+    record('C103a 选中形状复制 → 粘贴 = 一个新形状(新 id、未知字段原样、文字进纯文本),不是上一次复制的卡;新形状被选中',
+      c0.prevented && c0.text === '方块' && !!c0.mine && pasted.prevented && (cvA?.cards ?? []).length === 2
+        && newShapes.length === 1 && newShapes[0].text === '方块' && newShapes[0].note === 'future-field' && newShapes[0].shape === 'rect'
+        && selA.length === 1 && selA[0] === newShapes[0].id,
+      JSON.stringify({ c0: { prevented: c0.prevented, text: c0.text }, cards: (cvA?.cards ?? []).length, newShapes, selA }))
+
+    // b:Cmd+A(卡 + 形状 + Frame + 主卡)复制 → 粘贴:连线端点 / 层级按新锚、新 id 改写;卡颜色带走;Cmd+Z 一击全退
+    const blank = await blankOf(p)
+    await p.mouse.click(blank.x, blank.y)
+    await p.keyboard.press(`${MOD}+a`)
+    await p.waitForTimeout(150)
+    const before = await cvOf(p)
+    const cB = await clip(p, 'copy')
+    const pB = await clip(p, 'paste', { reuse: true })
+    await p.waitForTimeout(600)
+    const cvB = await cvOf(p)
+    const oldIds = new Set((before?.elements ?? []).map((e) => e.id))
+    const oldRefs = new Set((before?.cards ?? []).map((c) => c.ref))
+    const addEls = (cvB?.elements ?? []).filter((e) => !oldIds.has(e.id))
+    const addCards = (cvB?.cards ?? []).filter((c) => !oldRefs.has(c.ref))
+    const addConn = addEls.filter((e) => e.type === 'connector')
+    const addShape = addEls.find((e) => e.type === 'shape' && e.text === '方块')
+    // 阵形:新卡之间的相对位置与原卡一致(k2 - k1 = 400,0)
+    const byText = await p.evaluate((refs) => Object.fromEntries(refs.map((r) => [r, document.querySelector(`.amx-ucard[data-anchor="${r}"]`)?.textContent?.trim() ?? ''])), addCards.map((c) => c.ref))
+    const nk1 = addCards.find((c) => byText[c.ref]?.includes('卡 K1'))
+    const nk2 = addCards.find((c) => byText[c.ref]?.includes('卡 K2'))
+    const h2 = await p.evaluate((r) => !!document.querySelector(`.amx-ucard[data-anchor="${r}"] h2`), nk1?.ref ?? '')
+    const okB = cB.prevented && pB.prevented && addCards.length === 2 && !!nk1 && !!nk2 && h2
+      && nk2.x - nk1.x === 400 && nk2.y - nk1.y === 0
+      && cvB?.cardColors?.[nk2.ref] === '3' && cvB?.tree?.[nk2.ref] === nk1.ref && cvB?.tree?.k2 === 'k1'
+      && addConn.length === 1 && addConn[0].label === '关系' && addConn[0].to?.ref === nk1.ref && addConn[0].from?.id === addShape?.id
+      && addEls.some((e) => e.type === 'frame' && e.title === '区域') && addEls.some((e) => e.type === 'shape' && e.shape === 'ellipse')
+    await p.mouse.click(blank.x, blank.y)
+    await p.keyboard.press(`${MOD}+z`)
+    await p.waitForTimeout(600)
+    const cvB2 = await cvOf(p)
+    record('C103b 混选复制粘贴:卡(格式 / 颜色)+ 形状 + Frame + 连线 + 层级整份复现,端点与层级改指新锚 / 新 id、阵形不变;Cmd+Z 一击全退',
+      okB && JSON.stringify(cvB2?.elements) === JSON.stringify(before?.elements) && JSON.stringify(cvB2?.tree) === JSON.stringify(before?.tree) && (cvB2?.cards ?? []).length === 2,
+      JSON.stringify({ addCards, addEls, tree: cvB?.tree, colors: cvB?.cardColors, undo: { cards: (cvB2?.cards ?? []).length, els: (cvB2?.elements ?? []).length, tree: cvB2?.tree } }))
+
+    // c:Mod+D —— 舞台上选中形状 / 卡 = 原位错开一格的副本;卡内编辑时 = PM 的「复制块」(拍板 #8),舞台不另复制
+    await p.mouse.click(s1.x, s1.y)
+    await p.keyboard.press(`${MOD}+d`)
+    await p.waitForTimeout(500)
+    const cvC = await cvOf(p)
+    const dupS = (cvC?.elements ?? []).filter((e) => e.type === 'shape' && e.text === '方块' && e.x === 24 && e.y === 324)
+    await p.mouse.click(...Object.values(await padOf(p, 'k2')))
+    await p.keyboard.press(`${MOD}+d`)
+    await p.waitForTimeout(500)
+    const cvC2 = await cvOf(p)
+    const dupK = (cvC2?.cards ?? []).filter((c) => c.x === 904 && c.y === 24)
+    const dupKText = dupK[0] ? await p.evaluate((r) => document.querySelector(`.amx-ucard[data-anchor="${r}"]`)?.textContent?.trim(), dupK[0].ref) : null
+    // 卡内编辑:选中 k1 → 空格进编辑 → Mod+D
+    await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+    await p.keyboard.press('Space')
+    await p.waitForTimeout(250)
+    const nCards = (cvC2?.cards ?? []).length
+    const nEls = (cvC2?.elements ?? []).length
+    await p.keyboard.press(`${MOD}+d`)
+    await p.waitForTimeout(500)
+    const cvC3 = await cvOf(p)
+    const k1h2 = await p.evaluate(() => document.querySelectorAll('.amx-ucard[data-anchor="k1"] h2').length)
+    record('C103c Mod+D:舞台上选中形状 / 卡 = 错开一格的副本(+24,+24);卡内编辑时归 PM 复制块(卡里多一块,不多卡 / 元素)',
+      dupS.length === 1 && dupK.length === 1 && dupKText === '卡 K2' && (cvC3?.cards ?? []).length === nCards && (cvC3?.elements ?? []).length === nEls && k1h2 === 2,
+      JSON.stringify({ dupS, dupK, dupKText, cards: [nCards, (cvC3?.cards ?? []).length], els: [nEls, (cvC3?.elements ?? []).length], k1h2 }))
+    await p.keyboard.press('Escape')
+    await p.waitForTimeout(200)
+
+    // d:右键菜单「复制」「重复」(主卡 / 连线不给);菜单「复制」走真剪贴板 → 舞台粘贴
+    await p.mouse.click(s1.x, s1.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const itemsShape = await menuItems(p)
+    const nBeforeDup = (await cvOf(p))?.elements?.length ?? 0
+    const okDup = await clickMenu(p, '重复')
+    await p.waitForTimeout(500)
+    const nAfterDup = (await cvOf(p))?.elements?.length ?? 0
+    const mainPt = await p.evaluate(() => { const r = document.querySelector('.unified-body .ProseMirror').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 40 } })
+    await p.mouse.click(mainPt.x, mainPt.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const itemsMain = await menuItems(p)
+    await p.keyboard.press('Escape')
+    await p.context().grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {})
+    const f1bar = await centerOf(p, '.amx-el-frame-bar[data-el="f1"]')
+    await p.mouse.click(f1bar.x, f1bar.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const okCopy = await clickMenu(p, '复制')
+    await p.waitForTimeout(200)
+    const sys = await p.evaluate(() => navigator.clipboard.readText().catch((e) => 'ERR ' + e.message))
+    const nBeforeMenuPaste = (await cvOf(p))?.elements?.length ?? 0
+    await p.keyboard.press(`${MOD}+v`)
+    await p.waitForTimeout(600)
+    const cvD = await cvOf(p)
+    const framesD = (cvD?.elements ?? []).filter((e) => e.type === 'frame' && e.title === '区域').length
+    record('C103d 右键「复制」「重复」:形状上有两项、主卡上没有;「重复」= 多一个;「复制」进系统剪贴板(Frame 连框内形状),Cmd+V 粘出',
+      itemsShape.includes('复制') && itemsShape.includes('重复') && !itemsMain.includes('复制') && !itemsMain.includes('重复')
+        && okDup && nAfterDup === nBeforeDup + 1 && okCopy && sys.includes('区域') && framesD === 2 && (cvD?.elements?.length ?? 0) === nBeforeMenuPaste + 2,
+      JSON.stringify({ itemsShape, itemsMain, dup: [nBeforeDup, nAfterDup], sys, framesD, menuPaste: [nBeforeMenuPaste, cvD?.elements?.length] }))
+
+    // e:只选中主卡复制(选中里没有可复制对象)= 清空剪贴板 → 再粘贴什么都不落(修前:粘回上一次复制的那张卡)
+    await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+    await clip(p, 'copy')
+    await p.mouse.click(mainPt.x, mainPt.y)
+    const cE = await clip(p, 'copy')
+    const nE0 = await p.evaluate(() => document.querySelectorAll('.amx-ucard').length)
+    await clip(p, 'paste', { reuse: true })
+    await p.waitForTimeout(400)
+    const nE1 = await p.evaluate(() => document.querySelectorAll('.amx-ucard').length)
+    record('C103e 只选主卡复制 = 清空剪贴板(取消默认、无令牌、纯文本空),再粘贴不落任何东西',
+      cE.prevented && !cE.mine && cE.text === '' && nE1 === nE0, JSON.stringify({ cE, nE0, nE1 }))
+
+    await p.close()
+    // f:跨笔记粘贴(另一个实例,schema 不同):卡按 markdown 重建但保阵形 / 颜色,连线改指新卡。新开一页(上面几格叠了副本,s1 上压着别的形状)
+    const pf = await open(browser, seed103)
+    await pf.waitForTimeout(800)
+    await pf.mouse.click(...Object.values(await padOf(pf, 'k1')))
+    await pf.keyboard.down(MOD); await pf.mouse.click(s1.x, s1.y); await pf.mouse.click(...Object.values(await padOf(pf, 'k2'))); await pf.keyboard.up(MOD)
+    await pf.waitForTimeout(150)
+    const cF = await clip(pf, 'copy')
+    await pf.close()
+    const q = await open(browser, '# 另一篇\n\n另一篇正文。\n')
+    await q.click('.amx-modeseg button:nth-child(3)')
+    await q.waitForTimeout(1000)
+    const pF = await clip(q, 'paste', { text: cF.text, mine: cF.mine })
+    await q.waitForTimeout(600)
+    const cvF = await cvOf(q)
+    const qCards = await q.evaluate(() => [...document.querySelectorAll('.amx-ucard')].map((c) => ({ a: c.dataset.anchor, x: +c.dataset.x, y: +c.dataset.y, t: c.textContent.trim(), h2: !!c.querySelector('h2') })))
+    const fk1 = qCards.find((c) => c.t.includes('卡 K1'))
+    const fk2 = qCards.find((c) => c.t.includes('卡 K2'))
+    const fConn = (cvF?.elements ?? []).find((e) => e.type === 'connector')
+    const fShape = (cvF?.elements ?? []).find((e) => e.type === 'shape')
+    await q.close()
+    record('C103f 跨笔记粘贴:卡按 markdown 重建(h2 仍在)但阵形不变、颜色与层级带走,连线改指新卡与新形状',
+      pF.prevented && qCards.length === 2 && fk1?.h2 && fk2 && fk2.x - fk1.x === 400 && fk2.y === fk1.y
+        && cvF?.cardColors?.[fk2.a] === '3' && cvF?.tree?.[fk2.a] === fk1.a
+        && fConn?.to?.ref === fk1.a && fConn?.from?.id === fShape?.id && fShape?.x - fk1.x === 0 - 480 && fShape?.y - fk1.y === 300,
+      JSON.stringify({ qCards, fConn, fShape, colors: cvF?.cardColors, tree: cvF?.tree }))
+  })
+
+  // ── C104 侧栏拖笔记进画布(V-09)────────────────────────────────────────────────────
+  //  修前:refToCardMd 一律落 `[[链接]]` 卡;右键菜单没有「添加笔记」。台架 resolveEmbed 只认 `Embedded`,目标只能用它。
+  if (pick('C104')) await guard('C104', async () => {
+    const SEED104 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}',
+      '---', '', '# 拖笔记', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+    ].join('\n')
+    const p = await open(browser, SEED104)
+    await p.waitForTimeout(800)
+    /** 合成一次「侧栏拖笔记」到舞台空白(REF_MIME 与 chatDragRef.setChatRefDrag 同契约)。返回新卡的锚。 */
+    const dropNote = async (path, alt) => {
+      const before = await anchorsOf(p)
+      const r = await p.evaluate(({ path, alt }) => {
+        const s = document.querySelector('.amx-stage').getBoundingClientRect()
+        const x = s.left + 120
+        const y = s.bottom - 260
+        const dt = new DataTransfer()
+        dt.setData('application/x-forsion-chatref', JSON.stringify([{ kind: 'note', path }]))
+        const target = document.elementFromPoint(x, y)
+        const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt, altKey: alt }
+        const over = new DragEvent('dragover', opts)
+        target.dispatchEvent(over)
+        const drop = new DragEvent('drop', opts)
+        target.dispatchEvent(drop)
+        return { over: over.defaultPrevented, drop: drop.defaultPrevented }
+      }, { path, alt })
+      await p.waitForTimeout(900)
+      const added = (await anchorsOf(p)).filter((a) => !before.includes(a))
+      return { ...r, added }
+    }
+    const descOf = (a) => p.evaluate((a) => {
+      const c = document.querySelector(`.amx-ucard[data-anchor="${a}"]`)
+      return c ? { embed: !!c.querySelector('.unified-embed-host'), text: (c.textContent ?? '').trim().slice(0, 80), wiki: !!c.querySelector('.wikilink') } : null
+    }, a)
+    const bodyOf = () => p.evaluate(() => { window.__upage.probe.flush?.(); return window.__upage.writes.at(-1)?.text ?? '' })
+    const dA = await dropNote('Embedded.md', false)
+    const descA = dA.added.length === 1 ? await descOf(dA.added[0]) : null
+    await p.waitForTimeout(500)
+    const bodyA = await bodyOf()
+    record('C104a 侧栏拖笔记进画布(缺省)= `![[笔记]]` 嵌入卡,内容渲染出来',
+      dA.drop && dA.added.length === 1 && descA?.embed && descA.text.includes('被嵌入的第一段') && bodyA.includes(`<!-- a ${dA.added[0]} -->\n\n![[Embedded]]`),
+      JSON.stringify({ dA, descA, tail: bodyA.slice(-120) }))
+    const dB = await dropNote('Embedded.md', true)
+    const descB = dB.added.length === 1 ? await descOf(dB.added[0]) : null
+    await p.waitForTimeout(500)
+    const bodyB = await bodyOf()
+    record('C104b 按住 Alt 拖 = `[[链接]]` 卡(不嵌入)',
+      dB.drop && dB.added.length === 1 && descB && !descB.embed && descB.wiki && bodyB.includes(`<!-- a ${dB.added[0]} -->\n\n[[Embedded]]`),
+      JSON.stringify({ dB, descB, tail: bodyB.slice(-120) }))
+    // c:空白右键「添加笔记…」→ NotePicker(复用「移动到…」那个;本篇不在候选里)→ 选中 = 落嵌入卡
+    await p.evaluate(() => window.__upage.pageStore.setState({ pages: ['Unified.md', 'Embedded.md', '子夹/别的笔记.md'] }))
+    const blank = await blankOf(p)
+    await p.mouse.click(blank.x, blank.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const items = await menuItems(p)
+    const okMenu = await clickMenu(p, '添加笔记…')
+    await p.waitForTimeout(300)
+    const picker = await p.evaluate(() => {
+      const d = document.querySelector('[data-testid="note-picker"]')
+      return d ? { options: [...d.querySelectorAll('.cmd-item .cmd-path')].map((e) => e.textContent), focus: document.activeElement?.className ?? '' } : null
+    })
+    await p.keyboard.type('Embedded')
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(900)
+    const before = new Set([...dA.added, ...dB.added, 'k1'])
+    const addedC = (await anchorsOf(p)).filter((a) => !before.has(a))
+    const descC = addedC.length === 1 ? await descOf(addedC[0]) : null
+    const stageC = addedC.length === 1 ? await cardBox(p, addedC[0]) : null
+    const atC = await p.evaluate(({ x, y }) => {
+      const inner = document.querySelector('.amx-stage-inner')
+      const m = new DOMMatrixReadOnly(getComputedStyle(inner).transform)
+      const r = inner.getBoundingClientRect()
+      return { x: (x - r.left) / m.a, y: (y - r.top) / m.d }
+    }, blank)
+    const gone = await p.evaluate(() => !document.querySelector('[data-testid="note-picker"]'))
+    record('C104c 空白右键「添加笔记…」= NotePicker(本篇不在候选),选中 = 在右键处落一张 `![[笔记]]` 嵌入卡',
+      items.includes('添加笔记…') && okMenu && !!picker && !picker.options.includes('Unified.md') && picker.options.includes('Embedded.md')
+        && addedC.length === 1 && descC?.embed && gone && !!stageC && Math.abs(stageC.x + stageC.w / 2 - atC.x) < 60 && Math.abs(stageC.y - atC.y) < 60,
+      JSON.stringify({ items, picker, addedC, descC, stageC, atC, gone }))
+    // d:把**本篇**从侧栏拖进自己的画布 = 链接卡(不嵌入自己)
+    const dD = await dropNote('Unified.md', false)
+    const descD = dD.added.length === 1 ? await descOf(dD.added[0]) : null
+    await p.waitForTimeout(500)
+    const bodyD = await bodyOf()
+    record('C104d 把本篇拖进自己的画布 = `[[链接]]` 卡,不嵌入自己',
+      dD.drop && dD.added.length === 1 && descD && !descD.embed && bodyD.includes(`<!-- a ${dD.added[0]} -->\n\n[[Unified]]`),
+      JSON.stringify({ dD, descD }))
+    await p.close()
+  })
+
+  // ── C105 对齐参考线(V-14)──────────────────────────────────────────────────────────
+  //  修前:canvasKit 的 snapMoveToNeighbors / snapResizeToNeighbors 全仓无人调用;拖卡只有点阵吸附,两张宽度不是步长整倍数的卡
+  //  右缘永远差几像素(k2 右缘 780 往左拖 37 → 点阵落 732,k1 右缘 740)。
+  if (pick('C105')) await guard('C105', async () => {
+    const SEED105 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":260},{"ref":"k2","x":480,"y":400,"w":300}]}',
+      '---', '', '# 对齐', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '卡 K2', '', '<!-- /a k2 -->', '',
+    ].join('\n')
+    const zOf = (pg) => pg.evaluate(() => new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a)
+    const guidesNow = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-el-guide')].map((g) => ({ dir: g.classList.contains('is-v') ? 'v' : 'h', x: parseFloat(g.style.left), y: parseFloat(g.style.top), w: parseFloat(g.style.width), h: parseFloat(g.style.height), z: getComputedStyle(g).zIndex })))
+    /** 抓 k2 左上内衬往左拖 `dx` 舞台单位(中途停一下读参考线),松手后返回 { mid, k2 }。 */
+    const dragK2 = async (pg, dx) => {
+      const z = await zOf(pg)
+      const a = await padOf(pg, 'k2')
+      await pg.mouse.move(a.x, a.y); await pg.mouse.down()
+      for (let i = 1; i <= 10; i++) await pg.mouse.move(a.x + dx * z * i / 10, a.y)
+      await pg.waitForTimeout(120)
+      const mid = await guidesNow(pg)
+      await pg.mouse.up()
+      await pg.waitForTimeout(600)
+      return { mid, k2: cardsOfCv(await cvOf(pg)).k2 }
+    }
+    const p = await open(browser, SEED105)
+    await p.waitForTimeout(800)
+    const a = await dragK2(p, -37)
+    const gv = a.mid.find((g) => g.dir === 'v')
+    record('C105a 拖卡贴近别的卡的右缘(7 屏幕像素内):当场画竖参考线(连起两张卡、压在卡上)、松手右缘对齐 740(压过点阵的 732)',
+      !!gv && Math.abs(gv.x + gv.w / 2 - 740) < 0.6 && gv.y <= 0 && gv.y + gv.h >= 400 && Number(gv.z) >= 3 && a.k2?.x + a.k2?.w === 740,
+      JSON.stringify(a))
+    await p.close()
+    // b:贴近别的卡的边去调宽(新开一页,k2 右缘回到 780;右缘把手往左拖到离 740 差 3):宽度吸到 260,点阵会给 264
+    const pb = await open(browser, SEED105)
+    await pb.waitForTimeout(800)
+    await pb.mouse.click(...Object.values(await padOf(pb, 'k2')))
+    await pb.waitForTimeout(200)
+    // ⚠️ 抓右缘热区的上四分之一处:正中间是 V-17 的边口圆点(拖出 = 连线,压在热区之上),抓中心起的是连线不是调宽。
+    const grip = await pb.evaluate(() => { const r = document.querySelector('.amx-card-size-grip.is-e[data-card-grip="k2"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height * 0.2 } })
+    const before = { x: 480, w: 300 }
+    const z = await zOf(pb)
+    await pb.mouse.move(grip.x, grip.y); await pb.mouse.down()
+    const target = (before.x + before.w) - 740 - 3 // 指针停在离 740 还差 3 的地方(右缘 743)
+    for (let i = 1; i <= 10; i++) await pb.mouse.move(grip.x - target * z * i / 10, grip.y)
+    await pb.waitForTimeout(120)
+    const midB = await guidesNow(pb)
+    await pb.mouse.up()
+    await pb.waitForTimeout(600)
+    const afterB = cardsOfCv(await cvOf(pb)).k2
+    await pb.close()
+    record('C105b 调宽时被拖的边贴近别的卡的边:画竖参考线、右缘吸到 740 = 宽 260(点阵会落 744)',
+      midB.some((g) => g.dir === 'v' && Math.abs(g.x + g.w / 2 - 740) < 0.6) && afterB?.x === 480 && afterB?.w === 260,
+      JSON.stringify({ midB, afterB }))
+    // c:HUD 开关(本机偏好,不写盘)关掉 → 同样的拖动不吸不画、走点阵;重载后仍是关(同一个页面重载:localStorage 随浏览上下文)
+    const q = await open(browser, SEED105)
+    await q.waitForTimeout(800)
+    const w0 = await q.evaluate(() => window.__upage.writes.length)
+    const btn = '.amx-stage-hud button[aria-label="对齐参考线"]'
+    const on0 = await q.getAttribute(btn, 'aria-pressed')
+    await q.click(btn)
+    await q.waitForTimeout(300)
+    const off = { pressed: await q.getAttribute(btn, 'aria-pressed'), ls: await q.evaluate(() => localStorage.getItem('amadeus.canvas.alignGuides')), writes: (await q.evaluate(() => window.__upage.writes.length)) - w0 }
+    await q.reload({ waitUntil: 'domcontentloaded' })
+    await q.waitForSelector(PM, { timeout: 20000 })
+    await q.waitForTimeout(1000)
+    const pressedAfterReload = await q.getAttribute(btn, 'aria-pressed')
+    const c = await dragK2(q, -37)
+    await q.evaluate(() => localStorage.removeItem('amadeus.canvas.alignGuides'))
+    await q.close()
+    record('C105c HUD「对齐参考线」开关:缺省开;关掉只写本机(localStorage=0,零写盘)、重载仍关;关后同样的拖动不画线、按点阵落 732',
+      on0 === 'true' && off.pressed === 'false' && off.ls === '0' && off.writes === 0 && pressedAfterReload === 'false'
+        && c.mid.length === 0 && c.k2?.x + c.k2?.w === 732,
+      JSON.stringify({ on0, off, pressedAfterReload, c }))
+  })
+
+  // ── C106 连线能力(V-17)────────────────────────────────────────────────────────────
+  //  修前:箭头固定画在终点(无字段可改);不能改连;只能用箭头工具两击连线,不能从卡边拖出。
+  if (pick('C106')) await guard('C106', async () => {
+    const E1 = { id: 'e1', type: 'connector', from: { id: 's1' }, to: { id: 's2' } }
+    const E2 = { id: 'e2', type: 'connector', from: { id: 's2' }, to: { ref: 'k3' }, label: '旧', fromEnd: 'arrow', toEnd: 'none', note: 'future' }
+    const E3 = { id: 'e3', type: 'connector', from: { ref: 'k1' }, to: { ref: 'k3' } }
+    const CV106 = {
+      v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
+      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 300, w: 300 }, { ref: 'k3', x: 900, y: 300, w: 300 }],
+      elements: [
+        { id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '甲' },
+        { id: 's2', type: 'shape', shape: 'rect', x: 0, y: 600, w: 200, h: 120, text: '乙' },
+        E1, E2, E3,
+      ],
+    }
+    const seed106 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV106)}`, '---', '', '# 连线', '', '主卡。', '',
+      ...['k1', 'k2', 'k3'].flatMap((k) => [`<!-- a ${k} -->`, '', `卡 ${k.toUpperCase()}`, '', `<!-- /a ${k} -->`, ''])].join('\n')
+    const heads = (pg, id) => pg.evaluate((id) => {
+      const svg = document.querySelector(`svg.amx-el-conn[data-el="${id}"]`)
+      if (!svg) return null
+      const d = svg.querySelector('path.amx-el-conn-core')?.getAttribute('d') ?? ''
+      const m = /^M([-\d.]+),([-\d.]+) C.* ([-\d.]+),([-\d.]+)$/.exec(d)
+      const tips = [...svg.querySelectorAll('polygon')].map((g) => g.getAttribute('points').split(' ')[0].split(',').map(Number))
+      const near = (pt, x, y) => Math.abs(pt[0] - x) < 0.01 && Math.abs(pt[1] - y) < 0.01
+      return { n: tips.length, atStart: !!m && tips.some((pt) => near(pt, +m[1], +m[2])), atEnd: !!m && tips.some((pt) => near(pt, +m[3], +m[4])) }
+    }, id)
+    const p = await open(browser, seed106)
+    await p.waitForTimeout(800)
+    const r0 = { e1: await heads(p, 'e1'), e2: await heads(p, 'e2') }
+    // a:右键 e1(两形状之间的竖线,中点 (100,510))→ 箭头一排 → 双向 / 无 / 回到缺省
+    const e1mid = await stageToClient(p, 100, 510)
+    const pickEnds = async (v) => {
+      await p.mouse.click(e1mid.x, e1mid.y, { button: 'right' })
+      await p.waitForTimeout(250)
+      const seen = await p.evaluate(() => [...document.querySelectorAll('.amx-canvas-menu .amx-end-row .amx-end-btn')].map((b) => `${b.dataset.ends}${b.getAttribute('aria-pressed') === 'true' ? '*' : ''}`))
+      await p.click(`.amx-canvas-menu .amx-end-btn[data-ends="${v}"]`)
+      await p.waitForTimeout(500)
+      return { seen, e1: elsOfCv(await cvOf(p)).e1, dom: await heads(p, 'e1') }
+    }
+    const both = await pickEnds('both')
+    const none = await pickEnds('none')
+    const back = await pickEnds('end')
+    const cvA = await cvOf(p)
+    record('C106a 两端箭头:盘上 fromEnd/toEnd 照画(起点箭头在起点);右键连线改「双向 / 无 / 指向终点」,缺省值删键、改回缺省 = 条目逐字复原,别的连线逐字不动',
+      r0.e1?.n === 1 && r0.e1.atEnd && r0.e2?.n === 1 && r0.e2.atStart && !r0.e2.atEnd
+        && both.seen.join(',') === 'end*,start,both,none' && both.e1?.fromEnd === 'arrow' && !('toEnd' in both.e1) && both.dom?.n === 2
+        && none.e1?.toEnd === 'none' && !('fromEnd' in none.e1) && none.dom?.n === 0 && none.seen.includes('both*')
+        && JSON.stringify(back.e1) === JSON.stringify(E1) && back.dom?.n === 1
+        && JSON.stringify(elsOfCv(cvA).e2) === JSON.stringify(E2) && JSON.stringify(elsOfCv(cvA).e3) === JSON.stringify(E3),
+      JSON.stringify({ r0, both, none, back }))
+
+    // b:选中 e1 → 两端把手;拖终点把手到 k2 = 改连(label / 其余字段不动),Cmd+Z 撤回;拖到空白 / 拖回起点 = 不写
+    await p.mouse.click(e1mid.x, e1mid.y)
+    await p.waitForTimeout(200)
+    const ends = await p.evaluate(() => [...document.querySelectorAll('.amx-conn-end')].map((h) => h.dataset.connEnd))
+    const dragHandle = async (to) => {
+      const h = await centerOf(p, '.amx-conn-end[data-conn-end="to"]')
+      await p.mouse.move(h.x, h.y); await p.mouse.down()
+      for (let i = 1; i <= 8; i++) await p.mouse.move(h.x + (to.x - h.x) * i / 8, h.y + (to.y - h.y) * i / 8)
+      await p.waitForTimeout(100)
+      const rubber = await p.evaluate(() => ({ preview: !!document.querySelector('.amx-el-conn.is-preview'), targets: document.querySelectorAll('.amx-conn-target').length }))
+      await p.mouse.up()
+      await p.waitForTimeout(500)
+      return rubber
+    }
+    const w0 = await p.evaluate(() => window.__upage.writes.length)
+    const blank = await blankOf(p)
+    await dragHandle(blank)
+    const afterBlank = elsOfCv(await cvOf(p)).e1
+    await p.mouse.click(e1mid.x, e1mid.y)
+    await dragHandle(await centerOf(p, '.amx-el-shape[data-el="s1"]'))
+    const afterSelf = elsOfCv(await cvOf(p)).e1
+    const w1 = await p.evaluate(() => window.__upage.writes.length)
+    await p.mouse.click(e1mid.x, e1mid.y)
+    const k2c = await centerOf(p, '.amx-ucard[data-anchor="k2"]')
+    const rubber = await dragHandle(k2c)
+    const moved = elsOfCv(await cvOf(p)).e1
+    await p.mouse.click(blank.x, blank.y)
+    await p.keyboard.press(`${MOD}+z`)
+    await p.waitForTimeout(500)
+    const undone = elsOfCv(await cvOf(p)).e1
+    record('C106b 选中连线出两端把手;拖终点把手到卡 = 改连(有橡皮筋、目标高亮,其余字段不动),Cmd+Z 撤回;落空白 / 落回起点 = 不写',
+      ends.join(',') === 'from,to' && JSON.stringify(afterBlank) === JSON.stringify(E1) && JSON.stringify(afterSelf) === JSON.stringify(E1) && w1 === w0
+        && rubber.preview && rubber.targets === 2 && JSON.stringify(moved) === JSON.stringify({ ...E1, to: { ref: 'k2' } }) && JSON.stringify(undone) === JSON.stringify(E1),
+      JSON.stringify({ ends, afterBlank, afterSelf, writes: [w0, w1], rubber, moved, undone }))
+
+    // c:选中 k1 → 四个边口圆点;拖到 k3 = 设为子节点(不多连线);松手时按住 Shift 拖到 k2 = 自由连线;拖到形状 = 自由连线;拖到空白 = 不写
+    const dragDot = async (side, to, shift = false) => {
+      await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+      await p.waitForTimeout(200)
+      const dot = await centerOf(p, `.amx-el-selbox[data-anchor="k1"] .amx-link-dot.is-${side}`)
+      await p.mouse.move(dot.x, dot.y); await p.mouse.down()
+      for (let i = 1; i <= 8; i++) await p.mouse.move(dot.x + (to.x - dot.x) * i / 8, dot.y + (to.y - dot.y) * i / 8)
+      if (shift) await p.keyboard.down('Shift')
+      await p.mouse.up()
+      if (shift) await p.keyboard.up('Shift')
+      await p.waitForTimeout(500)
+      return cvOf(p)
+    }
+    await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+    await p.waitForTimeout(200)
+    const dots = await p.evaluate(() => [...document.querySelectorAll('.amx-el-selbox[data-anchor="k1"] .amx-link-dot')].map((d) => d.className.replace('amx-link-dot ', '')))
+    const nEls0 = (await cvOf(p)).elements.length
+    const cvC1 = await dragDot('e', await centerOf(p, '.amx-ucard[data-anchor="k3"]'))
+    const cvC2 = await dragDot('s', k2c, true)
+    const cvC3 = await dragDot('w', await centerOf(p, '.amx-el-shape[data-el="s2"]'))
+    const cvC4 = await dragDot('n', blank)
+    const conn = (cv, a, b) => (cv?.elements ?? []).filter((e) => e.type === 'connector' && JSON.stringify(e.from) === JSON.stringify(a) && JSON.stringify(e.to) === JSON.stringify(b))
+    await p.close()
+    record('C106c 选中卡出四个边口圆点;拖到卡 = 设为子节点(零连线条目);松手按住 Shift = 自由连线;拖到形状 = 自由连线;拖到空白 = 不写',
+      dots.join(',') === 'is-n,is-e,is-s,is-w' && cvC1?.tree?.k3 === 'k1' && cvC1.elements.length === nEls0
+        && conn(cvC2, { ref: 'k1' }, { ref: 'k2' }).length === 1 && !cvC2?.tree?.k2
+        && conn(cvC3, { ref: 'k1' }, { id: 's2' }).length === 1 && JSON.stringify(cvC4) === JSON.stringify(cvC3),
+      JSON.stringify({ dots, tree1: cvC1?.tree, n: [nEls0, cvC1?.elements.length, cvC2?.elements.length, cvC3?.elements.length], c2: conn(cvC2, { ref: 'k1' }, { ref: 'k2' }), c3: conn(cvC3, { ref: 'k1' }, { id: 's2' }) }))
+  })
+
+  // ── C107 导出 JSON Canvas(V-19)──────────────────────────────────────────────────────
+  //  修前:画布与 Obsidian 的 JSON Canvas 不互通,没有任何导出入口(拍板 #10:只做单向导出)。
+  if (pick('C107')) await guard('C107', async () => {
+    const CV107 = {
+      v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
+      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 300, w: 300 }],
+      cardColors: { k1: '4' },
+      tree: { k2: 'k1' },
+      elements: [
+        { id: 'f1', type: 'frame', x: 1000, y: 0, w: 300, h: 200, title: '区域' },
+        { id: 's1', type: 'shape', shape: 'ellipse', x: 0, y: 300, w: 200, h: 120, text: '方块', color: '#12ab34' },
+        { id: 'e1', type: 'connector', from: { id: 's1' }, to: { ref: 'k1' }, label: '关系', fromEnd: 'arrow' },
+      ],
+    }
+    const seed107 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV107)}`, '---', '', '# 导出', '', '主卡正文。', '',
+      '<!-- a k1 -->', '', '## 卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '![[Embedded]]', '', '<!-- /a k2 -->', ''].join('\n')
+    const p = await open(browser, seed107)
+    await p.waitForTimeout(900)
+    await p.evaluate(() => window.__upage.pageStore.setState({ pages: ['Unified.md', 'Embedded.md'] }))
+    const k2h = await p.evaluate(() => Math.round(document.querySelector('.amx-ucard[data-anchor="k2"]').offsetHeight))
+    const blank = await blankOf(p)
+    await p.mouse.click(blank.x, blank.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const items = await menuItems(p)
+    const okMenu = await clickMenu(p, '导出为 JSON Canvas')
+    await p.waitForTimeout(800)
+    const out = await p.evaluate(() => window.__upage.writes.filter((w) => w.path.endsWith('.canvas')).map((w) => ({ path: w.path, text: w.text })))
+    const notes = await p.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').length)
+    let jc = null
+    try { jc = JSON.parse(out[0]?.text ?? '') } catch { /* 断言里报 */ }
+    const node = (id) => jc?.nodes?.find((n) => n.id === id)
+    const edge = (id) => jc?.edges?.find((e) => e.id === id)
+    record('C107a 画布右键「导出为 JSON Canvas」= 同目录 Unified.canvas(Frame=group 垫底、卡=text、恰为嵌入的卡=file、形状=text、主卡=text、连线 / 层级=edge),笔记本身零写入',
+      items.includes('导出为 JSON Canvas') && okMenu && out.length === 1 && out[0].path === 'Unified.canvas' && notes === 0
+        && jc?.nodes?.[0]?.id === 'el-f1' && node('el-f1')?.type === 'group' && node('el-f1')?.label === '区域'
+        && node('card-k1')?.type === 'text' && node('card-k1')?.text === '## 卡 K1' && node('card-k1')?.color === '4' && node('card-k1')?.x === 480
+        && node('card-k2')?.type === 'file' && node('card-k2')?.file === 'Embedded.md' && node('card-k2')?.height === k2h
+        && node('el-s1')?.type === 'text' && node('el-s1')?.text === '方块' && node('el-s1')?.color === '#12ab34'
+        && node('main')?.type === 'text' && node('main')?.text.includes('主卡正文')
+        && edge('edge-e1')?.fromNode === 'el-s1' && edge('edge-e1')?.toNode === 'card-k1' && edge('edge-e1')?.fromEnd === 'arrow' && edge('edge-e1')?.label === '关系' && !!edge('edge-e1')?.fromSide
+        && edge('tree-k2')?.fromNode === 'card-k1' && edge('tree-k2')?.toNode === 'card-k2' && edge('tree-k2')?.toEnd === 'none',
+      JSON.stringify({ items, out: out.map((o) => o.path), notes, k2h, nodes: jc?.nodes?.map((n) => `${n.id}:${n.type}`), edges: jc?.edges }))
+    // b:再导一次(走笔记 ⋯ 菜单那条路:onCanvasMode 交出来的 exportCanvas)→ Unified 2.canvas,第一份逐字不动
+    const segOk = await p.evaluate(() => typeof window.__upage.probe.canvasSeg?.exportCanvas === 'function')
+    await p.evaluate(() => window.__upage.probe.canvasSeg?.exportCanvas?.())
+    await p.waitForTimeout(800)
+    const out2 = await p.evaluate(() => ({ paths: window.__upage.writes.filter((w) => w.path.endsWith('.canvas')).map((w) => w.path), first: window.__upage.vault.get('Unified.canvas') }))
+    // 文档模式下 ⋯ 菜单不给(导出要量画布里的卡盒)
+    await p.click('.amx-modeseg button:nth-child(2)')
+    await p.waitForTimeout(500)
+    const docSeg = await p.evaluate(() => ({ on: window.__upage.probe.canvasSeg?.on, exp: typeof window.__upage.probe.canvasSeg?.exportCanvas }))
+    await p.close()
+    record('C107b 再导一次(⋯ 菜单的 exportCanvas)= Unified 2.canvas,不覆盖第一份;文档模式下不交出导出动作',
+      segOk && out2.paths.join(',') === 'Unified.canvas,Unified 2.canvas' && out2.first === out[0]?.text && docSeg.on === false && docSeg.exp === 'undefined',
+      JSON.stringify({ segOk, out2: out2.paths, same: out2.first === out[0]?.text, docSeg }))
+  })
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   if (process.env.UCANVAS_ONLY === 'w2') {
@@ -833,6 +1392,13 @@ async function main() {
     await browser.close()
     const ok = results.filter(Boolean).length
     console.log(`\n${ok}/${results.length} 通过(仅波次 3 段)`)
+    process.exit(ok === results.length ? 0 : 1)
+  }
+  if (process.env.UCANVAS_ONLY === 'w4') {
+    await wave4(browser)
+    await browser.close()
+    const ok = results.filter(Boolean).length
+    console.log(`\n${ok}/${results.length} 通过(仅波次 4 段)`)
     process.exit(ok === results.length ? 0 : 1)
   }
   const SEED = '# 画布页\n\n主卡一段。\n\n要拖出去的段。\n'
@@ -5239,7 +5805,7 @@ async function main() {
     n: document.querySelectorAll('.amx-ucard').length,
     link: [...document.querySelectorAll('.amx-ucard')].some((c) => (c.textContent ?? '').includes('别的笔记')),
   }))
-  record('C71c 落点在卡片上照样接管(侧栏笔记 → 一张 [[引用]] 卡)',
+  record('C71c 落点在卡片上照样接管(侧栏笔记 → 一张 ![[嵌入]] 卡;V-09 起缺省嵌入,目标不在库里 = 丢失壳仍显示名字)',
     drop71.over && drop71.drop && c71.n === 4 && c71.link, JSON.stringify({ ...drop71, ...c71 }))
 
   // d:进卡编辑(选中 + 空格)之后粘贴归 PM —— 舞台不许再建卡
@@ -6306,6 +6872,7 @@ async function main() {
 
   await wave2(browser)
   await wave3(browser)
+  await wave4(browser)
   await browser.close()
   const ok = results.filter(Boolean).length
   console.log(`\n${ok}/${results.length} 通过`)

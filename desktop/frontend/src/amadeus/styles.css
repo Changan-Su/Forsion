@@ -3618,6 +3618,14 @@ body.amx-marquee-active * {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   pointer-events: none;
 }
+/* 对齐参考线(V-14):手势期吸附命中的线段,线宽在舞台里按 1/z 给(屏幕上恒 1px)。
+   ⚠️ z-index 抬到卡片之上(同 .amx-el-attach 的理由):元素层画在正文底下,线正好贯穿被对齐的卡,不抬就被卡身盖掉。 */
+.am-app .amx-el-guide {
+  position: absolute;
+  z-index: 3;
+  background: var(--danger);
+  pointer-events: none;
+}
 /* 卡片的选中框。画在白板层而不是给卡片 DOM 加 class:卡片归 PM 所有,它一重绘就把 class 抹了
    (canvasElements 的 selCards 注写了实测现象)。也顺带避开「border 改 offsetWidth → 连线跳 2px」。 */
 .am-app .amx-el-selbox {
@@ -3761,10 +3769,50 @@ body.amx-marquee-active * {
   pointer-events: none;
 }
 .am-app .amx-el-attach-label.is-sibling { color: var(--text-sec); }
+/* 拖拽式连线的两种把手(V-17):边口圆点(选中单个对象时四边中点,拖出 = 新连线)与选中连线的端点(拖到别的对象 = 改连)。
+   ⚠️ pointer-events:auto + z-index 是正确性:元素层整片 none,圆点骑在卡边上、而卡画在元素层之上(同 .amx-el-attach 的理由);
+   边口圆点压在边缘尺寸热区(z 6)之上,只占中点那一小块,其余边段照旧调尺寸。 */
+.am-app .amx-link-dot,
+.am-app .amx-conn-end {
+  position: absolute;
+  z-index: 7;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  box-sizing: border-box;
+  border-radius: var(--radius-pill, 999px);
+  border: 1.5px solid var(--primary);
+  background: var(--bg);
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.am-app .amx-link-dot { opacity: 0.85; }
+.am-app .amx-link-dot:hover, .am-app .amx-conn-end:hover { opacity: 1; background: var(--primary); }
+.am-app .amx-conn-end { background: var(--primary); cursor: move; }
+/* 卡 / 主卡的圆点住在选中框里(随拖拽样式表一起走),按百分比落在四边中点;元素的圆点按盒坐标直接定位(.is-free)。 */
+.am-app .amx-link-dot.is-n:not(.is-free) { left: 50%; top: 0; }
+.am-app .amx-link-dot.is-s:not(.is-free) { left: 50%; top: 100%; }
+.am-app .amx-link-dot.is-w:not(.is-free) { left: 0; top: 50%; }
+.am-app .amx-link-dot.is-e:not(.is-free) { left: 100%; top: 50%; }
+/* 右键连线的箭头样式一排(压过 base.css 的 `.ctx-menu button`:整行宽 + flex + hover 换底,同色板那段)。 */
+.am-app .amx-canvas-menu .amx-end-row .amx-end-btn {
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  width: auto;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-sec);
+}
+.am-app .amx-canvas-menu .amx-end-row .amx-end-btn[aria-pressed='true'] { background: var(--menu-hover); color: var(--text); }
 /* ⚠️ 非选择工具下把手与 ⊕ 一律收起(Codex 08-19 medium):选中态不随换工具清空,而建形状/建卡/
    连线那几支在 onDown 里**早于**它们 return —— 留着就是「看得见、点下去却建了个矩形」。
    舞台根的 `amx-tool-*` 只在画布模式挂,文档模式本层根本不渲染。 */
 .am-app .amx-stage:not(.amx-tool-select) .amx-el-add,
+.am-app .amx-stage:not(.amx-tool-select) .amx-link-dot,
+.am-app .amx-stage:not(.amx-tool-select) .amx-conn-end,
 .am-app .amx-stage:not(.amx-tool-select) .amx-el-grip,
 .am-app .amx-stage:not(.amx-tool-select) .amx-card-size-grip { display: none; }
 .am-app .amx-el-ellipse { border-radius: 50%; }

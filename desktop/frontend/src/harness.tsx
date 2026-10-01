@@ -2053,6 +2053,8 @@ if (new URLSearchParams(location.search).has('dock')) {
             readOnly={new URLSearchParams(location.search).has('uro') || locked}
             onUnlock={locked ? () => { void switchNoteLock(null, st.path, false) } : undefined}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
+            // 生产由 amadeusViews 收(⋯ 菜单 / 移动端胶囊);台架挂在探针上,仪器经它调「导出 JSON Canvas」(V-19,C107)。
+            onCanvasMode={(s) => { if (probe) probe.canvasSeg = s }}
           /></div>}
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
           <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
