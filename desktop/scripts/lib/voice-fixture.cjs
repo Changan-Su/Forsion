@@ -1,6 +1,6 @@
 /**
  * 语音台架共用:macOS `say`(Tingting)合成几句中文 + 句间静音 → 16k 16-bit 单声道 WAV,
- * 喂给 Chromium 假麦克风。live-voice.probe.cjs(采集+ASR)与 live-voice.e2e.cjs(整条 UI)共用。
+ * 喂给 Chromium 假麦克风。realtime-voice.e2e.cjs(实时语音通话整条 UI)用。
  *
  * ⚠️ Electron 里假麦克风要三件套才有声音:
  *   --use-fake-device-for-media-stream --use-file-for-fake-audio-capture=<wav>%noloop

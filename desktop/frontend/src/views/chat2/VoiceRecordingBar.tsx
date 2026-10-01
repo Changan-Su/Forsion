@@ -4,7 +4,7 @@
  * 静音处只剩虚线基线。■ = 停止并转写入框、↑ = 停止转写并立即发送(均由父组件接线)。
  */
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Loader2, Square } from 'lucide-react'
+import { ArrowUp, Loader2, Mic, MicOff, Square } from 'lucide-react'
 
 interface Props {
   analyser: AnalyserNode | null
@@ -15,7 +15,13 @@ interface Props {
   onSend?: () => void
   /** 给了就替换计时(实时对话的「聆听中 / 转写中」);■ 的 title 同步用 stopTitle。 */
   status?: string
+  /** 状态文字的悬停全文(实时通话:Tangu 正在办的那件事)。 */
+  statusTitle?: string
   stopTitle?: string
+  /** 给了就在 ■ 前出静音键(实时通话)。 */
+  onMute?: () => void
+  muted?: boolean
+  muteTitle?: string
   t: (k: string, p?: Record<string, unknown>) => string
 }
 
@@ -23,7 +29,7 @@ const STEP_MS = 40      // 每 40ms 落一根柱
 const PX_PER_MS = 0.1   // 滚动速度 ≈100px/s → 柱距 4px
 const GAIN = 3.2        // 语音时域 RMS 偏小,放大到可见
 
-export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, status, stopTitle, t }: Props) {
+export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, status, statusTitle, stopTitle, onMute, muted, muteTitle, t }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [sec, setSec] = useState(0)
 
@@ -100,7 +106,8 @@ export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, s
   return (
     <div className="t2c-voicebar">
       <canvas ref={canvasRef} className="t2c-voicewave" />
-      <span className="t2c-voicetime">{status ?? time}</span>
+      <span className="t2c-voicetime" title={statusTitle}>{status ?? time}</span>
+      {onMute && <button className="t2c-voicestop t2c-voicemute" title={muteTitle} aria-pressed={!!muted} onClick={onMute}>{muted ? <MicOff size={12} /> : <Mic size={12} />}</button>}
       <button className="t2c-voicestop" title={stopTitle ?? t('input.micStop')} onClick={onStop}><Square size={12} /></button>
       {onSend && <button className="t2c-send" title={t('input.send')} onClick={onSend}><ArrowUp size={16} /></button>}
     </div>

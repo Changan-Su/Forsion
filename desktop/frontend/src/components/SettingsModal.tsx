@@ -73,7 +73,7 @@ import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSetti
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
-import { LIVE_VOICE_KEY } from '../hooks/useLiveVoice'
+import { RealtimeVoiceSettings } from './RealtimeVoiceSettings'
 import {
   FORSION_PRIVACY_URL,
   FORSION_TERMS_URL,
@@ -394,10 +394,6 @@ export const SettingsModal: React.FC<{
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
-  })
-  // 开发者「实时语音对话」开关(功能未完成:逐句朗读/打断还没做,入口先藏在这里;Composer2 读同一个 key)。
-  const [liveVoice, setLiveVoice] = useState<boolean>(() => {
-    try { return localStorage.getItem(LIVE_VOICE_KEY) === '1' } catch { return false }
   })
   // 开发者「活动日志实时视图命令」开关(同款模式;bootstrapEngine 据此注册 open-activity-log 命令)。
   const [activityViewCmd, setActivityViewCmd] = useState<boolean>(() => {
@@ -2547,6 +2543,7 @@ export const SettingsModal: React.FC<{
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
                   <>
                     <AsrModelChoice models={models} />
+                    {stored && <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored} />}
                     {stored && (
                       <>
                         <div className="field">
@@ -3540,21 +3537,6 @@ export const SettingsModal: React.FC<{
                       <div className="hint">{t('settings.developer.mobileUiPreviewHint')}</div>
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={liveVoice}
-                          onChange={(e) => {
-                            const on = e.target.checked
-                            setLiveVoice(on)
-                            try { localStorage.setItem(LIVE_VOICE_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                          }}
-                        />
-                        {t('settings.developer.liveVoice')}
-                      </label>
-                      <div className="hint">{t('settings.developer.liveVoiceHint')}</div>
-                    </div>
-                    <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
                       <div>
                         <button className="btn ghost sm" onClick={() => { openChangelogTab(); p.onClose() }}>
@@ -3645,9 +3627,6 @@ export const SettingsModal: React.FC<{
                           try { localStorage.removeItem(MOBILE_UI_KEY) } catch { /* ignore */ }
                           setMobileUiCmd(false)
                           setMobileUiCommand(false)
-                          // 一并收回实时语音对话入口(功能没做完,不该留在开发者模式之外)。
-                          try { localStorage.removeItem(LIVE_VOICE_KEY) } catch { /* ignore */ }
-                          setLiveVoice(false)
                           // 一并撤掉活动日志实时视图命令。
                           try { localStorage.removeItem(ACTIVITY_VIEW_KEY) } catch { /* ignore */ }
                           setActivityViewCmd(false)

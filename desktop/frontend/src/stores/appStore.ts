@@ -894,6 +894,8 @@ export interface AppState {
   historyLoading: Record<string, boolean>
   loadSessionHistory(sessionId: string): Promise<void>
   pollSession(sessionId: string): Promise<void>
+  /** 实时语音通话代跑 Tangu run 用的模型与 agent_config(与 sendMessage 起 run 同一套取法,只读不固化)。 */
+  voiceRunParams(sessionId: string): { modelId: string; agentConfig: AgentConfig }
   /** 选择会话。Space 的被动账本恢复传 revealWorkspace:false,只恢复聊天、不替用户展开 Project。 */
   setActiveId(id: string | null, opts?: { revealWorkspace?: boolean }): void
   setActiveWorkspaceKey(key: string | null): void
@@ -2334,6 +2336,17 @@ export const useApp = create<AppState>((set, get) => ({
         return { historyLoading }
       })
     }
+  },
+
+  voiceRunParams: (sessionId) => {
+    const stored = get().configBySession[sessionId] || {}
+    const ref = refForSession(sessionId)
+    const agentConfig: AgentConfig = { ...(ref.kind === 'unit' ? stored : withAmadeusWorkspace(stored, activeAmadeusRoot())) }
+    delete (agentConfig as Record<string, unknown>).groupMaxRounds
+    delete (agentConfig as Record<string, unknown>).groupIntensity
+    if (!agentConfig.agentSlug && get().defaultAgentSlug) agentConfig.agentSlug = get().defaultAgentSlug
+    const modelId = get().sessions.find((x) => x.id === sessionId)?.model_id || defaultModelOf(get(), ref) || get().modelsResp?.defaultModelId || ''
+    return { modelId, agentConfig }
   },
 
   pollSession: async (sessionId) => {

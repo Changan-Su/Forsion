@@ -39,6 +39,9 @@
  *   npm run live:harness -- --only estop                     # 急停 + 远程锁定(P1 · K2):远程 run 起后台 sleep 进程再等审批 → 台架写锁文件 + POST /agent/remote/estop →
  *                                                           #   run 终态 reason:'remote_estop'、后台进程已死、挂起审批被收(再批 410);再带远程头起 run → 423 REMOTE_LOCKED;本机 run 照常答;
  *                                                           #   写 lock:null + /agent/remote/unlock → 远程 run 又能起。负对照 = 改前的 dist(无 estop 路由 → 红)
+ *   npm run live:harness -- --only realtime                  # 实时语音通话(10-01,仅 macOS:say 合成中文语音):真百炼 Qwen-Omni-Realtime × 真引擎 ws /agent/realtime。
+ *                                                           #   百炼 provider 取自 TANGU_LIVE_DASHSCOPE_CONFIG(缺省 ~/.forsion-dev/config.json 里第一个百炼 provider),烧用户百炼额度(几分钱)。
+ *                                                           #   判:说完→出声时延、人设名(不自称 Qwen)、双方转写落库、ask_tangu 委派 → 真 Tangu run 读出工作区里的随机文件名 → 结果被念回。
  *   npm run live:harness -- --only remotesession             # 远程会话子集(P1 · K9 / M1A):合成的手机调用方(同 remotecaller 的盖章头)经「隧道」上传附件进会话工作区,
  *                                                           #   附件腿只给文件名、要模型读出来(host 模式;引擎把附件绝对路径拼在本轮用户消息第一行,审批一律代拒),
  *                                                           #   契约腿 run_bash 审批由远端答(by=tunnel)、结果落库。全链路(真 unitWeb / hub / 手机页)见 desktop 的 check:remotechain。
@@ -110,7 +113,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human',
+const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human',
   // P1-K1
   'remotecaller',
   // P1-K2
@@ -135,7 +138,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['remember', 'musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -473,7 +476,15 @@ const MCP_CFG = ONLY.has('mcp') ? { mcpServers: { fake: {
 } } } : null;
 { // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
-  if (COMPACTION_CFG || MCP_CFG || gitCfg) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}) }, null, 2));
+  // realtime:把开发机上的百炼 provider 抄进隔离 config(只这一个 provider;id 钉成 bailian,场景按 bailian/<model> 叫)
+  let realtimeProviders = null;
+  if (ONLY.has('realtime')) {
+    const src = process.env.TANGU_LIVE_DASHSCOPE_CONFIG || join(homedir(), '.forsion-dev', 'config.json');
+    const p = (JSON.parse(readFileSync(src, 'utf8')).providers || []).find((x) => /dashscope|aliyuncs\.com/i.test(x?.baseUrl || '') && x.apiKey);
+    if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
+    realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
+  }
+  if (COMPACTION_CFG || MCP_CFG || gitCfg || realtimeProviders) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(realtimeProviders ? { providers: realtimeProviders } : {}) }, null, 2));
 }
 // C3:必须在上面那次整份 writeFileSync(config.json) 之后、引擎起来之前 —— 走 K4 的 IPC 处理器与 main.ts 同一套写法,不自己写 JSON
 let remoteCapWrite = null;
@@ -2698,6 +2709,80 @@ Then reply with only the command output.`,
   });
   // 09-24 反馈:「我浏览器里开着…」→ 旧版先 load_tools、读到后台空浏览器、再试屏幕控制、再用 browser_task 另起一个 Chrome,
   // 5 轮 173s 没答上。判据:走 browser_tabs、不许 browser_task、答中页里的随机款名;轮数 / 墙钟 / 绕路进 detail(速度回归看这里)。
+  await scenario('realtime', 'realtime 实时语音通话:百炼 speech-to-speech × ask_tangu 委派', async () => {
+    if (process.platform !== 'darwin') return { ok: false, skipped: true, detail: '需要 macOS 的 say 合成测试语音' };
+    const WS = createRequire(import.meta.url)('ws');
+    const RT_MODEL = `bailian/${process.env.TANGU_LIVE_REALTIME_MODEL || 'qwen3.8-omni-flash-realtime'}`;
+    // 随机文件名:模型猜不到,只有 Tangu 真去列目录才说得出来
+    const MARK = ['长颈鹿', '火烈鸟', '穿山甲', '北极熊', '海獭', '雪豹'][Math.floor(Math.random() * 6)] + '账本';
+    writeFileSync(join(workspace, `${MARK}.txt`), 'live realtime marker\n');
+    const pcmOf = (text, name) => {
+      const aiff = join(OUT, `${name}.aiff`), wav = join(OUT, `${name}.wav`);
+      execFileSync('say', ['-v', 'Tingting', '-o', aiff, text]);
+      execFileSync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@16000', '-c', '1', aiff, wav]);
+      return readFileSync(wav).subarray(44); // 16k mono s16le,剥 WAV 头
+    };
+    const HELLO = pcmOf('你好，你叫什么名字', 'rt-hello');
+    const ASK = pcmOf('帮我看一下工作目录里有哪些文件', 'rt-ask');
+    const agentName = await api('/agent/agents').then((r) => asList(r, 'agents')).then(async (list) => {
+      const meta = await api('/agent/agents-meta').catch(() => ({}));
+      return (list.find((a) => a.slug === meta.defaultSlug) || list[0])?.name || '';
+    }).catch(() => '');
+    const sid = `live-realtime-${Date.now()}`;
+    const ws = new WS(`ws://127.0.0.1:${port}/agent/realtime?token=${TOKEN}`);
+    const log = []; const transcripts = []; const runs = [];
+    let stoppedAt = 0; const latencies = []; let awaitingAudio = false; let ended = null;
+    const queue = []; const SIL = Buffer.alloc(3200);
+    ws.on('message', (data, isBinary) => {
+      if (isBinary) { if (awaitingAudio) { awaitingAudio = false; latencies.push(Date.now() - stoppedAt); } return; }
+      const m = JSON.parse(data.toString());
+      if (m.type !== 'response.audio_transcript.delta' && !String(m.type).endsWith('.delta')) log.push(m.type);
+      if (m.type === 'input_audio_buffer.speech_stopped') { stoppedAt = Date.now(); awaitingAudio = true; }
+      if (m.type === 'conversation.item.input_audio_transcription.completed') transcripts.push({ who: 'user', text: m.transcript, at: Date.now() });
+      if (m.type === 'response.audio_transcript.done') transcripts.push({ who: 'ai', text: m.transcript, at: Date.now() });
+      if (m.type === 'tangu.run') runs.push({ ...m, at: Date.now() });
+      if (m.type === 'end') ended = m.reason;
+    });
+    await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
+    ws.send(JSON.stringify({ type: 'start', session_id: sid, model: RT_MODEL, voice: 'Tina', title: 'Voice call', run: { model_id: MODEL, agent_config: AGENT_CONFIG } }));
+    const pump = setInterval(() => { // 真麦克风节奏:100ms 一帧,没话说就送静音
+      const cur = queue[0]; let chunk = SIL;
+      if (cur) { chunk = cur.buf.subarray(cur.off, cur.off + 3200); cur.off += 3200; if (cur.off >= cur.buf.length) queue.shift(); if (chunk.length < 3200) chunk = Buffer.concat([chunk, Buffer.alloc(3200 - chunk.length)]); }
+      if (ws.readyState === 1) ws.send(chunk);
+    }, 100);
+    try {
+      await until(() => log.includes('ready') || ended, 15_000, 100);
+      if (!log.includes('ready')) return { ok: false, detail: `没 ready:${ended || '超时'}` };
+      queue.push({ buf: HELLO, off: 0 });
+      const hello = await until(() => transcripts.find((t) => t.who === 'ai') || ended, 30_000, 200);
+      await sleep(2500); // 让它说完(生成比播放快,台架不播放 → 等一下再说下一句,免得像插话)
+      const nAiBefore = transcripts.filter((t) => t.who === 'ai').length;
+      queue.push({ buf: ASK, off: 0 });
+      const started = await until(() => runs.find((r) => r.status === 'started') || ended, 40_000, 200);
+      const finished = started && started !== ended ? await until(() => runs.find((r) => r.status === 'done' || r.status === 'error') || ended, 240_000, 500) : null;
+      const finishedAt = finished?.at || Infinity;
+      const after = finished ? await until(() => transcripts.find((t) => t.who === 'ai' && t.at > finishedAt) || ended, 30_000, 200) : null;
+      await sleep(1500); // 等最后一句落库
+      const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+      const runMsg = msgs.filter((x) => x.role !== 'user').map((x) => String(x.content || '')).find((c) => c.includes(MARK)) || '';
+      const helloText = hello && typeof hello === 'object' ? hello.text : '';
+      const afterText = after && typeof after === 'object' ? after.text : '';
+      const userSaved = msgs.some((x) => x.role === 'user' && /名字/.test(String(x.content || '')));
+      const aiSaved = msgs.some((x) => x.role !== 'user' && helloText && String(x.content || '').includes(helloText.slice(0, 6)));
+      const lat = latencies.length ? Math.max(...latencies.slice(0, 2)) : null;
+      const checks = {
+        ready: true,
+        latency: lat != null && lat < 1500,
+        persona: !!helloText && !/qwen|通义|阿里/i.test(helloText) && (!agentName || helloText.includes(agentName)),
+        persisted: userSaved && aiSaved,
+        delegated: finished?.status === 'done' && !!runMsg,
+        relayed: !!afterText,
+      };
+      const ok = Object.values(checks).every(Boolean);
+      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText}」${afterText.includes(MARK) ? '' : '(未逐字提文件名,不计红)'};落库 user=${userSaved} ai=${aiSaved};失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
+    } finally { clearInterval(pump); try { ws.close(); } catch { /* ignore */ } }
+  });
+
   await scenario('browsertabs', 'browsertabs 读用户已打开的浏览器标签', async () => {
     const ev = await run(`live-tabs-${Date.now()}`, '我浏览器里开着一个天禄五环的 B 站测评视频页面，帮我看看里面最推荐哪一款？直接告诉我款名。', 180_000);
     const used = ev.toolCalls.includes('browser_tabs');
