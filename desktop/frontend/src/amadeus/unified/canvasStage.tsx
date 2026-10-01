@@ -37,7 +37,7 @@ import {
 } from './canvasKit'
 import { CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import {
-  CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey,
+  CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey, endOf,
   MAIN_KEY, MIN_EL, type AttachPreview, type El, type ElBox, type ElGhost, type FrameEl,
 } from './canvasElements'
 import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, setElementColor, rawTree, setParent, childrenOf, isUnder, runEndOf, type ShapeKind } from './canvasEdit'
@@ -74,6 +74,8 @@ registerMessages({
   'canvasstage.overview.on': { zh: '开启低倍率简略显示', en: 'Turn on low-zoom overview' },
   'canvasstage.menu.editText': { zh: '编辑文字', en: 'Edit text' },
   'canvasstage.menu.connectTo': { zh: '连线到…', en: 'Connect to…' },
+  'canvasstage.menu.copy': { zh: '复制', en: 'Copy' },
+  'canvasstage.menu.duplicate': { zh: '重复', en: 'Duplicate' },
   'canvasstage.menu.arrange': { zh: '一键整理', en: 'Auto-arrange' },
   'canvasstage.menu.groupFrame': { zh: '成组为 Frame', en: 'Group into a frame' },
   'canvasstage.menu.unwrap': { zh: '收回文档', en: 'Unwrap into document' },
@@ -297,27 +299,54 @@ const CLIP_MIME = 'application/x-amx-canvas'
 
 /** 画布自己的剪贴板镜像:系统剪贴板存不下 PM 节点,copy 时把卡原样记在这儿,paste 时**凭令牌**
  *  认领 —— 只比文本的话,用户在别处复制了一模一样的字就会静默粘回旧卡(Codex 评审 medium)。
- *  ponytail: 只记卡片 —— 形状/连线/层级的复制粘贴没做,要的话在这个载荷里加一层。 */
+ *  白板元素 / 层级不进镜像:它们本来就是 JSON,随 CLIP_MIME 载荷走(V-07)。 */
 let cardClip: { token: string; nodes: ProseNode[] } | null = null
 
+/** 载荷里一张卡的几何(与 mds 逐项对齐)。跨实例粘贴靠它保住阵形与颜色,不再退化成 24px 阶梯。 */
+type ClipCardGeo = { ref: string; x: number; y: number; w: number; h: number; color?: string }
 /** CLIP_MIME 里那份载荷:令牌 + 每张卡内容的 markdown 快照。
  *  为什么光有令牌不够(用户实报「跨文件粘贴丢格式」):镜像里的节点绑在**复制时那个 schema**
  *  上,换一篇笔记就换一个编辑器实例、也就换了一套 NodeType —— 插不进对面的 doc;换一个应用
  *  窗口连 `cardClip` 这个模块变量都不共享。两档此前都退到 `textBetween` 的纯文本,格式全丢。
- *  markdown 跟着剪贴板走,两档都兜得住(代价:阵形退化成 24px 阶梯)。 */
-type CardClipPayload = { token: string; mds: string[] }
+ *  markdown 跟着剪贴板走,两档都兜得住。
+ *  V-07 起加三段(全部可选 —— 旧版本写的载荷只有 token + mds,照走旧路):
+ *   · `cards`:与 mds 逐项对齐的卡几何(原锚 + 盒 + 颜色);
+ *   · `els`:白板元素的**原始条目**(形状 / 文本 / Frame / 两端都在复制集合里的连线),未知字段原样带走;
+ *   · `tree`:复制集合内部的父子关系 `[子锚, 父锚]`。
+ *  粘贴时锚 / 元素 id 一律现开,连线端点与层级按新旧映射改写;映射不上的连线整条丢掉(悬空线不复活)。 */
+type CardClipPayload = { token: string; mds: string[]; cards?: ClipCardGeo[]; els?: unknown[]; tree?: Array<[string, string]> }
 function readCardClip(raw: string): CardClipPayload | null {
   if (!raw) return null
   try {
-    const v = JSON.parse(raw) as { token?: unknown; mds?: unknown }
+    const v = JSON.parse(raw) as { token?: unknown; mds?: unknown; cards?: unknown; els?: unknown; tree?: unknown }
     if (typeof v?.token !== 'string' || !Array.isArray(v.mds)) return null
     // ⚠️ 逐项过类型:自定义 MIME 是**任何 app 都能写**的格式,只验顶层的话 `{"mds":[1]}`
     //    会让下游 `m.trim()` 抛在已经 preventDefault 过的粘贴里 = 整次粘贴静默失败(Codex 评审)。
-    return { token: v.token, mds: v.mds.filter((m): m is string => typeof m === 'string') }
+    const mds = v.mds.filter((m): m is string => typeof m === 'string')
+    const out: CardClipPayload = { token: v.token, mds }
+    const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+    // 卡几何:必须与 mds **逐项**对齐(任何一项不合格就整段不用 —— 错位一格就是把甲卡的字放到乙卡的位置)。
+    if (Array.isArray(v.cards) && v.cards.length === mds.length && mds.length === v.mds.length) {
+      const cards = v.cards.flatMap((c): ClipCardGeo[] => {
+        const o = c as Record<string, unknown> | null
+        if (!o || typeof o.ref !== 'string' || !num(o.x) || !num(o.y) || !num(o.w) || o.w <= 0) return []
+        return [{ ref: o.ref, x: o.x, y: o.y, w: o.w, h: num(o.h) && o.h > 0 ? o.h : 0, ...(typeof o.color === 'string' ? { color: o.color } : {}) }]
+      })
+      if (cards.length === mds.length) out.cards = cards
+    }
+    if (Array.isArray(v.els)) out.els = v.els.filter((x) => !!x && typeof x === 'object' && !Array.isArray(x))
+    if (Array.isArray(v.tree)) out.tree = v.tree.filter((p): p is [string, string] => Array.isArray(p) && typeof p[0] === 'string' && typeof p[1] === 'string')
+    return out
   } catch {
     return null // 旧版本写的裸令牌 / 别的 app 占了同名格式:当外部文字处理
   }
 }
+
+/** 复制 / 剪切 / 重复要搬走的那一份(V-07)。cards 按 doc 序;els 是原始条目(按表序,非连线在前);
+ *  keys = 进了这一份的选中键(剪切只删它们)。 */
+interface ClipSet { cards: CardBox[]; els: unknown[]; tree: Array<[string, string]>; keys: string[] }
+/** 粘贴 / 重复落笔的一张卡:活节点(同实例)或 markdown(跨实例)二选一。 */
+type PasteCard = { ref: string; x: number; y: number; w: number; h: number; color?: unknown; node?: ProseNode; md?: string }
 
 const growBox = (b: ElBox, n: number): ElBox => ({ x: b.x - n, y: b.y - n, w: b.w + n * 2, h: b.h + n * 2 })
 const overlaps = (a: ElBox, b: ElBox): boolean =>
@@ -1184,33 +1213,6 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     return actRef.current.addCardAt(at.x - CARD_W / 2 + i * 24, at.y - 24 + i * 24, undefined, text, unwrapCards(frag))
   }, [])
 
-  /** 画布内部的卡片粘贴:整卡复现(格式、嵌入、层级里的位置关系都在),**锚一律现开**。
-   *  相对位置保留 —— 一次复制多张,粘出来还是那个阵形(左上角对齐到落点)。 */
-  const pasteCards = useCallback((nodes: ProseNode[], at: { x: number; y: number }): void => {
-    const view = cbRef.current.getView()
-    if (!view || !nodes.length) return
-    const x0 = Math.min(...nodes.map((n) => Number(n.attrs.x) || 0))
-    const y0 = Math.min(...nodes.map((n) => Number(n.attrs.y) || 0))
-    let tr = view.state.tr
-    const made: string[] = []
-    for (const n of nodes) {
-      // ⚠️ 逐张按**当前 tr.doc** 现算锚:一次粘多张时拿老 doc 连开会撞锚,重复锚整笔被
-      //    filterTransaction 拒(C51),表现是「粘贴什么都没发生」。
-      const anchor = freshAnchorId(tr.doc)
-      const copy = n.type.create({
-        ...n.attrs,
-        anchor,
-        x: Math.round(at.x + (Number(n.attrs.x) || 0) - x0),
-        y: Math.round(at.y + (Number(n.attrs.y) || 0) - y0),
-      }, n.content)
-      tr = tr.insert(tr.doc.content.size, copy)
-      made.push(anchor)
-    }
-    commitGeo(view, tr)
-    made.forEach((a) => cbRef.current.onCommit(a)) // 归属集合逐张登记,与 addCardAt 同款
-    setSel(made.map(cardKey))
-  }, [])
-
   /** 层级写入的便捷写点(经 writeFm,进 fm 快照/时间线)。⚠️ 必须**排在 onCommit 之后**调用:
    *  onCommit 里的 syncFromEditor 会同步重写 fm 那一行(cards 派生),先写 tree 的话下一句就被
    *  它整行盖掉。 */
@@ -1602,6 +1604,215 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     setSel([])
   }, [writeFm, pushFmCheckpoint, treeTouches, mergePair])
 
+  /** 选中集合 → 要复制 / 重复的那一份(V-07)。口径:
+   *  · 范围走 expandFrames(与拖 Frame 同一把尺:选中 Frame = 连框内对象一起);主卡(就是文档本身)与层级线不进;
+   *  · 连线只带**两端都在这一份里**的(选没选中都带 —— 复制两张连着的卡,线跟着走;只选一条线 = 粘出来也是悬空的,不带);
+   *  · 层级只带两端都在这一份里的父子关系。
+   *  什么都没有(只选了主卡 / 层级线)= null。 */
+  const collectClip = useCallback((keys: string[]): ClipSet | null => {
+    const view = cbRef.current.getView()
+    const scope = new Set(expandFrames(keys).filter((k) => k !== MAIN_KEY && !k.startsWith('t:')))
+    const anchors = new Set([...scope].filter((k) => k.startsWith('c:')).map(keyId))
+    const cards = view ? cardsOf(view).filter((c) => anchors.has(c.anchor)) : []
+    const inCards = new Set(cards.map((c) => c.anchor))
+    const raw = rawList(cbRef.current.elements)
+    const idOfRaw = (it: unknown): string | null => {
+      const id = it && typeof it === 'object' ? (it as { id?: unknown }).id : null
+      return typeof id === 'string' && id ? id : null
+    }
+    const isConn = (it: unknown): boolean => !!it && typeof it === 'object' && (it as { type?: unknown }).type === 'connector'
+    const shapes = raw.filter((it) => !isConn(it) && scope.has(elKey(idOfRaw(it) ?? '')))
+    const inShapes = new Set(shapes.map(idOfRaw))
+    const endIn = (v: unknown): boolean => {
+      const r = endOf(v)
+      return !!r && (r.ref ? inCards.has(r.ref) : r.id ? inShapes.has(r.id) : false)
+    }
+    const conns = raw.filter((it) => isConn(it) && idOfRaw(it) && endIn((it as { from?: unknown }).from) && endIn((it as { to?: unknown }).to))
+    const t = rawTree(cbRef.current.tree)
+    const tree = [...inCards].flatMap((c): Array<[string, string]> => (typeof t[c] === 'string' && inCards.has(t[c] as string) ? [[c, t[c] as string]] : []))
+    if (!cards.length && !shapes.length && !conns.length) return null
+    const els = [...shapes, ...conns]
+    return { cards, els, tree, keys: [...cards.map((c) => cardKey(c.anchor)), ...els.map((it) => elKey(idOfRaw(it)!))] }
+  }, [expandFrames])
+
+  /** 粘贴 / 重复的唯一落笔(V-07):卡片一笔 PM 事务(**锚一律现开**)+ 元素与层级一笔 fm,并成 'pair' 一击撤销。
+   *  `dx/dy` = 整份平移量(粘贴 = 左上角对齐落点,重复 = 原位错开一格)。阵形、颜色、卡内格式、元素未知字段全保留。
+   *  卡:有活节点且 schema 对得上(同实例)就整卡复现;否则按 markdown 重建(跨笔记 / 跨窗口)。 */
+  const pasteSet = useCallback((cards: PasteCard[], els: unknown[], tree: Array<[string, string]>, dx: number, dy: number): void => {
+    const cb = cbRef.current
+    const view = cb.getView()
+    const cardType = view?.state.schema.nodes.amadeusCanvasCard
+    const paragraph = view?.state.schema.nodes.paragraph
+    if (!view || !cardType || !paragraph) return
+    const refMap = new Map<string, string>()
+    const made: string[] = []
+    let tr = view.state.tr
+    for (const c of cards) {
+      // ⚠️ 逐张按**当前 tr.doc** 现算锚:一次粘多张时拿老 doc 连开会撞锚,重复锚整笔被
+      //    filterTransaction 拒(C51),表现是「粘贴什么都没发生」。
+      const anchor = freshAnchorId(tr.doc)
+      const x = Math.round(c.x + dx)
+      const y = Math.round(c.y + dy)
+      let node: ProseNode | null = null
+      if (c.node && c.node.type === cardType) node = cardType.create({ ...c.node.attrs, anchor, x, y }, c.node.content)
+      else {
+        const body = unwrapCards(c.md?.trim() ? cb.parseMd?.(c.md.trim()) ?? null : null)
+          ?? paragraph.create(null, c.md?.trim() ? view.state.schema.text(c.md.trim()) : undefined)
+        node = cardType.createAndFill({ anchor, x, y, w: Math.round(c.w) || CARD_W, h: Math.round(c.h) || 0, color: typeof c.color === 'string' ? c.color : '' }, body)
+      }
+      if (!node) continue
+      tr = tr.insert(tr.doc.content.size, node)
+      refMap.set(c.ref, anchor)
+      made.push(anchor)
+    }
+    const pm = made.length > 0
+    if (pm) {
+      commitGeo(view, tr)
+      made.forEach((a) => cb.onCommit(a)) // 归属集合逐张登记,与 addCardAt 同款
+    }
+    // 元素:先非连线(现开 id、平移),再连线(端点按新旧映射改写;映射不上整条丢)。id 在**递增中的表**上现算,同批不撞号。
+    const list = rawList(cbRef.current.elements)
+    const idMap = new Map<string, string>()
+    const made2: string[] = []
+    const prefixOf = (o: Record<string, unknown>): string => (o.type === 'frame' ? 'f' : o.type === 'connector' ? 'e' : 's')
+    const conns: Array<Record<string, unknown>> = []
+    for (const it of els) {
+      const o = it as Record<string, unknown>
+      if (typeof o.id !== 'string' || !o.id) continue
+      if (o.type === 'connector') { conns.push(o); continue }
+      const id = freshElId(list, prefixOf(o))
+      idMap.set(o.id, id)
+      list.push({ ...o, id, ...(typeof o.x === 'number' ? { x: Math.round(o.x + dx) } : {}), ...(typeof o.y === 'number' ? { y: Math.round(o.y + dy) } : {}) })
+      made2.push(id)
+    }
+    const remapEnd = (v: unknown): Record<string, unknown> | null => {
+      const r = endOf(v)
+      if (!r) return null
+      const base = v as Record<string, unknown>
+      if (r.ref) { const a = refMap.get(r.ref); return a ? { ...base, ref: a } : null }
+      if (r.id) { const i = idMap.get(r.id); return i ? { ...base, id: i } : null }
+      return null // 主卡端:主卡不随复制走
+    }
+    for (const o of conns) {
+      const from = remapEnd(o.from)
+      const to = remapEnd(o.to)
+      if (!from || !to) continue
+      const id = freshElId(list, 'e')
+      list.push({ ...o, id, from, to })
+      made2.push(id)
+    }
+    let nextTree: Record<string, unknown> | null = null
+    for (const [c, p] of tree) {
+      const nc = refMap.get(c)
+      const np = refMap.get(p)
+      if (!nc || !np) continue
+      const t = setParent(nextTree ?? rawTree(cbRef.current.tree), nc, np)
+      if (t !== nextTree) nextTree = t
+    }
+    // ⚠️ fm 必须排在 onCommit 之后(onCommit 的派生会同步重写 canvas 行,先写 fm 会被它盖掉;与 setColor 同序)。
+    if (made2.length || nextTree) {
+      writeFm({ ...(made2.length ? { e: list } : {}), ...(nextTree ? { t: nextTree } : {}) })
+      if (pm) mergePair()
+    }
+    setSel([...made.map(cardKey), ...made2.map(elKey)])
+  }, [writeFm, mergePair])
+
+  /** 复制集合 → 剪贴板(Cmd+C / 剪切 / 右键「复制」共用)。text/plain = 卡的 markdown + 元素文字(给别的 app);
+   *  CLIP_MIME = 带令牌的完整载荷。什么都没有(只选了主卡 / 层级线)= **清空**剪贴板 —— 不清的话下一次粘贴
+   *  会认领上一次复制的令牌,粘出一张旧卡(V-07 修前的现象)。返回复制集合(剪切据此删)。 */
+  const writeClip = useCallback((data: DataTransfer, keys: string[]): ClipSet | null => {
+    data.clearData()
+    const set = collectClip(keys)
+    if (!set) {
+      cardClip = null
+      data.setData('text/plain', '')
+      return null
+    }
+    // text/plain = **markdown**,与文档编辑器的 clipboardTextSerializer 同一口径(它对结构选区
+    // 早就给 markdown)。此前给的是 `textBetween` —— 标记全被剥光,粘进文档笔记就是「格式全丢
+    // 成纯文本」(用户 2026-09-05 实报的另一半;跨库/跨 app 也只剩光秃秃的字)。
+    // ⚠️ 兜底仍是 textBetween 带块分隔符:`node.textContent` 对多个块是**零分隔**拼接,两段
+    //    「甲」「乙」会写成「甲乙」——剪切之后原卡已经没了,这份纯文本是唯一幸存物,
+    //    段落边界就此不可逆地糊掉(Codex 评审 high)。
+    const md = cbRef.current.serializeMd
+    const mds = set.cards.map((c) => md?.(c.node.content)?.trim() || c.node.textBetween(0, c.node.content.size, '\n\n'))
+    const texts = set.els.flatMap((it) => {
+      const o = it as Record<string, unknown>
+      const s = o.type === 'connector' ? o.label : o.type === 'frame' ? o.title : o.text
+      return typeof s === 'string' && s.trim() ? [s.trim()] : []
+    })
+    data.setData('text/plain', [...mds, ...texts].join('\n\n'))
+    // 镜像的认领凭据 = 这一次复制现开的令牌,写进自定义 MIME(Chromium 的 web custom data,
+    // 只在本 app 内往返)。**不能只比文本**:用户复制完卡片又在别处复制了一模一样的字,
+    // 回来粘贴就会静默粘回旧卡的格式/嵌入,而不是他刚复制的那份(Codex 评审 medium)。
+    const token = `t${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+    const cards: ClipCardGeo[] = set.cards.map((c) => {
+      const a = c.node.attrs
+      return { ref: c.anchor, x: Number(a.x) || 0, y: Number(a.y) || 0, w: Number(a.w) || CARD_W, h: Number(a.h) || 0, ...(typeof a.color === 'string' && a.color ? { color: a.color } : {}) }
+    })
+    const payload: CardClipPayload = { token, mds, cards, ...(set.els.length ? { els: set.els } : {}), ...(set.tree.length ? { tree: set.tree } : {}) }
+    try { data.setData(CLIP_MIME, JSON.stringify(payload)) } catch { /* 写不进自定义 MIME:降级成纯文本粘贴 */ }
+    cardClip = { token, nodes: set.cards.map((c) => c.node) }
+    pasteSeq.current = 0
+    return set
+  }, [collectClip])
+
+  /** 剪贴板载荷 → 落点(左上角对齐 `at`)。返回 false = 载荷里没东西可落(调用方按外部文字处理)。 */
+  const pastePayload = useCallback((payload: CardClipPayload, at: { x: number; y: number }): boolean => {
+    const view = cbRef.current.getView()
+    if (!view) return false
+    // 同实例 + 令牌对得上:整卡复现(几何/阵形/嵌入全在)。
+    // ⚠️ 镜像里的节点绑在**当时那个 schema** 上:换笔记/切源码/插件重载都会重建编辑器实例,
+    //    拿旧 NodeType 插进新 doc 会 ReplaceError(PM 按 type 身份比对)。跨实例就按 markdown 重建。
+    const clip = cardClip
+    const live = !!clip && clip.token === payload.token
+      && (clip.nodes.length === 0 || clip.nodes[0].type === view.state.schema.nodes.amadeusCanvasCard)
+    let cards: PasteCard[]
+    if (live && clip) {
+      cards = clip.nodes.map((n) => ({ ref: String(n.attrs.anchor), x: Number(n.attrs.x) || 0, y: Number(n.attrs.y) || 0, w: Number(n.attrs.w) || CARD_W, h: Number(n.attrs.h) || 0, node: n }))
+    } else if (payload.cards) {
+      cards = payload.cards.map((c, i) => ({ ...c, md: payload.mds[i] }))
+    } else {
+      // 旧版本写的载荷(只有 mds):逐张按 markdown 重建,24px 阶梯(修前行为)。
+      const mds = payload.mds.filter((m) => m.trim())
+      if (!mds.length) return false
+      mds.forEach((m, i) => actRef.current.addCardMd(m, at, i))
+      return true
+    }
+    const els = payload.els ?? []
+    const xs: number[] = cards.map((c) => c.x)
+    const ys: number[] = cards.map((c) => c.y)
+    for (const it of els) {
+      const o = it as Record<string, unknown>
+      if (typeof o.x === 'number' && typeof o.y === 'number') { xs.push(o.x); ys.push(o.y) }
+    }
+    if (!xs.length) return false // 只剩连线(端点全不在这一份里)= 无物可落
+    pasteSet(cards, els, payload.tree ?? [], at.x - Math.min(...xs), at.y - Math.min(...ys))
+    return true
+  }, [pasteSet])
+
+  /** 重复(Mod+D / 右键「重复」,V-07):原位错开一格的副本,不经剪贴板。 */
+  const duplicateSel = useCallback((keys: string[]): void => {
+    const set = collectClip(keys)
+    if (!set) return
+    pasteSet(set.cards.map((c) => ({ ref: c.anchor, x: Number(c.node.attrs.x) || 0, y: Number(c.node.attrs.y) || 0, w: Number(c.node.attrs.w) || CARD_W, h: Number(c.node.attrs.h) || 0, node: c.node })), set.els, set.tree, GRID_STEP, GRID_STEP)
+  }, [collectClip, pasteSet])
+
+  /** 右键「复制」:菜单在浮层里,点完焦点不在舞台,而 Chromium 把 copy 事件派给 **DOM 选区所在的元素**
+   *  (不是 activeElement)—— 挂在舞台上的 onCopy 未必收得到。所以在这一次用户手势里挂一个一次性的
+   *  document 捕获期监听,再 execCommand('copy'),填充逻辑与 Cmd+C 同一份(writeClip)。 */
+  const copyFromMenu = useCallback((keys: string[]): void => {
+    const fill = (e: ClipboardEvent): void => {
+      if (!e.clipboardData) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      writeClip(e.clipboardData, keys)
+    }
+    document.addEventListener('copy', fill, { capture: true, once: true })
+    try { document.execCommand('copy') } finally { document.removeEventListener('copy', fill, { capture: true }) }
+    hostRef.current?.focus({ preventScroll: true })
+  }, [writeClip])
+
   /** 选中卡按空格进入正文编辑；双击额外带上 `hit`，光标落到点击处。
    *  单击仍只负责选中/拖动，不与双击抢手势。 */
   const enterNodeEdit = useCallback((key: string, hit?: { x: number; y: number }): void => {
@@ -1880,8 +2091,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   // 同样**只依赖 active**(理由见上面 fitRef 的注释)。这里的代价更重:宿主每渲染一次就把整个
   // effect 拆了重装,进行中的那次拖拽(闭包里的 drag 局部量)当场归零 —— 松手时 onUp 拿到 null,
   // 卡片弹回原位、事务不落。回调一律经 ref 现读。
-  const actRef = useRef({ mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, pasteCards })
-  actRef.current = { mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, pasteCards }
+  const actRef = useRef({ mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, writeClip, pastePayload })
+  actRef.current = { mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, writeClip, pastePayload }
 
   /** 编辑导致卡片换行/增高时，把相撞的其它卡推到最近空位；当前编辑卡是固定锚。自动布局不进
    *  用户撤销栈，否则打一行字会混进一笔“卡片自己跑开”的几何撤销。 */
@@ -3275,64 +3486,37 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       const r = host.getBoundingClientRect()
       return toStage(r.left + r.width / 2, r.top + r.height / 2)
     }
-    /** 复制/剪切选中的卡。**捕获期**挂在舞台上:卡内编辑时焦点在 PM 里(它是舞台的后代),
-     *  冒泡期抢不过它 —— 而卡内的复制本来就该归 PM,所以第一句就按 editing 让路。 */
+    /** 复制/剪切选中集合(卡 / 形状 / Frame / 连线,V-07)。**捕获期**挂在舞台上:卡内编辑时焦点在 PM 里
+     *  (它是舞台的后代),冒泡期抢不过它 —— 而卡内的复制本来就该归 PM,所以第一句就按 editing 让路。
+     *  ⚠️ 只要有选中就 preventDefault:修前形状 / 连线不进剪贴板时在这里**先 return**,系统剪贴板原封不动,
+     *     下一次粘贴认领的是上一次复制的令牌 = 粘出一张旧卡。现在选中里没有可复制对象(只有主卡 / 层级线)也清空剪贴板。 */
     const onCopy = (e: ClipboardEvent): void => {
-      const view = getView()
-      if (editingRef.current || !e.clipboardData || !view) return
-      const anchors = new Set(selRef.current.filter((k) => k.startsWith('c:')).map(keyId))
-      const hits = cardsOf(view).filter((c) => anchors.has(c.anchor))
-      if (!hits.length) return
-      // text/plain = **markdown**,与文档编辑器的 clipboardTextSerializer 同一口径(它对结构选区
-      // 早就给 markdown)。此前给的是 `textBetween` —— 标记全被剥光,粘进文档笔记就是「格式全丢
-      // 成纯文本」(用户 2026-09-05 实报的另一半;跨库/跨 app 也只剩光秃秃的字)。
-      // ⚠️ 兜底仍是 textBetween 带块分隔符:`node.textContent` 对多个块是**零分隔**拼接,两段
-      //    「甲」「乙」会写成「甲乙」——剪切之后原卡已经没了,这份纯文本是唯一幸存物,
-      //    段落边界就此不可逆地糊掉(Codex 评审 high)。
-      const md = cbRef.current.serializeMd
-      const mds = hits.map((c) => md?.(c.node.content)?.trim() || c.node.textBetween(0, c.node.content.size, '\n\n'))
-      const text = mds.join('\n\n')
+      if (editingRef.current || !e.clipboardData || !getView()) return
+      const keys = selRef.current
+      if (!keys.length) return
       e.preventDefault()
-      e.clipboardData.clearData()
-      e.clipboardData.setData('text/plain', text)
-      // 镜像的认领凭据 = 这一次复制现开的令牌,写进自定义 MIME(Chromium 的 web custom data,
-      // 只在本 app 内往返)。**不能只比文本**:用户复制完卡片又在别处复制了一模一样的字,
-      // 回来粘贴就会静默粘回旧卡的格式/嵌入,而不是他刚复制的那份(Codex 评审 medium)。
-      const token = `t${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
-      const payload: CardClipPayload = { token, mds }
-      try { e.clipboardData.setData(CLIP_MIME, JSON.stringify(payload)) } catch { /* 写不进自定义 MIME:降级成纯文本粘贴 */ }
-      cardClip = { token, nodes: hits.map((c) => c.node) }
-      pasteSeq.current = 0
-      // 剪切**只删剪走的那些卡**:选中集合里的形状/连线没进剪贴板,一起删掉就是粘不回来的丢失。
+      const set = actRef.current.writeClip(e.clipboardData, keys)
+      // 剪切**只删进了剪贴板的那些**:主卡 / 层级线 / 端点不在这一份里的连线没被复制,一起删掉就是粘不回来的丢失。
       // assets:false —— 搬家不是删除,问「磁盘文件也删吗」会让粘出来那张卡的文件被删掉。
-      if (e.type === 'cut') actRef.current.removeSel(hits.map((c) => cardKey(c.anchor)), { assets: false })
+      if (e.type === 'cut' && set) actRef.current.removeSel(set.keys, { assets: false })
     }
     /** 粘贴到画布 = 落一张卡(文件走附件那条链)。卡内编辑时同样让路给 PM。 */
     const onPaste = (e: ClipboardEvent): void => {
       if (readOnlyRef.current || editingRef.current || !e.clipboardData) return
       const files = Array.from(e.clipboardData.files ?? [])
       const text = e.clipboardData.getData('text/plain') ?? ''
-      if (!files.length && !text.trim()) return // 空剪贴板:什么都不做,别吞掉事件
+      // ⚠️ 载荷先读:只复制了无字形状时 text/plain 是空串,按「空剪贴板」早退的话 elements 段永远落不下来。
+      const payload = readCardClip(e.clipboardData.getData(CLIP_MIME))
+      if (!files.length && !text.trim() && !payload) return // 空剪贴板:什么都不做,别吞掉事件
       e.preventDefault()
       // 连粘错开 24px:第二张严丝合缝盖在第一张上,看起来就是「粘了没反应」(dropFilesAt 同款)。
       const n = pasteSeq.current++
       const c = stageCenter()
       const at = { x: c.x + n * 24, y: c.y + n * 24 }
       if (files.length) { actRef.current.dropFilesAt(files, at); return }
-      // 剪贴板带着本画布复制时那枚令牌 → 整卡复现;否则(含「别处复制了同样的字」)按外部文字处理。
-      // ⚠️ 镜像里的节点绑在**当时那个 schema** 上:换笔记/切源码/插件重载都会重建编辑器实例,
-      //    拿旧 NodeType 插进新 doc 会 ReplaceError(PM 按 type 身份比对)。跨实例就降级成文字。
-      const payload = readCardClip(e.clipboardData.getData(CLIP_MIME))
-      if (payload) {
-        // 同实例 + 令牌对得上:整卡复现(几何/阵形/嵌入全在)。
-        const live = cardClip?.token === payload.token &&
-          cardClip.nodes[0]?.type === getView()?.state.schema.nodes.amadeusCanvasCard
-        if (live && cardClip) { actRef.current.pasteCards(cardClip.nodes, at); return }
-        // 跨笔记 / 跨窗口:按复制时留下的 markdown 逐张重建 —— 格式、列表、链接、图片全部保住。
-        const mds = payload.mds.filter((m) => m.trim())
-        if (mds.length) { mds.forEach((m, i) => actRef.current.addCardMd(m, at, i)); return }
-      }
-      actRef.current.addCardMd(text, at)
+      // 剪贴板带着本画布复制时那枚令牌(或别的画布 / 窗口复制的完整载荷)→ 整份复现;否则(含「别处复制了同样的字」)按外部文字处理。
+      if (payload && actRef.current.pastePayload(payload, at)) return
+      if (text.trim()) actRef.current.addCardMd(text, at)
     }
 
     // pointercancel ≠ 松手:系统手势接管 / 失焦 / 设备断连都会发它。当成松手的话,用户**取消**的
@@ -3504,6 +3688,14 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     if (mod && (e.key === 'a' || e.key === 'A')) {
       e.preventDefault()
       setSel([...measureCards(hostRef.current).keys()].map(cardKey).concat(els.filter((x) => x.kind !== 'connector').map((x) => elKey(x.id)), [MAIN_KEY]))
+      return
+    }
+    // Mod+D = 重复选中(V-07,Figma / Obsidian 同款;卡 / 形状 / Frame 连辖域 / 两端都在内的连线一起,原位错开一格)。
+    // ⚠️ 只在**冒泡期**、焦点在舞台上时接:卡内编辑时本函数第一句已让位给 PM,那边的 Mod-d 是「复制块」
+    //    (拍板 #8,blockLayer 的 duplicateKeymap)。挪进捕获期就会把它吃掉 —— 与 V-18 的 Mod+Y 被 PM 吃掉同一类陷阱的反向。
+    if (mod && !e.shiftKey && !e.altKey && (e.key === 'd' || e.key === 'D')) {
+      e.preventDefault()
+      if (sel.length) duplicateSel(sel)
       return
     }
     // Esc 逐级退出:菜单 → 连线中 → 非默认工具 → 选中。菜单排在最前 —— 打开着菜单按 Esc 却先
@@ -3783,6 +3975,13 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
                     setMenu(null)
                     if (el) void editText(el.id, textKeyOf(el), textTitleOf(el))
                   }}>{t('canvasstage.menu.editText')}</button>
+                )}
+                {/* 复制 / 重复(V-07):主卡就是文档本身,不复制;单独一条连线复制出来也是悬空的(端点不随它走),不给。 */}
+                {menu.key !== MAIN_KEY && !menuConn && (
+                  <>
+                    <button onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); copyFromMenu(keys) }}>{t('canvasstage.menu.copy')}</button>
+                    <button onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); duplicateSel(keys); hostRef.current?.focus({ preventScroll: true }) }}>{t('canvasstage.menu.duplicate')}</button>
+                  </>
                 )}
                 {/* 连线的端点只能是卡 / 主卡 / 形状:从一条连线再「连线到…」画出来的端点谁都解析不了。 */}
                 {!menuConn && <button onClick={() => { setConnFrom(menu.key); setTool('conn'); setMenu(null) }}>{t('canvasstage.menu.connectTo')}</button>}

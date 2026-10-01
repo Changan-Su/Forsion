@@ -81,7 +81,7 @@ const colorAttrs = (color: string | null | undefined): { 'data-color'?: string; 
   return css ? { 'data-color': color as string, style: { ['--amx-color' as string]: css } } : {}
 }
 
-function endOf(v: unknown): EndRef | null {
+export function endOf(v: unknown): EndRef | null {
   if (!v || typeof v !== 'object') return null
   const o = v as EndRef
   const ref = str(o.ref)
