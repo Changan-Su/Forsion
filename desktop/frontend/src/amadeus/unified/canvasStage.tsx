@@ -749,8 +749,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   // ── fm 三键(elements / tree / main)的读写 ────────────────────────────────────────
   // 一切回调经 ref 现读:下面那个手势 effect 只依赖 [active],闭包里拿的必须是**此刻**的值
   // (理由见 effect 顶注)。
-  const cbRef = useRef({ getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages })
-  cbRef.current = { getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages }
+  const cbRef = useRef({ getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages, path })
+  cbRef.current = { getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages, path }
   const els = safeElements(elements)
   /** 主卡几何的**正则形**:默认位形(0,0,MAIN_W)与「盘上没存」合并成 null —— 二者对用户不可分
    *  (materialize 恒补默认 main,派生又会在卡/元素清空时把整行剥掉),分开记会让「首次拖动主卡
@@ -3668,7 +3668,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         if (kind === 'files' && files.length) { actRef.current.dropFilesAt(files, at); return }
         if (kind === 'refs') {
           // 按住 Alt = 链接卡(V-09)。⚠️ 判据读 drop 那一刻的 altKey:Alt 在 onDown 顶上归平移,但拖放不经 pointerdown。
-          readChatRefs(e.dataTransfer).forEach((r, i) => actRef.current.addCardMd(refToCardMd(r, e.altKey), at, i))
+          // 把**本篇**拖进自己的画布 = 落链接卡,不嵌入自己(「添加笔记…」的选择器同样把本篇排除在外)。
+          const self = cbRef.current.path
+          readChatRefs(e.dataTransfer).forEach((r, i) => actRef.current.addCardMd(refToCardMd(r, e.altKey || (r.kind === 'note' && r.path === self)), at, i))
           return
         }
         const text = e.dataTransfer?.getData('text/uri-list') || e.dataTransfer?.getData('text/plain') || ''

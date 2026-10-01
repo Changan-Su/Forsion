@@ -1119,6 +1119,14 @@ async function wave4(browser) {
       items.includes('添加笔记…') && okMenu && !!picker && !picker.options.includes('Unified.md') && picker.options.includes('Embedded.md')
         && addedC.length === 1 && descC?.embed && gone && !!stageC && Math.abs(stageC.x + stageC.w / 2 - atC.x) < 60 && Math.abs(stageC.y - atC.y) < 60,
       JSON.stringify({ items, picker, addedC, descC, stageC, atC, gone }))
+    // d:把**本篇**从侧栏拖进自己的画布 = 链接卡(不嵌入自己)
+    const dD = await dropNote('Unified.md', false)
+    const descD = dD.added.length === 1 ? await descOf(dD.added[0]) : null
+    await p.waitForTimeout(500)
+    const bodyD = await bodyOf()
+    record('C104d 把本篇拖进自己的画布 = `[[链接]]` 卡,不嵌入自己',
+      dD.drop && dD.added.length === 1 && descD && !descD.embed && bodyD.includes(`<!-- a ${dD.added[0]} -->\n\n[[Unified]]`),
+      JSON.stringify({ dD, descD }))
     await p.close()
   })
 
@@ -1158,7 +1166,8 @@ async function wave4(browser) {
     await pb.waitForTimeout(800)
     await pb.mouse.click(...Object.values(await padOf(pb, 'k2')))
     await pb.waitForTimeout(200)
-    const grip = await centerOf(pb, '.amx-card-size-grip.is-e[data-card-grip="k2"]')
+    // ⚠️ 抓右缘热区的上四分之一处:正中间是 V-17 的边口圆点(拖出 = 连线,压在热区之上),抓中心起的是连线不是调宽。
+    const grip = await pb.evaluate(() => { const r = document.querySelector('.amx-card-size-grip.is-e[data-card-grip="k2"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height * 0.2 } })
     const before = { x: 480, w: 300 }
     const z = await zOf(pb)
     await pb.mouse.move(grip.x, grip.y); await pb.mouse.down()
