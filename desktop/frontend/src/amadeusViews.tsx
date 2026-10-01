@@ -12,7 +12,7 @@ import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen, BookMarked,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
-  Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease,
+  Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -25,6 +25,7 @@ import { PageHistoryHost } from '@amadeus/unified/pageHistory'
 import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
+import { noteMarkdownBody } from '@amadeus/unified/copyMarkdown'
 import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle, type PageStyleEntry } from '@amadeus/unified/pageStyle'
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
@@ -1889,6 +1890,11 @@ registerMessages({
   'amxv.menu.lockPage': { zh: '锁定页面', en: 'Lock page' },
   'amxv.menu.unlockPage': { zh: '解锁页面', en: 'Unlock page' },
 })
+// 「复制为 Markdown」(评审 C-24):落盘正文,不含 frontmatter(口径见 unified/copyMarkdown)。失败复用 amxv.copyFailed。
+registerMessages({
+  'amxv.menu.copyMd': { zh: '复制为 Markdown', en: 'Copy as Markdown' },
+  'amxv.copyMd.done': { zh: '已复制 Markdown', en: 'Markdown copied' },
+})
 
 /** path 这篇在本机是否锁定(随任一标签 / 窗口的锁定切换刷新)。 */
 function useNoteLocked(vaultRoot: string | null, path: string | null): boolean {
@@ -2212,6 +2218,18 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       useApp.getState().toast(t('amxv.pdf.exportFailed', { e: String(err) }), true)
     } finally {
       wrap.remove()
+    }
+  }
+  /** 复制为 Markdown(C-24):先冲洗再取正文,剪贴板里的就是这一刻落盘的那份。 */
+  const copyMarkdown = async (): Promise<void> => {
+    if (!barPath) return
+    try {
+      const md = await noteMarkdownBody(barPath)
+      if (md == null) throw new Error(barPath)
+      await navigator.clipboard.writeText(md)
+      useApp.getState().toast(t('amxv.copyMd.done'))
+    } catch (err) {
+      useApp.getState().toast(t('amxv.copyFailed', { e: err instanceof Error ? err.message : String(err) }), true)
     }
   }
   const isActiveLeaf = useWorkspace((s) => s.mainTabs.find((t) => t.id === leaf.id)?.active ?? false)
@@ -2643,6 +2661,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {noteMenu && barPath && (
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
           {pageEntries.length > 0 && <><PageStyleMenuItems entries={pageEntries} /><div className="ctx-separator" /></>}
+          {unifiedRoute && <button onClick={() => { setNoteMenu(null); void copyMarkdown() }}><Copy size={13} /> {t('amxv.menu.copyMd')}</button>}
           {canExportPdf() && <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> {t('amxv.menu.exportPdf')}</button>}
           <button onClick={() => { useAmadeusPrefs.getState().toggleStar(barPath); setNoteMenu(null) }}>
             <Star size={13} /> {starred ? t('amxv.menu.unstar') : t('amxv.menu.star')}
@@ -2777,6 +2796,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? t('amxv.cloud.disableTip') : t('amxv.menu.cloudSyncOn'), on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),
           ...(window.amadeusCollab ? [{ id: 'share', icon: <Share2 size={16} />, label: t('amxv.shareOrPublish'), run: () => setShareCard({ x: window.innerWidth / 2, y: window.innerHeight / 2 }) }] : []),
           // 宿主做不了的两件不出键(G2-13:移动本地库上都是 no-op 死键),判据单源 amadeus/lib/hostCaps。
+          ...(unifiedRoute ? [{ id: 'copymd', icon: <Copy size={16} />, label: t('amxv.menu.copyMd'), run: () => void copyMarkdown() }] : []),
           ...(canExportPdf() ? [{ id: 'pdf', icon: <FileDown size={16} />, label: t('amxv.menu.exportPdf'), run: () => void exportPdf() }] : []),
           ...(canRevealInFileManager() ? [{ id: 'reveal', icon: <FolderOpen size={16} />, label: t('amxv.menu.reveal'), run: () => void amadeus.revealInFileManager(barPath!) }] : []),
           { id: 'delete', icon: <Trash2 size={16} />, label: t('amxv.menu.deleteNote'), danger: true, run: () => void deleteNoteFlow(barPath!, myPs) },

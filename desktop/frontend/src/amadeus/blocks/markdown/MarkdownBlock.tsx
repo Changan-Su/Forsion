@@ -106,6 +106,8 @@ import { fdDirOf } from '../../lib/fd'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
 import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
+import { EmojiSuggest, emojiSuggestPlugin } from './EmojiSuggest'
+import { footnoteInputRules, footnotePlugin } from './footnote'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
@@ -568,6 +570,8 @@ export function MilkdownInner({
   const [mention, setMention] = useState<WikiQuery | null>(null) // "@" 提及页面
   const [tagQ, setTagQ] = useState<WikiQuery | null>(null) // "#" 标签补全(L-14)
   const tagDismissedFrom = useRef<number | null>(null) // Esc 闩锁(同 @)
+  const [emojiQ, setEmojiQ] = useState<WikiQuery | null>(null) // ":" emoji 短代码补全(I-21)
+  const emojiDismissedFrom = useRef<number | null>(null) // Esc 闩锁(同 #)
   const [slash, setSlash] = useState<WikiQuery | null>(null) // "/" 命令菜单(query 驻留文档,同 @/[[)
   const [toolbar, setToolbar] = useState<SelRect | null>(null) // 选中文字上浮的格式工具栏
   const [pasteAs, setPasteAs] = useState<PasteAs | null>(null) // 粘贴链接后的「粘贴为」菜单
@@ -1145,6 +1149,11 @@ export function MilkdownInner({
         if (tagDismissedFrom.current === q.from) { setTagQ(null); return } // Esc 关掉的同一个 '#' 不再弹
         setTagQ(q)
       }))
+      .use(emojiSuggestPlugin((q, blurred) => {
+        if (!q) { if (!blurred) emojiDismissedFrom.current = null; setEmojiQ(null); return }
+        if (emojiDismissedFrom.current === q.from) { setEmojiQ(null); return } // Esc 关掉的同一个 ':' 不再弹
+        setEmojiQ(q)
+      }))
       // '/' 命令菜单:query 驻留文档(同 @/[[),字符不被吞、空格自动关成字面文本。注册在
       // wiki/mention 之后 —— 好让它们的 *OpenRef 已就绪,slash 在它们开着时让位(避免叠开两个菜单)。
       .use(slashSuggestPlugin((q, blurred) => {
@@ -1214,6 +1223,8 @@ export function MilkdownInner({
       .use(linkInputRule) // 打完 `[文字](地址)` 当场成链接(commonmark 预设没这条行内规则)
       .use(autolinkInputRule) // 手打裸 URL 在空格 / 全角标点收尾时成链接(I-13,见 ./autolink)
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
+      .use(footnoteInputRules) // 手打 `[^a]` / `[^a]: ` 成脚注(R-18,往返陷阱见 ./footnote)
+      .use(footnotePlugin) // 脚注显示编号 + 点上标跳定义 / 点编号回引用
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
       .use(pluginEditorExtensions('normal', { pagePath: () => pagePathRef.current }))
@@ -1489,6 +1500,19 @@ export function MilkdownInner({
     setTagQ(null)
   }
 
+  /** `:` emoji 补全选中:`:查询`(含冒号)整段换成 emoji 字符本身(I-21)。 */
+  const pickEmoji = (emoji: string): void => {
+    const q = emojiQ
+    if (q) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        view.dispatch(view.state.tr.insertText(emoji, q.from - 1, q.to))
+        view.focus()
+      })
+    }
+    setEmojiQ(null)
+  }
+
   // @ 与 [[ 候选:最近打开的页面排最前(宿主经 setRecentsProvider 注入),其余页面跟后;空查询即按此序展示(L-13)。
   const mentionPageNames = (): string[] => {
     const all = getPageNames()
@@ -1705,6 +1729,20 @@ export function MilkdownInner({
           onClose={() => {
             tagDismissedFrom.current = tagQ.from // Esc:同一个 '#' 不再弹
             setTagQ(null)
+          }}
+        />
+      )}
+      {emojiQ && !wiki && !mention && !tagQ && !slash && !readOnly && (
+        <EmojiSuggest
+          query={emojiQ.query}
+          left={emojiQ.left}
+          top={emojiQ.top}
+          anchorTop={emojiQ.anchorTop}
+          onPick={pickEmoji}
+          editorFocused={editorFocused}
+          onClose={() => {
+            emojiDismissedFrom.current = emojiQ.from // Esc:同一个 ':' 不再弹
+            setEmojiQ(null)
           }}
         />
       )}

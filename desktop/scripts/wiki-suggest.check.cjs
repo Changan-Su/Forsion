@@ -9,6 +9,8 @@
 //   L-18 汉字 / 中文标点紧挨 `@` 照弹提及面板,ASCII 邮箱形态(`mail@Me`)不弹(拍板 #18,与 mdMarks 同一个字符类)。
 //   L-21 `[[` 面板 Esc 闩锁:Esc 后接着打字 / 移光标不重弹,紧跟的回车不改写正文;删掉 `[[` 重打才解闩。
 //        合成 KeyboardEvent 的 isComposing 到不了页面,必须走 CDP Input.imeSetComposition 起真组合。
+//   I-21 `:emoji:` 短代码补全:冒号后 ≥2 个 ASCII 字母才弹(`10:30` / `http:` / `key:value` / `std::vector` / `备注:说明` 不弹),
+//        回车插 emoji 字符本身(`:sm` 整段换掉);Esc 闩锁;组字中不弹、回车放行给输入法;代码里恒字面。
 // 用法:npm run check:wikisuggest(自带起停 vite);或已起 vite 后 HARNESS_URL=… node scripts/wiki-suggest.check.cjs
 //       ONLY=L-04 只跑某一节。
 const fs = require('fs')
@@ -476,6 +478,81 @@ async function main() {
     await page.keyboard.type('[[Be', { delay: 30 })
     await page.waitForTimeout(250)
     check('L-21c 删掉 `[[` 重打 → 照常弹', (await items(page))[0] === '*Beta', JSON.stringify(await items(page)))
+    await page.close()
+  })
+
+  // ── I-21:`:emoji:` 短代码补全(数据 = lib/emoji,与页面图标选择器同一张表)──
+  await tryTest('I-21', async () => {
+    const emo = (page) => page.evaluate(() => [...document.querySelectorAll('.emoji-suggest .wiki-item')].map((e) => (e.dataset.active !== undefined ? '*' : '') + e.textContent))
+    const emoCount = (page) => page.locator('.emoji-suggest').count()
+    let page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' :s', { delay: 30 })
+    await page.waitForTimeout(200)
+    const one = await emoCount(page)
+    await page.keyboard.type('mil', { delay: 30 })
+    await page.waitForTimeout(250)
+    const shown = await emo(page)
+    check('I-21a `:s`(1 个字母)不弹,`:smil` 弹 emoji 候选(首项高亮、带命中关键词)', one === 0 && shown.length > 0 && shown[0].startsWith('*') && /smile/.test(shown[0]), JSON.stringify(shown))
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Z', { delay: 30 })
+    const out = await saved(page)
+    const want = shown[0] ? shown[0].slice(1).replace(/smile.*$/, '') : '?'
+    check('I-21b 回车 = `:smil` 整段换成 emoji 字符本身,不插换行', typeof out === 'string' && out === `# T\n\nx ${want}Z\n`, JSON.stringify(out))
+    // 不该弹的写法:时间、URL、键值、C++ 作用域、半角冒号的中文句、行内代码
+    const quiet = {}
+    for (const t of [' 10:30', ' http://ex', ' key:value', ' std::vector', ' 备注:说明']) {
+      await page.keyboard.type(t, { delay: 20 })
+      await page.waitForTimeout(200)
+      quiet[t] = await emoCount(page)
+      await page.keyboard.press('Escape')
+    }
+    await page.close()
+    // 行内代码里:光标放进 `co|de` 再打 `:smile`
+    page = await open(browser, '# T\n\nx `code` y\n', PAGES)
+    await page.evaluate(() => {
+      const view = window.__upage.probe.view()
+      let at = -1
+      view.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text === 'code') at = pos + 2; return at < 0 })
+      view.focus()
+      view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.near(view.state.doc.resolve(at))))
+    })
+    await page.waitForTimeout(150)
+    await page.keyboard.type(' :smile', { delay: 30 })
+    await page.waitForTimeout(200)
+    quiet['`co :smile|de`'] = await emoCount(page)
+    check('I-21c `10:30` / `http:` / `key:value` / `std::vector` / `备注:说明` / 行内代码里都不弹', Object.values(quiet).every((n) => n === 0), JSON.stringify(quiet))
+    await page.close()
+    // Esc 闩锁:关掉后接着打字不重弹;紧跟回车 = 换行(不插 emoji)
+    page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' :he', { delay: 30 })
+    await page.waitForTimeout(200)
+    const opened = await emoCount(page)
+    await page.keyboard.press('Escape')
+    await page.keyboard.type('a', { delay: 30 })
+    await page.waitForTimeout(200)
+    const reopened = await emoCount(page)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(150)
+    const doc = await page.evaluate(() => window.__upage.probe.view().state.doc.childCount)
+    check('I-21d Esc 闩锁:关掉后接着打字不重弹,回车照常换行', opened === 1 && reopened === 0 && doc === 3, `opened=${opened} reopened=${reopened} blocks=${doc}`)
+    await page.close()
+    // 输入法:`:` 之后起真组合(拼音还在候选窗里)不弹;组字中的回车放行给输入法(不插 emoji)
+    page = await open(browser, '# T\n\nx\n', PAGES)
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' :', { delay: 30 })
+    const s = await page.context().newCDPSession(page)
+    await s.send('Input.imeSetComposition', { text: 'smile', selectionStart: 5, selectionEnd: 5 })
+    await page.waitForTimeout(250)
+    const during = await emoCount(page)
+    await s.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 229 })
+    await s.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 229 })
+    await page.waitForTimeout(150)
+    await s.send('Input.insertText', { text: '微笑' })
+    await page.waitForTimeout(250)
+    const t = await docText(page)
+    check('I-21e 组字中不弹,组字回车不插 emoji;上屏汉字后也不弹', during === 0 && (await emoCount(page)) === 0 && t.endsWith('x :微笑'), `during=${during} ${JSON.stringify(t)}`)
     await page.close()
   })
 

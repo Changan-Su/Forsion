@@ -3,6 +3,7 @@
 // PageStyleMenuItems(入口集合 pageStyleEntries);`&umbar` 挂生产的移动端底栏胶囊 + ⋯ sheet。
 // 钉:缺省 920 / 15px;菜单三项生效且菜单不关;重载仍在;行内改名跟着走;锁定页照样生效、照样能改;
 // 画布模式不受影响;分享页形态(`&uro`、非 .amx-pane 壳)恒缺省;PDF 克隆带着字体 / 字号、纸面不溢出;移动 sheet 同一组入口。
+// C24(评审 C-24):⋯「复制为 Markdown」= 落盘正文 —— 防抖窗里刚打的字也在(先冲洗)、不含 frontmatter(结构 JSON 不进剪贴板)。
 // 用法:npm run check:pagestyle(由 e2e-editor 自起 / 复用 Vite);`--shot=<目录>` 留明暗 / 窄屏 / 菜单截图(DESIGN §8)。
 const fs = require('fs')
 const os = require('os')
@@ -279,6 +280,39 @@ async function main() {
     await mobDark.waitForTimeout(500)
     await shot(mobDark, 'pagestyle-sheet-390-dark')
     await mobDark.close()
+  }
+
+  // ── C24 复制为 Markdown:打完字立刻(800ms 防抖窗内)点 ⋯ 里那一项 —— 剪贴板 = 这一刻的正文,无 fm;盘上同步落成同一份 ──
+  {
+    const FM = '---\ntags: [周报]\namadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[]}\n---\n'
+    await open(page, '&upane', `${FM}# 周报\n\n正文段\n`)
+    await page.evaluate(() => { window.__clip = null; navigator.clipboard.writeText = async (s) => { window.__clip = s } })
+    await page.evaluate(() => {
+      const view = window.__upage.probe.view()
+      let at = -1
+      view.state.doc.descendants((n, pos) => { if (at < 0 && n.isText && n.text.includes('正文段')) at = pos + n.text.indexOf('正文段') + 3; return at < 0 })
+      view.focus()
+      view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.near(view.state.doc.resolve(at))))
+    })
+    await page.waitForTimeout(100)
+    await page.keyboard.type('甲')
+    await page.click('.amx-toolbar .amx-more-btn')
+    await page.waitForSelector('[data-copymd]', { timeout: 5000 })
+    if (SHOT) { await page.waitForTimeout(400); await shot(page, 'copymd-menu-light', { clip: { x: 1900 - 520, y: 0, width: 520, height: 460 } }) }
+    await page.click('[data-copymd]')
+    let clip = null
+    for (let i = 0; i < 30 && clip == null; i++) { await page.waitForTimeout(100); clip = await page.evaluate(() => window.__clip) }
+    const disk = await page.evaluate(() => { const w = window.__upage.writes; return w.length ? w[w.length - 1].text : null })
+    check('C24 复制为 Markdown:剪贴板 = 正文(含防抖窗里刚打的字)、不含 frontmatter', clip === '# 周报\n\n正文段甲\n', JSON.stringify(clip))
+    // fm 在盘上照旧(结构键会被派生规范化,不逐字比),正文 = 剪贴板那份
+    check('C24 先冲洗:盘上正文 = 剪贴板那份,fm 留在盘上', !!disk && !!clip && disk.startsWith('---\n') && disk.endsWith(`\n---\n${clip}`) && /tags: \[周报\]/.test(disk), JSON.stringify(disk))
+    if (SHOT) {
+      await open(page, '&upane&udark')
+      await page.click('.amx-toolbar .amx-more-btn')
+      await page.waitForSelector('[data-copymd]', { timeout: 5000 })
+      await page.waitForTimeout(500)
+      await shot(page, 'copymd-menu-dark', { clip: { x: 1900 - 520, y: 0, width: 520, height: 460 } })
+    }
   }
 
   await browser.close()

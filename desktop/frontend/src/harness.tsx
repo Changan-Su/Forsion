@@ -29,7 +29,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { HostLocaleProvider, LocaleProvider, setLocaleGlobal, useI18n } from './i18n'
+import { HostLocaleProvider, LocaleProvider, setLocaleGlobal, translate, useI18n } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -52,7 +52,8 @@ import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
-import { FileText as FileTextIcon } from 'lucide-react'
+import { FileText as FileTextIcon, Copy as CopyIcon } from 'lucide-react'
+import { noteMarkdownBody } from './amadeus/unified/copyMarkdown'
 import { QuickFind, useQuickFind } from './quickFind'
 import { treeRefBlocks } from './amadeus/unified/treeRefDrop'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
@@ -2021,6 +2022,11 @@ if (new URLSearchParams(location.search).has('dock')) {
               <PageStyleMenuItems entries={pageStyleEntries(pageStyle, (patch) => setNotePageStyle(null, st.path, patch))} />
               {/* 版本历史(C-20):门控与锁定口径镜像 amadeusViews(canPageHistory;锁定 = 能看不能恢复)。 */}
               {!st.block && canPageHistory() && <button type="button" data-page-history onClick={() => { setStyleMenu(null); setHistoryOpen(true) }}>{histT('pghist.menu')}</button>}
+              {/* 「复制为 Markdown」(C-24),镜像 amadeusViews 的 ⋯:生产同一个 noteMarkdownBody(仪器 page-style 的 C24)。 */}
+              <div className="ctx-separator" />
+              <button data-copymd onClick={() => { setStyleMenu(null); void noteMarkdownBody(st.path).then((md) => (md == null ? undefined : navigator.clipboard.writeText(md))) }}>
+                <CopyIcon size={13} /> {translate('amxv.menu.copyMd')}
+              </button>
             </OverlayAt>
           )}
           {historyOpen && <PageHistoryHost path={st.path} locked={locked} onClose={() => setHistoryOpen(false)} />}
