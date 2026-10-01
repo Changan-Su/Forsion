@@ -80,6 +80,10 @@ export const IPC = {
   listPageProps: 'vault:page-props',
   renamePageFile: 'page:rename-file',
   renameDbFile: 'db:rename-file',
+  /** 页面版本历史(评审 C-20):快照存在库外(主进程 tanguDataDir()/amadeus-history),只有桌面主进程实现。 */
+  listPageHistory: 'page:history-list',
+  readPageHistory: 'page:history-read',
+  restorePageHistory: 'page:history-restore',
 } as const
 
 /** Plugin API version the host implements. Manifests without apiVersion are treated as 1 (back-compat). */
@@ -480,6 +484,13 @@ export interface PathGoneEvent {
   root: string
 }
 
+/** 页面版本历史的一份快照(评审 C-20)。id 不透明(只拿来读 / 恢复);at = 快照时刻(毫秒);size = UTF-8 字节数。 */
+export interface PageHistoryEntry {
+  id: string
+  at: number
+  size: number
+}
+
 /** 回收站条目:name = .trash 内扁平文件名;original = 删除前的 vault 相对路径。 */
 export interface TrashEntry {
   name: string
@@ -627,6 +638,15 @@ export interface AmadeusApi {
   deleteTrashEntry?(name: string): Promise<void>
   /** 清空回收站。 */
   emptyTrash?(): Promise<void>
+  /** 页面版本历史(评审 C-20,可选:只有桌面主进程实现;缺位端 ⋯ 菜单不出「版本历史」,判据单源 amadeus/lib/hostCaps)。
+   *  快照由主进程在笔记的比对交换写里用手里的旧文顺手留(同一篇按时间窗最多一份),存在库外,不往智库里写任何东西。
+   *  列出 = 新 → 旧。 */
+  listPageHistory?(pagePath: string): Promise<PageHistoryEntry[]>
+  /** 读一份快照的原文;不在(已被淘汰)→ null。 */
+  readPageHistory?(pagePath: string, id: string): Promise<string | null>
+  /** 把笔记恢复成某份快照:base = 调用方读到的现文 `textFingerprint`。主进程在同篇写锁内比对 → 先给现文补一份快照
+   *  (补不成就不恢复)→ 原子写回;语义同带 base 的 writeTextFile(对不上 / 文件不在 = 不写,回 ok:false)。 */
+  restorePageHistory?(pagePath: string, id: string, base: string): Promise<TextWriteResult>
   /** 页面 emoji 图标表(fm icon: 键;可选:桌面索引提供,其余端优雅缺位)。 */
   pageIcons?(): Promise<Record<string, string>>
   /** fm `aliases:` 表(path → 别名;只含设置了的)。`[[` 补全用(L-13);可选:缺位端补全不含别名。 */
