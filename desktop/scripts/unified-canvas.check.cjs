@@ -1325,7 +1325,7 @@ async function wave4(browser) {
   if (pick('C107')) await guard('C107', async () => {
     const CV107 = {
       v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
-      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 300, w: 300 }],
+      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 300, w: 300 }, { ref: 'k3', x: 900, y: 300, w: 300 }],
       cardColors: { k1: '4' },
       tree: { k2: 'k1' },
       elements: [
@@ -1334,8 +1334,10 @@ async function wave4(browser) {
         { id: 'e1', type: 'connector', from: { id: 's1' }, to: { ref: 'k1' }, label: '关系', fromEnd: 'arrow' },
       ],
     }
-    const seed107 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV107)}`, '---', '', '# 导出', '', '主卡正文。', '',
-      '<!-- a k1 -->', '', '## 卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '![[Embedded]]', '', '<!-- /a k2 -->', ''].join('\n')
+    // 卡 k3 与主卡里各一张页相对路径的图(Codex 复核 P1):编辑器里它是 amadeus-asset:// 显示形,导出必须写回落盘的相对路径。
+    const seed107 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV107)}`, '---', '', '# 导出', '', '主卡正文。', '', '![主图](.amadeus/main.png)', '',
+      '<!-- a k1 -->', '', '## 卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '![[Embedded]]', '', '<!-- /a k2 -->', '',
+      '<!-- a k3 -->', '', '![卡图](.amadeus/card.png)', '', '<!-- /a k3 -->', ''].join('\n')
     const p = await open(browser, seed107)
     await p.waitForTimeout(900)
     await p.evaluate(() => window.__upage.pageStore.setState({ pages: ['Unified.md', 'Embedded.md'] }))
@@ -1352,16 +1354,17 @@ async function wave4(browser) {
     try { jc = JSON.parse(out[0]?.text ?? '') } catch { /* 断言里报 */ }
     const node = (id) => jc?.nodes?.find((n) => n.id === id)
     const edge = (id) => jc?.edges?.find((e) => e.id === id)
-    record('C107a 画布右键「导出为 JSON Canvas」= 同目录 Unified.canvas(Frame=group 垫底、卡=text、恰为嵌入的卡=file、形状=text、主卡=text、连线 / 层级=edge),笔记本身零写入',
+    record('C107a 画布右键「导出为 JSON Canvas」= 同目录 Unified.canvas(Frame=group 垫底、卡=text、恰为嵌入的卡=file、形状=text、主卡=text、连线 / 层级=edge),text 是落盘形(图片是页相对路径,无 amadeus-asset://),笔记本身零写入',
       items.includes('导出为 JSON Canvas') && okMenu && out.length === 1 && out[0].path === 'Unified.canvas' && notes === 0
         && jc?.nodes?.[0]?.id === 'el-f1' && node('el-f1')?.type === 'group' && node('el-f1')?.label === '区域'
         && node('card-k1')?.type === 'text' && node('card-k1')?.text === '## 卡 K1' && node('card-k1')?.color === '4' && node('card-k1')?.x === 480
         && node('card-k2')?.type === 'file' && node('card-k2')?.file === 'Embedded.md' && node('card-k2')?.height === k2h
         && node('el-s1')?.type === 'text' && node('el-s1')?.text === '方块' && node('el-s1')?.color === '#12ab34'
         && node('main')?.type === 'text' && node('main')?.text.includes('主卡正文')
+        && node('main')?.text.includes('![主图](.amadeus/main.png)') && node('card-k3')?.text === '![卡图](.amadeus/card.png)' && !(out[0]?.text ?? '').includes('amadeus-asset')
         && edge('edge-e1')?.fromNode === 'el-s1' && edge('edge-e1')?.toNode === 'card-k1' && edge('edge-e1')?.fromEnd === 'arrow' && edge('edge-e1')?.label === '关系' && !!edge('edge-e1')?.fromSide
         && edge('tree-k2')?.fromNode === 'card-k1' && edge('tree-k2')?.toNode === 'card-k2' && edge('tree-k2')?.toEnd === 'none',
-      JSON.stringify({ items, out: out.map((o) => o.path), notes, k2h, nodes: jc?.nodes?.map((n) => `${n.id}:${n.type}`), edges: jc?.edges }))
+      JSON.stringify({ items, out: out.map((o) => o.path), notes, k2h, nodes: jc?.nodes?.map((n) => `${n.id}:${n.type}`), main: node('main')?.text, k3: node('card-k3')?.text, edges: jc?.edges }))
     // b:再导一次(走笔记 ⋯ 菜单那条路:onCanvasMode 交出来的 exportCanvas)→ Unified 2.canvas,第一份逐字不动
     const segOk = await p.evaluate(() => typeof window.__upage.probe.canvasSeg?.exportCanvas === 'function')
     await p.evaluate(() => window.__upage.probe.canvasSeg?.exportCanvas?.())

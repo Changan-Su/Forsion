@@ -355,6 +355,9 @@ interface HostApi {
    *  给的是**显示形**(asset 协议 URL 原样),对面 parseMd 的 toDisplayMarkdown 会原样放行 ——
    *  换成 stored 形的话页相对路径会按目标笔记重解析,跨文件夹粘贴的图片当场断链。 */
   serializeMd: (content: Fragment) => string | null
+  /** 块内容 → **落盘形** markdown(与 serializeNow 同一条落盘链:serializeUnified + toStoredMarkdown,附件引用是页相对路径
+   *  而不是 asset 协议 URL)。给要离开本编辑器、按文件读的产物用(画布导出 JSON Canvas,V-19)。序列化抛 = null。 */
+  serializeStored: (content: Fragment) => string | null
   focusStart: () => void
   focusEnd: () => void
   /** 尾部空白区点击(AFFiNE 语义):末行有内容 → 追加一个普通空段并落光标;已是空段 → 直接落。
@@ -470,6 +473,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
             const view = ctx.get(editorViewCtx)
             const doc = view.state.schema.topNodeType.createAndFill(undefined, content)
             if (doc) out = normalizeSerializedMd(ctx.get(serializerCtx)(doc))
+          })
+        } catch {
+          return null
+        }
+        return out
+      },
+      serializeStored: (content) => {
+        let out: string | null = null
+        try { // 吞异常的理由同 serializeMd(分栏行等节点进序列化树会抛)
+          getInstance()?.action((ctx) => {
+            const doc = ctx.get(editorViewCtx).state.schema.topNodeType.createAndFill(undefined, content)
+            if (doc) out = toStoredMarkdown(serializeUnified(ctx, doc), pageDir)
           })
         } catch {
           return null
@@ -3217,6 +3232,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
             serializeMd={(frag) => hostApi.current?.serializeMd(frag) ?? null}
+            storedMd={(frag) => hostApi.current?.serializeStored(frag) ?? null}
             onBlocksDeleted={onBlocksDeleted}
             notePages={() => scoped.getState().pages}
             onCommit={(newRef) => {
