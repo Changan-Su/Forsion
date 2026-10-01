@@ -1,5 +1,6 @@
 import { groupPickerModels, useModelPickerPreferences } from '../modelPickerPreferences'
 import { ModelMetadata } from './ModelMetadata'
+import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type PickerGroup } from './modelPickerHost'
 /**
  * Chat View 模型 / Effort 控制器。
  *
@@ -20,6 +21,9 @@ import type { AgentConfig, CtxInfo, DefaultModelSlot, ModelInfo, ModelsResponse 
 
 registerMessages({
   'pill.rowAdvanced': { zh: '高级', en: 'Advanced' },
+  'pill.nativeDone': { zh: '完成', en: 'Done' },
+  'pill.nativeSearch': { zh: '搜索模型', en: 'Search models' },
+  'pill.nativeBack': { zh: '返回', en: 'Back' },
   'pill.rowModel': { zh: '模型', en: 'Model' },
   // 字段名统一「思考档位 / Thinking effort」(U-28a:此前有思考强度 / 推理强度 / Effort 多种叫法)。
   'pill.rowEffort': { zh: '思考档位', en: 'Thinking effort' },
@@ -208,6 +212,10 @@ function ModelMenuSurface({ portal, anchorRef, innerRef, style, children }: {
 
 export const ModelPill: React.FC<{
   className?: string
+  /** Revoke an open native sheet when its session / execution target changes. */
+  scopeKey?: string
+  /** Atomic draft update for shared prompt hosts; avoids two callbacks overwriting each other's draft. */
+  onSelectionChange?: (patch: { modelId?: string; thinkingLevel?: Thinking; ultra?: boolean }) => void
   /** Escape a prompt host's scrolling/clipping context and flip vertically when needed. */
   menuPortal?: boolean
   /** Composer2 传入时由三颗胶囊共用一个排他开关；harness / 独立用法仍可不受控。 */
@@ -241,7 +249,7 @@ export const ModelPill: React.FC<{
   footnote?: string
   title?: string
 }> = ({
-  className, menuPortal = false, open: controlledOpen, onOpenChange,
+  className, scopeKey, onSelectionChange, menuPortal = false, open: controlledOpen, onOpenChange,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, running = false, supportedThinking, effectiveThinking,
   modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title,
 }) => {
@@ -261,6 +269,14 @@ export const ModelPill: React.FC<{
   const [subTop, setSubTop] = useState(0)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const nativeCall = useRef<AbortController | null>(null)
+  const [nativeOpen, setNativeOpen] = useState(false)
+  const catalogKey = groups.flatMap(g => g.options.map(m => m.id)).join('\n')
+  useEffect(() => () => { nativeCall.current?.abort(); nativeCall.current = null }, [])
+  useLayoutEffect(() => {
+    if (nativeCall.current) { nativeCall.current.abort(); nativeCall.current = null; setNativeOpen(false); setPillOpen(false) }
+  }, [scopeKey, disabled, modelId, thinkingLevel, ultra, catalogKey])
+  useEffect(() => { if (!open) { nativeCall.current?.abort(); nativeCall.current = null; setNativeOpen(false) } }, [open])
   const subRef = useRef<HTMLDivElement>(null)
   const menuFix = useEdgeNudge(open && !menuPortal, { boundary: '.t2-chat-view' })
   const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
@@ -390,6 +406,55 @@ export const ModelPill: React.FC<{
   }
   const showPane = (p: Pane) => (): void => { if (pane !== p) setQuery(''); setPane(p) }
 
+  const openPicker = async (): Promise<void> => {
+    const present = modelPickerPresenter()
+    if (!present || open) { setPillOpen(!open); return }
+    const toGroups = (input: ModelPillGroup[]): PickerGroup[] => input.map(g => ({ label: g.label, options: g.options.map(m => ({
+      value: m.id, label: m.name, detail: m.tags?.map(tag => tag.text).join(' · ') || m.description,
+      ...(m.source === 'forsion' && m.multiplier != null ? { badge: `${m.multiplier.toFixed(2)}x` } : {}),
+    })) }))
+    const fields: ModelPickerRequest['fields'] = [{ id: 'model', label: t('pill.rowModel'), value: modelId || '', groups: toGroups(groups) }]
+    if (onThinkingChange) fields.push({ id: 'thinking', label: t('pill.rowEffort'), value: isUltra ? 'ultra' : effLevel, groups: [{ label: '', options: [
+      ...THINKING_LEVELS.map(lv => ({ value: lv, label: effortDisplay(lv, t) })),
+      ...(allowUltra ? [{ value: 'ultra', label: t('pill.ultra'), detail: t('pill.ultraTitle') }] : []),
+    ] }] })
+    if (onDefaultModelChange) for (const { slot, label } of slotRows) fields.push({ id: slot, label, value: defaultModelIds?.[slot] || '', groups: [
+      { label: '', options: [{ value: '', label: t('pill.followCloudDefault') }] }, ...toGroups(groupCatalog(slotModels(slot))),
+    ] })
+    if (ctx) fields.push({ id: 'context', label: t('pill.rowContext'), value: ctx.selected || 'custom', groups: [{ label: '', options: [
+      { value: 'default', label: t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) }), detail: t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) }) },
+      ...(ctx.maxTokens ? [{ value: 'max', label: t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) }) }] : []),
+    ] }] })
+    const request: ModelPickerRequest = { title: t('input.selectModel'), fields, footnote,
+      labels: { done: t('pill.nativeDone'), search: t('pill.nativeSearch'), empty: t('pill.noModels'), back: t('pill.nativeBack'), advanced: t('pill.rowAdvanced') },
+      theme: { dark: document.documentElement.dataset.mode === 'dark', accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() },
+    }
+    const call = new AbortController()
+    nativeCall.current = call; setNativeOpen(true); setPillOpen(true)
+    try {
+      const result = await present(request, call.signal)
+      if (call.signal.aborted || nativeCall.current !== call) return
+      const changes = pickerChanges(request, result)
+      nativeCall.current = null; setNativeOpen(false); setPillOpen(false)
+      if (!changes) return
+      const patch: { modelId?: string; thinkingLevel?: Thinking; ultra?: boolean } = {}
+      if ('model' in changes) patch.modelId = changes.model
+      if ('thinking' in changes) {
+        patch.thinkingLevel = changes.thinking === 'ultra' ? 'max' : changes.thinking as Thinking
+        if (allowUltra) patch.ultra = changes.thinking === 'ultra'
+      }
+      if (Object.keys(patch).length) {
+        if (onSelectionChange) onSelectionChange(patch)
+        else { if (patch.modelId !== undefined) onSelect(patch.modelId); if (patch.thinkingLevel) onThinkingChange?.(patch.thinkingLevel, patch.ultra) }
+      }
+      for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
+      if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : null)
+    } catch {
+      // Older/broken native hosts retain the existing fully functional Web picker.
+      if (!call.signal.aborted && nativeCall.current === call) { nativeCall.current = null; setNativeOpen(false) }
+    }
+  }
+
   if (readonly) {
     return (
       <span className={`composer-chip composer-chip--readonly${className ? ` ${className}` : ''}`} title={title}>
@@ -400,13 +465,13 @@ export const ModelPill: React.FC<{
   }
 
   return (
-    <span ref={wrapRef} className={`model-pill-wrap${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-cmenu>
+    <span ref={wrapRef} className={`model-pill-wrap${open && !nativeOpen ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-cmenu>
       <button type="button"
-        className={`composer-chip model-pill-btn${open ? ' is-open' : ''}${effortCls}`}
+        className={`composer-chip model-pill-btn${open && !nativeOpen ? ' is-open' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
         title={title || t('input.modelChipTitle')}
         disabled={disabled}
         aria-expanded={open}
-        onClick={() => setPillOpen(!open)}
+        onClick={() => { void openPicker() }}
       >
         {isUltra && <span ref={streaksRef} className="pill-ultra-streaks" aria-hidden="true">{[0, 1, 2, 3].map((i) => <i key={i} />)}</span>}
         <Bot size={13} />
@@ -416,7 +481,7 @@ export const ModelPill: React.FC<{
           : <MarqueeLabel text={label + effort} />}
         <ChevronDown size={10} />
       </button>
-      {open && (
+      {open && !nativeOpen && (
         <ModelMenuSurface
           portal={menuPortal}
           anchorRef={wrapRef}

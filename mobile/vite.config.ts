@@ -91,5 +91,9 @@ export default defineConfig(({ mode }) => {
   },
   // Capacitor 从 file:// 载入资源 → 相对 base。
   base: './',
+  // Review-only entry; normal production builds contain neither fixtures nor preview controls.
+  build: env.FORSION_NATIVE_PREVIEW === '1' ? {
+    rollupOptions: { input: { app: resolve(__dirname, 'index.html'), nativePreview: resolve(__dirname, 'native-preview.html') } },
+  } : undefined,
   }
 })

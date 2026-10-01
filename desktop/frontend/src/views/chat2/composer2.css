@@ -214,6 +214,9 @@
   .model-pill-btn.is-open .pill-marquee { display: block; }
   .model-pill-btn.is-open .pill-ultra-tag { display: inline; }
 }
+/* Native sheets do not expand the trigger. Keep its selected model legible on phones. */
+.t2c-row .composer-chip.model-pill-btn--native .pill-marquee { display: inline-block; max-width: 128px; text-overflow: ellipsis; }
+.t2c-row .composer-chip.model-pill-btn--native .pill-ultra-tag { display: inline; }
 
 /* 窄 Chat View 的排他展开：当前胶囊完整保留，其他胶囊 / 次要控制直接退出布局。
    发送（以及运行时停止）永远保留，避免为了观感牺牲核心动作。 */

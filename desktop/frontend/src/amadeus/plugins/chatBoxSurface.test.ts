@@ -7,6 +7,7 @@ import { setLocaleGlobal } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import type { PluginChatBoxHandle } from '../../../../shared/chatBox'
 import type { PluginContext } from './types'
+import { installModelPickerPresenter, type ModelPickerValues } from '../../components/modelPickerHost'
 
 let el: HTMLDivElement
 let box: PluginChatBoxHandle | undefined
@@ -26,6 +27,45 @@ const input = () => el.querySelector('textarea')!
 const submit = async () => { await act(async () => { (el.querySelector('.t2c-send') as HTMLButtonElement).click() }) }
 
 describe('public Chat Box mount', () => {
+  it('commits native model and effort together without overwriting the plugin draft or global model', async () => {
+    useApp.setState({ modelsResp: { directProviders: [], models: [
+      { id: 'original', name: 'Original', provider: 'test', source: 'direct' },
+      { id: 'other', name: 'Other', provider: 'test', source: 'direct' },
+    ], defaultModelId: 'original' } })
+    const remove = installModelPickerPresenter(async () => ({ model: 'other', thinking: 'high' }))
+    const onChange = vi.fn(), onSubmit = vi.fn(() => false)
+    try {
+      await act(async () => { box = mountPluginChatBox(el, { value: 'Keep my text', modelId: 'original', thinkingLevel: 'medium', onChange, onSubmit }) })
+      await act(async () => { (el.querySelector('.model-pill-btn') as HTMLButtonElement).click() })
+      expect(onChange).toHaveBeenLastCalledWith({ text: 'Keep my text', modelId: 'other', thinkingLevel: 'high' })
+      await submit()
+      expect(onSubmit).toHaveBeenLastCalledWith({ text: 'Keep my text', modelId: 'other', thinkingLevel: 'high' })
+      expect(useApp.getState().newChatModel).toBe('original')
+    } finally { remove() }
+  })
+  it('aborts the native presenter on plugin disposal and ignores a late result', async () => {
+    let finish!: (value: ModelPickerValues) => void
+    let signal!: AbortSignal
+    const remove = installModelPickerPresenter((_request, s) => { signal = s; return new Promise(resolve => { finish = resolve }) })
+    const onChange = vi.fn()
+    try {
+      await act(async () => { box = mountPluginChatBox(el, { onChange, onSubmit: () => false }) })
+      await act(async () => { (el.querySelector('.model-pill-btn') as HTMLButtonElement).click() })
+      expect(signal.aborted).toBe(false)
+      await act(async () => { box!.dispose() })
+      expect(signal.aborted).toBe(true)
+      await act(async () => { finish({ model: 'original', thinking: 'high' }) })
+      expect(onChange).not.toHaveBeenCalled()
+    } finally { remove() }
+  })
+  it('falls back to the Web menu when the native host rejects', async () => {
+    const remove = installModelPickerPresenter(async () => { throw new Error('older host') })
+    try {
+      await act(async () => { box = mountPluginChatBox(el, { onSubmit: () => false }) })
+      await act(async () => { (el.querySelector('.model-pill-btn') as HTMLButtonElement).click() })
+      expect(document.querySelector('.composer-menu--portal')).not.toBeNull()
+    } finally { remove() }
+  })
   it('updates in place, submits explicit model/effort, and preserves rejected drafts', async () => {
     const onSubmit = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     await act(async () => { box = mountPluginChatBox(el, { value: 'Keep this idea', modelId: 'chosen', thinkingLevel: 'high', onSubmit }) })

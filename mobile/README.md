@@ -5,7 +5,7 @@ Capacitor 打 Android APK,走 Forsion 网关云连(手机控云会话)。iOS 暂
 
 ## 架构
 
-- 渲染层经 `@ → ../desktop/frontend/src` 别名整体复用;**desktop 源零改**。
+- 渲染层经 `@ → ../desktop/frontend/src` 别名复用。共享组件保留可选宿主展示接口；Android 可接原生交互，桌面和浏览器继续使用 Web 展示。
 - `vite.config.ts` 的 `resolveId` 插件按绝对路径把引擎 3 个 Dockview 模块换成移动版:
   `engine/workspaceStore → src/engine/mobileWorkspaceStore`、`engine/{Shell,WorkspaceHost} → src/engine/emptyHost`。
 - `src/engine/MobileShell.tsx` = 顶栏 + 全屏主 leaf + **底部 Space 切换栏** + 侧滑抽屉。
@@ -33,7 +33,44 @@ cd android && ./gradlew assembleDebug
 # 产物:android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-需本机/CI 具备 Android SDK + JDK 17 + gradle。`android/` 已入库(含深链 intent-filter),CI 直接 build 即可。
+需本机/CI 具备 Android SDK + JDK 21 + gradle。`android/` 已入库(含深链 intent-filter),CI 直接 build 即可。
+
+## Android 原生交互试点（2026-10-01）
+
+首个交付是 Kotlin + Jetpack Compose 模型选择半屏面板。聊天与插件共用的 `ModelPill`
+通过 `modelPickerHost.ts` 展示协议调用 Capacitor `NativeModelPicker`；模型目录、中文/英文文案、
+模型 ID 和业务回调仍由调用方负责。搜索聚焦时面板展开；完成时一次提交模型与思考档，
+系统返回、下滑或点击遮罩取消。高级默认模型与上下文入口按原调用方能力展示。
+上下文窗口只适用于打开面板时的模型；切换模型后重新打开面板才能修改该模型的窗口。
+
+- `ctx.ui.mountChatBox` 的插件无需新增 Android UI 代码即可共用此面板。
+- 现有 DOM View、Amadeus 编辑器、ProseMirror 扩展继续运行在 WebView；本次没有重写编辑器或全部页面。
+- 切换会话/执行目标、模型目录变化、输入框卸载、插件禁用或页面重载会取消旧请求。
+  结果按请求目录校验；原生插件缺失/调用失败时回退现有 Web 菜单。
+- Android 15 的系统栏与刘海间距使用 Capacitor `adjustMarginsForEdgeToEdge: auto`，避免内容被状态栏覆盖。
+- **验证范围**：示例插件实际经过 `pluginStore` 注册、挂载共享输入框和卸载。
+  它不代表外部插件安装/市场加载已经可用；移动桥当前 `listPlugins` 返回空列表，需另行设计外部加载与能力声明。
+  预览消息和模型是样本，无登录、后端会话或模型请求。
+
+### 独立预览 APK 与截图
+
+```bash
+FORSION_NATIVE_PREVIEW=1 npm run build
+npx cap sync android
+./android/gradlew -p android :app:assembleDebug :app:testDebugUnitTest -PnativePreview
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.forsion.tangu.nativepreview/com.forsion.tangu.MainActivity
+# 等待应用出现后；仅连接一台设备，Node 22+
+OUT=/absolute/review-output node scripts/native-picker-emu.cjs
+```
+
+预览使用独立包名 `com.forsion.tangu.nativepreview`，不会覆盖已安装正式版。
+`native-preview.html` 只在显式预览构建中包含；发布前用普通 `npm run build` 再 `npx cap sync android`，
+并去掉 Gradle 的 `-PnativePreview`。原生模型面板也接入普通应用入口，预览开关只控制样本页面与独立安装身份。
+
+验收脚本通过真实 Compose 无障碍节点操作面板，并检查 Web 侧的草稿结果；输出浅色、深色、
+英文、搜索键盘与插件截图，以及 `acceptance.json`。当前已覆盖 Android 15 模拟器；
+真机、其他 Android 版本和完整外部插件目录仍待后续验收。
 
 ## 深链登录(需服务端确认一处)
 

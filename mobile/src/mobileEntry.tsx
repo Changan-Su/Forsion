@@ -22,6 +22,7 @@ import { recordError } from '@/diag'
 import { installSpaceShortcuts } from './spaceShortcuts'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
+import { installNativeModelPicker } from './nativeModelPicker'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -43,6 +44,7 @@ try {
   // ⚠️check:parity 抓不到这条(`setTr(translate)` 不是「导入名直接调用」那种形态,属它已登记的假阴性)。
   useApp.getState().setTr(translate)
   installEngine()
+  installNativeModelPicker()
   // 丝滑光标:desktop 在 main.tsx 装,移动端走的是本模块 —— 漏装过一轮(用户实报「移动端没生效」)。
   // 缺席即关(设置→外观里开);软键盘的重定位与偏移补偿在 smoothCaret 里接 visualViewport。
   // (旧注释写的「移动端没有设置开关」是错的:不列的只有「常规」页,「外观」页是共用的,

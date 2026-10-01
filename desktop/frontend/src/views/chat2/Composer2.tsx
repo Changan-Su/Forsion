@@ -44,7 +44,7 @@ import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import { ContextUsagePop } from './ContextUsagePop'
 import './composer2.css'
-import { homeTarget, targetForSession } from '../../services/engine/targets'
+import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 
 registerMessages({
   'livecall.start': { zh: '实时语音通话', en: 'Voice call' },
@@ -569,6 +569,7 @@ export const Composer2: React.FC<{
 
   const storeActiveSessionId = useApp((s) => s.activeId)
   const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
+  const composerRef = useComposerRef(activeSessionId)
   // 实时语音通话(对标 GPT Live,services/realtimeCall):通话是模块级单例、跨视图活着,这里只画入口与通话条。
   // 双方的话与代跑的 Tangu run 由引擎写进会话,聊天区照常显示。设置 → 语音 → 实时通话 选了模型才出按钮。
   const liveOwnerResolved = liveOwner ?? sessionId === null // 缺省只有主页输入框是接收方;ChatView 显式传
@@ -1785,6 +1786,7 @@ export const Composer2: React.FC<{
             })()}
             {showModelPill && (
               <ModelPill
+                scopeKey={`${activeSessionId ?? 'draft'}:${targetKeyOf(composerRef)}:${isEngine ? 'engine' : 'tangu'}`}
                 className="t2c-capsule-peer"
                 open={openMenu === 'model'}
                 onOpenChange={(next) => setOpenMenu(next ? 'model' : null)}

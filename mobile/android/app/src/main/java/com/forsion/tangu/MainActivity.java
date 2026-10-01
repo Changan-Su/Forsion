@@ -15,8 +15,12 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(UnitPlugin.class);
         // P1-DL:存到系统「下载」(Capacitor WebView 没有 DownloadListener,<a download> 在 App 里是哑弹)。
         registerPlugin(DownloadsPlugin.class);
+        registerPlugin(NativeModelPickerPlugin.class);
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);
+        if (BuildConfig.NATIVE_PREVIEW) {
+            getBridge().getWebView().loadUrl("https://localhost/native-preview.html");
+        }
     }
 }

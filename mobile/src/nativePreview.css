@@ -1,0 +1,40 @@
+/* Review fixture layout only; production views and editor styles remain shared. */
+html, body, #root { height: 100%; margin: 0; overflow: hidden; }
+.np-app { height: 100%; display: flex; flex-direction: column; color: var(--text); background: var(--bg); font-family: var(--font-ui); }
+.np-app button { color: inherit; border: 0; background: none; font: inherit; cursor: pointer; }
+.np-header { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; }
+.np-brand { display: flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
+.np-brand img { width: 28px; height: 28px; }
+.np-header-actions { display: flex; gap: 4px; }
+.np-header-actions button { width: 44px; height: 44px; display: grid; place-items: center; }
+.np-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.np-conversation-title { padding: 15px 24px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--text-muted); }
+.np-conversation-title span { display: flex; gap: 9px; align-items: center; }
+.np-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 12px; }
+.np-user { margin-left: 40px; padding: 16px 19px; border-radius: 20px 20px 5px 20px; background: color-mix(in srgb, var(--accent) 9%, var(--bg)); font-size: 15px; line-height: 1.7; }
+.np-assistant { padding-top: 30px; font-size: 15px; line-height: 1.8; }
+.np-eyebrow { color: var(--accent); font-size: 12px; font-weight: 500; letter-spacing: .06em; }
+.np-assistant h2 { font-size: 23px; font-weight: 600; line-height: 1.5; letter-spacing: -.6px; margin: 10px 0 14px; }
+.np-assistant p { margin: 12px 0; }
+.np-topics { margin: 19px 0; }
+.np-topics>div { padding: 13px 0; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent); }
+.np-topics span { font-size: 11px; color: var(--text-muted); }
+.np-topics strong { font-size: 14px; font-weight: 500; flex: 1; }
+.np-topics svg { color: var(--accent); }
+.np-composer { padding: 12px 16px 8px; }
+.np-app .t2c-card { border-radius: 22px; padding: 15px; box-shadow: var(--card-shadow); background: var(--bg); border: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.np-app .t2c-ta { min-height: 34px; font-size: 15px; }
+.np-app .t2c-row { padding-top: 8px; min-height: 40px; gap: 12px; }
+.np-app .composer-chip { font-size: 12px; min-height: 32px; }
+.np-app .t2c-send { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: white; }
+.np-app .t2c-send:disabled { opacity: .55; }
+.np-nav { display: flex; padding: 7px 20px 12px; justify-content: space-around; gap: 16px; flex-shrink: 0; }
+.np-nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 9px; color: var(--text-muted); font-size: 11px; }
+.np-nav button[aria-current] { color: var(--accent); }
+.np-plugin { flex: 1; padding: 20px 24px; }
+.np-plugin-intro { padding: 32px 0 28px; }
+.np-plugin h1, .np-note h1 { font-size: 28px; font-weight: 600; letter-spacing: -.8px; margin: 12px 0; }
+.np-plugin-intro>p:last-child { font-size: 15px; line-height: 1.9; color: var(--text-muted); max-width: 280px; }
+.np-disclosure { text-align: center; font-size: 11px; color: var(--text-muted); padding: 18px; }
+.np-note { padding: 40px 24px; font-size: 15px; line-height: 1.8; }
+.np-muted { color: var(--text-muted); padding: 20px 0; }
