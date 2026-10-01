@@ -10,7 +10,7 @@ import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { endCall, getCall, getCallError, startCall, subscribeCall, toggleMute, useRealtimeConfig } from '../../services/realtimeCall'
+import { endCall, getCall, getCallError, rejectCall, startCall, subscribeCall, toggleMute, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { normPath } from '../coding/studioModel'
@@ -59,6 +59,7 @@ registerMessages({
   'livecall.mute': { zh: '静音', en: 'Mute' },
   'livecall.unmute': { zh: '取消静音', en: 'Unmute' },
   'livecall.failed': { zh: '通话结束：{e}', en: 'Call ended: {e}' },
+  'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
 })
 registerMessages({
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
@@ -581,12 +582,20 @@ export const Composer2: React.FC<{
     setCallStarting(true)
     try {
       let sid = liveSessionKey !== undefined ? liveSessionKey : activeSessionId
-      if (!sid) sid = prepareLiveSession ? await prepareLiveSession() : await useApp.getState().newSession().then(() => useApp.getState().activeId)
+      if (!sid) {
+        // newSession 自己吞掉建会话失败 → 只认「activeId 真换了」,否则会在旧会话里开通话(Codex 10-01)
+        const before = useApp.getState().activeId
+        sid = prepareLiveSession ? await prepareLiveSession() : await useApp.getState().newSession().then(() => useApp.getState().activeId)
+        if (sid === before) sid = null
+      }
       if (!sid) return
+      const target = targetForSession(sid)
+      // 通话只走本机引擎(引擎端也只收回环);绑在别的电脑上的会话没有 WebSocket 转发,别把令牌塞进 URL 白连一趟
+      if (target.key !== 'home') { rejectCall(t('livecall.localOnly')); return }
       const params = useApp.getState().voiceRunParams(sid)
       const poll = sid
       await startCall({
-        target: targetForSession(sid), sessionId: sid, model: realtimeModel, voice: realtimeVoice, title: t('livecall.title'),
+        target, sessionId: sid, model: realtimeModel, voice: realtimeVoice, title: t('livecall.title'),
         run: { model_id: params.modelId, agent_config: params.agentConfig },
         onActivity: () => { void useApp.getState().pollSession(poll) },
       })

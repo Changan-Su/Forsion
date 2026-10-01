@@ -108,6 +108,8 @@ function authenticate(token: string): Promise<string | null> {
   });
 }
 
+const isLoopback = (addr: string | undefined): boolean => !!addr && (addr === '::1' || /^(::ffff:)?127\./.test(addr));
+
 function reject(socket: Duplex, code: number, text: string): void {
   try { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); } catch { /* ignore */ }
   socket.destroy();
@@ -118,7 +120,9 @@ export function attachRealtimeVoice(server: Server): void {
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url || '/', 'http://local');
     if (url.pathname !== REALTIME_PATH) return reject(socket, 404, 'Not Found'); // 本进程没有别的 upgrade 消费者
-    if (req.headers['x-forsion-remote']) return reject(socket, 403, 'Forbidden');
+    // 只收本机回环:通话以本机身份起 run(origin=client),远程来源另起一题。光看 x-forsion-remote 头不够 ——
+    // 引擎经 TANGU_HOST 监听非回环时,远端持 token 省掉这个头就冒充本机了(Codex 10-01)。
+    if (req.headers['x-forsion-remote'] || !isLoopback(req.socket.remoteAddress)) return reject(socket, 403, 'Forbidden');
     if (!deps().brain.realtime) return reject(socket, 501, 'Not Implemented');
     void authenticate(url.searchParams.get('token') || '').then((userId) => {
       if (!userId) return reject(socket, 401, 'Unauthorized');
@@ -135,6 +139,17 @@ function handleCall(client: WebSocket, userId: string): void {
   let wantResponse = false; // 等在途 response 结束后补一个
   let persist: Promise<void> = Promise.resolve(); // 通话记录按到达顺序落库;代跑 run 起之前先等它排空
   const unsubs = new Set<() => void>();
+  // 每段用户语音(上游 item_id)→ 它落库那行的 id。委派 run 复用这一行当本轮用户消息(Codex 10-01):
+  // 不另写一条「模型转述的任务」冒充用户说的话,也不会因转写晚到而顺序颠倒。
+  const userRows = new Map<string, { row: Promise<string | null>; done: (id: string | null) => void }>();
+  let lastUserItem: string | null = null;
+  const userRow = (itemId: string) => {
+    let e = userRows.get(itemId);
+    if (!e) { let done!: (id: string | null) => void; const row = new Promise<string | null>((r) => { done = r; }); e = { row, done }; userRows.set(itemId, e); }
+    return e;
+  };
+  let pendingReply = ''; // 本次 response 的语音转写,等 response.done 再决定落不落库
+  let skipNextReply = false; // 我们补要的那句「我去处理」不落库
 
   const toClient = (o: unknown): void => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(o)); };
   const toUpstream = (o: unknown): void => { if (upstream?.readyState === WebSocket.OPEN) upstream.send(JSON.stringify(o)); };
@@ -154,37 +169,51 @@ function handleCall(client: WebSocket, userId: string): void {
     persist = persist.then(fn).catch((e) => console.warn('[realtime] persist failed:', e?.message || e));
   };
 
+  const report = (text: string): void => {
+    if (closed) return;
+    toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: `[Tangu result] ${clip(text, 4000)}` }] } });
+    requestResponse();
+  };
+
   const delegate = async (task: string): Promise<void> => {
     const s = start!;
+    const item = lastUserItem;
+    // 等触发这次委派的那段话落库(转写可能比工具调用晚到);等不到就退回「任务原文当本轮用户消息」。
+    const reuse = item ? await Promise.race([userRow(item).row, new Promise<null>((r) => setTimeout(() => r(null), 3000))]) : null;
     await persist;
+    if (closed) return;
     const profile = resolveProfile(s.run.app_id);
     if (!profile) throw new Error(`unknown app_id: ${s.run.app_id}`);
     const runId = uuidv4();
+    let off: () => void = () => {};
     const done = new Promise<string>((resolve, rejectRun) => {
-      const off = subscribe(runId, (ev) => {
+      off = subscribe(runId, (ev) => {
         if (ev.type === 'done') { off(); unsubs.delete(off); resolve(String(ev.payload?.content ?? '')); }
         else if (ev.type === 'error') { off(); unsubs.delete(off); rejectRun(new Error(String(ev.payload?.message || ev.payload?.error || 'run failed'))); }
       });
       unsubs.add(off);
     });
-    await createRun({
-      id: runId, sessionId: s.session_id, userId, appId: profile.appId, modelId: s.run.model_id, assistantMessageId: uuidv4(),
-      // 等同用户在输入框发出:origin=client(审批档现读会话设置)、审批托盘握手(待批卡出在输入框上方)。
-      input: { message: task, userMessageId: uuidv4(), attachments: [], agentConfig: s.run.agent_config || {}, origin: 'client', approvalTray: true },
-    });
-    enqueueRun(s.session_id, runId);
-    toClient({ type: 'tangu.run', status: 'started', run_id: runId, task });
-    let result: string;
     try {
-      result = (await done).trim() || '(no output)';
-      toClient({ type: 'tangu.run', status: 'done', run_id: runId, task });
-    } catch (e: any) {
-      result = `The task failed: ${e?.message || e}`;
-      toClient({ type: 'tangu.run', status: 'error', run_id: runId, task });
+      await createRun({
+        id: runId, sessionId: s.session_id, userId, appId: profile.appId, modelId: s.run.model_id, assistantMessageId: uuidv4(),
+        // 等同用户在输入框发出:origin=client(审批档现读会话设置)、审批托盘握手(待批卡出在输入框上方)。
+        // 复用语音那行时 insertUserMessage 是 ON CONFLICT DO NOTHING:库里留用户原话,模型按原话 + 前文接活。
+        input: { message: task, userMessageId: reuse || uuidv4(), attachments: [], agentConfig: s.run.agent_config || {}, origin: 'client', approvalTray: true },
+      });
+      enqueueRun(s.session_id, runId);
+    } catch (e) {
+      off(); unsubs.delete(off);
+      throw e;
     }
-    if (closed) return;
-    toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: `[Tangu result] ${clip(result, 4000)}` }] } });
-    requestResponse();
+    toClient({ type: 'tangu.run', status: 'started', run_id: runId, task });
+    try {
+      const result = (await done).trim() || '(no output)';
+      toClient({ type: 'tangu.run', status: 'done', run_id: runId, task });
+      report(result);
+    } catch (e: any) {
+      toClient({ type: 'tangu.run', status: 'error', run_id: runId, task });
+      report(`The task failed: ${e?.message || e}`);
+    }
   };
 
   const onUpstream = (raw: WebSocket.RawData): void => {
@@ -201,33 +230,53 @@ function handleCall(client: WebSocket, userId: string): void {
         break;
       case 'response.created':
         responding = true;
+        pendingReply = '';
         break;
       case 'response.done': {
         responding = false;
-        // 模型只发了工具调用、没开口 → 补一轮让它说「我去处理」;以及排队等着的结果播报。
         const out: any[] = m.response?.output || [];
-        if (out.some((o) => o?.type === 'function_call') && !out.some((o) => o?.type === 'message')) wantResponse = true;
+        const calledTool = out.some((o) => o?.type === 'function_call');
+        // 带工具调用的那轮只是「我去看看」:不落库 —— 落了就夹在本轮用户消息与代跑 run 之间,run 的输入会以 assistant 收尾。
+        const text = pendingReply.trim();
+        pendingReply = '';
+        if (text && !calledTool && !skipNextReply) {
+          const agentSlug = typeof s.run.agent_config?.agentSlug === 'string' ? s.run.agent_config.agentSlug : undefined;
+          save(() => deps().state.finalizeAssistantMessage({ messageId: uuidv4(), sessionId: s.session_id, modelId: s.model, content: text, reasoning: '', toolCalls: [], toolResults: [], agentSlug }));
+        }
+        skipNextReply = false;
+        // 模型只发了工具调用、没开口 → 补一轮让它说「我去处理」(那句同样不落库);以及排队等着的结果播报。
+        if (calledTool && !out.some((o) => o?.type === 'message')) { wantResponse = true; skipNextReply = true; }
         if (wantResponse) { wantResponse = false; requestResponse(); }
         break;
       }
+      case 'input_audio_buffer.committed':
+        if (typeof m.item_id === 'string') { lastUserItem = m.item_id; userRow(m.item_id); }
+        break;
       case 'conversation.item.input_audio_transcription.completed': {
         const text = String(m.transcript || '').trim();
-        if (text) save(() => deps().state.insertUserMessage({ id: uuidv4(), sessionId: s.session_id, content: text, modelId: s.model, attachments: null }));
+        const entry = typeof m.item_id === 'string' ? userRow(m.item_id) : null;
+        if (!text) { entry?.done(null); break; }
+        const id = uuidv4();
+        save(async () => {
+          try { await deps().state.insertUserMessage({ id, sessionId: s.session_id, content: text, modelId: s.model, attachments: null }); entry?.done(id); }
+          catch (e) { entry?.done(null); throw e; }
+        });
         break;
       }
-      case 'response.audio_transcript.done': {
-        const text = String(m.transcript || '').trim();
-        const agentSlug = typeof s.run.agent_config?.agentSlug === 'string' ? s.run.agent_config.agentSlug : undefined;
-        if (text) save(() => deps().state.finalizeAssistantMessage({ messageId: uuidv4(), sessionId: s.session_id, modelId: s.model, content: text, reasoning: '', toolCalls: [], toolResults: [], agentSlug }));
+      case 'conversation.item.input_audio_transcription.failed':
+        if (typeof m.item_id === 'string') userRow(m.item_id).done(null);
         break;
-      }
+      case 'response.audio_transcript.done':
+        pendingReply += String(m.transcript || '');
+        break;
       case 'response.function_call_arguments.done': {
         if (m.name !== 'ask_tangu') break;
         let task = '';
         try { task = String(JSON.parse(m.arguments || '{}').task || '').trim(); } catch { /* 坏参数 */ }
         // 立刻答复这次调用(别让 call_id 悬一整个 run):结果稍后以 system 消息送回。
         toUpstream({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: m.call_id, output: JSON.stringify(task ? { status: 'started', note: 'Tangu is working on it; the result will arrive as a [Tangu result] message.' } : { status: 'error', note: 'Empty task.' }) } });
-        if (task) void delegate(task).catch((e) => toClient({ type: 'tangu.run', status: 'error', task, error: e?.message || String(e) }));
+        // 起不来(建 run 失败等)也要告诉模型,别让它以为还在办(Codex 10-01)。
+        if (task) void delegate(task).catch((e) => { toClient({ type: 'tangu.run', status: 'error', task, error: e?.message || String(e) }); report(`The task could not be started: ${e?.message || e}`); });
         break;
       }
       case 'error':
