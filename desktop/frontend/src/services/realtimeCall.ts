@@ -8,6 +8,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { EngineTarget } from './engine/target'
+import { realtimeSocketUrl } from './backendService'
 
 /** 设置浮窗(另一个 renderer)存完实时通话配置后 bump 这个 key:storage 事件跨 renderer 送达,主窗当场重读。 */
 export const REALTIME_CFG_BUMP_KEY = 'forsion_realtime_cfg_rev'
@@ -161,9 +162,8 @@ export async function startCall(o: StartCallOptions): Promise<void> {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     })
     if (ended) { stream.getTracks().forEach((t) => t.stop()); return }
-    const auth = (await o.target.headers()).Authorization || ''
+    const url = await realtimeSocketUrl(o.target)
     if (ended) return // 等鉴权头期间被挂断 / 被新通话顶掉
-    const url = `${o.target.base.replace(/^http/, 'ws')}/agent/realtime?token=${encodeURIComponent(auth.replace(/^Bearer\s+/i, ''))}`
     ws = new WebSocket(url)
     ws.binaryType = 'arraybuffer'
   } catch (e: any) {
