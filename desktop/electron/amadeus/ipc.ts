@@ -9,6 +9,7 @@ import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
+import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
@@ -334,7 +335,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (!sender) return
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== sender) w.webContents.send(channel, payload)
   }
-  registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, notifyPeers, logActivity, logNoteEdit })
+  registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, notifyPeers, logActivity, logNoteEdit, pageHistory: createPageHistory({ root: () => path.join(tanguDataDir(), 'amadeus-history') }) }) // 版本历史存库外(C-20)
 
   handle(IPC.openAttachment, async (_e, pagePath: string, ref: string) => {
     const abs = await vault.resolveAttachment(pagePath, ref)
