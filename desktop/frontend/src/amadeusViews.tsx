@@ -1,5 +1,6 @@
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
+import { History as HistoryIcon } from 'lucide-react'
 import { ALargeSmall, Check, MoveHorizontal, Type } from 'lucide-react'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
@@ -19,6 +20,8 @@ import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScop
 import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
+import { canPageHistory } from '@amadeus/lib/hostCaps'
+import { PageHistoryHost } from '@amadeus/unified/pageHistory'
 import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
@@ -2161,6 +2164,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   }, [dragging])
   // 笔记多功能菜单(Obsidian 式右上角 ⋮):导出/收藏/定位/删除。
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)
+  const [historyFor, setHistoryFor] = useState<string | null>(null) // 「⋯ → 版本历史」面板开着的那篇(C-20)
   /** v4 统一页交出来的画布模式(移动端专用:顶栏不渲染 = 那颗「文档 | 画布」胶囊没插槽可投)。
    *  v3 笔记不挂 UnifiedPage → 恒 null → 底栏「⋯」里自然没有这一项。 */
   const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void } | null>(null)
@@ -2647,11 +2651,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           {unifiedRoute && (
             <button onClick={() => { setNoteMenu(null); toggleLock() }}><LockIcon size={13} /> {lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage')}</button>
           )}
+          {unifiedRoute && canPageHistory() && <button data-page-history onClick={() => { setNoteMenu(null); setHistoryFor(barPath) }}><HistoryIcon size={13} /> {t('pghist.menu')}</button>}
           <button className="danger" onClick={() => { const p = barPath; setNoteMenu(null); void deleteNoteFlow(p, myPs) }}>
             <Trash2 size={13} /> {t('amxv.menu.deleteNote')}
           </button>
         </OverlayAt>
       )}
+      {historyFor && <PageHistoryHost path={historyFor} locked={historyFor === notePath && lockOn} onClose={() => setHistoryFor(null)} />}
       {shareCard && barPath && (
         <ShareCard path={barPath} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
       )}
@@ -2764,6 +2770,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
           ...(canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') ? [{ id: 'upload', icon: <Upload size={16} />, label: t('amxv.uploadToPage'), run: () => uploadInputRef.current?.click() }] : []),
           ...(unifiedRoute ? [{ id: 'lock', icon: <LockIcon size={16} />, label: lockOn ? t('amxv.menu.unlockPage') : t('amxv.menu.lockPage'), on: lockOn, run: toggleLock }] : []),
+          ...(unifiedRoute && canPageHistory() ? [{ id: 'history', icon: <HistoryIcon size={16} />, label: t('pghist.menu'), run: () => setHistoryFor(barPath!) }] : []),
           ...pageStyleSheetActions(pageEntries),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? t('amxv.unpin') : t('amxv.pin'), on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? t('amxv.menu.unstar') : t('amxv.menu.star'), on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
