@@ -43,6 +43,7 @@ import {
 import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, setElementColor, rawTree, setParent, childrenOf, isUnder, runEndOf, type ShapeKind } from './canvasEdit'
 import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
+import { NotePicker } from './blockLinks'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, canvasOverviewZoom, onCanvasOverviewZoomChange, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
@@ -81,6 +82,7 @@ registerMessages({
   'canvasstage.menu.unwrap': { zh: '收回文档', en: 'Unwrap into document' },
   'canvasstage.menu.delete': { zh: '删除', en: 'Delete' },
   'canvasstage.menu.newCard': { zh: '新建卡片', en: 'New card' },
+  'canvasstage.menu.addNote': { zh: '添加笔记…', en: 'Add note…' },
   'canvasstage.menu.fit': { zh: '适应内容', en: 'Fit to content' },
   'canvasstage.color.label': { zh: '颜色', en: 'Color' },
   'canvasstage.color.none': { zh: '无颜色', en: 'No color' },
@@ -285,10 +287,11 @@ function unwrapCards(frag: Fragment | null): Fragment | undefined {
   return out.length ? Fragment.fromArray(out) : undefined
 }
 
-/** 侧栏拖进来的引用 → 卡片正文。笔记走 `[[路径]]`(带目录时是路径限定形,resolvePageName 认;
- *  见 shared/amadeus/links.ts),工作区文件不在库里,只能落路径文本。 */
-function refToCardMd(ref: ChatRef): string {
-  if (ref.kind === 'note') return `[[${ref.path.replace(/\.md$/i, '')}]]`
+/** 侧栏拖进来的引用 → 卡片正文。笔记**缺省 `![[路径]]` 嵌入**(V-09,Obsidian 拖文件进画布 = 渲染出内容的
+ *  文件节点),`link` = 按住 Alt 拖 → `[[路径]]` 链接卡。带目录时是路径限定形,resolvePageName 认
+ *  (见 shared/amadeus/links.ts);工作区文件不在库里,只能落路径文本。 */
+function refToCardMd(ref: ChatRef, link = false): string {
+  if (ref.kind === 'note') return `${link ? '' : '!'}[[${ref.path.replace(/\.md$/i, '')}]]`
   if (ref.kind === 'session') return `[[session:${ref.id}|${ref.title}]]`
   return ref.path
 }
@@ -457,10 +460,12 @@ export interface CanvasStageProps {
   /** 只读舞台(公开分享页):任何按下都只是平移视口,没有选中/搬卡/建形/连线/删除/双击编辑/右键菜单/
    *  拖入/粘贴/键盘搬动;工具栏不出,缩放胶囊与缩略图照旧。 */
   readOnly?: boolean
+  /** 库内笔记名册(V-09 右键「添加笔记…」的候选,复用 blockLinks 的 NotePicker)。缺省 = 菜单不出这一项。 */
+  notePages?: () => string[]
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, notePages, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
@@ -538,6 +543,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   /** 拖到边缘认亲的当前候选(手势期高亮用;落笔在 onUp)。 */
   const [attach, setAttach] = useState<AttachPreview | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; key: string | null; at: { x: number; y: number } } | null>(null)
+  /** 「添加笔记…」的选择器开着时 = 落点(舞台坐标,取自右键那一下)。 */
+  const [notePick, setNotePick] = useState<{ x: number; y: number } | null>(null)
   /** 双击聚焦的逐帧弹簧。不能给 stage-inner 常驻 transition：滚轮、平移和拖卡都会被拖出尾巴。 */
   const [focusMotion, setFocusMotion] = useState(false)
   const focusRaf = useRef(0)
@@ -1056,6 +1063,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     setTool('select')
     setConnFrom(null)
     setMenu(null)
+    setNotePick(null)
     setEditing(null)
   }, [active])
 
@@ -3455,7 +3463,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         const files = Array.from(e.dataTransfer?.files ?? [])
         if (kind === 'files' && files.length) { actRef.current.dropFilesAt(files, at); return }
         if (kind === 'refs') {
-          readChatRefs(e.dataTransfer).forEach((r, i) => actRef.current.addCardMd(refToCardMd(r), at, i))
+          // 按住 Alt = 链接卡(V-09)。⚠️ 判据读 drop 那一刻的 altKey:Alt 在 onDown 顶上归平移,但拖放不经 pointerdown。
+          readChatRefs(e.dataTransfer).forEach((r, i) => actRef.current.addCardMd(refToCardMd(r, e.altKey), at, i))
           return
         }
         const text = e.dataTransfer?.getData('text/uri-list') || e.dataTransfer?.getData('text/plain') || ''
@@ -4016,6 +4025,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
             ) : (
               <>
                 <button onClick={() => { const at = menu.at; setMenu(null); addCardAt(at.x - CARD_W / 2, at.y - 24) }}>{t('canvasstage.menu.newCard')}</button>
+                {notePages && <button onClick={() => { const at = menu.at; setMenu(null); setNotePick(at) }}>{t('canvasstage.menu.addNote')}</button>}
                 <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('rect', at.x, at.y) }}>{t('canvasstage.shape.rect')}</button>
                 <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('ellipse', at.x, at.y) }}>{t('canvasstage.shape.ellipse')}</button>
                 <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('text', at.x, at.y) }}>{t('canvasstage.shape.text')}</button>
@@ -4025,6 +4035,20 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
             )}
           </OverlayAt>
         </OverlayPortal>
+      ) : null}
+      {/* 「添加笔记…」(V-09):复用「移动到…」那个 NotePicker(传送到 body,键位 ↑↓ ↵ Esc);选中 = 落点一张嵌入卡,与侧栏拖入同一份 md。 */}
+      {active && !readOnly && notePick && notePages ? (
+        <NotePicker
+          pages={notePages()}
+          exclude={path}
+          onClose={() => { setNotePick(null); hostRef.current?.focus({ preventScroll: true }) }}
+          onPick={(target) => {
+            const at = notePick
+            setNotePick(null)
+            hostRef.current?.focus({ preventScroll: true })
+            addCardMd(refToCardMd({ kind: 'note', path: target }), at)
+          }}
+        />
       ) : null}
     </div>
   )

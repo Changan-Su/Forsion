@@ -3212,6 +3212,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
             serializeMd={(frag) => hostApi.current?.serializeMd(frag) ?? null}
             onBlocksDeleted={onBlocksDeleted}
+            notePages={() => scoped.getState().pages}
             onCommit={(newRef) => {
               if (newRef) pipe.ownedCards.add(newRef) // 本实例建的卡也算「负责得起」,见 deriveCanvasJson
               syncFromEditor() // 版本推送在 deriveFmFromDoc 里(canvas 行真变了才推)

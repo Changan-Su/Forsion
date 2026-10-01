@@ -101,6 +101,7 @@
 //   —— 波次 4(评审 2026-09-27 新功能)在 wave4();`UCANVAS_ONLY=w4` 只跑这一段 ——
 //   C103 复制 / 重复(V-07):形状 / Frame / 连线进剪贴板(未知字段原样、连线与层级按新锚 / 新 id 改写、一击撤销);
 //        只选主卡复制 = 清剪贴板(不粘回旧卡);Mod+D 舞台上 = 重复选中、卡内编辑 = PM 复制块;右键「复制」「重复」;跨笔记粘贴保阵形
+//   C104 侧栏拖笔记进画布(V-09):缺省 = `![[路径]]` 嵌入卡(内容渲染出来)、按住 Alt = `[[链接]]` 卡;空白右键「添加笔记…」= 复用 NotePicker,选中即落嵌入卡
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -1028,6 +1029,89 @@ async function wave4(browser) {
         && cvF?.cardColors?.[fk2.a] === '3' && cvF?.tree?.[fk2.a] === fk1.a
         && fConn?.to?.ref === fk1.a && fConn?.from?.id === fShape?.id && fShape?.x - fk1.x === 0 - 480 && fShape?.y - fk1.y === 300,
       JSON.stringify({ qCards, fConn, fShape, colors: cvF?.cardColors, tree: cvF?.tree }))
+  }
+
+  // ── C104 侧栏拖笔记进画布(V-09)────────────────────────────────────────────────────
+  //  修前:refToCardMd 一律落 `[[链接]]` 卡;右键菜单没有「添加笔记」。台架 resolveEmbed 只认 `Embedded`,目标只能用它。
+  if (pick('C104')) {
+    const SEED104 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}',
+      '---', '', '# 拖笔记', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '',
+    ].join('\n')
+    const p = await open(browser, SEED104)
+    await p.waitForTimeout(800)
+    /** 合成一次「侧栏拖笔记」到舞台空白(REF_MIME 与 chatDragRef.setChatRefDrag 同契约)。返回新卡的锚。 */
+    const dropNote = async (path, alt) => {
+      const before = await anchorsOf(p)
+      const r = await p.evaluate(({ path, alt }) => {
+        const s = document.querySelector('.amx-stage').getBoundingClientRect()
+        const x = s.left + 120
+        const y = s.bottom - 260
+        const dt = new DataTransfer()
+        dt.setData('application/x-forsion-chatref', JSON.stringify([{ kind: 'note', path }]))
+        const target = document.elementFromPoint(x, y)
+        const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt, altKey: alt }
+        const over = new DragEvent('dragover', opts)
+        target.dispatchEvent(over)
+        const drop = new DragEvent('drop', opts)
+        target.dispatchEvent(drop)
+        return { over: over.defaultPrevented, drop: drop.defaultPrevented }
+      }, { path, alt })
+      await p.waitForTimeout(900)
+      const added = (await anchorsOf(p)).filter((a) => !before.includes(a))
+      return { ...r, added }
+    }
+    const descOf = (a) => p.evaluate((a) => {
+      const c = document.querySelector(`.amx-ucard[data-anchor="${a}"]`)
+      return c ? { embed: !!c.querySelector('.unified-embed-host'), text: (c.textContent ?? '').trim().slice(0, 80), wiki: !!c.querySelector('.wikilink') } : null
+    }, a)
+    const bodyOf = () => p.evaluate(() => { window.__upage.probe.flush?.(); return window.__upage.writes.at(-1)?.text ?? '' })
+    const dA = await dropNote('Embedded.md', false)
+    const descA = dA.added.length === 1 ? await descOf(dA.added[0]) : null
+    await p.waitForTimeout(500)
+    const bodyA = await bodyOf()
+    record('C104a 侧栏拖笔记进画布(缺省)= `![[笔记]]` 嵌入卡,内容渲染出来',
+      dA.drop && dA.added.length === 1 && descA?.embed && descA.text.includes('被嵌入的第一段') && bodyA.includes(`<!-- a ${dA.added[0]} -->\n\n![[Embedded]]`),
+      JSON.stringify({ dA, descA, tail: bodyA.slice(-120) }))
+    const dB = await dropNote('Embedded.md', true)
+    const descB = dB.added.length === 1 ? await descOf(dB.added[0]) : null
+    await p.waitForTimeout(500)
+    const bodyB = await bodyOf()
+    record('C104b 按住 Alt 拖 = `[[链接]]` 卡(不嵌入)',
+      dB.drop && dB.added.length === 1 && descB && !descB.embed && descB.wiki && bodyB.includes(`<!-- a ${dB.added[0]} -->\n\n[[Embedded]]`),
+      JSON.stringify({ dB, descB, tail: bodyB.slice(-120) }))
+    // c:空白右键「添加笔记…」→ NotePicker(复用「移动到…」那个;本篇不在候选里)→ 选中 = 落嵌入卡
+    await p.evaluate(() => window.__upage.pageStore.setState({ pages: ['Unified.md', 'Embedded.md', '子夹/别的笔记.md'] }))
+    const blank = await blankOf(p)
+    await p.mouse.click(blank.x, blank.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const items = await menuItems(p)
+    const okMenu = await clickMenu(p, '添加笔记…')
+    await p.waitForTimeout(300)
+    const picker = await p.evaluate(() => {
+      const d = document.querySelector('[data-testid="note-picker"]')
+      return d ? { options: [...d.querySelectorAll('.cmd-item .cmd-path')].map((e) => e.textContent), focus: document.activeElement?.className ?? '' } : null
+    })
+    await p.keyboard.type('Embedded')
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(900)
+    const before = new Set([...dA.added, ...dB.added, 'k1'])
+    const addedC = (await anchorsOf(p)).filter((a) => !before.has(a))
+    const descC = addedC.length === 1 ? await descOf(addedC[0]) : null
+    const stageC = addedC.length === 1 ? await cardBox(p, addedC[0]) : null
+    const atC = await p.evaluate(({ x, y }) => {
+      const inner = document.querySelector('.amx-stage-inner')
+      const m = new DOMMatrixReadOnly(getComputedStyle(inner).transform)
+      const r = inner.getBoundingClientRect()
+      return { x: (x - r.left) / m.a, y: (y - r.top) / m.d }
+    }, blank)
+    const gone = await p.evaluate(() => !document.querySelector('[data-testid="note-picker"]'))
+    record('C104c 空白右键「添加笔记…」= NotePicker(本篇不在候选),选中 = 在右键处落一张 `![[笔记]]` 嵌入卡',
+      items.includes('添加笔记…') && okMenu && !!picker && !picker.options.includes('Unified.md') && picker.options.includes('Embedded.md')
+        && addedC.length === 1 && descC?.embed && gone && !!stageC && Math.abs(stageC.x + stageC.w / 2 - atC.x) < 60 && Math.abs(stageC.y - atC.y) < 60,
+      JSON.stringify({ items, picker, addedC, descC, stageC, atC, gone }))
+    await p.close()
   }
 }
 
@@ -5458,7 +5542,7 @@ async function main() {
     n: document.querySelectorAll('.amx-ucard').length,
     link: [...document.querySelectorAll('.amx-ucard')].some((c) => (c.textContent ?? '').includes('别的笔记')),
   }))
-  record('C71c 落点在卡片上照样接管(侧栏笔记 → 一张 [[引用]] 卡)',
+  record('C71c 落点在卡片上照样接管(侧栏笔记 → 一张 ![[嵌入]] 卡;V-09 起缺省嵌入,目标不在库里 = 丢失壳仍显示名字)',
     drop71.over && drop71.drop && c71.n === 4 && c71.link, JSON.stringify({ ...drop71, ...c71 }))
 
   // d:进卡编辑(选中 + 空格)之后粘贴归 PM —— 舞台不许再建卡
