@@ -207,14 +207,20 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
       await writeIndex(dst, { ...sIdx, path: normRel(to) })
       return
     }
-    // 目标位置已有历史(同名位置删过又建):合并,不覆盖。先把文件搬过去,再写目标 index,最后删源目录。
+    // 目标位置已有历史(同名位置删过又建):合并,不覆盖。不丢版本的顺序(Codex 复核 C-20 #3):先把源快照**复制**过去 →
+    // 写目标 index → 最后才删源目录。任一步中断,源 index 与源文件都原样在(最坏是目标里多几份没登记的副本 / 两边各一份),
+    // 不会出现「文件已搬走、目标 index 没写成」两边都读不到的那一刻。
     const have = new Set(dIdx.entries.map((e) => e.id))
     const moved: StoredEntry[] = []
     for (const e of sIdx.entries) {
-      if (have.has(e.id)) continue
-      await fs.rename(path.join(src, `${e.id}.md`), path.join(dst, `${e.id}.md`)).then(() => { moved.push(e) }, (err: NodeJS.ErrnoException) => {
-        if (err?.code !== 'ENOENT') throw err
-      })
+      if (have.has(e.id)) { if (total != null) total -= e.size; continue } // 同一份已在目标:源那份随源目录删掉
+      try {
+        await fs.copyFile(path.join(src, `${e.id}.md`), path.join(dst, `${e.id}.md`))
+        moved.push(e)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
+        if (total != null) total -= e.size
+      }
     }
     const merged: IndexFile = { v: 1, path: normRel(to), entries: [...dIdx.entries, ...moved].sort((a, b) => a.at - b.at) }
     const extra = merged.entries.length > maxPerFile ? merged.entries.slice(0, merged.entries.length - maxPerFile) : []

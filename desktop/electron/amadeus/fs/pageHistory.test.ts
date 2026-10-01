@@ -167,6 +167,37 @@ describe('存储:改名 / 移动', () => {
   })
 })
 
+describe('存储:合并式改名中途失败不丢版本(Codex 复核 C-20 #3)', () => {
+  it('目标 index 写不成:源那边的版本照旧读得到,目标原有的也在', async () => {
+    const root = await tmp('amx-hist-')
+    const { h, clock } = store(root)
+    await h.snapshot('/v', 'a.md', 'a1')
+    clock.t += 6 * MIN
+    await h.snapshot('/v', 'b.md', 'b1')
+    const vdir = path.join(root, (await fs.readdir(root))[0])
+    let dstDir = ''
+    for (const d of await fs.readdir(vdir)) {
+      if (JSON.parse(await fs.readFile(path.join(vdir, d, 'index.json'), 'utf8')).path === 'b.md') dstDir = path.join(vdir, d)
+    }
+    const real = fs.writeFile
+    let injected = 0
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(((file: string, ...rest: unknown[]) =>
+      String(file).startsWith(path.join(dstDir, 'index.json'))
+        ? (injected++, Promise.reject(Object.assign(new Error('EIO (test)'), { code: 'EIO' })))
+        : (real as (...a: unknown[]) => Promise<void>)(file, ...rest)) as typeof fs.writeFile)
+    try {
+      await h.move('/v', { 'a.md': 'b.md' }) // 永不 reject:失败只记日志
+    } finally {
+      spy.mockRestore()
+    }
+    expect(injected).toBe(1) // 故障确实注入在「写目标 index」那一步
+    const src = await h.list('/v', 'a.md')
+    expect(await Promise.all(src.map((e) => h.read('/v', 'a.md', e.id)))).toEqual(['a1'])
+    const dst = await h.list('/v', 'b.md')
+    expect(await Promise.all(dst.map((e) => h.read('/v', 'b.md', e.id)))).toEqual(['b1'])
+  })
+})
+
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 async function setup(history?: PageHistoryT) {
   const root = await tmp('amx-hist-vault-')
