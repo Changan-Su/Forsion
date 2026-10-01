@@ -146,13 +146,16 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
     return sumOf(drop)
   }
 
-  /** 全局容量:超了按快照时刻最旧的先走(跨库、跨篇),直到回到上限以内。 */
-  async function enforceTotal(): Promise<void> {
+  /** 全局容量:超了按快照时刻最旧的先走(跨库、跨篇),直到回到上限以内。keep = 本次刚写入的那份,**豁免**:
+   *  恢复前补的那份要是被当场淘汰,恢复照样报成功、留底却没了(Codex 复核 C-20 #2)。单份就超上限时宁可暂时超额。 */
+  async function enforceTotal(keep: { dir: string; id: string }): Promise<void> {
     if (total == null) total = sumOf((await allIndexes()).flatMap((x) => x.idx.entries))
     if (total <= maxBytes) return
     const all = await allIndexes()
     total = sumOf(all.flatMap((x) => x.idx.entries))
-    const pool = all.flatMap(({ dir, idx }) => idx.entries.map((e) => ({ dir, idx, e }))).sort((a, b) => a.e.at - b.e.at)
+    const pool = all.flatMap(({ dir, idx }) => idx.entries.map((e) => ({ dir, idx, e })))
+      .filter((x) => !(x.dir === keep.dir && x.e.id === keep.id))
+      .sort((a, b) => a.e.at - b.e.at)
     const plan = new Map<string, { idx: IndexFile; drop: StoredEntry[] }>()
     let over = total - maxBytes
     for (const { dir, idx, e } of pool) {
@@ -187,7 +190,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
       await writeIndex(dir, idx) // 后写 index
     }
     if (total != null) total += size
-    await enforceTotal()
+    await enforceTotal({ dir, id })
     return true
   }
 

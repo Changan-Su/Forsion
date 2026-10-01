@@ -123,6 +123,25 @@ describe('存储:淘汰', () => {
   })
 })
 
+describe('存储:全局淘汰豁免刚写入的那份(Codex 复核 C-20 #2)', () => {
+  it('单份就超上限:刚存的那份留着(恢复前补的留底不会被当场删掉),别的先走', async () => {
+    const root = await tmp('amx-hist-')
+    const { h, clock } = store(root, { maxBytes: 50 })
+    await h.snapshot('/v', 'old.md', 'x'.repeat(40))
+    clock.t += MIN
+    expect(await h.snapshot('/v', 'a.md', 'y'.repeat(100), { force: true })).toBe(true)
+    const list = await h.list('/v', 'a.md')
+    expect(list.length).toBe(1)
+    expect(await h.read('/v', 'a.md', list[0].id)).toBe('y'.repeat(100))
+    expect(await h.list('/v', 'old.md')).toEqual([])
+    clock.t += MIN
+    // 下一份进来时,上一份不再豁免 → 按最旧先走
+    expect(await h.snapshot('/v', 'b.md', 'z'.repeat(30))).toBe(true)
+    expect(await h.list('/v', 'a.md')).toEqual([])
+    expect((await h.list('/v', 'b.md')).length).toBe(1)
+  })
+})
+
 describe('存储:改名 / 移动', () => {
   it('历史跟着走;目标已有历史 = 合并(按时间排、按上限截),源目录清掉', async () => {
     const root = await tmp('amx-hist-')
