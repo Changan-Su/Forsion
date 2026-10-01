@@ -390,9 +390,11 @@ export interface CanvasElementsProps {
   /** 连线橡皮筋(2026-08-18):第一击之后跟随指针的预览线 + 有效目标高亮。
    *  from = 起点选中键,x/y = 指针舞台坐标,over = 指针下的可连对象(高亮用)。 */
   preview?: { from: string; x: number; y: number; over: string | null } | null
+  /** 对齐参考线(V-14):手势期吸附命中的线段(舞台坐标,线宽已按缩放折成屏幕 1px)。 */
+  guides?: ReadonlyArray<ElBox & { dir: 'v' | 'h' }> | null
 }
 
-export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
+export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview, guides }: CanvasElementsProps): React.ReactElement | null {
   const { t } = useI18n()
   const els = useMemo(() => safeElements(elements), [elements])
   const edges = useMemo(() => safeTree(tree), [tree])
@@ -659,6 +661,9 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
           </>
         )
       })() : null}
+      {guides?.map((g, i) => (
+        <div key={`guide:${i}`} className={`amx-el-guide is-${g.dir}`} style={{ left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` }} />
+      ))}
       {marquee ? (
         <div className="amx-el-marquee" style={{ left: `${marquee.x}px`, top: `${marquee.y}px`, width: `${marquee.w}px`, height: `${marquee.h}px` }} />
       ) : null}

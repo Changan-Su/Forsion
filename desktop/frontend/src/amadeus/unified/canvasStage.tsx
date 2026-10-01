@@ -26,14 +26,15 @@ import { NodeSelection, TextSelection, type Transaction } from '@milkdown/kit/pr
 import { closeHistory, undo as pmUndo, redo as pmRedo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse, Palette } from 'lucide-react'
+import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse, Palette, AlignCenterVertical } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
 // 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
 // dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
 import {
   CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, PRESS_SLOP, TOUCH_SLOP, nudgeStep, edgePanVelocity,
   CanvasChrome, CanvasMiniMap as KitMiniMap, gridLayerStyle, recallViewport, rememberViewport, resizeBox, snapGrid,
-  type MiniItem, type ResizeEdge, type Viewport,
+  NEIGHBOR_SNAP_PX, snapMoveToNeighbors, snapResizeToNeighbors, guideLines, unionBox,
+  type GuideLine, type MiniItem, type ResizeEdge, type Viewport,
 } from './canvasKit'
 import { CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import {
@@ -46,7 +47,7 @@ import { askString } from '../components/askString'
 import { NotePicker } from './blockLinks'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, canvasOverviewZoom, onCanvasOverviewZoomChange, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
+import { canvasAlignGuidesEnabled, canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, canvasOverviewZoom, onCanvasOverviewZoomChange, setCanvasAlignGuidesEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
@@ -73,6 +74,9 @@ registerMessages({
   'canvasstage.overview.label': { zh: '低倍率简略显示', en: 'Low-zoom overview' },
   'canvasstage.overview.off': { zh: '关闭低倍率简略显示', en: 'Turn off low-zoom overview' },
   'canvasstage.overview.on': { zh: '开启低倍率简略显示', en: 'Turn on low-zoom overview' },
+  'canvasstage.guides.label': { zh: '对齐参考线', en: 'Alignment guides' },
+  'canvasstage.guides.off': { zh: '关闭对齐参考线', en: 'Turn off alignment guides' },
+  'canvasstage.guides.on': { zh: '开启对齐参考线', en: 'Turn on alignment guides' },
   'canvasstage.menu.editText': { zh: '编辑文字', en: 'Edit text' },
   'canvasstage.menu.connectTo': { zh: '连线到…', en: 'Connect to…' },
   'canvasstage.menu.copy': { zh: '复制', en: 'Copy' },
@@ -486,6 +490,11 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   const [snapEnabled, setSnapEnabledState] = useState<boolean>(canvasGridSnapEnabled)
   const snapRef = useRef(snapEnabled)
   snapRef.current = snapEnabled
+  /** 对齐参考线(V-14):本机手势偏好,默认开;ref 给只依赖 active 的指针 effect 现读。guides = 此刻要画的线段。 */
+  const [guidesOn, setGuidesOn] = useState<boolean>(canvasAlignGuidesEnabled)
+  const guidesRef = useRef(guidesOn)
+  guidesRef.current = guidesOn
+  const [guides, setGuides] = useState<GuideLine[] | null>(null)
   const setSnapEnabled = useCallback((on: boolean): void => {
     snapRef.current = on
     setSnapEnabledState(on)
@@ -2384,8 +2393,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
 
     type Drag =
       | { kind: 'pan'; x0: number; y0: number; vx: number; vy: number; tapKey?: string }
-      | { kind: 'card-size'; key: string; edge: CardResizeEdge; b0: ElBox; h0: number; x0: number; y0: number; dx: number; dy: number; next: ElBox; live?: boolean }
-      | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean; growSel?: string[] }
+      | { kind: 'card-size'; key: string; edge: CardResizeEdge; b0: ElBox; h0: number; x0: number; y0: number; dx: number; dy: number; next: ElBox; live?: boolean; others?: ElBox[]; gx?: boolean; gy?: boolean }
+      | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean; growSel?: string[]; align?: { base: ElBox | null; others: ElBox[] }; gx?: boolean; gy?: boolean }
       | { kind: 'size'; id: string; corner: string; b0: ElBox; dx: number; dy: number; dw: number; dh: number; live?: boolean }
       | { kind: 'marquee'; x0: number; y0: number; additive: boolean; base: string[]; live?: boolean }
       | { kind: 'create'; tool: Tool; x0: number; y0: number; x1: number; y1: number; live?: boolean }
@@ -2400,6 +2409,19 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     let dragOwner = -1
     const capture = (id: number): void => { dragOwner = id; try { host.setPointerCapture(id) } catch { /* 无所谓 */ } }
     const release = (id: number): void => { try { if (host.hasPointerCapture(id)) host.releasePointerCapture(id) } catch { /* 同上 */ } }
+
+    /** 对齐参考线(V-14)的吸附容差:屏幕上恒 NEIGHBOR_SNAP_PX,换成舞台单位(两级缩放,见 toStage 的告警)。 */
+    const guideTol = (): number => NEIGHBOR_SNAP_PX / (vpRef.current.z * (zoomOf(host) || 1))
+    /** 参考线的「别人」:舞台上除被操作对象之外的一切盒(卡 / 主卡 / 形状 / 文本 / Frame)。手势起手量一次就够 ——
+     *  拖动期间只有被拖的东西在动。 */
+    const alignOthers = (skipCards: ReadonlySet<string>, skipMain: boolean, skipEls: ReadonlySet<string>): ElBox[] => {
+      const out: ElBox[] = []
+      for (const [a, b] of measureCards(host)) if (!skipCards.has(a)) out.push(b)
+      const mb = skipMain ? null : measureMain(host)
+      if (mb) out.push(mb)
+      for (const [id, b] of shapeBoxes(safeElements(cbRef.current.elements), null)) if (!skipEls.has(id)) out.push(b)
+      return out
+    }
 
     /** 舞台空白(不含卡片正文、不含形状、不含浮层 chrome)。 */
     const isBlank = (t: HTMLElement): boolean =>
@@ -3005,11 +3027,22 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         drag.dx = s.x - drag.x0
         drag.dy = s.y - drag.y0
         const mainSize = drag.key === MAIN_KEY
-        // 过程盒永远按原始指针走；pointerup 才应用点阵吸附，不在手势期另画落点占位。
-        const next = resizeCardBox(drag.b0, drag.edge, drag.dx, drag.dy, false, mainSize ? MAIN_MIN_W : MIN_W)
-        drag.next = next
+        // 过程盒按原始指针走(点阵吸附留到 pointerup);只有对齐参考线(V-14)当场生效 —— 被拖的边贴近别的对象的
+        // 边就吸过去并画线,线画在哪、松手就落在哪。
+        let next = resizeCardBox(drag.b0, drag.edge, drag.dx, drag.dy, false, mainSize ? MAIN_MIN_W : MIN_W)
         if (Math.abs(next.x - drag.b0.x) > slop || Math.abs(next.y - drag.b0.y) > slop
           || Math.abs(next.w - drag.b0.w) > slop || Math.abs(next.h - drag.b0.h) > slop) drag.live = true
+        drag.gx = false
+        drag.gy = false
+        if (guidesRef.current && drag.live) {
+          if (!drag.others) drag.others = alignOthers(new Set(mainSize ? [] : [drag.key]), mainSize, new Set())
+          const r = snapResizeToNeighbors(next, drag.edge, drag.others, guideTol(), mainSize ? MAIN_MIN_W : MIN_W, MIN_H)
+          next = r.box
+          drag.gx = r.guides.v.length > 0
+          drag.gy = r.guides.h.length > 0
+          setGuides(drag.gx || drag.gy ? guideLines(next, drag.others, r.guides, 1 / vpRef.current.z) : null)
+        } else setGuides(null)
+        drag.next = next
         setSizeRule(drag.key, mainSize
           ? `margin-left:${next.x}px;margin-top:${next.y}px;width:${next.w}px;height:${next.h}px;${LIFT}`
           : `left:${next.x}px;top:${next.y}px;width:${next.w}px;height:${next.h}px;${LIFT}`, next)
@@ -3055,6 +3088,34 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       drag.dx = Math.round(s.x - drag.x0)
       drag.dy = Math.round(s.y - drag.y0)
       if (Math.abs(drag.dx) > slop || Math.abs(drag.dy) > slop) drag.live = true
+      // 对齐参考线(V-14,Figma / Miro 同款):被拖那一批的外接盒贴近别的对象的边或中线(屏幕 7px 内)就**当场吸过去**并画线。
+      // 外接盒与「别人」在本次手势第一次 move 时量(此刻 dragCss 还是空的,量到的就是原位)。
+      // 松手时命中参考线的那一轴不再走点阵(吸附优先相邻对象,见 onUp)。
+      if (!drag.align) {
+        const skipCards = new Set(drag.cards.map((c) => c.anchor))
+        const skipEls = new Set([...drag.ids].filter((k) => k.startsWith('e:')).map(keyId))
+        const cardBoxes = measureCards(host)
+        const shapes = shapeBoxes(safeElements(cbRef.current.elements), null)
+        const mine: ElBox[] = []
+        for (const a of skipCards) { const b = cardBoxes.get(a); if (b) mine.push(b) }
+        const mb = drag.mainStart ? measureMain(host) : null
+        if (mb) mine.push(mb)
+        for (const id of skipEls) { const b = shapes.get(id); if (b) mine.push(b) }
+        drag.align = { base: unionBox(mine), others: alignOthers(skipCards, !!drag.mainStart, skipEls) }
+      }
+      drag.gx = false
+      drag.gy = false
+      const alignBase = drag.align.base
+      if (guidesRef.current && drag.live && alignBase) {
+        const r = snapMoveToNeighbors({ ...alignBase, x: alignBase.x + drag.dx, y: alignBase.y + drag.dy }, drag.align.others, guideTol())
+        drag.dx += Math.round(r.dx)
+        drag.dy += Math.round(r.dy)
+        drag.gx = r.guides.v.length > 0
+        drag.gy = r.guides.h.length > 0
+        setGuides(drag.gx || drag.gy
+          ? guideLines({ ...alignBase, x: alignBase.x + drag.dx, y: alignBase.y + drag.dy }, drag.align.others, r.guides, 1 / vpRef.current.z)
+          : null)
+      } else setGuides(null)
       // 拖 Frame 标题条真的动起来了 → 把辖域同步进选中框(在此之前选中集合只有 Frame 自己)。
       if (drag.live && drag.kind === 'move' && drag.growSel) {
         setSel(drag.growSel)
@@ -3096,6 +3157,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       setGhost(null)
       setMarquee(null)
       setAttach(null)
+      setGuides(null)
     }
 
     const onUp = (e: PointerEvent): void => {
@@ -3183,9 +3245,12 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       let resizeSettle: { key: string; from: ElBox; to: ElBox } | null = null
       if (d.kind === 'card-size') {
         const mainSize = d.key === MAIN_KEY
-        const next = snapRef.current
+        let next = snapRef.current
           ? resizeCardBox(d.b0, d.edge, d.dx, d.dy, true, mainSize ? MAIN_MIN_W : MIN_W)
           : d.next
+        // 吸附优先相邻对象(V-14):命中参考线的那一轴取手势期已吸好的值,不再被点阵拉走。
+        if (d.gx) next = { ...next, x: d.next.x, w: d.next.w }
+        if (d.gy) next = { ...next, y: d.next.y, h: d.next.h }
         const vertical = d.edge.includes('n') || d.edge.includes('s')
         if (mainSize) {
           actRef.current.writeFm({ m: {
@@ -3252,8 +3317,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
           const basis = (d.hit.startsWith('c:') ? d.cards.find((c) => c.anchor === keyId(d.hit)) : null)
             ?? d.cards[0]
             ?? (d.mainStart ? { anchor: MAIN_KEY, ox: d.mainStart.x, oy: d.mainStart.y } : null)
-          const snapDx = snapRef.current && basis ? snapGrid(basis.ox + d.dx) - basis.ox : d.dx
-          const snapDy = snapRef.current && basis ? snapGrid(basis.oy + d.dy) - basis.oy : d.dy
+          // 吸附优先相邻对象(V-14):命中参考线的轴用手势期已吸好的位移(线画在哪就落在哪),另一轴照旧走点阵。
+          const snapDx = d.gx ? d.dx : snapRef.current && basis ? snapGrid(basis.ox + d.dx) - basis.ox : d.dx
+          const snapDy = d.gy ? d.dy : snapRef.current && basis ? snapGrid(basis.oy + d.dy) - basis.oy : d.dy
           const prePushX = snapDx - d.dx
           const prePushY = snapDy - d.dy
           const targetBoxes = movingBoxes.map((b) => ({ ...b, x: b.x + prePushX, y: b.y + prePushY }))
@@ -3868,6 +3934,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
             overviewScale={overviewEnabled && vp.z <= overviewZ ? vp.z : null}
             mainAutoHeight={!(typeof main.h === 'number' && main.h > 0)}
             preview={connFrom && connPt ? { from: connFrom, x: connPt.x, y: connPt.y, over: connPt.over } : null}
+            guides={guides}
           />
         ) : null}
         {children}
@@ -3915,6 +3982,23 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
           mini={miniMapVisible}
           onMini={(on) => { setMiniMapVisible(on); setCanvasMiniMapEnabled(on); hostRef.current?.focus({ preventScroll: true }) }}
           extra={(
+            <>
+            <button
+              type="button"
+              className={guidesOn ? 'is-on' : ''}
+              aria-pressed={guidesOn}
+              aria-label={t('canvasstage.guides.label')}
+              title={guidesOn ? t('canvasstage.guides.off') : t('canvasstage.guides.on')}
+              onClick={() => {
+                const next = !guidesOn
+                guidesRef.current = next
+                setGuidesOn(next)
+                setCanvasAlignGuidesEnabled(next)
+                hostRef.current?.focus({ preventScroll: true })
+              }}
+            >
+              <AlignCenterVertical size={12} />
+            </button>
             <button
               type="button"
               className={overviewEnabled ? 'is-on' : ''}
@@ -3930,6 +4014,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
             >
               <ListCollapse size={12} />
             </button>
+            </>
           )}
         />
       ) : null}

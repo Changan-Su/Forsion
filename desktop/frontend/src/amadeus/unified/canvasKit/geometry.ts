@@ -151,6 +151,30 @@ export function snapResizeToNeighbors(box: Box, edge: ResizeEdge, others: readon
   return { box: { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }, guides }
 }
 
+/** 参考线的一段(舞台坐标的细长矩形,`dir` = 竖线 v / 横线 h)。 */
+export interface GuideLine extends Box { dir: 'v' | 'h' }
+
+/** 把吸附命中的参考线画成线段:竖线 x=v 从「被拖的盒」与「在 v 上有特征位置(起 / 中 / 止)的那些盒」的
+ *  最上沿画到最下沿(Figma 同款:线只连起对齐的那几个对象,不是贯穿全屏);横线同理。
+ *  `t` = 线宽(舞台单位;调用方按 1/z 给,屏幕上恒为 1px)。 */
+export function guideLines(box: Box, others: readonly Box[], guides: SnapGuides, t: number): GuideLine[] {
+  const on = (ms: number[], v: number): boolean => ms.some((m) => Math.abs(m - v) <= 0.5)
+  const out: GuideLine[] = []
+  for (const v of guides.v) {
+    const hits = [box, ...others.filter((o) => on(marks(o.x, o.w), v))]
+    const top = Math.min(...hits.map((b) => b.y))
+    const bottom = Math.max(...hits.map((b) => b.y + b.h))
+    out.push({ dir: 'v', x: v - t / 2, y: top, w: t, h: bottom - top })
+  }
+  for (const h of guides.h) {
+    const hits = [box, ...others.filter((o) => on(marks(o.y, o.h), h))]
+    const left = Math.min(...hits.map((b) => b.x))
+    const right = Math.max(...hits.map((b) => b.x + b.w))
+    out.push({ dir: 'h', x: left, y: h - t / 2, w: right - left, h: t })
+  }
+  return out
+}
+
 /** 贴邻居的容差(**屏幕像素**;进手势时 ÷(z × 页面 zoom)换算成舞台单位)。 */
 export const NEIGHBOR_SNAP_PX = 7
 

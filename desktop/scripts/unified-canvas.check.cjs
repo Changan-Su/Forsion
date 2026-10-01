@@ -102,6 +102,8 @@
 //   C103 复制 / 重复(V-07):形状 / Frame / 连线进剪贴板(未知字段原样、连线与层级按新锚 / 新 id 改写、一击撤销);
 //        只选主卡复制 = 清剪贴板(不粘回旧卡);Mod+D 舞台上 = 重复选中、卡内编辑 = PM 复制块;右键「复制」「重复」;跨笔记粘贴保阵形
 //   C104 侧栏拖笔记进画布(V-09):缺省 = `![[路径]]` 嵌入卡(内容渲染出来)、按住 Alt = `[[链接]]` 卡;空白右键「添加笔记…」= 复用 NotePicker,选中即落嵌入卡
+//   C105 对齐参考线(V-14):拖卡 / 拖边贴近别的对象的边就吸过去并画线,松手落在线上(压过点阵吸附);
+//        HUD 开关关掉 = 不吸不画、回到点阵;开关只存本机(localStorage,不写盘)、跨重载记住
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -1112,6 +1114,79 @@ async function wave4(browser) {
         && addedC.length === 1 && descC?.embed && gone && !!stageC && Math.abs(stageC.x + stageC.w / 2 - atC.x) < 60 && Math.abs(stageC.y - atC.y) < 60,
       JSON.stringify({ items, picker, addedC, descC, stageC, atC, gone }))
     await p.close()
+  }
+
+  // ── C105 对齐参考线(V-14)──────────────────────────────────────────────────────────
+  //  修前:canvasKit 的 snapMoveToNeighbors / snapResizeToNeighbors 全仓无人调用;拖卡只有点阵吸附,两张宽度不是步长整倍数的卡
+  //  右缘永远差几像素(k2 右缘 780 往左拖 37 → 点阵落 732,k1 右缘 740)。
+  if (pick('C105')) {
+    const SEED105 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":260},{"ref":"k2","x":480,"y":400,"w":300}]}',
+      '---', '', '# 对齐', '', '主卡。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '卡 K2', '', '<!-- /a k2 -->', '',
+    ].join('\n')
+    const zOf = (pg) => pg.evaluate(() => new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a)
+    const guidesNow = (pg) => pg.evaluate(() => [...document.querySelectorAll('.amx-el-guide')].map((g) => ({ dir: g.classList.contains('is-v') ? 'v' : 'h', x: parseFloat(g.style.left), y: parseFloat(g.style.top), w: parseFloat(g.style.width), h: parseFloat(g.style.height), z: getComputedStyle(g).zIndex })))
+    /** 抓 k2 左上内衬往左拖 `dx` 舞台单位(中途停一下读参考线),松手后返回 { mid, k2 }。 */
+    const dragK2 = async (pg, dx) => {
+      const z = await zOf(pg)
+      const a = await padOf(pg, 'k2')
+      await pg.mouse.move(a.x, a.y); await pg.mouse.down()
+      for (let i = 1; i <= 10; i++) await pg.mouse.move(a.x + dx * z * i / 10, a.y)
+      await pg.waitForTimeout(120)
+      const mid = await guidesNow(pg)
+      await pg.mouse.up()
+      await pg.waitForTimeout(600)
+      return { mid, k2: cardsOfCv(await cvOf(pg)).k2 }
+    }
+    const p = await open(browser, SEED105)
+    await p.waitForTimeout(800)
+    const a = await dragK2(p, -37)
+    const gv = a.mid.find((g) => g.dir === 'v')
+    record('C105a 拖卡贴近别的卡的右缘(7 屏幕像素内):当场画竖参考线(连起两张卡、压在卡上)、松手右缘对齐 740(压过点阵的 732)',
+      !!gv && Math.abs(gv.x + gv.w / 2 - 740) < 0.6 && gv.y <= 0 && gv.y + gv.h >= 400 && Number(gv.z) >= 3 && a.k2?.x + a.k2?.w === 740,
+      JSON.stringify(a))
+    await p.close()
+    // b:贴近别的卡的边去调宽(新开一页,k2 右缘回到 780;右缘把手往左拖到离 740 差 3):宽度吸到 260,点阵会给 264
+    const pb = await open(browser, SEED105)
+    await pb.waitForTimeout(800)
+    await pb.mouse.click(...Object.values(await padOf(pb, 'k2')))
+    await pb.waitForTimeout(200)
+    const grip = await centerOf(pb, '.amx-card-size-grip.is-e[data-card-grip="k2"]')
+    const before = { x: 480, w: 300 }
+    const z = await zOf(pb)
+    await pb.mouse.move(grip.x, grip.y); await pb.mouse.down()
+    const target = (before.x + before.w) - 740 - 3 // 指针停在离 740 还差 3 的地方(右缘 743)
+    for (let i = 1; i <= 10; i++) await pb.mouse.move(grip.x - target * z * i / 10, grip.y)
+    await pb.waitForTimeout(120)
+    const midB = await guidesNow(pb)
+    await pb.mouse.up()
+    await pb.waitForTimeout(600)
+    const afterB = cardsOfCv(await cvOf(pb)).k2
+    await pb.close()
+    record('C105b 调宽时被拖的边贴近别的卡的边:画竖参考线、右缘吸到 740 = 宽 260(点阵会落 744)',
+      midB.some((g) => g.dir === 'v' && Math.abs(g.x + g.w / 2 - 740) < 0.6) && afterB?.x === 480 && afterB?.w === 260,
+      JSON.stringify({ midB, afterB }))
+    // c:HUD 开关(本机偏好,不写盘)关掉 → 同样的拖动不吸不画、走点阵;重载后仍是关(同一个页面重载:localStorage 随浏览上下文)
+    const q = await open(browser, SEED105)
+    await q.waitForTimeout(800)
+    const w0 = await q.evaluate(() => window.__upage.writes.length)
+    const btn = '.amx-stage-hud button[aria-label="对齐参考线"]'
+    const on0 = await q.getAttribute(btn, 'aria-pressed')
+    await q.click(btn)
+    await q.waitForTimeout(300)
+    const off = { pressed: await q.getAttribute(btn, 'aria-pressed'), ls: await q.evaluate(() => localStorage.getItem('amadeus.canvas.alignGuides')), writes: (await q.evaluate(() => window.__upage.writes.length)) - w0 }
+    await q.reload({ waitUntil: 'domcontentloaded' })
+    await q.waitForSelector(PM, { timeout: 20000 })
+    await q.waitForTimeout(1000)
+    const pressedAfterReload = await q.getAttribute(btn, 'aria-pressed')
+    const c = await dragK2(q, -37)
+    await q.evaluate(() => localStorage.removeItem('amadeus.canvas.alignGuides'))
+    await q.close()
+    record('C105c HUD「对齐参考线」开关:缺省开;关掉只写本机(localStorage=0,零写盘)、重载仍关;关后同样的拖动不画线、按点阵落 732',
+      on0 === 'true' && off.pressed === 'false' && off.ls === '0' && off.writes === 0 && pressedAfterReload === 'false'
+        && c.mid.length === 0 && c.k2?.x + c.k2?.w === 732,
+      JSON.stringify({ on0, off, pressedAfterReload, c }))
   }
 }
 

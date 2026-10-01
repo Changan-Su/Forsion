@@ -3561,6 +3561,14 @@ body.amx-marquee-active * {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   pointer-events: none;
 }
+/* 对齐参考线(V-14):手势期吸附命中的线段,线宽在舞台里按 1/z 给(屏幕上恒 1px)。
+   ⚠️ z-index 抬到卡片之上(同 .amx-el-attach 的理由):元素层画在正文底下,线正好贯穿被对齐的卡,不抬就被卡身盖掉。 */
+.am-app .amx-el-guide {
+  position: absolute;
+  z-index: 3;
+  background: var(--danger);
+  pointer-events: none;
+}
 /* 卡片的选中框。画在白板层而不是给卡片 DOM 加 class:卡片归 PM 所有,它一重绘就把 class 抹了
    (canvasElements 的 selCards 注写了实测现象)。也顺带避开「border 改 offsetWidth → 连线跳 2px」。 */
 .am-app .amx-el-selbox {
