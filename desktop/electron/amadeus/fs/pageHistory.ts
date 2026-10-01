@@ -46,6 +46,8 @@ export interface PageHistoryOptions {
   maxPerFile?: number
   maxBytes?: number
   log?: (msg: string) => void
+  /** 路径键按哪个平台的分隔符口径算(测试用;缺省 process.platform)。 */
+  platform?: NodeJS.Platform
 }
 
 export interface PageHistory {
@@ -62,6 +64,7 @@ export interface PageHistory {
 }
 
 const sha = (s: string): string => createHash('sha1').update(s).digest('hex')
+/** 校验用:把 `\` 当分隔符看(拒 `a\..\b.md` 这类,宁严勿松)。**不**用来算历史的路径键 —— 见 createPageHistory 的 keyRel。 */
 const normRel = (rel: string): string => rel.replace(/\\/g, '/')
 /** id 只许 `[0-9a-z-]`:拼进文件名,带 `/` `\` `.` 的一律拒(防在历史目录里穿越)。 */
 export const isHistoryId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-z]+-[0-9a-f]{8}(?:-\d+)?$/.test(id)
@@ -80,6 +83,10 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
   const maxPerFile = Math.max(1, opts.maxPerFile ?? HISTORY_MAX_PER_FILE)
   const maxBytes = opts.maxBytes ?? HISTORY_MAX_BYTES
   const log = opts.log ?? ((m: string) => console.warn(`[amadeus] 版本历史:${m}`))
+  // 路径键:只在 Windows 上把 `\` 归一成 `/`(那边 listPages 出反斜杠,渲染层又常写正斜杠,是同一篇)。macOS / Linux 上
+  // `\` 是合法文件名字符,根目录的 `a\b.md` 与 `a/b.md` 是两篇笔记,归一就会共用一份历史(Codex 复核 C-20 #4)。
+  const win = (opts.platform ?? process.platform) === 'win32'
+  const keyRel = (rel: string): string => (win ? rel.replace(/\\/g, '/') : rel)
 
   // 一切改动排成一条队(同步入队):同篇两次快照、快照 × 改名、淘汰扫描互不交错。读不入队(见顶注的落盘顺序);list 先等队空。
   let chain: Promise<unknown> = Promise.resolve()
@@ -92,7 +99,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
   let total: number | null = null
 
   const vaultDir = (vaultRoot: string): string => path.join(opts.root(), sha(path.resolve(vaultRoot)).slice(0, 16))
-  const fileDir = (vaultRoot: string, rel: string): string => path.join(vaultDir(vaultRoot), sha(normRel(rel)).slice(0, 16))
+  const fileDir = (vaultRoot: string, rel: string): string => path.join(vaultDir(vaultRoot), sha(keyRel(rel)).slice(0, 16))
 
   async function readIndex(dir: string): Promise<IndexFile | null> {
     let raw: string
@@ -170,8 +177,8 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
 
   async function doSnapshot(vaultRoot: string, rel: string, text: string, force: boolean): Promise<boolean> {
     const dir = fileDir(vaultRoot, rel)
-    const idx = (await readIndex(dir)) ?? { v: 1 as const, path: normRel(rel), entries: [] }
-    idx.path = normRel(rel)
+    const idx = (await readIndex(dir)) ?? { v: 1 as const, path: keyRel(rel), entries: [] }
+    idx.path = keyRel(rel)
     const at = now()
     const hash = sha(text).slice(0, 16)
     const last = idx.entries[idx.entries.length - 1]
@@ -204,7 +211,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
     if (!dIdx) {
       await fs.rm(dst, { recursive: true, force: true }) // 残目录(index 坏 / 缺)不挡路
       await fs.rename(src, dst)
-      await writeIndex(dst, { ...sIdx, path: normRel(to) })
+      await writeIndex(dst, { ...sIdx, path: keyRel(to) })
       return
     }
     // 目标位置已有历史(同名位置删过又建):合并,不覆盖。不丢版本的顺序(Codex 复核 C-20 #3):先把源快照**复制**过去 →
@@ -222,7 +229,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
         if (total != null) total -= e.size
       }
     }
-    const merged: IndexFile = { v: 1, path: normRel(to), entries: [...dIdx.entries, ...moved].sort((a, b) => a.at - b.at) }
+    const merged: IndexFile = { v: 1, path: keyRel(to), entries: [...dIdx.entries, ...moved].sort((a, b) => a.at - b.at) }
     const extra = merged.entries.length > maxPerFile ? merged.entries.slice(0, merged.entries.length - maxPerFile) : []
     if (extra.length) {
       const freed = await dropEntries(dst, merged, extra)

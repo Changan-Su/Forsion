@@ -54,8 +54,18 @@ describe('存储:时间窗 / 去重 / force', () => {
     expect(await h.snapshot(V, 'sub/a.md', 's1')).toBe(true)
     expect((await h.list('/vault/B', 'a.md')).length).toBe(1)
     expect((await h.list(V, 'a.md')).length).toBe(3)
-    // 反斜杠路径与正斜杠同一篇(Windows 的 listPages 是反斜杠)
-    expect((await h.list(V, 'sub\\a.md')).length).toBe(1)
+  })
+
+  it('路径键的分隔符口径(Codex 复核 C-20 #4):Windows 上 `\\` 与 `/` 同一篇;macOS / Linux 上 `a\\b.md` 是另一篇', async () => {
+    const posix = store(await tmp('amx-hist-'), { platform: 'darwin' }).h
+    await posix.snapshot('/v', 'a/b.md', 'slash')
+    await posix.snapshot('/v', 'a\\b.md', 'backslash')
+    const ps = await posix.list('/v', 'a/b.md')
+    const pb = await posix.list('/v', 'a\\b.md')
+    expect([await posix.read('/v', 'a/b.md', ps[0].id), await posix.read('/v', 'a\\b.md', pb[0].id), ps.length, pb.length]).toEqual(['slash', 'backslash', 1, 1])
+    const winH = store(await tmp('amx-hist-'), { platform: 'win32' }).h
+    await winH.snapshot('/v', 'a\\b.md', 'w1') // Windows 的 listPages 出反斜杠
+    expect((await winH.list('/v', 'a/b.md')).length).toBe(1)
   })
 
   it('id 只认索引里登记过的:伪造 / 穿越 id 一律 null', async () => {
