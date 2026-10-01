@@ -18,6 +18,9 @@
 //       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示;
 //       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失;
 //       F8(Codex 复核 P1)插入后在画布里改了形状颜色(只在 frontmatter、文档不变)→ 回执撤销拒撤,颜色与回答都在。
+//   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts、
+//       代码块工具条收掉、打开不写盘);对话 sketch 卡「插入笔记」→ 围栏落盘 + 笔记里出卡;整段对话「整理成笔记」→
+//       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -1022,6 +1025,87 @@ async function groupF(browser) {
   }
 }
 
+async function groupG(browser) {
+  const SK = '<b id="sk">交互</b><script>document.getElementById("sk").textContent = "已运行"</script>'
+  const md = '# 标题\n\n第一段。\n\n```forsion-sketch\n' + SK + '\n```\n'
+  // G1 笔记里的交互块:嵌入层渲成 sketch 卡(沙箱只 allow-scripts)、源码与代码块工具条都不露、打开零写入
+  {
+    const page = await openF(browser, md)
+    await page.waitForSelector('.unified-body .unified-embed .sketch-frame', { timeout: 8000 }).catch(() => {})
+    const st = await page.evaluate(() => {
+      const f = document.querySelector('.unified-body .unified-embed .sketch-frame')
+      const host = document.querySelector('.unified-body .unified-embed-host[data-language="forsion-sketch"]')
+      const tools = host?.querySelector(':scope > .amx-code-tools')
+      return { sandbox: f?.getAttribute('sandbox'), tools: tools ? getComputedStyle(tools).display : 'absent', writes: window.__upage.writes?.length ?? 0 }
+    })
+    check('G1 ```forsion-sketch → sketch 卡(sandbox=allow-scripts),代码块工具条收掉,打开零写入',
+      st.sandbox === 'allow-scripts' && (st.tools === 'none' || st.tools === 'absent') && st.writes === 0 && (await vault(page)) === md, JSON.stringify(st))
+    await page.close()
+  }
+  // G2 对话 sketch 卡「插入笔记」→ 围栏原样落盘(HTML 里的 \\( 不被公式归一改写),笔记里随即出卡
+  {
+    const page = await openF(browser, '# 标题\n\n第一段。\n')
+    await page.evaluate(async ({ MOD }) => {
+      const imp = eval(MOD)
+      const dep = (re) => performance.getEntriesByType('resource').map((e) => e.name).find((n) => re.test(n))
+      const R = await import(dep(/\/deps\/react\.js\?/))
+      const RD = await import(dep(/\/deps\/react-dom_client\.js\?/))
+      const React = R.default ?? R
+      const createRoot = RD.createRoot ?? RD.default.createRoot
+      const { EditorialMessage } = await imp('/src/views/chat2/EditorialMessage\\.tsx(\\?|$)', '/src/views/chat2/EditorialMessage.tsx')
+      const ins = await imp('/src/views/chat2/insertToNote\\.ts(\\?|$)', '/src/views/chat2/insertToNote.ts')
+      const host = document.createElement('div')
+      host.className = 'harness-chat t2-chat-view'
+      host.style.cssText = 'position:fixed;right:0;top:0;bottom:0;width:380px;overflow:auto;padding:16px;z-index:40'
+      document.body.appendChild(host)
+      const msg = { id: 'a1', role: 'assistant', content: '画好了', status: 'done', timestamp: 2, sketches: [{ callId: 'c1', title: '计算器', html: '<i>\\(x\\)</i>' }] }
+      createRoot(host).render(React.createElement(EditorialMessage, { msg, handlers: { onCopy: () => {}, onInsertNote: (text) => { ins.insertReplyToNote(text, null) } } }))
+    }, { MOD })
+    await page.waitForTimeout(400)
+    await page.click('.harness-chat .sketch-card [data-act="insert-note"]', { force: true })
+    await page.waitForTimeout(1500)
+    const d = await vault(page)
+    const frames = await page.evaluate(() => document.querySelectorAll('.unified-body .unified-embed .sketch-frame').length)
+    check('G2 对话 sketch 卡「插入笔记」→ ```forsion-sketch 围栏原样落盘,笔记里出卡',
+      d.includes('```forsion-sketch\n<i>\\(x\\)</i>\n```') && frames === 1, JSON.stringify({ d, frames }))
+    await page.close()
+  }
+  // G3 整段对话整理成笔记:complete 收到 custom + 对话记录;新笔记以一级标题命名、标题剥出正文;再来一次重名 → -2
+  {
+    const page = await openF(browser, '# 标题\n\n第一段。\n')
+    await installProbe(page, { complete: true })
+    const st = await page.evaluate(async ({ MOD }) => {
+      const imp = eval(MOD)
+      const { useApp } = await imp('/src/stores/appStore\\.ts(\\?|$)', '/src/stores/appStore.ts')
+      const c2n = await imp('/src/views/chat2/chatToNote\\.ts(\\?|$)', '/src/views/chat2/chatToNote.ts')
+      useApp.setState({
+        sessions: [{ id: 's1', title: '旧会话' }],
+        messagesBySession: { s1: [
+          { id: 'u1', role: 'user', content: '怎么发版?', status: 'done', timestamp: 1 },
+          { id: 'a1', role: 'assistant', content: '先 bump 再打 tag', status: 'done', timestamp: 2 },
+        ] },
+      })
+      window.__aiReply = '# 发版流程\n\n1. bump\n2. 打 tag'
+      const can = c2n.canTurnChatIntoNote()
+      const ok1 = await c2n.turnChatIntoNote('s1')
+      const ok2 = await c2n.turnChatIntoNote('s1')
+      return { can, ok1, ok2, req: window.__aiReqs[0], a: window.__upage.vault.get('发版流程.md'), b: window.__upage.vault.get('发版流程-2.md') }
+    }, { MOD })
+    check('G3 整理成笔记:custom 动作带对话记录;新笔记「发版流程.md」正文剥掉标题;再来一次 → 发版流程-2.md',
+      st.can && st.ok1 && st.ok2 && st.req?.action === 'custom' && /User:\n怎么发版\?/.test(st.req?.selection || '') && st.req?.title === '旧会话'
+        && st.a === '1. bump\n2. 打 tag\n' && st.b === st.a, JSON.stringify(st))
+    await page.close()
+  }
+  // G4 宿主没有正文 AI(探针不给 complete)→ 入口不出现
+  {
+    const page = await openF(browser, '# 标题\n')
+    await installProbe(page, { complete: false })
+    const can = await page.evaluate(async ({ MOD }) => (await eval(MOD)('/src/views/chat2/chatToNote\\.ts(\\?|$)', '/src/views/chat2/chatToNote.ts')).canTurnChatIntoNote(), { MOD })
+    check('G4 没有 complete → canTurnChatIntoNote 为假(菜单项不出现)', can === false, JSON.stringify({ can }))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const only = (process.argv.find((a) => a.startsWith('--group=')) || '').slice('--group='.length).toUpperCase()
@@ -1032,6 +1116,7 @@ async function main() {
     if (!only || only.includes('D')) await groupD(browser)
     if (!only || only.includes('E')) await groupE(browser)
     if (!only || only.includes('F')) await groupF(browser)
+    if (!only || only.includes('G')) await groupG(browser)
   } finally {
     await browser.close()
   }

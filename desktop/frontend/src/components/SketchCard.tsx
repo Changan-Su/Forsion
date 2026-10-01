@@ -22,7 +22,10 @@ function isCapacitorNative(): boolean {
   } catch { return false }
 }
 
-const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
+/** 卡头右侧的附加操作(对话里给「插入笔记」;笔记里的交互块不给,免得插回自己)。 */
+type SketchActions = (item: SketchItem) => React.ReactNode
+
+const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions }> = ({ item, actions }) => {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement>(null)
   const clipRef = useRef<HTMLDivElement>(null)
@@ -69,7 +72,12 @@ const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
   const doc = useMemo(() => (vars ? buildSketchDoc(item.html, vars) : ''), [item.html, vars])
   return (
     <div className="sketch-card" ref={rootRef} data-sketch-call-id={item.callId}>
-      {item.title && <div className="sketch-card-title">{item.title}</div>}
+      {(item.title || actions) && (
+        <div className="sketch-card-head">
+          {item.title && <div className="sketch-card-title">{item.title}</div>}
+          {actions?.(item)}
+        </div>
+      )}
       <div ref={clipRef} className={`sketch-clip${open ? ' open' : ''}${over && !open ? ' faded' : ''}`}>
         {/* webhost-ok: sketch 卡的能力包络就是规格本身(JS 可跑、无网络无宿主 API,内层 CSP default-src 'none' 收口,
             见 sketchWrapper.ts 实证注);webview 反而错配:Electron-only(web/mobile 没有)且每卡一个 OS 进程。 */}
@@ -84,7 +92,7 @@ const SketchFrame: React.FC<{ item: SketchItem }> = ({ item }) => {
   )
 }
 
-const SketchUnavailable: React.FC<{ item: SketchItem }> = ({ item }) => {
+const SketchUnavailable: React.FC<{ item: SketchItem; actions?: SketchActions }> = ({ item }) => {
   const { t } = useI18n()
   return (
     <div className="sketch-card" data-sketch-call-id={item.callId}>
@@ -94,9 +102,9 @@ const SketchUnavailable: React.FC<{ item: SketchItem }> = ({ item }) => {
   )
 }
 
-export const SketchCards: React.FC<{ items: SketchItem[] }> = ({ items }) => {
+export const SketchCards: React.FC<{ items: SketchItem[]; actions?: SketchActions }> = ({ items, actions }) => {
   // 原生壳内一律拒渲染 iframe(桥暴露);普通浏览器/Electron 正常画。整批同判,不逐卡重算。
   const native = isCapacitorNative()
   const Card = native ? SketchUnavailable : SketchFrame
-  return <>{items.map((s) => <Card key={s.callId} item={s} />)}</>
+  return <>{items.map((s) => <Card key={s.callId} item={s} actions={native ? undefined : actions} />)}</>
 }
