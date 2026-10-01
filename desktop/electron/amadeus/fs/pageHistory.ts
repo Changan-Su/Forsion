@@ -81,7 +81,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
   const maxBytes = opts.maxBytes ?? HISTORY_MAX_BYTES
   const log = opts.log ?? ((m: string) => console.warn(`[amadeus] 版本历史:${m}`))
 
-  // 一切改动排成一条队(同步入队):同篇两次快照、快照 × 改名、淘汰扫描互不交错。读不排队(见顶注的落盘顺序)。
+  // 一切改动排成一条队(同步入队):同篇两次快照、快照 × 改名、淘汰扫描互不交错。读不入队(见顶注的落盘顺序);list 先等队空。
   let chain: Promise<unknown> = Promise.resolve()
   const enqueue = <T>(fn: () => Promise<T>): Promise<T> => {
     const run = chain.then(fn, fn)
@@ -104,7 +104,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
     }
     try {
       const j = JSON.parse(raw) as Partial<IndexFile>
-      if (typeof j.path !== 'string' || !Array.isArray(j.entries)) throw new Error('结构不对')
+      if (typeof j.path !== 'string' || !Array.isArray(j.entries)) throw new Error('bad shape')
       const entries = j.entries.filter((x): x is StoredEntry =>
         !!x && isHistoryId(x.id) && Number.isFinite(x.at) && Number.isFinite(x.size) && typeof x.hash === 'string')
       return { v: 1, path: j.path, entries: entries.sort((a, b) => a.at - b.at) }
@@ -233,6 +233,7 @@ export function createPageHistory(opts: PageHistoryOptions): PageHistory {
     },
     async list(vaultRoot, rel) {
       if (!vaultRoot) return []
+      await chain // 刚打开面板时那一发冲洗保存的快照还在队里:等它落定再列,别少一份
       const idx = await readIndex(fileDir(vaultRoot, rel))
       return idx ? idx.entries.map(({ id, at, size }) => ({ id, at, size })).reverse() : []
     },
