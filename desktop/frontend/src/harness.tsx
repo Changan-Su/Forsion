@@ -29,7 +29,7 @@ import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
-import { HostLocaleProvider, LocaleProvider, setLocaleGlobal } from './i18n'
+import { HostLocaleProvider, LocaleProvider, setLocaleGlobal, useI18n } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
@@ -44,6 +44,8 @@ import { usePageStore, pageStoreFor, remapScopePaths, PageScopeCtx, onNotePathGo
 import { onNoteLockChange, readNoteLocked } from './amadeus/unified/viewMemory'
 import { switchNoteLock } from './amadeus/unified/noteLock'
 import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle } from './amadeus/unified/pageStyle'
+import { PageHistoryHost } from './amadeus/unified/pageHistory'
+import { canPageHistory } from './amadeus/lib/hostCaps'
 import { OverlayAt } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
@@ -1722,6 +1724,23 @@ if (new URLSearchParams(location.search).has('dock')) {
   const casRejects: Array<{ path: string; text: string; current: string | null }> = []
   const listeners = new Set<(p: string) => void>()
   let switchUPage: ((path: string) => void) | null = null
+  // `&uhist`:页面版本历史(评审 C-20)的内存版桥,口径同主进程 fs/pageHistory:CAS 写用盘上旧文留快照、时间窗内最多一份、
+  // 与最近一份相同不存;恢复 = 比对 base → 强制补快照 → 写回。`__upage.historyWindowMs` 调时间窗(缺省 5 分钟),
+  // `__upage.history`(路径 → 旧→新数组)可直接塞快照。没开 = 桥上没有这组成员 → ⋯ 里不出「版本历史」(门控同 web / 移动端)。
+  // 仪器:scripts/page-history.check.cjs。
+  const uhist = new URLSearchParams(location.search).has('uhist')
+  const history = new Map<string, Array<{ id: string; at: number; size: number; text: string }>>()
+  let histSeq = 0
+  const snapshotH = (p: string, text: string, force = false): void => {
+    const list = history.get(p) ?? []
+    const last = list[list.length - 1]
+    const at = Date.now()
+    const win = (window as unknown as { __upage?: { historyWindowMs?: number } }).__upage?.historyWindowMs ?? 5 * 60_000
+    if (last && last.text === text) return
+    if (!force && last && at - last.at < win) return
+    list.push({ id: `${at.toString(36)}-${(++histSeq).toString(16).padStart(8, '0')}`, at, size: new TextEncoder().encode(text).length, text })
+    history.set(p, list)
+  }
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
     // 标签 / 别名面(评审 L-14 `#` 补全、L-13 `[[` 别名候选):用与主进程索引同一份解析(正文 #标签 + fm tags / aliases),
@@ -1775,6 +1794,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         casRejects.push({ path: p, text, current: cur })
         return Promise.resolve({ ok: false, current: cur })
       }
+      if (uhist && typeof opts?.base === 'string' && cur != null && cur !== text && p.endsWith('.md')) snapshotH(p, cur)
       vault.set(p, text)
       writes.push({ path: p, text })
       // `__upage.writeLagMs = n`:盘先落、ack 晚 n ms 才回(web PUT / 网络盘的形态)—— 回灌在这段里读到的是
@@ -1819,6 +1839,22 @@ if (new URLSearchParams(location.search).has('dock')) {
       }
       return Promise.resolve()
     },
+    ...(uhist ? {
+      listPageHistory: (p: string) => Promise.resolve([...(history.get(p) ?? [])].reverse().map(({ id, at, size }) => ({ id, at, size }))),
+      readPageHistory: (p: string, id: string) => Promise.resolve(history.get(p)?.find((e) => e.id === id)?.text ?? null),
+      restorePageHistory: async (p: string, id: string, base: string) => {
+        const cur = vault.get(p)
+        if (cur == null) return { ok: false as const, current: null }
+        if (textFingerprint(cur) !== base) return { ok: false as const, current: cur }
+        const v = history.get(p)?.find((e) => e.id === id)
+        if (!v) throw new Error('This version is no longer available')
+        if (v.text === cur) return { ok: true as const }
+        snapshotH(p, cur, true)
+        vault.set(p, v.text)
+        writes.push({ path: p, text: v.text })
+        return { ok: true as const }
+      },
+    } : {}),
     renamePageFile: (p: string, next: string) => {
       const dir = p.split('/').slice(0, -1).join('/')
       const np = (dir ? dir + '/' : '') + next + '.md'
@@ -1841,6 +1877,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     vault,
     writes,
     casRejects,
+    history,
     failWrites: 0,
     casDelayMs: 0,
     writeLagMs: 0,
@@ -1917,6 +1954,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       useEffect(() => { onPath?.(st.path) }, [st.path]) // eslint-disable-line react-hooks/exhaustive-deps
       const pageStyle = useNotePageStyle(null, st.path)
       const [styleMenu, setStyleMenu] = useState<{ x: number; y: number } | null>(null)
+      const [historyOpen, setHistoryOpen] = useState(false)
+      const { t: histT } = useI18n()
       useEffect(() => {
         if (!styleMenu) return
         const close = (): void => setStyleMenu(null)
@@ -1980,8 +2019,11 @@ if (new URLSearchParams(location.search).has('dock')) {
           {styleMenu && (
             <OverlayAt className="ctx-menu" x={styleMenu.x} y={styleMenu.y} onClick={(e) => e.stopPropagation()}>
               <PageStyleMenuItems entries={pageStyleEntries(pageStyle, (patch) => setNotePageStyle(null, st.path, patch))} />
+              {/* 版本历史(C-20):门控与锁定口径镜像 amadeusViews(canPageHistory;锁定 = 能看不能恢复)。 */}
+              {!st.block && canPageHistory() && <button type="button" data-page-history onClick={() => { setStyleMenu(null); setHistoryOpen(true) }}>{histT('pghist.menu')}</button>}
             </OverlayAt>
           )}
+          {historyOpen && <PageHistoryHost path={st.path} locked={locked} onClose={() => setHistoryOpen(false)} />}
           {st.block ? <div data-uroute="block" /> : <div
             style={{ display: 'contents' }}
             onDragOver={hostDrop ? (e) => { const ty = Array.from(e.dataTransfer?.types ?? []); if (ty.includes('Files') || ty.includes('application/x-forsion-chatref')) e.preventDefault() } : undefined}

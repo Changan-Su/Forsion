@@ -143,6 +143,7 @@ const KNOWN_GATES = {
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
   'window.amadeus?.hostCaps': 'Amadeus 桥声明「做不了」的 OS 动作(评审 G2-13):导出 PDF / 在文件管理器中显示 / 系统程序打开附件,对应键**不渲染**。desktop 主进程桥不声明 = 全能做;移动本地库三件 false;云桥与 Unit 网页桥 revealInFileManager=false;移动端(window.tangu?.mobile)导出 PDF 除非桥显式声明 true 否则不给(云桥导出 = window.print,Android WebView 里是空操作,真机未验)。PDF 卡的「打开」走应用内阅读器不受限。判据单源 amadeus/lib/hostCaps.ts',
+  'window.amadeus?.listPageHistory': '页面版本历史(评审 C-20)的「⋯ → 版本历史」:快照存在桌面主进程的库外目录(tanguDataDir()/amadeus-history),只有 desktop 的 preload 桥实现这组可选成员;web 云桥、移动本地库、Unit 网页桥都没有 → 入口**不渲染**(没有本地快照可列,出个空列表比没有更糟)。云端版本接口在 Forsion Extend 里,另议。判据单源 amadeus/lib/hostCaps.ts 的 canPageHistory()',
   // P1-K3
   'window.tangu?.onApprovalOpen': '远程会话待批的系统通知被点击 → 打开会话 — 仅 Electron:通知由桌面主进程 approvalDelivery 订阅本机引擎待批流后发出(webContents.send approval:open)。移动端没有本机引擎、P1 没有原生通知(方案 P2),手机侧走收件箱审批提醒信的「打开会话」按钮(InboxReaderView,共享)与会话列表「等你处理」点(attentionStore,经 useBootstrap 三端共用);web 无此 IPC',
   // P1-K6
