@@ -107,6 +107,7 @@ import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
 import { TagSuggest, tagSuggestPlugin } from './TagSuggest'
 import { EmojiSuggest, emojiSuggestPlugin } from './EmojiSuggest'
+import { footnoteInputRules, footnotePlugin } from './footnote'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
@@ -1222,6 +1223,8 @@ export function MilkdownInner({
       .use(linkInputRule) // 打完 `[文字](地址)` 当场成链接(commonmark 预设没这条行内规则)
       .use(autolinkInputRule) // 手打裸 URL 在空格 / 全角标点收尾时成链接(I-13,见 ./autolink)
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
+      .use(footnoteInputRules) // 手打 `[^a]` / `[^a]: ` 成脚注(R-18,往返陷阱见 ./footnote)
+      .use(footnotePlugin) // 脚注显示编号 + 点上标跳定义 / 点编号回引用
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
       .use(pluginEditorExtensions('normal', { pagePath: () => pagePathRef.current }))

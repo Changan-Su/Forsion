@@ -20,6 +20,8 @@
 //   LI1~LI3 卡片 / 编辑面板文案跟界面语言(C-14):英文界面全英文,切中文当场跟上
 //   AU1~AU5 手打裸 URL(I-13):空格收尾成链且落盘裸 URL;空段里键入 URL 不抢跑成书签卡、离开才成卡;
 //          全角标点收尾成链、落盘 `<url>`(裸写会把 `。后` 吞进地址);ASCII 句末标点留在链接外;行内代码 / 字母后不成链
+//   FN1~FN6 脚注(R-18,同一张悬停卡):上标显示首次引用次序的编号(命名脚注也编号,落盘仍是 label);悬停出定义正文;
+//          点上标跳到定义(光标落进定义、滚进视野);点定义左侧编号回到引用处;没有定义 / 空定义有提示;只读页照样预览与跳转
 //
 // 用法:node scripts/e2e-editor.cjs --check=linkcard(或 npm run check:linkcard)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html;ONLY=LK 只跑某几组
@@ -626,11 +628,62 @@ async function cardLocale(browser) {
   await p.close()
 }
 
+ /** 脚注(R-18):编号装饰 / 悬停卡 / 点击跳转 / 回跳 / 只读。 */
+async function footnotes(browser) {
+  const fill = Array.from({ length: 40 }, (_, i) => `填充段 ${i}`).join('\n\n')
+  const md = `# T\n\n正文[^1] 和命名[^note],再引一次[^1],还有空的[^e]。\n\n${fill}\n\n[^note]: 命名定义。\n\n[^1]: 定义一,第一行。\n\n[^e]:\n`
+  for (const [label, flags] of [['编辑页', '&upane'], ['只读页', '&upane&uro']]) {
+    const p = await open(browser, md, flags)
+    const sups = await p.evaluate((s) => [...document.querySelectorAll(s + ' sup[data-type="footnote_reference"]')].map((e) => `${e.getAttribute('data-label')}=${e.textContent}`), PM)
+    const dts = await p.evaluate((s) => [...document.querySelectorAll(s + ' dl[data-type="footnote_definition"] > dt')].map((e) => `${e.parentElement.getAttribute('data-label')}=${e.textContent}`), PM)
+    if (label === '编辑页') check('FN1 编号 = 首次引用次序(命名脚注也编号,同名同号),定义左列同号', sups.join() === '1=1,note=2,1=1,e=3' && dts.join() === 'note=2,1=1,e=3', `${sups} | ${dts}`)
+    const hover = async (lab) => {
+      const b = await p.evaluate(([s, l]) => { const r = document.querySelector(`${s} sup[data-label="${l}"]`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, bottom: r.bottom } }, [PM, lab])
+      await p.mouse.move(b.x, b.y, { steps: 4 })
+      await p.waitForTimeout(900)
+      const c = await p.evaluate(() => { const c = document.querySelector('.amx-fncard'); if (!c) return null; const r = c.getBoundingClientRect(); return { text: c.innerText.replace(/\s+/g, ' ').trim(), pos: getComputedStyle(c).position, y: r.top } })
+      await p.mouse.move(5, 5, { steps: 2 })
+      await p.waitForTimeout(400)
+      return { c, b }
+    }
+    const h1 = await hover('note')
+    check(`FN2 [${label}] 悬停上标 → 卡片显示定义正文(fixed、贴上标下沿)`, !!h1.c && h1.c.text === '2 命名定义。' && h1.c.pos === 'fixed' && Math.abs(h1.c.y - h1.b.bottom - 6) <= 2, JSON.stringify(h1.c))
+    const he = await hover('e')
+    check(`FN3 [${label}] 空定义有提示`, he.c?.text === '3 脚注还是空的', JSON.stringify(he.c))
+    // 点上标 → 跳到定义:光标落进定义正文末尾、定义滚进视野
+    const sup = await p.evaluate((s) => { const r = document.querySelector(`${s} sup[data-label="1"]`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, PM)
+    await p.mouse.click(sup.x, sup.y)
+    await p.waitForTimeout(400)
+    const j = await p.evaluate((s) => {
+      const v = window.__upage.probe.view()
+      const $f = v.state.selection.$from
+      const d = document.querySelector(`${s} dl[data-label="1"]`).getBoundingClientRect()
+      return { inDef: $f.node(1)?.type.name === 'footnote_definition' && $f.node(1).attrs.label === '1', atEnd: $f.parentOffset === $f.parent.content.size, inView: d.top >= 0 && d.bottom <= innerHeight, type: v.state.selection.constructor.name }
+    }, PM)
+    check(`FN4 [${label}] 点上标跳到定义(光标在定义正文末尾、定义在视野里)`, j.inDef && j.atEnd && j.inView, JSON.stringify(j))
+    // 点定义左列编号 → 回到第一处引用
+    const dt = await p.evaluate((s) => { const r = document.querySelector(`${s} dl[data-label="1"] > dt`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, PM)
+    await p.mouse.click(dt.x, dt.y)
+    await p.waitForTimeout(400)
+    const back = await p.evaluate((s) => {
+      const v = window.__upage.probe.view()
+      const pos = v.state.selection.from
+      const before = v.state.doc.resolve(pos).nodeBefore
+      const r = document.querySelector(`${s} sup[data-label="1"]`).getBoundingClientRect()
+      return { afterRef: before?.type.name === 'footnote_reference' && before.attrs.label === '1', inView: r.top >= 0 && r.bottom <= innerHeight }
+    }, PM)
+    check(`FN5 [${label}] 点定义编号回到第一处引用`, back.afterRef && back.inView, JSON.stringify(back))
+    if (label === '只读页') check('FN6 只读页预览 / 跳转零写盘', (await writeCount(p)) === 0 && !p.__errs.length, JSON.stringify(p.__errs))
+    else check('FN6 编辑页只点不改:零写盘(编号是装饰,不改落盘)', (await writeCount(p)) === 0 && !p.__errs.length, JSON.stringify(p.__errs))
+    await p.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const short = '# T\n\n' + Array.from({ length: 3 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
   const long = '# T\n\n' + Array.from({ length: 40 }, (_, i) => `第${i}段 [链接${i}](https://example.com/${i}) 文字`).join('\n\n') + '\n'
-  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP / NT / FL / LI
+  // ONLY=LC,LK 只跑某几组(负对照时省时间):LC(两套壳 + 滚动收卡)/ L / M / AU / LK / HP / NT / FL / LI / FN
   const only = process.env.ONLY ? process.env.ONLY.split(',') : null
   const want = (g) => !only || only.includes(g)
   if (want('LC')) {
@@ -646,6 +699,7 @@ async function main() {
   if (want('NT')) await newTabClicks(browser)
   if (want('FL')) await followAtCursor(browser)
   if (want('LI')) await cardLocale(browser)
+  if (want('FN')) await footnotes(browser)
   await browser.close()
   const pass = results.filter(Boolean).length
   console.log(`\n${pass}/${results.length} passed`)

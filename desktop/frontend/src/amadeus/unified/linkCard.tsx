@@ -4,6 +4,7 @@
 // 卡片贴着链接下沿弹,指针进卡片即取消收起计时,所以缝里不会中途关掉。
 //
 // 落盘影响 = 零:卡片只读 `<a href>`,动作全部落成同一份 md 的行内 link mark 增删改。
+// 脚注上标(R-18)同一套计时与外壳:悬停 `sup[data-type=footnote_reference]` 出一张只读卡,显示定义正文(点上标本身跳定义,见 footnote.ts)。
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -11,6 +12,7 @@ import type { Mark, MarkType, Node as ProseNode } from '@milkdown/kit/prose/mode
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { hrefKind, normalizeHref } from '../blocks/markdown/linkHref'
+import { footnoteDefText } from '../blocks/markdown/footnote'
 import { registerMessages, useI18n } from '../../i18n'
 
 // 取消 / 保存 / 编辑 / 删除复用 common.*;这里只登记卡片自己的(评审 C-14:原来全是 JSX 裸中文)。
@@ -19,10 +21,23 @@ registerMessages({
   'linkcard.link': { zh: '链接', en: 'Link' },
   'linkcard.copy': { zh: '复制链接', en: 'Copy link' },
   'linkcard.unlink': { zh: '移除链接', en: 'Remove link' },
+  'linkcard.fnEmpty': { zh: '脚注还是空的', en: 'This footnote is empty' },
+  'linkcard.fnMissing': { zh: '找不到这条脚注的定义', en: 'Footnote definition not found' },
 })
 
 const OPEN_DELAY = 500
 const CLOSE_DELAY = 250
+/** 悬停卡认的两种目标:链接,与脚注上标(R-18)。 */
+const HOVER_SEL = 'a[href], sup[data-type="footnote_reference"]'
+
+interface FootHover {
+  /** 上标上显示的编号(没编号时是 label)。 */
+  num: string
+  /** 定义正文;null = 文中没有这条定义。 */
+  text: string | null
+  x: number
+  y: number
+}
 
 interface Hover {
   href: string
@@ -78,6 +93,7 @@ export function LinkHoverCard({ getView, onOpenNote }: {
 }): ReactElement | null {
   const { t } = useI18n()
   const [hover, setHover] = useState<Hover | null>(null)
+  const [foot, setFoot] = useState<FootHover | null>(null)
   const [edit, setEdit] = useState<{ from: number; to: number; text: string; href: string; wasHref: string } | null>(null)
   const openT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const closeT = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -97,15 +113,31 @@ export function LinkHoverCard({ getView, onOpenNote }: {
     }
     const onOver = (e: MouseEvent): void => {
       const t = e.target as HTMLElement | null
-      const a = t?.closest?.('a[href]') as HTMLAnchorElement | null
-      if (!a || !mine(a)) return
+      const hit = t?.closest?.(HOVER_SEL) as HTMLElement | null
+      if (!hit || !mine(hit)) return
       if (closeT.current) {
         clearTimeout(closeT.current)
         closeT.current = null
       }
       if (openT.current) clearTimeout(openT.current)
+      if (hit.tagName === 'SUP') {
+        openT.current = setTimeout(() => {
+          const view = getView()
+          const r = hit.getBoundingClientRect()
+          setHover(null)
+          setFoot({
+            num: hit.textContent ?? '',
+            text: view ? footnoteDefText(view.state.doc, hit.getAttribute('data-label') ?? '') : null,
+            x: r.left,
+            y: r.bottom + 6,
+          })
+        }, OPEN_DELAY)
+        return
+      }
+      const a = hit as HTMLAnchorElement
       openT.current = setTimeout(() => {
         const view = getView()
+        setFoot(null)
         const r = a.getBoundingClientRect()
         const rg = view ? rangeOfLink(view, a) : null
         setHover({
@@ -121,12 +153,12 @@ export function LinkHoverCard({ getView, onOpenNote }: {
     }
     const onOut = (e: MouseEvent): void => {
       const t = e.target as HTMLElement | null
-      if (!t?.closest?.('a[href]')) return
+      if (!t?.closest?.(HOVER_SEL)) return
       const to = e.relatedTarget as HTMLElement | null
       if (to?.closest?.('.amx-linkcard')) return // safeBridge:挪进卡片不算离开
       if (openT.current) clearTimeout(openT.current)
       if (closeT.current) clearTimeout(closeT.current)
-      closeT.current = setTimeout(() => setHover(null), CLOSE_DELAY)
+      closeT.current = setTimeout(() => { setHover(null); setFoot(null) }, CLOSE_DELAY)
     }
     document.addEventListener('mouseover', onOver, true)
     document.addEventListener('mouseout', onOut, true)
@@ -139,11 +171,11 @@ export function LinkHoverCard({ getView, onOpenNote }: {
 
   // 卡片是 fixed + 悬停那一刻的视口坐标:页面一滚,链接走了卡片还钉在原处 —— 滚动即收(编辑面板居中,不受影响)。
   useEffect(() => {
-    if (!hover || edit) return
-    const close = (): void => setHover(null)
+    if ((!hover && !foot) || edit) return
+    const close = (): void => { setHover(null); setFoot(null) }
     document.addEventListener('scroll', close, true)
     return () => document.removeEventListener('scroll', close, true)
-  }, [hover, edit])
+  }, [hover, foot, edit])
 
   /** 改写选定的整条链接:href=null 表示只摘掉链接(留文字与其余格式);text=''  连文字一起删;
    *  text 与原文相同 = 只改地址 → removeMark/addMark,**不重建文字**(code / 斜体 / 粗体原样留着,I-07);
@@ -240,6 +272,27 @@ export function LinkHoverCard({ getView, onOpenNote }: {
     )
   }
 
+  if (foot) {
+    return (
+      <OverlayPortal>
+        <OverlayAt
+          className="amx-linkcard amx-fncard"
+          x={foot.x}
+          y={foot.y}
+          onMouseEnter={() => {
+            if (closeT.current) clearTimeout(closeT.current)
+            closeT.current = null
+          }}
+          onMouseLeave={() => {
+            closeT.current = setTimeout(() => setFoot(null), CLOSE_DELAY)
+          }}
+        >
+          <span className="amx-fncard-num">{foot.num}</span>
+          <span className={`amx-fncard-text${foot.text ? '' : ' muted'}`}>{foot.text == null ? t('linkcard.fnMissing') : foot.text || t('linkcard.fnEmpty')}</span>
+        </OverlayAt>
+      </OverlayPortal>
+    )
+  }
   if (!hover) return null
   let host = hover.href
   try {
