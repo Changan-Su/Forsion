@@ -106,6 +106,8 @@
 //        HUD 开关关掉 = 不吸不画、回到点阵;开关只存本机(localStorage,不写盘)、跨重载记住
 //   C106 连线能力(V-17):fromEnd / toEnd 两端箭头(JSON Canvas 同名;缺省值删键、未动条目逐字不变)右键可改;
 //        选中连线拖端点 = 改连(落空白 / 自连 / 判重 = 不写,一击撤销);从选中卡的边口圆点拖出 = 新连线(卡↔卡默认父子、Shift 自由连)
+//   C107 导出 JSON Canvas(V-19,拍板 #10 单向):画布右键 / ⋯ 菜单(onCanvasMode.exportCanvas)写同目录 `<笔记名>.canvas`,
+//        卡 → text(恰为一个能解析的嵌入 → file)、Frame → group、形状 → text、连线 / 层级 → edge;重名加后缀不覆盖;笔记本身零写入
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -1309,6 +1311,62 @@ async function wave4(browser) {
       JSON.stringify({ dots, tree1: cvC1?.tree, n: [nEls0, cvC1?.elements.length, cvC2?.elements.length, cvC3?.elements.length], c2: conn(cvC2, { ref: 'k1' }, { ref: 'k2' }), c3: conn(cvC3, { ref: 'k1' }, { id: 's2' }) }))
   })
 
+  // ── C107 导出 JSON Canvas(V-19)──────────────────────────────────────────────────────
+  //  修前:画布与 Obsidian 的 JSON Canvas 不互通,没有任何导出入口(拍板 #10:只做单向导出)。
+  if (pick('C107')) await guard('C107', async () => {
+    const CV107 = {
+      v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
+      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 300, w: 300 }],
+      cardColors: { k1: '4' },
+      tree: { k2: 'k1' },
+      elements: [
+        { id: 'f1', type: 'frame', x: 1000, y: 0, w: 300, h: 200, title: '区域' },
+        { id: 's1', type: 'shape', shape: 'ellipse', x: 0, y: 300, w: 200, h: 120, text: '方块', color: '#12ab34' },
+        { id: 'e1', type: 'connector', from: { id: 's1' }, to: { ref: 'k1' }, label: '关系', fromEnd: 'arrow' },
+      ],
+    }
+    const seed107 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV107)}`, '---', '', '# 导出', '', '主卡正文。', '',
+      '<!-- a k1 -->', '', '## 卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '![[Embedded]]', '', '<!-- /a k2 -->', ''].join('\n')
+    const p = await open(browser, seed107)
+    await p.waitForTimeout(900)
+    await p.evaluate(() => window.__upage.pageStore.setState({ pages: ['Unified.md', 'Embedded.md'] }))
+    const k2h = await p.evaluate(() => Math.round(document.querySelector('.amx-ucard[data-anchor="k2"]').offsetHeight))
+    const blank = await blankOf(p)
+    await p.mouse.click(blank.x, blank.y, { button: 'right' })
+    await p.waitForTimeout(250)
+    const items = await menuItems(p)
+    const okMenu = await clickMenu(p, '导出为 JSON Canvas')
+    await p.waitForTimeout(800)
+    const out = await p.evaluate(() => window.__upage.writes.filter((w) => w.path.endsWith('.canvas')).map((w) => ({ path: w.path, text: w.text })))
+    const notes = await p.evaluate(() => window.__upage.writes.filter((w) => w.path === 'Unified.md').length)
+    let jc = null
+    try { jc = JSON.parse(out[0]?.text ?? '') } catch { /* 断言里报 */ }
+    const node = (id) => jc?.nodes?.find((n) => n.id === id)
+    const edge = (id) => jc?.edges?.find((e) => e.id === id)
+    record('C107a 画布右键「导出为 JSON Canvas」= 同目录 Unified.canvas(Frame=group 垫底、卡=text、恰为嵌入的卡=file、形状=text、主卡=text、连线 / 层级=edge),笔记本身零写入',
+      items.includes('导出为 JSON Canvas') && okMenu && out.length === 1 && out[0].path === 'Unified.canvas' && notes === 0
+        && jc?.nodes?.[0]?.id === 'el-f1' && node('el-f1')?.type === 'group' && node('el-f1')?.label === '区域'
+        && node('card-k1')?.type === 'text' && node('card-k1')?.text === '## 卡 K1' && node('card-k1')?.color === '4' && node('card-k1')?.x === 480
+        && node('card-k2')?.type === 'file' && node('card-k2')?.file === 'Embedded.md' && node('card-k2')?.height === k2h
+        && node('el-s1')?.type === 'text' && node('el-s1')?.text === '方块' && node('el-s1')?.color === '#12ab34'
+        && node('main')?.type === 'text' && node('main')?.text.includes('主卡正文')
+        && edge('edge-e1')?.fromNode === 'el-s1' && edge('edge-e1')?.toNode === 'card-k1' && edge('edge-e1')?.fromEnd === 'arrow' && edge('edge-e1')?.label === '关系' && !!edge('edge-e1')?.fromSide
+        && edge('tree-k2')?.fromNode === 'card-k1' && edge('tree-k2')?.toNode === 'card-k2' && edge('tree-k2')?.toEnd === 'none',
+      JSON.stringify({ items, out: out.map((o) => o.path), notes, k2h, nodes: jc?.nodes?.map((n) => `${n.id}:${n.type}`), edges: jc?.edges }))
+    // b:再导一次(走笔记 ⋯ 菜单那条路:onCanvasMode 交出来的 exportCanvas)→ Unified 2.canvas,第一份逐字不动
+    const segOk = await p.evaluate(() => typeof window.__upage.probe.canvasSeg?.exportCanvas === 'function')
+    await p.evaluate(() => window.__upage.probe.canvasSeg?.exportCanvas?.())
+    await p.waitForTimeout(800)
+    const out2 = await p.evaluate(() => ({ paths: window.__upage.writes.filter((w) => w.path.endsWith('.canvas')).map((w) => w.path), first: window.__upage.vault.get('Unified.canvas') }))
+    // 文档模式下 ⋯ 菜单不给(导出要量画布里的卡盒)
+    await p.click('.amx-modeseg button:nth-child(2)')
+    await p.waitForTimeout(500)
+    const docSeg = await p.evaluate(() => ({ on: window.__upage.probe.canvasSeg?.on, exp: typeof window.__upage.probe.canvasSeg?.exportCanvas }))
+    await p.close()
+    record('C107b 再导一次(⋯ 菜单的 exportCanvas)= Unified 2.canvas,不覆盖第一份;文档模式下不交出导出动作',
+      segOk && out2.paths.join(',') === 'Unified.canvas,Unified 2.canvas' && out2.first === out[0]?.text && docSeg.on === false && docSeg.exp === 'undefined',
+      JSON.stringify({ segOk, out2: out2.paths, same: out2.first === out[0]?.text, docSeg }))
+  })
 }
 
 async function main() {

@@ -45,6 +45,9 @@ import { rawList, patchElement, removeElements, moveElements, freshElId, newShap
 import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
 import { NotePicker } from './blockLinks'
+import { amadeus } from '../api'
+import { buildJsonCanvas, jsonCanvasText, writeJsonCanvas } from './canvasExport'
+import { emitAmadeusToast, shortWriteError } from './writeSafety'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { canvasAlignGuidesEnabled, canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, canvasOverviewZoom, onCanvasOverviewZoomChange, setCanvasAlignGuidesEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
@@ -88,6 +91,9 @@ registerMessages({
   'canvasstage.menu.newCard': { zh: '新建卡片', en: 'New card' },
   'canvasstage.menu.addNote': { zh: '添加笔记…', en: 'Add note…' },
   'canvasstage.menu.fit': { zh: '适应内容', en: 'Fit to content' },
+  'canvasstage.menu.exportCanvas': { zh: '导出为 JSON Canvas', en: 'Export as JSON Canvas' },
+  'canvasstage.export.done': { zh: '已导出 JSON Canvas：{path}', en: 'Exported JSON Canvas: {path}' },
+  'canvasstage.export.failed': { zh: '导出 JSON Canvas 失败：{e}', en: 'JSON Canvas export failed: {e}' },
   'canvasstage.color.label': { zh: '颜色', en: 'Color' },
   'canvasstage.color.none': { zh: '无颜色', en: 'No color' },
   'canvasstage.color.red': { zh: '红色', en: 'Red' },
@@ -479,10 +485,12 @@ export interface CanvasStageProps {
   readOnly?: boolean
   /** 库内笔记名册(V-09 右键「添加笔记…」的候选,复用 blockLinks 的 NotePicker)。缺省 = 菜单不出这一项。 */
   notePages?: () => string[]
+  /** 把本舞台的「导出 JSON Canvas」交给宿主(V-19:笔记 ⋯ 菜单与画布右键同一个动作)。只在画布态挂,卸载 / 退出画布时清空。 */
+  exportRef?: { current: (() => void) | null }
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, notePages, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, notePages, exportRef, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
@@ -741,8 +749,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   // ── fm 三键(elements / tree / main)的读写 ────────────────────────────────────────
   // 一切回调经 ref 现读:下面那个手势 effect 只依赖 [active],闭包里拿的必须是**此刻**的值
   // (理由见 effect 顶注)。
-  const cbRef = useRef({ getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted })
-  cbRef.current = { getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted }
+  const cbRef = useRef({ getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages })
+  cbRef.current = { getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages }
   const els = safeElements(elements)
   /** 主卡几何的**正则形**:默认位形(0,0,MAIN_W)与「盘上没存」合并成 null —— 二者对用户不可分
    *  (materialize 恒补默认 main,派生又会在卡/元素清空时把整行剥掉),分开记会让「首次拖动主卡
@@ -1556,6 +1564,47 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   const setEnds = useCallback((ids: string[], from: ConnEnd, to: ConnEnd): void => {
     mutate((l) => setConnectorEnds(l, new Set(ids), { fromEnd: from, toEnd: to }))
   }, [mutate])
+
+  /** 导出 JSON Canvas(V-19,拍板 #10:单向导出,不导入)。映射见 canvasExport 顶注;写到同目录 `<笔记名>.canvas`,
+   *  原子仅新建、重名加后缀,绝不覆盖。⚠️ 只在画布态可用:卡高(h=0 的自适应卡)要量画布里的 DOM,文档模式量到的是正文流的盒。
+   *  导出是副作用,不进撤销时间线。 */
+  const exportCanvas = useCallback(async (): Promise<void> => {
+    const view = cbRef.current.getView()
+    const host = hostRef.current
+    if (!view || !host || !active) return
+    const ser = cbRef.current.serializeMd
+    const mdOf = (n: ProseNode): string => ser?.(n.content)?.trim() || n.textBetween(0, n.content.size, '\n\n')
+    const boxes = measureCards(host)
+    const cards = cardsOf(view).map((c) => {
+      const a = c.node.attrs
+      const b = boxes.get(c.anchor) ?? { x: Number(a.x) || 0, y: Number(a.y) || 0, w: Number(a.w) || CARD_W, h: Number(a.h) || 80 }
+      return { ref: c.anchor, ...b, color: a.color, md: mdOf(c.node) }
+    })
+    const rest: ProseNode[] = []
+    view.state.doc.forEach((n) => { if (n.type.name !== 'amadeusCanvasCard') rest.push(n) })
+    const mainBox = measureMain(host)
+    const mainMd = rest.length ? ser?.(Fragment.fromArray(rest))?.trim() ?? '' : ''
+    const json = buildJsonCanvas({
+      cards,
+      main: mainBox ? { ...mainBox, md: mainMd } : null,
+      elements: cbRef.current.elements,
+      tree: cbRef.current.tree,
+      pages: cbRef.current.notePages?.(),
+      sourcePath: path,
+    })
+    try {
+      const written = await writeJsonCanvas(amadeus, path, jsonCanvasText(json))
+      emitAmadeusToast({ text: translate('canvasstage.export.done', { path: written }), level: 'success' })
+    } catch (err) {
+      emitAmadeusToast({ text: translate('canvasstage.export.failed', { e: shortWriteError(err) }), level: 'error' })
+    }
+  }, [active, path])
+  useEffect(() => {
+    if (!exportRef || !active || readOnly) return
+    const run = (): void => { void exportCanvas() }
+    exportRef.current = run
+    return () => { if (exportRef.current === run) exportRef.current = null }
+  }, [exportRef, active, readOnly, exportCanvas])
 
   /** 新形状:id 必须在 mutate 的闭包里取(现读现算,并发写不会撞号)。
    *  `box` 给了就是**拖出来的尺寸**(x/y 是左上角),没给就是点击建(x/y 当中心、取默认尺寸)。 */
@@ -4239,6 +4288,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
                 <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('text', at.x, at.y) }}>{t('canvasstage.shape.text')}</button>
                 <button onClick={() => { const at = menu.at; setMenu(null); addFrame(at.x, at.y) }}>Frame</button>
                 <button onClick={() => { setMenu(null); fit() }}>{t('canvasstage.menu.fit')}</button>
+                <div className="ctx-separator" />
+                <button onClick={() => { setMenu(null); void exportCanvas() }}>{t('canvasstage.menu.exportCanvas')}</button>
               </>
             )}
           </OverlayAt>

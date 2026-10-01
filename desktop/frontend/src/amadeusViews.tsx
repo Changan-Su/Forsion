@@ -165,6 +165,7 @@ registerMessages({
   'amxv.menu.newSubfolder': { zh: '新建子文件夹', en: 'New subfolder' },
   'amxv.menu.publishFolder': { zh: '发布此文件夹（公开链接）', en: 'Publish this folder (public link)' },
   'amxv.menu.exportPdf': { zh: '导出为 PDF', en: 'Export as PDF' },
+  'amxv.menu.exportCanvas': { zh: '导出为 JSON Canvas', en: 'Export as JSON Canvas' },
   'amxv.menu.deleteNote': { zh: '删除笔记', en: 'Delete note' },
 
   'amxv.publish.done': { zh: '文件夹已发布，公开链接已复制（任何人可只读浏览）', en: 'Folder published — the public link is copied (anyone can read it)' },
@@ -2163,7 +2164,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)
   /** v4 统一页交出来的画布模式(移动端专用:顶栏不渲染 = 那颗「文档 | 画布」胶囊没插槽可投)。
    *  v3 笔记不挂 UnifiedPage → 恒 null → 底栏「⋯」里自然没有这一项。 */
-  const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void } | null>(null)
+  const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void; exportCanvas?: () => void } | null>(null)
   /** v4 统一页交出来的撤销 / 重做(G2-05:移动端胶囊的两颗键;v4 不设 activePage,pageStore 的 undo 够不着它)。 */
   const unifiedHistRef = useRef<UnifiedHistory | null>(null)
   /** 本 leaf 的 v4 实例的文件写口(G1-02):拖入 / 上传直接交给它,不按路径全局找 —— 同篇双开时那会找到另一个标签。 */
@@ -2640,6 +2641,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
           {pageEntries.length > 0 && <><PageStyleMenuItems entries={pageEntries} /><div className="ctx-separator" /></>}
           {canExportPdf() && <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> {t('amxv.menu.exportPdf')}</button>}
+          {/* V-19:画布态才有(导出要量画布里的卡盒);写同目录 `<笔记名>.canvas`,不覆盖。 */}
+          {canvasSeg?.on && canvasSeg.exportCanvas && <button onClick={() => { const run = canvasSeg.exportCanvas; setNoteMenu(null); run?.() }}><FileDown size={13} /> {t('amxv.menu.exportCanvas')}</button>}
           <button onClick={() => { useAmadeusPrefs.getState().toggleStar(barPath); setNoteMenu(null) }}>
             <Star size={13} /> {starred ? t('amxv.menu.unstar') : t('amxv.menu.star')}
           </button>
@@ -2771,6 +2774,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           ...(window.amadeusCollab ? [{ id: 'share', icon: <Share2 size={16} />, label: t('amxv.shareOrPublish'), run: () => setShareCard({ x: window.innerWidth / 2, y: window.innerHeight / 2 }) }] : []),
           // 宿主做不了的两件不出键(G2-13:移动本地库上都是 no-op 死键),判据单源 amadeus/lib/hostCaps。
           ...(canExportPdf() ? [{ id: 'pdf', icon: <FileDown size={16} />, label: t('amxv.menu.exportPdf'), run: () => void exportPdf() }] : []),
+          ...(canvasSeg?.on && canvasSeg.exportCanvas ? [{ id: 'canvas-export', icon: <FileDown size={16} />, label: t('amxv.menu.exportCanvas'), run: () => canvasSeg.exportCanvas?.() }] : []),
           ...(canRevealInFileManager() ? [{ id: 'reveal', icon: <FolderOpen size={16} />, label: t('amxv.menu.reveal'), run: () => void amadeus.revealInFileManager(barPath!) }] : []),
           { id: 'delete', icon: <Trash2 size={16} />, label: t('amxv.menu.deleteNote'), danger: true, run: () => void deleteNoteFlow(barPath!, myPs) },
         ]}

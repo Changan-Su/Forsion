@@ -1206,7 +1206,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 画布模式的状态出口。桌面走 CanvasSegPortal 投进顶栏插槽,移动端整条顶栏不渲染 → 没插槽,
    *  改由宿主(NoteView)把它放进底栏胶囊的「⋯」。交给**父组件**而不是全局槽:结构上就是同一篇
    *  笔记,旧写法「uiOverlay 单槽 + 路径比对」栽过的那三条歧路(见 CanvasModeSeg 顶注)一条都不沾。 */
-  onCanvasMode?: (s: { on: boolean; toggle: () => void } | null) => void
+  onCanvasMode?: (s: { on: boolean; toggle: () => void; exportCanvas?: () => void } | null) => void
   /** 撤销 / 重做的出口(G2-05)。v4 不进 pageStore,宿主按 activePage 门控的 `myPs().undo()` 在这里是死键;
    *  宿主(NoteView)给本 leaf 自己的 ref,不按路径全局查找。卸载时清空。 */
   historyRef?: { current: UnifiedHistory | null }
@@ -1373,11 +1373,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }, [stableApply])
   // 交出去时 toggle 恒经 ref 取最新那份(宿主把它存进 state,不然会捏着某一帧的闭包)。
   useEffect(() => {
-    onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current() })
+    // exportCanvas(V-19):只在舞台真在画布态时交出去(导出要量画布 DOM;源码模式 / 只读下舞台不登记导出,
+    // 交出去就是一个点了没反应的菜单项)。经 ref 现取舞台那份。
+    const canExport = canvasOn && mode !== 'source' && !readOnly
+    onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current(), ...(canExport ? { exportCanvas: () => stageExport.current?.() } : {}) })
     return () => onCanvasMode?.(null)
-  }, [canvasOn, onCanvasMode])
+  }, [canvasOn, onCanvasMode, mode, readOnly])
   /** 画布舞台的统一撤销仲裁(CanvasStage 经 histStepRef 交上来,与它的 Cmd+Z 捕获同一个 histStep)。 */
   const stageHist = useRef<((dir: 'undo' | 'redo') => boolean) | null>(null)
+  /** 画布舞台的「导出 JSON Canvas」(V-19,经 exportRef 交上来;笔记 ⋯ 菜单经 onCanvasMode 调它)。 */
+  const stageExport = useRef<(() => void) | null>(null)
   // 撤销 / 重做交给宿主:与键盘**同路** —— 画布态走舞台仲裁(canvasStage 的 onKeyDownCapture),
   // 文档态走 PM history(milkdown history keymap 的同一对命令)。只读实例没有可退的东西。
   useEffect(() => {
@@ -3207,6 +3212,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             onMain={setCanvasMain}
             timeline={undoTimeline}
             histStepRef={stageHist}
+            exportRef={stageExport}
             saveFile={(f) => saveOneFile(path, f)}
             // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
