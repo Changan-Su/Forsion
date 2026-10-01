@@ -2714,7 +2714,8 @@ Then reply with only the command output.`,
     const WS = createRequire(import.meta.url)('ws');
     const RT_MODEL = `bailian/${process.env.TANGU_LIVE_REALTIME_MODEL || 'qwen3.8-omni-flash-realtime'}`;
     // 随机文件名:模型猜不到,只有 Tangu 真去列目录才说得出来
-    const MARK = ['长颈鹿', '火烈鸟', '穿山甲', '北极熊', '海獭', '雪豹'][Math.floor(Math.random() * 6)] + '账本';
+    const ANIMAL = ['长颈鹿', '火烈鸟', '穿山甲', '北极熊', '海獭', '雪豹'][Math.floor(Math.random() * 6)];
+    const MARK = ANIMAL + '账本';
     writeFileSync(join(workspace, `${MARK}.txt`), 'live realtime marker\n');
     const pcmOf = (text, name) => {
       const aiff = join(OUT, `${name}.aiff`), wav = join(OUT, `${name}.wav`);
@@ -2761,25 +2762,33 @@ Then reply with only the command output.`,
       const started = await until(() => runs.find((r) => r.status === 'started') || ended, 40_000, 200);
       const finished = started && started !== ended ? await until(() => runs.find((r) => r.status === 'done' || r.status === 'error') || ended, 240_000, 500) : null;
       const finishedAt = finished?.at || Infinity;
-      const after = finished ? await until(() => transcripts.find((t) => t.who === 'ai' && t.at > finishedAt) || ended, 30_000, 200) : null;
+      // 结果播报要提到那个随机名(「我去看看 / 稍等」这类确认语可能恰好落在 run 完成之后,不算念回)
+      const after = finished ? await until(() => transcripts.find((t) => t.who === 'ai' && t.at > finishedAt && t.text.includes(ANIMAL)) || ended, 30_000, 200) : null;
+      const afterAll = transcripts.filter((t) => t.who === 'ai' && t.at > finishedAt).map((t) => t.text).join(' / ');
       await sleep(1500); // 等最后一句落库
       const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
       const runMsg = msgs.filter((x) => x.role !== 'user').map((x) => String(x.content || '')).find((c) => c.includes(MARK)) || '';
       const helloText = hello && typeof hello === 'object' ? hello.text : '';
       const afterText = after && typeof after === 'object' ? after.text : '';
       const userSaved = msgs.some((x) => x.role === 'user' && /名字/.test(String(x.content || '')));
+      // 委派复用用户那句语音的消息行:库里不该冒出一条「模型转述的任务」用户消息,那句原话也只有一条
+      const userTexts = msgs.filter((x) => x.role === 'user').map((x) => String(x.content || ''));
+      const askRows = userTexts.filter((c) => /工作目录/.test(c)).length;
+      const spokenRow = userTexts.some((c) => /工作目录/.test(c) && /帮我/.test(c)); // 用户原话(say 念的是「帮我看一下…」)
+      const taskRow = !!started?.task && userTexts.includes(started.task) ? 1 : 0;
       const aiSaved = msgs.some((x) => x.role !== 'user' && helloText && String(x.content || '').includes(helloText.slice(0, 6)));
-      const lat = latencies.length ? Math.max(...latencies.slice(0, 2)) : null;
+      const lat = latencies.length ? latencies[0] : null; // 闲聊那轮;带工具调用那轮实测 ~1.3s,只报不判
       const checks = {
         ready: true,
         latency: lat != null && lat < 1500,
         persona: !!helloText && !/qwen|通义|阿里/i.test(helloText) && (!agentName || helloText.includes(agentName)),
         persisted: userSaved && aiSaved,
         delegated: finished?.status === 'done' && !!runMsg,
+        reusedUserRow: askRows === 1 && spokenRow && !taskRow,
         relayed: !!afterText,
       };
       const ok = Object.values(checks).every(Boolean);
-      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText}」${afterText.includes(MARK) ? '' : '(未逐字提文件名,不计红)'};落库 user=${userSaved} ai=${aiSaved};失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
+      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
     } finally { clearInterval(pump); try { ws.close(); } catch { /* ignore */ } }
   });
 

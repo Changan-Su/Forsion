@@ -765,7 +765,9 @@ export function HomepageView(_props: ViewProps) {
       const queued = leaveThen(() => {
         setActiveSpace('tangu')
         useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-        void useApp.getState().newSession().then(() => resolve(useApp.getState().activeId), () => resolve(null))
+        const before = useApp.getState().activeId
+        // newSession 自己吞掉失败:activeId 没换 = 没建成,别在旧会话里开通话
+        void useApp.getState().newSession().then(() => { const id = useApp.getState().activeId; resolve(id && id !== before ? id : null) }, () => resolve(null))
       })
       if (!queued) resolve(null)
     })

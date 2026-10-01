@@ -85,6 +85,13 @@ export function endCall(error?: string): void {
   teardown?.(error)
 }
 
+/** 没接通就拒(如会话不在本机):只留一条错误给输入框显示。 */
+export function rejectCall(error: string): void {
+  if (state) return
+  lastError = error
+  emit()
+}
+
 export function toggleMute(): void {
   if (state) patch({ muted: !state.muted })
 }
@@ -105,6 +112,8 @@ export async function startCall(o: StartCallOptions): Promise<void> {
   const sources = new Set<AudioBufferSourceNode>()
   let playHead = 0
   let ended = false
+  // 只动自己这通:挂断 / 新通话之后,旧调用残留的回调(建连、onclose、播放结束)不许碰全局状态(Codex 10-01)。
+  const own = (p: Partial<CallState>): void => { if (!ended) patch(p) }
   const ping = (delay = 500): void => { if (o.onActivity) window.setTimeout(o.onActivity, delay) }
 
   const flush = (): void => {
@@ -127,25 +136,25 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     sources.add(src)
     src.onended = () => {
       sources.delete(src)
-      if (!sources.size && state?.phase === 'speaking') patch({ phase: 'listening', analyser: micAnalyser })
+      if (!sources.size && state?.phase === 'speaking') own({ phase: 'listening', analyser: micAnalyser })
     }
-    if (state?.phase !== 'speaking') patch({ phase: 'speaking', analyser: outAnalyser })
+    if (state?.phase !== 'speaking') own({ phase: 'speaking', analyser: outAnalyser })
   }
 
-  teardown = (error?: string) => {
+  const finish = (error?: string): void => {
     if (ended) return
     ended = true
-    teardown = null
+    const current = teardown === finish
+    if (current) teardown = null
     flush()
     try { ws?.close() } catch { /* ignore */ }
     stream?.getTracks().forEach((t) => t.stop())
     void inCtx.close().catch(() => {})
     void outCtx.close().catch(() => {})
-    lastError = error || null
-    state = null
-    emit()
+    if (current) { lastError = error || null; state = null; emit() }
     ping(300)
   }
+  teardown = finish
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -153,18 +162,20 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     })
     if (ended) { stream.getTracks().forEach((t) => t.stop()); return }
     const auth = (await o.target.headers()).Authorization || ''
+    if (ended) return // 等鉴权头期间被挂断 / 被新通话顶掉
     const url = `${o.target.base.replace(/^http/, 'ws')}/agent/realtime?token=${encodeURIComponent(auth.replace(/^Bearer\s+/i, ''))}`
     ws = new WebSocket(url)
     ws.binaryType = 'arraybuffer'
   } catch (e: any) {
-    endCall(e?.message || String(e))
+    finish(e?.message || String(e))
     return
   }
 
   const sock = ws
   sock.onopen = () => sock.send(JSON.stringify({ type: 'start', session_id: o.sessionId, model: o.model, voice: o.voice || undefined, title: o.title, run: o.run }))
-  sock.onclose = (ev) => { if (!ended) endCall(ev.reason || (ev.code === 1000 ? undefined : `connection closed (${ev.code})`)) }
+  sock.onclose = (ev) => finish(ev.reason || (ev.code === 1000 ? undefined : `connection closed (${ev.code})`))
   sock.onmessage = (ev) => {
+    if (ended) return
     if (ev.data instanceof ArrayBuffer) { play(ev.data); return }
     let m: any
     try { m = JSON.parse(String(ev.data)) } catch { return }
@@ -177,7 +188,7 @@ export async function startCall(o: StartCallOptions): Promise<void> {
         src.connect(proc)
         proc.connect(inCtx.destination) // 不接到 destination 就不回调;输出缓冲不写 = 静音
         proc.onaudioprocess = (e) => {
-          if (!state || state.muted || sock.readyState !== WebSocket.OPEN) return
+          if (ended || !state || state.muted || sock.readyState !== WebSocket.OPEN) return
           const f = e.inputBuffer.getChannelData(0)
           let sum = 0
           for (let i = 0; i < f.length; i++) sum += f[i] * f[i]
@@ -186,32 +197,32 @@ export async function startCall(o: StartCallOptions): Promise<void> {
           if (!gated) for (let i = 0; i < f.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(f[i] * 32767)))
           sock.send(pcm.buffer)
         }
-        patch({ phase: 'listening', analyser: micAnalyser })
+        own({ phase: 'listening', analyser: micAnalyser })
         break
       }
       case 'input_audio_buffer.speech_started':
         flush() // 打断:模型的话立刻停,不等服务端
-        patch({ phase: 'hearing', analyser: micAnalyser })
+        own({ phase: 'hearing', analyser: micAnalyser })
         break
       case 'input_audio_buffer.speech_stopped':
-        patch({ phase: 'thinking' })
+        own({ phase: 'thinking' })
         break
       case 'conversation.item.input_audio_transcription.completed':
       case 'response.audio_transcript.done':
         ping()
         break
       case 'response.done':
-        if (!sources.size && state?.phase === 'thinking' && m.response?.status !== 'completed') patch({ phase: 'listening', analyser: micAnalyser })
+        if (!sources.size && state?.phase === 'thinking' && m.response?.status !== 'completed') own({ phase: 'listening', analyser: micAnalyser })
         break
       case 'tangu.run':
-        patch({ working: m.status === 'started' ? String(m.task || '') : null })
+        own({ working: m.status === 'started' ? String(m.task || '') : null })
         ping(m.status === 'started' ? 300 : 800)
         break
       case 'error':
         console.warn('[realtime] upstream error:', m.error?.message || m.error)
         break
       case 'end':
-        endCall(m.reason && m.reason !== 'client closed' ? String(m.reason) : undefined)
+        finish(m.reason && m.reason !== 'client closed' ? String(m.reason) : undefined)
         break
     }
   }
