@@ -2012,6 +2012,12 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   font-style: italic;
 }
+/* `:` emoji 短代码补全(I-21):行首一格放 emoji 本身,名字是命中的关键词。 */
+.am-app .emoji-suggest-char {
+  flex: none;
+  width: 1.5em;
+  text-align: center;
+}
 
 /* ── Tag pane ────────────────────────────────────────────── */
 .am-app .tag-pane {

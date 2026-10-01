@@ -208,15 +208,25 @@ export const EMOJI_ALL: string[] = EMOJI_GROUPS.flatMap((g) => g.items.map(([e])
 export function searchEmoji(query: string): string[] | null {
   const q = query.trim().toLowerCase()
   if (!q) return null
-  const starts: string[] = []
-  const has: string[] = []
+  return searchEmojiItems(q).map((x) => x.emoji)
+}
+
+/** 同 searchEmoji 的命中与排序,另带一个**显示名**(正文 `:` 短代码补全的候选行用,I-21):该条的英文关键词连写
+ *  (`sweat smile`、`slight smile` —— 只显示命中的那个词会出三行一样的 smile),没有英文词就用命中的词。空查询 → []。 */
+export function searchEmojiItems(query: string): Array<{ emoji: string; name: string }> {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  const starts: Array<{ emoji: string; name: string }> = []
+  const has: Array<{ emoji: string; name: string }> = []
   const seen = new Set<string>()
+  const nameOf = (words: string[], hit: string): string => words.filter((w) => /^[\x21-\x7e]+$/.test(w)).join(' ') || hit
   for (const g of EMOJI_GROUPS) {
     for (const [e, kw] of g.items) {
       if (seen.has(e)) continue
       const words = kw.split(/\s+/)
-      if (words.some((w) => w.startsWith(q))) { starts.push(e); seen.add(e) }
-      else if (kw.includes(q)) { has.push(e); seen.add(e) }
+      const head = words.find((w) => w.startsWith(q))
+      if (head) { starts.push({ emoji: e, name: nameOf(words, head) }); seen.add(e) }
+      else if (kw.includes(q)) { has.push({ emoji: e, name: nameOf(words, q) }); seen.add(e) }
     }
   }
   return [...starts, ...has]
