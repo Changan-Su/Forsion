@@ -104,6 +104,8 @@
 //   C104 侧栏拖笔记进画布(V-09):缺省 = `![[路径]]` 嵌入卡(内容渲染出来)、按住 Alt = `[[链接]]` 卡;空白右键「添加笔记…」= 复用 NotePicker,选中即落嵌入卡
 //   C105 对齐参考线(V-14):拖卡 / 拖边贴近别的对象的边就吸过去并画线,松手落在线上(压过点阵吸附);
 //        HUD 开关关掉 = 不吸不画、回到点阵;开关只存本机(localStorage,不写盘)、跨重载记住
+//   C106 连线能力(V-17):fromEnd / toEnd 两端箭头(JSON Canvas 同名;缺省值删键、未动条目逐字不变)右键可改;
+//        选中连线拖端点 = 改连(落空白 / 自连 / 判重 = 不写,一击撤销);从选中卡的边口圆点拖出 = 新连线(卡↔卡默认父子、Shift 自由连)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -830,6 +832,8 @@ async function wave3(browser) {
 async function wave4(browser) {
   const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
   const pick = (id) => !process.env.UCANVAS_W4 || process.env.UCANVAS_W4.split(',').includes(id)
+  /** 一格中途抛错(元素没出来 / 等待超时)记成这一格的 FAIL,后面的格子照跑 —— 负对照与回退时看得到全貌。 */
+  const guard = async (id, fn) => { try { await fn() } catch (err) { record(`${id} 运行中断(视作失败)`, false, String(err?.message ?? err).split('\n')[0].slice(0, 300)) } }
   const elsOfCv = (cv) => Object.fromEntries((cv?.elements ?? []).map((e) => [e.id, e]))
   const cardsOfCv = (cv) => Object.fromEntries((cv?.cards ?? []).map((c) => [c.ref, c]))
   const padOf = (pg, a) => pg.evaluate((a) => { const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect(); return { x: r.left + 6, y: r.top + 6 } }, a)
@@ -867,7 +871,7 @@ async function wave4(browser) {
   // ── C103 复制 / 重复(V-07)──────────────────────────────────────────────────────
   //  修前:onCopy 只认卡片,选中形状时在 preventDefault 之前 return → 系统剪贴板原封不动,粘贴认领上一次的令牌 = 粘出旧卡;
   //  没有 Mod+D;右键菜单没有复制 / 重复。
-  if (pick('C103')) {
+  if (pick('C103')) await guard('C103', async () => {
     const CV103 = {
       v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
       cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 880, y: 0, w: 300 }],
@@ -1031,11 +1035,11 @@ async function wave4(browser) {
         && cvF?.cardColors?.[fk2.a] === '3' && cvF?.tree?.[fk2.a] === fk1.a
         && fConn?.to?.ref === fk1.a && fConn?.from?.id === fShape?.id && fShape?.x - fk1.x === 0 - 480 && fShape?.y - fk1.y === 300,
       JSON.stringify({ qCards, fConn, fShape, colors: cvF?.cardColors, tree: cvF?.tree }))
-  }
+  })
 
   // ── C104 侧栏拖笔记进画布(V-09)────────────────────────────────────────────────────
   //  修前:refToCardMd 一律落 `[[链接]]` 卡;右键菜单没有「添加笔记」。台架 resolveEmbed 只认 `Embedded`,目标只能用它。
-  if (pick('C104')) {
+  if (pick('C104')) await guard('C104', async () => {
     const SEED104 = [
       '---', 'amadeus_schema: amadeus.page/4',
       'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}',
@@ -1114,12 +1118,12 @@ async function wave4(browser) {
         && addedC.length === 1 && descC?.embed && gone && !!stageC && Math.abs(stageC.x + stageC.w / 2 - atC.x) < 60 && Math.abs(stageC.y - atC.y) < 60,
       JSON.stringify({ items, picker, addedC, descC, stageC, atC, gone }))
     await p.close()
-  }
+  })
 
   // ── C105 对齐参考线(V-14)──────────────────────────────────────────────────────────
   //  修前:canvasKit 的 snapMoveToNeighbors / snapResizeToNeighbors 全仓无人调用;拖卡只有点阵吸附,两张宽度不是步长整倍数的卡
   //  右缘永远差几像素(k2 右缘 780 往左拖 37 → 点阵落 732,k1 右缘 740)。
-  if (pick('C105')) {
+  if (pick('C105')) await guard('C105', async () => {
     const SEED105 = [
       '---', 'amadeus_schema: amadeus.page/4',
       'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":260},{"ref":"k2","x":480,"y":400,"w":300}]}',
@@ -1187,7 +1191,124 @@ async function wave4(browser) {
       on0 === 'true' && off.pressed === 'false' && off.ls === '0' && off.writes === 0 && pressedAfterReload === 'false'
         && c.mid.length === 0 && c.k2?.x + c.k2?.w === 732,
       JSON.stringify({ on0, off, pressedAfterReload, c }))
-  }
+  })
+
+  // ── C106 连线能力(V-17)────────────────────────────────────────────────────────────
+  //  修前:箭头固定画在终点(无字段可改);不能改连;只能用箭头工具两击连线,不能从卡边拖出。
+  if (pick('C106')) await guard('C106', async () => {
+    const E1 = { id: 'e1', type: 'connector', from: { id: 's1' }, to: { id: 's2' } }
+    const E2 = { id: 'e2', type: 'connector', from: { id: 's2' }, to: { ref: 'k3' }, label: '旧', fromEnd: 'arrow', toEnd: 'none', note: 'future' }
+    const E3 = { id: 'e3', type: 'connector', from: { ref: 'k1' }, to: { ref: 'k3' } }
+    const CV106 = {
+      v: 1, mode: 'canvas', main: { x: 0, y: 0, w: 400 },
+      cards: [{ ref: 'k1', x: 480, y: 0, w: 300 }, { ref: 'k2', x: 480, y: 300, w: 300 }, { ref: 'k3', x: 900, y: 300, w: 300 }],
+      elements: [
+        { id: 's1', type: 'shape', shape: 'rect', x: 0, y: 300, w: 200, h: 120, text: '甲' },
+        { id: 's2', type: 'shape', shape: 'rect', x: 0, y: 600, w: 200, h: 120, text: '乙' },
+        E1, E2, E3,
+      ],
+    }
+    const seed106 = ['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${JSON.stringify(CV106)}`, '---', '', '# 连线', '', '主卡。', '',
+      ...['k1', 'k2', 'k3'].flatMap((k) => [`<!-- a ${k} -->`, '', `卡 ${k.toUpperCase()}`, '', `<!-- /a ${k} -->`, ''])].join('\n')
+    const heads = (pg, id) => pg.evaluate((id) => {
+      const svg = document.querySelector(`svg.amx-el-conn[data-el="${id}"]`)
+      if (!svg) return null
+      const d = svg.querySelector('path.amx-el-conn-core')?.getAttribute('d') ?? ''
+      const m = /^M([-\d.]+),([-\d.]+) C.* ([-\d.]+),([-\d.]+)$/.exec(d)
+      const tips = [...svg.querySelectorAll('polygon')].map((g) => g.getAttribute('points').split(' ')[0].split(',').map(Number))
+      const near = (pt, x, y) => Math.abs(pt[0] - x) < 0.01 && Math.abs(pt[1] - y) < 0.01
+      return { n: tips.length, atStart: !!m && tips.some((pt) => near(pt, +m[1], +m[2])), atEnd: !!m && tips.some((pt) => near(pt, +m[3], +m[4])) }
+    }, id)
+    const p = await open(browser, seed106)
+    await p.waitForTimeout(800)
+    const r0 = { e1: await heads(p, 'e1'), e2: await heads(p, 'e2') }
+    // a:右键 e1(两形状之间的竖线,中点 (100,510))→ 箭头一排 → 双向 / 无 / 回到缺省
+    const e1mid = await stageToClient(p, 100, 510)
+    const pickEnds = async (v) => {
+      await p.mouse.click(e1mid.x, e1mid.y, { button: 'right' })
+      await p.waitForTimeout(250)
+      const seen = await p.evaluate(() => [...document.querySelectorAll('.amx-canvas-menu .amx-end-row .amx-end-btn')].map((b) => `${b.dataset.ends}${b.getAttribute('aria-pressed') === 'true' ? '*' : ''}`))
+      await p.click(`.amx-canvas-menu .amx-end-btn[data-ends="${v}"]`)
+      await p.waitForTimeout(500)
+      return { seen, e1: elsOfCv(await cvOf(p)).e1, dom: await heads(p, 'e1') }
+    }
+    const both = await pickEnds('both')
+    const none = await pickEnds('none')
+    const back = await pickEnds('end')
+    const cvA = await cvOf(p)
+    record('C106a 两端箭头:盘上 fromEnd/toEnd 照画(起点箭头在起点);右键连线改「双向 / 无 / 指向终点」,缺省值删键、改回缺省 = 条目逐字复原,别的连线逐字不动',
+      r0.e1?.n === 1 && r0.e1.atEnd && r0.e2?.n === 1 && r0.e2.atStart && !r0.e2.atEnd
+        && both.seen.join(',') === 'end*,start,both,none' && both.e1?.fromEnd === 'arrow' && !('toEnd' in both.e1) && both.dom?.n === 2
+        && none.e1?.toEnd === 'none' && !('fromEnd' in none.e1) && none.dom?.n === 0 && none.seen.includes('both*')
+        && JSON.stringify(back.e1) === JSON.stringify(E1) && back.dom?.n === 1
+        && JSON.stringify(elsOfCv(cvA).e2) === JSON.stringify(E2) && JSON.stringify(elsOfCv(cvA).e3) === JSON.stringify(E3),
+      JSON.stringify({ r0, both, none, back }))
+
+    // b:选中 e1 → 两端把手;拖终点把手到 k2 = 改连(label / 其余字段不动),Cmd+Z 撤回;拖到空白 / 拖回起点 = 不写
+    await p.mouse.click(e1mid.x, e1mid.y)
+    await p.waitForTimeout(200)
+    const ends = await p.evaluate(() => [...document.querySelectorAll('.amx-conn-end')].map((h) => h.dataset.connEnd))
+    const dragHandle = async (to) => {
+      const h = await centerOf(p, '.amx-conn-end[data-conn-end="to"]')
+      await p.mouse.move(h.x, h.y); await p.mouse.down()
+      for (let i = 1; i <= 8; i++) await p.mouse.move(h.x + (to.x - h.x) * i / 8, h.y + (to.y - h.y) * i / 8)
+      await p.waitForTimeout(100)
+      const rubber = await p.evaluate(() => ({ preview: !!document.querySelector('.amx-el-conn.is-preview'), targets: document.querySelectorAll('.amx-conn-target').length }))
+      await p.mouse.up()
+      await p.waitForTimeout(500)
+      return rubber
+    }
+    const w0 = await p.evaluate(() => window.__upage.writes.length)
+    const blank = await blankOf(p)
+    await dragHandle(blank)
+    const afterBlank = elsOfCv(await cvOf(p)).e1
+    await p.mouse.click(e1mid.x, e1mid.y)
+    await dragHandle(await centerOf(p, '.amx-el-shape[data-el="s1"]'))
+    const afterSelf = elsOfCv(await cvOf(p)).e1
+    const w1 = await p.evaluate(() => window.__upage.writes.length)
+    await p.mouse.click(e1mid.x, e1mid.y)
+    const k2c = await centerOf(p, '.amx-ucard[data-anchor="k2"]')
+    const rubber = await dragHandle(k2c)
+    const moved = elsOfCv(await cvOf(p)).e1
+    await p.mouse.click(blank.x, blank.y)
+    await p.keyboard.press(`${MOD}+z`)
+    await p.waitForTimeout(500)
+    const undone = elsOfCv(await cvOf(p)).e1
+    record('C106b 选中连线出两端把手;拖终点把手到卡 = 改连(有橡皮筋、目标高亮,其余字段不动),Cmd+Z 撤回;落空白 / 落回起点 = 不写',
+      ends.join(',') === 'from,to' && JSON.stringify(afterBlank) === JSON.stringify(E1) && JSON.stringify(afterSelf) === JSON.stringify(E1) && w1 === w0
+        && rubber.preview && rubber.targets === 2 && JSON.stringify(moved) === JSON.stringify({ ...E1, to: { ref: 'k2' } }) && JSON.stringify(undone) === JSON.stringify(E1),
+      JSON.stringify({ ends, afterBlank, afterSelf, writes: [w0, w1], rubber, moved, undone }))
+
+    // c:选中 k1 → 四个边口圆点;拖到 k3 = 设为子节点(不多连线);松手时按住 Shift 拖到 k2 = 自由连线;拖到形状 = 自由连线;拖到空白 = 不写
+    const dragDot = async (side, to, shift = false) => {
+      await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+      await p.waitForTimeout(200)
+      const dot = await centerOf(p, `.amx-el-selbox[data-anchor="k1"] .amx-link-dot.is-${side}`)
+      await p.mouse.move(dot.x, dot.y); await p.mouse.down()
+      for (let i = 1; i <= 8; i++) await p.mouse.move(dot.x + (to.x - dot.x) * i / 8, dot.y + (to.y - dot.y) * i / 8)
+      if (shift) await p.keyboard.down('Shift')
+      await p.mouse.up()
+      if (shift) await p.keyboard.up('Shift')
+      await p.waitForTimeout(500)
+      return cvOf(p)
+    }
+    await p.mouse.click(...Object.values(await padOf(p, 'k1')))
+    await p.waitForTimeout(200)
+    const dots = await p.evaluate(() => [...document.querySelectorAll('.amx-el-selbox[data-anchor="k1"] .amx-link-dot')].map((d) => d.className.replace('amx-link-dot ', '')))
+    const nEls0 = (await cvOf(p)).elements.length
+    const cvC1 = await dragDot('e', await centerOf(p, '.amx-ucard[data-anchor="k3"]'))
+    const cvC2 = await dragDot('s', k2c, true)
+    const cvC3 = await dragDot('w', await centerOf(p, '.amx-el-shape[data-el="s2"]'))
+    const cvC4 = await dragDot('n', blank)
+    const conn = (cv, a, b) => (cv?.elements ?? []).filter((e) => e.type === 'connector' && JSON.stringify(e.from) === JSON.stringify(a) && JSON.stringify(e.to) === JSON.stringify(b))
+    await p.close()
+    record('C106c 选中卡出四个边口圆点;拖到卡 = 设为子节点(零连线条目);松手按住 Shift = 自由连线;拖到形状 = 自由连线;拖到空白 = 不写',
+      dots.join(',') === 'is-n,is-e,is-s,is-w' && cvC1?.tree?.k3 === 'k1' && cvC1.elements.length === nEls0
+        && conn(cvC2, { ref: 'k1' }, { ref: 'k2' }).length === 1 && !cvC2?.tree?.k2
+        && conn(cvC3, { ref: 'k1' }, { id: 's2' }).length === 1 && JSON.stringify(cvC4) === JSON.stringify(cvC3),
+      JSON.stringify({ dots, tree1: cvC1?.tree, n: [nEls0, cvC1?.elements.length, cvC2?.elements.length, cvC3?.elements.length], c2: conn(cvC2, { ref: 'k1' }, { ref: 'k2' }), c3: conn(cvC3, { ref: 'k1' }, { id: 's2' }) }))
+  })
+
 }
 
 async function main() {

@@ -26,7 +26,7 @@ import { NodeSelection, TextSelection, type Transaction } from '@milkdown/kit/pr
 import { closeHistory, undo as pmUndo, redo as pmRedo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse, Palette, AlignCenterVertical } from 'lucide-react'
+import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse, Palette, AlignCenterVertical, MoveRight, MoveLeft, MoveHorizontal } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
 // 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
 // dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
@@ -41,7 +41,7 @@ import {
   CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey, endOf,
   MAIN_KEY, MIN_EL, type AttachPreview, type El, type ElBox, type ElGhost, type FrameEl,
 } from './canvasElements'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, setElementColor, rawTree, setParent, childrenOf, isUnder, runEndOf, type ShapeKind } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, setElementColor, setConnectorEnds, reconnectEnd, CONN_END_DEFAULT, rawTree, setParent, childrenOf, isUnder, runEndOf, type ConnEnd, type ShapeKind } from './canvasEdit'
 import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
 import { NotePicker } from './blockLinks'
@@ -97,6 +97,11 @@ registerMessages({
   'canvasstage.color.cyan': { zh: '青色', en: 'Cyan' },
   'canvasstage.color.purple': { zh: '紫色', en: 'Purple' },
   'canvasstage.color.custom': { zh: '自定义颜色…', en: 'Custom color…' },
+  'canvasstage.ends.label': { zh: '箭头', en: 'Arrows' },
+  'canvasstage.ends.end': { zh: '箭头指向终点', en: 'Arrow at end' },
+  'canvasstage.ends.start': { zh: '箭头指向起点', en: 'Arrow at start' },
+  'canvasstage.ends.both': { zh: '双向箭头', en: 'Arrows at both ends' },
+  'canvasstage.ends.none': { zh: '无箭头', en: 'No arrows' },
 })
 
 /** 右键菜单的色板(V-08)。v = 盘上的 JSON Canvas 编码(Obsidian 同序),'' = 无色(删键)。
@@ -109,6 +114,14 @@ const COLOR_SWATCHES: Array<{ v: string; nameKey: string }> = [
   { v: '4', nameKey: 'canvasstage.color.green' },
   { v: '5', nameKey: 'canvasstage.color.cyan' },
   { v: '6', nameKey: 'canvasstage.color.purple' },
+]
+
+/** 连线两端的箭头样式(V-17,右键连线的一排按钮)。值 = 盘上的 JSON Canvas 编码;nameKey 渲染期再 t()。 */
+const END_STYLES: Array<{ id: string; from: ConnEnd; to: ConnEnd; nameKey: string; icon: React.ReactNode }> = [
+  { id: 'end', from: 'none', to: 'arrow', nameKey: 'canvasstage.ends.end', icon: <MoveRight size={13} /> },
+  { id: 'start', from: 'arrow', to: 'none', nameKey: 'canvasstage.ends.start', icon: <MoveLeft size={13} /> },
+  { id: 'both', from: 'arrow', to: 'arrow', nameKey: 'canvasstage.ends.both', icon: <MoveHorizontal size={13} /> },
+  { id: 'none', from: 'none', to: 'none', nameKey: 'canvasstage.ends.none', icon: <Minus size={13} /> },
 ]
 
 /** 低于这档正文已经不可扫读，改由恒定屏幕字号的标题/首行承担概览。 */
@@ -702,6 +715,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   useEffect(() => stopArrangeMotion, [stopArrangeMotion])
   /** 连线橡皮筋:第一击之后指针的舞台坐标 + 悬停的有效目标(渲染在 CanvasElements)。 */
   const [connPt, setConnPt] = useState<{ x: number; y: number; over: string | null } | null>(null)
+  /** 拖拽式连线(V-17:从边口圆点拖出 / 拖端点改连)的橡皮筋:from = 不动的那一端。与上面那条共用 CanvasElements 的 preview。 */
+  const [linkDrag, setLinkDrag] = useState<{ from: string; x: number; y: number; over: string | null } | null>(null)
   useEffect(() => {
     if (!connFrom) setConnPt(null)
   }, [connFrom])
@@ -1527,6 +1542,21 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     if (moved) mergePair()
   }, [writeFm, mergePair])
 
+  /** 一条「从 a 到 b」的连线意图落笔(箭头工具第二击与从边口圆点拖出共用,V-17)。2026-08-19 口径(勿破):
+   *  两端都是节点(卡 / 主卡)= 建父子(a 父 b 子,不挪位置);任一端是形状 / Frame = 自由连线;
+   *  `free`(按住 Shift)= 卡↔卡也强制自由连线。主卡是根,不认爹 —— b 是主卡时落成自由连线。 */
+  const linkNodes = useCallback((a: string, b: string, free: boolean): void => {
+    const nodeOf = (k: string): string | null => (k === MAIN_KEY ? MAIN_KEY : k.startsWith('c:') ? keyId(k) : null)
+    const pa = nodeOf(a)
+    const ch = nodeOf(b)
+    if (pa && ch && ch !== MAIN_KEY && !free) setNodeParent(ch, pa)
+    else mutate((l) => addConnector(l, a, b))
+  }, [setNodeParent, mutate])
+  /** 连线箭头样式(V-17)。缺省值删键,见 canvasEdit.setConnectorEnds。 */
+  const setEnds = useCallback((ids: string[], from: ConnEnd, to: ConnEnd): void => {
+    mutate((l) => setConnectorEnds(l, new Set(ids), { fromEnd: from, toEnd: to }))
+  }, [mutate])
+
   /** 新形状:id 必须在 mutate 的闭包里取(现读现算,并发写不会撞号)。
    *  `box` 给了就是**拖出来的尺寸**(x/y 是左上角),没给就是点击建(x/y 当中心、取默认尺寸)。 */
   const addShapeAt = useCallback((kind: ShapeKind, x: number, y: number, box?: ElBox): void => {
@@ -2108,8 +2138,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   // 同样**只依赖 active**(理由见上面 fitRef 的注释)。这里的代价更重:宿主每渲染一次就把整个
   // effect 拆了重装,进行中的那次拖拽(闭包里的 drag 局部量)当场归零 —— 松手时 onUp 拿到 null,
   // 卡片弹回原位、事务不落。回调一律经 ref 现读。
-  const actRef = useRef({ mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, writeClip, pastePayload })
-  actRef.current = { mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, writeClip, pastePayload }
+  const actRef = useRef({ mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, writeClip, pastePayload, linkNodes })
+  actRef.current = { mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, writeClip, pastePayload, linkNodes }
 
   /** 编辑导致卡片换行/增高时，把相撞的其它卡推到最近空位；当前编辑卡是固定锚。自动布局不进
    *  用户撤销栈，否则打一行字会混进一笔“卡片自己跑开”的几何撤销。 */
@@ -2398,6 +2428,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       | { kind: 'size'; id: string; corner: string; b0: ElBox; dx: number; dy: number; dw: number; dh: number; live?: boolean }
       | { kind: 'marquee'; x0: number; y0: number; additive: boolean; base: string[]; live?: boolean }
       | { kind: 'create'; tool: Tool; x0: number; y0: number; x1: number; y1: number; live?: boolean }
+      // V-17:从边口圆点拖出新连线(from = 起点选中键)/ 拖选中连线的一端改连(fixed = 不动的那一端)
+      | { kind: 'link'; from: string; x0: number; y0: number; live?: boolean }
+      | { kind: 'reconnect'; id: string; end: 'from' | 'to'; fixed: string; x0: number; y0: number; live?: boolean }
     let drag: Drag | null = null
     // 指针捕获拿不到就算了(合成事件、pointerId 已失效、外设拔掉都会抛)——**绝不能让它把
     // 后面的拖拽状态一起带走**:这一句抛出去的话,onDown 里它之后的语句全不执行。
@@ -2421,6 +2454,20 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       if (mb) out.push(mb)
       for (const [id, b] of shapeBoxes(safeElements(cbRef.current.elements), null)) if (!skipEls.has(id)) out.push(b)
       return out
+    }
+
+    /** 指针下的可连对象(拖拽式连线的悬停目标与落点,V-17)。⚠️ 按坐标现场取:拖拽期有指针捕获,事件 target 恒是舞台。
+     *  形状 / Frame 标题条 > 卡片 > 主卡正文;选中浮层上的尺寸热区归它那张卡(热区骑在卡边上,落在边上也算落在卡上)。 */
+    const keyAt = (x: number, y: number): string | null => {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null
+      if (!el || !host.contains(el)) return null
+      const shape = el.closest<HTMLElement>(EL_HIT)
+      if (shape?.dataset.el) return elKey(shape.dataset.el)
+      const grip = el.closest<HTMLElement>('[data-card-grip]')
+      if (grip?.dataset.cardGrip) return grip.dataset.cardGrip === MAIN_KEY ? MAIN_KEY : cardKey(grip.dataset.cardGrip)
+      const card = el.closest<HTMLElement>('.amx-ucard')
+      if (card?.dataset.anchor) return cardKey(card.dataset.anchor)
+      return el.closest('.ProseMirror') ? MAIN_KEY : null
     }
 
     /** 舞台空白(不含卡片正文、不含形状、不含浮层 chrome)。 */
@@ -2679,6 +2726,31 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         return
       }
 
+      // ── 拖拽式连线(V-17,Obsidian 同款)────────────────────────────────────────────────
+      // 边口圆点 = 拖出新连线;选中连线的端点把手 = 拖到别的对象上改连。两种把手都住在元素层(只在 select 工具下出,
+      // CSS 收起其余工具),底下的命中分支一个都认不出它们,会一路掉到「点空白」= 清选中 + 起框选 —— 必须在这里先认领。
+      const linkEl = t === 'select' ? target.closest<HTMLElement>('[data-link-from]') : null
+      if (linkEl?.dataset.linkFrom) {
+        e.preventDefault()
+        focusStage()
+        drag = { kind: 'link', from: linkEl.dataset.linkFrom, x0: at.x, y0: at.y }
+        capture(e.pointerId)
+        return
+      }
+      const endEl = t === 'select' ? target.closest<HTMLElement>('[data-conn-end]') : null
+      if (endEl?.dataset.connEnd && endEl.dataset.el) {
+        const conn = safeElements(cbRef.current.elements).find((x) => x.id === endEl.dataset.el)
+        const end = endEl.dataset.connEnd === 'from' ? 'from' : 'to'
+        const fixed = conn?.kind === 'connector' ? endKey(end === 'from' ? conn.to : conn.from) : null
+        e.preventDefault()
+        focusStage()
+        if (conn && fixed) {
+          drag = { kind: 'reconnect', id: conn.id, end, fixed, x0: at.x, y0: at.y }
+          capture(e.pointerId)
+        }
+        return
+      }
+
       // ── 卡内可交互控件:照常可点(用户 2026-08-20 实报「画布里点图片的 `</>` 没反应」)────
       // ⚠️ 根因不在按钮,在**指针事件**:pointerdown 一旦 preventDefault,浏览器就不再补发
       //    mousedown/click(兼容鼠标事件被抑制),再加上舞台 setPointerCapture 会把随后的 click
@@ -2788,11 +2860,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
           // ⚠️ 按住 Shift 落第二击 = 强制画**自由连线**(Codex 08-19 深夜 medium:卡↔卡的关联连线是
           //    既有能力,升级成层级不该把它整条砍掉;数据层与渲染层一直支持卡锚端点)。
           //    用 Shift 不用 Alt —— Alt 在 onDown 顶上就被平移分支吃掉了。
-          const nodeOf = (k: string): string | null => (k === MAIN_KEY ? MAIN_KEY : k.startsWith('c:') ? keyId(k) : null)
-          const pa = nodeOf(from)
-          const ch = nodeOf(ck)
-          if (pa && ch && ch !== MAIN_KEY && !e.shiftKey) actRef.current.setNodeParent(ch, pa) // 主卡是根,不认爹
-          else actRef.current.mutate((l) => addConnector(l, from, ck))
+          actRef.current.linkNodes(from, ck, e.shiftKey) // 落笔规则单源(与从边口圆点拖出同一份,V-17)
           setConnFrom(null)
           setTool('select')
         }
@@ -3021,6 +3089,14 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         return
       }
       const s = toStage(e.clientX, e.clientY)
+      // 拖拽式连线(V-17):只画橡皮筋 + 悬停目标高亮,落笔在松手。
+      if (drag.kind === 'link' || drag.kind === 'reconnect') {
+        if (Math.abs(s.x - drag.x0) > slop || Math.abs(s.y - drag.y0) > slop) drag.live = true
+        const from = drag.kind === 'link' ? drag.from : drag.fixed
+        const over = keyAt(e.clientX, e.clientY)
+        setLinkDrag({ from, x: s.x, y: s.y, over: over === from ? null : over })
+        return
+      }
       // 过程只动 CSS / 渲染层幽灵:PM 事务与 fm 写入都留到松手那一笔(§5 防 history 灌水)。
       // 卡片的过程通道是 dragCss(舞台样式表),见 effect 顶部的告警 —— PM 的 DOM 一个属性都不碰。
       if (drag.kind === 'card-size') {
@@ -3158,6 +3234,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       setMarquee(null)
       setAttach(null)
       setGuides(null)
+      setLinkDrag(null)
     }
 
     const onUp = (e: PointerEvent): void => {
@@ -3186,6 +3263,18 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         // 触屏两段式的第一段:落在对象上但没真拖动 = 一次点选(见 onDown 的 touchKey)。
         // 阈值用**屏幕像素**的 TOUCH_SLOP —— pan 的 x0/y0 就是 clientX/Y,不过舞台的 z。
         if (d.tapKey && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < TOUCH_SLOP) setSel([d.tapKey])
+        return
+      }
+      // 拖拽式连线(V-17)落笔:落在空白 / 落回自己 / 没拖动 = 取消,一个字节不写。新连线按 linkNodes 的口径
+      // (Shift 在**松手那一刻**读:卡↔卡强制自由连线);改连只换那一端(判重 / 自连由 reconnectEnd 拒)。
+      if (d.kind === 'link' || d.kind === 'reconnect') {
+        clearVisuals(d)
+        if (!d.live) return
+        const from = d.kind === 'link' ? d.from : d.fixed
+        const to = keyAt(e.clientX, e.clientY)
+        if (!to || to === from) return
+        if (d.kind === 'reconnect') actRef.current.mutate((l) => reconnectEnd(l, d.id, d.end, to))
+        else actRef.current.linkNodes(from, to, e.shiftKey)
         return
       }
       // 建形状/Frame:拖出了框就用框,没拖动(或框比 MIN_EL 还小)回落成默认尺寸的一击建 ——
@@ -3881,6 +3970,18 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     return colorKeys.every((k) => of(k) === first) ? first : null
   })()
   const menuHex = menuColor && menuColor.startsWith('#') ? menuColor : null
+  /** 右键连线时箭头样式作用的那批连线(选中集合里的连线;没选中就是右键那一条)与它们此刻一致的样式(V-17)。 */
+  const endIds = menuConn ? (sel.length ? sel : [menu!.key!]).filter((k) => k.startsWith('e:')).map(keyId)
+    .filter((id) => els.some((x) => x.kind === 'connector' && x.id === id)) : []
+  const menuEnds = (() => {
+    const styles = endIds.map((id) => {
+      const c = els.find((x) => x.kind === 'connector' && x.id === id)
+      const f = c?.kind === 'connector' ? c.fromEnd ?? CONN_END_DEFAULT.fromEnd : CONN_END_DEFAULT.fromEnd
+      const to = c?.kind === 'connector' ? c.toEnd ?? CONN_END_DEFAULT.toEnd : CONN_END_DEFAULT.toEnd
+      return END_STYLES.find((o) => o.from === f && o.to === to)?.id ?? null
+    })
+    return styles.length && styles.every((x) => x === styles[0]) ? styles[0] : null
+  })()
 
   // ⚠️ 文档模式下**不能**换成 `<>{children}</>`。那样这一槽位的元素类型在 Fragment 与 div 之间跳变,
   //    React 判定为不同类型 → 整棵子树卸载重挂 → **MilkdownProvider 重建,PM 的撤销栈当场销毁**:
@@ -3933,7 +4034,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
             attach={attach}
             overviewScale={overviewEnabled && vp.z <= overviewZ ? vp.z : null}
             mainAutoHeight={!(typeof main.h === 'number' && main.h > 0)}
-            preview={connFrom && connPt ? { from: connFrom, x: connPt.x, y: connPt.y, over: connPt.over } : null}
+            preview={linkDrag ?? (connFrom && connPt ? { from: connFrom, x: connPt.x, y: connPt.y, over: connPt.over } : null)}
             guides={guides}
           />
         ) : null}
@@ -4059,6 +4160,28 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
                           }}
                         />
                       </label>
+                    </div>
+                    <div className="ctx-separator" />
+                  </>
+                )}
+                {/* 连线两端的箭头(V-17):对选中的全部连线生效;大家一致时标出当前项。 */}
+                {menuConn && endIds.length > 0 && (
+                  <>
+                    <div className="amx-color-row amx-end-row" role="group" aria-label={t('canvasstage.ends.label')}>
+                      {END_STYLES.map((o) => (
+                        <button
+                          key={o.id}
+                          type="button"
+                          className="amx-end-btn"
+                          data-ends={o.id}
+                          title={t(o.nameKey)}
+                          aria-label={t(o.nameKey)}
+                          aria-pressed={menuEnds === o.id}
+                          onClick={() => { const ids = endIds; setMenu(null); setEnds(ids, o.from, o.to); hostRef.current?.focus({ preventScroll: true }) }}
+                        >
+                          {o.icon}
+                        </button>
+                      ))}
                     </div>
                     <div className="ctx-separator" />
                   </>
