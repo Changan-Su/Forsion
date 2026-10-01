@@ -298,20 +298,28 @@ export function registerPageHistoryHandlers(d: PageHistoryHandlerDeps): void {
     if (typeof base !== 'string') throw new Error('Missing base')
     const root = vault.getRoot()
     if (!root) throw new Error('No vault is open')
-    return withPathLock(pagePath, async () => {
-      let cur: string
+    /** 盘上现文:同 writeTextFile 的 CAS,只有 ENOENT 算「不在」(null,不按旧路径重建);其余读错原样抛。 */
+    const readCur = async (): Promise<string | null> => {
       try {
-        cur = await fs.readFile(vault.absPath(pagePath), 'utf8')
+        return await fs.readFile(vault.absPath(pagePath), 'utf8')
       } catch (err) {
-        // 同 writeTextFile 的 CAS:只有 ENOENT 算「不在」(不按旧路径重建);其余读错原样抛
         if ((err as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw err
-        return { ok: false as const, current: null }
+        return null
       }
+    }
+    return withPathLock(pagePath, async () => {
+      const cur = await readCur()
+      if (cur == null) return { ok: false as const, current: null }
       if (textFingerprint(cur) !== base) return { ok: false as const, current: cur }
       const text = await history.read(root, pagePath, id)
       if (text == null) throw new Error('This version is no longer available')
       if (text === cur) return { ok: true as const }
       await history.snapshot(root, pagePath, cur, { force: true }) // 补不成 → 抛 → 不恢复(没留底就覆盖不可逆)
+      // 读历史 + 补快照要排队落盘,期间外部程序(引擎 / 外部编辑器 / 云同步,都不在本进程的路径锁里)可能改了这篇:
+      // 写回前**再比一次**,把窗口收窄到与普通 CAS 写同级(Codex 复核 C-20 #1)。对不上 = 不写,按 CAS 被拒交回现文。
+      const again = await readCur()
+      if (again == null) return { ok: false as const, current: null }
+      if (textFingerprint(again) !== base) return { ok: false as const, current: again }
       await writeVaultText(vault, index, pagePath, text)
       if (e != null) d.notifyPeers?.(e, IPC.externalChange, pagePath) // 别的窗口开着这篇:同 writeTextFile 的跨窗回灌
       return { ok: true as const }

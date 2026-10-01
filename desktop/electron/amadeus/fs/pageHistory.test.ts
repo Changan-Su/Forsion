@@ -259,6 +259,22 @@ describe('恢复(restorePageHistory)', () => {
   })
 })
 
+describe('恢复:补快照期间被外部改写(Codex 复核 C-20 #1)', () => {
+  it('写回前再比一次 base:快照落盘那段时间里外部程序改了文件 → 不写、交回现文', async () => {
+    let t: Awaited<ReturnType<typeof setup>>
+    const racing: PageHistoryT = {
+      // 模拟「读历史 + 补快照」那段 await 里,不受进程内路径锁约束的外部写者(引擎 / 外部编辑器)改了文件
+      snapshot: async (_v, _r, _t, o) => { if (o?.force) await t.put('a.md', 'external edit'); return true },
+      list: async () => [], read: async () => 'old version', move: async () => {}, settle: async () => {},
+    }
+    t = await setup(racing)
+    await t.put('a.md', 'cur')
+    expect(await t.call(IPC.restorePageHistory, { sender: 'w1' }, 'a.md', 'abc-0123abcd', textFingerprint('cur'))).toEqual({ ok: false, current: 'external edit' })
+    expect(await t.disk('a.md')).toBe('external edit')
+    expect(t.peers).toEqual([])
+  })
+})
+
 describe('改名接入(propagateRenames)', () => {
   it('renamePageFile / movePage 之后历史在新路径下', async () => {
     const t = await setup()
