@@ -1456,10 +1456,12 @@ try {
     const ev3 = await run(`live-plugin-back-${Date.now()}`, ask);
     const called = (ev) => ev.toolCalls.includes('live_probe_marker');
     const said = (ev) => ev.content.includes(PLUGIN_MARKER);
+    // 工具真执行成功、结果里就是标记 —— 只看「调过 + 回答里有标记」不够:工具报错时模型可能去读夹具源码抄出标记(Codex 10-02)
+    const ran = (ev) => ev.toolResults.some((r) => r.name === 'live_probe_marker' && !r.isError && r.full.includes(PLUGIN_MARKER));
     const err = ev1.error || ev2.error || ev3.error;
-    const ok = !err && !!s0?.active && called(ev1) && said(ev1) && s1?.active === false && !called(ev2) && !said(ev2)
-      && !!s2?.active && called(ev3) && said(ev3);
-    const leg = (name, s, ev) => `${name}:active=${s?.active} 工具 ${ev.toolCalls.join(',') || '无'} 标记${said(ev) ? '命中' : '未命中'}`;
+    const ok = !err && !!s0?.active && called(ev1) && ran(ev1) && said(ev1) && s1?.active === false && !called(ev2) && !said(ev2)
+      && !!s2?.active && called(ev3) && ran(ev3) && said(ev3);
+    const leg = (name, s, ev) => `${name}:active=${s?.active} 工具 ${ev.toolCalls.join(',') || '无'}${ran(ev) ? '(执行成功)' : ''} 标记${said(ev) ? '命中' : '未命中'}`;
     return {
       ok, detail: err || [leg('开着', s0, ev1), leg('停用', s1, ev2), leg('再启用', s2, ev3)].join(';'),
       output: `开着:${ev1.content}\n停用:${ev2.content}\n再启用:${ev3.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
