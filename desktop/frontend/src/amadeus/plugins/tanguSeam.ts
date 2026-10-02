@@ -83,6 +83,9 @@ export interface TanguStartChatOptions {
   /** true = 直接送出(只对**插件自己捆绑包里**的 Agent 生效,宿主在 pluginStore 那层把关);
    *  false / 不给 = 只预填进输入框,由用户按回车。 */
   send?: boolean
+  /** Explicit Chat Box selection; applied after Agent defaults and before draft/send. */
+  modelId?: string
+  thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel']
   /** 新会话的工作目录:**本机绝对路径**(pluginStore 已把插件给的库相对路径解析、钳在库内)。 */
   cwd?: string
   /** 宿主内部:调用方(pluginStore)的活性闸。探针在每个 await 之后、任何副作用之前复查,

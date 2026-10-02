@@ -2,7 +2,7 @@
  * Market 安装解压单测:重点是**安全边界**(路径穿越拒绝)+ GitHub source zip 的剥顶层。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -131,6 +131,13 @@ describe('safeEntryPath', () => {
 })
 
 describe('extractZipToDir', () => {
+  it('preserves helper executable permissions without privilege bits', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'market-mode-'))
+    const zip = new JSZip().file('helper', '#!/bin/sh\nexit 0', { unixPermissions: 0o104755 })
+    await extractZipToDir(await zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' }), dir)
+    if (process.platform !== 'win32') expect(statSync(join(dir, 'helper')).mode & 0o7777).toBe(0o755)
+    await import('node:fs/promises').then((fs) => fs.rm(dir, { recursive: true, force: true }))
+  })
   it('正常解压 + 剥 GitHub source zip 顶层', async () => {
     const zip = new JSZip()
     zip.file('owner-repo-abc123/SKILL.md', '# hi')

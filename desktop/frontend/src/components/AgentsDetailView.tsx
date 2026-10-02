@@ -7,11 +7,13 @@ import { History, Sparkles, RefreshCw, Settings } from 'lucide-react'
 import { getHistorianActivity } from '../services/backendService'
 import type { HistorianActivityItem, SessionRecord, TanguDesktopConfig } from '../types'
 import { useApp } from '../stores/appStore'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { MuseView } from './MuseView'
 import { homeTarget } from '../services/engine/targets'
 
+registerMessages({ 'special.action.icon_updated': { zh: '更新图标', en: 'icon updated' } })
 const ACTION_KEY: Record<string, string> = {
+  icon_updated: 'special.action.icon_updated',
   title_updated: 'special.action.title_updated',
   log_appended: 'special.action.log_appended',
   memory_appended: 'special.action.memory_appended',

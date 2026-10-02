@@ -208,9 +208,9 @@ export function MobileRoot() {
         )}
       </AnimatePresence>
 
-      {/* 首启引导:移动端只走通用步(欢迎/外观/完成)—— 连接、模型、工作区、环境检测的落盘全靠
-          window.tangu 的 host 方法,mobileShim 没有,步骤序在 OnboardingWizard.stepOrder 里已收缩。
-          onFinish 不重连:移动端没有 connect 步,配置在引导里不会变。 */}
+      {/* 首启引导:移动端走通用步(欢迎/后台 Agent/外观/完成),后台开关即时写入引擎 API。
+          连接、模型、默认目录和环境检测依赖本机 host,步骤序按 OnboardingWizard.stepOrder 收缩。
+          onFinish 不重连:后台开关已保存,引导不改变移动端的连接配置。 */}
       <AnimatePresence>
         {a.onboarding && (
           <motion.div

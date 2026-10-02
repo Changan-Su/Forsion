@@ -5,6 +5,8 @@ import type { ToolContext } from '../tools/registry.js';
 
 const activeDelegates = new Set<string>();
 export const isDelegateActive = (sessionId: string): boolean => activeDelegates.has(sessionId);
+/** Read-only shutdown inventory; delegates have no independent agent_run row. */
+export const activeDelegateCount = (): number => activeDelegates.size;
 
 /** Persist the existing delegate loop without changing its tools, approvals or execution ownership. */
 export async function createDelegateTranscript(id: string, parent: ToolContext, title: string, modelId: string, task: string, config: Record<string, unknown>) {

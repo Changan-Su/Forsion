@@ -1,10 +1,11 @@
 /**
  * 远程活动 + 急停 + 解锁(设备能力 MCP 方案 P1 · K2 §3.5,方案 §6.5)。**本机专用**:桌面主进程带本机引擎令牌调。
  *   GET  /agent/remote/activity           ActivitySnapshot(在飞 run 分类 + 待批计数 + 非本机后台进程 + 锁状态)
+ *   GET  /agent/remote/restart-status     本机退出清单(全部运行/排队任务 + 子任务 + 后台进程)
  *   GET  /agent/remote/activity/events    SSE:连上立即一帧全量 snapshot,之后每次变更(去抖 200ms)再发全量;15s 一次 `: hb`
  *   POST /agent/remote/estop {source}     急停:上闩 → 中止全部非本机 run(reason:'remote_estop')→ 杀其后台进程 → 撤回远端批准的 Muse 条目
  *   POST /agent/remote/unlock             清闩:只在主进程已写好解锁(锁文件可读且 lock===null)时成立,否则 409
- * 四条都 deny-remote(unitWeb 允许清单之外的第二道:带 x-forsion-remote 一律 403);hostExec=false(云端 worker)一律 404。
+ * 全部 deny-remote(unitWeb 允许清单之外的第二道:带 x-forsion-remote 一律 403);hostExec=false(云端 worker)一律 404。
  * estop 幂等、与锁状态无关、**恒上闩**。活动快照只列已 dispatch 的 run:排在本机 run 后面(sessionQueue)与刚起还没登记的非本机 run
  * 由 abortUnregisteredNonLocalRuns 按 run 行现分类一并中止 —— 只靠扼流点的话,用户先解锁它们就会在急停之后照跑(独立评审 P1)。
  */
@@ -15,7 +16,9 @@ import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { abortRun, abortUnregisteredNonLocalRuns, waitForRunSettlement } from '../services/agentLoop.js';
 import { activitySnapshot, notifyActivity, onActivityChange, type RunCategory } from '../services/remoteActivity.js';
 import { clearRemoteLatch, latchRemoteLock, remoteLatchId, remoteLocked, remoteLockState } from '../services/remoteLock.js';
-import { killProcessesWhere } from '../tools/processRegistry.js';
+import { killProcessesWhere, runningProcessCount } from '../tools/processRegistry.js';
+import { listPendingRunsForRecovery } from '../services/runStore.js';
+import { activeDelegateCount } from '../services/delegateTranscript.js';
 import { revertRemoteMuseEntries } from '../services/remoteCreated.js';
 
 const router = Router();
@@ -48,6 +51,17 @@ function localOnly(req: any, res: any): boolean {
 router.get('/agent/remote/activity', authMiddleware, (req, res) => {
   if (!localOnly(req, res)) return;
   res.json(activitySnapshot());
+});
+
+// Restart must also see queued work, delegates and local background processes absent from the remote activity list.
+router.get('/agent/remote/restart-status', authMiddleware, async (req, res) => {
+  if (!localOnly(req, res)) return;
+  try {
+    const runs = await listPendingRunsForRecovery();
+    res.json({ tasks: runs.length + activeDelegateCount(), processes: runningProcessCount() });
+  } catch {
+    res.status(503).json({ detail: 'Task status unavailable' });
+  }
 });
 
 router.get('/agent/remote/activity/events', authMiddleware, (req, res) => {

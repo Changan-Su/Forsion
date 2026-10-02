@@ -3,7 +3,7 @@
  * 纯逻辑(只依赖 jszip + fs/path,不 import electron),便于单测路径穿越 / 剥顶层。
  */
 import JSZip from 'jszip'
-import { mkdir, writeFile, readFile, readdir } from 'fs/promises'
+import { mkdir, writeFile, readFile, readdir, chmod } from 'fs/promises'
 import { join, dirname, relative, isAbsolute } from 'path'
 
 /** type → ~/.forsion 下的子目录(join 会展开嵌套)。引擎域装 tangu/;desktop 域留顶层。 */
@@ -185,6 +185,10 @@ export async function extractZipToDir(zipBuffer: Buffer, destRoot: string, manif
     const out = join(destRoot, rel)
     await mkdir(dirname(out), { recursive: true })
     await writeFile(out, Buffer.from(await f.async('arraybuffer')))
+    // Fresh update directories must retain helper executable bits from ZIP/npm archives.
+    // Only ordinary permission bits are copied; archive setuid/setgid bits never survive.
+    const mode = typeof f.unixPermissions === 'string' ? parseInt(f.unixPermissions, 8) : f.unixPermissions
+    if (typeof mode === 'number' && Number.isFinite(mode)) await chmod(out, mode & 0o777)
     n++
   }
   if (n === 0) throw new Error('压缩包为空或无有效文件')
@@ -240,7 +244,7 @@ function hostOf(url: string): string {
   try { return new URL(url).host } catch { return url.slice(0, 60) }
 }
 
-const ZIP_MAGIC: readonly number[] = [0x50, 0x4b]
+export const ZIP_MAGIC: readonly number[] = [0x50, 0x4b]
 /** gzip 魔数:npm tarball(.tgz)用,见 builtinUpdates.ts。 */
 export const GZIP_MAGIC: readonly number[] = [0x1f, 0x8b]
 

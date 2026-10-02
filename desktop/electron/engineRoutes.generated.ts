@@ -139,6 +139,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/remote/activity', access: 'deny-remote', src: 'routes/remote.ts', why: 'in-flight run registry for the host main process (tray / keep-awake)' },
   { method: 'GET', path: '/agent/remote/activity/events', access: 'deny-remote', src: 'routes/remote.ts', why: 'in-flight run registry feed for the host main process' },
   { method: 'POST', path: '/agent/remote/estop', access: 'deny-remote', src: 'routes/remote.ts', why: 'emergency stop is a host-only action (design §6.5)' },
+  { method: 'GET', path: '/agent/remote/restart-status', access: 'deny-remote', src: 'routes/remote.ts', why: 'host-only exit checklist (running tasks / background processes) before restarting to update' },
   { method: 'POST', path: '/agent/remote/unlock', access: 'deny-remote', src: 'routes/remote.ts', why: 'unlocking remote access needs local system auth on the host (design §6.1, D13)' },
   { method: 'GET', path: '/agent/runs', access: 'allow', src: 'routes/runs.ts', why: 'list runs' },
   { method: 'POST', path: '/agent/runs', access: 'allow', src: 'routes/runs.ts', why: 'start a run (field / approval-mode clamping is engine-side, P0 ④)' },

@@ -22,6 +22,7 @@ import { ChangelogEntries } from '../views/ChangelogView'
 import { track } from '../achievements/store'
 import { applyUiFonts, readFont, writeFont } from '../uiFont'
 import { OnboardingModelChoice } from './OnboardingModelChoice'
+import { OnboardingBackgroundAgents } from './OnboardingBackgroundAgents'
 import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
 import './onboarding.css'
@@ -38,13 +39,20 @@ export const likelyMainlandChina = (): boolean => {
 export const ONBOARDING_DISMISS_KEY = 'forsion_tangu_onboarding_done'
 export const ONBOARDING_VERSION_KEY = 'forsion_tangu_onboarding_version'
 export const SUB_PROVIDER_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI · Grok' }
-type Step = 'welcome' | 'connect' | 'model' | 'theme' | 'workspace' | 'env' | 'permissions' | 'done'
+type Step = 'welcome' | 'connect' | 'model' | 'background' | 'theme' | 'workspace' | 'env' | 'permissions' | 'done'
+// Read the host connection at step entry, after login/model changes have been saved.
+const onboardingTarget = async () => {
+  if (!window.tangu?.getConfig) throw new Error('Host unavailable')
+  const c = await window.tangu.getConfig()
+  return connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
+}
 const permissionSets: Record<'computer' | 'media', DesktopPermissionId[]> = {
   computer: ['computerAccessibility', 'computerScreen'], media: ['microphone', 'camera', 'screen'],
 }
 const stepOrder = (): Step[] => {
   const steps: Step[] = PRODUCT.agentBackend && !!window.tangu?.envCheck
-    ? ['welcome', 'connect', 'model', 'theme', 'workspace', 'env', 'done'] : ['welcome', 'theme', 'done']
+    ? ['welcome', 'connect', 'model', 'background', 'theme', 'workspace', 'env', 'done']
+    : PRODUCT.agentBackend && !!window.tangu?.getConfig ? ['welcome', 'background', 'theme', 'done'] : ['welcome', 'theme', 'done']
   if (hasDesktopPermissions()) steps.splice(steps.indexOf('done'), 0, 'permissions')
   return steps
 }
@@ -62,6 +70,7 @@ export const OnboardingWizard: React.FC<{
   const [permissionTab, setPermissionTab] = useState<'computer' | 'media'>('computer')
   const [computerAvailable, setComputerAvailable] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [backgroundSaving, setBackgroundSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const titleRef = useRef<HTMLHeadingElement>(null)
   const changelogRef = useRef<HTMLDialogElement>(null)
@@ -263,7 +272,7 @@ export const OnboardingWizard: React.FC<{
     } finally { setSaving(false) }
   }
   const connectReady = loggedIn || byokSaved || subLoggedIn
-  const iconFor = { connect: Cloud, model: Bot, theme: Palette, workspace: FolderOpen, env: Wrench, permissions: ShieldCheck, done: Check }
+  const iconFor = { connect: Cloud, model: Bot, background: Sparkles, theme: Palette, workspace: FolderOpen, env: Wrench, permissions: ShieldCheck, done: Check }
   const title = step === 'welcome' ? t('onboarding.guide.intro') : step === 'done' ? t('onboarding.guide.doneTitle')
     : step === 'permissions' ? t('desktopPermissions.title') : t(`onboarding.step.${step}.title`)
   const description = step === 'welcome' ? t('onboarding.guide.welcome') : step === 'done' ? t('onboarding.guide.doneBody')
@@ -425,6 +434,7 @@ export const OnboardingWizard: React.FC<{
               <button className="btn ghost" onClick={() => void loadStepModels()}><RefreshCw size={14} />{t('onboarding.model.refresh')}</button></div>
           </div> : !modelsLoading && models && <OnboardingModelChoice models={models} value={chosenModel || ''} onChange={setChosenModel} />}
         </>}
+        {step === 'background' && <OnboardingBackgroundAgents resolveTarget={onboardingTarget} onBusyChange={setBackgroundSaving} />}
         {step === 'theme' && <div className="ob-appearance-layout">
           <div className="ob-appearance-controls">
             <div className="seg ob-sections" aria-label={t('onboarding.guide.theme')}>
@@ -639,11 +649,11 @@ export const OnboardingWizard: React.FC<{
       <footer className="ob-footer">
         {saveError && <div className="ob-save-error" role="alert">{saveError}</div>}
         <div className="ob-footer-row">
-          {stepIdx > 0 ? <button className="btn ghost" disabled={saving || mirrorSaving} onClick={() => setStep(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
+          {stepIdx > 0 ? <button className="btn ghost" disabled={saving || mirrorSaving || backgroundSaving} onClick={() => setStep(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
             : <button className="btn ghost" onClick={() => setShowChangelog(true)}><FileText size={14} />{t('onboarding.welcome.viewChangelog')}</button>}
           <span className="ob-footer-hint">{t('onboarding.guide.changeLater')}</span>
-          {step !== 'done' && <button className="btn ghost" disabled={saving || mirrorSaving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
-          <button className="btn primary" disabled={saving || mirrorSaving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
+          {step !== 'done' && <button className="btn ghost" disabled={saving || mirrorSaving || backgroundSaving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
+          <button className="btn primary" disabled={saving || mirrorSaving || backgroundSaving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
             {t(step === 'welcome' ? 'onboarding.welcome.continue' : step === 'done' ? 'onboarding.nav.start' : step === 'connect' && !connectReady ? 'onboarding.connect.skipForNow' : 'onboarding.nav.next')}
             {saving ? <Loader2 size={15} className="spin" /> : <ArrowRight size={15} />}
           </button>

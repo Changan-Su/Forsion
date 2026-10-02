@@ -10,17 +10,20 @@ import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView, NodeView, ViewMutationRecord } from '@milkdown/kit/prose/view'
-import { common, createLowlight } from 'lowlight'
 import { currentLocale, registerMessages, translate } from '../../../i18n'
 import { isShellLang, runInTerminal, stripPrompt } from '../../../builtins/runCommand'
 import { parseButtonBlock } from '../button/format'
 import { codeAutoPairBackspace, codeAutoPairInput } from './codeAutoPair'
+import { CODE_LANGUAGES, highlightCode, isPlainCodeLanguage, type CodeHighlight } from './codeHighlight'
+export { codeHighlightRuns } from './codeHighlight'
 
 /** 工具条文案。⚠️ 按钮字面**必须短**(和中文的两字一样):工具条绝对定位盖在代码块右上,
  *  英文写长了(实测 "Line numbers"/"Collapse" 一套 375px)会盖住短代码块的水平中心,点进去
  *  落到 select 上而不是代码里 —— e2e T42「代码块 Tab → 行首两空格」就是这么红的。完整说明放 title。 */
 registerMessages({
   'amxcode.langTitle': { zh: '语言', en: 'Language' },
+  'amxcode.auto': { zh: '自动', en: 'Auto' },
+  'amxcode.autoDetected': { zh: '自动 · {language}', en: 'Auto · {language}' },
   'amxcode.plainText': { zh: '纯文本', en: 'Plain text' },
   'amxcode.copy': { zh: '复制', en: 'Copy' },
   'amxcode.copyTitle': { zh: '复制代码', en: 'Copy code' },
@@ -38,53 +41,15 @@ registerMessages({
   'amxcode.collapseTitle': { zh: '折叠代码块（限高 8 行，视图态）', en: 'Fold the code block (8-line limit, view only)' },
 })
 
-const lowlight = createLowlight(common)
-
-/** 语言菜单:常用置顶,其余字典序;'' = 纯文本。 */
-const TOP = ['javascript', 'typescript', 'python', 'bash', 'json', 'html', 'css', 'sql', 'java', 'go', 'rust', 'c', 'cpp', 'yaml', 'markdown', 'diff']
-const LANGS: string[] = [...TOP, ...lowlight.listLanguages().filter((l) => !TOP.includes(l)).sort()]
-
-interface TokenRange {
-  from: number
-  to: number
-  cls: string
-}
-
-interface HastText { type: 'text'; value: string }
-interface HastElement { type: 'element'; children?: HastAny[]; properties?: { className?: string[] } }
-type HastAny = HastText | HastElement
-
-/** lowlight 实际跑了几次(check:editorperf 的 P3 读它:块外打字必须是 0 次,见 remapDecos)。 */
-let highlightRuns = 0
-export function codeHighlightRuns(): number {
-  return highlightRuns
-}
-
-/** hast 树 → 按文本偏移的 class 区间(不认识的语言/解析失败 = 无高亮,绝不炸)。 */
-function tokenRanges(code: string, lang: string): TokenRange[] {
-  if (!code || !lang) return []
-  let children: HastAny[]
-  try {
-    if (!lowlight.registered(lang)) return []
-    highlightRuns++
-    children = lowlight.highlight(lang, code).children as HastAny[]
-  } catch {
-    return []
+/** PM 节点不可变：装饰与 NodeView 共用一次识别；选区/块外输入不再识别未改的块。 */
+const highlights = new WeakMap<ProseNode, CodeHighlight>()
+function nodeHighlight(node: ProseNode): CodeHighlight {
+  let result = highlights.get(node)
+  if (!result) {
+    result = highlightCode(node.textContent, String(node.attrs.language ?? ''))
+    highlights.set(node, result)
   }
-  const out: TokenRange[] = []
-  let off = 0
-  const walk = (nodes: HastAny[], classes: string[]): void => {
-    for (const n of nodes) {
-      if (n.type === 'text') {
-        if (classes.length) out.push({ from: off, to: off + n.value.length, cls: classes.join(' ') })
-        off += n.value.length
-      } else if (n.type === 'element') {
-        walk(n.children ?? [], [...classes, ...(n.properties?.className ?? [])])
-      }
-    }
-  }
-  walk(children, [])
-  return out
+  return result
 }
 
 const codeKey = new PluginKey<CodeUi>('amx-code-block')
@@ -100,7 +65,6 @@ interface CodeUi {
 
 /** 一个代码块的全部装饰:块级 class(折行 / 行号 / 折叠)+ lowlight 的逐 token class。 */
 function blockDecos(node: ProseNode, pos: number, ui: Omit<CodeUi, 'decos'>): Decoration[] {
-  const lang = String((node.attrs as { language?: string }).language ?? '').trim()
   const isWrap = ui.wrapped.has(pos)
   const isNo = ui.lineno.has(pos) && !isWrap // 折行时行号必然错位(软换行没有自己的号),互斥
   const isCollapsed = ui.collapsed.has(pos)
@@ -108,7 +72,7 @@ function blockDecos(node: ProseNode, pos: number, ui: Omit<CodeUi, 'decos'>): De
     class: `amx-code${isWrap ? ' amx-code-wrap' : ''}${isNo ? ' amx-code-lineno' : ''}${isCollapsed ? ' amx-code-collapsed' : ''}`,
     ...(isNo ? { 'data-lines': String(node.textContent.split('\n').length) } : {}),
   })]
-  for (const t of tokenRanges(node.textContent, lang)) out.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
+  for (const t of nodeHighlight(node).ranges) out.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
   return out
 }
 
@@ -160,21 +124,26 @@ function remapDecos(prev: DecorationSet, tr: Transaction, ui: Omit<CodeUi, 'deco
 const recentLangs: string[] = []
 
 /** 悬停工具条(语言 / 复制 / 折行 / 行号 / 折叠 / 运行)。nodeAt = 代码块节点当前的文档位置。 */
-function buildToolbar(view: EditorView, nodeAt: () => number | null, lang: string, isWrap: boolean, isNo: boolean, isCollapsed: boolean): HTMLDivElement {
+function buildToolbar(view: EditorView, nodeAt: () => number | null, lang: string, detected: string, isWrap: boolean, isNo: boolean, isCollapsed: boolean): HTMLDivElement {
   const bar = document.createElement('div')
   bar.className = 'amx-code-tools'
   bar.contentEditable = 'false'
   // 语言选择
   const sel = document.createElement('select')
   sel.className = 'amx-code-lang'
-  sel.title = translate('amxcode.langTitle')
+  sel.title = detected ? translate('amxcode.autoDetected', { language: detected }) : translate('amxcode.langTitle')
   const opt0 = document.createElement('option')
   opt0.value = ''
-  opt0.textContent = translate('amxcode.plainText')
+  const label = detected === 'javascript' ? 'JS' : detected === 'typescript' ? 'TS' : detected
+  opt0.textContent = detected ? translate('amxcode.autoDetected', { language: label }) : translate('amxcode.auto')
   sel.appendChild(opt0)
-  const known = LANGS.includes(lang) || !lang
+  const plain = document.createElement('option')
+  plain.value = isPlainCodeLanguage(lang) ? lang : 'plaintext'
+  plain.textContent = translate('amxcode.plainText')
+  sel.appendChild(plain)
+  const known = CODE_LANGUAGES.includes(lang) || !lang || isPlainCodeLanguage(lang)
   // 最近用过的排最前(会话内),其余保持原序 —— AFFiNE 选中即 unshift 的同款手感。
-  const ordered = [...recentLangs.filter((l) => LANGS.includes(l)), ...LANGS.filter((l) => !recentLangs.includes(l))]
+  const ordered = [...recentLangs.filter((l) => CODE_LANGUAGES.includes(l)), ...CODE_LANGUAGES.filter((l) => !recentLangs.includes(l))]
   for (const l of known ? ordered : [lang, ...ordered]) {
     const o = document.createElement('option')
     o.value = l
@@ -292,8 +261,11 @@ class CodeBlockView implements NodeView {
    *  语言下拉开着时不会被重建打断。插件 view.update 每个事务都调一次(视图态切换不一定改到节点)。 */
   sync(): void {
     const lang = String((this.node.attrs as { language?: string }).language ?? '').trim()
+    const detected = !lang ? nodeHighlight(this.node).language : ''
     if (lang) this.dom.setAttribute('data-language', lang)
     else this.dom.removeAttribute('data-language')
+    if (detected) this.dom.setAttribute('data-detected-language', detected)
+    else this.dom.removeAttribute('data-detected-language')
     const pos = this.getPos()
     const ui = codeKey.getState(this.view.state)
     const isWrap = pos != null && !!ui?.wrapped.has(pos)
@@ -303,13 +275,13 @@ class CodeBlockView implements NodeView {
     // 语言下拉一改(改成 javascript 后列表里再没有 forsion-button)按钮就变回 JSON、改不回来。JSON 坏了的仍是
     // 普通代码块(R-13 的回落),工具条照给 —— 那时它就是一段代码。签名带上这一位:改源码修好 / 改坏时当场切换。
     const button = lang === 'forsion-button' && !!parseButtonBlock('```forsion-button\n' + this.node.textContent + '\n```')
-    const sig = button ? 'button' : `${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}`
+    const sig = button ? 'button' : `${lang}:${detected}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}`
     if (sig !== this.barSig) {
       if (button) {
         this.bar?.remove()
         this.bar = null
       } else {
-        const bar = buildToolbar(this.view, () => this.getPos() ?? null, lang, isWrap, isNo, isCollapsed)
+        const bar = buildToolbar(this.view, () => this.getPos() ?? null, lang, detected, isWrap, isNo, isCollapsed)
         if (this.bar) this.bar.replaceWith(bar)
         else this.dom.insertBefore(bar, this.contentDOM)
         this.bar = bar

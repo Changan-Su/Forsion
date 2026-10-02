@@ -4,7 +4,8 @@
  * 上下文菜单与归档区复刻侧栏(Sidebar.tsx)同款模式,复用 ctx-menu 样式与 sidebar.* 文案。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Plus, Folder, MessagesSquare, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Folder, MessagesSquare, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown, Smile } from 'lucide-react'
+import { SessionIcon, SessionIconPicker } from './SessionIcon'
 import type { SessionRecord, WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
 import { OverlayAt } from '@lcl/engine'
@@ -25,6 +26,7 @@ export const WorkspaceDetailView: React.FC<{
   const [limit, setLimit] = useState(PAGE)
   const [showArchived, setShowArchived] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number; archived: boolean } | null>(null)
+  const [iconPicker, setIconPicker] = useState<{ id: string; current: string | null; x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const renameRef = useRef<HTMLInputElement>(null)
@@ -89,7 +91,7 @@ export const WorkspaceDetailView: React.FC<{
           }}
         />
       ) : (
-        <span className="wsd-card-title">{displaySessionTitle(s.title, t)}</span>
+        <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}><SessionIcon emoji={s.emoji} size={16} /><span className="wsd-card-title">{displaySessionTitle(s.title, t)}</span></span>
       )}
       <span className="wsd-card-time">{fmt(s.updated_at || s.created_at)}</span>
     </button>
@@ -147,6 +149,9 @@ export const WorkspaceDetailView: React.FC<{
 
       {menu && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { const s = sessions.find((x) => x.id === menu.id); setIconPicker({ id: menu.id, current: s?.emoji ?? null, x: menu.x, y: menu.y }); setMenu(null) }}>
+            <Smile size={13} /> {t('session.icon.set')}
+          </button>
           <button
             onClick={() => {
               const s = sessions.find((x) => x.id === menu.id)
@@ -181,6 +186,7 @@ export const WorkspaceDetailView: React.FC<{
           )}
         </OverlayAt>
       )}
+      {iconPicker && <SessionIconPicker sessionId={iconPicker.id} current={iconPicker.current} x={iconPicker.x} y={iconPicker.y} onClose={() => setIconPicker(null)} />}
     </div>
   )
 }

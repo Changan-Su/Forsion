@@ -19,6 +19,7 @@ import { createRun, updateRunStatus } from '../src/services/runStore.js';
 import { onUserRunDone, parseRawLines, redactSecrets, resetHistorianConsolidationState } from '../src/services/localHistorian.js';
 import { configureMemoryDream, getMemoryDream } from '../src/services/memoryDream.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
+import { saveSpecialAgentsConfig } from '../src/services/specialAgentsConfig.js';
 
 const USER = 'u1';
 
@@ -30,6 +31,7 @@ let memContent: string;
 let memQueue: string[]; // 非空则 getMemory 逐次 shift(模拟并发修改);空则恒返 memContent
 let memThrow: boolean;
 let appendedLogs: string[];
+let beforeReply: (() => Promise<void>) | undefined;
 
 function rawFile(): string {
   return join(agentsDir(), DEFAULT_AGENT_SLUG, '.memory-raw.md');
@@ -52,6 +54,7 @@ beforeEach(async () => {
   memQueue = [];
   memThrow = false;
   appendedLogs = [];
+  beforeReply = undefined;
   resetHistorianConsolidationState();
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
@@ -63,6 +66,7 @@ beforeEach(async () => {
       buildProviderPayload: async (o: any) => ({ messages: o.messages }),
       streamProviderCompletion: async (o: any) => {
         llmPayloads.push(o.payload);
+        await beforeReply?.();
         const next = llmScript.shift() || '';
         const r = typeof next === 'string' ? { content: next } : next;
         return { content: r.content, finishReason: r.finishReason, usage: { prompt_tokens: 5, completion_tokens: 5 } };
@@ -110,6 +114,50 @@ afterEach(() => {
 });
 
 const judgeOut = (cands: string[]): string => JSON.stringify({ title: '新标题', log: '', memory_candidates: cands });
+
+describe('Historian 会话图标', () => {
+  const answer = JSON.stringify({ title: '新标题', summary: '对话摘要', emoji: '👩🏽‍💻', log: '', memory_candidates: [] });
+  const icon = async () => (await query<any[]>(`SELECT emoji FROM chat_sessions WHERE id = 'S'`))[0].emoji;
+  it('旧配置默认开启，总结时完整保存 Emoji 并记录活动', async () => {
+    llmScript.push(answer);
+    await onUserRunDone('S', USER);
+    expect(await icon()).toBe('👩🏽‍💻');
+    expect(llmPayloads.flatMap((p) => p.messages.map((m: any) => m.content)).join('\n')).toContain('"emoji"');
+    expect(await query<any[]>(`SELECT action FROM special_agent_log WHERE session_ref = 'S' AND action = 'icon_updated'`)).toHaveLength(1);
+  });
+  it('关闭后不请求、不写图标，即使模型多返回字段', async () => {
+    saveSpecialAgentsConfig({ historian: { autoEmoji: false } });
+    llmScript.push(answer);
+    await onUserRunDone('S', USER);
+    expect(await icon()).toBeNull();
+    expect(llmPayloads.flatMap((p) => p.messages.map((m: any) => m.content)).join('\n')).not.toContain('"emoji"');
+  });
+  it('保留既有的手动图标', async () => {
+    await query(`UPDATE chat_sessions SET emoji = '🎨' WHERE id = 'S'`);
+    llmScript.push(answer);
+    await onUserRunDone('S', USER);
+    expect(await icon()).toBe('🎨');
+    expect(llmPayloads.flatMap((p) => p.messages.map((m: any) => m.content)).join('\n')).not.toContain('"emoji"');
+  });
+  it('判官在途时手动设置的图标优先', async () => {
+    beforeReply = async () => { await query(`UPDATE chat_sessions SET emoji = '🌱' WHERE id = 'S'`); };
+    llmScript.push(answer);
+    await onUserRunDone('S', USER);
+    expect(await icon()).toBe('🌱');
+  });
+  it('判官在途时关闭开关，产出不再写入', async () => {
+    beforeReply = async () => { saveSpecialAgentsConfig({ historian: { autoEmoji: false } }); };
+    llmScript.push(answer);
+    await onUserRunDone('S', USER);
+    expect(await icon()).toBeNull();
+  });
+  it('无效产出不妨碍摘要保存', async () => {
+    llmScript.push(JSON.stringify({ summary: '这是一段完整的对话摘要', emoji: '🔬🎨' }));
+    await onUserRunDone('S', USER);
+    expect(await icon()).toBeNull();
+    expect((await query<any[]>(`SELECT summary FROM chat_sessions WHERE id = 'S'`))[0].summary).toBe('这是一段完整的对话摘要');
+  });
+});
 
 describe('Historian 记忆两阶段流水线', () => {
   it('采集:候选落 raw 层(带脱敏),正典 MEMORY 不动', async () => {

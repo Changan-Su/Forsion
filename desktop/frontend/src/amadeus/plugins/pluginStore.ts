@@ -1348,7 +1348,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
             //     探针返回之后不再有副作用,不需要再判。
             ...(readTangu()?.startChat
               ? {
-                  startChat: async (o: { agent?: string; prompt: string; send?: boolean; folder?: string }): Promise<TanguStartChatResult> => {
+                  chatSelection: true as const,
+                  startChat: async (o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<TanguStartChatResult> => {
                     if (!ctxAlive) return { ok: false, error: 'plugin disabled' }
                     const probe = readTangu()
                     if (!probe?.startChat) return { ok: false, error: 'startChat is not available on this host' }
@@ -1368,6 +1369,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       ...(agent ? { agent } : {}),
                       prompt: String(o?.prompt ?? ''),
                       send: !!o?.send && own,
+                      ...(o?.modelId ? { modelId: o.modelId } : {}),
+                      ...(o?.thinkingLevel ? { thinkingLevel: o.thinkingLevel } : {}),
                       ...(cwd ? { cwd } : {}),
                       alive: () => ctxAlive,
                     })

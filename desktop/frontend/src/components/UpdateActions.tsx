@@ -1,5 +1,6 @@
 /** 更新操作按钮(按 updater 阶段渲染)。About tab 与更新标签页共用,避免两处分叉。 */
 import { Loader2, ExternalLink, Download, RefreshCw, Check } from 'lucide-react'
+import { useCorePluginUpdates } from './CorePluginUpdates'
 import { useI18n } from '../i18n'
 import type { UpdaterStatusInfo } from '../types'
 
@@ -7,12 +8,14 @@ const RELEASES_URL = 'https://github.com/Changan-Su/Forsion/releases/latest'
 
 export function UpdateActions({ upd }: { upd: UpdaterStatusInfo }) {
   const { t } = useI18n()
+  const core = useCorePluginUpdates()
   const isMac = window.tangu?.platform === 'darwin'
   // 无 IPC(浏览器/旧 preload)→ 回退打开站点(保持原行为)。
   const check = (): void => {
     if (window.tangu?.checkForUpdates) void window.tangu.checkForUpdates()
     else window.open('https://forsion.net', '_blank')
   }
+  if (core.checking && ['idle', 'not-available', 'error'].includes(upd.phase)) return <button className="btn ghost sm" disabled><Loader2 size={12} className="spin" /> {t('about.update.checking')}</button>
   switch (upd.phase) {
     case 'checking':
       return <button className="btn ghost sm" disabled><Loader2 size={12} className="spin" /> {t('about.update.checking')}</button>
@@ -25,7 +28,7 @@ export function UpdateActions({ upd }: { upd: UpdaterStatusInfo }) {
     case 'downloaded':
       return <button className="btn primary sm" onClick={() => window.tangu?.installUpdate?.()}><RefreshCw size={12} /> {t('about.update.install')}</button>
     case 'not-available':
-      return <button className="btn ghost sm" onClick={check}><Check size={12} /> {t('about.update.upToDate')}</button>
+      return <button className="btn ghost sm" onClick={check}><Check size={12} /> {t(core.items.some((item) => item.phase !== 'current') ? 'about.update.check' : 'about.update.upToDate')}</button>
     case 'unsupported':
       return <span className="hint">{t('about.update.unsupported')}</span>
     default:

@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { CHANGELOG, changelogFor } from '../changelog'
 import { Markdown } from '../components/Markdown'
+import { CorePluginUpdates } from '../components/CorePluginUpdates'
 import { UpdateActions } from '../components/UpdateActions'
 import { useI18n } from '../i18n'
 import { useWorkspace } from '@lcl/engine'
@@ -52,6 +53,7 @@ export function ChangelogView() {
           <UpdateActions upd={upd} />
         </div>
       )}
+      <CorePluginUpdates controls />
       <div className="changelog">
         {/* 新版本那一节:CHANGELOG 是**跟着安装包打包进来的**,装的是 2.7.3 就永远只到 2.7.3 ——
             用户实报「更新 view 没有 2.7.4 的内容」。新版的说明由主进程去仓库 tag 上拉

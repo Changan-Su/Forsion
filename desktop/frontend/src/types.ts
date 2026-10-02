@@ -1,3 +1,4 @@
+import type { CorePluginUpdates } from '../../shared/corePlugins'
 import type { HostSandboxConfig } from '../../shared/hostSandboxConfig'
 import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, ProductSummary, ShortcutResult } from '../../shared/products'
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
@@ -133,6 +134,8 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 
 // ── Special Agents（Historian / Muse;本地）──────────────────────────────────
 export interface HistorianConfig {
+  /** 总结时为尚未设置图标的会话选择 Emoji；旧引擎缺省视为开启。 */
+  autoEmoji?: boolean
   enabled: boolean
   modelId: string
   /** 每 x 轮触发一次维护(标题 + 日志/记忆同一节奏)。 */
@@ -1361,7 +1364,11 @@ declare global {
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
       /** 应用内自动更新:检查 / 下载 / 重启安装(mac 仅检测,download/install 为 no-op)。 */
+      getCorePluginUpdates?(): Promise<CorePluginUpdates>
+      onCorePluginUpdates?(cb: (status: CorePluginUpdates) => void): () => void
       checkForUpdates?(): Promise<UpdaterStatusInfo>
+      getUpdaterStatus?(): Promise<UpdaterStatusInfo>
+      restartForUpdate?(): Promise<{ ok: boolean }>
       downloadUpdate?(): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
       /** 测试版通道开关(缺省关)。开了才收 x.y.z-beta.N;关着两层都隔离:
@@ -1537,6 +1544,10 @@ declare global {
       /** Forsion Market:浏览(公开)/ 详情含 README / 安装(下载+按类型解压到 ~/.tangu)/ 已装列表。 */
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
       marketDetail?(id: string): Promise<MarketDetail>
+      marketUpdateStatus?(): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
+      marketSetAutoUpdate?(id: string, on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
+      marketCheckUpdates?(): Promise<void>
+      onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
@@ -1797,7 +1808,7 @@ export interface AmadeusSyncStatus {
 export interface MarketCard {
   id: string
   type: 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin'
-  source: 'github' | 'zip'
+  source: 'github' | 'zip' | 'npm'
   name: string
   summary: string
   author: string
@@ -1831,4 +1842,5 @@ export interface MarketInstallProgress {
 export interface MarketDetail extends MarketCard {
   readme: string
   githubRepoUrl?: string | null
+  npmPackage?: string | null
 }

@@ -1,3 +1,7 @@
+import { isCorePlugin } from '../../../shared/corePlugins'
+import { CorePluginUpdates } from './CorePluginUpdates'
+import { APP_VERSION } from '../changelog'
+import { hasNativeFeature } from '../features/runtime'
 import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
 /**
  * 设置 → Forsion 插件:列表(卡片可点击)+ 详情页(manifest 信息/启停/依赖应用一键安装/插件命令/README)。
@@ -465,9 +469,9 @@ const PluginDetail: React.FC<{
         <PluginLogo url={p.iconUrl} size={52} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <b style={{ fontSize: 'var(--ui-font-heading, 14px)' }}>{pluginDisplayName(p, locale)}</b>
+            <b style={{ fontSize: 'var(--ui-font-heading, 14px)' }}>{isCorePlugin(p) && p.id === 'forsion-extend' ? 'Forsion Extend' : pluginDisplayName(p, locale)}</b>
             <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>v{p.version}</span>
-            <span style={badge}>{p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : p.agent ? t('settings.amadeusPlugins.agentOwned', { agent: p.agent }) : t('settings.amadeusPlugins.external')}</span>
+            <span style={badge}>{isCorePlugin(p) ? t('plugins.core.title') : p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : p.agent ? t('settings.amadeusPlugins.agentOwned', { agent: p.agent }) : t('settings.amadeusPlugins.external')}</span>
             {p.dev && <DevBadge t={t} />}
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
@@ -581,6 +585,7 @@ const PluginDetail: React.FC<{
 export const AmadeusPluginsTab: React.FC<{
   /** 引擎连接配置:捆绑包启停级联内嵌引擎插件用(缺省 = 不级联,仅本地启停)。 */
   cfg?: TanguDesktopConfig | null
+  section?: 'core' | 'installed'
   /** 级联改动引擎插件启用态后刷新引擎插件清单(SettingsModal 的 reloadPlugins)。 */
   onEngineReload?: () => void
   /** 引擎插件清单(SettingsModal 下传):级联时识别首方内置同 id,绝不去动它们。 */
@@ -589,7 +594,7 @@ export const AmadeusPluginsTab: React.FC<{
    *  id 与返回去处**必须成对**给 —— 拆成两个可选 prop 会出现「给了 id 没给 onBack、返回点不动」
    *  的半瘫状态(codex 评审 2026-08-21)。 */
   controlledDetail?: { id: string; onBack: () => void }
-}> = ({ cfg, onEngineReload, enginePlugins, controlledDetail }) => {
+}> = ({ cfg, onEngineReload, enginePlugins, controlledDetail, section = 'installed' }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
@@ -598,6 +603,8 @@ export const AmadeusPluginsTab: React.FC<{
   const scaffold = usePluginStore((s) => s.scaffoldSample)
   usePluginOnboarding((s) => s.version) // 「待引导」徽标随实测结果即时变化
   const [detail, setDetail] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  useEffect(() => { setDetail(null); setQuery('') }, [section])
   // 列表里的「待引导」徽标以此刻实测为准:只测本地两类,不跑插件的 check(可能打远端)。
   useEffect(() => {
     for (const p of plugins) if (activeIds.includes(p.id) && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id)
@@ -613,11 +620,12 @@ export const AmadeusPluginsTab: React.FC<{
     return <PluginDetail plugin={detailPlugin} onBack={back} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
   }
 
-  // 内置 vs 外置分两区:Callout 标注/字数统计 是 builtin,过去和外置插件混在同一串里,
-  // 而浏览器/终端(宿主原生)又单挂在最上面 —— 同样是「内置」却分三处,用户实报看不出章法。
+  // 核心独立一页；已安装页把编辑器扩展、宿主内置能力与开发操作折叠收纳。
   const managedFeatures = PRODUCT.nativeFeatures !== undefined
-  const builtins = plugins.filter((p) => p.builtin)
-  const externals = plugins.filter((p) => !p.builtin)
+  const matches = (p: AmadeusPlugin): boolean => !query.trim() || `${pluginDisplayName(p, locale)} ${pluginDisplayDescription(p, locale)} ${p.id}`.toLowerCase().includes(query.trim().toLowerCase())
+  const core = plugins.filter(isCorePlugin)
+  const builtins = plugins.filter((p) => p.builtin && !isCorePlugin(p) && matches(p))
+  const externals = plugins.filter((p) => !p.builtin && !isCorePlugin(p) && matches(p))
 
   /** 一张插件卡:内置区与外置区同款(区标题已说明归属,卡上不再重复挂「内置/外置」小标签)。 */
   const renderCard = (p: AmadeusPlugin): React.ReactNode => {
@@ -627,13 +635,17 @@ export const AmadeusPluginsTab: React.FC<{
         key={p.id}
         className={`plugin-card plugin-card--link${p.blocked ? ' plugin-card--blocked' : ''}`}
         data-plugin-id={p.id}
+        role="button"
+        tabIndex={0}
+        aria-label={pluginDisplayName(p, locale)}
+        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setDetail(p.id) } }}
         onClick={() => setDetail(p.id)}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <PluginLogo url={p.iconUrl} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{pluginDisplayName(p, locale)}</b>
+              <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{isCorePlugin(p) && p.id === 'forsion-extend' ? 'Forsion Extend' : pluginDisplayName(p, locale)}</b>
               <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>v{p.version}</span>
               {p.dev && <DevBadge t={t} />}
               {p.blocked && (
@@ -644,7 +656,7 @@ export const AmadeusPluginsTab: React.FC<{
               )}
               <BundleChips p={p} />
             </div>
-            {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{pluginDisplayDescription(p, locale)}</div>}
+            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(p.id === 'forsion-extend' ? 'plugins.core.extend' : 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
@@ -663,26 +675,48 @@ export const AmadeusPluginsTab: React.FC<{
     )
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+  if (section === 'core') return (
+    <div className="plugin-management" data-plugin-section="core">
+      <div className="hint">{t('plugins.core.hint')}</div>
+      {!managedFeatures && hasNativeFeature('amadeus') && <div className="plugin-card plugin-core-native" data-plugin-id="amadeus-core">
+        <PluginLogo />
+        <div className="plugin-core-native-copy"><strong>Amadeus</strong><div className="hint">{t('plugins.core.amadeus')}</div></div>
+        <span className="hint">v{APP_VERSION} · {t('plugins.core.withApp')}</span>
+      </div>}
+      {!managedFeatures && PRODUCT.agentBackend && <div className="plugin-card plugin-core-native" data-plugin-id="tangu-core">
+        <PluginLogo />
+        <div className="plugin-core-native-copy"><strong>Tangu</strong><div className="hint">{t('plugins.core.tangu')}</div></div>
+        <span className="hint">{t('plugins.core.withApp')}</span>
+      </div>}
+      {core.map(renderCard)}
+      <CorePluginUpdates controls />
       <NativeFeaturesSection />
-      <div className="settings-sec">{t(managedFeatures ? 'settings.amadeusPlugins.unitBuiltinTitle' : 'settings.amadeusPlugins.builtinTitle')}</div>
-      <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitBuiltinHint' : 'settings.amadeusPlugins.builtinHint')}</div>
-      {/* 宿主原生能力(浏览器/终端)与编辑器内置插件排同一列 —— 来源不同,对用户是一回事。 */}
-      <BuiltinPluginsSection />
-      {builtins.map(renderCard)}
+    </div>
+  )
 
-      <div className="settings-sec settings-sec--gap">{t(managedFeatures ? 'settings.amadeusPlugins.unitExternalTitle' : 'settings.amadeusPlugins.externalTitle')}</div>
-      <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : 'settings.amadeusPlugins.hint')}</div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为,unitBridge 只有 notSupported 桩 —— 藏;重新装载(重拉 unit/plugins + unit/spaces)保留。 */}
-        {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
-        {/* 手动拷进插件目录后点这里:all = 连同版本原地改的代码也让主窗重读(只重载本浮窗的话,主窗照样要刷新 / 重启) */}
-        <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
-        {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
-      </div>
-      {externals.length === 0 && <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitEmpty' : 'settings.amadeusPlugins.empty')}</div>}
+  return (
+    <div className="plugin-management" data-plugin-section="installed">
+      <div className="hint">{t('plugins.installed.hint')}</div>
+      <div className="plugin-management-toolbar"><input type="search" aria-label={t('plugins.search')} placeholder={t('plugins.search')} value={query} onChange={(e) => setQuery(e.target.value)} /></div>
       {externals.map(renderCard)}
+      {!externals.length && !builtins.length && <div className="hint">{t(query ? 'plugins.noResults' : managedFeatures ? 'settings.amadeusPlugins.unitEmpty' : 'settings.amadeusPlugins.empty')}</div>}
+      {!!builtins.length && <details className="plugin-management-group" open={query ? true : undefined}>
+        <summary>{t('plugins.editorExtensions')} · {builtins.length}</summary>
+        {builtins.map(renderCard)}
+      </details>}
+      {!query && <details className="plugin-management-group">
+        <summary>{t('plugins.bundledFeatures')}</summary>
+        <BuiltinPluginsSection />
+      </details>}
+      <details className="plugin-management-group">
+        <summary>{t('plugins.developer')}</summary>
+        <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : 'settings.amadeusPlugins.hint')}</div>
+        <div className="plugin-management-toolbar" style={{ flexWrap: 'wrap' }}>
+          {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
+          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
+          {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
+        </div>
+      </details>
     </div>
   )
 }

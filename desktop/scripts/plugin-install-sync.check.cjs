@@ -243,6 +243,8 @@ async function syncRound() {
 
     writeDir(path.join(home, 'plugins', 'drop-fixture'), forsionPlugin('drop-fixture', '1.0.0', counterPlugin('__dropSetups', '__dropDisposed')))
     const st = await openPanel(app, main, { id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'amadeus-plugins' } })
+    await st.getByRole('button', { name: '已安装插件', exact: true }).click()
+    await st.locator('summary').filter({ hasText: '开发工具' }).click()
     await st.getByRole('button', { name: '重新加载', exact: true }).click({ timeout: 30000 })
     check('E 手动拷进插件目录 + 设置里「重新加载」→ 主窗也装上', await waitFor(async () => (await g('__dropSetups')) === 1), `setup=${await g('__dropSetups')}`)
     check('E 「重新加载」点名了全部插件,没变的照样不拆装', (await g('__keepSetups')) === 1 && (await g('__keepDisposed')) === 0)

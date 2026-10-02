@@ -126,13 +126,13 @@ afterEach(() => {
 });
 
 async function sessionRow(): Promise<any> {
-  return (await query<any[]>(`SELECT title, summary FROM chat_sessions WHERE id = 'S'`))[0];
+  return (await query<any[]>(`SELECT title, summary, emoji FROM chat_sessions WHERE id = 'S'`))[0];
 }
 
 describe('Historian fork 判官', () => {
   it('缓存契约:cacheKey=sessionId、带 seed 工具面、同思考档、用会话模型;判读落标题+摘要', async () => {
     const { seed } = makeSeed();
-    llmScript = [judgeJson()];
+    llmScript = [judgeJson({ emoji: '🎨' })];
     await onUserRunDone('S', USER, undefined, seed);
 
     expect(builds.length).toBe(1); // fork 一次成功,不再走 independent
@@ -147,10 +147,12 @@ describe('Historian fork 判官', () => {
     const msgs = b.messages;
     expect(msgs[msgs.length - 1].role).toBe('user');
     expect(String(msgs[msgs.length - 1].content)).toContain('Historian fork');
+    expect(String(msgs[msgs.length - 1].content)).toContain('"emoji"');
     expect(msgs.some((m: any) => m.role === 'tool')).toBe(true);
 
     const row = await sessionRow();
     expect(row.title).toBe('渐变页修复');
+    expect(row.emoji).toBe('🎨');
     expect(row.summary).toContain('grad.ts');
     const act = await query<any[]>(`SELECT action FROM special_agent_log WHERE action = 'summary_updated'`);
     expect(act.length).toBe(1);

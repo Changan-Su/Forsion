@@ -45,6 +45,7 @@ import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedSc
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
 import { useNotesSpellcheck } from '../blocks/markdown/spellcheck'
+import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
@@ -629,9 +630,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   }
 
   /** 把一段 markdown 插进当前文档。返回是否真落地(编辑器没挂载 / 解析成空 = false)。
-   *  - `'cursor'`(缺省,用户动作走这档):光标所在**顶层块**为空 → 原地替换;否则插到它之后。
-   *    「顶层块」= doc 或分栏 cell 的直接子节点 —— 列内插入绝不许穿出到 doc 级(否则 /代码块
-   *    在列里会插到整行下面)。列表项里插 = 插在整份列表之后(与 Tab 层同一套祖先判定)。落光标+聚焦。
+   *  - `'cursor'`(缺省,用户动作走这档):光标所在容器中的块为空 → 原地替换;否则插到它之后。
+   *    容器 = doc、分栏 cell 或引用/callout；插入留在最近的容器里。列表项里插 = 插在整份列表之后。
    *  - `'start'`/`'end'`(插件写口走这两档):doc 的最前/最后。**不动选区、不抢焦点** —— 调用方是
    *    插件按钮/浮层,用户此刻的光标可能正在别处,PM 会把选区随事务映射过去。
    *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
@@ -657,7 +657,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       }
       const { $from } = view.state.selection
       let d = $from.depth
-      while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(d - 1).type.name)) d--
+      while (d >= 1 && !['doc', 'amadeusColumnCell', 'blockquote'].includes($from.node(d - 1).type.name)) d--
       if (d < 1) return
       /** 落点 = 插入内容的末尾(v3 的 requestSelfFocus('end') 同位),**向前**找文字位(R-17:向后找会在
        *  「后面还有块」时落进下一块 —— /code 插完光标跑到下面那段里)。caretBack = 再往回退几格(/math 落在 `$$ | $$`)。 */
@@ -669,7 +669,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       // 列表项 / 引用(callout)里的**空行**(B-07):就在这一行原地换成要插的块。此前一律按「整个顶层块空不空」判,
       // 容器永远非空 → 插到整只列表 / 引用之后,原处留下 `-`、`- [ ] <br />`、`>` 空项残渣,callout 里的代码块跑到外面。
       // 引用 / callout 收任何块:原地替换,留在容器里;列表项的首子只能是段落 → 容不下时只脱出**列表**(不脱引用),再替换。
-      // 非空行照旧插到顶层块之后(列表中间插代码块不劈列表)。
+      // 非空行插到所在容器内的块之后(列表中间插代码块不劈列表)。
       if ($from.depth > d && $from.parent.isTextblock && $from.parent.content.size === 0) {
         const tr = view.state.tr
         const fits = (at: number): boolean => {
@@ -689,6 +689,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const $p = tr.doc.resolve(at)
           const from = $p.before()
           tr.replaceWith(from, $p.after(), content)
+          unfoldCalloutsForInsert(tr, from, from + content.size)
           land(tr, from + content.size)
           if (quiet) dispatchQuiet(view, tr, from)
           else {
@@ -703,6 +704,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const to = $from.after(d)
       const blank = $from.node(d).textContent.trim() === ''
       const tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
+      unfoldCalloutsForInsert(tr, blank ? from : to, (blank ? from : to) + content.size)
       // quiet 也挪选区(不聚焦):连着插几条回答时一条接一条往下排,而不是每条都插回同一块之后、倒着排。
       land(tr, (blank ? from : to) + content.size)
       if (quiet) dispatchQuiet(view, tr, blank ? from : to)

@@ -1033,3 +1033,14 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - `ctx.app.hostPath?.(vaultRelativePath)` 只在当前引擎和真实笔记库共享文件系统时返回绝对输出路径；无活动库、云库、浏览器虚拟库、远程引擎或未声明能力时返回 `null`。返回 null 时不要拼接 `vaultRoot()` 强行写本机路径。
 - `window.tangu.executionCapabilities?.host` 是 Unit 对主机执行能力的声明；不存在不证明可用。网络视频分析还需网络、媒体工具和模型。
 - 本地 Unit 通过安装包 `runtime: { apiVersion: 1, main: "runtime.mjs" }` 加载本地能力，公开多用户投射不加载该入口。业务包无需依赖 Server 才能显示 UI 或使用本地能力。
+
+### API-backed Markdown editor
+
+`ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
+
+
+### Plugin Chat Box selection and Director hand-off (2026-09-30)
+
+When `ctx.tangu.chatSelection === true`, `startChat` accepts optional `modelId` and `thinkingLevel` from the native `ctx.ui.mountChatBox` submission. The host validates the live model catalog and supported thinking levels before changing the UI, then applies the explicit selection after Agent defaults, before prefill/send. Unrecognised selections return `ok:false`; keep the draft for retry. Older hosts omit the capability: retain a plain prompt adapter instead of showing a model picker whose selection cannot be honoured. Bundle ownership, vault-relative `folder`, plugin liveness and send gating remain unchanged.
+
+For API-backed public documents, `ctx.ui.mountMarkdownEditor` accepts `previewBaseUrl` for resolving relative images and videos in a cross-origin host.

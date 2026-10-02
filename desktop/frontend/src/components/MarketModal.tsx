@@ -9,7 +9,7 @@ import {
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
 } from 'lucide-react'
 import { Skeleton } from '@lcl/engine'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
@@ -24,6 +24,14 @@ import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { openBrowser } from '../builtins'
 import type { MarketCard, MarketDetail, MarketInstallProgress } from '../types'
+import { PluginSettingsView } from './AmadeusPluginsTab'
+import { isPlacedSettingsView } from '../amadeus/plugins/display'
+import { MarketPluginAutoUpdate, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
+import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
+
+registerMessages({
+  'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
+})
 
 type MarketType = MarketCard['type']
 type Tab = 'discover' | MarketType | 'webapp' | 'installed' | 'updates' | 'submit'
@@ -57,15 +65,7 @@ function ItemIcon({ url, type, size }: { url?: string | null; type: MarketType |
 
 /** 最新版本是否比已装的新(仅数值 semver 比较;不可比/未知已装版本 → 不提示,避免误报)。 */
 function isNewer(latest: string | null | undefined, installed: string | null): boolean {
-  if (!latest || !installed) return false
-  const norm = (s: string) => s.trim().replace(/^v/i, '').split(/[.\-+]/).map((x) => parseInt(x, 10))
-  const a = norm(latest), b = norm(installed)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0, y = b[i] ?? 0
-    if (Number.isNaN(x) || Number.isNaN(y)) return false
-    if (x !== y) return x > y
-  }
-  return false
+  return (compareMarketVersions(latest, installed) ?? 0) > 0
 }
 
 function timeValue(value?: string | null): number {
@@ -94,6 +94,13 @@ function formatDate(value?: string | null): string {
 
 export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n()
+  const pluginUpdates = useMarketPluginUpdates()
+  const settingsViews = usePluginStore((s) => s.settingsViews)
+  const plugins = usePluginStore((s) => s.plugins)
+  const activeIds = usePluginStore((s) => s.activeIds)
+  const submissionView = !window.tangu?.unitPage && window.tangu?.cloudInvoke
+    ? settingsViews.find((o) => o.pluginId === 'forsion-extend' && o.item.id === 'submission' && activeIds.includes(o.pluginId) && isPlacedSettingsView(plugins.find((p) => p.id === o.pluginId), o.item))
+    : undefined
   const storeClose = useApp((s) => s.closeMarket)
   const close = onClose ?? storeClose
   // 市场住在独立浮窗(桌面)或全屏覆盖层(主窗)里:全局通知在浮窗不渲染、在主窗被 overlayOpen 挡住,
@@ -137,6 +144,8 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const [scanning, setScanning] = useState(true)
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortMode>('popular')
+  // Automatic checks run in main even while this window is closed. Refresh the local installed snapshot after activation/mutations.
+  useEffect(() => { void listInstalled().then(setInstalled).catch(() => {}) }, [pluginUpdates])
 
   // 一次拉全目录:发现/分类/搜索/更新共用同一份快照,避免切 tab 重复请求和闪烁。
   const scanCatalog = useCallback(async () => {
@@ -190,6 +199,8 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const installedEntry = (c: MarketCard): InstalledItem | undefined => installedInfo(c)?.entry
   const isInstalled = (c: MarketCard): boolean => !!installedEntry(c)
   const hasUpdate = (c: MarketCard): boolean => isNewer(c.latestVersion, installedEntry(c)?.version ?? null)
+  const autoUpdate = (c: MarketCard) => (c.type === 'plugin' || c.type === 'amadeus-plugin') && isInstalled(c)
+    ? <MarketPluginAutoUpdate id={c.id} item={pluginUpdates.items.find((x) => x.id === c.id)} disabled={!!installing[c.id] || uninstalling === c.id} onError={(text) => toast(text, true)} /> : null
 
   const canOpenSettings = (c: MarketCard): boolean => {
     const realType = installedInfo(c)?.realType
@@ -299,7 +310,9 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   }
 
   const installBtn = (c: MarketCard, extraClass = '') => {
-    const busy = !!installing[c.id]
+    const state = pluginUpdates.items.find((x) => x.id === c.id)
+    const busy = !!installing[c.id] || state?.phase === 'downloading'
+    const pending = !!state?.pendingVersion
     const done = isInstalled(c)
     const update = hasUpdate(c)
     const inst = installedEntry(c)
@@ -309,12 +322,12 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
       <button
         className={`btn sm ${update || !done ? 'primary' : ''} ${extraClass}`.trim()}
         disabled={busy}
-        data-install-state={busy ? (p?.phase || 'resolve') : retry ? 'failed' : undefined}
+        data-install-state={busy ? (state?.phase === 'downloading' ? 'download' : p?.phase || 'resolve') : retry ? 'failed' : undefined}
         title={p?.host || (update ? t('market.updateTitle', { from: inst?.version || '?', to: c.latestVersion || '?' }) : undefined)}
-        onClick={(e) => { e.stopPropagation(); void onInstall(c) }}
+        onClick={(e) => { e.stopPropagation(); if (pending) void window.tangu?.restartForUpdate?.().catch((error) => toast(String(error?.message || error), true)); else void onInstall(c) }}
       >
         {busy ? <Loader2 size={13} className="mk-spin" /> : retry || update ? <RefreshCw size={13} /> : done ? <Check size={13} /> : <Download size={13} />}
-        {busy ? busyLabel(p) : retry ? t('market.installRetry') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
+        {pending ? t('restartUpdate.button') : busy ? state?.phase === 'downloading' ? t('market.autoUpdateDownloading') : busyLabel(p) : retry ? t('market.installRetry') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
       </button>
     )
   }
@@ -408,6 +421,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
           {installBtn(c)}
           {uninstallBtn(c)}
         </div>
+        {autoUpdate(c)}
       </div>
     </article>
   )
@@ -448,15 +462,15 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
             <button className={tab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>
             <button className={tab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>
-            {/* 投稿要去个人中心(openAccountCenter 住在 Forsion Extend):没装 Extend 就没有这一页,别留一个点了没反应的按钮 */}
-            {!!window.tangu?.openAccountCenter && <button className={tab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
+            {/* Extend 的投稿页同时挂在市场与云端设置中;旧包仍可打开网页个人中心。 */}
+            {(!!submissionView || !!window.tangu?.openAccountCenter) && <button className={tab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
           </div>
         </div>
       </aside>
 
       <section className="settings-main">
         <div className="settings-main-head mk-main-head">
-          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : tab === 'discover' ? t('market.subtitle') : t('market.sectionSubtitle', { section: navLabel[tab] })}</div></div>
+          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : t('market.sectionSubtitle', { section: navLabel[tab] })}</div></div>
           {showSearch && <label className="mk-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('market.searchPlaceholder')} />{query && <button onClick={() => setQuery('')} aria-label={t('market.clearSearch')}>×</button>}</label>}
           {showSort && <label className="mk-sort"><span>{t('market.sort.label')}</span><select value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="popular">{t('market.sort.popular')}</option><option value="latest">{t('market.sort.latest')}</option><option value="name">{t('market.sort.name')}</option></select></label>}
         </div>
@@ -478,9 +492,10 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
               <div className="mk-detail-layout">
                 <main className="mk-detail-main"><div className="mk-detail-section-title">{t('market.overview')}</div>{!!detail.tags?.length && <div className="mk-tags">{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></main>
                 <aside className="mk-detail-sidebar">
-                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}</div>
+                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
-                  <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div><div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div><div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
                 </aside>
               </div>
@@ -500,10 +515,11 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
               webLoading ? <Skeleton variant="list" /> : webError ? <div className="mk-state-card"><PackageOpen size={28} /><strong>{webError}</strong><button className="btn sm" onClick={() => { setWebApps(null); setWebError('') }}>{t('market.retry')}</button></div> : visibleWebApps.length === 0 ? <div className="mk-state-card"><Globe size={28} /><strong>{query ? t('market.noResults') : t('market.empty')}</strong><span>{query ? t('market.noResultsHint') : t('market.webHint')}</span></div> : (
                 <div className="mk-webapps"><p className="mk-web-hint">{t('market.webHint')}</p><div className="mk-grid">{visibleWebApps.map((item) => <article key={`${item.handle}/${item.slug}`} className="mk-card" onClick={() => openWebApp(item)}><div className="mk-card-visual"><Globe size={24} /></div><div className="mk-card-content"><div className="mk-card-eyeline"><span>{navLabel.webapp}</span></div><button className="mk-card-title" onClick={(e) => { e.stopPropagation(); openWebApp(item) }}>{item.name}</button><div className="mk-card-summary">{item.summary || t('market.summaryFallback')}</div><div className="mk-card-foot"><span className="mk-card-meta">{item.handle}</span><button className="btn sm primary" onClick={(e) => { e.stopPropagation(); openWebApp(item) }}><Globe size={13} />{t('market.webOpen')}</button></div></div></article>)}</div></div>
               )
-            ) : tab === 'submit' ? (
-              <section className="mk-submit"><div className="mk-submit-copy"><span>{t('market.submitKicker')}</span><h2>{t('market.submitTitle')}</h2><p>{t('market.submitHint')}</p><button className="btn primary" onClick={() => void window.tangu?.openAccountCenter?.('submission')}><ExternalLink size={15} />{t('market.submitOpen')}</button></div><div className="mk-submit-art"><PackageOpen size={44} /><strong>{t('market.submitArtTitle')}</strong><span>{t('market.submitArtHint')}</span></div></section>
+            ) : tab === 'submit' ? (submissionView
+              ? <PluginSettingsView pluginId={submissionView.pluginId} def={submissionView.item} bare />
+              : <section className="mk-submit"><div className="mk-submit-copy"><span>{t('market.submitKicker')}</span><h2>{t('market.submitTitle')}</h2><p>{t('market.submitHint')}</p><button className="btn primary" onClick={() => void window.tangu?.openAccountCenter?.('submission')}><ExternalLink size={15} />{t('market.submitOpen')}</button></div><div className="mk-submit-art"><PackageOpen size={44} /><strong>{t('market.submitArtTitle')}</strong><span>{t('market.submitArtHint')}</span></div></section>
             ) : (
-              <section className="mk-section"><div className="mk-section-head"><div><h2>{navLabel[tab]}</h2><p>{t('market.resultCount', { n: visibleCatalog.length })}</p></div>{tab === 'updates' ? <RefreshCw size={18} /> : tab === 'installed' ? <Library size={18} /> : <TypeGlyph type={tab as MarketType} size={18} />}</div>{tab === 'updates' && !scanning && updatable.length === 0 && !query ? <div className="mk-state-card"><Check size={28} /><strong>{t('market.allUpToDate')}</strong><span>{t('market.allUpToDateHint')}</span></div> : catalogState(visibleCatalog)}</section>
+              <section className="mk-section"><div className="mk-section-head"><div><h2>{navLabel[tab]}</h2><p>{t('market.resultCount', { n: visibleCatalog.length })}</p></div>{tab === 'updates' && window.tangu?.marketCheckUpdates ? <button className="btn sm" disabled={pluginUpdates.checking} onClick={() => void window.tangu!.marketCheckUpdates!().then(scanCatalog).catch((error) => toast(String(error?.message || error), true))}><RefreshCw size={14} />{t('market.autoUpdateCheck')}</button> : tab === 'updates' ? <RefreshCw size={18} /> : tab === 'installed' ? <Library size={18} /> : <TypeGlyph type={tab as MarketType} size={18} />}</div>{tab === 'updates' && !scanning && updatable.length === 0 && !query ? <div className="mk-state-card"><Check size={28} /><strong>{t('market.allUpToDate')}</strong><span>{t('market.allUpToDateHint')}</span></div> : catalogState(visibleCatalog)}</section>
             )}
         </div>
       </section>

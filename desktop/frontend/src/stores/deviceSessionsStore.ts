@@ -25,6 +25,7 @@ import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { classify } from '../services/engine/health'
 import { getSessionDetail, updateSession } from '../services/backendService'
 import { AGENT_APP_ID } from '../services/agentRunService'
+import { normalizeSessionEmoji } from '../../../../tangu-agent/src/core/sessionEmoji'
 
 /** 逐台会话列表的新鲜度:比这更新就不重拉(手动刷新 / force 除外)。 */
 export const DEVICE_LIST_FRESH_MS = 10_000
@@ -304,6 +305,29 @@ export async function renameRemote(unitId: string, sessionId: string, title: str
   useApp.setState((s) => ({ sessions: s.sessions.map((x) => (x.location?.kind === 'unit' ? apply(x) : x)) }))
   try { await updateSession(t, sessionId, { title }) } catch (err: any) {
     useApp.getState().toast(useApp.getState().tr('app.renameFail', { e: err?.message || err }), true)
+  }
+}
+
+/** 远端图标保存成功后才同步列表；不改变会话绑定或焦点。 */
+export async function setRemoteSessionEmoji(unitId: string, sessionId: string, value: string | null): Promise<boolean> {
+  const ref = unitRef(unitId)
+  const t = targetForRef(ref)
+  if (!t || bindingConflict(sessionId, ref)) return false
+  const emoji = normalizeSessionEmoji(value)
+  if (value !== null && !emoji) { useApp.getState().toast(useApp.getState().tr('session.icon.invalid'), true); return false }
+  try {
+    const result = await updateSession(t, sessionId, { emoji })
+    const apply = (x: SessionRecord): SessionRecord => x.id === sessionId ? { ...x, emoji: result.emoji } : x
+    const e = useDeviceSessions.getState().byUnit[ref.unitId]
+    if (e) patchEntry(ref.unitId, { sessions: e.sessions.map(apply) })
+    useApp.setState((s) => ({
+      sessions: s.sessions.map((x) => x.location && sameRef(x.location, ref) ? apply(x) : x),
+      archivedSessions: s.archivedSessions.map((x) => x.location && sameRef(x.location, ref) ? apply(x) : x),
+    }))
+    return true
+  } catch (err: any) {
+    useApp.getState().toast(useApp.getState().tr('session.icon.saveFail', { e: err?.message || err }), true)
+    return false
   }
 }
 

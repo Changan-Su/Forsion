@@ -125,7 +125,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone'];
+const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -141,6 +141,9 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
+OPT_IN.add('visualfigures');
+OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
+OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -1382,6 +1385,26 @@ try {
       output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2), toolCalls: [...ev.toolCalls, ...ev2.toolCalls] };
   });
 
+  await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
+    const ev = await run(`live-figures-${Date.now()}`, '请在聊天中用一张条形图比较任务耗时：逐项处理 48 分钟、分组处理 34 分钟、并行处理 22 分钟，强调并行方案。再用一张流程图展示理解需求、实现、验证、交付，其中验证包括自动检查和真实界面两个并行检查项。数据是演示数据，标清楚。使用 Forsion 自带的图表和流程组件，风格克制、清晰，窄屏也能读。', 240_000, {}, 'desktop/2.12.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualfigures.html'), html);
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    const contract = html.includes('<fs-chart') && html.includes('<fs-flow');
+    return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};native figures=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  await scenario('visualize', 'visualize 交互图与本地状态', async () => {
+    const ev = await run(`live-visualize-${Date.now()}`, '在聊天里给我一个可交互的正弦波示意图，用滑块调节振幅，立即改变波形。切换会话再回来要记住振幅。用 Forsion 自带的视觉控件和状态接口，不写项目文件。', 240_000, {}, 'desktop/2.12.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    cards.forEach((card, index) => writeFileSync(join(OUT, `visualize-${index}.html`), card.html || ''));
+    const html = cards.map((c) => c.html || '').join('\n');
+    const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
+    const contract = /type=["']range["']/.test(html) && html.includes('forsionSketch') && html.includes('setState') && /<svg|<canvas/.test(html);
+    return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
   await scenario('tool', 'tool 工具回合', async () => {
     const ev = await run(sessA, `请用工具读取文件 ${markerFile},把文件里 code = 后面的值原样回复给我,不要多说。`);
     const hit = ev.content.includes(MARKER);
@@ -2323,6 +2346,31 @@ Then reply with only the command output.`,
     const early = ev.sessionTitle;
     const ok = !!early && early.title === stored && titled.length === 1 && act.some((x) => x.action === 'summary_updated');
     return { ok, detail: `${early ? `首帧标题「${early.title}」@${early.atMs}ms,done@${ev.wallMs}ms` : 'done 前没收到 session_title'};落库「${stored}」;活动 ${act.map((r) => r.action).join('/') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  await scenario('emoji', 'Historian Emoji 默认选择、关闭与手动图标保护', async () => {
+    const details = [];
+    let ok = true;
+    for (const mode of ['default', 'off', 'manual']) {
+      const config = { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', autoEmoji: mode !== 'off' };
+      await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: config }) });
+      const created = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ app_id: 'tangu', title: `Emoji ${mode}`, ...(mode === 'manual' ? { emoji: '🌱' } : {}) }) });
+      const id = created.session.id;
+      const ev = await run(id, '请用约 250 字解释 SQLite 的 WAL 模式如何工作和适用场景，不需要调用工具。');
+      if (ev.error) return { ok: false, detail: ev.error, output: ev.content };
+      const activity = await until(async () => {
+        const all = await api('/agent/special/historian/activity?limit=100');
+        const rows = (all.activity || []).filter((r) => r.session_ref === id);
+        return rows.some((r) => r.action === 'summary_updated') ? rows : null;
+      }, 120_000, 2000);
+      const record = await api(`/agent/sessions/${id}/detail`).then((r) => r.session);
+      const emoji = record.emoji;
+      const valid = typeof emoji === 'string' && [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(emoji)].length === 1 && /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(emoji);
+      const pass = !!activity && (mode === 'default' ? valid && activity.some((r) => r.action === 'icon_updated') : mode === 'off' ? !emoji : emoji === '🌱');
+      ok &&= pass;
+      details.push(`${mode}: ${pass ? 'PASS' : 'FAIL'} icon=${emoji || '(none)'} activity=${activity?.map((r) => r.action).join('/') || '(none)'}`);
+    }
+    return { ok, detail: details.join('; ') };
   });
 
   const sessB = `live-b-${Date.now()}`;

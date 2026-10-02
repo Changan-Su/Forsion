@@ -37,7 +37,8 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus } from './updater'
+import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
 import { initMainLocale, mt } from './mainI18n'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
@@ -48,9 +49,13 @@ import * as deviceSecrets from './deviceSecrets' // P1-K5:设备凭据(配对 / 
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
+import { createCorePluginUpdater } from './corePluginUpdates'
+import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
+import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, type DownloadProgress } from './marketInstall'
+import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
+import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
@@ -1973,6 +1978,35 @@ if (process.platform !== 'darwin') {
 // Amadeus Space:amadeus-asset:// 自定义协议须在 app ready 前登记为 privileged。
 registerAmadeusAssetSchemes()
 
+const marketBase = async (): Promise<string> => {
+  const stored = await loadConfig()
+  const creds = loadTanguCreds()
+  const base = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
+  if (!base) throw new Error('未配置 Forsion 云端地址')
+  return base
+}
+const MARKET_UA = 'Forsion-Tangu'
+
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot; buf: Buffer }> {
+  const base = await marketBase()
+  // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
+  // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
+  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+    .catch((err: any) => { throw new Error(`resolve: ${err?.name === 'TimeoutError' ? 'timeout' : err?.cause?.code || err?.message || err}`) })
+  if (!infoRes.ok) throw new Error(`resolve: HTTP ${infoRes.status}`)
+  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot
+  if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('resolve: invalid target')
+  // github 源走 net.fetch(认系统代理);开了「中国大陆镜像」才加第三方代理站(见 downloadCandidates 的 ⚠️)。
+  // zip 源(Forsion 对象存储)一直能通,照旧 Node fetch 单发 —— 不让一个失效的系统代理设置拖累它。
+  const stored = await loadConfig()
+  const github = info.source === 'github'
+  const npm = info.source === 'npm'
+  const candidates = npm ? npmDownloadCandidates(info, stored.mirror) : github ? downloadCandidates(info.downloadUrl, stored.mirror, process.env.TANGU_GITHUB_PROXY || '') : [info.downloadUrl]
+  const archive = await downloadZip(candidates, (u, init) => github || u.startsWith(NPM_OFFICIAL) ? net.fetch(u, init) : fetch(u, init), (p) => report('download', p), npm ? GZIP_MAGIC : ZIP_MAGIC)
+  const buf = npm ? await npmTarballToZip(archive, info, info.type) : archive
+  return { info, buf }
+}
+
 app.whenReady().then(async () => {
   const desktopPermissions = registerDesktopPermissions({
     isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
@@ -2124,6 +2158,25 @@ app.whenReady().then(async () => {
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
   void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
   deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
+  const marketPluginUpdater = createMarketPluginUpdater({
+    home: forsionHomeDir(), appVersion: app.getVersion(),
+    protectedIds: () => new Set([...builtinPluginIds(), ...BUILTIN_BUNDLES.map((x) => x.id)]),
+    lookup: async (id) => {
+      const base = await marketBase()
+      const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      if (!r.ok) throw new Error(`resolve: HTTP ${r.status}`)
+      return await r.json() as MarketUpdateItem
+    },
+    download: async (item) => {
+      const { info, buf } = await downloadMarketPackage(item.id)
+      if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
+      return buf
+    },
+    broadcast: (status) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
+    },
+  })
+  if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
@@ -2215,37 +2268,66 @@ app.whenReady().then(async () => {
     return { restartPending: bundleRestartPending(id) }
   })
   // 「重启以生效」:走正常退出链(引擎 / 同步收尾),退完再拉起。dev(electron-vite)下拉不起来就手动重跑 npm run dev。
+  const guardedRestart = createRestartGuard({
+    inspect: async () => {
+      const st = backend.getStatus()
+      // External/cloud engines survive this desktop restarting; only inspect the engine we stop.
+      if (!PRODUCT.agentBackend || st.state === 'stopped' || st.state === 'crashed') return { tasks: 0, processes: 0 }
+      if (st.state !== 'ready' || !st.url) return { tasks: 0, processes: 0, unknown: true }
+      return readRestartActivity(st.url, backend.getToken())
+    },
+    confirm: async (options) => {
+      showMainWindow()
+      if (!mainWindow || mainWindow.isDestroyed()) return false
+      return (await dialog.showMessageBox(mainWindow, options)).response === 1
+    },
+    restart: async (install) => {
+      isQuitting = true
+      // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
+      try {
+        await backend.stop()
+        if (install) installUpdate()
+        else { app.relaunch(); app.quit() }
+      } catch (error) {
+        isQuitting = false
+        throw error
+      }
+    },
+  })
   ipcMain.handle('app:relaunch', (e) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
-    app.relaunch()
-    app.quit()
+    return guardedRestart()
   })
-  // 内置捆绑包的 npm 更新(builtinUpdates.ts):启动 1 分钟后查一次、之后每 6 小时一次,新版只下载进暂存区,
-  // 由下次启动的上面那次播种换上。只在打包版跑:dev 的随包来源就是 node_modules,跟着 npm install 走。
+  ipcMain.handle('updater:restart', (e) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return guardedRestart(canInstallUpdate() && getUpdaterStatus().phase === 'downloaded')
+  })
+  // Manual checks and background checks share state and a single in-flight run.
+  const corePluginUpdater = createCorePluginUpdater({
+    items: bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' })),
+    enabled: app.isPackaged,
+    broadcast: (status) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
+    },
+    run: async (onStatus) => {
+      const stored = await loadConfig()
+      return checkBuiltinUpdates({
+        pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
+        appVersion: app.getVersion(), registries: registryOrder(stored.mirror), onStatus,
+        fetch: (url, init) => url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init),
+      })
+    },
+  })
+  const checkAllUpdates = () => {
+    void corePluginUpdater.check()
+    if (PRODUCT.market) void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
+    return checkForUpdates()
+  }
+  ipcMain.handle('updater:core-status', () => corePluginUpdater.snapshot())
   if (app.isPackaged) {
-    let busy = false
-    const runBuiltinUpdates = async (): Promise<void> => {
-      if (busy) return
-      busy = true
-      try {
-        const stored = await loadConfig()
-        await checkBuiltinUpdates({
-          pluginsRoot: join(forsionHomeDir(), 'plugins'),
-          sources: bundleSources,
-          appVersion: app.getVersion(),
-          registries: registryOrder(stored.mirror),
-          // 官方源走 net.fetch(认系统代理);npmmirror 在大陆直连,照旧 Node fetch —— 同 market:install 的口径。
-          fetch: (url, init) => (url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)),
-        })
-      } catch (e) {
-        console.warn('[builtin-updates] 检查失败(忽略):', (e as Error)?.message)
-      } finally {
-        busy = false
-      }
-    }
     setTimeout(() => {
-      void runBuiltinUpdates()
-      setInterval(() => void runBuiltinUpdates(), 6 * 3600_000).unref()
+      void corePluginUpdater.check()
+      setInterval(() => void corePluginUpdater.check(), 6 * 3600_000).unref()
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -3041,7 +3123,8 @@ app.whenReady().then(async () => {
   })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
-  ipcMain.handle('updater:check', () => checkForUpdates())
+  ipcMain.handle('updater:check', () => checkAllUpdates())
+  ipcMain.handle('updater:status', () => getUpdaterStatus())
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
@@ -3049,14 +3132,10 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
   ipcMain.handle('updater:download', () => downloadUpdate())
-  ipcMain.handle('updater:install', async () => {
-    // 先优雅停后端 → 下方 before-quit 见 'stopped' 不再 preventDefault/app.exit(0),
-    // electron-updater 的退出安装路径才不被硬退出截断。
-    // 真会退出去装时先置 isQuitting:排在 ensureChain 里的那次拉起就不会在 stop 之后又把引擎起回来。
-    if (canInstallUpdate()) isQuitting = true
-    await backend.stop()
-    installUpdate()
-    return { ok: true }
+  ipcMain.handle('updater:install', async (e) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    if (!canInstallUpdate() || getUpdaterStatus().phase !== 'downloaded') return { ok: false }
+    return guardedRestart(true)
   })
 
   // 应用内「卸载 / 清空数据」(mac/linux 无 NSIS 卸载器,靠此;Windows 也可用)。清完 relaunch 为全新状态。
@@ -3096,14 +3175,6 @@ app.whenReady().then(async () => {
 
   // ── Forsion Market ──
   // 浏览/详情/安装全在主进程:有 cloudUrl + 文件系统 + 免 CORS。浏览端点公开(无需 token)。
-  const marketBase = async (): Promise<string> => {
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    const base = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    if (!base) throw new Error('未配置 Forsion 云端地址')
-    return base
-  }
-  const MARKET_UA = 'Forsion-Tangu'
 
   /** 服务端给的 iconUrl 是相对路径(它不知道自己的公网地址);渲染层的 <img> 直连,所以在这里拼成绝对地址。
    *  base 无尾斜杠、iconUrl 以 /api 开头,直接相接即可。图标是公开端点,不带 token。 */
@@ -3131,7 +3202,8 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string) => {
+  ipcMain.handle('market:install', async (e, id: string) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
       const now = Date.now()
@@ -3140,20 +3212,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const base = await marketBase()
-    // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
-    // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
-    const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
-      .catch((err: any) => { throw new Error(`resolve: ${err?.name === 'TimeoutError' ? 'timeout' : err?.cause?.code || err?.message || err}`) })
-    if (!infoRes.ok) throw new Error(`resolve: HTTP ${infoRes.status}`)
-    const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string }
-    if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('resolve: invalid target')
-    // github 源走 net.fetch(认系统代理);开了「中国大陆镜像」才加第三方代理站(见 downloadCandidates 的 ⚠️)。
-    // zip 源(Forsion 对象存储)一直能通,照旧 Node fetch 单发 —— 不让一个失效的系统代理设置拖累它。
-    const stored = await loadConfig()
-    const github = info.source === 'github'
-    const candidates = github ? downloadCandidates(info.downloadUrl, stored.mirror, process.env.TANGU_GITHUB_PROXY || '') : [info.downloadUrl]
-    const buf = await downloadZip(candidates, github ? (u, init) => net.fetch(u, init) : (u, init) => fetch(u, init), (p) => report('download', p))
+    const { info, buf } = await downloadMarketPackage(id, report)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -3187,8 +3246,28 @@ app.whenReady().then(async () => {
       await rm(dest, { recursive: true, force: true }).catch(() => {})
       throw new Error('install: builtin')
     }
+    await marketPluginUpdater.forget(effType, info.installSlug, false)
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
+  }))
+
+  ipcMain.handle('market:updateStatus', (e) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return marketPluginUpdater.snapshot()
   })
+  ipcMain.handle('market:setAutoUpdate', async (e, id: string, on: boolean) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    const state = await marketPluginUpdater.setAutoUpdate(id, on)
+    if (on) void marketPluginUpdater.check().catch((err) => console.warn('[market-updates]', err))
+    return state
+  })
+  ipcMain.handle('market:checkUpdates', (e) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return marketPluginUpdater.check()
+  })
+  if (PRODUCT.market) setTimeout(() => {
+    void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
+    setInterval(() => void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)), 6 * 3600_000).unref()
+  }, 60_000).unref()
 
   ipcMain.handle('market:installed', async () => {
     // 每个已装项带版本号(读其 manifest),供市场「可更新」检查。
@@ -3211,15 +3290,17 @@ app.whenReady().then(async () => {
   // 拒绝即 null) —— 目录不存在直接报错而不是静默成功,否则用户会以为卸载了、其实装在别处。
   // ⚠️ 插件家族:同 slug 可能因历史误标同时躺在引擎位与 Forsion 位。这里**只删调用方指明的那一个**,
   //    渲染层按 installedInfo 算出的 realType 传值;不做跨目录清扫(那是 market:install 的职责,它有身份守卫)。
-  ipcMain.handle('market:uninstall', async (_e, type: string, slug: string) => {
+  ipcMain.handle('market:uninstall', async (e, type: string, slug: string) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     const dir = marketItemDir(tanguHomeDir(), type, slug)
     if (!dir) throw new Error('非法的卸载目标')
     if (!existsSync(dir)) throw new Error('该项不在已安装目录中')
     // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
     const spaceId = type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
+    await marketPluginUpdater.forget(type, slug)
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }
-  })
+  }))
 
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
   // 另汇入 Forsion 插件捆绑包内嵌的 Space(plugins/<id>/spaces/<slug>/space.json,带 plugin=manifest id):
@@ -3242,13 +3323,14 @@ app.whenReady().then(async () => {
   // ── 后端插件卸载:只动 ~/.tangu/plugins(用户目录);<pkg>/plugins 首方插件结构性安全(不在这里,删不到)。
   // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
   ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguDataDir(), 'plugins')))
-  ipcMain.handle('plugins:uninstall', async (_e, id: string) => {
+  ipcMain.handle('plugins:uninstall', async (_e, id: string) => marketPluginUpdater.exclusive(async () => {
     if (!isSafeSlug(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
     if (!hit) throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    await marketPluginUpdater.forget('plugin', hit.slug)
     await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
     return { ok: true }
-  })
+  }))
 
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
   // 与 `tangu login <provider>` 同一实现、同一份 ~/.tangu/provider-auth.json。
@@ -3577,7 +3659,7 @@ app.whenReady().then(async () => {
   const ch = computerHistory
   createTray({
     show: showMainWindow,
-    checkUpdates: () => { void checkForUpdates() },
+    checkUpdates: () => { void checkAllUpdates() },
     quit: () => { isQuitting = true; app.quit() },
     computerHistory: ch ? {
       state: () => ch.view().state,

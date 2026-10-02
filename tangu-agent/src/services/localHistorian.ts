@@ -47,6 +47,8 @@ import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET } from './memoryRepository.js';
 import { sessionCalledTool } from './sessionSearchSql.js';
 import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
+import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
+import { applyHistorianEmoji } from './sessionEmoji.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
@@ -74,9 +76,10 @@ export function resetHistorianConsolidationState(): void {
 }
 
 /** judge JSON 的字段规格+示例(独立模式 system prompt 与 fork 判官指令共用同一契约)。 */
-function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean): { fields: string[]; example: string } {
+function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false): { fields: string[]; example: string } {
   const fields: string[] = [];
   if (wantTitle) fields.push('"title": a phrase of ≤16 characters in the user\'s language summarizing this conversation\'s topic, used as the session title (always provide it)');
+  if (wantEmoji) fields.push(HISTORIAN_EMOJI_FIELD);
   if (wantSummary) {
     fields.push(
       '"summary": an updated summary of this session, 1-3 sentences in the user\'s language, written for a human skimming their session list: ' +
@@ -107,7 +110,7 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     );
   }
   const example =
-    `{${wantTitle ? '"title":"Gradient visualization",' : ''}${wantSummary ? '"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open.",' : ''}` +
+    `{${wantTitle ? '"title":"Gradient visualization",' : ''}${wantEmoji ? '"emoji":"🎨",' : ''}${wantSummary ? '"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open.",' : ''}` +
     `"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}${wantHarness ? ',"harness_candidates":[]' : ''}}`;
   return { fields, example };
 }
@@ -118,8 +121,8 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
  * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
  * 不得相同;memory 要克制,多数对话应为空。
  */
-function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean): string {
-  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness);
+function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji);
   return [
     (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
     '\nRead the conversation below and judge; output **a single JSON object** only, with the following fields:',
@@ -130,8 +133,8 @@ function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boo
 }
 
 /** fork 判官的追加指令(user 消息,分叉尾部):上下文=上方完整对话,无需另拼 transcript。 */
-function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string): string {
-  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness);
+function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string, wantEmoji = false): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness, wantEmoji);
   return [
     '## Historian fork (tail-fork judge)',
     'You are a tail-fork of the assistant above, acting as the background Historian for this conversation. ' +
@@ -159,7 +162,7 @@ async function maybeConsolidate(userId: string, slug: string | undefined, modelI
 }
 
 /** 从模型输出里提取首个 JSON 对象(容忍代码围栏 / 前后噪声)。失败 → null。 */
-function parseJudgement(raw: string): { title?: string; summary?: string; log?: string; memory?: string } | null {
+function parseJudgement(raw: string): { title?: string; summary?: string; log?: string; memory?: string; emoji?: string } | null {
   let s = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
   const i = s.indexOf('{');
   const j = s.lastIndexOf('}');
@@ -478,7 +481,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
   try {
     // 仅用户会话；并发安全：roundN 由 done run 计数推出（幂等）。app_id/model_id/agent_config 供辅助模式讨论用。
     const skRows = await query<any[]>(
-      `SELECT kind, title, summary, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
+      `SELECT kind, title, summary, emoji, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
       [sessionId],
     );
     const sk = skRows[0];
@@ -517,6 +520,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const memoryDue = due && !remoteRound;
     const logDue = due && !remoteRound;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
+    const emojiDue = cfg.autoEmoji !== false && !String(sk.emoji || '').trim();
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
     if (!opts?.force && !(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
@@ -562,7 +566,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       let raw = forkMode
         ? await forkJudge(
             sessionId, userId, String(sk.app_id || deps().profile.appId), forkSeed!,
-            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary),
+            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue),
           )
         : '';
       // fork 产出非空但解析不出 JSON(判官跑偏成长文)= 判官失败,同样回落 independent——
@@ -572,7 +576,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         raw = '';
       }
       if (!raw) {
-        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness);
+        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue);
         const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: prevSummary ? `${sys}\n\n[Previous summary]\n${prevSummary}` : sys, transcript, maxTokens: 1600, signal: historianSignal.getStore() });
         await recordJudgeUsage(userId, cfg.modelId, result.model, result);
         raw = result.content;
@@ -583,6 +587,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         log(`判断输出无法解析为 JSON: "${raw.slice(0, 80)}"`); // 不 return:辅助讨论仍应发起
       } else {
         const title = cleanTitle(j.title);
+        if (emojiDue && loadSpecialAgentsConfig().historian.autoEmoji !== false) {
+          historianSignal.getStore()?.throwIfAborted();
+          const emoji = await applyHistorianEmoji(sessionId, userId, j.emoji).catch(() => null);
+          if (emoji) await logActivity(userId, 'icon_updated', emoji, sessionId);
+        }
         const logText = String(j.log || '').trim();
         // 候选条目:数组为正道;旧格式/半服从模型给了 memory 字符串 → 按行拆成多条候选兜底
         // (整文是 bullet 列表;当一条塞进行式 raw 会丢首行之外的全部内容——Codex #5)。

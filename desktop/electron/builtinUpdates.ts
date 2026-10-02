@@ -12,6 +12,7 @@
  *  · gatePluginManifest(apiVersion / minAppVersion):插件更新不能把宿主带崩,宿主太旧就等宿主升级;
  *  · 解包:minitar 拒 symlink / 硬链接,safeJoin 防穿越,条目数与解压总量封顶。
  */
+import type { CorePluginUpdate } from '../shared/corePlugins'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -79,6 +80,7 @@ export interface BuiltinUpdateOpts {
   registries: string[]
   fetch: RegistryFetch
   log?: (m: string) => void
+  onStatus?: (status: CorePluginUpdate) => void
 }
 
 /** 只认正式版:cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,预发布一旦进了暂存区,同号正式版就永远换不上去。 */
@@ -90,10 +92,17 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
   const staged: string[] = []
   for (const source of o.sources) {
     const { pkg, dir: src } = source
+    let status: CorePluginUpdate = { id: source.id, packageName: pkg, phase: 'checking' }
+    const report = (patch: Partial<CorePluginUpdate>): void => {
+      status = { ...status, ...patch }
+      o.onStatus?.({ ...status })
+    }
+    report({})
     try {
       const bundled = await readManifest(src)
       if (!bundled) {
         log(`[builtin-updates] ${pkg} 随包来源缺失,跳过:${src}`)
+        report({ phase: 'error', error: 'bundled source missing' })
         continue
       }
       const pendingPath = pendingDirFor(o.pluginsRoot, src)
@@ -102,16 +111,26 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
       // 否则一份改了版本号的假副本会让更新器永远以为已是最新。
       const counted = async (m: BundleManifest | null, dir: string): Promise<BundleManifest | null> =>
         m && m.id === bundled.id && (!source.desktop || (await verifyBundleSignature(dir, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])).ok) ? m : null
-      const have = [bundled, installedDir ? await counted(await readManifest(installedDir), installedDir) : null, await counted(await readManifest(pendingPath), pendingPath)]
+      const installed = installedDir ? await counted(await readManifest(installedDir), installedDir) : null
+      const pending = await counted(await readManifest(pendingPath), pendingPath)
+      report({ installedVersion: installed?.version ?? bundled.version, pendingVersion: pending?.version })
+      const have = [bundled, installed, pending]
         .filter((m): m is BundleManifest => !!m)
         .reduce((v, m) => (cmpVersion(m.version, v) > 0 ? m.version : v), '0.0.0')
       const latest = await resolveLatest(pkg, o.registries, o.fetch)
+      report({ latestVersion: latest.version })
       if (!RELEASE_VERSION.test(latest.version)) {
         log(`[builtin-updates] ${pkg} latest=${latest.version} 不是正式版,跳过`)
+        report({ phase: 'incompatible' })
         continue
       }
-      if (cmpVersion(latest.version, have) <= 0 || incompatible.has(`${pkg}@${latest.version}`)) continue
+      if (cmpVersion(latest.version, have) <= 0) {
+        report({ phase: pending && cmpVersion(pending.version, status.installedVersion!) > 0 ? 'staged' : 'current' })
+        continue
+      }
+      if (incompatible.has(`${pkg}@${latest.version}`)) { report({ phase: 'incompatible' }); continue }
 
+      report({ phase: 'downloading' })
       const tgz = await downloadZip(latest.tarballs, o.fetch, undefined, GZIP_MAGIC)
       if (`sha512-${createHash('sha512').update(tgz).digest('base64')}` !== latest.integrity) throw new Error('integrity mismatch')
       const entries = stripTopDir(untar(gunzipSync(tgz, { maxOutputLength: MAX_UNPACK })))
@@ -124,6 +143,7 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
       const gate = gatePluginManifest(manifest, o.appVersion)
       if (gate) {
         incompatible.add(`${pkg}@${latest.version}`)
+        report({ phase: 'incompatible' })
         log(`[builtin-updates] ${bundled.id}@${latest.version} 需要${gate === 'minApp' ? `宿主 ≥ ${String(manifest.minAppVersion)}` : '另一版插件 API'},等 Forsion 升级`)
         continue
       }
@@ -155,8 +175,10 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
         await fs.rm(retired, { recursive: true, force: true })
       }
       staged.push(`${bundled.id}@${latest.version}`)
+      report({ phase: 'staged', pendingVersion: latest.version })
       log(`[builtin-updates] ${bundled.id} ${have} → ${latest.version} 已下载,下次启动生效`)
     } catch (e) {
+      report({ phase: 'error', error: (e as Error)?.message || String(e) })
       log(`[builtin-updates] ${pkg} 检查更新失败(忽略,下次再试):${(e as Error)?.message || e}`)
     }
   }

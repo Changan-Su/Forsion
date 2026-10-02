@@ -6,7 +6,7 @@
 import { $prose, $remark } from '@milkdown/kit/utils'
 import { Plugin, PluginKey, TextSelection, type Selection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
-import type { EditorState } from '@milkdown/kit/prose/state'
+import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { ResolvedPos, Node as PMNode } from '@milkdown/kit/prose/model'
 import { registerMessages, translate } from '../../../i18n'
 import { splitParagraph } from './softBreak'
@@ -124,6 +124,50 @@ function calloutOf(node: PMNode) {
       ? { at: m[0].length + gap, len: mk[0].length, cls: mk[1][0] === '#' ? `h${mk[1].length}` : 'bullet' }
       : null,
   }
+}
+
+/** 拖入隐藏正文的内容必须立刻可见。按实际插入区间展开所有覆盖它的 callout，
+ *  不依赖选区（代码块/表格/hr 落下后可以是非空块选区）。整只搬动的折叠块保留自己的状态。
+ *  appendTransaction 与 drop 属于同一次撤销；后续插件事务的 mapping 也要计入。 */
+function unfoldCalloutsInRanges(tr: Transaction, inserted: Array<[number, number]>): void {
+  tr.doc.descendants((node, pos) => {
+    const c = calloutOf(node)
+    if (c?.marker !== '-') return
+    const bodyStart = pos + 1 + c.first.nodeSize
+    const bodyEnd = pos + node.nodeSize - 1
+    if (inserted.some(([from, to]) => from < bodyEnd && to > bodyStart && !(from <= pos && to >= pos + node.nodeSize))) {
+      const marker = pos + 2 + c.raw.length + 3
+      tr.insertText('+', marker, marker + 1)
+    }
+  })
+}
+
+/** 宿主新建特殊块也走同一条可见性规则；展开与插入合在本次事务里。 */
+export function unfoldCalloutsForInsert(tr: Transaction, from: number, to: number): void {
+  unfoldCalloutsInRanges(tr, [[from, to]])
+}
+
+export function unfoldCalloutsAfterDrop(transactions: readonly Transaction[], state: EditorState): Transaction | null {
+  const inserted: Array<[number, number]> = []
+  transactions.forEach((drop, index) => {
+    if (!drop.docChanged || drop.getMeta('uiEvent') !== 'drop') return
+    drop.mapping.maps.forEach((map, step) => {
+      map.forEach((_from, _to, start, end) => {
+        if (end <= start) return
+        let from = drop.mapping.slice(step + 1).map(start, 1)
+        let to = drop.mapping.slice(step + 1).map(end, -1)
+        for (let i = index + 1; i < transactions.length; i++) {
+          from = transactions[i].mapping.map(from, 1)
+          to = transactions[i].mapping.map(to, -1)
+        }
+        if (to > from) inserted.push([from, to])
+      })
+    })
+  })
+  if (!inserted.length) return null
+  const tr = state.tr
+  unfoldCalloutsInRanges(tr, inserted)
+  return tr.docChanged ? tr : null
 }
 
 /**
@@ -406,7 +450,9 @@ export function calloutPlugin() {
          * [!fold] 回到可见标题末；有色标注保留向后越过整块的语义。
          * ⚠️ 只管空光标 —— 跨隐藏区的选区(Meta+A 全选删除)是合法的,别破坏。
          */
-        appendTransaction(_trs, _old, state) {
+        appendTransaction(trs, _old, state) {
+          const expanded = unfoldCalloutsAfterDrop(trs, state)
+          if (expanded) return expanded
           const sel = state.selection
           if (!sel.empty) return null
           const head = calloutAt(sel.$from)

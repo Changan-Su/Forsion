@@ -58,6 +58,7 @@ import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
+import { CorePluginUpdates } from './CorePluginUpdates'
 import { AmadeusPluginsTab, PluginSettingsView } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
@@ -111,10 +112,11 @@ registerMessages({
   // 「Forsion 云端」一级页:账号 + 云端地址 + 记忆同步 + 笔记在线同步,整页随内置插件 Forsion Extend 出现 / 消失
   'settings.tab.forsionCloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
   'settings.page.forsionCloudDescription': {
-    zh: '管理 Forsion 账号、会员、额度与安全，以及笔记与记忆的云端同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
-    en: 'Manage your Forsion account, membership, quota and security, plus cloud sync for notes and memory. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
+    zh: '管理 Forsion 账号、会员、额度、安全与插件投稿，以及笔记与记忆的云端同步。由内置插件 Forsion 扩展提供，可在插件页停用。',
+    en: 'Manage your Forsion account, membership, quota, security and plugin submissions, plus cloud sync for notes and memory. Provided by the built-in Forsion Extend plugin, which you can turn off on the Plugins page.',
   },
   // 不叫「同步」:下面就是一级页「同步」(远程同步),左栏会出现两个同名项
+  'settingsmodal.forsionCloud.submissions': { zh: '插件投稿', en: 'Submissions' },
   'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
@@ -1105,7 +1107,7 @@ export const SettingsModal: React.FC<{
     ],
     'amadeus-plugins': [
       // Forsion 插件区整块在 window.amadeus 后面 —— 没有就只剩引擎插件一项,栏目条自动隐藏。
-      ...(window.amadeus ? [['pl-forsion', t('settings.plugins.secForsion')] as [string, string]] : []),
+      ...(window.amadeus ? [['pl-core', t('plugins.core.title')], ['pl-forsion', t('plugins.installed.title')]] as Array<[string, string]> : []),
       // 引擎插件管理桌面专属:设备页的 cfg.backendUrl=对方引擎,rescan/npm 装/启停会真打到对方机器(Codex P1)。
       ...(isDesktop ? [['pl-engine', t('settings.plugins.secEngine')] as [string, string]] : []),
     ],
@@ -2834,10 +2836,11 @@ export const SettingsModal: React.FC<{
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
                     设备页(unitPage)不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
                     启停会经代理持久改对方引擎插件(Codex P1);引擎插件区同因整块桌面专属。 */}
+                {tab === 'amadeus-plugins' && activeSub === 'pl-core' && !!window.amadeus && (
+                  <AmadeusPluginsTab key="core" section="core" {...(unitPage ? {} : { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins })} />
+                )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
-                  unitPage
-                    ? <AmadeusPluginsTab />
-                    : <AmadeusPluginsTab cfg={p.cfg} onEngineReload={reloadPlugins} enginePlugins={plugins} />
+                  <AmadeusPluginsTab key="installed" section="installed" {...(unitPage ? {} : { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins })} />
                 )}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && isDesktop && (
                   <>
@@ -3713,6 +3716,7 @@ export const SettingsModal: React.FC<{
                       <span className="grow" />
                       <UpdateActions upd={upd} />
                     </div>
+                    <CorePluginUpdates />
                     {(upd.phase === 'available' || upd.phase === 'downloaded') && (
                       <div className="field">
                         <div style={{ fontWeight: 600 }}>{t('about.update.available', { version: upd.version || '' })}</div>

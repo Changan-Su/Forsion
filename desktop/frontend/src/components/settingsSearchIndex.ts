@@ -39,6 +39,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'mirror', tab: 'general', sub: 'g-runtime', anchor: 'mirror', labelKey: 'settings.mirror.label', keywords: '镜像 国内 加速 mirror china', needs: ['stored', 'managed'] },
   { id: 'external-backend', tab: 'general', sub: 'g-conn', anchor: 'external-backend', labelKey: 'settings.external.title', keywords: '外部地址 令牌 url token', needs: ['external'] },
   { id: 'forsion-account', tab: 'forsion', sub: 'fx:forsion-extend:account', labelKey: 'settings.forsion.accountLabel', keywords: '账号 登录 account login sign', needs: ['desktop', 'cloud'] },
+  { id: 'forsion-submissions', tab: 'forsion', sub: 'fx:forsion-extend:submission', labelKey: 'settingsmodal.forsionCloud.submissions', keywords: '投稿 插件 发布 审核 npm github submissions publish review', needs: ['desktop', 'cloud'] },
   { id: 'cloud-url', tab: 'forsion', sub: 'f-conn', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored', 'cloud'] },
   { id: 'memory-sync', tab: 'forsion', sub: 'f-sync', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored', 'cloud'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },

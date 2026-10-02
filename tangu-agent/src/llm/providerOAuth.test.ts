@@ -22,6 +22,7 @@ describe('fetchProviderModels', () => {
         ok: true,
         json: () => Promise.resolve({ // 真实端点顶层是 { models: [...] }(2026-07-17 实测),非裸数组
           models: [
+            { slug: 'gpt-6.1-sol', visibility: 'list' },
             { slug: 'gpt-6-astra', visibility: 'list' },
             { slug: 'gpt-6-astra', visibility: 'list' },
             { slug: 'gpt-5.6-sol', visibility: 'list' },
@@ -32,9 +33,9 @@ describe('fetchProviderModels', () => {
       });
     });
     const r = await fetchProviderModels({ protocol: 'openai-responses', baseUrl: 'https://chatgpt.com/backend-api/codex' } as any, 'tok', 'acct');
-    expect(r).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
+    expect(r).toEqual(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.6-sol']);
     // 回归:Codex 后端缺 client_version query 直接 400 → 实拉永远失败,用户被冻结在硬编快照上看不到新模型。
-    expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.155.1'); // <0.155 的目录里没有 gpt-6-sol / gpt-6-luna
+    expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.159.2'); // 0.155.1 的目录里没有 gpt-6.1-sol
   });
 
   it('returns null on http error (→ caller falls back to curated hints)', async () => {
@@ -74,15 +75,15 @@ describe('Codex 模型目录缓存升级', () => {
     account_id: 'test-account', modelIds: ['gpt-5.6-sol'], modelIdsAt: Date.now(), ...extra,
   });
 
-  it.each([undefined, '0.150.0', '0.153.4'])('刚缓存的旧目录(version=%s)也立即刷新并记录版本', async (version) => {
+  it.each([undefined, '0.150.0', '0.153.4', '0.155.1'])('刚缓存的旧目录(version=%s)也立即刷新并记录版本', async (version) => {
     vi.mocked(loadProviderCreds).mockReturnValue({ codex: credential({ modelIdsClientVersion: version }) });
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ models: [{ slug: 'gpt-6-astra', visibility: 'list' }] }) });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }) });
     vi.stubGlobal('fetch', fetchMock);
     const providers = await loadOAuthDirectProviders();
-    expect(providers[0].modelIds).toEqual(['gpt-6-astra']);
+    expect(providers[0].modelIds).toEqual(['gpt-6.1-sol']);
     expect(fetchMock.mock.calls[0][1].headers['chatgpt-account-id']).toBe('test-account');
     expect(saveProviderCred).toHaveBeenCalledWith('codex', expect.objectContaining({
-      modelIds: ['gpt-6-astra'], modelIdsClientVersion: CODEX_MODELS_CLIENT_VERSION,
+      modelIds: ['gpt-6.1-sol'], modelIdsClientVersion: CODEX_MODELS_CLIENT_VERSION,
     }));
   });
 
@@ -108,6 +109,7 @@ describe('Codex 模型目录缓存升级', () => {
     expect(saveProviderCred).not.toHaveBeenCalled();
     vi.mocked(loadProviderCreds).mockReturnValue({ codex: credential({ modelIds: undefined }) });
     expect((await loadOAuthDirectProviders())[0].modelIds).toContain('gpt-6-astra');
+    expect((await loadOAuthDirectProviders())[0].modelIds).toContain('gpt-6.1-sol');
   });
 
   it('其他 provider 的有效缓存不受 Codex 目录版本影响', async () => {

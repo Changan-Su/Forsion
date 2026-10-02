@@ -44,17 +44,11 @@ export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDept
  */
 export const SKETCH_SECTION = `## Visual cards
 
-The \`sketch\` tool is a first-class answer medium, not a special effect. Do not wait for the user to
-say "draw". Default to a visual card when the essential relationship is easier to see than to read:
-- 3+ values, options, or categories to compare, rank, or scan
-- 3+ steps, states, dates, layers, nodes, or branches whose order or structure matters
-- a trend, distribution, composition, before/after, architecture, journey, timeline, or decision matrix
-- a proposed layout, palette, interface, or a small calculator/filter/toggle the user can manipulate
-
-If the user explicitly asks for text only, the deliverable is source code/a file rather than an
-explanation, or the answer is one fact or one number, stay in prose. Otherwise, when in doubt about a
-genuinely spatial relationship, draw. Make the card before the short explanation; after it, say only
-the takeaway or caveat that is not already visible.
+Use \`sketch\` when seeing or manipulating a relationship materially helps the answer: compare
+options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
+Do not wait for the user to say "draw" when interaction would help. Use prose for a single fact,
+Markdown for a requested table, and normal project/file tools when the deliverable is an app or file.
+Never add a visualization just because an answer contains three values or steps.
 
 ### Composition contract
 
@@ -66,19 +60,37 @@ Decide the one question the card answers, then choose one visual grammar:
 - hierarchy/architecture -> aligned layers or a tree; make direction and boundaries unambiguous
 - choice/decision -> a matrix with explicit criteria and one clearly explained emphasis
 
-Every finished card needs four parts: (1) a conclusion-led title, not a chart-type label; (2) a short
-subtitle stating measure, unit, scope, and time when relevant; (3) the visual field; (4) a compact
-source, assumption, or method line. Use the built-in \`.fs-*\` classes from the tool description so
-typography and spacing start polished. For charts, prefer responsive inline SVG with a viewBox,
-direct labels, hairline guides, and small contextual annotations. For diagrams, avoid a soup of equal
-rounded boxes: establish one reading direction, 2-3 hierarchy levels, consistent alignment, and
-quiet connectors. Use whitespace and rules to create useful density; decoration must never pretend
-to be data.
+Choose the smallest useful composition. A chart needs a concise title, units, readable labels and
+honest scales; a simulator needs compact controls and one dominant visual. Do not force every card
+into a title/subtitle/metrics/source template. Put sources and assumptions in a short caption only
+when needed. Keep the outer surface transparent; do not wrap plots in panels or add decorative KPI
+rows. Use one accent for one measure, neutral guides and meaningful labels. Never invent data.
 
-One well-made card beats several thin cards. Keep one color system, one focal accent, honest numeric
-proportions, readable labels, and meaningful interaction only. Before calling \`sketch\`, mentally
-check: the main point is visible in three seconds; labels do not collide; nothing relies on hover;
-dark/light themes work; and the card still makes sense without color.`;
+For common charts and processes, prefer the built-in \`fs-chart\` (bar or line) and \`fs-flow\`
+elements over hand-built shapes. Load the bundled \`visualize\` skill for their JSON schemas and
+examples. They provide direct labels, responsive layout, keyboard/hover inspection and restrained
+connectors without external libraries. Use custom SVG for multi-series plots or arbitrary graphs.
+
+Use the supplied \`.fs-*\` styles and \`--fs-*\` variables. Shared controls: \`fs-controls\`,
+\`fs-field\` (wrapping label), \`fs-input\`, \`fs-select\`, \`fs-range\`, \`fs-check\` (wrapping label)
+and \`fs-button\`. Put a range's current value in an \`output\` beside its label. Keep controls native,
+labelled and keyboard accessible. \`fs-tabs[role="tablist"]\` with button[role="tab"], aria-selected,
+aria-controls and matching role="tabpanel" elements has built-in click/arrow-key behavior.
+
+Fit widths from 320px to about 700px: wrap controls, stack panels, keep supporting text at least
+11px, and measure an SVG's actual container with ResizeObserver instead of shrinking a fixed
+viewBox and its labels. Use role="img" and an accessible name on visual fields; use aria-live="polite"
+for changed results. Essential actions must work without hover. Honor prefers-reduced-motion.
+
+For stateful interactions, read \`window.forsionSketch.state\` at startup (null on first use), validate
+its shape, then render. After user input call \`window.forsionSketch.setState(jsonValue)\` to replace
+a snapshot up to 16 KiB. Store only choices needed to restore the view, not secrets or derived data.
+This state is local to this card on this device; it does not reach the model or start a conversation.
+Listen for \`forsion:themechange\` when canvas needs repainting; SVG CSS updates automatically.
+
+Before calling \`sketch\`, check that every control works, all queried elements exist, labels fit,
+light/dark themes work, and the first render is useful. Afterwards give only the takeaway or caveat
+not already visible. For complex charts or interactions, use the bundled \`visualize\` skill.`;
 
 export type SketchTurnSignal = {
   kind: 'explicit' | 'implicit';

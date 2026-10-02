@@ -213,6 +213,9 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
   const prompt = typeof o?.prompt === 'string' ? o.prompt.trim() : ''
   if (!prompt) return { ok: false, error: 'prompt is required' }
   if (prompt.length > START_CHAT_MAX_PROMPT) return { ok: false, error: `prompt is too long (max ${START_CHAT_MAX_PROMPT} characters)` }
+  const modelId = typeof o.modelId === 'string' ? o.modelId.trim() : undefined
+  if (modelId && !readModels().some(m => m.id === modelId)) return { ok: false, error: `unknown model: ${modelId}` }
+  if (o.thinkingLevel !== undefined && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(o.thinkingLevel)) return { ok: false, error: 'invalid thinking level' }
   const agent = typeof o.agent === 'string' && o.agent.trim() ? o.agent.trim() : undefined
   if (agent && !(await agentKnown(agent))) return { ok: false, error: `unknown agent: ${agent}` }
   if (!alive()) return { ok: false, error: 'plugin disabled' }
@@ -227,6 +230,8 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
   app.setNewChatCfg(() => ({}))
   app.setNewChatModel(null)
   if (agent) app.selectNewChatAgent(agent)
+  if (modelId) app.setNewChatModel(modelId)
+  if (o.thinkingLevel !== undefined) app.setNewChatCfg(c => ({ ...c, thinkingLevel: o.thinkingLevel }))
   useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
   if (!o.send) {
     app.setPendingDraft(prompt)

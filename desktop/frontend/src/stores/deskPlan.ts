@@ -127,8 +127,8 @@ export function extractLiveBody(args: string, tool: string): string {
 export const DESK_PERSIST_KEY = contentStorageKey('forsion.deskBySession')
 export const DESK_PERSIST_CAP = 40
 
-/** 新对话草稿(activeId === null)的 Desk 卡片用的会话键:卡片开聊前就在场(伴随面住这里)。
- *  草稿态没有侧板、也没有任何写入路径往这个键落内容;落盘时一律剔除,别让它进快照。 */
+/** 旧版新会话草稿 Desk 的保留键;ChatView 现在只在会话开始后挂载 Desk。
+ *  保留落盘过滤与组件兼容,避免旧草稿状态进入会话快照。 */
 export const DESK_DRAFT_KEY = '__draft__'
 
 export interface DeskSnapshot {

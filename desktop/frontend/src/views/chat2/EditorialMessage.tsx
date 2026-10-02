@@ -485,7 +485,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
-                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} />)}
+                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} />)}
                 </Fragment>
               ) : null
             })
@@ -560,7 +560,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
-        {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} />}
+        {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} />}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && pendingApv.length > 0 && (

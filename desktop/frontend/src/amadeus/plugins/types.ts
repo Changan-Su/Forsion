@@ -985,7 +985,9 @@ export interface PluginContext {
      *    「工作区外写入」的升级审批(仍按用户自己的审批档走)。
      *  - 返回 `{ ok:false, error }` 而不抛:Agent 不存在、后端没连上、送出失败。
      *  旧宿主没有:`ctx.tangu?.startChat?.(…)`,缺席时插件自己退化(把提示词复制到剪贴板之类)。 */
-    startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string }): Promise<import('./tanguSeam').TanguStartChatResult>
+    /** True when startChat accepts explicit modelId / thinkingLevel from the native Chat Box. */
+    chatSelection?: true
+    startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<import('./tanguSeam').TanguStartChatResult>
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,

@@ -268,9 +268,7 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
 
 /** 卡片是否退场(.gone = 隐身但常驻,借 display allow-discrete 做进出动画):只有一条 ——
  *  侧板在演(open)且侧板真有东西可演;open 时内容已散(直播失败清场)就让卡片兜底,别双双消失。
- *  开聊前(新对话草稿 / 空会话 / 历史还在加载)卡片**照常在场**:07-27 那条「空会话不上场」的理由
- *  (`.newchat-pickers` 拿不到让位、歪出中线)已随 08-14 把 pickers 收进 `.composer-anchor` 失效,
- *  让位规则一并覆盖到它 —— 由 desk-rail check 的草稿态用例钉住。 */
+ *  这里只判断卡片与侧板的切换;新会话开始前是否挂载由 ChatView 决定。 */
 export const deskCardGone = (mode: string | undefined, panelHasContent: boolean): boolean =>
   mode === 'open' && panelHasContent
 
@@ -294,10 +292,9 @@ export function deskCardPlan(o: { mode: string | undefined; itemCount: number; c
 
 /** 卡片态(默认态):Pin Summary 下方的常驻预览小卡,上下各占右侧车道一半(严格 50/50)。
  *  正文 pointer-events:none —— 卡片是"预览",点整卡=放大成侧板;交互(编辑/按钮)只在 open 态。
- *  卡片不可关闭(用户裁决):空态也常驻当预览位,收/放只在卡片↔侧板之间切。
+ *  卡片不可关闭(用户裁决):已开始会话里的零条目空态也常驻当预览位,收/放只在卡片↔侧板之间切。
  *  (09-25 UIUX 评审 U-18 曾把零条目卡缩成 72px 小坞、输入框不再让位;09-26 用户看过后改判撤回 —— 空态照旧整卡,勿再提。)
- *  新对话草稿用 DESK_DRAFT_KEY 当会话键;ChatView 不给本组件挂 key,首条消息发出(草稿 → 真 id)
- *  是同一个实例,伴随面只按自己的 key 挂载 → 不重挂。 */
+ *  ChatView 在首条消息出现后才挂载本组件;切换已开始的会话不挂 key,伴随面按自己的 key 挂载。 */
 export function DeskCard({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const desk = useApp((s) => s.deskBySession[sessionId])

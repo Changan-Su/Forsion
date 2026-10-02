@@ -18,14 +18,17 @@ describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
   const base = () => ({ model: 'gpt-5.6-luna', temperature: 0.7, messages: [], tools: [{}] }) as any;
   const OFFICIAL = 'https://api.openai.com/v1';
 
-  it.each(['codex', 'openai'])('GPT-6 Astra 经 %s 注册表→payload→Responses 保留工具与有效档位', (providerId) => {
+  it.each([
+    ['codex', 'gpt-6-astra'], ['openai', 'gpt-6-astra'],
+    ['codex', 'gpt-6.1-sol'], ['openai', 'gpt-6.1-sol'],
+  ])('%s / %s 经注册表→payload→Responses 保留工具与有效档位', (providerId, modelId) => {
     const subscription = providerId === 'codex';
     const reg = createProviderRegistry([{
       providerId, baseUrl: subscription ? 'https://chatgpt.com/backend-api/codex' : OFFICIAL,
       ...(subscription ? { protocol: 'openai-responses' as const, accountId: 'test-account' } : {}),
-      modelIds: ['gpt-6-astra'],
+      modelIds: [modelId],
     }]);
-    const resolved = reg.resolve(`${providerId}/gpt-6-astra`)!;
+    const resolved = reg.resolve(`${providerId}/${modelId}`)!;
     for (const requested of [undefined, 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       const p = buildOpenAiCompatPayload({
         model: resolved.model, apiModelId: resolved.apiModelId,
@@ -39,7 +42,7 @@ describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
       expect(effective).toBe(expected);
       expect(p[PROTOCOL_MARK]).toBe('openai-responses');
       const wire = openaiToResponsesBody(p);
-      expect(wire.model).toBe('gpt-6-astra');
+      expect(wire.model).toBe(modelId);
       expect(wire.reasoning.effort).toBe(expected);
       expect(wire.instructions).toBe('SYSTEM');
       expect(wire.tools[0]).toMatchObject({ type: 'function', name: 'read_file' });

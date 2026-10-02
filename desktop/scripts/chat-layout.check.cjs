@@ -61,6 +61,7 @@ async function main() {
     // 真 Electron 会沿用系统指针位置；缩宽恰好把 pill 移到指针下时会展开名称，改变内容宽度。
     await win.mouse.move(1, 1)
     await win.waitForTimeout(700)
+    check('未开始的新会话不挂载 Agent Desk 卡片与侧板', await view.locator('.agent-desk-card, .agent-desk').count() === 0)
 
     const resize = async (width, height, zoom = 1) => {
       await view.evaluate((el, size) => {
@@ -203,6 +204,7 @@ async function main() {
     await resize(1000, 820)
     await win.waitForTimeout(550)
     check('已有空会话显示任务概览', await view.locator('.t2-tsum.show').isVisible())
+    check('已有 ID 但未发消息的会话也不挂载 Agent Desk', await view.locator('.agent-desk-card, .agent-desk').count() === 0)
     await view.screenshot({ path: path.join(home, 'empty-summary.png') })
     await safe('任务概览在场')
     for (const width of [760, 759, 620]) {
@@ -236,6 +238,21 @@ async function main() {
     check('任务概览进出动画中 Logo 与输入框同步', shifts.frames > 2 && shifts.maxOffset < 2, shifts)
     await win.emulateMedia({ reducedMotion: 'reduce' })
     await safe('减少动态效果')
+
+    // 真正发送首条消息后才上场;零条目仍保留卡片。回到草稿必须卸载,再次打开历史后恢复。
+    await view.locator('.t2c-ta').fill('Start the session')
+    await view.locator('.t2c-ta').press('Enter')
+    await view.locator('.agent-desk-card[data-desk-session="empty-with-summary"]').waitFor({ state: 'visible' })
+    check('首条消息发出后 Agent Desk 卡片显示', await view.locator('.agent-desk-card').isVisible())
+    await view.screenshot({ path: path.join(home, 'started-desk.png') })
+    await win.locator('button[data-act="new-chat"]').first().click()
+    await view.locator('.t2-empty-mark').waitFor()
+    check('重新新建会话卸载 Agent Desk', await view.locator('.agent-desk-card, .agent-desk').count() === 0)
+    await view.screenshot({ path: path.join(home, 'new-session-no-desk.png') })
+    stub.state.messages = [{ id: 'layout-first-message', role: 'user', content: 'Start the session', created_at: '2026-09-30 00:00:00' }]
+    await win.locator('.t2s-srow, .t2o-row').filter({ hasText: 'Empty with task summary' }).first().click()
+    await view.locator('.agent-desk-card[data-desk-session="empty-with-summary"]').waitFor({ state: 'visible' })
+    check('切回已开始的历史会话恢复 Agent Desk', await view.locator('.agent-desk-card').isVisible())
     console.log(`${checks}/${checks} passed; screenshots: ${home}`)
   } catch (error) {
     const win = app?.windows()[0]

@@ -29,6 +29,13 @@ async function startFakeForsionCloud(opts = {}) {
     replies: { t1: [{ id: 'r1', ticket_id: 't1', author_id: 'admin', author_role: 'admin', content: '收到，已复现，下个版本修复。', created_at: '2026-09-27T10:00:00Z' }], t2: [] },
   }
   const requests = []
+  const giftDefinition = {
+    version: 1, name: { zh: '云端礼包', en: 'Cloud gift' }, description: { zh: '打开获得 100 积分和 1 张重置卡。', en: 'Open to receive 100 points and one reset card.' },
+    icon: '🎁', rarity: 'rare', stackable: true,
+    use: { label: { zh: '打开礼包', en: 'Open gift' }, effects: [{ type: 'points', amount: 100 }, { type: 'reset_card', count: 1 }], animation: 'sparkle' },
+  }
+  const gifts = new Set(['gift-1', 'gift-2'])
+  const usedGifts = new Set()
   const bgLimit = (limit) => Math.round(limit * 0.15)
   const quota = () => {
     const d = bgLimit(LIMIT.daily), w = bgLimit(LIMIT.weekly)
@@ -79,6 +86,27 @@ async function startFakeForsionCloud(opts = {}) {
       }
       if (p === '/api/settings') return send(res, 200, { nickname: state.nickname, avatar: state.avatar })
       if (p === '/api/membership/my') return send(res, 200, { membership: { status: 'active', tier: 'plus', plan: { name: 'Plus 月付', tier: 'plus' }, startedAt: '2026-09-01T00:00:00Z', expiresAt: '2026-12-31T00:00:00Z' } })
+
+      // 背包列表不含卡密，逐件揭示才返回；重置卡与已有额度台架共享数量。
+      const vouchers = [
+        { id: 'voucher-1', itemType: 'api_key', displayName: 'Model credit voucher', source: 'points', acquiredAt: '2026-09-29T12:00:00Z', status: 'active' },
+        { id: 'voucher-2', itemType: 'api_key', displayName: 'Cloud storage voucher', source: 'admin', acquiredAt: '2026-09-28T12:00:00Z', status: 'active' },
+      ]
+      if (p === '/api/shop/inventory' && req.method === 'GET') return send(res, 200, [
+        ...Array.from({ length: state.cards }, (_, i) => ({ id: `reset-${i}`, itemType: 'reset_card', displayName: '额度重置卡', source: 'points', acquiredAt: '2026-09-30T12:00:00Z', status: 'active' })),
+        ...vouchers,
+        ...[...gifts].map((id) => ({ id, productId: 'gift-product', itemType: 'custom_item', itemDefinition: giftDefinition, displayName: '云端礼包', source: 'admin', acquiredAt: '2026-09-30T12:00:00Z', status: 'active' })),
+      ])
+      if (/^\/api\/shop\/inventory\/gift-[12]\/use$/.test(p) && req.method === 'POST') {
+        const id = p.split('/').at(-2)
+        const reused = usedGifts.has(id)
+        if (!reused) { gifts.delete(id); usedGifts.add(id); state.cards += 1 }
+        return send(res, 200, { itemId: id, message: { zh: '已获得 100 积分与 1 张重置卡', en: 'Received 100 points and one reset card' }, effects: giftDefinition.use.effects, animation: 'sparkle', reused })
+      }
+      if (p.startsWith('/api/shop/inventory/') && req.method === 'GET') {
+        const item = vouchers.find((v) => v.id === p.split('/').pop())
+        return send(res, item ? 200 : 404, item ? { ...item, codeName: 'Demo voucher', key: 'DEMO-VOUCHER-KEY' } : { detail: 'Not found' })
+      }
 
       // 额度与积分
       if (p === '/api/token-quota/my') return send(res, 200, quota())

@@ -6,6 +6,7 @@
  * 用法(在 Forsion-Genesis/tangu-agent 下先 npm run build):
  *   node scripts/codex-effort-probe.mjs gpt-6-sol off minimal max        # 按能力表发:打印每档实际上 wire 的 effort
  *   FORCE_EFFORT=minimal node scripts/codex-effort-probe.mjs gpt-6-sol   # 绕过能力表强发:后端 400 原文会列出该模型的合法值集合
+ *   node scripts/codex-effort-probe.mjs gpt-6.1-sol off minimal low medium high xhigh max # 6.1 Sol:off/minimal 须夹到 low;目录须含新 slug
  *
  * 取证口径(09-22):Codex 客户端目录的 supported_reasoning_levels 比后端窄(不列 none),合法值以后端 400 原文为准;
  * 能力表 modelCapabilities.ts 的 GPT-6 各支就是这么定的。

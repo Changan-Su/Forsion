@@ -151,7 +151,15 @@ const api = {
     ipcRenderer.invoke('feedback:submit', input),
   appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   // ── 应用内自动更新(检查 → 下载 → 重启安装;mac 仅检测,引导手动下载)──
+  getCorePluginUpdates: () => ipcRenderer.invoke('updater:core-status'),
+  onCorePluginUpdates: (cb: (status: any) => void): (() => void) => {
+    const fn = (_e: unknown, status: any) => cb(status)
+    ipcRenderer.on('updater:core-status', fn)
+    return () => { ipcRenderer.removeListener('updater:core-status', fn) }
+  },
   checkForUpdates: (): Promise<any> => ipcRenderer.invoke('updater:check'),
+  getUpdaterStatus: (): Promise<any> => ipcRenderer.invoke('updater:status'),
+  restartForUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:restart'),
   downloadUpdate: (): Promise<void> => ipcRenderer.invoke('updater:download'),
   installUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:install'),
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
@@ -165,9 +173,11 @@ const api = {
   /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。 */
   setBundleEnabled: (id: string, on: boolean): Promise<{ restartPending: boolean }> => ipcRenderer.invoke('plugins:setBundleEnabled', id, on),
   onUpdaterStatus: (cb: (st: any) => void): (() => void) => {
-    const listener = (_e: unknown, st: any): void => cb(st)
+    let off = false, received = false
+    const listener = (_e: unknown, st: any): void => { received = true; if (!off) cb(st) }
     ipcRenderer.on('updater:status', listener)
-    return () => ipcRenderer.removeListener('updater:status', listener)
+    void ipcRenderer.invoke('updater:status').then((st) => { if (!off && !received) cb(st) }).catch(() => {})
+    return () => { off = true; ipcRenderer.removeListener('updater:status', listener) }
   },
   onAuthDevice: (cb: (info: { url: string; userCode: string }) => void): (() => void) => {
     const listener = (_e: unknown, info: { url: string; userCode: string }): void => cb(info)
@@ -320,6 +330,16 @@ const api = {
   // ── Forsion Market(浏览/详情/安装全走主进程:公开浏览 + 本地解压安装)──
   marketList: (type?: string): Promise<{ items: any[] }> => ipcRenderer.invoke('market:list', type),
   marketDetail: (id: string): Promise<any> => ipcRenderer.invoke('market:detail', id),
+  marketUpdateStatus: () => ipcRenderer.invoke('market:updateStatus'),
+  marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
+  marketCheckUpdates: (): Promise<void> => ipcRenderer.invoke('market:checkUpdates'),
+  onMarketUpdateStatus: (cb: (state: import('../shared/marketPluginUpdates').MarketPluginUpdates) => void): (() => void) => {
+    let off = false, received = false
+    const listener = (_e: unknown, state: import('../shared/marketPluginUpdates').MarketPluginUpdates): void => { received = true; cb(state) }
+    ipcRenderer.on('market:updateStatus', listener)
+    void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
+    return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
+  },
   marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
     ipcRenderer.invoke('market:install', id),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
@@ -546,7 +566,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

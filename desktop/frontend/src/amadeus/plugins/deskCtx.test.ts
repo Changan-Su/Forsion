@@ -112,6 +112,13 @@ describe('ctx.tangu.startChat 的放行规则', () => {
   })
   const lastArg = () => startChat.mock.calls.at(-1)![0]
 
+  it('原生 Chat Box 选择显式传给探针并声明兼容能力', async () => {
+    const ctx = ctxOf('p-selection')
+    expect(ctx.tangu!.chatSelection).toBe(true)
+    await ctx.tangu!.startChat!({ prompt: 'x', modelId: 'chosen', thinkingLevel: 'high' })
+    expect(lastArg()).toMatchObject({ modelId: 'chosen', thinkingLevel: 'high', send: false })
+  })
+
   it('探针没有 startChat(旧台架)→ 方法不存在;有 → 注入', () => {
     setTanguProbe(baseProbe())
     expect(ctxOf('p-sc').tangu!.startChat).toBeUndefined()

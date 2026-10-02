@@ -135,6 +135,10 @@ describe('modelContextWindow', () => {
     expect(modelContextWindow('gpt-6-astra', { context_window: 922_000 })).toBe(922_000);
     expect(modelContextWindowInfo('codex/gpt-6-sol')).toEqual({ tokens: 272_000, source: 'family' });
     expect(modelContextWindowInfo('gpt-6-luna')).toEqual({ tokens: 272_000, source: 'family' });
+    for (const id of ['gpt-6.1-sol', 'codex/gpt-6.1-sol', 'openai/gpt-6.1-sol']) {
+      expect(modelContextWindowInfo(id)).toEqual({ tokens: 272_000, source: 'family' });
+    }
+    expect(modelContextWindowInfo('pr-sol61', { apiModelId: 'gpt-6.1-sol' })).toEqual({ tokens: 272_000, source: 'family' });
     expect(modelContextWindow('codex-mini-latest')).toBe(200_000); // o4-mini 底,272k 会溢出
     expect(modelContextWindow('claude-sonnet-4-5')).toBe(200_000);
     // Claude 5 家族 / Opus 4.7 起是 1M;4.6 及更早、Haiku 4.5 仍 200k(族表首命中,顺序即契约)

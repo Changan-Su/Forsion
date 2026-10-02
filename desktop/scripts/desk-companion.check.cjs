@@ -3,7 +3,7 @@
  * ctx.tangu.startChat 的**真 Electron** 仪器(2026-09-19)。
  *
  * 为什么要真 Electron:plugview 台架(plugin-view.e2e --companion)挂的是假探针、固定尺寸盒子,
- * 验不到「真 ChatView 里草稿态的卡片在不在」「草稿 → 真会话时伴随面重不重挂」「真 SSE 事件流推出来的
+ * 验不到「真 ChatView 里草稿态是否卸载卡片」「首条消息后伴随面是否只挂载一次」「真 SSE 事件流推出来的
  * phase 序列」「desk_present 在 idle / always 两种模式下落不落状态」「startChat 真的开出对话、只给自家
  * 捆绑 Agent 直发」。这些都只在真应用 + 真 store + 真插件宿主里成立。
  *
@@ -17,10 +17,10 @@
  * 引擎 = scripts/lib/stub-engine.cjs 的可编剧假引擎(证渲染接线,不证模型)。
  *
  * 断言(PASS/FAIL 逐行):
- *  A  探针禁用时新对话草稿也有 Desk 卡(草稿修复本体)且没有伴随面槽 —— 兼作槽位检测的负对照
- *  1  草稿卡里有伴随面槽 + 非零 canvas;探针挂载时看到 idle / sessionId null
+ *  A  探针禁用时新会话草稿没有 Desk 卡、侧板与伴随面槽
+ *  1  探针启用时草稿仍不挂载伴随面;首条消息出现后卡片挂载非零 canvas
  *  2  发一条消息(剧本:llm_call → reasoning → token → write_file → token → done):phase 按序
- *     thinking…tool…speaking…done,~4s 后回 idle;草稿 → 真会话**不重挂**
+ *     thinking…tool…speaking…done,~4s 后回 idle;草稿 → 真会话只挂载一次
  *     2e(2026-09-19 起恒红 = 已知宿主缺陷):appStore.ts `case 'done'` 先 patchMessage 把气泡标 done、
  *     之后才 endRun 清 runningBySession;两次 set 之间 agentStatusOf 找不到 streaming 气泡 → 落到 ⑤ 兜底
  *     thinking,订阅方在 done 之前收到一帧假 thinking(实测间隔 0–2ms)。宿主修好即绿,别加豁免。
@@ -29,7 +29,7 @@
  *     切回 idle 恢复旧行为;零条目时切模式不重挂
  *  5  startChat:send:false → 预填 + 选中 Agent、不起 run;send:true 自家 Agent → run 的 agentSlug 对;
  *     send:true 别家 Agent → 只预填不起 run;未知 Agent → 报错;5e 清单里有但没有播种标记(撞名)→ 只预填
- *  6  截图(亮 / 暗):草稿卡 + 伴随面;always 模式展开侧板
+ *  6  截图(亮 / 暗):草稿无 Desk;开聊后 always 模式展开侧板
  *  7  全程没有 [desk-companion] 控制台错误 / 渲染进程异常
  *  8  desk_screenshot × 伴随面(09-19 下午,用户实测 agent 看不到 Desk 上的形象):假引擎推 desk_capture_request,
  *     记下渲染层 POST 回来的图。idle 零条目 / always(先 desk_present 被吞)→ 截到形象且带 companion = 伴随面 key;
@@ -64,7 +64,6 @@ const PROBE_KEY = `plugin:${PROBE_ID}:main`
 const PROBE_AGENT = 'probe-agent'
 /** 探针捆绑包里也有,但隔离家目录里没有本插件的播种标记(撞名:同 slug 早已存在,引擎没覆盖)。 */
 const FOREIGN_AGENT = 'probe-foreign'
-const DRAFT = '__draft__'
 const T = { clear: ['清空 Desk', 'Clear Desk'], expand: ['展开', 'Expand'], collapse: ['收起为卡片', 'Collapse to card'] }
 const btnSel = (scope, labels) => labels.map((l) => `${scope} button[title="${l}"]`).join(', ')
 
@@ -300,7 +299,7 @@ async function send(win, text) {
 async function ensureDraft(win) {
   await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
   for (let i = 0; i < 40; i++) {
-    if (await win.locator(`.agent-desk-card[data-desk-session="${DRAFT}"]`).count().catch(() => 0)) return true
+    if (await win.locator('.t2-chat-view:not([data-session-id]) .t2-empty').count().catch(() => 0)) return true
     if (i === 8 || i === 20) {
       const b = win.locator('button[data-act="new-chat"]').first()
       if (await b.count().catch(() => 0)) await b.click().catch(() => {})
@@ -363,40 +362,30 @@ async function run(app, win, stub, env) {
   await sleep(1200)
   let st = await deskState(win)
   let pr = await probeState(win)
-  let card = st.cards.find((c) => c.session === DRAFT)
-  check('A 探针禁用:新对话草稿有 Desk 卡(在场、未退场)且没有伴随面槽',
-    draftA && !!card && card.visible && !card.gone && st.slots.length === 0 && (!pr || pr.setups === 0),
-    JSON.stringify({ draft: draftA, card: card && { visible: card.visible, gone: card.gone, title: card.title }, slots: st.slots.length, probeSetups: pr && pr.setups }))
-  if (!draftA || !card) throw new StopEarly('草稿态没有 Desk 卡 —— 后面全部依赖它')
+  let card
+  check('A 探针禁用:新会话草稿不挂载 Desk 卡、侧板与伴随面槽',
+    draftA && st.cards.length === 0 && st.panels.length === 0 && st.slots.length === 0 && (!pr || pr.setups === 0),
+    JSON.stringify({ draft: draftA, cards: st.cards.length, slots: st.slots.length, probeSetups: pr && pr.setups }))
+  if (!draftA) throw new StopEarly('没有进入新会话草稿')
 
-  // ── 1 探针启用:草稿卡里的伴随面 ─────────────────────────────────────────────────────
+  // ── 1 探针启用:草稿仍不挂载伴随面 ───────────────────────────────────────────────────
   await win.evaluate(() => localStorage.setItem('amadeus.plugins.disabled', '[]'))
   await reloadApp(win)
   await ensureDraft(win)
-  const slotReady = await waitFor(win, ([d, k]) => !!document.querySelector(`.agent-desk-card[data-desk-session="${d}"] [data-companion="${k}"] canvas`), [DRAFT, PROBE_KEY], 20_000)
+  await waitFor(win, () => !!window.__deskProbe, null, 20_000)
   await sleep(600)
   st = await deskState(win)
   pr = await probeState(win)
   if (!pr) throw new StopEarly('探针插件没装上(window.__deskProbe 不存在)')
   check('1a 探针拿到 ctx.desk / ctx.tangu.agentStatus / ctx.tangu.startChat', pr.hasDesk && pr.hasAgentStatus && pr.hasStartChat,
     JSON.stringify({ hasDesk: pr.hasDesk, hasAgentStatus: pr.hasAgentStatus, hasStartChat: pr.hasStartChat }))
-  card = st.cards.find((c) => c.session === DRAFT)
-  const cv = card && card.canvas
-  check('1 草稿卡含伴随面槽(data-companion=plugin:desk-probe:main, surface=desk-card)且 canvas 非零',
-    slotReady && !!card && !card.gone && card.companion === PROBE_KEY && card.surface === 'desk-card' && cv && cv.w > 0 && cv.h > 0 && cv.css.w > 0 && cv.css.h > 0,
-    JSON.stringify({ companion: card && card.companion, surface: card && card.surface, canvas: cv, body: card && card.body }))
-  // 读活着的挂载点此刻的 host.sessionId() / host.status():启动时应用偶尔先恢复一个旧会话、再被 ensureDraft
-  // 切回草稿(同一个卡片实例、不重挂),所以「挂载那一刻」的快照不一定是草稿 —— 断言草稿态下的现值。
   const liveNow = await win.evaluate(() => window.__deskProbeLive())
-  const mi = liveNow.find((x) => x.surface === 'desk-card')
-  check('1b 草稿态下 host.sessionId() = null、host.status() = idle(sessionId null)', liveNow.length === 1 && !!mi && mi.phase === 'idle' && mi.sessionId === null && mi.statusSession === null,
-    JSON.stringify({ live: liveNow, mounts: pr.mountInfo }))
-  check('1c 伴随面格撑满卡片正文(canvas 与正文同尺寸,±2px)',
-    !!(cv && card.body) && Math.abs(cv.css.w - card.body.w) <= 2 && Math.abs(cv.css.h - card.body.h) <= 2,
-    JSON.stringify({ canvas: cv && cv.css, body: card && card.body }))
+  check('1 探针启用:草稿仍不挂载 Desk 或伴随面',
+    st.cards.length === 0 && st.panels.length === 0 && st.slots.length === 0 && liveNow.length === 0,
+    JSON.stringify({ cards: st.cards.length, slots: st.slots.length, live: liveNow }))
   await shoot(win, shots, 'probe-draft-light')
 
-  // ── 2 一轮 run:phase 序列 + 草稿 → 真会话不重挂 ─────────────────────────────────────
+  // ── 2 一轮 run:phase 序列 + 首条消息后只挂载一次 ────────────────────────────────────
   const m0 = pr.mounts
   const u0 = pr.unmounts
   const ph0 = pr.phases.length
@@ -407,6 +396,14 @@ async function run(app, win, stub, env) {
   const gotSession = await waitFor(win, () => !!document.querySelector('.agent-desk-card[data-desk-session^="dc-s"]'), null, 15_000)
   st = await deskState(win)
   const sid = (st.cards.find((c) => /^dc-s/.test(c.session || '')) || {}).session || null
+  card = st.cards.find((c) => c.session === sid)
+  const cv = card && card.canvas
+  check('1b 首条消息后伴随面挂载到真实会话,canvas 非零',
+    !!card && card.companion === PROBE_KEY && card.surface === 'desk-card' && cv && cv.w > 0 && cv.h > 0,
+    JSON.stringify({ sid, companion: card && card.companion, canvas: cv }))
+  check('1c 伴随面格撑满卡片正文(canvas 与正文同尺寸,±2px)',
+    !!(cv && card.body) && Math.abs(cv.css.w - card.body.w) <= 2 && Math.abs(cv.css.h - card.body.h) <= 2,
+    JSON.stringify({ canvas: cv && cv.css, body: card && card.body }))
   const doneSeen = await waitFor(win, (n) => (window.__deskProbe.phases.slice(n).some((p) => p.phase === 'done')), ph0, 20_000)
   const idleSeen = await waitFor(win, (n) => {
     const ps = window.__deskProbe.phases.slice(n)
@@ -414,9 +411,11 @@ async function run(app, win, stub, env) {
     return d >= 0 && ps.slice(d + 1).some((p) => p.phase === 'idle')
   }, ph0, 9_000)
   pr = await probeState(win)
-  const newPhases = pr.phases.slice(ph0).filter((p) => p.surface === 'desk-card')
+  // 首条消息后才挂载:首个 thinking 可能已成为 mount 时的快照,订阅只记录其后的变化。
+  const newPhases = [...pr.mountInfo.slice(m0), ...pr.phases.slice(ph0)]
+    .filter((p) => p.surface === 'desk-card').sort((a, b) => a.t - b.t)
   const seq = dedupe(newPhases.filter((p) => p.sessionId === sid).map((p) => p.phase))
-  check('2 新会话建出,Desk 卡换成真会话键(同一张卡)', gotSession && !!sid && stub.seen.runs.length === runs0 + 1, JSON.stringify({ sid, runs: stub.seen.runs.length - runs0 }))
+  check('2 新会话建出,Desk 卡使用真会话键', gotSession && !!sid && stub.seen.runs.length === runs0 + 1, JSON.stringify({ sid, runs: stub.seen.runs.length - runs0 }))
   check('2a phase 有序经过 thinking → tool → speaking → done', doneSeen && orderedSubsequence(seq, ['thinking', 'tool', 'speaking', 'done']), JSON.stringify(seq))
   // 收尾那一刻:appStore 的 'done' 分支先把气泡标 done(patchMessage)、后 endRun 清 running —— 两次 set 之间
   // runningBySession 仍在、却已没有 streaming 气泡 → agentStatusOf 落到 ⑤ 兜底 thinking,订阅方收到一帧假 thinking。
@@ -431,7 +430,7 @@ async function run(app, win, stub, env) {
   const hold = dI >= 0 && iI >= 0 ? newPhases[iI].t - newPhases[dI].t : null
   check('2b done 余韵约 4s 后回 idle(3.5s–6s)', idleSeen && hold != null && hold >= 3500 && hold <= 6000, `hold=${hold}ms`)
   check('2c 工具阶段带工具名 write_file', newPhases.some((p) => p.phase === 'tool' && p.tool === 'write_file'), '')
-  check('2d 草稿 → 真会话**不重挂**(mount / unmount 计数不变)', pr.mounts === m0 && pr.unmounts === u0,
+  check('2d 草稿 → 真会话只挂载一次', pr.mounts === m0 + 1 && pr.unmounts === u0,
     `mounts ${m0}→${pr.mounts}, unmounts ${u0}→${pr.unmounts}${NC ? `  (负对照 --nc=${NC}:期望这里 FAIL)` : ''}`)
   if (!sid) throw new StopEarly('没拿到新会话 id')
   const sidTitle = (env.created.find((s) => s.id === sid) || {}).title || ''
@@ -547,7 +546,7 @@ async function run(app, win, stub, env) {
   await sleep(1000)
   st = await deskState(win)
   check('5 send:false(自家 Agent)→ 回 ok、主区回到草稿、输入框预填、不起 run',
-    res && res.ok && !res.sessionId && st.composer === PROMPT_A && st.cards.some((c) => c.session === DRAFT) && stub.seen.runs.length === r0,
+    res && res.ok && !res.sessionId && st.composer === PROMPT_A && st.cards.length === 0 && st.slots.length === 0 && stub.seen.runs.length === r0,
     JSON.stringify({ res, composer: st.composer, runs: stub.seen.runs.length - r0, cards: st.cards.map((c) => c.session) }))
   stub.script(QUICK_RUN)
   await win.locator('.t2c-ta').first().click()
@@ -613,11 +612,11 @@ async function run(app, win, stub, env) {
   await win.evaluate(() => window.__deskProbeSetMode('idle'))
   await sleep(400)
 
-  // ── 6 暗色截图(重载后:草稿卡 → 起一个会话 → always 展开)────────────────────────────
+  // ── 6 暗色截图(重载后:草稿无 Desk → 起一个会话 → always 展开)────────────────────────
   await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('deskprobe.mode', 'idle') })
   await reloadApp(win)
   await ensureDraft(win)
-  await waitFor(win, ([d, k]) => !!document.querySelector(`.agent-desk-card[data-desk-session="${d}"] [data-companion="${k}"] canvas`), [DRAFT, PROBE_KEY], 20_000)
+  check('6 暗色新会话草稿不挂载 Desk', (await deskState(win)).cards.length === 0)
   await sleep(800)
   await shoot(win, shots, 'probe-draft-dark')
   await shotAlwaysPanel(win, stub, shots, 'probe-always-panel-dark', PROBE_KEY, true)
@@ -635,14 +634,17 @@ async function run(app, win, stub, env) {
       await reloadApp(win)
       await ensureDraft(win)
       const prefix = `plugin:${id}:`
-      const up = await waitFor(win, ([d, p]) => {
-        const s = document.querySelector(`.agent-desk-card[data-desk-session="${d}"] [data-companion^="${p}"]`)
+      check(`D-${theme} 真插件 ${id}:草稿不挂载伴随面`, (await deskState(win)).slots.length === 0)
+      stub.script(QUICK_RUN)
+      await send(win, '真插件伴随面截图用的会话')
+      const up = await waitFor(win, (p) => {
+        const s = document.querySelector(`.agent-desk-card [data-companion^="${p}"]`)
         return !!s && !!s.querySelector('canvas')
-      }, [DRAFT, prefix], 30_000)
+      }, prefix, 30_000)
       await sleep(3500) // 模型 / 球体首帧
       st = await deskState(win)
-      card = st.cards.find((c) => c.session === DRAFT)
-      check(`D-${theme} 真插件 ${id}:草稿卡挂上它的伴随面且 canvas 非零`, up && !!card && (card.companion || '').startsWith(prefix) && card.canvas && card.canvas.w > 0 && card.canvas.h > 0,
+      card = st.cards.find((c) => (c.companion || '').startsWith(prefix))
+      check(`D-${theme} 真插件 ${id}:开聊后卡片挂上它的伴随面且 canvas 非零`, up && !!card && (card.companion || '').startsWith(prefix) && card.canvas && card.canvas.w > 0 && card.canvas.h > 0,
         JSON.stringify({ companion: card && card.companion, canvas: card && card.canvas }))
       await shoot(win, shots, `${id}-draft-${theme}`)
       await shotAlwaysPanel(win, stub, shots, `${id}-always-panel-${theme}`, prefix, false)
@@ -733,6 +735,11 @@ async function main() {
     messages: [],
     override: async ({ path: route, method, body }) => {
       if (route === '/agent/runs' && method === 'GET') return { runs: [] }
+      if (/^\/agent\/sessions\/[^/]+\/messages$/.test(route) && method === 'GET') {
+        const sid = route.split('/')[3]
+        const run = stubRef.seen.runs.find((r) => r.sessionId === sid)
+        return { messages: sid === OTHER.id || run ? [{ id: `history-${sid}`, role: 'user', content: run?.message || 'Existing conversation', created_at: OTHER.created_at }] : [] }
+      }
       // desk_screenshot 的回图(第 8 组):记下渲染层 POST 回来的 { dataUrl?, mode?, companion?, error? }
       if (/^\/agent\/runs\/[^/]+\/captures\/[^/]+$/.test(route) && method === 'POST') {
         const b = await body()

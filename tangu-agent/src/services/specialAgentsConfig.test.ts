@@ -8,6 +8,10 @@ import {
 import { isRoundDue } from './localHistorian.js';
 
 describe('normalizeConfig', () => {
+  it('session icons default on; explicit opt-out is preserved', () => {
+    expect(normalizeConfig({ historian: {} }).historian.autoEmoji).toBe(true);
+    expect(normalizeConfig({ historian: { autoEmoji: false } }).historian.autoEmoji).toBe(false);
+  });
   it('returns defaults for empty/garbage input', () => {
     expect(normalizeConfig(undefined)).toEqual(SPECIAL_AGENTS_DEFAULTS);
     expect(normalizeConfig({})).toEqual(SPECIAL_AGENTS_DEFAULTS);

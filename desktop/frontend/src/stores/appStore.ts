@@ -46,6 +46,7 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
 import { publishAccountQuota } from '../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalReason, sanitizeApprovalRemote } from '../approvalReason'
+import { normalizeSessionEmoji } from '../../../../tangu-agent/src/core/sessionEmoji'
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
@@ -1022,6 +1023,7 @@ export interface AppState {
   newSession(): Promise<void>
   addLocalWorkspace(): Promise<void>
   renameSession(id: string, title: string): Promise<void>
+  setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
@@ -2754,6 +2756,17 @@ export const useApp = create<AppState>((set, get) => ({
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
     try { await api.updateSession(targetForSession(id), id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+  },
+
+  setSessionEmoji: async (id, value) => {
+    const emoji = normalizeSessionEmoji(value)
+    if (value !== null && !emoji) { get().toast(get().tr('session.icon.invalid'), true); return false }
+    try {
+      const result = await api.updateSession(targetForSession(id), id, { emoji })
+      const apply = (x: SessionRecord): SessionRecord => x.id === id ? { ...x, emoji: result.emoji } : x
+      set((s) => ({ sessions: s.sessions.map(apply), archivedSessions: s.archivedSessions.map(apply) }))
+      return true
+    } catch (e: any) { get().toast(get().tr('session.icon.saveFail', { e: e?.message || e }), true); return false }
   },
 
   archiveSession: async (id, archived) => {

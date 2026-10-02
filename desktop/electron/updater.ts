@@ -196,6 +196,8 @@ export function getUpdaterStatus(): UpdaterStatus {
 }
 
 export async function checkForUpdates(): Promise<UpdaterStatus> {
+  // A verified installer is waiting for the user's restart; a timer/manual recheck must not hide it.
+  if (lastStatus.phase === 'downloaded') return lastStatus
   if (unsupported()) {
     const s: UpdaterStatus = { phase: 'unsupported' }
     broadcast(s)

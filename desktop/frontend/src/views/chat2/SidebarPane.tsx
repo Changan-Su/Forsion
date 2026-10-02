@@ -6,7 +6,8 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info, NotebookPen } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
+import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
@@ -162,6 +163,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   // 作用域:归档区在 sticky footer 里,不在 .t2s-scroll 内。
   const sel = useItemSelect(rootRef)
   const [menu, setMenu] = useState<MenuState | null>(null)
+  const [iconPicker, setIconPicker] = useState<{ id: string; current: string | null; x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [sessionLimit, setSessionLimit] = useState(() => {
@@ -331,7 +333,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
       // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
       lead={<>
-        {p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />}
+        <SessionIcon emoji={s.emoji} fallback={p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />} />
         {p.attentionIds?.get(s.id)
           ? <AttentionDot n={p.attentionIds.get(s.id)!.n} localOnly={p.attentionIds.get(s.id)!.localOnly} />
           : p.runningIds.has(s.id)
@@ -542,6 +544,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             </button>
           )}
           {menu.ids.length === 1 && (
+            <button onClick={() => { const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id); setIconPicker({ id: menu.id, current: s?.emoji ?? null, x: menu.x, y: menu.y }); setMenu(null) }}>
+              <Smile size={13} /> {t('session.icon.set')}
+            </button>
+          )}
+          {menu.ids.length === 1 && (
             <button onClick={() => { const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
               <Pencil size={13} /> {t('sidebar.rename')}
             </button>
@@ -593,6 +600,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         </OverlayAt>
       )}
 
+      {iconPicker && <SessionIconPicker sessionId={iconPicker.id} current={iconPicker.current} x={iconPicker.x} y={iconPicker.y} onClose={() => setIconPicker(null)} />}
       {wsMenu && (
         <OverlayAt className="ctx-menu" x={wsMenu.x} y={wsMenu.y} onClick={(e) => e.stopPropagation()}>
           {p.onTogglePinned && (() => {

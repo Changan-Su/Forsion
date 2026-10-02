@@ -206,6 +206,8 @@ export function Ribbon() {
     recalc()
     const ro = new ResizeObserver(recalc)
     ro.observe(el)
+    // Conditional pinned controls (for example a ready update) change height without resizing the ribbon.
+    if (pinnedRef.current) ro.observe(pinnedRef.current)
     return () => ro.disconnect()
   }, [expanded, slotH, items.length, folders.length, commandItems.length])
   // 常驻上限(10-02 用户拍板「Ribbon 减负」):上区最多 5 个 Space、命令区最多 4 项,其余进各自的「…」。

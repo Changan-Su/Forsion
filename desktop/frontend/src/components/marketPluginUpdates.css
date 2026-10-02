@@ -1,0 +1,6 @@
+.mk-auto-update { margin-top: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.mk-auto-update label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); min-height: var(--ui-control-height); }
+.mk-auto-update input { margin: 0; accent-color: var(--accent); }
+.mk-auto-update small { font-size: var(--ui-font-meta); color: var(--text-muted); overflow-wrap: anywhere; }
+.mk-auto-update small.is-error { color: var(--danger); }
+.mk-detail-actions .mk-auto-update { margin-top: 2px; }

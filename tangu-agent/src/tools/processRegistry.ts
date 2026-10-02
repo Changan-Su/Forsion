@@ -68,6 +68,8 @@ function emitChange(): void {
 }
 
 const procs = new Map<string, BackgroundProcess>(); // id -> proc
+/** Include local processes too: all origins are interrupted when this engine shuts down. */
+export const runningProcessCount = (): number => [...procs.values()].filter((p) => p.status === 'running').length;
 let seq = 0;
 let reaper: ReturnType<typeof setInterval> | null = null;
 let exitHookInstalled = false;

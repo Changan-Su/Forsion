@@ -467,6 +467,24 @@ describe('startChat(ctx.tangu.startChat 的执行半;放行规则在 pluginStore
     } as never)
   })
 
+  it('Chat Box 的模型与思考档覆盖 Agent 默认,预填与送出使用同一选择', async () => {
+    useApp.setState({ modelsResp: { models: [{ id: 'chosen', name: 'Chosen', provider: 'x', source: 'forsion' }] } } as never)
+    expect(await readTangu()!.startChat!({ prompt: 'draft', modelId: 'chosen', thinkingLevel: 'high' })).toEqual({ ok: true })
+    expect(useApp.getState().newChatModel).toBe('chosen')
+    expect(useApp.getState().newChatCfg.thinkingLevel).toBe('high')
+    expect(useApp.getState().pendingDraft).toBe('draft')
+    expect(await readTangu()!.startChat!({ prompt: 'send', modelId: 'chosen', thinkingLevel: 'off', send: true })).toMatchObject({ ok: true })
+    expect(useApp.getState().newChatModel).toBe('chosen')
+    expect(useApp.getState().newChatCfg.thinkingLevel).toBe('off')
+    expect(send).toHaveBeenCalled()
+  })
+  it('无效模型或档位拒绝且不改变活动会话', async () => {
+    expect(await readTangu()!.startChat!({ prompt: 'x', modelId: 'missing' })).toMatchObject({ ok: false })
+    expect(await readTangu()!.startChat!({ prompt: 'x', thinkingLevel: 'invalid' as never })).toMatchObject({ ok: false })
+    expect(useApp.getState().activeId).toBe('old')
+    expect(openView).not.toHaveBeenCalled()
+  })
+
   it('空 / 超长提示词 → ok:false,界面一动不动', async () => {
     const p = readTangu()!
     expect(await p.startChat!({ prompt: '   ' })).toMatchObject({ ok: false })
