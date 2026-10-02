@@ -557,7 +557,7 @@ export function Ribbon() {
         {zone === 'bottom' && <>{renderPlusBtn(zone)}{part.tail.length > 0 && renderMoreBtn(zone)}</>}
         {/* 滑动框(滚轮翻看的平滑动画):整区条目排成一列,框只露 n 格高,列按窗口起点 translateY,过渡 0.2s。
             窗外的是等高空占位 .rb-cell(不是 .rb-slot:拖拽量槽、台架按 .rb-slot 认「露出的格子」都不受影响),
-            只在滑动经过时临时画出图标。 */}
+            只在滑动经过时临时画出图标(inert:滑动那 0.2s 里也别让 Tab 落进去,Codex 评审)。 */}
         <div className="rb-strip" style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
           <div className="rb-strip-in" style={part.start ? { transform: `translateY(${-part.start * slotH}px)` } : undefined}>
             {(zone === 'top' ? topE : botE).map((en, k) => {
@@ -565,7 +565,7 @@ export function Ribbon() {
               if (i >= 0 && i < part.shown.length) return renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, k)
               const r = slide[zone]
               const passing = !!r && k >= r.lo && k < r.hi + part.shown.length
-              return <div key={en.id} className="rb-cell" aria-hidden style={{ height: slotH - GAP }}>{passing && renderEntry(en)}</div>
+              return <div key={en.id} className="rb-cell" aria-hidden inert style={{ height: slotH - GAP }}>{passing && renderEntry(en)}</div>
             })}
           </div>
         </div>
