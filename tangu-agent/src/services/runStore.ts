@@ -111,5 +111,5 @@ export const listPendingRunsForRecovery = (): Promise<PendingRunRow[]> =>
   deps().state.listPendingRunsForRecovery();
 
 /** 启动时把超时仍 running 的 run 标 failed（进程重启自愈）。 */
-export const failStaleRuns = (olderThanMinutes = 30, keepOwners: number[] = []): Promise<number> =>
+export const failStaleRuns = (olderThanMinutes = 30, keepOwners: string[] = []): Promise<number> =>
   deps().state.failStaleRuns(olderThanMinutes, keepOwners);

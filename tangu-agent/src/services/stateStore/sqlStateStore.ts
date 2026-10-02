@@ -7,6 +7,7 @@
  * (SSE)与跨重启 seq 播种不动。
  */
 import { query, getOlderThanSql, getDbType } from '../../core/db.js';
+import { SELF_OWNER } from '../runOwner.js';
 import { appendEventLocal, drainLocal, type AgentEvent } from '../eventBus.js';
 import { readSessionTranscriptInDb, searchSessionsInDb } from '../sessionSearchSql.js';
 import type { AgentRun } from '../runStore.js';
@@ -37,9 +38,9 @@ export function createSqlStateStore(): StateStore {
     async createRun(run) {
       // 本机共享库(SQLite,TUI 与桌面同指 state.db)记下持有进程:重启自愈据此不碰别的活着的引擎的 run(PI-DSH 评审 R2)。
       // ponytail: 只 SQLite 写 —— 恢复只在本机跑;云库未必迁过这一列;PGlite 回退档本就不与他端共享。
-      const owner = getDbType() === 'sqlite' ? [process.pid] : [];
+      const owner = getDbType() === 'sqlite' ? [SELF_OWNER] : [];
       await query(
-        `INSERT INTO agent_runs (id, session_id, user_id, app_id, status, model_id, assistant_message_id, input${owner.length ? ', owner_pid' : ''})
+        `INSERT INTO agent_runs (id, session_id, user_id, app_id, status, model_id, assistant_message_id, input${owner.length ? ', owner' : ''})
          VALUES (?, ?, ?, ?, 'queued', ?, ?, ?${owner.length ? ', ?' : ''})`,
         [run.id, run.sessionId, run.userId, run.appId, run.modelId, run.assistantMessageId, JSON.stringify(run.input ?? null), ...owner],
       );
@@ -74,14 +75,14 @@ export function createSqlStateStore(): StateStore {
     },
     async listPendingRunsForRecovery() {
       const rows = await query<any[]>(
-        `SELECT id, session_id, status, owner_pid FROM agent_runs
+        `SELECT id, session_id, status, owner FROM agent_runs
          WHERE status IN ('queued','running')
          ORDER BY session_id ASC, created_at ASC`,
       );
-      return rows.map((r) => ({ id: r.id, session_id: r.session_id, status: r.status, owner_pid: r.owner_pid ?? null }));
+      return rows.map((r) => ({ id: r.id, session_id: r.session_id, status: r.status, owner: r.owner ?? null }));
     },
-    async failStaleRuns(olderThanMinutes = 30, keepOwners: number[] = []) {
-      const keep = keepOwners.length ? `AND (owner_pid IS NULL OR owner_pid NOT IN (${keepOwners.map(() => '?').join(',')}))` : '';
+    async failStaleRuns(olderThanMinutes = 30, keepOwners: string[] = []) {
+      const keep = keepOwners.length ? `AND (owner IS NULL OR owner NOT IN (${keepOwners.map(() => '?').join(',')}))` : '';
       const rows = await query<any[]>(
         `UPDATE agent_runs SET status = 'failed', error = 'stale: process restarted', updated_at = CURRENT_TIMESTAMP
          WHERE status IN ('queued','running')

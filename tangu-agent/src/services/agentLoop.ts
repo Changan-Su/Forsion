@@ -69,6 +69,7 @@ import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
+import { SELF_OWNER, ownerAlive } from './runOwner.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
@@ -592,18 +593,6 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   }
 }
 
-/** run 行的持有进程是不是另一个还活着的本机引擎(TUI / 另一个桌面实例)。自己的 pid = 上一个同号进程留下的,按已死算。
- *  ponytail: 只按 pid 探活 —— pid 被无关进程复用会误判活着,那几行要等复用它的进程退出;要更准就记进程启动时刻。 */
-function ownedByLiveProcess(pid: number | null): boolean {
-  if (!pid || pid === process.pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e: any) {
-    return e?.code === 'EPERM'; // 存在但无权发信号 = 活着
-  }
-}
-
 const INTERRUPTED_DETAIL =
   'The engine restarted while this run was in progress, so it was stopped here instead of starting over (that would repeat actions already taken). Send a message to continue.';
 
@@ -622,7 +611,7 @@ async function terminalizeInterruptedRun(runId: string): Promise<void> {
 }
 
 /** 进程重启自愈(PI-DSH 评审 R2 改过语义):先清陈旧行(30 分钟没动静 → failed),余下在飞 run 按 session 分组、created_at 顺序处理 ——
- *  - 别的活着的引擎进程持有的:不碰,陈旧清扫也跳过(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
+ *  - 别的活着的引擎进程持有的(pid 在且启动时刻对得上,见 runOwner.ts):不碰,陈旧清扫也跳过(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
  *  - running(持有者已死):标中断,**不从头重跑** —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍;
  *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
  *  返回重入队数量。复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
@@ -630,7 +619,14 @@ export async function recoverQueuedRuns(): Promise<number> {
   // 非 SQLite(外部 PG / PGlite 回退)不记持有者 → 持有者一律按已死处理,即「独占库」语义(单实例是这两种库唯一受支持的形态)。
   // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标 orphaned、抢排队行;云端为此走网关 + recoverRuns:false);
   // 真要支持,得上带主机标识的租约 + 执行前 CAS —— 本机 pid 跨主机探不了活。
-  const live = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner_pid).filter(ownedByLiveProcess))] as number[];
+  const aliveCache = new Map<string, Promise<boolean>>();
+  const alive = (owner: string | null): Promise<boolean> => {
+    if (!owner) return Promise.resolve(false);
+    if (!aliveCache.has(owner)) aliveCache.set(owner, ownerAlive(owner));
+    return aliveCache.get(owner)!;
+  };
+  const owners = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner).filter((o): o is string => !!o))];
+  const live = (await Promise.all(owners.map(async (o) => ((await alive(o)) ? o : '')))).filter(Boolean);
   const stale = await failStaleRuns(30, live);
   if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
   const rows = await listPendingRunsForRecovery();
@@ -646,7 +642,7 @@ export async function recoverQueuedRuns(): Promise<number> {
   } catch { /* 查不到 kind 按普通会话处理 */ }
   let n = 0;
   for (const r of rows) {
-    if (ownedByLiveProcess(r.owner_pid)) continue;
+    if (await alive(r.owner)) continue;
     if (kinds.get(r.session_id) === 'teamwork') {
       await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
       continue;
@@ -657,8 +653,8 @@ export async function recoverQueuedRuns(): Promise<number> {
     }
     const claimed = await query<any[]>(
       // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
-      `UPDATE agent_runs SET owner_pid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner_pid, 0) = ? RETURNING id`,
-      [process.pid, r.id, r.owner_pid || 0],
+      `UPDATE agent_runs SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner, '') = ? RETURNING id`,
+      [SELF_OWNER, r.id, r.owner || ''],
     ).catch(() => []);
     if (!claimed.length) continue;
     enqueueRun(r.session_id, r.id);
