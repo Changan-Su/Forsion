@@ -5,10 +5,10 @@ import { windowKind } from './windowKind'
  *  - 注册名统一命名空间 `plugin:<pluginId>:<viewId>`(Space 的 requires.views 用同名声明);
  *  - 插件禁用 → 先关掉该类型的所有开着的 leaf(主区按 mainTabs,侧栏两侧 closeSideView),再反注册
  *    ——Dockview 的 components map 收缩时不能留活面板;
- *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区)。
+ *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区 / 侧栏 / 底部面板;移动端无底部)。
  */
 import React, { useEffect, useLayoutEffect, useRef } from 'react'
-import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, UI_MODE, type ViewProps } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
@@ -120,10 +120,13 @@ export function syncPluginViews(): void {
   if (installed) return
   installed = true
 
+  // 移动单列壳没有底部面板:bottom 回落右抽屉(与 Extend View 的约定一致),也不对插件宣称有 bottom。
+  const mobile = UI_MODE === 'mobile'
   usePluginStore.getState().setViewOpener((type, loc) => {
-    // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。
-    useWorkspace.getState().openView(type, {}, loc === 'left' || loc === 'right' ? loc : 'main')
-  })
+    // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。2026-10-02 起含底部面板。
+    const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (mobile ? 'right' : 'bottom') : 'main'
+    useWorkspace.getState().openView(type, {}, at)
+  }, mobile ? ['main', 'left', 'right'] : ['main', 'left', 'right', 'bottom'])
 
   // Forsion Sandbox 的热重载接缝:插件宿主(平台中立)不 import @lcl,工作台的读写由桌面壳在这里注入。
   // 枚举走 remapLeaves —— 它是**唯一**同时覆盖活 leaf 与收起侧栏 stash 的跨 store 接口(全返回 undefined
@@ -131,10 +134,16 @@ export function syncPluginViews(): void {
   setDevViewBridge({
     snapshot: (prefix) => {
       const ws = useWorkspace.getState()
-      const side = new Map<string, 'left' | 'right'>()
+      const side = new Map<string, 'left' | 'right' | 'bottom'>()
       for (const t of ws.leftTabs) side.set(t.type, 'left')
       for (const t of ws.rightTabs) side.set(t.type, 'right')
-      const out: Array<{ type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' }> = []
+      // 底部面板没有 tab 投影:展开着的按 __loc 认,收起的在 stash 里(漏掉 = 热重载把底部视图开进主区)
+      for (const p of ws.api?.panels ?? []) {
+        const q = (p.params ?? {}) as Record<string, unknown>
+        if (q.__loc === 'bottom' && typeof q.__type === 'string') side.set(q.__type, 'bottom')
+      }
+      for (const t of ws.stash.bottom) side.set(t.type, 'bottom')
+      const out: Array<{ type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' | 'bottom' }> = []
       ws.remapLeaves((type, params) => {
         if (type.startsWith(prefix)) out.push({ type, params: { ...params }, loc: side.get(type) ?? 'main' })
         return undefined

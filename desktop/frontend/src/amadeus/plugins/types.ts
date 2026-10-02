@@ -424,6 +424,9 @@ export interface StatusItemHandle {
   dispose(): void
 }
 
+/** A workbench area a plugin view can be docked into. */
+export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
+
 /** A workbench view a plugin can contribute (plain DOM mount — no React needed in the plugin).
  *  The host registers it into the engine view registry as `plugin:<pluginId>:<viewId>`, so custom
  *  Spaces can compose it (and declare it under `requires.views`), and the plugin's own commands
@@ -822,8 +825,14 @@ export interface PluginContext {
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
-   *  ignore the option and open in main). No-op on hosts without a workbench. */
-  openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' }): void
+   *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
+   *  ⚠️ Older desktop hosts open an unknown location in main, which navigates the active main view away:
+   *  check `viewLocations` before asking for 'bottom'. No-op on hosts without a workbench. */
+  openView(viewId: string, opts?: { location?: PluginViewLocation }): void
+  /** Where `openView` (and a Space's `layout`) can dock this plugin's views on this host (2026-10-02+).
+   *  Desktop/Web: main, left, right, bottom; mobile has no bottom panel. Undefined on older hosts and on hosts
+   *  without a workbench: feature-detect with `ctx.viewLocations?.includes('bottom')`. */
+  readonly viewLocations?: readonly PluginViewLocation[]
   /** Open one of this plugin's registered views in the native Floating Panel window.
    *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void

@@ -53,6 +53,10 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 
 需要让插件产物与原生笔记面板联动时,使用 `ctx.app.openNote(path, { reuseKey, activate })`:同一 `reuseKey` 的 Amadeus 面板会原地切换到新笔记；`activate:false` 可保持用户焦点在插件面板。配合 Space 主区条目的 `split:"right"` / `split:"down"`,插件无需在自己的 DOM 里复制文档编辑器或聊天界面。
 
+插件视图的布局优先放进原生 Panel,别在一个视图里自造侧栏、底栏:列表进左栏工作区(`registerListSource`),主体留在主区,属性与检查器放右栏(或用 Extend View),时间线、日志、终端这类横跨全宽的内容放底部面板 —— Space 配方写 `layout.bottom`,或 `ctx.openView(id, { location: 'bottom' })`。底部面板旧宿主没有、移动端也没有,依赖它之前先查 `ctx.viewLocations?.includes('bottom')`,不满足就在视图里自绘。
+
+Lay plugin views out in native panels instead of drawing sidebars or bottom bars inside one view: lists in the left workspace, the subject in main, properties on the right, and timelines, logs or consoles in the bottom panel (`layout.bottom` in a Space recipe, or `ctx.openView(id, { location: 'bottom' })`). Older hosts and mobile have no bottom panel: check `ctx.viewLocations?.includes('bottom')` first and fall back to drawing it in the view.
+
 ## 下一步
 
 - [应用市场](market.md) — 找现成的插件
