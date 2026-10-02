@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const state = vi.hoisted(() => ({ publish: vi.fn(async () => 1) }));
 vi.mock('./eventBus.js', () => ({ publish: state.publish }));
 
-import { requestApproval, resolveApproval, setApprovalTray } from './approvals.js';
+import { requestApproval, resolveApproval, setApprovalTray, UNATTENDED_REJECT_REASON } from './approvals.js';
+import { registerRun, unregisterRun } from './remoteActivity.js';
 import type { ToolCall } from '../core/types.js';
 
 const call = (cmd: string): ToolCall =>
@@ -61,5 +62,35 @@ describe('同 run 多个审批', () => {
     await a;
     await tick();
     resolveApproval(requests('r-once')[1].approvalId, { action: 'reject' });
+  });
+});
+
+// PI-DSH 评审 R1:Muse / 自动化 run 的审批没人答 —— 入口当场拒,不发卡、不排队(引擎委派中继 / 外部引擎主循环直调这里)。
+describe('无人值守 run 的审批', () => {
+  it.each([
+    ['Muse', { background: 'muse' }],
+    ['自动化', { agentConfig: { automationOrigin: 'trigger-1' } }],
+  ])('%s run → 当场拒,不发 approval_request', async (_label, input) => {
+    registerRun('r-unattended', 's', input);
+    try {
+      await expect(requestApproval('r-unattended', call('a'), '$ a')).resolves.toEqual({ action: 'reject', rejectReason: UNATTENDED_REJECT_REASON });
+      await tick();
+      expect(requests('r-unattended')).toHaveLength(0);
+    } finally {
+      unregisterRun('r-unattended');
+    }
+  });
+
+  it('正对照:登记过的本机 run 照常发卡等人', async () => {
+    registerRun('r-local', 's', { agentConfig: {} });
+    try {
+      const a = requestApproval('r-local', call('a'), '$ a');
+      await tick();
+      expect(requests('r-local')).toHaveLength(1);
+      resolveApproval(requests('r-local')[0].approvalId, { action: 'approve' });
+      await expect(a).resolves.toEqual({ action: 'approve' });
+    } finally {
+      unregisterRun('r-local');
+    }
   });
 });

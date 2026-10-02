@@ -23,6 +23,7 @@ import { query } from '../core/db.js';
 import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } from '../tools/registry.js';
 import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
 import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.js';
+import { withLlmRetry } from '../llm/retry.js';
 import { publish } from './eventBus.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { assistantTurnOf } from './contextBudget.js';
@@ -435,7 +436,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     if (subDefsDirty) { toolDefs = getToolDefinitions(subCtx); subDefsDirty = false; } // load_tools 解锁生效
     const lastIter = iteration === SUB_MAX_ITERATIONS - 1;
 
-    const payload = await llm.buildProviderPayload({
+    // 主循环的有界重试此前没铺到子代理:一次秒级 502 / fetch failed 就让委派整体失败(PI-DSH 评审 R3)。
+    const payload = await withLlmRetry(() => llm.buildProviderPayload({
       model,
       apiModelId,
       messages,
@@ -450,24 +452,26 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       // 子代理用独立缓存路由键:消息序列与父会话完全不同,蹭父会话的键反而打散其缓存。
       // 按 subId 细分:并行多个子代理时互不打散彼此的前缀(各自迭代轮次内的自相似才是缓存收益点)。
       cacheKey: `${parentCtx.sessionId}:sub:${subId}`,
-    });
+    }), undefined, parentCtx.signal);
 
     // 组 payload 是异步的,这段时间并行的兄弟子代理可能已把 run 推过上限:真发请求前再查一次(已在飞的请求只能让它跑完,
     // 所以这是防失控的软上限,不是逐点预留的硬额度)。
     if (parentCtx.runCostExceeded?.()) { overBudget = true; break; }
-    const res = await llm.streamProviderCompletion({
+    let emitted = false; // 已向子聊天区吐过帧的那次尝试不重发,否则转写重复
+    const res = await withLlmRetry(() => llm.streamProviderCompletion({
       apiKey,
       baseUrl,
       payload,
       provider: (model as any)?.provider,
       signal: parentCtx.signal,
       // 流式回灌子聊天区(tag subId);主聊天不渲染 `subagent` 事件,故不会串进主气泡。
-      onToken: (d) => { transcript.token(d); if (runId) void publish(runId, 'subagent', { phase: 'token', subId, delta: d }); },
-      onReasoning: (d) => { transcript.reasoning(d); if (runId) void publish(runId, 'subagent', { phase: 'reasoning', subId, delta: d }); },
+      onToken: (d) => { emitted = true; transcript.token(d); if (runId) void publish(runId, 'subagent', { phase: 'token', subId, delta: d }); },
+      onReasoning: (d) => { emitted = true; transcript.reasoning(d); if (runId) void publish(runId, 'subagent', { phase: 'reasoning', subId, delta: d }); },
       onToolCallDelta: (info) => {
+        emitted = true;
         if (info.argsDelta && runId) void publish(runId, 'subagent', { phase: 'tool_stream', subId, id: info.id, name: info.name, delta: info.argsDelta });
       },
-    });
+    }), undefined, parentCtx.signal, () => !emitted);
 
     if (runId) {
       void publish(runId, 'subagent', {
@@ -497,6 +501,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     // 与主循环同一个构造器:providerItems + reasoning_content 必须跟着工具轮回灌,否则 DeepSeek/ZAI/
     // 带思考的 Qwen 在工具轮之后的下一次请求可能直接 400(Codex 评审三轮 #2)。
     messages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
+    // 截断硬化与主循环同款:finish_reason=length 时工具参数可能「能解析但不完整」(write_file 写半个文件),
+    // 全部置错回喂、一个不执行,让模型用更短的参数重发(PI-DSH 评审 R3)。
+    const truncated = res.finishReason === 'length';
     for (const call of res.toolCalls) {
       if (parentCtx.signal?.aborted) throw new Error('aborted');
       // 管理面硬闸:**审批之前**就短路 —— 不拿一个注定被共享执行层拒掉的调用去打扰用户。
@@ -504,7 +511,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       // 授予了 manage_automation 时,模型写旧别名 muse_watch 也必须照常进审批,而不是在这儿被跳过 ——
       // 跳过审批等于「授予 = 免审批」,那正是本次改动明确不做的事。
       // 拒绝措辞单源在 executeTool:它在任何副作用之前返回那一句,这里只是不走审批。
-      const denied = isSubAgentDenied(subCtx, call.function.name);
+      const denied = truncated || isSubAgentDenied(subCtx, call.function.name);
       // —— PreToolUse hook(host-only;云端在 runHooks 顶部即空判定)—— 此前子代理循环**完全不跑** lifecycle hook,
       // 宿主配了「拦 manage_schedule」的 PreToolUse,父代理被拦、授给子代理就绕过去了(Codex 09-15 复审 #2)。
       // 与主循环同序:先 hook(block / 改写参数)、再审批(基于改写后的内容)、再执行、最后 PostToolUse。
@@ -539,7 +546,14 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       let content: string;
       let isError = false;
       let execCall = hookCall;
-      if (preV?.block) {
+      if (truncated) {
+        // 与主循环(agentLoop)逐字同一句。
+        content =
+          `Tool call "${call.function.name}" was NOT executed: the response hit the output token limit ` +
+          '(finish_reason=length), so its arguments may be silently truncated. Re-issue the call with ' +
+          'complete, shorter arguments — e.g. split a large write into several smaller edit/apply_patch calls.';
+        isError = true;
+      } else if (preV?.block) {
         // 与主循环(agentLoop)逐字同一句:模型面英文,写明是 hook 挡的、没执行(旧文案是中文「⛔ Hook 拦截：…」)。
         content = `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`;
         isError = true;

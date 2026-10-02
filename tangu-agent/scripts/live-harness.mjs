@@ -125,7 +125,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone'];
+const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -1410,6 +1410,20 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // PI-DSH 评审 R1(10-02):无人值守 run(Muse / 自动化)里没人答询问 —— ask_user 当场拿到 [No answer] 系统说明,模型须照常收尾
+  // (不挂、不打转)。agent_config.automationOrigin 把这条 run 标成自动化来源(runCategory → unattended)。
+  // 负对照 = 去掉 inquiries.ts 入口短路的 dist:ask_user 挂到超时(须红)。
+  await scenario('unattendedask', 'unattendedask 无人值守 run 里 ask_user 不挂:拿到 [No answer] 照常收尾', async () => {
+    const ev = await run(`live-unattendedask-${Date.now()}`, 'Use the ask_user tool to ask me whether the report title should be "Alpha" or "Beta". Then reply with one line: the title you will use and why.', 120_000, { automationOrigin: 'live-unattended-ask' });
+    const asks = ev.toolResults.filter((t) => t.name === 'ask_user');
+    const sys = asks.length > 0 && asks.every((t) => t.result.startsWith('[No answer]'));
+    return {
+      ok: !ev.error && ev.done && sys && asks.length <= 2, inconclusive: !ev.error && ev.done && !asks.length,
+      detail: ev.error || `ask_user ${asks.length} 次;${sys ? '均为 [No answer] 系统说明' : asks.length ? '结果不是系统说明' : '模型没问'};${ev.done ? '已收尾' : '没收尾'}`,
+      output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev),
+    };
   });
 
   // G3-02(09-28,Amadeus 编辑器评审):write_file 读后指纹闸。同会话两轮:① read_file 读一份带错别字的清单;台架随即往文件尾

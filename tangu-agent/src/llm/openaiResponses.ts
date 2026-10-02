@@ -195,6 +195,11 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     try {
       const j: any = await response.json();
       detail = j?.error?.message || JSON.stringify(j).slice(0, 300);
+      // Codex 订阅额度用尽:带上重置时间,否则用户只看到一句「usage limit」不知道等多久(PI-DSH 评审 R5)。
+      const resetsAt = Number(j?.error?.resets_at) || (Number(j?.error?.resets_in_seconds) ? Date.now() / 1000 + Number(j.error.resets_in_seconds) : 0);
+      if (resetsAt && /usage/i.test(`${j?.error?.type || ''} ${j?.error?.code || ''} ${detail}`)) {
+        detail += ` (resets in ~${Math.max(1, Math.round((resetsAt * 1000 - Date.now()) / 60_000))} min)`;
+      }
     } catch { /* keep empty */ }
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
     throw new LlmError(status, detail || `Codex upstream error ${response.status}`);

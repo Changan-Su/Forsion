@@ -26,6 +26,7 @@ import { printBanner } from './components/Banner.js';
 import { App } from './app.js';
 import { dispatchPluginCommand, listPlugins, activateAllPlugins } from '../plugins/bootstrap.js';
 import { applySpecialAgentEnableMigration } from '../services/specialAgentsConfig.js';
+import { drainRunsForExit } from '../services/agentLoop.js';
 
 /** CLI 版本 = 包 package.json(dist/tui/main.js 的 ../../;打包态即 resources/tangu-server/package.json)。 */
 function pkgVersion(): string {
@@ -171,8 +172,9 @@ async function main(): Promise<void> {
 
   const app = render(<App boot={cfg} storage={storage} />, { exitOnCtrlC: false });
   await app.waitUntilExit();
+  const drained = drainRunsForExit(1500); // 在飞 run 落完终态(部分回答 + aborted)再退,不然行停在 running(见 agentLoop)
   mod.dispose();
-  await mcp.dispose().catch(() => {});
+  await Promise.all([drained, mcp.dispose().catch(() => {})]);
   process.exit(0);
 }
 

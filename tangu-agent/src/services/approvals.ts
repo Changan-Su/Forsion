@@ -29,6 +29,7 @@ import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
+import { isUnattendedRun } from './remoteActivity.js';
 export type { AnswerBy } from './pendingPromptIndex.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isValidSlug, slugify, type NormalAgentDef } from '../agents/agentRegistry.js';
@@ -545,6 +546,7 @@ export const USER_REJECT_REASON =
   'The user rejected this tool call, so it was NOT run. Do not retry the same call; ask the user how to proceed or continue with other work.';
 export const ABORTED_REJECT_REASON =
   'The run was stopped while this tool call was waiting for approval, so it was NOT run.';
+export const UNATTENDED_REJECT_REASON = 'This unattended run cannot ask for approval, so the action was not performed.';
 
 // 同 run 审批串行化(Codex 评审 07-30 #2):TUI 的审批 UI 是单槽,通道端收到首个决定即退订——
 // 并行子代理同时弹审批会互相顶掉,后到的一直挂到超时。同 run 的请求排队逐个发布。
@@ -568,6 +570,8 @@ export function requestApproval(
   reason?: ApprovalReason,
   origin?: RemoteInfo,
 ): Promise<ApprovalDecision> {
+  // 无人值守 run 没人答:当场拒(gateToolCall 的同名分支只管自己那条路;引擎委派中继 / 外部引擎主循环直调这里)。
+  if (isUnattendedRun(runId)) return Promise.resolve({ action: 'reject', rejectReason: UNATTENDED_REJECT_REASON });
   if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin);
   const tail = approvalQueues.get(runId) || Promise.resolve();
   const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin));
@@ -1170,7 +1174,7 @@ export async function gateToolCall(
         : control ? { kind: 'control', mode } : { kind: 'mode', mode };
   // 无人值守且没有异步审批通道(自动化 / Muse 完全通行档,被远端 steer 染色后才会走到这里):没人答,await 就是永久挂起 → 直接拒。
   if (ctx.unattended && !ctx.approvalDeferral) {
-    return { action: 'reject', rejectReason: 'This unattended run cannot ask for approval, so the action was not performed.' };
+    return { action: 'reject', rejectReason: UNATTENDED_REJECT_REASON };
   }
   // 无人值守 run:没有订阅者能应答 approval_request,await 就是永久卡死 → 排队 / 代批(动态 import 防模块环)。
   if (ctx.approvalDeferral) {

@@ -31,6 +31,7 @@
     "boot:smoke": "node scripts/boot-smoke.mjs",
     "test:watch": "vitest",
     "e2e:direct": "node scripts/direct-offline.e2e.mjs",
+    "e2e:runrecovery": "node scripts/run-recovery.repro.mjs",
     "prelive:harness": "npm run build",
     "live:harness": "node scripts/live-harness.mjs",
     "smoke:tuiqueue": "bash scripts/tui-queue.smoke.sh",

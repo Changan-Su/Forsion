@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
+import { withLlmRetry } from '../llm/retry.js';
 import {
   compactionThreshold, estimateMessageTokens, estimateMessagesTokens, estimateTokensRough,
   isLossy, modelContextWindow, HISTORY_MSG_MAX_CHARS,
@@ -468,10 +469,17 @@ async function summarizeWith(target: SummaryTarget, transcript: string, incremen
     ...(thinking && thinking !== 'off' ? { thinkingLevel: thinking } : {}),
   });
   signal?.throwIfAborted();
-  const res = await deps().brain.llm.streamProviderCompletion({ apiKey: target.apiKey, baseUrl: target.baseUrl, payload, signal });
+  // 与主循环同一套有界重试(秒级抖动可重试、慢失败一票否决):摘要不往客户端吐帧,重发安全(PI-DSH 评审 R3)。
+  const res = await withLlmRetry(
+    () => deps().brain.llm.streamProviderCompletion({ apiKey: target.apiKey, baseUrl: target.baseUrl, payload, signal }),
+    undefined, signal,
+  );
   signal?.throwIfAborted();
-  // 摘要调用上台账(A5):无 run 上下文(/compact 路由等)时静默跳过。
+  // 摘要调用上台账(A5):无 run 上下文(/compact 路由等)时静默跳过。截断的那次也已付费,先记账再判。
   await publishBackgroundUsage('compaction', target.modelId, (res as any)?.usage, { model: target.model });
+  // 撞输出上限的摘要是半截(丢的恰是最近那段):落成持久检查点后每个 run 都会回放它(pi #7048)。
+  // 拒收 → run 内走机械折叠兜底,/compact 报失败。
+  if ((res as any)?.finishReason === 'length') throw new Error('summary was truncated at the output token limit');
   return String(res?.content || '').trim();
 }
 

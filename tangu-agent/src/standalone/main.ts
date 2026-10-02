@@ -27,6 +27,7 @@ import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
+import { drainRunsForExit } from '../services/agentLoop.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 /** --print-config:打印生效配置(config.json + env 叠加),token/apiKey 脱敏(仅留尾 4 位)。 */
@@ -199,10 +200,12 @@ async function main(): Promise<void> {
 
   attachRealtimeVoice(server); // ws /agent/realtime:实时语音通话中转(brain.realtime 未注入则拒连)
 
-  // 优雅退出(桌面 backendManager 发 SIGTERM):停定时器/中止 run/杀 MCP stdio 子进程。
+  // 优雅退出(桌面 backendManager 发 SIGTERM,3s 后 SIGKILL):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
+  // 等被中止的 run 落完终态(部分回答 + aborted)再退,有界 1.5s,赶在 2s 硬退出之前。
   const shutdown = (): void => {
+    const drained = drainRunsForExit(1500);
     try { mod.dispose(); } catch { /* ignore */ }
-    void mcp.dispose().finally(() => process.exit(0));
+    void Promise.all([drained, mcp.dispose()]).finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref?.();
   };
   process.on('SIGTERM', shutdown);

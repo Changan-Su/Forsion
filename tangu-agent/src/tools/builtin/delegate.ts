@@ -10,6 +10,7 @@ import { runSubAgent, SUB_MAX_ITERATIONS } from '../../services/subAgent.js';
 import { deps } from '../../seams/runtime.js';
 import { resolveTools, canonicalToolName, SUB_AGENT_GRANTABLE_TOOLS, type ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
+import { processOriginOf } from '../processRegistry.js';
 
 /**
  * grantTools 入参校验。两条硬约束(缺一子代理就可能比父代理更强):
@@ -129,9 +130,9 @@ export const delegateProvider: ToolProvider = {
             if (!ids.includes(engineId)) {
               return `Error: unknown or unavailable engine '${engineId}'${ids.length ? ` (available: ${ids.join(', ')})` : ' (no external agent CLI is set up)'}`;
             }
-            // 引擎的权限请求经父 run 的审批弹窗中继;没有 runId(Muse/自动化等无人值守 run)就没人能应答,
-            // 会在 ACP requestPermission 上永久挂起 —— 提前拒绝,别 spawn。
-            if (!ctx.runId) return 'Error: engine delegation needs an interactive run (its permission prompts have nowhere to go here)';
+            // 引擎的权限请求经父 run 的审批弹窗中继;Muse/自动化等无人值守 run 没人能应答 —— 提前拒绝,别 spawn。
+            // ⚠️ 不能只判 !ctx.runId:每个 run 的工具 ctx 都带 runId(原守卫因此形同虚设,PI-DSH 评审 R1)。
+            if (!ctx.runId || processOriginOf(ctx) === 'unattended') return 'Error: engine delegation needs an interactive run (its permission prompts have nowhere to go here)';
             // engine × grantTools 互斥:外部 CLI 跑它自己的工具面,授予根本到不了它那里。原先是「校验完静默丢掉」,
             // 模型不会知道自己点名的管理工具是个空操作,而 start 事件还照发 grants —— 审计面上等于记了一条
             // 从未授出去的管理权限。宁可让这次委派失败:模型要么去掉 grantTools,要么改用内置子代理。
