@@ -51,7 +51,8 @@ beforeEach(async () => {
     streamProviderCompletion: async (o: any) => {
       payloads.push(o.payload);
       if (isSummaryCall(o.payload)) {
-        if (summaryFailOnce) { summaryFailOnce = false; throw new LlmError(502, 'summarizer down'); }
+        // 不可重试的失败(R3 起 502 这类秒级抖动会在摘要调用内重发,不再走兜底)
+        if (summaryFailOnce) { summaryFailOnce = false; throw new LlmError(400, 'summarizer rejected the request'); }
         if (summaryGate) await summaryGate;
         const text = `## Goal\nSUMMARY-${summaries.length + 1}: keep going`;
         summaries.push(text);

@@ -39,6 +39,12 @@ describe('isRetryableLlmError', () => {
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run src/llm/retry.test.ts
  */
 describe('withLlmRetry', () => {
+  it('canRetry 返回 false(本次已吐过帧)→ 可重试错误也不重发', async () => {
+    const fn = vi.fn().mockRejectedValue(new LlmError(502, 'x'));
+    await expect(withLlmRetry(fn, undefined, undefined, () => false)).rejects.toMatchObject({ status: 502 });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
   it('已经取消时不启动第一次请求', async () => {
     const ac = new AbortController(); ac.abort();
     const fn = vi.fn();

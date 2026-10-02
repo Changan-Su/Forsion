@@ -47,6 +47,8 @@ export async function withLlmRetry<T>(
   fn: () => Promise<T>,
   onRetry?: (attempt: number, waitMs: number, err: unknown) => void,
   signal?: AbortSignal,
+  /** 流式调用方用:本次尝试已向客户端吐过帧就返回 false,不重发(否则重复流)。 */
+  canRetry?: () => boolean,
 ): Promise<T> {
   const t0 = Date.now();
   for (let attempt = 0; ; attempt++) {
@@ -60,7 +62,7 @@ export async function withLlmRetry<T>(
       // 退避期间用户点了停 → 立刻放弃并抛 AbortError,否则最终抛的是传输错、run 被误记成 failed。
       if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       const wait = MODEL_RETRY_BASE_MS * (attempt + 1);
-      if (llmRetryBudgetExceeded(t0, wait) || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
+      if (llmRetryBudgetExceeded(t0, wait) || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err) || canRetry?.() === false) throw err;
       onRetry?.(attempt + 1, wait, err);
       await sleepOrAbort(wait, signal);
       // timer/事件循环可能晚唤醒:睡前有余量不代表醒后仍可再发一次请求。
