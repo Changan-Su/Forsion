@@ -51,7 +51,7 @@ const cssFiles = [
   'frontend/src/views/dashCanvas.css',
   '../lcl/engine/singleColumn.css',
 ]
-const CSS = cssFiles.map((file) => fs.readFileSync(path.join(DESKTOP, file), 'utf8').replace(/@import\s+[^;]+;/g, '')).concat(softCss).join('\n')
+const CSS = cssFiles.map((file) => fs.readFileSync(path.join(DESKTOP, file), 'utf8').replace(/^\s*@import\s+(?:url\(|['"])[^;]+;/gm, '')).concat(softCss).join('\n')
 
 const surfaces = [
   ['project-menu', '项目菜单', 'composer-menu project-menu'],

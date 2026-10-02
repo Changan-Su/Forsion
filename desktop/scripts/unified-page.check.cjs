@@ -624,7 +624,8 @@ async function main() {
     await hoverBlock(p7, `${PM} > p`) // 段一
     await p7.click('.unified-gutter .drag-handle')
     await p7.waitForSelector('.unified-block-menu', { timeout: 3000 })
-    await p7.click('.unified-block-menu button:nth-of-type(3)') // 标题 2
+    await p7.hover('.unified-block-menu [data-sub="turnInto"]') // 「转换为 ›」子菜单(10-02 c2)
+    await p7.locator('.unified-block-submenu button', { hasText: '标题 2' }).first().click()
     await p7.waitForTimeout(250)
     // structuralSource 现在是真 input（value 不进 textContent），断言仍只看正文结尾。
     const p9a = await p7.evaluate((s) => document.querySelector(`${s} > h2`)?.textContent, PM)
@@ -651,7 +652,8 @@ async function main() {
         await hoverBlock(pg, `${PM} > pre`)
         await pg.click('.unified-gutter .drag-handle')
         await pg.waitForSelector('.unified-block-menu', { timeout: 3000 })
-        await pg.locator('.unified-block-menu button', { hasText: label }).first().click()
+        await pg.hover('.unified-block-menu [data-sub="turnInto"]')
+        await pg.locator('.unified-block-submenu button', { hasText: label }).first().click()
         await pg.waitForTimeout(1300)
         const saved = await pg.evaluate(() => (window.__upage.writes.at(-1) || {}).text || null)
         const shape = () => pg.evaluate(() => {
