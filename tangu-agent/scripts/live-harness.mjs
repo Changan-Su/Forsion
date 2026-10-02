@@ -12,6 +12,7 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
@@ -125,7 +126,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask'];
+const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -144,6 +145,7 @@ const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename'
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
+OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -799,6 +801,24 @@ const ESTOP_LOCK_FILE = join(OUT, 'userData', 'remote-lock.json'); // P1-K2 esto
 const REMOTE_SESSION_SANDBOX = join(tmpdir(), `forsion-agent-sessions-live-${stamp}`); // P1-K9 remotesession
 const markerFile = join(workspace, 'marker.txt');
 writeFileSync(markerFile, `# 台架标记文件\ncode = ${MARKER}\n`);
+// plugin(10-02):隔离 home 的插件目录里放一个夹具引擎插件,它唯一的工具回一个随机标记(引擎起来时装载)。
+const PLUGIN_MARKER = `PLUG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+if (ONLY.has('plugin')) {
+  const pdir = join(home, 'plugins', 'live-probe');
+  mkdirSync(join(pdir, 'dist'), { recursive: true });
+  writeFileSync(join(pdir, 'tangu-plugin.json'), JSON.stringify({ id: 'live-probe', name: 'Live probe', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
+  writeFileSync(join(pdir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(pdir, 'dist', 'index.js'), `export default {
+  activate(ctx) {
+    ctx.registerPlugin({ id: 'live-probe', name: 'Live probe', description: 'live-harness fixture', defaultEnabled: true,
+      toolProvider: { id: 'plugin:live-probe', tools: () => [{ name: 'live_probe_marker',
+        definition: { type: 'function', function: { name: 'live_probe_marker', description: 'Returns the live probe verification code.', parameters: { type: 'object', properties: {} } } },
+        execute: () => ${JSON.stringify(PLUGIN_MARKER)} }] } });
+  },
+  deactivate() {},
+};
+`);
+}
 // read_document 场景专用:**本机 liteparse 实测拒 .txt 与 .md**(`unsupported file format`),收 .csv。
 // 用 .txt 的话模型会 read_document 报错 → 回落 read_file → 照样答对标记,于是「按需装载」场景**假绿**
 // (2026-09-15 实测到的形态:序列 load_tools → read_document(Error)→ read_file,断言全绿)。
@@ -1410,6 +1430,33 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // plugin(10-02 插件生命周期):引擎插件热插拔对**模型可见面**的真跑。开着 → 模型调得到夹具工具、答出它回的标记;
+  // PUT 停用 → 新会话里调不到也答不出(工具真撤下了,不只是设置里关了);再启用 → 又调得到。三问各开新会话,不让上下文串答案。
+  // 负对照 = 停用不撤 provider 的引擎(或 PUT 只落盘不收敛):第二问照样答出标记,须红。
+  await scenario('plugin', 'plugin 引擎插件热插拔:开着调得到、停用后调不到、再启用回来', async () => {
+    const ask = 'Call the live_probe_marker tool and reply with exactly the code it returns, nothing else. If no such tool is available to you, reply NO_TOOL.';
+    const state = async () => (await api('/agent/plugins')).plugins?.find((p) => p.id === 'live-probe');
+    const setOn = (enabled) => api('/agent/plugins/live-probe/enabled', { method: 'PUT', body: JSON.stringify({ enabled }) });
+    const s0 = await state();
+    const ev1 = await run(`live-plugin-on-${Date.now()}`, ask);
+    await setOn(false);
+    const s1 = await state();
+    const ev2 = await run(`live-plugin-off-${Date.now()}`, ask);
+    await setOn(true);
+    const s2 = await state();
+    const ev3 = await run(`live-plugin-back-${Date.now()}`, ask);
+    const called = (ev) => ev.toolCalls.includes('live_probe_marker');
+    const said = (ev) => ev.content.includes(PLUGIN_MARKER);
+    const err = ev1.error || ev2.error || ev3.error;
+    const ok = !err && !!s0?.active && called(ev1) && said(ev1) && s1?.active === false && !called(ev2) && !said(ev2)
+      && !!s2?.active && called(ev3) && said(ev3);
+    const leg = (name, s, ev) => `${name}:active=${s?.active} 工具 ${ev.toolCalls.join(',') || '无'} 标记${said(ev) ? '命中' : '未命中'}`;
+    return {
+      ok, detail: err || [leg('开着', s0, ev1), leg('停用', s1, ev2), leg('再启用', s2, ev3)].join(';'),
+      output: `开着:${ev1.content}\n停用:${ev2.content}\n再启用:${ev3.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+    };
   });
 
   // PI-DSH 评审 R1(10-02):无人值守 run(Muse / 自动化)里没人答询问 —— ask_user 当场拿到 [No answer] 系统说明,模型须照常收尾

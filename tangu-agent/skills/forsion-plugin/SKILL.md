@@ -45,7 +45,7 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 - **前置插件**:manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0" }]`。前置没装 / 版本低 / 关着 / 没在跑时本插件休眠(列出但不运行),前置就位后自动激活;互相依赖成环的永不激活。
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 
-装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 设置页重扫即生效,不用重启。同 id 覆盖升级也是重扫即热换代 —— 前提是入口为**单文件**(esbuild 打成一个 bundle):入口里有相对 import(`./x.js`)、实参不是固定包名的动态 `import()`、或包里自带 `node_modules` 的,ESM 缓存只破得了入口,宿主会如实标「需重启」。同一进程里热换代满 20 次后也一律「需重启」(旧模块卸不掉,省内存)。
+装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 设置页重扫即生效,不用重启。同 id 覆盖升级也是重扫即热换代:单文件入口(esbuild 打成一个 bundle,推荐)直接换;多文件的**纯 ESM** 包(`"type": "module"`,入口相对 import 同包文件)在 Node ≥ 22.15 上也能整包换代。包里有 CommonJS(`.cjs`、`require('./x')`)、原生 `.node`、自带 `node_modules`,或运行时太旧的,宿主会如实标「需重启」。同一进程里热换代满 20 次后也一律「需重启」(旧模块卸不掉,省内存)。
 
 ## 主题(samples/forsion-sample-theme)
 
@@ -1072,7 +1072,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - ⚠️**这不是隔离沙箱**:dev 插件跑在真应用、用户的真笔记库上,与已安装插件同权。试验期间不要写、挪、删用户数据;定时器与监听必须在 disposer 里清(热重载会反复 `setup`,漏清一次就叠一层)。
 - ⚠️**同 id 影子**:dev 副本会顶掉同 id 的已安装副本(卡片带 DEV 徽标,期间该插件的「卸载」被禁用)。要对比已安装版,先在 Sandbox 里卸载 dev 副本。
 - ⚠️**声明了 `fileExtensions` 的插件不能从 Sandbox 加载**(宿主的毁档防线只覆盖已安装目录)——这类插件必须装上再测,面板会直说。
-- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:装进插件目录后重扫生效;同 id 覆盖升级单文件入口可热换代,入口带相对 import 的仍须重启后端。
+- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:装进插件目录后重扫生效;同 id 覆盖升级可热换代(单文件 bundle,或纯 ESM 多文件包),带 CommonJS / 自带 node_modules 的仍须重启后端。
 
 `check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。
 

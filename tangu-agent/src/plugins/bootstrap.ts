@@ -235,6 +235,8 @@ export interface PluginStatus {
   waitingFor?: PluginWaitingFor[];
   /** 上次激活抛错的消息。 */
   lastError?: string;
+  /** 上一次 activate / deactivate 超时后还在后台跑(busy):落定后按开关自动收敛,这期间不会再激活它。 */
+  settling?: boolean;
 }
 
 /** 生命周期限时(测试改小)。超时只是不再等,对方仍在后台跑 —— 见 withDeadline。 */
@@ -515,9 +517,10 @@ export async function activateAllPlugins(onActivate?: (id: string) => void): Pro
  * 运行期重扫 = 与磁盘同步(市场装 / 更新 / 删插件后无需重启):
  *   - 新 id → 激活一次 + 收敛(新插件即时出现在列表、按开关生效);
  *   - 目录消失 → 依赖者先休眠,再 deactivate + 彻底注销 meta;
- *   - 同 id 指纹变了(manifest 版本 / 入口 mtime·size·路径)→ 原地升级:停旧实例(依赖者先停)、带 `?tangu-gen=` 重新
- *     import 入口、激活新模块、依赖者随收敛重启。入口有相对 import 的(ESM 缓存只破得了入口)不热升级:老实例照跑,
- *     标 pluginsNeedingRestart,needsRestart=true(唯一还需要重启的情形)。
+ *   - 同 id 指纹变了(manifest 版本 / 包内代码文件 mtime·size)→ 原地升级:停旧实例(依赖者先停)、带 `?tangu-gen=` 重新
+ *     import 入口(同包 ESM 文件经模块钩子带上同一代号)、激活新模块、依赖者随收敛重启。破不了缓存的(cannotHotSwap:
+ *     CommonJS / 自带 node_modules / 运行时没有模块钩子)与本进程换代已满的不热升级:老实例照跑,标 pluginsNeedingRestart,
+ *     needsRestart=true。
  * addedIds / reloadedIds = 新代码**激活成功**的 id(失败的看列表 lastError);removedIds = 已注销的 id。
  */
 export function rescanPlugins(): Promise<{ addedIds: string[]; reloadedIds: string[]; removedIds: string[]; needsRestart: boolean }> {
@@ -631,6 +634,6 @@ export function pluginStatus(id: string): PluginStatus {
     if (waiting.length) out.waitingFor = waiting;
   }
   if (e.lastError) out.lastError = e.lastError;
-  else if (e.busy && !e.inst) out.lastError = 'The previous instance is still shutting down; it starts again once that finishes';
+  if (e.busy && !e.inst) out.settling = true;
   return out;
 }

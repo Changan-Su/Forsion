@@ -30,12 +30,13 @@ function pluginView(m: ReturnType<typeof listPluginMetas>[number], st: PluginSta
     scopes: m.scopes || ['global'], settings: m.settings || null, source: m.source || 'builtin',
     enabled: isPluginEnabledSync(m.id), needsRestart: pluginsNeedingRestart.has(m.id),
     // 生命周期运行态(老桌面忽略未知字段):active=此刻在跑;version 仅 folder 插件;requiresPlugins=声明的前置;
-    // waitingFor 仅「已启用但前置没齐而休眠」时给;lastError=上次激活抛错。
+    // waitingFor 仅「已启用但前置没齐而休眠」时给;lastError=上次激活抛错;settling=上一次启停超时还在后台收尾。
     active: st.active,
     ...(st.version ? { version: st.version } : {}),
     ...(st.requiresPlugins ? { requiresPlugins: st.requiresPlugins } : {}),
     ...(st.waitingFor ? { waitingFor: st.waitingFor } : {}),
     ...(st.lastError ? { lastError: st.lastError } : {}),
+    ...(st.settling ? { settling: true } : {}),
   };
 }
 

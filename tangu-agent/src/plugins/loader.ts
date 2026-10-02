@@ -12,7 +12,8 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
  * tool-def 快照也因此不变。
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import module from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { pluginsDir } from '../core/tanguHome.js';
@@ -108,24 +109,31 @@ const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.node', '.wasm']);
 // ponytail: 最多看这么多个代码文件;更大的包只按前这些算(只改了排在后面的 helper 会漏判成「没变」)。
 const MAX_FINGERPRINT_FILES = 2000;
 
-/** 指纹覆盖整个包的代码文件,不只入口:只改了 dist/helper.js 也要判成「变了」(再由 cannotHotSwap 落到「需重启」),
- *  否则重扫当它没变、老 helper 照跑还报 needsRestart:false(Codex 10-02)。跳过 node_modules 与点目录。 */
-function fingerprintOf(version: string, entryPath: string, dir: string): string {
-  const parts: string[] = [];
-  const walk = (d: string, rel: string): void => {
+/** 包内代码文件(绝对路径,按路径排序;跳过 node_modules 与点目录)。指纹与热升级判定同一口径。 */
+function codeFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
     let ents;
     try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const ent of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-      if (parts.length >= MAX_FINGERPRINT_FILES) return;
+      if (out.length >= MAX_FINGERPRINT_FILES) return;
       if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
       const abs = path.join(d, ent.name);
-      if (ent.isDirectory()) walk(abs, `${rel}${ent.name}/`);
-      else if (ent.isFile() && CODE_EXT.has(path.extname(ent.name))) {
-        try { const st = statSync(abs); parts.push(`${rel}${ent.name}:${st.mtimeMs}:${st.size}`); } catch { /* 刚被删:不计 */ }
-      }
+      if (ent.isDirectory()) walk(abs);
+      else if (ent.isFile() && CODE_EXT.has(path.extname(ent.name))) out.push(abs);
     }
   };
-  walk(dir, '');
+  walk(dir);
+  return out;
+}
+
+/** 指纹覆盖整个包的代码文件,不只入口:只改了 dist/helper.js 也要判成「变了」,
+ *  否则重扫当它没变、老 helper 照跑还报 needsRestart:false(Codex 10-02)。 */
+function fingerprintOf(version: string, entryPath: string, dir: string): string {
+  const parts: string[] = [];
+  for (const f of codeFiles(dir)) {
+    try { const st = statSync(f); parts.push(`${path.relative(dir, f)}:${st.mtimeMs}:${st.size}`); } catch { /* 刚被删:不计 */ }
+  }
   let entry: string;
   try { const st = statSync(entryPath); entry = `${st.mtimeMs}|${st.size}`; } catch { entry = 'missing'; }
   return `${version}|${entryPath}|${entry}|${createHash('sha1').update(parts.join('\n')).digest('hex')}`;
@@ -216,26 +224,85 @@ export function discoverPlugins(): DiscoveredPlugin[] {
 
 // 空白与注释(`from /* x */ './a'`、`import(/* x */ './a')` 都得认出来)
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
-const UNSAFE_IMPORT = new RegExp([
-  String.raw`\b(?:from|import)${GAP}['"]\.{1,2}/`, // import x from './x' / export * from '../x' / import './x'
-  String.raw`\b(?:import|require)${GAP}\(${GAP}(?:['"]\.{1,2}/|[^'"\s)])`, // import('./x') / import(变量 / 模板串) / require('./x')
+/** ESM 相对引入:import x from './x' / export * from '../x' / import './x' / import('./x') / import(变量 / 模板串)。 */
+const ESM_IMPORT = new RegExp([
+  String.raw`\b(?:from|import)${GAP}['"]\.{1,2}/`,
+  String.raw`\bimport${GAP}\(${GAP}(?:['"]\.{1,2}/|[^'"\s)])`,
 ].join('|'));
+/** CommonJS 引入:require('./x') / require(变量)。CommonJS 按文件名缓存,查询串破不了。
+ *  (单写 createRequire 不算:esbuild banner 用它造 require 只拿 node 内置,不涉及包内文件。) */
+const CJS_REQUIRE = new RegExp(String.raw`\brequire${GAP}\(${GAP}(?:['"]\.{1,2}/|[^'"\s)])`);
+
+/** 运行时能不能整图换代:Node ≥ 22.15 的同步模块钩子(打包版 Electron 40 = Node 24)。
+ *  `TANGU_PLUGIN_GRAPH_SWAP=0` 关掉,退回只破入口(多文件插件换代 = 需重启)。 */
+export function canSwapWholeGraph(): boolean {
+  return process.env.TANGU_PLUGIN_GRAPH_SWAP !== '0' && typeof (module as { registerHooks?: unknown }).registerHooks === 'function';
+}
+
+/** 入口所在的包作用域是不是 ESM:与 Node 同法,从入口目录往上找最近的 package.json(可以在插件目录之外,
+ *  如捆绑包根),看它的 "type"。入口本身是 .mjs 也算。 */
+function entryScopeIsModule(entryFile: string): boolean {
+  if (entryFile.endsWith('.mjs')) return true;
+  for (let d = path.dirname(entryFile); path.basename(d) !== 'node_modules'; d = path.dirname(d)) {
+    try {
+      return JSON.parse(readFileSync(path.join(d, 'package.json'), 'utf8'))?.type === 'module';
+    } catch { /* 没有或坏了:往上找 */ }
+    if (path.dirname(d) === d) break;
+  }
+  return false;
+}
 
 /**
- * 能不能原地热升级。热升级只破得了**入口**的 ESM 缓存(`?tangu-gen=` 查询串):入口相对引入的文件、包里自带
- * node_modules 下的依赖 URL 都不变,拿到的仍是旧模块 —— 这类不热升,老实例继续跑并如实标「需重启」。
- * 宁可误报(注释、字符串里出现也算;动态 import 的实参不是非相对字面量也算)不可漏报。
- * 首方引擎插件是 esbuild 单文件 bundle,天然可热升级。
+ * 能不能原地热升级。换代时入口带 `?tangu-gen=` 查询串重新 import;入口引入的同包 ESM 文件靠 resolve 钩子带上同一代号
+ * (loadPlugin)。破不了的如实判「需重启」(老实例继续跑):包里自带 node_modules、任何 CommonJS(.cjs / require(…) /
+ * 非 type:module 作用域)、原生 .node、或运行时没有模块钩子而入口有相对引入。宁可误报不可漏报(注释、字符串里出现也算)。
+ * 首方引擎插件是 esbuild 单文件 bundle,只破入口就够。
  */
 export function cannotHotSwap(d: DiscoveredPlugin): boolean {
   if (existsSync(path.join(d.dir, 'node_modules'))) return true;
+  let entryFile: string;
   let src: string;
   try {
-    src = readFileSync(fileURLToPath(d.entryUrl), 'utf8');
+    entryFile = fileURLToPath(d.entryUrl);
+    src = readFileSync(entryFile, 'utf8');
   } catch {
     return false; // 读不到入口 → 升级时 import 会自己报错(lastError),不在这里拦
   }
-  return UNSAFE_IMPORT.test(src);
+  if (!ESM_IMPORT.test(src) && !CJS_REQUIRE.test(src)) return false; // 单文件:只破入口就够
+  if (!canSwapWholeGraph() || !entryScopeIsModule(entryFile)) return true;
+  for (const f of codeFiles(d.dir)) {
+    if (f.endsWith('.cjs') || f.endsWith('.node')) return true;
+    if (/\.m?js$/.test(f)) {
+      try { if (CJS_REQUIRE.test(readFileSync(f, 'utf8'))) return true; } catch { /* 刚被删:不计 */ }
+    }
+  }
+  return false;
+}
+
+/** 代号 → 那一代入口所在插件根(realpath)。只增不减:总量受热换代上限约束(bootstrap MAX_HOT_GENERATIONS)。 */
+const genRoots = new Map<string, string>();
+const GEN_PARAM = /[?&]tangu-gen=(\d+)/;
+let graphHooksInstalled = false;
+
+/** 第一次换代时装一个同步 resolve 钩子:父模块 URL 带 `?tangu-gen=N`、解析结果是同一插件根里的 file: 模块 → 也带上
+ *  同一代号。于是入口相对引入的文件(及其再引入的)都是这一代的新模块,不沿用 ESM 缓存里的旧 helper。
+ *  不带代号的父模块(引擎自己、首次 import 的插件)原样放行。 */
+function ensureGraphHooks(): void {
+  if (graphHooksInstalled || !canSwapWholeGraph()) return;
+  graphHooksInstalled = true;
+  type Resolved = { url: string };
+  (module as unknown as { registerHooks(h: { resolve(s: string, c: { parentURL?: string }, next: (s: string, c: unknown) => Resolved): Resolved }): unknown }).registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const r = nextResolve(specifier, context);
+      const gen = context.parentURL ? GEN_PARAM.exec(context.parentURL)?.[1] : undefined;
+      const root = gen ? genRoots.get(gen) : undefined;
+      if (!root || !r.url.startsWith('file:') || GEN_PARAM.test(r.url)) return r;
+      let file: string;
+      try { file = fileURLToPath(r.url); } catch { return r; }
+      if (!file.startsWith(root + path.sep)) return r;
+      return { ...r, url: `${r.url}${r.url.includes('?') ? '&' : '?'}tangu-gen=${gen}` };
+    },
+  });
 }
 
 /** 本机沙箱开启时原生插件一律不可用。每次激活都判 —— 停用→启用复用已 import 的模块对象也要过这道闸。 */
@@ -245,11 +312,15 @@ export function assertNativePluginsAllowed(): void {
 
 /**
  * 昂贵:动态 import 入口、取 default-export `TanguPlugin`(不 activate)。失败抛。
- * `gen > 0` 时给入口 URL 带 `?tangu-gen=<n>` 破 ESM 缓存(原地升级用;只破入口,见 cannotHotSwap)。
+ * `gen > 0` 时给入口 URL 带 `?tangu-gen=<n>` 破 ESM 缓存(原地升级用),同包 ESM 文件经 resolve 钩子带上同一代号(见 cannotHotSwap)。
  * 普通停用→启用**不**重 import(ESM 模块永不卸载,每拨一次 import 一份会泄漏),复用同一模块对象再 activate。
  */
 export async function loadPlugin(d: DiscoveredPlugin, gen = 0): Promise<TanguPlugin> {
   assertNativePluginsAllowed();
+  if (gen > 0) {
+    try { genRoots.set(String(gen), realpathSync(d.dir)); } catch { /* 目录没了:下面的 import 自己报错 */ }
+    ensureGraphHooks();
+  }
   const mod = await import(gen > 0 ? `${d.entryUrl}?tangu-gen=${gen}` : d.entryUrl);
   const plugin: TanguPlugin = mod.default ?? mod.plugin;
   if (!plugin || typeof plugin.activate !== 'function') {

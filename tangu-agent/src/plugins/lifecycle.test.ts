@@ -1,7 +1,8 @@
 /**
  * 引擎插件生命周期(bootstrap):停用调 deactivate、工具撤下但槽位保留 → 再启用回原位;requiresPlugins 依赖门控与级联;
  * 热路由分发器;原地升级(入口破缓存)与相对 import 的如实需重启;目录消失注销;卸载墓碑;无依赖时启动顺序 = id 序;
- * activate / deactivate 限时与 busy 隔离;provider 归属;指纹覆盖 helper;热换代封顶;
+ * activate / deactivate 限时与 busy 隔离;provider 归属;指纹覆盖 helper;多文件 ESM 经模块钩子整图换代(没钩子 / CommonJS 如实需重启);
+ * 热换代封顶;
  * HTTP 面字段形状。真临时插件目录(tangu-plugin.json + dist/index.js 纯 ESM),TANGU_HOME / TANGU_PLUGINS_DIR 隔离;
  * 每例 vi.resetModules 拿一份全新的宿主模块图(bootstrap / registry / toolRegistry / settingsStore 都有模块级状态)。
  * 插件把 activate/deactivate 记进 globalThis.__lc,测试直接读。
@@ -30,7 +31,7 @@ interface PluginSpec {
   route?: string;
   /** activate 末尾抛错(此前已 registerPlugin)。 */
   throwInActivate?: boolean;
-  /** 入口相对 import 一个 helper(不可热升级)。 */
+  /** 入口相对 import 一个 helper,工具回 helper 里的标记(证明换代后跑的是新 helper)。 */
   relative?: boolean;
   /** 不登记 meta、只挂裸 provider(forsion-worker 一类:设置页没有开关)。 */
   noMeta?: boolean;
@@ -42,7 +43,7 @@ interface PluginSpec {
   providerId?: string;
 }
 
-const ENV_KEYS = ['TANGU_HOME', 'TANGU_PLUGINS', 'TANGU_PLUGINS_DIR', 'TANGU_BUNDLE_DIRS'];
+const ENV_KEYS = ['TANGU_HOME', 'TANGU_PLUGINS', 'TANGU_PLUGINS_DIR', 'TANGU_BUNDLE_DIRS', 'TANGU_PLUGIN_GRAPH_SWAP'];
 const savedEnv: Record<string, string | undefined> = {};
 let tmp: string;
 let pluginsRoot: string;
@@ -104,9 +105,9 @@ function writePlugin(id: string, spec: PluginSpec = {}): void {
   const provider = `{ id: '${spec.providerId ?? `plugin:${id}`}', tools: () => [{
         name: '${tool}',
         definition: { type: 'function', function: { name: '${tool}', description: 'x', parameters: { type: 'object', properties: {} } } },
-        execute: () => tag,
+        execute: () => ${spec.relative ? 'helperTag' : 'tag'},
       }] }`;
-  writeFileSync(path.join(dir, 'dist', 'index.js'), `${spec.relative ? "import { helperTag } from './helper.js';\nvoid helperTag;\n" : ''}
+  writeFileSync(path.join(dir, 'dist', 'index.js'), `${spec.relative ? "import { helperTag } from './helper.js';\n" : ''}
 const g = globalThis;
 g.__lcImports['${id}'] = (g.__lcImports['${id}'] || 0) + 1;
 const tag = ${tag};
@@ -222,7 +223,7 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     expect(await visibleTools(h)).toEqual(['lc_ok_tool']); // 吊住前登记的工具已撤
     await h.boot.setPluginEnabledLive('lc-ok', false); // 链没被堵
     await h.boot.setPluginEnabledLive('lc-hang', true); // 显式重试:上一次 activate 还挂着 → 不起第二份
-    expect(h.boot.pluginStatus('lc-hang')).toMatchObject({ active: false, lastError: expect.stringMatching(/still shutting down/) });
+    expect(h.boot.pluginStatus('lc-hang')).toEqual({ active: false, version: '1.0.0', settling: true });
     expect(lc().filter((x) => x.startsWith('activate:lc-hang'))).toHaveLength(1);
     (globalThis as any).__release['lc-hang']();
     await vi.waitFor(() => expect(h.boot.pluginStatus('lc-hang').active).toBe(true));
@@ -238,7 +239,7 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     await h.boot.setPluginEnabledLive('lc-slow', false);
     expect(await visibleTools(h)).toEqual([]); // 超时也照常撤
     await h.boot.setPluginEnabledLive('lc-slow', true);
-    expect(h.boot.pluginStatus('lc-slow')).toMatchObject({ active: false, lastError: expect.stringMatching(/still shutting down/) });
+    expect(h.boot.pluginStatus('lc-slow')).toEqual({ active: false, version: '1.0.0', settling: true });
     expect(lc()).toEqual(['activate:lc-slow:v1', 'deactivate:lc-slow:v1']);
     (globalThis as any).__release['lc-slow']();
     await vi.waitFor(() => expect(h.boot.pluginStatus('lc-slow').active).toBe(true));
@@ -257,29 +258,40 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     expect(await visibleTools(h)).toEqual([]);
   });
 
-  it('只改 helper(入口与版本都没动)也算换了代码:入口有相对 import → 如实需重启', async () => {
+  it('只改 helper(入口与版本都没动)也算换了代码:整图换代,工具读到新 helper', async () => {
     writePlugin('lc-rel', { relative: true });
     const h = await host();
     await h.boot.activateAllPlugins();
     writeFileSync(path.join(pluginsRoot, 'lc-rel', 'dist', 'helper.js'), 'export const helperTag = "v2-changed";\n');
-    const r = await h.boot.rescanPlugins();
-    expect(r.needsRestart).toBe(true);
-    expect(h.registry.pluginsNeedingRestart.has('lc-rel')).toBe(true);
+    expect(await h.boot.rescanPlugins()).toMatchObject({ reloadedIds: ['lc-rel'], needsRestart: false });
+    expect(await execTool(h, 'lc_rel_tool')).toBe('v2-changed');
   });
 
-  it('热升级判定从宽:注释夹在中间 / 动态 import 变量 / 自带 node_modules 都不热升;import("node:…") 不误判', async () => {
+  it('热升级判定:单文件照热升;多文件 ESM 有模块钩子才热升;CommonJS / 自带 node_modules / 没钩子时引入写法再隐蔽也认得出', async () => {
     const { cannotHotSwap } = await import('./loader.js');
-    const probe = (code: string, nodeModules = false): boolean => {
+    const probe = (code: string, extra: { files?: Record<string, string>; esm?: boolean } = {}): boolean => {
       const dir = mkdtempSync(path.join(tmp, 'hs-'));
       writeFileSync(path.join(dir, 'index.js'), code);
-      if (nodeModules) mkdirSync(path.join(dir, 'node_modules'));
+      if (extra.esm !== false) writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
+      for (const [name, body] of Object.entries(extra.files ?? {})) {
+        mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+        writeFileSync(path.join(dir, name), body);
+      }
       return cannotHotSwap({ dir, entryUrl: pathToFileURL(path.join(dir, 'index.js')).href } as any);
     };
+    const single = "import fs from 'node:fs'; await import('node:path'); console.log(import.meta.url)";
+    expect(probe(single)).toBe(false);
+    expect(probe("import { a } from /* c */ './h.js'", { files: { 'h.js': 'export const a = 1' } })).toBe(false); // 钩子整图换代
+    expect(probe("import { a } from './h.js'", { esm: false, files: { 'h.js': 'exports.a = 1' } })).toBe(true); // 非 module 作用域
+    expect(probe("import h from './h.cjs'", { files: { 'h.cjs': 'module.exports = 1' } })).toBe(true);
+    expect(probe("import { a } from './h.js'", { files: { 'h.js': "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); export const a = require('./x.json')" } })).toBe(true);
+    expect(probe("import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); require('node:fs')")).toBe(false); // esbuild banner 那种
+    expect(probe(single, { files: { 'node_modules/dep/index.js': '' } })).toBe(true);
+    process.env.TANGU_PLUGIN_GRAPH_SWAP = '0'; // 没钩子:只认单文件
     expect(probe("import { a } from /* c */ './h.js'")).toBe(true);
     expect(probe("await import(/* c */ './h.js')")).toBe(true);
     expect(probe('const m = await import(url)')).toBe(true);
-    expect(probe('export default {}', true)).toBe(true);
-    expect(probe("import fs from 'node:fs'; await import('node:path'); console.log(import.meta.url)")).toBe(false);
+    expect(probe(single)).toBe(false);
   });
 
   it('热换代封顶:本进程换代满 20 次后按需重启处理(旧模块卸不掉)', async () => {
@@ -377,7 +389,7 @@ describe('热路由', () => {
 });
 
 describe('与磁盘同步(rescan)', () => {
-  it('原地升级:改写 dist/index.js → 热换代(旧 deactivate 先于新 activate);入口带相对 import 的不热升、如实需重启', async () => {
+  it('原地升级:改写代码 → 热换代(旧 deactivate 先于新 activate);入口相对引入的 helper 也是新一代', async () => {
     writePlugin('lc-up');
     writePlugin('lc-rel', { relative: true });
     writePlugin('lc-sub', { requires: ['lc-up'] });
@@ -389,18 +401,30 @@ describe('与磁盘同步(rescan)', () => {
     writePlugin('lc-rel', { tag: 'v2', version: '1.1.0', relative: true });
     const mark = lc().length;
     const r = await h.boot.rescanPlugins();
-    expect(r).toEqual({ addedIds: [], reloadedIds: ['lc-up'], removedIds: [], needsRestart: true });
+    expect(r).toEqual({ addedIds: [], reloadedIds: ['lc-rel', 'lc-up'], removedIds: [], needsRestart: false });
     expect(await execTool(h, 'lc_up_tool')).toBe('v2');
-    expect(await execTool(h, 'lc_rel_tool')).toBe('v1'); // 老实例照跑
+    expect(await execTool(h, 'lc_rel_tool')).toBe('v2'); // helper 跟着换代,不是 ESM 缓存里的旧 helper
     // 依赖者随前置换代重启:先停依赖者,再停旧版本;新版本起来后依赖者再起
-    expect(lc().slice(mark)).toEqual(['deactivate:lc-sub:v1', 'deactivate:lc-up:v1', 'activate:lc-up:v2', 'activate:lc-sub:v1']);
-    expect(h.registry.pluginsNeedingRestart.has('lc-rel')).toBe(true);
-    expect(h.registry.pluginsNeedingRestart.has('lc-up')).toBe(false);
+    expect(lc().slice(mark)).toEqual([
+      'deactivate:lc-sub:v1', 'deactivate:lc-up:v1', 'deactivate:lc-rel:v1', 'activate:lc-rel:v2', 'activate:lc-up:v2', 'activate:lc-sub:v1',
+    ]);
+    expect(h.registry.pluginsNeedingRestart.size).toBe(0);
     expect(h.boot.pluginStatus('lc-up')).toMatchObject({ active: true, version: '1.1.0' });
     expect(await visibleTools(h)).toEqual(['lc_rel_tool', 'lc_up_tool', 'lc_sub_tool']); // 启动拓扑序的槽位,换代不挪位
 
-    const r2 = await h.boot.rescanPlugins(); // 代码没再变 → 不重复换代;lc-rel 仍如实需重启
-    expect(r2).toEqual({ addedIds: [], reloadedIds: [], removedIds: [], needsRestart: true });
+    const r2 = await h.boot.rescanPlugins(); // 代码没再变 → 不重复换代
+    expect(r2).toEqual({ addedIds: [], reloadedIds: [], removedIds: [], needsRestart: false });
+  });
+
+  it('运行时没有模块钩子(或 TANGU_PLUGIN_GRAPH_SWAP=0):多文件插件不热升,老实例照跑、如实需重启', async () => {
+    process.env.TANGU_PLUGIN_GRAPH_SWAP = '0';
+    writePlugin('lc-rel', { relative: true });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    writePlugin('lc-rel', { tag: 'v2', version: '1.1.0', relative: true });
+    expect(await h.boot.rescanPlugins()).toEqual({ addedIds: [], reloadedIds: [], removedIds: [], needsRestart: true });
+    expect(await execTool(h, 'lc_rel_tool')).toBe('v1');
+    expect(h.registry.pluginsNeedingRestart.has('lc-rel')).toBe(true);
   });
 
   it('目录消失 → 注销(removedIds),调 deactivate,工具与 meta 都没了;卸载后目录未删前的重扫不复活,重装新代码才回来', async () => {
