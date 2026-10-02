@@ -24,7 +24,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sandboxConfig } from './sandboxConfig.js';
 import { ExecutionQueue } from './executionQueue.js';
-import { assertDockerWorkspaceAvailable, dockerQuarantines, DockerCleanupError, removeDockerContainer, reportStartupInspectionFailure, runDocker, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
+import { assertDockerWorkspaceAvailable, dockerQuarantines, DockerCleanupError, removeDockerContainer, reportStartupInspectionFailure, runDocker, scheduleDockerStartupInspection, waitDockerStartupCleanup } from './dockerLifecycle.js';
 
 export interface ExecResult {
   stdout: string;
@@ -347,13 +347,7 @@ export async function installPackages(packages: string[], opts?: ExecOpts): Prom
   } finally { installQueue.release(); }
 }
 
-// ── per-run warm containers: lifecycle serialized through confirmed cleanup ──
-interface RunContainer {
-  name: string; mountDir: string; started: boolean; lock: ExecutionQueue;
-  closing?: Promise<void>; quarantined?: Error;
-}
-const runContainers = new Map<string, RunContainer>();
-
+// ── warm container launch args (shared with sessionSandbox's warm kernel) ──
 export function getUidGidArgs(): string[] {
   try {
     const uid = process.getuid?.(), gid = process.getgid?.();
@@ -372,59 +366,8 @@ export function warmContainerArgs(name: string, dir: string, image: string): str
     ...sandboxEnvArgs(), '--workdir', '/workspace', '--entrypoint', 'sleep', image, 'infinity'];
 }
 
-/** Warm startup is part of this operation; no unowned background creation can outlive run disposal. */
-export async function runPythonInRun(runId: string, mountDir: string, code: string, opts?: ExecOpts): Promise<ExecResult> {
-  opts?.signal?.throwIfAborted();
-  assertDockerWorkspaceAvailable(mountDir);
-  let rc = runContainers.get(runId);
-  if (rc?.closing || rc?.quarantined) throw rc.quarantined || new Error('Run sandbox is being disposed');
-  if (!rc) {
-    rc = { name: `agent-run-${randomUUID()}`, mountDir, started: false, lock: new ExecutionQueue(() => 1) };
-    runContainers.set(runId, rc);
-  }
-  if (path.resolve(rc.mountDir) !== path.resolve(mountDir)) throw new Error('Run sandbox workspace cannot change');
-  await rc.lock.acquire(opts?.signal);
-  try {
-    if (rc.closing || rc.quarantined) throw rc.quarantined || new Error('Run sandbox is being disposed');
-    opts?.signal?.throwIfAborted();
-    await acquire(opts?.signal);
-    let quarantined = false;
-    try {
-      if (!rc.started) {
-        const image = await resolvePythonImage(opts?.signal);
-        await ensurePkgDir();
-        rc.started = await startDockerContainer(rc.name, warmContainerArgs(rc.name, mountDir, image), [mountDir], opts?.signal);
-        if (!rc.started) return installErr('Docker warm container failed to start');
-      }
-      const result = await executeDocker(rc.name, ['exec', '-i', rc.name, 'python3', '-'], code,
-        { ...opts, mountDir, runId }, false);
-      if (result.aborted || result.timedOut || result.exitCode !== 0) rc.started = false;
-      return result;
-    } catch (e) {
-      quarantined = e instanceof DockerCleanupError;
-      if (quarantined) rc.quarantined = e as Error;
-      throw e;
-    } finally { if (!quarantined) release(); }
-  } finally { rc.lock.release(); }
-}
-
-export async function releaseRunContainer(runId: string): Promise<void> {
-  const rc = runContainers.get(runId);
-  if (!rc) return;
-  if (rc.closing) return rc.closing;
-  rc.closing = (async () => {
-    await rc.lock.acquire(undefined, 0);
-    try {
-      await removeDockerContainer(rc.name, [rc.mountDir]);
-      if (runContainers.get(runId) === rc) runContainers.delete(runId);
-    } catch (e) { rc.quarantined = e as Error; throw e; }
-    finally { rc.lock.release(); }
-  })();
-  return rc.closing;
-}
-
 export function reapOrphanRunContainers(dockerInUse = true): void {
-  if (runContainers.size || activeExecs.size) return; // startup-only
+  if (activeExecs.size) return; // startup-only
   // Names do not establish ownership: Desktop and CLI instances may share the same Docker daemon.
   void scheduleDockerStartupInspection(['agent-run-', 'agent-sbx-'])
     .catch((e) => reportStartupInspectionFailure(e, dockerInUse));
