@@ -76,3 +76,24 @@ export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendV
 export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
+
+/** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
+export {
+  installNativeSheetPresenter, nativeSheetPresenter, presentNativeMenu, presentNativePrompt, presentNativeConfirm,
+  pickNativeCtxItem, runNativeCtxMenu, readNativeTheme, menuResult, promptResult, confirmResult,
+} from './nativeSheet'
+export type {
+  NativeSheetTheme, NativeSheetRequest, NativeSheetPayload, NativeSheetPresenter, NativeSheetOutcome,
+  NativeMenuRequest, NativeMenuSection, NativeMenuItem, NativeMenuTrailing, NativeMenuResult,
+  NativePromptRequest, NativePromptResult, NativeConfirmRequest, NativeConfirmResult, NativeCtxItem,
+} from './nativeSheet'
+export { renderNativeIcons } from './nativeIcon'
+export type { NativeIcon, NativeIconSource, NativeVectorPath } from './nativeIcon'
+export {
+  installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
+  claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
+} from './nativeChrome'
+export type {
+  NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,
+  NativeChromeHost, NativeChromeClaim, NativeChromeClaimHandle, NativeChromeShellLabels, NativeChromeShellHandlers,
+} from './nativeChrome'
