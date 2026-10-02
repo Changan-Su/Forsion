@@ -958,6 +958,13 @@ const museSkillLoads = async () => {
       WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'use_skill' AND e.payload LIKE '%forsion-plugin%'`).get().n;
   } finally { db.close(); }
 };
+/** 某个 run 落库时的思考档(input.agentConfig.thinkingLevel);realtime 场景核「通话中换档」用。 */
+const runThinkingOf = async (runId) => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try { return db.prepare(`SELECT json_extract(input, '$.agentConfig.thinkingLevel') AS t FROM agent_runs WHERE id = ?`).get(runId)?.t ?? null; }
+  finally { db.close(); }
+};
 const asList = (x, key) => Array.isArray(x) ? x : Array.isArray(x?.[key]) ? x[key] : Array.isArray(x?.rows) ? x.rows : [];
 
 // 桌面 work 会话的 per-run 配置(execMode/cwd 只经 agent_config 传,见 agentLoop.ts:581;appStore.ts:1553 同形)。
@@ -3303,13 +3310,16 @@ Then reply with only the command output.`,
     }).catch(() => '');
     const sid = `live-realtime-${Date.now()}`;
     const ws = new WS(`ws://127.0.0.1:${port}/agent/realtime?token=${TOKEN}`);
-    const log = []; const transcripts = []; const runs = [];
+    const log = []; const transcripts = []; const runs = []; const timeline = []; const t0 = Date.now();
     let stoppedAt = 0; const latencies = []; let awaitingAudio = false; let ended = null;
     const queue = []; const SIL = Buffer.alloc(3200);
     ws.on('message', (data, isBinary) => {
       if (isBinary) { if (awaitingAudio) { awaitingAudio = false; latencies.push(Date.now() - stoppedAt); } return; }
       const m = JSON.parse(data.toString());
-      if (m.type !== 'response.audio_transcript.delta' && !String(m.type).endsWith('.delta')) log.push(m.type);
+      if (m.type !== 'response.audio_transcript.delta' && !String(m.type).endsWith('.delta')) {
+        log.push(m.type);
+        timeline.push(`${Date.now() - t0} ${m.type}${m.transcript ? ` 「${m.transcript}」` : ''}${m.status ? ` ${m.status}` : ''}${m.response?.status ? ` ${m.response.status} [${(m.response.output || []).map((o) => o.type).join(',')}]` : ''}${m.error ? ` ${JSON.stringify(m.error)}` : ''}`);
+      }
       if (m.type === 'input_audio_buffer.speech_stopped') { stoppedAt = Date.now(); awaitingAudio = true; }
       if (m.type === 'conversation.item.input_audio_transcription.completed') transcripts.push({ who: 'user', text: m.transcript, at: Date.now() });
       if (m.type === 'response.audio_transcript.done') transcripts.push({ who: 'ai', text: m.transcript, at: Date.now() });
@@ -3330,6 +3340,8 @@ Then reply with only the command output.`,
       const hello = await until(() => transcripts.find((t) => t.who === 'ai') || ended, 30_000, 200);
       await sleep(2500); // 让它说完(生成比播放快,台架不播放 → 等一下再说下一句,免得像插话)
       const nAiBefore = transcripts.filter((t) => t.who === 'ai').length;
+      // 通话中换档(Mini 卡片的 Effort,10-02):之后委派的 run 要按新参数跑
+      ws.send(JSON.stringify({ type: 'run', run: { model_id: MODEL, agent_config: { ...AGENT_CONFIG, thinkingLevel: 'low' } } }));
       queue.push({ buf: ASK, off: 0 });
       const started = await until(() => runs.find((r) => r.status === 'started') || ended, 40_000, 200);
       const finished = started && started !== ended ? await until(() => runs.find((r) => r.status === 'done' || r.status === 'error') || ended, 240_000, 500) : null;
@@ -3350,6 +3362,7 @@ Then reply with only the command output.`,
       const taskRow = !!started?.task && userTexts.includes(started.task) ? 1 : 0;
       const aiSaved = msgs.some((x) => x.role !== 'user' && helloText && String(x.content || '').includes(helloText.slice(0, 6)));
       const lat = latencies.length ? latencies[0] : null; // 闲聊那轮;带工具调用那轮实测 ~1.3s,只报不判
+      const runThinking = started?.run_id ? await runThinkingOf(started.run_id) : null;
       const checks = {
         ready: true,
         latency: lat != null && lat < 1500,
@@ -3358,9 +3371,11 @@ Then reply with only the command output.`,
         delegated: finished?.status === 'done' && !!runMsg,
         reusedUserRow: askRows === 1 && spokenRow && !taskRow,
         relayed: !!afterText,
+        runUpdated: runThinking === 'low',
       };
       const ok = Object.values(checks).every(Boolean);
-      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
+      writeFileSync(join(OUT, 'realtime-timeline.txt'), timeline.join('\n') + '\n'); // 事件时间线(相对通话开始的毫秒),排查播报 / 委派时序用
+      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};换档后委派 run 档位 ${runThinking ?? '-'};失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
     } finally { clearInterval(pump); try { ws.close(); } catch { /* ignore */ } }
   });
 

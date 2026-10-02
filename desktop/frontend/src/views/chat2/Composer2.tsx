@@ -5,12 +5,12 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  * /skill chip / 引用 / 模型·Agent·引擎·思考·loop·计划·群聊 / 上下文占比·压缩 / 发送·停止。
  * props 与旧 MessageInput 完全一致 → ChatView 直接换组件即可。
  */
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, Phone, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { endCall, getCall, getCallError, rejectCall, startCall, subscribeCall, toggleMute, useRealtimeConfig } from '../../services/realtimeCall'
+import { onCallEvent, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { normPath } from '../coding/studioModel'
@@ -47,18 +47,7 @@ import './composer2.css'
 import { homeTarget, targetForSession } from '../../services/engine/targets'
 
 registerMessages({
-  'livecall.start': { zh: '实时语音通话', en: 'Voice call' },
-  'livecall.end': { zh: '挂断', en: 'Hang up' },
-  'livecall.title': { zh: '语音通话', en: 'Voice call' },
-  'livecall.connecting': { zh: '正在接通…', en: 'Connecting…' },
-  'livecall.listening': { zh: '正在听', en: 'Listening' },
-  'livecall.thinking': { zh: '在想…', en: 'Thinking…' },
-  'livecall.speaking': { zh: '正在说', en: 'Speaking' },
-  'livecall.working': { zh: 'Tangu 处理中…', en: 'Tangu is working…' },
-  'livecall.muted': { zh: '已静音', en: 'Muted' },
-  'livecall.mute': { zh: '静音', en: 'Mute' },
-  'livecall.unmute': { zh: '取消静音', en: 'Unmute' },
-  'livecall.failed': { zh: '通话结束：{e}', en: 'Call ended: {e}' },
+  'livecall.start': { zh: '语音通话', en: 'Voice call' },
   'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
 })
 registerMessages({
@@ -569,17 +558,25 @@ export const Composer2: React.FC<{
 
   const storeActiveSessionId = useApp((s) => s.activeId)
   const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
-  // 实时语音通话(对标 GPT Live,services/realtimeCall):通话是模块级单例、跨视图活着,这里只画入口与通话条。
+  // 语音通话(对标 GPT Live):电话键只把会话与委派参数算好,通话本体跑在 Mini 卡片里(mini/VoiceCallView)。
   // 双方的话与代跑的 Tangu run 由引擎写进会话,聊天区照常显示。设置 → 语音 → 实时通话 选了模型才出按钮。
   const liveOwnerResolved = liveOwner ?? sessionId === null // 缺省只有主页输入框是接收方;ChatView 显式传
-  const call = useSyncExternalStore(subscribeCall, getCall)
-  const callError = useSyncExternalStore(subscribeCall, getCallError)
   const { model: realtimeModel, voice: realtimeVoice } = useRealtimeConfig()
   const [callStarting, setCallStarting] = useState(false)
-  const liveBar = !!call && liveOwnerResolved
+  const [callError, setCallError] = useState('')
+  // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
+  useEffect(() => {
+    if (!liveOwnerResolved) return
+    return onCallEvent((e) => {
+      if (e.kind === 'activity') { void useApp.getState().pollSession(e.sessionId); return }
+      useApp.setState((st) => st.configBySession[e.sessionId] ? { configBySession: { ...st.configBySession,
+        [e.sessionId]: { ...st.configBySession[e.sessionId], thinkingLevel: e.level as AgentConfig['thinkingLevel'], ...(e.level !== 'max' ? { ultra: undefined } : {}) } } } : {})
+    })
+  }, [liveOwnerResolved])
   const startVoiceCall = async () => {
     if (callStarting) return
     setCallStarting(true)
+    setCallError('')
     try {
       let sid = liveSessionKey !== undefined ? liveSessionKey : activeSessionId
       if (!sid) {
@@ -591,21 +588,14 @@ export const Composer2: React.FC<{
       if (!sid) return
       const target = targetForSession(sid)
       // 通话只走本机引擎(引擎端也只收回环);绑在别的电脑上的会话没有 WebSocket 转发,别把令牌塞进 URL 白连一趟
-      if (target.key !== 'home') { rejectCall(t('livecall.localOnly')); return }
-      const params = useApp.getState().voiceRunParams(sid)
-      const poll = sid
-      await startCall({
-        target, sessionId: sid, model: realtimeModel, voice: realtimeVoice, title: t('livecall.title'),
-        run: { model_id: params.modelId, agent_config: params.agentConfig },
-        onActivity: () => { void useApp.getState().pollSession(poll) },
-      })
+      if (target.key !== 'home') { setCallError(t('livecall.localOnly')); return }
+      const { modelId, agentConfig } = useApp.getState().voiceRunParams(sid)
+      const view = { type: 'voice-call', params: { sessionId: sid, model: realtimeModel, voice: realtimeVoice, title: t('livecall.title'),
+        agentSlug: agentConfig.agentSlug, run: { model_id: modelId, agent_config: agentConfig } } }
+      // 同一会话再按一次 = 把(可能被 ⌘⇧M 藏起来的)通话卡叫回来:Mini 只更新同一 leaf 的参数,不重挂、不重拨(e2e R14)。
+      window.tangu?.openMini?.({ view, mainView: { type: 'chat', params: { sessionId: sid } }, title: t('livecall.title') })
     } finally { setCallStarting(false) }
   }
-  const callStatus = !call ? '' : call.phase === 'connecting' ? t('livecall.connecting')
-    : call.phase === 'speaking' ? t('livecall.speaking')
-    : call.working ? t('livecall.working')
-    : call.muted ? t('livecall.muted')
-    : call.phase === 'thinking' ? t('livecall.thinking') : t('livecall.listening')
 
   const isHost = execConfig.execMode === 'host'
   const isChat = preset === 'chat'
@@ -1656,12 +1646,6 @@ export const Composer2: React.FC<{
             />
             {voiceActive ? (
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
-            ) : liveBar ? (
-              <VoiceRecordingBar
-                analyser={call.analyser} recording busy={false} onStop={() => endCall()} stopTitle={t('livecall.end')} t={t}
-                status={callStatus} statusTitle={call.working || undefined}
-                muted={call.muted} onMute={toggleMute} muteTitle={call.muted ? t('livecall.unmute') : t('livecall.mute')}
-              />
             ) : (<>
             {showModeChip && (
               <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
@@ -1813,19 +1797,21 @@ export const Composer2: React.FC<{
             <button
               className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
-              disabled={disabled || voice.busy || !voice.supported || !!call}
+              disabled={disabled || voice.busy || !voice.supported}
               onClick={voice.toggle}
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
-            {!!realtimeModel && liveOwnerResolved && !!window.tangu && (
+            {/* 暂时只在普通模式出(10-02 用户定):计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定。 */}
+            {!!realtimeModel && liveOwnerResolved && !!window.tangu?.openMini && !(planMode && !isChat) && !groupActive && !isChat && !engineId && (
               <button
-                className={`t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open${call ? ' recording' : ''}`}
-                title={call ? t('livecall.end') : t('livecall.start')}
-                disabled={!call && (!!disabled || callStarting)}
-                onClick={call ? () => endCall() : () => { void startVoiceCall() }}
+                className="t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open"
+                title={t('livecall.start')}
+                aria-label={t('livecall.start')}
+                disabled={!!disabled || callStarting}
+                onClick={() => { void startVoiceCall() }}
               >
-                <AudioLines size={14} />
+                <Phone size={14} />
               </button>
             )}
             {running ? (
@@ -1841,11 +1827,11 @@ export const Composer2: React.FC<{
             )}
             </>)}
           </ChatBoxToolbar>
-          {voice.error && !voice.recording && !voice.busy && !call && (
+          {voice.error && !voice.recording && !voice.busy && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
           )}
-          {callError && !call && liveOwnerResolved && !voice.error && (
-            <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{t('livecall.failed', { e: callError })}</div>
+          {callError && liveOwnerResolved && !voice.error && (
+            <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{callError}</div>
           )}
         </ChatBoxSurface>
       </div>

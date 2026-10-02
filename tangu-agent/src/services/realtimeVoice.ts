@@ -87,14 +87,17 @@ interface StartMsg {
   run: { model_id: string; app_id?: string; agent_config?: Record<string, unknown> };
 }
 
+function validRun(run: any): run is StartMsg['run'] {
+  if (typeof run?.model_id !== 'string' || !run.model_id) return false;
+  const cfg = run.agent_config;
+  return cfg == null || (typeof cfg === 'object' && !Array.isArray(cfg));
+}
+
 function parseStart(raw: string): StartMsg | null {
   let m: any;
   try { m = JSON.parse(raw); } catch { return null; }
   if (m?.type !== 'start' || typeof m.session_id !== 'string' || !m.session_id || typeof m.model !== 'string' || !m.model) return null;
-  if (typeof m.run?.model_id !== 'string' || !m.run.model_id) return null;
-  const cfg = m.run.agent_config;
-  if (cfg != null && (typeof cfg !== 'object' || Array.isArray(cfg))) return null;
-  return m as StartMsg;
+  return validRun(m.run) ? m as StartMsg : null;
 }
 
 /** 用宿主的 authMiddleware 判 upgrade 请求(它只读 authorization 头,桩一个 res 就够)。 */
@@ -209,7 +212,8 @@ function handleCall(client: WebSocket, userId: string): void {
     try {
       const result = (await done).trim() || '(no output)';
       toClient({ type: 'tangu.run', status: 'done', run_id: runId, task });
-      report(result);
+      // 结果常以 run 动手前那句「我先看看」开头(低思考档尤甚);不点明「已经办完」,实时模型会照着那句再说一遍「正在查看」(10-02 live 实测)。
+      report(`Task complete. Tangu's final answer follows; tell the user now (any opening "let me check" line was said before the work, ignore it):\n${result}`);
     } catch (e: any) {
       toClient({ type: 'tangu.run', status: 'error', run_id: runId, task });
       report(`The task failed: ${e?.message || e}`);
@@ -330,7 +334,13 @@ function handleCall(client: WebSocket, userId: string): void {
       }
       return;
     }
-    if (start) return; // start 之后的文本帧暂无语义
+    if (start) {
+      // 通话中换档(Mini 里选 Effort):之后委派的 run 按新参数跑;app_id 随通话定死,不换 profile。
+      let m: any;
+      try { m = JSON.parse(data.toString()); } catch { return; }
+      if (m?.type === 'run' && validRun(m.run)) start.run = { ...m.run, app_id: start.run.app_id };
+      return;
+    }
     start = parseStart(data.toString());
     if (!start) return end('bad start message');
     void open(start).catch((e) => end(e?.message || String(e)));

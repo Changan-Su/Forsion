@@ -1,12 +1,13 @@
 import { miniFeatureAvailable } from '../features/runtime'
 /** Native adapters share domain data/editors; each owns its compact interactions. */
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Bot, ListTodo, NotebookText, Plus } from 'lucide-react'
+import { Bot, ListTodo, NotebookText, Phone, Plus } from 'lucide-react'
 import { registerView, type ViewProps } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n, registerMessages, translate } from '../i18n'
 import { AmadeusOverlays } from '../amadeusOverlays'
+import { VoiceCallView } from './VoiceCallView'
 import './miniViews.css'
 
 const Chat = lazy(() => import('../views/ChatView').then((m) => ({ default: m.ChatView })))
@@ -85,6 +86,8 @@ function MiniAmadeus({ leaf, params }: ViewProps) {
 export function registerMiniViews(): void {
   if (miniFeatureAvailable('tangu')) registerView({ type: 'mini-tangu', kind: 'aux', displayName: () => translate('mini.chat'), icon: Bot, factory: (p) => <MiniTangu {...p} /> })
   if (miniFeatureAvailable('amadeus')) registerView({ type: 'mini-amadeus', kind: 'aux', displayName: () => translate('mini.notes'), icon: NotebookText, factory: (p) => <MiniAmadeus {...p} /> })
+  // 语音通话只开在 Mini 里(输入框电话键 → openMini 直达);桌面独有,靠 openMini 判在不在 Electron。
+  if (miniFeatureAvailable('tangu') && window.tangu?.openMini) registerView({ type: 'voice-call', kind: 'aux', displayName: () => translate('livecall.title'), icon: Phone, factory: (p) => <VoiceCallView {...p} /> })
   if (miniFeatureAvailable('calendar')) registerView({ type: 'mini-todo', kind: 'aux', displayName: 'ToDo List', icon: ListTodo,
     factory: ({ params }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} /></Suspense></div> })
 }
