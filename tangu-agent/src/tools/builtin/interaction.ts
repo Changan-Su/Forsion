@@ -9,7 +9,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WORKSPACE_DIR_NAME } from '../../core/tanguHome.js';
 import { deps } from '../../seams/runtime.js';
-import { requestInquiry } from '../../services/inquiries.js';
+import { requestInquiry, INQUIRY_UNATTENDED_ANSWER } from '../../services/inquiries.js';
 import { publish } from '../../services/eventBus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
@@ -53,7 +53,7 @@ export const INQUIRY_RUN_STOPPED_NOTE =
 export const INQUIRY_CHANNEL_STOPPED_ANSWER =
   '[No answer] The chat channel was stopped or disconnected before the user answered this question. This is a system note, not the user\'s reply: do not assume an answer; continue without it or wait for the user to reach out again.';
 /** 全部系统代答(逐字)。新增一种兜底答复要加进来,否则会被当成用户的答复贴标签。 */
-const SYSTEM_ANSWERS: ReadonlySet<string> = new Set([INQUIRY_RUN_STOPPED_NOTE, INQUIRY_CHANNEL_STOPPED_ANSWER]);
+const SYSTEM_ANSWERS: ReadonlySet<string> = new Set([INQUIRY_RUN_STOPPED_NOTE, INQUIRY_CHANNEL_STOPPED_ANSWER, INQUIRY_UNATTENDED_ANSWER]);
 
 /**
  * 把询问的原始答复规整成「给模型的答复」:run 已中止且拿到的是中止字面量 → 英文系统说明;其余原样。

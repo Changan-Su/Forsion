@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
+import { isUnattendedRun } from './remoteActivity.js';
 
 export interface InquiryRequestPayload {
   question: string;
@@ -30,6 +31,10 @@ function nextInquiryId(): string {
   return `inq_${randomUUID()}`;
 }
 
+/** 无人值守 run 的询问当场兑现的系统说明(英文,[No answer] 开头;interaction.ts 把它登记为系统代答,不贴「User answered」)。 */
+export const INQUIRY_UNATTENDED_ANSWER =
+  "[No answer] This is an unattended background run, so nobody is available to answer questions. This is a system note, not the user's reply and not permission: do not assume an answer; continue with what is safe without one, or leave the open question in your final result.";
+
 /** 登记一次询问:发事件 + await 用户答案。 */
 export function requestInquiry(
   runId: string,
@@ -37,6 +42,7 @@ export function requestInquiry(
   signal?: AbortSignal,
 ): Promise<string> {
   if (signal?.aborted) return Promise.resolve('(用户中止了运行)');
+  if (isUnattendedRun(runId)) return Promise.resolve(INQUIRY_UNATTENDED_ANSWER);
   const inquiryId = nextInquiryId();
   return new Promise<string>((resolve) => {
     const onAbort = (): void => {
