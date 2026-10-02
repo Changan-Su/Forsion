@@ -2205,6 +2205,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .engine-pill .engine-pill-icon { display: inline-flex; flex-shrink: 0; }
 .engine-pill .engine-pill-label { max-width: 0; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: max-width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1), opacity 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.05s, margin 0.6s cubic-bezier(0.2, 0.8, 0.3, 1); }
 .engine-pill:hover .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; }
+/* 触屏长按 = 打开菜单,不该同时选中药丸里的字(Android WebView 会选中并留下选区手柄)。 */
+@media (pointer: coarse) { .engine-pill { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
 .engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop 0.4s ease-out; }
 .engine-pill.selected .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; font-weight: 600; }
 @keyframes agentSelectPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1.02); } }
