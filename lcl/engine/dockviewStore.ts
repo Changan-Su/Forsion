@@ -484,8 +484,9 @@ interface WorkspaceState {
    *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。 */
   closeViewsOfType(type: string): void
   /** 把该类型的全部实例**原地**换成另一个视图(2026-10-02,插件 `ctx.replaceView` 的引擎半身;Coding 进出项目
-   *  换左栏的同一件事):活 panel 走 navigateLeaf —— 同组同位、零结构变化,所以不会重挂主区那一列(列里的
-   *  iframe 不重载);收起侧栏 stash 里的条目一并换,该侧**保持收起**(不替用户把面板弹出来);当前 Space 的
+   *  换左栏的同一件事):主区活 panel 走 navigateLeaf(__frame 宿主按 __type 重挂内层);侧栏 / 底部的活 panel
+   *  是按类型的组件,改 __type 换不掉 → 在原位旁开一个新的再摘掉旧的(同组同位,组不空、零结构变化,所以
+   *  不会重挂主区那一列,列里的 iframe 不重载);收起侧栏 stash 里的条目一并换,该侧**保持收起**(不替用户把面板弹出来);当前 Space 的
    *  sidebarDefaults 同步换(否则关空再展开回到旧视图)。活动 panel 还给原主人 —— 换一个侧栏视图不该把
    *  焦点从主区抢走。返回换掉的实例数(活的 + stash 里的);`to` 没注册则什么都不动、返回 0。 */
   replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
@@ -784,9 +785,41 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const api = get().api
     if (!api || from === to || !getView(to)) return 0
     const keep = api.activePanel?.id
-    let n = 0
-    for (const p of [...api.panels]) if (panelType(p) === from && get().navigateLeaf(p.id, to, params)) n++
-    if (n && keep) api.getPanel(keep)?.api.setActive() // navigateLeaf 激活了被换的那个
+    const def = getView(to)!
+    let n = 0, side = 0
+    for (const p of [...api.panels]) {
+      if (panelType(p) !== from) continue
+      const loc = ((p.params ?? {}) as PanelMeta).__loc ?? 'main'
+      if (loc === 'main') { if (get().navigateLeaf(p.id, to, params)) n++; continue }
+      // 侧栏 / 底部挂的是按类型的组件(component = 类型名,见 openView),改 __type 换不掉已经画出来的那个
+      // (2026-10-02 真 Electron:返回 1,左栏照旧是旧视图)→ 在原位旁开新的再摘掉旧的:组一直不空,不触发重排。
+      const group = p.group as { panels?: IDockviewPanel[]; activePanel?: IDockviewPanel } | undefined
+      // 侧栏按类型一个 tab(openView 同侧同类型复用):`to` 已开在这一侧就让它顶上,只摘掉旧的,不开第二个
+      const there = panelsAt(api, loc).find((x) => x !== p && panelType(x) === to)
+      if (there) {
+        if (group?.activePanel === p) there.api.setActive()
+        api.removePanel(p)
+        n++; side++; continue
+      }
+      const index = group?.panels?.indexOf(p) ?? -1
+      api.addPanel({
+        id: def.singleton && !api.getPanel(to) ? to : nextId(api, to), component: to, title: label(def.displayName),
+        params: { ...params, __loc: loc, __type: to },
+        position: { referencePanel: p, ...(index >= 0 ? { index } : {}) },
+        inactive: group?.activePanel !== p,
+      })
+      api.removePanel(p)
+      n++; side++
+    }
+    if (side) { get().refreshTabs(); scheduleWorkspaceSave() }
+    // 活动 panel 还给原主人(navigateLeaf / 新开的 panel 抢走了它;被换掉的侧栏 panel 已不在则作罢)。
+    // ⚠️已在组里最前的 panel 再 setActive,dockview 7 会重绘它(openPanel → renderPanel 摘下再挂回,iframe 重载;
+    // 底部面板修复会话 10-02 用 removeChild 栈抓到)→ 那种只切活动组。
+    const back = keep ? api.getPanel(keep) : undefined
+    if (n && back) {
+      if ((back.group as { activePanel?: IDockviewPanel } | undefined)?.activePanel === back) back.group.api.setActive()
+      else back.api.setActive()
+    }
     const swap = (list: Stashed[]): Stashed[] => list.map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
     const { stash, stashActive, sidebarDefaults } = get()
     const stashed = stash.left.concat(stash.right, stash.bottom).filter((v) => v.type === from).length
