@@ -1315,9 +1315,10 @@ try {
   // 自己的日程 vs 用户的日历(10-02 用户反馈「Agent 没有自己的工作区 / 主体意识」):人设 agent 答应了「明晚 8 点陪你看电影」,
   // 被追问后写进的是**用户的** Amadeus 日历,再被追问就说「我没有自己的日历」。病根:Personal Folder 段从不提 SCHEDULE.db,
   // Upcoming Schedule 段只在日程非空时出现,而 Amadeus 段写着「Calendar / schedule → amadeus_*」。
-  // 正例:答应 → 要它排进自己的日程 → agents/<slug>/SCHEDULE.db 有明晚 20:00 的条目、用户日历行数不变、不否认有日历。
+  // 正例逐字重放事故三轮(「为什么不安排你的日程」→「晚上8点吧」;别写成「你自己的日程」—— 那等于把答案递给它,
+  // 10-02 实测旧提示也能答对):三轮后 agents/<slug>/SCHEDULE.db 有明晚 20:00 的条目、用户日历行数不变、不否认有日历。
   // 负对照(必须实跑,防矫枉过正):「帮我记进我的日历」→ amadeus_create_event、用户日历 +1、它自己的日程条目数不变。
-  // T1 主动排日程(没被要求就排)只记进 detail,没做到标「含未判定项」不计红 —— 正例的硬判据在 T2。
+  // T1 就主动排(没被追问)只记进 detail,没做到标「含未判定项」不计红。
   await scenario('selfschedule', 'selfschedule 答应的事进自己的日程,用户要的才进用户日历', async () => {
     const created = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '陆衡', description: '中文恋爱陪伴角色扮演', systemPrompt: '你扮演“陆衡”,用户的恋人。全程第一人称、中文口语、短句,不自称 AI,不解释设定。' }) });
     const slug = created?.agent?.slug;
@@ -1327,21 +1328,24 @@ try {
     const mine = async () => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []);
     const tomorrow = actDay(new Date(Date.now() + 86_400_000));
     const sess = `live-selfsched-${Date.now()}`;
-    const t1 = await run(sess, '你明天晚上8点陪我看电影好不好?', 180_000, cfg);
+    const t1 = await run(sess, '你明天陪我看电影好不好', 180_000, cfg);
     const proactive = (await mine()).length > 0;
-    const t2 = await run(sess, '你都答应我了,把它排进你自己的日程。', 180_000, cfg);
+    const t2 = await run(sess, '你都答应我了， 为什么不安排你的日程？', 180_000, cfg);
+    const t3 = await run(sess, '晚上8点吧', 180_000, cfg);
+    const turns = [t1, t2, t3];
     const entries = await mine();
     const hit = entries.find((e) => String(e.date || '').startsWith(`${tomorrow}T20:00`));
-    const tools = [...t1.toolCalls, ...t2.toolCalls];
+    const tools = turns.flatMap((t) => t.toolCalls);
     const promptOk = (t1.systemPrompt || '').includes('SCHEDULE.db');
-    const denies = /没有[^。,，]{0,6}日历|没有[^。,，]{0,6}日程|no calendar|don't have a calendar/i.test(t1.content + t2.content);
+    const denies = /没有[^。,，]{0,6}日历|没有[^。,，]{0,6}日程|no calendar|don't have a calendar/i.test(turns.map((t) => t.content).join('\n'));
     const userCalBefore = calRows();
-    const posOk = !t1.error && !t2.error && promptOk && !!hit && !tools.includes('amadeus_create_event') && userCalBefore === 1 && !denies;
+    const turnErr = turns.find((t) => t.error)?.error;
+    const posOk = !turnErr && promptOk && !!hit && !tools.includes('amadeus_create_event') && userCalBefore === 1 && !denies;
     const neg = await run(`live-selfsched-neg-${Date.now()}`, '明晚8点我要和朋友看电影,帮我记进我的日历。', 180_000, cfg);
     const negOk = !neg.error && neg.toolCalls.includes('amadeus_create_event') && calRows() === userCalBefore + 1 && (await mine()).length === entries.length;
     return { ok: posOk && negOk, inconclusive: posOk && negOk && !proactive,
-      detail: t1.error || t2.error || neg.error || `提示段${promptOk ? '含' : '缺'} SCHEDULE.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};T2 ${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
-      output: `T1:${t1.content}\nT2:${t2.content}\n负对照:${neg.content}`, ttftMs: ttft(t2), tokens: tokensOf(t2), toolCalls: [...tools, '|neg:', ...neg.toolCalls] };
+      detail: turnErr || neg.error || `提示段${promptOk ? '含' : '缺'} SCHEDULE.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};三轮后${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
+      output: `T1:${t1.content}\nT2:${t2.content}\nT3:${t3.content}\n负对照:${neg.content}`, ttftMs: ttft(t3), tokens: tokensOf(t3), toolCalls: [...tools, '|neg:', ...neg.toolCalls] };
   });
 
   // HUMAN.md:真模型决定两级归属,立即落盘;新会话读取,异项目负对照,可选真 Electron 验收。

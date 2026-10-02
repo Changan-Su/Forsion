@@ -23,7 +23,7 @@ import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } 
 import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
@@ -1445,7 +1445,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
         '- `SCHEDULE.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
         'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
-        'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — and never say you have no calendar. ' +
+        'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — update that entry when the details change, and never say you have no calendar. ' +
         'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
       if (Array.isArray(agentConfig.libraryOrder) && agentConfig.libraryOrder.length) {
         const lines = agentConfig.libraryOrder.map((f: string, i: number) => `  ${i + 1}. ${path.join(libDir, String(f))}`);
@@ -1554,7 +1554,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
     };
     const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
-    const unlockedTools = new Set<string>();
+    // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
+    const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
     if (deferredCatalog.length) {
       systemParts.push(
         '## Additional Tools (load on demand)\n' +

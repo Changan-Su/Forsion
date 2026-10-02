@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
-import { getToolDefinitions, listDeferredTools, executeTool } from '../src/tools/registry.js';
+import { getToolDefinitions, listDeferredTools, executeTool, deferredUnlocksFromHistory } from '../src/tools/registry.js';
 import type { ToolContext } from '../src/tools/registry.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -144,6 +144,27 @@ describe('registry 级:defer 过滤与解锁', () => {
   });
 });
 
+describe('registry 级:deferredUnlocksFromHistory 跨 run 延续解锁', () => {
+  const catalog = [
+    { name: 'manage_schedule' }, { name: 'manage_automation' },
+    { name: 'amadeus_list_calendars', group: 'calendar' }, { name: 'amadeus_create_event', group: 'calendar' },
+    { name: 'start_discussion', group: 'discussion' }, { name: 'wait_discussion', group: 'discussion' },
+  ];
+  const call = (name: string) => ({ tool_calls: [{ id: 'x', type: 'function', function: { name, arguments: '{}' } }] as any });
+
+  it('历史里用过的 catalog 工具解锁;同 group 整组到位;别名先归一', () => {
+    expect([...deferredUnlocksFromHistory([call('manage_schedule')], catalog)]).toEqual(['manage_schedule']);
+    expect([...deferredUnlocksFromHistory([call('amadeus_create_event')], catalog)].sort()).toEqual(['amadeus_create_event', 'amadeus_list_calendars']);
+    expect([...deferredUnlocksFromHistory([call('muse_watch')], catalog)]).toEqual(['manage_automation']);
+  });
+
+  it('非 catalog 名字 / 空历史 / 无 tool_calls 的消息:不解锁(负对照)', () => {
+    expect(deferredUnlocksFromHistory([call('manage_human'), call('read_file'), call('load_tools')], catalog).size).toBe(0);
+    expect(deferredUnlocksFromHistory([], catalog).size).toBe(0);
+    expect(deferredUnlocksFromHistory([{}, { tool_calls: [] }], catalog).size).toBe(0);
+  });
+});
+
 describe('registry 级:preset=coding 产品面工具转 deferred(WB-Bench 收敛)', () => {
   const base: ToolContext = { userId: 'u1', sessionId: 's1', appId: 'tangu', profile, execMode: 'host', cwd: '/tmp', preset: 'coding' };
 
@@ -198,6 +219,21 @@ describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () 
     const sys = (llmPayloads[0].messages as any[]).find((m) => m.role === 'system');
     expect(String(sys?.content)).toContain('Additional Tools (load on demand)');
     expect(String(sys?.content)).toContain('manage_automation');
+  });
+
+  // 10-02:上一 run 装过并用过的 deferred 工具,下一 run 起点就在 defs 里(否则模型照历史硬调,落到 manage_human 空刷)。
+  it('跨 run 延续:R1 load_tools+调用 calculator,R2 首轮 tools 已含 calculator', async () => {
+    const { home, llmPayloads } = await setupLoop((call) => {
+      if (call === 1) return { content: '', toolCalls: [{ id: 'c1', type: 'function', function: { name: 'load_tools', arguments: '{"names":["calculator"]}' } }], finishReason: 'tool_calls' };
+      if (call === 2) return { content: '', toolCalls: [{ id: 'c2', type: 'function', function: { name: 'calculator', arguments: '{"expression":"1+1"}' } }], finishReason: 'tool_calls' };
+      return { content: '好了', toolCalls: [], finishReason: 'stop' };
+    });
+    cleanupHome = home;
+    await runToDone('R1', '算一下 1+1');
+    expect((llmPayloads[0].tools || []).map((t: any) => t.function?.name)).not.toContain('calculator');
+    const r2Start = llmPayloads.length;
+    await runToDone('R2', '再算一次');
+    expect((llmPayloads[r2Start].tools || []).map((t: any) => t.function?.name)).toContain('calculator');
   });
 
   it('真实 delegate 子代理:能力面可自助解锁、管理面解锁不了(目录/defs/load_tools 三处),父 run 不被污染', async () => {
