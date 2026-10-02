@@ -72,6 +72,29 @@ OUT=/absolute/review-output node scripts/native-picker-emu.cjs
 英文、搜索键盘与插件截图，以及 `acceptance.json`。当前已覆盖 Android 15 模拟器；
 真机、其他 Android 版本和完整外部插件目录仍待后续验收。
 
+## Android 原生外壳：顶栏 + 通用底单（2026-10-02）
+
+WebView 仍是内核，外壳换原生：两个可选宿主接缝在 `lcl/engine`，Android 宿主在 `src/nativeChrome.ts` / `src/nativeSheet.ts`，
+Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏览器调试）时一切照旧走 Web UI。
+
+- **`NativeChrome`**：原生 Material 顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
+  WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。设置、引导、成就等全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏。
+- **`NativeSheet`**：通用 Compose 半屏底单，三种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`prompt`、`confirm`。
+  调用方用 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`，拿到 `{ handled: false }` 就渲染自己的 Web UI。
+  已接入：标签页底单、更多底单（无自定义组件项时）、`ContextMenu` 原语（`pickNativeCtxItem`）、`askString`、无 children 的 `ConfirmDialog`。
+- 文案、图标、主题全部由 Web 侧传入（i18n 跟随当前语言）；Kotlin 不持有用户可见字符串，只做载荷校验（大小 / 深度 / id 唯一）。
+
+真机验收（一台模拟器/设备，debug APK，后端全由 CDP 桩住，不碰真服务器；结束时还原 token / 语言 / 主题）：
+
+```bash
+rm -rf dist && npm run build && npx cap sync android
+./android/gradlew -p android :app:assembleDebug :app:testDebugUnitTest
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
+```
+
+负对照在 `e2e:boot`：浏览器里没有原生宿主时必须仍是 `.mb-topbar` + Web 标签页底单。
+
 ## 深链登录(需服务端确认一处)
 
 native 无 nginx 的同源 `/auth` 代理 → 系统浏览器打开 `${VITE_AUTH_ORIGIN}/auth?redirect=tangu://auth-callback&app=tangu-mobile`,

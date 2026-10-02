@@ -443,7 +443,7 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
   const id = v.id.slice('tab:'.length)
   if (v.trailing) {
     useWorkspace.getState().closeLeaf(id)
-    if (useWorkspace.getState().mainTabs.length > 1) void presentNativeTabs(tr)
+    if (useWorkspace.getState().mainTabs.length > 0) void presentNativeTabs(tr)
     return true
   }
   useWorkspace.getState().activateLeaf(id)

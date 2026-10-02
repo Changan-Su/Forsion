@@ -147,6 +147,19 @@ async function main() {
         .first().waitFor({ state: 'attached', timeout: 2000 }) // .amx-toast 2.6s 自动消失,等待须短于它
         .then(() => true).catch(() => false)
       if (!alive) fails.push('AmadeusOverlays 没挂载/没在渲染 —— 移动端 askString 与各确认弹窗会永远不响应')
+
+      // 负对照(原生外壳):浏览器里没有 NativeChrome / NativeSheet 宿主 → 必须仍是 web 顶栏 + web 标签页底单。
+      // 原生接缝若误判「已安装」,这里会丢顶栏或点了标签页钮没反应(Android 侧见 scripts/native-shell-emu.cjs)。
+      const native = await page.locator('.mb-shell[data-native-chrome]').count()
+      const topbar = await page.locator('.mb-topbar').count()
+      if (native || !topbar) fails.push(`无原生宿主时外壳应保留 web 顶栏(data-native-chrome=${native}, .mb-topbar=${topbar})`)
+      else {
+        // dispatchEvent 而非 click():这里没种引导完成标记,引导层盖在外壳上;要证的是回落链路,不是命中测试。
+        await page.locator('.mb-topbar .mb-tabsbtn').dispatchEvent('click')
+        const sheet = await page.locator('.mb-sheet .mb-tabrow-new').waitFor({ state: 'visible', timeout: 3000 })
+          .then(() => true).catch(() => false)
+        if (!sheet) fails.push('无原生宿主时点标签页钮没出 web 底单(.mb-sheet)')
+      }
     }
   } finally {
     // 浏览器起不来(找不到 chrome / 启动失败)也必须收掉 preview —— 原来 launch 在 try 之外,
