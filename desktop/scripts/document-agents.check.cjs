@@ -1,4 +1,4 @@
-// Page instructions + @Agent tasks + slash AI capsules, against the real v4 editor.
+// Page instructions + @Agent tasks + slash category tabs, against the real v4 editor.
 // The Tangu seam is a fake: this proves UI, CAS save and dispatch ordering, not model behavior.
 // Freeze frontend writes while running (Vite HMR invalidates in-flight observations).
 // HARNESS_URL=http://localhost:5268/harness.html node scripts/e2e-editor.cjs --check=document-agents
@@ -103,8 +103,23 @@ async function flush(page) {
 const disk = (page) => page.evaluate(() => window.__upage.vault.get('Unified.md'))
 const activity = (page) => page.evaluate(() => ({ calls: window.__documentAgent.calls, runs: window.__documentAgent.runs, drafts: window.__documentAgent.drafts, opens: window.__documentAgent.opens, inline: window.__documentAgent.inline, events: window.__documentAgent.events }))
 
+async function settleSlashMenu(page) {
+  await page.evaluate(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const menu = document.querySelector('.slash-menu')
+    if (!menu) return
+    await Promise.all(menu.getAnimations({ subtree: true })
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+      .map((animation) => animation.finished.catch(() => {})))
+  })
+  await page.waitForFunction(() => {
+    const menu = document.querySelector('.slash-menu')
+    return !menu || getComputedStyle(menu).opacity === '1'
+  })
+}
 async function screenshot(page, name, fullPage = true) {
   await page.evaluate(() => document.fonts.ready)
+  await settleSlashMenu(page)
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage })
 }
 async function scenario(browser, name, run) {
@@ -123,17 +138,45 @@ async function endOfPage(page, newLine = true) {
   })
   if (newLine) await page.keyboard.press('Enter')
 }
-async function openSlash(page, text = '/ai') {
+async function openSlash(page, text = '/') {
   await endOfPage(page)
   await page.keyboard.type(text, { delay: 25 })
   await page.waitForSelector('.slash-menu')
 }
 const slashActive = (page) => page.evaluate(() => {
   const menu = document.querySelector('.slash-menu')
-  const selected = menu?.querySelector('[role="menuitem"][data-active]:not([data-active="false"]), [role="menuitem"].active')
-  const capsules = [...(menu?.querySelectorAll('.slash-ai-capsule') || [])]
-  return { index: capsules.indexOf(selected), text: selected?.textContent || '', count: capsules.length, inGroup: !!selected?.closest('.slash-ai-capsules') }
+  const rows = [...(menu?.querySelectorAll('.slash-item[data-key]') || [])]
+  const selected = rows.find((row) => row.hasAttribute('data-active') && row.getAttribute('data-active') !== 'false')
+  const tabs = [...(menu?.querySelectorAll('.slash-category-tab') || [])]
+  const tab = tabs.find((item) => item.getAttribute('aria-selected') === 'true')
+  return {
+    category: tab?.dataset.category || null,
+    categories: tabs.map((item) => ({ category: item.dataset.category, role: item.getAttribute('role'), text: item.textContent })),
+    panelCategory: menu?.querySelector('.slash-list')?.getAttribute('data-category') || null,
+    panelRole: menu?.querySelector('.slash-list')?.getAttribute('role') || null,
+    tablistRole: menu?.querySelector('.slash-category-tabs')?.getAttribute('role') || null,
+    index: rows.indexOf(selected), key: selected?.dataset.key || null,
+    keys: rows.map((row) => row.dataset.key), text: selected?.textContent || '',
+    count: rows.length, oldCapsules: menu?.querySelectorAll('.slash-ai-capsule').length || 0,
+    emptyText: rows.length ? '' : menu?.querySelector('.slash-list')?.textContent?.trim() || '',
+  }
 })
+async function waitCategory(page, category) {
+  await page.waitForFunction((category) => document.querySelector('.slash-category-tab[aria-selected="true"]')?.getAttribute('data-category') === category, category)
+  return slashActive(page)
+}
+
+const PLUGIN_FIXTURE = `
+ctx.registerSlashItem({ id: 'document-agent-fixture', label: 'Plugin Fixture', group: 'Document checks', keywords: 'pluginfixture',
+  run: () => { window.__slashPluginRuns = (window.__slashPluginRuns || 0) + 1; return 'PLUGIN_FIXTURE_OUTPUT'; } })
+`
+async function installSlashPlugin(page) {
+  await page.evaluate((code) => {
+    // Plugin loading refreshes its scoped vault inventory; this harness has no folders.
+    window.amadeus.listFolders ??= async () => []
+    return window.__ep.loadPlugin(code, { id: 'document-agent-fixture' })
+  }, PLUGIN_FIXTURE)
+}
 
 async function selectText(page, text) {
   const point = await page.evaluate(({ PM, text }) => {
@@ -161,52 +204,129 @@ async function slashScenarios(browser) {
     const page = await openPage('# AI commands\n\nPreserve this paragraph.\n')
     await openSlash(page)
     const first = await slashActive(page)
+    const h6Index = first.keys.indexOf('h6')
+    for (let index = 0; index < h6Index; index++) await page.keyboard.press('ArrowDown')
+    const h6 = await slashActive(page)
+    await page.keyboard.press('ArrowDown')
+    const card = await slashActive(page)
+    await page.keyboard.press('ArrowDown')
+    const ul = await slashActive(page)
+    check('S12 Basic keyboard order follows the visible heading, card and list rows', h6Index >= 0 && h6.key === 'h6' && card.key === 'card' && ul.key === 'ul' && first.keys.slice(h6Index, h6Index + 3).join(',') === 'h6,card,ul', { h6: h6.key, card: card.key, ul: ul.key, keys: first.keys })
     await page.keyboard.press('ArrowLeft')
-    const last = await slashActive(page)
+    const last = await waitCategory(page, 'plugin')
     await page.keyboard.press('ArrowRight')
-    const wrapped = await slashActive(page)
+    const wrapped = await waitCategory(page, 'basic')
     await page.keyboard.press('ArrowRight')
-    const second = await slashActive(page)
-    check('S1 /ai capsules navigate left/right and wrap', first.count === 4 && first.index === 0 && last.index === 3 && wrapped.index === 0 && second.index === 1, { first, last, wrapped, second })
+    const second = await waitCategory(page, 'ai')
+    check('S1 slash defaults to Basic and left/right cycles the three category tabs', first.category === 'basic' && first.categories.map((tab) => tab.category).join(',') === 'basic,ai,plugin' && first.categories.every((tab) => tab.role === 'tab') && first.tablistRole === 'tablist' && first.count > 0 && last.category === 'plugin' && wrapped.category === 'basic' && second.category === 'ai', { first, last, wrapped, second })
+    check('S2 an empty Plugin category remains selectable with an explicit empty state', last.count === 0 && !!last.emptyText && last.panelRole === 'tabpanel' && last.panelCategory === 'plugin', last)
+    await page.keyboard.press('ArrowDown')
+    const down = await slashActive(page)
+    await page.keyboard.press('ArrowUp')
+    const up = await slashActive(page)
+    check('S3 up/down selects normal command rows inside the current category', second.keys.join(',') === 'ai,instructions,agent-task,prompt' && second.index === 0 && down.index === 1 && down.key === 'instructions' && down.category === 'ai' && up.index === 0 && up.category === 'ai' && second.oldCapsules === 0, { second, down, up })
     const composing = await page.evaluate((PM) => {
-      const event = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true, isComposing: true })
-      document.querySelector(PM).dispatchEvent(event)
-      return event.defaultPrevented
+      const editor = document.querySelector(PM)
+      // Set ProseMirror's composition state as an IME does, not just one key's flag.
+      editor.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }))
+      const events = [
+        { key: 'ArrowRight', isComposing: true },
+        { key: 'ArrowDown', isComposing: true },
+        { key: 'Enter', isComposing: true },
+        { key: 'ArrowRight', keyCode: 229 },
+      ].map((options) => {
+        const event = new KeyboardEvent('keydown', { ...options, bubbles: true, cancelable: true })
+        editor.dispatchEvent(event)
+        return { ...options, prevented: event.defaultPrevented }
+      })
+      editor.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }))
+      return events
     }, PM)
     const afterComposition = await slashActive(page)
-    check('S2 composing arrows are not consumed', !composing && afterComposition.index === 1, { prevented: composing, active: afterComposition })
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(500)
-    await openSlash(page, '/')
-    await page.keyboard.press('ArrowDown')
-    const below = await slashActive(page)
-    await page.keyboard.press('ArrowUp')
-    const above = await slashActive(page)
-    check('S4 up/down navigates across the AI group as one row', !below.inGroup && above.inGroup, { below, above })
+    check('S4 IME arrows and Enter do not switch categories or execute commands', composing.every((event) => !event.prevented) && afterComposition.category === 'ai' && afterComposition.index === 0 && await page.locator('[data-document-agent]').count() === 0, { composing, active: afterComposition })
     await page.evaluate(() => {
       const input = document.createElement('textarea'); input.id = 'unrelated-input'; document.body.append(input); input.focus()
     })
-    await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter')
-    const untouched = await page.evaluate(() => ({ value: document.getElementById('unrelated-input').value, focused: document.activeElement?.id, tasks: document.querySelectorAll('[data-document-agent="task"]').length }))
-    check('S5 slash shortcuts do not capture keys from a different input', untouched.value === '\n' && untouched.focused === 'unrelated-input' && untouched.tasks === 0, untouched)
+    await page.keyboard.type('outside')
+    await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')
+    const untouched = await page.evaluate(() => ({ value: document.getElementById('unrelated-input').value, focused: document.activeElement?.id, blocks: document.querySelectorAll('[data-document-agent]').length, calls: window.__documentAgent.calls.length, drafts: window.__documentAgent.drafts.length }))
+    check('S5 slash shortcuts do not capture keys from a different input', untouched.value === 'outside\n' && untouched.focused === 'unrelated-input' && untouched.blocks === 0 && untouched.calls === 0 && untouched.drafts === 0, untouched)
+  })
+  await scenario(browser, 'slash-reopen', async (openPage) => {
+    const page = await openPage('# Categories\n\nKeep this text.\n')
+    await openSlash(page)
+    await page.keyboard.press('ArrowRight')
+    await waitCategory(page, 'ai')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('.slash-menu', { state: 'hidden' })
+    await openSlash(page)
+    const reopened = await slashActive(page)
+    check('S6 reopening an empty slash query resets to Basic', reopened.category === 'basic' && reopened.count > 0, reopened)
   })
   await scenario(browser, 'slash-instructions', async (openPage) => {
     const page = await openPage('# AI commands\n\nPreserve this paragraph.\n')
     await openSlash(page)
     await page.keyboard.press('ArrowRight')
+    await waitCategory(page, 'ai')
+    await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     await page.waitForSelector('[data-document-agent="instructions"]')
     await flush(page)
     const saved = await disk(page)
-    check('S3 Enter inserts instructions and preserves surrounding prose', saved.includes('forsion-instructions') && saved.includes('Preserve this paragraph.') && !saved.includes('/ai'), saved)
+    check('S7 Enter inserts the selected instructions row and preserves surrounding prose', saved.includes('forsion-instructions') && saved.includes('Preserve this paragraph.') && !saved.includes('\n/'), saved)
   })
   await scenario(browser, 'slash-task', async (openPage) => {
     const page = await openPage('# Task command\n\nKeep this text.\n')
     await openSlash(page)
-    await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight'); await page.keyboard.press('Enter')
+    await page.keyboard.press('ArrowRight')
+    await waitCategory(page, 'ai')
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter')
     await page.waitForSelector('[data-document-agent="task"]')
     const state = await activity(page)
-    check('S6 selecting the task capsule creates an editable draft only', await page.locator('[data-document-agent="task"] textarea').count() === 1 && state.calls.length === 0 && state.runs.length === 0, state)
+    check('S8 selecting the task command row creates an editable draft only', await page.locator('[data-document-agent="task"] textarea').count() === 1 && state.calls.length === 0 && state.runs.length === 0, state)
+  })
+  await scenario(browser, 'slash-plugin', async (openPage) => {
+    const page = await openPage('# Plugins\n\nKeep plugin context.\n')
+    await installSlashPlugin(page)
+    await openSlash(page)
+    const basic = await slashActive(page)
+    await page.keyboard.press('ArrowLeft')
+    await waitCategory(page, 'plugin')
+    await page.waitForSelector('.slash-item[data-key]:has-text("Plugin Fixture")')
+    const plugin = await slashActive(page)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => window.__upage.probe.view().state.doc.textContent.includes('PLUGIN_FIXTURE_OUTPUT'))
+    await flush(page)
+    const saved = await disk(page), runs = await page.evaluate(() => window.__slashPluginRuns)
+    check('S9 registered plugin commands appear as rows in Plugin and execute on Enter', basic.category === 'basic' && !basic.keys.some((key) => key.includes('document-agent-fixture')) && plugin.count === 1 && plugin.oldCapsules === 0 && runs === 1 && saved.includes('PLUGIN_FIXTURE_OUTPUT') && saved.includes('Keep plugin context.'), { basic, plugin, runs, saved })
+  })
+  await scenario(browser, 'slash-search-categories', async (openPage) => {
+    const page = await openPage('# Search\n\nKeep this paragraph.\n')
+    await installSlashPlugin(page)
+    await openSlash(page, '/ai')
+    const foundAI = await waitCategory(page, 'ai')
+    await page.keyboard.press('ArrowLeft')
+    const filteredBasic = await waitCategory(page, 'basic')
+    const queryAfterLeft = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.textContent)
+    await page.locator('.slash-category-tab[data-category="plugin"]').click()
+    const filteredPlugin = await waitCategory(page, 'plugin')
+    await page.locator('.slash-category-tab[data-category="ai"]').click()
+    const restoredAI = await waitCategory(page, 'ai')
+    const aiKeys = ['ai', 'instructions', 'agent-task', 'prompt']
+    check('S10 search discovers AI globally while manual category switches retain the query', foundAI.keys.join(',') === aiKeys.join(',') && filteredBasic.keys.every((key) => !aiKeys.includes(key)) && filteredPlugin.keys.every((key) => !aiKeys.includes(key)) && queryAfterLeft === '/ai' && restoredAI.keys.join(',') === foundAI.keys.join(',') && restoredAI.categories.length === 3, { foundAI, filteredBasic, filteredPlugin, restoredAI, queryAfterLeft })
+    await page.keyboard.press('Backspace'); await page.keyboard.press('Backspace')
+    const cleared = await waitCategory(page, 'basic')
+    await page.keyboard.type('pluginfixture', { delay: 25 })
+    const foundPlugin = await waitCategory(page, 'plugin')
+    await page.waitForSelector('.slash-item[data-key]:has-text("Plugin Fixture")')
+    await page.keyboard.press('ArrowRight')
+    const emptyBasic = await waitCategory(page, 'basic')
+    const queryAfterRight = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.textContent)
+    await page.keyboard.press('ArrowLeft')
+    await waitCategory(page, 'plugin')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => window.__slashPluginRuns === 1)
+    check('S11 clearing a query restores Basic and plugin search crosses categories without trapping navigation', cleared.category === 'basic' && cleared.count > 0 && foundPlugin.count === 1 && emptyBasic.count === 0 && !!emptyBasic.emptyText && queryAfterRight === '/pluginfixture', { cleared, foundPlugin, emptyBasic, queryAfterRight })
   })
 }
 
@@ -361,10 +481,9 @@ async function safetyAndShots(browser) {
     await page.evaluate(() => window.__upage.switchFile('Unified.md'))
     await page.waitForSelector('[data-document-agent="task"]')
     check('R8 a non-host engine cannot submit an existing page task', await page.locator('[data-document-agent="task"] .am-doc-agent-action').isDisabled())
-    await openSlash(page)
+    await openSlash(page, '/ai')
     const menu = await slashActive(page)
-    const labels = await page.locator('.slash-ai-capsule').evaluateAll((capsules) => capsules.map((capsule) => capsule.getAttribute('aria-label') || capsule.textContent))
-    check('R9 a non-host engine hides the task insertion capsule', menu.count >= 2 && menu.count < 4 && labels.every((label) => !!label && !label.includes('Agent 任务')), labels)
+    check('R9 a non-host engine hides unsupported AI task and prompt command rows', menu.category === 'ai' && menu.keys.join(',') === 'ai,instructions' && menu.categories.length === 3 && menu.oldCapsules === 0, menu)
   })
   await scenario(browser, 'prompt-and-screenshots', async (openPage) => {
     const page = await openPage(source, '&upane')
@@ -402,19 +521,40 @@ async function safetyAndShots(browser) {
 async function slashScreenshots(browser) {
   await scenario(browser, 'slash-screenshots', async (openPage) => {
     for (const mode of ['light', 'dark', 'english']) {
-      const page = await openPage('# AI commands\n\nPreserve this paragraph.\n', `&upane${mode === 'dark' ? '&udark' : ''}`)
-      if (mode === 'english') await page.evaluate(() => window.__upage.setLocale('en'))
-      await openSlash(page)
-      await page.keyboard.press('ArrowRight')
-      const labels = await page.locator('.slash-ai-capsule .slash-label').evaluateAll((nodes) => nodes.map((node) => {
-        const range = document.createRange(); range.selectNodeContents(node)
-        const lines = [...range.getClientRects()].filter((rect) => rect.width > 0)
-        const button = node.closest('button').getBoundingClientRect()
-        return { text: node.textContent, lines: lines.length, top: button.top, fits: lines.every((line) => line.left >= button.left && line.right <= button.right) }
-      }))
-      check(`V1 ${mode} AI capsules use a single row of unwrapped labels`, labels.length === 4 && labels.every((label) => label.lines === 1 && label.fits && Math.abs(label.top - labels[0].top) < 1), labels)
-      // Full-page screenshots can resize the layout and dismiss anchored menus.
-      await screenshot(page, `slash-ai-${mode}`, false)
+      for (const width of [1200, 480]) {
+        const page = await openPage('# Document commands\n\nPreserve this paragraph.\n', `&upane${mode === 'dark' ? '&udark' : ''}`, width)
+        if (mode === 'dark') await page.waitForFunction(() => document.documentElement.dataset.mode === 'dark')
+        if (mode === 'english') await page.evaluate(() => window.__upage.setLocale('en'))
+        await openSlash(page)
+        const suffix = `${mode}${width === 480 ? '-narrow' : ''}`
+        // Full-page screenshots can resize the layout and dismiss anchored menus.
+        await screenshot(page, `slash-basic-${suffix}`, false)
+        await page.keyboard.press('ArrowRight')
+        await waitCategory(page, 'ai')
+        const geometry = await page.evaluate(() => {
+          const menu = document.querySelector('.slash-menu')
+          const box = menu.getBoundingClientRect()
+          const tabs = [...menu.querySelectorAll('.slash-category-tab')].map((node) => {
+            const rect = node.getBoundingClientRect()
+            return { text: node.textContent.trim(), top: rect.top, height: rect.height, width: rect.width, client: node.clientWidth, scroll: node.scrollWidth }
+          })
+          const rows = [...menu.querySelectorAll('.slash-item[data-key]')].map((node) => {
+            const rect = node.getBoundingClientRect()
+            return { key: node.dataset.key, top: rect.top, width: rect.width, height: rect.height, categoryTab: node.matches('.slash-category-tab'), role: node.getAttribute('role') }
+          })
+          return { tabs, rows, left: box.left, right: box.right, viewport: window.innerWidth, oldCapsules: menu.querySelectorAll('.slash-ai-capsule').length }
+        })
+        const expectedTabs = mode === 'english' ? ['Basic', 'AI', 'Plugins'] : ['基本', 'AI', '插件']
+        check(`V1 ${suffix} has three category capsules and four full command rows`, geometry.tabs.map((tab) => tab.text).join(',') === expectedTabs.join(',') && geometry.tabs.every((tab) => Math.abs(tab.top - geometry.tabs[0].top) < 1 && tab.scroll <= tab.client + 1) && geometry.rows.length === 4 && geometry.rows.every((row, index) => row.role === 'menuitem' && !row.categoryTab && row.width > geometry.tabs[0].width * 2 && (index === 0 || row.top >= geometry.rows[index - 1].top + geometry.rows[index - 1].height - 1)) && geometry.left >= -1 && geometry.right <= geometry.viewport + 1 && geometry.oldCapsules === 0, geometry)
+        await screenshot(page, `slash-ai-${suffix}`, false)
+        if (mode === 'light' && width === 1200) {
+          await settleSlashMenu(page)
+          await page.locator('.slash-menu').screenshot({ path: path.join(OUT, 'slash-categories-menu.png') })
+          await page.keyboard.press('ArrowRight')
+          await waitCategory(page, 'plugin')
+          await screenshot(page, 'slash-plugin-empty-light', false)
+        }
+      }
     }
   })
 }

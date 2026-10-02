@@ -1,22 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { moveSlash, slashRows } from './slashNavigation'
+import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory } from './slashNavigation'
 
-describe('AI slash capsule keyboard rows', () => {
-  const items = [{ aiCapsule: true }, { aiCapsule: true }, { aiCapsule: true }, {}, {}]
-  it('uses left and right within AI and wraps without changing the document', () => {
-    expect(moveSlash(items, 0, 'ArrowLeft')).toBe(2)
-    expect(moveSlash(items, 2, 'ArrowRight')).toBe(0)
-    expect(moveSlash(items, 3, 'ArrowRight')).toBeNull()
+describe('slash categories and ordinary command rows', () => {
+  it('uses left and right for the three categories, including an empty plugin category', () => {
+    expect(moveSlashCategory('basic', 'ArrowRight')).toBe('ai')
+    expect(moveSlashCategory('ai', 'ArrowRight')).toBe('plugin')
+    expect(moveSlashCategory('plugin', 'ArrowRight')).toBe('basic')
+    expect(moveSlashCategory('basic', 'ArrowLeft')).toBe('plugin')
+    expect(moveSlashCategory('ai', 'ArrowUp')).toBeNull()
   })
-  it('uses up and down between visual rows', () => {
-    expect(slashRows(items)).toEqual([[0, 1, 2], [3], [4]])
-    expect(moveSlash(items, 1, 'ArrowDown')).toBe(3)
-    expect(moveSlash(items, 3, 'ArrowUp')).toBe(0)
-    expect(moveSlash(items, 4, 'ArrowDown')).toBe(4)
+  it('keeps AI commands as independent rows selected by up and down', () => {
+    expect(moveSlash(4, 0, 'ArrowDown')).toBe(1)
+    expect(moveSlash(4, 2, 'ArrowUp')).toBe(1)
+    expect(moveSlash(4, 3, 'ArrowDown')).toBe(3)
+    expect(moveSlash(4, 0, 'ArrowUp')).toBe(0)
+    expect(moveSlash(4, 0, 'ArrowRight')).toBeNull()
+    expect(moveSlash(0, 0, 'ArrowDown')).toBeNull()
   })
-  it('handles filtered results and missing active items', () => {
-    expect(slashRows([{}, { aiCapsule: true }, {}, { aiCapsule: true }])).toEqual([[0], [1, 3], [2]])
-    expect(moveSlash([], 0, 'ArrowDown')).toBeNull()
-    expect(moveSlash([{ aiCapsule: true }], 0, 'ArrowLeft')).toBe(0)
+  it('opens basic by default and discovers AI or plugin commands through global search', () => {
+    expect(slashCategory({})).toBe('basic')
+    expect(defaultSlashCategory([{ category: 'ai' }], '')).toBe('basic')
+    expect(defaultSlashCategory([{ category: 'ai' }], 'ai')).toBe('ai')
+    expect(defaultSlashCategory([{ category: 'plugin' }, {}], 'plugin')).toBe('plugin')
+    expect(defaultSlashCategory([], 'missing')).toBe('basic')
   })
 })
