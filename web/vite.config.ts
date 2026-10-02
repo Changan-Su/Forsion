@@ -1,5 +1,5 @@
 /**
- * Tangu Web — 独立 app(像 AI Studio/Echo:自己的容器/nginx,连 Forsion server /api → tangu worker)。
+ * Tangu Web — 独立 app(自己的容器/nginx,连 Forsion server /api → tangu worker)。
  * 经别名复用 desktop/frontend/src(不复制源码);自带 webShim 入口。
  * 服务于自身 origin 的根路径(base '/'),产物落 web/dist;部署见同目录 Dockerfile/nginx.conf.template。
  */

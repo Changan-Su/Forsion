@@ -1,6 +1,6 @@
 # =====================================================
 # Forsion Web(内部代号 Tangu Web)— 独立前端(React19 + Vite + Nginx),连 Forsion server /api → tangu worker。
-# 镜像同 AI Studio 套路;区别:web 经 vite 别名复用 desktop/frontend/src,故
+# 独立 nginx 前端镜像;web 经 vite 别名复用 desktop/frontend/src,故
 # 构建上下文必须是 Forsion-Genesis/(含 web/ 与 desktop/frontend/),而非 web/。
 #
 #   docker build -f web/Dockerfile -t tangu-web .        # 在 Forsion-Genesis/ 下执行

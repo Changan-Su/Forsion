@@ -1,8 +1,8 @@
 # =====================================================
 # Tangu standalone worker 镜像 —— headless host-mode（自带 iLink 微信循环 + stickers），
-# 供 Tangu Manager（apps/Tangu-Manager）在 worker 宿主机上 per-user 编排。
+# 供 Tangu Manager（独立仓 Tangu-Manager）在 worker 宿主机上 per-user 编排。
 # -----------------------------------------------------
-# 构建上下文 = apps/Tangu-Agent/（自包含）。入口 = bin `tangu-server` = node dist/standalone/main.js。
+# 构建上下文 = Forsion-Genesis 仓根（只 COPY tangu-agent/）。入口 = bin `tangu-server` = node dist/standalone/main.js。
 # 连接契约（Tangu Manager 经 -e 注入，见 src/standalone/config.ts）：
 #   TANGU_CLOUD_URL（必填，Forsion brain）/ TANGU_TOKEN（user-scoped）/ TANGU_USER_ID /
 #   TANGU_HOST=0.0.0.0 / TANGU_PORT=8787 / TANGU_HOME=/tangu-home（挂 per-user 卷）/
