@@ -263,13 +263,19 @@ async function main() {
     // 补到 10 个:10-02 起上区只常驻 5 个(用户拍板 v1),第 6 个起进「…」—— 常驻的正好标 ⌘1..5,不跳号
     await page.evaluate(() => {
       const s = window.__rb.getState()
-      for (const n of ['E', 'F', 'G', 'H', 'I', 'J']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() {} })
+      for (const n of ['E', 'F', 'G', 'H', 'I', 'J']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() { window.__rbHits.push('t' + n) } })
     })
     await page.setViewportSize({ width: 900, height: 1000 }) // 够高:进「…」只因常驻上限,不因高度
     await page.waitForTimeout(250)
     const ks = await keysOf(page)
     const hasMore = !!(await page.$('.rb-top .rb-more'))
     check('M5 补到 10 个:上区只常驻 5 个(标 ⌘1..5),其余进「…」', ks.join() === '⌘1,⌘2,⌘3,⌘4,⌘5' && hasMore, `${ks.length} 个 ｜ ${ks.join('|')} ｜ more=${hasMore}`)
+    // 号按整条上区排序分,不按「露在外面的」:收进「…」的第 6 个照样 mod+6 直达(序 = tD,tA,tB,tC,tE,tF…)。
+    await page.evaluate(() => { window.__rbHits.length = 0 })
+    await page.keyboard.press('Meta+6')
+    await page.waitForTimeout(80)
+    const hit6 = await page.evaluate(() => window.__rbHits.join())
+    check('M5b 收进「…」的第 6 个照样 mod+6 直达', hit6 === 'tF', hit6)
     await page.setViewportSize({ width: 900, height: 800 })
 
     // N. 未读角标(收件箱红点)× 快捷键提示:展开态角标必须贴**图标**右上角,不是行右端 ——
