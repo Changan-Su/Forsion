@@ -10,13 +10,11 @@ name: parity
 
 on:
   pull_request:
+    # 放宽到目录级:门控会陆续搬进新文件(GATE_FILES / E 段 store),逐个列文件必然漂移;脚本几秒跑完,放宽成本可忽略。
     paths: &parity_paths
-      - 'desktop/frontend/src/main.tsx'
-      - 'desktop/frontend/src/Root.tsx'
-      - 'desktop/frontend/src/bootstrapEngine.tsx'
+      - 'desktop/frontend/src/**'
+      - 'lcl/engine/**'
       - 'mobile/src/**'
-      - 'lcl/engine/Shell.tsx'
-      - 'lcl/engine/SingleColumnHost.tsx'
       - 'desktop/scripts/platform-parity.check.cjs'
       - '.github/workflows/parity.yml'
   push:
