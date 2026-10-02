@@ -19,6 +19,13 @@ describe('isRetryableLlmError', () => {
     }
   });
 
+  it('quota / subscription usage exhaustion is not retried even as 429; rate limits still are (R5)', () => {
+    for (const m of ['The usage limit has been reached', 'usage_limit_reached', 'You exceeded your current quota, please check your plan and billing details.', 'insufficient_quota']) {
+      expect(isRetryableLlmError(new LlmError(429, m))).toBe(false);
+    }
+    expect(isRetryableLlmError(new LlmError(429, 'Rate limit reached for requests'))).toBe(true);
+  });
+
   it('does not retry user abort', () => {
     const e = new Error('aborted');
     e.name = 'AbortError';

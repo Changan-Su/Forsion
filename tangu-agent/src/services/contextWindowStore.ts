@@ -48,7 +48,8 @@ const PATTERNS: readonly RegExp[] = [
  * 只在 400/413 上判:别的状态码里出现这些词多半是转述,不是本次请求超长。
  */
 const OVERFLOW_HINTS: readonly RegExp[] = [
-  /prompt is too long/i, // Anthropic
+  /prompt (?:is )?too long/i, // Anthropic、z.ai(「Prompt too long」)
+  /prompt exceeds max length/i, // z.ai CN
   /request_too_large/i, // Anthropic 413
   /input is too long for requested model/i, // Bedrock
   /exceeds the context window/i, // OpenAI Completions / Responses

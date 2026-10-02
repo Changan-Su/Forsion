@@ -8,11 +8,16 @@ import { LlmError } from '../core/types.js';
 export function isRetryableLlmError(err: unknown): boolean {
   if ((err as any)?.name === 'AbortError') return false;
   if (err instanceof LlmError) {
+    // 额度 / 配额耗尽常以 429 返回,但要几小时才重置:必须先于状态码判,否则白重试 3 次(PI-DSH 评审 R5,借 pi retry.ts)。
+    if (QUOTA_EXHAUSTED.test(err.message)) return false;
     const s = err.status;
     return s === 0 || s === 408 || s === 425 || s === 429 || s >= 500;
   }
   return true;
 }
+
+/** 订阅额度 / 账单配额用尽的措辞(不可重试)。「rate limit」是秒级限流,不在此列。 */
+const QUOTA_EXHAUSTED = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i;
 
 export const MODEL_MAX_RETRIES = 3; // 首次 + 至多 3 次重试 = 4 次尝试
 export const MODEL_RETRY_BASE_MS = 1500; // 线性退避 1.5/3/4.5s:扛 Wi-Fi 切换级别的网络抖动(旧 400ms 兜不住真实断网)
