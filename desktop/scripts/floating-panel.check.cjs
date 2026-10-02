@@ -345,17 +345,15 @@ async function main() {
     // 新装的用户 Space 不占顶栏槽位,进的是 ribbon「更多」浮层 —— 两处都看。
     // 「更多」浮层是 mouseenter 开的(不是 click):指针还停在按钮上时再悬停不会重开,读到空列表会被当成「已撤掉」
     // 而假绿(实测踩过)→ 每次先把指针挪开再悬停;读不到行返回 null(≠ false)。
-    const flyRows = main.locator('.rb-fly-row')
     const mainRibbonHasProbe = async () => {
       if (await main.locator('.rb-slot[data-id="space:probe-space"]').count()) return true
-      await main.mouse.move(600, 400)
-      await main.locator('.rb-more').first().hover()
-      if (!(await until(async () => (await flyRows.count()) > 0, 2000))) return null // 浮层里恒有 Automation / Muse 等行
-      const rows = await flyRows.allTextContents()
-      await main.keyboard.press('Escape')
-      await main.mouse.move(600, 400)
-      await until(async () => (await flyRows.count()) === 0, 1000)
-      return rows.some((t) => t.includes('Probe space'))
+      // 10-02 起「…」= 展开:点开后上区铺满整条,藏着的就在条上;看完再点一下收起
+      await main.locator('.rb-top .rb-more').first().click()
+      if (!(await until(async () => (await main.locator('.rb.rb-open-top').count()) > 0, 2000))) return null
+      const hit = (await main.locator('.rb-slot[data-id="space:probe-space"]').count()) > 0
+      await main.locator('.rb-top .rb-more').first().click()
+      await until(async () => (await main.locator('.rb.rb-open-top').count()) === 0, 1000)
+      return hit
     }
     const hadRibbon = await until(async () => (await mainRibbonHasProbe()) === true, 10000)
     floating = await settingsPage('spaces')

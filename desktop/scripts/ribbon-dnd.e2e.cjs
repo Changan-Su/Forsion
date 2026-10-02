@@ -277,13 +277,16 @@ async function main() {
     const hit6 = await page.evaluate(() => window.__rbHits.join())
     check('M5b 收进「…」的第 6 个照样 mod+6 直达', hit6 === 'tF', hit6)
 
-    // W. 滚轮翻看(10-02 用户要求,类 Agent 选择条):DOM 不滚,露出的那一窗按格平移。每下之间停 260ms
-    //    (> 200ms)= 每下都是新手势、各挪一格;deltaY 只给 10px,顺带钉「慢转的滚轮一下只有几 px 也得动」。
+    // W. 滚轮翻看(10-02 用户要求,类 Agent 选择条):DOM 不滚,露出的那一窗平移。第二版「丝滑 + 吸附」:
+    //    手势中按 px 跟手,停手 120ms 吸附到整格,吸附过渡走完(+240ms)才提交新窗口。每下之间停 450ms
+    //    = 每下都是独立手势;deltaY 只给 10px,顺带钉「慢转的滚轮一下只有几 px 也得挪一格」。
+    const SETTLE = 450
     const idsIn = (zone) => page.$$eval(`.rb-${zone} .rb-slot`, (els) => els.map((e) => e.dataset.id))
-    const wheelAt = async (zone, dy, times = 1) => {
+    const wheelAt = async (zone, dy, times = 1, gap = SETTLE) => {
       const b = await page.$eval(`.rb-${zone} .rb-slot`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
       await page.mouse.move(b.x, b.y)
-      for (let i = 0; i < times; i++) { await page.mouse.wheel(0, dy); await page.waitForTimeout(260) }
+      for (let i = 0; i < times; i++) { await page.mouse.wheel(0, dy); await page.waitForTimeout(gap) }
+      if (gap < SETTLE) await page.waitForTimeout(SETTLE)
     }
     const top0 = await idsIn('top')
     await wheelAt('top', 10)
@@ -295,27 +298,35 @@ async function main() {
     await page.waitForTimeout(80)
     const hit1 = await page.evaluate(() => window.__rbHits.join())
     check('W1b 滚过以后 mod+1 仍是整区第一个(号不随滚动变)', hit1 === 'tD', hit1)
-    // 平滑动画:滚一下的当帧,滑动框的列还在过渡中(transform 不是终值),经过的格子临时画出图标;过渡完 DOM 回到只露一窗
+    // 丝滑 + 吸附:滚一下 10px 的 60ms 后,列停在两格之间(跟手,不是整格)、窗外格子临时画出图标;
+    // 停手后吸附到整格(新窗口起点 × 槽距),占位清空。
+    const pitch = await page.$$eval('.rb-top .rb-slot', (els) => els[1].getBoundingClientRect().top - els[0].getBoundingClientRect().top)
+    const ty = (m) => { const v = /matrix\(([^)]+)\)/.exec(m); return v ? Number(v[1].split(',')[5]) : 0 }
+    const stripNow = () => page.evaluate(() => ({ tr: getComputedStyle(document.querySelector('.rb-top .rb-strip-in')).transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }))
     await page.mouse.wheel(0, 10)
     await page.waitForTimeout(60)
-    const mid = await page.evaluate(() => {
-      const inner = document.querySelector('.rb-top .rb-strip-in')
-      return { tr: getComputedStyle(inner).transform, final: inner.style.transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }
-    })
-    await page.waitForTimeout(400)
-    const end = await page.evaluate(() => ({ tr: getComputedStyle(document.querySelector('.rb-top .rb-strip-in')).transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }))
-    const ty = (m) => { const v = /matrix\(([^)]+)\)/.exec(m); return v ? Number(v[1].split(',')[5]) : 0 }
-    const want = Number(/-?[\d.]+/.exec(mid.final)?.[0] ?? 0)
-    check('W1c 平滑滑动:过渡中途在新旧之间、经过的格子画出图标;滑完停在终值、占位清空', ty(mid.tr) > want && mid.filled > 0 && Math.abs(ty(end.tr) - want) < 0.5 && end.filled === 0, JSON.stringify({ mid: ty(mid.tr), want, filledMid: mid.filled, end: ty(end.tr), filledEnd: end.filled }))
+    const mid = await stripNow()
+    await page.waitForTimeout(SETTLE)
+    const end = await stripNow()
+    const offGrid = (y) => Math.abs(y / pitch - Math.round(y / pitch)) > 0.05
+    check('W1c 丝滑:手势中列停在两格之间、窗外格子画出图标;停手吸附到整格(第 3 格起)、占位清空', offGrid(ty(mid.tr)) && mid.filled > 0 && Math.abs(ty(end.tr) + 2 * pitch) < 0.5 && end.filled === 0, JSON.stringify({ pitch, mid: ty(mid.tr), filledMid: mid.filled, end: ty(end.tr), filledEnd: end.filled }))
+    // 触控板式连续小 delta(6 × 15px ≈ 2.4 格,16ms 一发 = 同一手势):累加跟手,停手四舍五入吸附 → 再挪 2 格。
+    const before8 = await idsIn('top')
+    await wheelAt('top', 15, 6, 16)
+    const after8 = await idsIn('top')
+    check('W8 连续小 delta 累加、停手按最近整格吸附(≈2.4 格 → 2 格)', after8[0] === top0[4] && before8[0] === top0[2], `${before8.join()} → ${after8.join()}`)
+    await wheelAt('top', -10, 2)
     await wheelAt('top', -10)
     await wheelAt('top', 10, 8)
     const k2 = await keysOf(page)
     check('W2 滚到底夹住:露最后 5 个(⌘6..⌘9,第 10 个无号)', k2.join() === '⌘6,⌘7,⌘8,⌘9,', k2.join('|'))
-    await page.hover('.rb-top .rb-more')
-    await page.waitForSelector('.rb-fly', { timeout: 3000 })
-    const flyTop = await page.$$eval('.rb-fly .rb-fly-row', (els) => els.map((e) => e.dataset.id))
-    check('W3 滚过去的前几个进「…」', top0.slice(0, 5).every((id) => flyTop.includes(id)), flyTop.join())
+    // 「…」= 展开:滚过去的前几个点开就在条上(10-02 起「…」不再弹浮层)。
+    await page.click('.rb-top .rb-more')
+    await page.waitForTimeout(150)
+    const openTop = await idsIn('top')
+    check('W3 滚过去的前几个点「…」展开后就在条上', top0.slice(0, 5).every((id) => openTop.includes(id)) && openTop.length === 10, openTop.join())
     await page.keyboard.press('Escape')
+    await page.waitForTimeout(100)
     await wheelAt('top', -10, 8)
     check('W4 往上滚回来:窗口复原', (await idsIn('top')).join() === top0.join(), (await idsIn('top')).join())
     await page.evaluate(() => {
@@ -335,6 +346,51 @@ async function main() {
     check('W7 一下 120px 的滚轮只挪一格', top2[0] === top0[1], `${top0.join()} → ${top2.join()}`)
     await wheelAt('top', -120)
     await page.setViewportSize({ width: 900, height: 800 })
+
+    // X. 「…」= 展开(10-02 用户要求):点上区「…」→ 上区铺满、命令区让出来;点 Ribbon 图标不收,点别处 / Esc /
+    //    窗口失焦(点进 iframe 视图时事件到不了本窗口)收回。命令区「…」镜像:上区与主位槽一起让出来。
+    await fresh(page)
+    await page.evaluate(() => {
+      const s = window.__rb.getState()
+      for (const n of ['E', 'F', 'G', 'H', 'I']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() { window.__rbHits.push('t' + n) } })
+      for (const n of ['D', 'E', 'F']) s.addRibbonIcon({ id: 'b' + n, side: 'bottom', tooltip: () => 'Bot ' + n, icon: s.items[0].icon, onClick() {} })
+      s.addRibbonIcon({ id: 'pin', side: 'bottom', pinned: true, tooltip: () => 'Pinned', icon: s.items[0].icon, onClick() {} })
+    })
+    await page.waitForTimeout(250)
+    const isOpen = () => page.evaluate(() => ({ top: !!document.querySelector('.rb.rb-open-top'), bottom: !!document.querySelector('.rb.rb-open-bottom') }))
+    const pinBottom = () => page.$eval('.rb-pinned', (e) => Math.round(e.getBoundingClientRect().bottom))
+    const pin0 = await pinBottom()
+    await page.click('.rb-top .rb-more')
+    await page.waitForTimeout(150)
+    const xTop = await idsIn('top')
+    const xMore = await page.$eval('.rb-top .rb-more', (b) => ({ exp: b.getAttribute('aria-expanded'), label: b.getAttribute('aria-label') }))
+    check('X1 点上区「…」:上区 9 个全露、命令区让出来、钮变「收起」', xTop.length === 9 && !(await page.$('.rb-bottom')) && xMore.exp === 'true' && xMore.label === '收起', `${xTop.join()} ｜ ${JSON.stringify(xMore)}`)
+    check('X2 上区展开时账号卡仍贴底', (await pinBottom()) === pin0, `${pin0} → ${await pinBottom()}`)
+    await page.evaluate(() => { window.__rbHits.length = 0 })
+    await page.click('.rb-top .rb-slot[data-id="tI"] .rb-btn')
+    await page.waitForTimeout(100)
+    check('X3 点展开区里的图标:照常触发、不收起', (await page.evaluate(() => window.__rbHits.join())) === 'tI' && (await isOpen()).top, JSON.stringify(await isOpen()))
+    await page.mouse.click(600, 400)
+    await page.waitForTimeout(150)
+    check('X4 点 Ribbon 以外任意处:收回,命令区回来、上区回到 5 个', !(await isOpen()).top && !!(await page.$('.rb-bottom')) && (await idsIn('top')).length === 5, `${(await idsIn('top')).length} ｜ ${JSON.stringify(await isOpen())}`)
+    await page.click('.rb-bottom .rb-more')
+    await page.waitForTimeout(150)
+    const xBot = await idsIn('bottom')
+    const homeShown = await page.$eval('.rb-home', (e) => getComputedStyle(e).display !== 'none')
+    check('X5 点命令区「…」:命令区全露、上区与主位槽让出来', (await isOpen()).bottom && !(await page.$('.rb-top')) && !homeShown && xBot.length === 6, `${xBot.join()} ｜ home=${homeShown}`)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(150)
+    check('X6 Esc 收回', !(await isOpen()).bottom && !!(await page.$('.rb-top')), JSON.stringify(await isOpen()))
+    await page.click('.rb-top .rb-more')
+    await page.waitForTimeout(100)
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')))
+    await page.waitForTimeout(150)
+    check('X7 窗口失焦(点进 iframe 视图)收回', !(await isOpen()).top, JSON.stringify(await isOpen()))
+    await page.click('.rb-top .rb-more')
+    await page.waitForTimeout(100)
+    await page.click('.rb-top .rb-more')
+    await page.waitForTimeout(150)
+    check('X8 再点「收起」收回', !(await isOpen()).top && (await idsIn('top')).length === 5, JSON.stringify(await isOpen()))
 
     // N. 未读角标(收件箱红点)× 快捷键提示:展开态角标必须贴**图标**右上角,不是行右端 ——
     //    行右端归 .rb-key,两个都往那儿放就是用户实报的「红点和 ⌘1 重合」。

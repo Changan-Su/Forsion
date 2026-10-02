@@ -17,6 +17,7 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.ribbon.addSpaceOrFolder': { zh: '新建 Space 或收纳夹', en: 'New Space or folder' },
   'lcl.ribbon.addCommand': { zh: '添加命令', en: 'Add command' },
   'lcl.ribbon.more': { zh: '更多', en: 'More' },
+  'lcl.ribbon.less': { zh: '收起', en: 'Show less' },
   'lcl.ribbon.switchSpace': { zh: '切到第 {n} 个 Space', en: 'Switch to Space {n}' },
   'lcl.ribbon.newSpace': { zh: '新建 Space', en: 'New Space' },
   'lcl.ribbon.newFolder': { zh: '新建收纳夹', en: 'New folder' },

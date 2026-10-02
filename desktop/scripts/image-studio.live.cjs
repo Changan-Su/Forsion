@@ -108,8 +108,9 @@ async function main() {
     if (await skip.isVisible().catch(() => false)) await skip.click()
     await win.waitForSelector('.dv-groupview')
     const icon = win.locator('.rb-space[aria-label="图像工作室"]').first()
-    if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().hover()
-    await icon.click(); await win.waitForSelector('.ims-empty')
+    if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().click() // 「…」= 展开
+    await icon.click()
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用; await win.waitForSelector('.ims-empty')
     await win.locator('.ims input[type="file"][multiple]').setInputFiles(path.join(OUT, generated.files[0]))
     await win.locator('.ims-footer input').fill('Live · ceramic studies')
     const first = win.locator('.ims-image').first(); await first.click()

@@ -198,8 +198,9 @@ async function openCodingSpace(win) {
   if (await direct.isVisible().catch(() => false)) { await direct.click(); return }
   const more = win.locator('.rb-top .rb-more').first()
   if (await more.isVisible().catch(() => false)) {
-    await more.hover()
-    await win.locator(`.rb-fly ${locator.split(', ').join(', .rb-fly ')}`).first().click()
+    await more.click() // 「…」= 展开:藏着的就在条上
+    await win.locator(`.rb-top ${locator.split(', ').join(', .rb-top ')}`).first().click()
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用
     return
   }
   // Space can also be pinned to the home launcher rather than the ribbon.

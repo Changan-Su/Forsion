@@ -32,8 +32,9 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
     if (await win.locator('.ims').isVisible().catch(() => false)) return
     const icon = win.locator('.rb-space[aria-label="图像工作室"]').first()
-    if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().hover()
+    if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().click() // 「…」= 展开
     await icon.click()
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用
     await win.waitForSelector('.ims')
   }
   const mode = async value => {
