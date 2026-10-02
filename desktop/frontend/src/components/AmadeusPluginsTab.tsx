@@ -26,6 +26,7 @@ import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import { PluginLogo } from './PluginLogo'
+import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
@@ -64,6 +65,14 @@ registerMessages({
     zh: '开发副本不能声明自定义文件类型（fileExtensions）',
     en: 'A dev copy cannot claim custom file types (fileExtensions)',
   },
+  // manifest isDesktopOnly:true 的插件在 Android App 上列出但不装载
+  'settings.amadeusPlugins.blockedDesktopOnly': { zh: '仅支持桌面端', en: 'Desktop only' },
+  // 没有可见插件目录的宿主(Android App):插件只经应用市场装
+  'settings.amadeusPlugins.marketHint': {
+    zh: '启用/禁用即时生效，点击插件可查看详情。插件从应用市场安装；标为「仅支持桌面端」的插件只能在 Forsion 桌面端使用。',
+    en: 'Turning a plugin on or off takes effect immediately; tap a plugin for details. Plugins are installed from the market; plugins marked "Desktop only" work only in Forsion for desktop.',
+  },
+  'settings.amadeusPlugins.openMarket': { zh: '浏览应用市场', en: 'Browse the market' },
 })
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 内嵌引擎插件随父插件同开同关(经引擎 HTTP)。
@@ -216,7 +225,9 @@ const blockedLabel = (t: (k: string, v?: Record<string, string>) => string, p: A
       ? t('settings.amadeusPlugins.blockedInvalid', { reason: p.blockedReason || '' })
       : p.blocked === 'dev-fileext'
         ? t('settings.amadeusPlugins.blockedDevFileExt')
-        : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
+        : p.blocked === 'desktopOnly'
+          ? t('settings.amadeusPlugins.blockedDesktopOnly')
+          : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
 
 /** DEV 徽章:开发态加载的来源。卡片与详情页同款。 */
 const DevBadge: React.FC<{ t: (k: string) => string }> = ({ t }) => (
@@ -494,7 +505,7 @@ const PluginDetail: React.FC<{
             <button className="btn ghost sm" onClick={() => void unloadDev()}>{t('settings.amadeusPlugins.devUnload')}</button>
           )
         ) : !p.builtin && !p.preinstalled && !p.agent && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
-          <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
+          <button className="btn ghost sm" data-plugin-uninstall style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
@@ -673,13 +684,18 @@ export const AmadeusPluginsTab: React.FC<{
       {builtins.map(renderCard)}
 
       <div className="settings-sec settings-sec--gap">{t(managedFeatures ? 'settings.amadeusPlugins.unitExternalTitle' : 'settings.amadeusPlugins.externalTitle')}</div>
-      <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : 'settings.amadeusPlugins.hint')}</div>
+      <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : canOpenPluginsFolder() ? 'settings.amadeusPlugins.hint' : 'settings.amadeusPlugins.marketHint')}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {/* 没有插件文件夹的宿主(Android App)唯一的安装入口是市场:就地给一个,别让用户回去翻「⋯」菜单。 */}
+        {!canOpenPluginsFolder() && !!window.tangu?.marketList && (
+          <button className="btn ghost sm" data-plugins-open-market onClick={() => { useApp.getState().closeSettings(); useApp.getState().openMarket() }}>{t('settings.amadeusPlugins.openMarket')}</button>
+        )}
         {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为,unitBridge 只有 notSupported 桩 —— 藏;重新装载(重拉 unit/plugins + unit/spaces)保留。 */}
-        {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
+        {/* Android App(hostCaps.pluginsFolder=false):插件住在应用私有目录、只经市场装 —— 文件夹与脚手架两个按钮不给。 */}
+        {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
         {/* 手动拷进插件目录后点这里:all = 连同版本原地改的代码也让主窗重读(只重载本浮窗的话,主窗照样要刷新 / 重启) */}
         <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
-        {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
+        {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
       </div>
       {externals.length === 0 && <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitEmpty' : 'settings.amadeusPlugins.empty')}</div>}
       {externals.map(renderCard)}

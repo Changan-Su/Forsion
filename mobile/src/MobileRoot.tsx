@@ -1,8 +1,8 @@
 import { amadeusAvailable } from '@/features/runtime'
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
- * 设置浮层(账号/登录)+ 首启引导 + Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的桌面专属浮层
- * (商店/反馈/插件引导/QuickFind);哪些故意不要、为什么,以 `desktop/scripts/platform-parity.check.cjs`
+ * 设置浮层(账号/登录)+ 应用市场 + 插件就绪卡 + 首启引导 + Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的
+ * 桌面专属浮层(反馈等);哪些故意不要、为什么,以 `desktop/scripts/platform-parity.check.cjs`
  * 的 SKIP 表为准 —— 那张表是唯一台账,别只在这里凭记忆增删。
  *
  * ⚠️ 本文件消费的是 **desktop 的 appStore/组件**,而 vite build 不做类型检查 —— 桌面侧删个字段
@@ -17,6 +17,8 @@ import { useBootstrap } from '@/stores/bootstrap'
 import { useInbox } from '@/stores/inboxStore'
 import { pullInbox } from '@/services/backendService'
 import { SettingsModal } from '@/components/SettingsModal'
+import { MarketModal } from '@/components/MarketModal'
+import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
 import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { NotificationHost } from '@/components/NotificationHost'
 import { AmadeusOverlays } from '@/amadeusOverlays'
@@ -78,6 +80,8 @@ function useAndroidBack(): void {
       if (app.onboarding) return
       // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
       if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) { useBtw.getState().closeWeb(); return }
+      // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
+      if (app.marketOpen) { app.closeMarket(); return }
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }
@@ -126,6 +130,7 @@ export function MobileRoot() {
     activeId: s.activeId,
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
+    marketOpen: s.marketOpen,
     onboarding: s.onboarding,
     setOnboarding: s.setOnboarding,
     achievementsOpen: s.achievementsOpen,
@@ -176,6 +181,24 @@ export function MobileRoot() {
             transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
           >
             <AchievementsModal />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 应用市场(2026-10-02 起 Android 能装 Forsion 插件):入口 rb-market 经「⋯」菜单、open-market 命令与
+          设置 → 插件页的「浏览应用市场」。手机上与设置同款全屏二级页;安装 / 卸载的结果由市场自己的提示条说。 */}
+      <AnimatePresence>
+        {a.marketOpen && (
+          <motion.div
+            key="market"
+            data-mobile-market
+            style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--bg)' }}
+            initial={{ opacity: 0, scale: 0.985 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.985 }}
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+          >
+            <MarketModal onClose={() => useApp.getState().closeMarket()} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -249,6 +272,9 @@ export function MobileRoot() {
           点它开成就总览 —— AchievementsModal 上面已挂(⋯ 菜单里的 rb-achievements 也进得去)。 */}
       {/* 旁聊(/btw):手机没有浮窗语义,走全屏二级页;只在它归属的会话仍是当前会话时显示 */}
       <BtwHost page />
+
+      {/* 插件就绪检查卡(带 requires 的插件刚装好 / 手动启用时弹):全屏二级页开着时延后,回到主界面再出(同桌面 Root)。 */}
+      {!a.settingsOpen && !a.marketOpen && !a.onboarding && <PluginOnboardingHost />}
 
       <AchievementToast onOpen={() => useApp.getState().openAchievements()} />
 

@@ -21,3 +21,9 @@ export function canExportPdf(): boolean {
 export function canOpenAttachment(): boolean {
   return window.amadeus?.hostCaps?.openAttachment !== false
 }
+
+/** 插件页「打开插件文件夹」/「创建示例插件」:宿主得有一个用户看得见、能往里放文件的插件目录。
+ *  Android App 的插件住在应用私有目录(只经市场装),桥声明 false → 两个按钮不渲染(否则点了没反应)。 */
+export function canOpenPluginsFolder(): boolean {
+  return window.amadeus?.hostCaps?.pluginsFolder !== false
+}

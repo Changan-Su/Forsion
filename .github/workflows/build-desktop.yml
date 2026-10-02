@@ -253,6 +253,7 @@ jobs:
           npm run test:unitrelay
           npm run test:unitbridge
           npm run test:unitssheet
+          npm run test:plugins
 
       - name: Build web bundle + cap sync
         working-directory: mobile
@@ -286,6 +287,7 @@ jobs:
           npm run e2e:settingscfg
           npm run e2e:update
           npm run e2e:runon
+          npm run e2e:plugins
 
       # P1-K8:原生身份 / 换票 / 中继的 JVM 单测(RelayPathsTest 等;android.jar 的 org.json 是桩,测试 classpath 另带真实现)。
       # 此前 CI 只 assemble、从不跑 gradle 单测(分支里的 PhoneVerbsTest 同样不受保护)。
