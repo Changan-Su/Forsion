@@ -205,8 +205,9 @@ export interface CommandCatalogEntry {
  * 命令目录 = 命令表里**声明了 `invoke`** 的那些(存在即白名单)。
  * 随每次 run 请求体上送,不进 system prompt(前缀缓存纪律)。
  *
- * ⚠️ 目录随端而异是**正确行为**,不是 bug:插件命令在 web/移动端根本不注册
- *    (两端的 listPlugins 都返回 []),host 门控命令同理。模型在手机上看到的目录本就该更短。
+ * ⚠️ 目录随端而异是**正确行为**,不是 bug:host 门控命令只在有对应宿主的端注册;插件命令
+ *    跟着「这台设备装了哪些插件」走 —— web 的 listPlugins 仍返回 [],Android 自 2026-10-02 起
+ *    能从市场装外置插件,它们声明了 `invoke` 的命令会进这份目录(与桌面同一条路、同一层 checkArgs)。
  */
 export function buildCommandCatalog(): CommandCatalogEntry[] {
   const out: CommandCatalogEntry[] = []
