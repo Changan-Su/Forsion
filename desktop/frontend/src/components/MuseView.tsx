@@ -221,8 +221,8 @@ export const MuseView: React.FC<{
         </div>
       )}
 
-      {/* 当前思考 */}
-      <div className="field">
+      {/* 当前思考。Muse 没开(与顶上状态药丸同一判据 !status?.enabled)整格不画:「未开启」药丸已经说过,关掉后残留的旧思考也不该冒充现状(10-02 用户拍板 v7)。 */}
+      {status?.enabled && <div className="field">
         <label>{t('special.muse.thinking')}</label>
         <div style={{
           fontSize: 'var(--ui-font-body, 13px)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto',
@@ -230,7 +230,7 @@ export const MuseView: React.FC<{
         }}>
           {thinking || <span className="hint">{status?.enabled ? '…' : t('special.muse.disabled')}</span>}
         </div>
-      </div>
+      </div>}
 
       {/* 追踪中:Muse 自己 SCHEDULE.db 的 auto 条目(任务卡「交给 Muse 追踪」/ Muse 自己排的后续),到期回灌它的周期;Calendar 同源可见。 */}
       <div className="field">

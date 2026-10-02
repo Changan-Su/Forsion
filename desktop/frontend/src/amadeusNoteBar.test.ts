@@ -14,10 +14,11 @@ describe('upload-to-note entry gate', () => {
     expect(canUploadToNote('notes/A.md', false, true)).toBe(false)
   })
   // 两个入口(桌面顶栏按钮、移动端胶囊「⋯」)都必须走这一个判据:摘掉任一处改回 `activePage &&`,这里就红。
-  it('is the gate of both the desktop toolbar button and the mobile capsule action', () => {
+  it('is the gate of both the desktop note menu item and the mobile capsule action', () => {
     const src = readFileSync(join(__dirname, 'amadeusViews.tsx'), 'utf8')
     expect(src.match(/canUploadToNote\(barPath, lockOn, !!unifiedRoute && mode === 'source'\)/g)?.length).toBe(2)
-    const at = src.lastIndexOf("title={t('amxv.uploadToPage')}") // 桌面顶栏那颗(移动端胶囊的图标按钮在前面)
+    const at = src.indexOf('data-note-upload') // 桌面端 10-02(v5)从顶栏收进笔记「…」菜单
+    expect(at).toBeGreaterThan(0)
     const btn = src.slice(at - 200, at)
     expect(btn).toContain('canUploadToNote(')
   })

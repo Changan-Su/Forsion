@@ -112,9 +112,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--ui-font-body, 13px);
-  font-weight: 600;
+  /* 常规字重,选中行中等(10-02 用户拍板 a5,与 sidebar2.css 的 .t2sw 同口径)。 */
+  font-weight: 400;
   line-height: 1.4;
 }
+.t2o-row.active .t2o-name { font-weight: 500; }
 .t2o-pin-mark {
   width: 12px;
   height: 12px;
@@ -286,7 +288,7 @@
   .t2o-bar-sub[role="status"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; flex: none; }
 }
 /* 墓碑行(实体已删/已卸载,只剩历史会话):名字变淡,不给 hover 尾部操作。 */
-.t2o-row-gone .t2o-name { color: var(--text-muted); font-weight: 500; }
+.t2o-row-gone .t2o-name { color: var(--text-muted); font-weight: 400; }
 
 /* ── Team Desk(方案 §6.4 B;09-16 第四轮):团队会话里替换 Agent Desk 的成员工作台。壳复用 .agent-desk-card / .agent-desk,内容用 .t2o-desk-* ──
  * 状态点:工作中 = accent 脉动;等审批 = warning;已完成 = 静态 accent;失败 = danger。状态条头像同一套(is-working / is-waiting)。 */

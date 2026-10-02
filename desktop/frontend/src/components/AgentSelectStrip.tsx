@@ -250,6 +250,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
       : dispatch.kind === 'team'
         ? t('agentSelect.team', { n: dispatch.count })
         : defaultName ? t('agentSelect.hintDefault', { name: defaultName }) : t('agentSelect.hintDefaultAnon')
+  // 什么都没选 = 走默认:主页不再常驻这句(10-02 用户拍板 v8,悬停头像的提示里有「默认」);选了 / 组队时它在报状态,照常显示。
+  const isDefaultLine = teamCount < TEAM_MIN && picked.length !== 1 && dispatch.kind !== 'team'
 
   const compactValue = pickedIds[0] || ''
   const compactIcon = picked[0] ? pillIcon(picked[0]) : <EngineIcon engineId="" size={16} />
@@ -285,7 +287,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
           ...candidates.map((item) => renderPill(item, null)),
         ]}
       </PillBar>
-      <div className={`engine-picker-hint${teamCount >= TEAM_MIN ? ' agent-select-team' : ''}`}>{statusLine}</div>
+      <div className={`engine-picker-hint${teamCount >= TEAM_MIN ? ' agent-select-team' : ''}${isDefaultLine ? ' is-default' : ''}`}>{statusLine}</div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   )

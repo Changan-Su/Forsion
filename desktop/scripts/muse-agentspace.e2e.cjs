@@ -98,12 +98,20 @@ async function launch(home, stubUrl) {
   return { app, win }
 }
 async function clickSpace(win, re) {
-  const ok = await win.evaluate((src) => {
+  const hit = () => win.evaluate((src) => {
     const r = new RegExp(src, 'i')
     const b = [...document.querySelectorAll('button.rb-space')].find((x) => r.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
     if (b) b.click()
     return !!b
   }, re.source)
+  let ok = await hit()
+  // Ribbon 收起态只渲染窗口内的 Space,窗外是无按钮的 .rb-cell 占位:先点「…」展开,点完再收起(同 muse-space.e2e)。
+  if (!ok) {
+    await win.locator('.rb-top .rb-more').first().click().catch(() => {})
+    await win.waitForTimeout(300)
+    ok = await hit()
+    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
+  }
   await win.waitForTimeout(1200)
   return ok
 }

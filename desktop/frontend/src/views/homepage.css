@@ -292,13 +292,14 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
 .hp-composer .t2c-card { box-shadow: var(--card-shadow); }
 
 /* Spaces 是一个 pane,内部 tile 靠间距和 hover 组织,不再每项画边框+阴影。 */
+/* 10-02 用户拍板 v8:坞不再垫卡片底,图标直接浮在舞台上;只有图片壁纸才垫回玻璃(照片上的小字要托底才读得清)。 */
 .hp-spaces {
   box-sizing: border-box;
   width: 100%;
   padding: 10px;
   border: var(--border-width) solid transparent;
   border-radius: var(--radius-lg);
-  background: var(--overlay-light, color-mix(in srgb, var(--bg-card) 72%, transparent));
+  background: transparent;
 }
 
 /* 图片壁纸和主题生成舞台都支持玻璃。输入卡材质画在无子节点的伪元素上，避免输入卡自身成为
@@ -320,7 +321,7 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
   backdrop-filter: var(--hp-glass-filter);
   -webkit-backdrop-filter: var(--hp-glass-filter);
 }
-.hp-root .hp-spaces {
+.hp-root[data-wallpaper='true'] .hp-spaces {
   border-color: transparent;
   background: var(--hp-glass-sheen), var(--hp-glass-tint);
   backdrop-filter: var(--hp-glass-filter);
@@ -328,7 +329,7 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
 }
 .hp-root .hp-composer .t2c-card.dragover { border-color: var(--accent-ink); }
 html[data-glass='off'] .hp-root .hp-composer .t2c-card::before,
-html[data-glass='off'] .hp-root .hp-spaces,
+html[data-glass='off'] .hp-root[data-wallpaper='true'] .hp-spaces,
 html[data-glass='off'] .hp-root .hp-organizer-panel::before,
 html[data-glass='off'] .hp-root .hp-folder-panel::before,
 html[data-glass='off'] .hp-root .hp-organizer-grid .hp-tile-icon,
@@ -372,35 +373,9 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+/* 默认派发(什么都没选)时主页不常驻「由默认 Agent … 处理」(10-02 用户拍板 v8);选了 / 组队照常显示。 */
+.hp-root .hp-composer .engine-picker-hint.is-default { display: none; }
 /* uiux-d: end */
-.hp-spaces-head {
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 3px 7px 7px;
-}
-.hp-spaces-title { display: inline-flex; align-items: baseline; gap: 8px; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 600; }
-.hp-spaces-count { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
-.hp-spaces-actions { display: inline-flex; align-items: center; gap: 5px; }
-.hp-spaces-actions button {
-  height: 27px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-pill, 999px);
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--ui-font-caption, 11px);
-  cursor: pointer;
-  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-instant) var(--ease-spring);
-}
-.hp-spaces-actions button:hover { color: var(--text); background: var(--bg-hover); }
-.hp-spaces-actions button:active { transform: scale(0.96); }
 
 /* 前置区是一份主页专属副本列表;竖线右侧才是与 Ribbon 同步的排序区。
  * 两侧都只占一排,溢出各自在本段横向滚动,不把 pane 撑成第二行。 */
@@ -1070,8 +1045,6 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   .hp-stack { gap: 18px; }
   .hp-clock { font-size: 46px; }
   .hp-brand { font-size: 30px; }
-  .hp-spaces-actions button span { display: none; }
-  .hp-spaces-actions button { width: 28px; padding: 0; justify-content: center; }
   .hp-dock { gap: 2px; }
   .hp-tile { width: 70px; min-height: 74px; }
   .hp-pinned-zone { min-width: 146px; max-width: 48%; gap: 2px; }
@@ -1142,8 +1115,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   .hp-wallpaper-art,
   .hp-tile,
   .hp-tile-icon,
-  .hp-folder-app,
-  .hp-spaces-actions button { transition-duration: 0.01ms !important; }
+  .hp-folder-app { transition-duration: 0.01ms !important; }
   .hp-root[data-focus-blur='true'].hp-composer-focused .hp-wallpaper,
   .hp-root[data-focus-blur='true'].hp-composer-focused .hp-wallpaper-art,
   .hp-root[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,

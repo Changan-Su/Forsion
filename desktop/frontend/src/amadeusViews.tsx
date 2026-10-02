@@ -126,7 +126,6 @@ registerMessages({
   'amxv.sec.cloudWorkspace': { zh: 'Cloud工作区', en: 'Cloud vault' },
   'amxv.role.viewer': { zh: '只读', en: 'Read-only' },
   'amxv.role.editor': { zh: '可编辑', en: 'Can edit' },
-  'amxv.pinned.hint': { zh: '拖入笔记置顶，或点编辑器右上角的图钉', en: 'Drag a note here to pin it, or use the pin button at the top right of the editor' },
   'amxv.cloudsync.hint': { zh: '拖入笔记/文件，或右键条目「开启云同步」', en: 'Drag notes or files here, or right-click an item and choose “Turn on cloud sync”' },
 
   'amxv.skip.tooLarge': { zh: '超过云端单文件上限，云端不收', en: 'Over the cloud file size limit — the cloud will not accept it' },
@@ -355,11 +354,13 @@ usePageStore.subscribe((state, prev) => {
  *  逐级展开淡入(宽度 0fr→1fr + 段级 stagger,见 amadeus-host.css),移出反向收拢。
  *  当前标题自始至终是同一个元素,由父级展开的布局变化推它右移(无双文字交叉闪烁)。
  *  父级超过 3 段压缩为「首2 + … + 末1」,当前标题永远完整。点任意段在左栏定位高亮。 */
-export function Breadcrumb({ path }: { path?: string } = {}) {
+export function Breadcrumb({ path, hideLoneLeaf }: { path?: string; hideLoneLeaf?: boolean } = {}) {
   const storePage = usePageStore((s) => s.activePage)
   const requestLocate = useAmadeusNav((s) => s.requestLocate)
   const activePage = path ?? storePage // unified 笔记不设 activePage,显式传路径
   if (!activePage) return null
+  // 标题只说一次(10-02 用户拍板 v6):页面自己有大标题、又在智库根(没有父级可展开)时,中间这枚与标签、正文标题三重复。
+  if (hideLoneLeaf && !activePage.includes('/')) return null
   const segs = activePage.replace(/(\.dashboard)?\.md$/i, '').split('/')
   // 插件复合后缀文件与标题栏同口径:剥全后缀('Foo.canvas.md' → 'Foo'),别露 '.canvas' 残段。
   const ft = matchFileType(activePage)
@@ -624,7 +625,7 @@ function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActi
 
 /** 「置顶」分区(amadeusPrefs,每 vault 一份 localStorage;编辑器图钉按钮写入):
  *  故意不进 frontmatter——fm 随云同步跟文件走,会让本地/云端两侧共享置顶。
- *  恒显(空时引导文案);笔记可拖入=置顶(标记不挪位置)。 */
+ *  有条目才显示(10-02 起;空时不再恒显引导文案);笔记可拖入=置顶(标记不挪位置)。 */
 function PinnedSection({ row, dragPath }: { row: (path: string) => ReactNode; dragPath: string | null }) {
   const { t } = useI18n()
   const pins = useAmadeusPrefs((s) => s.pins)
@@ -632,7 +633,8 @@ function PinnedSection({ row, dragPath }: { row: (path: string) => ReactNode; dr
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const [over, setOver] = useState(false)
   const items = useMemo(() => pages.filter((p) => pins.includes(p)), [pages, pins])
-  if (!vaultRoot) return null
+  // 空了就不占地方(10-02 用户拍板 v7):钉上第一篇才出现。拖动中也不临时冒出来 —— 那会把树整体往下推,拖到一半落点跳走。
+  if (!vaultRoot || !items.length) return null
   const accepts = !!dragPath && isNotePath(dragPath) && !pins.includes(dragPath)
   return (
     <SideSection
@@ -658,7 +660,7 @@ function PinnedSection({ row, dragPath }: { row: (path: string) => ReactNode; dr
         },
       }}
     >
-      {items.length ? items.map((p) => row(p)) : <div className="t2s-hint amx-sec-hint">{t('amxv.pinned.hint')}</div>}
+      {items.map((p) => row(p))}
     </SideSection>
   )
 }
@@ -696,7 +698,7 @@ function CloudSkipWarn() {
 
 /** 「云同步」分区(仅本地侧):当前 vault 已开启同步的条目汇总(原树位置不动),
  *  分区头带该 vault 条目绑定引擎的状态点;行尾 ✕ 关闭同步;路径已不存在显 ghost。
- *  恒显(空时引导文案);笔记/文件可拖入=走「开启云同步」关联勾选弹窗(与右键同流程)。 */
+ *  有条目或跳过警示才显示(10-02 起);笔记/文件可拖入=走「开启云同步」关联勾选弹窗(与右键同流程)。 */
 function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
@@ -709,6 +711,8 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
   const rec = vaults.find((v) => v.vaultRoot === vaultRoot)
   if (!window.amadeusSync?.entrySyncEnable || !vaultRoot) return null
   const entries = rec?.entries ?? []
+  // 同「置顶」:没有条目、也没有跳过警示时不占地方(10-02 用户拍板 v7)。
+  if (!entries.length && !status?.skipped.length) return null
   const norm = (p: string): string => p.replace(/\\/g, '/').normalize('NFC')
   const pageSet = new Set(pages.map(norm))
   const fileSet = new Set(files.map(norm))
@@ -2591,7 +2595,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {barPath && !isCoarsePointer() && !leaf.params.miniSurface && (
         // 顶栏与编辑器融为一体:实色纸面底(var(--bg)),滚动时正文从其后穿过被遮住(见 CSS)。
         <div className="amx-toolbar">
-          <Breadcrumb path={barPath} />
+          <Breadcrumb path={barPath} hideLoneLeaf={!!unifiedRoute} />
           {/* 「文档 | 画布」胶囊(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。状态在 UnifiedPage,
               经 uiOverlay 交出来 —— 与旁边那颗可视/源码的路子一致。标记在 CanvasModeSeg(harness 共用)。 */}
           <span className={SEG_SLOT} />
@@ -2630,20 +2634,14 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
               <Share2 size={14} />
             </button>
           )}
-          <button
-            className="amx-mode-btn"
-            onClick={() => useUiOverlay.getState().toggleEditorMode(leaf.id)}
-            title={mode === 'source' ? t('amxv.toVisualLong') : t('amxv.toSource')}
-          >
-            {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
-          </button>
-          {canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') && (
+          {/* 「源码」「上传」平时收进「…」(10-02 用户拍板 v7);源码态常驻「回可视」钮 —— 它在表达状态,也是唯一显眼的出口。 */}
+          {mode === 'source' && (
             <button
               className="amx-mode-btn"
-              title={t('amxv.uploadToPage')}
-              onClick={() => uploadInputRef.current?.click()}
+              onClick={() => useUiOverlay.getState().toggleEditorMode(leaf.id)}
+              title={t('amxv.toVisualLong')}
             >
-              <Upload size={14} />
+              <Eye size={14} />
             </button>
           )}
           <button
@@ -2662,6 +2660,12 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {noteMenu && barPath && (
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
           {pageEntries.length > 0 && <><PageStyleMenuItems entries={pageEntries} /><div className="ctx-separator" /></>}
+          <button data-note-mode onClick={() => { setNoteMenu(null); useUiOverlay.getState().toggleEditorMode(leaf.id) }}>
+            {mode === 'source' ? <Eye size={13} /> : <Code2 size={13} />} {mode === 'source' ? t('amxv.toVisual') : t('amxv.toSource')}
+          </button>
+          {canUploadToNote(barPath, lockOn, !!unifiedRoute && mode === 'source') && (
+            <button data-note-upload onClick={() => { setNoteMenu(null); uploadInputRef.current?.click() }}><Upload size={13} /> {t('amxv.uploadToPage')}</button>
+          )}
           {unifiedRoute && <button onClick={() => { setNoteMenu(null); void copyMarkdown() }}><Copy size={13} /> {t('amxv.menu.copyMd')}</button>}
           {canExportPdf() && <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> {t('amxv.menu.exportPdf')}</button>}
           {/* V-19:画布态才有(导出要量画布里的卡盒);写同目录 `<笔记名>.canvas`,不覆盖。 */}
