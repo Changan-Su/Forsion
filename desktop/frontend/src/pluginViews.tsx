@@ -1,4 +1,5 @@
 import { windowKind } from './windowKind'
+import { amadeusAvailable } from './features/runtime'
 /**
  * 插件视图桥:pluginStore.views(平台中立的 DOM-mount 契约)→ LCL 视图注册表。
  * 桌面差异全部收在这里(与 amadeusPlugins.ts 同款纪律,vendored pluginStore 不 import @lcl):
@@ -33,6 +34,11 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   current.current = { leaf, params }
   const listeners = useRef(new Set<(params: Readonly<Record<string, unknown>>) => void>())
   useLayoutEffect(() => { for (const notify of listeners.current) notify(params) }, [params])
+  // 插件视图读写库内路径(ctx.app.readFile / listFiles…),而库是惰性恢复的:只有左栏工作区、聊天、Agent Desk 这些
+  // 宿主会唤醒它。用户直接停在插件 Space(启动即在、刷新、从主页点进来)时谁都不唤醒 → 插件读到空、写被拒
+  // 「No vault is open」(2026-10-02 视频工作室 0.8 × 主页启动缺省,真 Electron 抓到)。与 WorkspaceView 同一处方;
+  // 动态 import:amadeusPlugins 静态引了本文件(syncPluginViews)。
+  useEffect(() => { if (amadeusAvailable()) void import('./amadeusPlugins').then((m) => m.ensureAmadeusReady()) }, [])
   // Plugin views may own Electron webviews/canvases. Passive effect cleanup can run
   // after the first paint of the next Space, leaving the old surface visible briefly.
   // Keep mounting passive, but dispose the live surface during React's unmount commit.

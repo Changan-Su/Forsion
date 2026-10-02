@@ -125,7 +125,8 @@ export interface ThemeContribution {
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
  * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
- * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。
+ * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
+ * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
  * 结论:与笔记无关的插件功能(仪表盘/远程系统面板/工具面)**不得**建立在这些方法上 ——
  * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / 自己的视图 DOM)。
  * 新增方法时把「需库 / 无需库」写进它的注释,别让下一个人再踩。
