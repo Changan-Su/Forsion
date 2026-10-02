@@ -68,7 +68,7 @@ import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
-import { query, getDbType } from '../core/db.js';
+import { query } from '../core/db.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
@@ -626,13 +626,9 @@ async function terminalizeInterruptedRun(runId: string): Promise<void> {
  *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
  *  返回重入队数量。复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
 export async function recoverQueuedRuns(): Promise<number> {
-  // 非 SQLite(外部 PG / PGlite 回退)不记持有者:只做陈旧清扫,新鲜行一概不接手 —— 多个实例共用一个 PG 时宁可留着不碰。
-  // ponytail: 要在那种库上接手,得上带主机名的租约 + 执行前 CAS,本机 pid 不够。
-  if (getDbType() !== 'sqlite') {
-    const stale = await failStaleRuns();
-    if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
-    return 0;
-  }
+  // 非 SQLite(外部 PG / PGlite 回退)不记持有者 → 持有者一律按已死处理,即「独占库」语义(单实例是这两种库唯一受支持的形态)。
+  // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标 orphaned、抢排队行;云端为此走网关 + recoverRuns:false);
+  // 真要支持,得上带主机标识的租约 + 执行前 CAS —— 本机 pid 跨主机探不了活。
   const live = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner_pid).filter(ownedByLiveProcess))] as number[];
   const stale = await failStaleRuns(30, live);
   if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
@@ -659,7 +655,8 @@ export async function recoverQueuedRuns(): Promise<number> {
       continue;
     }
     const claimed = await query<any[]>(
-      `UPDATE agent_runs SET owner_pid = ? WHERE id = ? AND status = 'queued' AND COALESCE(owner_pid, 0) = ? RETURNING id`,
+      // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
+      `UPDATE agent_runs SET owner_pid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner_pid, 0) = ? RETURNING id`,
       [process.pid, r.id, r.owner_pid || 0],
     ).catch(() => []);
     if (!claimed.length) continue;
