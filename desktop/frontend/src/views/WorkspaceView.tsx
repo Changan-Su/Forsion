@@ -19,7 +19,6 @@ import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
 import { SessionsView } from './SessionsView'
-// TODO(簇 C):OrbitsView = 新版会话侧栏(轨道体系 P1),由另一簇创建;契约 props = { sideFilter?: 'local' | 'cloud' }。
 import { OrbitsView } from './OrbitsView'
 import { TocView } from './RightViews'
 import { FilesPanel } from './chat2/FilesPanel'
