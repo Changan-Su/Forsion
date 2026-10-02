@@ -603,6 +603,7 @@ const tabCountText = (list) => {
     assert.ok(h.byId(list, 'nativeSheet.prompt.field'), 'rename prompt missing')
     retype('E2E Renamed Two')
     await h.pause(300)
+    shot('17c-rename-prompt-keyboard-light')
     await tapId('nativeSheet.prompt.ok')
     await waitSheet(false)
     const patch = await waitLog(sent, (l) => l.startsWith('PATCH ') && l.includes('/agent/sessions/e2e-s2 '))
