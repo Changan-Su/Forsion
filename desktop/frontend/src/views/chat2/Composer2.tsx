@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, Phone, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
@@ -48,6 +48,7 @@ import { homeTarget, targetForSession } from '../../services/engine/targets'
 
 registerMessages({
   'livecall.start': { zh: '语音通话', en: 'Voice call' },
+  'livecall.return': { zh: '回到通话', en: 'Back to the call' },
   'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
   'livecall.typeHint': { zh: '通话中：打的字会直接送进电话', en: 'In a call: typed messages go straight into the call' },
   'livecall.textFallback': { zh: '通话没接上，这条改发给 Tangu 了', en: 'The call did not pick this up, so it was sent to Tangu instead' },
@@ -1387,6 +1388,8 @@ export const Composer2: React.FC<{
   const pickerPrefs = useModelPickerPreferences()
   const modelGroups = useMemo(() => groupModelsByProvider(models || [], pickerPrefs), [models, pickerPrefs])
   const groupActive = !!groupChat && (groupAgents?.length || 0) >= 2
+  // 能打电话:选了实时模型、桌面有 Mini,且暂时只在普通模式(10-02 用户定:计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定)
+  const callable = !!realtimeModel && liveOwnerResolved && !!window.tangu?.openMini && !(planMode && !isChat) && !groupActive && !isChat && !engineId
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })
@@ -1836,18 +1839,6 @@ export const Composer2: React.FC<{
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
-            {/* 暂时只在普通模式出(10-02 用户定):计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定。 */}
-            {!!realtimeModel && liveOwnerResolved && !!window.tangu?.openMini && !(planMode && !isChat) && !groupActive && !isChat && !engineId && (
-              <button
-                className="t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open"
-                title={t('livecall.start')}
-                aria-label={t('livecall.start')}
-                disabled={!!disabled || callStarting}
-                onClick={() => { void startVoiceCall() }}
-              >
-                <Phone size={14} />
-              </button>
-            )}
             {running ? (
               <>
                 {(!!draft.trim() || allRefChips.length > 0) && (
@@ -1855,6 +1846,17 @@ export const Composer2: React.FC<{
                 )}
                 <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
               </>
+            ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotedText && !pinnedSkills.length ? (
+              // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
+              <ChatBoxSubmit
+                className="t2c-live-control"
+                onClick={() => { void startVoiceCall() }}
+                disabled={!!disabled || callStarting}
+                title={t(inCall ? 'livecall.return' : 'livecall.start')}
+                aria-label={t(inCall ? 'livecall.return' : 'livecall.start')}
+              >
+                {callStarting ? <Loader2 size={16} className="spin" /> : <AudioLines size={16} />}
+              </ChatBoxSubmit>
             ) : (
               // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
               <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
