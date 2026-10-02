@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import {
-  createWindowsRecorderResolver, probeRecorderProtocol, recorderBinDir, recorderPipeName, stageRecorderExe, windowsRecorderSource,
+  cleanupRecorderCopies, createWindowsRecorderResolver, probeRecorderProtocol, recorderBinDir, recorderPipeName, stageRecorderExe, windowsRecorderSource,
 } from './computerHistoryWin'
 
 const cleanups: Array<() => void> = []
@@ -25,21 +25,25 @@ describe('computerHistoryWin', () => {
     expect(recorderPipeName('alice', 'ba9876543210')).not.toBe(name)
   })
 
-  it('私有副本:按哈希命名、已在不重拷;清掉别的哈希的旧副本与残留临时文件,不碰别的文件', async () => {
+  it('私有副本:按拷出来的字节的哈希命名、已在不动;清掉别的哈希的旧副本与残留临时文件,刚建的不碰,不碰别的文件', async () => {
     const dir = tmp()
     const src = path.join(dir, 'windows-bridge.exe')
     writeFileSync(src, 'v2')
     const bin = path.join(dir, 'bin')
     mkdirSync(bin)
-    for (const f of ['windows-bridge-aaaaaaaaaaaa.exe', '.windows-bridge-bbbbbbbbbbbb.1-x.tmp', 'keep.txt']) writeFileSync(path.join(bin, f), 'old')
-    const exe = await stageRecorderExe(src, bin, '0123456789ab')
-    expect(exe).toBe(path.join(bin, 'windows-bridge-0123456789ab.exe'))
+    for (const f of ['windows-bridge-aaaaaaaaaaaa.exe', '.windows-bridge-1-x.tmp', 'keep.txt']) writeFileSync(path.join(bin, f), 'old')
+    const h12 = sha('v2').slice(0, 12)
+    const { exe, h12: got } = await stageRecorderExe(src, bin)
+    expect(got).toBe(h12)
+    expect(exe).toBe(path.join(bin, `windows-bridge-${h12}.exe`))
     expect(readFileSync(exe, 'utf8')).toBe('v2')
-    expect(readdirSync(bin).sort()).toEqual(['keep.txt', 'windows-bridge-0123456789ab.exe'])
-    // 已在 = 不动(哪怕源变了:名字里的哈希就是它的身份,换内容的源会算出新哈希)
-    writeFileSync(src, 'changed')
-    expect(await stageRecorderExe(src, bin, '0123456789ab')).toBe(exe)
-    expect(readFileSync(exe, 'utf8')).toBe('v2')
+    await cleanupRecorderCopies(bin, exe) // 都是刚建的(可能是另一个 Forsion 正要拉起的):不动
+    expect(readdirSync(bin)).toHaveLength(4)
+    await cleanupRecorderCopies(bin, exe, 0)
+    expect(readdirSync(bin).sort()).toEqual(['keep.txt', `windows-bridge-${h12}.exe`])
+    // 已在 = 不动,也不留临时文件
+    expect((await stageRecorderExe(src, bin)).exe).toBe(exe)
+    expect(readdirSync(bin).sort()).toEqual(['keep.txt', `windows-bridge-${h12}.exe`])
   })
 
   it('解析器:哈希按文件缓存、协议每个哈希只探一次;探测一时失败不缓存;源换了内容 → 新副本 + 新管道 + 再探', async () => {
@@ -54,7 +58,7 @@ describe('computerHistoryWin', () => {
       return 13
     })
     let source: string | null = null
-    const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => source, username: () => 'alice', probe })
+    const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => source, username: () => 'alice', probe, staleMs: 0 })
     expect(await resolve()).toBeNull() // 没有源 = helper_missing
     source = src
     await expect(resolve()).rejects.toThrow('EBUSY') // 一时失败:不缓存
@@ -102,6 +106,8 @@ describe('computerHistoryWin', () => {
     expect(await probeRecorderProtocol(script('old', 'cat > /dev/null'))).toBeNull()
     expect(Date.now() - started).toBeLessThan(2_000)
     expect(await probeRecorderProtocol(script('noise', 'echo "usage: bridge"'))).toBeNull()
+    // 崩了 / 非零退出不是「老 helper」的结论:reject,不进缓存
+    await expect(probeRecorderProtocol(script('crash', 'exit 3'))).rejects.toMatchObject({ code: 'helper_probe_failed' })
     await expect(probeRecorderProtocol(script('hang', 'sleep 5'), 200)).rejects.toMatchObject({ code: 'helper_probe_timeout' })
     await expect(probeRecorderProtocol(path.join(dir, 'nope'))).rejects.toMatchObject({ code: 'ENOENT' })
   })

@@ -119,6 +119,8 @@ describe('computerHistoryModel', () => {
     expect(normalizeBundleId('chrome.exe')).toBe('chrome.exe') // Windows 的 App 标识 = exe 文件名,照样过校验
     expect(normalizeExeName(' Notepad++.EXE ')).toBe('notepad++.exe')
     expect(normalizeExeName('Code - Insiders.exe')).toBe('code - insiders.exe')
+    expect(normalizeExeName('Acme, Inc.exe')).toBe('acme, inc.exe')
+    expect(normalizeExeName('微信.exe')).toBe('微信.exe')
     for (const bad of ['chrome', 'C:\\Windows\\notepad.exe', '../x.exe', ' .exe', '*.exe']) expect(normalizeExeName(bad), bad).toBeNull()
   })
 

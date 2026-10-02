@@ -203,6 +203,7 @@ export function normalizeBundleId(input: string): string | null {
  *  (`notepad++.exe`、`Code - Insiders.exe`),不收路径。不合法返回 null。 */
 export function normalizeExeName(input: string): string | null {
   const id = input.trim().toLowerCase()
-  if (id.length > 255 || !/^[a-z0-9][a-z0-9._+()&' -]*\.exe$/.test(id)) return null
+  // Windows 文件名规则:拒路径分隔、保留字符(含通配 *)与控制字符;不以空格或点开头。
+  if (id.length > 255 || !/^[^\s.<>:"/\\|?*\u0000-\u001f][^<>:"/\\|?*\u0000-\u001f]*\.exe$/u.test(id)) return null
   return id
 }

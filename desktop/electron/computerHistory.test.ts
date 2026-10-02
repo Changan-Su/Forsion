@@ -235,7 +235,7 @@ describe('输入收敛 / 策略', () => {
 
   it('排除表 → 下发策略:收敛输入、默认 titleOnly(Forsion / 终端 / 本 App)合并,排除优先', () => {
     const ex = normalizeExclude({
-      apps: [' com.x.App ', 'bad id!', 'com.x.App', 'com.apple.Terminal', 42],
+      apps: [' com.x.App ', 'bad/id', 'com.x.App', 'com.apple.Terminal', 42],
       domains: ['https://Mail.Example.com/inbox?x=1', '*.bank.cn', '.corp.local', 'not a domain', 'mail.example.com'],
     })
     expect(ex).toEqual({ apps: ['com.x.App', 'com.apple.Terminal'], domains: ['mail.example.com', 'bank.cn', 'corp.local'] })
@@ -249,7 +249,8 @@ describe('输入收敛 / 策略', () => {
     expect(policy).toMatchObject({ text: true, clicks: true, keys: true })
     expect(buildPolicy({ apps: [], domains: [] }).titleOnlyBundleIds).toEqual([...DEFAULT_TITLE_ONLY_BUNDLE_IDS])
     // Windows 的 exe 名常带空格、+、括号(notepad++.exe / Code - Insiders.exe)
-    expect(normalizeExclude({ apps: ['notepad++.exe', 'Code - Insiders.exe', 'a\\b.exe'], domains: [] }).apps).toEqual(['notepad++.exe', 'Code - Insiders.exe'])
+    expect(normalizeExclude({ apps: ['notepad++.exe', 'Code - Insiders.exe', 'Acme, Inc.exe', '微信.exe', 'a\\b.exe', 'a:b.exe'], domains: [] }).apps)
+      .toEqual(['notepad++.exe', 'Code - Insiders.exe', 'Acme, Inc.exe', '微信.exe'])
   })
 
   it('applyExclude:排除 App 只留不带标题的 app 切换(它的 window 事件整条丢);排除站点留一条不带内容的标记、同 App 连续不重复', () => {

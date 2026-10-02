@@ -148,8 +148,9 @@ export function sanitizeEvent(raw: unknown, now: number): ComputerHistoryEvent |
   return ev
 }
 
-// Windows 的 App 标识是 exe 文件名,常带空格、+、括号、&(`notepad++.exe`、`Code - Insiders.exe`),一并收下。
-const BUNDLE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._*+()&' -]{0,254}$/
+// Windows 的 App 标识是 exe 文件名,能带空格、逗号、括号、非 ASCII(`Code - Insiders.exe`、`Acme, Inc.exe`)——按 Windows
+// 文件名规则收(只拒路径分隔与保留字符、控制字符):收窄就会把用户排除的 App 悄悄丢掉、照样被记录。macOS bundle id 是它的子集。
+const BUNDLE_ID_RE = /^[^\s<>:"/\\|?\u0000-\u001f][^<>:"/\\|?\u0000-\u001f]{0,254}$/u
 /** 用户排除表收敛(渲染层来的,当不可信输入):bundle id 字符集 + 域名规整成 punycode 主机名,去重封顶。 */
 export function normalizeExclude(raw: unknown): ComputerHistoryExclude {
   const r = (raw && typeof raw === 'object' ? raw : {}) as { apps?: unknown; domains?: unknown }
