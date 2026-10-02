@@ -8,6 +8,7 @@
  *   C 模型正说着时打字 → 上游先收到 response.cancel,收线后补 response.create;
  *   D 打字那行不被 heard 改写、委派不带语音提示;通话中 {type:'run'} 换档后委派 run 按新档跑。
  *   E 只差标点 / 空白不算听错,不改那行。
+ *   F 上游报 <50002> 断开:通话不挂、换一条上游重连(指令带上文);断在没答完的那句上就重喂那句;空闲时断不重喂;超过 2 次才挂断。
  * 不花额度、不需要模型。用法:npm run build && npm run check:realtime
  */
 import { spawn } from 'node:child_process';
@@ -30,14 +31,15 @@ const until = async (fn, ms, every = 50) => { const end = Date.now() + ms; for (
 const freePort = () => new Promise((r) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 
 // ── 假百炼:记下引擎发来的每条事件;response.create 默认立刻 created + done(空)
-const fake = { sock: null, got: [], holdNext: false };
+const fake = { sock: null, got: [], holdNext: false, conns: 0 };
 const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
 await new Promise((r) => wss.once('listening', r));
 wss.on('connection', (ws) => {
   fake.sock = ws;
+  const conn = ++fake.conns;
   ws.on('message', (d) => {
     const m = JSON.parse(d.toString());
-    fake.got.push(m);
+    fake.got.push({ ...m, _conn: conn });
     if (m.type === 'session.update') ws.send(JSON.stringify({ type: 'session.updated', session: m.session }));
     if (m.type === 'response.create') {
       ws.send(JSON.stringify({ type: 'response.created', response: { status: 'in_progress', output: [] } }));
@@ -156,6 +158,36 @@ try {
   await until(() => rows(`SELECT input FROM agent_runs WHERE session_id = ? ORDER BY created_at`, sid)[2], 5000);
   check('E 只差标点/空白:那行原样保留、不发 transcript.corrected',
     rows(`SELECT id FROM chat_messages WHERE session_id = ? AND content = ?`, sid, '帮我看一下工作目录。').length === 1 && fromEngine.filter((m) => m.type === 'transcript.corrected').length === nFixE);
+
+  // ── F:百炼服务端错误断开 → 重连(10-02 实报 <50002> ModelServingError)
+  await until(() => fromEngine.filter((m) => m.type === 'tangu.run' && m.status !== 'started').length >= 3, 15_000);
+  await sleep(300);
+  const ERR = '<50002> InternalError.Algo.ModelServingError: Internal Error calling model processing.';
+  up({ type: 'input_audio_buffer.committed', item_id: 'it-3' });
+  up({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'it-3', transcript: '讲个笑话吧。' });
+  await until(() => rows(`SELECT id FROM chat_messages WHERE session_id = ? AND content = ?`, sid, '讲个笑话吧。')[0], 3000);
+  up({ type: 'response.created', response: { status: 'in_progress', output: [] } }); // 正答着这句时断
+  const readyBefore = fromEngine.filter((m) => m.type === 'ready').length;
+  fake.sock.close(1011, ERR);
+  const conn2 = await until(() => fake.got.find((m) => m._conn === 2 && m.type === 'session.update'), 8000);
+  const replayed = await until(() => {
+    const c2 = fake.got.filter((m) => m._conn === 2);
+    const i = c2.findIndex((m) => m.type === 'conversation.item.create' && m.item?.content?.[0]?.text === '讲个笑话吧。');
+    return i >= 0 && c2.slice(i).some((m) => m.type === 'response.create') ? c2.map((m) => m.type) : null;
+  }, 5000);
+  check('F1 上游 50002 断开:通话不挂、通知重连、新上游指令带上文、没答完的那句重喂一遍',
+    fromEngine.some((m) => m.type === 'reconnecting') && fromEngine.filter((m) => m.type === 'ready').length === readyBefore + 1 &&
+    !fromEngine.some((m) => m.type === 'end') && /讲个笑话吧/.test(conn2?.session?.instructions || '') && !!replayed,
+    JSON.stringify({ reconnecting: fromEngine.filter((m) => m.type === 'reconnecting').length, replayed }));
+  await sleep(300); // 假上游已把重喂那句答完(completed)
+  fake.sock.close(1011, ERR);
+  const conn3 = await until(() => fake.got.find((m) => m._conn === 3 && m.type === 'session.update'), 8000);
+  await sleep(500);
+  check('F2 空闲时再断:照样重连,但不重喂已答完的话',
+    !!conn3 && !fake.got.some((m) => m._conn === 3 && m.type === 'conversation.item.create') && !fromEngine.some((m) => m.type === 'end'));
+  fake.sock.close(1011, ERR);
+  const ended = await until(() => fromEngine.find((m) => m.type === 'end'), 5000);
+  check('F3 第三次断(超过 2 次重连)才挂断,原因原样带给客户端', !!ended && ended.reason === ERR && fake.conns === 3, JSON.stringify(ended));
 } catch (e) {
   check('台架异常', false, String(e?.stack || e));
 } finally {

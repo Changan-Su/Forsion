@@ -353,6 +353,23 @@ async function main() {
     check('R16c 超长文字不进电话,照常交给 Tangu', !!longRun && rt.texts.length === nLong)
     await until(async () => (await win.locator('.t2c-stop').count()) === 0, 8000, 200)
 
+    // 引擎换上游重连(百炼服务端出错):卡片显示「重新接通」,接上后计时不清零、麦克风不重复上传
+    const secs = async () => { const t = await mini.locator('.vc-timer').first().textContent().catch(() => ''); const [a, b] = String(t).split(':').map(Number); return a * 60 + b }
+    const rate = async () => { const f = rt.frames; await sleep(1000); return rt.frames - f }
+    const rateBefore = await rate()
+    const tBefore = await secs()
+    rt.ws.send(JSON.stringify({ type: 'reconnecting' }))
+    const reconnLabel = await until(async () => { const x = await mini.locator('.vc-status-text').first().textContent().catch(() => ''); return /重新接通/.test(x || '') ? x : null }, 3000, 100)
+    await sleep(500)
+    rt.ws.send(JSON.stringify({ type: 'ready' }))
+    await sleep(300)
+    const after = await rate()
+    const tAfter = await secs()
+    const backLabel = await mini.locator('.vc-status-text').first().textContent().catch(() => '')
+    check('R20 上游重连:卡片显示「重新接通」,接上后回到正在听、计时不清零、麦克风帧率不翻倍',
+      !!reconnLabel && !/重新接通/.test(backLabel || '') && tAfter >= tBefore && after > 3 && after <= rateBefore * 1.5,
+      `「${reconnLabel}」→「${backLabel}」;计时 ${tBefore}s→${tAfter}s;帧/秒 ${rateBefore}→${after}`)
+
     const miniClosed = mini.waitForEvent('close', { timeout: 5000 }).then(() => true).catch(() => false)
     await mini.locator('.vc-hangup').first().click()
     const hung = await until(() => rt.closed, 5000)
@@ -384,6 +401,33 @@ async function main() {
     check('R19 登记残留时打字:等不到 Mini 确认就改发给 Tangu、提示一句、清掉登记', !!fellBack && hint && stale === null,
       `run=${!!fellBack};提示=${hint};登记=${stale}`)
     await shot(win, '6-ended')
+
+    // 百炼服务端出错挂断:卡片说人话(原文在悬停里),不溢出卡片
+    await until(async () => (await win.locator('.t2c-stop').count()) === 0, 8000, 200)
+    const startsBefore = rt.starts
+    await win.locator('.t2c-live-control').first().click()
+    const mini2 = await until(async () => {
+      for (const ctx of browser.contexts()) for (const pg of ctx.pages()) if (pg.url().includes('window=mini') && !pg.isClosed()) return pg
+      return null
+    }, 15_000, 300)
+    await until(() => rt.starts > startsBefore, 10_000)
+    await sleep(800)
+    const ERR = '<50002> InternalError.Algo.ModelServingError: Internal Error calling model processing.'
+    rt.ws.send(JSON.stringify({ type: 'end', reason: ERR }))
+    const errUi = await until(async () => {
+      const r = await mini2?.evaluate(() => {
+        const el = document.querySelector('.vc-status.is-error')
+        const txt = el?.querySelector('.vc-status-text')
+        if (!el || !txt) return null
+        return { text: txt.textContent, title: el.getAttribute('title'), lines: Math.round(txt.getBoundingClientRect().height / parseFloat(getComputedStyle(txt).lineHeight)),
+          clipped: document.querySelector('.vc-settings').getBoundingClientRect().top < txt.getBoundingClientRect().bottom }
+      }).catch(() => null)
+      return r
+    }, 5000, 200)
+    if (mini2) await shot(mini2, '7-mini-service-error')
+    check('R21 百炼服务端出错挂断:卡片显示「语音服务出错」、原文在悬停里、最多两行不压住下面',
+      !!errUi && /语音服务出错/.test(errUi.text) && !/InternalError/.test(errUi.text) && (errUi.title || '').includes('<50002>') && errUi.lines <= 2 && !errUi.clipped,
+      JSON.stringify(errUi))
   } finally {
     try { await browser?.close() } catch { /* ignore */ }
     try { child.kill('SIGTERM') } catch { /* ignore */ }

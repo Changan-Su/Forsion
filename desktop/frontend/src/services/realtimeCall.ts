@@ -37,7 +37,7 @@ export function useRealtimeConfig(): { model: string; voice: string } {
   }, () => rtCfg)
 }
 
-export type CallPhase = 'connecting' | 'listening' | 'hearing' | 'thinking' | 'speaking'
+export type CallPhase = 'connecting' | 'reconnecting' | 'listening' | 'hearing' | 'thinking' | 'speaking'
 
 export interface CallState {
   sessionId: string
@@ -254,7 +254,7 @@ export async function startCall(o: StartCallOptions): Promise<void> {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'run', run }))
     },
     text: (text) => {
-      if (ended || !state?.connectedAt || ws?.readyState !== WebSocket.OPEN) return false
+      if (ended || !state?.connectedAt || state.phase === 'reconnecting' || ws?.readyState !== WebSocket.OPEN) return false // 重连中引擎收不下,让主窗改发 Tangu
       flush()
       own({ phase: 'thinking', analyser: micAnalyser })
       ws.send(JSON.stringify({ type: 'text', text }))
@@ -286,6 +286,8 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     try { m = JSON.parse(String(ev.data)) } catch { return }
     switch (m.type) {
       case 'ready': {
+        // 引擎换了一条上游重连好了:麦克风那一套原样接着用(再建一个上传节点 = 每帧发两遍),计时不清零。
+        if (proc) { own({ phase: 'listening', analyser: micAnalyser }); break }
         // ponytail: ScriptProcessorNode 已废弃但 Electron 仍支持;换 AudioWorklet 要单独的 worklet 模块文件。
         proc = inCtx.createScriptProcessor(1024, 1, 1)
         proc.connect(inCtx.destination) // 不接到 destination 就不回调;输出缓冲不写 = 静音
@@ -326,6 +328,10 @@ export async function startCall(o: StartCallOptions): Promise<void> {
         break
       case 'error':
         console.warn('[realtime] upstream error:', m.error?.message || m.error)
+        break
+      case 'reconnecting': // 上游服务端出错断开,引擎正换一条:半句话别再放了
+        flush()
+        own({ phase: 'reconnecting', analyser: micAnalyser })
         break
       case 'end':
         finish(m.reason && m.reason !== 'client closed' ? String(m.reason) : undefined)

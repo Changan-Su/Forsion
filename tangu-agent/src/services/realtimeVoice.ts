@@ -6,7 +6,8 @@
  *                  之后二进制帧 = 16kHz mono s16le PCM(麦克风);通话中 JSON {type:'run', run}(换委派参数,如 Effort)、
  *                  {type:'text', text}(打的字送进电话)。
  *   引擎 → 客户端:二进制帧 = 24kHz mono s16le PCM(模型语音);JSON = 上游事件原样转发(音频增量除外)
- *                  + {type:'tangu.run', status, run_id?, task} + {type:'transcript.corrected', message_id, text} + {type:'end', reason}。
+ *                  + {type:'tangu.run', status, run_id?, task} + {type:'transcript.corrected', message_id, text} + {type:'end', reason}
+ *                  + {type:'reconnecting'}(上游服务端出错断开、正换一条重连;接上后再发一次 ready)。
  *
  * 分工:实时模型管听、说、轮次与打断(speech-to-speech,10-01 实测说完→出声 0.6–0.9s);要碰电脑 / 文件 / 联网 / 干活
  * 的请求经唯一工具 ask_tangu 交给本会话的 Tangu run(与输入框发出的 run 同一条路:同会话、同 agent_config、审批照常)。
@@ -139,6 +140,10 @@ export function attachRealtimeVoice(server: Server): void {
   });
 }
 
+/** 上游自己出错断开、值得换一条重连的(服务端 5xxxx / 内部错误);鉴权、参数这类重连也没用,照常挂断。 */
+const RETRYABLE_UPSTREAM = /^<5\d{4}>|InternalError|ModelServingError/;
+const MAX_RECONNECTS = 2;
+
 function handleCall(client: WebSocket, userId: string): void {
   let upstream: WebSocket | null = null;
   let start: StartMsg | null = null;
@@ -151,6 +156,11 @@ function handleCall(client: WebSocket, userId: string): void {
   // 不另写一条「模型转述的任务」冒充用户说的话,也不会因转写晚到而顺序颠倒。
   const userRows = new Map<string, { row: Promise<string | null>; done: (id: string | null) => void; text?: string; typed?: boolean }>();
   let lastUserItem: string | null = null;
+  // 上游断线重连用:在途 response 回的是哪句、最近答完的是哪句、哪句已经委派出去(那句不重喂,免得同一件事办两遍)。
+  let respondingTo: string | null = null;
+  let answered: string | null = null;
+  let delegatedItem: string | null = null;
+  let reconnects = 0;
   const userRow = (itemId: string) => {
     let e = userRows.get(itemId);
     if (!e) { let done!: (id: string | null) => void; const row = new Promise<string | null>((r) => { done = r; }); e = { row, done }; userRows.set(itemId, e); }
@@ -274,10 +284,12 @@ function handleCall(client: WebSocket, userId: string): void {
         break;
       case 'response.created':
         responding = true;
+        respondingTo = lastUserItem;
         pendingReply = '';
         break;
       case 'response.done': {
         responding = false;
+        if (m.response?.status === 'completed') answered = respondingTo;
         const out: any[] = m.response?.output || [];
         const calledTool = out.some((o) => o?.type === 'function_call');
         // 带工具调用的那轮只是「我去看看」:不落库 —— 落了就夹在本轮用户消息与代跑 run 之间,run 的输入会以 assistant 收尾。
@@ -316,6 +328,7 @@ function handleCall(client: WebSocket, userId: string): void {
         break;
       case 'response.function_call_arguments.done': {
         if (m.name !== 'ask_tangu') break;
+        delegatedItem = lastUserItem;
         let task = '', heard = '';
         try { const a = JSON.parse(m.arguments || '{}'); task = String(a.task || '').trim(); heard = clip(String(a.heard || '').trim(), 4000); } catch { /* 坏参数 */ }
         // 立刻答复这次调用(别让 call_id 悬一整个 run):结果稍后以 system 消息送回。
@@ -340,6 +353,13 @@ function handleCall(client: WebSocket, userId: string): void {
     if (!owner) await st.autoCreateSession({ id: s.session_id, userId, appId: profile.appId, title: s.title || 'Voice call', modelId: s.run.model_id });
     let ep: { url: string; headers: Record<string, string> };
     try { ep = deps().brain.realtime!.endpoint(s.model); } catch (e: any) { return end(e?.message || String(e)); }
+    await connect(s, ep);
+  };
+
+  // 百炼偶发服务端错误(10-02 实报 `<50002> InternalError.Algo.ModelServingError`)会直接关掉上游:通话不挂,换一条上游接着打。
+  // 新上游的指令按库里最近的对话现拼,上下文接得上;断在一句还没答完(也没委派出去)的话上,把那句重新喂进去。
+  // ponytail: 断在结果播报中途的那条 [Tangu result] 不重放;真有人报「办完了没念」再补。
+  const connect = async (s: StartMsg, ep: { url: string; headers: Record<string, string> }, replay?: string): Promise<void> => {
     const agentSlug = typeof s.run.agent_config?.agentSlug === 'string' ? s.run.agent_config.agentSlug : undefined;
     const instructions = await buildVoiceInstructions(s.session_id, agentSlug);
     if (closed) return;
@@ -360,11 +380,25 @@ function handleCall(client: WebSocket, userId: string): void {
         },
       });
       toClient({ type: 'ready' });
+      if (replay) {
+        toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: replay }] } });
+        requestResponse();
+      }
     });
+    // 新上游在旧的 close 之后才建,旧的不会再来事件,不用区分新旧。
     up.on('message', onUpstream);
     up.on('unexpected-response', (_q, r) => end(`upstream HTTP ${r.statusCode}`));
     up.on('error', (e) => end(e.message));
-    up.on('close', (code, reason) => end(reason.toString() || `upstream closed (${code})`));
+    up.on('close', (code, reason) => {
+      const why = reason.toString() || `upstream closed (${code})`;
+      if (closed || reconnects >= MAX_RECONNECTS || !(code === 1011 || RETRYABLE_UPSTREAM.test(why))) return end(why);
+      reconnects++;
+      console.warn(`[realtime] upstream dropped (${why}); reconnecting ${reconnects}/${MAX_RECONNECTS}`);
+      const unanswered = lastUserItem && lastUserItem !== answered && lastUserItem !== delegatedItem ? userRows.get(lastUserItem)?.text : undefined;
+      responding = false; wantResponse = false; pendingReply = ''; skipNextReply = false; respondingTo = null;
+      toClient({ type: 'reconnecting' });
+      void connect(s, ep, unanswered).catch((e) => end(e?.message || String(e)));
+    });
   };
 
   client.on('message', (data, isBinary) => {

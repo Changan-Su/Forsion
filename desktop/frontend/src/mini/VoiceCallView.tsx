@@ -18,6 +18,8 @@ import './voiceCall.css'
 registerMessages({
   'livecall.title': { zh: '语音通话', en: 'Voice call' },
   'livecall.connecting': { zh: '正在接通…', en: 'Connecting…' },
+  'livecall.reconnecting': { zh: '信号断了一下，正在重新接通…', en: 'Connection dropped, reconnecting…' },
+  'livecall.serviceError': { zh: '语音服务出错，可以重新拨打', en: 'the voice service hit an error. You can call again' },
   'livecall.listening': { zh: '正在听', en: 'Listening' },
   'livecall.thinking': { zh: '在想…', en: 'Thinking…' },
   'livecall.speaking': { zh: '正在说', en: 'Speaking' },
@@ -168,9 +170,11 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
     window.tangu?.closeSelf?.()
   }
 
-  const status = error ? t('livecall.failed', { e: error })
+  // 百炼服务端错误(<50002> InternalError…)原文太长也看不懂:说人话,原文放悬停里。
+  const status = error ? t('livecall.failed', { e: /^<5\d{4}>|InternalError|ModelServingError/.test(error) ? t('livecall.serviceError') : error })
     : !call ? ''
     : call.phase === 'connecting' ? t('livecall.connecting')
+    : call.phase === 'reconnecting' ? t('livecall.reconnecting')
     : call.phase === 'speaking' ? t('livecall.speaking')
     : call.working ? t('livecall.working')
     : call.muted ? t('livecall.muted')
@@ -186,7 +190,7 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
           <AgentAvatar name={name} url={avatar} fill className="vc-avatar" />
         </div>
         <div className="vc-name">{name}</div>
-        <div className={`vc-status${error ? ' is-error' : ''}`} title={call?.working || undefined} role="status">
+        <div className={`vc-status${error ? ' is-error' : ''}`} title={error || call?.working || undefined} role="status">
           <span className="vc-status-text">{status}</span>
           {live && connectedAt ? <span className="vc-timer">{fmtDuration(now - connectedAt)}</span> : null}
         </div>
