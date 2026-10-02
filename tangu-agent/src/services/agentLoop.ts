@@ -2076,6 +2076,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
       approvalDeferral,
       unlockedTools,
+      // 延续解锁可能一次把目录解空 → lockedCount=0 会把 load_tools 从 defs 中间删掉,工具前缀与上一 run 末尾错位
+      // (Codex 10-02)。上一 run 能装上它们,load_tools 当时就在场 → 从起点就粘住。
+      loadToolsExposed: unlockedTools.size > 0 || undefined,
       unlockTools: (names) => {
         let changed = false;
         for (const n of names) if (!unlockedTools.has(n)) { unlockedTools.add(n); changed = true; }

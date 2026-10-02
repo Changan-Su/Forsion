@@ -30,7 +30,7 @@ function names(ctx: ToolContext): string[] {
 
 // ── loop 级共用 harness:真内存 SQLite + 真 loop,fake llm 按调用序号出剧本 ──
 type LlmScript = (call: number) => { content: string; toolCalls: any[]; finishReason: string };
-async function setupLoop(script: LlmScript): Promise<{ home: string; llmPayloads: any[] }> {
+async function setupLoop(script: LlmScript, prof = profile): Promise<{ home: string; llmPayloads: any[] }> {
   const home = mkdtempSync(join(tmpdir(), 'tangu-defer-'));
   process.env.TANGU_HOME = home;
   const llmPayloads: any[] = [];
@@ -57,7 +57,7 @@ async function setupLoop(script: LlmScript): Promise<{ home: string; llmPayloads
     calculateCost: async () => 0,
     logApiUsage: async () => {},
   };
-  configureTangu({ host, brain: fakeBrain, billing: fakeBilling, profile });
+  configureTangu({ host, brain: fakeBrain, billing: fakeBilling, profile: prof });
   await runMigration();
   await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('S', 'u1', 'tangu', 't', 'm1', 'user')`);
   return { home, llmPayloads };
@@ -234,6 +234,33 @@ describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () 
     const r2Start = llmPayloads.length;
     await runToDone('R2', '再算一次');
     expect((llmPayloads[r2Start].tools || []).map((t: any) => t.function?.name)).toContain('calculator');
+  });
+
+  // Codex 10-02:延续解锁把目录一次解空时,load_tools 不能从 defs 中间消失(R2 起点须与 R1 末尾逐项一致,护前缀缓存)。
+  // R1 先 load_tools 整个目录、再每样调一次(manage_* 只 list,其余空参报错也无妨 —— 进历史的是调用本身)。
+  it('跨 run 延续把目录解空:R2 起点 defs 与 R1 末尾一致,load_tools 仍在', async () => {
+    let catalog: string[] = [];
+    const { home, llmPayloads } = await setupLoop((call) => {
+      if (call === 1) {
+        const sys = String((llmPayloads[0].messages as any[]).find((m) => m.role === 'system')?.content);
+        const sec = sys.split('## Additional Tools (load on demand)\n')[1].split('\n\n')[0];
+        catalog = sec.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2).split(':')[0]);
+        return { content: '', toolCalls: [{ id: 'c1', type: 'function', function: { name: 'load_tools', arguments: JSON.stringify({ names: catalog }) } }], finishReason: 'tool_calls' };
+      }
+      if (call === 2) {
+        return { content: '', toolCalls: catalog.map((n, i) => ({ id: `c2-${i}`, type: 'function', function: { name: n, arguments: n.startsWith('manage_') ? '{"action":"list"}' : '{}' } })), finishReason: 'tool_calls' };
+      }
+      return { content: '好了', toolCalls: [], finishReason: 'stop' };
+    });
+    cleanupHome = home;
+    await runToDone('R1', '每样都试一下');
+    expect(catalog.length).toBeGreaterThan(3);
+    const r1End = (llmPayloads[llmPayloads.length - 1].tools || []).map((t: any) => t.function?.name);
+    const r2Start = llmPayloads.length;
+    await runToDone('R2', '再来');
+    expect(r1End).toContain('load_tools');
+    for (const n of catalog) expect(r1End).toContain(n);
+    expect((llmPayloads[r2Start].tools || []).map((t: any) => t.function?.name)).toEqual(r1End);
   });
 
   it('真实 delegate 子代理:能力面可自助解锁、管理面解锁不了(目录/defs/load_tools 三处),父 run 不被污染', async () => {
