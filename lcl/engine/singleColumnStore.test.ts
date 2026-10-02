@@ -119,3 +119,18 @@ describe('单列布局持久化', () => {
     expect(useWorkspace.getState().applyNamed('space:nope')).toBe(false) // 没存过 → 调用方 resetLayout
   })
 })
+
+describe('原地换视图(replaceViewsOfType,插件 ctx.replaceView 的单列半身)', () => {
+  it('抽屉里收着的也照换、不替用户打开抽屉;sidebarDefaults 跟着换;目标没注册就不动', () => {
+    seed()
+    useWorkspace.getState().setSidebarDefaults({ left: [{ type: 'files', params: {} }], right: [] })
+    const id = useWorkspace.getState().leftLeaves[0].id
+    expect(useWorkspace.getState().replaceViewsOfType('files', 'note', { path: 'b.md' })).toBe(1)
+    const s = useWorkspace.getState()
+    expect(s.leftLeaves.map((r) => [r.id, r.type, r.params])).toEqual([[id, 'note', { path: 'b.md' }]])
+    expect(s.leftVisible).toBe(false)
+    expect(s.sidebarDefaults.left).toEqual([{ type: 'note', params: { path: 'b.md' } }])
+    expect(useWorkspace.getState().replaceViewsOfType('note', 'not-registered')).toBe(0)
+    expect(useWorkspace.getState().leftLeaves[0].type).toBe('note')
+  })
+})

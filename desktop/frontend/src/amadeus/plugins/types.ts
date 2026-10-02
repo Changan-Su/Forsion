@@ -833,6 +833,17 @@ export interface PluginContext {
    *  Desktop/Web: main, left, right, bottom; mobile has no bottom panel. Undefined on older hosts and on hosts
    *  without a workbench: feature-detect with `ctx.viewLocations?.includes('bottom')`. */
   readonly viewLocations?: readonly PluginViewLocation[]
+  /** Close every open instance of one of this plugin's own views, wherever it is docked (2026-10-02+). A side
+   *  panel that loses its last view shows the host's empty placeholder; the bottom panel collapses — as when the
+   *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts. */
+  closeView?(viewId: string): void
+  /** Swap this plugin's view `fromViewId` for `toViewId` where it stands (2026-10-02+): open tabs change in place
+   *  (same panel and size, the layout is not rebuilt, the active tab stays where it was), a collapsed panel keeps the
+   *  new view in its stash and stays collapsed, and the Space's panel defaults follow. This is the "launch layout →
+   *  project layout" move (a list in the left panel becomes the project's media). Returns how many instances were
+   *  replaced; 0 when `fromViewId` is open nowhere — then decide yourself whether to `openView` (that one expands a
+   *  collapsed panel). Absent on older hosts: fall back to `openView`. */
+  replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
   /** Open one of this plugin's registered views in the native Floating Panel window.
    *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void

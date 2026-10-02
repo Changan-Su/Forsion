@@ -148,6 +148,9 @@ interface PluginState {
   /** 打开器真能停靠的位置(经 ctx.viewLocations 给插件做 feature-detect);没有打开器 = null。 */
   viewLocations: readonly PluginViewLocation[] | null
   setViewOpener(fn: ((type: string, loc?: PluginViewLocation) => void) | null, locations?: readonly PluginViewLocation[]): void
+  /** 宿主注入的关 / 换视图(桌面壳 = 引擎的 closeViewsOfType / replaceViewsOfType);没有工作台的宿主保持 null。 */
+  viewControls: { close(type: string): void; replace(from: string, to: string, params?: Record<string, unknown>): number } | null
+  setViewControls(controls: PluginState['viewControls']): void
   disposers: Record<string, (() => void) | undefined>
   initialized: boolean
   /** 注册并按偏好启用一组插件;缺省 = 全部 builtins(独立版);桌面壳传自己的选择性子集。 */
@@ -1030,6 +1033,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId, opts) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location),
     get viewLocations() { return get().viewLocations ?? undefined },
+    closeView: (viewId) => get().viewControls?.close(`plugin:${pluginId}:${viewId}`),
+    replaceView: (fromViewId, toViewId, opts) => get().viewControls?.replace(`plugin:${pluginId}:${fromViewId}`, `plugin:${pluginId}:${toViewId}`, opts?.params) ?? 0,
     ...(!hostTangu()?.mobile ? { openFloatingPanel: (viewId: string, opts?: import('./types').PluginFloatingPanelOptions) => {
       const type = `plugin:${pluginId}:${viewId}`
       const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
@@ -1492,6 +1497,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     viewOpener: null,
     viewLocations: null,
     setViewOpener: (fn, locations) => set({ viewOpener: fn, viewLocations: fn ? locations ?? ['main', 'left', 'right'] : null }),
+    viewControls: null,
+    setViewControls: (controls) => set({ viewControls: controls }),
     disposers: {},
     lastSetupError: {},
     initialized: false,

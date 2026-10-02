@@ -134,6 +134,11 @@ export function syncPluginViews(): void {
     const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (hasBottom ? 'bottom' : 'right') : 'main'
     useWorkspace.getState().openView(type, {}, at)
   }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
+  // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
+  usePluginStore.getState().setViewControls({
+    close: (type) => useWorkspace.getState().closeViewsOfType(type),
+    replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
+  })
 
   // Forsion Sandbox 的热重载接缝:插件宿主(平台中立)不 import @lcl,工作台的读写由桌面壳在这里注入。
   // 枚举走 remapLeaves —— 它是**唯一**同时覆盖活 leaf 与收起侧栏 stash 的跨 store 接口(全返回 undefined

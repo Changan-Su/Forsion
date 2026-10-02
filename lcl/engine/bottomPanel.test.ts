@@ -363,3 +363,48 @@ describe('底部面板:布局信封向后兼容', () => {
     vi.runAllTimers()
   })
 })
+
+// 插件 ctx.replaceView 的引擎半身(2026-10-02):Coding 进出项目换左栏的同一件事,交给插件用。
+describe('原地换视图(replaceViewsOfType)', () => {
+  it('活的 panel 原地换类型:同一个 panel、同一侧,参数换成新的;返回换掉的个数', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', { old: 1 }, 'bottom')
+    const id = bottoms(panels)[0] && panels.find((p) => p.params.__loc === 'bottom')!.id
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { fresh: true })).toBe(1)
+    const p = panels.find((x) => x.id === id)!
+    expect([p.params.__type, p.params.__loc, p.params.fresh, p.params.old]).toEqual(['logv', 'bottom', true, undefined])
+    expect(bottoms(panels)).toHaveLength(1) // 没有新开组,也没有关组
+    vi.runAllTimers()
+  })
+
+  it('收起的面板:stash 里换、面板保持收起(不替用户弹出来);激活记忆跟着换', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    vi.runAllTimers()
+    useWorkspace.getState().toggleSidebar('bottom')
+    vi.runAllTimers()
+    expect(useWorkspace.getState().stash.bottom.map((v) => v.type)).toEqual(['termv'])
+    // 桩的 group 不报活动 tab,折叠记不下激活项 —— 真 Dockview 会记;这里直接种上
+    useWorkspace.setState((st) => ({ stashActive: { ...st.stashActive, bottom: 'termv' } }))
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    const s = useWorkspace.getState()
+    expect(s.stash.bottom).toEqual([{ type: 'logv', params: {} }])
+    expect(s.stashActive.bottom).toBe('logv')
+    expect([s.bottomVisible, bottoms(panels).length]).toEqual([false, 0])
+  })
+
+  it('Space 的面板默认值跟着换(关空再展开不回到旧视图);什么都没开时返回 0;目标没注册则不动', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSidebarDefaults({ left: [{ type: 'termv', params: {} }], right: [], bottom: [{ type: 'termv', params: {} }] })
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'nope')).toBe(0)
+    expect(useWorkspace.getState().sidebarDefaults.left[0].type).toBe('termv')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(0)
+    expect(useWorkspace.getState().sidebarDefaults).toEqual({ left: [{ type: 'logv', params: {} }], right: [], bottom: [{ type: 'logv', params: {} }] })
+  })
+})
+
