@@ -9,7 +9,8 @@
  *   3  收起后主区回到满高(藏起来的 0 高组不留缝)+ 展开还原收起前的底部标签;截图落 SHOT_DIR 自己看
  *   4  × 关掉最后一个底部标签(closeLeaf 那条收起路径)同样不重挂 —— 底部没有可关标签时 NOTE 跳过
  *   5  reload(布局从存档恢复,藏着的组一起恢复)后首次 ⌘J 也不重挂
- *   6  NOTE:左右栏开合(仍删组)的重载数,只记不判
+ *   7  恢复默认布局 → 撤销(撤销快照里带着藏着的组,走 applyLayout):组还在,⌘J 开回原标签且不重挂
+ *   6  NOTE:左右栏开合(仍删组)的重载数,只记不判(放最后跑)
  *
  * 跑:npx electron-vite build && npm run check:bottomiframe
  * 负对照:撤掉 parkBottom(toggleSidebar 收起改回逐个 close)重 build,2.x 必红。
@@ -103,6 +104,7 @@ async function main() {
     const closeBtn = win.locator('.dv-groupview:has(.wb-view--bottom) .wb-tab-close')
     if (await closeBtn.count() === 1) {
       const b = await state()
+      await win.locator('.dv-groupview:has(.wb-view--bottom) .dv-tab').first().hover() // 单标签组的 × 只在悬停时可点
       await closeBtn.click()
       await sleep(SETTLE)
       const a = await state()
@@ -120,6 +122,19 @@ async function main() {
     R.check('5 reload 后:探针帧重新挂上', await inject() && (await state()).loads === 1, `parked=${(await state()).parked}`)
     await toggle('5 reload 后首次展开', true)
     await toggle('5 reload 后收起', false)
+
+    // 7 恢复默认布局 → 撤销:撤销快照(信封)里带着藏起来的空组,经 applyLayout 还原后 ⌘J 照样开回原内容、不重挂
+    const parkedBefore = (await state()).parked
+    await win.locator('.dv-edge-reset').first().click()
+    await sleep(700)
+    await win.getByRole('button', { name: /^(撤销|Undo)$/ }).first().click()
+    await sleep(SETTLE)
+    s = await state()
+    R.check('7 撤销后底部仍收着、藏着的组还在', !s.bottomOn && s.parked === parkedBefore, `bottomOn=${s.bottomOn} parked ${parkedBefore}→${s.parked}`)
+    R.check('7 撤销后:探针帧重新挂上', await inject())
+    s = await toggle('7 撤销后展开', true)
+    R.check('7 撤销后展开还原收起前的底部标签', JSON.stringify(s.bottomTabs) === JSON.stringify(tabsOpen), JSON.stringify(s.bottomTabs))
+    await toggle('7 撤销后收起', false)
 
     // 6 左右栏:仍删组,只记不判
     for (const [name, sel] of [['右栏', '.dv-edge-right'], ['左栏', '.dv-prefix .dv-edge-toggle']]) {
