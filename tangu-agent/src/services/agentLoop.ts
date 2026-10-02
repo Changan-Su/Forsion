@@ -22,7 +22,7 @@ import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
-import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
+import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
@@ -68,7 +68,7 @@ import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
-import { query } from '../core/db.js';
+import { query, getDbType } from '../core/db.js';
 import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
@@ -592,7 +592,7 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
 }
 
 /** run 行的持有进程是不是另一个还活着的本机引擎(TUI / 另一个桌面实例)。自己的 pid = 上一个同号进程留下的,按已死算。
- *  ponytail: 只按 pid 探活 —— pid 被无关进程复用会误判活着,那几行等 failStaleRuns 的 30 分钟兜底;要更准就记进程启动时刻。 */
+ *  ponytail: 只按 pid 探活 —— pid 被无关进程复用会误判活着,那几行要等复用它的进程退出;要更准就记进程启动时刻。 */
 function ownedByLiveProcess(pid: number | null): boolean {
   if (!pid || pid === process.pid) return false;
   try {
@@ -620,13 +620,22 @@ async function terminalizeInterruptedRun(runId: string): Promise<void> {
   }
 }
 
-/** 进程重启自愈(PI-DSH 评审 R2 改过语义):在飞 run 按 session 分组、created_at 顺序处理 ——
- *  - 别的活着的引擎进程持有的:不碰(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
+/** 进程重启自愈(PI-DSH 评审 R2 改过语义):先清陈旧行(30 分钟没动静 → failed),余下在飞 run 按 session 分组、created_at 顺序处理 ——
+ *  - 别的活着的引擎进程持有的:不碰,陈旧清扫也跳过(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
  *  - running(持有者已死):标中断,**不从头重跑** —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍;
  *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
- *  必须在 failStaleRuns() 之后调用（避免捡到即将被标 failed 的陈旧行）。返回重入队数量。
- *  复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
+ *  返回重入队数量。复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
 export async function recoverQueuedRuns(): Promise<number> {
+  // 非 SQLite(外部 PG / PGlite 回退)不记持有者:只做陈旧清扫,新鲜行一概不接手 —— 多个实例共用一个 PG 时宁可留着不碰。
+  // ponytail: 要在那种库上接手,得上带主机名的租约 + 执行前 CAS,本机 pid 不够。
+  if (getDbType() !== 'sqlite') {
+    const stale = await failStaleRuns();
+    if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
+    return 0;
+  }
+  const live = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner_pid).filter(ownedByLiveProcess))] as number[];
+  const stale = await failStaleRuns(30, live);
+  if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
   const rows = await listPendingRunsForRecovery();
   // 团队成员工作会话(kind=teamwork)里的子 run 只由团队 run 驱动:重启后团队 run 从头再激活、会新建子 run;遗留的子 run 不能再跑
   //(没人订阅它的事件、它的审批会永久占住成员会话的串行队列、工具动作会重做)→ 直接终态化(Codex 09-16 r4 #5)。

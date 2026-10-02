@@ -102,7 +102,8 @@ export interface StateStore {
   listActiveRunsBySession(sessionId: string, userId: string): Promise<ActiveRunRow[]>;
   /** 进程重启自愈（仅持库进程调;worker 关掉）。 */
   listPendingRunsForRecovery(): Promise<PendingRunRow[]>;
-  failStaleRuns(olderThanMinutes?: number): Promise<number>;
+  /** keepOwners:这些持有进程还活着,它们的行再旧也不标(TUI 等审批超过 30 分钟时桌面引擎启动,PI-DSH R2 Codex 评审)。 */
+  failStaleRuns(olderThanMinutes?: number, keepOwners?: number[]): Promise<number>;
 
   // ── steps ──
   appendStep(step: StepInput): Promise<void>;

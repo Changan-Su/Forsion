@@ -40,7 +40,6 @@ import ttsRouter from './routes/tts.js';
 import inlineRouter from './routes/inline.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
-import { failStaleRuns } from './services/runStore.js';
 import { recoverQueuedRuns, abortAllRuns } from './services/agentLoop.js';
 import { loadSandboxConfig } from './sandbox/sandboxConfig.js';
 import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './sandbox/dockerProvider.js';
@@ -114,15 +113,11 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(remoteRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {
-    // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;顺序不可颠倒)。
+    // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;见 recoverQueuedRuns)。
     // 共享云库的 worker 集群必须关掉(opts.recoverRuns=false),否则跨 worker 互相干扰。
     // 纯调度网关(Forsion server)三个全关:loop 不在该进程跑,沙箱也不在该机。
     if (opts?.recoverRuns !== false) {
-      failStaleRuns()
-        .then((n) => {
-          if (n) console.log(`[tangu] marked ${n} stale runs as failed`);
-          return recoverQueuedRuns();
-        })
+      recoverQueuedRuns()
         .then((m) => { if (m) console.log(`[tangu] re-enqueued ${m} pending run(s)`); })
         .catch(() => {});
     }

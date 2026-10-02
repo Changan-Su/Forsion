@@ -80,12 +80,15 @@ export function createSqlStateStore(): StateStore {
       );
       return rows.map((r) => ({ id: r.id, session_id: r.session_id, status: r.status, owner_pid: r.owner_pid ?? null }));
     },
-    async failStaleRuns(olderThanMinutes = 30) {
+    async failStaleRuns(olderThanMinutes = 30, keepOwners: number[] = []) {
+      const keep = keepOwners.length ? `AND (owner_pid IS NULL OR owner_pid NOT IN (${keepOwners.map(() => '?').join(',')}))` : '';
       const rows = await query<any[]>(
         `UPDATE agent_runs SET status = 'failed', error = 'stale: process restarted', updated_at = CURRENT_TIMESTAMP
          WHERE status IN ('queued','running')
            AND ${getOlderThanSql('updated_at', olderThanMinutes)}
+           ${keep}
          RETURNING id`,
+        keepOwners,
       );
       return Array.isArray(rows) ? rows.length : 0;
     },

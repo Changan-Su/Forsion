@@ -3,7 +3,8 @@
  *   ① 别的活着的引擎进程持有的(running / queued)一概不碰;
  *   ② running 但持有者已死 → 标中断 + 终态事件,不从头重跑;
  *   ③ queued 且持有者已死 / 不明(升级前的行)→ 认领成本进程再入队;
- *   ④ 本机 SQLite 建 run 时记下持有进程。
+ *   ④ 本机 SQLite 建 run 时记下持有进程;
+ *   ⑤ 陈旧清扫也跳过活进程持有的行;非 SQLite 库只做陈旧清扫(Codex 评审两条 P1)。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -101,6 +102,34 @@ describe('重启自愈 × 持有进程', () => {
     expect((await row('legacy-queued')).owner_pid).toBe(process.pid);
     expect(llmCalls).toBe(2); // 只有两条 queued 真跑了;interrupted 那条没被从头重跑
   }, 20_000);
+
+  it('陈旧清扫(30 分钟)同样跳过活进程持有的行:TUI 等审批超过 30 分钟时桌面引擎启动,不能把它标失败', async () => {
+    await seed('live-old', 'running', LIVE);
+    await seed('dead-old', 'running', DEAD);
+    await query(`UPDATE agent_runs SET updated_at = datetime('now', '-2 hours') WHERE id IN ('live-old', 'dead-old')`);
+    expect(await recoverQueuedRuns()).toBe(0);
+    expect(await row('live-old')).toMatchObject({ status: 'running', owner_pid: LIVE });
+    expect(await row('dead-old')).toMatchObject({ status: 'failed', error: 'stale: process restarted' });
+  });
+
+  it('非 SQLite 库(外部 PG,多实例可能共用)不记持有者:只做陈旧清扫,新鲜行一概不接手', async () => {
+    await seed('pg-running', 'running', null);
+    await seed('pg-queued', 'queued', null);
+    await seed('pg-old', 'running', null);
+    await query(`UPDATE agent_runs SET updated_at = datetime('now', '-2 hours') WHERE id = 'pg-old'`);
+    const host = deps().host;
+    const orig = host.getDbType;
+    host.getDbType = () => 'postgres';
+    try {
+      expect(await recoverQueuedRuns()).toBe(0);
+    } finally {
+      host.getDbType = orig;
+    }
+    expect(await row('pg-running')).toMatchObject({ status: 'running' });
+    expect(await row('pg-queued')).toMatchObject({ status: 'queued', owner_pid: null });
+    expect(await row('pg-old')).toMatchObject({ status: 'failed', error: 'stale: process restarted' });
+    expect(llmCalls).toBe(0);
+  });
 
   it('认领是 CAS:读完列表后被另一个引擎抢先认领的 queued 行不再入队', async () => {
     await seed('raced', 'queued', LIVE); // 库里已是别人的
