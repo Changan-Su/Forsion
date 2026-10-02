@@ -198,6 +198,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
+| `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
@@ -358,6 +359,15 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 插件主动在 View 卸载时 dispose；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。
 新增公共组件时一起维护类型、本文、原生消费者和生命周期测试，`contractDocs.test.ts` 覆盖 `ctx.ui` 嵌套方法。
+
+### 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(2026-09-30 起)
+
+`ctx.ui?.mountMarkdownEditor?.(el, opts)` 挂载与笔记同源的 Amadeus 编辑器(可视 / Markdown 源码 / 发布预览三档),
+返回 `{ getValue(), update(patch), insertMarkdown(md), focus(), dispose() }`。
+`opts` 支持 `value`(必填字符串)、`label`、`readOnly`、`previewBaseUrl`(预览里相对路径图片/视频的源)、`onChange(markdown)`。
+**正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
+`update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等;宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
+老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
