@@ -16,7 +16,7 @@ import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { announceExtensionsChanged, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
 import { isGate, promptIfPending } from '../stores/pluginOnboardingStore'
@@ -92,7 +92,7 @@ function formatDate(value?: string | null): string {
   return formatDateLabel(date, { year: 'always' })
 }
 
-export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
+export function MarketModal({ onClose, initialQuery }: { onClose?: () => void; initialQuery?: string } = {}) {
   const { t } = useI18n()
   const pluginUpdates = useMarketPluginUpdates()
   const settingsViews = usePluginStore((s) => s.settingsViews)
@@ -142,7 +142,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const [webLoading, setWebLoading] = useState(false)
   const [webError, setWebError] = useState('')
   const [scanning, setScanning] = useState(true)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery ?? '')
   const [sort, setSort] = useState<SortMode>('popular')
   // Automatic checks run in main even while this window is closed. Refresh the local installed snapshot after activation/mutations.
   useEffect(() => { void listInstalled().then(setInstalled).catch(() => {}) }, [pluginUpdates])
@@ -233,7 +233,13 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
       if (restart) offerRestart(t('market.pluginInstalledRestartHint'))
       else if (effectiveType === 'space') toast(t('market.spaceInstalled', { name: c.name }))
       else if (effectiveType === 'theme') toast(t('market.themeInstalled', { name: c.name }))
-      else if (effectiveType === 'amadeus-plugin') toast(t('market.amadeusPluginInstalled', { name: c.name }))
+      else if (effectiveType === 'amadeus-plugin') {
+        // 装上了但前置没齐(装着、开不了):别报「已加载」,说清还缺什么 —— 插件详情页有「在市场中查找」
+        const p = usePluginStore.getState().plugins.find((x) => x.id === res?.id)
+        const plugins = usePluginStore.getState().plugins
+        const missing = p ? unmetPluginDeps(p).map((u) => plugins.find((x) => x.id === u.dep.id)?.name || u.dep.name || u.dep.id) : []
+        toast(missing.length ? t('market.amadeusPluginNeedsDeps', { name: c.name, list: missing.join(t('common.listSep')) }) : t('market.amadeusPluginInstalled', { name: c.name }))
+      }
       else if (effectiveType !== 'plugin') toast(t('market.installOk', { name: c.name })) // 引擎插件的结果 onPluginInstalled 已经说过
       await scanCatalog()
     } catch (e: any) {
@@ -366,7 +372,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const matchesQuery = useCallback((c: MarketCard): boolean => {
     const needle = query.trim().toLocaleLowerCase()
     if (!needle) return true
-    return [c.name, c.summary, c.author, ...(c.tags || [])]
+    return [c.name, c.summary, c.author, c.installSlug, ...(c.tags || [])]
       .some((value) => value.toLocaleLowerCase().includes(needle))
   }, [query])
 

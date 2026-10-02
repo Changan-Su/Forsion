@@ -170,6 +170,7 @@
     "check:quietfocus": "node scripts/quiet-focus.check.cjs",
     "check:persistignore": "node scripts/persist-ignore.check.cjs",
     "check:onboarding": "node scripts/plugin-onboarding.check.cjs",
+    "check:plugindeps": "node scripts/plugin-deps.check.cjs",
     "check:pluginsync": "node scripts/plugin-install-sync.check.cjs",
     "check:first-run": "node scripts/onboarding.check.cjs",
     "check:miniauto": "node scripts/mini-auto.check.cjs",

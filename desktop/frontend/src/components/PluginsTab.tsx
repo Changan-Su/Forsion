@@ -12,6 +12,7 @@ import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PluginLogo } from './PluginLogo'
 import { homeTarget } from '../services/engine/targets'
+import { dependentsOf, unmetDependencies } from '@amadeus/plugins/pluginDeps'
 
 export const PluginsTab: React.FC<{
   cfg: TanguDesktopConfig
@@ -45,19 +46,33 @@ export const PluginsTab: React.FC<{
   const [preferMirror, setPreferMirror] = useState(false)
   const [installing, setInstalling] = useState(false)
 
+  // 前置插件(引擎侧 requiresPlugins,口径同桌面 pluginDeps):开着却休眠的,引擎给 waitingFor;关着的这里自己算 ——
+  // 前置没齐就开不了。旧引擎不给 active / version / requiresPlugins,一切按「没声明」处理。
+  const sep = t('common.listSep')
+  const nodes = useMemo(() => (plugins ?? []).map((x) => ({ id: x.id, version: x.version ?? '', requiresPlugins: x.requiresPlugins })), [plugins])
+  const running = (x: PluginInfo): boolean => x.active ?? x.enabled
+  const byId = (id: string): PluginInfo | undefined => plugins?.find((x) => x.id === id)
+  const label = (id: string): string => { const q = byId(id); return q ? nm(q) : id }
+  const missingFor = (p: PluginInfo): string[] => p.enabled
+    ? (p.waitingFor ?? []).map((w) => w.id)
+    : unmetDependencies(nodes.find((n) => n.id === p.id)!, nodes, (id) => { const q = byId(id); return !!q && running(q) }, (id) => !!byId(id)?.enabled).map((u) => u.dep.id)
+  const runningDependents = (p: PluginInfo): PluginInfo[] =>
+    dependentsOf(p.id, nodes).map((n) => byId(n.id)!).filter((x) => x && running(x))
+
   const toggle = async (p: PluginInfo): Promise<void> => {
+    const deps = p.enabled ? runningDependents(p) : []
+    if (deps.length && !window.confirm(t('settings.plugins.disableDependents', { name: nm(p), list: deps.map(nm).join(sep) }))) return
     try { await setPluginEnabled(homeTarget(), p.id, !p.enabled); onReload() } catch { /* ignore */ }
   }
 
-  // 运行期重扫:发现新装入文件夹的插件(市场/手动拷贝)。已有插件的代码改动受 ESM 缓存影响,仍需重启后端。
+  // 运行期重扫:新装 / 更新 / 移除的插件即时生效(引擎 10-02 起热插拔;入口带相对 import 的更新仍要重启,needsRestart 会说)。
   const [rescanning, setRescanning] = useState(false)
   const doRescan = async (): Promise<void> => {
     setRescanning(true)
     try {
       const r = await rescanPlugins(homeTarget())
-      const msg = r.addedIds.length
-        ? t('settings.plugins.rescanAdded', { n: String(r.addedIds.length) })
-        : t('settings.plugins.rescanNone')
+      const n = r.addedIds.length + (r.reloadedIds?.length ?? 0) + (r.removedIds?.length ?? 0)
+      const msg = n ? t('settings.plugins.rescanAdded', { n: String(n) }) : t('settings.plugins.rescanNone')
       panelToast(r.needsRestart ? `${msg} · ${t('settings.plugins.needsRestartHint')}` : msg)
       onReload()
     } catch (e: any) {
@@ -66,11 +81,15 @@ export const PluginsTab: React.FC<{
   }
 
   const uninstall = async (p: PluginInfo): Promise<void> => {
-    if (!window.confirm(t('settings.plugins.uninstallConfirm', { name: nm(p) }))) return
+    const deps = runningDependents(p)
+    const ask = t('settings.plugins.uninstallConfirm', { name: nm(p) })
+    if (!window.confirm(deps.length ? `${t('settings.plugins.uninstallDependents', { name: nm(p), list: deps.map(nm).join(sep) })}\n\n${ask}` : ask)) return
     try {
-      await uninstallPlugin(homeTarget(), p.id).catch(() => {}) // 后端不在也继续:剩孤儿设置好过卸不掉
+      const r = await uninstallPlugin(homeTarget(), p.id).catch(() => null) // 后端不在也继续:剩孤儿设置好过卸不掉
       await window.tangu?.pluginsUninstall?.(p.id)
-      await window.tangu?.backendRestart?.() // 工具/路由无法运行期反注册,重启后 discoverPlugins 不再发现它
+      // 10-02 起的引擎在 DELETE 里就把工具 / 路由撤干净了(restartRequired:false);旧引擎或后端不在 → 照旧重启,
+      // 重启后 discoverPlugins 不再发现它。
+      if (r?.restartRequired !== false) await window.tangu?.backendRestart?.()
       panelToast(t('settings.plugins.uninstalled', { name: nm(p) }))
       onReload()
     } catch (e: any) {
@@ -132,7 +151,7 @@ export const PluginsTab: React.FC<{
         : !shown.length
           ? <div className="hint">{t('settings.plugins.empty')}</div>
           : shown.map((p) => (
-        <div key={p.id} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12 }}>
+        <div key={p.id} data-engine-plugin={p.id} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <PluginLogo url={p.iconUrl} />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -146,6 +165,15 @@ export const PluginsTab: React.FC<{
                     {t('settings.plugins.needsRestart')}
                   </span>
                 )}
+                {p.enabled && !running(p) && (p.waitingFor?.length ? (
+                  <span data-plugin-waiting title={p.waitingFor.map((w) => label(w.id)).join(sep)} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
+                    {t('settings.plugins.waitingDeps')}
+                  </span>
+                ) : p.lastError ? (
+                  <span data-plugin-failed title={p.lastError} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger, #c0392b)', border: 'var(--border-width) solid var(--danger, #c0392b)', borderRadius: 4, padding: '0 4px' }}>
+                    {t('settings.plugins.loadFailed')}
+                  </span>
+                ) : null)}
               </div>
               <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
             </div>
@@ -157,7 +185,14 @@ export const PluginsTab: React.FC<{
                 {t('settings.plugins.uninstall')}
               </button>
             )}
-            <input type="checkbox" checked={p.enabled} onChange={() => void toggle(p)} style={{ cursor: 'pointer' }} />
+            {(() => {
+              const blocked = !p.enabled && missingFor(p).length > 0 // 关着、前置又没齐 → 开不了
+              return (
+                <span title={blocked ? t('settings.plugins.needsDepsToEnable', { list: missingFor(p).map(label).join(sep) }) : undefined}>
+                  <input type="checkbox" checked={p.enabled} disabled={blocked} onChange={() => void toggle(p)} style={{ cursor: blocked ? 'not-allowed' : 'pointer' }} />
+                </span>
+              )
+            })()}
           </div>
         </div>
       ))}

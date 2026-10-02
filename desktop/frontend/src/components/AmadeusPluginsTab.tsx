@@ -11,7 +11,7 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { serialBundleEngines, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { pluginFootprint, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
@@ -20,7 +20,7 @@ import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
-import { setPluginEnabled, type PluginInfo } from '../services/backendService'
+import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces } from '../userSpaces'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
@@ -29,6 +29,7 @@ import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
+import type { PluginDependency } from '@amadeus-shared/ipc'
 import { PluginLogo } from './PluginLogo'
 import { homeTarget } from '../services/engine/targets'
 
@@ -68,42 +69,183 @@ registerMessages({
     zh: '开发副本不能声明自定义文件类型（fileExtensions）',
     en: 'A dev copy cannot claim custom file types (fileExtensions)',
   },
+  // 前置插件(manifest requiresPlugins):装着但开不了 / 前置停了自动暂停、回来自动恢复
+  'settings.amadeusPlugins.waitingDeps': { zh: '等待前置插件', en: 'Waiting for required plugins' },
+  'settings.amadeusPlugins.loadFailed': { zh: '加载失败', en: 'Failed to load' },
+  'settings.amadeusPlugins.needsDepsToEnable': { zh: '需要先安装并启用：{list}', en: 'Install and turn on these first: {list}' },
+  'settings.amadeusPlugins.disableDependents': {
+    zh: '停用「{name}」后，依赖它的插件也会暂停：{list}。重新启用后它们会自动恢复。继续吗？',
+    en: 'Turning off "{name}" also pauses the plugins that require it: {list}. They resume when you turn it back on. Continue?',
+  },
+  'settings.amadeusPlugins.uninstallDependents': {
+    zh: '以下插件依赖「{name}」，卸载后将无法运行：{list}。',
+    en: 'These plugins require "{name}" and stop working once it is uninstalled: {list}.',
+  },
+  'settings.amadeusPlugins.requires': { zh: '前置插件', en: 'Required plugins' },
+  'settings.amadeusPlugins.requiresHint': {
+    zh: '这些插件运行时它才会运行；它们停下时它自动暂停，回来后自动恢复。',
+    en: 'This plugin runs only while these are running. It pauses when they stop and resumes when they come back.',
+  },
+  'settings.amadeusPlugins.dep.ok': { zh: '运行中', en: 'Running' },
+  'settings.amadeusPlugins.dep.missing': { zh: '未安装', en: 'Not installed' },
+  'settings.amadeusPlugins.dep.blocked': { zh: '与当前版本不兼容', en: 'Not compatible with this version' },
+  'settings.amadeusPlugins.dep.version': { zh: '需要 {min} 或更高，已安装 {have}', en: 'Needs {min} or later; {have} is installed' },
+  'settings.amadeusPlugins.dep.cycle': { zh: '与它互相依赖，无法启用', en: 'Requires this plugin in turn, so neither can run' },
+  'settings.amadeusPlugins.dep.off': { zh: '已关闭', en: 'Turned off' },
+  'settings.amadeusPlugins.dep.waiting': { zh: '已开启，但尚未运行', en: 'Turned on but not running' },
+  'settings.amadeusPlugins.dep.findInMarket': { zh: '在市场中查找', en: 'Find in market' },
+  'settings.amadeusPlugins.dep.enable': { zh: '启用', en: 'Turn on' },
+  // 运行占用(副作用账 + 注册项)
+  'settings.amadeusPlugins.effects': { zh: '运行占用 · {n}', en: 'Active effects · {n}' },
+  'settings.amadeusPlugins.effectsHint': {
+    zh: '插件此刻挂在应用里的东西。停用或重载时按相反顺序全部撤掉；插件已写进智库的文件不受影响。',
+    en: 'What this plugin currently holds in the app. Turning it off or reloading undoes all of it in reverse order. Files it already wrote to your vault are not affected.',
+  },
+  'settings.amadeusPlugins.effect.registrations': { zh: '注册项', en: 'Registrations' },
+  'settings.amadeusPlugins.effect.subscription': { zh: '订阅', en: 'Subscriptions' },
+  'settings.amadeusPlugins.effect.mount': { zh: '界面挂载', en: 'Embedded UI' },
+  'settings.amadeusPlugins.effect.theme': { zh: '主题样式', en: 'Theme styles' },
+  'settings.amadeusPlugins.effect.font': { zh: '字体', en: 'Fonts' },
+  'settings.amadeusPlugins.effect.editorExtension': { zh: '编辑器扩展', en: 'Editor extensions' },
+  'settings.amadeusPlugins.effect.propertyType': { zh: '属性类型', en: 'Property types' },
+  'settings.amadeusPlugins.effect.achievements': { zh: '成就', en: 'Achievements' },
+  'settings.amadeusPlugins.effect.request': { zh: '进行中的请求', en: 'Requests in flight' },
+  'settings.amadeusPlugins.effect.deskCompanion': { zh: 'Agent Desk 伴随面', en: 'Agent Desk companions' },
+  'settings.amadeusPlugins.effect.viewSurface': { zh: '视图文件通道', en: 'View file access' },
 })
 
-/** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 内嵌引擎插件随父插件同开同关(经引擎 HTTP)。
- *  按父插件串行(serialBundleEngines,与 pluginStore 的补关同一条链):快速连点按序执行,防 PUT 乱序落成「父关子开」
- *  或补关的 false 盖掉刚写的 true(codex P1-4 / 09-25)。
- *  纪律(codex P1-4/P1-5):以父插件**实际**启用结果为准(setup 抛错=未启用,不按点击意图猜);
- *  用户目录手装的同 id(loader 优先级更高的覆盖版)与首方内置不归捆绑包管,跳过;失败 toast,不静默。 */
-function cascadeAfterToggle(
-  p: AmadeusPlugin,
-  cfg?: TanguDesktopConfig | null,
-  onEngineReload?: () => void,
-  enginePlugins?: PluginInfo[] | null,
-): Promise<void> {
-  const run = async (): Promise<void> => {
-    void loadUserSpaces() // 无 bundle 时幂等无害
-    const ids = p.bundle?.enginePlugins ?? []
-    if (!ids.length || !cfg) return
-    const on = usePluginStore.getState().isActive(p.id)
-    let userOwned = new Set<string>()
-    try {
-      userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.()) ?? []).map((x) => x.id))
-    } catch { /* 桥缺位按空集 */ }
-    let failed = 0
-    for (const id of ids) {
-      if (userOwned.has(id)) continue // 用户手装同 id 胜出,不归本捆绑包管
-      if (enginePlugins?.find((e) => e.id === id)?.source === 'builtin') continue // 首方内置同 id,绝不去动
-      try {
-        await setPluginEnabled(homeTarget(), id, on)
-      } catch {
-        failed += 1
-      }
-    }
-    if (failed) panelToast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
-    onEngineReload?.()
+/** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 刷新引擎插件列表。内嵌引擎插件的开关**不在这里写** —— 这里多半是设置浮窗,
+ *  它的运行态未必等于主窗的;由主窗收到偏好 / 开启戳后在 syncBundleEngines 里统一串行写(Codex 10-02)。 */
+function cascadeAfterToggle(p: AmadeusPlugin, onEngineReload?: () => void): void {
+  void loadUserSpaces() // 无 bundle 时幂等无害
+  if (p.bundle?.enginePlugins?.length) onEngineReload?.()
+}
+
+type T = (k: string, v?: Record<string, string>) => string
+type Loc = Parameters<typeof pluginDisplayName>[1]
+/** 前置的显示名:装了用它自己的名字,没装用声明里的 name,再不行用 id。 */
+const depName = (d: PluginDependency, plugins: AmadeusPlugin[], locale: Loc): string => {
+  const installed = plugins.find((x) => x.id === d.id)
+  return installed ? pluginDisplayName(installed, locale) : d.name || d.id
+}
+
+/** 卡片与详情页共用的开关动作。开关跟意图(偏好)走:在等前置 / 加载失败的插件开关是「开」的,再点一下是关掉它。
+ *  关之前把会跟着暂停的依赖方说清楚;开了却没跑起来(setup 抛错)就地报 —— 宿主只发 Amadeus 吐司,只有主窗渲染,
+ *  设置浮窗里拨开关就像没反应。 */
+function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void): void {
+  const wasOn = pluginWanted(p)
+  const name = pluginDisplayName(p, locale)
+  if (wasOn) {
+    const deps = runningDependents(p.id).map((x) => pluginDisplayName(x, locale))
+    if (deps.length && !window.confirm(t('settings.amadeusPlugins.disableDependents', { name, list: deps.join(t('common.listSep')) }))) return
   }
-  return serialBundleEngines(p.id, run)
+  usePluginStore.getState().toggle(p.id)
+  const st = usePluginStore.getState()
+  if (!wasOn && !st.isActive(p.id) && st.lastSetupError[p.id]) panelToast(t('pluginhost.setupFailed', { name }), true)
+  if (!wasOn) void promptIfPending(p.id) // 手动启用 = 注意力在场:实测(连 check),确有未满足才弹检查卡
+  cascade()
+}
+
+/** 普通插件的开关:勾选 = 想开。用户关着、前置又没齐 → 开不了(灰掉,悬停说缺什么)。 */
+const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: () => void }> = ({ p, onFlip }) => {
+  const { t, locale } = useI18n()
+  const plugins = usePluginStore((s) => s.plugins)
+  const activeIds = usePluginStore((s) => s.activeIds)
+  const disabledIds = usePluginStore((s) => s.disabledIds)
+  const wanted = pluginWanted(p, disabledIds)
+  const unmet = wanted ? [] : unmetPluginDeps(p, { plugins, activeIds, disabledIds })
+  const stuck = !!p.blocked || unmet.length > 0
+  return (
+    <span title={unmet.length ? t('settings.amadeusPlugins.needsDepsToEnable', { list: unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep')) }) : undefined} onClick={(e) => e.stopPropagation()}>
+      <input type="checkbox" data-plugin-switch checked={wanted && !p.blocked} disabled={stuck} onChange={onFlip} style={{ cursor: stuck ? 'not-allowed' : 'pointer' }} />
+    </span>
+  )
+}
+
+/** 运行态徽标:想开却没在跑 —— 在等前置,或加载失败(错因放悬停)。 */
+const RunBadge: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t, locale } = useI18n()
+  const plugins = usePluginStore((s) => s.plugins)
+  const activeIds = usePluginStore((s) => s.activeIds)
+  const disabledIds = usePluginStore((s) => s.disabledIds)
+  const error = usePluginStore((s) => s.lastSetupError[p.id])
+  if (p.blocked || activeIds.includes(p.id) || !pluginWanted(p, disabledIds)) return null
+  const unmet = unmetPluginDeps(p, { plugins, activeIds, disabledIds })
+  const warn = { ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }
+  if (unmet.length) return <span data-plugin-waiting style={warn} title={unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep'))}>{t('settings.amadeusPlugins.waitingDeps')}</span>
+  if (error) return <span data-plugin-failed style={{ ...badge, color: 'var(--danger, #c0392b)', borderColor: 'var(--danger, #c0392b)' }} title={error}>{t('settings.amadeusPlugins.loadFailed')}</span>
+  return null
+}
+
+/** 前置插件:逐条说清楚状态,给能做的那一步(去市场找 / 打开它)。 */
+const RequiredPlugins: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t, locale } = useI18n()
+  const plugins = usePluginStore((s) => s.plugins)
+  const activeIds = usePluginStore((s) => s.activeIds)
+  const disabledIds = usePluginStore((s) => s.disabledIds)
+  const deps = p.requiresPlugins ?? []
+  if (!deps.length) return null
+  const unmet = unmetPluginDeps(p, { plugins, activeIds, disabledIds })
+  const market = !!window.tangu?.marketList && !window.tangu?.unitPage
+  return (
+    <>
+      <div className="hint">{t('settings.amadeusPlugins.requires')}</div>
+      <div className="plugin-card" data-plugin-requires style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {deps.map((d) => {
+          const u = unmet.find((x) => x.dep.id === d.id)
+          const installed = plugins.find((x) => x.id === d.id)
+          // 前置自己也缺前置时「启用」点了没反应 —— 那就不给按钮,状态行已经说了它关着
+          const canEnable = u?.reason === 'off' && !!installed && !unmetPluginDeps(installed, { plugins, activeIds, disabledIds }).length
+          return (
+            <div key={d.id} data-dep-id={d.id} data-dep-state={u?.reason ?? 'ok'} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
+                  {depName(d, plugins, locale)}
+                  {d.minVersion && <span style={{ color: 'var(--text-faint)' }}> ≥ {d.minVersion}</span>}
+                </div>
+                <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: u ? 'var(--warn, #b8860b)' : 'var(--text-faint)' }}>
+                  {!u ? t('settings.amadeusPlugins.dep.ok')
+                    : u.reason === 'version' ? t('settings.amadeusPlugins.dep.version', { min: d.minVersion ?? '', have: u.have ?? '' })
+                    : t(`settings.amadeusPlugins.dep.${u.reason}`)}
+                </div>
+              </div>
+              {market && (u?.reason === 'missing' || u?.reason === 'version') && (
+                <button className="btn ghost sm" onClick={() => useApp.getState().openMarket(d.market || d.name || d.id)}>{t('settings.amadeusPlugins.dep.findInMarket')}</button>
+              )}
+              {canEnable && <button className="btn ghost sm" onClick={() => usePluginStore.getState().enable(d.id)}>{t('settings.amadeusPlugins.dep.enable')}</button>}
+            </div>
+          )
+        })}
+        <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.requiresHint')}</div>
+      </div>
+    </>
+  )
+}
+
+/** 运行占用:插件此刻挂在应用里的东西。账不是响应式的 —— 展开那一刻现读。 */
+const PluginFootprint: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  const [, bump] = useState(0)
+  const { registrations, effects } = pluginFootprint(p.id)
+  const groups = new Map<string, { n: number; labels: Set<string> }>()
+  for (const e of effects) {
+    const g = groups.get(e.kind) ?? { n: 0, labels: new Set<string>() }
+    g.n++
+    if (e.label) g.labels.add(e.label)
+    groups.set(e.kind, g)
+  }
+  return (
+    <details data-plugin-footprint onToggle={() => bump((n) => n + 1)} style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))', paddingTop: 12 }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 'var(--ui-font-meta, 12px)', userSelect: 'none' }}>{t('settings.amadeusPlugins.effects', { n: String(registrations + effects.length) })}</summary>
+      <div style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' }}>
+        <div>{t('settings.amadeusPlugins.effect.registrations')} × {registrations}</div>
+        {[...groups].map(([kind, g]) => (
+          <div key={kind}>{t(`settings.amadeusPlugins.effect.${kind}`)} × {g.n}{g.labels.size ? <span style={{ color: 'var(--text-faint)' }}> · {[...g.labels].join(', ')}</span> : null}</div>
+        ))}
+        <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.effectsHint')}</div>
+      </div>
+    </details>
+  )
 }
 
 /** 捆绑内容徽章(计数;空捆绑不渲染)。 */
@@ -392,7 +534,6 @@ const PluginDetail: React.FC<{
 }> = ({ plugin: p, onBack, cfg, onEngineReload, enginePlugins }) => {
   const { t, locale } = useI18n()
   const activeIds = usePluginStore((s) => s.activeIds)
-  const toggle = usePluginStore((s) => s.toggle)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
   const settings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
   // 挂进「Forsion 云端」的面板在那一页画,详情页不重复
@@ -402,17 +543,12 @@ const PluginDetail: React.FC<{
   // 进详情页实测一次本地两类(设置 / 授权):徽标以「此刻」为准,不以上次打开设置页时为准。
   useEffect(() => { if (on && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id) }, [p, on])
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
-  const toggleHere = (): void => {
-    const wasOff = !on
-    toggle(p.id)
-    // setup 抛错时宿主只发 Amadeus 吐司(只有主窗渲染)→ 在设置浮窗里拨开关就像没反应,这里就地报。
-    const st = usePluginStore.getState()
-    if (wasOff && !st.isActive(p.id) && st.lastSetupError[p.id]) panelToast(t('pluginhost.setupFailed', { name: pluginDisplayName(p, locale) }), true)
-    if (wasOff) void promptIfPending(p.id) // 手动启用 = 注意力在场:实测(连 check),确有未满足才弹检查卡
-    void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins)
-  }
+  const toggleHere = (): void => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))
   const uninstall = async (): Promise<void> => {
-    if (!window.confirm(t('settings.amadeusPlugins.uninstallConfirm', { name: pluginDisplayName(p, locale) }))) return
+    const name = pluginDisplayName(p, locale)
+    const deps = runningDependents(p.id).map((x) => pluginDisplayName(x, locale))
+    const ask = t('settings.amadeusPlugins.uninstallConfirm', { name })
+    if (!window.confirm(deps.length ? `${t('settings.amadeusPlugins.uninstallDependents', { name, list: deps.join(t('common.listSep')) })}\n\n${ask}` : ask)) return
     const ids = p.bundle?.enginePlugins ?? []
     // 先级联关停内嵌引擎插件(尽力):目录一删设置落点就没了,先关能让工具即刻对模型不可见
     if (cfg) for (const id of ids) await setPluginEnabled(homeTarget(), id, false).catch(() => {})
@@ -430,14 +566,17 @@ const PluginDetail: React.FC<{
     await reloadPluginsAndAnnounce() // 设置是独立浮窗:主窗 / 分离窗里跑着的那份实例靠广播拆
     void loadUserSpaces() // 撤下其内嵌 Space
     if (ids.length) {
-      // 引擎侧已装载的内嵌插件(工具/路由)无法运行期反注册 → 重启并核实;
-      // 失败要说清「文件已删但引擎待重启」而非谎报成功(codex P1-8)。
-      const st = await window.tangu?.backendRestart?.().catch(() => null)
-      onEngineReload?.()
-      if (!st || st.state === 'crashed') {
-        panelToast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
-        return
-      }
+      // 引擎 10-02 起热插拔:重扫发现目录没了就运行期撤掉内嵌插件(依赖它们的先休眠),不用重启。旧引擎(不给 reloadedIds)
+      // 撤不掉工具 / 路由 → 照旧重启并核实;失败要说清「文件已删但引擎待重启」而非谎报成功(codex P1-8)。
+      const r = cfg ? await rescanPlugins(homeTarget()).catch(() => null) : null
+      if (!r?.reloadedIds || r.needsRestart) {
+        const st = await window.tangu?.backendRestart?.().catch(() => null)
+        onEngineReload?.()
+        if (!st || st.state === 'crashed') {
+          panelToast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
+          return
+        }
+      } else onEngineReload?.()
     }
     panelToast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
   }
@@ -479,6 +618,7 @@ const PluginDetail: React.FC<{
             {needsOnboarding(p) && (
               <span data-onboarding-badge style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
             )}
+            <RunBadge p={p} />
             <BundleChips p={p} />
           </div>
           {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)', marginTop: 3 }}>{pluginDisplayDescription(p, locale)}</div>}
@@ -505,7 +645,7 @@ const PluginDetail: React.FC<{
         {/* 带主进程半身的内置包(Forsion Extend):开关管下次开机装不装那一半;没有这座桥(设备页 / 旧壳)就不给开关 */}
         {p.locked
           ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
-          : <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />}
+          : <PluginSwitch p={p} onFlip={toggleHere} />}
       </div>
       {p.locked && !!window.tangu?.setBundleEnabled && (
         <div className="hint">
@@ -533,6 +673,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      <RequiredPlugins p={p} />
       {dep && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.dep')}</div>
@@ -565,6 +706,7 @@ const PluginDetail: React.FC<{
           只在插件启用时挂:停用的插件其 setup 没跑过,面板里的按钮点了也没有后端。 */}
       {on && settingsViews.map((o) => <PluginSettingsView key={o.item.id} pluginId={p.id} def={o.item} />)}
       <PluginGuide plugin={p} />
+      {on && <PluginFootprint p={p} />}
       {/* README / 更新日志:必须套 .md-body —— 裸 <Markdown> 吃的是浏览器默认样式(h1 2em、1em 段距),
           和设置页其余部分的行距对不上,观感就是「排版很乱」。同一个类也管着关于页的更新日志。 */}
       {p.readme && (
@@ -598,7 +740,6 @@ export const AmadeusPluginsTab: React.FC<{
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
-  const toggle = usePluginStore((s) => s.toggle)
   const openFolder = usePluginStore((s) => s.openPluginsFolder)
   const scaffold = usePluginStore((s) => s.scaffoldSample)
   usePluginOnboarding((s) => s.version) // 「待引导」徽标随实测结果即时变化
@@ -629,7 +770,6 @@ export const AmadeusPluginsTab: React.FC<{
 
   /** 一张插件卡:内置区与外置区同款(区标题已说明归属,卡上不再重复挂「内置/外置」小标签)。 */
   const renderCard = (p: AmadeusPlugin): React.ReactNode => {
-    const on = activeIds.includes(p.id)
     return (
       <div
         key={p.id}
@@ -654,22 +794,16 @@ export const AmadeusPluginsTab: React.FC<{
               {needsOnboarding(p) && (
                 <span data-onboarding-badge style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
               )}
+              <RunBadge p={p} />
               <BundleChips p={p} />
             </div>
             {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(p.id === 'forsion-extend' ? 'plugins.core.extend' : 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
-          {p.locked ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} /> : (
-            <input
-              type="checkbox"
-              checked={on}
-              disabled={!!p.blocked}
-              onClick={(e) => e.stopPropagation()}
-              onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) void promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
-              style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
-            />
-          )}
+          {p.locked
+            ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
+            : <PluginSwitch p={p} onFlip={() => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))} />}
         </div>
       </div>
     )

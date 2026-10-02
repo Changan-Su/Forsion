@@ -1234,6 +1234,9 @@ export interface AmadeusPlugin {
   minAppVersion?: string
   /** Companion app id (manifest.requiresApp); detail page renders install/probe UI when whitelisted in KNOWN_APPS. */
   requiresApp?: string
+  /** 前置插件(manifest `requiresPlugins`,宿主已消毒):缺任何一个,本插件装着但不运行;前置没了自动暂停、回来自动恢复。
+   *  判定与原因见 pluginDeps.ts;代码内注册的内置插件也可以直接写这个字段。 */
+  requiresPlugins?: import('@amadeus-shared/ipc').PluginDependency[]
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
   /** README.md content for the detail page (external plugins only). */
@@ -1263,6 +1266,9 @@ export interface AmadeusPlugin {
   devProductId?: string
   /** 开发副本正遮蔽同 id 的安装版(撤下后安装版会回来)。 */
   shadowsInstalled?: boolean
-  /** Wire up contributions; optionally return a disposer for teardown on disable. */
-  setup(ctx: PluginContext): void | (() => void)
+  /** Wire up contributions; optionally return a disposer for teardown on disable.
+   *  May be async: the plugin counts as active once the synchronous part returns; a disposer the promise
+   *  resolves to is installed then (or run at once if the plugin was stopped meanwhile), and a rejection
+   *  rolls the whole activation back exactly like a synchronous throw. */
+  setup(ctx: PluginContext): void | (() => void) | Promise<void | (() => void)>
 }

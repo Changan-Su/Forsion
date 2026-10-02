@@ -4,7 +4,7 @@ import { amadeusAvailable } from './features/runtime'
  *    outline(壳有原生大纲视图)、extra-themes(其 [data-theme=…] 选择器在桌面 EditorScope 下永不命中)。
  *  - 插件贡献的 commands 桥进 engine 命令面板(全局可见,id 前缀 amadeus:)。
  *  - 插件 API 的 openSearch/openSwitcher(uiStore.palette)映射到桌面等价物,外部插件不改也能用。 */
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { applyPluginEnableStamp, PLUGIN_ENABLE_STAMP_KEY, usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { calloutBlocks, wordCount } from '@amadeus/plugins/builtins'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -38,6 +38,7 @@ export function installAmadeusPlugins(): void {
   // Mini/detached renderers share preferences but own plugin instances. Revoke local views
   // immediately when another window disables their owner; do not repeat automation mutations.
   window.addEventListener('storage', (event) => {
+    if (event.key === PLUGIN_ENABLE_STAMP_KEY) return applyPluginEnableStamp(event.newValue)
     if (event.key !== 'amadeus.plugins.disabled' && event.key !== null) return
     usePluginStore.getState().syncDisabledPreferences()
     void import('./userSpaces').then(async (m) => { await m.loadUserSpaces(); m.settleAsyncStartupSpace() })

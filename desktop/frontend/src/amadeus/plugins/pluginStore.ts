@@ -19,7 +19,7 @@ import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
-import { registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
+import { getPropertyType, registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
 import { createBlockSurface } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
@@ -68,6 +68,9 @@ import type {
 import { validateTableSpec } from './tableSpec'
 import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
+import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
+import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
+import { windowKind } from '../../windowKind'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget } from '../../services/engine/targets'
@@ -85,6 +88,12 @@ registerMessages({
 })
 
 const DISABLED_KEY = 'amadeus.plugins.disabled'
+/** 「用户在某个窗口明确打开了 X」的一次性戳,写在偏好之前。别的窗口收到 → 清本窗记着的加载失败(重开 = 重试;
+ *  偏好没变、或关了马上又开被合并成没变时也照样到达);主窗再记下欠它内嵌引擎插件的 true。 */
+export const PLUGIN_ENABLE_STAMP_KEY = 'amadeus.plugins.enableStamp'
+/** 主窗欠这些捆绑包内嵌引擎插件一个 true:宿主自己关掉的(父插件被关 / 在等前置),或用户明确开了捆绑包。
+ *  父插件跑起来时**只**补开这些 —— 用户在别处(TUI / CLI)关掉的不在里面,不会被翻回来(Codex 10-02)。只主窗读写。 */
+const OWED_KEY = 'amadeus.plugins.bundleEngineOwed'
 
 /** 外置插件来源:**unit 设备页**(B 端渲染,方案 §11.4 —— 本页就是某台设备曝出来的网页)从该设备的
  *  `unit/plugins` 面拉(相对 base:局域网直连与 server 隧道子路径同一写法);其余环境走
@@ -437,6 +446,24 @@ function writeDisabled(ids: string[]): void {
 
 /** 读持久化的禁用插件 id(直读 localStorage,不依赖 store 是否已 init)。
  *  供 userSpaces 在启动装载时过滤「被禁用插件的内嵌 Space」——那一刻插件宿主可能还没装配。 */
+function readOwed(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(OWED_KEY) || '[]') as string[])
+  } catch {
+    return new Set()
+  }
+}
+// ponytail: 同步读改写,绝不跨 await 攥着旧副本;只主窗写,没有跨窗口竞写。
+function editOwed(fn: (owed: Set<string>) => void): void {
+  const owed = readOwed()
+  fn(owed)
+  try {
+    localStorage.setItem(OWED_KEY, JSON.stringify([...owed]))
+  } catch {
+    /* ignore */
+  }
+}
+
 export function readDisabledPluginIds(): string[] {
   return readDisabled()
 }
@@ -465,18 +492,11 @@ export const agentSpaceSourceUrl = (pluginId: string): string | null => agentLiv
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
 
-/** 开发副本的 setup 代次(按插件 id):见 toPlugin 的开发态分支。 */
-const setupGeneration = new Map<string, number>()
-
 /** 外置插件最近装入的源码(按 id):reloadOne 用来跳过「磁盘内容没变」的重载(应用刚起第一次看到戳就不用拆装一遍)。 */
 const loadedCode = new Map<string, string>()
 
-/** Wrap an external source as a plugin whose setup() evaluates its code with `ctx`. */
-function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
-  loadedCode.set(src.id, src.code)
-  // 每一次重新包装都是一次「重载」(loadExternal / reloadExternal / reloadOne 都经这里)——
-  // 开发态记账在这一刻归零,免得 Studio 把上一份代码的日志算到新代码头上。
-  if (src.dev) clearDevRecords(src.id)
+/** 来源 → 插件的元数据部分(不含 setup,无副作用):重载时代码没变的插件只刷这一份,不拆不装。 */
+function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
   return {
     id: src.id,
     name: src.name,
@@ -493,6 +513,7 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
+    requiresPlugins: src.requiresPlugins,
     capabilities: src.capabilities,
     readme: src.readme,
     changelog: src.changelog,
@@ -506,6 +527,32 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     devRoot: src.devRoot,
     devProductId: src.devProductId,
     shadowsInstalled: src.shadowsInstalled,
+  }
+}
+
+/** 运行身份:这几样变了,正在跑的那一份就是旧的,得拆了重装;别的(名字 / 图标 / README / 前置声明)只刷元数据。
+ *  capabilities 决定注不注 ctx.system,agent 决定注不注 ctx.agent —— 都是 setup 那一刻定下的。 */
+function sameRuntime(p: AmadeusPlugin, src: ExternalPluginSource): boolean {
+  const caps = (x?: readonly string[]): string => [...(x ?? [])].sort().join(',')
+  return loadedCode.get(src.id) === src.code
+    && (p.blocked ?? null) === (src.blocked ?? null)
+    && !!p.dev === !!src.dev
+    && (p.devRoot ?? null) === (src.devRoot ?? null)
+    && !!p.shadowsInstalled === !!src.shadowsInstalled
+    && (p.agent ?? null) === (src.agent ?? null)
+    && caps(p.capabilities) === caps(src.capabilities)
+}
+
+/** Wrap an external source as a plugin whose setup() evaluates its code with `ctx`. */
+function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
+  loadedCode.set(src.id, src.code)
+  // 每一次重新包装都是一次「重载」(loadExternal / reloadExternal / reloadOne 都经这里)——
+  // 开发态记账在这一刻归零,免得 Studio 把上一份代码的日志算到新代码头上。
+  if (src.dev) clearDevRecords(src.id)
+  return {
+    ...pluginMeta(src),
+    // 返回值原样交回宿主:disposer、undefined,或 async setup 的 promise —— 落定 / 失败 / 过期的处理在 start() 里,
+    // 开发副本与已安装插件同一套(过期判定看这一次激活的那本账还活不活)。
     setup: (ctx) => {
       // 已安装插件:求值路径与从前**逐字相同**(一个形参、一个实参)。开发态那条多带一个 console ——
       // new Function 的栈帧是 <anonymous>,不在求值时把按插件记账的 console 塞进作用域,
@@ -522,38 +569,14 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
           agentLoads.set(src.id, n)
           code = `${src.code}\n//# sourceURL=${url}`
         }
-        const fn = new Function('ctx', code) as (c: PluginContext) => unknown
+        const fn = new Function('ctx', code) as (c: PluginContext) => ReturnType<AmadeusPlugin['setup']>
         const d = fn(ctx)
         // 跑成功了才算「正在运行的那一版」:同步 setup 抛错 → 由加载失败那条回写负责,它残留的定时器不再另报(Codex 09-27 三轮)
         if (url) agentLive.set(src.id, url)
-        return typeof d === 'function' ? (d as () => void) : undefined
+        return d
       }
-      const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => unknown
-      // 每次 setup 一个代次:热重载下「上一版的 async setup 还没落定,新一版已经装好」是常态,迟到的结果必须认得出自己过期了。
-      const generation = (setupGeneration.get(src.id) ?? 0) + 1
-      setupGeneration.set(src.id, generation)
-      const current = (): boolean => setupGeneration.get(src.id) === generation
-        && usePluginStore.getState().activeIds.includes(src.id) && !!usePluginStore.getState().plugins.find((p) => p.id === src.id)?.dev
-      const d = fn(ctx, devConsoleFor(src.id))
-      if (typeof d === 'function') return d as () => void
-      // async setup:抛在 promise 里的错没人接(宿主 try/catch 只罩同步那一段),开发者只会在控制台
-      // 看到一行 unhandled rejection,设置页与 Studio 都显示「已启用」。开发态把它接住记成 setup 错误。
-      if (d && typeof (d as PromiseLike<unknown>).then === 'function') {
-        void Promise.resolve(d).then((resolved: unknown) => {
-          if (typeof resolved !== 'function') return
-          // async setup 交回来的 disposer:这一代还活着 → 装上(否则定时器 / 监听跨重载一层层叠);已经过期 → 当场调用收掉。
-          if (current()) usePluginStore.setState((s) => ({ disposers: { ...s.disposers, [src.id]: resolved as () => void } }))
-          else { try { (resolved as () => void)() } catch (err) { console.error(`[amadeus] plugin "${src.id}" stale disposer failed`, err) } }
-        }, (e: unknown) => {
-          // 过期那一代的 reject 不许回写:第 1 版的失败迟到,不能把已经装好的第 2 版标成「加载失败」。
-          if (!current()) return
-          console.error(`[amadeus] plugin "${src.id}" async setup rejected`, e)
-          usePluginStore.setState((s) => ({
-            lastSetupError: { ...s.lastSetupError, [src.id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) },
-          }))
-        })
-      }
-      return undefined
+      const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => ReturnType<AmadeusPlugin['setup']>
+      return fn(ctx, devConsoleFor(src.id))
     },
   }
 }
@@ -565,15 +588,27 @@ export function isValidPluginExt(e: string): boolean {
   return true
 }
 
+/** 每个正在运行的插件一本副作用账(effectScope.ts);teardown 关账。模块级:视图宿主组件也要往里记。 */
+const liveScopes = new Map<string, EffectScope>()
+
 /** 视图级页表面(viewSurface)的吊销登记:插件禁用时 fileTypes 切片一变,React 重渲 → effect
- *  cleanup 会把视图表面收掉,但那是**异步**的 —— teardown 里同步吊销才封死「禁用后在飞的插件
- *  代码还能写文件」的空窗。视图正常卸载时自己 dereg,这里只兜插件层的收尸。 */
-const viewTeardowns = new Map<string, Set<() => void>>()
+ *  cleanup 会把视图表面收掉,但那是**异步**的 —— 记在插件当前那本账上,teardown 关账时同步吊销,才封死
+ *  「禁用后在飞的插件代码还能写文件」的空窗。视图正常卸载时自己收尾,返回的函数只把这条从账上划掉。
+ *  插件此刻不在跑(正停 / 已停)→ 当场吊销:不给已经停掉的插件留一个活的写口。 */
 export function addPluginViewTeardown(pluginId: string, fn: () => void): () => void {
-  let bucket = viewTeardowns.get(pluginId)
-  if (!bucket) viewTeardowns.set(pluginId, (bucket = new Set()))
-  bucket.add(fn)
-  return () => { viewTeardowns.get(pluginId)?.delete(fn) }
+  const scope = liveScopes.get(pluginId)
+  if (scope) return scope.own('viewSurface', fn).forget
+  try { fn() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" view-surface revoke failed`, e) }
+  return () => {}
+}
+
+/** 插件此刻挂在宿主里的东西:各切片里的注册项条数 + 副作用账(订阅 / 挂载 / 字体 / 编辑器扩展……)。
+ *  插件详情页「运行占用」用;不在跑 → 0 与空。 */
+export function pluginFootprint(pluginId: string): { registrations: number; effects: EffectRecord[] } {
+  const s = usePluginStore.getState()
+  let registrations = 0
+  for (const k of SLICE_KEYS) for (const o of s[k] as Owned<unknown>[]) if (o.pluginId === pluginId) registrations++
+  return { registrations, effects: liveScopes.get(pluginId)?.records() ?? [] }
 }
 
 /** ctx.automation / ctx.calendar 共用的「等库恢复」。vault 是懒恢复的(bootstrapEngine:「vault 恢复仍然懒」),
@@ -655,8 +690,8 @@ function serialIn<T>(chains: Map<string, Promise<unknown>>, pluginId: string, ta
 const ruleChains = new Map<string, Promise<unknown>>()
 const serialByPlugin = <T>(pluginId: string, task: () => Promise<T>): Promise<T> => serialIn(ruleChains, pluginId, task)
 
-/** 捆绑包内嵌引擎插件启停的串行链(按父插件):拨开关的级联(AmadeusPluginsTab)与补关(syncDisabledBundleEngines)
- *  各自在链内现读偏好,两边的 PUT 不会乱序落成「卡片开、引擎关」。与规则链分开:引擎 PUT 卡住不许连带挡住规则停用。 */
+/** 捆绑包内嵌引擎插件启停的串行链(按父插件):拨开关的级联(AmadeusPluginsTab)与对齐(syncBundleEngines)
+ *  各自在链内现读期望态,两边的 PUT 不会乱序落成「卡片开、引擎关」。与规则链分开:引擎 PUT 卡住不许连带挡住规则停用。 */
 const bundleEngineChains = new Map<string, Promise<unknown>>()
 export const serialBundleEngines = <T>(pluginId: string, task: () => Promise<T>): Promise<T> => serialIn(bundleEngineChains, pluginId, task)
 
@@ -676,42 +711,146 @@ function ensureReadySubscription(): void {
 function onBackendReadyEdge(): void {
   replayFailedEnsures()
   replayPendingDisables()
-  void syncDisabledBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
+  void syncBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件对齐失败', e))
 }
 
-/** 用户关掉的捆绑包 ⇒ 它内嵌的引擎插件也必须是关的。拨开关时的级联(AmadeusPluginsTab)只发一次,那一刻引擎
- *  不在就丢了;而引擎对捆绑包内嵌插件缺省启用(tangu-agent plugins/bootstrap)—— 欠下的在装载完与每次就绪边沿补上。
- *  只认持久化的禁用偏好(用户明确意图):不看激活态(启动时还在异步激活,会误关),也不管门禁挡下的
- *  (显式 false 是粘性的,解禁后没人翻回来)。只 PUT 仍开着的,多窗口重复跑是空转。跳过口径同级联:
- *  用户目录同 id 覆盖与首方内置同 id 不归捆绑包管;设备页不动对端引擎(见 SettingsModal 的级联注释)。
- *  关不掉不能只等下一个边沿:后端一直就绪就不会再有边沿 → 失败按 ensure 重放的节奏补(≥30s,每次触发各自至多 3 次)。 */
-export async function syncDisabledBundleEngines(attempt = 0): Promise<void> {
+/** 用户想不想让它跑(偏好)。locked 包(Forsion Extend)看主进程那一半的开关(bundleOff),不看 localStorage ——
+ *  旧开关拨下的「关」会一直留在那儿,而主进程半身其实在跑,按 localStorage 判它挂进「Forsion 云端」的设置页就永远出不来。 */
+export function pluginWanted(p: AmadeusPlugin, disabledIds: readonly string[] = usePluginStore.getState().disabledIds): boolean {
+  return p.locked ? !p.bundleOff : !disabledIds.includes(p.id)
+}
+
+/** p 还差哪些前置(空 = 齐了;口径见 pluginDeps.ts:装了、没被挡、版本够、**正在跑**)。 */
+export function unmetPluginDeps(
+  p: AmadeusPlugin,
+  s: Pick<PluginState, 'plugins' | 'activeIds' | 'disabledIds'> = usePluginStore.getState(),
+): UnmetDependency[] {
+  if (!p.requiresPlugins?.length) return []
+  const byId = new Map(s.plugins.map((x) => [x.id, x]))
+  return unmetDependencies(p, s.plugins, (id) => s.activeIds.includes(id), (id) => { const q = byId.get(id); return !!q && pluginWanted(q, s.disabledIds) })
+}
+
+/** 正在跑、且直接或间接声明了要 id 的插件(停用 / 卸载 id 之前给用户看:它们会跟着暂停)。 */
+export function runningDependents(id: string): AmadeusPlugin[] {
+  const s = usePluginStore.getState()
+  return dependentsOf(id, s.plugins).filter((p) => s.activeIds.includes(p.id))
+}
+
+/** 捆绑包内嵌引擎插件该开(true)/ 该关(false)/ 别动(null),只看父插件:在跑 → 开;用户关了它、或它在等前置 → 关;
+ *  门禁挡着、加载失败、还没装载完(启动时还在异步激活,会误关)→ 不动 —— 显式 false 是粘性的,解禁后没人翻回来。 */
+export function bundleEngineDesired(id: string): boolean | null {
+  const s = usePluginStore.getState()
+  const p = s.plugins.find((x) => x.id === id)
+  if (!p) return null
+  if (!pluginWanted(p, s.disabledIds)) return false // 用户关了优先于「还在跑」(locked 包关了要到重启才拆)
+  if (s.activeIds.includes(id)) return true
+  if (p.blocked || s.lastSetupError[id]) return null
+  return unmetPluginDeps(p, s).length ? false : null
+}
+
+/** 捆绑包内嵌引擎插件跟父插件走(bundleEngineDesired),**只主窗**写引擎:各窗口运行态可能不同,拨开关的那个窗口(设置浮窗)
+ *  不直接 PUT,主窗收到偏好 / 开启戳后在这里统一串行写(Codex 10-02)。每次对齐之后、每次就绪边沿跑。
+ *  关:父插件被关 / 在等前置 → 关掉仍开着的,并记进欠账(OWED_KEY);开:父插件在跑 → **只**补开欠账里的 ——
+ *  用户在 TUI / CLI 关掉的不翻回来。门禁挡着 / 失败 / 还没装载完 → 不动(启动时还在异步激活,会误关)。
+ *  跳过:用户目录同 id 覆盖与首方内置同 id 不归捆绑包管;设备页不动对端引擎。
+ *  失败不能只等下一个边沿:后端一直就绪就不会再有边沿 → 按 ensure 重放的节奏补(≥30s,每次触发各自至多 3 次)。 */
+export async function syncBundleEngines(attempt = 0): Promise<void> {
   if (typeof window === 'undefined' || window.tangu?.unitPage || (window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) return
+  // 只主窗:各窗口的运行态可能不一样(某窗里加载失败),N 个窗口各按各的写会来回翻。
+  if (windowKind() !== 'main') return
   ensureReadySubscription() // 这次等不到后端,就绪边沿再来一次
   const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
   if (!cfg) return
-  const isOff = (id: string): boolean => usePluginStore.getState().disabledIds.includes(id)
-  const parents = usePluginStore.getState().plugins.filter((p) => isOff(p.id) && p.bundle?.enginePlugins?.length)
+  const parents = usePluginStore.getState().plugins.filter((p) => p.bundle?.enginePlugins?.length && bundleEngineDesired(p.id) !== null)
   if (!parents.length) return
   let userOwned = new Set<string>()
   try {
     userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.()) ?? []).map((x) => x.id))
   } catch { /* 桥缺位按空集 */ }
-  const engine = await listPlugins(connectionTarget(cfg)) // 拉失败也回 [],与「一个都没有」分不开 → 按失败补
-  let failed = !engine.length
-  const on = new Set(engine.filter((e) => e.enabled && e.source !== 'builtin' && !userOwned.has(e.id)).map((e) => e.id))
+  let failed = false
   for (const p of parents) {
-    // 与级联同链,链内现读偏好:等名单 / 排队期间用户重新打开了,就让位给级联写的 true。
+    // 与级联同链,链内现读期望**与引擎名单**:排队期间用户又拨了开关、或前一个任务的 PUT 刚落定(暂停→恢复连着来),
+    // 按此刻的来 —— 链外先拉的名单快照会过期,拿它比会漏掉「父插件已恢复、引擎插件还关着」(Codex 10-02)。
     await serialBundleEngines(p.id, async () => {
-      if (!isOff(p.id)) return
+      if (bundleEngineDesired(p.id) === null) return
+      const engine = await listPlugins(connectionTarget(cfg)) // 拉失败也回 [],与「一个都没有」分不开 → 按失败补
+      if (!engine.length) { failed = true; return }
+      const want = bundleEngineDesired(p.id) // 等名单那一下也可能拨了开关:名单到手后再读
+      if (want === null) return
+      const enabled = new Map(engine.filter((e) => e.source !== 'builtin' && !userOwned.has(e.id)).map((e) => [e.id, e.enabled]))
       for (const id of p.bundle?.enginePlugins ?? []) {
-        if (on.has(id)) await setPluginEnabled(connectionTarget(cfg), id, false).catch(() => { failed = true })
+        if (!enabled.has(id)) continue
+        if (!want) {
+          if (enabled.get(id)) await setPluginEnabled(connectionTarget(cfg), id, false).then(() => editOwed((o) => o.add(id)), () => { failed = true })
+        } else if (readOwed().has(id)) {
+          if (enabled.get(id)) editOwed((o) => o.delete(id))
+          else await setPluginEnabled(connectionTarget(cfg), id, true).then(() => editOwed((o) => o.delete(id)), () => { failed = true })
+        }
       }
     })
   }
   if (failed && attempt < ENSURE_REPLAY_MAX) {
-    setTimeout(() => void syncDisabledBundleEngines(attempt + 1).catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e)), ENSURE_REPLAY_MIN_GAP_MS)
+    setTimeout(() => void syncBundleEngines(attempt + 1).catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件对齐失败', e)), ENSURE_REPLAY_MIN_GAP_MS)
   }
+}
+
+/** 用户明确打开了 id(本窗 enable,或别的窗口的戳):清本窗记着的失败;主窗记下欠它内嵌引擎插件的 true。 */
+function noteExplicitEnable(id: string): void {
+  usePluginStore.setState((s) => {
+    if (!s.lastSetupError[id]) return {}
+    const lastSetupError = { ...s.lastSetupError }
+    delete lastSetupError[id]
+    return { lastSetupError }
+  })
+  const engines = usePluginStore.getState().plugins.find((p) => p.id === id)?.bundle?.enginePlugins ?? []
+  if (engines.length && windowKind() === 'main') editOwed((o) => engines.forEach((e) => o.add(e)))
+}
+
+/** storage 事件:别的窗口明确打开了某插件(PLUGIN_ENABLE_STAMP_KEY)。 */
+export function applyPluginEnableStamp(raw: string | null): void {
+  let id: unknown
+  try {
+    id = raw ? (JSON.parse(raw) as { id?: unknown }).id : undefined
+  } catch {
+    return
+  }
+  if (typeof id !== 'string') return
+  noteExplicitEnable(id)
+  usePluginStore.getState().syncDisabledPreferences()
+}
+
+/** 因前置没齐而停着的插件,它种在引擎里的规则已经发过停用的(每次进入这个状态发一次;重新跑起来即清 —— setup 会再 ensure)。 */
+const pendingRulesOff = new Set<string>()
+
+/** 对齐之后的引擎侧收尾,只主窗做(各窗都会对齐,发 N 遍没意义):想开却因前置没齐停着的插件,规则先停 ——
+ *  用户看到的是「没在运行」,引擎里不许照跑;再让捆绑包内嵌引擎插件跟上父插件的运行态。 */
+function afterReconcile(): void {
+  if (windowKind() !== 'main' || !readTangu()?.waitBackend) return
+  const s = usePluginStore.getState()
+  for (const p of s.plugins) {
+    if (s.activeIds.includes(p.id) || p.blocked || pendingRulesOff.has(p.id) || !pluginWanted(p, s.disabledIds) || !unmetPluginDeps(p, s).length) continue
+    pendingRulesOff.add(p.id)
+    void disablePluginRules(p.id).catch((e) => console.warn(`[amadeus] plugin "${p.id}" 停用自动化规则失败`, e))
+  }
+  if (s.plugins.some((p) => p.bundle?.enginePlugins?.length)) void syncBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件对齐失败', e))
+}
+
+/** 按插件归属的切片。键必须恰好是 PluginState 里全部 Owned<…>[] 字段(satisfies 管着:新增切片忘了登记就编译不过)——
+ *  旧代码在 teardown 与 setup 失败两处各手抄一遍。 */
+type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
+const SLICE_KEYS = Object.keys({
+  slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
+  settingsViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, fileCreators: 1,
+} satisfies Record<OwnedKey, 1>) as OwnedKey[]
+
+/** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
+function dropSlices(s: PluginState, id: string): Partial<PluginState> {
+  const out: Partial<Record<OwnedKey, Owned<unknown>[]>> = {}
+  for (const k of SLICE_KEYS) {
+    const arr = s[k] as Owned<unknown>[]
+    if (arr.some((o) => o.pluginId === id)) out[k] = arr.filter((o) => o.pluginId !== id)
+  }
+  return out as Partial<PluginState>
 }
 
 /** 对「上次 ensure 失败、没在飞、离上次重放 ≥30s、重放未满 3 次」的插件各重放一次。
@@ -769,10 +908,10 @@ async function ensurePluginAutomationOnce(pluginId: string, rules: PluginAutomat
   })
 }
 
-/** 用户**明确禁用**插件 → 它的 `plugin:<id>:` 规则全部 enabled=false(不删;再启用时插件自己的 ensure 会置回 true,
+/** 插件**确定不跑了** → 它的 `plugin:<id>:` 规则全部 enabled=false(不删;再启用时插件自己的 ensure 会置回 true,
  *  引擎那边 false→true 会 dropCursors 重新播种)。全量拉 + 前缀过滤,没有就自然 no-op;fire-and-forget。
- *  ⚠️只挂在 disable(id) 上,不进 teardown / revokers —— 那两条被 reloadExternal 与 setup 抛错分支复用,
- *  在那里关规则会与紧随其后的 ensure(enabled:true)赛跑。
+ *  调用点只有三处:用户明确禁用(disable)、因前置没齐停着(afterReconcile,主窗)、来源没了(applySources,主窗)。
+ *  ⚠️不进 teardown —— 它被重载与 setup 失败复用,在那里关规则会与紧随其后的 ensure(enabled:true)赛跑。
  *  ⚠️关不掉不许静默返回(codex 二轮 high):后端不在 / 拉不到 / 发失败一律留墓碑(pendingDisable),
  *  后端 !ok→ok 边沿重试;墓碑还在 = 「规则尚未停用」,由 getPluginDisableState 露出来。 */
 async function disablePluginRules(pluginId: string, replay = false): Promise<void> {
@@ -827,59 +966,20 @@ function replayPendingDisables(): void {
 }
 
 export const usePluginStore = create<PluginState>((set, get) => {
-  // 每个插件一份 app API(块表面可吊销);teardown 时按 id 吊销。同 id 重新 enable 会覆盖成新的一份,
-  // 旧 facade 已在 teardown 里吊销 → 旧代码持有的引用是哑的。
-  const revokers: Record<string, (() => void) | undefined> = {}
   const makeContext = (pluginId: string): PluginContext => {
-    revokers[pluginId]?.() // 防守:没经 teardown 就重建 context(setup 抛错后重试)也不留旧订阅
+    liveScopes.get(pluginId)?.close() // 防守:没经 teardown 就重建 context 也不留旧账
+    // 每个插件一份 app API(块表面可吊销)。关账时先杀它(ctx.app 变哑、块表面吊销、文件订阅收掉),
+    // 旧代码持有的引用从此是哑的 —— 然后才逐条撤别的副作用。
     const { api: appApi, revokeSurface } = makeAppApi(pluginId, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId)
-    // 语言订阅与块表面同一条纪律:插件自己能退订,但**最终责任人是宿主** —— disable/reload/setup 抛错
-    // 一律统一收掉(codex 评审 2026-08-14)。
-    const localeUnsubs = new Set<() => void>()
-    const tanguUnsubs = new Set<() => void>()
-    const fontDisposers = new Set<() => void>()
-    // 插件仪表盘挂载(ctx.dashboard.mount):与视图表面同一条纪律 —— 插件禁用/重载时宿主统一卸掉,
-    // 否则内存作用域的 pageStore 与 React 树在插件死后还活着。
-    const dashMounts = new Set<() => void>()
-    // 插件原生表挂载(ctx.table.mount):同上;另有 body 级弹层宿主要收,漏了就是页面上一堆空 div。
-    const tableMounts = new Set<() => void>()
-    // 插件宿主原生 UI(ctx.ui.*):插件没接 disposer 时也由 disable/reload 统一收掉。
-    const uiMounts = new Set<() => void>()
-    // ctx 级活性闸(ctx.app 的 alive 管不到 ctx.tangu / ctx.desk):吊销后 startChat 不再开对话、
-    // registerCompanion 不再挂新伴随面、旧 handle 变哑。
-    let ctxAlive = true
-    revokers[pluginId] = () => {
-      ctxAlive = false
+    const scope = createEffectScope(pluginId, () => {
       lastGesture.delete(pluginId) // 旧实例上的点击不许授权重载后的新实例(Codex 09-27)
-      revokeDeskCompanions(pluginId)
       revokeSurface()
-      for (const d of Array.from(dashMounts)) {
-        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" dashboard dispose failed`, e) }
-      }
-      dashMounts.clear()
-      for (const d of Array.from(tableMounts)) {
-        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" table dispose failed`, e) }
-      }
-      tableMounts.clear()
-      for (const d of Array.from(uiMounts)) {
-        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" UI dispose failed`, e) }
-      }
-      uiMounts.clear()
-      for (const u of Array.from(localeUnsubs)) {
-        try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" locale unsubscribe failed`, e) }
-      }
-      localeUnsubs.clear()
-      // ctx.tangu 的订阅同款纪律:禁用后的插件不许还在收模型/Space 变更回调。
-      for (const u of Array.from(tanguUnsubs)) {
-        try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" tangu unsubscribe failed`, e) }
-      }
-      tanguUnsubs.clear()
-      // 字体同理:插件不调 disposer 也得收干净,否则停用后下拉里还留着选不出效果的死项。
-      for (const d of Array.from(fontDisposers)) {
-        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" font dispose failed`, e) }
-      }
-      fontDisposers.clear()
-    }
+    })
+    liveScopes.set(pluginId, scope)
+    // ctx 级活性闸(ctx.app 的 alive 管不到 ctx.tangu / ctx.desk):吊销后 startChat 不再开对话、
+    // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
+    // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
+    const ctxAlive = (): boolean => scope.alive()
     // agent 自建 Space 读写自家数据(2026-09-27):**只注入给 agent-<slug> 插件**(来源 <tangu>/agents/<slug>/Space/,
     // plugin.agent = slug),只能碰它自己这个 agent;探针缺这条(纯 Amadeus 壳 / 台架)或该 agent 没有数据源 → 整个不注入。
     // 写只在用户刚在**它自己的视图里**点过之后放行:插件代码是 agent 自己写的,不许它不经点击替用户处理 TODO ——
@@ -890,7 +990,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const slug = get().plugins.find((p) => p.id === pluginId)?.agent
       const self = slug ? readTangu()?.agentSelf?.(slug) : null
       if (!slug || !self) return {}
-      const alive = <T,>(f: () => Promise<T>): Promise<T> => (ctxAlive ? f() : Promise.reject(new Error('plugin disabled')))
+      const alive = <T,>(f: () => Promise<T>): Promise<T> => (ctxAlive() ? f() : Promise.reject(new Error('plugin disabled')))
       // 订阅:有人订才轮询,状态键(在跑 / 上次周期 / 休眠 / 待批数 / 待办数)变了才回调;updateTodo 之后立刻补一次。
       const listeners = new Set<() => void>()
       let timer: ReturnType<typeof setInterval> | null = null
@@ -902,9 +1002,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         }
       }
       const check = async (): Promise<void> => {
-        if (!ctxAlive || !listeners.size) return
+        if (!ctxAlive() || !listeners.size) return
         const [st, pending] = await Promise.all([self.status().catch(() => null), self.todos('pending').catch(() => null)])
-        if (!st || !pending || !ctxAlive) return
+        if (!st || !pending || !ctxAlive()) return
         // 待办按 id 比而不是按条数:别处忽略一条、同时新长出一条,条数不变也得回调
         const key = `${st.running}|${st.lastCycleAt}|${st.sleepUntil}|${st.pendingApprovals}|${pending.map((t) => t.id).sort().join(',')}`
         if (lastKey !== null && key !== lastKey) fire()
@@ -921,7 +1021,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
             // 调用那一刻判:本插件视图里 1.5 秒内有过真实点击 / 按键;定时器 / 挂载时 / 别处的点击一律拒
             if (!gesture()) return Promise.reject(new Error('ctx.agent.updateTodo only works right after the user clicks inside your own view (call it from a click handler)'))
             // alive 传进去:等后端就绪那一拍里插件被停用,就别再把写发出去
-            return alive(() => self.updateTodo(String(id), status, () => ctxAlive)).then(() => { if (ctxAlive) fire() })
+            return alive(() => self.updateTodo(String(id), status, ctxAlive)).then(() => { if (ctxAlive()) fire() })
           },
           schedule: () => alive(() => self.schedule()),
           library: {
@@ -929,16 +1029,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
             read: (path: string) => alive(() => self.libraryRead(String(path))),
           },
           subscribe: (cb: () => void) => {
-            if (!ctxAlive) return () => {}
+            if (!ctxAlive()) return () => {}
             listeners.add(cb)
             if (!timer) { void check(); timer = setInterval(() => void check(), AGENT_POLL_MS) }
-            const off = (): void => {
+            return scope.own('subscription', () => {
               listeners.delete(cb)
-              tanguUnsubs.delete(off)
               if (!listeners.size && timer) { clearInterval(timer); timer = null; lastKey = null }
-            }
-            tanguUnsubs.add(off)
-            return off
+            }, 'agent')
           },
         },
       }
@@ -947,16 +1044,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     app: appApi,
     account: hostTangu()?.account ? {
       ...hostTangu()!.account!,
-      subscribe: (listener) => {
-        const off = hostTangu()!.account!.subscribe(listener)
-        const dispose = () => { off(); tanguUnsubs.delete(dispose) }
-        tanguUnsubs.add(dispose)
-        return dispose
-      },
+      subscribe: (listener) => scope.own('subscription', hostTangu()!.account!.subscribe(listener), 'account'),
     } : undefined,
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
-      if (!ctxAlive) return
+      if (!ctxAlive()) return
       if (!action || typeof action.id !== 'string' || typeof action.title !== 'string' || typeof action.run !== 'function') {
         console.warn(`[amadeus] 插件 ${pluginId} 的 registerSelectionAction 缺 id / title / run,已忽略`)
         return
@@ -967,6 +1059,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),
     registerTheme: (theme) => {
       injectThemeStyle(theme.id, theme.css)
+      scope.own('theme', () => removeThemeStyle(theme.id), theme.id) // <style> 在 store 外:只删切片会留孤儿
       set((s) => ({ themes: [...s.themes, { pluginId, item: theme }] }))
     },
     // 插件字体(2026-08-28):与内置预设同形,只是 source 不同 → 设置里分到「插件提供」组。
@@ -988,9 +1081,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
         source: `plugin:${pluginId}`,
         files,
       })
-      const wrapped = (): void => { dispose(); fontDisposers.delete(wrapped) }
-      fontDisposers.add(wrapped)
-      return wrapped
+      // 插件不调 disposer 也得收干净,否则停用后下拉里还留着选不出效果的死项。
+      return scope.own('font', dispose, font.id)
     },
     registerPanel: (panel) => set((s) => ({ panels: [...s.panels, { pluginId, item: panel }] })),
     // 全局状态栏项(2026-07-23 复活):同 id 重复注册即覆盖;返回 handle 供原位更新(外置插件轮询改 text)。
@@ -1012,15 +1104,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
     },
     // 右上角通知(2026-07-23 起):来源自动标插件名;事件 plugin:<id>,用户可在设置里按插件静音。
+    // 停用后残留的定时器不许再弹(10-02 补的活性闸,与 ctx.app 的副作用口同一条纪律)。
     notify: (message, opts) =>
-      notifyApp({
+      void (ctxAlive() && notifyApp({
         text: String(message ?? ''),
         level: opts?.level,
         title: opts?.title ? String(opts.title) : undefined,
         sticky: typeof opts?.sticky === 'boolean' ? opts.sticky : undefined,
         event: `plugin:${pluginId}`,
         sourceLabel: get().plugins.find((p) => p.id === pluginId)?.name || pluginId,
-      }),
+      })),
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
     registerListSource: (src) => set((s) => ({ listSources: [...s.listSources, { pluginId, item: src }] })),
     // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType)。返回 false 让插件知道自己被内置取代了,
@@ -1058,11 +1151,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
-    openView: (viewId, opts) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location),
+    openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location) },
     ...(!hostTangu()?.mobile ? { openFloatingPanel: (viewId: string, opts?: import('./types').PluginFloatingPanelOptions) => {
       const type = `plugin:${pluginId}:${viewId}`
       const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
-      if (!def) return
+      if (!def || !ctxAlive()) return
       const target = { id: type, title: opts?.title || def.title, view: { type, params: opts?.params },
         width: opts?.width, height: opts?.height, minWidth: opts?.minWidth, minHeight: opts?.minHeight }
       if (hostTangu()?.openFloatingPanel) void hostTangu()?.openFloatingPanel?.(target)
@@ -1072,7 +1165,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       openMiniPanel: (viewId: string, opts?: import('./types').PluginMiniPanelOptions) => {
         const type = `plugin:${pluginId}:${viewId}`
         const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
-        if (!def) return
+        if (!def || !ctxAlive()) return
         const mainType = `plugin:${pluginId}:${opts?.mainViewId || viewId}`
         hostTangu()?.openMini?.({ title: opts?.title || def.title, params: opts?.params,
           view: { type, params: opts?.params }, mainView: { type: mainType, params: opts?.mainViewParams } })
@@ -1080,12 +1173,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     } : {}),
     // 宿主 UI 当前语言(2026-08-14 起):插件自带双语词表,用它挑。只报变化,初值走 getLocale()。
     getLocale: () => currentLocale(),
-    subscribeLocale: (cb) => {
-      const off = subscribeLocale(cb)
-      const wrapped = () => { off(); localeUnsubs.delete(wrapped) }
-      localeUnsubs.add(wrapped)
-      return wrapped
-    },
+    subscribeLocale: (cb) => scope.own('subscription', subscribeLocale(cb), 'locale'),
     // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
     registerSetting: (def) =>
       set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
@@ -1114,7 +1202,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
     // 名字给扩展隔离的提示用(评审 G1-07:哪个插件的扩展坏了要点名)。
-    registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId),
+    // 撤是按插件整体撤(clearEditorExtensions 让全部编辑器原地重配一次),所以 N 份扩展只记一条。
+    registerEditorExtension: (factory, opts) => {
+      addEditorExtension(pluginId, factory, opts, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId)
+      scope.ownOnce('editorExtension', () => clearEditorExtensions(pluginId))
+    },
     // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
     // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
     loadData: async () => {
@@ -1139,11 +1231,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       mountMarkdownEditor: (el, opts) => {
         const pending = { ...opts }
         let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null
-        let cancelled = !ctxAlive, focusPending = false
+        let cancelled = false, focusPending = false
         if (!(el instanceof HTMLElement) || typeof opts?.value !== 'string') throw new TypeError('mountMarkdownEditor needs an HTMLElement and Markdown value')
-        const dispose = (): void => { cancelled = true; uiMounts.delete(dispose); if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null }
+        // 插件没接 disposer 时由关账统一卸;已停用时登记即撤(cancelled 当场为真,不挂)。
+        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null }, 'markdownEditor')
         if (!cancelled) {
-          uiMounts.add(dispose)
           void import('./markdownEditorSurface').then(m => {
             if (cancelled) return
             mounted = m.mountPluginMarkdownEditor(el, pending)
@@ -1159,16 +1251,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         }
       },
       mountChatBox: (el, opts) => {
-        if (!ctxAlive) return { update() {}, focus() {}, dispose() {} }
+        if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
         if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
         let cancelled = false, focusPending = false
         const pending = { ...opts }
-        const dispose = (): void => {
-          cancelled = true; uiMounts.delete(dispose); mounted?.dispose(); mounted = null
-        }
-        uiMounts.add(dispose)
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
           mounted = m.mountPluginChatBox(el, pending)
@@ -1188,15 +1277,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let mounted: import('./types').PluginFloatingTocHandle | null = null
         let cancelled = false
         let pendingRefresh = false
-        const dispose = (): void => {
-          cancelled = true
-          uiMounts.delete(dispose)
-          mounted?.dispose()
-          mounted = null
-        }
-        uiMounts.add(dispose)
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'floatingToc')
         void import('./floatingTocSurface').then((m) => {
-          if (cancelled) { uiMounts.delete(dispose); return }
+          if (cancelled) return
           mounted = m.mountPluginFloatingToc(shell, opts)
           if (pendingRefresh) mounted.refresh()
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" Floating TOC mount failed`, e) })
@@ -1220,22 +1303,17 @@ export const usePluginStore = create<PluginState>((set, get) => {
       mount: (el, o) => {
         let disposeMounted: (() => void) | null = null
         let cancelled = false
-        const dispose = (): void => {
-          cancelled = true
-          dashMounts.delete(dispose)
-          disposeMounted?.()
-          disposeMounted = null
-        }
-        dashMounts.add(dispose)
+        // 内存作用域的 pageStore 与 React 树不许在插件死后还活着:插件不卸,关账卸。
+        const dispose = scope.own('mount', () => { cancelled = true; disposeMounted?.(); disposeMounted = null }, 'dashboard')
         void import('./dashboardSurface').then((m) => {
-          if (cancelled || !el.isConnected) { dashMounts.delete(dispose); return }
+          if (cancelled || !el.isConnected) { dispose(); return }
           disposeMounted = m.mountPluginDashboard(pluginId, el, o).dispose
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" dashboard mount failed`, e) })
         return dispose
       },
     },
     // 面板里的原生多维表(只读、内存行)。与 dashboard.mount 同款三件套:动态 import 破环、
-    // cancelled 标志 + el.isConnected 复检、每插件一份 tableMounts 由 revoker 排空。
+    // cancelled 标志 + el.isConnected 复检;挂载记在本次激活的账上,关账排空。
     // ⚠️校验**同步**先做:tableSurface 还在飞的时候抛出去,插件才来得及降级(抛进 then 里 = 插件
     // 永远收不到,容器空着还没有报错)。import 落地前来的 update 只换 pending 规格。
     // 宿主没有 DOM(SSR / 台架式 node 环境)时整条省略 —— 哑桩会让插件走进原生分支然后什么都不画。
@@ -1246,18 +1324,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let handle: { update(s: TableSpec): void; dispose(): void } | null = null
         let pending = spec
         let cancelled = false
-        const dispose = (): void => {
-          cancelled = true
-          tableMounts.delete(dispose)
-          handle?.dispose()
-          handle = null
-        }
-        tableMounts.add(dispose)
+        // body 级弹层宿主也在这一卸里收,漏了就是页面上一堆空 div。
+        const dispose = scope.own('mount', () => { cancelled = true; handle?.dispose(); handle = null }, 'table')
         void import('./tableSurface').then((m) => {
           // 只认 cancelled,**不看 el.isConnected**:面板每次重渲都会把容器掀掉再由 panel-lib 认领回来,
           // import 落地那一刻容器多半正游离着 —— 此时放弃 = 句柄永远为空、容器永远空白且不回落。
           // React 往游离节点上挂根是合法的,认领回 DOM 就显示。
-          if (cancelled) { tableMounts.delete(dispose); return }
+          if (cancelled) return
           handle = m.mountPluginTable(pluginId, el, pending)
         }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" table mount failed`, e) })
         return {
@@ -1272,17 +1345,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
     } } : {}),
     registerPropertyType: (def) => {
       registerPropType(def)
+      // 按身份撤:同 type 后来被别家顶掉了,就别把别家活着的那份摘了。
+      scope.own('propertyType', () => { if (getPropertyType(def.type) === def) unregisterPropType(def.type) }, def.type)
       set((s) => ({ propertyTypes: [...s.propertyTypes, { pluginId, item: def }] }))
     },
     // 成就:注册/计数都在 achievements/store 内强制 plugin:<id>: 前缀(防撞官方 id/伪造官方计数)。
     achievements: {
-      // 同 register* 那道闸(这一条嵌在 ctx.achievements 里,末尾那个按成员名的循环够不着):teardown 会清掉系列,过期续体不许再塞回来。
-      registerSeries: (def) => { if (ctxAlive) registerPluginSeries(pluginId, def) },
-      track: (event, n) => track(`plugin:${pluginId}:${event}`, n),
+      // 嵌在 ctx.achievements 里(末尾那个按成员名的闸够不着):已停用就不登记;登记了就记账,关账整插件撤。
+      registerSeries: (def) => {
+        if (!ctxAlive()) return
+        registerPluginSeries(pluginId, def)
+        scope.ownOnce('achievements', () => unregisterPluginAchievements(pluginId))
+      },
+      track: (event, n) => { if (ctxAlive()) track(`plugin:${pluginId}:${event}`, n) },
     },
-    // 活动日志:同款前缀纪律(插件伪造不了官方事件);拼行/消毒在 main 侧 activityLog.ts。
+    // 活动日志:同款前缀纪律(插件伪造不了官方事件);拼行/消毒在 main 侧 activityLog.ts。停用后不许再记。
     activity: {
-      log: (event, detail) => act(`plugin:${pluginId}:${event}`, detail),
+      log: (event, detail) => { if (ctxAlive()) act(`plugin:${pluginId}:${event}`, detail) },
     },
     // 自动化播种:**探针给得出后端配置的宿主才注入**(闸看 waitBackend 在不在,不看 readTangu() 本身:
     // 台架假探针 / 旧宿主没有这条 = 与非 Tangu 宿主同口径,ctx.automation 整个不存在)。
@@ -1323,21 +1402,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
             agents: () => readTangu()?.agents?.() ?? [],
             activeSpace: () => readTangu()?.activeSpace() ?? null,
             session: () => readTangu()?.session?.() ?? null,
-            subscribe: (cb: () => void) => {
-              const off = readTangu()?.subscribe(cb) ?? (() => {})
-              const wrapped = (): void => { off(); tanguUnsubs.delete(wrapped) }
-              tanguUnsubs.add(wrapped)
-              return wrapped
-            },
+            subscribe: (cb: () => void) => scope.own('subscription', readTangu()?.subscribe(cb) ?? (() => {}), 'tangu'),
             // Agent 状态(2026-09-19):调用时才读探针(台架可以事后换探针)。探针缺这条(旧台架)→ 恒 idle,
             // 与契约「缺席按 idle 处理」同口径;省略 sessionId 时此处拿不到 activeId(appStore 有 import 环),报 null。
             agentStatus: (sid?: string | null): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(sid ?? null),
             subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: string | null): (() => void) => {
-              if (!ctxAlive) return () => {}
-              const off = readTangu()?.subscribeAgentStatus?.(cb, sid) ?? (() => {})
-              const wrapped = (): void => { off(); tanguUnsubs.delete(wrapped) }
-              tanguUnsubs.add(wrapped)
-              return wrapped
+              if (!ctxAlive()) return () => {}
+              return scope.own('subscription', readTangu()?.subscribeAgentStatus?.(cb, sid) ?? (() => {}), 'agentStatus')
             },
             // 开一个可见的新对话:探针给得出才注入(同 automation 的闸)。放行规则都在这一层:
             //  ① send:true 只对**本插件捆绑包播种的** Agent 生效(清单有 + 播种标记是本插件),别家 Agent /
@@ -1350,7 +1421,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
               ? {
                   chatSelection: true as const,
                   startChat: async (o: { agent?: string; prompt: string; send?: boolean; folder?: string; modelId?: string; thinkingLevel?: import('../../../../shared/chatBox').ChatBoxSelection['thinkingLevel'] }): Promise<TanguStartChatResult> => {
-                    if (!ctxAlive) return { ok: false, error: 'plugin disabled' }
+                    if (!ctxAlive()) return { ok: false, error: 'plugin disabled' }
                     const probe = readTangu()
                     if (!probe?.startChat) return { ok: false, error: 'startChat is not available on this host' }
                     const agent = typeof o?.agent === 'string' ? o.agent.trim() : ''
@@ -1361,7 +1432,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
                     let own = false
                     if (listed && o?.send) {
                       try { own = (await amadeus?.bundleAgentOwned?.(pluginId, agent)) === true } catch { own = false }
-                      if (!ctxAlive) return { ok: false, error: 'plugin disabled' } // 等 IPC 那一拍里被禁用
+                      if (!ctxAlive()) return { ok: false, error: 'plugin disabled' } // 等 IPC 那一拍里被禁用
                     }
                     const folder = typeof o?.folder === 'string' ? o.folder.trim().replace(/[\\/]+$/, '') : ''
                     const cwd = (folder && appApi.hostPath?.(folder)) || undefined
@@ -1372,23 +1443,22 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       ...(o?.modelId ? { modelId: o.modelId } : {}),
                       ...(o?.thinkingLevel ? { thinkingLevel: o.thinkingLevel } : {}),
                       ...(cwd ? { cwd } : {}),
-                      alive: () => ctxAlive,
+                      alive: ctxAlive,
                     })
                   },
                 }
               : {}),
-            // 一次性补全(G3-07):探针给得出才注入。插件停用 → 在飞请求中止并 reject(tanguUnsubs 随停用统一收)。
+            // 一次性补全(G3-07):探针给得出才注入。插件停用 → 关账中止在飞请求并 reject。
             ...(readTangu()?.complete
               ? {
                   complete: async (req: { prompt: string; selection?: string; before?: string; after?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string }> => {
-                    if (!ctxAlive) throw new Error('plugin disabled')
+                    if (!ctxAlive()) throw new Error('plugin disabled')
                     const probe = readTangu()
                     if (!probe?.complete) throw new Error('complete is not available on this host')
                     const prompt = typeof req?.prompt === 'string' ? req.prompt.trim() : ''
                     if (!prompt) throw new Error('ctx.tangu.complete: prompt is required')
                     const ac = new AbortController()
-                    const stop = (): void => { ac.abort(); tanguUnsubs.delete(stop) }
-                    tanguUnsubs.add(stop)
+                    const stop = scope.own('request', () => ac.abort(), 'complete')
                     const outer = req.signal
                     const onOuter = (): void => ac.abort()
                     outer?.addEventListener('abort', onOuter)
@@ -1397,13 +1467,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
                       const r = await probe.complete({ action: 'custom', instruction: prompt, selection: str(req.selection), before: str(req.before), after: str(req.after) }, {
                         signal: ac.signal,
-                        onDelta: (d) => { if (ctxAlive) { try { req.onDelta?.(d) } catch { /* 插件回调抛错不打断流 */ } } },
+                        onDelta: (d) => { if (ctxAlive()) { try { req.onDelta?.(d) } catch { /* 插件回调抛错不打断流 */ } } },
                       })
-                      if (!ctxAlive) throw new Error('plugin disabled')
+                      if (!ctxAlive()) throw new Error('plugin disabled')
                       return { text: r.text }
                     } finally {
                       outer?.removeEventListener('abort', onOuter)
-                      tanguUnsubs.delete(stop)
+                      stop.forget()
                     }
                   },
                 }
@@ -1415,20 +1485,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // Agent Desk 伴随面(2026-09-19):**只在有 Agent Desk 的宿主上注入** —— 桌面 Tangu。判据与 ChatView 的
     // deskEnabled 同源:探针在(Tangu 宿主)+ 端判定单源 currentPlatform() === 'desktop'(web 的 getConfig 没有
     // agentDeskEnabled,Desk 永不出现)+ 不是单列移动壳。用户在设置里关了 Desk 不影响注入(注册照常成功,只是不显示)。
-    // 生效者与模式由 deskCompanion 注册表管;吊销(禁用/重载/setup 抛错)经 revokers 统一 revokeDeskCompanions。
+    // 生效者与模式由 deskCompanion 注册表管;登记即记账,关账(禁用/重载/setup 抛错)统一 revokeDeskCompanions。
     ...(readTangu() && currentPlatform() === 'desktop' && UI_MODE !== 'mobile'
       ? {
           desk: {
             registerCompanion: (def: DeskCompanionContribution): DeskCompanionHandle => {
-              if (!ctxAlive) {
+              if (!ctxAlive()) {
                 console.warn(`[amadeus] 插件 ${pluginId} 已停用,ctx.desk.registerCompanion 被忽略`)
                 return { update: () => {}, dispose: () => {} }
               }
               const h = registerDeskCompanion(pluginId, def)
+              scope.ownOnce('deskCompanion', () => revokeDeskCompanions(pluginId))
               // 旧一代 handle 变哑:同 key 重新启用后注册的是新条目,残留的异步回调不许改它的模式或把它撤掉。
               return {
-                update: (patch) => { if (ctxAlive) h.update(patch) },
-                dispose: () => { if (ctxAlive) h.dispose() },
+                update: (patch) => { if (ctxAlive()) h.update(patch) },
+                dispose: () => { if (ctxAlive()) h.dispose() },
               }
             },
           },
@@ -1459,7 +1530,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const fn = members[key]
       if (!key.startsWith('register') || typeof fn !== 'function') continue
       members[key] = (...args: unknown[]): unknown => {
-        if (ctxAlive) return (fn as (...a: unknown[]) => unknown)(...args)
+        if (ctxAlive()) return (fn as (...a: unknown[]) => unknown)(...args)
         console.warn(`[amadeus] 插件 ${pluginId} 已停用 / 已重载,ctx.${key} 被忽略`)
         return DEAD_HANDLE
       }
@@ -1467,7 +1538,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     return ctx
   }
 
-  /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
+  /** 拆一个插件(不碰偏好):先跑它自己的 disposer(此时 ctx 还活着,收尾要用),再关账 —— 判死、杀 facade、
+   *  后进先出逐条撤宿主环境里的副作用、每条各自 try/catch —— 最后一次 set 摘掉它在各切片里的贡献。 */
   const teardown = (id: string): void => {
     agentLive.delete(id) // 拆掉了就不再是「正在运行的那一版」(agentSpaceSourceUrl)
     try {
@@ -1475,54 +1547,147 @@ export const usePluginStore = create<PluginState>((set, get) => {
     } catch (e) {
       console.error(`[amadeus] plugin "${id}" dispose failed`, e)
     }
-    // 块表面的订阅与 React root 不在插件自己的 disposer 里(插件可能压根没写),宿主统一收 ——
-    // 收完该插件的 API 整体变哑,它在飞的异步任务改不动用户文件了(codex)。
-    try {
-      revokers[id]?.()
-    } catch (e) {
-      console.error(`[amadeus] plugin "${id}" block-surface revoke failed`, e)
-    }
-    revokers[id] = undefined
-    // 视图级表面同一条纪律:同步吊销,别等 React 的 effect cleanup(那是下一拍的事)。
-    for (const fn of Array.from(viewTeardowns.get(id) ?? [])) {
-      try { fn() } catch (e) { console.error(`[amadeus] plugin "${id}" view-surface revoke failed`, e) }
-    }
-    viewTeardowns.delete(id)
-    for (const o of get().themes) if (o.pluginId === id) removeThemeStyle(o.item.id)
-    for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
-    unregisterPluginAchievements(id)
+    liveScopes.get(id)?.close()
+    liveScopes.delete(id)
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
-    clearEditorExtensions(id) // 代次 +1 → 已建好的编辑器原地重配(G1-06),当场摘掉这个插件的 PM 插件
     set((s) => ({
+      ...dropSlices(s, id),
       activeIds: s.activeIds.filter((x) => x !== id),
-      slashItems: s.slashItems.filter((o) => o.pluginId !== id),
-      selectionActions: s.selectionActions.filter((o) => o.pluginId !== id),
-      commands: s.commands.filter((o) => o.pluginId !== id),
-      themes: s.themes.filter((o) => o.pluginId !== id),
-      panels: s.panels.filter((o) => o.pluginId !== id),
-      statusItems: s.statusItems.filter((o) => o.pluginId !== id),
-      propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
-      settings: s.settings.filter((o) => o.pluginId !== id),
-      settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
-      readiness: s.readiness.filter((o) => o.pluginId !== id),
-      views: s.views.filter((o) => o.pluginId !== id),
-      listSources: s.listSources.filter((o) => o.pluginId !== id),
-      fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
-      embedRenderers: s.embedRenderers.filter((o) => o.pluginId !== id),
-      fileCreators: s.fileCreators.filter((o) => o.pluginId !== id),
       disposers: { ...s.disposers, [id]: undefined },
     }))
   }
 
-  const applyPref = (id: string): void => {
-    // 带主进程半身的首方内置包(Forsion Extend):渲染半身跟着主进程那一半的开关走(桌面配置 disabledBundles),不看 localStorage ——
-    // 旧开关拨下的「关」会一直留在那儿,而主进程半身其实在跑,它挂进「Forsion 云端」的设置页就永远出不来。enable 顺手把旧的「关」擦掉。
-    const plugin = get().plugins.find((p) => p.id === id)
-    if (plugin?.locked) {
-      if (!plugin.bundleOff) get().enable(id)
-      return
+  /** 拆这几个连同它们正在跑的依赖方,按依赖倒序:依赖方先停,它收尾时前置还活着(收尾要经前置落盘的不丢)。
+   *  前置离场的每条路(停用 / 消失 / 换代 / 异步失败 / 来源读不到)都走这里,别再单拆前置。 */
+  const stopWithDependents = (ids: string[]): void => {
+    const s = get()
+    const drop = new Set(ids.flatMap((id) => [id, ...dependentsOf(id, s.plugins).map((d) => d.id)]))
+    for (const p of topoOrder(s.plugins).reverse()) if (drop.has(p.id) && get().activeIds.includes(p.id)) teardown(p.id)
+  }
+
+  /** 激活(调用方已判过门禁 / 偏好 / 前置),返回是否成功。setup 同步抛错 → 当场回滚成没装过的样子并记错因。
+   *  async setup:同步那段返回即算激活;交回的 disposer 落定时这一代还活着就装上、已过期就当场调用;
+   *  reject 且这一代还活着 → 与同步抛错同一条回滚,再对齐一轮(依赖它的跟着停)。过期那一代的结果一律不认。 */
+  const start = (plugin: AmadeusPlugin): boolean => {
+    const id = plugin.id
+    // 标准设置行:每个插件自动获得「工作文件夹」(ctx.app.workFolder() 的数据源;
+    // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。拆 / 失败按 pluginId 一并收走。
+    set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(plugin.name, id) }] }))
+    const ctx = makeContext(id)
+    const scope = liveScopes.get(id)!
+    const fail = (e: unknown): void => {
+      console.error(`[amadeus] plugin "${id}" setup failed`, e)
+      useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
+      teardown(id)
+      set((s) => ({ lastSetupError: { ...s.lastSetupError, [id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) } }))
     }
-    if (!get().disabledIds.includes(id)) get().enable(id)
+    let r: ReturnType<AmadeusPlugin['setup']>
+    try {
+      r = plugin.setup(ctx)
+    } catch (e) {
+      fail(e)
+      return false
+    }
+    if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
+      void Promise.resolve(r).then((d) => {
+        if (typeof d !== 'function') return
+        if (scope.alive()) set((s) => ({ disposers: { ...s.disposers, [id]: d } }))
+        else try { d() } catch (e) { console.error(`[amadeus] plugin "${id}" stale disposer failed`, e) }
+      }, (e: unknown) => {
+        if (!scope.alive()) return // 上一代迟到的失败,不许把已经装好的下一代标成失败
+        stopWithDependents([id]) // 同步那段一返回就算激活,依赖方可能已经起来了
+        fail(e)
+        reconcile()
+      })
+    }
+    set((s) => ({
+      activeIds: [...s.activeIds, id],
+      disposers: { ...s.disposers, [id]: typeof r === 'function' ? r : undefined },
+      lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
+    }))
+    // locked 包:旧开关拨下的「关」留在 localStorage 里没意义(它跟主进程开关走),跑起来就顺手擦掉。
+    if (plugin.locked && get().disabledIds.includes(id)) {
+      set((s) => ({ disabledIds: s.disabledIds.filter((x) => x !== id) }))
+      writeDisabled(get().disabledIds)
+    }
+    // 上一轮停用留下的「待停用」欠账作废:插件又跑起来了,再让边沿去关它的规则就是倒着走。
+    pendingDisable.delete(id)
+    pendingRulesOff.delete(id)
+    return true
+  }
+
+  /** 这一刻该跑的集合:按依赖顺序走一遍,前置也在集合里才算齐。 */
+  const desiredIds = (order: AmadeusPlugin[]): Set<string> => {
+    const s = get()
+    const want = new Set<string>()
+    for (const p of order) {
+      if (p.blocked || !pluginWanted(p, s.disabledIds) || s.lastSetupError[p.id]) continue
+      if (!unmetDependencies(p, s.plugins, (x) => want.has(x), () => true).length) want.add(p.id)
+    }
+    return want
+  }
+
+  /** 对齐(对标 Cordis 的「空间维」):让「正在跑的」=「没被挡 ∧ 用户想开 ∧ 没挂着失败 ∧ 前置都在跑」。
+   *  先按依赖倒序停(依赖方先停,它收尾时前置还在),再按依赖顺序起(前置先起)。起失败了重算一轮(它的依赖方不能起)。
+   *  失败过的不自动重试(等用户重开 / 重载清掉错因),否则一个坏插件每次对齐都报一遍错。 */
+  const reconcile = (): void => {
+    for (let round = 0; round <= get().plugins.length; round++) {
+      const order = topoOrder(get().plugins)
+      const want = desiredIds(order)
+      let changed = false
+      for (const p of [...order].reverse()) {
+        if (get().activeIds.includes(p.id) && !want.has(p.id)) { teardown(p.id); changed = true }
+      }
+      for (const p of order) {
+        if (!want.has(p.id) || get().activeIds.includes(p.id)) continue
+        changed = true
+        if (!start(p)) break
+      }
+      if (!changed) break
+    }
+    afterReconcile()
+  }
+
+  /** 按来源列表对齐插件表(only = 只动这一个 id):没了的拆掉丢弃;代码与运行身份没变的只刷元数据 —— 不拆不装,
+   *  开着的标签页不动(装一个插件不再关掉别的插件的标签页);变了的、或上次加载失败的拆旧换新。最后对齐一轮。 */
+  const applySources = (sources: ExternalPluginSource[], only?: string, force = false): void => {
+    const s0 = get()
+    const keep = (cur: AmadeusPlugin, src: ExternalPluginSource | undefined): src is ExternalPluginSource =>
+      !!src && !force && sameRuntime(cur, src) && !s0.lastSetupError[cur.id]
+    // 没了的、换代的先连同正在跑的依赖方拆:依赖方手里攥着的是前置旧那一代,得跟着重起(对齐那轮再按依赖顺序起回来)。
+    stopWithDependents(s0.plugins.filter((p) => !p.builtin && (only === undefined || p.id === only)
+      && !keep(p, sources.find((x) => x.id === p.id))).map((p) => p.id))
+    const seen = new Set<string>()
+    const next: AmadeusPlugin[] = []
+    const reset: string[] = []
+    for (const cur of s0.plugins) {
+      seen.add(cur.id)
+      if (cur.builtin || (only !== undefined && cur.id !== only)) { next.push(cur); continue }
+      const src = sources.find((x) => x.id === cur.id)
+      if (keep(cur, src)) {
+        next.push({ ...pluginMeta(src), setup: cur.setup })
+        continue
+      }
+      reset.push(cur.id)
+      if (src) { next.push(toPlugin(src)); continue }
+      loadedCode.delete(cur.id)
+      dropDevRecords(cur.id) // 来源整个没了 → 连开发态记账一起丢
+      // 卸掉了:它种在引擎里的规则不许成为没人管的孤儿(只主窗发;同 id 很快又装回来,它的 setup 会 ensure 回去)。
+      if (windowKind() === 'main' && readTangu()?.waitBackend) {
+        void disablePluginRules(cur.id).catch((e) => console.warn(`[amadeus] plugin "${cur.id}" 停用自动化规则失败`, e))
+      }
+    }
+    for (const src of sources) {
+      if (seen.has(src.id) || (only !== undefined && src.id !== only)) continue
+      reset.push(src.id)
+      next.push(toPlugin(src))
+    }
+    set((s) => {
+      const lastSetupError = { ...s.lastSetupError }
+      for (const id of reset) delete lastSetupError[id]
+      return { plugins: next, lastSetupError }
+    })
+    reconcile()
   }
 
   return {
@@ -1555,91 +1720,49 @@ export const usePluginStore = create<PluginState>((set, get) => {
     init(plugins = BUILTIN_PLUGINS) {
       if (get().initialized) return
       set({ plugins: [...plugins], disabledIds: readDisabled(), initialized: true })
-      for (const p of plugins) applyPref(p.id)
+      reconcile()
     },
 
     enable(id) {
-      if (get().activeIds.includes(id)) return
       const plugin = get().plugins.find((p) => p.id === id)
-      if (!plugin) return
-      if (plugin.blocked) return // 门禁挡下的插件(apiVersion/minAppVersion 不符)任何路径都不得激活
+      if (!plugin || plugin.blocked) return // 门禁挡下的插件(apiVersion/minAppVersion 不符)任何路径都不得激活
+      if (unmetPluginDeps(plugin).length) return // 前置没齐:装着但开不了(设置页给原因与「安装 / 启用前置」入口)
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
-      // 标准设置行:每个插件自动获得「工作文件夹」(ctx.app.workFolder() 的数据源;
-      // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。teardown/失败清理按 pluginId 一并收走。
-      set((s) => ({
-        settings: [...s.settings, { pluginId: id, item: workFolderSetting(plugin.name, id) }],
-      }))
-      let dispose: (() => void) | undefined
+      noteExplicitEnable(id) // 用户重开 = 重试
       try {
-        const r = plugin.setup(makeContext(id))
-        if (typeof r === 'function') dispose = r
-      } catch (e) {
-        console.error(`[amadeus] plugin "${id}" setup failed`, e)
-        useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
-        set((s) => ({ lastSetupError: { ...s.lastSetupError, [id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) } }))
-        // 抛错前它可能已经订了块表面/语言 —— 这条分支原来漏收(codex 评审 2026-08-14),补上。
-        try { revokers[id]?.() } catch (err) { console.error(`[amadeus] plugin "${id}" revoke failed`, err) }
-        revokers[id] = undefined
-        // setup 抛错前可能已注册了主题/成就/属性类型 —— 三者都有 store 外的副作用(注入的 <style>、成就注册表),
-        // 只 filter zustand 状态会留下孤儿(禁用的插件主题仍挂在 head 上)。与 teardown 同口径全清。
-        for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
-        for (const o of get().themes) if (o.pluginId === id) removeThemeStyle(o.item.id)
-        unregisterPluginAchievements(id)
-        lastEnsure.delete(id) // 抛错前可能已调过 ensure:没激活的插件不该留着一条等重放的记录
-        set((s) => ({
-          slashItems: s.slashItems.filter((o) => o.pluginId !== id),
-          selectionActions: s.selectionActions.filter((o) => o.pluginId !== id),
-          commands: s.commands.filter((o) => o.pluginId !== id),
-          themes: s.themes.filter((o) => o.pluginId !== id),
-          panels: s.panels.filter((o) => o.pluginId !== id),
-          statusItems: s.statusItems.filter((o) => o.pluginId !== id),
-          propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
-          settings: s.settings.filter((o) => o.pluginId !== id),
-      settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
-      readiness: s.readiness.filter((o) => o.pluginId !== id),
-          views: s.views.filter((o) => o.pluginId !== id),
-      listSources: s.listSources.filter((o) => o.pluginId !== id),
-          fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
-          embedRenderers: s.embedRenderers.filter((o) => o.pluginId !== id),
-          fileCreators: s.fileCreators.filter((o) => o.pluginId !== id),
-        }))
-        return
+        localStorage.setItem(PLUGIN_ENABLE_STAMP_KEY, JSON.stringify({ id, t: Date.now() })) // 先于偏好:别的窗口先收到戳
+      } catch {
+        /* ignore */
       }
-      set((s) => ({
-        activeIds: [...s.activeIds, id],
-        disabledIds: s.disabledIds.filter((x) => x !== id),
-        disposers: { ...s.disposers, [id]: dispose },
-        lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
-      }))
+      set((s) => ({ disabledIds: s.disabledIds.filter((x) => x !== id) }))
       writeDisabled(get().disabledIds)
-      // 上一轮禁用留下的「待停用」欠账作废:用户刚把插件打开,再让边沿去关它的规则就是倒着走。
-      // ⚠️放在成功路末尾(activeIds 已 set):setup 抛错那条路插件并没激活,墓碑该留着继续重试。
-      pendingDisable.delete(id)
+      reconcile()
     },
 
     disable(id) {
-      if (!get().activeIds.includes(id)) return
-      teardown(id)
-      set((s) => ({ disabledIds: s.disabledIds.includes(id) ? s.disabledIds : [...s.disabledIds, id] }))
+      const plugin = get().plugins.find((p) => p.id === id)
+      const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
+      if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
+      reconcile() // 依赖它的先停,再停它
       // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
-      if (readTangu()?.waitBackend) {
+      if (wasOn && readTangu()?.waitBackend) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
       }
     },
 
     syncDisabledPreferences() {
-      const disabledIds = readDisabled()
-      set({ disabledIds })
-      // locked 包(Forsion Extend)的开关在主进程(bundleOff),不跟 localStorage:别的窗口(设置浮窗就是另一个窗口)拨了它,
-      // 本窗口按自己手里旧的 bundleOff 先拆再装、再把「开」写回 localStorage,两窗来回翻。它的开关到重启才生效,本窗口不跟着拆装。
-      const locked = new Set(get().plugins.filter((p) => p.locked).map((p) => p.id))
-      for (const id of [...get().activeIds]) if (disabledIds.includes(id) && !locked.has(id)) teardown(id)
-      for (const plugin of get().plugins) if (!plugin.locked && !disabledIds.includes(plugin.id)) applyPref(plugin.id)
+      // 别的窗口拨了开关:只对齐本窗的实例,不重放用户侧的自动化动作(那边已经做过)。
+      // locked 包不跟 localStorage(pluginWanted),别的窗口拨了它本窗也不拆装 —— 它的开关到重启才生效。
+      set({ disabledIds: readDisabled() })
+      reconcile()
     },
 
     toggle(id) {
-      if (get().activeIds.includes(id)) get().disable(id)
+      const plugin = get().plugins.find((p) => p.id === id)
+      if (!plugin) return
+      // 按意图翻:在等前置 / 加载失败的插件开关是「开」的,再点一下是关掉它
+      if (pluginWanted(plugin)) get().disable(id)
       else get().enable(id)
     },
 
@@ -1650,18 +1773,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
       try {
         sources = await resolveExternalSources()
       } catch {
-        return
+        return // 读不到来源 ≠ 来源都没了:保持现状
       }
-      const externals = sources.map(toPlugin)
-      set((s) => ({ plugins: [...s.plugins.filter((p) => p.builtin), ...externals] }))
-      for (const p of externals) applyPref(p.id)
-      if (readTangu()?.waitBackend) void syncDisabledBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
+      applySources(sources)
     },
 
-    async reloadExternal() {
-      for (const p of get().plugins) if (!p.builtin && get().activeIds.includes(p.id)) teardown(p.id)
-      set((s) => ({ plugins: s.plugins.filter((p) => p.builtin) }))
-      await get().loadExternal()
+    reloadExternal() {
+      return get().loadExternal()
     },
 
     reloadOne(id, opts) {
@@ -1675,31 +1793,17 @@ export const usePluginStore = create<PluginState>((set, get) => {
           if (!opts?.strict) return
           const stale = get().plugins.find((p) => p.id === id)
           if (stale?.dev) { // fail closed:读不到来源 ≠ 来源还在
-            if (get().activeIds.includes(id)) teardown(id)
+            stopWithDependents([id])
             loadedCode.delete(id)
             set((s) => ({ plugins: s.plugins.filter((p) => p.id !== id) }))
+            reconcile() // 依赖它的跟着停
           }
           throw e
         }
-        const cur = get().plugins.find((p) => p.id === id)
-        if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
-        const src = sources.find((s) => s.id === id)
-        // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)。
-        // ⚠️**来源身份**也得比:刚从安装版复制出来的开发副本,代码可以与安装版一字不差 —— 只比代码的话,
-        //   「在 Forsion 中加载」开了等于没开(dev 标志永远装不进来),撤下开发副本后它也永远拆不掉(卸载守卫因此永远拒)。
-        if (!opts?.force && cur && src
-          && loadedCode.get(id) === src.code
-          && (cur.blocked ?? null) === (src.blocked ?? null)
-          && (cur.dev ?? false) === (src.dev ?? false)
-          && (cur.devRoot ?? null) === (src.devRoot ?? null)
-          && (cur.shadowsInstalled ?? false) === (src.shadowsInstalled ?? false)) return
-        if (get().activeIds.includes(id)) teardown(id)
-        if (!src) { loadedCode.delete(id); dropDevRecords(id) } // 来源整个没了 → 连开发态记账一起丢
-        set((s) => ({
-          plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
-          lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
-        }))
-        if (src) applyPref(id)
+        if (get().plugins.find((p) => p.id === id)?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
+        // 来源身份也算运行身份(sameRuntime):刚从安装版复制出来的开发副本,代码可以与安装版一字不差 ——
+        // 只比代码的话「在 Forsion 中加载」开了等于没开,撤下开发副本后它也永远拆不掉。
+        applySources(sources, id, !!opts?.force)
       }
       const next = (reloadChains.get(id) ?? Promise.resolve()).then(run, run)
       const guard = next.catch(() => {}).then(() => { if (reloadChains.get(id) === guard) reloadChains.delete(id) })
