@@ -172,6 +172,7 @@
   cursor: pointer; transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
 }
 .t2-iconbtn:hover { background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text); }
+.t2-msgtime { align-self: center; padding: 0 6px; font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* 暂不可用(「插入笔记」没有可插的笔记,G3-08):仍可点 —— 点了给说明;与 :hover 同特异性,必须排在它后面 */
 .t2-iconbtn[aria-disabled="true"], .t2-iconbtn[aria-disabled="true"]:hover { background: transparent; color: var(--text-faint, var(--text-muted)); opacity: .45; cursor: default; }
 

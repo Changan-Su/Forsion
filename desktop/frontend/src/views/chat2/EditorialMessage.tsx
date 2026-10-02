@@ -55,6 +55,7 @@ import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { UI_MODE, useEdgeNudge } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { CreationCards } from './CreationCards'
+import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
@@ -407,6 +408,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             {lead ? (lead.body && <WikiText text={lead.body} />) : <WikiText text={msg.content} />}
           </div>
           <div className="t2-actions">
+            <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
             <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
             {handlers?.onRewind && (
@@ -595,11 +597,18 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             {handlers?.onInsertNote && !!body && <InsertNoteButton onInsert={() => handlers.onInsertNote?.(body)} />}
             <button className="t2-iconbtn" title={t('chat.action.regenerate')} onClick={() => handlers?.onRegenerate?.()}><RotateCcw size={14} /></button>
             <button className="t2-iconbtn" title={t('chat.action.branch')} onClick={() => handlers?.onBranch?.()}><GitBranch size={14} /></button>
+            <MsgTime at={msg.timestamp} />
           </div>
         )}
       </div>
     </div>
   )
+}
+
+/** 操作行末尾的时刻;悬停给带年份的完整时间。0 / 缺省(旧历史没存)不画,免得冒出 1970。 */
+function MsgTime({ at }: { at: number }) {
+  if (!(at > 0)) return null
+  return <span className="t2-msgtime" title={formatDateTime(at, { year: 'always' })}>{formatMessageTime(at)}</span>
 }
 
 /** 每秒刷新的已等待秒数(since=本次模型调用起点)。 */

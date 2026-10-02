@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatDateTime, formatListTime, formatLongDate, formatMonthDay, formatRelative, formatTime, relativeParts, toDate } from './time'
+import { formatDate, formatDateTime, formatListTime, formatLongDate, formatMessageTime, formatMonthDay, formatRelative, formatTime, relativeParts, toDate } from './time'
 
 const now = new Date(2026, 8, 25, 12, 0).getTime() // 2026-09-25 12:00 本地
 
@@ -79,5 +79,16 @@ describe('formatListTime:列表 7 天内相对时间,更早显示日期(收件�
     expect(formatListTime(now - 8 * 86_400_000, { now, locale: 'zh' })).toBe('9月17日')
     expect(formatListTime(now - 8 * 86_400_000, { now, locale: 'en' })).toBe('Sep 17')
     expect(formatListTime(now - 30_000, { now, locale: 'zh' })).toBe('刚刚')
+  })
+})
+
+describe('formatMessageTime:聊天消息末尾的时刻', () => {
+  it('今天只给时刻;6 天内按日历日给星期;更早给日期', () => {
+    expect(formatMessageTime(new Date(2026, 8, 25, 0, 1), { now, locale: 'zh' })).toBe('00:01')
+    expect(formatMessageTime(new Date(2026, 8, 24, 23, 3), { now, locale: 'zh' })).toBe('星期四 23:03')
+    expect(formatMessageTime(new Date(2026, 8, 24, 23, 3), { now, locale: 'en' })).toBe('Thursday 23:03')
+    expect(formatMessageTime(new Date(2026, 8, 19, 8, 0), { now, locale: 'en' })).toBe('Saturday 08:00')
+    expect(formatMessageTime(new Date(2026, 8, 18, 8, 0), { now, locale: 'zh' })).toBe('9月18日 08:00')
+    expect(formatMessageTime(0 / 0, { now })).toBe('')
   })
 })
