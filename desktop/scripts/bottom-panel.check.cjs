@@ -71,6 +71,22 @@ function alignChecks(order, snap) {
     !!l && !!b && (l.y + l.h) > b.y + 10, l && b ? `left底 ${l.y + l.h} / bottom顶 ${b.y}` : 'n/a')
 }
 
+/** bottomSpan 的拓扑契约:底部左右边界贴到它横跨的那几列,被横跨的侧栏坐在底部之上,没被横跨的满高。 */
+function spanChecks(span, order, snap) {
+  const b = snap.bottom, m = snap.main, l = snap.left, r = snap.right
+  const tag = `[${span}·${order}]`
+  check(`前置${tag}:四者都在场`, !!b && !!m && !!l && !!r, `main ${!!m} / left ${!!l} / right ${!!r} / bottom ${!!b}`)
+  if (!b || !m || !l || !r) return
+  const overL = span === 'left' || span === 'full', overR = span === 'right' || span === 'full'
+  const x0 = (overL ? l : m).x, x1 = overR ? r.x + r.w : m.x + m.w
+  check(`⚠️${tag}底部左边界贴${overL ? '左栏' : '主区'}`, Math.abs(b.x - x0) <= 2, `bottom.x ${b.x} / 期望 ${x0}`)
+  check(`⚠️${tag}底部右边界贴${overR ? '右栏' : '主区'}`, Math.abs(b.x + b.w - x1) <= 2, `bottom右 ${b.x + b.w} / 期望 ${x1}`)
+  for (const [name, side, over] of [['左栏', l, overL], ['右栏', r, overR]]) {
+    check(`⚠️${tag}${name}${over ? '坐在底部之上' : '满高'}`,
+      over ? Math.abs(side.y + side.h - b.y) <= 8 : side.y + side.h > b.y + 10, `${name}底 ${side.y + side.h} / bottom顶 ${b.y}`)
+  }
+}
+
 /** 驱动一次 toggle,rAF 逐帧采底部组高,收尾回几何快照。 */
 const toggle = (page, side) => page.evaluate(async (s) => {
   const d = window.__dock
@@ -289,6 +305,49 @@ async function main() {
       right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom'),
     }))
     alignChecks('收着底部开合右栏后展开', drift)
+
+    // ── SpaceDefinition.bottomSpan 的其余三种拓扑 ────────────────────────────────
+    // 上面各段 = 缺省 'right'。这里每种各走三条路:先侧栏后底部 / 先底部后侧栏 / 收着底部开合被横跨的那侧再展开
+    // (藏起来的空底部组 parkBottom 看不见,得靠展开时的分区整理归位)。
+    for (const span of ['left', 'full', 'main']) {
+      const fresh = async () => {
+        await page.goto(URL, { waitUntil: 'domcontentloaded' })
+        await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
+        await page.waitForTimeout(500)
+        await page.evaluate((s) => window.__dock.span(s), span)
+      }
+      const sides = () => page.evaluate(() => { window.__dock.open('sidev', {}, false, 'left'); window.__dock.open('sidev', {}, false, 'right') })
+      const snap = () => page.evaluate(() => ({ main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
+        right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom') }))
+      await fresh(); await sides(); await page.waitForTimeout(600)
+      await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+      spanChecks(span, '先侧栏后底部', await snap())
+      if (SHOT) {
+        await page.screenshot({ path: `/tmp/bottom-panel-span-${span}.png` })
+        console.log(`      截图 → /tmp/bottom-panel-span-${span}.png`)
+      }
+      await fresh()
+      await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+      await sides(); await page.waitForTimeout(700)
+      spanChecks(span, '先底部后侧栏', await snap())
+      const covered = span === 'main' ? 'right' : 'left'
+      await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+      for (const _ of [0, 1]) { await page.evaluate((s) => window.__dock.toggle(s), covered); await page.waitForTimeout(700) }
+      await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+      spanChecks(span, `收着底部开合${covered}后展开`, await snap())
+    }
+
+    // ── 冷启动补摆:布局先按回落 Space 的缺省拓扑还原,活动 Space 晚定下后 realignRegions 按它重摆 ──────
+    // (userSpaces.settleAsyncStartupSpace 的两条冷路径就靠这一步;异步插件 Space 不补 = 一直停在缺省拓扑)
+    await page.goto(URL, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
+    await page.waitForTimeout(500)
+    await page.evaluate(() => { window.__dock.open('sidev', {}, false, 'left'); window.__dock.open('sidev', {}, false, 'right') })
+    await page.waitForTimeout(600)
+    await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+    await page.evaluate(() => { window.__dock.span('full'); window.__dock.realign() }); await page.waitForTimeout(700)
+    spanChecks('full', '缺省摆好后补摆', await page.evaluate(() => ({ main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
+      right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom') })))
 
     const bad = results.filter((x) => !x.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)

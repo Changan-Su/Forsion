@@ -103,6 +103,7 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
     name: specName(spec),
     icon: SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
     sidebarDefaults: sides,
+    bottomSpan: spec.layout.bottomSpan,
     build() {
       ws().setSidebarDefaults(sides)
       // 主区默认仍是兼容旧配方的「同组标签」。条目显式写 split:right/down 时,先复制上一项的原生
@@ -209,7 +210,7 @@ export function settleAsyncStartupSpace(): void {
     const space = getActiveSpace()
     if (!space) return
     ws().setSidebarDefaults(space.sidebarDefaults)
-    ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale)
+    ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale, space.bottomSpan)
   }
 
   if (migrated) {
@@ -227,7 +228,13 @@ export function settleAsyncStartupSpace(): void {
     if (startupSpacePref() === LAST_EXIT_SPACE) {
       setActiveSpaceCold(want)
       configure()
+      // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)
+      ws().realignRegions?.()
     } else setActiveSpace(want)
+  } else if (ws().sideProfileKey !== want) {
+    // 纯插件产品(PRODUCT.spaces 为空):bootstrap 时一个 Space 都没有,画像(含 bottomSpan)从没按它设过(Codex 评审)
+    configure()
+    ws().realignRegions?.()
   }
   asyncStartupSpaceResolved = true
 }

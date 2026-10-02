@@ -68,11 +68,16 @@ export function restoreRegionProportions(api: DockviewApi, snapshot: RegionTree 
   }
 }
 
-/** Fixed shell topology: left | ((Main | right) / bottom).
+/** 底部面板横跨哪几列(SpaceDefinition.bottomSpan)。缺省 'right' = 09-05 拍板的现状。 */
+export type BottomSpan = 'right' | 'left' | 'full' | 'main'
+
+/** Shell topology by bottomSpan:
+ *  right (default): left | ((Main | right) / bottom)    left: ((left | Main) / bottom) | right
+ *  full:            (left | Main | right) / bottom      main: left | (Main / bottom) | right
  * Each region retains its own arbitrary split subtree. No View is serialized/recreated here:
  * only public Dockview group moves are used, so editor state, drafts and media survive.
  * `before` preserves Main ratios from before Dockview temporarily split one Main leaf to add a side. */
-export function alignWorkspaceRegions(api: DockviewApi, before?: RegionTree | null): boolean {
+export function alignWorkspaceRegions(api: DockviewApi, before?: RegionTree | null, span: BottomSpan = 'right'): boolean {
   const current = captureRegionTree(api)
   if (!current) return false
   const pick = (loc: ViewLocation): RegionTree | null => {
@@ -82,8 +87,13 @@ export function alignWorkspaceRegions(api: DockviewApi, before?: RegionTree | nu
   }
   const main = pick('main')
   if (!main) return false
-  const target = branch('horizontal', [pick('left'),
-    branch('vertical', [branch('horizontal', [main, pick('right')]), pick('bottom')])])!
+  const l = pick('left'), r = pick('right'), b = pick('bottom')
+  const h = (...n: Array<RegionTree | null>) => branch('horizontal', n)
+  const v = (...n: Array<RegionTree | null>) => branch('vertical', n)
+  const target = (span === 'left' ? h(v(h(l, main), b), r)
+    : span === 'full' ? v(h(l, main, r), b)
+    : span === 'main' ? h(l, v(main, b), r)
+    : h(l, v(h(main, r), b)))!
   if (signature(current) === signature(target)) return false
 
   const active = api.activePanel?.id

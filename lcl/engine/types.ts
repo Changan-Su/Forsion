@@ -10,7 +10,7 @@ import type { LucideIcon } from 'lucide-react'
 import type { ExtendViewController } from './extendView'
 import type { PersistedPanel } from './layoutPersist'
 
-/** 视图可被开在主区 / 左侧栏 / 右侧栏 / 底部面板(VS Code 式,只在主区下方,不跨左右栏)。 */
+/** 视图可被开在主区 / 左侧栏 / 右侧栏 / 底部面板(底部横跨哪几列由 SpaceDefinition.bottomSpan 定,缺省主区+右栏)。 */
 export type ViewLocation = 'main' | 'left' | 'right' | 'bottom'
 
 /** 可折叠区(= 除主区外的三个「有折叠钮 + stash + 尺寸记忆」的区)。左右按宽、bottom 按高。 */
@@ -202,6 +202,10 @@ export interface SpaceDefinition {
   /** 侧栏「首次无记录」的默认宽 = 黄金分割 × 本系数;**缺省 1 = 与其他 Space 同宽**。
    *  只有确实需要更宽起手的 Space 才设(如 Coding 对话栏 1.2)。用户拖过之后一律以记住的宽度为准。 */
   sideDefaultScale?: { left?: number; right?: number }
+  /** 底部面板横跨哪几列(左右栏谁满高)。**缺省 'right'** = 横跨主区+右栏、左栏满高(09-05 拍板的现状)。
+   *  'left' = 横跨左栏+主区、右栏满高;'full' = 通栏横跨左中右;'main' = 只在主区下方、左右栏都满高。
+   *  切到该 Space(含还原已存布局)时由 alignRegions 统一摆正,不重挂任何 View。 */
+  bottomSpan?: import('./regionLayout').BottomSpan
   /** 「工作区」视图处于 auto 档时,主视图**没有硬规则**则左栏落这个;**缺省 'sessions' = 与其他 Space 一致**。
    *  只有主区内容天然对应某个侧栏档的 Space 才设(如 Amadeus → 'notes';Inbox → 收件箱列表源 'plugin:inbox:messages',
    *  2026-09-11 —— 列表源不在场时宿主退回缺省档)。
