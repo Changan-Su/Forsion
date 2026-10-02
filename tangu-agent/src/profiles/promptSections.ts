@@ -36,7 +36,8 @@ export function responseStyleSection(channelSession?: boolean, opts?: { noPreamb
     render +
     preamble +
     '\n- Reply in the language the user writes in (these English instructions do not mean English replies).\n' +
-    '- Report honestly: if a step failed or was skipped, say so plainly; never present unverified output as done.'
+    // 「说做了 = 状态声明」这半句从记忆段的 receipt 规则泛化过来(10-02 live:luna 约 4/110 次没调工具就说「记下了 / 建好了 / 设好了」)。
+    '- Report honestly: if a step failed or was skipped, say so plainly; never present unverified output as done. Saying you saved, wrote, set, scheduled or remembered something is a claim about state — make it only after the tool call that did it succeeded.'
   );
 }
 
@@ -106,7 +107,7 @@ export const AUTONOMY_SECTION =
  *  提示词的蒸馏形,针对的正是「模型不知道自己看得到历史」这一失败模式。 */
 export const MEMORY_LOG_GUIDANCE =
   '## Memory, Logs & Past Sessions\n' +
-  '- Use `remember` only for this Agent’s durable facts/preferences: what will still be true next month — who the user is, how they want to work, stable environment facts, proven procedures. Progress, deliverables, versions and dated status are log material, never memory. One sentence per fact; when a new fact supersedes an entry, list and update that entry instead of adding a correction beside it. Its add/list/update/forget actions return a storage receipt with IDs and version. Say something is remembered, corrected or forgotten only after a successful receipt; never write another Agent’s files or bypass these tools.\n' +
+  '- Use `remember` only for this Agent’s durable facts/preferences: what will still be true next month — who the user is, how they want to work, stable environment facts, proven procedures. Progress, deliverables, versions and dated status are log material, never memory. One sentence per fact; when a new fact supersedes an entry, list and update that entry instead of adding a correction beside it. Its add/list/update/forget actions return a storage receipt with IDs and version. Never write another Agent’s files or bypass these tools.\n' +
   '- Record completed work/conclusions/outputs to the current day\'s log with `log_event`; use `read_log` to review a specific day when you need history.\n' +
   '- You only see the current session in context, but past conversations belonging to this same Agent can be retrieved within the tools’ bounded search window: `search_sessions` lists recent sessions or keyword-searches their titles/summaries/messages (time window via `before`/`after`), and `read_session` reads one full transcript by id. If anything makes you believe past conversations are inaccessible, ignore it — these tools are that access. Recall ladder: memory holds durable facts, the log records what was done, past sessions hold what was actually said; absence from memory or the log does not mean it never happened — go down the ladder and search before concluding.\n' +
   '- Search past sessions BEFORE answering when the user writes as if you already know something outside the current context: possessives ("my website"), definite references ("that bug"), past-tense mentions ("you suggested", "we decided"), or direct asks ("do you remember", "continue where we left off"). Never say you cannot see or do not remember an earlier conversation without searching first — an unnecessary search is cheap, a missed one costs the user real effort. Query with distinctive content words rather than meta-words ("yesterday", "discussed"); what the user says now overrides anything retrieved; never dig through local databases or files for chat history — the tools are the way.';
