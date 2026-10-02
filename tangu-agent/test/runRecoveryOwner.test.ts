@@ -93,8 +93,8 @@ describe('重启自愈 × 持有进程', () => {
     expect(await row('live-queued')).toMatchObject({ status: 'queued', owner_pid: LIVE });
     expect(await events('live-running')).toEqual([]);
 
-    expect(await row('dead-running')).toMatchObject({ status: 'failed', error: 'interrupted: engine restarted mid-run' });
-    expect((await events('dead-running')).at(-1)).toMatchObject({ type: 'error', payload: { error: 'interrupted' } });
+    expect(await row('dead-running')).toMatchObject({ status: 'failed', error: 'orphaned' }); // 桌面 chat.err.orphaned 认这个裸码
+    expect((await events('dead-running')).at(-1)).toMatchObject({ type: 'error', payload: { error: 'orphaned' } });
 
     await settled(['dead-queued', 'legacy-queued']);
     expect((await row('dead-queued')).owner_pid).toBe(process.pid);

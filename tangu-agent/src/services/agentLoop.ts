@@ -609,8 +609,9 @@ const INTERRUPTED_DETAIL =
 /** 跑到一半就没了持有者的 run(崩溃 / 退出 / 更新):标失败 + 补一条终态事件,不从头重跑。 */
 async function terminalizeInterruptedRun(runId: string): Promise<void> {
   try {
-    await updateRunStatus(runId, 'failed', { error: 'interrupted: engine restarted mid-run' });
-    await publish(runId, 'error', { error: 'interrupted', detail: INTERRUPTED_DETAIL });
+    // 裸码 'orphaned':桌面 humanizeRunError 已有对应双语文案(chat.err.orphaned「运行意外中断…请重试」)
+    await updateRunStatus(runId, 'failed', { error: 'orphaned' });
+    await publish(runId, 'error', { error: 'orphaned', detail: INTERRUPTED_DETAIL });
     await drain(runId);
   } catch (e) {
     console.warn('[agent-core] terminalizeInterruptedRun failed:', e);
