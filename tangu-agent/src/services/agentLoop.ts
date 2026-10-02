@@ -591,8 +591,40 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   }
 }
 
-/** 进程重启自愈：把 DB 里仍 queued/running 的 run 按 session 分组、created_at 顺序重新入队。
- *  必须在 failStaleRuns() 之后调用（避免捡到即将被标 failed 的陈旧行）。返回重入队数量。 */
+/** run 行的持有进程是不是另一个还活着的本机引擎(TUI / 另一个桌面实例)。自己的 pid = 上一个同号进程留下的,按已死算。
+ *  ponytail: 只按 pid 探活 —— pid 被无关进程复用会误判活着,那几行等 failStaleRuns 的 30 分钟兜底;要更准就记进程启动时刻。 */
+function ownedByLiveProcess(pid: number | null): boolean {
+  if (!pid || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === 'EPERM'; // 存在但无权发信号 = 活着
+  }
+}
+
+const INTERRUPTED_DETAIL =
+  'The engine restarted while this run was in progress, so it was stopped here instead of starting over (that would repeat actions already taken). Send a message to continue.';
+
+/** 跑到一半就没了持有者的 run(崩溃 / 退出 / 更新):标失败 + 补一条终态事件,不从头重跑。 */
+async function terminalizeInterruptedRun(runId: string): Promise<void> {
+  try {
+    await updateRunStatus(runId, 'failed', { error: 'interrupted: engine restarted mid-run' });
+    await publish(runId, 'error', { error: 'interrupted', detail: INTERRUPTED_DETAIL });
+    await drain(runId);
+  } catch (e) {
+    console.warn('[agent-core] terminalizeInterruptedRun failed:', e);
+  } finally {
+    setTimeout(() => cleanup(runId), 30_000);
+  }
+}
+
+/** 进程重启自愈(PI-DSH 评审 R2 改过语义):在飞 run 按 session 分组、created_at 顺序处理 ——
+ *  - 别的活着的引擎进程持有的:不碰(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
+ *  - running(持有者已死):标中断,**不从头重跑** —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍;
+ *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
+ *  必须在 failStaleRuns() 之后调用（避免捡到即将被标 failed 的陈旧行）。返回重入队数量。
+ *  复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
 export async function recoverQueuedRuns(): Promise<number> {
   const rows = await listPendingRunsForRecovery();
   // 团队成员工作会话(kind=teamwork)里的子 run 只由团队 run 驱动:重启后团队 run 从头再激活、会新建子 run;遗留的子 run 不能再跑
@@ -607,10 +639,20 @@ export async function recoverQueuedRuns(): Promise<number> {
   } catch { /* 查不到 kind 按普通会话处理 */ }
   let n = 0;
   for (const r of rows) {
+    if (ownedByLiveProcess(r.owner_pid)) continue;
     if (kinds.get(r.session_id) === 'teamwork') {
       await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
       continue;
     }
+    if (r.status === 'running') {
+      await terminalizeInterruptedRun(r.id);
+      continue;
+    }
+    const claimed = await query<any[]>(
+      `UPDATE agent_runs SET owner_pid = ? WHERE id = ? AND status = 'queued' AND COALESCE(owner_pid, 0) = ? RETURNING id`,
+      [process.pid, r.id, r.owner_pid || 0],
+    ).catch(() => []);
+    if (!claimed.length) continue;
     enqueueRun(r.session_id, r.id);
     n++;
   }

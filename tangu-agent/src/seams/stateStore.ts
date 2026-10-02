@@ -78,6 +78,9 @@ export interface FinalizeMessageInput {
   agentSlug?: string;
 }
 
+/** 重启自愈看到的在飞 run:owner_pid = 持有它的本机引擎进程(NULL = 不知道)。 */
+export interface PendingRunRow { id: string; session_id: string; status: string; owner_pid: number | null }
+
 export interface StateStore {
   // ── runs ──
   createRun(run: {
@@ -98,7 +101,7 @@ export interface StateStore {
   ): Promise<void>;
   listActiveRunsBySession(sessionId: string, userId: string): Promise<ActiveRunRow[]>;
   /** 进程重启自愈（仅持库进程调;worker 关掉）。 */
-  listPendingRunsForRecovery(): Promise<Array<{ id: string; session_id: string }>>;
+  listPendingRunsForRecovery(): Promise<PendingRunRow[]>;
   failStaleRuns(olderThanMinutes?: number): Promise<number>;
 
   // ── steps ──

@@ -7,7 +7,7 @@
 import { deps } from '../seams/runtime.js';
 import { currentRunClientTag } from '../seams/runContext.js';
 import type { AgentEvent } from './eventBus.js';
-import type { ActiveRunRow, StepInput, StepRow } from '../seams/stateStore.js';
+import type { ActiveRunRow, PendingRunRow, StepInput, StepRow } from '../seams/stateStore.js';
 
 export interface AgentRun {
   id: string;
@@ -107,7 +107,7 @@ export const listActiveRunsBySession = (
 ): Promise<ActiveRunRow[]> => deps().state.listActiveRunsBySession(sessionId, userId);
 
 /** 进程重启自愈用：列出仍在飞的 run（须在 failStaleRuns() 之后调用）。 */
-export const listPendingRunsForRecovery = (): Promise<Array<{ id: string; session_id: string }>> =>
+export const listPendingRunsForRecovery = (): Promise<PendingRunRow[]> =>
   deps().state.listPendingRunsForRecovery();
 
 /** 启动时把超时仍 running 的 run 标 failed（进程重启自愈）。 */

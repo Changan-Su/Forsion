@@ -292,6 +292,9 @@ export async function runMigration(): Promise<void> {
     // 待批行的预览口径版本(2026-09-26):NULL = 升级前的行(预览折叠 / 截断 / 写类只有一行摘要),永远批不了,
     // 由 pendingApprovals.retireLegacyPending 撤回;批准的抢占要求 ≥ PREVIEW_VERSION。
     ['pending_approvals', 'preview_version INTEGER'],
+    // run 的持有进程(本机 SQLite 才写,见 sqlStateStore.createRun):重启自愈据此探活,别的活着的引擎进程的 run 不碰
+    //(TUI 与桌面共用 state.db;PI-DSH 评审 R2)。NULL = 云端 / 升级前的行 / 非 SQLite 本机库。
+    ['agent_runs', 'owner_pid INTEGER'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
