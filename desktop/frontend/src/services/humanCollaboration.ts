@@ -1,5 +1,5 @@
-import type { TanguDesktopConfig, ToolEvent } from '../types'
-import { authFetch } from './http'
+import type { ToolEvent } from '../types'
+import { engineFetch, type EngineTarget } from './engine/targets'
 
 export type HumanScope = { kind: 'agent'; slug: string } | { kind: 'project'; cwd: string }
 export type HumanTarget = { kind: 'agent'; slug: string } | { kind: 'project'; sessionId: string }
@@ -15,11 +15,11 @@ export interface HumanJump { at: number; edit?: boolean; changeId?: string }
 export const HUMAN_CHANGED_EVENT = 'forsion:human-changed'
 export const humanTargetKey = (target: HumanTarget) => target.kind === 'agent' ? `agent:${target.slug}` : `project:${target.sessionId}`
 const endpoint = (target: HumanTarget) => target.kind === 'agent' ? `/agent/agents/${encodeURIComponent(target.slug)}/human` : '/agent/project-context/human'
-async function request<T>(cfg: TanguDesktopConfig, target: HumanTarget, method: string, suffix = '', input?: Record<string, unknown>): Promise<T> {
+async function request<T>(engine: EngineTarget, target: HumanTarget, method: string, suffix = '', input?: Record<string, unknown>): Promise<T> {
   const project = target.kind === 'project' ? { sessionId: target.sessionId } : {}
   const query = method === 'GET' && target.kind === 'project' ? `?sessionId=${encodeURIComponent(target.sessionId)}` : ''
-  const r = await authFetch(`${cfg.backendUrl}${endpoint(target)}${suffix}${query}`, {
-    method, headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+  const r = await engineFetch(engine, `${endpoint(target)}${suffix}${query}`, {
+    method,
     ...(method === 'GET' ? {} : { body: JSON.stringify({ ...input, ...project }) }),
   })
   const body = await r.json()
@@ -27,11 +27,11 @@ async function request<T>(cfg: TanguDesktopConfig, target: HumanTarget, method: 
   if (method !== 'GET') window.dispatchEvent(new CustomEvent(HUMAN_CHANGED_EVENT))
   return body as T
 }
-export const getHumanDocument = (cfg: TanguDesktopConfig, target: HumanTarget) => request<HumanDocument>(cfg, target, 'GET')
-export const saveHumanDocument = (cfg: TanguDesktopConfig, target: HumanTarget, content: string, expectedVersion: string, summary: string) =>
-  request<{ document: HumanDocument; change: HumanChange | null }>(cfg, target, 'PUT', '', { content, expectedVersion, summary })
-export const undoHumanChange = (cfg: TanguDesktopConfig, target: HumanTarget, change: HumanChange) =>
-  request<{ document: HumanDocument; change: HumanChange }>(cfg, target, 'POST', '/undo', { changeId: change.id, expectedVersion: change.afterVersion })
+export const getHumanDocument = (engine: EngineTarget, target: HumanTarget) => request<HumanDocument>(engine, target, 'GET')
+export const saveHumanDocument = (engine: EngineTarget, target: HumanTarget, content: string, expectedVersion: string, summary: string) =>
+  request<{ document: HumanDocument; change: HumanChange | null }>(engine, target, 'PUT', '', { content, expectedVersion, summary })
+export const undoHumanChange = (engine: EngineTarget, target: HumanTarget, change: HumanChange) =>
+  request<{ document: HumanDocument; change: HumanChange }>(engine, target, 'POST', '/undo', { changeId: change.id, expectedVersion: change.afterVersion })
 
 /** Durable tool results are the notification source, including restored chat history.
  * Never interpret arbitrary assistant prose or another tool's output as an update. */

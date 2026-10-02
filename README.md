@@ -161,6 +161,10 @@ Download the latest desktop installer from [GitHub Releases](https://github.com/
 | Windows | `Forsion-*.exe` | NSIS installer. |
 | Linux | `Forsion-*.AppImage` | Add execute permission, then run. |
 
+Every desktop release includes two distributions. `Forsion-<version>-<arch>` bundles Forsion Extend for account and cloud features. `Forsion-NoExtend-<version>-<arch>` includes the local app and Agent backend without bundling Extend; cloud account, sync, publishing and remote device features require Extend. Both use the same app identity and data folders. Windows/Linux updates stay within the chosen distribution; on macOS, download the same filename variant when updating.
+
+For local builds, run `FORSION_BUNDLE_EXTEND=0 npm run build`, then `FORSION_BUNDLE_EXTEND=0 npm run dist` from `desktop/`. Omitting the variable produces the default distribution.
+
 1. **Install and connect a model.** First launch helps configure your connection, model, and workspace. The desktop installer includes the Agent backend and Node.js runtime.
 2. **Bring some real context.** Create a project note with a goal, sources, and next steps. Ask an Agent to read it, and explicitly tell it a preference worth remembering.
 3. **Finish one useful task.** Ask an Agent to produce something from your material, inspect the saved file, and check an explicitly saved preference in the memory panel. Add TEAM, Muse, and plugins when you need them.
@@ -227,6 +231,8 @@ Common commands:
 | `tangu-agent/` | `npm run build` | Compile the Agent runtime. |
 | `tangu-agent/` | `npm run typecheck` | Check types and plugin-API sync status. |
 | `tangu-agent/` | `npm test` | Run the runtime tests. |
+| `tangu-agent/` | `npm run build && npm run smoke:tooldefs` | Reproduce missing tool definitions and verify isolation before model requests. |
+| `tangu-agent/` | `TANGU_PLUGINS_DIR="$PWD/test/fixtures" npm run live:harness -- --only chat,tool` | Verify chat and file tools with an invalid plugin loaded, using the dev model credentials. |
 | `desktop/` | `npm run dev` | Start the desktop dev environment. |
 | `desktop/` | `npm run typecheck` | Check desktop types. |
 | `desktop/` | `npm test` | Run desktop unit tests. |

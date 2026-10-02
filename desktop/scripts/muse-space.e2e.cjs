@@ -14,7 +14,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -195,11 +195,14 @@ async function main() {
     check('落点回执进 Muse LOG([feedback] 行)', seen.feedback.some((x) => x.includes('handed to Muse')) && seen.feedback.some((x) => x.includes('new session')), JSON.stringify(seen.feedback))
 
     // ④ Muse Space
-    const clicked = await win.evaluate(() => {
+    const clickMuse = () => win.evaluate(() => {
       const button = [...document.querySelectorAll('button.rb-space')].find((item) => (item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').trim() === 'Muse')
       if (button) { button.click(); return true }
       return false
     })
+    let clicked = await clickMuse()
+    // 10-02 起上区只常驻 5 个 Space,Muse 缺省收在「…」里:悬停「…」展开再找一次。
+    if (!clicked) { await win.locator('.rb-top .rb-more').first().hover().catch(() => {}); await win.waitForTimeout(500); clicked = await clickMuse() }
     check('ribbon 上有 Muse Space 图标', clicked)
     await win.waitForTimeout(2500)
     await dismissNotifications(win)

@@ -4,7 +4,7 @@
 const fs = require('fs')
 const path = require('path')
 const assert = require('assert/strict')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const ROOT = path.join(__dirname, '..')
 const base = process.env.TANGU_BACKEND_URL
 const token = process.env.TANGU_HUMAN_TOKEN

@@ -4,18 +4,20 @@ import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { HostSandboxSettings } from './HostSandboxSettings'
 import { ErrorBoundary } from './ErrorBoundary'
+import { BrowserExtensionPanel } from './BrowserExtensionPanel'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
+import { listClientSurfaces } from '../services/clientSurfaces'
 import {
   fetchProviderModels,
   listModels, listTools, setModelContextWindow,
@@ -92,6 +94,7 @@ import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClick
 import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
+import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
 import { resolveSettingsTarget } from './settingsTarget'
@@ -126,6 +129,8 @@ registerMessages({
   // 持久配置读回前外部连接表单只读(Codex H1-1):此时表单里可能是托管后端的临时地址 / 令牌。
   'settingsmodal.external.cfgLoading': { zh: '正在读取已保存的连接配置…', en: 'Loading the saved connection settings…' },
   'settingsmodal.external.cfgFailed': { zh: '读不到已保存的连接配置，暂不能修改：{error}', en: 'Couldn\'t load the saved connection settings, so they can\'t be changed yet: {error}' },
+  // 已登录时云端地址跟随账号(主进程 loadConfig 以账号的 cloudUrl 覆盖,token 绝不发往别的服务器),这里只读。
+  'settingsmodal.cloudUrl.lockedHint': { zh: '该地址跟随已登录的账号，无法在此修改。要连接其他服务器，请先退出登录。', en: 'This address follows the signed-in account and can\'t be changed here. To connect to a different server, sign out first.' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -368,6 +373,7 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  const [chatAvatars, setChatAvatars] = useState<boolean>(isChatAvatarsOn)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
@@ -853,6 +859,8 @@ export const SettingsModal: React.FC<{
     }
   }, [p.open, isDesktop])
 
+  // An expired account token still binds the saved cloud address.
+  const cloudUrlLocked = !!authSt?.loggedIn
   const doProviderLogin = async (id: string): Promise<void> => {
     if (!window.tangu?.providerLogin) return
     setProviderBusy(id)
@@ -2031,23 +2039,26 @@ export const SettingsModal: React.FC<{
 
                 {/* Forsion 云端 → 连接:云端地址(自建服务才用;cloudUrl 是 managedKey —— 写 = 重启后端 + 重建 unit host,保留显式保存,不做失焦提交) */}
                 {tab === 'forsion' && activeSub === 'f-conn' && stored && (
-                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t('settings.forsion.cloudUrlHint')}>
+                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
                     <div className="settings-control-list">
                       <SettingsRow label={t('settings.forsionCloud.address')}>
                         <div className="settings-inline-row settings-row-wide-control">
                           <input
                             type="text"
-                            value={stored.cloudUrl}
+                            value={cloudUrlLocked ? savedCfg?.cloudUrl ?? '' : stored.cloudUrl}
+                            readOnly={cloudUrlLocked}
                             onChange={(e) => edit({ cloudUrl: e.target.value })}
                             placeholder="https://api.forsion.net"
                             aria-label={t('settings.forsion.cloudUrlLabel')}
                           />
+                          {!cloudUrlLocked && (
                           <button
                             className="btn primary sm"
                             onClick={() => void commitEdits(['cloudUrl'], (v) => ({ cloudUrl: (v.cloudUrl || '').trim() }))}
                           >
                             {t('settings.forsion.save')}
                           </button>
+                          )}
                         </div>
                         {commitErrorHint('cloudUrl')}
                       </SettingsRow>
@@ -2907,6 +2918,7 @@ export const SettingsModal: React.FC<{
                         <div className="settings-panel-footer"><span className="hint" role="status">{remoteMsg}</span></div>
                       ) : null}
                     </SettingsPanel>
+                    {isDesktop && !unitPage && <BrowserExtensionPanel cfg={p.cfg} managed={stored.mode !== 'external'} />}
                   </>
                 )}
 
@@ -3123,6 +3135,21 @@ export const SettingsModal: React.FC<{
                               const on = !smoothCaret
                               setSmoothCaret(on)
                               persistSmoothCaret(on)
+                            }}
+                          />
+                        </div>
+                        <div className="settings-control-row" data-setting-anchor="chat-avatars">
+                          <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={chatAvatars}
+                            aria-label={t('settings.theme.chatAvatars')}
+                            className={`switch${chatAvatars ? ' on' : ''}`}
+                            onClick={() => {
+                              const on = !chatAvatars
+                              setChatAvatars(on)
+                              setChatAvatarsOn(on)
                             }}
                           />
                         </div>
@@ -3450,6 +3477,9 @@ export const SettingsModal: React.FC<{
                         />
                       )}
                     />
+                    {/* 客户端能力面自带的设置行(手机操控等,见 services/clientSurfaces.ts):数据驱动,
+                        desktop/web 没注册就什么都不出,这里不写任何平台判断。 */}
+                    {listClientSurfaces().map(({ ns, surface: { SettingsRow: Row } }) => Row && <Row key={ns} />)}
                   </>
                 )}
 

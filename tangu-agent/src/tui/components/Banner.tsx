@@ -4,6 +4,8 @@
  * 手绘边框 → 必须自算终端显示宽度:CJK/全角=2 列、ANSI 转义=0 列(Ink 的对齐在这帮不上忙)。
  */
 import { homedir } from 'node:os';
+import { APPROVAL_MODE_META, type ApprovalModeId } from '../../core/commandCatalog.js';
+import { L } from '../i18n.js';
 
 const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string): string => `\x1b[1m${s}\x1b[0m`;
@@ -69,21 +71,19 @@ export function buildBannerLines(o: BannerOpts): string[] {
   const LABEL_W = 13; // 'permissions:' + 1 空格,labels 全 ASCII 可直接 padEnd
   const label = (s: string): string => dim(s.padEnd(LABEL_W));
 
-  const modelValue = o.model ? bold(o.model) : '(未设置)';
-  const modelLine = `${label('model:')}${modelValue}   ${cyan('/model')} ${dim('切换')}`;
+  const modelValue = o.model ? bold(o.model) : L('(未设置)', '(not set)');
+  const modelLine = `${label('model:')}${modelValue}   ${cyan('/model')} ${dim(L('切换', 'switch'))}`;
 
   const home = homedir();
   const cwdShort = home && o.cwd.startsWith(home) ? `~${o.cwd.slice(home.length)}` : o.cwd;
-  const dirRaw = o.execMode === 'host' ? cwdShort : `${o.storage} · 云沙箱工作区`;
+  const dirRaw = o.execMode === 'host' ? cwdShort : `${o.storage} · ${L('云沙箱工作区', 'cloud sandbox workspace')}`;
   const dirLine = `${label('directory:')}${middleTruncatePath(dirRaw, maxInner - LABEL_W)}`;
 
-  const perm =
-    o.approvalMode === 'full-auto'
-      ? bold(magenta('full-auto · YOLO'))
-      : o.approvalMode === 'readonly'
-        ? green('readonly · 只读')
-        : 'auto-edit · 自动编辑';
-  const permLine = `${label('permissions:')}${perm}${dim(o.execMode === 'host' ? ' · 本机直连' : ' · 云沙箱')}`;
+  // 档名走 APPROVAL_MODE_META(与状态栏 / Desktop 药丸同名);旧版把 custom 也显示成 auto-edit。
+  const meta = APPROVAL_MODE_META[o.approvalMode as ApprovalModeId];
+  const permText = meta ? `${o.approvalMode} · ${L(meta.zh, meta.en)}` : o.approvalMode;
+  const perm = o.approvalMode === 'full-auto' ? bold(magenta(permText)) : o.approvalMode === 'readonly' ? green(permText) : permText;
+  const permLine = `${label('permissions:')}${perm}${dim(o.execMode === 'host' ? L(' · 本机直连', ' · local host') : L(' · 云沙箱', ' · cloud sandbox'))}`;
 
   const title = `${bold('>_ Tangu CLI')}${o.version ? ` ${dim(`(v${o.version})`)}` : ''}`;
   const inner = [title, '', modelLine, dirLine, permLine];
@@ -96,8 +96,15 @@ export function buildBannerLines(o: BannerOpts): string[] {
     dim(`╰${'─'.repeat(innerW + 2)}╯`),
   ];
 
-  const prov = o.providers.length ? ` · 直连=${o.providers.join(',')}` : '';
-  lines.push(dim(`  输入开聊 · /help 命令 · @提及文件 · ↑↓历史 · Tab 补全 · Esc 中止 · Ctrl+C 退出${prov}`));
+  const prov = o.providers.length ? L(` · 直连=${o.providers.join(',')}`, ` · direct=${o.providers.join(',')}`) : '';
+  lines.push(
+    dim(
+      L(
+        `  输入开聊 · /help 命令 · /hotkeys 快捷键 · @提及文件 · ↑↓历史 · Tab 补全 · Shift+Tab 思考档 · Ctrl+P 模型 · Esc 中止 · Ctrl+C 退出${prov}`,
+        `  Type to chat · /help commands · /hotkeys shortcuts · @ mention files · ↑↓ history · Tab complete · Shift+Tab thinking · Ctrl+P model · Esc abort · Ctrl+C quit${prov}`,
+      ),
+    ),
+  );
   return lines;
 }
 

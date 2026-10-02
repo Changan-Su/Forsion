@@ -1,6 +1,6 @@
 {
   "name": "@forsion/tangu-agent",
-  "version": "2.11.4",
+  "version": "2.12.1",
   "license": "SEE LICENSE IN LICENSE",
   "description": "Tangu Agent — 与宿主无关的服务端 agent runtime;可作为 Forsion 微后端插件,也可独立运行(云端大脑客户端)。",
   "type": "module",
@@ -34,6 +34,7 @@
     "prelive:harness": "npm run build",
     "live:harness": "node scripts/live-harness.mjs",
     "smoke:tuiqueue": "bash scripts/tui-queue.smoke.sh",
+    "smoke:tooldefs": "node scripts/tool-definition-validation.smoke.mjs",
     "smoke:projectctx": "node scripts/project-context.smoke.mjs",
     "stall:timeline": "node scripts/stall-timeline.mjs",
     "cache:report": "node scripts/cache-hit-report.mjs",

@@ -5,18 +5,19 @@ import { CapabilityMenu } from './CapabilityMenu'
 import { useI18n } from '../i18n'
 import { formatRelative, formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
+import type { EngineTarget } from '../services/engine/targets'
 import { getHumanDocument, saveHumanDocument, undoHumanChange, humanTargetKey, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget, type HumanJump } from '../services/humanCollaboration'
 import './humanMessages'
 import './humanCollaboration.css'
 
 type Draft = { content: string; version: string }
 const drafts = new Map<string, Draft>()
-type Props = { cfg: TanguDesktopConfig; target: HumanTarget; name: string; running?: boolean; jump?: HumanJump }
+type Props = { engine: EngineTarget; cfg: TanguDesktopConfig; target: HumanTarget; name: string; running?: boolean; jump?: HumanJump }
 export function HumanCollaborationPanel(props: Props) {
-  const key = JSON.stringify([props.cfg.backendUrl, props.cfg.token, humanTargetKey(props.target)])
+  const key = JSON.stringify([props.engine.key, props.engine.base, props.cfg.token, humanTargetKey(props.target)])
   return <HumanBody key={key} {...props} draftKey={key} />
 }
-function HumanBody({ cfg, target, name, running, jump, draftKey }: Props & { draftKey: string }) {
+function HumanBody({ engine, target, name, running, jump, draftKey }: Props & { draftKey: string }) {
   const { t, locale } = useI18n()
   const [doc, setDoc] = useState<HumanDocument | null>(null)
   const [draft, setDraft] = useState<Draft | null>(() => drafts.get(draftKey) || null)
@@ -30,7 +31,7 @@ function HumanBody({ cfg, target, name, running, jump, draftKey }: Props & { dra
   const errorText = (e: any) => e?.code === 'HUMAN_LOCAL_ONLY' ? t('human.localOnly') : e?.code === 'HUMAN_REMOTE_DENIED' ? t('human.remoteDenied') : String(e?.message || e)
   const load = useCallback(async () => {
     const n = ++seq.current
-    try { const d = await getHumanDocument(cfg, target); if (alive.current && n === seq.current) { setDoc(d); const pending = draftRef.current; if (pending && pending.version !== d.version && pending.content === d.content) changeDraft(null); if (!draftRef.current) setError('') } }
+    try { const d = await getHumanDocument(engine, target); if (alive.current && n === seq.current) { setDoc(d); const pending = draftRef.current; if (pending && pending.version !== d.version && pending.content === d.content) changeDraft(null); if (!draftRef.current) setError('') } }
     catch (e) { if (alive.current && n === seq.current) setError(errorText(e)) }
   }, [draftKey, locale]) // identity is encoded by draftKey
   useEffect(() => { void load(); const refresh = () => { void load() }; window.addEventListener(HUMAN_CHANGED_EVENT, refresh); return () => window.removeEventListener(HUMAN_CHANGED_EVENT, refresh) }, [load, running])
@@ -44,18 +45,18 @@ function HumanBody({ cfg, target, name, running, jump, draftKey }: Props & { dra
     if (!draft || !version || busy) return
     const submitted = draft
     setBusy(true); setError(''); setNotice(''); ++seq.current
-    try { const r = await saveHumanDocument(cfg, target, draft.content, version, t('human.userEdit')); if (drafts.get(draftKey) === submitted) drafts.delete(draftKey); if (alive.current) { setDoc(r.document); changeDraft(null); setConflict(false); setLatest(null); setNotice(t('human.saved')) } }
+    try { const r = await saveHumanDocument(engine, target, draft.content, version, t('human.userEdit')); if (drafts.get(draftKey) === submitted) drafts.delete(draftKey); if (alive.current) { setDoc(r.document); changeDraft(null); setConflict(false); setLatest(null); setNotice(t('human.saved')) } }
     catch (e: any) { if (alive.current) { setConflict(e?.status === 409); setError(e?.status === 409 ? t('human.conflict') : errorText(e)) } }
     finally { if (alive.current) setBusy(false) }
   }
   const undo = async (change: HumanChange) => {
     if (busy || draft) return
     setBusy(true); setError(''); ++seq.current
-    try { const r = await undoHumanChange(cfg, target, change); if (alive.current) { setDoc(r.document); setNotice(t('human.undone')) } }
+    try { const r = await undoHumanChange(engine, target, change); if (alive.current) { setDoc(r.document); setNotice(t('human.undone')) } }
     catch (e: any) { if (alive.current) setError(e?.status === 409 ? t('human.undoConflict') : errorText(e)) }
     finally { if (alive.current) setBusy(false) }
   }
-  const reviewLatest = async () => { try { const d = await getHumanDocument(cfg, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
+  const reviewLatest = async () => { try { const d = await getHumanDocument(engine, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
   return <section className="human-panel" data-human-scope={target.kind} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 's' && draft) { e.preventDefault(); e.stopPropagation(); void save() } }}>
     <header className="human-heading"><div><h3>{t('human.title')}</h3><p>{target.kind === 'agent' ? t('human.agentScope', { name }) : t('human.projectScope')}</p></div><div className="human-actions">
       {!draft && <button type="button" className="profile-text-action" disabled={!doc || busy} onClick={() => doc && changeDraft({ content: doc.content || t('human.template'), version: doc.version })}><Pencil size={13} />{t('human.edit')}</button>}

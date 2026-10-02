@@ -15,7 +15,9 @@ import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
-import { gateToolCall, requestApproval, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { takeRunThinking } from './sessionSettings.js';
+import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
@@ -809,6 +811,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
     ? input.uiSettings : (uiCommands ? {} : undefined);
+  // 客户端原生能力(phone.intents 等,routes/runs 已消毒):同链同冻结。带 clientCapability 的工具据此过中央闸,
+  // requestClientAction 也只在非空时装配。派生 run 自建 input → 天然不继承。
+  const clientCapabilities: readonly string[] | undefined = Array.isArray(input.clientCapabilities)
+    ? Object.freeze(input.clientCapabilities.filter((c: unknown): c is string => typeof c === 'string'))
+    : undefined;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -972,7 +979,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 换 Agent 时桌面会单独 PATCH thinkingLevel,「ultra + high」这种陈旧组合在这里自动失效。主动委派段见系统提示末尾。
   // 团队模式不吃 Ultra:成员各跑各的档,父 run 只做编排(桌面入口也不给,这里是引擎侧的同一口径)。
   const ultraRequested = agentConfig.ultra === true && !agentConfig.groupChat;
-  const thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
+  let thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
@@ -1000,7 +1007,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           .slice(0, 8)
       : [];
   const requestedApprovalMode: ApprovalMode =
-    agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+    normalizeApprovalMode(agentConfig.approvalMode, `run ${runId}`) || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // C3:远程污点 run 的快照档先钳一次(Agent 定义激活填进来的也在内);每次调用现读的会话存档由审批闸再钳。
   const approvalMode: ApprovalMode = remoteCap ? clampApprovalMode(requestedApprovalMode, remoteCap) : requestedApprovalMode;
   // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
@@ -1458,7 +1465,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities,
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
       hostSandbox: runHostSandbox,
@@ -2009,6 +2016,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 少了这一步,同 run 里 set 之后再 list 仍是 run 开始的旧值,模型把它当「没生效」的证据(2026-09-05 实报)。
       // ⚠️ 这一行被 uiCommands.test.ts 按源码文本钉住(装配本身没有可跑的测试路径)。
       updateUiSettings: makeUiSettingsUpdater(uiSettings),
+      // 客户端原生动作(phone_* 等):闭包绑死本 run 的 runId/sessionId/能力,run 级中止信号总会一并监听。
+      // 没声明能力的 run 根本不装配。这里是 run 级原件:registry.executeTool 再按工具收窄(bindClientActionToTool)——
+      // 只有声明了 clientCapability 的工具拿得到,且只能发自己那个 ns。⚠️ 这一行被 phoneTools.test.ts 按源码文本钉住。
+      ...(clientCapabilities?.length ? { requestClientAction: makeClientActionRequester({ runId, sessionId, caps: clientCapabilities, runSignal: ac.signal }) } : {}),
       // 激活的 agent 定义 slug → start_discussion 的「分身」据此取主 agent 人设(memScopeSlug 可能是共用默认,不可混用)。
       agentSlug: activeAgentSlug,
       collectImage: (img) => {
@@ -2106,7 +2117,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }, hookCtx());
       if (ac.signal.aborted) throw new AbortLikeError();
       if (preV.block) {
-        return mkRejected(call, startedAt, parallelGroup, `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`);
+        // 模型面英文,且写清是 hook 挡的(不是用户拒的):同 approvals 的 rejectReason 口径
+        return mkRejected(call, startedAt, parallelGroup, `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`);
       }
       // hook 改写参数 → 用改写后的 call 走审批与执行（审批基于改写后的内容，更安全）。
       const effCall = preV.updatedInput
@@ -2137,8 +2149,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         };
       }
       if (decision.action === 'reject') {
-        // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)
-        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || '用户拒绝了该操作。');
+        // 模型面文案英文、按原因区分:规则 / hook / 无人值守排队 / 中止各自带 rejectReason;
+        // 没带 = 用户在审批卡或通道里点了拒绝(中止在上一行已抛 AbortLikeError,不会走到这里)。
+        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || USER_REJECT_REASON);
       }
       return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect);
     };
@@ -2403,6 +2416,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         await drain(runId);
         await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
         return;
+      }
+      const thinkingOverride = takeRunThinking(runId);
+      if (thinkingOverride && thinkingOverride !== thinkingLevel) {
+        thinkingLevel = thinkingOverride;
+        toolCtx.thinkingLevel = thinkingOverride; // self_brainstorm 分身须同档
       }
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
       if (toolDefsDirty) {
@@ -2825,7 +2843,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    没有计划卡=没有批准入口,整条计划流程静默失效。收尾前催一次。
         //    整 run 只催一次(第二次放行):plan 模式也用来问答/调研,不该把每一轮都逼成计划。
         //    不看 usedTools:「只读调研完直接口述计划」正是要拦的那种。——
-        if (planMode && !planNudged && !lastIter) {
+        // 本 run 已调过 exit_plan_mode(计划已提交 / 已批准):run 级 planMode 快照仍是 true,但不能再催 —— 否则批准后收尾又被催,
+        // 模型重交计划、桌面弹第二张计划卡、「自动开始」等不到 done(09-26 真模型 12/12 复现,698fb79b 起就在)。
+        if (planMode && !planNudged && !lastIter && !allToolCalls.some((c) => c.function.name === 'exit_plan_mode')) {
           planNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
@@ -3099,6 +3119,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     steerArrivals.delete(runId);
     steerClosed.delete(runId);
     clearRunRemoteTaint(runId); // 远端 steer 染的色随 run 收尾(表长 = 在飞 run 数)
+    takeRunThinking(runId); // 末轮才改的思考档没被取走 → 丢弃(会话存值已写,下一个 run 照样生效)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

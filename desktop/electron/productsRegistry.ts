@@ -11,7 +11,7 @@ import { existsSync, promises as fs, type Dirent, type Stats } from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { PRODUCT_SIDECAR_NEW, PRODUCT_SIDECAR_PATHS, effectivePluginId, type ProductKind, type ProductSummary } from '../shared/products'
-import { dirIdentity, type DirIdentity } from './dirIdentity'
+import { dirIdToken, dirIdentity, sameDirIdentity, type DirIdentity } from './dirIdentity'
 
 /** 本机登记过的外部造物(调用方从 productTrust 取:真实路径 + 登记时的目录身份)。 */
 export interface ExternalRoot { root: string; dir: DirIdentity }
@@ -172,7 +172,7 @@ async function writeSidecar(dir: string, sidecar: Sidecar, at: string): Promise<
  */
 async function writeInto(r: { root: string; dir: DirIdentity }, sidecar: Sidecar, rel: string): Promise<boolean> {
   const now = await fs.lstat(r.root).catch(() => null)
-  if (!now || now.isSymbolicLink() || now.dev !== r.dir.dev || now.ino !== r.dir.ino) return false
+  if (!now || now.isSymbolicLink() || !sameDirIdentity(r.dir, { dev: now.dev, ino: now.ino, birth: now.birthtimeMs })) return false
   await writeSidecar(r.root, sidecar, rel)
   return true
 }
@@ -307,11 +307,11 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
       const st = await fs.lstat(root)
       if (st.isSymbolicLink() || !st.isDirectory()) return // 软链项目一律不认,绝不跟随
       // 外部造物:用它之前再核一次目录身份 —— 调用方核过之后这个路径被换成了别的目录,就不收(更不往里写 sidecar)
-      if (expect && (st.dev !== expect.dev || st.ino !== expect.ino)) return
+      if (expect && !sameDirIdentity(expect, { dev: st.dev, ino: st.ino, birth: st.birthtimeMs })) return
       const { raw, files } = await readRaw(root)
       // ⚠️先 stat 再补 sidecar:写 sidecar 会顶起目录 mtime,updatedAt 要的是补写**之前**那个,
       //   否则首次扫描会把整个栅格按「刚才补了谁」重排。
-      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, files, updatedAt: st.mtimeMs, birth: birthOf(st), external, dir: { dev: st.dev, ino: st.ino } })
+      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, files, updatedAt: st.mtimeMs, birth: birthOf(st), external, dir: { dev: st.dev, ino: st.ino, birth: st.birthtimeMs } })
     } catch { /* 单个项目坏掉(权限/竞态删除)不拖垮整张表 */ }
   }
   // 托管根读不了(权限)只少了托管的那部分,外部造物照样列
@@ -407,7 +407,7 @@ async function summarize(record: Indexed): Promise<ProductSummary> {
     updatedAt: record.updatedAt,
     published: existsSync(path.join(record.root, CONNECT_MARKER)),
     ...(record.external ? { external: true } : {}),
-    dirId: `${record.dir.dev}:${record.dir.ino}`,
+    dirId: dirIdToken(record.dir),
     // pluginId 跟**生效后的** kind 走:sidecar 把 kind 改成 web 就不该再挂着插件 id,
     // 反过来一个没有清单的目录被标成 plugin 也变不出 id(那种 patch 已在 updateProduct 挡掉)。
     ...(kind === 'plugin' && detected.pluginId ? { pluginId: detected.pluginId } : {}),
@@ -445,7 +445,7 @@ export async function getProduct(projectsRoot: string, id: string, externals: re
 export async function ensureProduct(projectsRoot: string, dir: string, externals: readonly ExternalRoot[] = []): Promise<ProductSummary> {
   const rootReal = await realRoot(projectsRoot).catch(() => null)
   const id = dirIdentity(dir)
-  const external = id ? externals.find((e) => e.dir.dev === id.dev && e.dir.ino === id.ino) : undefined
+  const external = id ? externals.find((e) => sameDirIdentity(e.dir, id)) : undefined
   if (external) {
     const records = await serialized(CHAIN, () => index(rootReal, externals))
     const record = records.find((r) => r.external && r.root === external.root)
@@ -460,7 +460,7 @@ export async function ensureProduct(projectsRoot: string, dir: string, externals
   // ⚠️按目录身份认,不比名字:`<root>/DEMO` 在大小写不敏感的卷上打开的就是磁盘上的 `demo`(同一个 inode,认得出);
   //   大小写敏感的卷上 `App` 与 `app` 是两个目录,按平台转小写会把请求 `App` 的人交给 `app`(Codex 评审)。
   const want = dirIdentity(path.join(rootReal, name))
-  const record = want ? records.find((r) => !r.external && r.dir.dev === want.dev && r.dir.ino === want.ino) : undefined
+  const record = want ? records.find((r) => !r.external && sameDirIdentity(r.dir, want)) : undefined
   if (!record) throw new Error(`Product directory is unavailable: ${name}`)
   return summarize(record)
 }

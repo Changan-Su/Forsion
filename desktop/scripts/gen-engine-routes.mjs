@@ -72,6 +72,16 @@ export const CLASSIFICATION = {
   'POST /agent/remote/estop': [D, 'emergency stop is a host-only action (design §6.5)'],
   'POST /agent/remote/unlock': [D, 'unlocking remote access needs local system auth on the host (design §6.1, D13)'],
 
+  // Pairing credentials and persistent collaboration policy are host-only.
+  'GET /agent/browser-extension': [D, 'browser extension pairing credentials'],
+  'POST /agent/browser-extension/reset-code': [D, 'rotates browser extension pairing credentials'],
+  'GET /agent/agents/:slug/human': [D, 'host collaboration configuration'],
+  'PUT /agent/agents/:slug/human': [D, 'host collaboration configuration write'],
+  'POST /agent/agents/:slug/human/undo': [D, 'host collaboration configuration undo'],
+  'GET /agent/project-context/human': [D, 'host collaboration configuration'],
+  'PUT /agent/project-context/human': [D, 'host collaboration configuration write'],
+  'POST /agent/project-context/human/undo': [D, 'host collaboration configuration undo'],
+
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
   'GET /agent/workspace/read': [A, 'session workspace read'],

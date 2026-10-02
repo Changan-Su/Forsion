@@ -8,7 +8,7 @@ vi.mock('../services/backendService', () => ({ postMuseFeedback: vi.fn(async () 
 
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { postMuseFeedback } from '../services/backendService'
-import { syncAgentSpace, reportAgentSpaceMountError, __resetAgentSpaceSync } from './agentSpaceSync'
+import { syncAgentSpace, reportAgentSpaceMountError, agentSpaceRuntimeError, __resetAgentSpaceSync } from './agentSpaceSync'
 import type { TanguDesktopConfig } from '../types'
 
 const cfg = {} as TanguDesktopConfig
@@ -81,6 +81,33 @@ describe('syncAgentSpace 回写', () => {
     ])
   })
 
+  it('加载失败的回写 POST 失败(引擎一时不可用)→ 同戳的下次同步重发,不必等内容变;发成功了就不再发', async () => {
+    afterReload({ plugins: [muse], activeIds: [], views: [], lastSetupError: { 'agent-muse': 'boom' } })
+    posted.mockRejectedValueOnce(new Error('engine down'))
+    await run(20)
+    expect(posted).toHaveBeenCalledTimes(1)
+    await run(20) // 同戳:不重载,但重发那条
+    expect(posted).toHaveBeenCalledTimes(2)
+    expect(posted.mock.calls[1][1]).toBe('Space plugin failed to load: boom')
+    await run(20)
+    expect(posted).toHaveBeenCalledTimes(2)
+  })
+
+  it('两版的回写同时在途、旧版的失败晚到 → 不覆盖新版待重发的那条', async () => {
+    let failV1: (e: unknown) => void = () => {}
+    posted.mockImplementationOnce(() => new Promise((_, rej) => { failV1 = rej }))
+    afterReload({ plugins: [muse], activeIds: [], views: [], lastSetupError: { 'agent-muse': 'boom v1' } })
+    await run(30) // v1 的回写在途
+    posted.mockRejectedValueOnce(new Error('engine down'))
+    afterReload({ plugins: [muse], activeIds: [], views: [], lastSetupError: { 'agent-muse': 'boom v2' } })
+    await run(31) // v2 的回写先失败 → 记下待重发
+    failV1(new Error('engine down')) // v1 的失败晚到
+    await vi.advanceTimersByTimeAsync(0)
+    await run(31) // 同戳:重发的必须是 v2 那条
+    expect(posted).toHaveBeenCalledTimes(3)
+    expect(posted.mock.calls[2][1]).toBe('Space plugin failed to load: boom v2')
+  })
+
   it('挂载失败的回写 POST 失败 → 撤销标记,下次挂载再报', async () => {
     const home = { id: 'home' }
     posted.mockRejectedValueOnce(new Error('engine down'))
@@ -96,5 +123,30 @@ describe('syncAgentSpace 回写', () => {
     afterReload({ plugins: [], activeIds: [], views: [] })
     await run(6)
     expect(posted).not.toHaveBeenCalled()
+  })
+
+  // 挂载之后没接住的错误:用与宿主同形的 new Function + sourceURL 造真栈(Node 与 Electron 同一个 V8)。
+  // 这里只测认领与文案(纯函数);「只认正在运行的那一版、去重、上限」走真实加载,见 amadeus/plugins/agentSpaceSource.test.ts
+  const url = 'forsion-agent-space/agent-muse/1/main.js'
+  const throwFromSpace = (body: string, at = url): unknown => {
+    const inner = (new Function('ctx', `${body}\n//# sourceURL=${at}`) as (c: unknown) => () => void)({})
+    try { inner() } catch (e) { return e }
+    throw new Error('fixture did not throw')
+  }
+
+  it('按 sourceURL 认领:行号换算回 main.js;宿主自己的错 / 非 Error / 别的 agent / 旧版都不认', () => {
+    const text = agentSpaceRuntimeError(throwFromSpace('const box = null\nreturn () => { box.innerHTML = 1 }'), url)
+    expect(text).toMatch(/went unhandled in your Space after it loaded \(main\.js line 2\): TypeError: Cannot set properties of null/)
+    expect(agentSpaceRuntimeError(new Error('backend not ready'), url)).toBeNull()
+    expect(agentSpaceRuntimeError('just a string', url)).toBeNull()
+    expect(agentSpaceRuntimeError(throwFromSpace('return () => { null.x = 1 }'), 'forsion-agent-space/agent-other/1/main.js')).toBeNull()
+    expect(agentSpaceRuntimeError(throwFromSpace('return () => { null.x = 1 }', 'forsion-agent-space/agent-muse/7/main.js'), url)).toBeNull()
+  })
+
+  it('Space await 的宿主接口 reject 了、它没接 → 也认(异步栈里有它那一帧),行号落在 await 那行;文案不说是它的代码抛的', async () => {
+    const host = { status: async () => { await null; throw new Error('backend not ready') } } // 宿主代码:栈帧里没有 sourceURL
+    const draw = (new Function('ctx', `return async () => {\n  await ctx.status()\n}\n//# sourceURL=${url}`) as (c: unknown) => () => Promise<void>)(host)
+    const err = await draw().catch((e: unknown) => e)
+    expect(agentSpaceRuntimeError(err, url)).toMatch(/^An error went unhandled in your Space after it loaded \(main\.js line 2\): Error: backend not ready/)
   })
 })

@@ -14,6 +14,7 @@ import { AUTH_PROBE_PATH as PROBE_PATH, classify, classifyError, noteReachable, 
 import { remoteRefusalMessage } from './localOnly'
 import './engine/messages'
 import { currentPlatform } from './platform'
+import { collectClientCapabilities } from './clientSurfaces'
 
 registerMessages({
   'agentrun.authFailed': { zh: '鉴权失败（401）：令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
@@ -157,6 +158,9 @@ export async function startRun(
       ui_settings: readUiSettings(),
       // 同类握手:本端有输入框上方的审批托盘(views/chat2/ApprovalTray),待批卡能攒多张、各自兑现。
       approval_tray: true,
+      // 客户端能力握手(tangu-agent/docs/phone-control.md §2):已注册能力面的能力并集,desktop/web 恒为 []。
+      // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
+      client_capabilities: collectClientCapabilities(),
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

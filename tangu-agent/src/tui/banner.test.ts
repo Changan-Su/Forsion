@@ -1,6 +1,11 @@
 /** 启动面板:显示宽度(CJK=2 列/ANSI=0 列)/路径中省略/边框对齐(全行等宽)。 */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { dispWidth, stripAnsi, middleTruncatePath, buildBannerLines } from './components/Banner.js';
+import { setUiLocale } from './i18n.js';
+
+// 横幅文案随系统语言;断言按中文写,先钉住(英文另起一例)。
+beforeAll(() => setUiLocale('zh'));
+afterAll(() => setUiLocale(null));
 
 describe('dispWidth', () => {
   it('ASCII=1 列,CJK=2 列,ANSI=0 列', () => {
@@ -43,7 +48,7 @@ describe('buildBannerLines', () => {
     expect(stripAnsi(box[box.length - 1]).startsWith('╰')).toBe(true);
   });
 
-  it('内容齐备:标题+版本/model+切换提示/目录/权限 YOLO/直连提示行', () => {
+  it('内容齐备:标题+版本/model+切换提示/目录/权限档名/直连提示行', () => {
     const flat = buildBannerLines(opts).map(stripAnsi).join('\n');
     expect(flat).toContain('>_ Tangu CLI (v1.0.0)');
     expect(flat).toContain('model:');
@@ -51,8 +56,24 @@ describe('buildBannerLines', () => {
     expect(flat).toContain('/model 切换');
     expect(flat).toContain('directory:');
     expect(flat).toContain('permissions:');
-    expect(flat).toContain('full-auto · YOLO');
+    expect(flat).toContain('full-auto · 完全放行'); // APPROVAL_MODE_META 单源
     expect(flat).toContain('直连=xai');
+    expect(flat).toContain('Shift+Tab');
+  });
+
+  it('custom 档显示自己的名字(旧版误显示成 auto-edit);英文界面用英文档名', () => {
+    const zh = buildBannerLines({ ...opts, approvalMode: 'custom' }).map(stripAnsi).join('\n');
+    expect(zh).toContain('custom · 自定义');
+    expect(zh).not.toContain('auto-edit');
+    setUiLocale('en');
+    try {
+      const en = buildBannerLines({ ...opts, approvalMode: 'readonly' }).map(stripAnsi).join('\n');
+      expect(en).toContain('readonly · Ask for approval');
+      expect(en).toContain('direct=xai');
+      expect(en).not.toMatch(/[\u4e00-\u9fff]/); // 英文界面不漏中文
+    } finally {
+      setUiLocale('zh');
+    }
   });
 
   it('窄终端:目录被截仍对齐;未设模型显示占位', () => {

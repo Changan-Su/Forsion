@@ -1,6 +1,7 @@
 /** /sessions 与 /resume 的数据层：查嵌入式库的 chat_sessions / chat_messages（跨重启持久）。 */
 import { query } from '../core/db.js';
 import type { TranscriptItem, Block } from './types.js';
+import { L } from './i18n.js';
 
 export interface SessionRow {
   id: string;
@@ -18,7 +19,7 @@ export async function listSessions(userId: string, limit = 20): Promise<SessionR
      ORDER BY updated_at DESC LIMIT ?`,
     [userId, limit],
   );
-  return rows.map((r) => ({ id: r.id, title: r.title || '(未命名)', modelId: r.model_id, updatedAt: r.updated_at }));
+  return rows.map((r) => ({ id: r.id, title: r.title || L('(未命名)', '(untitled)'), modelId: r.model_id, updatedAt: r.updated_at }));
 }
 
 /**

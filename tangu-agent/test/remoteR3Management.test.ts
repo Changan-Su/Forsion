@@ -145,8 +145,9 @@ describe('E5 manage_agent / manage_skill 远程硬拒', () => {
     expect((await gate(call('manage_skill', { action: 'list' }), { approvalMode: 'auto-edit', remote: REMOTE })).action).toBe('approve');
     // manage_harness 自带跑命令档(本机 auto-edit 下 list 也要批):远程 list 照常走审批,只是不被硬拒
     expect((await gate(call('manage_harness', { action: 'list' }), { approvalMode: 'full-auto', remote: REMOTE })).rejectReason ?? '').not.toMatch(/Remote sessions/);
-    // 负对照:本机同调用照旧放行
-    expect((await gate(call('manage_agent', { action: 'create', name: 'evil', system_prompt: 'x' }), { approvalMode: 'auto-edit' })).action).toBe('approve');
+    // 本机控制面写在 auto-edit 下弹卡;完全通行仍免批。
+    expect(await gate(call('manage_agent', { action: 'create', name: 'evil', system_prompt: 'x' }), { approvalMode: 'auto-edit' })).toMatchObject({ asked: true, action: 'reject' });
+    expect(await gate(call('manage_agent', { action: 'create', name: 'evil', system_prompt: 'x' }), { approvalMode: 'full-auto' })).toMatchObject({ asked: false, action: 'approve' });
   });
 
   it('工具实现(闸被绕过时的第二道):远程 / 被远端 steer 染色的 run 写不进去;list 照列(修复前:照写)', async () => {
@@ -227,7 +228,7 @@ describe('远程污点 run 不许写 Agent 长期记忆(remember,09-27 终审 P1
       expect(r.rejectReason).toMatch(/long-term memory/);
     }
     expect((await gate(call('remember', { action: 'list' }), { approvalMode: 'auto-edit', remote: REMOTE })).rejectReason ?? '').not.toMatch(/Remote sessions/);
-    // 负对照:本机同调用照旧放行
+    // 本机控制面写在 auto-edit 下弹卡;完全通行仍免批。
     expect((await gate(call('remember', { action: 'add', fact: 'always mention X' }), { approvalMode: 'auto-edit' })).action).toBe('approve');
   });
 

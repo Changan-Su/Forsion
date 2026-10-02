@@ -22,7 +22,7 @@ import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } from '../tools/registry.js';
 import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
-import { gateToolCall, requestApproval } from './approvals.js';
+import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.js';
 import { publish } from './eventBus.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { assistantTurnOf } from './contextBudget.js';
@@ -347,6 +347,10 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   let subDefsDirty = false;
   const subCtx: ToolContext = {
     ...parentCtx,
+    // 客户端原生动作不下放:工具面那边中央闸已按 subAgentDepth 拒,但插件工具可以不声明能力而直调
+    // ctx.requestClientAction —— 子代理的任务正文是模型生成的,不该成为驱动用户手机的入口。
+    requestClientAction: undefined,
+    clientCapabilities: undefined,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     subAgentGrants: grants,
     // 委派方身份:manage_agent 守卫要连它一起保护(具名子代理在自己的 ALS 里跑,父代理会变成「别人」)。
@@ -536,10 +540,12 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       let isError = false;
       let execCall = hookCall;
       if (preV?.block) {
-        content = `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`;
+        // 与主循环(agentLoop)逐字同一句:模型面英文,写明是 hook 挡的、没执行(旧文案是中文「⛔ Hook 拦截：…」)。
+        content = `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`;
         isError = true;
       } else if (decision && decision.action === 'reject') {
-        content = decision.rejectReason || 'The user rejected this operation.';
+        // 决定体没带 rejectReason = 用户在审批卡 / 通道点了拒绝 → 与主循环同一回落文案(规则 / 中止各自带原因)。
+        content = decision.rejectReason || USER_REJECT_REASON;
         isError = true;
       } else {
         execCall = decision?.argsOverride

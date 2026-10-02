@@ -17,6 +17,7 @@ import type { VaultManager } from './vaultManager'
 import type { VaultIndex } from './vaultIndex'
 import { withDbLock } from './dbLock'
 import { writeVaultText } from './pageWrite'
+import { registerPageHistoryHandlers, type PageHistory } from './pageHistory'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 
 const nowIso = (): string => new Date().toISOString()
@@ -64,6 +65,7 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
   [IPC.emptyTrash]: () => [IPC.structureChange],
   [IPC.renamePageFile]: () => [IPC.structureChange],
   [IPC.renameDbFile]: () => [IPC.structureChange],
+  [IPC.restorePageHistory]: (a) => [IPC.externalChange, a[0]], // 版本历史恢复 = 一次笔记写(C-20)
   [IPC.saveAttachment]: () => [IPC.structureChange],
   [IPC.saveAsset]: () => [IPC.structureChange],
 }
@@ -72,7 +74,7 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
  *  VAULT_WRITE_EVENTS 映射的回灌事件 —— 发了就是叫别的编辑器 / 设备去重读一份没变过的盘面(收口 N-9)。
  *  三个派发口共用这一份判据:ipc.ts 的 handle 与 vaultFace.call、unit/localVault 的 call。 */
 export function casRejected(channel: string, result: unknown): boolean {
-  return (channel === IPC.dbWriteCas || channel === IPC.writeTextFile) && (result as { ok?: unknown } | null | undefined)?.ok === false
+  return (channel === IPC.dbWriteCas || channel === IPC.writeTextFile || channel === IPC.restorePageHistory) && (result as { ok?: unknown } | null | undefined)?.ok === false
 }
 
 export interface VaultHandlerDependencies {
@@ -87,6 +89,8 @@ export interface VaultHandlerDependencies {
    *  渲染层 IPC 起源是真 IpcMainInvokeEvent(带 sender),Unit RPC 起源是 null(那条由 vaultFace.call 的
    *  VAULT_WRITE_EVENTS 映射负责,这里不插手)。缺省 = 不发(测试 / 无窗口宿主)。 */
   notifyPeers?: (origin: unknown, channel: string, payload?: unknown) => void
+  /** 页面版本历史(评审 C-20,fs/pageHistory)。缺省 = 不留快照、不注册历史通道(Unit 独立宿主 / 测试)。 */
+  pageHistory?: PageHistory
 }
 
 /** 同一路径的文本写串行化(进程内)。CAS 的「读→比对→写」中间有两次 await,两个窗口的 invoke
@@ -169,6 +173,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   const propagateRenames = async (pairsIn: Record<string, string>, pagesBefore: string[]): Promise<void> => {
     const pairs = new Map(Object.entries(pairsIn))
     if (!pairs.size) return
+    void deps.pageHistory?.move(vault.getRoot(), pairsIn) // 版本历史跟着改名 / 移动走(C-20;五条改名路径都汇到这里)
     const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
     const before = [...pagesBefore].sort()
     const after = before.map((p) => pairs.get(p) ?? p).sort()
@@ -376,6 +381,8 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
           return { ok: false as const, current: null }
         }
         if (textFingerprint(cur) !== base) return { ok: false as const, current: cur }
+        // 版本历史(C-20):手里的盘上旧文就是快照,不额外读盘;不等它(排队 + 出错只记日志,绝不拖慢保存)。
+        if (cur !== text && vault.isPagePath(filePath)) void deps.pageHistory?.snapshot(vault.getRoot(), filePath, cur)
       }
       // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
       //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
@@ -428,6 +435,8 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       // 写口(lifecycle.unifiedPatchFm),根本不走到这条外科写。
       if (e != null && vault.isPagePath(pagePath)) deps.notifyPeers?.(e, IPC.externalChange, pagePath)
     }))
+
+  if (deps.pageHistory) registerPageHistoryHandlers({ vault, index, handle, withPathLock, notifyPeers: deps.notifyPeers, history: deps.pageHistory })
 
   handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {
     const dir = path.dirname(oldPath)

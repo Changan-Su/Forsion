@@ -179,7 +179,7 @@ export interface PendingApprovalInfo {
   reason: string | null
   cwd: string | null
   status: 'pending' | 'executing' | 'approved' | 'rejected' | 'failed'
-  decided_by: 'user' | 'agent' | null
+  decided_by: 'user' | 'agent' | 'system' | null
 
   note: string | null
   result: string | null
@@ -982,7 +982,7 @@ export interface ApprovalRemote {
 export interface ApprovalReason {
   /** custom-ask=你写的规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 ·
    *  protected=写凭据 / Forsion 本机配置(契约 C4 / C6:每次都问,完全通行与「总允许」都不跳过) */
-  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected'
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected' | 'control'
   /** 命中的规则串(仅 custom-ask) */
   rule?: string
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base) */
@@ -1446,6 +1446,7 @@ declare global {
       productsIsCreation?(dir: string): Promise<boolean>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
+      productsExternalLaunchNeedsReauth?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>

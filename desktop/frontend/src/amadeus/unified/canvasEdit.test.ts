@@ -1,6 +1,6 @@
 // 白板写侧的三条不变式。第一条是**毁数据级**的,单独写在最前面。
 import { describe, it, expect } from 'vitest'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, addConnector, setElementText, rawTree, setParent, pruneTree, childrenOf, isUnder, depthOf, runEndOf } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, addConnector, setElementText, rawTree, setParent, pruneTree, childrenOf, isUnder, depthOf, runEndOf, setConnectorEnds, reconnectEnd } from './canvasEdit'
 import { withElements, parseCanvasJson } from './canvas'
 
 /** 迁移产物的真实形状:形状带未来字段 `note`,顶层带未知键 `futureKey`。 */
@@ -156,5 +156,41 @@ describe('层级深度与子树归属', () => {
     expect(runEndOf(items, 0, rawTree({ c: 'ghost', ghost: 'p' }))).toBe(1) // 悬空 = 各归各
     // idx 不连续(中间夹着正文)→ 就地收边,这是毁数据防线
     expect(runEndOf([{ anchor: 'p', idx: 0 }, { anchor: 'c', idx: 2 }], 0, rawTree({ c: 'p' }))).toBe(1)
+  })
+})
+
+// ── V-17:fromEnd / toEnd 与改连(落盘格式变化:可选字段、缺省值删键、旧条目逐字不变)────────────────
+describe('连线箭头 fromEnd / toEnd 与改连(V-17)', () => {
+  const C = { id: 'e1', type: 'connector', from: { id: 's1' }, to: { ref: 'k1' }, label: 'L', note: 'future' }
+  it('设非缺省值写键;改回缺省值 = 删键,条目逐字回到原样;没变 = 同一个数组', () => {
+    const list: unknown[] = [C, { id: 's1', type: 'shape', x: 0, y: 0, w: 1, h: 1 }]
+    const both = setConnectorEnds(list, new Set(['e1']), { fromEnd: 'arrow', toEnd: 'arrow' })
+    expect(both[0]).toEqual({ ...C, fromEnd: 'arrow' }) // toEnd=arrow 是缺省:不写
+    expect(both[1]).toBe(list[1])
+    const none = setConnectorEnds(both, new Set(['e1']), { fromEnd: 'none', toEnd: 'none' })
+    expect(none[0]).toEqual({ ...C, toEnd: 'none' })
+    const back = setConnectorEnds(none, new Set(['e1']), { fromEnd: 'none', toEnd: 'arrow' })
+    expect(JSON.stringify(back[0])).toBe(JSON.stringify(C))
+    expect(setConnectorEnds(list, new Set(['e1']), { fromEnd: 'none', toEnd: 'arrow' })).toBe(list)
+    expect(setConnectorEnds(list, new Set(['s1']), { fromEnd: 'arrow' })).toBe(list) // 不是连线:不碰
+  })
+  it('旧端的一切写口都不抹新字段(条目整份 spread):挪 / 改字 / 设色 / 删别的元素', () => {
+    const E = { ...C, fromEnd: 'arrow', toEnd: 'none' }
+    const list: unknown[] = [E, { id: 's9', type: 'shape', x: 0, y: 0, w: 1, h: 1 }]
+    expect(setElementText(list, 'e1', 'label', 'M')[0]).toEqual({ ...E, label: 'M' })
+    expect(moveElements(list, new Set(['e1', 's9']), 5, 5)[0]).toBe(E)
+    expect(removeElements(list, new Set(['s9']))[0]).toBe(E)
+  })
+  it('改连:只换那一端;落回另一端 / 没变 / 与别的连线成同一对(无向)/ 认不出的键 = 原样返回', () => {
+    const other = { id: 'e2', type: 'connector', from: { ref: 'k2' }, to: { id: 's1' } }
+    const list: unknown[] = [C, other]
+    expect(reconnectEnd(list, 'e1', 'to', 'c:k3')[0]).toEqual({ ...C, to: { ref: 'k3' } })
+    expect(reconnectEnd(list, 'e1', 'to', 'm:')[0]).toEqual({ ...C, to: { main: true } })
+    expect(reconnectEnd(list, 'e1', 'from', 'e:s9')[0]).toEqual({ ...C, from: { id: 's9' } })
+    expect(reconnectEnd(list, 'e1', 'to', 'e:s1')).toBe(list) // 两端成了同一个对象
+    expect(reconnectEnd(list, 'e1', 'to', 'c:k1')).toBe(list) // 没变
+    expect(reconnectEnd(list, 'e1', 'to', 'c:k2')).toBe(list) // 与 e2(k2—s1)成同一对
+    expect(reconnectEnd(list, 'e1', 'to', 't:k1')).toBe(list)
+    expect(reconnectEnd(list, 'nope', 'to', 'c:k3')).toBe(list)
   })
 })

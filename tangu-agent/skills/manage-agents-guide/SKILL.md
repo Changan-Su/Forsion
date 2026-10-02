@@ -1,7 +1,7 @@
 ---
 name: 配置与管理 Agent
 description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 工作笔记 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
-version: 1.1.0
+version: 1.2.0
 category: agent 管理
 ---
 
@@ -13,7 +13,7 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 
 ## 一个 Agent 由什么组成
 
-`~/.tangu/agents/<slug>/`(slug = 小写字母数字与连字符):
+`~/.tangu/agents/<slug>/`(slug = 小写字母数字与连字符;实际家目录以系统提示「Your Personal Folder」给的绝对路径为准):
 
 - **config.toml** — 参数 + `developer_instructions`(该 agent「做什么 / 怎么做 / 必读什么」的开发指令)。键:`name`、`description`、`model`(覆盖会话模型,可空)、`tools`(启用的工具 id 白名单,可空=继承)、`model_reasoning_effort`(off/low/medium/high)、`max_iterations`(1~200)、`library_order`(Library 优先阅读顺序)、`avatar`(Library 内头像文件名)。
   **审批档只归用户**:agent 的审批档(config.toml 里的 `approval_mode`)只能由用户在设置里改 —— `manage_agent` 不接受 `approval_mode` 参数(传了会报错、什么都不写),
@@ -39,10 +39,11 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 { "action": "list" }
 ```
 
-**创建**(`name` 与 `system_prompt` 必填;`slug` 省略则由 name 派生;其余可省):
+**创建**(`name` 与 `system_prompt` 必填;**`slug` 请总是显式给**(小写字母数字与连字符);其余可省):
 ```json
 {
   "action": "create",
+  "slug": "code-reviewer",
   "name": "代码审查员",
   "description": "专注质量、安全与可维护性的代码审查",
   "system_prompt": "你是一位资深代码审查员。聚焦正确性与边界条件、安全漏洞、并发与性能、可读性与命名、错误处理与测试覆盖;按「严重/建议/提示」分级给出可操作修改并解释原因。",
@@ -52,11 +53,29 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 }
 ```
 > `system_prompt` 写进 config.toml 的 `developer_instructions`;`soul` 写进 SOUL.md。
+>
+> ⚠️ 省略 `slug` 时由 `name` 派生,只保留 a-z0-9:**中文等非 ASCII 的名字会派生成 `agent`**。而 `create` 撞上已存在的 slug 是**覆盖** ——
+> 旧 agent 被替换,省略的字段沿用旧值(回执会写 `Overwrote existing agent`)。所以名字含非 ASCII 字符时必须自己起个英文 `slug`;
+> 不确定某个 slug 有没有被占用,先 `list`。
 
-**更新**(`slug` 必填;只传要改的字段):
+**更新**(`slug`、`name`、`system_prompt` 必填,且二者都会**整体覆盖**原值:不改名就把现在的 `name` 原样传回;`system_prompt` 覆盖
+`developer_instructions`,不打算改就先读该 agent 的 config.toml,把 `name` / `developer_instructions` 原样传回。其余字段省略 = 保留原值,只传要改的):
+- **路径**:别假定是 `~/.tangu`(开发版等环境的家目录不在那里)。系统提示「Your Personal Folder」给出的是你自己的 agent 文件夹绝对路径,
+  它的上一级就是 agents 目录,目标文件是 `<agents 目录>/<slug>/config.toml`。
+- **传回的是解码后的字符串,不是文件里的原始字面**:`'''…'''` 多行块取两组 `'''` 之间的原文(紧跟开头 `'''` 的那个换行不算);
+  `"…"` 基本串要先反转义(`\"` → `"`、`\\` → `\`、`\n` → 换行、`\t` → 制表符)。把 `\"`、`\\` 这类转义原样抄进参数,
+  指令里就多出真的反斜杠,每改一次再多一层。改**自己**时是逐字比对,首尾也别多带空行。
 ```json
-{ "action": "update", "slug": "code-reviewer", "soul": "（新的人格…）" }
+{
+  "action": "update",
+  "slug": "code-reviewer",
+  "name": "代码审查员",
+  "system_prompt": "（当前的 developer_instructions,原样传回）",
+  "soul": "（新的人格…）"
+}
 ```
+> 改**自己**(当前激活的 agent)时:`system_prompt` 必须原样传回、`soul` 不传或原样传回(人格归用户),只能调运行参数(model / tools / thinking_level / 调高 max_iterations);
+> 想记下「以后该怎么做」走 `manage_harness`。
 
 **删除**(不能删默认 agent):
 ```json

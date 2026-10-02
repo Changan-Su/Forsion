@@ -35,8 +35,8 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
   return { status: r.status, body: await r.json().catch(() => null) };
 };
 const pending = (id: string, agentSlug: string) => query(
-  `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status)
-   VALUES (?, ?, 'S-n', NULL, ?, 'run_bash', ?, 'run_bash: ls', NULL, NULL, 'pending')`,
+  `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, preview_version)
+   VALUES (?, ?, 'S-n', NULL, ?, 'run_bash', ?, 'run_bash: ls', NULL, NULL, 'pending', 1)`,
   [id, USER, agentSlug, JSON.stringify({ command: 'ls' })],
 );
 const noteCol = async (id: string) => (await query<any[]>(`SELECT note FROM pending_approvals WHERE id = ?`, [id]))[0]?.note ?? null;

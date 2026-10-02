@@ -82,7 +82,7 @@
 .amx-mediaview-name { font-size: var(--ui-font-body, 13px); color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
-.amx-doc { max-width: 920px; margin: 0 auto; padding: 0 48px; }
+.amx-doc { max-width: var(--amx-page-max, 920px); margin: 0 auto; padding: 0 48px; }
 /* 可编辑标题:与编辑器一级标题同字号(1.7em × 15px = 25.5px / 700)。无 hover/focus 高亮框
  * (会与顶栏冲突,已去除);上移与顶栏之间留出间距(margin-top);提交即 renamePage。 */
 .amx-title-input {
@@ -165,7 +165,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-mode-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 .amx-source {
-  display: block; box-sizing: border-box; width: 100%; max-width: 920px; margin: 0 auto;
+  display: block; box-sizing: border-box; width: 100%; max-width: var(--amx-page-max, 920px); margin: 0 auto;
   min-height: 60vh; border: none; outline: none; resize: none; overflow: hidden;
   background: transparent; color: var(--text); white-space: pre-wrap; word-break: break-word;
   font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
@@ -1093,7 +1093,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-hoverprev-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 10px; font-size: 0.92em; }
 .amx-hoverprev-body .md-plain .milkdown { pointer-events: none; }
 /* Notion 式封面 + 标题上方大图标/动作排 */
-.amx-cover { position: relative; width: calc(100% - 64px); max-width: 864px; height: 210px; margin: 0 auto; border-radius: var(--radius-lg, 12px); overflow: hidden; flex: 0 0 auto; }
+.amx-cover { position: relative; width: calc(100% - 64px); max-width: calc(var(--amx-page-max, 920px) - 56px); height: 210px; margin: 0 auto; border-radius: var(--radius-lg, 12px); overflow: hidden; flex: 0 0 auto; }
 /* 「调整位置」模式:图片解锁可上下拖(否则默认锁定不可拖);激活时工具常显 + 内描边提示激活态。 */
 .amx-cover-repo { cursor: ns-resize; box-shadow: inset 0 0 0 2px var(--accent); }
 .amx-cover-repo .amx-cover-tools { opacity: 1; }
@@ -2036,3 +2036,61 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .unified-page .unified-savebar { width: auto; max-width: none; margin: 8px 0 4px; align-items: center; }
 .unified-page .unified-savebar > svg { margin-top: 0; }
 .unified-page .unified-savebar > .btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* ── 页面排版选项(评审 C-21,拍板 #14):全宽 / 小字号 / 页面字体 ──
+ * 属性由笔记宿主(amadeusViews 的 EditorScope)挂在 `.amx-pane` 上,状态存本机 viewMemory、不写 md;
+ * 分享页 / Muse 库 / 收件箱不挂 = 恒缺省。PDF 导出克隆的就是这个壳,字体与字号随之带进 PDF(纸面窄于 920,全宽无从体现)。
+ * 只作用于这一篇的正文排版:字体 / 字号限定 `.unified-body:not(.amx-canvas)`(画布卡片按缺省字号排版,不受影响)
+ * 与标题;界面字号六档不动。全宽写 100% 而不是 none —— 封面的 calc(… - 56px) 遇 none 会整条失效。
+ * 小字号 13.5px:Notion 是 16→14(0.875);这里取 0.9,仍比界面正文 13px 大一档,读起来不像控件字。
+ * 衬线用系统字体栈(与设置页主题预览同一串),不打包新字体文件;等宽 = --font-mono;缺省 = 不声明。 */
+.amx-pane[data-page-wide] { --amx-page-max: 100%; }
+.amx-pane[data-page-small] .unified-body:not(.amx-canvas) .milkdown .ProseMirror { font-size: 13.5px; }
+.amx-pane[data-page-font='serif'] :is(.unified-body:not(.amx-canvas) .milkdown .ProseMirror, .amx-doc .amx-title-input) {
+  font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif;
+}
+.amx-pane[data-page-font='mono'] :is(.unified-body:not(.amx-canvas) .milkdown .ProseMirror, .amx-doc .amx-title-input) {
+  font-family: var(--font-mono);
+}
+/* ⋯ 菜单里的排版段(PageStyleMenuItems):字体一排三格,每格用该字体写 Aa;开关项末列打勾(DESIGN §3 菜单几何)。 */
+.ctx-menu .amx-pagefont { padding-bottom: 2px; }
+.ctx-menu .amx-pagefont-row { display: flex; gap: 4px; padding: 0 4px 2px; }
+.ctx-menu .amx-pagefont-row .amx-pagefont-opt {
+  flex: 1 1 0; min-width: 0; width: auto; min-height: 0;
+  flex-direction: column; justify-content: center; gap: 1px;
+  padding: 5px 2px 4px; text-align: center;
+  border: var(--border-width, 1px) solid transparent;
+  color: var(--text-muted);
+}
+.ctx-menu .amx-pagefont-row .amx-pagefont-opt.on { border-color: var(--sel-line); background: var(--sel-fill); color: var(--text); }
+.amx-pagefont-aa { font-size: var(--ui-font-title, 16px); line-height: 1.2; color: var(--text); }
+.amx-pagefont-opt[data-font='serif'] .amx-pagefont-aa { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
+.amx-pagefont-opt[data-font='mono'] .amx-pagefont-aa { font-family: var(--font-mono); }
+.amx-pagefont-name { font-size: var(--ui-font-caption, 11px); line-height: 1.3; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-menu .amx-pagestyle-label { flex: 1 1 auto; min-width: 0; }
+.ctx-menu .amx-pagestyle-check { margin-left: auto; color: var(--accent-ink, var(--accent)); }
+/* 移动端 ⋯ sheet 里的同一组:字体一行三段,开关项末列打勾。 */
+.mb-sheet-row.amx-sheet-choice { cursor: default; }
+.mb-sheet-row.amx-sheet-choice > span:not(.amx-sheet-seg) { flex: 1 1 auto; min-width: 0; }
+.amx-sheet-seg { display: inline-flex; gap: 4px; flex: none; }
+.amx-sheet-seg > button {
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px);
+  padding: 4px 10px; cursor: pointer;
+}
+.amx-sheet-seg > button.on { border-color: var(--sel-line); background: var(--sel-fill); color: var(--text); }
+.amx-sheet-seg > button[data-font='serif'] { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
+.amx-sheet-seg > button[data-font='mono'] { font-family: var(--font-mono); }
+.mb-sheet-row .amx-sheet-check { margin-left: auto; color: var(--accent-ink, var(--accent)); }
+
+/* 框架收声(10-02 用户拍板 v3):笔记 / 仪表盘顶栏的动作钮平时 0.38,指针进顶栏或键盘焦点进来才亮,
+ * 与 lcl engine.css 末尾的标签栏同一个值。已点亮的图钉 / 同步(.amx-pin-on)保持全亮。
+ * 画板工具盘(.excalidraw 里那条)是干活的工具,不收;嵌卡(.dash-viewcard)整条顶栏已经悬停才出,不再叠一层。 */
+@media (hover: hover) {
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:not(.amx-pin-on) {
+    opacity: 0.38;
+    transition: opacity var(--duration-fast, 0.15s);
+  }
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *):hover .amx-mode-btn,
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:focus-visible { opacity: 1; }
+}

@@ -135,6 +135,19 @@ export function formatListTime(at: TimeInput, opts: TimeOpts = {}): string {
   return Math.abs(now - d.getTime()) < 7 * DAY ? formatRelative(d, { ...opts, now }) : formatDate(d, { ...opts, now })
 }
 
+/** 聊天消息操作行的时刻:今天「23:03」,6 天内「星期四 23:03」/「Thursday 23:03」,更早「9月17日 23:03」。
+ *  按**日历日**算而不是 24 小时滑窗:昨晚 23 点的消息今早看是「星期X 23:00」,不是光秃秃的「23:00」。 */
+export function formatMessageTime(at: TimeInput, opts: TimeOpts = {}): string {
+  const d = toDate(at)
+  if (!d) return ''
+  const n = new Date(opts.now ?? Date.now())
+  // round 吃掉夏令时那天的 23 / 25 小时
+  const days = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / DAY)
+  if (days === 0) return formatTime(d)
+  if (days > 0 && days < 7) return `${formatDateName(d, 'weekday', opts.locale)} ${formatTime(d)}`
+  return formatDateTime(d, opts)
+}
+
 /** 月日 + 星期(主页时钟下的日期行):「9月17日 星期三」/「Wednesday, September 17」。
  *  zh 分两趟拼,中间留一口气(一趟出的是「9月17日星期三」);en 用 Intl 自己的语序,别拼成「September 17 Wednesday」。 */
 export function formatLongDate(at: TimeInput, opts: TimeOpts = {}): string {

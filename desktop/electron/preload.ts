@@ -255,6 +255,7 @@ const api = {
   productsRegister: (source: string, within: string, strict: boolean) => ipcRenderer.invoke('products:register', source, within, strict),
   productsIsCreation: (dir: string): Promise<boolean> => ipcRenderer.invoke('products:isCreation', dir),
   productsExternalLaunchAllowed: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchAllowed', id),
+  productsExternalLaunchNeedsReauth: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchNeedsReauth', id),
   /** 开发态插件的加载 / 卸载由主进程向**每个窗口**广播:收到就重载这些插件 id(卸载 = 来源没了 → 拆掉)。 */
   onDevPluginsChanged: (cb: (change: { pluginIds: string[] }) => void) => {
     const listener = (_e: unknown, change: { pluginIds: string[] }) => cb(change)

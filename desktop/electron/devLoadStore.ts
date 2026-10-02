@@ -6,7 +6,7 @@
  * 下次启动它的 main.js 就以插件权限(读写真笔记库、以登录账号发请求)直接执行,全程零点击。
  * 授权必须住在项目够不着的地方:本文件写在 forsionHomeDir() 下,**只由 products:update 这个 IPC 写**。
  *
- * 一条授权 = 产物 id + 授权当时那个目录的**身份(dev+ino)**,两者都对上才算数(见 dirIdentity.ts):
+ * 一条授权 = 产物 id + 授权当时那个目录的**身份(dev+ino+创建时间)**,两者都对上才算数(见 dirIdentity.ts):
  *  · 复制出来的项目会被注册表重铸 id → 名单里没有它;
  *  · 同 id 的 sidecar 被人搬进另一个目录 → 另一个 inode,同样不算;
  *  · 用户给项目文件夹改名 / 同卷挪位置 → inode 不变,授权照旧(绑路径字符串的话一改名授权就静默失效,
@@ -46,6 +46,11 @@ export function readDevLoads(homeDir: string): DevLoads {
 export function isDevLoaded(loads: DevLoads, product: { id: string; root: string }): boolean {
   const grant = loads[product.id]
   return !!grant && matchesDirIdentity(product.root, grant.dir)
+}
+
+/** 有授权、但目录身份对不上了(旧记录没有创建时间 / 目录重建过 / 跨卷挪过):Sandbox 面板据此提示「再点一次加载」。只用来出提示。 */
+export function isDevLoadStale(loads: DevLoads, product: { id: string; root: string }): boolean {
+  return !!loads[product.id] && !isDevLoaded(loads, product)
 }
 
 export function setDevLoad(homeDir: string, product: { id: string; root: string; pluginId?: string | null }, on: boolean): void {

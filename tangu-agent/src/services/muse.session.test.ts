@@ -142,6 +142,7 @@ describe('C1b kickoff 拆分', () => {
       expect(message).toContain('ctx.agent.status() → { running, lastCycleAt');
       expect(message).toContain('var(--bg-card)');
       expect(message).toContain('subscribe(cb) returns an unsubscribe function right away'); // 同步返回,不是 Promise(Codex 复核)
+      expect(message).toContain('a later runtime error (with its main.js line)'); // 挂载后的运行时错误也回写(09-27)
       expect(message).not.toMatch(/--panel|--surface|--card\b/);
       expect(message).toContain('never edit it just to refresh status or timestamps');
       expect(message).toContain('works only inside a click handler');

@@ -310,7 +310,7 @@
 }
 
 .am-app .page-view {
-  max-width: 920px;
+  max-width: var(--amx-page-max, 920px); /* 阅读宽度 token(C-21):全宽 = 宿主在 .amx-pane 上改写它 */
   margin: 0 auto;
   padding: 28px 40px 120px;
 }
@@ -2012,6 +2012,12 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   font-style: italic;
 }
+/* `:` emoji 短代码补全(I-21):行首一格放 emoji 本身,名字是命中的关键词。 */
+.am-app .emoji-suggest-char {
+  flex: none;
+  width: 1.5em;
+  text-align: center;
+}
 
 /* ── Tag pane ────────────────────────────────────────────── */
 .am-app .tag-pane {
@@ -2818,6 +2824,41 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm, 6px);
   padding: 0 4px;
 }
+/* 脚注(R-18,blocks/markdown/footnote.ts):上标显示编号(按首次引用次序,只是装饰;label 才是落盘数据),点 = 跳到定义;
+   定义 = 左列编号(点 = 回到引用处)+ 右列正文(仍是可编辑的块容器)。 */
+.am-app .ProseMirror sup[data-type='footnote_reference'] {
+  padding: 0 1px;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+.am-app .ProseMirror sup[data-type='footnote_reference']:hover,
+.am-app .ProseMirror dl[data-type='footnote_definition'] > dt:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.am-app .ProseMirror dl[data-type='footnote_definition'] {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0.2em 0;
+  color: var(--text-sec);
+}
+.am-app .ProseMirror dl[data-type='footnote_definition'] > dt {
+  flex: none;
+  min-width: 1.2em;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+.am-app .ProseMirror dl[data-type='footnote_definition'] > dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
 /* 行内 `![[pic.png]]`:混在文字里的图片嵌入(整块只有它一条时走块级 embed,见 BlockHost)。
    照 Obsidian 的观感:原尺寸随行排版、只限宽不限高;`|200` 写死的宽度由 inline style 接管。 */
 .wiki-inline-img {
@@ -3026,6 +3067,9 @@ body.amx-marquee-active * {
 /* 同一段既被块级嵌入接手、又被行内双链层渲了一条链接(inline 装饰藏得住文本、藏不住 widget)——
    段落上的 unified-embed-host 由 embedLayer 下发,这里把那条多余的行内链接收掉。 */
 .unified-body .unified-embed-host > .wikilink { display: none; }
+/* 交互块(```forsion-sketch)由嵌入层渲成 sketch 卡:代码块工具条(语言 / 复制 / 折行)压在卡上没有意义,
+   源码走嵌入层悬停的 `</>`。按钮块是在 codeBlock.ts 里摘掉工具条的,这里用 CSS 免得再动那份 nodeView。 */
+.unified-body .unified-embed-host[data-language="forsion-sketch"] > .amx-code-tools { display: none; }
 /* 段落独占一条 ![[图片]] → 升级成块级观感(渲染仍是 wikilink 行内 widget,只放大呈现)。 */
 .unified-body p > .wiki-inline-img-wrap:only-child > .wiki-inline-img {
   display: block;
@@ -3209,6 +3253,22 @@ body.amx-marquee-active * {
 .am-app .amx-linkcard button.danger { color: var(--danger, #d33); }
 .am-app .amx-linkcard-host { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--primary); }
 .am-app .amx-linkcard-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
+/* 脚注悬停卡(R-18):同一张卡的只读变体 —— 编号 + 定义正文(多行折,最多 6 行)。 */
+.am-app .amx-fncard { align-items: flex-start; gap: 8px; max-width: 360px; padding: 8px 10px; }
+.am-app .amx-fncard-num { flex: none; color: var(--primary); font-variant-numeric: tabular-nums; }
+.am-app .amx-fncard-text {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--ui-font-body, 13px);
+  line-height: var(--ui-line-body, 18px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.am-app .amx-fncard-text.muted { color: var(--text-muted); }
 .am-app .amx-linkedit-backdrop { position: fixed; inset: 0; z-index: 119; }
 .am-app .amx-linkedit {
   position: fixed; /* 同上:没有定位 z-index 不生效,面板被自己 z119 的遮罩盖住,一点输入框就关(I-05) */
@@ -3561,6 +3621,14 @@ body.amx-marquee-active * {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   pointer-events: none;
 }
+/* 对齐参考线(V-14):手势期吸附命中的线段,线宽在舞台里按 1/z 给(屏幕上恒 1px)。
+   ⚠️ z-index 抬到卡片之上(同 .amx-el-attach 的理由):元素层画在正文底下,线正好贯穿被对齐的卡,不抬就被卡身盖掉。 */
+.am-app .amx-el-guide {
+  position: absolute;
+  z-index: 3;
+  background: var(--danger);
+  pointer-events: none;
+}
 /* 卡片的选中框。画在白板层而不是给卡片 DOM 加 class:卡片归 PM 所有,它一重绘就把 class 抹了
    (canvasElements 的 selCards 注写了实测现象)。也顺带避开「border 改 offsetWidth → 连线跳 2px」。 */
 .am-app .amx-el-selbox {
@@ -3704,10 +3772,50 @@ body.amx-marquee-active * {
   pointer-events: none;
 }
 .am-app .amx-el-attach-label.is-sibling { color: var(--text-sec); }
+/* 拖拽式连线的两种把手(V-17):边口圆点(选中单个对象时四边中点,拖出 = 新连线)与选中连线的端点(拖到别的对象 = 改连)。
+   ⚠️ pointer-events:auto + z-index 是正确性:元素层整片 none,圆点骑在卡边上、而卡画在元素层之上(同 .amx-el-attach 的理由);
+   边口圆点压在边缘尺寸热区(z 6)之上,只占中点那一小块,其余边段照旧调尺寸。 */
+.am-app .amx-link-dot,
+.am-app .amx-conn-end {
+  position: absolute;
+  z-index: 7;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  box-sizing: border-box;
+  border-radius: var(--radius-pill, 999px);
+  border: 1.5px solid var(--primary);
+  background: var(--bg);
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.am-app .amx-link-dot { opacity: 0.85; }
+.am-app .amx-link-dot:hover, .am-app .amx-conn-end:hover { opacity: 1; background: var(--primary); }
+.am-app .amx-conn-end { background: var(--primary); cursor: move; }
+/* 卡 / 主卡的圆点住在选中框里(随拖拽样式表一起走),按百分比落在四边中点;元素的圆点按盒坐标直接定位(.is-free)。 */
+.am-app .amx-link-dot.is-n:not(.is-free) { left: 50%; top: 0; }
+.am-app .amx-link-dot.is-s:not(.is-free) { left: 50%; top: 100%; }
+.am-app .amx-link-dot.is-w:not(.is-free) { left: 0; top: 50%; }
+.am-app .amx-link-dot.is-e:not(.is-free) { left: 100%; top: 50%; }
+/* 右键连线的箭头样式一排(压过 base.css 的 `.ctx-menu button`:整行宽 + flex + hover 换底,同色板那段)。 */
+.am-app .amx-canvas-menu .amx-end-row .amx-end-btn {
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  width: auto;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-sec);
+}
+.am-app .amx-canvas-menu .amx-end-row .amx-end-btn[aria-pressed='true'] { background: var(--menu-hover); color: var(--text); }
 /* ⚠️ 非选择工具下把手与 ⊕ 一律收起(Codex 08-19 medium):选中态不随换工具清空,而建形状/建卡/
    连线那几支在 onDown 里**早于**它们 return —— 留着就是「看得见、点下去却建了个矩形」。
    舞台根的 `amx-tool-*` 只在画布模式挂,文档模式本层根本不渲染。 */
 .am-app .amx-stage:not(.amx-tool-select) .amx-el-add,
+.am-app .amx-stage:not(.amx-tool-select) .amx-link-dot,
+.am-app .amx-stage:not(.amx-tool-select) .amx-conn-end,
 .am-app .amx-stage:not(.amx-tool-select) .amx-el-grip,
 .am-app .amx-stage:not(.amx-tool-select) .amx-card-size-grip { display: none; }
 .am-app .amx-el-ellipse { border-radius: 50%; }
@@ -3743,6 +3851,102 @@ body.amx-marquee-active * {
 }
 .am-app .amx-el-frame.is-sel .amx-el-frame-bar { color: var(--primary); border-color: var(--primary); }
 .am-app .amx-el-text { border: 0; padding: 0; justify-content: flex-start; text-align: left; }
+/* ── 画布颜色(V-08,拍板 #9)──────────────────────────────────────────────────────────
+   盘上存 JSON Canvas 编码(`"1"`–`"6"` / `#rrggbb`),渲染侧把它换成 `--amx-color`(canvasEdit.canvasColorCss):
+   预设 → 下面这张色板,自定义 → 字面 hex。**只在画布模式消费** —— 卡片规则挂在 `.amx-canvas` 作用域下,
+   白板元素本来就只在画布模式渲染;文档模式一个像素都不动(C45 钉着文档模式零装饰)。
+   色板按明暗各一套(用户内容色,与行内高亮色同一种写法);底色一律与 `--bg` 调和,两种模式自动成立。
+   ⚠️ 描边类颜色规则一律带 `:not(.is-sel)`:与 `.is-sel` 同特异性,靠源码顺序定胜负的话选中态会被颜色盖掉
+   (DESIGN §7.2)。不加 box-shadow(check:shadowcontract)。 */
+.am-app {
+  --amx-cv-1: #e03e3e;
+  --amx-cv-2: #e8780f;
+  --amx-cv-3: #cf9a00;
+  --amx-cv-4: #2e9d57;
+  --amx-cv-5: #0e9fa6;
+  --amx-cv-6: #7b5ce5;
+}
+[data-mode='dark'] .am-app, .am-app[data-mode='dark'] {
+  --amx-cv-1: #f06a6a;
+  --amx-cv-2: #f29a4a;
+  --amx-cv-3: #e8c547;
+  --amx-cv-4: #5cc987;
+  --amx-cv-5: #4ccfd3;
+  --amx-cv-6: #a88bff;
+}
+/* 卡片:data-color 是原值(认不出的怪值也照抄,见 canvas.ts toDOM),所以两处都带回落 —— 认不出 = 原样观感。 */
+.am-app .amx-canvas .amx-ucard[data-color] {
+  border-color: var(--amx-color, var(--border));
+  background: color-mix(in srgb, var(--amx-color, var(--bg)) 10%, var(--bg));
+}
+.am-app .amx-el-shape[data-color]:not(.amx-el-text) {
+  border-color: var(--amx-color);
+  background: color-mix(in srgb, var(--amx-color) 14%, transparent);
+}
+.am-app .amx-el-text[data-color] { color: var(--amx-color); }
+.am-app .amx-el-frame[data-color] { background: color-mix(in srgb, var(--amx-color) 7%, transparent); }
+.am-app .amx-el-frame[data-color]:not(.is-sel) { border-color: color-mix(in srgb, var(--amx-color) 70%, transparent); }
+.am-app .amx-el-frame[data-color]:not(.is-sel) .amx-el-frame-bar {
+  color: var(--amx-color);
+  border-color: color-mix(in srgb, var(--amx-color) 55%, transparent);
+}
+.am-app .amx-el-conn[data-color]:not(.is-sel) path { stroke: var(--amx-color); }
+.am-app .amx-el-conn[data-color]:not(.is-sel) polygon { fill: var(--amx-color); }
+.am-app .amx-el-label[data-color] {
+  color: var(--amx-color);
+  border-color: color-mix(in srgb, var(--amx-color) 45%, var(--border));
+}
+/* 右键菜单里的色板行。⚠️ 选择器要压过 base.css 的 `.ctx-menu button`(整行宽 + flex + hover 换底)。 */
+/* 8 枚 × 16px + 7 × 4px 间距 + 两侧 6px = 168px,正好落在操作菜单的 --menu-action-min/max 之间,不撑宽菜单。 */
+.am-app .amx-canvas-menu .amx-color-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+}
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--amx-swatch, var(--bg));
+  color: var(--text-sec);
+  cursor: pointer;
+  transition: transform var(--dur-fast, 120ms) var(--ease-apple, ease-out);
+}
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch:hover { transform: scale(1.12); background: var(--amx-swatch, var(--bg)); }
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch[aria-pressed='true'],
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch[data-active] {
+  outline: 1.5px solid var(--text-sec);
+  outline-offset: 1.5px;
+}
+/* 「无颜色」= 底色圆 + 一道斜杠。 */
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch[data-swatch='none']::after {
+  content: '';
+  position: absolute;
+  inset: 50% 2px auto;
+  height: 1.5px;
+  background: var(--text-muted);
+  transform: rotate(-45deg);
+}
+/* 自定义色:label 包一个视觉隐藏的原生取色器(点圆 = 打开系统取色板)。 */
+.am-app .amx-canvas-menu .amx-color-row .amx-color-swatch.is-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .amx-canvas-menu .amx-color-row .amx-color-swatch { transition: none; }
+}
 /* (2026-08-18 晚:主卡标题条已按用户拍板移除 —— 主卡**完全等同卡片**,两段式选中/编辑,
    手柄就是 padding 圈,不再有独立的「正文」条。别加回来。) */
 /* 主卡选中框里的调宽把手要能点(选中框本身 pointer-events:none)。 */

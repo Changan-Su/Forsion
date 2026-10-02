@@ -7,6 +7,8 @@ import { humanChanges } from '../../services/humanCollaboration'
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { FileInput } from 'lucide-react'
+import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
@@ -17,7 +19,9 @@ import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SketchCards } from '../../components/SketchCard'
+import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
+import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
 
 registerMessages({
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
@@ -48,9 +52,10 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
-import { useEdgeNudge } from '@lcl/engine'
+import { UI_MODE, useEdgeNudge } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { CreationCards } from './CreationCards'
+import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
@@ -202,6 +207,8 @@ export interface MessageHandlers {
   onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
+  /** 把这条回答插回笔记(评审 G3-08,见 insertToNote.ts);宿主没有 Amadeus 编辑能力时不传 → 按钮不渲染。text = 摘掉围栏的正文。 */
+  onInsertNote?: (text: string) => void
 }
 
 /**
@@ -283,6 +290,27 @@ function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; c
   return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
 }
 
+/** 「插入笔记」(G3-08):一篇 v4 笔记都没开 → 不出现;开着的全是只读 / 锁定 → aria-disabled + 说明 —— 不用 disabled:
+ *  手机上没有悬停,点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
+function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
+  const { t } = useI18n()
+  const state = useNoteInsertState()
+  if (state === 'hidden') return null
+  const ready = state === 'ready'
+  return (
+    <button
+      className="t2-iconbtn"
+      data-act="insert-note"
+      aria-disabled={ready ? undefined : true}
+      title={t(ready ? 'chat.action.insertNote' : 'chat.insertNote.none')}
+      aria-label={t('chat.action.insertNote')}
+      onClick={onInsert}
+    >
+      <FileInput size={14} />
+    </button>
+  )
+}
+
 export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   // shell 代码块「运行」的回传:结果作为用户消息发回**这条消息所在**的会话(run 活着自动变 steer)。
   // cwd 跟会话走(agent 的工作目录),没有就家目录。对象按会话 memo,别每次渲染新造一个(Markdown 是 React.memo)。
@@ -291,6 +319,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     cwd: useApp.getState().configBySession[runSid]?.cwd || useApp.getState().sessions.find((s) => s.id === runSid)?.project_path || undefined,
     onRun: (r: RunResult) => { void useApp.getState().send(runResultText(r), [], undefined, undefined, undefined, runSid) },
   } : undefined, [runSid])
+  // 独占一段的 `![[…]]` → 内联图片/音视频(Markdown 缺省关,只给助手消息开;理由见其 EmbedContext)。
+  // 移动端不开:Android 没有 amadeus-asset 拦截器(同 ChatWikiLink 的 media 分支);无 readHostFile = 不在桌面壳里。
+  const embedExec = fileCtx?.execMode
+  const embeds = useMemo(() => (runSid && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec])
   const { t } = useI18n()
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
@@ -376,6 +408,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             {lead ? (lead.body && <WikiText text={lead.body} />) : <WikiText text={msg.content} />}
           </div>
           <div className="t2-actions">
+            <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
             <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
             {handlers?.onRewind && (
@@ -400,6 +433,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
   const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
   const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
+  // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
+  const sketchActions = handlers?.onInsertNote
+    ? (it: SketchItem) => <InsertNoteButton onInsert={() => handlers.onInsertNote?.(sketchFence(it.html))} />
+    : undefined
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
   const pendingApv = (msg.approvals || []).filter((a) => a.status === 'pending')
@@ -439,7 +476,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} embeds={embeds} /></div>
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
@@ -448,7 +485,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
-                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} />)}
+                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} />)}
                 </Fragment>
               ) : null
             })
@@ -459,7 +496,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} embeds={embeds} /></div>
               )}
             </>
           )
@@ -523,7 +560,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
-        {!!trailingSketches.length && <SketchCards items={trailingSketches} />}
+        {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} />}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && pendingApv.length > 0 && (
@@ -557,13 +594,21 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 {speakState === 'loading' ? <Loader2 size={14} className="spin" /> : speakState === 'playing' ? <Square size={14} /> : <Volume2 size={14} />}
               </button>
             )}
+            {handlers?.onInsertNote && !!body && <InsertNoteButton onInsert={() => handlers.onInsertNote?.(body)} />}
             <button className="t2-iconbtn" title={t('chat.action.regenerate')} onClick={() => handlers?.onRegenerate?.()}><RotateCcw size={14} /></button>
             <button className="t2-iconbtn" title={t('chat.action.branch')} onClick={() => handlers?.onBranch?.()}><GitBranch size={14} /></button>
+            <MsgTime at={msg.timestamp} />
           </div>
         )}
       </div>
     </div>
   )
+}
+
+/** 操作行末尾的时刻;悬停给带年份的完整时间。0 / 缺省(旧历史没存)不画,免得冒出 1970。 */
+function MsgTime({ at }: { at: number }) {
+  if (!(at > 0)) return null
+  return <span className="t2-msgtime" title={formatDateTime(at, { year: 'always' })}>{formatMessageTime(at)}</span>
 }
 
 /** 每秒刷新的已等待秒数(since=本次模型调用起点)。 */

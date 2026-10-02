@@ -37,6 +37,7 @@ vi.mock('../services/runStore.js', () => ({
 }));
 
 vi.mock('../services/agentLoop.js', () => ({
+  sessionHasActiveRun: vi.fn(() => false),
   abortRun: vi.fn(),
   enqueueRun: vi.fn((sessionId: string, runId: string) => { state.enqueued = { sessionId, runId }; }),
 }));
@@ -48,11 +49,16 @@ vi.mock('../services/eventBus.js', () => ({
   }),
 }));
 
-vi.mock('../services/approvals.js', () => ({ resolveApproval: vi.fn(() => true) }));
+vi.mock('../services/approvals.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/approvals.js')>()),
+  resolveApproval: vi.fn(() => true),
+}));
 vi.mock('../agents/agentRegistry.js', () => ({
   readAgentsMeta: () => ({ defaultSlug: 'xyra' }),
   listAgents: vi.fn(async () => []),
   getAgent: vi.fn(async () => null),
+  agentCapOf: () => null,
+  DEFAULT_MAX_ITERATIONS: 90,
 }));
 vi.mock('../services/replySegment.js', () => ({
   resolveReplySegment: () => ({ enabled: false }),
@@ -75,6 +81,7 @@ vi.mock('./config.js', () => ({
     inboxForward: { enabled: false, senders: 'all' },
   }),
   channelWorkspaceDir: (kind: string) => `/tmp/${kind}`,
+  saveChannelSettings: vi.fn(),
 }));
 
 import { ChannelService, normalizeChannelHostClientTag } from './service.js';

@@ -26,8 +26,13 @@ interface DragState { id: string; zone: RibbonZone; from: string | null } // fro
 // 浮层只存「哪个夹 / 哪个区的溢出」的 id,内容每次 render 从 live store 派生(存快照会在拖出/重排后诈尸,见 codex#1)。
 interface FlyState { key: string; zone: RibbonZone; folderId?: string; top: number }
 interface MenuState { x: number; y: number; entries: { label: string; onClick(): void }[] }
+/** 一个区切出来的样子:露出的一窗 + 其余(进「…」);start = 窗口在整区里的起点,max = 滚轮最多挪几格。 */
+interface Part { shown: Entry[]; tail: Entry[]; start: number; max: number }
 
 const GAP = 4
+/** 常驻上限:上区(Spaces)与命令区各露几项,超出的进「…」(见下面 capT / capB)。 */
+const TOP_VISIBLE = 5
+const BOTTOM_VISIBLE = 4
 /** 收起态浮签时序 = desktop hoverTip 已拍板的那套(引擎不能 import 宿主,只能同值抄一份):
  *  悬停 1s 弹;刚收起 0.1s 内移到下一枚 → 立刻弹(连续扫图标时不必每枚重等 1s)。 */
 const TIP_SHOW_DELAY = 1000
@@ -112,6 +117,12 @@ export function Ribbon() {
   const flyRef = useRef<HTMLDivElement>(null)
   const flyTimer = useRef<number | null>(null)
   const geom = useRef<{ top: number; pitch: number; grabDy: number } | null>(null) // 落点几何(dragstart 拍一次)
+  // 滚轮翻看(10-02 用户要求,类 Agent 选择条):各区露出的那一窗往后挪了几格。不持久化,越界在 cut() 里夹回。
+  const [scrollOff, setScrollOff] = useState<Record<RibbonZone, number>>({ top: 0, bottom: 0 })
+  const wheel = useRef({ acc: 0, at: -1e9 })
+  // 滑动中途经过的窗口起点范围:这段里的格子临时画出图标(进场/离场看得见),滑完清掉,DOM 回到「只有露出的那一窗」。
+  const [slide, setSlide] = useState<Partial<Record<RibbonZone, { lo: number; hi: number }>>>({})
+  const slideTimer = useRef<Partial<Record<RibbonZone, number>>>({})
 
   // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
   //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
@@ -174,7 +185,8 @@ export function Ribbon() {
   const pinned = items.filter((i) => i.side === 'bottom' && i.pinned)
   // head 区:折叠钮下的固定件(zoneList 的 top/bottom 过滤天然排除它,不进拖拽/溢出/持久化)。
   const headItems = items.filter((i) => i.side === 'head')
-  // home 区:两区之间那段空当的**正中**(2026-08-28 用户要求的「主位」槽)。同 head,不进拖拽/溢出/持久化。
+  // home 区:Space 区的**第一格**(2026-08-28 用户要的「主位」槽;10-02 用户改判:从两区之间的正中挪到上区最前)。
+  // 同 head,不进拖拽/溢出/持久化。
   const homeItems = items.filter((i) => i.side === 'home')
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
@@ -196,29 +208,67 @@ export function Ribbon() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [expanded, slotH, items.length, folders.length, commandItems.length])
-  let capT = topE.length
-  let capB = botE.length
+  // 常驻上限(10-02 用户拍板「Ribbon 减负」):上区最多 5 个 Space、命令区最多 4 项,其余进各自的「…」。
+  // 写成 `len ≤ N ? len : N + 1`,cut() 留一格给「…」后正好露 N 个。命令区从头吃起 → 注册序排在前面的
+  // 反馈 / 市场 / 成就进「…」,明暗 / 设备互联 / 命令面板 / 设置常驻(钉死的账号卡不在 botE 里,不占名额)。
+  // ponytail: 用户钉进命令区的命令与收纳夹也占名额,钉多了会把明暗挤进「…」;要按项豁免再给 RibbonItem 加标记。
+  const cap = (len: number, max: number): number => (len <= max ? len : max + 1)
+  const wantT = cap(topE.length, TOP_VISIBLE)
+  const wantB = cap(botE.length, BOTTOM_VISIBLE)
+  let capT = wantT
+  let capB = wantB
   if (capT + capB > slots) {
+    // 窗口矮到连上限都放不下:按高度两区分配(只会比上限更少)。
     // 空区给 0(否则 max(1,…) 白占一格,挤掉另一区,见 codex#5);两区都非空时各保至少一半。
     if (topE.length === 0) { capT = 0; capB = slots }
     else if (botE.length === 0) { capT = slots; capB = 0 }
     else {
       const half = Math.floor(slots / 2)
-      capT = Math.max(1, Math.min(topE.length, Math.max(half, slots - botE.length)))
-      capB = Math.max(1, Math.min(botE.length, slots - capT))
+      capT = Math.max(1, Math.min(wantT, Math.max(half, slots - wantB)))
+      capB = Math.max(1, Math.min(wantB, slots - capT))
     }
   }
   /** 溢出从「…」那一端吃起 —— 上区「…」在下,吃列表尾;命令区「…」在上,吃列表头。
-   *  两区都是「离锚点最远的先被收走」:上区锚在顶(head),命令区锚在底(账号卡)。 */
-  const cut = (list: Entry[], cap: number, fromFront: boolean): { shown: Entry[]; tail: Entry[] } => {
-    if (list.length <= cap) return { shown: list, tail: [] }
+   *  两区都是「离锚点最远的先被收走」:上区锚在顶(head),命令区锚在底(账号卡)。
+   *  off = 滚轮挪过的格数(从锚点那一端往里数):露出的是连续一窗,窗外两侧的都进「…」。
+   *  start / max 给快捷键提示与滚轮夹边用。 */
+  const cut = (list: Entry[], cap: number, fromFront: boolean, off: number): Part => {
+    if (list.length <= cap) return { shown: list, tail: [], start: 0, max: 0 }
     const n = Math.max(0, cap - 1) // 留一格给「…」
-    return fromFront
-      ? { shown: list.slice(list.length - n), tail: list.slice(0, list.length - n) }
-      : { shown: list.slice(0, n), tail: list.slice(n) }
+    const max = list.length - n
+    const o = Math.min(Math.max(0, off), max)
+    const start = fromFront ? list.length - n - o : o
+    return { shown: list.slice(start, start + n), tail: [...list.slice(0, start), ...list.slice(start + n)], start, max }
   }
-  const top = cut(topE, capT, false)
-  const bot = cut(botE, capB, true)
+  const top = cut(topE, capT, false, scrollOff.top)
+  const bot = cut(botE, capB, true, scrollOff.bottom)
+  /** 滚轮在区上 = 平移露出的那一窗(DOM 不滚,拖拽落点、「…」、快捷键都照旧按条目算)。
+   *  **一个滚轮事件最多挪一格**:鼠标滚轮一格 = 一个图标(Windows 一格 120px,照原生换算会一下跳 3 格,窗口才 5 格);
+   *  触控板是一串小 delta,攒够一格高(slotH px)挪一格;停顿 200ms 后的第一下不论多小都挪(慢转的滚轮一下只有几 px)。
+   *  方向 = 内容跟着滚轮走:上区往下滚看后面的;命令区藏的在上面,往上滚露出来。
+   *  ponytail: 步长 / 停顿阈值是凭手感估的参数,真机嫌快嫌慢就调 slotH 倍数与 200ms。 */
+  const onZoneWheel = (zone: RibbonZone, part: Part) => (e: React.WheelEvent): void => {
+    if (!part.max || drag || !e.deltaY) return
+    const w = wheel.current
+    const fresh = e.timeStamp - w.at > 200
+    w.at = e.timeStamp
+    w.acc = (fresh ? 0 : w.acc) + (e.deltaMode === 1 ? e.deltaY * slotH : e.deltaY)
+    const step = fresh || Math.abs(w.acc) >= slotH ? Math.sign(w.acc) : 0
+    if (!step) return
+    w.acc = 0
+    const cur = Math.min(scrollOff[zone], part.max)
+    const next = Math.min(part.max, Math.max(0, cur + (zone === 'top' ? step : -step)))
+    if (next === cur) return
+    // 窗口新起点(上区偏移往后数,命令区往前数);新旧起点都记进滑动范围,连滚几下就是一段并集。
+    const to = part.start + (zone === 'top' ? next - cur : cur - next)
+    setSlide((s) => {
+      const r = s[zone]
+      return { ...s, [zone]: { lo: Math.min(r?.lo ?? part.start, part.start, to), hi: Math.max(r?.hi ?? part.start, part.start, to) } }
+    })
+    window.clearTimeout(slideTimer.current[zone])
+    slideTimer.current[zone] = window.setTimeout(() => setSlide((s) => ({ ...s, [zone]: undefined })), 260) // CSS 过渡 0.2s + 余量
+    setScrollOff((s) => ({ ...s, [zone]: next }))
+  }
   // 浮层内容一律从 live store / 当前溢出派生(FlyState 只存 id)——拖出/重排后自动跟随,不诈尸。
   const flyFolder = fly?.folderId ? folders.find((f) => f.id === fly.folderId) : undefined
   const flyTail = fly && !fly.folderId ? (fly.zone === 'top' ? top.tail : bot.tail) : undefined
@@ -309,7 +359,7 @@ export function Ribbon() {
   /** 量一个区的槽间距。条上拖动一律用 dragstart 拍的快照:让位动画给槽加了 transform,
    *  边拖边量会自反馈成抖动;从浮层/收纳夹拖进来时条上没 transform,当场量(抓取点按光标居中算)。 */
   const measure = (group: HTMLElement, grabDy?: number): { top: number; pitch: number; grabDy: number } => {
-    const els = group.querySelectorAll<HTMLElement>('.rb-slot')
+    const els = group.querySelectorAll<HTMLElement>('.rb-slot') // 窗外占位是 .rb-cell,不算槽
     const top = els[0]?.getBoundingClientRect().top ?? 0
     const pitch = els.length > 1 ? els[1].getBoundingClientRect().top - top : 0
     return { top, pitch, grabDy: grabDy ?? pitch / 2 }
@@ -447,7 +497,7 @@ export function Ribbon() {
   /** i = 当前槽下标,preview = 落点预览后的 id 序;两者之差 = 让位位移(手机桌面那种排斥占位)。
    *  位移用布局 px(slotH)不是 rect 的视口 px —— transform 走的是未缩放坐标系。
    *  line = 被拖项不在本条上(从收纳夹/「…」浮层拖回来)时改画插入线:让位会把末槽压到「…」钮上。 */
-  const renderSlot = (e: Entry, zone: RibbonZone, i: number, preview: string[] | null, line: boolean): React.ReactNode => {
+  const renderSlot = (e: Entry, zone: RibbonZone, i: number, preview: string[] | null, line: boolean, at: number): React.ReactNode => {
     const to = preview ? preview.indexOf(e.id) : i
     return (
       <div
@@ -463,7 +513,7 @@ export function Ribbon() {
         {renderEntry(e)}
         {/* 快捷键提示:只在展开态(收起态 32px 塞不下)、只给上区前 9 个。绝对定位 = 不进流,
             槽高常量 slotH 与拖拽落点几何一点不受影响。 */}
-        {zone === 'top' && expanded && slotHint(i) && <span className="rb-key">{slotHint(i)}</span>}
+        {zone === 'top' && expanded && slotHint(at) && <span className="rb-key">{slotHint(at)}</span>}
       </div>
     )
   }
@@ -486,13 +536,14 @@ export function Ribbon() {
   // 命令区靠下贴账号卡,整组 = Spaces 区的镜像:[＋ / 「…」/ 图标…] ↔ [图标… / 「…」/ ＋],
   // 两个 ＋ 都贴着中间空隙,两个「…」都紧挨各自的图标列。
   // 拖放收在组这一层(不再逐槽挂):同一个 indexAt 既画让位预览又定提交落点 —— 提示在哪就落在哪。
-  const renderZone = (zone: RibbonZone, part: { shown: Entry[]; tail: Entry[] }): React.ReactNode => {
+  const renderZone = (zone: RibbonZone, part: Part): React.ReactNode => {
     const ids = part.shown.map((e) => e.id)
     const preview = drag && over?.zone === zone && ids.includes(drag.id) ? moveTo(ids, drag.id, over.index) : null
     return (
       <div
         className={`rb-group rb-${zone}`}
         onContextMenu={onZoneCtx(zone)}
+        onWheel={onZoneWheel(zone, part)}
         /* 下标没变就还回原对象:dragover 每秒几十发,不这么挡会整条 ribbon 每帧重渲一次。 */
         onDragOver={(e) => {
           const ix = indexAt(e.currentTarget, e.clientY, ids.length)
@@ -504,7 +555,20 @@ export function Ribbon() {
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, (over?.zone === zone ? ids[over.index] : null) ?? null) }}
       >
         {zone === 'bottom' && <>{renderPlusBtn(zone)}{part.tail.length > 0 && renderMoreBtn(zone)}</>}
-        {part.shown.map((en, i) => renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i))}
+        {/* 滑动框(滚轮翻看的平滑动画):整区条目排成一列,框只露 n 格高,列按窗口起点 translateY,过渡 0.2s。
+            窗外的是等高空占位 .rb-cell(不是 .rb-slot:拖拽量槽、台架按 .rb-slot 认「露出的格子」都不受影响),
+            只在滑动经过时临时画出图标(inert:滑动那 0.2s 里也别让 Tab 落进去,Codex 评审)。 */}
+        <div className="rb-strip" style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
+          <div className="rb-strip-in" style={part.start ? { transform: `translateY(${-part.start * slotH}px)` } : undefined}>
+            {(zone === 'top' ? topE : botE).map((en, k) => {
+              const i = k - part.start
+              if (i >= 0 && i < part.shown.length) return renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, k)
+              const r = slide[zone]
+              const passing = !!r && k >= r.lo && k < r.hi + part.shown.length
+              return <div key={en.id} className="rb-cell" aria-hidden inert style={{ height: slotH - GAP }}>{passing && renderEntry(en)}</div>
+            })}
+          </div>
+        </div>
         {zone === 'top' && <>{part.tail.length > 0 && renderMoreBtn(zone)}{renderPlusBtn(zone)}</>}
       </div>
     )
@@ -578,12 +642,11 @@ export function Ribbon() {
         </button>
         {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
-      {renderZone('top', top)}
-      {/* 主位槽:**恒渲染**(空着也留),`margin-block:auto` 由它一个人吃掉全部空当 →
-          自己垂直居中,底部两组照旧贴底。没有 home 件的宿主(如 Tangu Web)高度为 0,观感与从前一致。 */}
+      {/* 主位槽:**恒渲染**(空着也留),排在 Space 区最前。没有 home 件的宿主(如 Tangu Web)高度为 0。 */}
       <div ref={homeRef} className="rb-group rb-home">
         {homeItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
+      {renderZone('top', top)}
       {renderZone('bottom', bot)}
       <div ref={pinnedRef} className="rb-group rb-pinned">
         {pinned.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}

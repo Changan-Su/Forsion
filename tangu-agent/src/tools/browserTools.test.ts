@@ -159,7 +159,8 @@ describe('user browser attach (Chrome remote debugging)', () => {
     process.env.TANGU_BROWSER_CDP = 'off';
     const out = JSON.parse(String(await browserTabsProvider.tools()[0].execute({}, ctxOf())));
     expect(out).toMatchObject({ success: false, connected: false });
-    expect(out.error).toMatch(/chrome:\/\/inspect\/#remote-debugging/);
+    expect(out.error).toMatch(/Tangu for Chrome" extension/); // 09-24 起首选扩展(不弹授权框、有标签组、后台操作)
+    expect(out.error).toMatch(/Settings → Browser/);
   });
 
   it('gates clicks/typing/back only while driving the user\'s browser, and never in full-auto', () => {

@@ -34,7 +34,7 @@ describe('ApprovalCard 来源行', () => {
     expect(source()).toBe('来自远程会话 · 小米 14')
     const rows = [...host.querySelectorAll('.approval-why')]
     expect(rows[0].hasAttribute('data-approval-remote')).toBe(true)
-    expect(rows[1].textContent).toBe(translateFor('zh', 'approval.why.mode', { mode: translateFor('zh', 'approval.mode.autoEdit') }))
+    expect(rows[1].textContent).toBe(translateFor('zh', 'approval.why.mode', { mode: translateFor('zh', 'input.approval.autoEdit') }))
   })
 
   it('hub 验过的调用方、名字清洗后为空 → 「已登记设备」,不说成「未识别的客户端」', async () => {

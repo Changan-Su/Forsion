@@ -1,4 +1,4 @@
-import { Router, type Response } from 'express';
+import { Router, type Response, type RequestHandler } from 'express';
 import { authMiddleware, type AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { HumanError, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
@@ -23,19 +23,18 @@ async function scopeOf(req: AuthRequest, res: Response): Promise<HumanScope | nu
   if (!scope) throw new HumanError('HUMAN_NO_PROJECT', 'This session has no local project.');
   return scope;
 }
-for (const endpoint of ['/agent/agents/:slug/human', '/agent/project-context/human']) {
-  router.get(endpoint, authMiddleware, async (req: AuthRequest, res) => {
+const getHuman: RequestHandler = async (req: AuthRequest, res) => {
     try { const scope = await scopeOf(req, res); if (scope) res.json(await readHuman(scope)); } catch (e) { fail(res, e); }
-  });
-  router.put(endpoint, authMiddleware, async (req: AuthRequest, res) => {
+};
+const putHuman: RequestHandler = async (req: AuthRequest, res) => {
     try {
       const scope = await scopeOf(req, res); if (!scope) return;
       const result = await writeHuman(scope, { ...req.body, undoId: undefined }, 'user');
       if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId);
       res.json(result);
     } catch (e) { fail(res, e); }
-  });
-  router.post(`${endpoint}/undo`, authMiddleware, async (req: AuthRequest, res) => {
+};
+const undoHuman: RequestHandler = async (req: AuthRequest, res) => {
     try {
       const scope = await scopeOf(req, res); if (!scope) return;
       if (typeof req.body?.changeId !== 'string' || !req.body.changeId) throw new HumanError('HUMAN_CHANGE_REQUIRED', 'changeId is required.');
@@ -43,6 +42,12 @@ for (const endpoint of ['/agent/agents/:slug/human', '/agent/project-context/hum
       if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId);
       res.json(result);
     } catch (e) { fail(res, e); }
-  });
-}
+};
+// Keep paths explicit so the remote-access route allowlist can audit every endpoint.
+router.get('/agent/agents/:slug/human', authMiddleware, getHuman);
+router.put('/agent/agents/:slug/human', authMiddleware, putHuman);
+router.post('/agent/agents/:slug/human/undo', authMiddleware, undoHuman);
+router.get('/agent/project-context/human', authMiddleware, getHuman);
+router.put('/agent/project-context/human', authMiddleware, putHuman);
+router.post('/agent/project-context/human/undo', authMiddleware, undoHuman);
 export default router;

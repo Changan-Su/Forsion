@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EMOJI_ALL, EMOJI_GROUPS, searchEmoji } from './emoji'
+import { EMOJI_ALL, EMOJI_GROUPS, searchEmoji, searchEmojiItems } from './emoji'
 
 describe('emoji 库', () => {
   it('比原来那 66 个硬编码的多得多', () => expect(EMOJI_ALL.length).toBeGreaterThan(300))
@@ -32,5 +32,12 @@ describe('emoji 库', () => {
   it('结果不重复(同一 emoji 出现在多个组里也只出一次)', () => {
     const r = searchEmoji('星') ?? []
     expect(new Set(r).size).toBe(r.length)
+  })
+
+  it('searchEmojiItems(正文 `:` 补全):同序同命中,显示名 = 英文关键词连写', () => {
+    const r = searchEmojiItems('smil')
+    expect(r.map((x) => x.emoji)).toEqual(searchEmoji('smil'))
+    expect(r.find((x) => x.emoji === '😅')?.name).toBe('sweat smile')
+    expect(searchEmojiItems('')).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 /** Real Electron Mini Panel contract: isolated backend/vault/plugins and real window geometry.
  * npm run build && npm run check:minicard. No physical input is sent to other applications. */
 const fs = require('fs'), os = require('os'), path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const ROOT = path.resolve(__dirname, '..'), temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-mini-panel-'))

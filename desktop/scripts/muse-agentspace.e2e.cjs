@@ -10,13 +10,15 @@
  *    → 渲染出待办数与 Journal、挂载时不经手势的 updateTodo 被拒、真点击才放行(引擎收到 done + from pending);再改回 v4;
  *    再换成 async mount(09-27 dev 上 Muse 真这么写):resolve 出的清理在切走 Space 时执行、视图卸载后才 resolve 的当场执行、
  *    reject → 主区「插件视图加载失败」+ feedback 点名(从前 Promise 被当成「没有清理」丢掉,异步抛错只剩控制台一行);
+ *    再换成挂载之后才抛错的一版(09-27 live:选择器拿到 null,异步 draw 里 TypeError,数据卡全空):Space 看着正常,
+ *    异步回调与定时器里的 TypeError 都经 feedback 回写、带 main.js 行号,定时器反复抛的同一条只报一次;
  *  ⑤ 退出 → 重启 → 点 Muse 图标 → 命名布局里存的是宿主类型 muse-library,恢复后直接是插件视图(不是 Tangu 内容 / 空框)。
  * 负对照 --nc:假引擎永不更新戳 → ② ③ ④ 必红。先 `npm run build`;跑法 `npm run e2e:museagentspace`;截图 $TMPDIR/forsion-muse-agentspace.png。
  */
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
@@ -66,13 +68,21 @@ const ASYNC_OK = `ctx.registerView({ id: 'home', title: 'Muse', async mount(el) 
   return () => { window.__museAsyncCleanups = (window.__museAsyncCleanups || 0) + 1 }
 } })
 `
+// 挂载之后的运行时错误:null 来自根本不匹配的选择器(live 那次是少引号的笔误,Chromium 宽松解析成不匹配)。行号钉死:4 / 6
+const RUNTIME_THROWS = `ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
+  el.innerHTML = '<div class="muse-runtime" style="padding:24px">runtime error probe</div>'
+  const box = el.querySelector('.not-there')
+  const draw = async () => { await null; box.innerHTML = 'late' }
+  draw()
+  const t = setInterval(() => { box.textContent = 'tick' }, 300)
+  return () => clearInterval(t)
+} })
+`
 const ASYNC_THROWS = `ctx.registerView({ id: 'home', title: 'x', async mount(el) { await null; throw new Error('boom async mount') } })\n`
 
 async function launch(home, stubUrl) {
   const app = await electron.launch({
-    // -ApplePersistenceIgnoreState YES:共用的 Electron.app 最近崩过(别的会话 / 台架),macOS 会在 ready 之前弹
-    // 「重新打开窗口时意外退出,要不要再试」的模态框把主线程卡死 —— 台架实例后台起、没人点,firstWindow 永远等不到(09-27 采样实证)
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl },
   })
@@ -233,6 +243,21 @@ async function main() {
     check('async mount reject 经 feedback 回写给 Muse', asyncFb(), JSON.stringify(feedback))
     fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
     check('改回 v4 后 ≤12s 恢复(async mount 之后)', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
+
+    // 挂载之后的运行时错误:宿主的 try/catch 与 mount 的 Promise 都罩不住 —— 代码带 sourceURL,窗口 error / unhandledrejection 认领回写
+    fs.writeFileSync(path.join(space, 'main.js'), RUNTIME_THROWS, 'utf8'); bump()
+    const runtimeShown = await visible(win, '.muse-runtime', 12_000)
+    const asyncErr = /went unhandled in your Space after it loaded \(main\.js line 4\): TypeError: Cannot set properties of null \(setting 'innerHTML'\)/
+    const timerErr = /went unhandled in your Space after it loaded \(main\.js line 6\): TypeError: Cannot set properties of null \(setting 'textContent'\)/
+    const count = (re) => feedback.filter((x) => re.test(x)).length
+    const t5 = Date.now()
+    while (Date.now() - t5 < 10_000 && !(count(asyncErr) && count(timerErr))) await win.waitForTimeout(300)
+    await win.waitForTimeout(1500) // 定时器再抛几轮:同一条不许重报
+    check('运行时错误:Space 看着正常(报错前画的还在)', runtimeShown)
+    check('运行时错误:异步回调里的 TypeError 经 feedback 回写,带 main.js 行号', count(asyncErr) === 1, JSON.stringify(feedback.slice(-3)))
+    check('运行时错误:定时器里反复抛的同一条只回写一次', count(timerErr) === 1, `count=${count(timerErr)}`)
+    fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
+    check('改回 v4 后 ≤12s 恢复(运行时错误之后)', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
 
     // ⑤ 退出 → 重启 → 点进去就是插件视图(布局只存宿主类型 muse-library)
     await app.close()

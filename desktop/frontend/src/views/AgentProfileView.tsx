@@ -523,7 +523,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
       </>}
       {section === 'skills' && <AgentSkillsPanel cfg={s.cfg} agentSlug={agent.slug} surface={compact ? 'details' : 'space'} selectedIds={draft.enabledSkillIds} onSelectedIds={(enabledSkillIds) => patch({ enabledSkillIds })} extendView={extendView} />}
       {section === 'mcp' && equipment('mcp')}
-      {section === 'human' && <HumanCollaborationPanel cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running} jump={humanJump} />}
+      {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running} jump={humanJump} />}
       {section === 'growth' && <>
         {/* 两层各一张分段卡:标题 + 一句话说清它是什么。待复盘候选的角标跟着「进化」走。 */}
         <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'evolution'] as const).map((g) =>

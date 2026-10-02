@@ -11,7 +11,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
 const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) || `=${d}`).split('=').slice(1).join('=')

@@ -17,6 +17,7 @@ const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
 // and (for packages with a main-process half) signed with the key pinned in that list. A package missing from
 // extraResources used to ship silently; now it fails here.
 const builtinBundles = require('../electron/builtinBundles.json')
+const { bundleExtend } = require('../build/distribution.cjs')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
 const errors = []
 function check(ok, message) {
@@ -69,10 +70,19 @@ for (const dir of resources) {
   let pkg = {}
   try { pkg = JSON.parse(readArchive('package.json')) } catch { errors.push(`${archive}: invalid package.json`) }
   check(pkg.version === expectedVersion, `App version ${pkg.version} != ${expectedVersion}`)
+  check(pkg.forsionBundleExtend === bundleExtend, 'Packaged distribution metadata differs from FORSION_BUNDLE_EXTEND')
+  if (!bundleExtend) {
+    check(!fs.existsSync(path.join(dir, 'bundled-plugins', 'extend')), 'NoExtend package contains the Extend bundle')
+    check(!asar.listPackage(archive).some((entry) => /(?:^|\/)node_modules\/@forsion\/extend(?:\/|$)/.test(entry.replace(/\\/g, '/'))), 'NoExtend asar contains Extend')
+  }
   const engine = readJson(path.join(dir, 'tangu-server', 'package.json'))
+  const extensionDir = path.join(dir, 'tangu-server', 'browser-extension')
+  check(fs.existsSync(path.join(extensionDir, 'manifest.json')), 'Bundled Chrome extension manifest missing')
+  check(fs.existsSync(path.join(extensionDir, 'background.js')), 'Bundled Chrome extension background script missing')
   check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
 
   const main = readArchive('out/main/main.js')
+  check(main.includes('latest-no-extend') === !bundleExtend, 'Main process updater variant differs from FORSION_BUNDLE_EXTEND; rebuild the shell with the same value used for packaging')
   const preload = readArchive('out/preload/preload.mjs')
   for (const channel of ['permissions:status', 'permissions:request', 'permissions:verify', 'permissions:closeGuide']) {
     check(main.includes(channel) && preload.includes(channel), `Permission IPC missing from main/preload: ${channel}`)
@@ -86,6 +96,7 @@ for (const dir of resources) {
   // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去),
   // 随包那份的 id / 版本对得上,带主进程半身的还要过清单里钉的公钥。
   for (const bundle of builtinBundles) {
+    if (!bundleExtend && bundle.id === 'forsion-extend') continue
     const pinned = pkg.dependencies?.[bundle.pkg] ?? ''
     check(/^\d+\.\d+\.\d+$/.test(pinned), `${bundle.pkg} dependency must be an exact release version, got "${pinned}"`)
     // 宿主删掉某块原生实现后要求的最低包版本(builtinBundles.json minVersion):钉着旧版 = 安装包静默少功能
@@ -179,4 +190,4 @@ if (errors.length) {
   console.error(errors.map((e) => `✗ ${e}`).join('\n'))
   process.exit(1)
 }
-console.log(`Release content verified (${expectedVersion}): permission UI/IPC, CU bundle, native helpers, engine version`)
+console.log(`Release content verified (${expectedVersion}, ${bundleExtend ? 'default' : 'NoExtend'}): permission UI/IPC, CU bundle, native helpers, engine version`)

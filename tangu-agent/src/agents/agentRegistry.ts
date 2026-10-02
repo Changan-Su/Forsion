@@ -26,6 +26,9 @@ import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codin
 import { loadSpecialAgentsConfig, legacyMusePrompt, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import { normalizeCompactionLayer } from '../services/compactionSettings.js';
+// ⚠️ 与 approvals.ts 互相 import(它 import 本文件的 getAgent / slugify 等):两边都只在函数体里用对方的导出,
+// 所以求值顺序无关紧要。别在本文件顶层调用 normalizeApprovalMode(模块未求值完 → TDZ)。
+import { normalizeApprovalMode } from '../services/approvals.js';
 import type { ThinkingLevel } from '../core/types.js';
 
 /** 循环轮数缺省(会话/Agent 都没给时 agentLoop 用它)与 **Agent 级下限**:Agent 定义里低于下限的 max_iterations
@@ -110,6 +113,33 @@ export function isValidSlug(slug: string): boolean {
 const THINK: ThinkLevel[] = [...THINKING_LEVELS];
 const APPROVAL: ApprovalMode[] = ['readonly', 'auto-edit', 'full-auto', 'custom'];
 
+/** 审批档原值的首尾空白先剥(与 projectContext 同口径):`"auto-edit "` = auto-edit、`"   "` = 空(跟随会话)。非字符串原样交给 normalizeApprovalMode。 */
+const trimApproval = (v: unknown): unknown => (typeof v === 'string' ? v.trim() : v);
+
+const warnedUnparsedApproval = new Set<string>(); // unparsedApprovalMode 的告警去重(slug|原值)
+
+/**
+ * config.toml **整份解析失败**时的审批档兜底(fail-closed)。最常见的手改错误恰恰是 `approval_mode = readonly`
+ * 忘了引号 —— 非法 TOML,旧口径整份当空对象 → 审批档 '' = 跟随会话(host 上是 auto-edit),想收紧反而放宽。
+ * 现在:文件里有一行非空的 approval_mode(不论写的是哪一档,文件已不可信)→ readonly 并告警;
+ * 没有这一行、或值是空串(`approval_mode = ""`)→ ''(与「空 = 跟随会话」同口径)。
+ * 只认行首的顶层键写法;`[ \t]*` 不跨行,免得 `approval_mode =` 后换行把下一行的值算进来。
+ */
+function unparsedApprovalMode(slug: string, tomlRaw: string): ApprovalMode {
+  const m = /^[ \t]*["']?approval_mode["']?[ \t]*=[ \t]*(.*)$/m.exec(tomlRaw);
+  if (!m) return '';
+  const value = m[1].replace(/[ \t]+#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  if (!value) return '';
+  // 告警按「slug|原值」进程内去重:云端 cloudGetAgent / httpBrain 水合每次请求都重解析,坏文件不修会刷屏(同 approvals.warnUnknownMode)
+  const key = `${slug}|${m[1].trim()}`;
+  if (!warnedUnparsedApproval.has(key)) {
+    if (warnedUnparsedApproval.size > 200) warnedUnparsedApproval.clear(); // 只防无界增长
+    warnedUnparsedApproval.add(key);
+    console.warn(`[tangu] agent ${slug} 的 config.toml 解析失败,其中 approval_mode = ${m[1].trim()} 按 readonly 处理(修好 TOML 语法后恢复)`);
+  }
+  return 'readonly';
+}
+
 /** 解析旧扁平 agent 文件（frontmatter 单行标量 + tools 列表 + 正文)。容错:缺字段回退默认。迁移源。 */
 export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -133,7 +163,8 @@ export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
     .map((s) => s.trim().replace(/^["']|["']$/g, ''))
     .filter(Boolean);
   const thinking = (THINK.includes(meta.thinkinglevel as ThinkLevel) ? meta.thinkinglevel : '') as ThinkLevel;
-  const approval = (APPROVAL.includes(meta.approvalmode as ApprovalMode) ? meta.approvalmode : '') as ApprovalMode;
+  // 未知非空档 → readonly + 告警(H5,同 parseAgentConfig);空 / 纯空白 / 缺席 = ''(跟随会话);首尾空白先剥(同 projectContext)
+  const approval: ApprovalMode = normalizeApprovalMode(trimApproval(meta.approvalmode), `agent ${slug} (legacy .md)`) ?? '';
   const maxIter = Number(meta.maxiterations);
   return {
     slug,
@@ -175,7 +206,8 @@ export function serializeAgent(def: NormalAgentDef): string {
 /** 解析 config.toml + SOUL.md 正文 → NormalAgentDef。容错:解析失败/缺字段回退默认。 */
 export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): NormalAgentDef {
   let meta: Record<string, any> = {};
-  try { meta = (parseToml(tomlRaw) as Record<string, any>) || {}; } catch { meta = {}; }
+  let unparsed = false;
+  try { meta = (parseToml(tomlRaw) as Record<string, any>) || {}; } catch { meta = {}; unparsed = true; }
   const str = (v: any): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
   const tools = Array.isArray(meta.tools)
     ? meta.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100)
@@ -188,8 +220,12 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     : [];
   const effort = str(meta.model_reasoning_effort);
   const think = (THINK.includes(effort as ThinkLevel) ? effort : '') as ThinkLevel;
-  const appr = str(meta.approval_mode);
-  const approval = (APPROVAL.includes(appr as ApprovalMode) ? appr : '') as ApprovalMode;
+  // 审批档(H5 fail-closed):空 / 纯空白 / 缺席 = ''(跟随会话);四个 id 原样(首尾空白先剥,同 projectContext);
+  // **其它非空值**(拼错、新客户端才认识的档、非字符串)→ readonly 并告警。旧口径静默写成 '' = 跟随会话 ——
+  // 用户手改 config.toml 想收紧,拼错一个字反而放宽。整份解析失败另走 unparsedApprovalMode(少个引号同样不许放宽)。
+  const approval: ApprovalMode = unparsed
+    ? unparsedApprovalMode(slug, tomlRaw)
+    : normalizeApprovalMode(trimApproval(meta.approval_mode), `agent ${slug} config.toml`) ?? '';
   const maxIter = Number(meta.max_iterations);
   return {
     slug,
@@ -706,6 +742,32 @@ export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
   return null;
 }
 
+/**
+ * saveAgent 的审批档哨兵:在按 slug 串行化的保存里**现读**磁盘上的审批档原样保留;该 slug 此刻不存在 → 空(跟随会话,
+ * 与全新 create 同口径)。manage_agent 专用 —— 它传的若是自己先前读到的 existing.approvalMode,那次读取到落盘之间
+ * 用户恰好在设置里把档从 full-auto 收紧成 readonly,模型这次更新就会把 full-auto 写回去(Codex 09-25 P1)。
+ * Symbol:JSON 表达不了,HTTP 调用方传不进来。
+ */
+export const KEEP_APPROVAL_MODE: unique symbol = Symbol('tangu.keepApprovalMode');
+
+/** 锁内现读发现该 agent 不在(mustExist 的保存 / patchAgent / 落盘那一刻 config.toml 已被锁外删掉)。
+ *  路由据此回 404,不靠匹配报错文本;message 保持原样(manage_agent 把它原文回给模型)。 */
+export class AgentNotFoundError extends Error {
+  constructor(slug: string) {
+    super(`agent not found: ${slug} (it was removed before the change could be saved)`);
+    this.name = 'AgentNotFoundError';
+  }
+}
+
+/** 锁内现读发现该 slug 已被占(mustNotExist 的保存:预读时还不在、落盘前冒出来一个同 slug 的)。路由据此回 409;
+ *  message 保持原样(manage_agent 把它原文回给模型,测试按原文匹配)。 */
+export class AgentExistsError extends Error {
+  constructor(slug: string) {
+    super(`agent already exists: ${slug} (it was created before your new agent could be saved). Nothing was saved; check it with action=list, then pass a different slug or call again to replace it.`);
+    this.name = 'AgentExistsError';
+  }
+}
+
 export interface SaveAgentInput {
   slug?: string;
   name: string;
@@ -716,7 +778,8 @@ export interface SaveAgentInput {
   enabledMcpServers?: string[] | null;
   thinkingLevel?: ThinkLevel;
   maxIterations?: number | null;
-  approvalMode?: ApprovalMode;
+  /** KEEP_APPROVAL_MODE = 保留**保存那一刻**磁盘上的审批档(在按 slug 串行化的保存里现读),见下。 */
+  approvalMode?: ApprovalMode | typeof KEEP_APPROVAL_MODE;
   systemPrompt: string;
   /** 人格(SOUL.md);缺省保留已有。 */
   soul?: string;
@@ -733,6 +796,12 @@ export interface SaveAgentInput {
   toolsMode?: 'allow' | 'deny' | null;
   /** 内置工具名单;null=清除,缺省保留已有。 */
   toolsList?: string[] | null;
+  /** true = 该 slug 在保存那一刻(锁内现读)必须已存在,否则抛错不落盘 —— 调用方先读到了它、按「改已有的」
+   *  请求的批准;这期间被删了就别悄悄新建一个(新建的审批档是空 = 跟随会话,比它原来的档宽)。 */
+  mustExist?: boolean;
+  /** true = 该 slug 在保存那一刻(锁内现读)必须**不存在**,否则抛错不落盘 —— 调用方先读到它不存在、按「新建」请求的批准
+   *  (卡上写的是「new agent · 跟随会话档」);这期间冒出一个同 slug 的(可能是 full-auto)就别把指令写进去,让调用方重来。 */
+  mustNotExist?: boolean;
 }
 
 /** existing + input → 完整 def 的合并语义(校验/裁剪/缺省保留已有字段)。纯函数:本地 saveAgent 与
@@ -778,7 +847,9 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     tools: Array.isArray(input.tools) ? input.tools.filter((t) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
     thinkingLevel: THINK.includes(input.thinkingLevel as ThinkLevel) ? (input.thinkingLevel as ThinkLevel) : '',
     maxIterations: clampAgentMaxIterations(slug, input.maxIterations),
-    approvalMode: APPROVAL.includes(input.approvalMode as ApprovalMode) ? (input.approvalMode as ApprovalMode) : '',
+    approvalMode: input.approvalMode === KEEP_APPROVAL_MODE
+      ? (existing?.approvalMode || '')
+      : APPROVAL.includes(input.approvalMode as ApprovalMode) ? (input.approvalMode as ApprovalMode) : '',
     createdBy: existing?.createdBy || input.createdBy || 'user',
     createdAt: existing?.createdAt || new Date().toISOString(),
     systemPrompt: (input.systemPrompt != null ? String(input.systemPrompt) : existing?.systemPrompt || '').trim().slice(0, 100_000),
@@ -802,17 +873,103 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
   return def;
 }
 
-/** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。 */
-export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> {
-  const slug = input.slug && isValidSlug(input.slug) ? input.slug : slugify(input.name);
-  const existing = await getAgent(slug);
+// 同 slug 的写串行化(进程内):读 existing → 合并 → 落盘 之间有 await,两次保存交错时后写的一方会用它读到的旧值
+// 盖掉先写的一方(比如用户刚收紧的审批档)。KEEP_APPROVAL_MODE 的「现读」只有在这把锁里才算数。
+// 删除 / 头像的读-改-写也排进同一条队(Codex 09-25 二轮 #3 #4):删除不入队 = 保存读到 existing 之后删掉、保存再把目录建回来
+// (mustExist 形同虚设);头像在锁外读的旧快照(含审批档)会盖掉排在它前面的用户收紧。
+const saveChains = new Map<string, Promise<unknown>>(); // slug -> 队尾
+
+/** 把 fn 排进该 slug 的队。⚠️ fn 里绝不能再调 saveAgent / deleteAgent / saveAgentAvatar / deleteAgentAvatar(同 slug = 自己等自己,
+ *  永久挂死)—— 要写就调 writeAgentLocked。入队前先 ensureAgentsReady(见 saveAgent 的注释)。 */
+function withAgentLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+  const tail = saveChains.get(slug) || Promise.resolve();
+  const mine = tail.then(fn);
+  const entry = mine.then(() => undefined, () => undefined);
+  saveChains.set(slug, entry);
+  void entry.then(() => { if (saveChains.get(slug) === entry) saveChains.delete(slug); });
+  return mine;
+}
+
+/** 锁内落盘(调用方已持有该 slug 的锁、existing 是锁内现读的)。基于已有 agent 的写不建目录:落盘那一刻它的 config.toml
+ *  不在了(锁外的删除,如别的进程 / 手动删)就报错,绝不把删掉的 agent 写回来。 */
+async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): Promise<NormalAgentDef> {
+  if (input.mustExist && !existing) throw new AgentNotFoundError(slug);
+  if (input.mustNotExist && existing) throw new AgentExistsError(slug);
   const def = buildAgentDef(slug, existing, input);
   const adir = path.join(agentsDir(), slug);
-  mkdirSync(adir, { recursive: true });
+  if (!existing) mkdirSync(adir, { recursive: true });
+  else if (!existsSync(path.join(adir, 'config.toml'))) throw new AgentNotFoundError(slug);
   await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
   await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
   cache = null; // 失效缓存
   return def;
+}
+
+/** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。
+ *  同 slug 的调用按到达顺序串行(读-合并-写整段在锁内)。 */
+export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> {
+  const slug = input.slug && isValidSlug(input.slug) ? input.slug : slugify(input.name);
+  // 首访播种必须在锁外跑完:ensureAgentsReady → ensureBuiltinAvatar → saveAgentAvatar(同一个 xyra,入同一条队)。
+  // 放在锁里(经 getAgent 触发)= 自己等自己,首个保存恰是 xyra 时永久挂死。锁外先跑,锁内的 getAgent 再调就是空操作。
+  // deleteAgent / saveAgentAvatar / deleteAgentAvatar 入队前同样先跑它。
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => writeAgentLocked(slug, await getAgent(slug), input));
+}
+
+/** 字段级补丁:undefined = 未提交 → 保留该 agent 现有的值;null 对 maxIterations / enabledSkillIds / enabledMcpServers /
+ *  toolsMode / toolsList 仍是「清除」(同 SaveAgentInput)。 */
+export type AgentPatch = Partial<Omit<SaveAgentInput, 'slug' | 'mustExist' | 'mustNotExist'>>;
+
+/** cur + 补丁 → 完整的 SaveAgentInput:未提交的字段逐个取 cur 的值(buildAgentDef 对 description / model / tools / thinkingLevel /
+ *  maxIterations 是整量覆盖,省略 = 清空,所以得显式带上)。avatar / createdBy 不填 —— buildAgentDef 本就按它自己读到的 existing 保留。
+ *  纯函数,cur 从哪来由调用方负责:只有**锁内现读**的 cur 才不会把并发写回去(本地 patchAgent、云端 cloudPatchAgent 都在锁里调它)。 */
+export function mergeAgentPatch(cur: NormalAgentDef, patch: AgentPatch): SaveAgentInput {
+  const pick = <K extends keyof AgentPatch>(k: K, fallback: AgentPatch[K]): AgentPatch[K] => (patch[k] !== undefined ? patch[k] : fallback);
+  return {
+    ...patch,
+    slug: cur.slug,
+    name: pick('name', cur.name) as string,
+    description: pick('description', cur.description),
+    model: pick('model', cur.model),
+    tools: pick('tools', cur.tools),
+    enabledSkillIds: pick('enabledSkillIds', cur.enabledSkillIds),
+    enabledMcpServers: pick('enabledMcpServers', cur.enabledMcpServers),
+    thinkingLevel: pick('thinkingLevel', cur.thinkingLevel || undefined),
+    maxIterations: pick('maxIterations', cur.maxIterations),
+    approvalMode: pick('approvalMode', cur.approvalMode),
+    systemPrompt: pick('systemPrompt', cur.systemPrompt) as string,
+    soul: pick('soul', cur.soul),
+    shareDefaultMemory: pick('shareDefaultMemory', cur.shareDefaultMemory),
+    cloudSync: pick('cloudSync', cur.cloudSync),
+    activityAccess: pick('activityAccess', cur.activityAccess),
+    toolsMode: pick('toolsMode', cur.toolsMode),
+    toolsList: pick('toolsList', cur.toolsList),
+  };
+}
+
+/**
+ * 改一个**已有** agent 的部分字段:读现值 → 合并 → 落盘整段在该 slug 的队里,只有 fields 里提交了的字段会变。
+ * 旧口径(设置页 PATCH、manage_agent update)在锁外先读 cur、再把 cur 的每个未提交字段(含审批档)显式写回 ——
+ * 读到写之间用户收紧的审批档 / 收窄的工具名单被这份旧快照盖回去;期间被删的 agent 被这次保存建回来。
+ * - 审批档没提交 → KEEP_APPROVAL_MODE(锁内现读现留),永远不从调用方的快照里取。
+ * - 恒 mustExist:锁内读不到(已被删)→ AgentNotFoundError,不新建。patch 一个不存在的 agent 就是新建,那该走 saveAgent。
+ * - fields 可以是函数:拿锁内现读的 cur 做守卫(manage_agent 的人格主权 / 不许自降轮数),抛错 = 什么都不写。
+ * 入队前先 ensureAgentsReady(同 saveAgent:首访播种会给 xyra 存头像,放锁里 = 自己等自己)。
+ */
+export async function patchAgent(slug: string, fields: AgentPatch | ((cur: NormalAgentDef) => AgentPatch)): Promise<NormalAgentDef> {
+  if (!isValidSlug(slug)) throw new AgentNotFoundError(slug);
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => {
+    const cur = await getAgent(slug);
+    if (!cur) throw new AgentNotFoundError(slug);
+    const patch = typeof fields === 'function' ? fields(cur) : fields;
+    return writeAgentLocked(slug, cur, {
+      ...mergeAgentPatch(cur, patch),
+      approvalMode: patch.approvalMode !== undefined ? patch.approvalMode : KEEP_APPROVAL_MODE,
+      mustExist: true,
+      mustNotExist: false,
+    });
+  });
 }
 
 function agentDeletable(slug: string): boolean {
@@ -827,14 +984,17 @@ function agentDeletable(slug: string): boolean {
 
 export async function deleteAgent(slug: string): Promise<boolean> {
   if (!agentDeletable(slug)) return false;
-  try {
-    await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
-    await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
-    cache = null;
-    return true;
-  } catch {
-    return false;
-  }
+  await ensureAgentsReady(); // 与 saveAgent 同理:入队前跑完首访播种
+  return withAgentLock(slug, async () => {
+    try {
+      await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
+      await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
+      cache = null;
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** 移除 Agent 但保留它的文件:整个目录(定义、记忆、Library)挪进 `agents/.removed/<slug>-<时间戳>/` —— 名册只认合法 slug,
@@ -842,6 +1002,8 @@ export async function deleteAgent(slug: string): Promise<boolean> {
  *  (先挪后删:默认 Agent / 启用中的 Muse 被拒时,文件不会先没了)。 */
 export async function removeAgentKeepFiles(slug: string): Promise<{ ok: boolean; keptAt?: string }> {
   if (!agentDeletable(slug)) return { ok: false };
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => {
   const dest = path.join(agentsDir(), '.removed', `${slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
   const moved = async (from: string, to: string): Promise<boolean> => fs.rename(from, to).then(() => true, (e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return false; throw e; });
   try {
@@ -856,6 +1018,7 @@ export async function removeAgentKeepFiles(slug: string): Promise<{ ok: boolean;
   } catch {
     return { ok: false };
   }
+  });
 }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──
@@ -876,25 +1039,59 @@ export async function saveAgentAvatar(slug: string, base64: string, mimeType: st
   const buf = Buffer.from(raw, 'base64');
   if (!buf.length) throw new Error('empty image');
   if (buf.length > AVATAR_MAX_BYTES) throw new Error('image too large (max 1MB)');
-  const cur = await getAgent(slug);
-  if (!cur) throw new Error('agent not found');
-  const libDir = path.join(agentsDir(), slug, 'Library');
-  mkdirSync(libDir, { recursive: true });
-  // 删旧 avatar.*(避免不同扩展名堆积)
-  try {
-    for (const f of await fs.readdir(libDir)) {
-      if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+  // 读-写整段在该 slug 的队里(Codex 09-25 二轮 #3 #4):旧口径锁外读 cur、再把 cur 的每个字段(含审批档)经 saveAgent 写回 ——
+  // 排在它前面的用户收紧(full-auto → readonly)会被这份旧快照盖回去;期间被删的 agent,mkdir Library 就把目录建回来了。
+  // 首访播种先在锁外跑完(ensureBuiltinAvatar 正是从播种里调本函数的,嵌套那次 ensureAgentsReady 立即返回、队是空的)。
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => {
+    const cur = await getAgent(slug);
+    if (!cur) throw new Error('agent not found');
+    const adir = path.join(agentsDir(), slug);
+    const libDir = path.join(adir, 'Library');
+    // getAgent 读完到这里之间,agent 可能被锁外删掉(别的进程 / 手动删):递归 mkdir 会把 <slug>/Library 连同 <slug>/ 建回来,
+    // 留下只有头像的孤儿目录(Codex 09-25 三轮 #8)。所以先复查 config.toml,再**非递归**建 Library —— <slug>/ 不在就 ENOENT,
+    // 绝不替它建。
+    if (!existsSync(path.join(adir, 'config.toml'))) throw new Error('agent not found');
+    try {
+      mkdirSync(libDir);
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') throw new Error('agent not found');
+      if (e?.code !== 'EEXIST') throw e;
     }
-  } catch { /* ignore */ }
-  const filename = `avatar.${ext}`;
-  await fs.writeFile(path.join(libDir, filename), buf);
-  await saveAgent({
-    slug, name: cur.name, description: cur.description, model: cur.model, tools: cur.tools,
-    thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
-    systemPrompt: cur.systemPrompt, soul: cur.soul, avatar: filename, createdBy: cur.createdBy,
+    // 删旧 avatar.*(避免不同扩展名堆积)
+    try {
+      for (const f of await fs.readdir(libDir)) {
+        if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+      }
+    } catch { /* ignore */ }
+    const filename = `avatar.${ext}`;
+    const file = path.join(libDir, filename);
+    await fs.writeFile(file, buf);
+    try {
+      await writeAgentLocked(slug, cur, { ...keepAgentFields(cur), avatar: filename });
+    } catch (e) {
+      // 写头像的同时 agent 被锁外删掉了(删到一半、我们刚写进 Library):收走刚写的头像,空了的 Library / <slug>/ 一并去掉。
+      // 只删自己写的文件与**空**目录(rmdir 不递归,非空就留着)—— 绝不 rm -rf。
+      if (!existsSync(path.join(adir, 'config.toml'))) {
+        await fs.rm(file, { force: true }).catch(() => { /* ignore */ });
+        await fs.rmdir(libDir).catch(() => { /* 非空 / 已不在 */ });
+        await fs.rmdir(adir).catch(() => { /* 非空 / 已不在 */ });
+      }
+      throw e;
+    }
+    if (builtinAgentAvatar(slug)) await fs.rm(avatarRemovedMarker(slug), { force: true });
+    return filename;
   });
-  if (builtinAgentAvatar(slug)) await fs.rm(avatarRemovedMarker(slug), { force: true });
-  return filename;
+}
+
+/** 只改头像时写回的其余字段:全部取**锁内现读**的 cur(buildAgentDef 对 description / model / tools 等是整量覆盖,省略 = 清空,
+ *  所以得显式带上);审批档用 KEEP_APPROVAL_MODE —— 头像操作永远不写审批档,只留落盘那一刻磁盘上的值。 */
+function keepAgentFields(cur: NormalAgentDef): SaveAgentInput {
+  return {
+    slug: cur.slug, name: cur.name, description: cur.description, model: cur.model, tools: cur.tools,
+    thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: KEEP_APPROVAL_MODE,
+    systemPrompt: cur.systemPrompt, soul: cur.soul, createdBy: cur.createdBy,
+  };
 }
 
 /** 读头像二进制 + mime;无则 null。 */
@@ -915,24 +1112,23 @@ export async function readAgentAvatar(slug: string): Promise<{ data: Buffer; mim
 /** 删除头像:移除 Library/avatar.* 并清空 config.avatar(保留其余字段)。无头像时也按成功返回。 */
 export async function deleteAgentAvatar(slug: string): Promise<boolean> {
   if (!isValidSlug(slug)) throw new Error('invalid slug');
-  const cur = await getAgent(slug);
-  if (!cur) throw new Error('agent not found');
-  const libDir = path.join(agentsDir(), slug, 'Library');
-  try {
-    for (const f of await fs.readdir(libDir)) {
-      if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+  await ensureAgentsReady(); // 同 saveAgentAvatar:读-写整段入队,首访播种先在锁外跑完
+  return withAgentLock(slug, async () => {
+    const cur = await getAgent(slug);
+    if (!cur) throw new Error('agent not found');
+    const libDir = path.join(agentsDir(), slug, 'Library');
+    try {
+      for (const f of await fs.readdir(libDir)) {
+        if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+      }
+    } catch { /* 目录不存在 → 无文件可删 */ }
+    await writeAgentLocked(slug, cur, { ...keepAgentFields(cur), avatar: '' });
+    // 内置头像均尊重用户显式删除。
+    if (builtinAgentAvatar(slug)) {
+      await fs.writeFile(avatarRemovedMarker(slug), new Date().toISOString(), 'utf-8').catch(() => { /* ignore */ });
     }
-  } catch { /* 目录不存在 → 无文件可删 */ }
-  await saveAgent({
-    slug, name: cur.name, description: cur.description, model: cur.model, tools: cur.tools,
-    thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
-    systemPrompt: cur.systemPrompt, soul: cur.soul, avatar: '', createdBy: cur.createdBy,
+    return true;
   });
-  // 内置头像均尊重用户显式删除。
-  if (builtinAgentAvatar(slug)) {
-    await fs.writeFile(avatarRemovedMarker(slug), new Date().toISOString(), 'utf-8').catch(() => { /* ignore */ });
-  }
-  return true;
 }
 
 // ── Library 文件管理(通用参考资料 + avatar)。设置面板增删改查;Agent 经文件工具读写同一目录。──

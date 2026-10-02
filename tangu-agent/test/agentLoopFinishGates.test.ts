@@ -19,6 +19,8 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, abortRun } from '../src/services/agentLoop.js';
+import { subscribe } from '../src/services/eventBus.js';
+import { resolveInquiry } from '../src/services/inquiries.js';
 
 const USER = 'u1';
 let home: string;
@@ -307,6 +309,27 @@ describe('计划提交兜底(2026-08-18 真机:模型把计划当普通文本回
 
     const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S'`);
     expect(rows.some((r) => String(r.content).includes('plan_submit_check'))).toBe(false); // 脚手架不落库
+  }, 20_000);
+
+  it('本 run 已调 exit_plan_mode 并获批 → 收尾不再催(否则重交计划、弹第二张卡)', async () => {
+    script = [
+      () => ({
+        content: '', reasoning: '',
+        toolCalls: [{ id: 'ep1', type: 'function', function: { name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '1. 读 a.txt\n2. 追加一行' }) } }],
+        usage: { prompt_tokens: 10, completion_tokens: 10 }, finishReason: 'stop',
+      }),
+      finalStep('计划已批准,开始执行前先收尾。'),
+    ];
+    // 计划卡 = inquiry:台架替用户点「批准,退出计划模式(手动开始)」
+    const off = subscribe('R1', (ev) => {
+      if (ev.type === 'inquiry_request') setTimeout(() => resolveInquiry(ev.payload.inquiryId, '批准,退出计划模式(手动开始)'), 0);
+    });
+    try {
+      const run = await runToSettled({ execMode: 'host', cwd: home, planMode: true });
+      expect(run.status).toBe('done');
+      expect(llmPayloads.length).toBe(2); // 修前是 3:批准后的收尾又被 <plan_submit_check> 拦下
+      expect(userTexts(llmPayloads[1])).not.toContain('<plan_submit_check>');
+    } finally { off(); }
   }, 20_000);
 
   it('负对照:非 planMode 收尾不催(否则普通会话每轮都被拦)', async () => {

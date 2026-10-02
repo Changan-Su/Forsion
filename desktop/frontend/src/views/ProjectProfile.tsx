@@ -485,9 +485,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       <fieldset disabled={!!busy} className="team-profile-fields" key={tab}>
         {loadError && <p className="agent-profile-error" role="alert" style={{ paddingTop: 16 }}>{loadError} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>}
         {tab === 'human' && <>
-          <HumanCollaborationPanel cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} />
+          <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} />
           {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentOf(slug)?.name || slug })}</summary>
-            <HumanCollaborationPanel cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} />
+            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} />
           </details>)}
         </>}
         {tab === 'agents' && <>

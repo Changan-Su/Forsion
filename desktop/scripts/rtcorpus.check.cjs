@@ -21,6 +21,9 @@
 // 另:任何桶打开即写盘、或命中 forbid(比「没修」更坏的形态),一律红。
 // 编辑用例(EDITS,verbatim 桶):动作不是「首段敲字」而是删掉某一段,golden = 删后落盘;重开后链接 href 必须还是删之前那个,
 //   第二轮敲字逐字(D-12 返修:删掉同名定义的第一条,引用形只在剩下的首个定义解析出同一地址时写回)。
+// 键入用例(TYPES,verbatim 桶):真键盘敲一串(输入规则现场生效的语法),golden = 首轮落盘;重开必须零写盘、节点仍在
+//   (nodes:各类节点个数),第二轮首段敲字逐字。R-18 脚注:手打 `[^a]` 落成脚注且重开仍是脚注 —— 没有定义的引用落盘后
+//   会被重新读成字面文本,所以必须连定义一起建出来(footnote.ts 顶注 ①②③)。
 //
 // 用法:npm run check:rtcorpus(自带起停 vite;worktree 里设 HARNESS_URL 指到自己的端口)
 //      node scripts/e2e-editor.cjs --check=rtcorpus --only=d06   只跑 id 含 d06 的
@@ -219,6 +222,18 @@ const EDITS = [
     golden: `${M}\n\nsee [a](http://x.example/docs) here\n\n[1]: http://x.example/docs\n`, href: 'http://x.example/docs' },
 ]
 
+// steps:[{ at: 光标放到这段文字之后, enter?: 先回车, type: 敲的字 }](同一页依次执行)
+const TYPES = [
+  { id: 'fn.type_new_def', md: `${M}\n\n段尾\n`, steps: [{ at: M, type: ' 引用[^a]' }, { type: '定义' }], // 没有定义:建在文末、光标送进去
+    golden: `${M} 引用[^a]\n\n段尾\n\n[^a]: 定义\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
+  { id: 'fn.type_existing_def', md: `${M}\n\n[^n]: 已有\n`, steps: [{ at: M, type: ' 见[^N]后' }], // 已有定义(大小写不敏感):只插引用,光标原地
+    golden: `${M} 见[^N]后\n\n[^n]: 已有\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
+  { id: 'fn.type_lead_ref', md: `${M}\n\n段尾\n`, steps: [{ at: '段尾', enter: true, type: '[^b]。' }, { type: '注' }], // 段首:等下一个字不是 `:` 才转
+    golden: `${M}\n\n段尾\n\n[^b]。\n\n[^b]: 注\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
+  { id: 'fn.type_def_dedupe', md: `${M}\n\n段尾\n`, steps: [{ at: M, type: '[^c]' }, { at: '段尾', enter: true, type: '[^c]: 手写' }], // 手写定义吃掉自动建的空定义
+    golden: `${M}[^c]\n\n段尾\n\n[^c]: 手写\n`, nodes: { footnote_reference: 1, footnote_definition: 1 } },
+]
+
 function lineDiff(a, b) {
   const A = a.split('\n'), B = b.split('\n')
   const n = A.length, m = B.length
@@ -372,6 +387,41 @@ async function runEdit(browser, e) {
   return r
 }
 
+const nodeCounts = (page) => page.evaluate(() => {
+  const out = {}
+  window.__upage.probe.view().state.doc.descendants((n) => { out[n.type.name] = (out[n.type.name] || 0) + 1 })
+  return out
+})
+
+async function runType(browser, c) {
+  const errs = []
+  const r = { id: c.id, bucket: V, rounds: [], openWrites: [], errs }
+  let page = await open(browser, c.md, errs)
+  r.openWrites.push(await writeCount(page))
+  const w0 = await writeCount(page)
+  for (const st of c.steps) {
+    if (st.at && !(await caretAfter(page, st.at))) { errs.push(`找不到 ${st.at}`); break }
+    await page.waitForTimeout(80) // 等选区就位再按键(台架时序坑)
+    if (st.enter) await page.keyboard.press('Enter')
+    await page.keyboard.type(st.type, { delay: 15 })
+  }
+  for (let t = 0; t < 60 && (await writeCount(page)) === w0; t++) await page.waitForTimeout(100)
+  await page.waitForTimeout(1200) // 防抖 800ms:最后几击落定
+  const out = await lastWrite(page)
+  await page.close()
+  r.rounds.push({ out, want: c.golden })
+  if (out != null) {
+    page = await open(browser, out, errs)
+    r.openWrites.push(await writeCount(page))
+    const got = await nodeCounts(page)
+    for (const [k, n] of Object.entries(c.nodes || {})) if ((got[k] || 0) !== n) errs.push(`重开后 ${k}=${got[k] || 0},期望 ${n}`)
+    const two = await typeAndSave(page, M, 'Y')
+    await page.close()
+    r.rounds.push({ out: two.out, want: out.replace(M, M + 'Y'), note: two.note })
+  }
+  return r
+}
+
 async function pool(items, n, fn) {
   const out = new Array(items.length)
   let next = 0
@@ -383,8 +433,8 @@ async function pool(items, n, fn) {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const cases = [...CASES, ...ENTRIES.map((e) => ({ ...e, bucket: V })), ...EDITS.map((e) => ({ ...e, kind: 'edit', bucket: V }))].filter((c) => !ONLY || c.id.includes(ONLY))
-  const results = await pool(cases, Number(process.env.RTCORPUS_JOBS || 4), (c) => (c.kind === 'edit' ? runEdit(browser, c) : c.kind ? runEntry(browser, c) : runCase(browser, c)))
+  const cases = [...CASES, ...ENTRIES.map((e) => ({ ...e, bucket: V })), ...EDITS.map((e) => ({ ...e, kind: 'edit', bucket: V })), ...TYPES.map((e) => ({ ...e, kind: 'type', bucket: V }))].filter((c) => !ONLY || c.id.includes(ONLY))
+  const results = await pool(cases, Number(process.env.RTCORPUS_JOBS || 4), (c) => (c.kind === 'edit' ? runEdit(browser, c) : c.kind === 'type' ? runType(browser, c) : c.kind ? runEntry(browser, c) : runCase(browser, c)))
   await browser.close()
 
   let red = 0

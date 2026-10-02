@@ -5,7 +5,7 @@
  * 存在模块 Map；模式、文档滚动与光标(C-23)要跨重启恢复，落 localStorage。
  */
 
-import { recallViewport, rememberViewport } from './canvasKit/viewport'
+import { forgetViewport, recallViewport, rememberViewport } from './canvasKit/viewport'
 
 export type NoteSurfaceMode = 'doc' | 'canvas'
 
@@ -35,7 +35,7 @@ export function writeNoteSurfaceMode(vaultRoot: string | null | undefined, path:
 
 export function readDocumentScroll(vaultRoot: string | null | undefined, path: string): number {
   const id = noteMemoryId(vaultRoot, path)
-  return docScroll.get(id) ?? views()[id]?.s ?? 0
+  return docScroll.get(id) ?? live(views()[id])?.s ?? 0
 }
 
 export function writeDocumentScroll(vaultRoot: string | null | undefined, path: string, top: number): void {
@@ -50,6 +50,8 @@ export function writeDocumentScroll(vaultRoot: string | null | undefined, path: 
 // 按 noteMemoryId(库根 + 路径)存本机 localStorage,一个键一张表、按最近使用淘汰到 VIEW_CAP 条;不写 md。
 // 光标带一小段上下文文字(caretContext):回放前按文本复核,文档在别处被改得对不上了就丢弃,绝不把光标放到别的字上。
 // 写入防抖 500ms(滚动事件很密),pagehide / beforeunload 立即落;多窗口各写各的,落盘前与盘上那份按条目的新旧合并。
+// 改名 / 移动搬走的条目留一条**删除标记**(d:1,u = 搬走那一刻)并当场落盘:合并照旧按 u 取新,于是别的窗口缓存里
+// 那份更旧的原条目写回时输给标记、不会复活;旧路径日后新建的笔记也读不到它(读取一律跳过标记)。
 
 export interface NoteCaret {
   /** anchor / head(PM 文档位置) */
@@ -58,7 +60,7 @@ export interface NoteCaret {
   /** head 前后各一小段文字(复核用) */
   t: string
 }
-interface NoteView { s?: number; c?: NoteCaret; u: number }
+interface NoteView { s?: number; c?: NoteCaret; u: number; /** 删除标记(改名 / 移动搬走后留下) */ d?: 1 }
 const VIEW_KEY = 'amx.noteView.v1'
 const VIEW_CAP = 300
 let viewCache: Record<string, NoteView> | null = null
@@ -76,6 +78,13 @@ function views(): Record<string, NoteView> {
   if (!viewCache) viewCache = loadViews()
   return viewCache
 }
+/** 删除标记当「没有」读。 */
+const live = (v: NoteView | undefined): NoteView | undefined => (v && !v.d ? v : undefined)
+/** 把盘上更新的条目(含别的窗口留下的删除标记)并进本窗缓存;本窗更新的留着等防抖落盘。 */
+function syncViews(): void {
+  const mine = views()
+  for (const [id, v] of Object.entries(loadViews())) if (!mine[id] || (mine[id].u ?? 0) < (v.u ?? 0)) mine[id] = v
+}
 function persistViews(): void {
   if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
   const mine = views()
@@ -91,13 +100,15 @@ function persistViews(): void {
 }
 function touchView(id: string, patch: Partial<NoteView>): void {
   const all = views()
-  all[id] = { ...all[id], ...patch, u: Date.now() }
+  all[id] = { ...live(all[id]), ...patch, u: Date.now() }
   if (!persistTimer) persistTimer = setTimeout(persistViews, 500)
 }
 if (typeof window !== 'undefined') {
   const now = (): void => { if (persistTimer) persistViews() }
   window.addEventListener('pagehide', now)
   window.addEventListener('beforeunload', now)
+  // 别的窗口落了盘(含改名留下的删除标记):本窗缓存跟上,别拿旧条目给旧路径上的新笔记用。
+  window.addEventListener('storage', (e) => { if (e.key === VIEW_KEY && viewCache) syncViews() })
 }
 
 /** 立刻落盘(防抖窗里的也算):窗口要走了(pagehide)时,防抖着没记的光标先记进来再调它。 */
@@ -106,7 +117,7 @@ export function flushNoteViews(): void {
 }
 
 export function readNoteCaret(vaultRoot: string | null | undefined, path: string): NoteCaret | null {
-  const c = views()[noteMemoryId(vaultRoot, path)]?.c
+  const c = live(views()[noteMemoryId(vaultRoot, path)])?.c
   return c && Number.isInteger(c.a) && Number.isInteger(c.h) && typeof c.t === 'string' ? c : null
 }
 
@@ -118,20 +129,35 @@ export function writeNoteCaret(vaultRoot: string | null | undefined, path: strin
 export function remapNoteViewMemory(vaultRoot: string | null | undefined, oldPath: string, newPath: string): void {
   if (oldPath === newPath) return
   const mode = readNoteSurfaceMode(vaultRoot, oldPath)
-  if (mode) writeNoteSurfaceMode(vaultRoot, newPath, mode)
-  const oldId = noteMemoryId(vaultRoot, oldPath)
-  if (docScroll.has(oldId)) docScroll.set(noteMemoryId(vaultRoot, newPath), docScroll.get(oldId)!)
-  const kept = views()[oldId]
-  if (kept) {
-    delete views()[oldId]
-    touchView(noteMemoryId(vaultRoot, newPath), { ...kept })
+  if (mode) {
+    writeNoteSurfaceMode(vaultRoot, newPath, mode)
+    try { localStorage.removeItem(modeKey(vaultRoot, oldPath)) } catch { /* 私有模式 */ }
   }
+  const oldId = noteMemoryId(vaultRoot, oldPath)
+  const newId = noteMemoryId(vaultRoot, newPath)
+  if (docScroll.has(oldId)) {
+    docScroll.set(newId, docScroll.get(oldId)!)
+    docScroll.delete(oldId)
+  }
+  // 滚动 / 光标表:先并进盘上的(别的窗口可能刚写过这一篇),搬到新键,旧键换成删除标记,**当场**读盘 → 合并 → 写回。
+  syncViews()
+  const kept = live(views()[oldId])
+  if (kept) {
+    const { u: _u, d: _d, ...carry } = kept
+    touchView(newId, carry)
+  }
+  views()[oldId] = { d: 1, u: Date.now() }
+  persistViews()
   const vp = recallViewport(oldId) // 画布视口(会话级,键同口径;V-15)
-  if (vp) rememberViewport(noteMemoryId(vaultRoot, newPath), vp)
+  if (vp) {
+    rememberViewport(newId, vp)
+    forgetViewport(oldId)
+  }
   if (readNoteLocked(vaultRoot, oldPath)) {
     writeNoteLocked(vaultRoot, newPath, true)
     writeNoteLocked(vaultRoot, oldPath, false)
   }
+  movePageStyle(vaultRoot, oldPath, newPath)
 }
 
 // ── 锁定页面(评审 C-07,拍板 #15)──────────────────────────────────────────────────────────────
@@ -165,6 +191,89 @@ export function onNoteLockChange(fn: () => void): () => void {
     window.removeEventListener(LOCK_EVENT, fn)
     window.removeEventListener('storage', onStorage)
   }
+}
+
+// ── 页面排版选项(评审 C-21,拍板 #14):全宽 / 小字号 / 页面字体 ─────────────────────────────────────────
+// 与锁定页面同一口径:「这台设备上怎么看这一篇」是视图偏好,不是内容 —— 只落本机 localStorage(键 = 库根 + 路径),
+// 不写 frontmatter。一篇一个键,全是缺省值就删键(同「解锁即删键」),所以不设 LRU:只有改过的笔记才占条目。
+
+export type NotePageFont = 'default' | 'serif' | 'mono'
+export interface NotePageStyle { wide: boolean; small: boolean; font: NotePageFont }
+export const DEFAULT_PAGE_STYLE: NotePageStyle = { wide: false, small: false, font: 'default' }
+
+const PAGE_PREFIX = 'amx.notePage:'
+const PAGE_EVENT = 'amadeus:note-page-style'
+const pageKey = (vaultRoot: string | null | undefined, path: string): string => `${PAGE_PREFIX}${noteMemoryId(vaultRoot, path)}`
+
+function parsePageStyle(raw: string | null): NotePageStyle {
+  if (!raw) return DEFAULT_PAGE_STYLE
+  try {
+    const v = JSON.parse(raw) as { w?: unknown; s?: unknown; f?: unknown }
+    return { wide: v.w === 1, small: v.s === 1, font: v.f === 'serif' || v.f === 'mono' ? v.f : 'default' }
+  } catch {
+    return DEFAULT_PAGE_STYLE
+  }
+}
+
+export function readNotePageStyle(vaultRoot: string | null | undefined, path: string): NotePageStyle {
+  try { return parsePageStyle(localStorage.getItem(pageKey(vaultRoot, path))) } catch { return DEFAULT_PAGE_STYLE }
+}
+
+/** 改这一篇的排版选项(只改给出的几项)。同窗各标签经事件、别的窗口经 `storage` 事件跟上。 */
+export function writeNotePageStyle(vaultRoot: string | null | undefined, path: string, patch: Partial<NotePageStyle>): void {
+  const next = { ...readNotePageStyle(vaultRoot, path), ...patch }
+  storePageStyle(pageKey(vaultRoot, path), next)
+  try { window.dispatchEvent(new Event(PAGE_EVENT)) } catch { /* 非浏览器环境 */ }
+}
+
+function storePageStyle(key: string, st: NotePageStyle): void {
+  const packed: { w?: 1; s?: 1; f?: NotePageFont } = {}
+  if (st.wide) packed.w = 1
+  if (st.small) packed.s = 1
+  if (st.font !== 'default') packed.f = st.font
+  try {
+    if (Object.keys(packed).length) localStorage.setItem(key, JSON.stringify(packed))
+    else localStorage.removeItem(key)
+  } catch { /* 私有模式 / 配额:本次会话照样生效,只是记不住 */ }
+}
+
+/** 订阅排版选项变化(任一篇;订阅方自己按路径重读)。返回退订函数。 */
+export function onNotePageStyleChange(fn: () => void): () => void {
+  const onStorage = (e: StorageEvent): void => { if (!e.key || e.key.startsWith(PAGE_PREFIX)) fn() }
+  window.addEventListener(PAGE_EVENT, fn)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    window.removeEventListener(PAGE_EVENT, fn)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+/** 改名 / 移动:排版选项跟着走,旧键删掉(再调一次就是空操作 —— 行内改名与 remapScopePaths 会各调一次)。 */
+function movePageStyle(vaultRoot: string | null | undefined, oldPath: string, newPath: string): void {
+  let raw: string | null = null
+  try { raw = localStorage.getItem(pageKey(vaultRoot, oldPath)) } catch { return }
+  if (raw == null) return
+  storePageStyle(pageKey(vaultRoot, newPath), parsePageStyle(raw))
+  try { localStorage.removeItem(pageKey(vaultRoot, oldPath)) } catch { /* 同上 */ }
+  try { window.dispatchEvent(new Event(PAGE_EVENT)) } catch { /* 非浏览器环境 */ }
+}
+
+/** 文件夹改名 / 移动(整棵子树换前缀):子树里每篇的排版选项跟着走。库根不同的条目不碰。 */
+export function remapNotePageStylePrefix(vaultRoot: string | null | undefined, oldPrefix: string, newPrefix: string): void {
+  if (oldPrefix === newPrefix) return
+  const hits: Array<[string, string]> = []
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key || !key.startsWith(PAGE_PREFIX)) continue
+      let id: unknown
+      try { id = JSON.parse(key.slice(PAGE_PREFIX.length)) } catch { continue }
+      if (!Array.isArray(id) || id[0] !== (vaultRoot ?? '') || typeof id[1] !== 'string') continue
+      const p = id[1]
+      if (p === oldPrefix || p.startsWith(`${oldPrefix}/`)) hits.push([p, newPrefix + p.slice(oldPrefix.length)])
+    }
+  } catch { return }
+  for (const [from, to] of hits) movePageStyle(vaultRoot, from, to)
 }
 
 const PROPS_OPEN_PREFIX = 'amx.propsOpen:'

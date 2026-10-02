@@ -116,6 +116,21 @@ export interface BackendStatus {
   staleDist: boolean
 }
 
+/**
+ * 通道回复 / TUI 的界面语言:Finder 启动的桌面没有 LANG,引擎继承空 env 只能猜 → 按系统界面语言注入 TANGU_LANG。
+ * 引擎按 TANGU_LANG → LC_ALL → LC_MESSAGES → LANG 取**第一个可用值**(tui/i18n.detectZh、channels/messages.resolveChannelLocale),
+ * 空 / C / POSIX / C.* 视为未设置。只有四个都不可用才注入:TANGU_LANG 排在最前,用户 shell 里设了 LANG=en_US 而系统界面是中文时,
+ * 注入的 zh 会把用户的英文盖掉(Codex 评审 09-25)。「可用」口径必须与引擎那两处一致。
+ */
+export function injectEngineLang(env: NodeJS.ProcessEnv, appLocale: string): void {
+  const usable = (v: string | undefined): boolean => {
+    const s = (v || '').trim()
+    return !!s && s !== 'C' && s !== 'POSIX' && !s.startsWith('C.')
+  }
+  if (['TANGU_LANG', 'LC_ALL', 'LC_MESSAGES', 'LANG'].some((k) => usable(env[k]))) return
+  env.TANGU_LANG = /^zh/i.test(appLocale) ? 'zh' : 'en'
+}
+
 // 500 行:导出会话日志会整份带走这段缓冲;200 行在微信/TG 轮询报错刷屏时只够几分钟。查看器是一次性取回的 <pre>,没有持续开销。
 const LOG_CAP = 500
 
@@ -284,11 +299,15 @@ export class BackendManager {
       // 没有这个请求方。宿主在 spawn 时把同一个真实 App 版本交给引擎,供通道 run 写入 input.client;
       // 源通道仍单独保留在 input.source.channel,不拿 wechat/telegram/qq 污染「端×版本」维度。
       env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`
+      // 通道回复 / TUI 的界面语言:用户 env 里没有任何可用的语言变量才按系统界面语言注入(见 injectEngineLang)
+      injectEngineLang(env, app.getLocale?.() || '')
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'
       env.TANGU_BROWSER_ENGINE = s.browserEngine || 'auto'
       env.TANGU_BROWSER_SEARCH_ENGINE = s.browserSearchEngine || 'duckduckgo'
       env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = s.browserAllowPrivateUrls ? '1' : '0'
       env.TANGU_BROWSER_COMMAND_TIMEOUT_MS = String(s.browserCommandTimeoutMs || 30000)
+      // Tangu for Chrome 扩展桥的端口:dev 与正式版各用一个,两个同时开着也不抢(连接码按各自家目录分开存)
+      env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : '47655'
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
       //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。

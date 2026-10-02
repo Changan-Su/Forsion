@@ -1,5 +1,5 @@
 /** Team deliverables in the main ChatView: live SSE, replay, reload, interaction and file preview. */
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')

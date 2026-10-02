@@ -143,8 +143,8 @@ describe('S1 受保护审批只在本机批准', () => {
 
   it('special 排队的受保护项:远端批准 → 403 且行仍 pending(没执行);远端拒绝 → 200', async () => {
     const ins = (id: string, reason: string | null) => query(
-      `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status)
-       VALUES (?, 'u1', 'S-q', NULL, 'muse', 'write_file', ?, 'write config', ?, ?, 'pending')`,
+      `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, preview_version)
+       VALUES (?, 'u1', 'S-q', NULL, 'muse', 'write_file', ?, 'write config', ?, ?, 'pending', 1)`,
       [id, JSON.stringify({ path: join(home, 'config.json'), content: '{"pwned":true}' }), reason, ws],
     );
     await ins('pa-prot', JSON.stringify({ kind: 'protected', mode: 'auto-edit' }));

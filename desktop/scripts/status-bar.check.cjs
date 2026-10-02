@@ -4,7 +4,10 @@
  *  A 可点项一律是原生 <button type=button>(原来是 span+onClick:Tab 不到、读屏不知道能点)
  *  B 每个可点项都有悬停说明(title):点了会发生什么(切换 Space / 立即同步 / 打开反链…)
  *  C 从页面开头连按 Tab 真能走到状态栏的可点项(不是 el.focus() 硬塞),且落上时画的是 1px 焦点环
- *  D 新用户(无存档)缺省隐藏「收件箱未读」;已存偏好不动(写一份不隐藏的存档后重载,收件箱按钮真的可见)。
+ *  F 新用户(无存档)缺省**整条不显示**(10-02 用户拍板「框架收声」);同步出错时只露同步那一项(主进程推一条
+ *    error 状态,插件项、其余内置项都不出),恢复后整条收回
+ *  G 在设置浮窗里拨开「显示状态栏」→ 主窗**不重启**就出现(storage 事件跨窗口;漏了它 = 拨了没反应)
+ *  D 新用户打开后缺省隐藏「收件箱未读」;已存偏好不动(写一份不隐藏的存档后重载,收件箱按钮真的可见)。
  *    桩引擎报 3 封未读 —— 未读为 0 时 InboxItem 返回 null、只剩空包装节点,只查包装节点 id 会假绿(Codex 第一轮 C-4)
  *  E 分组:隔离家目录装一个探针插件,左右各注册一个状态项;插件项排在所在侧内置项之后,交界处的分隔线**真的可见**
  *    (Codex 第一轮 C-5:以前采了 seps 不断言,且没插件项时整条跳过)。「可见」按实际渲染判:display / visibility /
@@ -17,7 +20,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { _electron: electron } = require('playwright-core')
+const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
@@ -68,8 +71,35 @@ async function main() {
       const b = win.locator(`text=${label}`).first()
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
-    await win.waitForSelector('.sb .sb-click', { timeout: 30_000 })
-    await win.waitForTimeout(1200)
+    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+    await win.waitForTimeout(1500)
+
+    // F 新用户缺省不显示;同步出错只露同步项,恢复后收回。错误状态从主进程直推渲染端的那条 IPC(amadeus:sync:status,
+    //   带 binding = 按条目同步的事件形状),不必真配一个会失败的同步后端。
+    const fresh = await win.evaluate(() => ({ sb: !!document.querySelector('.sb'), prefs: localStorage.getItem('forsion.sb.prefs') }))
+    check('F 新用户无存档:状态栏整条不显示', !fresh.sb && fresh.prefs === null, JSON.stringify(fresh))
+    const pushSync = (state) => app.evaluate(({ BrowserWindow }, st) => {
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('amadeus:sync:status', { enabled: true, state: st, lastSyncAt: null, pending: 0, conflicts: 0, skipped: [], error: st === 'error' ? 'probe' : null, binding: '/tmp/sb-probe-vault' })
+    }, state)
+    await pushSync('error')
+    await win.waitForSelector('.sb', { timeout: 10_000 }).catch(() => {})
+    const alert = await win.evaluate(() => [...document.querySelectorAll('.sb .sb-item[data-sb-id]')].filter((e) => e.childElementCount || e.textContent).map((e) => e.dataset.sbId))
+    check('F 同步出错:状态栏出现且只露同步项', alert.length === 1 && alert[0] === 'sync.status', alert.join(','))
+    await pushSync('idle')
+    await win.waitForFunction(() => !document.querySelector('.sb'), null, { timeout: 10_000 }).catch(() => {})
+    check('F 同步恢复:状态栏整条收回', !(await win.evaluate(() => !!document.querySelector('.sb'))))
+
+    // G 设置浮窗里拨开 → 主窗不重启就出现
+    await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'statusbar' } }))
+    let fl = null
+    for (let i = 0; i < 60 && !fl; i++) { fl = app.windows().find((w) => w.url().includes('window=floating')) || null; if (!fl) await win.waitForTimeout(250) }
+    const sw = fl && fl.locator('button[role="switch"][aria-label="显示状态栏"]')
+    if (sw) await sw.click({ timeout: 30_000 }).catch(() => {})
+    await win.waitForSelector('.sb .sb-click', { timeout: 15_000 }).catch(() => {})
+    const afterOn = await win.evaluate(() => ({ sb: !!document.querySelector('.sb .sb-click'), prefs: localStorage.getItem('forsion.sb.prefs') }))
+    check('G 设置浮窗拨开「显示状态栏」→ 主窗不重启就出现', !!fl && afterOn.sb && JSON.parse(afterOn.prefs || '{}').enabled === true, JSON.stringify(afterOn))
+    if (fl) await fl.close().catch(() => {})
+    await win.waitForTimeout(800)
 
     const info = await win.evaluate(() => {
       const clicks = [...document.querySelectorAll('.sb .sb-click')]
@@ -105,7 +135,7 @@ async function main() {
     }
 
     // D 缺省隐藏收件箱未读(无存档)
-    check('D 新用户无存档(缺省值生效,未落盘)', info.prefs === null, `forsion.sb.prefs=${info.prefs}`)
+    check('D 打开开关写下的存档带着缺省隐藏项', JSON.parse(info.prefs || '{}').hidden?.includes('inbox.unread') === true, `forsion.sb.prefs=${info.prefs}`)
     check('D 缺省不渲染「收件箱未读」项', !info.ids.some((x) => x.id === 'inbox.unread'), info.ids.map((x) => x.id).join(','))
     await win.evaluate(() => localStorage.setItem('forsion.sb.prefs', JSON.stringify({ enabled: true, hidden: [], order: [] })))
     await win.reload()

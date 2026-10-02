@@ -9,7 +9,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, bindClientActionToTool, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -48,11 +48,13 @@ import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHumanProvider } from './builtin/manageHuman.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
+import { sessionSettingsProvider } from './builtin/sessionSettings.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { viewVideoProvider } from './builtin/viewVideo.js';
 import { uiCommandsProvider } from './builtin/uiCommands.js';
+import { phoneToolsProvider } from './builtin/phoneTools.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
@@ -61,6 +63,7 @@ import { WRITE_TOOLS, writeTargetsOf } from './writeTargets.js';
 import { withWriteLock } from './writeLock.js';
 import path from 'node:path';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
+import { usableToolDefinition } from './toolDefinitionValidation.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
 export type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
@@ -188,6 +191,8 @@ registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(a
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)
 registerToolProvider(readComputerHistoryProvider); // 电脑历史开着 ∧ 本机客户端 ∧ 非通道/团队/子代理:读用户在 Forsion 之外的电脑活动(默认关,append 末尾;快照两侧剔除,见 dump-tooldefs)
+registerToolProvider(sessionSettingsProvider); // host-only 前台 run:session_settings 读 / update_session_settings 改本会话模型与思考档(写走 command 审批档;审批档不开放;append 末尾,保前缀缓存)
+registerToolProvider(phoneToolsProvider); // 手机端限定(clientCapability 'phone.intents' 中央闸;与 uiCommandsProvider 同属「发起端能力面」):phone_* 五件经 client_cmd 让手机原生执行(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -270,6 +275,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx);
   if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
+      if (!usableToolDefinition(t?.definition, 'custom', t?.name)) continue;
       if (taken.has(t.name)) continue; // 内置同名优先
       taken.add(t.name);
       defs.push(t.definition);
@@ -278,6 +284,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   // MCP 工具(ctx 运行时注入,manager 已按 (server, tool) 排序 → defs 字节级稳定)
   if (externalOk && ctx.mcpTools && ctx.mcpTools.size) {
     for (const t of ctx.mcpTools.values()) {
+      if (!usableToolDefinition(t?.definition, `mcp:${t?.serverName || '(unknown)'}`, t?.name)) continue;
       if (taken.has(t.name)) continue; // mcp__ 前缀理论上不冲突,保险跳过
       taken.add(t.name);
       defs.push(t.definition);
@@ -332,7 +339,11 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   const impl: ToolDef | undefined = resolveTools(currentProfile(ctx), ctx).get(name);
   if (impl) {
     const caps = mergeCapabilities(name, impl);
-    const { scopedCtx, cleanup } = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    const timed = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    const cleanup = timed.cleanup;
+    // 客户端原生动作按工具收窄:没声明 clientCapability 的工具拿不到 requestClientAction,声明了的只能发自己的 ns
+    // (否则任何插件工具都能直调它绕过中央闸)。⚠️ 这一行被 clientCapabilityGate.test.ts 的执行侧用例覆盖。
+    const scopedCtx = bindClientActionToTool(timed.scopedCtx, impl);
     // ⚠️「拍 pre-image → 执行 → 取写后指纹 / 撤销」必须整段在**同一把写锁**里(codex 2026-08-17 P1)。
     // 原来快照在锁外拍:两个子代理/会话同时写同一个文件时,双方都会在任一方进锁之前拍完快照 ——
     // 后写的那个拍到的是**前写者改动之前**的字节,回退它就把前者的改动一起抹掉。
@@ -382,7 +393,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
 
   const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx); // 与 getToolDefinitions 同判
   const custom = externalOk ? ctx.customTools?.get(name) : undefined;
-  if (custom) {
+  if (custom && usableToolDefinition(custom.definition, 'custom', custom.name)) {
     try {
       const result = await executeCustomTool(custom, args, ctx);
       const isError = typeof result === 'string' && result.startsWith('Error:');
@@ -396,7 +407,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   // 第三级 fallback:MCP 工具(经 deps().mcp 调远端;仅 standalone/TUI 装配了 mcp)。
   // 结果是第三方内容:文本已在 manager 圈进不可信围栏;图片经 collectImage 回灌并带不可信前言(M6)。
   const mcpTool = externalOk ? ctx.mcpTools?.get(name) : undefined;
-  if (mcpTool && deps().mcp) {
+  if (mcpTool && usableToolDefinition(mcpTool.definition, `mcp:${mcpTool.serverName}`, mcpTool.name) && deps().mcp) {
     const r = await deps().mcp!.callTool(mcpTool, args, ctx.signal);
     return { toolCallId: call.id, name, result: mcpResultForModel(r, mcpTool, ctx.collectImage), isError: r.isError };
   }

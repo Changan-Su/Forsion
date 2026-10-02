@@ -260,15 +260,80 @@ async function main() {
     await page.waitForTimeout(120)
     const firstId = await page.$eval('.rb-top .rb-slot', (e) => e.dataset.id)
     check('M4 改序后 ⌘1 标在新的第一个上', firstId === 'tD' && (await keysOf(page))[0] === '⌘1', `${firstId} / ${(await keysOf(page))[0]}`)
-    // 补到 10 个:第 10 个没有快捷键 → 不画提示
+    // 补到 10 个:10-02 起上区只常驻 5 个(用户拍板 v1),第 6 个起进「…」—— 常驻的正好标 ⌘1..5,不跳号
     await page.evaluate(() => {
       const s = window.__rb.getState()
-      for (const n of ['E', 'F', 'G', 'H', 'I', 'J']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() {} })
+      for (const n of ['E', 'F', 'G', 'H', 'I', 'J']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() { window.__rbHits.push('t' + n) } })
     })
-    await page.setViewportSize({ width: 900, height: 1000 }) // 够高,10 个都不进「…」
+    await page.setViewportSize({ width: 900, height: 1000 }) // 够高:进「…」只因常驻上限,不因高度
     await page.waitForTimeout(250)
     const ks = await keysOf(page)
-    check('M5 第 10 个没有快捷键 → 不画提示', ks.length === 10 && ks[8] === '⌘9' && ks[9] === '', `${ks.length} 个 ｜ ${ks.join('|')}`)
+    const hasMore = !!(await page.$('.rb-top .rb-more'))
+    check('M5 补到 10 个:上区只常驻 5 个(标 ⌘1..5),其余进「…」', ks.join() === '⌘1,⌘2,⌘3,⌘4,⌘5' && hasMore, `${ks.length} 个 ｜ ${ks.join('|')} ｜ more=${hasMore}`)
+    // 号按整条上区排序分,不按「露在外面的」:收进「…」的第 6 个照样 mod+6 直达(序 = tD,tA,tB,tC,tE,tF…)。
+    await page.evaluate(() => { window.__rbHits.length = 0 })
+    await page.keyboard.press('Meta+6')
+    await page.waitForTimeout(80)
+    const hit6 = await page.evaluate(() => window.__rbHits.join())
+    check('M5b 收进「…」的第 6 个照样 mod+6 直达', hit6 === 'tF', hit6)
+
+    // W. 滚轮翻看(10-02 用户要求,类 Agent 选择条):DOM 不滚,露出的那一窗按格平移。每下之间停 260ms
+    //    (> 200ms)= 每下都是新手势、各挪一格;deltaY 只给 10px,顺带钉「慢转的滚轮一下只有几 px 也得动」。
+    const idsIn = (zone) => page.$$eval(`.rb-${zone} .rb-slot`, (els) => els.map((e) => e.dataset.id))
+    const wheelAt = async (zone, dy, times = 1) => {
+      const b = await page.$eval(`.rb-${zone} .rb-slot`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+      await page.mouse.move(b.x, b.y)
+      for (let i = 0; i < times; i++) { await page.mouse.wheel(0, dy); await page.waitForTimeout(260) }
+    }
+    const top0 = await idsIn('top')
+    await wheelAt('top', 10)
+    const top1 = await idsIn('top'), k1 = await keysOf(page)
+    check('W1 上区往下滚一下:窗口后移一格,提示标真实位置(⌘2..⌘6)', top1[0] === top0[1] && top1.length === 5 && k1.join() === '⌘2,⌘3,⌘4,⌘5,⌘6', `${top1.join()} ｜ ${k1.join('|')}`)
+    // 快捷键不跟着滚动变(10-02 用户确认):滚过以后 mod+1 仍是整区第一个(tD,已滚出窗口)。
+    await page.evaluate(() => { window.__rbHits.length = 0 })
+    await page.keyboard.press('Meta+1')
+    await page.waitForTimeout(80)
+    const hit1 = await page.evaluate(() => window.__rbHits.join())
+    check('W1b 滚过以后 mod+1 仍是整区第一个(号不随滚动变)', hit1 === 'tD', hit1)
+    // 平滑动画:滚一下的当帧,滑动框的列还在过渡中(transform 不是终值),经过的格子临时画出图标;过渡完 DOM 回到只露一窗
+    await page.mouse.wheel(0, 10)
+    await page.waitForTimeout(60)
+    const mid = await page.evaluate(() => {
+      const inner = document.querySelector('.rb-top .rb-strip-in')
+      return { tr: getComputedStyle(inner).transform, final: inner.style.transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }
+    })
+    await page.waitForTimeout(400)
+    const end = await page.evaluate(() => ({ tr: getComputedStyle(document.querySelector('.rb-top .rb-strip-in')).transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }))
+    const ty = (m) => { const v = /matrix\(([^)]+)\)/.exec(m); return v ? Number(v[1].split(',')[5]) : 0 }
+    const want = Number(/-?[\d.]+/.exec(mid.final)?.[0] ?? 0)
+    check('W1c 平滑滑动:过渡中途在新旧之间、经过的格子画出图标;滑完停在终值、占位清空', ty(mid.tr) > want && mid.filled > 0 && Math.abs(ty(end.tr) - want) < 0.5 && end.filled === 0, JSON.stringify({ mid: ty(mid.tr), want, filledMid: mid.filled, end: ty(end.tr), filledEnd: end.filled }))
+    await wheelAt('top', -10)
+    await wheelAt('top', 10, 8)
+    const k2 = await keysOf(page)
+    check('W2 滚到底夹住:露最后 5 个(⌘6..⌘9,第 10 个无号)', k2.join() === '⌘6,⌘7,⌘8,⌘9,', k2.join('|'))
+    await page.hover('.rb-top .rb-more')
+    await page.waitForSelector('.rb-fly', { timeout: 3000 })
+    const flyTop = await page.$$eval('.rb-fly .rb-fly-row', (els) => els.map((e) => e.dataset.id))
+    check('W3 滚过去的前几个进「…」', top0.slice(0, 5).every((id) => flyTop.includes(id)), flyTop.join())
+    await page.keyboard.press('Escape')
+    await wheelAt('top', -10, 8)
+    check('W4 往上滚回来:窗口复原', (await idsIn('top')).join() === top0.join(), (await idsIn('top')).join())
+    await page.evaluate(() => {
+      const s = window.__rb.getState()
+      for (const n of ['D', 'E', 'F']) s.addRibbonIcon({ id: 'b' + n, side: 'bottom', tooltip: () => 'Bot ' + n, icon: s.items[0].icon, onClick() {} })
+    })
+    await page.waitForTimeout(200)
+    const bot0 = await idsIn('bottom')
+    await wheelAt('bottom', -10)
+    const bot1 = await idsIn('bottom')
+    check('W5 命令区往上滚一下:露出前面藏着的那一个(命令区「…」在上)', bot0.join() === 'bC,bD,bE,bF' && bot1.join() === 'bB,bC,bD,bE', `${bot0.join()} → ${bot1.join()}`)
+    await wheelAt('bottom', 10, 3)
+    check('W6 命令区往下滚回来:贴底复原', (await idsIn('bottom')).join() === bot0.join(), (await idsIn('bottom')).join())
+    // 鼠标滚轮一格常见 100–120px:一下只许挪一格(照原生换算会跳 3 格,5 格的窗口一下翻掉大半)。
+    await wheelAt('top', 120)
+    const top2 = await idsIn('top')
+    check('W7 一下 120px 的滚轮只挪一格', top2[0] === top0[1], `${top0.join()} → ${top2.join()}`)
+    await wheelAt('top', -120)
     await page.setViewportSize({ width: 900, height: 800 })
 
     // N. 未读角标(收件箱红点)× 快捷键提示:展开态角标必须贴**图标**右上角,不是行右端 ——

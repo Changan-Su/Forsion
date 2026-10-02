@@ -10,6 +10,7 @@
  *    这条测试在旧代码上照样绿(负对照已实跑:去掉桩即假绿)。所以桩是本测试的前置态,不是装饰。
  */
 import { describe, it, expect, beforeAll } from 'vitest'
+await import('@/agentCommands') // 收集阶段先转译整张模块图(~350 个):放进用例体里,首次转译的耗时算进 5s 用例超时,机器一忙(本机多会话负载 40+)就假红;CI 上一直是绿的
 
 beforeAll(() => {
   ;(document as unknown as Record<string, unknown>).startViewTransition = (cb: () => void) => {

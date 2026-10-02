@@ -16,6 +16,8 @@ import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
 import { quoteInChatPanel } from './chat2/chatPanelQuote'
+import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
+import { amadeusAvailable } from '../features/runtime'
 import { DESK_DRAFT_KEY, resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -547,6 +549,8 @@ export function ChatView({ leaf, params }: ViewProps) {
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
                       onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
                       onTask: (card, landing) => runTaskCard(card, landing, activeId),
+                      // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
+                      onInsertNote: amadeusAvailable() ? (text) => void insertReplyToNote(text, askOriginOf(activeMessages, m.id)) : undefined,
 
                       ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
                     }}

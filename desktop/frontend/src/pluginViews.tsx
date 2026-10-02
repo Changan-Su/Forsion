@@ -57,7 +57,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       el.textContent = translate('pluginview.mountFailed')
     }
     const runCleanup = (fn: () => void): void => {
-      try { fn() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
+      // 也派给窗口 error:agent 自建 Space 的清理抛错由 builtins/agentSpaceSync 按栈帧认领、回写给 agent(别的插件只多一行日志)
+      try { fn() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e); globalThis.reportError?.(e) }
     }
     try {
       const mounted = def.mount(el, {

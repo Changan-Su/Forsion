@@ -12,6 +12,7 @@ const path = require('path')
 const { spawn } = require('child_process')
 const { chromium } = require('playwright-core')
 const { WebSocketServer } = require('ws')
+const { MAC_FLAGS } = require('./lib/launch-electron.cjs') // 裸起 Electron 也要跳过 macOS 崩溃后的重开窗口模态
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { synthMic, fakeMicSwitches } = require('./lib/voice-fixture.cjs')
 
@@ -97,7 +98,7 @@ async function main() {
   rt = fakeRealtime(stub)
   const port = 9400 + Math.floor(Math.random() * 400)
   // 裸起 Electron + CDP:playwright 的 _electron.launch 会顶掉 AudioServiceOutOfProcess → 假麦克风电平恒 0
-  const child = spawn(require('electron'), [...fakeMicSwitches(mic.file), `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], {
+  const child = spawn(require('electron'), [...fakeMicSwitches(mic.file), `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, ...MAC_FLAGS], {
     cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' }, stdio: 'ignore',
   })
   const shot = (win, name) => win.screenshot({ path: path.join(home, `${name}.png`) }).catch(() => {})

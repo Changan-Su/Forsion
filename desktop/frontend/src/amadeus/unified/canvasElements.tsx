@@ -28,6 +28,7 @@ registerMessages({
   'canvasel.attach.sibling': { zh: '设为同级节点', en: 'Attach as sibling' },
   'canvasel.add.child': { zh: '新建子卡片（Tab）', en: 'New child card (Tab)' },
   'canvasel.add.sibling': { zh: '新建兄弟卡片（回车）', en: 'New sibling card (Enter)' },
+  'canvasel.link.drag': { zh: '拖出连线（落在卡片上 = 设为子节点，按住 Shift = 自由连线）', en: 'Drag to connect (onto a card = make it a child; hold Shift for a free connector)' },
 })
 
 export interface ElBox { x: number; y: number; w: number; h: number }
@@ -51,14 +52,16 @@ export interface EndRef { ref?: string; id?: string; main?: boolean }
  *  ⚠️ 真源在 canvasEdit(数据层)—— 它同时是**层级里的主卡父键**,而剪枝住在 canvas.ts,
  *  那边不可能 import 一个 .tsx 渲染模块。这里只是转出,别在本文件里另写一份字面量。 */
 export { MAIN_KEY } from './canvasEdit'
-import { MAIN_KEY } from './canvasEdit'
+import { MAIN_KEY, canvasColorCss } from './canvasEdit'
 
-export interface ShapeEl extends ElBox { kind: 'shape' | 'text'; id: string; shape: 'rect' | 'ellipse'; text: string | null }
-export interface ConnEl { kind: 'connector'; id: string; from: EndRef; to: EndRef; label: string | null }
+/** `color`(V-08)= 盘上原值里**认得出**的那一份(`"1"`–`"6"` / `#rrggbb`);认不出 = 不上色(原值仍在盘上)。 */
+export interface ShapeEl extends ElBox { kind: 'shape' | 'text'; id: string; shape: 'rect' | 'ellipse'; text: string | null; color?: string | null }
+/** `fromEnd` / `toEnd`(V-17)= 两端箭头,与 JSON Canvas 同名;缺省(没写 / 认不出)= 起点无、终点有(修前的固定画法)。 */
+export interface ConnEl { kind: 'connector'; id: string; from: EndRef; to: EndRef; label: string | null; color?: string | null; fromEnd?: 'none' | 'arrow'; toEnd?: 'none' | 'arrow' }
 /** Frame(AFFiNE 同名同义,2026-08-18):一个带标题的区域,拖标题条 = 连内容整体搬走。
  *  ⚠️ 它**不是容器**:辖域是「完全落在框内」的几何判定,现算现用,盘上不存成员表 ——
  *  存成员表就要在每次移动/删除/回灌后维护它,而几何判定永远与眼睛看到的一致。 */
-export interface FrameEl extends ElBox { kind: 'frame'; id: string; title: string | null }
+export interface FrameEl extends ElBox { kind: 'frame'; id: string; title: string | null; color?: string | null }
 export type El = ShapeEl | ConnEl | FrameEl
 
 /** 选中键:卡片 `c:<锚>`,元素 `e:<id>`。卡锚与元素 id 的字符集重叠,裸值会歧义。 */
@@ -72,8 +75,15 @@ export const keyId = (k: string): string => k.slice(2)
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+/** 渲染用的颜色收窄:过不了 JSON Canvas 编码的一律当无色(不是整条跳过 —— 一个怪颜色不许带走形状)。 */
+const colorOf = (v: unknown): string | null => (canvasColorCss(v) ? (v as string) : null)
+/** 上色元素的根节点属性:`data-color` 给 CSS 当开关,`--amx-color` 给它具体的值(styles.css 的 V-08 段)。 */
+const colorAttrs = (color: string | null | undefined): { 'data-color'?: string; style?: React.CSSProperties } => {
+  const css = canvasColorCss(color)
+  return css ? { 'data-color': color as string, style: { ['--amx-color' as string]: css } } : {}
+}
 
-function endOf(v: unknown): EndRef | null {
+export function endOf(v: unknown): EndRef | null {
   if (!v || typeof v !== 'object') return null
   const o = v as EndRef
   const ref = str(o.ref)
@@ -101,7 +111,7 @@ export function safeElements(raw: unknown): El[] {
       const to = endOf(o.to)
       if (!from || !to) continue
       seen.add(id)
-      out.push({ kind: 'connector', id, from, to, label: str(o.label) })
+      out.push({ kind: 'connector', id, from, to, label: str(o.label), color: colorOf(o.color), fromEnd: o.fromEnd === 'arrow' ? 'arrow' : 'none', toEnd: o.toEnd === 'none' ? 'none' : 'arrow' })
       continue
     }
     if (o.type !== 'shape' && o.type !== 'text' && o.type !== 'frame') continue
@@ -112,10 +122,10 @@ export function safeElements(raw: unknown): El[] {
     if (x == null || y == null || w == null || h == null || w <= 0 || h <= 0) continue
     seen.add(id)
     if (o.type === 'frame') {
-      out.push({ kind: 'frame', id, x, y, w, h, title: str(o.title) })
+      out.push({ kind: 'frame', id, x, y, w, h, title: str(o.title), color: colorOf(o.color) })
       continue
     }
-    out.push({ kind: o.type === 'text' ? 'text' : 'shape', id, x, y, w, h, shape: o.shape === 'ellipse' ? 'ellipse' : 'rect', text: str(o.text) })
+    out.push({ kind: o.type === 'text' ? 'text' : 'shape', id, x, y, w, h, shape: o.shape === 'ellipse' ? 'ellipse' : 'rect', text: str(o.text), color: colorOf(o.color) })
   }
   return out
 }
@@ -132,8 +142,8 @@ function edgeAnchor(from: ElBox, to: ElBox): Pt {
   return { x: cx, y: dy >= 0 ? from.y + from.h : from.y }
 }
 
-/** 两盒之间贝塞尔的四个控制点(路径、命中、包围盒三处必须用同一份,否则画的和点的不是一条线)。 */
-function edgeCtl(a: ElBox, b: ElBox): { p1: Pt; c1: Pt; c2: Pt; p2: Pt } {
+/** 两盒之间贝塞尔的四个控制点(路径、命中、包围盒、端点把手四处必须用同一份,否则画的和点的不是一条线)。 */
+export function edgeCtl(a: ElBox, b: ElBox): { p1: Pt; c1: Pt; c2: Pt; p2: Pt } {
   const p1 = edgeAnchor(a, b)
   const p2 = edgeAnchor(b, a)
   const horiz = Math.abs(p2.x - p1.x) >= Math.abs(p2.y - p1.y)
@@ -149,7 +159,7 @@ function edgeCtl(a: ElBox, b: ElBox): { p1: Pt; c1: Pt; c2: Pt; p2: Pt } {
 }
 
 /** `box` = 四个控制点的包围盒(贝塞尔恒在控制点凸包内,拿它当画布尺寸够且不多)。 */
-function edgePath(a: ElBox, b: ElBox): { d: string; mid: Pt; tip: Pt; ang: number; box: ElBox } {
+function edgePath(a: ElBox, b: ElBox): { d: string; mid: Pt; tip: Pt; ang: number; tail: Pt; tailAng: number; box: ElBox } {
   const { p1, c1, c2, p2 } = edgeCtl(a, b)
   const xs = [p1.x, c1.x, c2.x, p2.x]
   const ys = [p1.y, c1.y, c2.y, p2.y]
@@ -160,6 +170,9 @@ function edgePath(a: ElBox, b: ElBox): { d: string; mid: Pt; tip: Pt; ang: numbe
     mid: { x: (p1.x + p2.x) / 2 + (c1.x + c2.x - p1.x - p2.x) / 8, y: (p1.y + p2.y) / 2 + (c1.y + c2.y - p1.y - p2.y) / 8 },
     tip: p2,
     ang: Math.atan2(p2.y - c2.y, p2.x - c2.x),
+    // 起点箭头(V-17 fromEnd):朝外指向 from 盒,方向 = c1 → p1。
+    tail: p1,
+    tailAng: Math.atan2(p1.y - c1.y, p1.x - c1.x),
     box: { x, y, w: Math.max(1, Math.max(...xs) - x), h: Math.max(1, Math.max(...ys) - y) },
   }
 }
@@ -382,9 +395,11 @@ export interface CanvasElementsProps {
   /** 连线橡皮筋(2026-08-18):第一击之后跟随指针的预览线 + 有效目标高亮。
    *  from = 起点选中键,x/y = 指针舞台坐标,over = 指针下的可连对象(高亮用)。 */
   preview?: { from: string; x: number; y: number; over: string | null } | null
+  /** 对齐参考线(V-14):手势期吸附命中的线段(舞台坐标,线宽已按缩放折成屏幕 1px)。 */
+  guides?: ReadonlyArray<ElBox & { dir: 'v' | 'h' }> | null
 }
 
-export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
+export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview, guides }: CanvasElementsProps): React.ReactElement | null {
   const { t } = useI18n()
   const els = useMemo(() => safeElements(elements), [elements])
   const edges = useMemo(() => safeTree(tree), [tree])
@@ -537,8 +552,23 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
           肉眼看不见、elementFromPoint 也命中不到,形状根本调不了尺寸(用户 08-19 实报「都应该
           能够塑型」)。椭圆更狠:圆角 50% 会把整个角都裁没。 */}
       {sel.size === 1 && [...sel][0].startsWith('e:') && shapes.has(keyId([...sel][0]))
-        ? <Grips id={keyId([...sel][0])} box={shapes.get(keyId([...sel][0]))!} />
+        ? <><Grips id={keyId([...sel][0])} box={shapes.get(keyId([...sel][0]))!} /><LinkDots node={[...sel][0]} box={shapes.get(keyId([...sel][0]))!} /></>
         : null}
+      {/* 选中一条自由连线 = 两端出把手,拖到别的对象上 = 改连(V-17)。层级线(t:)不给:改它的端点 = 改层级,另议。 */}
+      {(() => {
+        const only = sel.size === 1 ? [...sel][0] : null
+        const conn = only?.startsWith('e:') ? els.find((x): x is ConnEl => x.kind === 'connector' && x.id === keyId(only)) : null
+        const a = conn ? boxOf(conn.from) : null
+        const b = conn ? boxOf(conn.to) : null
+        if (!conn || !a || !b) return null
+        const { p1, p2 } = edgeCtl(a, b)
+        return (
+          <>
+            <div className="amx-conn-end" data-conn-end="from" data-el={conn.id} style={{ left: `${p1.x}px`, top: `${p1.y}px` }} />
+            <div className="amx-conn-end" data-conn-end="to" data-el={conn.id} style={{ left: `${p2.x}px`, top: `${p2.y}px` }} />
+          </>
+        )
+      })()}
       {/* 层级线由 tree **现算**，盘上没有对应连线条目；选中键只是关系引用，删除它实际改的是层级，
           不会向 elements 里物化第二份会分叉的数据（见 treeKey 与 canvasEdit）。 */}
       {edges.map(([child, parent]) => {
@@ -552,7 +582,7 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
         const b = boxes.get(a)
         return b ? (
           <div key={`sel:${a}`} className={`amx-el-selbox${editing === a ? ' is-editing' : ''}`} data-anchor={a} style={{ left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` }}>
-            {sel.size === 1 && editing !== a ? <><CardResizeHandles anchor={a} /><AddButtons node={a} /></> : null}
+            {sel.size === 1 && editing !== a ? <><CardResizeHandles anchor={a} /><AddButtons node={a} /><LinkDots node={cardKey(a)} /></> : null}
           </div>
         ) : null
       })}
@@ -561,7 +591,7 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
           空格进入编辑,命中逻辑全在 canvasStage.onDown。 */}
       {mainSel && mainBox ? (
         <div className={`amx-el-selbox${editing === MAIN_KEY ? ' is-editing' : ''}`} data-main-sel style={{ left: `${mainBox.x}px`, top: `${mainBox.y}px`, width: `${mainBox.w}px`, height: `${mainBox.h}px` }}>
-          {sel.size === 1 && editing !== MAIN_KEY ? <><CardResizeHandles anchor={MAIN_KEY} /><AddButtons node={MAIN_KEY} /></> : null}
+          {sel.size === 1 && editing !== MAIN_KEY ? <><CardResizeHandles anchor={MAIN_KEY} /><AddButtons node={MAIN_KEY} /><LinkDots node={MAIN_KEY} /></> : null}
         </div>
       ) : null}
       {/* 原 PM 内容已经由 overview 状态从渲染树中摘下；这里是唯一可见的轻量标题/摘要替身。 */}
@@ -651,6 +681,9 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
           </>
         )
       })() : null}
+      {guides?.map((g, i) => (
+        <div key={`guide:${i}`} className={`amx-el-guide is-${g.dir}`} style={{ left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` }} />
+      ))}
       {marquee ? (
         <div className="amx-el-marquee" style={{ left: `${marquee.x}px`, top: `${marquee.y}px`, width: `${marquee.w}px`, height: `${marquee.h}px` }} />
       ) : null}
@@ -705,14 +738,38 @@ function AddButtons({ node }: { node: string }): React.ReactElement {
   )
 }
 
+/** 边口圆点(V-17,Obsidian 同款):选中单个对象时四边中点各一枚,从这里拖出 = 新连线(落点规则见 canvasStage 的 linkNodes:
+ *  卡↔卡默认建父子、按住 Shift 自由连,与箭头工具同口径)。`node` = 选中键(`c:` / `m:` / `e:`)。
+ *  卡 / 主卡的画在选中框**里面**(随拖拽样式表一起走,与 ⊕ 同理);元素的没有选中框,按 `box` 直接定位在元素层。
+ *  ⚠️ `pointer-events:auto` + z-index 必须有(元素层整片 none,圆点骑在卡边上、卡画在元素层之上)。 */
+const LINK_SIDES = ['n', 'e', 's', 'w'] as const
+function LinkDots({ node, box }: { node: string; box?: ElBox }): React.ReactElement {
+  const { t } = useI18n()
+  const at = (side: typeof LINK_SIDES[number]): React.CSSProperties | undefined => box
+    ? {
+        left: `${side === 'w' ? box.x : side === 'e' ? box.x + box.w : box.x + box.w / 2}px`,
+        top: `${side === 'n' ? box.y : side === 's' ? box.y + box.h : box.y + box.h / 2}px`,
+      }
+    : undefined
+  return (
+    <>
+      {LINK_SIDES.map((side) => (
+        <div key={side} className={`amx-link-dot is-${side}${box ? ' is-free' : ''}`} data-link-from={node} title={t('canvasel.link.drag')} style={at(side)} />
+      ))}
+    </>
+  )
+}
+
 /** Frame。⚠️ **框体整片 pointer-events:none**,只有标题条与四角把手 auto —— 一个满屏大的
  *  可点矩形就是糊在画布上的看不见的挡板(挡拖卡、挡选字、挡 ⠿),文件头纪律 1 说的就是这件事。
  *  代价是「点框内空白不会选中 Frame」,那与 Figma/AFFiNE 一致(那两家也是点标题选框)。 */
 function Frame({ el, box, sel }: { el: FrameEl; box: ElBox; sel: boolean }): React.ReactElement {
+  const c = colorAttrs(el.color)
   return (
     <div
       className={`amx-el-frame${sel ? ' is-sel' : ''}`}
-      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
+      data-color={c['data-color']}
+      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px`, ...c.style }}
     >
       <div className="amx-el-frame-bar" data-el={el.id}>{el.title ?? 'Frame'}</div>
     </div>
@@ -721,11 +778,13 @@ function Frame({ el, box, sel }: { el: FrameEl; box: ElBox; sel: boolean }): Rea
 
 function Shape({ el, box, sel }: { el: ShapeEl; box: ElBox; sel: boolean }): React.ReactElement {
   const cls = el.kind === 'text' ? 'amx-el-text' : el.shape === 'ellipse' ? 'amx-el-ellipse' : 'amx-el-rect'
+  const c = colorAttrs(el.color)
   return (
     <div
       className={`amx-el-shape ${cls}${sel ? ' is-sel' : ''}`}
       data-el={el.id}
-      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
+      data-color={c['data-color']}
+      style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px`, ...c.style }}
     >
       {el.text}
     </div>
@@ -745,29 +804,36 @@ function Connector({ el, a, b, sel, related, tree, preview }: { el: ConnEl; a: E
   // 同时开两篇画布笔记、元素 id 又都是迁移生成的 e1/e2 时就会撞。三角形零 id。
   const L = 9
   const W = 4.5
-  const cos = Math.cos(p.ang)
-  const sin = Math.sin(p.ang)
-  const tri = [
-    `${p.tip.x},${p.tip.y}`,
-    `${p.tip.x - L * cos + W * sin},${p.tip.y - L * sin - W * cos}`,
-    `${p.tip.x - L * cos - W * sin},${p.tip.y - L * sin + W * cos}`,
-  ].join(' ')
+  const tri = (tip: Pt, ang: number): string => {
+    const cos = Math.cos(ang)
+    const sin = Math.sin(ang)
+    return [
+      `${tip.x},${tip.y}`,
+      `${tip.x - L * cos + W * sin},${tip.y - L * sin - W * cos}`,
+      `${tip.x - L * cos - W * sin},${tip.y - L * sin + W * cos}`,
+    ].join(' ')
+  }
+  // 两端箭头(V-17):层级线恒不带(mindmap 惯例:父子关系靠位置读,不靠指向);自由连线按 fromEnd / toEnd,缺省 = 只有终点。
+  const headTo = !tree && el.toEnd !== 'none'
+  const headFrom = !tree && el.fromEnd === 'arrow'
+  const c = colorAttrs(el.color)
   return (
     <>
       {/* viewBox 直接吃舞台坐标 → path 的 d 不用做任何平移换算。 */}
       <svg
         className={`amx-el-conn${sel ? ' is-sel' : ''}${related ? ' is-related' : ''}${tree ? ' is-tree' : ''}${preview ? ' is-preview' : ''}`}
         data-el={el.id}
-        style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
+        data-color={c['data-color']}
+        style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px`, ...c.style }}
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
       >
         {related ? <path className="amx-el-conn-halo" d={p.d} /> : null}
         <path className="amx-el-conn-core" d={p.d} />
-        {/* 层级线不带箭头(mindmap 惯例:父子关系靠位置读,不靠指向) */}
-        {tree ? null : <polygon points={tri} />}
+        {headTo ? <polygon points={tri(p.tip, p.ang)} /> : null}
+        {headFrom ? <polygon points={tri(p.tail, p.tailAng)} /> : null}
       </svg>
       {el.label ? (
-        <div className={`amx-el-label${sel ? ' is-sel' : ''}`} style={{ left: `${p.mid.x}px`, top: `${p.mid.y}px` }}>
+        <div className={`amx-el-label${sel ? ' is-sel' : ''}`} data-color={c['data-color']} style={{ left: `${p.mid.x}px`, top: `${p.mid.y}px`, ...c.style }}>
           {el.label}
         </div>
       ) : null}

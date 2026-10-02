@@ -25,7 +25,6 @@ registerMessages({
   'quota.banner.near': { zh: '{period}即将用尽，仅剩 {percent}', en: '{period} is almost used up, with {percent} remaining' },
   'quota.banner.critical': { zh: '{period}严重不足，仅剩 {percent}', en: '{period} is critically low, with {percent} remaining' },
   'quota.banner.exhausted': { zh: '{period}已用尽', en: '{period} is exhausted' },
-  'quota.banner.autoDeduct': { zh: '{period}已用尽，正在使用积分自动抵扣', en: '{period} is exhausted; automatic points deduction is active' },
   'quota.banner.upgrade': { zh: '升级会员', en: 'Upgrade membership' },
   'quota.banner.useReset': { zh: '使用额度重置卡（{n}）', en: 'Use a quota reset card ({n})' },
   'quota.banner.noReset': { zh: '暂无额度重置卡', en: 'No quota reset card' },
@@ -125,7 +124,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   const messageKey = advisory.exhausted
     ? (isBg
       ? (quota.background?.autoMain ? 'quota.banner.bg.autoMain' : 'quota.banner.bg.exhausted')
-      : (quota.pointsAutoDeduct ? 'quota.banner.autoDeduct' : 'quota.banner.exhausted'))
+      : 'quota.banner.exhausted')
     : advisory.threshold === 5 ? 'quota.banner.critical'
       : advisory.threshold === 10 ? 'quota.banner.near'
         : 'quota.banner.low'

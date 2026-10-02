@@ -151,5 +151,53 @@ export function snapResizeToNeighbors(box: Box, edge: ResizeEdge, others: readon
   return { box: { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }, guides }
 }
 
+/** 参考线的一段(舞台坐标的细长矩形,`dir` = 竖线 v / 横线 h)。 */
+export interface GuideLine extends Box { dir: 'v' | 'h' }
+
+/** 把吸附命中的参考线画成线段:竖线 x=v 从「被拖的盒」与「在 v 上有特征位置(起 / 中 / 止)的那些盒」的
+ *  最上沿画到最下沿(Figma 同款:线只连起对齐的那几个对象,不是贯穿全屏);横线同理。
+ *  `t` = 线宽(舞台单位;调用方按 1/z 给,屏幕上恒为 1px)。 */
+export function guideLines(box: Box, others: readonly Box[], guides: SnapGuides, t: number): GuideLine[] {
+  const on = (ms: number[], v: number): boolean => ms.some((m) => Math.abs(m - v) <= 0.5)
+  const out: GuideLine[] = []
+  for (const v of guides.v) {
+    const hits = [box, ...others.filter((o) => on(marks(o.x, o.w), v))]
+    const top = Math.min(...hits.map((b) => b.y))
+    const bottom = Math.max(...hits.map((b) => b.y + b.h))
+    out.push({ dir: 'v', x: v - t / 2, y: top, w: t, h: bottom - top })
+  }
+  for (const h of guides.h) {
+    const hits = [box, ...others.filter((o) => on(marks(o.y, o.h), h))]
+    const left = Math.min(...hits.map((b) => b.x))
+    const right = Math.max(...hits.map((b) => b.x + b.w))
+    out.push({ dir: 'h', x: left, y: h - t / 2, w: right - left, h: t })
+  }
+  return out
+}
+
 /** 贴邻居的容差(**屏幕像素**;进手势时 ÷(z × 页面 zoom)换算成舞台单位)。 */
 export const NEIGHBOR_SNAP_PX = 7
+
+/** 拖到视口边缘自动平移(V-13,Figma / Obsidian 同款)的边带宽度(屏幕 px)与满速(屏幕 px/s)。 */
+export const EDGE_PAN_ZONE = 32
+export const EDGE_PAN_MAX = 1000
+
+/**
+ * 指针在可见舞台 `rect`(client px)里的位置 → 视口自动平移的**屏幕速度**(px/s)。
+ * 进入距边 EDGE_PAN_ZONE 的边带才起跑,越贴边越快(二次曲线:刚擦进边带几乎不动,贴死边缘满速);
+ * 捕获中的拖拽可以把指针带出舞台,出界一律按满速。正值 = 指针在右 / 下边(内容该往左 / 上走)。
+ * 舞台某一轴窄到放不下两条边带加一段中间区时,那一轴不自动平移(否则指针无处可停)。
+ */
+export function edgePanVelocity(rect: { left: number; top: number; right: number; bottom: number }, x: number, y: number): { vx: number; vy: number } {
+  const axis = (p: number, lo: number, hi: number): number => {
+    if (hi - lo < EDGE_PAN_ZONE * 3) return 0
+    const ramp = (d: number): number => {
+      const r = Math.min(1, (EDGE_PAN_ZONE - d) / EDGE_PAN_ZONE)
+      return EDGE_PAN_MAX * r * r
+    }
+    if (hi - p < EDGE_PAN_ZONE) return ramp(hi - p)
+    if (p - lo < EDGE_PAN_ZONE) return -ramp(p - lo)
+    return 0
+  }
+  return { vx: axis(x, rect.left, rect.right), vy: axis(y, rect.top, rect.bottom) }
+}
