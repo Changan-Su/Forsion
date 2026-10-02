@@ -329,11 +329,22 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   if (!isHostSandboxToolAllowed(name, ctx)) {
     return { toolCallId: call.id, name, result: `Error: tool "${name}" is unavailable under the current host sandbox policy.`, isError: true };
   }
+  // 坏参数绝不当 `{}` 执行:原先静默吞掉,模型只收到「command is required」这类误导报错(PI-DSH 评审 R4)。
   let args: Record<string, any> = {};
+  let badArgs = '';
   try {
-    args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-  } catch {
-    args = {};
+    const parsed = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+    if (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed))) badArgs = 'must be a JSON object';
+    else args = parsed ?? {};
+  } catch (e: any) {
+    badArgs = `are not valid JSON (${String(e?.message || e).slice(0, 160)})`;
+  }
+  if (badArgs) {
+    return {
+      toolCallId: call.id, name,
+      result: `Error: the arguments for "${name}" ${badArgs}. Nothing was executed. Resend the call with one JSON object that matches the tool's parameter schema.`,
+      isError: true,
+    };
   }
 
   const impl: ToolDef | undefined = resolveTools(currentProfile(ctx), ctx).get(name);
@@ -426,9 +437,38 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   const canLoad = !!ctx.unlockTools && !ctx.muse && !ctx.automationOrigin &&
     [...resolveTools(currentProfile(ctx), ctx).values()].some((t) => isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name));
   const planNote = ctx.planMode ? ' Note: plan mode is active — custom/external tools are disabled until the plan is approved.' : '';
+  const known = [...resolveTools(currentProfile(ctx), ctx).keys(), ...(externalOk ? [...(ctx.customTools?.keys() ?? []), ...(ctx.mcpTools?.keys() ?? [])] : [])];
+  const near = closeToolNames(name, known);
+  const hint = near.length ? ` Did you mean ${near.map((n) => `"${n}"`).join(' or ')}?` : '';
   return {
     toolCallId: call.id, name,
-    result: `Tool "${name}" is not available in this session.${planNote} Use only tools from your tool list${canLoad ? ', or load a listed one from the "Additional Tools" catalog with load_tools' : ''}; do not retry this name.`,
+    result: `Tool "${name}" is not available in this session.${hint}${planNote} Use only tools from your tool list${canLoad ? ', or load a listed one from the "Additional Tools" catalog with load_tools' : ''}; do not retry this name.`,
     isError: true,
   };
+}
+
+/** 未知工具的相近名(借 pi codemode「错误即提示词」):忽略大小写与 `-`/`_`/`.` 后比包含关系与编辑距离≤2。最多 3 个。 */
+export function closeToolNames(name: string, candidates: Iterable<string>): string[] {
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const a = norm(name);
+  if (a.length < 3) return [];
+  const scored: Array<[number, string]> = [];
+  for (const c of new Set(candidates)) {
+    const b = norm(c);
+    if (!b || c === name) continue;
+    const d = b === a ? 0 : (b.length >= 3 && (b.includes(a) || a.includes(b))) ? 1 : editDistance(a, b);
+    if (d <= 2) scored.push([d, c]);
+  }
+  return scored.sort((x, y) => x[0] - y[0] || x[1].length - y[1].length).slice(0, 3).map(([, c]) => c);
+}
+
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3; // ponytail: 只关心 ≤2,长度差超了直接判远
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
 }
