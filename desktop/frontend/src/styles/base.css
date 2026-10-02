@@ -2207,6 +2207,17 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .engine-pill:hover .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; }
 /* 触屏长按 = 打开菜单,不该同时选中药丸里的字(Android WebView 会选中并留下选区手柄)。 */
 @media (pointer: coarse) { .engine-pill { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+/* ── 触屏按压反馈(2026-10-02 真机录屏打回:「点哪儿都有蓝色遮罩」)。
+   蓝块 = Android WebView 缺省的点按高亮(一个直角矩形,不跟圆角,约 0.2s 淡出),整份样式从没关过它。
+   关掉后必须补一层按压态,否则会话行 / Agent 卡片这类原本只靠它反馈的元素按下去毫无动静:
+   用 inset box-shadow 当「状态层」—— 画在背景之上、内容之下,跟随元素自己的圆角,不必知道原背景是什么。
+   :active 由 WebView 的手势识别驱动:一开始滚动就撤销,所以滑列表不会一路闪。
+   长按按钮不该选中上面的字(链接除外:聊天正文里的链接要能长按复制)。 */
+@media (pointer: coarse) {
+  html { -webkit-tap-highlight-color: transparent; }
+  :is(button, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  :is(button, a, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']):not(:disabled):active { box-shadow: inset 0 0 0 100vmax rgba(128, 128, 128, 0.2); }
+}
 .engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop 0.4s ease-out; }
 .engine-pill.selected .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; font-weight: 600; }
 @keyframes agentSelectPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1.02); } }

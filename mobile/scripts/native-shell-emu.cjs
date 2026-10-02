@@ -365,7 +365,9 @@ const tabCountText = (list) => {
 
   // ── WebView helpers. Mobile CSS zooms (body 1.15, drawer body 1.15): rects × cumulative zoom × dpr = device px.
   /** Tap a page element like a finger would (real touch → real user activation), once it stops moving. */
-  async function tapEl(expr) {
+  async function tapEl(expr) { const p = await elPoint(expr); h.tapAt(p.x, p.y) }
+  /** Device-pixel centre of a page element, once it stops moving. */
+  async function elPoint(expr) {
     const measure = () => cdp.eval(`(() => { const el = ${expr}; if (!el) return null; el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect()
       let z = 1; for (let e = el; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
       return { x: (r.left + r.width / 2) * z, y: (r.top + r.height / 2) * z, dpr: devicePixelRatio } })()`)
@@ -378,7 +380,7 @@ const tabCountText = (list) => {
     }
     assert.ok(r, `element missing: ${expr}`)
     const wv = webViewNode(ui())
-    h.tapAt(Math.round(wv.rect.left + r.x * r.dpr), Math.round(wv.rect.top + r.y * r.dpr))
+    return { x: Math.round(wv.rect.left + r.x * r.dpr), y: Math.round(wv.rect.top + r.y * r.dpr) }
   }
   const drawerOpen = "!!document.querySelector('.mb-drawer--left.open')"
   async function openDrawer() {
@@ -542,6 +544,35 @@ const tabCountText = (list) => {
     h.key(4)
     assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-drawer--left.open')", 5000), 'drawer did not close')
     assert.ok(resumed(), 'app left the foreground')
+  })
+
+  // 2026-10-02 real-phone recording: every tap flashed the WebView's blue tap-highlight box. It is off now, and a press
+  // tints the element instead (base.css, @media (pointer: coarse)). The pressed state is sampled while a finger is down.
+  await check('touch feedback: no WebView tap highlight; a held press tints the element; long-press selects no text', async () => {
+    await tanguDrawer()
+    // held target = the "new chat" button: a long-press there does nothing (a Space tab's long-press raises the
+    // system "pin to home screen" dialog, a session row's opens its menu — both would cover what is being sampled)
+    const tab = `document.querySelector('.mb-drawer--left [data-act="new-chat"]')`
+    const probe = await cdp.eval(`(() => { const hl = (s) => getComputedStyle(document.querySelector(s)).webkitTapHighlightColor
+      const match = 'button, a, summary, input, textarea, select, label, [role="button"], [role="tab"], [role="menuitem"], [role="option"]'
+      // informational: what a finger can press that the press-tint selector does not cover (nearest cursor:pointer owner)
+      const missed = new Set(); for (const e of document.querySelectorAll('.mb-shell *')) { if (getComputedStyle(e).cursor !== 'pointer' || e.closest(match)) continue
+        if (e.parentElement && getComputedStyle(e.parentElement).cursor === 'pointer') continue
+        missed.add(e.tagName.toLowerCase() + '.' + String(e.className && e.className.baseVal !== undefined ? e.className.baseVal : e.className).split(' ')[0]) }
+      return { tab: hl('.mb-drawer--left .mb-tab'), row: hl('.mb-drawer--left .t2s-srow'), coarse: matchMedia('(pointer: coarse)').matches, missed: [...missed] } })()`)
+    console.log('  tappable elements outside the press-tint selector:', probe.missed.join(', ') || '(none)')
+    assert.deepEqual({ tab: probe.tab, row: probe.row, coarse: probe.coarse }, { tab: 'rgba(0, 0, 0, 0)', row: 'rgba(0, 0, 0, 0)', coarse: true })
+    const p = await elPoint(tab)
+    const lifted = h.holdAt(p.x, p.y, 2500)
+    const pressed = await h.waitPage(cdp, `(() => { const e = ${tab}; return e.matches(':active') ? { shadow: getComputedStyle(e).boxShadow } : null })()`, 2200)
+    shot('03b-press-feedback')
+    await lifted
+    assert.ok(pressed, 'the held button never became :active')
+    assert.match(pressed.shadow, /inset/, `no press tint on the held button (box-shadow: ${pressed.shadow})`)
+    await h.pause(400)
+    assert.equal(await cdp.eval('String(getSelection())'), '', 'long-press selected text')
+    assert.ok(await cdp.eval(drawerOpen), 'the long-press was taken as a tap')
+    await closeDrawer()
   })
 
   let firstView = ''

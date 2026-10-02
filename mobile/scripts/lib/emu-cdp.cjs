@@ -2,7 +2,7 @@
  *  resource-ids), screenshots, and ONE persistent CDP session to the app's WebView (debug builds only).
  *  A persistent session matters: Fetch interception and event listeners die with the socket, so per-call
  *  connections (live-island-emu.cjs style) cannot stub the backend across a reload. */
-const { execFileSync } = require('node:child_process')
+const { execFileSync, execFile } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -44,6 +44,10 @@ function tapAt(x, y) { adb('shell', 'input', 'tap', String(x), String(y)) }
 function tapNode(node) { tapAt(node.rect.cx, node.rect.cy) }
 function longPress(node, ms = 900) {
   adb('shell', 'input', 'swipe', String(node.rect.cx), String(node.rect.cy), String(node.rect.cx), String(node.rect.cy), String(ms))
+}
+/** Keep a finger down at one point for `ms` without blocking: resolves when it lifts (lets the caller sample the pressed state). */
+function holdAt(x, y, ms) {
+  return new Promise((resolve, reject) => execFile(ADB, ['shell', 'input', 'swipe', String(x), String(y), String(x), String(y), String(ms)], (e) => (e ? reject(e) : resolve())))
 }
 function key(code) { adb('shell', 'input', 'keyevent', String(code)) }
 function screenshot(out, name) {
@@ -139,4 +143,4 @@ async function waitPage(cdp, expression, timeout = 10000) {
   return last
 }
 
-module.exports = { adb, adbBuffer, nodes, byId, byIdPrefix, tapAt, tapNode, longPress, key, screenshot, waitNodes, connect, waitPage, pause, Cdp }
+module.exports = { adb, adbBuffer, nodes, byId, byIdPrefix, tapAt, tapNode, longPress, holdAt, key, screenshot, waitNodes, connect, waitPage, pause, Cdp }
