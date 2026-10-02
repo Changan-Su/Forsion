@@ -39,9 +39,13 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 - **绝不运行时 import 核心包**。对 `@forsion/tangu-agent` 只允许 `import type`(模板 tsconfig 开了 `verbatimModuleSyntax`,值导入直接编译错误)。运行时能力全走 `activate(ctx)` 的 **`ctx.sdk`** —— 否则核心的模块级单例被复制成第二份,行为诡异。
 - **`dist/` 必须提交**。市场安装 = 解压源码到 `~/.forsion/plugins/<id>/`,全程不构建;改 `src/` 后必须 `npm run build`(tsc→dist/)再提交。
 - **工具门禁**:`isEnabledFor` 返回 `store.isPluginEnabledSync(id)`,插件启用才对模型可见。
+- **生命周期**:关掉插件时宿主调 `deactivate()`(限时 5s)并撤掉它注册的工具 / 命令 / 路由(meta 留着,设置页照样列出);再打开会在**同一个模块对象**上再调一次 `activate(ctx)`。所以 activate 可能跑多次 —— 别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听(含 `process.once`)一律在 deactivate 里收掉。
+- **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
+- **工具 provider id 用自己的命名空间**(`plugin:<你的 id>`):两个插件撞了同一个 id,后注册的覆盖前者。
+- **前置插件**:manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0" }]`。前置没装 / 版本低 / 关着 / 没在跑时本插件休眠(列出但不运行),前置就位后自动激活;互相依赖成环的永不激活。
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 
-装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 重启后端(同 id 原位升级受 ESM 缓存影响,必须重启)。
+装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 设置页重扫即生效,不用重启。同 id 覆盖升级也是重扫即热换代 —— 前提是入口为**单文件**(esbuild 打成一个 bundle):入口里有相对 import(`./x.js`)、实参不是固定包名的动态 `import()`、或包里自带 `node_modules` 的,ESM 缓存只破得了入口,宿主会如实标「需重启」。同一进程里热换代满 20 次后也一律「需重启」(旧模块卸不掉,省内存)。
 
 ## 主题(samples/forsion-sample-theme)
 
@@ -563,6 +567,20 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 
 范例:`samples/forsion-sample-bundle/`(setting 类 + `check.mjs` 断言 requires 的 key 都注册过)。
 
+### 前置插件 requiresPlugins 与生命周期(2026-10-02 起)
+
+- manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0", "market": "x-slug", "name": "X" }]`(≤8 条;
+  `market` = 市场 installSlug,设置页「在市场中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
+  前置算齐 ⇔ 已安装、没被门禁挡、版本 ≥ `minVersion`、**正在运行**。没齐时:用户关着 → 开关灰掉开不了;用户开着 → 「等待前置插件」,
+  前置就位自动激活;前置停用 / 卸载 → 自动暂停(依赖方先停),回来自动恢复。互相依赖成环的永不激活。
+- 前置的意思是「我要它注册的东西在」(视图 / 命令 / 文件类型),**不是**「我能 import 它」—— 插件之间仍然不直接互调。
+- **宿主替你记账**:经 ctx 登记的一切(订阅、挂载、字体、主题样式、编辑器扩展、属性类型、伴随面、在飞的 `complete`……)在停用 / 重载 /
+  setup 失败时由宿主按相反顺序撤掉,详情页「运行占用」列着此刻挂了什么。你自己起的 `setInterval` / `addEventListener` 宿主看不见 ——
+  仍然要在返回的 disposer 里清。
+- **async setup**:可以 `return` 一个 promise。同步那段返回即算启用;resolve 出的函数就是 disposer(那时已被停用 / 重载 → 宿主当场调用它);
+  reject 与同步抛错同一处理 —— 回滚已登记的一切、详情页显示「加载失败」、依赖它的插件跟着暂停,直到用户重开或重载。
+  停用之后 await 醒来再 `register*` 一律作废(拿到空操作)。
+
 ### 双语与图标
 
 - `ctx.getLocale()` 取初值 + `ctx.subscribeLocale(cb)` 只报变化。判定 = **切语言时视图不重挂也要变**;
@@ -1014,7 +1032,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - ⚠️**这不是隔离沙箱**:dev 插件跑在真应用、用户的真笔记库上,与已安装插件同权。试验期间不要写、挪、删用户数据;定时器与监听必须在 disposer 里清(热重载会反复 `setup`,漏清一次就叠一层)。
 - ⚠️**同 id 影子**:dev 副本会顶掉同 id 的已安装副本(卡片带 DEV 徽标,期间该插件的「卸载」被禁用)。要对比已安装版,先在 Sandbox 里卸载 dev 副本。
 - ⚠️**声明了 `fileExtensions` 的插件不能从 Sandbox 加载**(宿主的毁档防线只覆盖已安装目录)——这类插件必须装上再测,面板会直说。
-- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:同 id 升级受 ESM 缓存影响必须重启后端,热重载做不到。
+- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:装进插件目录后重扫生效;同 id 覆盖升级单文件入口可热换代,入口带相对 import 的仍须重启后端。
 
 `check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。
 

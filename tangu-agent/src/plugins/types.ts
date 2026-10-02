@@ -41,6 +41,13 @@ export interface TanguPluginManifest {
   /** 本插件声明提供的 CLI 子命令名（供 `tangu` 廉价路由，无需先 activate）。 */
   commands?: string[];
   description?: string;
+  /**
+   * 前置插件(引擎插件 id;与桌面 UI 插件同一套语义)。`"id"` 或 `{ id, minVersion? }`;其余键(market / name 等,
+   * 桌面用)引擎忽略。非 kebab id、依赖自己的丢弃,去重,最多 8 条;minVersion 须点分数字(可带前导 v)。
+   * 前置**满足** = 已发现 + 版本 ≥ minVersion(点分数字比较,前导 v 忽略,缺段按 0)+ 已启用 + 正在运行;
+   * 不满足时本插件休眠(仍列出,不运行),前置就位后自动激活。激活顺序按依赖拓扑(同层按 id);成环的全部休眠。
+   */
+  requiresPlugins?: Array<string | { id: string; minVersion?: string }>;
 }
 
 /** 插件注册的 CLI 子命令（`tangu <name> ...`）。 */
@@ -82,13 +89,19 @@ export interface PluginRouters {
   adminRouter: Router;
 }
 
-/** `activate(ctx)` 收到的注册面 + 运行时句柄。 */
+/**
+ * `activate(ctx)` 收到的注册面 + 运行时句柄。
+ * 每次激活拿到一份**新** ctx,宿主按它记一本效果台账(工具 provider / 命令 / 路由 / meta):停用时逐条撤销。
+ * 停用之后旧 ctx 即失效 —— 迟到的 register*(异步回调、定时器里)一律忽略并告警。
+ */
 export interface TanguPluginContext {
   /** 注册 `tangu <name>` 子命令。 */
   registerCommand(cmd: PluginCommand): void;
-  /** 注册工具 provider（一律 append 在核心 builtin 之后，按插件加载序——保 tool-def 稳定）。 */
+  /** 注册工具 provider（一律 append 在核心 builtin 之后，按插件加载序——保 tool-def 稳定）。
+   *  停用时撤下但**保留槽位**,再启用回到原位(不跑到队尾)。 */
   registerToolProvider(p: ToolProvider): void;
-  /** 登记进统一插件注册表（在「设置 → 插件」露出 + schema 面板;带 toolProvider 则顺带注册工具）。 */
+  /** 登记进统一插件注册表（在「设置 → 插件」露出 + schema 面板;带 toolProvider 则顺带注册工具）。
+   *  停用后 meta 仍列出(休眠:名称/图标/设置保留,toolProvider 与 promptSection 摘掉)。 */
   registerPlugin(meta: PluginMeta): void;
   /** 注册一个可被 profileStore 选用的 AppProfile（预留扩展，worker 不用）。 */
   registerProfile(p: AppProfile): void;
@@ -96,7 +109,9 @@ export interface TanguPluginContext {
   registerHostAdapter(id: string, build: (opts: any) => { host: HostServices }): void;
   registerBrainAdapter(id: string, build: (opts: any) => CloudBrainServices): void;
   registerBillingAdapter(id: string, build: (opts: any) => BillingServices): void;
-  /** 在 `createTanguModule` 之后把额外路由挂到三组 router（预留扩展，worker 不用）。 */
+  /** 贡献额外路由（预留扩展，worker 不用）。`mount` 拿到的是**本次激活专属**的三组子 router,宿主经一个分发器
+   *  挂在核心路由之后(按插件 id 序);运行期激活(重扫/启用/升级)即时生效、停用即摘除,都不用重启。
+   *  `mount` 在 `createTanguModule` 之后才调(彼时 deps() 已就绪)。 */
   registerRoutes(mount: (r: PluginRouters) => void): void;
   /** 运行时构建块（按引用，见 `TanguSdk`）。 */
   sdk: TanguSdk;
@@ -111,10 +126,20 @@ export interface TanguPluginContext {
   activity: { append(event: string, detail?: Record<string, unknown>): void };
 }
 
-/** 插件入口默认导出。 */
+/**
+ * 插件入口默认导出。生命周期(宿主 = ./bootstrap.ts):
+ *   - 启动时每个发现的插件都 activate 一次(meta / defaultEnabled 只有激活后才知道),随后未启用或前置没齐的立即 deactivate 休眠;
+ *   - 停用 / 卸载 / 原地升级 / 前置消失 → 调 `deactivate()`(限时 5s,超时或抛错只告警),再撤掉它注册的一切;
+ *   - 再启用 → 在**同一个模块对象**上再调一次 `activate(ctx)`(不重 import)。所以 activate 可能跑多次:
+ *     别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听都要在 deactivate 里收掉;
+ *   - activate 抛错 = 本次激活作废:已注册的半截效果回滚,并调一次 deactivate 收尾,插件休眠(列表带 lastError),
+ *     不自动重试 —— 用户再拨一次开关、或重扫发现代码变了才重试。
+ */
 export interface TanguPlugin {
   /** 可选:loader 已从 `tangu-plugin.json` 拿到权威 manifest，本字段仅信息性。 */
   manifest?: TanguPluginManifest;
   activate(ctx: TanguPluginContext): void | Promise<void>;
+  /** 停用 / 卸载 / 原地升级时调用(限时 5s)。停掉 activate 里起的后台工作。
+   *  ⚠️ 启动期那次(未启用 / 前置没齐的插件)早于 createTanguModule:deactivate 里别依赖 deps() 等运行时装配。 */
   deactivate?(): void | Promise<void>;
 }
