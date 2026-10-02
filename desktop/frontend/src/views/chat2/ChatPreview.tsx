@@ -35,10 +35,12 @@ registerMessages({
 type TFn = (key: string, vars?: Record<string, unknown>) => string
 
 function buildSample(t: TFn): UiMessage[] {
+  // 操作行会显示时间:给个真实的「刚才」,别让预览冒出 1970
+  const at = Date.now() - 60_000
   return [
-    { id: 'u1', role: 'user', content: t('chatpreview.msg.ask'), attachments: [{ name: 'routes.md', mimeType: 'text/markdown', data: '', size: 128 }], status: 'done', timestamp: 1 },
+    { id: 'u1', role: 'user', content: t('chatpreview.msg.ask'), attachments: [{ name: 'routes.md', mimeType: 'text/markdown', data: '', size: 128 }], status: 'done', timestamp: at + 1 },
     {
-      id: 'a1', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: 2,
+      id: 'a1', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: at + 2,
       systemPrompt: 'You are Tangu, a coding agent. Keep changes scoped and verify them.',
       reasoning: t('chatpreview.msg.reasoning'),
       toolEvents: [
@@ -57,7 +59,7 @@ function buildSample(t: TFn): UiMessage[] {
       content: t('chatpreview.msg.answer'),
     },
     {
-      id: 'a2', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: 3,
+      id: 'a2', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: at + 3,
       content: t('chatpreview.msg.buildFirst'),
       approvals: [
         { approvalId: 'ap1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'npm run build && npx tsc --noEmit' }), preview: '$ npm run build && npx tsc --noEmit', status: 'pending', reason: { kind: 'mode', mode: 'auto-edit' } },
@@ -65,7 +67,7 @@ function buildSample(t: TFn): UiMessage[] {
       ],
     },
     {
-      id: 'a3', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: 4, content: '',
+      id: 'a3', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: at + 4, content: '',
       inquiries: [{ inquiryId: 'iq1', runId: 'r1', question: t('chatpreview.inquiry.question'), options: [t('chatpreview.inquiry.optTable'), t('chatpreview.inquiry.optIf')], status: 'pending' }],
     },
   ]
