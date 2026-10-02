@@ -59,6 +59,7 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const voiceRef = useRef<HTMLSelectElement>(null)
   const [cloneOpen, setCloneOpen] = useState(false)
   const lastModel = useRef('') // 关掉再打开回到上次选的模型
   const ds = providers.filter((p) => /dashscope|aliyuncs\.com/i.test(p.baseUrl))
@@ -83,7 +84,7 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
     if (customId === null) return
     const v = customId.trim()
     setCustomId(null)
-    if (v !== voice) void save({ realtimeVoice: v })
+    if (v && v !== voice) void save({ realtimeVoice: v }) // 空着离开 = 放弃,别把已选的音色清成默认(Codex 10-02);要默认就在下拉里选 Tina
   }
 
   const doClone = (): void => {
@@ -121,7 +122,7 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
         {model && (
           <>
             <label style={{ marginTop: 12 }}>{t('settings.realtime.model')}</label>
-            <select className="realtime-model" value={model} onChange={(e) => void save({ realtimeModelId: e.target.value })}>
+            <select className="realtime-model" aria-label={t('settings.realtime.model')} value={model} onChange={(e) => void save({ realtimeModelId: e.target.value })}>
               {ds.flatMap((p) => MODELS.map((m) => (
                 <option key={`${p.providerId}/${m}`} value={`${p.providerId}/${m}`}>{ds.length > 1 ? `${p.providerId} · ${m}` : m}</option>
               )))}
@@ -134,7 +135,7 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
       {model && (
         <div className="field">
           <label>{t('settings.realtime.voice')}</label>
-          <select className="realtime-voice" value={customId !== null ? CUSTOM : voice || DEFAULT_VOICE} onChange={(e) => pickVoice(e.target.value)}>
+          <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || DEFAULT_VOICE} onChange={(e) => pickVoice(e.target.value)}>
             {VOICES.map((v) => <option key={v} value={v}>{`${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
             {voice && !PRESETS.has(voice) && <option value={voice}>{t('settings.realtime.voiceMine', { id: voice })}</option>}
             <option value={CUSTOM}>{t('settings.realtime.voiceCustom')}</option>
@@ -142,7 +143,7 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
           {customId !== null && (
             <input type="text" autoFocus style={{ marginTop: 8 }} value={customId} placeholder={t('settings.realtime.voiceIdPlaceholder')}
               onChange={(e) => setCustomId(e.target.value)} onBlur={commitCustom}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitCustom() }} />
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { commitCustom(); voiceRef.current?.focus() } }} />
           )}
           <div className="hint">{t('settings.realtime.voiceHint')}</div>
           {provider && (

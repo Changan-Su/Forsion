@@ -156,6 +156,11 @@ async function main() {
       onDefault = cfgNow().realtimeModel
       await sp.locator('select.realtime-voice').first().selectOption('Cindy').catch(() => {})
       await sp.waitForTimeout(600)
+      // 点开「自定义音色 ID」什么都不填就离开:已选的 Cindy 不能被清掉
+      await sp.locator('select.realtime-voice').first().selectOption('__custom__').catch(() => {})
+      await sp.waitForTimeout(200)
+      await sp.locator('select.realtime-model').first().focus().catch(() => {})
+      await sp.waitForTimeout(600)
       await sw.click().catch(() => {}) // 关:只清模型,音色留着
       await sp.waitForTimeout(600)
       offCfg = { ...cfgNow(), selBefore }
