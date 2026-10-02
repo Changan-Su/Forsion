@@ -2935,7 +2935,6 @@ export const SettingsModal: React.FC<{
                 {tab === 'theme' && (
                   <>
                     <ThemePreview tabLabel={activeTabLabel} />
-                    <StartupAppearanceSettings />
                     <section className="settings-panel settings-theme-language" data-setting-anchor="theme-language">
                       <div className="settings-panel-head settings-panel-head--actions">
                         <span className="settings-panel-icon"><Palette size={16} /></span>
@@ -3203,6 +3202,7 @@ export const SettingsModal: React.FC<{
                         })}
                       </div>
                     </section>
+                    <StartupAppearanceSettings />
                   </>
                 )}
 

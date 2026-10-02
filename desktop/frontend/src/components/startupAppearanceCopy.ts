@@ -2,9 +2,9 @@ import { registerMessages } from '../i18n'
 
 registerMessages({
   "startupAppearance.title": { zh: "开屏与图标", en: "Startup and icons" },
-  "startupAppearance.description": { zh: "自定义启动时的画面和 Forsion 品牌图标。", en: "Customize the startup screen and Forsion brand icon." },
-  "startupAppearance.icon": { zh: "品牌图标", en: "Brand icon" },
-  "startupAppearance.splash": { zh: "开屏动画素材", en: "Startup artwork" },
+  "startupAppearance.description": { zh: "上传图片，或选择插件提供的方案。", en: "Upload images or choose artwork from plugins." },
+  "startupAppearance.icon": { zh: "应用图标", en: "App icon" },
+  "startupAppearance.splash": { zh: "开屏素材", en: "Startup artwork" },
   "startupAppearance.default": { zh: "默认", en: "Default" },
   "startupAppearance.upload": { zh: "上传图片", en: "Upload image" },
   "startupAppearance.show": { zh: "显示开屏", en: "Show startup screen" },
@@ -14,6 +14,8 @@ registerMessages({
   "startupAppearance.motion.spin": { zh: "旋转", en: "Rotate" },
   "startupAppearance.motion.none": { zh: "静止", en: "Still" },
   "startupAppearance.native": { zh: "同步到 Dock／任务栏", en: "Use in Dock / taskbar" },
+  "startupAppearance.nativeScope": { zh: "用于运行中的 Forsion", en: "While Forsion is running" },
+  "startupAppearance.help": { zh: "格式与说明", en: "Formats and details" },
   "startupAppearance.nativeHint": { zh: "更改运行中的应用图标；安装包和系统固定的快捷方式图标保持原样。", en: "Changes the running app icon. Installer and pinned shortcut icons keep their original artwork." },
   "startupAppearance.hint": { zh: "支持 PNG、JPEG、SVG、GIF、WebP，最大 1.4 MB、4096 × 4096。品牌图标自动转为静态图像；开屏保留动态素材。", en: "PNG, JPEG, SVG, GIF or WebP, up to 1.4 MB and 4096 × 4096. Brand icons become still images; startup artwork retains animation." },
   "startupAppearance.behavior": { zh: "图标立即生效；开屏在下次启动时显示。减少动态效果时使用静态图标。", en: "Icons update immediately; startup changes appear on the next launch. Reduced motion uses the still icon." },
