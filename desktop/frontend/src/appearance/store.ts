@@ -71,13 +71,3 @@ export async function prepareAppearanceImage(data: string, icon: boolean): Promi
   context.drawImage(image, (256 - width) / 2, (256 - height) / 2, width, height)
   return canvas.toDataURL('image/png')
 }
-export async function readAppearanceFile(file: File, icon: boolean): Promise<string> {
-  if (file.size > 1_400_000) throw new Error('Image exceeds 1.4 MB')
-  const data = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-  return prepareAppearanceImage(data, icon)
-}

@@ -130,14 +130,119 @@ async function main() {
     await settings.locator('.startup-appearance-preview').screenshot({ path: path.join(OUT, 'preview.png') })
     check('preview runs the actual startup runtime in an isolated frame', await frame.locator('.forsion-startup-image').count() === 1)
     await settings.getByRole('button', { name: '关闭预览', exact: true }).click()
-    // Upload and bad-image failure go through the real file input and image decoder.
-    const input = settings.locator('input[type="file"]').first()
-    await input.setInputFiles({ name: 'broken.png', mimeType: 'image/png', buffer: Buffer.from('broken') })
-    await settings.locator('.startup-appearance-error').waitFor()
-    check('bad uploads preserve the selected icon', JSON.parse(fs.readFileSync(diskPath, 'utf8')).icon.id === key)
-    await input.setInputFiles({ name: 'uploaded.png', mimeType: 'image/png', buffer: Buffer.from(stored.icon.image.split(',')[1], 'base64') })
-    await settings.waitForFunction(() => document.querySelector('#startup-icon').value === 'upload')
-    check('uploaded icon uses the same persisted pipeline', true)
+    // The import dialog is a draft: decode, crop and compress before touching persisted settings.
+    const input = settings.locator('.startup-appearance input[type="file"]').first()
+    const importDialog = settings.locator('.appearance-import')
+    const applyImage = () => importDialog.getByRole('button', { name: /^(确认使用|Apply image)$/ }).click()
+    const saved = () => JSON.parse(fs.readFileSync(diskPath, 'utf8'))
+    const upload = { name: 'uploaded.png', mimeType: 'application/octet-stream', buffer: Buffer.from(stored.icon.image.split(',')[1], 'base64') }
+    await input.setInputFiles({ name: 'broken.png', mimeType: 'image/png', buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]) })
+    await settings.getByRole('alert').filter({ hasText: '无法读取这张图片' }).waitFor()
+    check('decode failure is specific and preserves the selected icon', saved().icon.id === key)
+    await input.setInputFiles({ name: 'unsupported.heic', mimeType: 'image/heic', buffer: Buffer.from('unsupported') })
+    await settings.getByRole('alert').filter({ hasText: '不支持此图片格式' }).waitFor()
+    await input.setInputFiles({ name: 'huge.png', mimeType: 'image/png', buffer: Buffer.alloc(20_000_001) })
+    await settings.getByRole('alert').filter({ hasText: '原图超过 20 MB' }).waitFor()
+    check('unsupported formats and source size failures explain the cause', true)
+    await input.setInputFiles(upload)
+    await importDialog.waitFor()
+    check('generic MIME images decode without replacing the previous selection', saved().icon.id === key)
+    await settings.keyboard.press('Escape')
+    await importDialog.waitFor({ state: 'hidden' })
+    check('cancel leaves the previous icon untouched', saved().icon.id === key)
+    await input.setInputFiles(upload)
+    await importDialog.waitFor()
+    await app.evaluate(({ ipcMain }) => {
+      global.__appearanceWriter = ipcMain._invokeHandlers.get('appearance:update')
+      ipcMain.removeHandler('appearance:update')
+      ipcMain.handle('appearance:update', () => { throw new Error('simulated disk full') })
+    })
+    try {
+      await applyImage()
+      await importDialog.getByRole('alert').filter({ hasText: '设置保存失败' }).waitFor()
+      check('save failure keeps the draft open and preserves the old icon', saved().icon.id === key && await importDialog.isVisible())
+    } finally {
+      await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('appearance:update'); ipcMain.handle('appearance:update', global.__appearanceWriter); delete global.__appearanceWriter })
+    }
+    await applyImage()
+    await importDialog.waitFor({ state: 'hidden' })
+    check('confirmed upload uses the persisted pipeline after retry', saved().icon.id === 'upload')
+    const largePng = await settings.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 1500; c.height = 900
+      const ctx = c.getContext('2d'), pixels = ctx.createImageData(c.width, c.height)
+      let seed = 42
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        for (let channel = 0; channel < 3; channel++) { seed = (1664525 * seed + 1013904223) >>> 0; pixels.data[i + channel] = seed >>> 24 }
+        pixels.data[i + 3] = 255
+      }
+      ctx.putImageData(pixels, 0, 0)
+      return c.toDataURL('image/png').split(',')[1]
+    })
+    const largeBytes = Buffer.from(largePng, 'base64')
+    assert.ok(largeBytes.length > 1_400_000 && largeBytes.length < 20_000_000)
+    await input.setInputFiles({ name: 'large-photo.png', mimeType: 'image/png', buffer: largeBytes })
+    await applyImage(); await importDialog.waitFor({ state: 'hidden' })
+    check('image larger than the old 1.4 MB limit is automatically reduced', saved().icon.image.length < 800_000)
+    const wide = { name: 'wide-artwork.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="5000" height="2500"><path fill="#ce6d59" d="M0 0h2000v2500H0z"/><path fill="#4f8b77" d="M2000 0h1000v2500H2000z"/><path fill="#648ab5" d="M3000 0h2000v2500H3000z"/></svg>') }
+    await input.setInputFiles(wide)
+    await importDialog.getByRole('button', { name: '正方形裁剪', exact: true }).click()
+    const stage = importDialog.locator('.appearance-import-stage')
+    const zoom = importDialog.getByRole('slider', { name: '缩放', exact: true })
+    await zoom.focus(); await zoom.press('End')
+    const center = () => importDialog.locator('.appearance-import-stage canvas').evaluate((el) => [...el.getContext('2d').getImageData(256, 256, 1, 1).data])
+    const beforeDrag = await center()
+    const stageBox = await stage.boundingBox()
+    await settings.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height / 2)
+    await settings.mouse.down(); await settings.mouse.move(stageBox.x + stageBox.width * 1.5, stageBox.y + stageBox.height / 2, { steps: 6 }); await settings.mouse.up()
+    const afterDrag = await center()
+    check('large non-square images support zoom and drag with a live crop', beforeDrag[1] > beforeDrag[0] && afterDrag[0] > afterDrag[1])
+    const beforeKey = await importDialog.locator('.appearance-import-stage canvas').evaluate((el) => el.toDataURL())
+    await stage.focus(); await stage.press('ArrowLeft')
+    check('crop position supports keyboard adjustments', beforeKey !== await importDialog.locator('.appearance-import-stage canvas').evaluate((el) => el.toDataURL()))
+    await stage.press('ArrowRight')
+    await settings.screenshot({ path: path.join(OUT, 'import-crop-zh.png'), animations: 'disabled' })
+    await importDialog.screenshot({ path: path.join(OUT, 'import-dialog-zh.png'), animations: 'disabled' })
+    await applyImage(); await importDialog.waitFor({ state: 'hidden' })
+    const cropPixelsSource = saved().icon.image
+    const cropPixels = await settings.evaluate(async (src) => {
+      const img = new Image(); img.src = src; await img.decode()
+      const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0)
+      return { width: c.width, height: c.height, center: [...ctx.getImageData(128, 128, 1, 1).data] }
+    }, saved().icon.image)
+    check('saved 256px square pixels match the crop preview', cropPixels.width === 256 && cropPixels.height === 256 && Math.abs(cropPixels.center[0] - afterDrag[0]) < 3)
+    const formats = await settings.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 96; c.height = 160
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#4f8b77'; ctx.fillRect(20, 20, 56, 120)
+      return ['image/png', 'image/jpeg', 'image/webp'].map((mime) => ({ mime, data: c.toDataURL(mime).split(',')[1] }))
+    })
+    for (const { mime, data } of formats) {
+      await input.setInputFiles({ name: `portrait.${mime.split('/')[1]}`, mimeType: '', buffer: Buffer.from(data, 'base64') })
+      await importDialog.waitFor()
+      check(`${mime} with empty MIME imports in fit mode`, await importDialog.getByRole('button', { name: '完整显示', exact: true }).getAttribute('aria-pressed') === 'true')
+      if (mime === 'image/png') {
+        check('fit preserves transparent margins on portrait images', await importDialog.locator('.appearance-import-stage canvas').evaluate((el) => { const ctx = el.getContext('2d'); return ctx.getImageData(1, 256, 1, 1).data[3] === 0 && ctx.getImageData(256, 256, 1, 1).data[3] === 255 }))
+      }
+      await settings.keyboard.press('Escape')
+    }
+    await input.setInputFiles({ name: 'too-wide.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="20000" height="2"/>') })
+    await settings.getByRole('alert').filter({ hasText: '单边 16384 像素' }).waitFor()
+    check('extreme dimensions report their limit without changing the selection', saved().icon.image === cropPixelsSource)
+    const splashInput = settings.locator('.startup-appearance input[type="file"]').nth(1)
+    await splashInput.setInputFiles({ name: 'large-startup.png', mimeType: 'image/png', buffer: largeBytes })
+    await applyImage(); await importDialog.waitFor({ state: 'hidden' })
+    check('large startup artwork is automatically compressed with a static poster', saved().splash.image.length <= 2_000_000 && saved().splash.poster.startsWith('data:image/png'))
+    console.log(`Compression: ${largeBytes.length} source bytes -> ${Buffer.from(saved().splash.image.split(',')[1], 'base64').length} startup bytes`)
+    await splashInput.setInputFiles({ name: 'animated-startup.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(stored.splash.image.split(',')[1], 'base64') })
+    await importDialog.getByText('将保留原图动画。', { exact: true }).waitFor()
+    check('transparent animation preview does not reveal a frozen frame underneath', await importDialog.locator('.appearance-import-stage canvas').evaluate((el) => getComputedStyle(el).visibility === 'hidden'))
+    await importDialog.getByRole('button', { name: '正方形裁剪', exact: true }).click()
+    await importDialog.getByText('本次处理将保存为静态图片。', { exact: true }).waitFor()
+    await importDialog.getByRole('button', { name: '完整显示', exact: true }).click()
+    await applyImage(); await importDialog.waitFor({ state: 'hidden' })
+    check('animated originals stay animated in fit mode and disclose static crop output', saved().splash.image === stored.splash.image)
+    await settings.selectOption('#startup-splash', key)
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
     await settings.selectOption('#startup-icon', key)
     await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
     await settings.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
@@ -147,6 +252,12 @@ async function main() {
     await settings.screenshot({ path: path.join(OUT, 'en-dark-narrow-context.png') })
     await settings.locator('.startup-appearance').screenshot({ path: path.join(OUT, 'en-dark-narrow.png') })
     check('English narrow settings do not overflow horizontally', await settings.locator('.startup-appearance').evaluate((el) => el.scrollWidth <= el.clientWidth + 1))
+    await settings.locator('.startup-appearance input[type="file"]').first().setInputFiles(wide)
+    await importDialog.getByRole('button', { name: 'Square crop', exact: true }).click()
+    await settings.screenshot({ path: path.join(OUT, 'import-crop-en-dark-narrow.png'), animations: 'disabled' })
+    check('crop dialog stays within the narrow window', await importDialog.evaluate((el) => { const r = el.getBoundingClientRect(); return el.scrollWidth <= el.clientWidth + 1 && r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight }))
+    await importDialog.getByRole('button', { name: 'Cancel', exact: true }).last().click()
+
     await app.close(); app = null
     await launch()
     const initial = await win.evaluate(() => window.tangu.startupAppearance.initial)

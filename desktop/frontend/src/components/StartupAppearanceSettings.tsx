@@ -1,10 +1,12 @@
 import React, { useState } from 'react'
 import { ChevronRight, ImageIcon, Play, RotateCcw, Upload, X } from 'lucide-react'
 import { useI18n } from '../i18n'
-import { useAppearance, updateAppearance, readAppearanceFile, prepareAppearanceImage } from '../appearance/store'
+import { useAppearance, updateAppearance, prepareAppearanceImage } from '../appearance/store'
+import { APPEARANCE_ACCEPT, AppearanceImportError, importAppearanceFile, type ImportedAppearance } from '../appearance/imageImport'
 import { ANIMATIONS, DEFAULT_APPEARANCE, type AppearancePatch, type AppearanceAsset } from '../../../shared/startupAppearance'
 import { BrandLogo } from './BrandLogo'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
+import { AppearanceImportDialog } from './AppearanceImportDialog'
 import startupHtml from '../../index.html?raw'
 import startupRuntime from '../../startupAppearance.js?raw'
 import './startupAppearance.css'
@@ -14,11 +16,12 @@ export const StartupAppearanceSettings: React.FC = () => {
   const { t, locale } = useI18n()
   const { value, presets } = useAppearance()
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [importing, setImporting] = useState<{ image: ImportedAppearance; slot: 'icon' | 'splash' } | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const run = async (work: () => Promise<void>): Promise<void> => {
-    setBusy(true); setError(false)
-    try { await work() } catch { setError(true) } finally { setBusy(false) }
+    setBusy(true); setError(null)
+    try { await work() } catch (e) { setError(e instanceof AppearanceImportError ? `startupAppearance.error.${e.reason}` : 'startupAppearance.error.save') } finally { setBusy(false) }
   }
   const save = (patch: AppearancePatch): void => { void run(() => updateAppearance(patch)) }
   const label = (asset: AppearanceAsset): string => asset.id === 'upload' ? t('startupAppearance.uploaded') : locale === 'en' ? asset.labelEn || asset.label : asset.label
@@ -50,12 +53,10 @@ export const StartupAppearanceSettings: React.FC = () => {
       </select>
       <label className="btn ghost sm startup-appearance-upload" title={t('startupAppearance.upload')}>
         <Upload size={14} aria-hidden="true" />
-        <input aria-label={`${t('startupAppearance.upload')} · ${t(`startupAppearance.${slot}`)}`} type="file" accept="image/png,image/jpeg,image/svg+xml,image/gif,image/webp" onChange={(e) => {
+        <input aria-label={`${t('startupAppearance.upload')} · ${t(`startupAppearance.${slot}`)}`} type="file" accept={APPEARANCE_ACCEPT} onChange={(e) => {
           const file = e.target.files?.[0]; e.target.value = ''
           if (file) void run(async () => {
-            const image = await readAppearanceFile(file, slot === 'icon')
-            const poster = slot === 'splash' ? await prepareAppearanceImage(image, true) : undefined
-            await updateAppearance({ [slot]: { id: 'upload', label: file.name.slice(0, 160) || 'Image', image, poster } })
+            setImporting({ image: await importAppearanceFile(file), slot })
           })
         }} />
       </label>
@@ -103,7 +104,11 @@ export const StartupAppearanceSettings: React.FC = () => {
         {!presets.length && <p>{t('startupAppearance.empty')}</p>}
       </div>
     </details>
-    {error && <p role="alert" className="startup-appearance-error">{t('startupAppearance.error')}</p>}
+    {error && <p role="alert" className="startup-appearance-error">{t(error)}</p>}
+    {importing && <AppearanceImportDialog image={importing.image} slot={importing.slot} onCancel={() => setImporting(null)} onApply={async (asset) => {
+      await updateAppearance({ [importing.slot]: asset })
+      setImporting(null)
+    }} />}
     {preview && <dialog ref={(el) => { if (el && !el.open) el.showModal() }} className="startup-appearance-preview" aria-label={t('startupAppearance.preview')} onCancel={(e) => { e.preventDefault(); setPreview(null) }} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setPreview(null) } }}><button autoFocus type="button" className="btn ghost sm" onClick={() => setPreview(null)}><X size={14} />{t('startupAppearance.close')}</button><iframe title={t('startupAppearance.preview')} sandbox="allow-scripts" srcDoc={preview} /></dialog>}
   </SettingsPanel>
 }
