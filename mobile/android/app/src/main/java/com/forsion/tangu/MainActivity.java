@@ -24,7 +24,8 @@ public class MainActivity extends BridgeActivity {
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);
-        if (BuildConfig.NATIVE_PREVIEW) {
+        // 仅 -PnativePreviewSample 的 debug 预览包:启动即进审阅样本页。-PnativePreview(并装预览)跑的是真 App。
+        if (BuildConfig.NATIVE_PREVIEW_SAMPLE) {
             getBridge().getWebView().loadUrl("https://localhost/native-preview.html");
         }
     }

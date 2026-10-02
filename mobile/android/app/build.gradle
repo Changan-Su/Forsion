@@ -35,16 +35,20 @@ android {
     }
     buildTypes {
         debug {
-            // Explicit preview builds coexist with the installed app and its data.
-            if (project.hasProperty('nativePreview')) {
+            // 并装预览(debug 签名,不碰正式 keystore):
+            //   -PnativePreview        = **真 App**,包名 com.forsion.tangu.nativepreview,与已装正式版及其数据并存;
+            //   -PnativePreviewSample  = 同一包名,启动直接进审阅用样本页(native-preview.html,
+            //                            dist 须以 FORSION_NATIVE_PREVIEW=1 构建)。命令见 mobile/README.md。
+            def previewId = project.hasProperty('nativePreview') || project.hasProperty('nativePreviewSample')
+            if (previewId) {
                 applicationIdSuffix '.nativepreview'
                 resValue 'string', 'app_name', 'Forsion Preview'
                 resValue 'string', 'title_activity_main', 'Forsion Preview'
             }
-            buildConfigField 'boolean', 'NATIVE_PREVIEW', project.hasProperty('nativePreview') ? 'true' : 'false'
+            buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', project.hasProperty('nativePreviewSample') ? 'true' : 'false'
         }
         release {
-            buildConfigField 'boolean', 'NATIVE_PREVIEW', 'false'
+            buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', 'false'
             if (System.getenv("ANDROID_KEYSTORE_PATH")) {
                 signingConfig signingConfigs.release
             }

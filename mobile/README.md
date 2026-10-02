@@ -52,21 +52,41 @@ cd android && ./gradlew assembleDebug
   外部插件的安装与装载见下面「Android 插件」一节。
   预览消息和模型是样本，无登录、后端会话或模型请求。
 
-### 独立预览 APK 与截图
+### 并装预览 APK（真 App，独立包名）
+
+给人试用的预览包：**真 App**（与正式版同一份代码、同一个生产网关），包名 `com.forsion.tangu.nativepreview`、
+桌面名「Forsion Preview」，与已装正式版（`com.forsion.tangu`）及其数据并存，互不覆盖。
+
+```bash
+rm -rf dist && npm run build && npx cap sync android
+./android/gradlew -p android :app:assembleDebug -PnativePreview
+cp android/app/build/outputs/apk/debug/app-debug.apk outputs/forsion-nativepreview-debug.apk   # 与普通 debug 包同一输出路径,先拷走
+adb install -r outputs/forsion-nativepreview-debug.apk
+adb shell am start -n com.forsion.tangu.nativepreview/com.forsion.tangu.MainActivity
+```
+
+- 这是 **debug 签名**的包（WebView 可远程调试、`src/debug` 的网络配置只对 localhost / 10.0.2.2 放行明文），只给内部试用，
+  不发外;**不用、也不碰正式 keystore**。`-PnativePreview` 只挂在 `debug {}` 上，`assembleRelease` 不受影响。
+- 两个包都注册了 `tangu://auth-callback`：在预览包里登录时系统会弹「用哪个应用打开」，选 Forsion Preview。
+  scheme 是深链绑定身份，**不改**。
+- 插件、笔记缓存、设置都在各自包的私有目录里，两边互不可见。
+
+### 审阅样本页（模型面板截图台架）
 
 ```bash
 FORSION_NATIVE_PREVIEW=1 npm run build
 npx cap sync android
-./android/gradlew -p android :app:assembleDebug :app:testDebugUnitTest -PnativePreview
+./android/gradlew -p android :app:assembleDebug :app:testDebugUnitTest -PnativePreviewSample
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.forsion.tangu.nativepreview/com.forsion.tangu.MainActivity
 # 等待应用出现后；仅连接一台设备，Node 22+
 OUT=/absolute/review-output node scripts/native-picker-emu.cjs
 ```
 
-预览使用独立包名 `com.forsion.tangu.nativepreview`，不会覆盖已安装正式版。
-`native-preview.html` 只在显式预览构建中包含；发布前用普通 `npm run build` 再 `npx cap sync android`，
-并去掉 Gradle 的 `-PnativePreview`。原生模型面板也接入普通应用入口，预览开关只控制样本页面与独立安装身份。
+`-PnativePreviewSample` 与上面同一包名，但启动直接进 `native-preview.html` 样本页（`BuildConfig.NATIVE_PREVIEW_SAMPLE`）。
+`native-preview.html` 只在 `FORSION_NATIVE_PREVIEW=1` 构建中包含；发布前用普通 `npm run build` 再 `npx cap sync android`，
+并去掉 Gradle 的预览参数。原生模型面板也接入普通应用入口，样本开关只控制样本页面。
+台架自己会跳到 `/native-preview.html`，所以装的是 `-PnativePreview` 包也能跑，只要 dist 带了样本页。
 
 验收脚本通过真实 Compose 无障碍节点操作面板，并检查 Web 侧的草稿结果；输出浅色、深色、
 英文、搜索键盘与插件截图，以及 `acceptance.json`。当前已覆盖 Android 15 模拟器；
