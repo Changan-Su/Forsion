@@ -201,8 +201,8 @@ async function main() {
       return false
     })
     let clicked = await clickMuse()
-    // 10-02 起上区只常驻 5 个 Space,Muse 缺省收在「…」里:悬停「…」展开再找一次。
-    if (!clicked) { await win.locator('.rb-top .rb-more').first().hover().catch(() => {}); await win.waitForTimeout(500); clicked = await clickMuse() }
+    // 10-02 起上区只常驻 5 个 Space,Muse 缺省收在「…」里:点「…」展开再找一次,点完收起。
+    if (!clicked) { await win.locator('.rb-top .rb-more').first().click().catch(() => {}); await win.waitForTimeout(300); clicked = await clickMuse(); await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) }
     check('ribbon 上有 Muse Space 图标', clicked)
     await win.waitForTimeout(2500)
     await dismissNotifications(win)

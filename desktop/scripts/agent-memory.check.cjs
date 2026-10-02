@@ -94,9 +94,10 @@ async function main() {
       const slot = win.locator('.rb-slot[data-id="space:agents"] .rb-space').first()
       if (await slot.count()) await slot.click()
       else {
-        await win.locator('.rb-top .rb-more').first().hover()
-        await win.waitForTimeout(500)
-        await win.locator('.rb-fly .rb-space[aria-label="Agents"]').first().click()
+        await win.locator('.rb-top .rb-more').first().click() // 「…」= 展开
+        await win.waitForTimeout(300)
+        await win.locator('.rb-top .rb-space[aria-label="Agents"]').first().click()
+        await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click()) // 收起:展开时命令区让出来,后续步骤要用
       }
       await win.locator('.agents-roster').first().waitFor({ timeout: 15000 })
     }

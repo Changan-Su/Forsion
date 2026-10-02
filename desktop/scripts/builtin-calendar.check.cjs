@@ -102,10 +102,10 @@ async function enterSpace(win, names, id) {
   if (!hit) {
     const more = win.locator('.rb-top .rb-more').first()
     if (await more.count().catch(() => 0)) {
-      await more.hover()
-      await win.waitForTimeout(500)
-      hit = await win.evaluate(byName('.rb-fly'))
-      await win.mouse.move(700, 700)
+      await more.click() // 「…」= 展开:藏着的就在条上;点中后收起
+      await win.waitForTimeout(300)
+      hit = await win.evaluate(byName('.rb-top'))
+      await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
     }
   }
   if (!hit) throw new Error(`enterSpace: ribbon 上找不到 ${id || ''} ${JSON.stringify(names)}`)
@@ -119,12 +119,12 @@ async function ribbonSpaceNames(win) {
   const shown = [...await win.evaluate(read('.rb-top')), ...await win.evaluate(read('.rb-home'))]
   const more = win.locator('.rb-top .rb-more').first()
   if (!(await more.count().catch(() => 0))) return shown
-  await more.hover()
-  await win.waitForTimeout(500)
-  const hidden = await win.evaluate(read('.rb-fly'))
-  await win.mouse.move(700, 700)
-  await win.waitForTimeout(400)
-  return [...shown, ...hidden]
+  await more.click() // 「…」= 展开:上区铺满整条;读完再点一下收起
+  await win.waitForTimeout(300)
+  const all = await win.evaluate(read('.rb-top'))
+  await more.click()
+  await win.waitForTimeout(300)
+  return [...all, ...await win.evaluate(read('.rb-home'))]
 }
 const calIcons = (names) => names.filter((n) => n === '日历' || n === 'Calendar').length
 

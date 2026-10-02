@@ -83,6 +83,10 @@
 .rb-expanded .rb-cell { width: 100%; justify-content: stretch; }
 @media (prefers-reduced-motion: reduce) { .rb-strip-in { transition: none; } }
 .rb-pinned { flex-shrink: 0; margin-top: 4px; }
+/* 「…」展开(10-02):展开区铺满整条,另一区不渲染。上区展开时命令区没了,margin-top:auto 改由账号卡接着贴底;
+   命令区展开时主位槽(属于 Space 那一侧)一起让出来 —— 用 CSS 藏不卸载,home 件的状态留着。 */
+.rb-open-top .rb-pinned { margin-top: auto; }
+.rb-open-bottom .rb-home { display: none; }
 /* ＋ 号:比图标钮更淡,悬停才显形(不喧宾夺主)。 */
 .rb-plus { opacity: 0.4; }
 .rb-plus:hover { opacity: 1; }
