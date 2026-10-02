@@ -1033,3 +1033,9 @@
 .t2-target-health[data-target-health='gone'] .t2-quota-advisory-copy > svg { color: var(--danger); }
 .t2-target-health[data-target-health='connecting'] .t2-quota-advisory-copy > svg { color: var(--text-muted); }
 .t2-target-health .t2-quota-advisory-copy > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* 设置 → 外观「聊天头像」关(chatAvatars.ts):助手头像留位不画 —— 34px 那一列还在,正文左缘与代码块
+   拖柄都不跳;用户侧头像与名字条一起收(气泡右对齐,身份自明)。 */
+html[data-chat-avatars='off'] .t2-asst > .t2-avatar { visibility: hidden; }
+html[data-chat-avatars='off'] .t2-user-avatar,
+html[data-chat-avatars='off'] .t2-username { display: none; }

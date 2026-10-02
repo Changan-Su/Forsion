@@ -1,10 +1,11 @@
 /**
  * Ribbon「主位槽」+「启动时进入」三档的端到端契约(真 Electron)。2026-08-28 用户要求的两件事:
- *   · ribbon 竖条**正中**一个固定图标格,默认放主页 Space,右键可换成别的;
+ *   · ribbon 上一个固定图标格,默认放主页 Space,右键可换成别的(08-28 放竖条正中;
+ *     10-02 用户改:放 Space 区第一个,紧贴在上区 Spaces 之上);
  *   · 启动缺省 = 主位槽指着的那个 Space;另两档 = 上次退出的 Space / 指定 Space。
  *
  * 判据:
- *   1 主位槽在场,且**垂直居中**在 Spaces 组与命令组之间(不是贴着某一组)
+ *   1 主位槽在场,且是 Space 区第一格:紧贴在上区之上(间距 ≤ 8px),不再悬在两组正中
  *   2 ⚠️同一个 Space 不在条上出现两次:主页只在主位槽里,上区没有它
  *   3 ⚠️右键换主位:新的进槽、旧的回上区、**回到它在用户排的序里原来那一格**,
  *     且 `forsion_tangu_ribbon_order` 一个字都没变 —— 换法必须是 addRibbonIcon 改 side,
@@ -122,14 +123,13 @@ async function main() {
       await win.evaluate(`document.body.click()`)
       await win.waitForTimeout(400)
     }
-    // 1 居中:主位格中心 ≈ (上区底 + 命令区顶) / 2。两组之间的空当由它一个人的两个 auto 外边距均分。
+    // 1 Space 区第一格:主位格整个在上区之上,且贴着(中间只有 .rb-home 的 4px 外边距)。
     const g = s0.geom
-    const want = g.topG && g.botG ? (g.topG.bottom + g.botG.top) / 2 : NaN
-    const dy = g.homeG ? Math.abs(g.homeG.mid - want) : NaN
+    const gap = g.homeG && g.topG ? g.topG.top - g.homeG.bottom : NaN
     check(
-      '1 主位槽在场且垂直居中于 Spaces 组与命令组之间',
-      s0.slot.length === 1 && Number.isFinite(dy) && dy <= 2 && g.homeG.top > g.topG.bottom && g.homeG.bottom < g.botG.top,
-      JSON.stringify({ slot: s0.slot, mid: g.homeG?.mid, want, dy }),
+      '1 主位槽在场且是 Space 区第一格(紧贴上区之上)',
+      s0.slot.length === 1 && Number.isFinite(gap) && gap >= 0 && gap <= 8 && g.homeG.bottom < g.botG.top,
+      JSON.stringify({ slot: s0.slot, home: g.homeG, top: g.topG, gap }),
     )
     check('2 同一个 Space 不出现两次:主页只在主位槽,上区没有它', s0.slot[0] === '主页' && !s0.top.includes('主页'), JSON.stringify({ slot: s0.slot, top: s0.top }))
 

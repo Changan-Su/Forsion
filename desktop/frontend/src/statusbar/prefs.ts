@@ -18,13 +18,16 @@ interface SbPrefsState extends SbPrefs {
 /** 没有存档时(新用户 / 从没动过状态栏设置)的缺省隐藏项。收件箱未读与 Ribbon 收件箱角标重复,
  *  缺省收起(09-25 评审 U-23 拍板);**只改缺省** —— 已存偏好原样读回,老用户勾过的不动。 */
 export const DEFAULT_HIDDEN: readonly string[] = ['inbox.unread']
+/** 没有存档时状态栏整条缺省关(10-02 用户拍板「框架收声」);同步出错时仍单独露出同步项(items.tsx DesktopStatusBar)。
+ *  同 DEFAULT_HIDDEN **只改缺省**:存过偏好的老用户(含存档里 enabled:true)原样不动。 */
+export const DEFAULT_ENABLED = false
 
 function read(): SbPrefs {
   try {
     const v = localStorage.getItem(KEY)
     if (v) return { enabled: true, hidden: [], order: [], ...(JSON.parse(v) as Partial<SbPrefs>) }
   } catch { /* ignore */ }
-  return { enabled: true, hidden: [...DEFAULT_HIDDEN], order: [] }
+  return { enabled: DEFAULT_ENABLED, hidden: [...DEFAULT_HIDDEN], order: [] }
 }
 function persist(s: SbPrefs): void {
   try { localStorage.setItem(KEY, JSON.stringify({ enabled: s.enabled, hidden: s.hidden, order: s.order })) } catch { /* ignore */ }
@@ -45,3 +48,6 @@ export const useSbPrefs = create<SbPrefsState>((set, get) => ({
     persist(get())
   },
 }))
+
+// 设置住在独立浮窗:那边拨开关写的是同一份 localStorage,主窗靠 storage 事件跟上(否则要重启才生效)。
+if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === KEY) useSbPrefs.setState(read()) })

@@ -330,18 +330,12 @@ export function installEngine(): void {
     }
   })
 
-  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);反馈/商店/成就/明暗/命令/设置/账号常驻底部。
+  // ribbon = 左侧功能条:顶部 = 主位 + Space 图标组(可拖动改序,常驻 5 个,其余进「…」);命令区 反馈/商店/成就/明暗/设备互联/命令/设置,
+  // 常驻后 4 项(10-02 用户拍板「Ribbon 减负」:反馈/商店/成就缺省收进命令区的「…」,见 Ribbon.tsx BOTTOM_VISIBLE);账号钉最底。
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
   // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册
   // (两者都是 ribbon 图标 + 命令面板两条路)。
   // 反馈、商店置于底部最上方:无持久顺序时注册序即上下序,故在 rb-mode 之前、反馈又在商店之前注册。
-  // Unit 切换器(head 常驻,折叠钮旁):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
-  // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ rb-unit 在移动端照样注册,
-  // 但 SingleColumnHost 只渲染 side=bottom 的项,head 上的它不可见(无害;移动端入口是 rb-units-mobile)。
-  // webShim / unitShim 无此方法 → 不注册;vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态。
-  // 名册(unitsList)自 Forsion Extend 0.6 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
-  // 只是不列账号名下的设备:本地 / 按地址直连 / 「允许其他设备连接本机」与已配对设备都不经云端。
-  if (window.tangu?.unitsList || window.tangu?.unitHostStatus) addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
   if (window.tangu?.submitFeedback) {
     addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => { app().openFeedback() } })
     // 老存档(用户动过底部区)的 bottomOrder 里,rb-feedback 要么还停在 08-31 前的旧位(明暗与命令之间),要么缺席
@@ -359,6 +353,25 @@ export function installEngine(): void {
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
   addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
+  // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
+  // 10-02 用户拍板:从 head 挪进命令区,默认在明暗与命令面板之间 → 注册在 rb-mode 之后、rb-cmd 之前(无持久顺序时注册序即上下序)。
+  // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
+  // SingleColumnHost 的「⋯」sheet 只渲染 side=bottom 的项,挂 bottom 会和移动端自己的入口(rb-units-mobile)重复。
+  // webShim / unitShim 无此方法 → 不注册;vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态。
+  // 名册(unitsList)自 Forsion Extend 0.6 起随包出现;没有 Extend 的桌面仍有 unitHostStatus(宿主)→ 切换器照样上架,
+  // 只是不列账号名下的设备:本地 / 按地址直连 / 「允许其他设备连接本机」与已配对设备都不经云端。
+  if (window.tangu?.unitsList || window.tangu?.unitHostStatus) {
+    addRibbonIcon({ id: 'rb-unit', side: UI_MODE === 'mobile' ? 'head' : 'bottom', component: UnitSwitcher })
+    // 老存档(用户拖过命令区)的 bottomOrder 里没有 rb-unit → rankIds 会把它排到区末尾(设置下面)。
+    // 只挪一次到 rb-mode 之后,打标记后用户再拖到哪算哪(同上面反馈那条的一次性迁移)。
+    const UNIT_MOVED_KEY = 'forsion_ribbon_unit_in_bottom'
+    if (UI_MODE !== 'mobile' && !localStorage.getItem(UNIT_MOVED_KEY)) {
+      const rb = useRibbonStore.getState()
+      const at = rb.bottomOrder.filter((id) => id !== 'rb-unit').indexOf('rb-mode')
+      if (at >= 0 && !rb.folders.some((f) => f.items.includes('rb-unit'))) rb.setZoneOrder('bottom', moveTo(rb.bottomOrder, 'rb-unit', at + 1))
+      try { localStorage.setItem(UNIT_MOVED_KEY, '1') } catch { /* ignore */ }
+    }
+  }
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。

@@ -111,11 +111,13 @@ export function UnitRemoteSurface(): React.ReactElement | null {
   // 切进来把键盘直接交给对方页面(不点一下打不了字)。
   useEffect(() => { if (active) webRef.current?.focus() }, [active, target?.url])
   // 点了本机 ribbon 的视图槽(视图图标 / Space)= 用户要回本机 —— Space 切换语义,自动退场。
-  // 头部胶囊与尾部账号/设置不算:它们开的是浮层,盖在远程面之上,关掉还该在设备页里。
+  // 胶囊自己与尾部账号/设置不算:它们开的是浮层,盖在远程面之上,关掉还该在设备页里。
+  // ⚠️ 10-02 起胶囊住进命令区,自己也在 .rb-slot 里 —— 不排除它,点胶囊想换设备就先被踢回本机(check:unitswitcher 勾选态那条)。
   useEffect(() => {
     if (!active) return
     const onClick = (e: MouseEvent): void => {
-      if ((e.target as HTMLElement | null)?.closest?.('.rb-slot')) useUnitRemote.getState().hide()
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.('.rb-slot') && !t.closest('.unitsw-pill')) useUnitRemote.getState().hide()
     }
     document.addEventListener('click', onClick, true)
     return () => document.removeEventListener('click', onClick, true)

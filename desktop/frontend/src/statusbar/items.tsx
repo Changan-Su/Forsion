@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Check, CloudOff, Inbox, Link2, RefreshCw } from 'lucide-react'
 import {
-  StatusBar, activeMainPanel, addStatusItem, getActiveSpace, label,
+  StatusBar, activeMainPanel, addStatusItem, useStatusStore, getActiveSpace, label,
   openCommandPalette, setActiveSpace, useSpaceStore, useWorkspace,
   effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts,
 } from '@lcl/engine'
@@ -68,8 +68,8 @@ const badReport = (r: RemoteSyncReport | null): boolean => !!r && (!r.ok || r.er
 
 /** 右:云同步聚合状态(镜像引擎 + 按条目引擎 + remotesync 三源)。无任何同步源时隐藏;
  *  点击手动同步(镜像 syncNow + remotesync run 各自触发,互不阻塞)。 */
-function SyncItem() {
-  const { t } = useI18n()
+/** 同步状态的三路来源(镜像同步 / 按条目同步 / remotesync):SyncItem 画它,DesktopStatusBar 用它判「出没出错」。 */
+function useSyncSources() {
   const [mirror, setMirror] = useState<AmadeusSyncStatus | null>(null)
   const entry = useEntrySync((s) => s.status)
   const [remote, setRemote] = useState<{ running: boolean; bad: boolean; configured: boolean; progress: RemoteSyncProgress | null } | null>(null)
@@ -91,6 +91,20 @@ function SyncItem() {
       off2?.()
     }
   }, [])
+  return { mirror, entry, remote }
+}
+
+/** 同步真出错了(状态栏总开关关着时据此单独露出同步项)。⚠️ 刻意不含 auth-required:没登录 / 没开云端的人
+ *  会一直是这个态,算进来等于状态栏永远在;未登录在同步项本身、设置与账号卡里照旧有提示。 */
+function useSyncAlert(): boolean {
+  const { mirror, entry, remote } = useSyncSources()
+  const all = [...(mirror?.enabled ? [mirror] : []), ...Object.values(entry).filter((s) => s.enabled)]
+  return all.some((s) => s.state === 'error') || !!remote?.bad
+}
+
+function SyncItem() {
+  const { t } = useI18n()
+  const { mirror, entry, remote } = useSyncSources()
   const enabledEntries = Object.values(entry).filter((s) => s.enabled)
   const mirrorOn = !!mirror?.enabled
   if (!mirrorOn && !enabledEntries.length && !remote?.configured && !remote?.running) return null
@@ -211,7 +225,8 @@ export function installStatusBarItems(): void {
   addStatusItem({ id: 'inbox.unread', side: 'right', component: InboxItem })
 }
 
-/** 设置感知的状态栏(Shell footer):总开关关闭即整条不渲染;hidden/order 透传引擎 StatusBar。
+/** 设置感知的状态栏(Shell footer):总开关关闭即整条不渲染 —— 唯一例外是**同步出错**:那时只露同步一项,
+ *  恢复即收(10-02 用户拍板「框架收声」,缺省关,见 prefs.ts)。hidden/order 透传引擎 StatusBar。
  *  显示时置 --sb-h 给 main/right 视图让位(见 engine.css .wb-view--main/--right);隐藏/卸载即清 →
  *  工作区满高(detached/mini 窗不渲染本组件 → 无 --sb-h → 视图不缩,零副作用)。 */
 export function DesktopStatusBar() {
@@ -219,12 +234,16 @@ export function DesktopStatusBar() {
   const enabled = useSbPrefs((s) => s.enabled)
   const hidden = useSbPrefs((s) => s.hidden)
   const order = useSbPrefs((s) => s.order)
+  const alert = useSyncAlert()
+  const items = useStatusStore((s) => s.items)
+  const shown = enabled || alert
   useEffect(() => {
-    if (!enabled) return
+    if (!shown) return
     document.documentElement.style.setProperty('--sb-h', '18px')
     return () => { document.documentElement.style.removeProperty('--sb-h') }
-  }, [enabled])
-  if (!enabled) return null
+  }, [shown])
+  if (!shown) return null
+  if (!enabled) return <StatusBar hidden={items.map((i) => i.id).filter((id) => id !== 'sync.status')} trailing={isPluginItem} label={t('sb.label')} />
   return <StatusBar hidden={hidden} order={order} trailing={isPluginItem} label={t('sb.label')} />
 }
 

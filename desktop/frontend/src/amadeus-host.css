@@ -2082,3 +2082,15 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 .amx-sheet-seg > button[data-font='serif'] { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
 .amx-sheet-seg > button[data-font='mono'] { font-family: var(--font-mono); }
 .mb-sheet-row .amx-sheet-check { margin-left: auto; color: var(--accent-ink, var(--accent)); }
+
+/* 框架收声(10-02 用户拍板 v3):笔记 / 仪表盘顶栏的动作钮平时 0.38,指针进顶栏或键盘焦点进来才亮,
+ * 与 lcl engine.css 末尾的标签栏同一个值。已点亮的图钉 / 同步(.amx-pin-on)保持全亮。
+ * 画板工具盘(.excalidraw 里那条)是干活的工具,不收;嵌卡(.dash-viewcard)整条顶栏已经悬停才出,不再叠一层。 */
+@media (hover: hover) {
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:not(.amx-pin-on) {
+    opacity: 0.38;
+    transition: opacity var(--duration-fast, 0.15s);
+  }
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *):hover .amx-mode-btn,
+  .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:focus-visible { opacity: 1; }
+}

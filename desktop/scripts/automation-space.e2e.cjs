@@ -57,6 +57,9 @@ async function main() {
     const openSpace = async () => { await win.locator('button.rb-space').filter({ hasText: /^自动化$|^Automation$/ }).first().click() }
     // Ribbon labels may be visually collapsed, so use the accessible title when needed.
     const autoButton = win.locator('button.rb-space[aria-label="自动化"], button.rb-space[aria-label="Automation"]').first()
+    // 10-02 起上区只常驻 5 个 Space,自动化缺省收在「…」里:先悬停「…」展开再点。
+    const revealAuto = async () => { if (!(await autoButton.isVisible().catch(() => false))) { await win.locator('.rb-top .rb-more').first().hover().catch(() => {}); await win.waitForTimeout(500) } }
+    await revealAuto()
     if (await autoButton.count()) await autoButton.click(); else await openSpace()
     await win.waitForSelector('.auto-home')
     const showGuide = async () => {
@@ -182,7 +185,9 @@ async function main() {
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
     await win.reload({ waitUntil: 'domcontentloaded' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))
-    await win.locator('button.rb-space[aria-label="Automation"]').click()
+    await win.waitForSelector('.dv-groupview', { timeout: 40000 })
+    await revealAuto()
+    await autoButton.click()
     await win.locator('.auto-home').waitFor({ timeout: 30000 })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))
     await win.locator('.auto-starter').first().click()
