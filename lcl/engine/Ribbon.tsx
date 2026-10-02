@@ -120,6 +120,9 @@ export function Ribbon() {
   // 滚轮翻看(10-02 用户要求,类 Agent 选择条):各区露出的那一窗往后挪了几格。不持久化,越界在 cut() 里夹回。
   const [scrollOff, setScrollOff] = useState<Record<RibbonZone, number>>({ top: 0, bottom: 0 })
   const wheel = useRef({ acc: 0, at: -1e9 })
+  // 滑动中途经过的窗口起点范围:这段里的格子临时画出图标(进场/离场看得见),滑完清掉,DOM 回到「只有露出的那一窗」。
+  const [slide, setSlide] = useState<Partial<Record<RibbonZone, { lo: number; hi: number }>>>({})
+  const slideTimer = useRef<Partial<Record<RibbonZone, number>>>({})
 
   // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
   //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
@@ -253,8 +256,18 @@ export function Ribbon() {
     const step = fresh || Math.abs(w.acc) >= slotH ? Math.sign(w.acc) : 0
     if (!step) return
     w.acc = 0
-    const d = zone === 'top' ? step : -step
-    setScrollOff((s) => ({ ...s, [zone]: Math.min(part.max, Math.max(0, Math.min(s[zone], part.max) + d)) }))
+    const cur = Math.min(scrollOff[zone], part.max)
+    const next = Math.min(part.max, Math.max(0, cur + (zone === 'top' ? step : -step)))
+    if (next === cur) return
+    // 窗口新起点(上区偏移往后数,命令区往前数);新旧起点都记进滑动范围,连滚几下就是一段并集。
+    const to = part.start + (zone === 'top' ? next - cur : cur - next)
+    setSlide((s) => {
+      const r = s[zone]
+      return { ...s, [zone]: { lo: Math.min(r?.lo ?? part.start, part.start, to), hi: Math.max(r?.hi ?? part.start, part.start, to) } }
+    })
+    window.clearTimeout(slideTimer.current[zone])
+    slideTimer.current[zone] = window.setTimeout(() => setSlide((s) => ({ ...s, [zone]: undefined })), 260) // CSS 过渡 0.2s + 余量
+    setScrollOff((s) => ({ ...s, [zone]: next }))
   }
   // 浮层内容一律从 live store / 当前溢出派生(FlyState 只存 id)——拖出/重排后自动跟随,不诈尸。
   const flyFolder = fly?.folderId ? folders.find((f) => f.id === fly.folderId) : undefined
@@ -346,7 +359,7 @@ export function Ribbon() {
   /** 量一个区的槽间距。条上拖动一律用 dragstart 拍的快照:让位动画给槽加了 transform,
    *  边拖边量会自反馈成抖动;从浮层/收纳夹拖进来时条上没 transform,当场量(抓取点按光标居中算)。 */
   const measure = (group: HTMLElement, grabDy?: number): { top: number; pitch: number; grabDy: number } => {
-    const els = group.querySelectorAll<HTMLElement>('.rb-slot')
+    const els = group.querySelectorAll<HTMLElement>('.rb-slot') // 窗外占位是 .rb-cell,不算槽
     const top = els[0]?.getBoundingClientRect().top ?? 0
     const pitch = els.length > 1 ? els[1].getBoundingClientRect().top - top : 0
     return { top, pitch, grabDy: grabDy ?? pitch / 2 }
@@ -542,7 +555,20 @@ export function Ribbon() {
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, (over?.zone === zone ? ids[over.index] : null) ?? null) }}
       >
         {zone === 'bottom' && <>{renderPlusBtn(zone)}{part.tail.length > 0 && renderMoreBtn(zone)}</>}
-        {part.shown.map((en, i) => renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, part.start + i))}
+        {/* 滑动框(滚轮翻看的平滑动画):整区条目排成一列,框只露 n 格高,列按窗口起点 translateY,过渡 0.2s。
+            窗外的是等高空占位 .rb-cell(不是 .rb-slot:拖拽量槽、台架按 .rb-slot 认「露出的格子」都不受影响),
+            只在滑动经过时临时画出图标。 */}
+        <div className="rb-strip" style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
+          <div className="rb-strip-in" style={part.start ? { transform: `translateY(${-part.start * slotH}px)` } : undefined}>
+            {(zone === 'top' ? topE : botE).map((en, k) => {
+              const i = k - part.start
+              if (i >= 0 && i < part.shown.length) return renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, k)
+              const r = slide[zone]
+              const passing = !!r && k >= r.lo && k < r.hi + part.shown.length
+              return <div key={en.id} className="rb-cell" aria-hidden style={{ height: slotH - GAP }}>{passing && renderEntry(en)}</div>
+            })}
+          </div>
+        </div>
         {zone === 'top' && <>{part.tail.length > 0 && renderMoreBtn(zone)}{renderPlusBtn(zone)}</>}
       </div>
     )

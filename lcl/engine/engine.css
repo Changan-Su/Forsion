@@ -74,6 +74,14 @@
 .rb-home { flex-shrink: 0; }
 .rb-home:not(:empty) { margin-bottom: 4px; }
 .rb-bottom { flex-shrink: 0; margin-top: auto; }
+/* 滚轮翻看的滑动框(10-02):框只露 n 格高,里面整区一列按窗口起点 translateY。overflow:clip 不建滚动容器
+   (不会被 scrollIntoView / 键盘滚走);留 4px 裁切余量给焦点环、插入线、未读角标。窗外占位 .rb-cell 与槽等高。 */
+.rb-strip { flex-shrink: 0; overflow: clip; overflow-clip-margin: 4px; }
+.rb-strip-in { display: flex; flex-direction: column; gap: 4px; align-items: center; transition: transform 0.2s var(--ease-out, ease-out); }
+.rb-cell { display: flex; justify-content: center; pointer-events: none; }
+.rb-expanded .rb-strip-in { align-items: stretch; }
+.rb-expanded .rb-cell { width: 100%; justify-content: stretch; }
+@media (prefers-reduced-motion: reduce) { .rb-strip-in { transition: none; } }
 .rb-pinned { flex-shrink: 0; margin-top: 4px; }
 /* ＋ 号:比图标钮更淡,悬停才显形(不喧宾夺主)。 */
 .rb-plus { opacity: 0.4; }

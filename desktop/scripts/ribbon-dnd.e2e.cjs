@@ -289,6 +289,25 @@ async function main() {
     await wheelAt('top', 10)
     const top1 = await idsIn('top'), k1 = await keysOf(page)
     check('W1 上区往下滚一下:窗口后移一格,提示标真实位置(⌘2..⌘6)', top1[0] === top0[1] && top1.length === 5 && k1.join() === '⌘2,⌘3,⌘4,⌘5,⌘6', `${top1.join()} ｜ ${k1.join('|')}`)
+    // 快捷键不跟着滚动变(10-02 用户确认):滚过以后 mod+1 仍是整区第一个(tD,已滚出窗口)。
+    await page.evaluate(() => { window.__rbHits.length = 0 })
+    await page.keyboard.press('Meta+1')
+    await page.waitForTimeout(80)
+    const hit1 = await page.evaluate(() => window.__rbHits.join())
+    check('W1b 滚过以后 mod+1 仍是整区第一个(号不随滚动变)', hit1 === 'tD', hit1)
+    // 平滑动画:滚一下的当帧,滑动框的列还在过渡中(transform 不是终值),经过的格子临时画出图标;过渡完 DOM 回到只露一窗
+    await page.mouse.wheel(0, 10)
+    await page.waitForTimeout(60)
+    const mid = await page.evaluate(() => {
+      const inner = document.querySelector('.rb-top .rb-strip-in')
+      return { tr: getComputedStyle(inner).transform, final: inner.style.transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }
+    })
+    await page.waitForTimeout(400)
+    const end = await page.evaluate(() => ({ tr: getComputedStyle(document.querySelector('.rb-top .rb-strip-in')).transform, filled: [...document.querySelectorAll('.rb-top .rb-cell')].filter((c) => c.childElementCount).length }))
+    const ty = (m) => { const v = /matrix\(([^)]+)\)/.exec(m); return v ? Number(v[1].split(',')[5]) : 0 }
+    const want = Number(/-?[\d.]+/.exec(mid.final)?.[0] ?? 0)
+    check('W1c 平滑滑动:过渡中途在新旧之间、经过的格子画出图标;滑完停在终值、占位清空', ty(mid.tr) > want && mid.filled > 0 && Math.abs(ty(end.tr) - want) < 0.5 && end.filled === 0, JSON.stringify({ mid: ty(mid.tr), want, filledMid: mid.filled, end: ty(end.tr), filledEnd: end.filled }))
+    await wheelAt('top', -10)
     await wheelAt('top', 10, 8)
     const k2 = await keysOf(page)
     check('W2 滚到底夹住:露最后 5 个(⌘6..⌘9,第 10 个无号)', k2.join() === '⌘6,⌘7,⌘8,⌘9,', k2.join('|'))
