@@ -16,6 +16,7 @@ import { createMobileAmadeusBridge } from './amadeus/mobileAmadeusBridge'
 import { createCloudAmadeusBridge, setCloudNotify } from '@webamadeus/cloudBridge'
 import { installCloudCollab } from '@webamadeus/cloudCollab'
 import { cloudApiBaseOf } from '@/services/engine/cloudBase'
+import { installMobilePlugins } from './plugins/installMobilePlugins'
 
 const VAULT_MODE_KEY = 'amadeus_vault_mode' // 'cloud'(缺省,移动端主打云客户端) | 'local'(显式选过才本地)
 const vaultMode = (): 'local' | 'cloud' => {
@@ -49,6 +50,17 @@ void installMobileShim().then(async (ok) => {
       : // 本地 Capacitor vault;cfg 供 fetchLinkMeta(书签卡 server 代理)/searchImages。
         (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken }) as unknown as Bridge)
 
+  // Forsion 插件宿主 + 应用市场(2026-10-02):插件住在应用私有目录、不属于任何库 —— 叠在下面的转发壳上,
+  // 云端库 / 本地库两种模式(以及切库之后)同一份,不往两座库桥里各抄一遍。市场桥挂到 window.tangu,
+  // 必须早于 import('./mobileEntry')(bootstrapEngine 按 window.tangu?.marketList 注册入口)。
+  const plugins = installMobilePlugins({ cloudApiBase: () => cloudApi })
+  const pluginHost: Record<string, unknown> = {
+    listPlugins: plugins.host.listPlugins,
+    uninstallPlugin: plugins.host.uninstallPlugin,
+    readPluginData: plugins.host.readPluginData,
+    writePluginData: plugins.host.writePluginData,
+  }
+
   let side = vaultMode()
   let impl = makeBridge(side)
   window.tangu?.onAuthChanged?.(() => {
@@ -63,12 +75,23 @@ void installMobileShim().then(async (ok) => {
     })
   })
   // 恒定壳:`in` 也要转发 —— 渲染层多处用 `'x' in window.amadeus` 探能力(云/本地两桥方法集不同)。
+  // 插件宿主四件(pluginHost)压在库桥之上;hostCaps 是**合并**不是替换:库桥自己的 revealInFileManager:false 等
+  // 必须保留,只叠一条 pluginsFolder:false(插件页不渲染「打开插件文件夹 / 创建示例插件」)。
+  // 自有键判断(别用 `in`:pluginHost 是普通对象,'toString' / 'constructor' 也会命中原型链)
+  const hostKey = (k: string | symbol): boolean => typeof k === 'string' && Object.prototype.hasOwnProperty.call(pluginHost, k)
+  const view = (k: string | symbol): unknown => {
+    if (hostKey(k)) return pluginHost[k as string]
+    if (k === 'hostCaps') return { ...((impl.hostCaps as Record<string, unknown> | undefined) ?? {}), pluginsFolder: false }
+    return impl[k as string]
+  }
+  const keys = (): Array<string | symbol> => [...new Set([...Reflect.ownKeys(impl), ...Object.keys(pluginHost), 'hostCaps'])]
   ;(window as unknown as { amadeus: unknown }).amadeus = new Proxy({} as Bridge, {
-    get: (_t, k) => impl[k as string],
-    has: (_t, k) => k in impl,
-    ownKeys: () => Reflect.ownKeys(impl),
+    get: (_t, k) => view(k),
+    has: (_t, k) => k === 'hostCaps' || hostKey(k) || k in impl,
+    ownKeys: () => keys(),
     // configurable 必须为 true:目标是个空对象,报一个不可配置的属性会被 Proxy 不变式判非法直接抛。
     getOwnPropertyDescriptor: (_t, k) => {
+      if (k === 'hostCaps' || hostKey(k)) return { value: view(k), writable: true, enumerable: true, configurable: true }
       const d = Reflect.getOwnPropertyDescriptor(impl, k)
       return d ? { ...d, configurable: true } : undefined
     },

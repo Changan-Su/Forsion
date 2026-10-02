@@ -100,9 +100,7 @@ const SKIP = {
   listSkills: 'Root 里仅用于接收设置浮窗的 skills-changed 广播后重读主窗技能清单；移动端设置与 Agent 档案共用一个渲染进程，改动后在原窗口刷新',
   openAgentProfile: 'Root 里仅用于接收设置浮窗的 open-agent 请求并切回主窗 Agent Space；移动端没有卫星窗，设置内直接导航到 Agent 档案',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
-  MarketModal: '入口 rb-market 门控在 window.tangu?.marketList,移动 shim 无此方法 → 该 ribbon 项根本不注册,没有可点入口',
   FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',
-  PluginOnboardingHost: '引导就绪卡只对「刚装好的」插件弹,而装插件是 host 能力(移动端装不了)。注:内建插件(callout/字数统计)在移动端照常启用,但它们不声明 onboarding',
   UnitRemoteSurface: '设备远程面(整个主区切过去)是 <webview>+Electron 分区注入,纯 host 概念;移动端拍板不做被连方/内嵌面,App 互联入口 = UnitsSheet 开外部浏览器引导页(2026-08-25)',
   Shell: '单列壳 SingleColumnHost 取而代之(mobile/vite.config engineSwap)',
   TopBar: 'Dockview tab 栏专属;单列壳自带导航',
@@ -132,7 +130,7 @@ const KNOWN_GATES = {
   'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话现已全端默认 Work，此标志用于工作区落点等端差异，不是功能门控',
   'window.tangu?.spacesList': '用户自定义 Space 读盘 — 仅桌面',
   'window.tangu?.spacesSave': '用户自定义 Space 写盘 — 仅桌面',
-  'window.tangu?.marketList': '应用市场入口(ribbon 图标 + open-market 命令)— 仅桌面',
+  'window.tangu?.marketList': '应用市场入口(ribbon 图标 + open-market 命令)— 桌面 = Electron IPC;Android App 自 2026-10-02 起也有(mobile/src/plugins/mobileMarket.ts,只装 Forsion 插件,由 mobile/src/main.tsx 在启动模块求值前挂上 → rb-market 经「⋯」菜单可点,MobileRoot 挂了 MarketModal)。web / 设备页无此方法 → 不注册',
   'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
   // P1-K8

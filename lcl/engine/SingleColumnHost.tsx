@@ -418,7 +418,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
           }
           const Icon = it.icon
           return (
-            <button key={it.id} className="mb-sheet-row" onClick={() => { it.onClick?.(); onClose() }}>
+            <button key={it.id} className="mb-sheet-row" data-ribbon-id={it.id} onClick={() => { it.onClick?.(); onClose() }}>
               {Icon && <Icon size={20} />}
               <span>{it.tooltip ? label(it.tooltip) : it.id}</span>
             </button>

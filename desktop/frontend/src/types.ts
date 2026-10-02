@@ -1541,6 +1541,9 @@ declare global {
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
+       *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
+      marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
