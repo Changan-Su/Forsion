@@ -337,6 +337,18 @@ async function main() {
       spanChecks(span, `收着底部开合${covered}后展开`, await snap())
     }
 
+    // ── 冷启动补摆:布局先按回落 Space 的缺省拓扑还原,活动 Space 晚定下后 realignRegions 按它重摆 ──────
+    // (userSpaces.settleAsyncStartupSpace 的两条冷路径就靠这一步;异步插件 Space 不补 = 一直停在缺省拓扑)
+    await page.goto(URL, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
+    await page.waitForTimeout(500)
+    await page.evaluate(() => { window.__dock.open('sidev', {}, false, 'left'); window.__dock.open('sidev', {}, false, 'right') })
+    await page.waitForTimeout(600)
+    await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+    await page.evaluate(() => { window.__dock.span('full'); window.__dock.realign() }); await page.waitForTimeout(700)
+    spanChecks('full', '缺省摆好后补摆', await page.evaluate(() => ({ main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
+      right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom') })))
+
     const bad = results.filter((x) => !x.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)
     process.exitCode = bad.length ? 1 : 0

@@ -231,6 +231,10 @@ export function settleAsyncStartupSpace(): void {
       // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)
       ws().realignRegions?.()
     } else setActiveSpace(want)
+  } else if (ws().sideProfileKey !== want) {
+    // 纯插件产品(PRODUCT.spaces 为空):bootstrap 时一个 Space 都没有,画像(含 bottomSpan)从没按它设过(Codex 评审)
+    configure()
+    ws().realignRegions?.()
   }
   asyncStartupSpaceResolved = true
 }
