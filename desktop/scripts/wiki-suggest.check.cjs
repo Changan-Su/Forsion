@@ -82,6 +82,18 @@ async function saved(page) {
   })
 }
 const docText = (page) => page.evaluate(() => window.__upage.probe.view().state.doc.textContent)
+/** 等 PM 选区追上 DOM 选区:原生 ←→ 移光标后 PM 要等异步 selectionchange 才知道,紧跟着由 PM 键位处理的键
+ *  (Backspace 等)会拿旧光标动手。10-02 实测连按 11 次 → 后立刻读,20 次 16 次是旧值,L-02b 因此偶红
+ *  (删掉了标题而不是链接里的旧名);等它追上一般只要 ~15ms,比写死延时在高负载下稳。 */
+const waitCaret = (page) =>
+  page
+    .waitForFunction(() => {
+      const v = window.__upage.probe.view()
+      const s = document.getSelection()
+      if (!s || !s.focusNode) return false
+      try { return v.posAtDOM(s.focusNode, s.focusOffset) === v.state.selection.head } catch { return false }
+    }, null, { timeout: 3000, polling: 'raf' })
+    .catch(() => {})
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
@@ -94,6 +106,7 @@ async function main() {
     await clickEnd(page, `${PM} > p`)
     await page.keyboard.press('Meta+ArrowLeft')
     for (let i = 0; i < rightN; i++) await page.keyboard.press('ArrowRight')
+    await waitCaret(page)
     await act(page)
     await page.keyboard.type('Be', { delay: 30 })
     await page.waitForTimeout(250)
