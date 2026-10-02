@@ -54,3 +54,6 @@ Thumbs.db
 # Isolated Coding Studio Electron acceptance artifacts
 /outputs/coding-studio-*
 /outputs/image-studio*
+
+# live 台架产物(live-harness --out 指到仓内时;里面有 provider-auth.json 凭据软链,绝不进库)
+/tangu-agent/outputs/
