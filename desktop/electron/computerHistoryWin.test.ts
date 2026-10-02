@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import {
-  createWindowsRecorderResolver, probeRecorderProtocol, recorderPipeName, stageRecorderExe, windowsRecorderSource,
+  createWindowsRecorderResolver, probeRecorderProtocol, recorderBinDir, recorderPipeName, stageRecorderExe, windowsRecorderSource,
 } from './computerHistoryWin'
 
 const cleanups: Array<() => void> = []
@@ -104,5 +104,12 @@ describe('computerHistoryWin', () => {
     expect(await probeRecorderProtocol(script('noise', 'echo "usage: bridge"'))).toBeNull()
     await expect(probeRecorderProtocol(script('hang', 'sleep 5'), 200)).rejects.toMatchObject({ code: 'helper_probe_timeout' })
     await expect(probeRecorderProtocol(path.join(dir, 'nope'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+describe('recorderBinDir', () => {
+  it('lives under LOCALAPPDATA, never inside the computer-history root', () => {
+    expect(recorderBinDir({ LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, 'C:\\Users\\u')).toBe(path.join('C:\\Users\\u\\AppData\\Local', 'tangu-computer-use', 'recorder'))
+    expect(recorderBinDir({}, '/home/u')).toBe(path.join('/home/u', 'AppData', 'Local', 'tangu-computer-use', 'recorder'))
   })
 })

@@ -19,7 +19,7 @@ import { ipcErrorText } from '../ipcError'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, clearArg, clockLabel, dayOptions, dayRange, dayStartAgo, isSupportedPlatform, needsHelperSetup, normalizeBundleId,
+  CLEAR_CHOICES, PAUSE_CHOICES, clearArg, clockLabel, dayOptions, dayRange, dayStartAgo, isSupportedPlatform, needsHelperSetup, normalizeBundleId, normalizeExeName,
   normalizeDomain, historyBlocks, pauseArg, statusKeys, statusTone, type ClearChoice,
 } from './computerHistoryModel'
 import './computerHistoryMessages'
@@ -216,7 +216,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
     permissionBusyRef.current ? false : act('exclude', (a) => a.setExclude(next))
   const addApp = async (): Promise<void> => {
     // Windows 的 App 标识是小写 exe 文件名(事件里就是小写):手填的也规整成小写,芯片才对得上最近用过的 App 名
-    const id = normalizeBundleId(windows ? appDraft.toLowerCase() : appDraft)
+    const id = windows ? normalizeExeName(appDraft) : normalizeBundleId(appDraft)
     if (!id) { setAppError(windows ? 'computerHistory.win.invalid' : 'computerHistory.apps.invalid'); return }
     if (exclude.apps.some((x) => x.toLowerCase() === id.toLowerCase())) { setAppError('computerHistory.apps.duplicate'); return }
     setAppError(null)

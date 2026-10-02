@@ -248,6 +248,8 @@ describe('输入收敛 / 策略', () => {
     expect(policy.titleOnlyBundleIds).not.toContain('com.apple.Terminal') // 被用户排除 → 不再只记标题,而是什么都不记
     expect(policy).toMatchObject({ text: true, clicks: true, keys: true })
     expect(buildPolicy({ apps: [], domains: [] }).titleOnlyBundleIds).toEqual([...DEFAULT_TITLE_ONLY_BUNDLE_IDS])
+    // Windows 的 exe 名常带空格、+、括号(notepad++.exe / Code - Insiders.exe)
+    expect(normalizeExclude({ apps: ['notepad++.exe', 'Code - Insiders.exe', 'a\\b.exe'], domains: [] }).apps).toEqual(['notepad++.exe', 'Code - Insiders.exe'])
   })
 
   it('applyExclude:排除 App 只留不带标题的 app 切换(它的 window 事件整条丢);排除站点留一条不带内容的标记、同 App 连续不重复', () => {

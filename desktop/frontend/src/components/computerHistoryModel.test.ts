@@ -3,7 +3,7 @@ import { __dictSnapshot } from '../i18n'
 import './computerHistoryMessages'
 import type { ComputerHistorySession, ComputerHistoryStatus } from '../../../shared/computerHistory'
 import {
-  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, WINDOWS_STATUS_KEYS, clearArg, clockLabel, isSupportedPlatform, needsHelperSetup, normalizeBundleId,
+  CLEAR_CHOICES, PAUSE_CHOICES, STATUS_KEYS, WINDOWS_STATUS_KEYS, clearArg, clockLabel, isSupportedPlatform, needsHelperSetup, normalizeBundleId, normalizeExeName,
   normalizeDomain, statusKeys, pauseArg, startOfLocalDay, statusTone, historyBlocks, urlHost, dayOptions, dayRange, dayStartAgo, localDayKey,
 } from './computerHistoryModel'
 
@@ -117,6 +117,9 @@ describe('computerHistoryModel', () => {
     expect(statusKeys('helper_missing', 'darwin')).toBe(STATUS_KEYS.helper_missing)
     expect(statusKeys('recording', 'win32')).toBe(STATUS_KEYS.recording)
     expect(normalizeBundleId('chrome.exe')).toBe('chrome.exe') // Windows 的 App 标识 = exe 文件名,照样过校验
+    expect(normalizeExeName(' Notepad++.EXE ')).toBe('notepad++.exe')
+    expect(normalizeExeName('Code - Insiders.exe')).toBe('code - insiders.exe')
+    for (const bad of ['chrome', 'C:\\Windows\\notepad.exe', '../x.exe', ' .exe', '*.exe']) expect(normalizeExeName(bad), bad).toBeNull()
   })
 
   it('主机名:解析失败给空串', () => {

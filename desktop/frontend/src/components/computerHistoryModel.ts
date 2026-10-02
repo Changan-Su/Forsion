@@ -198,3 +198,11 @@ export function normalizeBundleId(input: string): string | null {
   if (id.length > 255 || !/^[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+$/.test(id)) return null
   return id
 }
+
+/** Windows 手填的程序文件名 → 小写规整值(helper 按小写 exe 名比对);必须以 .exe 结尾,允许空格、+、括号、&、'
+ *  (`notepad++.exe`、`Code - Insiders.exe`),不收路径。不合法返回 null。 */
+export function normalizeExeName(input: string): string | null {
+  const id = input.trim().toLowerCase()
+  if (id.length > 255 || !/^[a-z0-9][a-z0-9._+()&' -]*\.exe$/.test(id)) return null
+  return id
+}

@@ -5,7 +5,7 @@
  * 纪律:
  *  1. **绝不原地运行 CU 包里的 exe**:CU 引擎插件的 setup-helper.mjs 每起一个新引擎进程就把随包 exe 覆盖到
  *     ~/.pi/agent/helpers/tangu-computer-use/windows-bridge.exe,插件目录更新时也会被整目录原子替换 —— 常驻进程占着这些
- *     路径,Windows 上覆盖 / 替换就会失败,Computer Use 随之坏掉。所以拷进 `<电脑历史根>/bin/windows-bridge-<h12>.exe`
+ *     路径,Windows 上覆盖 / 替换就会失败,Computer Use 随之坏掉。所以拷进 `%LOCALAPPDATA%\tangu-computer-use\recorder\windows-bridge-<h12>.exe`
  *     (h12 = 内容 sha256 前 12 位)再跑;同目录临时名 + rename,存在即视为完整。别的哈希的旧副本尽力删(还在跑的删不掉,
  *     它没了订阅者约 60s 后自己退出,下次再删)。
  *  2. **管道名带用户 + 内容哈希**:命名管道是全机的,快速用户切换下两个用户不能撞;新 exe = 新管道,旧服务没人连自己退出。
@@ -21,9 +21,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { activeBundleDir, builtinBundleSources } from './builtinPlugins'
 
+/** 私有副本的目录:%LOCALAPPDATA%\tangu-computer-use\recorder。不放电脑历史根下 —— 「清空数据」整删那棵树时还在跑的 exe
+ *  删不掉(服务在最后一个订阅者走后约 60s 才退),会留下半截目录;也不放漫游的 %APPDATA%,更不是 setup-helper 覆盖的 ~/.pi 路径。 */
+export function recorderBinDir(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string {
+  return path.join(env.LOCALAPPDATA?.trim() || path.join(home, 'AppData', 'Local'), 'tangu-computer-use', 'recorder')
+}
+
 /** 这一次连接要用的 Windows 录制服务(控制器每次连接现取)。 */
 export interface WindowsRecorderTarget {
-  /** 私有副本(bin/windows-bridge-<h12>.exe),拉起它,不是 CU 包里那份。 */
+  /** 私有副本(recorderBinDir() 下的 windows-bridge-<h12>.exe),拉起它,不是 CU 包里那份。 */
   exe: string
   /** `\\.\pipe\tangu-computer-use-recorder-<u8>-<h12>` */
   pipe: string

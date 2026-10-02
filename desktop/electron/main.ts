@@ -59,7 +59,7 @@ import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, 
 import { computerUseLiveView, helperSocketPath } from './computerUse'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
 import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
-import { createWindowsRecorderResolver, windowsRecorderSource } from './computerHistoryWin'
+import { createWindowsRecorderResolver, recorderBinDir, windowsRecorderSource } from './computerHistoryWin'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
@@ -1991,9 +1991,9 @@ app.whenReady().then(async () => {
       socketPath,
       externalSocket: socketPath !== helperSocketPath({}),
       helperAppPath: () => permissionHelperAppPath(),
-      // Windows:CU 包里的 windows-bridge.exe 拷成 <root>/bin 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)
+      // Windows:CU 包里的 windows-bridge.exe 拷成 %LOCALAPPDATA% 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)
       windowsRecorder: process.platform === 'win32' ? createWindowsRecorderResolver({
-        binDir: join(chRoot, 'bin'),
+        binDir: recorderBinDir(),
         source: () => windowsRecorderSource({
           isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath, pluginsRoot: join(forsionHomeDir(), 'plugins'),
         }),
