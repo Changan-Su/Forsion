@@ -116,11 +116,11 @@ export function listLanguages(): ThemeEntry[] {
 }
 
 export function getLanguage(id: string): ThemeEntry | null {
-  return themeRegistry[id] ?? null;
+  return Object.hasOwn(themeRegistry, id) ? themeRegistry[id] : null;
 }
 
 export function hasLanguage(id: string): boolean {
-  return id in themeRegistry;
+  return Object.hasOwn(themeRegistry, id);
 }
 
 /** 全部配色(含 custom 殿后)。主题色轴与背景色轴共用这张表。 */

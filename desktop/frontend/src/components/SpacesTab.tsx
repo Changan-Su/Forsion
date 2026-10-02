@@ -12,6 +12,7 @@ import { panelToast } from './PanelNotice'
 import { useI18n } from '../i18n'
 import { LayoutGrid, Rocket } from 'lucide-react'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
+import { SpaceAppearancePanel } from './SpaceAppearancePanel'
 
 export const SpacesTab: React.FC = () => {
   const { t } = useI18n()
@@ -59,6 +60,8 @@ export const SpacesTab: React.FC = () => {
           )}
         />
       </SettingsPanel>
+
+      <SpaceAppearancePanel />
 
       <SettingsPanel icon={<LayoutGrid size={16} />} title={t('settings.spaces.libraryTitle', { count: spaces.length })} description={t('settings.spaces.hint')}>
         <div className="settings-collection-list">

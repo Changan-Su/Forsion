@@ -8,6 +8,8 @@
  * ⚠ 带值而不是让收方自己读 localStorage:localStorage 的跨进程可见性与 IPC 是两条管道,
  *   收方可能读到旧值 —— 那等于 bug 没修。收方仍要校验(见 themeStore / uiPrefsApply)。
  */
+import { normalizeSpaceAppearanceUpdate, type SpaceAppearanceUpdate } from './spaceAppearance'
+
 export interface ThemeAxes {
   lang: string
   skin: string
@@ -22,6 +24,7 @@ export interface ThemeAxes {
 }
 
 export interface UiSyncPayload {
+  spaceAppearance?: SpaceAppearanceUpdate
   theme?: ThemeAxes
   /** 渲染层本地偏好:localStorage 键 → 值(null = 删键 = 回到默认)。白名单在收方 uiPrefsApply。 */
   prefs?: Record<string, string | null>
@@ -76,7 +79,8 @@ export function normalizeUiSync(raw: unknown): UiSyncPayload | null {
   const v = raw as Record<string, unknown>
   const t = theme(v.theme)
   const p = prefs(v.prefs)
-  return t || p ? { theme: t, prefs: p } : null
+  const spaceAppearance = normalizeSpaceAppearanceUpdate(v.spaceAppearance)
+  return t || p || spaceAppearance ? { theme: t, prefs: p, ...(spaceAppearance ? { spaceAppearance } : {}) } : null
 }
 
 // ── P1-KF:渲染层生效语言 → 主进程(托盘 / 系统通知 / 对话框的 mt() 跟它走)──────────────────────────────

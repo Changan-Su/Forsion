@@ -4,7 +4,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { lazyRetry } from '../../../lazyRetry'
 import { useDrawStore, registerDrawingApplier } from '../../store/drawingStore'
-import { useTheme } from '../../../stores/themeStore'
+import { useVisualTheme as useTheme } from '../../../stores/themeStore'
 import { registerMessages, useI18n } from '../../../i18n'
 import { amadeus } from '../../api'
 import type { BoardSettings } from '@amadeus-shared/excalidraw/board'

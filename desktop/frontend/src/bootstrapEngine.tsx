@@ -27,7 +27,7 @@ import { UnitSwitcher } from './components/UnitSwitcher'
 import { useApp, activeChatModelId } from './stores/appStore'
 import { openBtw } from './views/chat2/btwStore'
 import { PRODUCT } from './product'
-import { useTheme } from './stores/themeStore'
+import { useTheme, useVisualTheme, toggleVisibleMode } from './stores/themeStore'
 import { notifyApp, useNotifications } from './stores/notificationStore'
 import { cycleLocale, registerMessages, subscribeLocale, translate, useI18n } from './i18n'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
@@ -96,7 +96,7 @@ const splitChat = (): void => {
 /** Ribbon 明暗钮的图标跟随当前明暗:暗色显示 Sun(点了变亮),亮色显示 Moon(点了变暗)。
  *  做成读 store 的组件而不是换注册:RibbonItem.icon 是静态字段,主页坞 / 移动单列壳也直接拿它渲染。 */
 const ThemeModeIcon = ((props: LucideProps) => {
-  const dark = useTheme((s) => s.mode === 'dark')
+  const dark = useVisualTheme((s) => s.mode === 'dark')
   return dark ? <Sun {...props} /> : <Moon {...props} />
 }) as unknown as LucideIcon
 
@@ -353,7 +353,7 @@ export function installEngine(): void {
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
-  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
+  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useVisualTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => toggleVisibleMode() })
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 10-02 用户拍板:从 head 挪进命令区,默认在明暗与命令面板之间 → 注册在 rb-mode 之后、rb-cmd 之前(无持久顺序时注册序即上下序)。
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
@@ -453,7 +453,7 @@ export function installEngine(): void {
   // `side === 'left' ? 左 : 右` 的二元三目 —— 传 'bottom' 会**去开右抽屉**(命令面板在移动端也在,
   // 不 gate 就真能点到)。同理它的 bucketOf/sidebarDefaults 也没有 bottom 桶。
   if (UI_MODE !== 'mobile') addCommand({ id: 'toggle-bottom', icon: PanelBottom, checked: () => ws().bottomVisible, title: () => app().tr('command.toggleBottom'), keywords: 'panel bottom terminal 底部 面板 终端', hotkey: 'mod+j', run: () => ws().toggleSidebar('bottom') })
-  addCommand({ id: 'theme-mode', icon: ThemeModeIcon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
+  addCommand({ id: 'theme-mode', icon: ThemeModeIcon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => toggleVisibleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })
   // ⚠️别与上一条混:theme-lang = 主题的「语言层」(genesis/lovable/soft),这条才是界面中英文。

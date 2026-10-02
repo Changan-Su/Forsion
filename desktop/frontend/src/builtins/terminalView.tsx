@@ -11,7 +11,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { ViewProps } from '@lcl/engine'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useI18n } from '../i18n'
 import { takePendingRun, type PendingRun } from './runCommand'
 
