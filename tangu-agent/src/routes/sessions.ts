@@ -599,8 +599,13 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || '';
     if (!modelId) return res.status(400).json({ detail: '需要 model_id 才能压缩（会话未设模型）' });
-    // 在途 run 正往 chat_messages 落段、也可能正落自己的检查点:手动压缩不与它并发(TUI 同款拒绝)
-    if (sessionHasActiveRun(req.params.id) || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'Session has an active run; compact after it finishes' });
+    // 在途 run 正往 chat_messages 落段、也可能正落自己的检查点:手动压缩不与它并发(TUI 同款拒绝)。
+    // 进程内 Map 看不到别的进程(TUI / 网关)的 run → 与删消息路由同样查 agent_runs 表(PI-DSH 评审 R6)。
+    const inflight = await query<any[]>(
+      `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
+      [req.params.id],
+    );
+    if (inflight.length || sessionHasActiveRun(req.params.id) || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'Session has an active run; compact after it finishes' });
     // instructions = /compact <focus>:一次性的 Additional focus(pi 同款),不落配置
     const focus = typeof req.body?.instructions === 'string' ? req.body.instructions.trim().slice(0, 2000) : '';
     // 旋钮与自动压缩同一契约:会话 agent_config.compaction > 该会话 Agent 的 [compaction] > config.json > 缺省
