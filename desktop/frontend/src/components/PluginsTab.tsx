@@ -173,6 +173,10 @@ export const PluginsTab: React.FC<{
                   <span data-plugin-failed title={p.lastError} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger, #c0392b)', border: 'var(--border-width) solid var(--danger, #c0392b)', borderRadius: 4, padding: '0 4px' }}>
                     {t('settings.plugins.loadFailed')}
                   </span>
+                ) : p.settling ? (
+                  <span data-plugin-settling title={t('settings.plugins.settlingHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
+                    {t('settings.plugins.settling')}
+                  </span>
                 ) : null)}
               </div>
               <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>

@@ -14,7 +14,8 @@
  *  C 装上前置并重新加载 → 开关可点;打开 → 在跑:前置行 = ok,「运行占用」列出语言订阅
  *  D 关前置 → 弹确认且点名依赖方 → 依赖方暂停,回到「等待前置插件」
  *  E 开前置 → 依赖方自动恢复
- *  F 引擎插件页(桩引擎按新引擎形状给列表):开着却休眠的挂「等待前置插件」;关着且前置没齐的开关灰掉
+ *  F 引擎插件页(桩引擎按新引擎形状给列表):开着却休眠的挂「等待前置插件」;关着且前置没齐的开关灰掉;
+ *    上一次启停超时还在收尾的挂「正在收尾」
  *
  * 用法:npx electron-vite build 之后 `npm run check:plugindeps`。渲染层改动不 build 就跑 = 测的是旧代码(调试铁律 2)。
  */
@@ -65,6 +66,7 @@ async function main() {
       engPlugin('eng-base', { enabled: false, active: false }),
       engPlugin('eng-user', { enabled: true, active: false, requiresPlugins: [{ id: 'eng-base' }], waitingFor: [{ id: 'eng-base', reason: 'off' }] }),
       engPlugin('eng-off', { enabled: false, active: false, requiresPlugins: [{ id: 'eng-missing' }] }),
+      engPlugin('eng-settling', { enabled: true, active: false, settling: true }),
     ] } : undefined),
   })
   fs.writeFileSync(path.join(userData + '-dev', 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'deps-test-token' }))
@@ -147,6 +149,8 @@ async function main() {
     check('F 引擎插件开着却休眠 → 挂「等待前置插件」', await waitFor(() => eng('eng-user').locator('[data-plugin-waiting]').count().then((n) => n === 1)))
     check('F 引擎插件关着、前置没装 → 开关灰掉', await waitFor(() => eng('eng-off').locator('input[type="checkbox"]').isDisabled()))
     check('F 对照:关着但没声明前置的照常可开', !(await eng('eng-base').locator('input[type="checkbox"]').isDisabled()))
+    check('F 上一次启停还在收尾 → 挂「正在收尾」,不是「加载失败」', await waitFor(async () =>
+      (await eng('eng-settling').locator('[data-plugin-settling]').count()) === 1 && (await eng('eng-settling').locator('[data-plugin-failed]').count()) === 0))
     await pause(300) // 子页入场动画:没跑完就截是半透明的中间帧
     await fl.evaluate(() => document.getAnimations().forEach((a) => { if (Number.isFinite(a.effect?.getComputedTiming().endTime)) a.finish() }))
     const shotEngine = path.join(temp, 'plugin-deps-engine.png')
