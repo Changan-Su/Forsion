@@ -5025,3 +5025,9 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transf
  * 放文件末尾,与上面 .settings-page--mobile 那组页头规则的顺序无关也稳(DESIGN §7.2)。 */
 .settings-page--mobile[data-native-chrome] .settings-mobile-home-head,
 .settings-page--mobile[data-native-chrome] .settings-mobile-detail-head { display: none; }
+
+/* 应用市场同款:原生顶栏 page 模式(标题 + 返回;详情页加 ×)接管时,Web 的返回钮 + 品牌块与详情页「返回列表」让位,
+ * 分类药丸行(.settings-nav-list)留着。要压过 @media (pointer: coarse) 里
+ * `.settings-page:not(.settings-page--mobile) .settings-nav-top`(0,3,0)的 display:flex → 同为 (0,3,0),靠放文件末尾(DESIGN §7.2)。 */
+.mk-page[data-native-chrome] .settings-nav-top,
+.mk-page[data-native-chrome] .mk-detail-back { display: none; }

@@ -143,6 +143,10 @@ export interface Command {
    *  与 `.is-on` 高亮,一眼看出开没开。渲染期求值,须便宜、无副作用;Ribbon 在点击后与悬停时重读,
    *  别处改了状态要等下次重渲才跟上(引擎不订阅宿主状态)。不是开关就别声明 —— 否则会被读屏报成「未按下」。 */
   checked?: () => boolean
+  /** 手机单列壳「⋯」菜单里的分组:声明了 = 这条命令也直接列进「⋯」(同 id 的命令归一节,节标题 = title,
+   *  渲染期求值、跟随语言)。给**没有 ribbon 图标**的来源用 —— 外置插件只贡献命令,手机上又没有命令区可钉。
+   *  桌面 Ribbon / 命令面板不读这个字段。 */
+  moreGroup?: { id: string; title: string | (() => string) }
 }
 
 /** ribbon 竖条上的一个图标(≈ Obsidian addRibbonIcon)。 */

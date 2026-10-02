@@ -280,6 +280,9 @@
 }
 .mb-sheet-row:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); }
 .mb-sheet-card { padding: 4px 2px; }
+/* 「⋯」里声明了 moreGroup 的命令组(插件命令):节标题 + 分隔线,行沿用 .mb-sheet-row。 */
+.mb-sheet-group { margin-top: 6px; padding-top: 6px; border-top: var(--border-width, 1px) solid var(--border, rgba(0, 0, 0, 0.1)); }
+.mb-sheet-head { padding: 6px 12px 2px; font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-faint, var(--text-muted, #888)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── 标签页切换 sheet 的行(骑 .mb-sheet-row 壳) ── */
 .mb-tabrow.on { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); font-weight: 600; }

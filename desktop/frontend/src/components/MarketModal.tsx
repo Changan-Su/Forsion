@@ -8,7 +8,7 @@ import {
   GitBranch, Globe, LayoutGrid, Library, Loader2, Package, PackageOpen, Palette, Puzzle,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
 } from 'lucide-react'
-import { Skeleton } from '@lcl/engine'
+import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
@@ -296,6 +296,14 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
     }
   }
 
+  // Android 原生顶栏(lcl nativeChrome 的可选宿主)在场时由它画标题 + 返回(page 模式),与设置页同一口径:
+  // 列表页「返回」= 退出市场;详情页「返回」= 回列表、「×」= 退出市场。Web 页头(返回钮 + 品牌)让位(data-native-chrome),
+  // 分类药丸行留着。没装宿主(桌面、Web、手机浏览器)时声明为 null = 空操作。
+  const nativeChrome = useNativeChromeInstalled()
+  useNativeChromeClaim(!nativeChrome ? null : detail
+    ? { mode: 'page', title: detail.name, back: t('market.detailBack'), onBack: () => setDetail(null), close: t('settings.backToApp'), onClose: close }
+    : { mode: 'page', title: t('market.title'), back: t('settings.backToApp'), onBack: close })
+
   // Android 返回键(MobileRoot 先派发 forsion:mobile-back):详情页开着 → 先回列表,不关整个市场。
   useEffect(() => {
     if (!detail) return
@@ -463,7 +471,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const showSort = !detail && tab !== 'submit' && tab !== 'webapp'
 
   return (
-    <div className="settings-page mk-page">
+    <div className="settings-page mk-page" data-native-chrome={nativeChrome ? '' : undefined}>
       <aside className="settings-nav" aria-label="Market navigation">
         <div className="settings-nav-top">
           <button className="settings-back" onClick={close}><ArrowLeft size={15} /> {t('settings.backToApp')}</button>

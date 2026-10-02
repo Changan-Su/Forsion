@@ -11,9 +11,11 @@
  */
 import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
-import { PanelLeft, PanelRight, X, MoreHorizontal, Plus } from 'lucide-react'
+import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
+import { useCommandStore } from './commandRegistry'
+import { moreCommandGroups, moreCommandOn, moreCommandTitle } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
@@ -450,24 +452,36 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
   return true
 }
 
-/** 「⋯」菜单的原生版。带 React `component` 的项没法交给原生层画 → 有这种项时整张留在 Web sheet。 */
+/** 「⋯」菜单的原生版。带 React `component` 的项没法交给原生层画 → 有这种项时整张留在 Web sheet。
+ *  ribbon 底部项一节在前;其后每个声明了 `moreGroup` 的命令组一节(外置插件的命令,节标题 = 插件名),
+ *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板)。 */
 async function presentNativeMore(tr: Tr): Promise<boolean> {
   const items = useRibbonStore.getState().items.filter(isMoreItem)
-  if (!items.length || items.some((i) => i.component)) return false
+  const groups = moreCommandGroups(useCommandStore.getState().commands)
+  if ((!items.length && !groups.length) || items.some((i) => i.component)) return false
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.more'),
-    sections: [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? label(it.tooltip) : it.id, icon: it.icon })) }],
+    sections: [
+      ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? label(it.tooltip) : it.id, icon: it.icon })) }] : []),
+      ...groups.map((g) => ({
+        ...(g.title ? { title: g.title } : {}),
+        items: g.commands.map((c) => ({ id: `cmd:${c.id}`, label: moreCommandTitle(c), icon: c.icon ?? Zap, ...(moreCommandOn(c) ? { checked: true } : {}) })),
+      })),
+    ],
   })
   if (!out.handled) return false
-  const picked = out.value ? items.find((i) => i.id === out.value?.id) : undefined
-  picked?.onClick?.()
+  const id = out.value?.id
+  if (!id) return true
+  if (id.startsWith('cmd:')) { useCommandStore.getState().run(id.slice('cmd:'.length)); return true }
+  items.find((i) => i.id === id)?.onClick?.()
   return true
 }
 
-/** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)。
+/** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)+ 声明了 `moreGroup` 的命令组(插件命令)。
  *  账号(rb-account)与设置(rb-settings)已迁去左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
   const items = useRibbonStore((s) => s.items).filter(isMoreItem)
+  const groups = moreCommandGroups(useCommandStore((s) => s.commands))
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>
       <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
@@ -485,6 +499,21 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
             </button>
           )
         })}
+        {groups.map((g) => (
+          <div key={g.id} className="mb-sheet-group" data-more-group={g.id}>
+            {g.title && <div className="mb-sheet-head">{g.title}</div>}
+            {g.commands.map((c) => {
+              const Icon = c.icon ?? Zap
+              const on = moreCommandOn(c)
+              return (
+                <button key={c.id} className="mb-sheet-row" data-command-id={c.id} aria-pressed={c.checked ? on : undefined} onClick={() => { onClose(); useCommandStore.getState().run(c.id) }}>
+                  <Icon size={20} />
+                  <span>{moreCommandTitle(c)}</span>
+                </button>
+              )
+            })}
+          </div>
+        ))}
       </div>
     </div>
   )
