@@ -143,8 +143,24 @@ export async function renderNativeIcons(sources: readonly NativeIconSource[]): P
     }
     return undefined
   })
-  const pending = sources.map((s, i) => ({ s, i })).filter(({ s }) => s != null && typeof s !== 'boolean' && typeof s !== 'string' && typeof s !== 'number')
-  if (!pending.length || typeof document === 'undefined') return out
+  const drawable = sources.map((s, i) => ({ s, i })).filter(({ s }) => s != null && typeof s !== 'boolean' && typeof s !== 'string' && typeof s !== 'number')
+  if (!drawable.length || typeof document === 'undefined') return out
+  // Long lists repeat the same icon (a session list: one MessagesSquare per row). Render each distinct
+  // component / simple element once and copy the result: smaller payload, fewer DOM nodes.
+  const firstOf = new Map<unknown, Map<string, number>>()
+  const copies: Array<{ from: number; to: number }> = []
+  const pending: typeof drawable = []
+  for (const entry of drawable) {
+    const key = dedupeKey(entry.s)
+    if (key) {
+      const byProps = firstOf.get(key[0]) ?? new Map<string, number>()
+      firstOf.set(key[0], byProps)
+      const first = byProps.get(key[1])
+      if (first !== undefined) { copies.push({ from: first, to: entry.i }); continue }
+      byProps.set(key[1], entry.i)
+    }
+    pending.push(entry)
+  }
   const host = document.createElement('div')
   let root: ReturnType<typeof createRoot> | null = null
   try {
@@ -167,5 +183,19 @@ export async function renderNativeIcons(sources: readonly NativeIconSource[]): P
   } finally {
     try { root?.unmount() } catch { /* already gone */ }
   }
+  for (const { from, to } of copies) out[to] = out[from]
   return out
+}
+
+/** Identity for dedupe: a component type, or an element of a component type whose props are plain JSON
+ *  (`<Pencil size={13} />`). Anything else (children, callbacks, refs) is rendered on its own. */
+function dedupeKey(src: NativeIconSource): [unknown, string] | null {
+  if (isComponentType(src)) return [src, '']
+  if (!isValidElement(src) || typeof src.type === 'string' || src.key != null) return null
+  const props = src.props as Record<string, unknown>
+  for (const v of Object.values(props)) {
+    if (v != null && typeof v === 'object') return null
+    if (typeof v === 'function' || typeof v === 'symbol') return null
+  }
+  try { return [src.type, JSON.stringify(props)] } catch { return null }
 }

@@ -10,7 +10,7 @@
  *  `dispatchNativeChromeAction`. */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
-export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back'
+export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close'
 export interface NativeChromeShellLabels { left: string; right: string; tabs: string; more: string }
 export interface NativeChromeShellState {
   mode: 'shell'
@@ -21,7 +21,8 @@ export interface NativeChromeShellState {
   tabCount: number
   labels: NativeChromeShellLabels
 }
-export interface NativeChromePageState { mode: 'page'; title: string; back: string }
+/** `close` = label of an optional trailing × (e.g. a settings sub-page: back = settings home, × = leave settings). */
+export interface NativeChromePageState { mode: 'page'; title: string; back: string; close?: string }
 export interface NativeChromeHiddenState { mode: 'hidden' }
 export type NativeChromeState = NativeChromeShellState | NativeChromePageState | NativeChromeHiddenState
 
@@ -29,8 +30,8 @@ export interface NativeChromeHost {
   /** Receives every change of the effective state (already deduplicated). */
   render(state: NativeChromeState): void
 }
-export type NativeChromeShellHandlers = Partial<Record<Exclude<NativeChromeAction, 'back'>, () => void>>
-export type NativeChromeClaim = NativeChromeHiddenState | (NativeChromePageState & { onBack: () => void })
+export type NativeChromeShellHandlers = Partial<Record<Exclude<NativeChromeAction, 'back' | 'close'>, () => void>>
+export type NativeChromeClaim = NativeChromeHiddenState | (NativeChromePageState & { onBack: () => void; onClose?: () => void })
 export interface NativeChromeClaimHandle { update(next: NativeChromeClaim): void; release(): void }
 
 const HIDDEN: NativeChromeHiddenState = { mode: 'hidden' }
@@ -42,7 +43,7 @@ const subscribers = new Set<() => void>()
 
 function effective(): NativeChromeState {
   const top = claims[claims.length - 1]?.claim
-  if (top) return top.mode === 'page' ? { mode: 'page', title: top.title, back: top.back } : HIDDEN
+  if (top) return top.mode === 'page' ? { mode: 'page', title: top.title, back: top.back, ...(top.close && top.onClose ? { close: top.close } : {}) } : HIDDEN
   return shell?.state ?? HIDDEN
 }
 function flush(): void {
@@ -95,17 +96,24 @@ export function claimNativeChrome(claim: NativeChromeClaim): NativeChromeClaimHa
   }
 }
 
-/** Hold a claim while `claim` is non-null. `onBack` may change between renders without re-claiming. */
+/** Hold a claim while `claim` is non-null. `onBack` / `onClose` may change between renders without re-claiming. */
 export function useNativeChromeClaim(claim: NativeChromeClaim | null): void {
   const onBack = useRef<(() => void) | undefined>(undefined)
+  const onClose = useRef<(() => void) | undefined>(undefined)
   onBack.current = claim && claim.mode === 'page' ? claim.onBack : undefined
-  const key = claim ? JSON.stringify(claim.mode === 'page' ? { m: 'page', t: claim.title, b: claim.back } : { m: 'hidden' }) : ''
+  onClose.current = claim && claim.mode === 'page' ? claim.onClose : undefined
+  const key = claim ? JSON.stringify(claim.mode === 'page'
+    ? { m: 'page', t: claim.title, b: claim.back, c: claim.close && claim.onClose ? claim.close : '' }
+    : { m: 'hidden' }) : ''
   const handle = useRef<NativeChromeClaimHandle | null>(null)
   useEffect(() => {
     if (!key) return
-    const parsed = JSON.parse(key) as { m: string; t?: string; b?: string }
+    const parsed = JSON.parse(key) as { m: string; t?: string; b?: string; c?: string }
     const next: NativeChromeClaim = parsed.m === 'page'
-      ? { mode: 'page', title: parsed.t ?? '', back: parsed.b ?? '', onBack: () => onBack.current?.() }
+      ? {
+        mode: 'page', title: parsed.t ?? '', back: parsed.b ?? '', onBack: () => onBack.current?.(),
+        ...(parsed.c ? { close: parsed.c, onClose: () => onClose.current?.() } : {}),
+      }
       : HIDDEN
     if (handle.current) handle.current.update(next)
     else handle.current = claimNativeChrome(next)
@@ -119,9 +127,10 @@ export function dispatchNativeChromeAction(action: NativeChromeAction): boolean 
   const top = claims[claims.length - 1]?.claim
   if (top) {
     if (action === 'back' && top.mode === 'page') { top.onBack(); return true }
+    if (action === 'close' && top.mode === 'page' && top.close && top.onClose) { top.onClose(); return true }
     return false
   }
-  if (action === 'back' || !shell) return false
+  if (action === 'back' || action === 'close' || !shell) return false
   const fn = shell.handlers[action]
   if (!fn) return false
   fn()

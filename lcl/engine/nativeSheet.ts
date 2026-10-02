@@ -24,6 +24,8 @@ export interface NativeSheetTheme {
 }
 
 export interface NativeMenuTrailing<I = NativeIconSource> { id: string; label: string; icon?: I }
+/** Native-side filtering (label + detail, case-insensitive) of one page. */
+export interface NativeMenuSearch { placeholder: string; empty: string }
 export interface NativeMenuItem<I = NativeIconSource> {
   id: string
   label: string
@@ -34,16 +36,19 @@ export interface NativeMenuItem<I = NativeIconSource> {
   disabled?: boolean
   /** Nested sections → pushed page with a back button. */
   children?: NativeMenuSection<I>[]
+  /** Search field on the nested page opened by this item (only meaningful with `children`). */
+  search?: NativeMenuSearch
   /** A secondary action button at the end of the row (e.g. close ×). */
   trailing?: NativeMenuTrailing<I>
 }
-export interface NativeMenuSection<I = NativeIconSource> { title?: string; items: NativeMenuItem<I>[] }
+/** `footer` = a short muted note under the section's rows (e.g. what a rewind keeps / cannot restore). */
+export interface NativeMenuSection<I = NativeIconSource> { title?: string; items: NativeMenuItem<I>[]; footer?: string }
 export interface NativeMenuRequest<I = NativeIconSource> {
   kind: 'menu'
   title?: string
   sections: NativeMenuSection<I>[]
-  /** Native-side filtering of the current page. */
-  search?: { placeholder: string; empty: string }
+  /** Search field on the ROOT page (nested pages declare their own via `NativeMenuItem.search`). */
+  search?: NativeMenuSearch
   /** Accessible label of the nested-page back button. */
   back?: string
 }
@@ -120,12 +125,34 @@ export function confirmResult(raw: unknown): NativeConfirmResult | null {
 /** Ids must be unique across the whole tree (including nested pages), or the answer would be ambiguous. */
 function idsUnique<I>(sections: NativeMenuSection<I>[], seen = new Set<string>()): boolean {
   for (const s of sections) for (const it of s.items) {
-    if (!it.id || seen.has(it.id)) return false
+    if (!it.id || it.id.length > MAX_ID || seen.has(it.id)) return false
     seen.add(it.id)
     if (it.children && !idsUnique(it.children, seen)) return false
   }
   return true
 }
+function itemCount<I>(sections: NativeMenuSection<I>[]): number {
+  let n = 0
+  for (const s of sections) for (const it of s.items) n += 1 + (it.children ? itemCount(it.children) : 0)
+  return n
+}
+
+// Native parser caps (NativeSheetPayload.kt). Text is clipped here so ONE long session title cannot make the
+// whole request invalid (which would silently drop the user back to the web menu); ids are never clipped.
+const MAX_ID = 160
+const MAX_TEXT = 256
+const MAX_DETAIL = 1024
+const MAX_BACK = 64
+export const NATIVE_MENU_MAX_ITEMS = 600
+/** Clip to `max` UTF-16 units (what Kotlin's String.length counts) with an ellipsis, never splitting a pair. */
+export function clipNativeText(text: string, max: number): string {
+  if (text.length <= max) return text
+  let cut = max - 1
+  const code = text.charCodeAt(cut - 1)
+  if (code >= 0xd800 && code <= 0xdbff) cut -= 1
+  return text.slice(0, cut) + '…'
+}
+const clipSearch = (s: NativeMenuSearch): NativeMenuSearch => ({ placeholder: clipNativeText(s.placeholder, MAX_TEXT), empty: clipNativeText(s.empty, MAX_TEXT) })
 
 // ── theme ──────────────────────────────────────────────────────────────────────
 
@@ -245,27 +272,31 @@ async function serializeMenu(req: NativeMenuRequest): Promise<NativeMenuRequest<
   const icons = await renderNativeIcons(sources)
   let i = 0
   const map = (sections: NativeMenuSection[]): NativeMenuSection<NativeIcon>[] => sections.map((s) => ({
-    ...(s.title ? { title: s.title } : {}),
+    ...(s.title ? { title: clipNativeText(s.title, MAX_TEXT) } : {}),
+    ...(s.footer ? { footer: clipNativeText(s.footer, MAX_DETAIL) } : {}),
     items: s.items.map((it) => {
       const icon = icons[i++]
       const trailingIcon = icons[i++]
-      const out: NativeMenuItem<NativeIcon> = { id: it.id, label: it.label }
-      if (it.detail) out.detail = it.detail
+      const out: NativeMenuItem<NativeIcon> = { id: it.id, label: clipNativeText(it.label, MAX_TEXT) }
+      if (it.detail) out.detail = clipNativeText(it.detail, MAX_DETAIL)
       if (icon) out.icon = icon
       if (it.checked) out.checked = true
       if (it.danger) out.danger = true
       if (it.disabled) out.disabled = true
-      if (it.children?.length) out.children = map(it.children)
-      if (it.trailing) out.trailing = { id: it.trailing.id, label: it.trailing.label, ...(trailingIcon ? { icon: trailingIcon } : {}) }
+      if (it.children?.length) {
+        out.children = map(it.children)
+        if (it.search) out.search = clipSearch(it.search)
+      }
+      if (it.trailing) out.trailing = { id: it.trailing.id, label: clipNativeText(it.trailing.label, MAX_TEXT), ...(trailingIcon ? { icon: trailingIcon } : {}) }
       return out
     }),
   }))
   return {
     kind: 'menu',
-    ...(req.title ? { title: req.title } : {}),
+    ...(req.title ? { title: clipNativeText(req.title, MAX_TEXT) } : {}),
     sections: map(req.sections),
-    ...(req.search ? { search: req.search } : {}),
-    ...(req.back ? { back: req.back } : {}),
+    ...(req.search ? { search: clipSearch(req.search) } : {}),
+    ...(req.back ? { back: clipNativeText(req.back, MAX_BACK) } : {}),
   }
 }
 
@@ -292,7 +323,7 @@ async function present<T>(build: () => Promise<NativeSheetPayload> | NativeSheet
 export function presentNativeMenu(request: Omit<NativeMenuRequest, 'kind'>, signal?: AbortSignal): Promise<NativeSheetOutcome<NativeMenuResult>> {
   const req: NativeMenuRequest = { ...request, kind: 'menu' }
   if (!presenter) return Promise.resolve({ handled: false })
-  if (!idsUnique(req.sections) || !req.sections.some((s) => s.items.length)) return Promise.resolve({ handled: false })
+  if (!idsUnique(req.sections) || !req.sections.some((s) => s.items.length) || itemCount(req.sections) > NATIVE_MENU_MAX_ITEMS) return Promise.resolve({ handled: false })
   return present(async () => ({ ...(await serializeMenu(req)), theme: readNativeTheme() }), (raw) => menuResult(req, raw), signal)
 }
 export function presentNativePrompt(request: Omit<NativePromptRequest, 'kind'>, signal?: AbortSignal): Promise<NativeSheetOutcome<NativePromptResult>> {
