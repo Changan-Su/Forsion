@@ -45,7 +45,12 @@ async function check(name, fn) {
     console.log('FAIL', name, '—', e && e.message || e)
     try { shots.push(h.screenshot(OUT, `fail-${checks.length}`)) } catch { /* no device */ }
     // Leave a clean stage for the next check: dismiss sheets / drawers left open by the failure.
-    for (let i = 0; i < 3 && !h.byId(h.nodes(), 'nativeChrome.bar'); i++) { h.key(4); await h.pause(500) }
+    // (page mode — settings — keeps the bar: its back button means "still inside a page")
+    for (let i = 0; i < 4; i++) {
+      const l = h.nodes()
+      if (h.byId(l, 'nativeChrome.bar') && !h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeSheet.sheet')) break
+      h.key(4); await h.pause(500)
+    }
   }
 }
 const shot = (name) => { shots.push(h.screenshot(OUT, name)); return name }
@@ -431,6 +436,32 @@ const tabCountText = (list) => {
     const patch = await waitLog(sent, (l) => l.startsWith('PATCH ') && l.includes('/agent/sessions/e2e-s2 '))
     assert.ok(patch && JSON.parse(patch.slice(patch.indexOf('{'))).title === 'E2E Renamed Two', `rename PATCH: ${patch}`)
     assert.ok(await h.waitPage(cdp, `!!${rowExpr('E2E Renamed Two')}`, 5000), 'row title did not update')
+  })
+
+  await check('Orbits row ⋯ (pin round-trip) and "+" menus open natively', async () => {
+    await tanguDrawer()
+    const tail = `[...document.querySelectorAll('.mb-drawer--left .t2o-tail')][0]`
+    const pins = "document.querySelectorAll('.mb-drawer--left .t2o-pin-mark').length"
+    const before = await cdp.eval(pins)
+    for (const step of [1, 2]) { // pin, then unpin again (leaves the pin store as found)
+      await tapEl(tail)
+      const list = await waitSheet(true)
+      const got = ids(list)
+      assert.ok(got.includes('agent-details') && (got.includes('pin') || got.includes('unpin')), `row ids: ${got}`)
+      assert.equal(await cdp.eval("!!document.querySelector('.ctx-menu')"), false, 'web menu rendered as well')
+      if (step === 1) shot('17b-orbit-row-menu')
+      const pin = got.includes('pin')
+      await tapId(`nativeSheet.item.${pin ? 'pin' : 'unpin'}`, list)
+      await waitSheet(false)
+      const want = step === 1 ? before + (pin ? 1 : -1) : before
+      assert.ok(await h.waitPage(cdp, `(${pins}) === ${want} || null`, 4000), `pin mark count after step ${step} != ${want}`)
+    }
+    await tapEl("document.querySelector('.mb-drawer--left .t2o-plus')")
+    const list = await waitSheet(true)
+    assert.deepEqual(ids(list), ['new-agent', 'new-team', 'new-project'])
+    h.key(4)
+    await waitSheet(false)
+    assert.equal(await cdp.eval("!!document.querySelector('.ctx-menu')"), false, 'cancel left a web menu behind')
   })
 
   await check('mode menu: approval tier switches through the same setter (pill + session config), nested agent page', async () => {
