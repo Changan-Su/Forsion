@@ -2,7 +2,7 @@
 // 真 standalone 进程 × mock OpenAI 端点 × 同一个 state.db:
 //   主循环第一轮请求回一个 run_bash(往 side-effect.log 追加一行 = 可观测副作用),工具结果回来后的第二轮请求挂住不回(= run 在飞)。
 //   crash  :A 跑到挂住 → kill -9 A → 起 B → B 是否从头重跑(首轮请求再来一次、副作用再写一行)
-//   sigterm:同上但发 SIGTERM(桌面退出 / 更新的正常路径)→ run 行是否已落终态、B 是否重跑
+//   sigterm:同上但发 SIGTERM(桌面退出 / 更新的正常路径)→ A 退出前须把 run 落成 aborted(drainRunsForExit),B 不重跑
 //   cross  :A 还活着、run 在飞 → 起 B(同库,自愈全开 = 桌面拉起的引擎)→ B 是否把 A 的在飞 run 再跑一遍
 // 用法:npm run build && npm run e2e:runrecovery [-- crash|sigterm|cross ...]
 // 退出码:有场景出现「重跑」或「副作用重复」= 1。
@@ -127,14 +127,15 @@ async function scenario(kind) {
 
     const rerun = after.firstTurn > before.firstTurn;
     const dup = after.side > before.side;
+    const undrained = kind === 'sigterm' && atRestart?.status !== 'aborted'; // 正常退出没把行落成终态
     console.log(`\n[${kind}] run=${runId}`);
     console.log(`  A 在飞时:首轮请求 ${before.firstTurn} 次,副作用 ${before.side} 行,行状态 ${JSON.stringify(before.row)}`);
     console.log(`  B 起来前:行状态 ${JSON.stringify(atRestart)}`);
     console.log(`  B 起来后:首轮请求 ${after.firstTurn} 次,副作用 ${after.side} 行,行状态 ${JSON.stringify(after.row)}`);
     const bLog = B.logs.join('').split('\n').filter((l) => /re-enqueued|stale|recover|interrupted/i.test(l));
     if (bLog.length) console.log(`  B 日志:${bLog.join(' | ')}`);
-    console.log(`  ${rerun || dup ? 'REPRO' : 'CLEAN'}  从头重跑=${rerun} 副作用重复=${dup}`);
-    return !(rerun || dup);
+    console.log(`  ${rerun || dup || undrained ? 'REPRO' : 'CLEAN'}  从头重跑=${rerun} 副作用重复=${dup}${kind === 'sigterm' ? ` 退出前落终态=${!undrained}` : ''}`);
+    return !(rerun || dup || undrained);
   } finally {
     for (const e of engines) try { e.child.kill('SIGKILL'); } catch { /* noop */ }
     await Promise.all(engines.map((e) => e.exited));

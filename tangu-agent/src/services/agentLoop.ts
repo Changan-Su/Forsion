@@ -246,6 +246,7 @@ export function enqueueRun(sessionId: string, runId: string): void {
 
 /** 非阻塞启动一个 run（不 await）。AbortController 同步注册，保证早到的 abort 也生效。仅由 enqueueRun/advanceQueue 调用。 */
 export function startRun(runId: string): void {
+  if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
   const ac = new AbortController();
   abortControllers.set(runId, ac);
   const task = dispatchRun(runId, ac).catch(async (err) => {
@@ -664,6 +665,22 @@ export async function recoverQueuedRuns(): Promise<number> {
     n++;
   }
   return n;
+}
+
+let exiting = false;
+/**
+ * 进程退出前(standalone 收到 SIGTERM / TUI 退出)调,**只在真退出时调**:不再起新 run(中止触发的推进队列也不起,排队行留到下次启动认领),
+ * 中止在飞 run,有界等它们落完终态 —— 中止分支会存下已生成的部分回答并标 aborted。不等的话行停在 running,
+ * 下次启动只能标 orphaned、部分回答也丢了(PI-DSH 评审 R2:dispose 后 2s 内 exit,实测来不及)。
+ */
+export async function drainRunsForExit(timeoutMs: number): Promise<void> {
+  exiting = true;
+  abortAllRuns();
+  const tasks = [...runTasks.values()];
+  if (!tasks.length) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([Promise.allSettled(tasks), new Promise<void>((r) => { timer = setTimeout(r, timeoutMs); })]);
+  if (timer) clearTimeout(timer);
 }
 
 /** 中止所有在飞 run(dispose/卸载用)。各 run 的 finally 会自行清理 + 推进队列。 */
