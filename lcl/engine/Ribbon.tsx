@@ -26,6 +26,8 @@ interface DragState { id: string; zone: RibbonZone; from: string | null } // fro
 // 浮层只存「哪个夹 / 哪个区的溢出」的 id,内容每次 render 从 live store 派生(存快照会在拖出/重排后诈尸,见 codex#1)。
 interface FlyState { key: string; zone: RibbonZone; folderId?: string; top: number }
 interface MenuState { x: number; y: number; entries: { label: string; onClick(): void }[] }
+/** 一个区切出来的样子:露出的一窗 + 其余(进「…」);start = 窗口在整区里的起点,max = 滚轮最多挪几格。 */
+interface Part { shown: Entry[]; tail: Entry[]; start: number; max: number }
 
 const GAP = 4
 /** 常驻上限:上区(Spaces)与命令区各露几项,超出的进「…」(见下面 capT / capB)。 */
@@ -115,6 +117,9 @@ export function Ribbon() {
   const flyRef = useRef<HTMLDivElement>(null)
   const flyTimer = useRef<number | null>(null)
   const geom = useRef<{ top: number; pitch: number; grabDy: number } | null>(null) // 落点几何(dragstart 拍一次)
+  // 滚轮翻看(10-02 用户要求,类 Agent 选择条):各区露出的那一窗往后挪了几格。不持久化,越界在 cut() 里夹回。
+  const [scrollOff, setScrollOff] = useState<Record<RibbonZone, number>>({ top: 0, bottom: 0 })
+  const wheel = useRef({ acc: 0, at: -1e9 })
 
   // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
   //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
@@ -221,16 +226,36 @@ export function Ribbon() {
     }
   }
   /** 溢出从「…」那一端吃起 —— 上区「…」在下,吃列表尾;命令区「…」在上,吃列表头。
-   *  两区都是「离锚点最远的先被收走」:上区锚在顶(head),命令区锚在底(账号卡)。 */
-  const cut = (list: Entry[], cap: number, fromFront: boolean): { shown: Entry[]; tail: Entry[] } => {
-    if (list.length <= cap) return { shown: list, tail: [] }
+   *  两区都是「离锚点最远的先被收走」:上区锚在顶(head),命令区锚在底(账号卡)。
+   *  off = 滚轮挪过的格数(从锚点那一端往里数):露出的是连续一窗,窗外两侧的都进「…」。
+   *  start / max 给快捷键提示与滚轮夹边用。 */
+  const cut = (list: Entry[], cap: number, fromFront: boolean, off: number): Part => {
+    if (list.length <= cap) return { shown: list, tail: [], start: 0, max: 0 }
     const n = Math.max(0, cap - 1) // 留一格给「…」
-    return fromFront
-      ? { shown: list.slice(list.length - n), tail: list.slice(0, list.length - n) }
-      : { shown: list.slice(0, n), tail: list.slice(n) }
+    const max = list.length - n
+    const o = Math.min(Math.max(0, off), max)
+    const start = fromFront ? list.length - n - o : o
+    return { shown: list.slice(start, start + n), tail: [...list.slice(0, start), ...list.slice(start + n)], start, max }
   }
-  const top = cut(topE, capT, false)
-  const bot = cut(botE, capB, true)
+  const top = cut(topE, capT, false, scrollOff.top)
+  const bot = cut(botE, capB, true, scrollOff.bottom)
+  /** 滚轮在区上 = 平移露出的那一窗(DOM 不滚,拖拽落点、「…」、快捷键都照旧按条目算)。
+   *  **一个滚轮事件最多挪一格**:鼠标滚轮一格 = 一个图标(Windows 一格 120px,照原生换算会一下跳 3 格,窗口才 5 格);
+   *  触控板是一串小 delta,攒够一格高(slotH px)挪一格;停顿 200ms 后的第一下不论多小都挪(慢转的滚轮一下只有几 px)。
+   *  方向 = 内容跟着滚轮走:上区往下滚看后面的;命令区藏的在上面,往上滚露出来。
+   *  ponytail: 步长 / 停顿阈值是凭手感估的参数,真机嫌快嫌慢就调 slotH 倍数与 200ms。 */
+  const onZoneWheel = (zone: RibbonZone, part: Part) => (e: React.WheelEvent): void => {
+    if (!part.max || drag || !e.deltaY) return
+    const w = wheel.current
+    const fresh = e.timeStamp - w.at > 200
+    w.at = e.timeStamp
+    w.acc = (fresh ? 0 : w.acc) + (e.deltaMode === 1 ? e.deltaY * slotH : e.deltaY)
+    const step = fresh || Math.abs(w.acc) >= slotH ? Math.sign(w.acc) : 0
+    if (!step) return
+    w.acc = 0
+    const d = zone === 'top' ? step : -step
+    setScrollOff((s) => ({ ...s, [zone]: Math.min(part.max, Math.max(0, Math.min(s[zone], part.max) + d)) }))
+  }
   // 浮层内容一律从 live store / 当前溢出派生(FlyState 只存 id)——拖出/重排后自动跟随,不诈尸。
   const flyFolder = fly?.folderId ? folders.find((f) => f.id === fly.folderId) : undefined
   const flyTail = fly && !fly.folderId ? (fly.zone === 'top' ? top.tail : bot.tail) : undefined
@@ -459,7 +484,7 @@ export function Ribbon() {
   /** i = 当前槽下标,preview = 落点预览后的 id 序;两者之差 = 让位位移(手机桌面那种排斥占位)。
    *  位移用布局 px(slotH)不是 rect 的视口 px —— transform 走的是未缩放坐标系。
    *  line = 被拖项不在本条上(从收纳夹/「…」浮层拖回来)时改画插入线:让位会把末槽压到「…」钮上。 */
-  const renderSlot = (e: Entry, zone: RibbonZone, i: number, preview: string[] | null, line: boolean): React.ReactNode => {
+  const renderSlot = (e: Entry, zone: RibbonZone, i: number, preview: string[] | null, line: boolean, at: number): React.ReactNode => {
     const to = preview ? preview.indexOf(e.id) : i
     return (
       <div
@@ -475,7 +500,7 @@ export function Ribbon() {
         {renderEntry(e)}
         {/* 快捷键提示:只在展开态(收起态 32px 塞不下)、只给上区前 9 个。绝对定位 = 不进流,
             槽高常量 slotH 与拖拽落点几何一点不受影响。 */}
-        {zone === 'top' && expanded && slotHint(i) && <span className="rb-key">{slotHint(i)}</span>}
+        {zone === 'top' && expanded && slotHint(at) && <span className="rb-key">{slotHint(at)}</span>}
       </div>
     )
   }
@@ -498,13 +523,14 @@ export function Ribbon() {
   // 命令区靠下贴账号卡,整组 = Spaces 区的镜像:[＋ / 「…」/ 图标…] ↔ [图标… / 「…」/ ＋],
   // 两个 ＋ 都贴着中间空隙,两个「…」都紧挨各自的图标列。
   // 拖放收在组这一层(不再逐槽挂):同一个 indexAt 既画让位预览又定提交落点 —— 提示在哪就落在哪。
-  const renderZone = (zone: RibbonZone, part: { shown: Entry[]; tail: Entry[] }): React.ReactNode => {
+  const renderZone = (zone: RibbonZone, part: Part): React.ReactNode => {
     const ids = part.shown.map((e) => e.id)
     const preview = drag && over?.zone === zone && ids.includes(drag.id) ? moveTo(ids, drag.id, over.index) : null
     return (
       <div
         className={`rb-group rb-${zone}`}
         onContextMenu={onZoneCtx(zone)}
+        onWheel={onZoneWheel(zone, part)}
         /* 下标没变就还回原对象:dragover 每秒几十发,不这么挡会整条 ribbon 每帧重渲一次。 */
         onDragOver={(e) => {
           const ix = indexAt(e.currentTarget, e.clientY, ids.length)
@@ -516,7 +542,7 @@ export function Ribbon() {
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, (over?.zone === zone ? ids[over.index] : null) ?? null) }}
       >
         {zone === 'bottom' && <>{renderPlusBtn(zone)}{part.tail.length > 0 && renderMoreBtn(zone)}</>}
-        {part.shown.map((en, i) => renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i))}
+        {part.shown.map((en, i) => renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, part.start + i))}
         {zone === 'top' && <>{part.tail.length > 0 && renderMoreBtn(zone)}{renderPlusBtn(zone)}</>}
       </div>
     )
