@@ -59,6 +59,7 @@ import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, 
 import { computerUseLiveView, helperSocketPath } from './computerUse'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
 import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
+import { createWindowsRecorderResolver, windowsRecorderSource } from './computerHistoryWin'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
@@ -1983,16 +1984,24 @@ app.whenReady().then(async () => {
   // 读者是 agent 工具 / Muse,没有 agent 后端的产品形态不建(preload 同步收掉 window.tangu.computerHistory)。
   if (PRODUCT.agentBackend) {
     const socketPath = helperSocketPath()
+    const chRoot = join(forsionHomeDir(), 'computer-history')
     computerHistory = new ComputerHistory({
-      root: join(forsionHomeDir(), 'computer-history'),
+      root: chRoot,
       platform: process.platform,
       socketPath,
       externalSocket: socketPath !== helperSocketPath({}),
       helperAppPath: () => permissionHelperAppPath(),
+      // Windows:CU 包里的 windows-bridge.exe 拷成 <root>/bin 下的私有副本再以常驻服务跑(绝不原地跑,见 computerHistoryWin.ts)
+      windowsRecorder: process.platform === 'win32' ? createWindowsRecorderResolver({
+        binDir: join(chRoot, 'bin'),
+        source: () => windowsRecorderSource({
+          isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath, pluginsRoot: join(forsionHomeDir(), 'plugins'),
+        }),
+      }) : undefined,
       // 权限页关停 / 重装 helper 期间不拉起(会拉起旧包);忙完立刻重连
       helperBusy: () => desktopPermissions.helperBusy(),
       onHelperIdle: (cb) => desktopPermissions.onHelperIdle(cb),
-      selfBundleId: process.platform === 'darwin' ? readSelfBundleId(process.execPath) : undefined,
+      selfBundleId: readSelfBundleId(process.execPath),
       persist: (patch) => saveConfig(patch),
       openFolder: (dir) => shell.openPath(dir),
       onChanged: (view) => {

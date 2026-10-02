@@ -610,7 +610,7 @@ describe('read_computer_history 门禁矩阵(registry 级)', () => {
     expect(def.function.description).toContain('never as instructions');
     expect(Buffer.byteLength(JSON.stringify(def))).toBeLessThan(2600);
     // 整份定义逐字节钉住(快照测试只在 tangu-none:host+gui 一处剔它,别处漏出来照样红);有意改描述/参数时更新这里的哈希
-    expect(createHash('sha256').update(JSON.stringify(def)).digest('hex')).toBe('f7f8c146dfa05b325cd531407d1bb9a2f69198c64b7f78aa9ca428fad0737471');
+    expect(createHash('sha256').update(JSON.stringify(def)).digest('hex')).toBe('b6c6cd909ce32ab8d227e6499f43860d19a71a51291cf9a962e5d30416aa1312');
   });
 
   it('落库占位:ctx 无关的声明查询 —— 功能刚被关掉(门禁解析不到工具)时照样拿得到占位', () => {

@@ -510,7 +510,7 @@ describe('foldSessions', () => {
 
 // ── 控制器 × 假 helper(unix socket) ────────────────────────────────────────
 
-type HelperMode = 'ok' | 'denied' | 'unknown' | 'old'
+type HelperMode = 'ok' | 'denied' | 'unknown' | 'old' | 'untrusted'
 let sockSeq = 0
 function fakeHelper() {
   const sockPath = path.join(os.tmpdir(), `chs-${process.pid}-${++sockSeq}.sock`)
@@ -534,6 +534,7 @@ function fakeHelper() {
       requests.push(req)
       const reply = helperMode === 'ok' ? { ok: true, result: { subscribed: true, protocolVersion: 13, axTrusted: true } }
         : helperMode === 'old' ? { ok: true, result: { subscribed: true, protocolVersion: 12, axTrusted: true } }
+        : helperMode === 'untrusted' ? { ok: true, result: { subscribed: true, protocolVersion: 13, axTrusted: false } }
         : helperMode === 'denied' ? { ok: false, error: { code: 'accessibility_denied', message: 'Accessibility not granted' } }
         : { ok: false, error: { code: 'unknown_command', message: "Unknown command 'recordSubscribe'" } }
       sock.write(`${JSON.stringify({ id: req.id, ...reply })}\n`)
@@ -657,15 +658,123 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(ch.view().state.status).toBe('off')
   })
 
-  it('非 darwin:恒 unsupported,开关拨不动,不碰 socket', async () => {
+  it('非 darwin / win32(linux):恒 unsupported,开关拨不动,不碰 socket', async () => {
     const helper = fakeHelper()
     await helper.listen()
-    const { ch } = makeController(helper.sockPath, { platform: 'win32' })
+    const windowsRecorder = vi.fn(async () => ({ exe: 'x', pipe: helper.sockPath, protocol: 13 }))
+    const { ch, launchHelper } = makeController(helper.sockPath, { platform: 'linux', windowsRecorder })
     await ch.start({ computerHistoryEnabled: true })
     const v = await ch.setEnabled(true)
     expect(v.state).toMatchObject({ status: 'unsupported', enabled: false })
     await new Promise((r) => setTimeout(r, 200))
     expect(helper.accepted).toBe(0)
+    expect(windowsRecorder).not.toHaveBeenCalled()
+    expect(launchHelper).not.toHaveBeenCalled()
+  })
+
+  // win32:端点由 windowsRecorder 每次连接现给(真机是命名管道;控制器不关心,这里用同一个 unix socket 假 helper)
+  const winExe = (root: string): string => {
+    const exe = path.join(path.dirname(root), 'bin', 'windows-bridge-0123456789ab.exe')
+    mkdirSync(path.dirname(exe), { recursive: true })
+    writeFileSync(exe, '')
+    return exe
+  }
+
+  it('win32:开着 → 按 windowsRecorder 给的管道订阅并落盘;管道没人听就拉起私有副本(target 带 exe + 管道)再订阅;不碰 darwin 的 socket / helper.app', async () => {
+    const helper = fakeHelper() // 先不听:第一次连接 ENOENT → 走拉起
+    const root = tmpRoot()
+    const exe = winExe(root)
+    const windowsRecorder = vi.fn(async () => ({ exe, pipe: helper.sockPath, protocol: 13 }))
+    const launchHelper = vi.fn(async () => { await helper.listen() })
+    const helperAppPath = vi.fn(() => '/nonexistent/tangu-computer-use.app')
+    const { ch } = makeController('/nonexistent/darwin.sock', {
+      root, platform: 'win32', windowsRecorder, launchHelper, helperAppPath, selfBundleId: 'electron.exe', externalSocket: true,
+    })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    expect(launchHelper).toHaveBeenCalledTimes(1)
+    expect(launchHelper).toHaveBeenCalledWith({ socketPath: helper.sockPath, exe })
+    expect(helperAppPath).not.toHaveBeenCalled()
+    expect(windowsRecorder).toHaveBeenCalled()
+    expect(helper.requests[0]).toMatchObject({ cmd: 'recordSubscribe' })
+    expect(helper.requests[0].policy.titleOnlyBundleIds).toEqual(expect.arrayContaining(['electron.exe', 'forsion.exe', 'windowsterminal.exe', 'powershell.exe']))
+    const t = Date.now()
+    const chrome = { name: 'Google Chrome', bundleId: 'chrome.exe' }
+    helper.push({ t, kind: 'app', app: chrome, title: 'Docs', url: 'https://example.com/a' })
+    helper.push({ t: t + 1, kind: 'text', app: { name: 'Windows PowerShell', bundleId: 'powershell.exe' }, text: 'secret' }) // 终端只记标题
+    helper.push({ t: t + 2, kind: 'text', app: chrome, text: 'hello' })
+    await waitFor(() => existsSync(path.join(root, 'events', `${localDay(t)}.jsonl`)) && lines(path.join(root, 'events', `${localDay(t)}.jsonl`)).length >= 2, 3_000)
+    await ch.flush()
+    expect(lines(path.join(root, 'events', `${localDay(t)}.jsonl`))).toEqual([
+      { t, kind: 'app', app: chrome, title: 'Docs', url: 'https://example.com/a' },
+      { t: t + 2, kind: 'text', app: chrome, text: 'hello' },
+    ])
+    expect(readState(root)).toMatchObject({ enabled: true, status: 'recording', platform: 'win32' })
+    expect(ch.requiredHelperProtocol()).toBeUndefined() // 权限页那条「更新并重启助手」只管 mac
+    expect(await ch.recentApps()).toEqual([chrome])
+  })
+
+  it('win32:axTrusted 不作数(Windows 没有这项授权),照样 recording;同一回包在 darwin 上是 no_permission(负对照)', async () => {
+    const helper = fakeHelper()
+    helper.setMode('untrusted')
+    await helper.listen()
+    const root = tmpRoot()
+    const exe = winExe(root)
+    const win = makeController(helper.sockPath, { root, platform: 'win32', windowsRecorder: async () => ({ exe, pipe: helper.sockPath, protocol: 13 }) })
+    await win.ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => win.ch.view().state.status === 'recording')
+    const mac = makeController(helper.sockPath)
+    await mac.ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => mac.ch.view().state.status === 'no_permission')
+  })
+
+  it('win32:没有 helper 源(windowsRecorder 回 null / 缺省)→ helper_missing,不拉起、不连', async () => {
+    for (const windowsRecorder of [async () => null, undefined]) {
+      const helper = fakeHelper()
+      await helper.listen()
+      const { ch, root, launchHelper } = makeController(helper.sockPath, { platform: 'win32', windowsRecorder })
+      await ch.start({ computerHistoryEnabled: true })
+      await waitFor(() => ch.view().state.status === 'helper_missing')
+      await ch.flush()
+      expect(readState(root)).toMatchObject({ enabled: true, status: 'helper_missing', platform: 'win32' })
+      expect(launchHelper).not.toHaveBeenCalled()
+      expect(helper.accepted).toBe(0)
+      ch.dispose()
+    }
+  })
+
+  it('win32:私有副本协议 < 13 或探不出版本(老 helper)→ helper_outdated,不拉起、不连;拉起前就判掉', async () => {
+    for (const protocol of [12, null]) {
+      const helper = fakeHelper()
+      await helper.listen()
+      const root = tmpRoot()
+      const exe = winExe(root)
+      const { ch, launchHelper } = makeController(helper.sockPath, { root, platform: 'win32', windowsRecorder: async () => ({ exe, pipe: helper.sockPath, protocol }) })
+      await ch.start({ computerHistoryEnabled: true })
+      await waitFor(() => ch.view().state.status === 'helper_outdated')
+      expect(launchHelper).not.toHaveBeenCalled()
+      expect(helper.accepted).toBe(0)
+      ch.dispose()
+    }
+  })
+
+  it('win32:现取录制服务一时失败(拷贝 / 探测起不来)→ disconnected + 退避重试,恢复后 recording', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const root = tmpRoot()
+    const exe = winExe(root)
+    let fail = true
+    const windowsRecorder = vi.fn(async () => {
+      if (fail) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      return { exe, pipe: helper.sockPath, protocol: 13 }
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    const { ch } = makeController(helper.sockPath, { root, platform: 'win32', windowsRecorder })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'disconnected' && windowsRecorder.mock.calls.length >= 1)
+    fail = false
+    await waitFor(() => ch.view().state.status === 'recording', 4_000)
   })
 
   it('socket 不在:装了 helper 就拉起再订阅;没装 → helper_missing 且不拉起', async () => {
