@@ -57,7 +57,7 @@ import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
-import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, normalizeProbe } from './appDock'
+import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
 import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
@@ -1833,12 +1833,18 @@ let dockWindow: BrowserWindow | null = null
 let dockTarget: DockWindow | null = null
 let stopDockFollow: (() => void) | null = null
 let dockLink: HelperLink | null = null
+/** 每次贴 / 撤都 +1。attach 每个 await 之后核一次:连点两行、或贴到一半关了面板,旧的那次就地作废,不会留下第二个跟随器。 */
+let dockGen = 0
+/** 最近一次列给用户挑的窗口(pid:windowId)。attach 只认这里面的 —— dock 窗里也跑插件代码,不能让它绕过挑选,
+ *  随手报一个 pid 就贴过去、再读那个 App 的选区。 */
+let dockOffered = new Set<string>()
 
 function dockState(): DockState { return { target: dockTarget } }
 function sendDockState(): void {
   if (dockWindow && !dockWindow.isDestroyed()) dockWindow.webContents.send('appDock:state', dockState())
 }
 function detachDock(): void {
+  dockGen++
   stopDockFollow?.(); stopDockFollow = null
   dockTarget = null
 }
@@ -1849,7 +1855,7 @@ function openDockWindow(): void {
   const width = DOCK_PANEL_WIDTH, height = Math.min(640, wa.height - 48)
   const win = new BrowserWindow({
     width, height, x: Math.round(wa.x + (wa.width - width) / 2), y: Math.round(wa.y + (wa.height - height) / 2),
-    minWidth: DOCK_PANEL_MIN_WIDTH, minHeight: 320,
+    minWidth: DOCK_PANEL_MIN_WIDTH, minHeight: DOCK_PANEL_MIN_HEIGHT,
     frame: false, transparent: true, resizable: true, hasShadow: true, skipTaskbar: true,
     minimizable: false, maximizable: false, fullscreenable: false,
     // 目标 App 在前台时第一下点面板就要能拖 / 能点进输入框(见 miniForeground 那轮实测)
@@ -1874,9 +1880,12 @@ async function attachDock(target: DockWindow): Promise<{ ok: boolean; error?: st
   const win = dockWindow
   if (!win || win.isDestroyed()) return { ok: false, error: 'closed' }
   detachDock()
+  const gen = dockGen
+  const superseded = (): boolean => gen !== dockGen || win.isDestroyed()
   dockLink ??= new HelperLink(helperSocketPath())
   const link = dockLink
   let probe = normalizeProbe(await link.request({ cmd: 'dockProbe', windowId: target.windowId }).catch(() => null))
+  if (superseded()) return { ok: false, error: 'superseded' }
   if (!probe.exists) return { ok: false, error: 'window_gone' }
   const panelWidth = Math.max(DOCK_PANEL_MIN_WIDTH, win.getBounds().width)
   const wa = screen.getDisplayMatching(probe.rect).workArea
@@ -1885,11 +1894,13 @@ async function attachDock(target: DockWindow): Promise<{ ok: boolean; error?: st
   if (room && side === 'right') {
     await link.request({ cmd: 'setWindowFrame', pid: target.pid, windowId: target.windowId, x: room.x, y: room.y, width: room.width, height: room.height }).catch(() => {})
     probe = normalizeProbe(await link.request({ cmd: 'dockProbe', windowId: target.windowId }).catch(() => null))
+    if (superseded()) return { ok: false, error: 'superseded' }
   }
   win.setBounds(panelRectFor(probe.rect, side, panelWidth))
   dockTarget = target
   // 把这一对一起带到前面:目标拿前台(用户接着就要在里面干活),面板随后由跟随循环提上来。
   await link.request({ cmd: 'focusWindow', pid: target.pid, windowId: target.windowId }).catch(() => {})
+  if (superseded()) return { ok: false, error: 'superseded' }
   stopDockFollow = startDockFollow({
     win, target, side,
     request: (payload) => link.request(payload),
@@ -3110,7 +3121,9 @@ app.whenReady().then(async () => {
     if (!dockSender(e)) return { windows: [] }
     try {
       await ensureHelperRunning()
-      return { windows: normalizeDockCandidates(await askHelper(helperSocketPath(), { cmd: 'dockCandidates', excludePids: [process.pid] }, 5_000)) }
+      const windows = normalizeDockCandidates(await askHelper(helperSocketPath(), { cmd: 'dockCandidates', excludePids: [process.pid] }, 5_000))
+      dockOffered = new Set(windows.map((w) => `${w.pid}:${w.windowId}`))
+      return { windows }
     } catch (err) {
       const code = (err as { code?: string }).code
       return { windows: [], error: code === 'unknown_command' ? 'unsupported_helper' : code || 'unavailable' }
@@ -3119,6 +3132,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('appDock:attach', async (e, raw: unknown) => {
     const target = normalizeDockWindow(raw)
     if (!dockSender(e) || !target) return { ok: false }
+    if (!dockOffered.has(`${target.pid}:${target.windowId}`)) return { ok: false, error: 'not_offered' }
     try { return await attachDock(target) } catch (err) { return { ok: false, error: (err as { code?: string }).code || 'unavailable' } }
   })
   ipcMain.handle('appDock:detach', (e) => {
@@ -3129,7 +3143,7 @@ app.whenReady().then(async () => {
     if (!dockSender(e) || !dockTarget) return {}
     try {
       // 单独一条连接:读 AX 最慢要 1s,走跟随那条长连接会把这 1s 的位置更新全堵在后面。
-      return normalizeDockSelection(await askHelper(helperSocketPath(), { cmd: 'selection', pid: dockTarget.pid }, 3_000))
+      return normalizeDockSelection(await askHelper(helperSocketPath(), { cmd: 'selection', pid: dockTarget.pid, windowId: dockTarget.windowId }, 3_000))
     } catch (err) {
       return { error: (err as { code?: string }).code || 'unavailable' }
     }

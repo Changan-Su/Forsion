@@ -17,6 +17,9 @@ export type DockSide = 'left' | 'right'
 
 export const DOCK_PANEL_WIDTH = 400
 export const DOCK_PANEL_MIN_WIDTH = 320
+/** 面板最矮多高。⚠️与 BrowserWindow 的 minHeight 同值:要是我们要的比它矮,系统会夹回去 →
+ *  实际 bounds 永远 ≠ 要的 → 每帧重摆、「刚摆完」的保护窗永远开着 → 用户再也拖不动面板。 */
+export const DOCK_PANEL_MIN_HEIGHT = 200
 /** 给面板腾位时目标最窄缩到多少(再窄多数 App 就不成样子了)。 */
 const MIN_TARGET_WIDTH = 480
 /** 用户最后一次拖 / 拉面板之后多久恢复「目标 → 面板」的摆放。 */
@@ -27,12 +30,21 @@ const MAX_PROBE_FAILURES = 60
 const HIDDEN_PROBE_MS = 250
 
 /**
- * 两次采样之间尺寸跳变 = 系统动画(最小化的神灯、还原、绿钮缩放、窗口管理器一键贴边),不是用户在拖边:
- * 用户拖边每帧只变几个像素。这时面板先藏起,等目标连续稳住再贴回去 —— 逐帧跟着神灯变形比消失难看得多。
+ * 目标两次采样之间是怎么变的。用户手势只有两种形态:**拖**(尺寸不变)和**拉边**(被拉那条边的对边不动)。
+ * 别的组合 —— 一边挪一边缩放、上下两条边一起动而高度不变 —— 只会是系统动画(最小化的神灯、还原、绿钮缩放)
+ * 或窗口管理器一键贴边:这时面板先藏,等目标稳住再贴回去,逐帧跟着神灯变形比消失难看得多。
+ * 实测神灯的前 ~60ms 只有宽度在长、左沿不动,与「拉右边」无从区分;之后才出现「挪 + 缩放」,约 90ms 内藏起。
+ * 容差 1px:CG 的 bounds 取整后同一条边可能差 1。
  */
-export function isSizeJump(prev: Rectangle, next: Rectangle): boolean {
-  const jump = (a: number, b: number): boolean => Math.abs(a - b) > Math.max(120, a * 0.2)
-  return jump(prev.width, next.width) || jump(prev.height, next.height)
+export function classifyChange(prev: Rectangle, next: Rectangle): 'same' | 'move' | 'resize' | 'jump' {
+  const eq = (a: number, b: number): boolean => Math.abs(a - b) <= 1
+  const sameW = eq(prev.width, next.width), sameH = eq(prev.height, next.height)
+  if (sameW && sameH) return eq(prev.x, next.x) && eq(prev.y, next.y) ? 'same' : 'move'
+  const axisOk = (same: boolean, p0: number, p1: number, n0: number, n1: number): boolean =>
+    same ? eq(p0, n0) : eq(p0, n0) || eq(p1, n1)
+  const h = axisOk(sameW, prev.x, prev.x + prev.width, next.x, next.x + next.width)
+  const v = axisOk(sameH, prev.y, prev.y + prev.height, next.y, next.y + next.height)
+  return h && v ? 'resize' : 'jump'
 }
 
 /** 贴哪边:右边放得下就右边,否则左边放得下就左边,都不行仍贴右边(由 makeRoom 腾位)。 */
@@ -56,7 +68,7 @@ export function panelRectFor(target: Rectangle, side: DockSide, panelWidth: numb
     x: side === 'right' ? target.x + target.width : target.x - panelWidth,
     y: target.y,
     width: panelWidth,
-    height: target.height,
+    height: Math.max(DOCK_PANEL_MIN_HEIGHT, target.height),
   }
 }
 
@@ -113,7 +125,6 @@ export function startDockFollow(deps: DockFollowDeps): () => void {
   let stopped = false
   let probing = false
   let failures = 0
-  let hidden = false
   let lastFront = 0
   let target_: Rectangle | null = null
   /** 我们自己 setBounds 摆的位置:move/resize 事件里与它相同 = 程序化,不算用户。 */
@@ -189,22 +200,24 @@ export function startDockFollow(deps: DockFollowDeps): () => void {
     if (!probe.exists) { stop(); deps.onGone('closed'); return }
     const prev = target_
     target_ = probe.rect
-    // 用户正拉着面板的缝时目标会跟着大幅变宽,那不是系统动画,别把用户手里的面板藏了
+    // 用户正拖 / 拉着面板时目标是被我们带着动的,那不是系统动画,别把用户手里的面板藏了
     const userActive = Date.now() < userUntil
-    if (!userActive && prev && !sameRect(prev, probe.rect) && isSizeJump(prev, probe.rect)) { settling = true; stableProbes = 0 }
-    else if (settling) stableProbes = prev && sameRect(prev, probe.rect) ? stableProbes + 1 : 0
+    if (!userActive && prev && classifyChange(prev, probe.rect) === 'jump') { settling = true; stableProbes = 0 }
+    else if (settling) stableProbes = prev && classifyChange(prev, probe.rect) === 'same' ? stableProbes + 1 : 0 // 与 classifyChange 同一 1px 容差,静止时 1px 抖动不至于永远藏着
     if (settling && stableProbes >= STABLE_PROBES) settling = false
     const fullscreen = sameRect(probe.rect, deps.displayBoundsOf(probe.rect))
     offscreen = !probe.onScreen
+    // 显隐一律以窗口的真实状态为准,不记私有标志:别处(再跑一次「贴到应用旁边」→ present)把藏着的面板亮出来时,
+    // 私有标志还停在「已藏」,下一帧就不会再藏它 —— 目标明明最小化着,面板却孤零零留在屏上。
     if (offscreen || fullscreen || settling) {
-      if (!hidden) { hidden = true; win.hide() }
+      if (win.isVisible()) win.hide()
       lastFront = probe.frontPid
       return
     }
     if (Date.now() >= userUntil) place(panelRectFor(probe.rect, side, panelWidth))
     // 目标 App 刚到前台 → 面板跟着提到最前(不抢焦点)。藏着的这时一并露面。
     const cameForward = probe.frontPid === target.pid && lastFront !== target.pid
-    if (hidden || cameForward) { hidden = false; win.showInactive() }
+    if (!win.isVisible() || cameForward) win.showInactive()
     lastFront = probe.frontPid
   }
 

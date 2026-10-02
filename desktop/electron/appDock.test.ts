@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { BrowserWindow, Rectangle } from 'electron'
-import { chooseSide, makeRoom, panelRectFor, targetRectFor, startDockFollow, isSizeJump } from './appDock'
+import { chooseSide, makeRoom, panelRectFor, targetRectFor, startDockFollow, classifyChange, DOCK_PANEL_MIN_HEIGHT } from './appDock'
 
 const wa: Rectangle = { x: 0, y: 25, width: 1500, height: 900 }
 
@@ -22,6 +22,8 @@ describe('贴边几何', () => {
     const t = { x: 100, y: 50, width: 800, height: 600 }
     expect(panelRectFor(t, 'right', 400)).toEqual({ x: 900, y: 50, width: 400, height: 600 })
     expect(panelRectFor(t, 'left', 400)).toEqual({ x: -300, y: 50, width: 400, height: 600 })
+    // 目标比面板的最小高度还矮:要的高度不能低于 BrowserWindow 的 minHeight,否则系统夹回 → 每帧重摆
+    expect(panelRectFor({ ...t, height: 120 }, 'right', 400).height).toBe(DOCK_PANEL_MIN_HEIGHT)
   })
 
   it('拖面板(尺寸不变)= 目标整体平移,不写尺寸', () => {
@@ -56,6 +58,7 @@ class FakeWin extends EventEmitter {
   getBounds(): Rectangle { return { ...this.bounds } }
   setBounds(r: Rectangle): void { this.bounds = { ...r }; this.emit('move'); this.emit('resize') }
   isDestroyed(): boolean { return false }
+  isVisible(): boolean { return this.visible }
   hide(): void { this.visible = false }
   showInactive(): void { this.visible = true; this.shows++ }
   /** 模拟用户拖 / 拉:直接改 bounds 并发事件(不经 setBounds)。 */
@@ -145,16 +148,16 @@ describe('startDockFollow', () => {
     h.stop()
   })
 
-  it('尺寸跳变(最小化的神灯 / 还原 / 一键贴边)→ 先藏起,目标稳住再贴回;用户拖边的小步变化照常跟', async () => {
+  it('系统动画(挪 + 缩放同时发生)→ 先藏起,目标稳住再贴回;用户拉边(对边不动)照常跟', async () => {
     vi.useFakeTimers()
     let rect = { x: 150, y: 150, w: 600, h: 500 }
     const h = harness(() => ({ exists: true, onScreen: true, ...rect, frontPid: 1 }))
     await tickN()
-    rect = { x: 152, y: 150, w: 610, h: 504 } // 拖边:小步
+    rect = { x: 150, y: 150, w: 610, h: 504 } // 拉右下角:左沿上沿不动
     await tickN()
     expect(h.win.visible).toBe(true)
-    expect(h.win.bounds.x).toBe(762)
-    rect = { x: 320, y: 376, w: 896, h: 501 } // 神灯第一帧
+    expect(h.win.bounds.x).toBe(760)
+    rect = { x: 320, y: 376, w: 896, h: 501 } // 一键贴边 / 神灯:四条边都动了
     await tickN(1)
     expect(h.win.visible).toBe(false)
     rect = { x: 900, y: 200, w: 700, h: 600 } // 贴到新位置后稳住
@@ -164,11 +167,49 @@ describe('startDockFollow', () => {
     h.stop()
   })
 
-  it('isSizeJump:20% / 120px 门槛', () => {
-    const a = { x: 0, y: 0, width: 600, height: 500 }
-    expect(isSizeJump(a, { ...a, width: 610 })).toBe(false)
-    expect(isSizeJump(a, { ...a, width: 896 })).toBe(true)
-    expect(isSizeJump(a, { ...a, height: 53 })).toBe(true)
+  it('实测的最小化神灯逐帧轨迹:前几帧像拉右边(跟着),一出现「挪 + 缩放」就藏,之后不再露面', async () => {
+    vi.useFakeTimers()
+    // TextEdit 260,160 640×460 最小化,16ms 采样(位移每帧最多 ~90px,单看位移阈值抓不住)
+    const frames = [
+      [260, 160, 640, 460], [260, 160, 642, 460], [260, 160, 648, 460], [260, 160, 658, 460], [260, 160, 676, 460],
+      [471, 425, 764, 461], [555, 474, 699, 461], [646, 525, 616, 461], [784, 602, 478, 439],
+    ]
+    let i = 0
+    const h = harness(() => {
+      const f = frames[Math.min(i, frames.length - 1)]
+      return { exists: true, onScreen: i < frames.length, x: f[0], y: f[1], w: f[2], h: f[3], frontPid: 1 }
+    })
+    await tickN(1)
+    for (i = 1; i < 5; i++) { await tickN(1); expect(h.win.visible).toBe(true) }
+    for (; i < frames.length; i++) { await tickN(1); expect(h.win.visible).toBe(false) }
+    await tickN(3) // 已不在屏上
+    expect(h.win.visible).toBe(false)
+    h.stop()
+  })
+
+  it('藏着时被别处亮出来(再跑一次贴边命令 → present)→ 下一帧照样藏回去', async () => {
+    vi.useFakeTimers()
+    let p: Record<string, unknown> = { exists: true, onScreen: true, x: 100, y: 50, w: 800, h: 600, frontPid: 1 }
+    const h = harness(() => p)
+    await tickN()
+    p = { ...p, onScreen: false }
+    await tickN()
+    expect(h.win.visible).toBe(false)
+    h.win.showInactive()
+    await vi.advanceTimersByTimeAsync(300)
+    expect(h.win.visible).toBe(false)
+    h.stop()
+  })
+
+  it('classifyChange:拖 / 拉边 / 动画', () => {
+    const a = { x: 100, y: 100, width: 600, height: 500 }
+    expect(classifyChange(a, { ...a, x: 101 })).toBe('same') // CG 取整的 1px
+    expect(classifyChange(a, { ...a, x: 300, y: 40 })).toBe('move')
+    expect(classifyChange(a, { ...a, width: 900 })).toBe('resize') // 拉右边
+    expect(classifyChange(a, { x: 50, y: 100, width: 650, height: 500 })).toBe('resize') // 拉左边
+    expect(classifyChange(a, { x: 50, y: 60, width: 650, height: 540 })).toBe('resize') // 拉左上角
+    expect(classifyChange(a, { x: 140, y: 100, width: 520, height: 500 })).toBe('jump') // 两边一起收(神灯)
+    expect(classifyChange(a, { x: 100, y: 160, width: 640, height: 500 })).toBe('jump') // 宽变了且上下平移
   })
 
   it('窗口关了 → onGone(closed) 并停表', async () => {

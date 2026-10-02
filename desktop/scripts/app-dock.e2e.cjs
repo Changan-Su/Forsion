@@ -152,8 +152,8 @@ async function main() {
     await sleep(900)
     check('T4 目标最小化 → 面板藏起', (await dockBounds())?.visible === false, await dockBounds())
     te.minimize(false)
-    await sleep(900)
-    g = await glued()
+    // 还原的神灯动画在机器忙时能拖到 1s+;按「贴好了」轮询,最多 3s(断言的是最终贴好,不是动画时长)
+    for (let i = 0; i < 15; i++) { await sleep(200); g = await glued(); if (g.ok) break }
     check('T4b 目标还原 → 面板回来并贴好', g.ok, g)
 
     // ── 层级:别的 App 到前台再切回目标,面板必须在目标之上(CGWindowList 前→后的顺序)──

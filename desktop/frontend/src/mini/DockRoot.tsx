@@ -4,7 +4,7 @@
  * (`<forsion-app …/>`,电脑操作插件教模型把它当默认操作对象);用户点进面板那一刻读一次目标 App 的划线 / 选中项,挂成引用。
  * 跟随、挪窗口、读划线都在主进程(electron/appDock.ts),这里只管显示与交互。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AppWindow, RefreshCw, X } from 'lucide-react'
 import { MiniColumnHost, useWorkspace } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
@@ -65,18 +65,21 @@ export function DockRoot() {
   }, [ready, target?.pid, target?.windowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 用户点进面板那一刻读目标 App 的划线(App 失去前台后选区仍在)。同一段只挂一次:用户删掉引用后再点回来不会又冒出来。
+  // 只按目标换窗口重来 —— 依赖 t / target 对象的话,切语言或主进程重推同一目标都会清空 last,删掉的引用又冒回来。
+  const tRef = useRef(t)
+  tRef.current = t
   useEffect(() => {
     if (!target) return
     let last = ''
     const grab = async (): Promise<void> => {
-      const quote = selectionQuote(await window.tangu?.appDockSelection?.(), target.app, t)
+      const quote = selectionQuote(await window.tangu?.appDockSelection?.(), target.app, tRef.current)
       if (!quote || quote === last) return
       last = quote
       useApp.getState().setPendingChatQuote('chat', quote)
     }
     window.addEventListener('focus', grab)
     return () => window.removeEventListener('focus', grab)
-  }, [target, t])
+  }, [target?.pid, target?.windowId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!target) return <DockPicker />
   return <MiniColumnHost buildDefault={() => {}} direct={{
@@ -100,7 +103,7 @@ function DockPicker() {
   const attach = async (c: DockCandidate): Promise<void> => {
     setError('')
     const r = await window.tangu?.appDockAttach?.({ pid: c.pid, windowId: c.windowId, app: c.app, bundleId: c.bundleId, title: c.title })
-    if (r && !r.ok) setError(r.error || 'unavailable')
+    if (r && !r.ok && r.error !== 'superseded') setError(r.error || 'unavailable') // superseded = 连点了另一行,那一次说了算
   }
   const errorText = error ? (KNOWN_ERRORS.has(error) ? t(`dock.err.${error}`) : t('dock.err.generic', { code: error })) : ''
   return (
