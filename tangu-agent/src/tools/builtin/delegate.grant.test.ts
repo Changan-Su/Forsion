@@ -151,3 +151,29 @@ describe('engine × grantTools 互斥', () => {
     expect(lastGrants()).toEqual(['manage_schedule']);
   });
 });
+
+// PI-DSH 评审 R1:原守卫只判 !ctx.runId,可每个 run 的工具 ctx 都带 runId —— Muse / 自动化照样 spawn 引擎,
+// 引擎的权限请求中继到没人答的审批上。现在按 run 来源挡。
+describe('无人值守 run 不委派外部引擎', () => {
+  beforeEach(() => {
+    configureTangu({
+      host: stub, brain: stub, billing: stub, profile,
+      engines: { list: () => [{ id: 'codex', name: 'Codex', available: true }] } as any,
+    });
+  });
+
+  it.each([
+    ['runOrigin=unattended', { runOrigin: 'unattended' as const }],
+    ['只带 automationOrigin(loop 之外的调用方)', { automationOrigin: 'trigger-1' }],
+    ['Muse', { muse: true, automationOrigin: 'muse' }],
+  ])('%s → 报错、不 spawn', async (_label, extra) => {
+    const r = await execute({ task: 't', engine: 'codex' }, ctxOf(extra));
+    expect(r).toMatch(/engine delegation needs an interactive run/);
+    expect(spies.runSubAgent).not.toHaveBeenCalled();
+  });
+
+  it('正对照:本机 run 照常委派;无人值守 run 的内置子代理照常委派', async () => {
+    expect(await execute({ task: 't', engine: 'codex' }, ctxOf({ runOrigin: 'local' }))).toBe('sub report');
+    expect(await execute({ task: 't' }, ctxOf({ runOrigin: 'unattended' }))).toBe('sub report');
+  });
+});

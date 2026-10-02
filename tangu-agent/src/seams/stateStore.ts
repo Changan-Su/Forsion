@@ -78,6 +78,9 @@ export interface FinalizeMessageInput {
   agentSlug?: string;
 }
 
+/** 重启自愈看到的在飞 run:owner = 持有它的本机引擎进程 `<pid>:<启动时刻秒>`(NULL = 不知道;见 services/runOwner.ts)。 */
+export interface PendingRunRow { id: string; session_id: string; status: string; owner: string | null }
+
 export interface StateStore {
   // ── runs ──
   createRun(run: {
@@ -98,8 +101,9 @@ export interface StateStore {
   ): Promise<void>;
   listActiveRunsBySession(sessionId: string, userId: string): Promise<ActiveRunRow[]>;
   /** 进程重启自愈（仅持库进程调;worker 关掉）。 */
-  listPendingRunsForRecovery(): Promise<Array<{ id: string; session_id: string }>>;
-  failStaleRuns(olderThanMinutes?: number): Promise<number>;
+  listPendingRunsForRecovery(): Promise<PendingRunRow[]>;
+  /** keepOwners:这些持有进程还活着,它们的行再旧也不标(TUI 等审批超过 30 分钟时桌面引擎启动,PI-DSH R2 Codex 评审)。 */
+  failStaleRuns(olderThanMinutes?: number, keepOwners?: string[]): Promise<number>;
 
   // ── steps ──
   appendStep(step: StepInput): Promise<void>;
