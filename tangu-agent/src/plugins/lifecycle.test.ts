@@ -8,7 +8,7 @@
  * 插件把 activate/deactivate 记进 globalThis.__lc,测试直接读。
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -274,7 +274,7 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
 
   it('热升级判定:单文件照热升;多文件 ESM 有模块钩子才热升;CommonJS / 自带 node_modules / 没钩子时引入写法再隐蔽也认得出', async () => {
     const { cannotHotSwap } = await import('./loader.js');
-    const probe = (code: string, extra: { files?: Record<string, string>; esm?: boolean } = {}): boolean => {
+    const probe = (code: string, extra: { files?: Record<string, string>; links?: Record<string, string>; esm?: boolean } = {}): boolean => {
       const dir = mkdtempSync(path.join(tmp, 'hs-'));
       writeFileSync(path.join(dir, 'index.js'), code);
       if (extra.esm !== false) writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
@@ -282,6 +282,7 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
         mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
         writeFileSync(path.join(dir, name), body);
       }
+      for (const [name, target] of Object.entries(extra.links ?? {})) symlinkSync(target, path.join(dir, name), 'dir');
       return cannotHotSwap({ dir, entryUrl: pathToFileURL(path.join(dir, 'index.js')).href } as any);
     };
     const single = "import fs from 'node:fs'; await import('node:path'); console.log(import.meta.url)";
@@ -293,6 +294,20 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     expect(probe("import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); require('node:fs')")).toBe(false); // esbuild banner 那种
     expect(probe(single, { files: { 'node_modules/dep/index.js': '' } })).toBe(true);
     expect(probe("import { a } from './lib/h.js'", { files: { 'lib/package.json': '{}', 'lib/h.js': 'exports.a = 1' } })).toBe(true); // 子作用域 CommonJS
+    // Codex 10-02 第二轮:证明不了整张模块图都会换代 → 需重启
+    const helper = { 'h.js': 'export const a = 1' };
+    expect(probe("import { a } from './h.js'; import s from '../shared.mjs'", { files: helper })).toBe(true); // 引到插件根外
+    expect(probe("import { a } from './h.js'; await import('/opt/x.js')", { files: helper })).toBe(true); // 绝对路径
+    expect(probe("import { a } from './h.js'; const m = await import(url)", { files: helper })).toBe(true); // import(变量)
+    expect(probe("import { a } from './dist/h.js'", { files: { 'dist/h.js': "import d from 'dep'; export const a = d", 'dist/node_modules/dep/index.cjs': 'module.exports = 1' } })).toBe(true); // 深层 node_modules
+    expect(probe("import h from './.lib/helper.cjs'", { files: { '.lib/helper.cjs': 'module.exports = 1' } })).toBe(true); // 点目录里的 CommonJS
+    expect(probe("import { a } from './h.js'", { files: { 'h.js': "import { createRequire } from 'node:module'; const req = createRequire(import.meta.url); export const a = req('./r.mjs')", 'r.mjs': 'export default 1' } })).toBe(true); // 改了名的 require
+    expect(probe("import { createRequire as cr } from 'node:module'; const load = cr(import.meta.url); load('./x.json')")).toBe(true); // 改名导入 + 改名调用,单文件也拦
+    expect(probe("import { createRequire } from 'node:module'; createRequire(import.meta.url)('./x.json')")).toBe(true); // 当场调用
+    expect(probe("import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url); require('node:fs'); __require('node:path')")).toBe(false); // CU 的 esbuild banner
+    const outside = mkdtempSync(path.join(tmp, 'hs-ext-'));
+    writeFileSync(path.join(outside, 'h.js'), 'export const a = 1');
+    expect(probe("import { a } from './lib/h.js'", { links: { lib: outside } })).toBe(true); // 软链出去
     process.env.TANGU_PLUGIN_GRAPH_SWAP = '0'; // 没钩子:只认单文件
     expect(probe("import { a } from /* c */ './h.js'")).toBe(true);
     expect(probe("await import(/* c */ './h.js')")).toBe(true);

@@ -12,7 +12,7 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
  * tool-def 快照也因此不变。
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import module from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -106,32 +106,42 @@ export function compareVersions(a: string, b: string): number {
 }
 
 const CODE_EXT = new Set(['.js', '.mjs', '.cjs', '.node', '.wasm']);
-// ponytail: 最多看这么多个代码文件;更大的包只按前这些算(只改了排在后面的 helper 会漏判成「没变」)。
+// ponytail: 最多看这么多个代码文件;更大的包只按前这些算指纹,热升级判定直接按「需重启」处理。
 const MAX_FINGERPRINT_FILES = 2000;
 
-/** 包内代码文件(绝对路径,按路径排序;跳过 node_modules 与点目录)。指纹与热升级判定同一口径。 */
-function codeFiles(dir: string): string[] {
-  const out: string[] = [];
+interface PackageScan {
+  /** 包内代码文件(绝对路径,按路径排序;点目录也看,只跳过 .git 与 node_modules)。指纹与热升级判定同一口径。 */
+  files: string[];
+  /** 任一层有 node_modules 目录。 */
+  nodeModules: boolean;
+  /** 有软链或文件数到顶:模块图看不全。 */
+  opaque: boolean;
+}
+
+function scanPackage(dir: string): PackageScan {
+  const scan: PackageScan = { files: [], nodeModules: false, opaque: false };
   const walk = (d: string): void => {
     let ents;
     try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const ent of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-      if (out.length >= MAX_FINGERPRINT_FILES) return;
-      if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+      if (scan.files.length >= MAX_FINGERPRINT_FILES) { scan.opaque = true; return; }
+      if (ent.name === '.git') continue;
+      if (ent.name === 'node_modules') { scan.nodeModules = true; continue; }
+      if (ent.isSymbolicLink()) { scan.opaque = true; continue; }
       const abs = path.join(d, ent.name);
       if (ent.isDirectory()) walk(abs);
-      else if (ent.isFile() && CODE_EXT.has(path.extname(ent.name))) out.push(abs);
+      else if (ent.isFile() && CODE_EXT.has(path.extname(ent.name))) scan.files.push(abs);
     }
   };
   walk(dir);
-  return out;
+  return scan;
 }
 
 /** 指纹覆盖整个包的代码文件,不只入口:只改了 dist/helper.js 也要判成「变了」,
  *  否则重扫当它没变、老 helper 照跑还报 needsRestart:false(Codex 10-02)。 */
 function fingerprintOf(version: string, entryPath: string, dir: string): string {
   const parts: string[] = [];
-  for (const f of codeFiles(dir)) {
+  for (const f of scanPackage(dir).files) {
     try { const st = statSync(f); parts.push(`${path.relative(dir, f)}:${st.mtimeMs}:${st.size}`); } catch { /* 刚被删:不计 */ }
   }
   let entry: string;
@@ -224,14 +234,35 @@ export function discoverPlugins(): DiscoveredPlugin[] {
 
 // 空白与注释(`from /* x */ './a'`、`import(/* x */ './a')` 都得认出来)
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
-/** ESM 相对引入:import x from './x' / export * from '../x' / import './x' / import('./x') / import(变量 / 模板串)。 */
-const ESM_IMPORT = new RegExp([
-  String.raw`\b(?:from|import)${GAP}['"]\.{1,2}/`,
-  String.raw`\bimport${GAP}\(${GAP}(?:['"]\.{1,2}/|[^'"\s)])`,
-].join('|'));
-/** CommonJS 引入:require('./x') / require(变量)。CommonJS 按文件名缓存,查询串破不了。
- *  (单写 createRequire 不算:esbuild banner 用它造 require 只拿 node 内置,不涉及包内文件。) */
-const CJS_REQUIRE = new RegExp(String.raw`\brequire${GAP}\(${GAP}(?:['"]\.{1,2}/|[^'"\s)])`);
+const PATH_SPEC = String.raw`['"]((?:\.{1,2}/|/|file:)[^'"\n]*)['"]`;
+/** 字面路径引入:import x from './x' / export * from '../x' / import './x' / import('./x'),也认绝对路径与 file: URL。
+ *  只经 matchAll 用(全局正则别拿去 .test,lastIndex 有状态)。 */
+const ESM_PATH = new RegExp(String.raw`\b(?:from|import)${GAP}${PATH_SPEC}|\bimport${GAP}\(${GAP}${PATH_SPEC}`, 'g');
+/** import(变量 / 模板串):目标证明不了。 */
+const ESM_DYNAMIC = new RegExp(String.raw`\bimport${GAP}\(${GAP}[^'"\s)]`);
+const esc = (id: string): string => id.replace(/\$/g, '\\$');
+/** 以相对路径或变量为参数的调用:`name('./x')` / `name(变量)`;只拿内置模块的(`require('node:fs')`)不算。 */
+const loadCall = (name: string): RegExp => new RegExp(String.raw`(?<![\w$.])${esc(name)}${GAP}\(${GAP}(?:['"](?:\.{1,2}/|/|file:)|[^'"\s)])`);
+
+/** 会不会经 CommonJS 载入文件(CommonJS 按文件名缓存,查询串破不了)。认 require / esbuild 的 __require,
+ *  以及 createRequire 造出来、改了名的函数(`const req = createRequire(…)`,含 `createRequire as X` 改名导入)
+ *  和当场调用(`createRequire(…)('./x')`)。 */
+function loadsViaRequire(src: string): boolean {
+  if (!/require/i.test(src)) return false;
+  const makers = ['createRequire', ...Array.from(src.matchAll(/\bcreateRequire\s+as\s+([A-Za-z_$][\w$]*)/g), (m) => m[1])];
+  const names = new Set(['require', '__require']);
+  for (const maker of makers) {
+    if (new RegExp(String.raw`(?<![\w$])${esc(maker)}${GAP}\([^()]*(?:\([^()]*\)[^()]*)*\)${GAP}\(`).test(src)) return true;
+    for (const m of src.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[\w$]+\.)?${esc(maker)}\b`, 'g'))) names.add(m[1]);
+  }
+  for (const n of names) if (loadCall(n).test(src)) return true;
+  return false;
+}
+
+/** 这段源码会不会载入别的文件(相对 / 绝对路径、动态 import 变量、CommonJS)。都没有 = 单文件 bundle。 */
+function loadsOtherFiles(src: string): boolean {
+  return src.match(ESM_PATH) !== null || ESM_DYNAMIC.test(src) || loadsViaRequire(src);
+}
 
 /** 运行时能不能整图换代:Node ≥ 22.15 的同步模块钩子(打包版 Electron 40 = Node 24)。
  *  `TANGU_PLUGIN_GRAPH_SWAP=0` 关掉,退回只破入口(多文件插件换代 = 需重启)。 */
@@ -239,11 +270,11 @@ export function canSwapWholeGraph(): boolean {
   return process.env.TANGU_PLUGIN_GRAPH_SWAP !== '0' && typeof (module as { registerHooks?: unknown }).registerHooks === 'function';
 }
 
-/** 入口所在的包作用域是不是 ESM:与 Node 同法,从入口目录往上找最近的 package.json(可以在插件目录之外,
- *  如捆绑包根),看它的 "type"。入口本身是 .mjs 也算。 */
-function entryScopeIsModule(entryFile: string): boolean {
-  if (entryFile.endsWith('.mjs')) return true;
-  for (let d = path.dirname(entryFile); path.basename(d) !== 'node_modules'; d = path.dirname(d)) {
+/** 文件所在的包作用域是不是 ESM:与 Node 同法,从所在目录往上找最近的 package.json(可以在插件目录之外,
+ *  如捆绑包根),看它的 "type"。.mjs 也算。 */
+function scopeIsModule(file: string): boolean {
+  if (file.endsWith('.mjs')) return true;
+  for (let d = path.dirname(file); path.basename(d) !== 'node_modules'; d = path.dirname(d)) {
     try {
       return JSON.parse(readFileSync(path.join(d, 'package.json'), 'utf8'))?.type === 'module';
     } catch { /* 没有或坏了:往上找 */ }
@@ -252,14 +283,24 @@ function entryScopeIsModule(entryFile: string): boolean {
   return false;
 }
 
+/** 字面路径解析到插件根外(那份不在本代模块图里,钩子不给它换代)。 */
+function escapesRoot(root: string, file: string, spec: string): boolean {
+  let target: string;
+  try { target = spec.startsWith('file:') ? fileURLToPath(spec) : path.resolve(path.dirname(file), spec.split(/[?#]/)[0]); } catch { return true; }
+  const rel = path.relative(root, target);
+  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+}
+
 /**
  * 能不能原地热升级。换代时入口带 `?tangu-gen=` 查询串重新 import;入口引入的同包 ESM 文件靠 resolve 钩子带上同一代号
- * (loadPlugin)。破不了的如实判「需重启」(老实例继续跑):包里自带 node_modules、任何 CommonJS(.cjs / require(…) /
- * 非 type:module 作用域)、原生 .node、或运行时没有模块钩子而入口有相对引入。宁可误报不可漏报(注释、字符串里出现也算)。
- * 首方引擎插件是 esbuild 单文件 bundle,只破入口就够。
+ * (loadPlugin)。**证明不了整张模块图都会换代,就如实判「需重启」**(老实例继续跑;宁可误报不可漏报,注释、字符串里
+ * 出现也算):任一层自带 node_modules;多文件包里有 CommonJS(.cjs / require 家族 / 非 type:module 作用域)、原生 .node、
+ * 软链、import(变量)、路径引到插件根外,或运行时没有模块钩子。
+ * 首方引擎插件是 esbuild 单文件 bundle(只拿 node 内置),只破入口就够。
  */
 export function cannotHotSwap(d: DiscoveredPlugin): boolean {
-  if (existsSync(path.join(d.dir, 'node_modules'))) return true;
+  const scan = scanPackage(d.dir);
+  if (scan.nodeModules) return true;
   let entryFile: string;
   let src: string;
   try {
@@ -268,14 +309,16 @@ export function cannotHotSwap(d: DiscoveredPlugin): boolean {
   } catch {
     return false; // 读不到入口 → 升级时 import 会自己报错(lastError),不在这里拦
   }
-  if (!ESM_IMPORT.test(src) && !CJS_REQUIRE.test(src)) return false; // 单文件:只破入口就够
-  if (!canSwapWholeGraph() || !entryScopeIsModule(entryFile)) return true;
-  for (const f of codeFiles(d.dir)) {
+  if (!loadsOtherFiles(src)) return false; // 单文件:只破入口就够
+  if (!canSwapWholeGraph() || scan.opaque || !scopeIsModule(entryFile)) return true;
+  for (const f of scan.files) {
     if (f.endsWith('.cjs') || f.endsWith('.node')) return true;
-    if (f.endsWith('.js') && !entryScopeIsModule(f)) return true; // 子目录自带非 module 的 package.json → 那里的 .js 是 CommonJS
-    if (/\.m?js$/.test(f)) {
-      try { if (CJS_REQUIRE.test(readFileSync(f, 'utf8'))) return true; } catch { /* 刚被删:不计 */ }
-    }
+    if (!/\.m?js$/.test(f)) continue;
+    if (!scopeIsModule(f)) return true; // 子目录自带非 module 的 package.json → 那里的 .js 是 CommonJS
+    let code: string;
+    try { code = readFileSync(f, 'utf8'); } catch { continue; } // 刚被删:不计
+    if (loadsViaRequire(code) || ESM_DYNAMIC.test(code)) return true;
+    for (const m of code.matchAll(ESM_PATH)) if (escapesRoot(d.dir, f, m[1] ?? m[2])) return true;
   }
   return false;
 }
