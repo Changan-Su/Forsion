@@ -988,6 +988,13 @@ const runThinkingOf = async (runId) => {
   try { return db.prepare(`SELECT json_extract(input, '$.agentConfig.thinkingLevel') AS t FROM agent_runs WHERE id = ?`).get(runId)?.t ?? null; }
   finally { db.close(); }
 };
+/** 某个 run 的一次性提示(input.ephemeralHint;realtime 委派带实时模型的理解)。 */
+const runHintOf = async (runId) => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try { return String(db.prepare(`SELECT json_extract(input, '$.ephemeralHint') AS h FROM agent_runs WHERE id = ?`).get(runId)?.h || ''); }
+  finally { db.close(); }
+};
 const asList = (x, key) => Array.isArray(x) ? x : Array.isArray(x?.[key]) ? x[key] : Array.isArray(x?.rows) ? x.rows : [];
 
 // 桌面 work 会话的 per-run 配置(execMode/cwd 只经 agent_config 传,见 agentLoop.ts:581;appStore.ts:1553 同形)。
@@ -3419,7 +3426,7 @@ Then reply with only the command output.`,
     }).catch(() => '');
     const sid = `live-realtime-${Date.now()}`;
     const ws = new WS(`ws://127.0.0.1:${port}/agent/realtime?token=${TOKEN}`);
-    const log = []; const transcripts = []; const runs = []; const timeline = []; const t0 = Date.now();
+    const log = []; const transcripts = []; const runs = []; const timeline = []; const t0 = Date.now(); const toolArgs = [];
     let stoppedAt = 0; const latencies = []; let awaitingAudio = false; let ended = null;
     const queue = []; const SIL = Buffer.alloc(3200);
     ws.on('message', (data, isBinary) => {
@@ -3433,6 +3440,7 @@ Then reply with only the command output.`,
       if (m.type === 'conversation.item.input_audio_transcription.completed') transcripts.push({ who: 'user', text: m.transcript, at: Date.now() });
       if (m.type === 'response.audio_transcript.done') transcripts.push({ who: 'ai', text: m.transcript, at: Date.now() });
       if (m.type === 'tangu.run') runs.push({ ...m, at: Date.now() });
+      if (m.type === 'response.function_call_arguments.done' && m.name === 'ask_tangu') { try { toolArgs.push(JSON.parse(m.arguments || '{}')); } catch { toolArgs.push({}); } }
       if (m.type === 'end') ended = m.reason;
     });
     await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
@@ -3458,6 +3466,10 @@ Then reply with only the command output.`,
       // 结果播报要提到那个随机名(「我去看看 / 稍等」这类确认语可能恰好落在 run 完成之后,不算念回)
       const after = finished ? await until(() => transcripts.find((t) => t.who === 'ai' && t.at > finishedAt && t.text.includes(ANIMAL)) || ended, 30_000, 200) : null;
       const afterAll = transcripts.filter((t) => t.who === 'ai' && t.at > finishedAt).map((t) => t.text).join(' / ');
+      // 通话中打字(10-02):模型要用语音答这句(答案只有一个字,听得出答没答对)
+      const typedAt = Date.now();
+      ws.send(JSON.stringify({ type: 'text', text: '一加一等于几？只用一个字回答。' }));
+      const typedReply = await until(() => transcripts.find((t) => t.who === 'ai' && t.at > typedAt && /二|2|两/.test(t.text)) || ended, 20_000, 200);
       await sleep(1500); // 等最后一句落库
       const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
       const runMsg = msgs.filter((x) => x.role !== 'user').map((x) => String(x.content || '')).find((c) => c.includes(MARK)) || '';
@@ -3472,6 +3484,7 @@ Then reply with only the command output.`,
       const aiSaved = msgs.some((x) => x.role !== 'user' && helloText && String(x.content || '').includes(helloText.slice(0, 6)));
       const lat = latencies.length ? latencies[0] : null; // 闲聊那轮;带工具调用那轮实测 ~1.3s,只报不判
       const runThinking = started?.run_id ? await runThinkingOf(started.run_id) : null;
+      const runHint = started?.run_id ? await runHintOf(started.run_id) : '';
       const checks = {
         ready: true,
         latency: lat != null && lat < 1500,
@@ -3481,10 +3494,13 @@ Then reply with only the command output.`,
         reusedUserRow: askRows === 1 && spokenRow && !taskRow,
         relayed: !!afterText,
         runUpdated: runThinking === 'low',
+        heard: toolArgs.some((a) => typeof a.heard === 'string' && /工作目录/.test(a.heard)), // 交了「听到的原话」
+        hint: !!started?.task && runHint.includes(started.task.slice(0, 8)), // 委派 run 带实时模型的理解
+        typed: !!typedReply && typeof typedReply === 'object' && userTexts.concat(asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages').filter((x) => x.role === 'user').map((x) => String(x.content || ''))).some((c) => c.includes('一加一')),
       };
       const ok = Object.values(checks).every(Boolean);
       writeFileSync(join(OUT, 'realtime-timeline.txt'), timeline.join('\n') + '\n'); // 事件时间线(相对通话开始的毫秒),排查播报 / 委派时序用
-      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};换档后委派 run 档位 ${runThinking ?? '-'};失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
+      return { ok, detail: `说完→出声 ${latencies.join('/')}ms;人设「${helloText}」(应含 ${agentName || '?'});委派 task=「${started?.task || '-'}」→ ${finished?.status || '没回'}${runMsg ? `,run 读到 ${MARK}` : `,run 没读到 ${MARK}`};念回「${afterText || afterAll || '-'}」;落库 user=${userSaved} ai=${aiSaved};「工作目录」用户行 ${askRows} 条${taskRow ? '(含转述任务行)' : ''};换档后委派 run 档位 ${runThinking ?? '-'};heard「${toolArgs.map((a) => a.heard || '-').join(' / ')}」;打字答「${typedReply && typeof typedReply === 'object' ? typedReply.text : '-'}」;失败项 ${Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '无'}${ended ? `;通话结束:${ended}` : ''}` };
     } finally { clearInterval(pump); try { ws.close(); } catch { /* ignore */ } }
   });
 

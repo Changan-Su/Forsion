@@ -17,6 +17,8 @@ export type MainPanelOpenStep =
   | { panel: SpacePanelSpec; mode: 'tab' }
   | { panel: SpacePanelSpec; mode: 'split'; direction: 'right' | 'down'; from: number }
 
+const BOTTOM_SPANS = ['right', 'left', 'full', 'main'] as const
+
 export interface SpaceSpec {
   id: string
   name: string | { zh?: string; en?: string }
@@ -29,8 +31,9 @@ export interface SpaceSpec {
   /** Explicit compact surface; distinct view type, with a full-panel destination. */
   mini?: { view: SpacePanelSpec; mainView: SpacePanelSpec; name?: string | { zh?: string; en?: string } }
   /** `bottom` (optional) docks views into the native bottom panel and opens it, e.g. a video editor's timeline.
-   *  Older hosts ignore it, so a main view that relies on it should feature-detect `ctx.viewLocations`. */
-  layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[]; bottom?: SpacePanelSpec[] }
+   *  Older hosts ignore it, so a main view that relies on it should feature-detect `ctx.viewLocations`.
+   *  `bottomSpan` (optional) = which columns the bottom panel spans (SpaceDefinition.bottomSpan; default 'right'). */
+  layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[]; bottom?: SpacePanelSpec[]; bottomSpan?: (typeof BOTTOM_SPANS)[number] }
   requires?: { views?: string[]; plugin?: string | null }
 }
 
@@ -132,6 +135,9 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
   if ([left, right, bottom].some((side) => (side as SpacePanelSpec[]).some((p) => p.split))) {
     return { ok: false, error: 'split 只适用于 layout.main' }
   }
+  if (lay.bottomSpan !== undefined && !BOTTOM_SPANS.includes(lay.bottomSpan as never)) {
+    return { ok: false, error: `layout.bottomSpan 必须是 ${BOTTOM_SPANS.join(' / ')} 之一` }
+  }
 
   let mini: SpaceSpec['mini']
   if (d.mini !== undefined) {
@@ -167,6 +173,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
       layout: {
         main: main as SpacePanelSpec[], left: left as SpacePanelSpec[], right: right as SpacePanelSpec[],
         ...((bottom as SpacePanelSpec[]).length ? { bottom: bottom as SpacePanelSpec[] } : {}),
+        ...(lay.bottomSpan ? { bottomSpan: lay.bottomSpan as (typeof BOTTOM_SPANS)[number] } : {}),
       },
       requires: reqViews.length ? { views: reqViews } : undefined,
     },

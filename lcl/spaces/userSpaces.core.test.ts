@@ -85,6 +85,18 @@ describe('parseSpaceJson', () => {
       expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: bad } }), opts()).ok).toBe(false)
     }
   })
+
+  it('layout.bottomSpan 可选:四个合法值原样透传,缺省不出现该键,其它值拒收', () => {
+    for (const span of ['right', 'left', 'full', 'main']) {
+      const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottomSpan: span } }), opts())
+      expect(r.ok && r.spec.layout.bottomSpan).toBe(span)
+    }
+    const old = parseSpaceJson(JSON.stringify(VALID), opts())
+    expect(old.ok && 'bottomSpan' in old.spec.layout).toBe(false)
+    for (const bad of ['center', 'justify', 1, null]) {
+      expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottomSpan: bad } }), opts()).ok).toBe(false)
+    }
+  })
 })
 
 describe('slug 工具', () => {
