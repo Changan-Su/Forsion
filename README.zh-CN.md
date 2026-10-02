@@ -329,8 +329,12 @@ Forsion/
 ├── desktop/       # Electron 主进程、共享 React 渲染层与产品档案
 ├── web/           # Vite + nginx 的浏览器客户端
 ├── mobile/        # Capacitor Android 客户端
+├── unit/          # 独立 Forsion Unit 框架与本地插件
+├── docs/          # 使用文档
+├── scripts/       # 开源边界检查
+├── .github/       # CI 工作流
 ├── archived/      # 只读历史实现
-└── Dockerfile.standalone
+└── Dockerfile.standalone  # Tangu Manager 用的 worker 镜像
 ```
 
 ### 各端状态
