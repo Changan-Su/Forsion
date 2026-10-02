@@ -3,6 +3,7 @@
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
 import type { ActiveWindowSample } from '../shared/activeWindow'
+import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
@@ -25,6 +26,14 @@ export interface BackendStatus {
   pid: number | null
   lastError: string | null
 }
+
+// Cache changes from the start of preload, including the interval before React subscribes.
+let currentAppearance: StartupAppearance = ipcRenderer.sendSync('appearance:initial')
+const appearanceListeners = new Set<(value: StartupAppearance) => void>()
+ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
+  currentAppearance = value
+  for (const listener of appearanceListeners) listener(value)
+})
 
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
@@ -317,6 +326,15 @@ const api = {
   discoveryImportMcp: (names: string[]): Promise<{ imported: string[]; reserved?: string[] }> =>
     ipcRenderer.invoke('discovery:importMcp', names),
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
+  startupAppearance: {
+    initial: currentAppearance,
+    update: (patch: AppearancePatch, clearPlugin?: string): Promise<StartupAppearance> => ipcRenderer.invoke('appearance:update', patch, clearPlugin),
+    subscribe: (cb: (value: StartupAppearance) => void) => {
+      appearanceListeners.add(cb)
+      cb(currentAppearance)
+      return () => { appearanceListeners.delete(cb) }
+    },
+  },
   listThemes: (): Promise<Array<{ id: string; manifest: Record<string, any>; css: string }>> =>
     ipcRenderer.invoke('themes:list'),
   openThemesDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('themes:openDir'),

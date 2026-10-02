@@ -1383,6 +1383,11 @@ declare global {
       /** 带主进程半身的内置包(Forsion Extend)启停:只改下次开机装不装,回是否待重启。设备页没有这座桥。 */
       setBundleEnabled?(id: string, on: boolean): Promise<{ restartPending: boolean }>
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
+      startupAppearance?: {
+        initial: import('../../shared/startupAppearance').StartupAppearance
+        update(patch: import('../../shared/startupAppearance').AppearancePatch, clearPlugin?: string): Promise<import('../../shared/startupAppearance').StartupAppearance>
+        subscribe(cb: (value: import('../../shared/startupAppearance').StartupAppearance) => void): () => void
+      }
       setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源)→ 刷新账号卡/authInfo。 */

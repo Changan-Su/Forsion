@@ -1,4 +1,5 @@
 import { unitConfigFace } from './unitConfigFace'
+import { registerStartupAppearance } from './startupAppearance'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
 import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
@@ -2008,6 +2009,7 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
 }
 
 app.whenReady().then(async () => {
+  await registerStartupAppearance(isTrustedSender)
   const desktopPermissions = registerDesktopPermissions({
     isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
     // 电脑历史开着时,运行中的 helper 协议太老也判「需要更新」→ 权限卡的「更新并重启助手」把老进程换掉

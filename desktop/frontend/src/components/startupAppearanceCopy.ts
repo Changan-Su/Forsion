@@ -1,0 +1,27 @@
+import { registerMessages } from '../i18n'
+
+registerMessages({
+  "startupAppearance.title": { zh: "开屏与图标", en: "Startup and icons" },
+  "startupAppearance.description": { zh: "自定义启动时的画面和 Forsion 品牌图标。", en: "Customize the startup screen and Forsion brand icon." },
+  "startupAppearance.icon": { zh: "品牌图标", en: "Brand icon" },
+  "startupAppearance.splash": { zh: "开屏动画素材", en: "Startup artwork" },
+  "startupAppearance.default": { zh: "默认", en: "Default" },
+  "startupAppearance.upload": { zh: "上传图片", en: "Upload image" },
+  "startupAppearance.show": { zh: "显示开屏", en: "Show startup screen" },
+  "startupAppearance.motion": { zh: "加载动画", en: "Loading animation" },
+  "startupAppearance.motion.default": { zh: "默认", en: "Default" },
+  "startupAppearance.motion.pulse": { zh: "呼吸", en: "Breathe" },
+  "startupAppearance.motion.spin": { zh: "旋转", en: "Rotate" },
+  "startupAppearance.motion.none": { zh: "静止", en: "Still" },
+  "startupAppearance.native": { zh: "同步到 Dock／任务栏", en: "Use in Dock / taskbar" },
+  "startupAppearance.nativeHint": { zh: "更改运行中的应用图标；安装包和系统固定的快捷方式图标保持原样。", en: "Changes the running app icon. Installer and pinned shortcut icons keep their original artwork." },
+  "startupAppearance.hint": { zh: "支持 PNG、JPEG、SVG、GIF、WebP，最大 1.4 MB、4096 × 4096。品牌图标自动转为静态图像；开屏保留动态素材。", en: "PNG, JPEG, SVG, GIF or WebP, up to 1.4 MB and 4096 × 4096. Brand icons become still images; startup artwork retains animation." },
+  "startupAppearance.behavior": { zh: "图标立即生效；开屏在下次启动时显示。减少动态效果时使用静态图标。", en: "Icons update immediately; startup changes appear on the next launch. Reduced motion uses the still icon." },
+  "startupAppearance.plugins": { zh: "插件提供", en: "From plugins" },
+  "startupAppearance.uploaded": { zh: "已上传图片", en: "Uploaded image" },
+  "startupAppearance.preview": { zh: "预览开屏", en: "Preview startup" },
+  "startupAppearance.reset": { zh: "恢复默认", en: "Restore defaults" },
+  "startupAppearance.close": { zh: "关闭预览", en: "Close preview" },
+  "startupAppearance.error": { zh: "无法保存，请检查图片格式、大小或可用存储后重试。", en: "Could not save. Check the image format, size or available storage, then retry." },
+  "startupAppearance.empty": { zh: "安装提供开屏或图标的插件后，可在这里选择。", en: "Install a plugin with startup artwork or icons to find more options here." },
+})

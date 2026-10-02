@@ -4,6 +4,7 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { registerFont as registerHostFont } from '../../fontPresets'
+import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
 
 // Trust model: external plugins run with the curated `ctx.app` API (and, like Obsidian,
 // full renderer scope). Only install plugins you trust.
@@ -969,6 +970,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
       injectThemeStyle(theme.id, theme.css)
       set((s) => ({ themes: [...s.themes, { pluginId, item: theme }] }))
     },
+    registerAppearance: (preset) => {
+      if (!ctxAlive) return () => {}
+      const dispose = registerAppearance(pluginId, preset)
+      uiMounts.add(dispose)
+      return () => { dispose(); uiMounts.delete(dispose) }
+    },
     // 插件字体(2026-08-28):与内置预设同形,只是 source 不同 → 设置里分到「插件提供」组。
     // id 由宿主加命名空间前缀,插件之间不会撞;远程 URL 直接丢掉(CSP default-src 'self',且要离线可用)。
     registerFont: (font) => {
@@ -1580,6 +1587,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         // 抛错前它可能已经订了块表面/语言 —— 这条分支原来漏收(codex 评审 2026-08-14),补上。
         try { revokers[id]?.() } catch (err) { console.error(`[amadeus] plugin "${id}" revoke failed`, err) }
         revokers[id] = undefined
+        clearPluginAppearance(id)
         // setup 抛错前可能已注册了主题/成就/属性类型 —— 三者都有 store 外的副作用(注入的 <style>、成就注册表),
         // 只 filter zustand 状态会留下孤儿(禁用的插件主题仍挂在 head 上)。与 teardown 同口径全清。
         for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
@@ -1620,6 +1628,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     disable(id) {
       if (!get().activeIds.includes(id)) return
       teardown(id)
+      clearPluginAppearance(id)
       set((s) => ({ disabledIds: s.disabledIds.includes(id) ? s.disabledIds : [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
@@ -1655,6 +1664,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const externals = sources.map(toPlugin)
       set((s) => ({ plugins: [...s.plugins.filter((p) => p.builtin), ...externals] }))
       for (const p of externals) applyPref(p.id)
+      // Keep cached assets through a normal reload, discard removed/blocked/disabled owners.
+      const appearance = useAppearance.getState().value
+      for (const asset of [appearance.icon, appearance.splash]) {
+        if (asset?.pluginId && !get().activeIds.includes(asset.pluginId)) clearPluginAppearance(asset.pluginId)
+      }
       if (readTangu()?.waitBackend) void syncDisabledBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
     },
 
@@ -1700,6 +1714,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
         }))
         if (src) applyPref(id)
+        if (!get().activeIds.includes(id)) clearPluginAppearance(id)
       }
       const next = (reloadChains.get(id) ?? Promise.resolve()).then(run, run)
       const guard = next.catch(() => {}).then(() => { if (reloadChains.get(id) === guard) reloadChains.delete(id) })

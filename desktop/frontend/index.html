@@ -290,45 +290,6 @@
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      // 闪屏退场:logo 动画一直循环,**等 React 把首帧真画出来**才淡出——启动要装插件、扫工作目录,
-      // 比 1600ms 慢很正常,写死时长会让闪屏在应用还没起来时就撤走(露出半成品/空壳)。
-      (function () {
-        var s = document.getElementById('tangu-splash');
-        if (!s) return;
-        // The brand splash belongs only to the primary Forsion launch. Satellite windows are
-        // already opened from a running app and must reveal their content directly.
-        var windowKind = new URLSearchParams(location.search).get('window');
-        if (windowKind === 'mini' || windowKind === 'floating' || windowKind === 'detached') {
-          s.remove();
-          var splashStyle = document.getElementById('tangu-splash-style');
-          if (splashStyle) splashStyle.remove();
-          return;
-        }
-        var CYCLE = 1600;  // 与 --p2m-duration 一致
-        var LEAD = 300;    // 提前于循环接缝淡出:在 logo「落定」那一刻淡出,别在接缝的空档里淡出
-        var CEIL = 10000;  // 天花板:首帧永远画不出来(初始化抛错)也不能把用户锁在闪屏后面
-        var t0 = Date.now();
-        var ceil = setTimeout(fade, CEIL);
-        function fade() {
-          clearTimeout(ceil);
-          s.classList.add('out');
-        }
-        // 淡出动画结束后移除(按 animationName 过滤,避免被内部部件的 animationend 冒泡误触发)。
-        s.addEventListener('animationend', function (e) {
-          if (e.animationName === 'tangu-splash-out') s.remove();
-        });
-        (function waitForFirstPaint() {
-          var root = document.getElementById('root');
-          if (!root || !root.firstChild) return requestAnimationFrame(waitForFirstPaint); // 还没挂上 → 继续循环
-          // 已提交内容 → 再等一帧确保真画出来了,然后排到最近一个「落定」时刻淡出(至少放完一整轮)。
-          requestAnimationFrame(function () {
-            var el = Date.now() - t0;
-            var n = Math.max(1, Math.ceil((el + LEAD) / CYCLE));
-            setTimeout(fade, Math.max(0, n * CYCLE - LEAD - el));
-          });
-        })();
-      })();
-    </script>
+    <!-- forsion-startup-runtime -->
   </body>
 </html>

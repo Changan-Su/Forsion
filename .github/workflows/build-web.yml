@@ -13,6 +13,10 @@ on:
     paths:
       - 'web/**'
       - 'desktop/frontend/src/**'   # web 的主体渲染层(@/@amadeus 别名)
+      - 'desktop/frontend/index.html' # 开屏预览复用的模板
+      - 'desktop/frontend/startupAppearance.js'
+      - 'desktop/frontend/startupAppearancePlugin.ts'
+      - 'desktop/shared/startupAppearance.ts'
       - 'desktop/shared/amadeus/**' # @amadeus-shared
       - 'lcl/**'                    # @lcl(Space-View 框架)
       - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)

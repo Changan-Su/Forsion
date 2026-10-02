@@ -808,6 +808,8 @@ export interface PluginContext {
   registerSelectionAction(action: SelectionActionContribution): void
   registerCommand(command: CommandContribution): void
   registerTheme(theme: ThemeContribution): void
+  /** Adds an image-only preset to Appearance settings; never changes the user's selection. */
+  registerAppearance?(preset: import('../../../../shared/startupAppearance').AppearancePreset): () => void
   /** Contribute a font to 设置 → 外观 → 字体. Returns a disposer; the host also revokes it on
    *  disable/reload, so plugins may ignore the return value.
    *  Old hosts (< 2026-08-28) lack it — call as `ctx.registerFont?.(…)`. */
