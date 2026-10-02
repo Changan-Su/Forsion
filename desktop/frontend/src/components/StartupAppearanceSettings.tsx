@@ -3,6 +3,7 @@ import { ChevronRight, ImageIcon, Play, RotateCcw, Upload, X } from 'lucide-reac
 import { useI18n } from '../i18n'
 import { useAppearance, updateAppearance, prepareAppearanceImage } from '../appearance/store'
 import { APPEARANCE_ACCEPT, AppearanceImportError, importAppearanceFile, type ImportedAppearance } from '../appearance/imageImport'
+import { BUILTIN_APPEARANCES } from '../appearance/builtins'
 import { ANIMATIONS, DEFAULT_APPEARANCE, type AppearancePatch, type AppearanceAsset } from '../../../shared/startupAppearance'
 import { BrandLogo } from './BrandLogo'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
@@ -27,11 +28,16 @@ export const StartupAppearanceSettings: React.FC = () => {
   const label = (asset: AppearanceAsset): string => asset.id === 'upload' ? t('startupAppearance.uploaded') : locale === 'en' ? asset.labelEn || asset.label : asset.label
   const select = (slot: 'icon' | 'splash', key: string): void => {
     if (!key) { save({ [slot]: null }); return }
+    const builtin = BUILTIN_APPEARANCES.find((p) => p.key === key)
+    if (builtin?.[slot]) {
+      save({ [slot]: { id: builtin.key, label: builtin.label, labelEn: builtin.labelEn, image: builtin[slot]!, ...(slot === 'splash' ? { poster: builtin.icon } : {}) } })
+      return
+    }
     const preset = presets.find((p) => p.key === key)
     if (!preset?.[slot]) return
     void run(async () => {
       const image = await prepareAppearanceImage(preset[slot]!, slot === 'icon')
-      const poster = slot === 'splash' ? await prepareAppearanceImage(image, true) : undefined
+      const poster = slot === 'splash' ? await prepareAppearanceImage(image, true, false) : undefined
       // A disabled/reloaded plugin must not finish an old asynchronous selection.
       if (!useAppearance.getState().presets.some((p) => p.token === preset.token)) return
       await updateAppearance({ [slot]: { id: preset.key, label: preset.label, labelEn: preset.labelEn, pluginId: preset.pluginId, image, poster } })
@@ -48,7 +54,8 @@ export const StartupAppearanceSettings: React.FC = () => {
     <div className="startup-appearance-picker">
       <select id={`startup-${slot}`} value={value[slot]?.id || ''} onChange={(e) => select(slot, e.target.value)}>
         <option value="">{t('startupAppearance.default')}</option>
-        {value[slot] && !presets.some((p) => p.key === value[slot]!.id && p[slot]) && <option value={value[slot]!.id}>{label(value[slot]!)}</option>}
+        {value[slot] && ![...BUILTIN_APPEARANCES, ...presets].some((p) => p.key === value[slot]!.id && p[slot]) && <option value={value[slot]!.id}>{label(value[slot]!)}</option>}
+        <optgroup label={t('startupAppearance.builtins')}>{BUILTIN_APPEARANCES.filter((p) => p[slot]).map((p) => <option key={p.key} value={p.key}>{locale === 'en' ? p.labelEn || p.label : p.label}</option>)}</optgroup>
         {presets.some((p) => p[slot]) && <optgroup label={t('startupAppearance.plugins')}>{presets.filter((p) => p[slot]).map((p) => <option key={p.key} value={p.key}>{locale === 'en' ? p.labelEn || p.label : p.label}</option>)}</optgroup>}
       </select>
       <label className="btn ghost sm startup-appearance-upload" title={t('startupAppearance.upload')}>

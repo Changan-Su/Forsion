@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createSerialQueue, writePrivateJson } from './configWrite'
 import { DEFAULT_APPEARANCE, patchAppearance, readAppearance, type StartupAppearance } from '../shared/startupAppearance'
+import { roundIconBitmap } from '../shared/iconShape'
 
 /** Initialized before any windows/preloads. One serialized writer for every app window. */
 export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainInvokeEvent) => boolean): Promise<void> {
@@ -21,7 +22,11 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
     const icon = nativeImage.createFromDataURL(value.icon.image)
     const size = icon.getSize()
     if (icon.isEmpty() || size.width > 512 || size.height > 512) throw new Error('Invalid native icon')
-    return value.nativeIcon ? icon : defaultIcon
+    if (!value.nativeIcon) return defaultIcon
+    // Also cover previously saved square icons without rewriting the user's preference.
+    const bitmap = icon.toBitmap({ scaleFactor: 1 })
+    roundIconBitmap(bitmap, size.width, size.height)
+    return nativeImage.createFromBitmap(bitmap, { width: size.width, height: size.height, scaleFactor: 1 })
   }
   let activeIcon = defaultIcon
   try { activeIcon = decode(state) } catch { state = { ...state, icon: null } }

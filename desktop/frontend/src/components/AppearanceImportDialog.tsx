@@ -3,6 +3,7 @@ import { RotateCcw, X } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { AppearanceImportError, DEFAULT_FRAMING, drawAppearanceImage, encodeAppearanceImport, type ImageFraming, type ImportedAppearance } from '../appearance/imageImport'
 import type { AppearanceAsset } from '../../../shared/startupAppearance'
+import { ICON_CORNER_RATIO } from '../../../shared/iconShape'
 
 export function AppearanceImportDialog({ image, slot, onApply, onCancel }: {
   image: ImportedAppearance
@@ -27,9 +28,9 @@ export function AppearanceImportDialog({ image, slot, onApply, onCancel }: {
   useEffect(() => {
     for (const el of [preview.current, thumbnail.current]) {
       const ctx = el?.getContext('2d')
-      if (el && ctx) drawAppearanceImage(ctx, image.source, framing, el.width)
+      if (el && ctx) drawAppearanceImage(ctx, image.source, framing, el.width, slot === 'icon')
     }
-  }, [image, framing])
+  }, [image, framing, slot])
   const apply = async (): Promise<void> => {
     setSaving(true); setError(null)
     let asset: AppearanceAsset
@@ -56,6 +57,7 @@ export function AppearanceImportDialog({ image, slot, onApply, onCancel }: {
           onClick={() => setFraming({ ...DEFAULT_FRAMING, mode })}>{t(`startupAppearance.${mode}`)}</button>)}
       </div>
       <div className={`appearance-import-stage${framing.mode === 'crop' ? ' is-cropping' : ''}`}
+        style={slot === 'icon' ? { borderRadius: `${ICON_CORNER_RATIO * 100}%` } : undefined}
         tabIndex={framing.mode === 'crop' && !saving ? 0 : undefined} role={framing.mode === 'crop' ? 'group' : undefined}
         aria-label={t('startupAppearance.cropArea')} aria-describedby="appearance-import-hint"
         onPointerDown={(e) => {

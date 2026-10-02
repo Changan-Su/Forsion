@@ -12,7 +12,8 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, setIcon: mock.windowIcon, webContents: { send: mock.send } }] },
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => false, tag: 'default' }),
-    createFromDataURL: (url: string) => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }), tag: url }),
+    createFromDataURL: (url: string) => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }), tag: url, toBitmap: () => Object.assign(Buffer.from([255, 255, 255, 255]), { tag: url }) }),
+    createFromBitmap: (bitmap: Buffer & { tag: string }) => ({ isEmpty: () => false, tag: bitmap.tag }),
   },
 }))
 import { registerStartupAppearance } from './startupAppearance'

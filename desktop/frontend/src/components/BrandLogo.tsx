@@ -4,11 +4,12 @@ import React, { useState } from 'react'
 import lightUrl from '../assets/forsion-logo-light.svg'
 import darkUrl from '../assets/forsion-logo-dark.svg'
 import { useAppearance } from '../appearance/store'
+import { ICON_CORNER_RATIO } from '../../../shared/iconShape'
 
 export const BrandLogo: React.FC<{ size?: number }> = ({ size = 20 }) => {
   const icon = useAppearance((s) => s.value.icon)
   const [failed, setFailed] = useState<string | null>(null)
-  if (icon && icon.image !== failed) return <img className="brand-logo" src={icon.image} width={size} height={size} style={{ objectFit: 'contain' }} alt="Forsion" draggable={false} onError={() => setFailed(icon.image)} />
+  if (icon && icon.image !== failed) return <img className="brand-logo" src={icon.image} width={size} height={size} style={{ objectFit: 'contain', borderRadius: `${ICON_CORNER_RATIO * 100}%` }} alt="Forsion" draggable={false} onError={() => setFailed(icon.image)} />
   return (
   <>
     <img className="brand-logo brand-logo--light" src={lightUrl} width={size} height={size} alt="Forsion" draggable={false} />

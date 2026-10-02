@@ -1,4 +1,5 @@
 import { validAppearanceImage, type AppearanceAsset } from '../../../shared/startupAppearance'
+import { ICON_CORNER_RATIO } from '../../../shared/iconShape'
 
 export const MAX_IMPORT_BYTES = 20_000_000
 export const MAX_IMPORT_PIXELS = 64_000_000
@@ -83,9 +84,13 @@ export async function importAppearanceFile(file: File): Promise<ImportedAppearan
 }
 
 /** Shared by the live preview and final encoding so saved pixels match the crop. */
-export function drawAppearanceImage(ctx: CanvasRenderingContext2D, source: HTMLCanvasElement, framing: ImageFraming, size: number): void {
+export function drawAppearanceImage(ctx: CanvasRenderingContext2D, source: HTMLCanvasElement, framing: ImageFraming, size: number, rounded = false): void {
   const w = source.width, h = source.height
   ctx.clearRect(0, 0, size, size)
+  ctx.save()
+  if (rounded) {
+    ctx.beginPath(); ctx.roundRect(0, 0, size, size, size * ICON_CORNER_RATIO); ctx.clip()
+  }
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'
   if (framing.mode === 'crop') {
     const side = Math.min(w, h) / clamp(framing.zoom, 1, 4)
@@ -94,12 +99,13 @@ export function drawAppearanceImage(ctx: CanvasRenderingContext2D, source: HTMLC
     const scale = Math.min(size / w, size / h)
     ctx.drawImage(source, (size - w * scale) / 2, (size - h * scale) / 2, w * scale, h * scale)
   }
+  ctx.restore()
 }
 export function encodeAppearanceImport(input: ImportedAppearance, slot: 'icon' | 'splash', framing: ImageFraming): AppearanceAsset {
   const result = canvas(slot === 'icon' ? 256 : 1024)
   const ctx = result.getContext('2d')
   if (!ctx) throw new AppearanceImportError('encode')
-  drawAppearanceImage(ctx, input.source, framing, result.width)
+  drawAppearanceImage(ctx, input.source, framing, result.width, slot === 'icon')
   let image = result.toDataURL('image/png')
   if (slot === 'splash' && input.original && framing.mode === 'fit') image = input.original
   else if (!validAppearanceImage(image, slot === 'icon')) {
@@ -110,7 +116,7 @@ export function encodeAppearanceImport(input: ImportedAppearance, slot: 'icon' |
     }
     if (!validAppearanceImage(image, slot === 'icon')) {
       result.width = result.height = 256
-      drawAppearanceImage(ctx, input.source, framing, 256)
+      drawAppearanceImage(ctx, input.source, framing, 256, slot === 'icon')
       image = result.toDataURL('image/png')
     }
   }

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { APPEARANCE_KEY, DEFAULT_APPEARANCE, patchAppearance, readAppearance, validAppearanceImage, type AppearancePatch, type AppearancePreset, type StartupAppearance } from '../../../shared/startupAppearance'
+import { ICON_CORNER_RATIO } from '../../../shared/iconShape'
 
 const host = () => typeof window === 'undefined' ? undefined : window.tangu?.startupAppearance
 function initial(): StartupAppearance {
@@ -51,7 +52,7 @@ export function registerAppearance(pluginId: string, preset: AppearancePreset): 
 }
 
 /** Decode once before saving; icons become bounded static PNGs for Electron and every renderer. */
-export async function prepareAppearanceImage(data: string, icon: boolean): Promise<string> {
+export async function prepareAppearanceImage(data: string, icon: boolean, rounded = icon): Promise<string> {
   if (!validAppearanceImage(data)) throw new Error('Unsupported or oversized image')
   const image = new Image()
   const loaded = new Promise<void>((resolve, reject) => {
@@ -68,6 +69,7 @@ export async function prepareAppearanceImage(data: string, icon: boolean): Promi
   const context = canvas.getContext('2d')!
   const scale = Math.min(256 / image.naturalWidth, 256 / image.naturalHeight)
   const width = image.naturalWidth * scale, height = image.naturalHeight * scale
+  if (rounded) { context.beginPath(); context.roundRect(0, 0, 256, 256, 256 * ICON_CORNER_RATIO); context.clip() }
   context.drawImage(image, (256 - width) / 2, (256 - height) / 2, width, height)
   return canvas.toDataURL('image/png')
 }

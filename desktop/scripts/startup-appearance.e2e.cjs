@@ -66,13 +66,47 @@ async function main() {
         app.dock.setIcon = (icon) => { global.__appearanceIcons.push(icon.toDataURL()); return setIcon(icon) }
       }
     })
+    const diskPath = path.join(`${userdata}-dev`, 'startup-appearance.json')
+    const pixels = (src) => settings.evaluate(async (src) => {
+      const img = new Image(); img.src = src; await img.decode()
+      const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0)
+      const data = ctx.getImageData(0, 0, c.width, c.height).data
+      let edge
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 0 && data[i] < 255) { edge = [...data.slice(i - 3, i + 1)]; break }
+      return { width: c.width, height: c.height, edge, corner: [...ctx.getImageData(0, 0, 1, 1).data], center: [...ctx.getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data] }
+    }, src)
+    check('new installations still use the tree icon despite available built-in artwork', await settings.inputValue('#startup-icon') === '' && await settings.inputValue('#startup-splash') === '')
+    const legacyIcon = await settings.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = c.height = 64
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#4f8b77'; ctx.fillRect(0, 0, 64, 64)
+      return c.toDataURL('image/png')
+    })
+    await settings.evaluate((image) => window.tangu.startupAppearance.update({ icon: { id: 'upload', label: 'Previously uploaded icon', image } }), legacyIcon)
+    if (process.platform === 'darwin') {
+      const nativePixels = await pixels(await app.evaluate(() => global.__appearanceIcons.at(-1)))
+      check('previously saved square icons gain smooth native corners without changing their colours', nativePixels.corner[3] === 0 && nativePixels.center.join(',') === '79,139,119,255' && nativePixels.edge && nativePixels.edge.slice(0, 3).every((n, i) => Math.abs(n - nativePixels.center[i]) <= 4))
+    }
+    await settings.selectOption('#startup-icon', 'builtin:arioso')
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
+    await settings.selectOption('#startup-splash', 'builtin:arioso')
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
+    const builtin = JSON.parse(fs.readFileSync(diskPath, 'utf8'))
+    const builtinPixels = await pixels(builtin.icon.image)
+    check('compressed Arioso is selectable as a built-in icon and startup image without plugin ownership', builtin.icon.id === 'builtin:arioso' && builtin.splash.id === 'builtin:arioso' && !builtin.icon.pluginId && !builtin.splash.pluginId && builtin.icon.image.length < 200_000 && builtin.splash.image.startsWith('data:image/webp') && builtin.splash.poster === builtin.icon.image)
+    check('built-in icon has real transparent rounded corners at 256px', builtinPixels.width === 256 && builtinPixels.corner[3] === 0 && builtinPixels.center[3] === 255)
+    check('built-in option appears once in its own localized group', await settings.locator('#startup-icon optgroup[label="内置"] option[value="builtin:arioso"]').count() === 1 && await settings.locator('#startup-icon option[value="builtin:arioso"]').count() === 1)
+    await settings.locator('.startup-appearance').screenshot({ path: path.join(OUT, 'arioso-zh-light.png'), animations: 'disabled' })
+    await settings.getByRole('button', { name: '预览开屏', exact: true }).click()
+    await settings.frameLocator('.startup-appearance-preview iframe').locator('.forsion-startup-image').waitFor()
+    await settings.locator('.startup-appearance-preview').screenshot({ path: path.join(OUT, 'arioso-preview.png'), animations: 'disabled' })
+    await settings.getByRole('button', { name: '关闭预览', exact: true }).click()
     await settings.selectOption('#startup-icon', key)
     await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
     await settings.selectOption('#startup-splash', key)
     await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
     await settings.selectOption('#startup-motion', 'pulse')
     await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
-    const diskPath = path.join(`${userdata}-dev`, 'startup-appearance.json')
     const stored = JSON.parse(fs.readFileSync(diskPath, 'utf8'))
     check('selection persisted as PNG icon and animated SVG startup artwork', stored.icon.image.startsWith('data:image/png') && stored.splash.image.startsWith('data:image/svg+xml') && stored.animation === 'pulse')
     await win.waitForFunction(() => [...document.querySelectorAll('img.brand-logo')].some((img) => img.src.startsWith('data:image/png')))
@@ -200,6 +234,7 @@ async function main() {
     await stage.focus(); await stage.press('ArrowLeft')
     check('crop position supports keyboard adjustments', beforeKey !== await importDialog.locator('.appearance-import-stage canvas').evaluate((el) => el.toDataURL()))
     await stage.press('ArrowRight')
+    check('import preview and thumbnail show transparent icon corners before saving', await importDialog.evaluate((el) => [...el.querySelectorAll('canvas')].every((c) => c.getContext('2d').getImageData(0, 0, 1, 1).data[3] === 0)))
     await settings.screenshot({ path: path.join(OUT, 'import-crop-zh.png'), animations: 'disabled' })
     await importDialog.screenshot({ path: path.join(OUT, 'import-dialog-zh.png'), animations: 'disabled' })
     await applyImage(); await importDialog.waitFor({ state: 'hidden' })
@@ -211,6 +246,7 @@ async function main() {
       return { width: c.width, height: c.height, center: [...ctx.getImageData(128, 128, 1, 1).data] }
     }, saved().icon.image)
     check('saved 256px square pixels match the crop preview', cropPixels.width === 256 && cropPixels.height === 256 && Math.abs(cropPixels.center[0] - afterDrag[0]) < 3)
+    check('uploaded crop stores transparent corners in the PNG itself', (await pixels(saved().icon.image)).corner[3] === 0)
     const formats = await settings.evaluate(() => {
       const c = document.createElement('canvas'); c.width = 96; c.height = 160
       const ctx = c.getContext('2d'); ctx.fillStyle = '#4f8b77'; ctx.fillRect(20, 20, 56, 120)
@@ -283,11 +319,19 @@ async function main() {
     await launch(); await openSettings()
     await settings.waitForFunction(() => document.querySelector('#startup-icon').value === '')
     check('removed plugin restores default artwork on discovery', JSON.parse(fs.readFileSync(diskPath, 'utf8')).icon === null)
+    await settings.selectOption('#startup-icon', 'builtin:arioso')
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
+    await settings.selectOption('#startup-splash', 'builtin:arioso')
+    await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
+    await settings.locator('.startup-appearance').screenshot({ path: path.join(OUT, 'arioso-en-dark-narrow.png'), animations: 'disabled' })
+    await app.close(); app = null
+    await launch(); await openSettings()
+    check('built-in choices persist across restart after the sample plugin is removed', await settings.inputValue('#startup-icon') === 'builtin:arioso' && await settings.inputValue('#startup-splash') === 'builtin:arioso' && await settings.locator('#startup-icon option[value="builtin:arioso"]').count() === 1)
     await settings.selectOption('#startup-motion', 'spin')
     await settings.waitForFunction(() => !document.querySelector('.startup-appearance-fields').disabled)
     await settings.getByRole('button', { name: /^(恢复默认|Restore defaults)$/ }).click()
     await settings.waitForFunction(() => document.querySelector('#startup-motion').value === 'default')
-    check('restore defaults persists the full default appearance', JSON.parse(fs.readFileSync(diskPath, 'utf8')).splash === null)
+    check('restore defaults persists the full default tree appearance', JSON.parse(fs.readFileSync(diskPath, 'utf8')).splash === null && JSON.parse(fs.readFileSync(diskPath, 'utf8')).icon === null)
     console.log(`${checks} checks passed; screenshots: ${OUT}`)
   } catch (error) {
     if (settings && !settings.isClosed()) { await settings.screenshot({ path: path.join(OUT, 'failure.png') }).catch(() => {}); console.error((await settings.locator('body').innerText().catch(() => '')).slice(0, 5000)) }

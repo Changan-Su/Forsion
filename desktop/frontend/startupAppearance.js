@@ -32,12 +32,14 @@
     @media(prefers-reduced-motion:reduce) { #tangu-splash .tangu-splash-logo, #tangu-splash #panel-stack, #tangu-splash #tree-mark, #tangu-splash #tree-outline, #tangu-splash[data-custom-motion] > :first-child { animation:none; } #tangu-splash #tree-outline {opacity:0} }';
   document.head.appendChild(style);
   var asset = (!reduce && value.splash) || value.icon;
+  var usesIcon = asset && asset === value.icon;
   if (animation === 'none' && asset && asset.poster) asset = { image: asset.poster };
   var valid = asset && typeof asset.image === 'string' && asset.image.length <= 2000000 && /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/.test(asset.image);
   if (valid) {
     var original = splash.firstElementChild;
     var img = document.createElement('img');
     img.className = 'forsion-startup-image';
+    if (usesIcon) img.style.borderRadius = '22%';
     img.alt = '';
     img.onerror = function () { img.replaceWith(original); splash.removeAttribute('data-custom-motion'); };
     img.src = asset.image;

@@ -2,7 +2,7 @@ import { registerMessages } from '../i18n'
 
 registerMessages({
   "startupAppearance.title": { zh: "开屏与图标", en: "Startup and icons" },
-  "startupAppearance.description": { zh: "上传图片，或选择插件提供的方案。", en: "Upload images or choose artwork from plugins." },
+  "startupAppearance.description": { zh: "选择内置图片、上传图片或插件方案。", en: "Choose built-in artwork, uploads or plugin presets." },
   "startupAppearance.icon": { zh: "应用图标", en: "App icon" },
   "startupAppearance.splash": { zh: "开屏素材", en: "Startup artwork" },
   "startupAppearance.default": { zh: "默认", en: "Default" },
@@ -20,6 +20,7 @@ registerMessages({
   "startupAppearance.hint": { zh: "支持 PNG、JPEG、SVG、GIF、WebP。可导入不超过 20 MB、6400 万像素（单边不超过 16384 像素）的原图，保存前自动缩小、压缩。支持预览和正方形裁剪。", en: "PNG, JPEG, SVG, GIF or WebP. Import up to 20 MB and 64 megapixels (maximum 16384 pixels per side), with automatic resizing and compression before saving. Preview and square cropping are available." },
   "startupAppearance.behavior": { zh: "图标立即生效；开屏在下次启动时显示。减少动态效果时使用静态图标。", en: "Icons update immediately; startup changes appear on the next launch. Reduced motion uses the still icon." },
   "startupAppearance.plugins": { zh: "插件提供", en: "From plugins" },
+  "startupAppearance.builtins": { zh: "内置", en: "Built-in" },
   "startupAppearance.uploaded": { zh: "已上传图片", en: "Uploaded image" },
   "startupAppearance.preview": { zh: "预览开屏", en: "Preview startup" },
   "startupAppearance.reset": { zh: "恢复默认", en: "Restore defaults" },
@@ -35,7 +36,7 @@ registerMessages({
   "startupAppearance.resetCrop": { zh: "重置裁剪", en: "Reset crop" },
   "startupAppearance.cropHint": { zh: "拖动图片调整位置，滑动缩放；也可用方向键微调。", en: "Drag to reposition and use the slider to zoom. Arrow keys make fine adjustments." },
   "startupAppearance.fitHint": { zh: "保留完整画面和透明区域，图片不会被拉伸。", en: "Keeps the full image and transparency without stretching." },
-  "startupAppearance.iconOutput": { zh: "自动缩小并保存为 256 × 256 的应用图标。", en: "Automatically resized to a 256 × 256 app icon." },
+  "startupAppearance.iconOutput": { zh: "自动缩小并保存为 256 × 256 的圆角应用图标。", en: "Automatically resized to a rounded 256 × 256 app icon." },
   "startupAppearance.splashOutput": { zh: "大图片会自动缩小、压缩，确认后应用。", en: "Large images are automatically resized and compressed before applying." },
   "startupAppearance.animationKept": { zh: "将保留原图动画。", en: "The original animation will be preserved." },
   "startupAppearance.animationStill": { zh: "本次处理将保存为静态图片。", en: "This edit will save a still image." },
