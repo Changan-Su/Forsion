@@ -277,6 +277,19 @@ async function main() {
     }))
     alignChecks('收起后二次展开', again)
 
+    // ── 收着底部时开合右栏,再展开底部 ────────────────────────────────────────────
+    // 底部收起后组藏在网格里(parkBottom),分区整理看不见空组;右栏一关一开会让它漂到只托着主区的那一列。
+    // 展开开回它时必须由分区整理重新归位,不能就这样长成「底部只在主区下面」。
+    // (此时 toggle 次数为奇 → 底部开着;先收起)
+    await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+    for (const _ of [0, 1]) { await page.evaluate(() => window.__dock.toggle('right')); await page.waitForTimeout(700) }
+    await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700)
+    const drift = await page.evaluate(() => ({
+      main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
+      right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom'),
+    }))
+    alignChecks('收着底部开合右栏后展开', drift)
+
     const bad = results.filter((x) => !x.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)
     process.exitCode = bad.length ? 1 : 0

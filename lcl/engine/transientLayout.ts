@@ -12,8 +12,9 @@ export function withoutTransientPanels(input: ReturnType<DockviewApi['toJSON']>,
       node.data = node.data.map(prune).filter((n): n is Node => n !== null)
       return node.data.length ? node : null
     }
+    const had = node.data.views.length
     node.data.views = node.data.views.filter((id) => !removed.has(id))
-    if (!node.data.views.length) return null
+    if (had && !node.data.views.length) return null // 本来就空的组(收起的底部面板藏着的那个)照存
     if (node.data.activeView && removed.has(node.data.activeView)) {
       const previous = previousViews[node.data.activeView]
       node.data.activeView = node.data.views.includes(previous) ? previous : node.data.views[0]
