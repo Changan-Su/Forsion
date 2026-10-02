@@ -1,10 +1,10 @@
 /**
- * 设置 → 语音 → 实时语音通话(对标 GPT Live):选百炼 Qwen-Omni-Realtime 模型 + 音色,可就地复刻自己的声音。
- * 选了模型输入框才出「实时语音通话」按钮(Composer2)。
+ * 设置 → 模型 → 语音 →「语音通话」一节(对标 GPT Live):开关 + 百炼 Qwen-Omni-Realtime 模型 + 通话音色,可就地复刻自己的声音。
+ * 开了(选了模型)输入框空着时发送键才变成通话键(Composer2)。
  * 百炼铁律:复刻音色只能配复刻时的 target_model —— 朗读那边的 cosyvoice / qwen3-tts 音色在这里一律不能用,换模型就得重新复刻。
  */
-import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Loader2, Mic, Upload } from 'lucide-react'
 import type { DirectProviderConfig, StoredDesktopConfig } from '../types'
 import { cloneTtsVoice } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
@@ -14,20 +14,29 @@ import { registerMessages, useI18n } from '../i18n'
 const MODELS = ['qwen3.8-omni-flash-realtime', 'qwen3.5-omni-plus-realtime', 'qwen3.5-omni-flash-realtime']
 // 百炼「Qwen-Omni-Realtime 音色列表」里的一部分(全表 36+ 种,可直接手输名字)
 const VOICES = ['Tina', 'Cindy', 'Raymond', 'Katerina', 'Ryan', 'Mia', 'Jennifer', 'Aiden']
+const PRESETS = new Set(VOICES)
+const DEFAULT_VOICE = 'Tina' // 引擎留空时用的那个(realtimeVoice.ts DEFAULT_VOICE)
+const CUSTOM = '__custom__'
 const MAX_AUDIO_MB = 10
 
 registerMessages({
-  'settings.realtime.title': { zh: '实时语音通话', en: 'Voice call' },
-  'settings.realtime.intro': { zh: '像 GPT Live 一样直接对话：随时插话打断，要动手的事（查资料、读写文件、跑任务）它会交给 Agent 去办，结果再说给你听。走阿里云百炼的 Qwen-Omni-Realtime，按百炼的音频计费。选好模型后，输入框会出现通话按钮。', en: 'Talk to it like GPT Live: interrupt any time, and anything that needs real work (looking things up, files, tasks) is handed to the agent, then read back to you. Runs on Alibaba Cloud Bailian Qwen-Omni-Realtime and is billed by Bailian per audio. Once a model is selected, a call button appears in the composer.' },
-  'settings.realtime.off': { zh: '不启用', en: 'Off' },
-  'settings.realtime.needProvider': { zh: '需要先在「模型 → 服务商」里添加一个阿里云百炼（DashScope）服务商。', en: 'Add an Alibaba Cloud Bailian (DashScope) provider under Models → Providers first.' },
-  'settings.realtime.voice': { zh: '音色', en: 'Voice' },
-  'settings.realtime.voiceHint': { zh: '可选预置音色，也可填复刻出来的音色 ID；留空用 Tina。朗读用的音色不能用在这里。', en: 'Pick a preset or enter a cloned voice ID; empty means Tina. Read-aloud voices do not work here.' },
-  'settings.realtime.cloneTitle': { zh: '用自己的声音', en: 'Use your own voice' },
-  'settings.realtime.cloneHint': { zh: '上传 10–20 秒干净的人声（不超过 60 秒、10MB，采样率 ≥ 24kHz），复刻成功后自动采用。音色只认当前选的模型，换模型后要重新复刻。', en: 'Upload 10–20 seconds of clean speech (max 60 s and 10 MB, at least 24 kHz). The cloned voice is applied automatically. It only works with the model selected now; re-clone after switching models.' },
+  'settings.realtime.title': { zh: '语音通话', en: 'Voice call' },
+  'settings.realtime.enable': { zh: '启用语音通话', en: 'Turn on voice calls' },
+  'settings.realtime.intro': { zh: '像打电话一样和 Agent 对话，随时插话打断；要动手的事（查资料、读写文件、跑任务）交给 Agent 办完再说给你听。开启后，输入框空着时发送键就是通话键。', en: 'Talk to the agent like a phone call and interrupt any time; anything that needs real work (looking things up, files, tasks) is handed to the agent and read back to you. Once on, the send button becomes the call button while the composer is empty.' },
+  'settings.realtime.model': { zh: '通话模型', en: 'Call model' },
+  'settings.realtime.billing': { zh: '走阿里云百炼 Qwen-Omni-Realtime，按百炼的音频时长计费。', en: 'Runs on Alibaba Cloud Bailian Qwen-Omni-Realtime and is billed by Bailian per audio duration.' },
+  'settings.realtime.needProvider': { zh: '需要先在「模型 → 提供方」里添加一个阿里云百炼（DashScope）提供方。', en: 'Add an Alibaba Cloud Bailian (DashScope) provider under Models → Providers first.' },
+  'settings.realtime.voice': { zh: '通话音色', en: 'Call voice' },
+  'settings.realtime.voiceHint': { zh: '只用于语音通话，和下面「朗读」的音色互不通用。', en: 'Used only in voice calls; it is not shared with the read-aloud voices below.' },
+  'settings.realtime.voiceCustom': { zh: '自定义音色 ID…', en: 'Custom voice ID…' },
+  'settings.realtime.voiceMine': { zh: '我的音色 · {id}', en: 'My voice · {id}' },
+  'settings.realtime.voiceIdPlaceholder': { zh: '填百炼音色 ID，回车保存', en: 'Bailian voice ID, press Enter to save' },
+  'settings.realtime.cloneTitle': { zh: '用自己的声音复刻…', en: 'Clone your own voice…' },
+  'settings.realtime.cloneHint': { zh: '上传 10–20 秒干净的人声（不超过 60 秒、10MB，采样率 ≥ 24kHz），复刻成功后自动采用。音色只认当前的通话模型，换模型后要重新复刻。', en: 'Upload 10–20 seconds of clean speech (max 60 s and 10 MB, at least 24 kHz). The cloned voice is applied automatically. It only works with the current call model; re-clone after switching models.' },
   'settings.realtime.cloneBtn': { zh: '复刻', en: 'Clone' },
   'settings.realtime.cloned': { zh: '已采用复刻音色 {voice}', en: 'Now using cloned voice {voice}' },
   'settings.realtime.fileTooLarge': { zh: '文件超过 {mb}MB', en: 'File is larger than {mb} MB' },
+  'settings.voice.pickAudio': { zh: '选择录音…', en: 'Choose a recording…' },
   'settings.realtime.voice.Tina': { zh: '甜甜 · 温暖女声', en: 'Warm female' },
   'settings.realtime.voice.Cindy': { zh: '林欣宜 · 台湾腔女声', en: 'Taiwanese-accent female' },
   'settings.realtime.voice.Raymond': { zh: '林川野 · 清亮男声', en: 'Clear male' },
@@ -44,18 +53,39 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   onSaved: (c: StoredDesktopConfig) => void
 }) {
   const { t } = useI18n()
-  const [voiceText, setVoiceText] = useState<string | null>(null)
+  const [customId, setCustomId] = useState<string | null>(null) // 非 null = 正在填自定义音色 ID
   const [file, setFile] = useState<File | null>(null)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+  const voiceRef = useRef<HTMLSelectElement>(null)
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const lastModel = useRef('') // 关掉再打开回到上次选的模型
   const ds = providers.filter((p) => /dashscope|aliyuncs\.com/i.test(p.baseUrl))
   const model = stored.realtimeModelId || ''
   const provider = ds.find((p) => model.startsWith(p.providerId + '/'))
+  const voice = stored.realtimeVoice || ''
   const save = (patch: Partial<StoredDesktopConfig>) => window.tangu!.setConfig(patch).then((c) => {
     onSaved(c)
     try { localStorage.setItem(REALTIME_CFG_BUMP_KEY, String(Date.now())) } catch { /* ignore */ } // 叫主窗重读(见 useRealtimeConfig)
   })
+  // 关掉只清模型、不动音色:复刻出来的音色 ID 丢了就得重新花钱复刻
+  const toggle = (): void => {
+    if (model) { lastModel.current = model; void save({ realtimeModelId: '' }) }
+    else void save({ realtimeModelId: lastModel.current || `${ds[0].providerId}/${MODELS[0]}` })
+  }
+  const pickVoice = (v: string): void => {
+    if (v === CUSTOM) { setCustomId(PRESETS.has(voice) ? '' : voice); return }
+    setCustomId(null)
+    void save({ realtimeVoice: v })
+  }
+  const commitCustom = (): void => {
+    if (customId === null) return
+    const v = customId.trim()
+    setCustomId(null)
+    if (v && v !== voice) void save({ realtimeVoice: v }) // 空着离开 = 放弃,别把已选的音色清成默认(Codex 10-02);要默认就在下拉里选 Tina
+  }
 
   const doClone = (): void => {
     if (!file || !provider || busy) return
@@ -83,46 +113,58 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   return (
     <>
       <div className="field">
-        <label>{t('settings.realtime.title')}</label>
-        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.realtime.intro')}</div>
-        <select className="realtime-model" value={model} onChange={(e) => void save({ realtimeModelId: e.target.value })}>
-          <option value="">{t('settings.realtime.off')}</option>
-          {ds.flatMap((p) => MODELS.map((m) => (
-            <option key={`${p.providerId}/${m}`} value={`${p.providerId}/${m}`}>{ds.length > 1 ? `${p.providerId} · ${m}` : m}</option>
-          )))}
-          {model && !provider && <option value={model}>{model}</option>}
-        </select>
+        <div className="switch-row" style={{ minHeight: 30 }}>
+          <button type="button" role="switch" aria-checked={!!model} aria-label={t('settings.realtime.enable')}
+            className={`switch realtime-switch${model ? ' on' : ''}`} onClick={toggle} />
+          <span>{t('settings.realtime.enable')}</span>
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>{t('settings.realtime.intro')}</div>
+        {model && (
+          <>
+            <label style={{ marginTop: 12 }}>{t('settings.realtime.model')}</label>
+            <select className="realtime-model" aria-label={t('settings.realtime.model')} value={model} onChange={(e) => void save({ realtimeModelId: e.target.value })}>
+              {ds.flatMap((p) => MODELS.map((m) => (
+                <option key={`${p.providerId}/${m}`} value={`${p.providerId}/${m}`}>{ds.length > 1 ? `${p.providerId} · ${m}` : m}</option>
+              )))}
+              {!provider && <option value={model}>{model}</option>}
+            </select>
+            <div className="hint">{t('settings.realtime.billing')}</div>
+          </>
+        )}
       </div>
       {model && (
         <div className="field">
           <label>{t('settings.realtime.voice')}</label>
-          <input
-            type="text"
-            list="realtime-voice-options"
-            value={voiceText ?? stored.realtimeVoice ?? ''}
-            placeholder="Tina"
-            onChange={(e) => setVoiceText(e.target.value)}
-            onBlur={() => { if (voiceText !== null) { const v = voiceText.trim(); setVoiceText(null); void save({ realtimeVoice: v }) } }}
-          />
-          <datalist id="realtime-voice-options">
-            {VOICES.map((v) => <option key={v} value={v} label={t(`settings.realtime.voice.${v}`)} />)}
-          </datalist>
+          <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || DEFAULT_VOICE} onChange={(e) => pickVoice(e.target.value)}>
+            {VOICES.map((v) => <option key={v} value={v}>{`${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
+            {voice && !PRESETS.has(voice) && <option value={voice}>{t('settings.realtime.voiceMine', { id: voice })}</option>}
+            <option value={CUSTOM}>{t('settings.realtime.voiceCustom')}</option>
+          </select>
+          {customId !== null && (
+            <input type="text" autoFocus style={{ marginTop: 8 }} value={customId} placeholder={t('settings.realtime.voiceIdPlaceholder')}
+              onChange={(e) => setCustomId(e.target.value)} onBlur={commitCustom}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { commitCustom(); voiceRef.current?.focus() } }} />
+          )}
           <div className="hint">{t('settings.realtime.voiceHint')}</div>
-        </div>
-      )}
-      {model && provider && (
-        <div className="field">
-          <label>{t('settings.realtime.cloneTitle')}</label>
-          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.realtime.cloneHint')}</div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="file" accept="audio/*" onChange={(e) => { setFile(e.target.files?.[0] || null); e.target.value = '' }} />
-            {file && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{file.name}</span>}
-            <input type="text" style={{ width: 140 }} value={name} placeholder={t('settings.tts.studio.namePlaceholder')} onChange={(e) => setName(e.target.value)} />
-            <button className="btn primary sm" disabled={!file || busy} onClick={doClone}>
-              {busy ? <Loader2 size={12} className="spin" /> : null} {t('settings.realtime.cloneBtn')}
-            </button>
-          </div>
-          {msg && <div className="hint" style={{ marginTop: 6 }}>{msg}</div>}
+          {provider && (
+            <>
+              <button className="btn ghost sm realtime-clone-toggle" style={{ marginTop: 10 }} aria-expanded={cloneOpen} onClick={() => setCloneOpen((o) => !o)}>
+                <Mic size={12} /> {t('settings.realtime.cloneTitle')}
+              </button>
+              {cloneOpen && (<>
+              <div className="hint" style={{ margin: '8px 0' }}>{t('settings.realtime.cloneHint')}</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input ref={fileRef} type="file" accept="audio/*" hidden onChange={(e) => { setFile(e.target.files?.[0] || null); e.target.value = '' }} />
+                <button className="btn ghost sm" onClick={() => fileRef.current?.click()}><Upload size={12} /> {file ? file.name : t('settings.voice.pickAudio')}</button>
+                <input type="text" style={{ width: 140 }} value={name} placeholder={t('settings.tts.studio.namePlaceholder')} onChange={(e) => setName(e.target.value)} />
+                <button className="btn primary sm" disabled={!file || busy} onClick={doClone}>
+                  {busy ? <Loader2 size={12} className="spin" /> : null} {t('settings.realtime.cloneBtn')}
+                </button>
+              </div>
+              </>)}
+              {msg && <div className="hint" style={{ marginTop: 6 }}>{msg}</div>}
+            </>
+          )}
         </div>
       )}
     </>

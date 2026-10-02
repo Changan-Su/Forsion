@@ -37,7 +37,7 @@ export function useRealtimeConfig(): { model: string; voice: string } {
   }, () => rtCfg)
 }
 
-export type CallPhase = 'connecting' | 'listening' | 'hearing' | 'thinking' | 'speaking'
+export type CallPhase = 'connecting' | 'reconnecting' | 'listening' | 'hearing' | 'thinking' | 'speaking'
 
 export interface CallState {
   sessionId: string
@@ -64,14 +64,60 @@ export interface StartCallOptions {
   micId?: string
   speakerId?: string
   onActivity?: () => void
+  /** 引擎改正了某行语音转写(实时模型听对、旁路识别听错时)。 */
+  onTranscriptFix?: (messageId: string, text: string) => void
 }
 
 /** 跨窗口事件(通话跑在 Mini 窗,聊天区在主窗):localStorage 的 storage 事件只投给**别的**窗口。 */
 export const CALL_EVENT_KEY = 'forsion_voice_call_evt'
 export type CallEvent = { kind: 'activity'; sessionId: string } | { kind: 'effort'; sessionId: string; level: string }
+  /** 主窗输入框 → Mini:通话中打的字;Mini 转进电话后回 text-ack(同 id)。 */
+  | { kind: 'text'; sessionId: string; text: string; id: string; at: number } | { kind: 'text-ack'; id: string }
+  /** Mini → 主窗:引擎用实时模型听到的原话改正了一行语音转写(轮询不刷已显示的消息,得点名替换)。 */
+  | { kind: 'transcript'; sessionId: string; messageId: string; text: string }
 export function postCallEvent(e: CallEvent): void {
   try { localStorage.setItem(CALL_EVENT_KEY, JSON.stringify({ ...e, n: `${Date.now()}-${Math.random()}` })) } catch { /* ignore */ }
 }
+/** 正在通话的会话(Mini 接通时写、收线时删)。主窗据此把打的字送进电话;跨窗靠 storage 事件,本窗改动直接通知。 */
+const ACTIVE_KEY = 'forsion_voice_call_active'
+const presenceListeners = new Set<() => void>()
+let presenceWired = false
+export function setCallPresence(sessionId: string | null): void {
+  try { if (sessionId) localStorage.setItem(ACTIVE_KEY, sessionId); else localStorage.removeItem(ACTIVE_KEY) } catch { /* ignore */ }
+  presenceListeners.forEach((l) => l())
+}
+export function getCallPresence(): string | null {
+  try { return localStorage.getItem(ACTIVE_KEY) } catch { return null }
+}
+export function subscribeCallPresence(fn: () => void): () => void {
+  if (!presenceWired) {
+    presenceWired = true
+    window.addEventListener('storage', (e) => { if (e.key === ACTIVE_KEY || e.key === null) presenceListeners.forEach((l) => l()) })
+  }
+  presenceListeners.add(fn)
+  return () => { presenceListeners.delete(fn) }
+}
+
+/** 通话里打字的长度上限(引擎同口径截断);更长的照常交给 Tangu,别被截了还当送到了。 */
+export const CALL_TEXT_MAX = 4000
+/** Mini 只认这么新的 text 事件:比主窗超时(2s)短,超时改发 Tangu 之后晚到的那条不会再进电话(否则一句话办两遍)。 */
+export const CALL_TEXT_FRESH_MS = 1500
+
+/** 主窗:把打的字交给 Mini 里的通话。Mini 没在 2s 内确认(崩了 / 已挂、登记没来得及删)就清掉登记、返回 false,
+ *  调用方改走普通发送 —— 打的字绝不能悄悄丢掉。 */
+export function sendTextToCall(sessionId: string, text: string, timeoutMs = 2000): Promise<boolean> {
+  const id = `${Date.now()}-${Math.random()}`
+  return new Promise((resolve) => {
+    const off = onCallEvent((e) => { if (e.kind === 'text-ack' && e.id === id) { off(); clearTimeout(timer); resolve(true) } })
+    const timer = setTimeout(() => {
+      off()
+      if (getCallPresence() === sessionId) setCallPresence(null)
+      resolve(false)
+    }, timeoutMs)
+    postCallEvent({ kind: 'text', sessionId, text, id, at: Date.now() })
+  })
+}
+
 export function onCallEvent(fn: (e: CallEvent) => void): () => void {
   const h = (ev: StorageEvent): void => {
     if (ev.key !== CALL_EVENT_KEY || !ev.newValue) return
@@ -91,7 +137,7 @@ let state: CallState | null = null
 let lastError: string | null = null
 const listeners = new Set<() => void>()
 let teardown: ((reason?: string) => void) | null = null
-let controls: { mic(id: string): Promise<void>; speaker(id: string): Promise<void>; run(run: StartCallOptions['run']): void } | null = null
+let controls: { mic(id: string): Promise<void>; speaker(id: string): Promise<void>; run(run: StartCallOptions['run']): void; text(text: string): boolean } | null = null
 
 const emit = (): void => listeners.forEach((l) => l())
 const patch = (p: Partial<CallState>): void => { if (state) { state = { ...state, ...p }; emit() } }
@@ -116,6 +162,8 @@ export const setCallMic = (id: string): Promise<void> => controls?.mic(id) ?? Pr
 export const setCallSpeaker = (id: string): Promise<void> => controls?.speaker(id) ?? Promise.resolve()
 /** 通话中换委派参数(如 Effort):之后 ask_tangu 起的 run 按新参数跑。 */
 export const updateCallRun = (run: StartCallOptions['run']): void => controls?.run(run)
+/** 通话中打的字:模型的话当场停(同插话),文字送进电话,模型用语音回。没接通返回 false。 */
+export const sendCallText = (text: string): boolean => controls?.text(text) ?? false
 
 export async function startCall(o: StartCallOptions): Promise<void> {
   if (state) endCall()
@@ -205,6 +253,14 @@ export async function startCall(o: StartCallOptions): Promise<void> {
       o.run = run // 还没发 start 的话,start 直接带新值
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'run', run }))
     },
+    text: (text) => {
+      if (ended || !state?.connectedAt || state.phase === 'reconnecting' || ws?.readyState !== WebSocket.OPEN) return false // 重连中引擎收不下,让主窗改发 Tangu
+      flush()
+      own({ phase: 'thinking', analyser: micAnalyser })
+      ws.send(JSON.stringify({ type: 'text', text }))
+      ping() // 引擎落库那行,叫主窗拉
+      return true
+    },
   }
 
   try {
@@ -230,6 +286,8 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     try { m = JSON.parse(String(ev.data)) } catch { return }
     switch (m.type) {
       case 'ready': {
+        // 引擎换了一条上游重连好了:麦克风那一套原样接着用(再建一个上传节点 = 每帧发两遍),计时不清零。
+        if (proc) { own(sources.size ? { phase: 'speaking', analyser: outAnalyser } : { phase: 'listening', analyser: micAnalyser }); break }
         // ponytail: ScriptProcessorNode 已废弃但 Electron 仍支持;换 AudioWorklet 要单独的 worklet 模块文件。
         proc = inCtx.createScriptProcessor(1024, 1, 1)
         proc.connect(inCtx.destination) // 不接到 destination 就不回调;输出缓冲不写 = 静音
@@ -261,12 +319,19 @@ export async function startCall(o: StartCallOptions): Promise<void> {
       case 'response.done':
         if (!sources.size && state?.phase === 'thinking' && m.response?.status !== 'completed') own({ phase: 'listening', analyser: micAnalyser })
         break
+      case 'transcript.corrected':
+        if (typeof m.message_id === 'string' && typeof m.text === 'string') o.onTranscriptFix?.(m.message_id, m.text)
+        break
       case 'tangu.run':
         own({ working: m.status === 'started' ? String(m.task || '') : null })
         ping(m.status === 'started' ? 300 : 800)
         break
       case 'error':
         console.warn('[realtime] upstream error:', m.error?.message || m.error)
+        break
+      case 'reconnecting': // 上游服务端出错断开,引擎正换一条。断在没答完的那句上(会重答)才掐掉半句;已生成完的回答照常放完
+        if (m.replay) flush()
+        own({ phase: 'reconnecting' })
         break
       case 'end':
         finish(m.reason && m.reason !== 'client closed' ? String(m.reason) : undefined)

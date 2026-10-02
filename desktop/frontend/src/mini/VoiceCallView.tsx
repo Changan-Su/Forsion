@@ -12,12 +12,14 @@ import { THINKING_LEVELS, type AgentConfig, type ThinkingLevel } from '../types'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { homeTarget } from '../services/engine/targets'
-import { endCall, getCall, getCallError, postCallEvent, setCallMic, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
+import { CALL_TEXT_FRESH_MS, endCall, getCall, getCallError, getCallPresence, onCallEvent, postCallEvent, sendCallText, setCallMic, setCallPresence, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
 import './voiceCall.css'
 
 registerMessages({
   'livecall.title': { zh: '语音通话', en: 'Voice call' },
   'livecall.connecting': { zh: '正在接通…', en: 'Connecting…' },
+  'livecall.reconnecting': { zh: '信号断了一下，正在重新接通…', en: 'Connection dropped, reconnecting…' },
+  'livecall.serviceError': { zh: '语音服务出错，可以重新拨打', en: 'the voice service hit an error. You can call again' },
   'livecall.listening': { zh: '正在听', en: 'Listening' },
   'livecall.thinking': { zh: '在想…', en: 'Thinking…' },
   'livecall.speaking': { zh: '正在说', en: 'Speaking' },
@@ -74,6 +76,7 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
         target: homeTarget(), sessionId, model: params.model, voice: typeof params.voice === 'string' ? params.voice : undefined,
         title: typeof params.title === 'string' ? params.title : '', run, micId: devices.mic, speakerId: devices.speaker,
         onActivity: () => postCallEvent({ kind: 'activity', sessionId }),
+        onTranscriptFix: (messageId, text) => postCallEvent({ kind: 'transcript', sessionId, messageId, text }),
       })
     }
     return () => endCall()
@@ -85,6 +88,20 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
     if (call) hadCall.current = true
     else if (hadCall.current && !error) window.tangu?.closeSelf?.()
   }, [call, error])
+
+  // 接通后登记「这个会话在通话」,主窗输入框据此把打的字送进来;收线 / 关窗撤销(崩了没撤,主窗等不到确认会自己清)。
+  // 重连中收不下打的字:撤掉登记让主窗直接发 Tangu(不用等 2s 超时),接回来再登记 —— 超时那条路会把登记清掉且再也不补(Codex 10-02)。
+  const live0 = !!call?.connectedAt && call.phase !== 'reconnecting'
+  useEffect(() => {
+    if (!live0) return
+    setCallPresence(sessionId)
+    const clear = (): void => { if (getCallPresence() === sessionId) setCallPresence(null) }
+    window.addEventListener('pagehide', clear)
+    const off = onCallEvent((e) => {
+      if (e.kind === 'text' && e.sessionId === sessionId && Date.now() - e.at < CALL_TEXT_FRESH_MS && sendCallText(e.text)) postCallEvent({ kind: 'text-ack', id: e.id })
+    })
+    return () => { off(); window.removeEventListener('pagehide', clear); clear() }
+  }, [live0, sessionId])
 
   // 头像光环跟着真实声音动:说话时读模型输出,其余读麦克风。直接写 CSS 变量,不走 React 渲染。
   const ringRef = useRef<HTMLDivElement>(null)
@@ -154,9 +171,11 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
     window.tangu?.closeSelf?.()
   }
 
-  const status = error ? t('livecall.failed', { e: error })
+  // 百炼服务端错误(<50002> InternalError…)原文太长也看不懂:说人话,原文放悬停里。
+  const status = error ? t('livecall.failed', { e: /^<5\d{4}>|InternalError|ModelServingError/.test(error) ? t('livecall.serviceError') : error })
     : !call ? ''
     : call.phase === 'connecting' ? t('livecall.connecting')
+    : call.phase === 'reconnecting' ? t('livecall.reconnecting')
     : call.phase === 'speaking' ? t('livecall.speaking')
     : call.working ? t('livecall.working')
     : call.muted ? t('livecall.muted')
@@ -172,7 +191,7 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
           <AgentAvatar name={name} url={avatar} fill className="vc-avatar" />
         </div>
         <div className="vc-name">{name}</div>
-        <div className={`vc-status${error ? ' is-error' : ''}`} title={call?.working || undefined} role="status">
+        <div className={`vc-status${error ? ' is-error' : ''}`} title={error || call?.working || undefined} role="status">
           <span className="vc-status-text">{status}</span>
           {live && connectedAt ? <span className="vc-timer">{fmtDuration(now - connectedAt)}</span> : null}
         </div>

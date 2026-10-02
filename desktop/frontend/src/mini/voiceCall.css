@@ -14,7 +14,8 @@
 }
 .voice-call[data-phase="thinking"] .vc-halo,
 .voice-call[data-phase="working"] .vc-halo,
-.voice-call[data-phase="connecting"] .vc-halo { animation: vc-breathe 1.6s ease-in-out infinite; }
+.voice-call[data-phase="connecting"] .vc-halo,
+.voice-call[data-phase="reconnecting"] .vc-halo { animation: vc-breathe 1.6s ease-in-out infinite; }
 .voice-call[data-phase="muted"] .vc-halo,
 .voice-call[data-phase="idle"] .vc-halo { opacity: 0; }
 @keyframes vc-breathe {
@@ -31,7 +32,7 @@
 .vc-status { display: flex; gap: 6px; justify-content: center; max-width: 100%; min-height: var(--ui-line-meta, 18px); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); color: var(--text-muted); }
 .vc-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vc-status.is-error { color: var(--danger); }
-.vc-status.is-error .vc-status-text { white-space: normal; text-align: center; }
+.vc-status.is-error .vc-status-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; text-align: center; }
 .vc-timer { font-variant-numeric: tabular-nums; color: var(--text-faint); }
 .vc-settings { display: flex; flex-direction: column; padding: 0 8px; }
 .vc-row { flex-basis: 32px; color: var(--text-muted); }

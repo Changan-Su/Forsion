@@ -3,9 +3,11 @@
  *
  *   ws://<engine>/agent/realtime?token=<本机 token>
  *   客户端 → 引擎:首帧 JSON {type:'start', session_id, model, voice?, title?, run:{model_id, app_id?, agent_config?}};
- *                  之后二进制帧 = 16kHz mono s16le PCM(麦克风)。
+ *                  之后二进制帧 = 16kHz mono s16le PCM(麦克风);通话中 JSON {type:'run', run}(换委派参数,如 Effort)、
+ *                  {type:'text', text}(打的字送进电话)。
  *   引擎 → 客户端:二进制帧 = 24kHz mono s16le PCM(模型语音);JSON = 上游事件原样转发(音频增量除外)
- *                  + {type:'tangu.run', status, run_id?, task} + {type:'end', reason}。
+ *                  + {type:'tangu.run', status, run_id?, task} + {type:'transcript.corrected', message_id, text} + {type:'end', reason}
+ *                  + {type:'reconnecting', replay}(上游服务端出错断开、正换一条重连,replay = 断在没答完的那句上、会重答;接上后再发一次 ready)。
  *
  * 分工:实时模型管听、说、轮次与打断(speech-to-speech,10-01 实测说完→出声 0.6–0.9s);要碰电脑 / 文件 / 联网 / 干活
  * 的请求经唯一工具 ask_tangu 交给本会话的 Tangu run(与输入框发出的 run 同一条路:同会话、同 agent_config、审批照常)。
@@ -38,8 +40,11 @@ const ASK_TANGU = {
   description: "Hand a task to Tangu, the agent that can use the user's computer, files, notes, apps, the web and tools. Returns later with the result.",
   parameters: {
     type: 'object',
-    properties: { task: { type: 'string', description: 'The complete, self-contained task, written in the user\'s language.' } },
-    required: ['task'],
+    properties: {
+      task: { type: 'string', description: 'The complete, self-contained task, written in the user\'s language.' },
+      heard: { type: 'string', description: 'The user\'s latest words, verbatim, exactly as you heard them, in their language. The on-screen transcript comes from a separate speech recognizer that can mishear; this corrects it.' },
+    },
+    required: ['task', 'heard'],
   },
 };
 
@@ -69,6 +74,7 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
     `Talk like a person on the phone: in the user's language, one to three short sentences, no markdown, lists, code or emoji. Never say you are Qwen, Tongyi or an Alibaba model; you are ${name}.`,
     `You cannot see the user's screen, files, notes, apps or the web yourself. Whenever the user wants something that needs them (looking something up, current information, reading or changing files, running a task), call ask_tangu with a complete, self-contained task and say in a few words that you're on it. Never make up results.`,
     `When a "[Tangu result]" system message arrives, tell the user the gist conversationally. Summarize long output; never read out paths, code or long lists verbatim. If the user interrupts you, stop and listen.`,
+    `The user may also type messages during the call; answer those by voice in the same way.`,
   ];
   if (def?.soul?.trim()) sections.push(`## Your persona\n${clip(def.soul.trim(), 2000)}`);
   const user = readUserMd().trim();
@@ -134,6 +140,10 @@ export function attachRealtimeVoice(server: Server): void {
   });
 }
 
+/** 上游自己出错断开、值得换一条重连的(服务端 5xxxx / 内部错误);鉴权、参数这类重连也没用,照常挂断。 */
+const RETRYABLE_UPSTREAM = /^<5\d{4}>|InternalError|ModelServingError/;
+const MAX_RECONNECTS = 2;
+
 function handleCall(client: WebSocket, userId: string): void {
   let upstream: WebSocket | null = null;
   let start: StartMsg | null = null;
@@ -144,8 +154,14 @@ function handleCall(client: WebSocket, userId: string): void {
   const unsubs = new Set<() => void>();
   // 每段用户语音(上游 item_id)→ 它落库那行的 id。委派 run 复用这一行当本轮用户消息(Codex 10-01):
   // 不另写一条「模型转述的任务」冒充用户说的话,也不会因转写晚到而顺序颠倒。
-  const userRows = new Map<string, { row: Promise<string | null>; done: (id: string | null) => void }>();
+  const userRows = new Map<string, { row: Promise<string | null>; done: (id: string | null) => void; text?: string; typed?: boolean }>();
   let lastUserItem: string | null = null;
+  // 上游断线重连用:在途 response 回的是哪句、最近答完的是哪句、哪句已经委派出去(那句不重喂,免得同一件事办两遍)。
+  let respondingTo: string | null = null;
+  let answered: string | null = null;
+  let delegatedItem: string | null = null;
+  let reconnects = 0;
+  const heldReports: object[] = [];
   const userRow = (itemId: string) => {
     let e = userRows.get(itemId);
     if (!e) { let done!: (id: string | null) => void; const row = new Promise<string | null>((r) => { done = r; }); e = { row, done }; userRows.set(itemId, e); }
@@ -171,20 +187,54 @@ function handleCall(client: WebSocket, userId: string): void {
   const save = (fn: () => Promise<void>): void => {
     persist = persist.then(fn).catch((e) => console.warn('[realtime] persist failed:', e?.message || e));
   };
+  // 通话中打的字(主窗输入框 → Mini → 这里):照语音那句一样落库、送进上游;模型正说着就掐掉(同插话),然后答这句。
+  const sendText = (text: string): void => {
+    const s = start!;
+    const key = `typed:${uuidv4()}`;
+    lastUserItem = key;
+    const entry = userRow(key);
+    entry.text = text;
+    entry.typed = true;
+    const id = uuidv4();
+    save(async () => {
+      try { await deps().state.insertUserMessage({ id, sessionId: s.session_id, content: text, modelId: s.model, attachments: null }); entry.done(id); }
+      catch (e) { entry.done(null); throw e; }
+    });
+    toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
+    if (responding) { wantResponse = true; toUpstream({ type: 'response.cancel' }); }
+    else requestResponse();
+  };
 
   const report = (text: string): void => {
     if (closed) return;
-    toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: `[Tangu result] ${clip(text, 4000)}` }] } });
+    const item = { type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: `[Tangu result] ${clip(text, 4000)}` }] } };
+    // 正在换上游(重连中):先攒着,接上再送 —— 直接发会丢,而且 requestResponse 会把 responding 置真、没人来清,之后谁也要不到回复(Codex 10-02)。
+    if (upstream?.readyState !== WebSocket.OPEN) { heldReports.push(item); return; }
+    toUpstream(item);
     requestResponse();
   };
 
-  const delegate = async (task: string): Promise<void> => {
+  const delegate = async (task: string, heard: string): Promise<void> => {
     const s = start!;
     const item = lastUserItem;
+    const entry = item ? userRow(item) : null;
     // 等触发这次委派的那段话落库(转写可能比工具调用晚到);等不到就退回「任务原文当本轮用户消息」。
-    const reuse = item ? await Promise.race([userRow(item).row, new Promise<null>((r) => setTimeout(() => r(null), 3000))]) : null;
+    const reuse = entry ? await Promise.race([entry.row, new Promise<null>((r) => setTimeout(() => r(null), 3000))]) : null;
     await persist;
     if (closed) return;
+    // 屏上那行来自旁路语音识别(qwen3-asr),会听错(10-02 实报:「贪吃蛇」落成「看知识」),而实时模型自己听对了。
+    // 用它交来的原话改正那一行 —— 委派 run 的输入按这行从库里拼,不改正 Tangu 就照错字办事。打字那行本来就准,不动。
+    const voiced = !!entry && !entry.typed;
+    // 只差标点 / 空白不算听错(实测实时模型常把句末句号省掉),不改,省得把原话的标点抹掉。
+    const bare = (x = ''): string => x.replace(/[\s\p{P}]/gu, '');
+    if (reuse && voiced && bare(heard) && bare(heard) !== bare(entry!.text) && deps().state.correctUserMessage) {
+      try {
+        if (await deps().state.correctUserMessage!({ id: reuse, sessionId: s.session_id, content: heard })) {
+          entry!.text = heard;
+          toClient({ type: 'transcript.corrected', message_id: reuse, text: heard });
+        }
+      } catch (e: any) { console.warn('[realtime] correct transcript failed:', e?.message || e); }
+    }
     const profile = resolveProfile(s.run.app_id);
     if (!profile) throw new Error(`unknown app_id: ${s.run.app_id}`);
     const runId = uuidv4();
@@ -201,7 +251,11 @@ function handleCall(client: WebSocket, userId: string): void {
         id: runId, sessionId: s.session_id, userId, appId: profile.appId, modelId: s.run.model_id, assistantMessageId: uuidv4(),
         // 等同用户在输入框发出:origin=client(审批档现读会话设置)、审批托盘握手(待批卡出在输入框上方)。
         // 复用语音那行时 insertUserMessage 是 ON CONFLICT DO NOTHING:库里留用户原话,模型按原话 + 前文接活。
-        input: { message: task, userMessageId: reuse || uuidv4(), attachments: [], agentConfig: s.run.agent_config || {}, origin: 'client', approvalTray: true },
+        input: {
+          message: task, userMessageId: reuse || uuidv4(), attachments: [], agentConfig: s.run.agent_config || {}, origin: 'client', approvalTray: true,
+          // 只进本 run 的模型上下文、不进聊天记录(agent_runs.input 里随 run 留一份):改正没成(没交原话 / 存储不支持)时,Tangu 也拿得到实时模型的理解。
+          ...(voiced ? { ephemeralHint: `This request came from a voice call. The user's message above is a speech-recognition transcript and may contain mishearings. The voice assistant understood the request as: "${clip(task, 1000)}". If they differ, follow the voice assistant's understanding.` } : {}),
+        },
       });
       enqueueRun(s.session_id, runId);
     } catch (e) {
@@ -234,10 +288,12 @@ function handleCall(client: WebSocket, userId: string): void {
         break;
       case 'response.created':
         responding = true;
+        respondingTo = lastUserItem;
         pendingReply = '';
         break;
       case 'response.done': {
         responding = false;
+        if (m.response?.status === 'completed') answered = respondingTo;
         const out: any[] = m.response?.output || [];
         const calledTool = out.some((o) => o?.type === 'function_call');
         // 带工具调用的那轮只是「我去看看」:不落库 —— 落了就夹在本轮用户消息与代跑 run 之间,run 的输入会以 assistant 收尾。
@@ -261,6 +317,7 @@ function handleCall(client: WebSocket, userId: string): void {
         const entry = typeof m.item_id === 'string' ? userRow(m.item_id) : null;
         if (!text) { entry?.done(null); break; }
         const id = uuidv4();
+        if (entry) entry.text = text;
         save(async () => {
           try { await deps().state.insertUserMessage({ id, sessionId: s.session_id, content: text, modelId: s.model, attachments: null }); entry?.done(id); }
           catch (e) { entry?.done(null); throw e; }
@@ -275,12 +332,13 @@ function handleCall(client: WebSocket, userId: string): void {
         break;
       case 'response.function_call_arguments.done': {
         if (m.name !== 'ask_tangu') break;
-        let task = '';
-        try { task = String(JSON.parse(m.arguments || '{}').task || '').trim(); } catch { /* 坏参数 */ }
+        delegatedItem = lastUserItem;
+        let task = '', heard = '';
+        try { const a = JSON.parse(m.arguments || '{}'); task = String(a.task || '').trim(); heard = clip(String(a.heard || '').trim(), 4000); } catch { /* 坏参数 */ }
         // 立刻答复这次调用(别让 call_id 悬一整个 run):结果稍后以 system 消息送回。
         toUpstream({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: m.call_id, output: JSON.stringify(task ? { status: 'started', note: 'Tangu is working on it; the result will arrive as a [Tangu result] message.' } : { status: 'error', note: 'Empty task.' }) } });
         // 起不来(建 run 失败等)也要告诉模型,别让它以为还在办(Codex 10-01)。
-        if (task) void delegate(task).catch((e) => { toClient({ type: 'tangu.run', status: 'error', task, error: e?.message || String(e) }); report(`The task could not be started: ${e?.message || e}`); });
+        if (task) void delegate(task, heard).catch((e) => { toClient({ type: 'tangu.run', status: 'error', task, error: e?.message || String(e) }); report(`The task could not be started: ${e?.message || e}`); });
         break;
       }
       case 'error':
@@ -299,6 +357,13 @@ function handleCall(client: WebSocket, userId: string): void {
     if (!owner) await st.autoCreateSession({ id: s.session_id, userId, appId: profile.appId, title: s.title || 'Voice call', modelId: s.run.model_id });
     let ep: { url: string; headers: Record<string, string> };
     try { ep = deps().brain.realtime!.endpoint(s.model); } catch (e: any) { return end(e?.message || String(e)); }
+    await connect(s, ep);
+  };
+
+  // 百炼偶发服务端错误(10-02 实报 `<50002> InternalError.Algo.ModelServingError`)会直接关掉上游:通话不挂,换一条上游接着打。
+  // 新上游的指令按库里最近的对话现拼,上下文接得上;断在一句还没答完(也没委派出去)的话上,把那句重新喂进去。
+  // ponytail: 断在结果播报中途的那条 [Tangu result] 不重放;真有人报「办完了没念」再补。
+  const connect = async (s: StartMsg, ep: { url: string; headers: Record<string, string> }, replay?: string): Promise<void> => {
     const agentSlug = typeof s.run.agent_config?.agentSlug === 'string' ? s.run.agent_config.agentSlug : undefined;
     const instructions = await buildVoiceInstructions(s.session_id, agentSlug);
     if (closed) return;
@@ -319,11 +384,25 @@ function handleCall(client: WebSocket, userId: string): void {
         },
       });
       toClient({ type: 'ready' });
+      const held = heldReports.splice(0);
+      held.forEach(toUpstream);
+      if (replay) toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: replay }] } });
+      if (replay || held.length) requestResponse();
     });
+    // 新上游在旧的 close 之后才建,旧的不会再来事件,不用区分新旧。
     up.on('message', onUpstream);
     up.on('unexpected-response', (_q, r) => end(`upstream HTTP ${r.statusCode}`));
     up.on('error', (e) => end(e.message));
-    up.on('close', (code, reason) => end(reason.toString() || `upstream closed (${code})`));
+    up.on('close', (code, reason) => {
+      const why = reason.toString() || `upstream closed (${code})`;
+      if (closed || reconnects >= MAX_RECONNECTS || !(code === 1011 || RETRYABLE_UPSTREAM.test(why))) return end(why);
+      reconnects++;
+      console.warn(`[realtime] upstream dropped (${why}); reconnecting ${reconnects}/${MAX_RECONNECTS}`);
+      const unanswered = lastUserItem && lastUserItem !== answered && lastUserItem !== delegatedItem ? userRows.get(lastUserItem)?.text : undefined;
+      responding = false; wantResponse = false; pendingReply = ''; skipNextReply = false; respondingTo = null;
+      toClient({ type: 'reconnecting', replay: !!unanswered }); // replay = 那句会重答,客户端把半句音频掐掉;否则让已生成完的回答放完
+      void connect(s, ep, unanswered).catch((e) => end(e?.message || String(e)));
+    });
   };
 
   client.on('message', (data, isBinary) => {
@@ -339,6 +418,7 @@ function handleCall(client: WebSocket, userId: string): void {
       let m: any;
       try { m = JSON.parse(data.toString()); } catch { return; }
       if (m?.type === 'run' && validRun(m.run)) start.run = { ...m.run, app_id: start.run.app_id };
+      else if (m?.type === 'text' && typeof m.text === 'string' && m.text.trim() && upstream?.readyState === WebSocket.OPEN) sendText(clip(m.text.trim(), 4000));
       return;
     }
     start = parseStart(data.toString());

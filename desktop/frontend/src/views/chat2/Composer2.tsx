@@ -5,12 +5,12 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  * /skill chip / 引用 / 模型·Agent·引擎·思考·loop·计划·群聊 / 上下文占比·压缩 / 发送·停止。
  * props 与旧 MessageInput 完全一致 → ChatView 直接换组件即可。
  */
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, Phone, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { onCallEvent, useRealtimeConfig } from '../../services/realtimeCall'
+import { CALL_TEXT_MAX, getCallPresence, onCallEvent, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { normPath } from '../coding/studioModel'
@@ -48,7 +48,10 @@ import { homeTarget, targetForSession } from '../../services/engine/targets'
 
 registerMessages({
   'livecall.start': { zh: '语音通话', en: 'Voice call' },
+  'livecall.return': { zh: '回到通话', en: 'Back to the call' },
   'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
+  'livecall.typeHint': { zh: '通话中：打的字会直接送进电话', en: 'In a call: typed messages go straight into the call' },
+  'livecall.textFallback': { zh: '通话没接上，这条改发给 Tangu 了', en: 'The call did not pick this up, so it was sent to Tangu instead' },
 })
 registerMessages({
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
@@ -564,11 +567,30 @@ export const Composer2: React.FC<{
   const { model: realtimeModel, voice: realtimeVoice } = useRealtimeConfig()
   const [callStarting, setCallStarting] = useState(false)
   const [callError, setCallError] = useState('')
+  // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)
+  const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
+  const inCall = !!activeSessionId && callSessionId === activeSessionId
   // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
   useEffect(() => {
     if (!liveOwnerResolved) return
     return onCallEvent((e) => {
       if (e.kind === 'activity') { void useApp.getState().pollSession(e.sessionId); return }
+      if (e.kind === 'transcript') {
+        // 这行还没拉到时不能丢:在途那次轮询可能拿的是改正前的旧行,而轮询合并「本地已有的优先」,落地后就再也不换了。
+        // 盯着 store 等这行出现再改,最多 30s。
+        const fix = (): boolean => {
+          const hit = useApp.getState().messagesBySession[e.sessionId]?.find((m) => m.id === e.messageId)
+          if (!hit) return false
+          if (hit.content !== e.text) useApp.setState((st) => ({ messagesBySession: { ...st.messagesBySession,
+            [e.sessionId]: (st.messagesBySession[e.sessionId] || []).map((m) => m.id === e.messageId ? { ...m, content: e.text } : m) } }))
+          return true
+        }
+        if (fix()) return
+        const off = useApp.subscribe(() => { if (fix()) { off(); clearTimeout(timer) } })
+        const timer = setTimeout(off, 30_000)
+        return
+      }
+      if (e.kind !== 'effort') return
       useApp.setState((st) => st.configBySession[e.sessionId] ? { configBySession: { ...st.configBySession,
         [e.sessionId]: { ...st.configBySession[e.sessionId], thinkingLevel: e.level as AgentConfig['thinkingLevel'], ...(e.level !== 'max' ? { ultra: undefined } : {}) } } } : {})
     })
@@ -1107,7 +1129,7 @@ export const Composer2: React.FC<{
   const allRefChips = autoChip ? [autoChip, ...refChips] : refChips
 
   /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
-  const sendMessage = (override?: string) => {
+  const sendMessage = (override?: string): Promise<boolean> | undefined => {
     const text = (override ?? draft).trim()
     // 斜杠命令只认键盘草稿:实时转写(override)一律当普通消息发,不执行本地命令(Codex 评审 09-17)
     const cmd = override == null ? text : ''
@@ -1207,6 +1229,19 @@ export const Composer2: React.FC<{
       return
     }
     if (disabled) return
+    // 通话中:纯文字送进电话(实时模型听到、用语音回);带附件 / 引用 / 技能的照常交给 Tangu。
+    // Mini 没确认(崩了 / 刚挂)就改走普通发送并提示 —— 打的字不能丢。override(兜底重发、听写)不再进这条。
+    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotedText && !pinnedSkills.length) {
+      setDraft(''); setHistPos(0); setHint(null)
+      requestAnimationFrame(autoGrow)
+      return sendTextToCall(activeSessionId!, text).then(async (ok) => {
+        if (ok) return true
+        const sent = (await Promise.resolve(sendMessage(text)).catch(() => false)) ?? false // 普通路径会先清提示,所以发完再提示
+        if (sent) setHint(t('livecall.textFallback'))
+        else setDraft((d) => d || text) // 两条路都没送出去:字还给输入框(期间又打了新字就不覆盖)
+        return sent
+      })
+    }
     const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     const refs = allRefChips.length ? allRefChips.map((c) => c.token).join(' ') + '\n' : ''
@@ -1353,6 +1388,8 @@ export const Composer2: React.FC<{
   const pickerPrefs = useModelPickerPreferences()
   const modelGroups = useMemo(() => groupModelsByProvider(models || [], pickerPrefs), [models, pickerPrefs])
   const groupActive = !!groupChat && (groupAgents?.length || 0) >= 2
+  // 能打电话:选了实时模型、桌面有 Mini,且暂时只在普通模式(10-02 用户定:计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定)
+  const callable = !!realtimeModel && liveOwnerResolved && !!window.tangu?.openMini && !(planMode && !isChat) && !groupActive && !isChat && !engineId
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })
@@ -1483,7 +1520,7 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t('input.placeholder')}
+            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t('input.placeholder')}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
             data-tip-tall={(running && !compactCard && tipTall) || undefined}
             disabled={disabled}
@@ -1802,18 +1839,6 @@ export const Composer2: React.FC<{
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
-            {/* 暂时只在普通模式出(10-02 用户定):计划 / 团队 / Chat 预设 / 外部引擎会话都不给,与 modeLabel 同源判定。 */}
-            {!!realtimeModel && liveOwnerResolved && !!window.tangu?.openMini && !(planMode && !isChat) && !groupActive && !isChat && !engineId && (
-              <button
-                className="t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open"
-                title={t('livecall.start')}
-                aria-label={t('livecall.start')}
-                disabled={!!disabled || callStarting}
-                onClick={() => { void startVoiceCall() }}
-              >
-                <Phone size={14} />
-              </button>
-            )}
             {running ? (
               <>
                 {(!!draft.trim() || allRefChips.length > 0) && (
@@ -1821,6 +1846,17 @@ export const Composer2: React.FC<{
                 )}
                 <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
               </>
+            ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotedText && !pinnedSkills.length ? (
+              // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
+              <ChatBoxSubmit
+                className="t2c-live-control"
+                onClick={() => { void startVoiceCall() }}
+                disabled={!!disabled || callStarting}
+                title={t(inCall ? 'livecall.return' : 'livecall.start')}
+                aria-label={t(inCall ? 'livecall.return' : 'livecall.start')}
+              >
+                {callStarting ? <Loader2 size={16} className="spin" /> : <AudioLines size={16} />}
+              </ChatBoxSubmit>
             ) : (
               // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
               <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
