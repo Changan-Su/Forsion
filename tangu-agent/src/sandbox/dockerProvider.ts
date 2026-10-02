@@ -481,8 +481,3 @@ function runInDocker(args: DockerRunArgs): Promise<ExecResult> {
   const writableDirs = [...(args.mountDir ? [args.mountDir] : []), ...(args.pkgMount && !args.pkgMount.ro ? [args.pkgMount.dir] : [])];
   return executeDocker(name, dockerArgs, stdinData, { ...args, timeoutMs, kind }, true, writableDirs);
 }
-
-/** 给调用方临时目录的根（os.tmpdir 下，调用方负责 mkdtemp/rm）。 */
-export function sandboxTmpRoot(): string {
-  return os.tmpdir();
-}
