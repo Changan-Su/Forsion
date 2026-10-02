@@ -190,6 +190,7 @@
     "check:extendview": "node scripts/extend-view.check.cjs",
     "check:tablegroups": "node scripts/extend-view.check.cjs --groups-only",
     "check:bottompanel": "node scripts/bottom-panel.check.cjs",
+    "check:bottomiframe": "node scripts/bottom-toggle-iframe.electron.cjs",
     "shot:bottompanel": "node scripts/bottom-panel.check.cjs --shot",
     "check:remount": "node scripts/main-remount.check.cjs",
     "check:nav": "node scripts/nav-history.check.cjs",
