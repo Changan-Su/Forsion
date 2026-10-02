@@ -33,6 +33,9 @@ COPY desktop/build/gen-fonts.cjs ./desktop/build/gen-fonts.cjs
 # web/vite.config.ts 顶层 import '../unit/releasePolicy.mjs'(Unit 发行时校验打包输入;镜像里不启用,但顶层 import 照样求值,
 # 缺了它 vite 连配置都加载不了 → 整个 build 红)。只拷这一个文件,别把 unit/ 整目录带进上下文。
 COPY unit/releasePolicy.mjs ./unit/releasePolicy.mjs
+# 会话图标校验与引擎共用一份:desktop 的 appStore / deviceSessionsStore 直接 import 引擎这个无依赖的纯函数文件。
+# 同上,只拷这一个文件,别把 tangu-agent/ 带进上下文。
+COPY tangu-agent/src/core/sessionEmoji.ts ./tangu-agent/src/core/sessionEmoji.ts
 # desktop/shared/product.ts(Unit 分支起共享的产品档案)静态 import ../products/forsion.json;main 上旧的 frontend/product.ts
 # 是把回退档案写死在源码里的,所以以前不需要这一层。三个 json 都拷,products.test.ts 无害。
 COPY desktop/products ./desktop/products
