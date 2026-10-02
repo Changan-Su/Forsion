@@ -240,12 +240,23 @@ const rewindNote = (stat: RewindStat | null, t: TFn): string =>
   [t('rewind.scopeNote'), t('rewind.keepNote'), ...(stat?.skipped ? [t('rewind.skippedNote', { n: stat.skipped })] : [])].join(' ')
 
 /** Android(lcl nativeSheet 可选宿主):先统计再呈现原生半屏。没有宿主 → false,调用方照旧开 Web 菜单;
- *  宿主呈现失败 → onFallback 开 Web 菜单。 */
-function openNativeRewind(at: number, ctx: FileCtx | undefined, t: TFn, onPick: (mode: RewindMode) => void, onFallback: () => void): boolean {
+ *  宿主呈现失败 → onFallback 开 Web 菜单。
+ *  `signal` = 发起这次请求的那条消息还在不在场(EditorialMessage 在卸载 / 换会话 / 换消息时 abort):
+ *  统计检查点可能很慢,期间用户切走了会话 —— 那就**不再弹**;已经弹出来的半屏随 signal 一起收掉,选了也不执行。
+ *  否则「回退对话」会落在用户已经离开的那个会话上(onPick 闭包里绑的是发起时的会话与消息)。
+ *  Web 菜单没有这个洞:它是消息自己的子节点,消息一卸载菜单就没了。`load` 仅供单测注入慢统计。 */
+export function openNativeRewind(
+  at: number, ctx: FileCtx | undefined, t: TFn, onPick: (mode: RewindMode) => void, onFallback: () => void,
+  signal: AbortSignal, load: typeof loadRewindStat = loadRewindStat,
+): boolean {
   if (!nativeSheetPresenter()) return false
-  void loadRewindStat(at, ctx)
-    .then((stat) => runNativeSheetMenu({ title: t('rewind.title'), sections: [{ items: rewindMenuItems(stat, t, onPick), footer: rewindNote(stat, t) }] }))
-    .then((handled) => { if (!handled) onFallback() })
+  void load(at, ctx)
+    .then((stat) => {
+      if (signal.aborted) return true // 统计期间消息已不在场:不弹,也不回落 Web 菜单
+      const pick = (mode: RewindMode): void => { if (!signal.aborted) onPick(mode) }
+      return runNativeSheetMenu({ title: t('rewind.title'), sections: [{ items: rewindMenuItems(stat, t, pick), footer: rewindNote(stat, t) }] }, { signal })
+    })
+    .then((handled) => { if (!handled && !signal.aborted) onFallback() })
   return true
 }
 
@@ -318,6 +329,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
+  // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
+  const rewindReq = useRef<AbortController | null>(null)
+  useEffect(() => () => { rewindReq.current?.abort(); rewindReq.current = null }, [msg.id, runSid])
   // 点外面/Esc 关回退菜单(同 Composer2 的 [data-cmenu] 约定)。
   useEffect(() => {
     if (!rewindOpen) return
@@ -404,7 +418,13 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
                 <button className="t2-iconbtn" data-act="rewind" title={t('rewind.title')} onClick={() => {
                   // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
-                  if (!rewindOpen && openNativeRewind(msg.timestamp, fileCtx, t, (mode) => handlers.onRewind?.(mode), () => setRewindOpen(true))) return
+                  if (!rewindOpen) {
+                    rewindReq.current?.abort() // 连点:上一次还在统计 / 还开着的请求作废,只留这一次
+                    const req = new AbortController()
+                    rewindReq.current = req
+                    if (openNativeRewind(msg.timestamp, fileCtx, t, (mode) => handlers.onRewind?.(mode), () => setRewindOpen(true), req.signal)) return
+                    rewindReq.current = null
+                  }
                   setRewindOpen((v) => !v)
                 }}><HistoryIcon size={14} /></button>
                 {rewindOpen && (

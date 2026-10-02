@@ -26,23 +26,45 @@ const usePromptStore = create<{ req: Req | null; open(r: Req): void; clear(): vo
   clear: () => set({ req: null }),
 }))
 
+/** 在途的原生输入半屏(Android);null = 没有。 */
+let nativePending: AbortController | null = null
+
+/**
+ * 输入框是单例:新的询问顶掉在途的那一个 —— **不管它是哪一种**(Web 对话框 / 原生半屏),都按「取消」收尾。
+ * Web:先清掉 store 里的请求(对话框随即卸载)再 resolve(null)。此前原生路径只 resolve 不清,
+ * 被顶掉的 Web 对话框就一直挂在原生半屏底下,而它的 promise 早已了结(点它什么都不会发生)。
+ * 原生:abort → presentNativePrompt 以取消收尾,半屏由宿主收掉。
+ */
+function cancelPending(): void {
+  const cur = usePromptStore.getState().req
+  if (cur) {
+    usePromptStore.getState().clear()
+    cur.resolve(null)
+  }
+  nativePending?.abort()
+  nativePending = null
+}
+
 function askStringWeb(title: string, initial: string, opts?: { label?: string; confirmLabel?: string }): Promise<string | null> {
   return new Promise((resolve) => {
-    // 已有弹窗未决:先取消旧的(单例;嵌套询问不是我们的形态)
-    usePromptStore.getState().req?.resolve(null)
+    cancelPending()
     usePromptStore.getState().open({ title, initial, label: opts?.label, confirmLabel: opts?.confirmLabel, resolve: (v) => resolve(v === ASK_ALT ? null : v) })
   })
 }
 
 export async function askString(title: string, initial = '', opts?: { label?: string; confirmLabel?: string }): Promise<string | null> {
   // Android 原生半屏输入(lcl nativeSheet 的可选宿主);宿主缺席或呈现失败才走 Web PromptDialog。
-  // 语义与 Web 版一致:确定回 trim 后的值,空串 / 取消回 null。新的询问会顶掉旧的(原生侧同样单例)。
+  // 语义与 Web 版一致:确定回 trim 后的值,空串 / 取消回 null。新的询问会顶掉旧的(见 cancelPending)。
   if (nativeSheetPresenter()) {
-    usePromptStore.getState().req?.resolve(null)
+    cancelPending()
+    const ctl = new AbortController()
+    nativePending = ctl
     const out = await presentNativePrompt({
       title, initial, label: opts?.label,
       confirm: opts?.confirmLabel ?? translate('amdlg.confirm'), cancel: translate('amdlg.cancel'),
-    })
+    }, ctl.signal)
+    if (nativePending === ctl) nativePending = null
+    if (ctl.signal.aborted) return null // 被后来的询问顶掉 = 取消;绝不再回落去开 Web 对话框(那会反过来顶掉新的)
     if (out.handled) return out.value?.text.trim() || null
   }
   return askStringWeb(title, initial, opts)
@@ -53,9 +75,15 @@ export async function askString(title: string, initial = '', opts?: { label?: st
  *  原生半屏只有确定 / 取消两个出口,这一变体保持 Web 对话框(Android 上也是)。 */
 export function askStringOrAlt(title: string, initial: string, opts: { label?: string; confirmLabel?: string; altLabel: string }): Promise<string | null | typeof ASK_ALT> {
   return new Promise((resolve) => {
-    usePromptStore.getState().req?.resolve(null)
+    cancelPending()
     usePromptStore.getState().open({ title, initial, label: opts.label, confirmLabel: opts.confirmLabel, altLabel: opts.altLabel, resolve })
   })
+}
+
+/** 当前挂着的 Web 询问(测试用:断言对话框是否还挂着);没有 → null。 */
+export function pendingWebPrompt(): { title: string; altLabel?: string } | null {
+  const req = usePromptStore.getState().req
+  return req ? { title: req.title, altLabel: req.altLabel } : null
 }
 
 /** 挂载一次(AmadeusOverlays);.am-app 载体让 .dialog-* 样式命中。

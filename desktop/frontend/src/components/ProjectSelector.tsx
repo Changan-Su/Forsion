@@ -9,6 +9,14 @@ import { useI18n } from '../i18n'
 import { isCoarsePointer } from '../touch'
 import { nativeSheetPresenter, openNativeSheetMenu, presentNativePrompt, useEdgeNudge, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 
+/** Web 下拉的搜索口径:名称 + 本地路径 + 云端 Project 名(同一串里做不分大小写的子串匹配)。 */
+export const projectSearchText = (w: Pick<WorkspaceDescriptor, 'name' | 'path' | 'project'>): string => `${w.name} ${w.path || ''} ${w.project || ''}`
+
+/** 原生半屏那一行的副文案:原生搜索只匹配「名称 + 副文案」,所以 Web 下拉能搜到的另外两个字段(路径、Project 名)
+ *  得放进来,两边才搜得出同一批项目(此前原生行只有名称,按路径搜不到)。与名称相同的不重复显示。 */
+export const projectSearchDetail = (w: Pick<WorkspaceDescriptor, 'name' | 'path' | 'project'>): string | undefined =>
+  [w.path, w.project].filter((v): v is string => !!v && v !== w.name).join(' · ') || undefined
+
 export const ProjectSelector: React.FC<{
   workspaces: WorkspaceDescriptor[]
   value: string | null
@@ -56,7 +64,7 @@ export const ProjectSelector: React.FC<{
   const projectless = pickable.find((w) => w.kind === 'rootless') || null
   const projects = pickable.filter((w) => w.kind !== 'rootless')
   const query = q.trim().toLowerCase()
-  const list = projects.filter((w) => !query || `${w.name} ${w.path || ''} ${w.project || ''}`.toLowerCase().includes(query))
+  const list = projects.filter((w) => !query || projectSearchText(w).toLowerCase().includes(query))
   // 项目少时搜索只是一行噪音；达到需要浏览的数量再渐进披露。
   const showSearch = projects.length >= 6
   const SelectedIcon = selected?.kind === 'cloud' ? Cloud : selected?.kind === 'rootless' ? FolderX : Folder
@@ -65,7 +73,7 @@ export const ProjectSelector: React.FC<{
 
   // 菜单条目的唯一一份:Web 下拉与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。
   const projectItem = (w: WorkspaceDescriptor): SheetMenuItem => ({
-    id: `ws:${w.key}`, label: w.name, icon: w.kind === 'cloud' ? <Cloud size={14} /> : <Folder size={14} />,
+    id: `ws:${w.key}`, label: w.name, detail: projectSearchDetail(w), icon: w.kind === 'cloud' ? <Cloud size={14} /> : <Folder size={14} />,
     checked: w.key === selected?.key, run: () => pick(w),
   })
   const projectlessItem = projectless ? {

@@ -44,7 +44,18 @@ interface ViewCandidate {
 
 const OMIT_VIEW_TYPES = new Set(['chat', 'chat-panel', 'home', 'launcher', 'sidebar-empty'])
 /** 原生半屏「全部会话」页最多带多少条(原生解析上限 600 项/请求;搜索在原生侧对这份做)。 */
-const NATIVE_ALL_SESSIONS_CAP = 300
+export const NATIVE_ALL_SESSIONS_CAP = 300
+
+/**
+ * 原生半屏「添加会话」页的两节(最近 / 其余全部);**装不下就返回 null**,调用方改走 Web 二级面板。
+ * 原生页的搜索只在递过去的那份名单里找:此前超过上限时直接截到 300 条,第 301 条以后的会话在原生搜索里
+ * 永远搜不到,也没有任何提示(Web 面板搜的是全量)。截断的名单不如不给 —— 整页回落到能搜全量的 Web 面板。
+ */
+export function nativeSessionPage<S extends { id: string }>(recent: readonly S[], all: readonly S[], cap = NATIVE_ALL_SESSIONS_CAP): { recent: S[]; rest: S[] } | null {
+  const recentIds = new Set(recent.map((x) => x.id))
+  const rest = all.filter((x) => !recentIds.has(x.id))
+  return rest.length > cap ? null : { recent: [...recent], rest }
+}
 
 function uniqueViews(items: ViewCandidate[]): ViewCandidate[] {
   const seen = new Set<string>()
@@ -239,9 +250,10 @@ export const AddContentMenu: React.FC<{
   const addAgentItem: SheetMenuItem | null = onAddAgent ? { id: 'add-agent', act: 'add-agent', label: t('addMenu.agent'), icon: <UserPlus size={14} />, run: () => { onAddAgent(); onOpenChange(false) } } : null
   const filesItem: SheetMenuItem = { id: 'files', label: t('addMenu.files'), icon: <Paperclip size={14} />, run: () => { void choosePaths() } }
 
-  /** 原生半屏:一级 = 同样的动作入口;会话 / View 两个二级页带原生搜索(数据都已在 store 里,同步可得)。 */
+  /** 原生半屏:一级 = 同样的动作入口;会话 / View 两个二级页带原生搜索(数据都已在 store 里,同步可得)。
+   *  会话多到原生页装不下时,「添加会话」这一项改为打开 Web 菜单并直达会话面板(那里搜的是全量)。 */
   const nativeMenu = (): SheetMenu => {
-    const recentIds = new Set(recentSessions.map((x) => x.id))
+    const sessionPage = nativeSessionPage(recentSessions, allSessions)
     const shownViews = uniqueViews([...openViews, ...recentViewCandidates])
     const shownKeys = new Set(shownViews.map((v) => v.key))
     const searchEmpty = t('addMenu.noMatches')
@@ -253,13 +265,16 @@ export const AddContentMenu: React.FC<{
           newChatItem,
           ...(addAgentItem ? [addAgentItem] : []),
           filesItem,
-          {
+          sessionPage ? {
             id: 'conversation', label: t('addMenu.conversation'), icon: <MessagesSquare size={14} />,
             search: { placeholder: t('addMenu.searchChats'), empty: searchEmpty },
             children: [
-              { title: t('addMenu.recent'), items: recentSessions.map(sessionItem) },
-              { title: t('addMenu.allChats'), items: allSessions.filter((x) => !recentIds.has(x.id)).slice(0, NATIVE_ALL_SESSIONS_CAP).map(sessionItem) },
+              { title: t('addMenu.recent'), items: sessionPage.recent.map(sessionItem) },
+              { title: t('addMenu.allChats'), items: sessionPage.rest.map(sessionItem) },
             ],
+          } : {
+            id: 'conversation', label: t('addMenu.conversation'), icon: <MessagesSquare size={14} />,
+            run: () => { onOpenChange(true); setPane('conversation') },
           },
           {
             id: 'view', label: t('addMenu.view'), icon: <PanelsTopLeft size={14} />,
