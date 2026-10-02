@@ -9,13 +9,15 @@
  * - 系统返回(Android):MobileRoot 派发可取消的 `forsion:mobile-back`,本壳先接管 tab sheet/「⋯」的关闭。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { Suspense, useEffect, useRef, useState, type RefObject } from 'react'
+import { Suspense, createElement, useEffect, useRef, useState, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { getView } from './viewRegistry'
-import { label, identitySig } from './types'
+import { label, identitySig, type RibbonItem } from './types'
+import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
+import { setNativeChromeShell, useNativeChromeInstalled, type NativeChromeShellLabels } from './nativeChrome'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
@@ -403,10 +405,69 @@ function DrawerFoot() {
   )
 }
 
+/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉已迁去左抽屉底部常驻的账号 / 设置 / mobileFoot 项。 */
+const isMoreItem = (i: RibbonItem): boolean => i.side === 'bottom' && i.id !== 'rb-account' && i.id !== 'rb-settings' && !i.mobileFoot
+
+/** 「＋ 新建标签页」:desktop 同款 —— 当前 Space 有 newPage 则调,否则开 launcher 新标签。 */
+function newMainTab(): void {
+  const sp = getActiveSpace()
+  if (sp?.newPage) sp.newPage()
+  else useWorkspace.getState().openView('launcher', {}, 'main', { newTab: true })
+}
+
+type Tr = (key: string, vars?: Record<string, unknown>) => string
+
+/** 标签页 sheet 的原生版(可选宿主,见 nativeSheet)。返回 false = 宿主不可用/失败 → 调用方开 Web sheet。
+ *  原生答复是一次性的:× 关掉一个标签后,Web sheet 会留在原地,这里就按新列表重新弹一次。 */
+async function presentNativeTabs(tr: Tr): Promise<boolean> {
+  const tabs = useWorkspace.getState().mainTabs
+  const items: NativeMenuItem[] = tabs.map((t) => {
+    const def = getView(t.type)
+    return {
+      id: `tab:${t.id}`,
+      label: t.title || (def ? label(def.displayName) : t.type),
+      // 与 Web 版同一接缝:笔记 tab 的 TabIcon 显示用户设的 emoji(带 hook,所以交给 renderNativeIcons 真渲染)。
+      icon: def?.TabIcon ? createElement(def.TabIcon, { params: { notePath: t.filePath }, size: 24 }) : def?.icon,
+      ...(t.active ? { checked: true } : {}),
+      ...(t.closable && tabs.length > 1 ? { trailing: { id: 'close', label: tr('lcl.mobile.closeTab'), icon: X } } : {}),
+    }
+  })
+  const out = await presentNativeMenu({
+    title: tr('lcl.mobile.tabs'),
+    sections: [{ items }, { items: [{ id: 'new', label: tr('lcl.tab.new'), icon: Plus }] }],
+  })
+  if (!out.handled) return false
+  const v = out.value
+  if (!v) return true
+  if (v.id === 'new') { newMainTab(); return true }
+  const id = v.id.slice('tab:'.length)
+  if (v.trailing) {
+    useWorkspace.getState().closeLeaf(id)
+    if (useWorkspace.getState().mainTabs.length > 1) void presentNativeTabs(tr)
+    return true
+  }
+  useWorkspace.getState().activateLeaf(id)
+  return true
+}
+
+/** 「⋯」菜单的原生版。带 React `component` 的项没法交给原生层画 → 有这种项时整张留在 Web sheet。 */
+async function presentNativeMore(tr: Tr): Promise<boolean> {
+  const items = useRibbonStore.getState().items.filter(isMoreItem)
+  if (!items.length || items.some((i) => i.component)) return false
+  const out = await presentNativeMenu({
+    title: tr('lcl.mobile.more'),
+    sections: [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? label(it.tooltip) : it.id, icon: it.icon })) }],
+  })
+  if (!out.handled) return false
+  const picked = out.value ? items.find((i) => i.id === out.value?.id) : undefined
+  picked?.onClick?.()
+  return true
+}
+
 /** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)。
  *  账号(rb-account)与设置(rb-settings)已迁去左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
-  const items = useRibbonStore((s) => s.items).filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && i.id !== 'rb-settings' && !i.mobileFoot)
+  const items = useRibbonStore((s) => s.items).filter(isMoreItem)
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>
       <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
@@ -436,9 +497,7 @@ function TabSheet({ onClose }: { onClose: () => void }) {
   const tabs = useWorkspace((s) => s.mainTabs)
   const { t: tr } = useEngineI18n()
   const newTab = () => {
-    const sp = getActiveSpace()
-    if (sp?.newPage) sp.newPage()
-    else useWorkspace.getState().openView('launcher', {}, 'main', { newTab: true })
+    newMainTab()
     onClose()
   }
   return (
@@ -521,6 +580,54 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const wide = useWideAspect(true)
   const chromeOff = useChromeAutoHide(mainRef, true)
 
+  // 标签页 /「⋯」:装了原生半屏宿主(Android)就走原生菜单,宿主缺席或失败才开 Web sheet。
+  const { t: tr } = useEngineI18n()
+  const trRef = useRef<Tr>(tr)
+  trRef.current = tr
+  const openTabs = (): void => {
+    if (!nativeSheetPresenter()) { setTabsOpen(true); return }
+    void presentNativeTabs(trRef.current).then((ok) => { if (!ok) setTabsOpen(true) })
+  }
+  const openMore = (): void => {
+    if (!nativeSheetPresenter()) { setMoreOpen(true); return }
+    void presentNativeMore(trRef.current).then((ok) => { if (!ok) setMoreOpen(true) })
+  }
+
+  // 原生顶栏(可选宿主,见 nativeChrome):装了就不渲染 Web 胶囊顶栏,状态经 store 订阅推给宿主 ——
+  // 不在渲染期订阅标题,否则视图渲染期 setTitle → 宿主重渲 → 再 setTitle 的循环(见 LeafHost 注释)。
+  // 左钮可用性与 Web 版同一条式子(hasLeft):左抽屉是切 Space / 账号 / 设置的唯一入口。
+  const nativeChrome = useNativeChromeInstalled()
+  const chromeLabels: NativeChromeShellLabels = {
+    left: tr('lcl.mobile.leftPanel'), right: tr('lcl.mobile.rightPanel'), tabs: tr('lcl.mobile.tabs'), more: tr('lcl.mobile.more'),
+  }
+  const chromeLabelsKey = JSON.stringify(chromeLabels)
+  const chromeActions = useRef({ tabs: openTabs, more: openMore })
+  chromeActions.current = { tabs: openTabs, more: openMore }
+  useEffect(() => {
+    if (!nativeChrome) return
+    const labels = JSON.parse(chromeLabelsKey) as NativeChromeShellLabels
+    const push = (): void => {
+      const ws = useWorkspace.getState()
+      setNativeChromeShell({
+        title: ws.mainTabs.find((t) => t.active)?.title ?? '',
+        left: ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || footAliveNow(),
+        right: ws.rightLeaves.length > 0 || ws.sidebarDefaults.right.length > 0,
+        tabCount: ws.mainTabs.length || 1,
+        labels,
+      }, {
+        left: () => useWorkspace.getState().toggleSidebar('left'),
+        right: () => useWorkspace.getState().toggleSidebar('right'),
+        tabs: () => chromeActions.current.tabs(),
+        more: () => chromeActions.current.more(),
+      })
+    }
+    push()
+    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push)]
+    // 只退订,不清状态:换语言重跑本 effect 时若先清成 null,原生栏会先收起再弹出(WebView 高度跳两下)。
+    return () => { offs.forEach((off) => off()) }
+  }, [nativeChrome, chromeLabelsKey])
+  useEffect(() => () => setNativeChromeShell(null), [])
+
   // Android 系统返回:MobileRoot 派发可取消的 forsion:mobile-back,壳先接管最上层的两个 sheet。
   const sheetsRef = useRef({ tabs: false, more: false })
   sheetsRef.current = { tabs: tabsOpen, more: moreOpen }
@@ -573,10 +680,10 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         {hasRight ? (
           <button className="mb-icon-btn" onClick={() => useWorkspace.getState().toggleSidebar('right')} aria-label="right panel"><PanelRight size={20} /></button>
         ) : null}
-        <button className="mb-icon-btn mb-tabsbtn" onClick={() => setTabsOpen(true)} aria-label="tabs">
+        <button className="mb-icon-btn mb-tabsbtn" onClick={openTabs} aria-label="tabs">
           <span className="mb-tabcount">{tabCount || 1}</span>
         </button>
-        <button className="mb-icon-btn" onClick={() => setMoreOpen(true)} aria-label="more"><MoreHorizontal size={20} /></button>
+        <button className="mb-icon-btn" onClick={openMore} aria-label="more"><MoreHorizontal size={20} /></button>
       </div>
     </header>
   )
@@ -585,7 +692,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     // ⚠️ 顶部**不再**在壳上留安全区:内容要画到屏幕最顶端(封面图/网页/白板 edge-to-edge),
     //    躲刘海是浮动胶囊自己的事(.mb-topbar 的 top、抽屉的 padding-top,见 singleColumn.css)。
     //    底部仍留 —— 底部 chrome 分散在各视图里,没法逐个保证自理,收窄爆炸半径。
-    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    // data-native-chrome:原生顶栏在 WebView 之外占位,视图不再给胶囊让 --mb-top(见 singleColumn.css 末尾)。
+    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
@@ -595,7 +703,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
           {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
               ① push 抽屉的 translate 只打在 .mb-main —— 挂外面胶囊就不跟着内容滑,视觉当场穿帮;
               ② 宽屏 docked 形态左栏(.mb-sidecol)与 main 并排,挂外面的 left:0 会盖到左栏头上。 */}
-          {topbar}
+          {!nativeChrome && topbar}
           <LeafHost />
         </main>
         <div className={`mb-push-dim${pushed || (wide && rightVisible) ? ' on' : ''}`} onClick={closeDrawers} />

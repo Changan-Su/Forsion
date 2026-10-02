@@ -2,8 +2,10 @@
  *  确定回 trim 后的值、取消/Esc 回 null。Electron 不支持 window.prompt(调用即失败),
  *  所有原 prompt 调用点一律换用本入口;Host 挂在 AmadeusOverlays(三端共用)。 */
 import { create } from 'zustand'
+import { nativeSheetPresenter, presentNativePrompt } from '@lcl/engine'
 import { PromptDialog } from './Dialogs'
 import { useMobileBackClose } from '../lib/mobileBack'
+import { translate } from '../../i18n'
 
 /** askStringOrAlt 的次要出口(如「移除链接」)被点时的返回值。 */
 export const ASK_ALT: unique symbol = Symbol('askString.alt')
@@ -24,7 +26,7 @@ const usePromptStore = create<{ req: Req | null; open(r: Req): void; clear(): vo
   clear: () => set({ req: null }),
 }))
 
-export function askString(title: string, initial = '', opts?: { label?: string; confirmLabel?: string }): Promise<string | null> {
+function askStringWeb(title: string, initial: string, opts?: { label?: string; confirmLabel?: string }): Promise<string | null> {
   return new Promise((resolve) => {
     // 已有弹窗未决:先取消旧的(单例;嵌套询问不是我们的形态)
     usePromptStore.getState().req?.resolve(null)
@@ -32,8 +34,23 @@ export function askString(title: string, initial = '', opts?: { label?: string; 
   })
 }
 
+export async function askString(title: string, initial = '', opts?: { label?: string; confirmLabel?: string }): Promise<string | null> {
+  // Android 原生半屏输入(lcl nativeSheet 的可选宿主);宿主缺席或呈现失败才走 Web PromptDialog。
+  // 语义与 Web 版一致:确定回 trim 后的值,空串 / 取消回 null。新的询问会顶掉旧的(原生侧同样单例)。
+  if (nativeSheetPresenter()) {
+    usePromptStore.getState().req?.resolve(null)
+    const out = await presentNativePrompt({
+      title, initial, label: opts?.label,
+      confirm: opts?.confirmLabel ?? translate('amdlg.confirm'), cancel: translate('amdlg.cancel'),
+    })
+    if (out.handled) return out.value?.text.trim() || null
+  }
+  return askStringWeb(title, initial, opts)
+}
+
 /** 同 askString,多一个次要出口按钮(`altLabel`,如编辑链接时的「移除链接」):点它 resolve ASK_ALT。
- *  为什么要单独一个出口:PromptDialog 的空输入等同「取消」,拿不到「确认了但留空」这个信号(I-10)。 */
+ *  为什么要单独一个出口:PromptDialog 的空输入等同「取消」,拿不到「确认了但留空」这个信号(I-10)。
+ *  原生半屏只有确定 / 取消两个出口,这一变体保持 Web 对话框(Android 上也是)。 */
 export function askStringOrAlt(title: string, initial: string, opts: { label?: string; confirmLabel?: string; altLabel: string }): Promise<string | null | typeof ASK_ALT> {
   return new Promise((resolve) => {
     usePromptStore.getState().req?.resolve(null)

@@ -30,13 +30,13 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
+import { SingleColumnHost, useWorkspace, useNav, useNativeChromeClaim, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
-import { MobileUnitsSheet } from './UnitsSheet'
+import { MobileUnitsSheet, useUnitsSheet } from './UnitsSheet'
 import { homeTarget } from '@/services/engine/targets'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
@@ -97,6 +97,10 @@ function useAndroidBack(): void {
   }, [])
 }
 
+/** 全屏 Web 浮层盖住单列壳时,原生顶栏(Android NativeChrome,可选宿主)收起,不能浮在浮层上面。
+ *  没装原生宿主(web / 手机浏览器)时这个声明是空操作。 */
+const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
+
 export function MobileRoot() {
   useBootstrap()
   useInboxAutoPull()
@@ -129,6 +133,9 @@ export function MobileRoot() {
     connect: s.connect,
   })))
   const activeSession = a.sessions.find((s) => s.id === a.activeId) || a.archivedSessions.find((s) => s.id === a.activeId) || null
+  const unitsOpen = useUnitsSheet((s) => s.open)
+  const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
+  useNativeChromeClaim(a.settingsOpen || a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
 
   return (
     <>

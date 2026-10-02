@@ -418,3 +418,8 @@
      JS 首帧之前也是同一种失配。inline(uiZoom 显式设过)优先级更高,仍然覆盖得掉这条。 */
   :root { --uiz: 1.15; }
 }
+
+/* ── Android 原生顶栏(NativeChrome,2026-10-02):原生栏在 WebView **之外**占位(WebView 布局在它下方),
+   Web 胶囊顶栏不渲染,视图也就不必再给它让出 --mb-top。只在装了原生宿主时命中;web / 桌面手机框 / 手机浏览器
+   没有这个属性,行为与之前逐像素相同。放文件末尾(DESIGN §7.2)。 */
+.mb-shell[data-native-chrome] { --mb-top: 0px; }
