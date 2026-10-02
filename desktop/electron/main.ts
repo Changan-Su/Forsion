@@ -56,7 +56,9 @@ import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudi
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
-import { computerUseLiveView, helperSocketPath } from './computerUse'
+import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
+import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, normalizeProbe } from './appDock'
+import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
 import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
@@ -1824,6 +1826,85 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
 
+// ══ 侧边拼接(App Dock):对话面板贴在别的 App 窗口旁边,像一个窗口那样一起动(跟随见 electron/appDock.ts)══
+// 面板本身是一扇 Mini 形态的窗口(?window=mini&dock=1):先列出屏上的窗口让用户挑,挑中后贴过去、里面开一段新对话,
+// 默认引用这个 App。全程经 CU helper(本机辅助 App)看位置、挪窗口、读划线;只支持 macOS(Windows 的 helper 桌面够不着)。
+let dockWindow: BrowserWindow | null = null
+let dockTarget: DockWindow | null = null
+let stopDockFollow: (() => void) | null = null
+let dockLink: HelperLink | null = null
+
+function dockState(): DockState { return { target: dockTarget } }
+function sendDockState(): void {
+  if (dockWindow && !dockWindow.isDestroyed()) dockWindow.webContents.send('appDock:state', dockState())
+}
+function detachDock(): void {
+  stopDockFollow?.(); stopDockFollow = null
+  dockTarget = null
+}
+
+function openDockWindow(): void {
+  if (dockWindow && !dockWindow.isDestroyed()) { present(dockWindow); return }
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+  const width = DOCK_PANEL_WIDTH, height = Math.min(640, wa.height - 48)
+  const win = new BrowserWindow({
+    width, height, x: Math.round(wa.x + (wa.width - width) / 2), y: Math.round(wa.y + (wa.height - height) / 2),
+    minWidth: DOCK_PANEL_MIN_WIDTH, minHeight: 320,
+    frame: false, transparent: true, resizable: true, hasShadow: true, skipTaskbar: true,
+    minimizable: false, maximizable: false, fullscreenable: false,
+    // 目标 App 在前台时第一下点面板就要能拖 / 能点进输入框(见 miniForeground 那轮实测)
+    acceptFirstMouse: true,
+    backgroundColor: '#00000000', show: !QUIET_WINDOWS,
+    webPreferences: satelliteWebPreferences(),
+  })
+  dockWindow = win
+  if (QUIET_WINDOWS) win.showInactive()
+  win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
+  hardenNav(win.webContents)
+  win.on('closed', () => {
+    if (dockWindow !== win) return
+    detachDock(); dockWindow = null
+    dockLink?.close(); dockLink = null
+  })
+  console.log('[win] dock open')
+  loadRendererWith(win, { window: 'mini', dock: '1' })
+}
+
+async function attachDock(target: DockWindow): Promise<{ ok: boolean; error?: string }> {
+  const win = dockWindow
+  if (!win || win.isDestroyed()) return { ok: false, error: 'closed' }
+  detachDock()
+  dockLink ??= new HelperLink(helperSocketPath())
+  const link = dockLink
+  let probe = normalizeProbe(await link.request({ cmd: 'dockProbe', windowId: target.windowId }).catch(() => null))
+  if (!probe.exists) return { ok: false, error: 'window_gone' }
+  const panelWidth = Math.max(DOCK_PANEL_MIN_WIDTH, win.getBounds().width)
+  const wa = screen.getDisplayMatching(probe.rect).workArea
+  const side = chooseSide(probe.rect, panelWidth, wa)
+  const room = makeRoom(probe.rect, panelWidth, wa)
+  if (room && side === 'right') {
+    await link.request({ cmd: 'setWindowFrame', pid: target.pid, windowId: target.windowId, x: room.x, y: room.y, width: room.width, height: room.height }).catch(() => {})
+    probe = normalizeProbe(await link.request({ cmd: 'dockProbe', windowId: target.windowId }).catch(() => null))
+  }
+  win.setBounds(panelRectFor(probe.rect, side, panelWidth))
+  dockTarget = target
+  // 把这一对一起带到前面:目标拿前台(用户接着就要在里面干活),面板随后由跟随循环提上来。
+  await link.request({ cmd: 'focusWindow', pid: target.pid, windowId: target.windowId }).catch(() => {})
+  stopDockFollow = startDockFollow({
+    win, target, side,
+    request: (payload) => link.request(payload),
+    displayBoundsOf: (rect) => screen.getDisplayMatching(rect).bounds,
+    onGone: () => { if (!win.isDestroyed()) win.close() }, // 目标关了:对话已在会话列表里,面板一并收起
+    intervalMs: Number(process.env.DOCK_FOLLOW_MS) || undefined, // 只给台架负对照用(e2e:appdock --nc=nofollow)
+  })
+  sendDockState()
+  return { ok: true }
+}
+
+function dockSender(e: Electron.IpcMainInvokeEvent): boolean {
+  return isTrustedSender(e) && !!dockWindow && !dockWindow.isDestroyed() && e.sender === dockWindow.webContents
+}
+
 function toggleMiniWindow(opts?: MiniOpenOptions): void {
   if (!opts && autoMiniSessionId) opts = { sessionId: autoMiniSessionId }
   miniAutoPanel?.dismiss()
@@ -3017,6 +3098,43 @@ app.whenReady().then(async () => {
   mcpTranscribeFile = (p, req) => transcribeFileByPath(p, req)
 
   // ── 本地语音模型(SenseVoice)下载 / 状态 / 删除。下载进度经 'asr:localProgress' 推回发起窗口。──
+  // ── 侧边拼接(App Dock):open 谁都能调(命令面板入口);候选 / 贴靠 / 读划线只认面板窗口自己 ──
+  ipcMain.handle('appDock:open', (e) => {
+    if (!isTrustedSender(e)) return { ok: false }
+    if (process.platform !== 'darwin') return { ok: false, error: 'unsupported_platform' }
+    openDockWindow()
+    return { ok: true }
+  })
+  ipcMain.handle('appDock:ready', (e) => (dockSender(e) ? dockState() : { target: null }))
+  ipcMain.handle('appDock:candidates', async (e) => {
+    if (!dockSender(e)) return { windows: [] }
+    try {
+      await ensureHelperRunning()
+      return { windows: normalizeDockCandidates(await askHelper(helperSocketPath(), { cmd: 'dockCandidates', excludePids: [process.pid] }, 5_000)) }
+    } catch (err) {
+      const code = (err as { code?: string }).code
+      return { windows: [], error: code === 'unknown_command' ? 'unsupported_helper' : code || 'unavailable' }
+    }
+  })
+  ipcMain.handle('appDock:attach', async (e, raw: unknown) => {
+    const target = normalizeDockWindow(raw)
+    if (!dockSender(e) || !target) return { ok: false }
+    try { return await attachDock(target) } catch (err) { return { ok: false, error: (err as { code?: string }).code || 'unavailable' } }
+  })
+  ipcMain.handle('appDock:detach', (e) => {
+    if (!dockSender(e)) return
+    detachDock(); sendDockState()
+  })
+  ipcMain.handle('appDock:selection', async (e) => {
+    if (!dockSender(e) || !dockTarget) return {}
+    try {
+      // 单独一条连接:读 AX 最慢要 1s,走跟随那条长连接会把这 1s 的位置更新全堵在后面。
+      return normalizeDockSelection(await askHelper(helperSocketPath(), { cmd: 'selection', pid: dockTarget.pid }, 3_000))
+    } catch (err) {
+      return { error: (err as { code?: string }).code || 'unavailable' }
+    }
+  })
+
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>
     computerUseLiveView(opts || {}),

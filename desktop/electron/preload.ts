@@ -360,6 +360,18 @@ const api = {
   // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。
   transcribeAudioFile: (filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribeFile', filePath, req),
+  // 侧边拼接(App Dock,macOS):对话面板贴在别的 App 窗口旁边。open 任何窗口可调;其余只有面板窗口自己调得通。
+  appDockOpen: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:open'),
+  appDockReady: (): Promise<import('../shared/appDock').DockState> => ipcRenderer.invoke('appDock:ready'),
+  appDockCandidates: (): Promise<{ windows: import('../shared/appDock').DockCandidate[]; error?: string }> => ipcRenderer.invoke('appDock:candidates'),
+  appDockAttach: (target: import('../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:attach', target),
+  appDockDetach: (): Promise<void> => ipcRenderer.invoke('appDock:detach'),
+  appDockSelection: (): Promise<import('../shared/appDock').DockSelection & { error?: string }> => ipcRenderer.invoke('appDock:selection'),
+  onAppDockState: (cb: (state: import('../shared/appDock').DockState) => void): (() => void) => {
+    const listener = (_: unknown, state: import('../shared/appDock').DockState): void => cb(state)
+    ipcRenderer.on('appDock:state', listener)
+    return () => ipcRenderer.removeListener('appDock:state', listener)
+  },
   // Computer Use 实时画面:最近被操控窗口的一帧(只读,helper 没跑就 active:false;见 electron/computerUse.ts)。
   computerUseLiveView: (opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<{
     active: boolean

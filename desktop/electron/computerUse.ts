@@ -12,6 +12,8 @@
  *  3. **macOS only**。Windows 的 helper 是 stdin/stdout 子进程(没有服务端),桌面够不着;
  *     要支持得先给 Rust bridge 加一个命名管道服务端 —— 那是另一件事。
  */
+import { execFile } from 'node:child_process'
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -157,4 +159,97 @@ export async function computerUseLiveView(opts: LiveViewOptions = {}): Promise<C
     if (code === 'unknown_command') return { active: false, error: 'unsupported_helper' }
     return { active: false, error: code || 'unavailable' }
   }
+}
+
+// ── 侧边拼接(App Dock)用的两样:长连接 + 按需拉起 helper ─────────────────────────────────────────
+
+/**
+ * 一条长开的 helper 连接,逐行一问一答(helper 每条连接一个线程、按行顺序处理,所以回包严格 FIFO)。
+ * 贴边面板每 16ms 问一次 dockProbe:每次新建连接 = helper 每秒起 60 个线程,这里只起一个。
+ * 断了就让在途的全部失败,下次 request 自动重连。
+ */
+export class HelperLink {
+  private socket: net.Socket | null = null
+  private buffer = ''
+  private pending: Array<{ resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }> = []
+
+  constructor(private readonly socketPath: string, private readonly timeoutMs = 3_000) {}
+
+  request(payload: Record<string, unknown>): Promise<unknown> {
+    const socket = this.socket ?? this.connect()
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => this.fail(Object.assign(new Error('timeout'), { code: 'client_timeout' })), this.timeoutMs)
+      this.pending.push({ resolve, reject, timer })
+      socket.write(`${JSON.stringify({ id: `fd_${++requestSeq}`, ...payload })}\n`)
+    })
+  }
+
+  close(): void { this.fail(new Error('closed')) }
+
+  private connect(): net.Socket {
+    const socket = net.createConnection(this.socketPath)
+    socket.setEncoding('utf8')
+    socket.on('data', (chunk: string) => {
+      if (this.socket !== socket) return
+      this.buffer += chunk
+      let nl: number
+      while ((nl = this.buffer.indexOf('\n')) >= 0) {
+        const line = this.buffer.slice(0, nl)
+        this.buffer = this.buffer.slice(nl + 1)
+        const head = this.pending.shift()
+        if (!head) continue
+        clearTimeout(head.timer)
+        try {
+          const parsed = JSON.parse(line) as { ok?: boolean; result?: unknown; error?: { code?: string; message?: string } }
+          if (parsed.ok === true) head.resolve(parsed.result)
+          else head.reject(Object.assign(new Error(parsed.error?.message || 'helper error'), { code: parsed.error?.code }))
+        } catch (err) { head.reject(err as Error) }
+      }
+    })
+    // 只认当前这条:作废的旧连接晚到的 close 不能把刚建好的新连接一起拆掉。
+    socket.on('error', (err) => { if (this.socket === socket) this.fail(err) })
+    socket.on('close', () => { if (this.socket === socket) this.fail(new Error('closed')) })
+    this.socket = socket
+    return socket
+  }
+
+  /** 一旦超时或断线,整条连接作废:FIFO 对不上号了,不能拿下一个回包配给错的请求。 */
+  private fail(err: Error): void {
+    const socket = this.socket
+    this.socket = null
+    this.buffer = ''
+    socket?.destroy()
+    for (const p of this.pending.splice(0)) { clearTimeout(p.timer); p.reject(err) }
+  }
+}
+
+/** helper 装在哪:与 vendor helper-path.mjs 同一规则(env 覆盖 → 可写的 /Applications 里已有 → ~/Applications)。 */
+export function helperAppPath(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir(), exists = existsSync, writable = (dir: string): boolean => {
+  try { accessSync(dir, fsConstants.W_OK); return true } catch { return false }
+}): string {
+  const explicit = env.PI_COMPUTER_USE_HELPER_APP_PATH?.trim()
+  if (explicit) return path.resolve(explicit)
+  const system = '/Applications/tangu-computer-use.app'
+  if (exists(system) && writable('/Applications')) return system
+  return path.join(homeDir, 'Applications', 'tangu-computer-use.app')
+}
+
+/**
+ * 确保 helper 在跑(只在用户**主动**要贴边时调用;实时画面那条只读通道依旧绝不拉起它)。
+ * 必须 `open -n -g <app> --args serve`:直接 spawn 二进制会把 TCC 的归属记到 Forsion 头上,辅助功能看着像没授权。
+ * 没装 → helper_not_installed(装是 CU 工具第一次运行时自己做的,桌面这边不重复一套安装)。
+ */
+export async function ensureHelperRunning(socketPath = helperSocketPath()): Promise<void> {
+  const alive = (): Promise<boolean> => askHelper(socketPath, { cmd: 'diagnostics' }, 1_000).then(() => true, () => false)
+  if (await alive()) return
+  // dev 指到了自己的 socket(dev-recorder 起的那个),别替它去拉正式 helper —— 拉起来也不在这个 socket 上。
+  if (process.env.PI_CU_SOCKET_PATH) throw Object.assign(new Error('helper not running'), { code: 'helper_not_running' })
+  const appPath = helperAppPath()
+  if (!existsSync(appPath)) throw Object.assign(new Error('helper not installed'), { code: 'helper_not_installed' })
+  await new Promise<void>((resolve, reject) => execFile('open', ['-n', '-g', appPath, '--args', 'serve', '--socket', socketPath], (err) => (err ? reject(err) : resolve())))
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 200))
+    if (await alive()) return
+  }
+  throw Object.assign(new Error('helper did not start'), { code: 'helper_not_running' })
 }

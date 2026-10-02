@@ -6,10 +6,13 @@ import { useApp } from './stores/appStore'
 import { useI18n } from './i18n'
 import { installFileDropGuard } from './fileDropGuard'
 import { ensureAmadeusReady } from './amadeusPlugins'
-import { windowKind } from './windowKind'
+import { isDockWindow, windowKind } from './windowKind'
 import type { MiniOpenOptions } from '../../shared/miniPanel'
+import { DockRoot } from './mini/DockRoot'
 
 let directMini: MiniOpenOptions | null = null
+/** 侧边拼接面板(DockRoot)也是 direct 形态:它自己定目标,不经 onMiniTarget。 */
+export function setDirectMini(target: MiniOpenOptions | null): void { directMini = target }
 
 if (windowKind() === 'mini') {
   setMiniMainHandler(async (target) => {
@@ -46,6 +49,10 @@ function buildMiniPanel(): void {
 }
 
 export function MiniRoot() {
+  return isDockWindow() ? <DockRoot /> : <MiniPanelRoot />
+}
+
+function MiniPanelRoot() {
   const { t } = useI18n()
   const [direct, setDirect] = useState<MiniOpenOptions | null>(null)
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])

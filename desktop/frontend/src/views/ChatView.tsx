@@ -66,6 +66,13 @@ const EMPTY_STRS: string[] = []
 const isHiddenInList = (m: UiMessage): boolean =>
   !!m.teamSummary || (!!m.work && !m.content && !m.error && !m.approvals?.length && !m.inquiries?.length)
 
+/** 侧边拼接面板递来的那扇 App 窗口(leaf params 是不透明数据,逐字段挑)。 */
+function appRefOf(raw: unknown): { app: string; bundleId?: string; pid: number; windowId: number; title: string } | null {
+  const r = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+  if (!r || typeof r.pid !== 'number' || typeof r.windowId !== 'number') return null
+  return { app: String(r.app ?? ''), bundleId: typeof r.bundleId === 'string' ? r.bundleId : undefined, pid: r.pid, windowId: r.windowId, title: String(r.title ?? '') }
+}
+
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
   const showWaitDetails = useChatWaitDetailsEnabled()
@@ -791,6 +798,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 侧栏聊天默认引用主区当前笔记；Space 的主区分栏可显式 opt-in，
           // 让同屏 ChatView 也跟随旁边的 Amadeus 文档。
           autoRefFromMain={!params.childSurface && (leaf.loc !== 'main' || params.autoRefFromMain === true)}
+          appRef={!params.childSurface ? appRefOf(params.appRef) : null}
           onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else if (!params.childSurface) s.setPendingDraft(null) }}
           sentHistory={sentHistory}
           pendingSteer={s.steerPending}

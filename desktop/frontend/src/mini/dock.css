@@ -1,0 +1,10 @@
+/* 侧边拼接面板的「挑窗口」页。外壳、行样式全用 LCL mini card 的;这里只补列表排布。 */
+.dock-picker-title { text-align: left; color: var(--text); font-weight: 600; }
+.dock-picker { display: flex; flex-direction: column; min-height: 0; }
+.dock-picker-hint { margin: 0; padding: 10px 12px 6px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--text-muted); }
+.dock-picker-error { margin: 0 12px 6px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--danger); }
+.dock-picker-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 5px 8px; }
+.dock-picker-row { height: auto; min-height: 40px; padding-top: 6px; padding-bottom: 6px; }
+.dock-picker-row .mini-card-row-label { display: flex; flex-direction: column; gap: 2px; }
+.dock-picker-app { color: var(--text); }
+.dock-picker-window { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }

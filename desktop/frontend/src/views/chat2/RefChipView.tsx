@@ -17,7 +17,7 @@
  * 要根治得在消息里带结构化引用字段(引擎协议改动),不在本条范围。
  */
 import type { ReactNode } from 'react'
-import { FileText, Folder, MessageSquare, PanelsTopLeft, X } from 'lucide-react'
+import { AppWindow, FileText, Folder, MessageSquare, PanelsTopLeft, X } from 'lucide-react'
 import { sessionIdOfTarget } from './chatDragRef'
 import type { RefChip } from './Composer2'
 
@@ -39,6 +39,8 @@ export function RefChipView({ chip, onRemove, removeTitle, children }: {
         ? <Folder size={13} style={ICON} />
         : chip.kind === 'view'
         ? <PanelsTopLeft size={13} style={ICON} />
+        : chip.kind === 'app'
+        ? <AppWindow size={13} style={ICON} />
         : <FileText size={13} style={ICON} />}
       <span>{children ?? chip.name}</span>
       {onRemove && <button type="button" title={removeTitle} aria-label={removeTitle} onClick={onRemove}><X size={12} /></button>}
@@ -66,6 +68,7 @@ function barePathLike(tok: string): boolean {
 const WIKI_RE = /^\[\[([^[\]\n]+)\]\]/
 const QUOTED_RE = /^"([^"\n]+)"/
 const VIEW_RE = /^<forsion-view type="([^"\n]*)" title="([^"\n]*)" \/>/
+const APP_RE = /^<forsion-app app="([^"\n]*)"[^>\n]* \/>/
 const BARE_RE = /^[^\s]+/
 
 /** 从 line 的 pos 处读一条引用 token;读不出 → null。 */
@@ -86,6 +89,8 @@ function readRef(line: string, pos: number): { ref: LeadingRef; end: number; str
   }
   m = VIEW_RE.exec(rest)
   if (m) return { ref: { token: m[0], name: unescapeAttr(m[2]), kind: 'view' }, end: pos + m[0].length, strong: true }
+  m = APP_RE.exec(rest)
+  if (m) return { ref: { token: m[0], name: unescapeAttr(m[1]), kind: 'app' }, end: pos + m[0].length, strong: true }
   m = QUOTED_RE.exec(rest)
   if (m) {
     // fileChip 只给**含空白**的路径加引号;引号里得是路径(带分隔符),`"hello world"` 这种句子不认

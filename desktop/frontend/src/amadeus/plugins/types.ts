@@ -60,7 +60,9 @@ export interface SlashContribution {
  * analysis pipeline is the bundled `bluebird` agent.) */
 export interface CommandContribution {
   id: string
-  title: string
+  /** A function is re-read at render time, so the title follows the interface language
+   *  (`() => ctx.getLocale?.() === 'en' ? 'Do X' : '做 X'`). Hosts before 2026-10-02 only accept a string. */
+  title: string | (() => string)
   run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
   /**
