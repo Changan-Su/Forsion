@@ -41,6 +41,7 @@ function fakeRealtime(stub) {
     return b
   }
   wss.on('connection', (ws) => {
+    rt.ws = ws
     const send = (o) => { rt.sent.push(o.type); ws.send(JSON.stringify(o)) }
     let speaking = false, lastLoud = 0
     const reply = async (text, sec) => {
@@ -68,6 +69,8 @@ function fakeRealtime(stub) {
       if (!isBinary) {
         const m = JSON.parse(data.toString())
         if (m.type === 'start') { rt.starts++; rt.start = m; send({ type: 'ready' }) } else rt.texts.push(m)
+        // 打的字:像真引擎那样落库(聊天区靠 Mini 的 activity 叫主窗拉到)
+        if (m.type === 'text') stub.state.messages.push({ id: `rt-t${rt.texts.length}`, role: 'user', content: m.text, timestamp: Date.now() })
         return
       }
       rt.frames++
@@ -300,10 +303,86 @@ async function main() {
     await sleep(1500)
     check('R14 同一会话再按电话键不重拨(只叫回卡片)', rt.starts === 1 && !rt.closed, `start ${rt.starts} 次;已断 ${rt.closed}`)
 
+    // 通话中在主窗打字:送进电话(Mini 转给引擎),不起普通 run;输入框提示换成通话状态
+    const ta = win.locator('.t2c-ta:visible').first()
+    const placeholder = await ta.getAttribute('placeholder').catch(() => '')
+    const runsBefore = stub.seen.runs.length
+    await ta.fill('帮我记一下明天下午开会')
+    await ta.press('Enter')
+    const typed = await until(() => rt.texts.find((m) => m.type === 'text' && m.text === '帮我记一下明天下午开会'), 4000)
+    await sleep(800)
+    const shownTyped = await until(async () => (await win.evaluate(() => document.body.innerText)).includes('帮我记一下明天下午开会'), 4000, 200)
+    check('R16 通话中打字送进电话:Mini 转给引擎、不起普通 run、草稿清空、出现在聊天区;输入框提示是通话状态',
+      !!typed && stub.seen.runs.length === runsBefore && (await ta.inputValue()) === '' && !!shownTyped && /通话中/.test(placeholder || ''),
+      `placeholder「${placeholder}」;普通 run +${stub.seen.runs.length - runsBefore}`)
+
+    // 引擎用实时模型听到的原话改正了一行语音转写 → 主窗那条当场换掉(轮询不刷已显示的消息)
+    const fixedText = '你好，今天天气到底怎么样'
+    const row = stub.state.messages.find((m) => m.id === 'rt-u1')
+    if (row) row.content = fixedText
+    rt.ws.send(JSON.stringify({ type: 'transcript.corrected', message_id: 'rt-u1', text: fixedText }))
+    const fixedShown = await until(async () => {
+      const txt = await win.evaluate(() => document.body.innerText)
+      return txt.includes(fixedText) && !txt.includes('你好，今天天气怎么样\n') ? true : null
+    }, 4000, 200)
+    check('R17 语音转写被改正后,主窗聊天区那条当场换成改正后的原话', !!fixedShown)
+
+    // 改正比这行先到(在途那次轮询拿的是旧行,合并时本地已有的优先):主窗要等这行出现再改,不能丢
+    const lateText = '帮我写一个贪吃蛇小游戏'
+    rt.ws.send(JSON.stringify({ type: 'transcript.corrected', message_id: 'rt-late', text: lateText }))
+    await sleep(500)
+    stub.state.messages.push({ id: 'rt-late', role: 'user', content: '帮我写一个看知识小游戏', timestamp: Date.now() })
+    const lateShown = await until(async () => {
+      const txt = await win.evaluate(() => document.body.innerText)
+      return txt.includes(lateText) && !txt.includes('看知识') ? true : null
+    }, 10000, 300)
+    check('R17b 改正先到、这行后到:主窗拉到这行时换成改正后的原话', !!lateShown)
+
+    // 主窗超时改发 Tangu 之后才到的 text 事件:Mini 不再送进电话(否则一句话办两遍)
+    const nStale = rt.texts.length
+    await win.evaluate((sid) => localStorage.setItem('forsion_voice_call_evt', JSON.stringify({ kind: 'text', sessionId: sid, text: '过期的一句', id: 'stale-1', at: Date.now() - 5000, n: 'stale-1' })), created?.id)
+    await sleep(1000)
+    check('R16b 过期的 text 事件 Mini 不接', rt.texts.length === nStale, `rt 收到 ${rt.texts.length - nStale} 条`)
+
+    // 超过通话上限的长文:照常交给 Tangu,不被截断后当成送进了电话
+    const runsLong = stub.seen.runs.length
+    const nLong = rt.texts.length
+    await ta.fill('长'.repeat(4001))
+    await ta.press('Enter')
+    const longRun = await until(() => stub.seen.runs.slice(runsLong).find((r) => String(r.message || '').length > 4000), 5000)
+    check('R16c 超长文字不进电话,照常交给 Tangu', !!longRun && rt.texts.length === nLong)
+    await until(async () => (await win.locator('.t2c-stop').count()) === 0, 8000, 200)
+
     const miniClosed = mini.waitForEvent('close', { timeout: 5000 }).then(() => true).catch(() => false)
     await mini.locator('.vc-hangup').first().click()
     const hung = await until(() => rt.closed, 5000)
     check('R15 挂断:连接断开、Mini 卡片关窗', !!hung && await miniClosed)
+
+    // 挂断后打字 = 普通消息(交给 Tangu)
+    const runsAfterHang = stub.seen.runs.length
+    const nTexts = rt.texts.length
+    const ph2 = await ta.getAttribute('placeholder').catch(() => '')
+    await ta.fill('挂断后的普通消息')
+    await ta.press('Enter')
+    const normalRun = await until(() => stub.seen.runs.slice(runsAfterHang).find((r) => String(r.message || '').includes('挂断后的普通消息')), 5000)
+    check('R18 挂断后打字照常发给 Tangu,输入框提示恢复', !!normalRun && rt.texts.length === nTexts && !/通话中/.test(ph2 || ''), `placeholder「${ph2}」`)
+    await until(async () => (await win.locator('.t2c-stop').count()) === 0, 8000, 200) // 等那条 run 收尾,下一句别变成插队
+    await sleep(500)
+
+    // 登记残留(Mini 崩了没撤):打字等不到 Mini 确认 → 2s 后改发给 Tangu 并提示,不丢
+    await win.evaluate((sid) => {
+      localStorage.setItem('forsion_voice_call_active', sid)
+      window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_voice_call_active', newValue: sid }))
+    }, created?.id)
+    await sleep(300)
+    const runsStale = stub.seen.runs.length
+    await ta.fill('没人接的一句')
+    await ta.press('Enter')
+    const fellBack = await until(() => stub.seen.runs.slice(runsStale).find((r) => String(r.message || '').includes('没人接的一句')), 6000, 200)
+    const hint = await win.evaluate(() => document.body.innerText.includes('通话没接上，这条改发给 Tangu 了'))
+    const stale = await win.evaluate(() => localStorage.getItem('forsion_voice_call_active'))
+    check('R19 登记残留时打字:等不到 Mini 确认就改发给 Tangu、提示一句、清掉登记', !!fellBack && hint && stale === null,
+      `run=${!!fellBack};提示=${hint};登记=${stale}`)
     await shot(win, '6-ended')
   } finally {
     try { await browser?.close() } catch { /* ignore */ }

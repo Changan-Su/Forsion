@@ -12,7 +12,7 @@ import { THINKING_LEVELS, type AgentConfig, type ThinkingLevel } from '../types'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { homeTarget } from '../services/engine/targets'
-import { endCall, getCall, getCallError, postCallEvent, setCallMic, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
+import { CALL_TEXT_FRESH_MS, endCall, getCall, getCallError, getCallPresence, onCallEvent, postCallEvent, sendCallText, setCallMic, setCallPresence, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
 import './voiceCall.css'
 
 registerMessages({
@@ -74,6 +74,7 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
         target: homeTarget(), sessionId, model: params.model, voice: typeof params.voice === 'string' ? params.voice : undefined,
         title: typeof params.title === 'string' ? params.title : '', run, micId: devices.mic, speakerId: devices.speaker,
         onActivity: () => postCallEvent({ kind: 'activity', sessionId }),
+        onTranscriptFix: (messageId, text) => postCallEvent({ kind: 'transcript', sessionId, messageId, text }),
       })
     }
     return () => endCall()
@@ -85,6 +86,19 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
     if (call) hadCall.current = true
     else if (hadCall.current && !error) window.tangu?.closeSelf?.()
   }, [call, error])
+
+  // 接通后登记「这个会话在通话」,主窗输入框据此把打的字送进来;收线 / 关窗撤销(崩了没撤,主窗等不到确认会自己清)。
+  const live0 = !!call?.connectedAt
+  useEffect(() => {
+    if (!live0) return
+    setCallPresence(sessionId)
+    const clear = (): void => { if (getCallPresence() === sessionId) setCallPresence(null) }
+    window.addEventListener('pagehide', clear)
+    const off = onCallEvent((e) => {
+      if (e.kind === 'text' && e.sessionId === sessionId && Date.now() - e.at < CALL_TEXT_FRESH_MS && sendCallText(e.text)) postCallEvent({ kind: 'text-ack', id: e.id })
+    })
+    return () => { off(); window.removeEventListener('pagehide', clear); clear() }
+  }, [live0, sessionId])
 
   // 头像光环跟着真实声音动:说话时读模型输出,其余读麦克风。直接写 CSS 变量,不走 React 渲染。
   const ringRef = useRef<HTMLDivElement>(null)

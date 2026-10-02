@@ -33,6 +33,7 @@
     "e2e:direct": "node scripts/direct-offline.e2e.mjs",
     "prelive:harness": "npm run build",
     "live:harness": "node scripts/live-harness.mjs",
+    "check:realtime": "node scripts/realtime-relay.check.mjs",
     "smoke:tuiqueue": "bash scripts/tui-queue.smoke.sh",
     "smoke:tooldefs": "node scripts/tool-definition-validation.smoke.mjs",
     "smoke:projectctx": "node scripts/project-context.smoke.mjs",

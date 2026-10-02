@@ -169,6 +169,14 @@ export function createSqlStateStore(): StateStore {
         [sessionId, limit, offset],
       );
     },
+    async correctUserMessage(m) {
+      const rows = await query<any[]>(
+        `UPDATE chat_messages SET content = ? WHERE id = ? AND session_id = ? AND role = 'user' AND content <> ? RETURNING id`,
+        [m.content, m.id, m.sessionId, m.content],
+      );
+      return rows.length > 0;
+    },
+
     async insertUserMessage(m) {
       const inserted = await query<any[]>(
         `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error, attachments)
