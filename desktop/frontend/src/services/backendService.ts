@@ -112,6 +112,11 @@ export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey:
   request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(t, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
 export const deleteTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
   request<{ ok: boolean }>(t, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
+/** 实时语音通话的 WebSocket 地址(引擎 ws /agent/realtime;浏览器 WebSocket 设不了头,本机 token 只能走 query)。 */
+export async function realtimeSocketUrl(t: EngineTarget): Promise<string> {
+  const auth = (await t.headers()).Authorization || ''
+  return `${t.base.replace(/^http/, 'ws')}/agent/realtime?token=${encodeURIComponent(auth.replace(/^Bearer\s+/i, ''))}`
+}
 
 /** 语音合成(POST /agent/tts → 音频字节;home 类:朗读 / 语音条 / 设置页试听)。以前 ttsService 自拼 URL(K6 §3.3「直连三处」之一),
  *  现在基址与鉴权头归目标。非 2xx 抛引擎的 detail(与改造前同一句)。 */

@@ -429,6 +429,10 @@ interface TanguStoredConfig {
   ttsSpeed: number
   /** 新回复完成后自动朗读(仅当前活跃会话)。 */
   ttsAutoSpeak: boolean
+  /** 实时语音通话模型 <providerId>/<model>(百炼 Qwen-Omni-Realtime);'' = 未启用。存 config.json tts.realtimeModel。 */
+  realtimeModelId: string
+  /** 实时通话音色;'' = 引擎缺省(Tina)。存 tts.realtimeVoice。 */
+  realtimeVoice: string
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
   activityLogEnabled: boolean
   /** 电脑历史(electron/computerHistory.ts):订阅 CU helper 记录全机 App / 标题 / URL / 输入差分,落 <forsionHome>/computer-history。
@@ -505,6 +509,8 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsVoice: '',
   ttsSpeed: 1,
   ttsAutoSpeak: false,
+  realtimeModelId: '',
+  realtimeVoice: '',
   activityLogEnabled: true,
   computerHistoryEnabled: false,
   computerHistoryPausedUntil: null,
@@ -709,6 +715,8 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       ttsVoice: tts.voice || '',
       ttsSpeed: typeof tts.speed === 'number' ? tts.speed : 1,
       ttsAutoSpeak: !!tts.autoSpeak,
+      realtimeModelId: tts.realtimeModel || '',
+      realtimeVoice: tts.realtimeVoice || '',
     } : {}),
     ...(home.asr !== undefined ? { asrModelId: asr.modelId || '', asrBackend: asr.backend === 'local' ? 'local' : 'cloud' } : {}),
     ...(home.models !== undefined ? {
@@ -803,6 +811,8 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('ttsVoice' in patch) { tts.voice = patch.ttsVoice; tT = true }
   if ('ttsSpeed' in patch) { tts.speed = patch.ttsSpeed; tT = true }
   if ('ttsAutoSpeak' in patch) { tts.autoSpeak = patch.ttsAutoSpeak; tT = true }
+  if ('realtimeModelId' in patch) { tts.realtimeModel = patch.realtimeModelId; tT = true }
+  if ('realtimeVoice' in patch) { tts.realtimeVoice = patch.realtimeVoice; tT = true }
   if (cT) home.cloud = cloud
   if (bT) home.browser = browser
   if (nT) home.notes = notes

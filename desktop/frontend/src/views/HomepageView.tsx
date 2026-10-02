@@ -93,7 +93,7 @@ type HomeDispatch = (
  * 主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
  * `sessionId={null}` 强制 slash / 引用菜单也按新对话语义跑,不误操作用户上次停留的会话。
  */
-function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDispatch; onInputModeChange: (focused: boolean) => void }) {
+function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDispatch: HomeDispatch; onStartCall: () => Promise<string | null>; onInputModeChange: (focused: boolean) => void }) {
   const vaultRoot = usePageStore((state) => state.vaultRoot)
   const activeSpaceId = useSpaceStore((state) => state.activeSpaceId)
   const s = useApp(useShallow((state) => ({
@@ -199,8 +199,9 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
       </div>
       <Composer2
         sessionId={null}
-        // 实时对话只在 Home 空间里的主页接得住;主页被当成标签开进别的 Space 时它不会随发送卸载,交接不成立
+        // 通话按钮只画在 Home 空间里的主页(主页被当成标签开进别的 Space 时不当接收方)
         liveOwner={activeSpaceId === 'home'}
+        prepareLiveSession={onStartCall}
         autoFocus={false}
         disabled={s.connState !== 'ok'}
         running={false}
@@ -244,7 +245,6 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         currentAgentSlug={agentSlug} // 草稿没设思考档时药丸显示该 Agent 的缺省(与引擎同源)
         onOpenSettings={() => s.openSettings('skills')}
         onExecConfigChange={(patch) => s.setExecConfig(patch, null)}
-        // 返回**真实发送**的结果(退场动效 + 建会话 + 起 run 之后):实时语音靠它判断「上一句还在途中」。
         onSend={(text, attachments, workspaceFiles, skillIds, mentions) => onDispatch(text, attachments, workspaceFiles, skillIds, mentions)}
         onStop={() => {}}
         autoRefFromMain={false}
@@ -758,6 +758,21 @@ export function HomepageView(_props: ViewProps) {
     })
   }
 
+  /** 主页开通话 = 与发第一句同一条路:切到 Tangu、保证有主聊天视图,再建新会话;通话条随之出现在那边的输入框。 */
+  const startCallSession = (): Promise<string | null> => {
+    if (!hasTangu) return Promise.resolve(null)
+    return new Promise<string | null>((resolve) => {
+      const queued = leaveThen(() => {
+        setActiveSpace('tangu')
+        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+        const before = useApp.getState().activeId
+        // newSession 自己吞掉失败:activeId 没换 = 没建成,别在旧会话里开通话
+        void useApp.getState().newSession().then(() => { const id = useApp.getState().activeId; resolve(id && id !== before ? id : null) }, () => resolve(null))
+      })
+      if (!queued) resolve(null)
+    })
+  }
+
   const exitComposerInputMode = (): void => {
     const active = document.activeElement
     if (active instanceof HTMLTextAreaElement && active.matches('.hp-composer .t2c-ta')) active.blur()
@@ -835,7 +850,7 @@ export function HomepageView(_props: ViewProps) {
           <div className="hp-greet">{name ? t(greet + '.named', { name }) : t(greet)}</div>
         </div>
 
-        {hasTangu && <HomepageChatbox onDispatch={dispatchChat} onInputModeChange={setComposerFocused} />}
+        {hasTangu && <HomepageChatbox onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} />}
 
         {/* 收纳架只保留一排摘要;“全部”与空白右键都进入独立二级收纳层。 */}
         <section className="hp-spaces" data-total={tiles.length}>

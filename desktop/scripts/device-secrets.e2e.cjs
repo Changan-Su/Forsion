@@ -12,7 +12,7 @@
  *     (level=plaintext,远程会话 fail closed)。真正起作用的是 Playwright 的 Electron loader:每次 `_electron.launch` 都在
  *     ready 之前 appendSwitch('use-mock-keychain') + ('password-store','basic')(playwright-core 1.61.1
  *     lib/server/electron/loader.js:69-70)—— 所以别的预置 external token 的台架同样不碰真钥匙串。下面 launch 参数里再写一遍,
- *     是让 Node 侧 mockDecrypt 的前提在本文件里看得见。⚠️ 绕过 loader 直接 spawn Electron 的台架(如 live-voice.e2e)要自己带这两个开关。
+ *     是让 Node 侧 mockDecrypt 的前提在本文件里看得见。⚠️ 绕过 loader 直接 spawn Electron 的台架(如 realtime-voice.e2e)要自己带这两个开关。
  *   - userData = --user-data-dir + '-dev'(dev 态),后端 = 桩引擎(external 模式 + TANGU_BACKEND_URL)。
  *
  * 三段:

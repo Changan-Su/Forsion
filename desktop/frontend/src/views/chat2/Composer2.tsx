@@ -5,12 +5,12 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  * /skill chip / 引用 / 模型·Agent·引擎·思考·loop·计划·群聊 / 上下文占比·压缩 / 发送·停止。
  * props 与旧 MessageInput 完全一致 → ChatView 直接换组件即可。
  */
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { useLiveVoice, useLiveVoiceEnabled } from '../../hooks/useLiveVoice'
+import { endCall, getCall, getCallError, rejectCall, startCall, subscribeCall, toggleMute, useRealtimeConfig } from '../../services/realtimeCall'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { normPath } from '../coding/studioModel'
@@ -46,6 +46,21 @@ import { ContextUsagePop } from './ContextUsagePop'
 import './composer2.css'
 import { homeTarget, targetForSession } from '../../services/engine/targets'
 
+registerMessages({
+  'livecall.start': { zh: '实时语音通话', en: 'Voice call' },
+  'livecall.end': { zh: '挂断', en: 'Hang up' },
+  'livecall.title': { zh: '语音通话', en: 'Voice call' },
+  'livecall.connecting': { zh: '正在接通…', en: 'Connecting…' },
+  'livecall.listening': { zh: '正在听', en: 'Listening' },
+  'livecall.thinking': { zh: '在想…', en: 'Thinking…' },
+  'livecall.speaking': { zh: '正在说', en: 'Speaking' },
+  'livecall.working': { zh: 'Tangu 处理中…', en: 'Tangu is working…' },
+  'livecall.muted': { zh: '已静音', en: 'Muted' },
+  'livecall.mute': { zh: '静音', en: 'Mute' },
+  'livecall.unmute': { zh: '取消静音', en: 'Unmute' },
+  'livecall.failed': { zh: '通话结束：{e}', en: 'Call ended: {e}' },
+  'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
+})
 registerMessages({
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
   'input.mention.projectNote': { zh: '派往项目 · 在该项目新建会话开工', en: 'Dispatch to project · starts a new session there' },
@@ -287,10 +302,12 @@ export const Composer2: React.FC<{
   onPresetChange?: (p: 'chat' | 'work') => void
   voiceMode?: boolean
   onVoiceModeChange?: (on: boolean) => void
-  /** 实时语音对话的接收方(显示按钮、接主页交接)。缺省 = sessionId===null(主页)。ChatView 传「跟随侧栏的主区聊天」。 */
+  /** 实时语音通话的接收方(画按钮与通话条;同一时刻只有一个)。缺省 = sessionId===null(主页)。ChatView 传「跟随侧栏的主区聊天」。 */
   liveOwner?: boolean
-  /** 实时对话真正发往的会话(pinned leaf 是它自己的会话);缺省回落 activeSessionId。 */
+  /** 实时通话落进的会话(pinned leaf 是它自己的会话);缺省回落 activeSessionId。空 = 先建一个新会话。 */
   liveSessionKey?: string | null
+  /** 没有会话时开通话:由宿主建会话并切过去(主页 = 与发第一句同一条路),返回会话 id;缺省就地 newSession。 */
+  prepareLiveSession?: () => Promise<string | null>
   groupChat?: boolean
   groupAgents?: string[]
   groupTempAgents?: NormalAgentDef[]
@@ -353,7 +370,7 @@ export const Composer2: React.FC<{
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
-  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, skills,
+  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
@@ -550,28 +567,45 @@ export const Composer2: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice.recording, voice.busy])
 
-  // 实时对话(免手):一直听,说完一句转写 → 直接作为消息发出(不经草稿,引用芯片/自动引用与键盘发送同一条 sendMessage);
-  // Agent 回复期间不接新的开口。草稿里有手打内容 → 只追加不自动发(别把半截手写替用户发出去);没发成的也落回草稿。
-  // 在途排队、交接、换会话挂断都住在 useLiveVoice 的 LiveSession 里;接收方与会话由挂载方显式给(评审 r2)。
   const storeActiveSessionId = useApp((s) => s.activeId)
   const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
-  const draftRef = useRef(draft)
-  draftRef.current = draft
-  const appendToDraft = (text: string) => setDraft((d) => (d.trim() ? d.replace(/\s+$/, '') + ' ' + text : text))
+  // 实时语音通话(对标 GPT Live,services/realtimeCall):通话是模块级单例、跨视图活着,这里只画入口与通话条。
+  // 双方的话与代跑的 Tangu run 由引擎写进会话,聊天区照常显示。设置 → 语音 → 实时通话 选了模型才出按钮。
   const liveOwnerResolved = liveOwner ?? sessionId === null // 缺省只有主页输入框是接收方;ChatView 显式传
-  const liveEnabled = useLiveVoiceEnabled() // 功能未完成:入口默认藏起来,只有开发者选项打开才画按钮
-  const live = useLiveVoice((text) => {
-    if (draftRef.current.trim()) { appendToDraft(text); return }
-    const sent = sendMessage(text)
-    if (!sent) appendToDraft(text)
-    return sent
-  }, {
-    // 开关关掉(或开发者模式退出)= 立刻不再是接收方:hook 的 owner 效果会收场,别让按钮没了麦克风还开着。
-    paused: running || !!disabled, owner: liveOwnerResolved && liveEnabled, handoffOnSend: sessionId === null,
-    sessionKey: liveSessionKey !== undefined ? liveSessionKey : activeSessionId,
-    onKeep: appendToDraft, // 没被接受的语音(连同排队句)由 hook 交还给**当前**接收方的草稿
-  })
-  const liveBar = live.active && !running
+  const call = useSyncExternalStore(subscribeCall, getCall)
+  const callError = useSyncExternalStore(subscribeCall, getCallError)
+  const { model: realtimeModel, voice: realtimeVoice } = useRealtimeConfig()
+  const [callStarting, setCallStarting] = useState(false)
+  const liveBar = !!call && liveOwnerResolved
+  const startVoiceCall = async () => {
+    if (callStarting) return
+    setCallStarting(true)
+    try {
+      let sid = liveSessionKey !== undefined ? liveSessionKey : activeSessionId
+      if (!sid) {
+        // newSession 自己吞掉建会话失败 → 只认「activeId 真换了」,否则会在旧会话里开通话(Codex 10-01)
+        const before = useApp.getState().activeId
+        sid = prepareLiveSession ? await prepareLiveSession() : await useApp.getState().newSession().then(() => useApp.getState().activeId)
+        if (sid === before) sid = null
+      }
+      if (!sid) return
+      const target = targetForSession(sid)
+      // 通话只走本机引擎(引擎端也只收回环);绑在别的电脑上的会话没有 WebSocket 转发,别把令牌塞进 URL 白连一趟
+      if (target.key !== 'home') { rejectCall(t('livecall.localOnly')); return }
+      const params = useApp.getState().voiceRunParams(sid)
+      const poll = sid
+      await startCall({
+        target, sessionId: sid, model: realtimeModel, voice: realtimeVoice, title: t('livecall.title'),
+        run: { model_id: params.modelId, agent_config: params.agentConfig },
+        onActivity: () => { void useApp.getState().pollSession(poll) },
+      })
+    } finally { setCallStarting(false) }
+  }
+  const callStatus = !call ? '' : call.phase === 'connecting' ? t('livecall.connecting')
+    : call.phase === 'speaking' ? t('livecall.speaking')
+    : call.working ? t('livecall.working')
+    : call.muted ? t('livecall.muted')
+    : call.phase === 'thinking' ? t('livecall.thinking') : t('livecall.listening')
 
   const isHost = execConfig.execMode === 'host'
   const isChat = preset === 'chat'
@@ -1213,8 +1247,7 @@ export const Composer2: React.FC<{
       return true
     })
   }
-  // 通话中手动发送也登记在途:空态手动发一句建出会话,不算「用户切走」而挂断。
-  const send = () => { live.track(sendMessage()) }
+  const send = () => { void sendMessage() }
 
   const pickFiles = async (files: FileList | null) => {
     if (!files) return
@@ -1625,8 +1658,9 @@ export const Composer2: React.FC<{
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
             ) : liveBar ? (
               <VoiceRecordingBar
-                analyser={live.analyser} recording busy={false} onStop={live.stop} stopTitle={t('livevoice.stop')} t={t}
-                status={live.phase === 'transcribing' ? t('input.micBusy') : t('input.micListening')}
+                analyser={call.analyser} recording busy={false} onStop={() => endCall()} stopTitle={t('livecall.end')} t={t}
+                status={callStatus} statusTitle={call.working || undefined}
+                muted={call.muted} onMute={toggleMute} muteTitle={call.muted ? t('livecall.unmute') : t('livecall.mute')}
               />
             ) : (<>
             {showModeChip && (
@@ -1779,17 +1813,17 @@ export const Composer2: React.FC<{
             <button
               className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
-              disabled={disabled || voice.busy || !voice.supported || live.active}
+              disabled={disabled || voice.busy || !voice.supported || !!call}
               onClick={voice.toggle}
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
-            {live.supported && liveEnabled && liveOwnerResolved && (
+            {!!realtimeModel && liveOwnerResolved && !!window.tangu && (
               <button
-                className={`t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open${live.active ? ' recording' : ''}`}
-                title={live.active ? t('livevoice.stop') : live.error || t('livevoice.start')}
-                disabled={!live.active && !!disabled}
-                onClick={live.active ? live.stop : live.start}
+                className={`t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open${call ? ' recording' : ''}`}
+                title={call ? t('livecall.end') : t('livecall.start')}
+                disabled={!call && (!!disabled || callStarting)}
+                onClick={call ? () => endCall() : () => { void startVoiceCall() }}
               >
                 <AudioLines size={14} />
               </button>
@@ -1807,11 +1841,11 @@ export const Composer2: React.FC<{
             )}
             </>)}
           </ChatBoxToolbar>
-          {voice.error && !voice.recording && !voice.busy && !live.active && (
+          {voice.error && !voice.recording && !voice.busy && !call && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
           )}
-          {live.error && (live.active || !voice.error) && (
-            <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{live.error}</div>
+          {callError && !call && liveOwnerResolved && !voice.error && (
+            <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{t('livecall.failed', { e: callError })}</div>
           )}
         </ChatBoxSurface>
       </div>

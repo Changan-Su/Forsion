@@ -250,6 +250,21 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         throw new Error(`未找到 TTS 模型 ${req.model} 对应的直连 provider(需在 provider 的 ttsModelIds 声明或用 <providerId>/<model> 形式)`);
       },
     },
+    realtime: {
+      // 实时语音只认 <providerId>/<model>,且只接百炼(Qwen-Omni-Realtime;OpenAI 兼容事件协议)。
+      // 端点用经典域名 wss://dashscope(-intl).aliyuncs.com/api-ws/v1/realtime(10-01 实测可用,无需业务空间 ID)。
+      // TANGU_REALTIME_UPSTREAM:台架把上游换成本地假百炼(desktop scripts/realtime-voice.e2e.cjs),免烧额度。
+      endpoint: (model: string) => {
+        const p = registry.list().find((x) => model.startsWith(x.providerId + '/'));
+        if (!p) throw new Error(`No provider for realtime model ${model} (use <providerId>/<model>)`);
+        if (!isDashScopeBase(p.baseUrl)) throw new Error(`Realtime voice needs an Alibaba Cloud Bailian (DashScope) provider; ${p.providerId} is not one`);
+        const apiModelId = model.slice(p.providerId.length + 1);
+        return {
+          url: `${process.env.TANGU_REALTIME_UPSTREAM || `wss://${new URL(p.baseUrl).host}/api-ws/v1/realtime`}?model=${encodeURIComponent(apiModelId)}`,
+          headers: { Authorization: `Bearer ${p.apiKey || ''}` },
+        };
+      },
+    },
     llm: {
       resolveModelAndKey: async (modelId: string) => {
         const local = registry.resolve(modelId);

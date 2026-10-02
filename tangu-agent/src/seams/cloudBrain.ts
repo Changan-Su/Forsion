@@ -300,6 +300,12 @@ export interface TtsBrain {
   synthesize(req: SpeechRequest): Promise<SpeechResult>;
 }
 
+/** 实时语音(speech-to-speech)上游:给出 WebSocket 地址与鉴权头,连接与转发归调用方(services/realtimeVoice)。 */
+export interface RealtimeBrain {
+  /** model 形如 `<providerId>/<model>`;未命中 provider 抛错。 */
+  endpoint(model: string): { url: string; headers: Record<string, string> };
+}
+
 // ── Amadeus 云笔记库(v1)────────────────────────────────────────────────────
 // 对端:server /api/amadeus/vaults/default/*(契约冻结)。让云端 Tangu(thin worker)的
 // amadeus_* 工具读写用户的云 vault(host 模式仍直连本地磁盘,见 tools/builtin/amadeus.ts)。
@@ -353,6 +359,8 @@ export interface CloudBrainServices {
   images?: ImagesBrain;
   /** 语音合成;可选:仅 standalone multiBrain 实现(BYO-key 直连),云端未注入 → /agent/tts 返回 501。 */
   tts?: TtsBrain;
+  /** 实时语音;可选:仅 standalone multiBrain 实现(BYO-key 直连百炼),云端未注入 → /agent/realtime 拒连。 */
+  realtime?: RealtimeBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */
   agentFiles?: AgentFilesBrain;
   /** 每-agent 人格(Phase 2 云端运行水合);可选:未注入 → agentLoop 回落本地 getAgent。 */

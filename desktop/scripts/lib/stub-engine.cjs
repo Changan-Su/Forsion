@@ -98,7 +98,7 @@ async function startStubEngine(data = {}) {
       const id = `r${seen.runs.length + 1}`;
       seen.runs.push({ runId: id, message: b.message, sessionId: b.session_id, agentConfig: b.agent_config });
       runs.set(id, sseLines(queue.shift() || []));
-      // 起 run 慢一拍(测「发送往返途中又来一句」这类在途竞态;live-voice.e2e 用)
+      // 起 run 慢一拍(测「发送往返途中又来一句」这类在途竞态)
       if (state.runDelayMs) await new Promise((r) => setTimeout(r, state.runDelayMs));
       if (state.failRuns) return json({ detail: 'stub: run rejected' }, 500);
       return json({ runId: id, assistantMessageId: `a-${id}`, userMessageId: `u-${id}` });
@@ -250,6 +250,8 @@ async function startStubEngine(data = {}) {
     });
   });
 
+  // WebSocket 端点(如实时通话 /agent/realtime)由台架自己接:stub 不依赖 ws,只把 upgrade 交出去。
+  if (typeof data.upgrade === 'function') server.on('upgrade', data.upgrade);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   return {
     url: `http://127.0.0.1:${server.address().port}`,

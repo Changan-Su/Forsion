@@ -1169,6 +1169,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   ttsSpeed?: number
   /** 新回复完成后自动朗读(仅当前活跃会话)。 */
   ttsAutoSpeak?: boolean
+  /** 实时语音通话模型 <providerId>/<model>(百炼 Qwen-Omni-Realtime);空 = 未启用,输入框不出通话按钮。 */
+  realtimeModelId?: string
+  /** 实时通话音色(预置名或复刻音色 id;复刻音色须以同一实时模型为 target_model 复刻)。空 = Tina。 */
+  realtimeVoice?: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=Forsion 云端/自带 key。缺省 cloud。(就绪与否走 asrLocalStatus IPC,不落 config) */
   asrBackend?: 'local' | 'cloud'
   /** 辅助模型 · LLM:后台/特殊 agent(Muse/Historian)用;空=跟随 app 级槽。 */

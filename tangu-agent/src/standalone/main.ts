@@ -27,6 +27,7 @@ import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
+import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 /** --print-config:打印生效配置(config.json + env 叠加),token/apiKey 脱敏(仅留尾 4 位)。 */
 function maskSecret(s?: string): string {
@@ -195,6 +196,8 @@ async function main(): Promise<void> {
       console.log(`[tangu] 外部引擎: ${engineList.map((e) => `${e.name}(${e.id})`).join(', ')}`);
     }
   });
+
+  attachRealtimeVoice(server); // ws /agent/realtime:实时语音通话中转(brain.realtime 未注入则拒连)
 
   // 优雅退出(桌面 backendManager 发 SIGTERM):停定时器/中止 run/杀 MCP stdio 子进程。
   const shutdown = (): void => {
