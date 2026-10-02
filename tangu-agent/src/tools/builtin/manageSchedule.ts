@@ -41,7 +41,7 @@ export const manageScheduleProvider: ToolProvider = {
       mode: 'both',
       isEnabledFor: (profile) => !!profile.capabilities.hostExec, // 本地限定;云端 no-op
       deferred: true, // P0-2:2KB schema,低频管理面 → 按需装载
-      deferHint: 'View or edit your own multi-day schedule/agenda entries (planned tasks, recurring items).',
+      deferHint: 'Your own calendar: put your commitments and plans on it, or schedule tasks that run when due (shown in the user\'s Calendar).',
       definition: {
         type: 'function',
         function: {

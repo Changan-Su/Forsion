@@ -517,7 +517,7 @@ export const amadeusProvider: ToolProvider = {
         if (!events.length) return 'No events found for that query.';
         return JSON.stringify(events, null, 2);
       },
-    ), 'Read events in a date range from the calendars.'),
+    ), 'Read events in a date range from the user\'s calendars.'),
     deferCalendar(mk(
       'amadeus_create_event',
       'Add an event to the user\'s calendar. Times are "YYYY-MM-DD" (all-day) or "YYYY-MM-DDTHH:mm" (with a time).',
@@ -546,7 +546,7 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Created event "${args.title}" (${value}) in "${cal.db.name}". id=${id}` };
         });
       },
-    ), 'Add an event to a calendar.'),
+    ), 'Add an event to the user\'s calendar.'),
     deferCalendar(mk(
       'amadeus_edit_event',
       'Edit an existing calendar event by id. Only the fields you pass are changed.',
@@ -582,7 +582,7 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Updated event ${args.eventId} in "${cal.db.name}".` };
         });
       },
-    ), 'Change an existing calendar event.'),
+    ), 'Change an event on the user\'s calendar.'),
     deferCalendar(mk(
       'amadeus_delete_event',
       'Delete a calendar event by id.',
@@ -603,7 +603,7 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Deleted event ${args.eventId} from "${cal.db.name}".` };
         });
       },
-    ), 'Remove a calendar event.'),
+    ), 'Remove an event from the user\'s calendar.'),
   ],
 };
 
@@ -611,9 +611,9 @@ export const amadeusProvider: ToolProvider = {
 const AMADEUS_TOOL_GUIDANCE =
   '- Notes: `amadeus_list_notes` finds them (vault-relative paths).\n' +
   '- A note `X.md` may own a sibling folder `X.fd/` holding its child notes/databases (Notion-style subpages); the parent\'s frontmatter `children:` list mirrors that folder. To add a subpage under `X.md`, write to `X.fd/<name>.md`.\n' +
-  '- Calendar / schedule: `amadeus_list_calendars` lists calendars; `amadeus_list_events` reads events; `amadeus_create_event` / `amadeus_edit_event` / `amadeus_delete_event` manage them.\n' +
+  '- The user\'s calendars: `amadeus_list_calendars` lists them; `amadeus_list_events` reads events; `amadeus_create_event` / `amadeus_edit_event` / `amadeus_delete_event` manage them.\n' +
   '- Event times are `YYYY-MM-DD` (all-day) or `YYYY-MM-DDTHH:mm` (with a time); an event has a start and an optional end.\n' +
-  '- Use these only when the user asks about their notes, calendar, schedule, or to-dos, and prefer the calendar tools over hand-editing `.db` files.';
+  '- Use these only when the user asks about their own notes, calendar, or to-dos, and prefer the calendar tools over hand-editing `.db` files.';
 
 /**
  * 云端(非 host)系统提示段:云端 amadeus facet 已装配时输出「用户的 Amadeus 云笔记库」指引;

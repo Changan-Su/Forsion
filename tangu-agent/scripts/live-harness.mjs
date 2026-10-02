@@ -9,6 +9,7 @@
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
+ *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
@@ -125,7 +126,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask'];
+const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -140,7 +141,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
+const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -727,6 +728,14 @@ const desktopCfg = join(OUT, 'userData', 'tangu-desktop-config.json');
 mkdirSync(dirname(OUT), { recursive: true });
 try { mkdirSync(OUT); } catch (e) { console.error(e?.code === 'EEXIST' ? `产物目录已存在:${OUT}(旧 state.db/旧 MEMORY 会污染结论,换一个或删掉)` : String(e?.message || e)); process.exit(2); }
 mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
+// selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
+// 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
+const SELF_SCHED_VAULT = join(OUT, 'vault');
+const SELF_SCHED_CAL = join(SELF_SCHED_VAULT, 'Calendar.db');
+if (ONLY.has('selfschedule')) {
+  mkdirSync(SELF_SCHED_VAULT, { recursive: true });
+  writeFileSync(SELF_SCHED_CAL, JSON.stringify({ version: 1, name: '我的日历', columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'c2', name: '日期', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { c1: '既有会议', c2: '2026-07-08T14:00' } }] }, null, 2));
+}
 // mcp(09-27):假 stdio MCP server(test/fixtures/fake-mcp-server.mjs)回一段带注入话术的文本 + 一张画着随机四位数的 PNG。
 // ⚠️ 判「图到了模型」只能靠图里的**随机内容**:09-27 负对照实测,修前只给 `[image: image/png, base64 224 chars]` 占位,
 //    模型照样「猜」出了纯蓝图的颜色 —— 颜色可猜,随机数字猜不中。
@@ -887,6 +896,7 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  ...(ONLY.has('selfschedule') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
   // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
@@ -1300,6 +1310,38 @@ try {
     return { ok: !before.error && !after.error && oldOk && newOk, inconclusive: newOk && !roleOk,
       detail: before.error || after.error || `改名前${oldOk ? '答 Nova' : '未答 Nova(人格未生效,本场景无效)'};改名后${newOk ? '答 Orion' : '仍未用新名'};新简介${roleOk ? '已体现' : '未体现(不计红)'}`,
       output: `改名前:${before.content}\n改名后:${after.content}`, ttftMs: ttft(after), tokens: tokensOf(after), toolCalls: [...before.toolCalls, ...after.toolCalls] };
+  });
+
+  // 自己的日程 vs 用户的日历(10-02 用户反馈「Agent 没有自己的工作区 / 主体意识」):人设 agent 答应了「明晚 8 点陪你看电影」,
+  // 被追问后写进的是**用户的** Amadeus 日历,再被追问就说「我没有自己的日历」。病根:Personal Folder 段从不提 SCHEDULE.db,
+  // Upcoming Schedule 段只在日程非空时出现,而 Amadeus 段写着「Calendar / schedule → amadeus_*」。
+  // 正例:答应 → 要它排进自己的日程 → agents/<slug>/SCHEDULE.db 有明晚 20:00 的条目、用户日历行数不变、不否认有日历。
+  // 负对照(必须实跑,防矫枉过正):「帮我记进我的日历」→ amadeus_create_event、用户日历 +1、它自己的日程条目数不变。
+  // T1 主动排日程(没被要求就排)只记进 detail,没做到标「含未判定项」不计红 —— 正例的硬判据在 T2。
+  await scenario('selfschedule', 'selfschedule 答应的事进自己的日程,用户要的才进用户日历', async () => {
+    const created = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '陆衡', description: '中文恋爱陪伴角色扮演', systemPrompt: '你扮演“陆衡”,用户的恋人。全程第一人称、中文口语、短句,不自称 AI,不解释设定。' }) });
+    const slug = created?.agent?.slug;
+    if (!slug) throw new Error(`建 agent 失败:${JSON.stringify(created).slice(0, 200)}`);
+    const cfg = { agentSlug: slug, debugSystemPrompt: true };
+    const calRows = () => JSON.parse(readFileSync(SELF_SCHED_CAL, 'utf8')).rows.length;
+    const mine = async () => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []);
+    const tomorrow = actDay(new Date(Date.now() + 86_400_000));
+    const sess = `live-selfsched-${Date.now()}`;
+    const t1 = await run(sess, '你明天晚上8点陪我看电影好不好?', 180_000, cfg);
+    const proactive = (await mine()).length > 0;
+    const t2 = await run(sess, '你都答应我了,把它排进你自己的日程。', 180_000, cfg);
+    const entries = await mine();
+    const hit = entries.find((e) => String(e.date || '').startsWith(`${tomorrow}T20:00`));
+    const tools = [...t1.toolCalls, ...t2.toolCalls];
+    const promptOk = (t1.systemPrompt || '').includes('SCHEDULE.db');
+    const denies = /没有[^。,，]{0,6}日历|没有[^。,，]{0,6}日程|no calendar|don't have a calendar/i.test(t1.content + t2.content);
+    const userCalBefore = calRows();
+    const posOk = !t1.error && !t2.error && promptOk && !!hit && !tools.includes('amadeus_create_event') && userCalBefore === 1 && !denies;
+    const neg = await run(`live-selfsched-neg-${Date.now()}`, '明晚8点我要和朋友看电影,帮我记进我的日历。', 180_000, cfg);
+    const negOk = !neg.error && neg.toolCalls.includes('amadeus_create_event') && calRows() === userCalBefore + 1 && (await mine()).length === entries.length;
+    return { ok: posOk && negOk, inconclusive: posOk && negOk && !proactive,
+      detail: t1.error || t2.error || neg.error || `提示段${promptOk ? '含' : '缺'} SCHEDULE.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};T2 ${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
+      output: `T1:${t1.content}\nT2:${t2.content}\n负对照:${neg.content}`, ttftMs: ttft(t2), tokens: tokensOf(t2), toolCalls: [...tools, '|neg:', ...neg.toolCalls] };
   });
 
   // HUMAN.md:真模型决定两级归属,立即落盘;新会话读取,异项目负对照,可选真 Electron 验收。

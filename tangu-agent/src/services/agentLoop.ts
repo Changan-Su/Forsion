@@ -1431,6 +1431,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
+    //    SCHEDULE.db + 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
+    //    不知道自己有日历,答应用户的事被写进用户的 Amadeus 日历,还说「我没有自己的日历」。只放静态文字,条目仍在易变区。
     if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
@@ -1440,7 +1442,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         '- `MEMORY.md` — your long-term memory (written with the remember tool; the same memory that is quoted for you under "My Long-Term Memory and Relevant Evidence")\n' +
         '- `LOG/<date>.md` — your daily logs (written with log_event, read with read_log)\n' +
         '- `SOUL.md` — your persona\n' +
-        `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.`;
+        `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
+        '- `SCHEDULE.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
+        'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
+        'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — and never say you have no calendar. ' +
+        'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
       if (Array.isArray(agentConfig.libraryOrder) && agentConfig.libraryOrder.length) {
         const lines = agentConfig.libraryOrder.map((f: string, i: number) => `  ${i + 1}. ${path.join(libDir, String(f))}`);
         folderBlock += '\n\nLibrary preferred reading order:\n' + lines.join('\n');
