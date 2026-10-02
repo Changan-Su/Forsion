@@ -90,7 +90,8 @@ function CallCard({ sessionId, params }: { sessionId: string; params: ViewProps[
   }, [call, error])
 
   // 接通后登记「这个会话在通话」,主窗输入框据此把打的字送进来;收线 / 关窗撤销(崩了没撤,主窗等不到确认会自己清)。
-  const live0 = !!call?.connectedAt
+  // 重连中收不下打的字:撤掉登记让主窗直接发 Tangu(不用等 2s 超时),接回来再登记 —— 超时那条路会把登记清掉且再也不补(Codex 10-02)。
+  const live0 = !!call?.connectedAt && call.phase !== 'reconnecting'
   useEffect(() => {
     if (!live0) return
     setCallPresence(sessionId)

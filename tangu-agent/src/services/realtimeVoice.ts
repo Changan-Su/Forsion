@@ -7,7 +7,7 @@
  *                  {type:'text', text}(打的字送进电话)。
  *   引擎 → 客户端:二进制帧 = 24kHz mono s16le PCM(模型语音);JSON = 上游事件原样转发(音频增量除外)
  *                  + {type:'tangu.run', status, run_id?, task} + {type:'transcript.corrected', message_id, text} + {type:'end', reason}
- *                  + {type:'reconnecting'}(上游服务端出错断开、正换一条重连;接上后再发一次 ready)。
+ *                  + {type:'reconnecting', replay}(上游服务端出错断开、正换一条重连,replay = 断在没答完的那句上、会重答;接上后再发一次 ready)。
  *
  * 分工:实时模型管听、说、轮次与打断(speech-to-speech,10-01 实测说完→出声 0.6–0.9s);要碰电脑 / 文件 / 联网 / 干活
  * 的请求经唯一工具 ask_tangu 交给本会话的 Tangu run(与输入框发出的 run 同一条路:同会话、同 agent_config、审批照常)。
@@ -161,6 +161,7 @@ function handleCall(client: WebSocket, userId: string): void {
   let answered: string | null = null;
   let delegatedItem: string | null = null;
   let reconnects = 0;
+  const heldReports: object[] = [];
   const userRow = (itemId: string) => {
     let e = userRows.get(itemId);
     if (!e) { let done!: (id: string | null) => void; const row = new Promise<string | null>((r) => { done = r; }); e = { row, done }; userRows.set(itemId, e); }
@@ -206,7 +207,10 @@ function handleCall(client: WebSocket, userId: string): void {
 
   const report = (text: string): void => {
     if (closed) return;
-    toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: `[Tangu result] ${clip(text, 4000)}` }] } });
+    const item = { type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text: `[Tangu result] ${clip(text, 4000)}` }] } };
+    // 正在换上游(重连中):先攒着,接上再送 —— 直接发会丢,而且 requestResponse 会把 responding 置真、没人来清,之后谁也要不到回复(Codex 10-02)。
+    if (upstream?.readyState !== WebSocket.OPEN) { heldReports.push(item); return; }
+    toUpstream(item);
     requestResponse();
   };
 
@@ -380,10 +384,10 @@ function handleCall(client: WebSocket, userId: string): void {
         },
       });
       toClient({ type: 'ready' });
-      if (replay) {
-        toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: replay }] } });
-        requestResponse();
-      }
+      const held = heldReports.splice(0);
+      held.forEach(toUpstream);
+      if (replay) toUpstream({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: replay }] } });
+      if (replay || held.length) requestResponse();
     });
     // 新上游在旧的 close 之后才建,旧的不会再来事件,不用区分新旧。
     up.on('message', onUpstream);
@@ -396,7 +400,7 @@ function handleCall(client: WebSocket, userId: string): void {
       console.warn(`[realtime] upstream dropped (${why}); reconnecting ${reconnects}/${MAX_RECONNECTS}`);
       const unanswered = lastUserItem && lastUserItem !== answered && lastUserItem !== delegatedItem ? userRows.get(lastUserItem)?.text : undefined;
       responding = false; wantResponse = false; pendingReply = ''; skipNextReply = false; respondingTo = null;
-      toClient({ type: 'reconnecting' });
+      toClient({ type: 'reconnecting', replay: !!unanswered }); // replay = 那句会重答,客户端把半句音频掐掉;否则让已生成完的回答放完
       void connect(s, ep, unanswered).catch((e) => end(e?.message || String(e)));
     });
   };

@@ -8,6 +8,7 @@
  *   C 模型正说着时打字 → 上游先收到 response.cancel,收线后补 response.create;
  *   D 打字那行不被 heard 改写、委派不带语音提示;通话中 {type:'run'} 换档后委派 run 按新档跑。
  *   E 只差标点 / 空白不算听错,不改那行。
+ *   G 委派的 run 在重连途中收尾:结果攒着、接上后送达并要回复(不丢、不把 responding 卡死)。
  *   F 上游报 <50002> 断开:通话不挂、换一条上游重连(指令带上文);断在没答完的那句上就重喂那句;空闲时断不重喂;超过 2 次才挂断。
  * 不花额度、不需要模型。用法:npm run build && npm run check:realtime
  */
@@ -31,8 +32,9 @@ const until = async (fn, ms, every = 50) => { const end = Date.now() + ms; for (
 const freePort = () => new Promise((r) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 
 // ── 假百炼:记下引擎发来的每条事件;response.create 默认立刻 created + done(空)
-const fake = { sock: null, got: [], holdNext: false, conns: 0 };
-const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+const fake = { sock: null, got: [], holdNext: false, conns: 0, delayConnMs: 0 };
+// delayConnMs:G 用,把重连拖长,让委派的 run 恰好在重连途中收尾
+const wss = new WebSocketServer({ port: 0, host: '127.0.0.1', verifyClient: (_info, cb) => setTimeout(() => cb(true), fake.delayConnMs) });
 await new Promise((r) => wss.once('listening', r));
 wss.on('connection', (ws) => {
   fake.sock = ws;
@@ -69,7 +71,7 @@ child.stderr.on('data', (d) => appendFileSync(engineLog, d));
 const db = () => new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
 const rows = (sql, ...a) => { const d = db(); try { return d.prepare(sql).all(...a); } finally { d.close(); } };
 
-let client;
+let client, client2;
 try {
   const ok = await until(() => fetch(`http://127.0.0.1:${port}/health`).then((r) => r.ok).catch(() => false), 30_000, 300);
   if (!ok) throw new Error(`引擎 30s 没起来,见 ${engineLog}`);
@@ -188,10 +190,41 @@ try {
   fake.sock.close(1011, ERR);
   const ended = await until(() => fromEngine.find((m) => m.type === 'end'), 5000);
   check('F3 第三次断(超过 2 次重连)才挂断,原因原样带给客户端', !!ended && ended.reason === ERR && fake.conns === 3, JSON.stringify(ended));
+
+  // ── G:另起一通;委派后上游断开,重连拖 12s,run(假模型,很快失败)在这期间收尾
+  const ev2 = [];
+  client2 = new WebSocket(`ws://127.0.0.1:${port}/agent/realtime?token=${TOKEN}`);
+  client2.on('message', (d, bin) => { if (!bin) ev2.push({ ...JSON.parse(d.toString()), at: Date.now() }); });
+  await new Promise((r, j) => { client2.once('open', r); client2.once('error', j); });
+  const sid2 = `relay-g-${Date.now()}`;
+  client2.send(JSON.stringify({ type: 'start', session_id: sid2, model: 'bailian/qwen3.8-omni-flash-realtime', title: 'Voice call', run: run0 }));
+  await until(() => ev2.some((m) => m.type === 'ready'), 10_000);
+  const connG = fake.conns;
+  up({ type: 'input_audio_buffer.committed', item_id: 'it-g' });
+  up({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'it-g', transcript: '查一下天气。' });
+  await until(() => rows(`SELECT id FROM chat_messages WHERE session_id = ? AND content = ?`, sid2, '查一下天气。')[0], 3000);
+  up({ type: 'response.created', response: { status: 'in_progress', output: [] } });
+  up({ type: 'response.function_call_arguments.done', name: 'ask_tangu', call_id: 'c-g', arguments: JSON.stringify({ task: '查天气', heard: '查一下天气。' }) });
+  up({ type: 'response.done', response: { status: 'completed', output: [{ type: 'function_call' }] } });
+  await until(() => ev2.some((m) => m.type === 'tangu.run' && m.status === 'started'), 5000);
+  fake.delayConnMs = 12_000; // 假模型的 run 要 ~9s 才失败(resolve 重试 1.5+3+4.5s)
+  fake.sock.close(1011, ERR);
+  const openedAt = await until(() => { const r = ev2.filter((m) => m.type === 'ready'); return r.length >= 2 ? r[1].at : null; }, 20_000);
+  fake.delayConnMs = 0;
+  const runEnd = ev2.find((m) => m.type === 'tangu.run' && m.status !== 'started');
+  const delivered = await until(() => {
+    const cg = fake.got.filter((m) => m._conn === connG + 1);
+    const i = cg.findIndex((m) => m.type === 'conversation.item.create' && m.item?.role === 'system' && /\[Tangu result\]/.test(m.item?.content?.[0]?.text || ''));
+    return i >= 0 && cg.slice(i).some((m) => m.type === 'response.create') ? cg.map((m) => m.type) : null;
+  }, 5000);
+  check('G 委派的 run 在重连途中收尾:结果攒着,新上游接上后送达并要回复;那句已委派不重喂',
+    !!runEnd && !!openedAt && runEnd.at < openedAt && !!delivered && !fake.got.some((m) => m._conn === connG + 1 && m.item?.role === 'user'),
+    JSON.stringify({ runEndBeforeReady: runEnd && openedAt ? runEnd.at < openedAt : null, delivered }));
 } catch (e) {
   check('台架异常', false, String(e?.stack || e));
 } finally {
   try { client?.close(); } catch { /* ignore */ }
+  try { client2?.close(); } catch { /* ignore */ }
   child.kill('SIGTERM');
   wss.close();
 }

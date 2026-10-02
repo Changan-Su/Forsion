@@ -40,6 +40,7 @@ function fakeRealtime(stub) {
     for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / 24000) * 6000), i * 2)
     return b
   }
+  rt.tone = tone
   wss.on('connection', (ws) => {
     rt.ws = ws
     const send = (o) => { rt.sent.push(o.type); ws.send(JSON.stringify(o)) }
@@ -358,17 +359,35 @@ async function main() {
     const rate = async () => { const f = rt.frames; await sleep(1000); return rt.frames - f }
     const rateBefore = await rate()
     const tBefore = await secs()
-    rt.ws.send(JSON.stringify({ type: 'reconnecting' }))
+    const presence = () => win.evaluate(() => localStorage.getItem('forsion_voice_call_active'))
+    const stops = () => mini.evaluate(() => window.__srcStop)
+    rt.ws.send(rt.tone(2)) // 一段已生成完、还在放的回答
+    await sleep(300)
+    const stop0 = await stops()
+    rt.ws.send(JSON.stringify({ type: 'reconnecting', replay: false }))
     const reconnLabel = await until(async () => { const x = await mini.locator('.vc-status-text').first().textContent().catch(() => ''); return /重新接通/.test(x || '') ? x : null }, 3000, 100)
+    const presenceDuring = await until(async () => (await presence()) === null ? 'cleared' : null, 2000, 100)
+    const keptAudio = (await stops()) === stop0
     await sleep(500)
     rt.ws.send(JSON.stringify({ type: 'ready' }))
+    const presenceAfter = await until(async () => (await presence()) === created?.id ? 'set' : null, 3000, 100)
+    // 断在没答完的那句上(replay):半句音频当场掐掉,免得和重答的那遍叠在一起
+    rt.ws.send(rt.tone(2))
     await sleep(300)
+    const stop1 = await stops()
+    rt.ws.send(JSON.stringify({ type: 'reconnecting', replay: true }))
+    const cutAudio = await until(async () => (await stops()) > stop1, 2000, 100)
+    await sleep(300)
+    rt.ws.send(JSON.stringify({ type: 'ready' }))
+    await sleep(2300) // 等第一段放完、状态回到正在听
     const after = await rate()
     const tAfter = await secs()
     const backLabel = await mini.locator('.vc-status-text').first().textContent().catch(() => '')
     check('R20 上游重连:卡片显示「重新接通」,接上后回到正在听、计时不清零、麦克风帧率不翻倍',
       !!reconnLabel && !/重新接通/.test(backLabel || '') && tAfter >= tBefore && after > 3 && after <= rateBefore * 1.5,
       `「${reconnLabel}」→「${backLabel}」;计时 ${tBefore}s→${tAfter}s;帧/秒 ${rateBefore}→${after}`)
+    check('R20b 重连中撤掉通话登记(打的字直接走 Tangu)、接回来再登记;已生成完的回答放完,要重答的才掐',
+      !!presenceDuring && !!presenceAfter && keptAudio && !!cutAudio, JSON.stringify({ presenceDuring, presenceAfter, keptAudio, cutAudio: !!cutAudio }))
 
     const miniClosed = mini.waitForEvent('close', { timeout: 5000 }).then(() => true).catch(() => false)
     await mini.locator('.vc-hangup').first().click()

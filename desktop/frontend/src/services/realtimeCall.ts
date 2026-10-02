@@ -287,7 +287,7 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     switch (m.type) {
       case 'ready': {
         // 引擎换了一条上游重连好了:麦克风那一套原样接着用(再建一个上传节点 = 每帧发两遍),计时不清零。
-        if (proc) { own({ phase: 'listening', analyser: micAnalyser }); break }
+        if (proc) { own(sources.size ? { phase: 'speaking', analyser: outAnalyser } : { phase: 'listening', analyser: micAnalyser }); break }
         // ponytail: ScriptProcessorNode 已废弃但 Electron 仍支持;换 AudioWorklet 要单独的 worklet 模块文件。
         proc = inCtx.createScriptProcessor(1024, 1, 1)
         proc.connect(inCtx.destination) // 不接到 destination 就不回调;输出缓冲不写 = 静音
@@ -329,9 +329,9 @@ export async function startCall(o: StartCallOptions): Promise<void> {
       case 'error':
         console.warn('[realtime] upstream error:', m.error?.message || m.error)
         break
-      case 'reconnecting': // 上游服务端出错断开,引擎正换一条:半句话别再放了
-        flush()
-        own({ phase: 'reconnecting', analyser: micAnalyser })
+      case 'reconnecting': // 上游服务端出错断开,引擎正换一条。断在没答完的那句上(会重答)才掐掉半句;已生成完的回答照常放完
+        if (m.replay) flush()
+        own({ phase: 'reconnecting' })
         break
       case 'end':
         finish(m.reason && m.reason !== 'client closed' ? String(m.reason) : undefined)
