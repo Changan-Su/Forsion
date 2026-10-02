@@ -1,12 +1,11 @@
 /**
- * standalone 配置:CLI 参数 > 环境变量 > 默认。手写 parseArgs(无 commander 依赖),仿
- * apps/Agents-Manager/desktop/cli/web.ts。
+ * standalone 配置:CLI 参数 > 环境变量 > 默认。手写 parseArgs(无 commander 依赖)。
  */
 import type { DirectProvider } from '../llm/providerRegistry.js';
 import { getRawSection } from '../core/config.js';
 
 export interface StandaloneConfig {
-  cloudUrl: string; // Forsion 云端地址(brain API 所在),如 https://api.forsion.app
+  cloudUrl: string; // Forsion 云端地址(brain API 所在),如 https://api.forsion.net
   token: string; // Forsion cloud credential; local authentication may use a separate host token.
   localToken?: string; // Optional private local HTTP credential (Unit never reuses its cloud account token).
   databaseUrl: string; // 可选:外部 Postgres 连接串;留空则用嵌入式 SQLite/WAL(零安装,落 state.db)
