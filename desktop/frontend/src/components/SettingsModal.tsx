@@ -144,7 +144,10 @@ registerMessages({
   'modelsettings.displayHint': { zh: '整理模型选择器中的分组，选择本地模型的显示范围。', en: 'Organize picker groups and choose which local models appear.' },
   'modelsettings.providersHint': { zh: '管理提供方登录、API 连接与模型拉取。', en: 'Manage provider sign-ins, API connections and model discovery.' },
   'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
-  'modelsettings.voiceHint': { zh: '配置语音输入、朗读模型和音色。', en: 'Configure speech recognition, speech synthesis and voices.' },
+  'modelsettings.voiceHint': { zh: '语音通话、语音输入和朗读分开设置，音色互不通用。', en: 'Voice calls, voice input and read-aloud are set up separately; their voices are not shared.' },
+  'settings.voice.secCall': { zh: '语音通话', en: 'Voice call' },
+  'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
+  'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
   'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
   'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
@@ -2550,13 +2553,21 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {/* 语音朗读(TTS):OpenAI 兼容 /audio/speech;模型 id 命中直连 provider 的 ttsModelIds 或 <providerId>/<model>。 */}
+                {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
+                    语音通话 = 空输入框的发送键 / 语音输入 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
                   <>
-                    <AsrModelChoice models={models} />
-                    {stored && <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored} />}
                     {stored && (
                       <>
+                        <div className="settings-sec">{t('settings.voice.secCall')}</div>
+                        <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored} />
+                      </>
+                    )}
+                    <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>
+                    <AsrModelChoice models={models} />
+                    {stored && (
+                      <>
+                        <div className="settings-sec settings-sec--gap">{t('settings.voice.secRead')}</div>
                         <div className="field">
                           <label>{t('settings.tts.model')}</label>
                           <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>

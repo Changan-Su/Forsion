@@ -138,27 +138,62 @@ async function main() {
       for (const ctx of browser.contexts()) for (const pg of ctx.pages()) if (await pg.locator('.settings-main').count().catch(() => 0)) return pg
       return null
     }, 15_000, 400)
-    let picked = ''
+    let picked = '', sections = [], onDefault = '', offCfg = {}
     if (sp) {
       await sp.locator('.settings-nav').getByRole('button', { name: '模型', exact: true }).first().click().catch(() => {})
       await sp.waitForTimeout(500)
       await sp.locator('.settings-nav-subitem', { hasText: '语音' }).first().click().catch(() => {})
+      // 语音页三节:语音通话 / 语音输入 / 朗读;通话是开关,开了才出模型与音色
+      const sw = sp.locator('.realtime-switch').first()
+      await sw.waitFor({ timeout: 8000 }).catch(() => {})
+      sections = await sp.locator('.settings-sec').allTextContents().catch(() => [])
+      const selBefore = await sp.locator('select.realtime-model').count()
+      await sw.click().catch(() => {})
       const sel = sp.locator('select.realtime-model').first()
+      await sel.waitFor({ timeout: 8000 }).catch(() => {})
+      await sp.waitForTimeout(600)
+      const cfgNow = () => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).tts || {}
+      onDefault = cfgNow().realtimeModel
+      await sp.locator('select.realtime-voice').first().selectOption('Cindy').catch(() => {})
+      await sp.waitForTimeout(600)
+      await sw.click().catch(() => {}) // 关:只清模型,音色留着
+      await sp.waitForTimeout(600)
+      offCfg = { ...cfgNow(), selBefore }
+      await sw.click().catch(() => {}) // 再开:回到刚才的模型
       await sel.waitFor({ timeout: 8000 }).catch(() => {})
       await sel.selectOption(RT_MODEL).catch(() => {})
       await sp.waitForTimeout(600)
       picked = await sel.inputValue().catch(() => '')
+      await sp.locator('.realtime-clone-toggle').first().click().catch(() => {})
+      await sp.locator('.settings-body').first().evaluate((el) => { el.scrollTop = 0 }).catch(() => {})
+      await sp.waitForTimeout(300)
       await shot(sp, '0-settings')
+      await sp.locator('.settings-body').first().evaluate((el) => { el.scrollTop = el.scrollHeight }).catch(() => {})
+      await sp.waitForTimeout(300)
+      await shot(sp, '0b-settings-read')
       const closed = sp.waitForEvent('close').catch(() => {})
       await sp.locator('.settings-nav button:text-is("返回应用")').first().click({ timeout: 5000 }).catch(() => {})
       await closed
     }
     const cfgRt = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).tts?.realtimeModel
     check('R1 设置 → 模型 → 语音里选得到实时模型,落进 config.json', picked === RT_MODEL && cfgRt === RT_MODEL, `下拉 ${picked || '-'};config.tts.realtimeModel=${cfgRt}`)
+    check('R1b 语音页分「语音通话 / 语音输入 / 朗读」三节;通话是开关:关着不出模型,打开落默认模型,关掉只清模型不丢音色',
+      sections.join('|') === '语音通话|语音输入|朗读' && offCfg.selBefore === 0 && onDefault === RT_MODEL && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
+      JSON.stringify({ sections, onDefault, offCfg }))
     const btn = liveBtn().first()
     const shown = await until(() => btn.isVisible().catch(() => false), 8000)
-    const phoneIcon = await btn.locator('svg.lucide-phone').count().catch(() => 0)
-    check('R2 关掉设置后主页输入框当场出现电话键(跨窗生效)', !!shown && phoneIcon === 1, `phone 图标 ${phoneIcon}`)
+    const callIcon = await btn.locator('svg.lucide-audio-lines').count().catch(() => 0)
+    const inSendSlot = await btn.evaluate((el) => el.classList.contains('t2c-send')).catch(() => false)
+    check('R2 关掉设置后主页输入框当场出现通话键(跨窗生效),就在发送键的位置', !!shown && callIcon === 1 && inSendSlot, `声波图标 ${callIcon};发送位 ${inSendSlot}`)
+    // 照 ChatGPT:打了字变回发送键,清空又变回通话键;空着按回车不会拨出去
+    const ta0 = win.locator('.t2c-ta:visible').first()
+    await ta0.fill('随便写点')
+    const typedSend = await until(async () => (await liveBtn().count()) === 0 && (await win.locator('.t2c-send:not(:disabled)').count()) === 1, 3000, 100)
+    await ta0.fill('')
+    const backToCall = await until(() => liveBtn().first().isVisible().catch(() => false), 3000, 100)
+    await ta0.press('Enter')
+    await sleep(1200)
+    check('R2b 有字 = 发送键、清空 = 通话键;空着按回车不拨号', !!typedSend && !!backToCall && rt.starts === 0, `有字时发送键 ${!!typedSend};清空回通话键 ${!!backToCall};拨号 ${rt.starts} 次`)
     await shot(win, '1-idle')
     if (!shown) throw new Error('没有通话按钮,后面不跑')
 

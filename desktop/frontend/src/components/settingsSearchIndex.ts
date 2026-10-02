@@ -45,7 +45,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 default model' },
   { id: 'model-providers', tab: 'model', sub: 'm-providers', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 apikey provider' },
   { id: 'web-search', tab: 'model', sub: 'm-websearch', labelKey: 'settings.sub.webSearch', keywords: '联网 搜索 search web' },
-  { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 voice tts speech' },
+  { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation' },
   { id: 'theme-language', tab: 'theme', anchor: 'theme-language', labelKey: 'settings.theme.langLabel', keywords: '设计语言 主题 theme language' },
   { id: 'palette', tab: 'theme', anchor: 'palette', labelKey: 'settings.theme.skinLabel', keywords: '配色 颜色 color palette accent' },
   { id: 'color-mode', tab: 'theme', anchor: 'color-mode', labelKey: 'settings.theme.modeLabel', keywords: '深色 浅色 暗色 明暗 dark light' },
