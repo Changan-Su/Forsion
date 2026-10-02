@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.18.0
+  version: 1.19.0
   author: Forsion
   category: Forsion
 ---
@@ -58,6 +58,44 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 ## Space(samples/forsion-sample-space)
 
 `space.json` 声明视图布局配方(引用视图类型 id;插件视图用 `plugin:<插件id>:<视图id>` 并在 `requires.views` 声明)。纯数据,无代码。
+
+### 布局:原生 Panel 优先(2026-10-02 起规)
+
+插件视图**先摆进宿主的原生 Panel**,别在一个 view 里自造侧栏、底栏、分栏 —— 原生 Panel 自带标签、拖宽、折叠、
+mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Space 长得不一样。按内容找位置:
+
+| 内容 | 放哪 | 怎么写 |
+|---|---|---|
+| 可打开项的列表(工程、收藏、会话) | 左栏统一工作区 | `registerListSource` + `layout.left: [{ "type": "workspace", "params": { "mode": "plugin:<id>:<列表源>" } }]` |
+| 主体(编辑器、播放器、详情) | 主区 | `layout.main`;要并排的另一份原生视图(笔记、聊天)用 `split: "right" / "down"` 分栏 |
+| 随选中对象变的属性 / 检查器 | 右栏 | 长驻内容写 `layout.right`;跟着主视图走的面板用 Extend View(`view.extendView.open({ side: 'right' })`) |
+| 横跨全片的时间线、日志、控制台、终端 | 底部面板 | `layout.bottom`(2026-10-02 起)或 `ctx.openView(id, { location: 'bottom' })` |
+
+- 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 原生笔记 `split: "right"` + 原生聊天 `split: "down"`)、
+  **视频工作室**(左 = 工程列表;主区 = 舞台与走带;右 = 属性 Extend View;底部 = 时间线)。
+- **一份状态,多个 view**:主区和底部是两个 `registerView`,同一窗口里共用插件模块里的那份状态,别各存一份。
+  拆不开的 DOM 可以整块搬进另一个 view 的 `el`(事件监听跟着走),样式随之注入。
+- ⚠️ **iframe 一搬就重新加载**,而宿主开合底部面板会把主区整列摘下重挂 —— 主区里的 iframe 同样重载。
+  靠 postMessage 驱动的预览要在帧**每次**报告就绪时把时间、播放状态补发回去,不能只听第一次(否则画面一直是黑的)。
+- **先 feature-detect 再依赖**:旧宿主静默忽略 `layout.bottom`;旧桌面宿主把 `openView(id, { location: 'bottom' })`
+  当主区打开,会把当前主视图导航走。查 `ctx.viewLocations?.includes('bottom')`(移动端没有底部面板,不含它)。
+  主视图让出内容的判据 = 配方传给它的参数(如 `{ "timeline": "bottom" }`)**且** `viewLocations` 含 bottom;任一不满足就在 view 内自绘。
+- 配方里写了 `layout.bottom` 就**默认展开**;用户收起后 mod+J 照配方开回来(关掉最后一个标签也一样)。
+  改了 `layout` 要**抬 `version`**,否则用过这个 Space 的人永远停在旧布局。
+- **启动布局 → 项目布局(照 Coding Studio,2026-10-02 起插件可做)**:没打开项目时左栏是项目导航、主区是启动台,
+  底部收起;打开项目后左栏换成项目自己的内容(素材、对话),底部开出时间线 / 终端。换法:
+  `ctx.replaceView?.('nav', 'media')` —— 只换自己的视图,**原地**换(同一块面板、尺寸不变、不重建布局,所以主区
+  里的 iframe 不会重载);面板收着就只换暂存、保持收着;Space 的面板默认值跟着换。回到启动台反过来换,再
+  `ctx.closeView?.('timeline')` 收起底部(关掉底部最后一个视图 = 面板收起,与用户点 × 一样)。返回 0 = 那个视图
+  哪儿都没开着(用户关了它,或布局已经是项目态):**别**拿 `openView` 兜底 —— 它会把用户收起的面板弹出来。
+  旧宿主没有这两个方法:左栏就一直是导航(视频工作室这么做:旧宿主上没有素材区,时间线仍画在编辑器里);
+  非要内容就 `openView(id, { location: 'left' })` 多开一个标签,底部不动。
+  ⚠️ 进出项目的布局跳转会让宿主重挂主区那一列(主区视图卸载再挂上;10-02 真 Electron 实测进、出各一次,⌘J 开合
+  不会)。两条后果:① 跨这一下要留的临时状态(新建页里填的想法、刚选的模板)放模块作用域,**等用户真正用掉
+  (发送 / 清空)才清** —— 别在第一次交给界面时就清,即将被卸掉的那一份可能先拿到;② 关项目时,新挂上的那份
+  会按「参数里的文件 → 模块里的当前项 → 存盘的上次打开」找项目:先把这三样清干净(存盘那步要 await)再拆界面、
+  换布局,否则它会把刚关的项目又打开。
+  范例:视频工作室(导航 ↔ 素材,底部时间线随项目开合;仪器 `npm run verify:docked`)。
 
 ### Mini Panel 适配
 
@@ -343,6 +381,8 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 
 - ⚠️**库是惰性恢复的**:`vaultRoot()` 为 null 只说明「当前没有**打开着的**库」,不代表用户没有库 ——
   用户这一程还没进过 Amadeus 之前它就是 null。插件在宿主**启动期**装载,setup 里那一发读写多半正撞在这上面。
+  插件视图挂载时宿主会唤醒库(2026-10-02 起),但恢复是异步的:视图刚挂上那一下 `vaultRoot()` 仍可能是 null ——
+  一进视图就要读库(列工程、恢复上次打开的文件)的,先等 `vaultRoot()` 有值再读,别把那一刻的空当成「用户没有内容」。
 - **结论(2026-09-02 起规,起因:服务器总览面板误依赖笔记库,用户实报「太奇怪了」)**:
   **与笔记无关的功能(仪表盘 / 远程系统面板 / 工具面)不得建立在这些方法上** ——
   用 `ctx.dashboard.mount`(见下节)、`ctx.loadData` / `ctx.saveData`、以及自己视图里的 DOM。

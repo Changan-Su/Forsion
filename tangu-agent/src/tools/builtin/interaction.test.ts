@@ -30,7 +30,8 @@ import {
   INQUIRY_CHANNEL_STOPPED_ANSWER,
   isSystemAnswer,
 } from './interaction.js';
-import { resolveInquiry } from '../../services/inquiries.js';
+import { resolveInquiry, INQUIRY_UNATTENDED_ANSWER } from '../../services/inquiries.js';
+import { registerRun, unregisterRun } from '../../services/remoteActivity.js';
 // 先经 hub 进入 channels 模块环(生产里也是 hub 先载入):直接从 service.js 进会在环里撞上未定义的 ChannelService。
 import '../../channels/hub.js';
 import { INQUIRY_CHANNEL_STOPPED_ANSWER as SERVICE_CHANNEL_STOPPED_ANSWER } from '../../channels/service.js';
@@ -273,5 +274,52 @@ describe('exit_plan_mode 的工具结果(给模型,英文;批准判定口径不�
     expect(state.setConfigCalls).toHaveLength(0);
     expect(r).toContain(INQUIRY_RUN_STOPPED_NOTE);
     expect(r).not.toMatch(CJK);
+  });
+});
+
+// PI-DSH 评审 R1:Muse / 自动化 run 里没人能答询问 —— 入口当场兑现系统说明,不登记、不发事件,run 不挂。
+describe('无人值守 run 的询问', () => {
+  const unattended = async (runId: string, input: any, fn: () => Promise<any>): Promise<any> => {
+    registerRun(runId, 's', input);
+    try { return await fn(); } finally { unregisterRun(runId); }
+  };
+
+  it('钉子:系统说明英文、[No answer] 开头、写明不是许可,且被认作系统代答', () => {
+    expect(INQUIRY_UNATTENDED_ANSWER.startsWith(SYSTEM_ANSWER_PREFIX)).toBe(true);
+    expect(INQUIRY_UNATTENDED_ANSWER).not.toMatch(CJK);
+    expect(INQUIRY_UNATTENDED_ANSWER).toMatch(/not permission/);
+    expect(isSystemAnswer(INQUIRY_UNATTENDED_ANSWER)).toBe(true);
+  });
+
+  it.each([
+    ['Muse', { background: 'muse' }],
+    ['自动化', { agentConfig: { automationOrigin: 'trigger-1' } }],
+  ])('%s run 的 ask_user → 当场返回系统说明,不发 inquiry_request', async (_label, input) => {
+    const r = await unattended('run-unattended', input, () =>
+      Promise.resolve(tool('ask_user').execute({ question: 'Which one?' }, { runId: 'run-unattended', sessionId: 's' } as any)));
+    expect(r).toBe(INQUIRY_UNATTENDED_ANSWER);
+    expect(state.events.filter((e) => e.type === 'inquiry_request')).toHaveLength(0);
+  });
+
+  it('exit_plan_mode 同理:不算批准,计划模式不动', async () => {
+    const r = await unattended('run-unattended-plan', { background: 'muse' }, () =>
+      Promise.resolve(tool('exit_plan_mode').execute({ plan: '# p' }, { runId: 'run-unattended-plan', sessionId: 's' } as any)));
+    expect(r).toBe(`The plan was not approved: no answer from the user.\n${INQUIRY_UNATTENDED_ANSWER}`);
+    expect(state.setConfigCalls).toHaveLength(0);
+  });
+
+  it('正对照:登记过的本机 run 照常发询问等人', async () => {
+    const r = await unattended('run-local-registered', { agentConfig: {} }, async () => {
+      const p = Promise.resolve(tool('ask_user').execute({ question: 'Q?' }, { runId: 'run-local-registered', sessionId: 's' } as any));
+      let inq: any;
+      for (let i = 0; i < 50 && !inq; i++) {
+        await new Promise((res) => setTimeout(res, 0));
+        inq = state.events.find((e) => e.runId === 'run-local-registered' && e.type === 'inquiry_request');
+      }
+      expect(inq).toBeTruthy();
+      resolveInquiry(inq.payload.inquiryId, 'B');
+      return p;
+    });
+    expect(r).toBe('User answered: B');
   });
 });

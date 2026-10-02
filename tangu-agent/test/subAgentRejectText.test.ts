@@ -156,3 +156,25 @@ describe('子代理的拒绝 / 拦截文案 = 主循环同一句(英文)', () =>
     expect(toolResult()).toBe('Denied by approval rule: get_datetime');
   }, 20_000);
 });
+
+// PI-DSH 评审 R3:主循环的截断闸与有界重试铺到子代理循环。
+describe('子代理循环硬化 = 主循环同款', () => {
+  it('④ finish_reason=length 的工具调用一个不执行,回喂同一句截断说明', async () => {
+    script[0] = () => ({
+      content: '', reasoning: '',
+      toolCalls: [{ id: 'tc1', type: 'function', function: { name: 'get_datetime', arguments: '{}' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 10 }, finishReason: 'length',
+    });
+    await runSubAgent({ task: 't', parentCtx: parentCtx(), modelId: 'm1' });
+    expect(spies.exec).not.toHaveBeenCalled();
+    expect(toolResult()).toMatch(/^Tool call "get_datetime" was NOT executed: the response hit the output token limit \(finish_reason=length\)/);
+  }, 20_000);
+
+  it('⑤ 没吐帧的秒级失败(502)重发一次;已吐过帧的不重发', async () => {
+    const { LlmError } = await import('../src/core/types.js');
+    script.unshift(() => { throw new LlmError(502, 'bad gateway'); });
+    const out = await runSubAgent({ task: 't', parentCtx: parentCtx(), modelId: 'm1' });
+    expect(out).toContain('done');
+    expect(payloads.length).toBe(3);
+  }, 20_000);
+});

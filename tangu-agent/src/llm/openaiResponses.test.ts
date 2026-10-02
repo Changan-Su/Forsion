@@ -139,6 +139,18 @@ describe('streamOpenAiResponses SSE parse', () => {
     return res.usage;
   };
 
+  it('Codex 订阅额度用尽:错误带重置时间,且不可重试(R5)', async () => {
+    const { isRetryableLlmError } = await import('./retry.js');
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 429,
+      json: async () => ({ error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', resets_at: Date.now() / 1000 + 600 } }),
+    }));
+    const err: any = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
+    expect(err.status).toBe(429);
+    expect(err.message).toMatch(/usage limit has been reached \(resets in ~(9|10) min\)/);
+    expect(isRetryableLlmError(err)).toBe(false);
+  });
+
   // 与 openaiCompat 同一条极性契约:两套协议对「没报 / 报了 0」必须给出同一语义。
   it('reasoning_tokens 极性:上游没报 → 整个键缺席;明确报 0 → 键在且为 0', async () => {
     expect(await usageOf({ input_tokens: 10, output_tokens: 5 })).not.toHaveProperty('reasoning_tokens');

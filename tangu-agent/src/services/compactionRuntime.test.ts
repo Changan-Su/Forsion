@@ -236,6 +236,31 @@ describe('current working context compaction', () => {
     expect(msgs).toHaveLength(24);
   });
 
+  it('R3:撞输出上限的摘要拒收 —— run 内 ok:false(走机械兜底),/compact 不写检查点', async () => {
+    fake.stream.mockResolvedValue({ content: '## Goal\nContinue fixing the parser and then the', finishReason: 'length' });
+    const msgs = history();
+    const original = structuredClone(msgs);
+    const r = await compactWorkingMessages(msgs, 'm', 'tangu', undefined, HIST_OPTS);
+    expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/truncated/) });
+    expect(msgs).toEqual(original);
+
+    fake.query.mockResolvedValueOnce([
+      { role: 'user', content: 'question', timestamp: 1 }, { role: 'assistant', content: 'answer', timestamp: 2 },
+    ]).mockResolvedValue([]);
+    const s = await compactSession('s', 'm', 'tangu');
+    expect(s).toMatchObject({ ok: false, reason: expect.stringMatching(/truncated/) });
+    expect(fake.query.mock.calls.every(([sql]) => String(sql).startsWith('SELECT'))).toBe(true);
+  });
+
+  it('R3:摘要调用遇秒级可重试错误(502)重发一次即成功', async () => {
+    const { LlmError } = await import('../core/types.js');
+    fake.stream.mockRejectedValueOnce(new LlmError(502, 'bad gateway'))
+      .mockResolvedValueOnce({ content: '## Goal\nContinue fixing the parser; keep the failing test evidence.' });
+    const r = await compactWorkingMessages(history(), 'm', 'tangu', undefined, HIST_OPTS);
+    expect(r.ok).toBe(true);
+    expect(fake.stream).toHaveBeenCalledTimes(2);
+  });
+
   it('does not write a persisted checkpoint after cancellation during summary generation', async () => {
     fake.query.mockResolvedValueOnce([
       { role: 'user', content: 'question', timestamp: 1 }, { role: 'assistant', content: 'answer', timestamp: 2 },

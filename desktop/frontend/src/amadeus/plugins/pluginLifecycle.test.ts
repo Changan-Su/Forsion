@@ -39,6 +39,25 @@ beforeEach(() => {
 })
 
 describe('副作用账', () => {
+  it('停用后旧 ctx 的 openView / closeView / replaceView 作废(视图类型名新旧两代共用)', async () => {
+    const calls: string[] = []
+    st().setViewOpener((type) => void calls.push(`open:${type}`))
+    st().setViewControls({ close: (t) => void calls.push(`close:${t}`), replace: (f, t) => { calls.push(`replace:${f}->${t}`); return 1 } })
+    try {
+      env.sources = [src('vw', 'globalThis.__ctx = ctx')]
+      await st().loadExternal()
+      const ctx = (globalThis as unknown as { __ctx: { openView(v: string): void; closeView(v: string): void; replaceView(a: string, b: string): number } }).__ctx
+      st().disable('vw')
+      ctx.openView('a')
+      ctx.closeView('a')
+      expect(ctx.replaceView('a', 'b')).toBe(0)
+      expect(calls).toEqual([])
+    } finally {
+      st().setViewOpener(null)
+      st().setViewControls(null)
+    }
+  })
+
   it('后进先出撤;关账后再登记的当场撤并拿到空操作', () => {
     const log: string[] = []
     const scope = createEffectScope('p')

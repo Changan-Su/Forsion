@@ -193,7 +193,7 @@ describe('对外状态', () => {
 })
 
 describe('reloadDevPlugin', () => {
-  type View = { type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' }
+  type View = { type: string; params: Record<string, unknown>; loc: 'main' | 'left' | 'right' | 'bottom' }
   const trace: string[] = []
   const install = (open: View[], registered: Set<string>, opened: View[], closeOnReload: (list: View[]) => View[]): void => {
     let live = open
