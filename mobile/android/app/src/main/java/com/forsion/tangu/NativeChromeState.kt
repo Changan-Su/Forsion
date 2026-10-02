@@ -37,7 +37,7 @@ internal data class ChromeState(
 
     companion object {
         val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close")
-        const val MAX_SPACES = 24
+        const val MAX_SPACES = 64 // = MAX_SPACES in mobile/src/nativeChrome.ts, which trims the list before sending
 
         private fun spaces(json: JSONObject): List<ChromeSpace> {
             val array = json.optJSONArray("spaces") ?: return emptyList()
@@ -52,7 +52,7 @@ internal data class ChromeState(
         }
 
         fun parse(json: JSONObject): ChromeState {
-            require(json.toString().length <= 64_000) { "Chrome state too large" }
+            require(json.toString().length <= 512_000) { "Chrome state too large" } // up to MAX_SPACES serialized icons
             val mode = when (NativeJson.str(json, "mode", 16)) {
                 "shell" -> Mode.SHELL
                 "page" -> Mode.PAGE

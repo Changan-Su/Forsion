@@ -16,7 +16,11 @@ import { useEffect, useRef, useSyncExternalStore } from 'react'
 export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close'
 export interface NativeChromeShellLabels { left: string; right: string; tabs: string; more: string }
 /** One destination of the bottom navigation bar. Data only: the host resolves the icon from the Space registry. */
-export interface NativeChromeSpace { id: string; label: string; active: boolean }
+export interface NativeChromeSpace {
+  id: string; label: string; active: boolean
+  /** Opaque identity of the Space's icon component: changes when only the icon was replaced, so the state is re-sent. */
+  iconRev?: number
+}
 export interface NativeChromeShellState {
   mode: 'shell'
   title: string

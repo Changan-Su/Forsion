@@ -96,6 +96,8 @@ class NativeChromePlugin : Plugin() {
                 }
                 ViewCompat.setOnApplyWindowInsetsListener(webView) { _, windowInsets ->
                     insets.value = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+                    // This listener outlives the bars (page reload, JS-side fallback): keyboard avoidance must not go with them.
+                    readIme(windowInsets)
                     layout()
                     WindowInsetsCompat.CONSUMED // as Capacitor: do not pass insets to the page
                 }
@@ -127,9 +129,7 @@ class NativeChromePlugin : Plugin() {
             // and — edge-to-edge only, see layout() — the WebView ends at the keyboard's top edge.
             // ponytail: devices that do not report IME insets keep the bar above the keyboard; wire the Keyboard plugin's events if that shows up.
             ViewCompat.setOnApplyWindowInsetsListener(view) { _, windowInsets ->
-                val ime = windowInsets.isVisible(WindowInsetsCompat.Type.ime())
-                val bottom = if (ime) windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0
-                if (ime != imeVisible || bottom != imeBottom) { imeVisible = ime; imeBottom = bottom; layout() }
+                if (readIme(windowInsets)) layout()
                 windowInsets
             }
             val params = CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
@@ -138,6 +138,15 @@ class NativeChromePlugin : Plugin() {
             spaceBar = view
             ViewCompat.requestApplyInsets(view)
         }
+    }
+
+    /** Records the keyboard's state; true when it changed. */
+    private fun readIme(windowInsets: WindowInsetsCompat): Boolean {
+        val ime = windowInsets.isVisible(WindowInsetsCompat.Type.ime())
+        val bottom = if (ime) windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0
+        if (ime == imeVisible && bottom == imeBottom) return false
+        imeVisible = ime; imeBottom = bottom
+        return true
     }
 
     private fun barPx(): Int = (NATIVE_CHROME_HEIGHT.value * activity.resources.displayMetrics.density).roundToInt()
@@ -191,8 +200,6 @@ class NativeChromePlugin : Plugin() {
         bar = null
         spaceBar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
         spaceBar = null
-        imeVisible = false
-        imeBottom = 0
         layout()
     }
 

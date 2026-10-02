@@ -393,12 +393,29 @@ const tabCountText = (list) => {
     if (await cdp.eval(drawerOpen)) h.key(4)
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 'drawer stayed open')
   }
+  /** Tap a Space of the native bottom bar. With more than five the bar scrolls: bring the item in first. */
+  async function tapSpace(id) {
+    for (const dir of [0, 1, -1]) {
+      let list = ui()
+      const bar = h.byId(list, 'nativeChrome.spaces')
+      assert.ok(bar, 'no native space bar')
+      if (dir) {
+        const [from, to] = dir > 0 ? [bar.rect.left + 80, bar.rect.right - 80] : [bar.rect.right - 80, bar.rect.left + 80]
+        h.adb('shell', 'input', 'swipe', String(from), String(bar.rect.cy), String(to), String(bar.rect.cy), '250')
+        await h.pause(700)
+        list = ui()
+      }
+      const n = h.byId(list, `nativeChrome.space.${id}`)
+      if (n && n.rect.right - n.rect.left > 40) { h.tapNode(n); return }
+    }
+    assert.fail(`Space "${id}" is not in the native bar`)
+  }
   async function toSpace(id) {
     await openDrawer()
     // Spaces live in the native bottom bar now; the shell mirrors the active one on `.mb-shell[data-space]`.
     const active = `document.querySelector('.mb-shell')?.dataset.space === ${JSON.stringify(id)}`
     if (!(await cdp.eval(active))) {
-      await tapId(`nativeChrome.space.${id}`)
+      await tapSpace(id)
       assert.ok(await h.waitPage(cdp, active, 6000), `Space "${id}" did not become active`)
       await h.pause(1200)
       await openDrawer()
@@ -588,7 +605,7 @@ const tabCountText = (list) => {
     assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'home')
     assert.equal(h.byId(list, 'nativeChrome.space.home').selected || h.byId(list, 'nativeChrome.space.home').checked, 'true', 'active Space not marked selected')
     // switch with the drawer closed: lands on the Space's main view, drawer stays closed
-    await tapId('nativeChrome.space.agents', list)
+    await tapSpace('agents')
     assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell').dataset.space === 'agents'", 6000), 'tap did not switch Space')
     await h.pause(800)
     assert.ok(!(await cdp.eval(drawerOpen)), 'switching from a closed drawer opened it')
@@ -596,15 +613,15 @@ const tabCountText = (list) => {
     assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'the Space main view failed to render')
     shot('03c-space-bar')
     // re-tap the active Space: drawer opens; again: closes
-    await tapId('nativeChrome.space.agents')
+    await tapSpace('agents')
     assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 're-tap did not open the drawer')
     await h.pause(600)
     shot('03d-space-bar-drawer')
     // drawer open: switching keeps it open (the user picks from the new Space's list)
-    await tapId('nativeChrome.space.tangu')
+    await tapSpace('tangu')
     assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'tangu' && ${drawerOpen}`, 6000), 'switching with the drawer open closed it')
     await h.pause(600)
-    await tapId('nativeChrome.space.tangu')
+    await tapSpace('tangu')
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 're-tap did not close the drawer')
     // keyboard: the bar leaves, the WebView takes its room; back brings it back
     await tapEl("document.querySelector('.composer textarea, .composer [contenteditable], textarea')")
@@ -613,6 +630,26 @@ const tabCountText = (list) => {
     h.key(4)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar did not come back after the keyboard')
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+    // more Spaces than fit → the bar scrolls. It leaves composition in page mode (settings) and is recreated on the
+    // way back: the active Space must be in view again, not left behind at scroll offset 0.
+    if (ids.length > 5) {
+      const last = ids[ids.length - 1]
+      const fullWidth = items[0].rect.right - items[0].rect.left
+      await tapSpace(last)
+      assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === ${JSON.stringify(last)}`, 6000), 'the last Space did not become active')
+      await openDrawer()
+      await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+      assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+      assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the space bar stayed up in page mode')
+      await tapId('nativeChrome.back')
+      const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 12000 })
+      assert.ok(r.hit, 'the space bar did not come back after settings')
+      await h.pause(600)
+      const n = h.byId(ui(), `nativeChrome.space.${last}`)
+      assert.ok(n && n.rect.right - n.rect.left >= fullWidth - 2, `active Space "${last}" is not fully in view after page mode (${n ? n.rect.right - n.rect.left : 'missing'} of ${fullWidth}px)`)
+      shot('03g-space-bar-scrolled')
+      if (await cdp.eval(drawerOpen)) await closeDrawer()
+    }
   })
 
   // 2026-10-02 real-phone recording: every tap flashed the WebView's blue tap-highlight box. It is off now, and a press

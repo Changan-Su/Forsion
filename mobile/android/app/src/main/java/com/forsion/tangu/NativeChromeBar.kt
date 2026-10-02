@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -166,8 +167,17 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: St
         ) {
             val scroll = state.spaces.size > 5
             val itemWidth = if (scroll) maxWidth / 5.5f else maxWidth / state.spaces.size
+            val scrollState = rememberScrollState()
+            // The bar leaves composition in page mode (settings) and comes back at offset 0: centre the active Space
+            // again, as the web row did — otherwise "nothing looks selected" when it sits past the fifth slot.
+            val activeIndex = state.spaces.indexOfFirst { it.active }
+            val itemPx = with(density) { itemWidth.toPx() }
+            val viewportPx = with(density) { maxWidth.toPx() }
+            LaunchedEffect(activeIndex, scroll, itemPx, viewportPx) {
+                if (scroll && activeIndex >= 0) scrollState.scrollTo((activeIndex * itemPx - (viewportPx - itemPx) / 2f).toInt().coerceAtLeast(0))
+            }
             Row(
-                if (scroll) Modifier.fillMaxSize().horizontalScroll(rememberScrollState()) else Modifier.fillMaxSize(),
+                if (scroll) Modifier.fillMaxSize().horizontalScroll(scrollState) else Modifier.fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 for (space in state.spaces) {

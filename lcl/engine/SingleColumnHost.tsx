@@ -19,7 +19,7 @@ import { moreCommandGroups, moreCommandOn, moreCommandTitle, moreRowLabel, prese
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
-import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, type NativeChromeShellLabels } from './nativeChrome'
+import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, type NativeChromeShellLabels, type NativeChromeSpace } from './nativeChrome'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
@@ -339,10 +339,19 @@ function switchSpaceKeepDrawer(id: string): void {
 }
 
 /** 原生底部导航栏的数据:与抽屉里 Web Space 条同一份列表、同一条「当前项」判据(活动 id 不在表里时落第一格)。 */
-function nativeSpaceList(): Array<{ id: string; label: string; active: boolean }> {
+function nativeSpaceList(): NativeChromeSpace[] {
   const { spaces, activeSpaceId } = useSpaceStore.getState()
   const known = spaces.some((x) => x.id === activeSpaceId)
-  return spaces.map((sp, i) => ({ id: sp.id, label: label(sp.name), active: known ? sp.id === activeSpaceId : i === 0 }))
+  return spaces.map((sp, i) => ({ id: sp.id, label: label(sp.name), active: known ? sp.id === activeSpaceId : i === 0, iconRev: iconRev(sp.icon) }))
+}
+// 图标组件的身份号:Space 同 id 同名只换了图标(插件热重载)时,状态的 JSON 得跟着变,否则被接缝的去重吞掉、原生栏留着旧图标。
+const iconRevs = new WeakMap<object, number>()
+let iconRevSeq = 0
+function iconRev(icon: object | undefined): number {
+  if (!icon) return 0
+  let rev = iconRevs.get(icon)
+  if (!rev) { rev = ++iconRevSeq; iconRevs.set(icon, rev) }
+  return rev
 }
 /** 点原生底部导航栏:换 Space;抽屉开着就留在抽屉里(同 switchSpaceKeepDrawer 的用户口径),关着就直接看主区。
  *  点**当前**那格 = 开/关左抽屉(列表都在抽屉里,等于「回到这个 Space 的列表」)。 */
@@ -596,12 +605,15 @@ function TabSheet({ onClose }: { onClose: () => void }) {
 }
 
 /** 长宽比 > 4:3(横屏手机/平板)→ 左栏与 main 并排推开而非悬浮(用户拍板:默认展开,右栏仍抽屉)。
- *  desktop「手机框」预览是 3:4 竖比,天然不触发。 */
+ *  desktop「手机框」预览是 3:4 竖比,天然不触发。
+ *  ⚠️ 还要求宽度 ≥ 520px:竖屏手机弹出键盘后视口只剩一条矮横条(360×260 这种),单看长宽比会被判成「宽屏」,
+ *     左栏当场并排弹出、收键盘后还留着(Codex 评审 2026-10-02)。竖屏手机宽 ≤ 480,横屏手机 ≥ 640,520 卡在中间。 */
+const WIDE_QUERY = '(min-aspect-ratio: 4/3) and (min-width: 520px)'
 function useWideAspect(enabled: boolean): boolean {
-  const [wide, setWide] = useState(() => enabled && window.matchMedia('(min-aspect-ratio: 4/3)').matches)
+  const [wide, setWide] = useState(() => enabled && window.matchMedia(WIDE_QUERY).matches)
   useEffect(() => {
     if (!enabled) return
-    const mq = window.matchMedia('(min-aspect-ratio: 4/3)')
+    const mq = window.matchMedia(WIDE_QUERY)
     const on = (): void => setWide(mq.matches)
     on() // 旋转/分屏即时跟随
     mq.addEventListener('change', on)

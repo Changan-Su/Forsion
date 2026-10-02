@@ -17,6 +17,7 @@ interface NativeChromePlugin {
   addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
 }
 const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close']
+const MAX_SPACES = 64 // = ChromeState.MAX_SPACES (Kotlin)
 
 let installed = false
 export function installNativeChrome(): void {
@@ -27,7 +28,10 @@ export function installNativeChrome(): void {
     .then(([left, right, more, back, close]) => ({ left, right, more, back, close }))
   // Space icons are React components: serialize each once (keyed by the component, so a re-registered Space re-renders).
   const spaceIcons = new Map<unknown, NativeIcon | undefined>()
-  const withIcons = async (list: NativeChromeSpace[]): Promise<Array<NativeChromeSpace & { icon?: NativeIcon }>> => {
+  const withIcons = async (all: NativeChromeSpace[]): Promise<Array<NativeChromeSpace & { icon?: NativeIcon }>> => {
+    // ponytail: the bar scrolls, but a payload is still capped (Kotlin MAX_SPACES). Past it the tail is not shown —
+    // far beyond any real Space count; a rejected setState would instead take the whole native chrome down.
+    const list = all.slice(0, MAX_SPACES)
     const defs = useSpaceStore.getState().spaces
     const sources = list.map((sp) => defs.find((d) => d.id === sp.id)?.icon)
     const missing = [...new Set(sources.filter((src) => src && !spaceIcons.has(src)))]
