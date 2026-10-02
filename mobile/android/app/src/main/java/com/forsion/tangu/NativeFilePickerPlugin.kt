@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Base64
 import androidx.activity.result.ActivityResult
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
@@ -13,7 +12,6 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
-import java.io.ByteArrayOutputStream
 
 /**
  * System document picker for the chat "Add files" entry when it is chosen from a native sheet.
@@ -21,19 +19,24 @@ import java.io.ByteArrayOutputStream
  * Why it exists: Chromium only opens `<input type=file>` with transient user activation. A tap inside the
  * Compose sheet (a separate dialog window) gives the WebView none, so the web input's `click()` is silently
  * dropped. JS reaches this through `window.tangu.pickFiles` (mobile/src/nativeFiles.ts); everything else
- * (size limits, attachment vs workspace file) stays in the composer exactly as for a web pick.
+ * (attachment vs workspace file) stays in the composer exactly as for a web pick.
  *
- * Result: `{ files: [{ name, type, data(base64) }], skipped: [name] }`. Files over [MAX_FILE_BYTES], or past
- * [MAX_TOTAL_BYTES] / [MAX_FILES], are listed in `skipped` (never silently dropped). Cancel = empty lists.
+ * No file bytes cross the bridge. The result only describes the picked documents:
+ * `{ files: [{ uri, name, type, size }], skipped: [name] }` (`size` = -1 when the provider does not report one).
+ * JS then streams each document through Capacitor's local server (`Capacitor.convertFileSrc(uri)` →
+ * `https://localhost/_capacitor_content_/…`, served by WebViewLocalServer via ContentResolver.openInputStream)
+ * and enforces the byte caps on what actually arrives. The previous version read every file into a byte
+ * array, base64-encoded it and sent up to 60 MB as ONE bridge message that JS decoded and copied again.
+ *
+ * URI permission: ACTION_OPEN_DOCUMENT grants this app read access to the returned URIs for as long as this
+ * activity lives. JS fetches right after `pick()` resolves, so nothing is persisted (no
+ * takePersistableUriPermission) and there is nothing to release.
+ *
+ * Documents past [FilePickPlan]'s caps, or whose provider throws while being described, are listed in
+ * `skipped` (never silently dropped). Cancel = empty lists. Every path settles the call exactly once.
  */
 @CapacitorPlugin(name = "NativeFilePicker")
 class NativeFilePickerPlugin : Plugin() {
-    companion object {
-        const val MAX_FILES = 20
-        const val MAX_FILE_BYTES = 25L * 1024 * 1024 // = the composer's workspace-file cap (MAX_WS_BYTES)
-        const val MAX_TOTAL_BYTES = 60L * 1024 * 1024
-    }
-
     @PluginMethod
     fun pick(call: PluginCall) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -47,58 +50,59 @@ class NativeFilePickerPlugin : Plugin() {
     @ActivityCallback
     private fun onPicked(call: PluginCall?, result: ActivityResult) {
         if (call == null) return
+        val uris = try { pickedUris(result) } catch (_: Exception) { emptyList() }
+        if (uris.isEmpty()) { call.resolve(answer(JSArray(), JSArray())); return }
+        // Provider queries can block (remote documents): off the main thread. One resolve, whatever happens inside.
+        Thread {
+            val out = try { describe(uris) } catch (_: Exception) { answer(JSArray(), JSArray()) }
+            call.resolve(out)
+        }.start()
+    }
+
+    private fun answer(files: JSArray, skipped: JSArray): JSObject = JSObject().put("files", files).put("skipped", skipped)
+
+    private fun pickedUris(result: ActivityResult): List<Uri> {
         val data = result.data
-        if (result.resultCode != Activity.RESULT_OK || data == null) {
-            call.resolve(JSObject().put("files", JSArray()).put("skipped", JSArray()))
-            return
-        }
+        if (result.resultCode != Activity.RESULT_OK || data == null) return emptyList()
         val uris = mutableListOf<Uri>()
         val clip = data.clipData
         if (clip != null) for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(uris::add)
         else data.data?.let(uris::add)
-        // Reading can take a while for large / remote documents: off the main thread.
-        Thread {
-            val files = JSArray()
-            val skipped = JSArray()
-            var total = 0L
-            uris.forEachIndexed { index, uri ->
-                val name = displayName(uri) ?: uri.lastPathSegment ?: "file"
-                if (index >= MAX_FILES) { skipped.put(name); return@forEachIndexed }
-                val bytes = try { readCapped(uri, minOf(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total)) } catch (_: Exception) { null }
-                if (bytes == null) { skipped.put(name); return@forEachIndexed }
-                total += bytes.size
-                files.put(JSObject().apply {
-                    put("name", name)
-                    put("type", context.contentResolver.getType(uri) ?: "")
-                    put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
-                })
-            }
-            call.resolve(JSObject().put("files", files).put("skipped", skipped))
-        }.start()
+        return uris
     }
 
-    private fun displayName(uri: Uri): String? = try {
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        }
-    } catch (_: Exception) { null }
+    private class Described(val name: String, val type: String, val size: Long)
 
-    /** Whole document, or null when it is larger than [limit] bytes (never a truncated file). */
-    private fun readCapped(uri: Uri, limit: Long): ByteArray? {
-        if (limit <= 0) return null
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            val out = ByteArrayOutputStream()
-            val buf = ByteArray(64 * 1024)
-            var read = 0L
-            while (true) {
-                val n = input.read(buf)
-                if (n < 0) break
-                read += n
-                if (read > limit) return null
-                out.write(buf, 0, n)
+    private fun describe(uris: List<Uri>): JSObject {
+        // A document whose provider throws (getType / query are provider calls) is skipped; the others go on.
+        val described = uris.map { uri -> try { describeOne(uri) } catch (_: Exception) { null } }
+        val plan = FilePickPlan.plan(described.map { it?.size })
+        val files = JSArray()
+        val skipped = JSArray()
+        uris.forEachIndexed { i, uri ->
+            val d = described[i]
+            if (d != null && plan[i]) {
+                files.put(JSObject().put("uri", uri.toString()).put("name", d.name).put("type", d.type).put("size", d.size))
+            } else {
+                skipped.put(d?.name ?: fallbackName(uri))
             }
-            return out.toByteArray()
         }
-        return null
+        return answer(files, skipped)
+    }
+
+    private fun fallbackName(uri: Uri): String = try { uri.lastPathSegment } catch (_: Exception) { null } ?: "file"
+
+    private fun describeOne(uri: Uri): Described {
+        var name: String? = null
+        var size = -1L
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val nameAt = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeAt = c.getColumnIndex(OpenableColumns.SIZE)
+                if (nameAt >= 0 && !c.isNull(nameAt)) name = c.getString(nameAt)
+                if (sizeAt >= 0 && !c.isNull(sizeAt)) size = c.getLong(sizeAt)
+            }
+        }
+        return Described(name ?: fallbackName(uri), context.contentResolver.getType(uri) ?: "", if (size >= 0) size else -1L)
     }
 }
