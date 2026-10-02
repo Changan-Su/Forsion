@@ -13,10 +13,18 @@ on:
     paths:
       - 'web/**'
       - 'desktop/frontend/src/**'   # web 的主体渲染层(@/@amadeus 别名)
-      - 'desktop/shared/amadeus/**' # @amadeus-shared
+      - 'desktop/shared/**'         # @amadeus-shared + 渲染层直接 import 的 shared 模块(products / remoteSessions…)
+      - 'desktop/products/**'       # shared/product.ts 静态 import ../products/forsion.json
+      - 'desktop/CHANGELOG.md'      # changelog.ts 经 ?raw 内联(关于页版本号 / 更新日志)
+      - 'desktop/CHANGELOG.en.md'
+      - 'desktop/build/copy-excalidraw-assets.cjs' # web 的 prepare-board 调它
+      - 'desktop/build/gen-fonts.cjs'              # web 的 prepare-fonts 调它
+      - 'unit/releasePolicy.mjs'    # web/vite.config.ts 顶层 import
+      - 'tangu-agent/src/core/sessionEmoji.ts' # desktop 渲染层直接 import
       - 'lcl/**'                    # @lcl(Space-View 框架)
       - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)
       - '.github/workflows/build-web.yml'
+      # ⚠️ 以上须与 web/Dockerfile 的 COPY 源保持一致,新增 COPY 记得补这里。
 
 permissions:
   contents: read
