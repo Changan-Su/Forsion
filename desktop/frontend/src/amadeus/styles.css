@@ -736,10 +736,12 @@
 .am-app .milkdown .ProseMirror > *:last-child {
   margin-bottom: 0;
 }
+/* 标题节奏(10-02 用户拍板 a5):半粗(DESIGN §3「标题用半粗」),上远下近 —— 上方留 1.5 倍字高、下方 0.35 倍,
+   标题跟着它下面那段走。原来 0.4em / 0.3em 上下几乎一样,标题贴着上一段,看不出属于谁。首块的上边距由上面 :first-child 清零。 */
 .am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.3;
-  margin: 0.4em 0 0.3em;
+  margin: 1.5em 0 0.35em;
 }
 .am-app .milkdown .ProseMirror h1 {
   font-size: 1.7em;
@@ -2207,11 +2209,17 @@ body.amx-marquee-active * {
   box-shadow: inset 2px 0 0 var(--primary);
 }
 
-/* Editor: table header tint, smoother hr */
+/* 表格减线(10-02 用户拍板 a5):表头不垫底色、灰字中等字重;格线淡一半;格内段落不带上下边距(原来把行撑到 44px)。
+   表格线本身保留(DESIGN §5:表格线是信息)。写在这里而不是上面 th,td 那条:同特异性,放后面才压得住。 */
 .am-app .milkdown .ProseMirror th {
-  background: var(--surface);
-  font-weight: 600;
+  font-weight: 500;
+  color: var(--text-muted);
 }
+.am-app .milkdown .ProseMirror :is(th, td) {
+  border-color: color-mix(in srgb, var(--border) 55%, transparent);
+  padding: 6px 10px;
+}
+.am-app .milkdown .ProseMirror :is(th, td) > p { margin: 0; }
 .am-app .milkdown .ProseMirror tr:hover td {
   background: var(--surface);
 }

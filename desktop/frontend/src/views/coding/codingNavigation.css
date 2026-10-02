@@ -1,6 +1,4 @@
 .csn { display: flex; flex-direction: column; gap: 20px; height: 100%; padding: 16px 10px; overflow-y: auto; color: var(--text); font-family: var(--font-ui); }
-.csn-brand { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px 12px; border-bottom: 1px solid var(--border); font-size: var(--ui-font-heading); }
-.csn-brand-mark { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-sm); background: var(--sel-fill); color: var(--accent-ink); }
 .csn-section { display: flex; flex-direction: column; gap: 2px; }
 .csn-heading { padding: 3px 10px 8px; color: var(--text-faint); font-size: var(--ui-font-caption); font-weight: 550; letter-spacing: .04em; text-transform: uppercase; }
 .csn-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 35px; padding: 7px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); text-align: left; font-family: inherit; font-size: var(--ui-font-meta); cursor: pointer; transition: background var(--duration-fast), color var(--duration-fast); }

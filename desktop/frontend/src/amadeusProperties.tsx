@@ -303,7 +303,8 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = f
   const count = parsed.ok ? visible.length : null
 
   return (
-    <div className="amx-props" ref={rootRef}>
+    // 零属性时整条只在指针经过标题区 / 本条、或键盘焦点进来时露出(10-02 用户拍板 v7;CSS 在 amadeus-host.css)。
+    <div className={`amx-props${count === 0 && !open ? ' is-empty' : ''}`} ref={rootRef}>
       <div className="amx-props-bar">
         <button className="amx-props-chip" onClick={() => setOpen((o) => !o)}>
           {count === null ? t('amprops.chipRaw') : t('amprops.chipCount', { n: count })}{open ? ' ▾' : ' ▸'}

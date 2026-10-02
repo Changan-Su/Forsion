@@ -834,4 +834,9 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   .dv-edge-actions > .dv-edge-toggle:focus-visible { opacity: 1; }
   /* Ribbon 两区的「+」(加 Space / 钉命令):v1 实拍里不在,平时整个收起,指针进 Ribbon 才以原来的 0.4 露出。 */
   .rb:not(:hover) .rb-plus:not(:focus-visible) { opacity: 0; }
+  /* 侧栏只有一个 tab(第二轮 v5):那枚图标不是「在多个里选」,平时不画;指针进这条、或键盘焦点进来才出。
+     它仍是拖动面板的抓手,所以只淡不删。 */
+  .dockview-theme-lcl .dv-single-tab .wb-tab--icon { opacity: 0; transition: opacity var(--duration-fast, 0.15s); }
+  .dockview-theme-lcl .dv-single-tab:hover .wb-tab--icon,
+  .dockview-theme-lcl .dv-single-tab:focus-within .wb-tab--icon { opacity: 1; }
 }

@@ -83,11 +83,11 @@
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
 .amx-doc { max-width: var(--amx-page-max, 920px); margin: 0 auto; padding: 0 48px; }
-/* 可编辑标题:与编辑器一级标题同字号(1.7em × 15px = 25.5px / 700)。无 hover/focus 高亮框
- * (会与顶栏冲突,已去除);上移与顶栏之间留出间距(margin-top);提交即 renamePage。 */
+/* 可编辑标题:比正文一级标题(1.7em × 15px = 25.5px)高一档 —— 32px / 700(10-02 用户拍板 a5;原来与 H1 同字号,
+ * 页面标题和第一个标题分不出层级)。无 hover/focus 高亮框(会与顶栏冲突,已去除);上移与顶栏之间留出间距(margin-top);提交即 renamePage。 */
 .amx-title-input {
   width: 100%; border: none; outline: none; background: transparent; color: var(--text);
-  font-family: inherit; font-size: 25.5px; font-weight: 700; line-height: 1.3;
+  font-family: inherit; font-size: 32px; font-weight: 700; line-height: 1.25;
   margin: 10px 0 2px; padding: 4px 6px 4px 2px;
 }
 /* 未命名笔记标题占位(Notion 式虚化 New Page):比正文更淡。 */
@@ -676,6 +676,13 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
 }
 .amx-props-chip:hover, .amx-props-add:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 .amx-props-rows { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+/* 零属性:平时不露「属性 0 +」,指针进标题区或本条、键盘焦点进来才出(触屏没有悬停,照常显示)。只淡不收,露出时正文不跳。 */
+@media (hover: hover) {
+  .amx-props.is-empty .amx-props-bar { opacity: 0; transition: opacity var(--duration-fast, 0.15s); }
+  .amx-title-wrap:hover + .amx-props.is-empty .amx-props-bar,
+  .amx-props.is-empty:hover .amx-props-bar,
+  .amx-props.is-empty:focus-within .amx-props-bar { opacity: 1; }
+}
 .amx-props-empty { color: var(--text-faint, var(--text-muted)); padding: 2px 6px; }
 .amx-prop-row { display: flex; align-items: flex-start; gap: 8px; padding: 1px 0; }
 .amx-prop-key {

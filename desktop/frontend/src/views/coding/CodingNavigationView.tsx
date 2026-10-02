@@ -13,7 +13,7 @@ export function CodingNavigationView() {
   const showCreate = useLaunchNavigation(s => s.showCreate)
   const showGallery = useLaunchNavigation(s => s.showGallery)
   return <nav className="csn" aria-label={t('csl.navigation')}>
-    <div className="csn-brand"><span className="csn-brand-mark"><Shapes size={17} /></span><strong>{t('csl.title')}</strong></div>
+    {/* 侧栏顶不再写「编码工作室」:标签已经是这个名字(10-02 用户拍板 v6)。 */}
     <div className="csn-section"><span className="csn-heading">{t('csl.navBuild')}</span>
       <button type="button" className="csn-item" aria-current={page === 'create' ? 'page' : undefined} onClick={showCreate}><Plus size={16} />{t('csl.newProject')}</button>
       <button type="button" className="csn-item" aria-current={page === 'projects' && filter === 'all' ? 'page' : undefined} onClick={() => showProjects()}><LayoutGrid size={16} />{t('csl.projects')}</button>
