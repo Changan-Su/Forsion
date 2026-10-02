@@ -5025,6 +5025,8 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transf
  * 放文件末尾,与上面 .settings-page--mobile 那组页头规则的顺序无关也稳(DESIGN §7.2)。 */
 .settings-page--mobile[data-native-chrome] .settings-mobile-home-head,
 .settings-page--mobile[data-native-chrome] .settings-mobile-detail-head { display: none; }
+/* 插件详情(从列表点进去的那种)的 Web「返回列表」钮同理让位:原生顶栏的返回先退回插件列表(SettingsModal.backOneLevel)。 */
+.settings-page--mobile[data-native-chrome] [data-plugin-back-row="list"] { display: none; }
 
 /* 应用市场同款:原生顶栏 page 模式(标题 + 返回;详情页加 ×)接管时,Web 的返回钮 + 品牌块与详情页「返回列表」让位,
  * 分类药丸行(.settings-nav-list)留着。要压过 @media (pointer: coarse) 里

@@ -56,7 +56,7 @@ import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
-import { AmadeusPluginsTab, PluginSettingsView } from './AmadeusPluginsTab'
+import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
@@ -1194,12 +1194,19 @@ export const SettingsModal: React.FC<{
     toggleTab(id)
   }
 
-  // Android 实体返回 / 系统侧滑:二级页先回设置首页;已在首页时再交给 MobileRoot 退出设置。
+  // 二级页的「返回」:页里还开着一层(从插件列表点进去的详情)→ 先退那一层,与它的 Web「返回列表」钮同一个动作;否则回设置首页。
+  const backOneLevel = (): void => {
+    const inner = pluginListDetailBack.current
+    if (inner) inner()
+    else setMobileMenuOpen(true)
+  }
+
+  // Android 实体返回 / 系统侧滑:二级页先退一层(见 backOneLevel);已在首页时再交给 MobileRoot 退出设置。
   useEffect(() => {
     if (!p.open || !mobileSettings || mobileMenuOpen) return
     const backToMenu = (event: Event): void => {
       event.preventDefault()
-      setMobileMenuOpen(true)
+      backOneLevel()
     }
     window.addEventListener('forsion:mobile-back', backToMenu)
     return () => window.removeEventListener('forsion:mobile-back', backToMenu)
@@ -1287,12 +1294,12 @@ export const SettingsModal: React.FC<{
   })
 
   // Android 原生顶栏(lcl nativeChrome 的可选宿主)在场时由它画标题 + 返回(page 模式),Web 页头让位(data-native-chrome)。
-  // 返回 / × 与 Web 页头的按钮做的是同一件事:首页「返回」= 退出设置;二级页「返回」= 回设置首页,「×」= 退出设置。
+  // 返回 / × 与 Web 页头的按钮做的是同一件事:首页「返回」= 退出设置;二级页「返回」= 回设置首页(插件详情开着时先回插件列表),「×」= 退出设置。
   // 没有原生宿主(手机浏览器、桌面手机框)时这个声明是空操作,Web 页头照旧。
   const nativeChrome = useNativeChromeInstalled() && mobileSettings
   useNativeChromeClaim(!p.open || !mobileSettings ? null : mobileMenuOpen
     ? { mode: 'page', title: t('settings.title'), back: t('settings.backToApp'), onBack: p.onClose }
-    : { mode: 'page', title: activeSubLabel || activeTabLabel, back: t('settings.title'), onBack: () => setMobileMenuOpen(true), close: t('settings.backToApp'), onClose: p.onClose })
+    : { mode: 'page', title: activeSubLabel || activeTabLabel, back: t('settings.title'), onBack: backOneLevel, close: t('settings.backToApp'), onClose: p.onClose })
 
   if (!p.open) return null
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { moreCommandGroups, moreCommandOn, moreCommandTitle, presentedCommand } from './moreSheet'
+import { moreCommandGroups, moreCommandOn, moreCommandTitle, moreRowLabel, presentedCommand } from './moreSheet'
 import { useCommandStore } from './commandRegistry'
 import type { Command } from './types'
 
@@ -39,6 +39,15 @@ describe('more sheet command groups', () => {
     expect(moreCommandOn(cmd('b', { checked: () => true }))).toBe(true)
     expect(moreCommandOn(cmd('c', { checked: () => false }))).toBe(false)
     expect(moreCommandOn(cmd('d', { checked: () => { throw new Error('x') } }))).toBe(false)
+  })
+  it('ribbon row labels drop a trailing keyboard-shortcut hint (no keyboard on a phone); other parentheses stay', () => {
+    expect(moreRowLabel('命令面板 (⌘K)')).toBe('命令面板')
+    expect(moreRowLabel('Command palette (⌘K)')).toBe('Command palette')
+    expect(moreRowLabel('查找（Ctrl+Shift+F）')).toBe('查找')
+    expect(moreRowLabel('Theme (dark)')).toBe('Theme (dark)') // not a shortcut
+    expect(moreRowLabel('(⌘K) first')).toBe('(⌘K) first') // only a trailing hint
+    expect(moreRowLabel('(⌘K)')).toBe('(⌘K)') // never an empty row
+    expect(moreRowLabel('Feedback')).toBe('Feedback')
   })
   it('a pick only resolves to the command object that was presented (re-registered / removed ids do nothing)', () => {
     const ran: string[] = []

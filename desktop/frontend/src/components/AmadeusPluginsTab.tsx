@@ -390,13 +390,20 @@ const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   )
 }
 
+/** 从卡片列表点进去的详情页开着时 = 它的「返回列表」,否则 null。移动设置(SettingsModal)在 Android 原生顶栏的返回 /
+ *  系统返回上先退这一层,与 Web「返回列表」钮是同一个动作(此前直接回到设置首页,详情页还开在底下)。
+ *  受控详情(左栏 `fplugin:<id>` 直达)不登记:它不是从列表进来的,返回照旧回设置首页。 */
+export const pluginListDetailBack: { current: (() => void) | null } = { current: null }
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
+  /** 从卡片列表点进来的(非受控):原生顶栏在场时 Web「返回列表」钮让位给顶栏的返回(base.css 按这个标记藏)。 */
+  fromList?: boolean
   cfg?: TanguDesktopConfig | null
   onEngineReload?: () => void
   enginePlugins?: PluginInfo[] | null
-}> = ({ plugin: p, onBack, cfg, onEngineReload, enginePlugins }) => {
+}> = ({ plugin: p, onBack, fromList, cfg, onEngineReload, enginePlugins }) => {
   const { t, locale } = useI18n()
   const activeIds = usePluginStore((s) => s.activeIds)
   const toggle = usePluginStore((s) => s.toggle)
@@ -467,7 +474,7 @@ const PluginDetail: React.FC<{
 
   return (
     <div data-plugin-detail={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div>
+      <div data-plugin-back-row={fromList ? 'list' : undefined}>
         <button className="btn ghost sm" data-plugin-back onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <ArrowLeft size={13} /> {t('settings.amadeusPlugins.back')}
         </button>
@@ -619,9 +626,16 @@ export const AmadeusPluginsTab: React.FC<{
 
   // 受控 id 解析得到才赢;插件被卸载/禁用后落回卡片列表,且**列表点得动**(见 resolvePluginDetail)。
   const { plugin: detailPlugin, controlled } = resolvePluginDetail(plugins, controlledDetail?.id, detail)
+  const listDetailOpen = !!detailPlugin && !controlled
+  useEffect(() => {
+    if (!listDetailOpen) return
+    const back = (): void => setDetail(null)
+    pluginListDetailBack.current = back
+    return () => { if (pluginListDetailBack.current === back) pluginListDetailBack.current = null }
+  }, [listDetailOpen])
   if (detailPlugin) {
     const back = controlled && controlledDetail ? controlledDetail.onBack : () => setDetail(null)
-    return <PluginDetail plugin={detailPlugin} onBack={back} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
+    return <PluginDetail plugin={detailPlugin} onBack={back} fromList={!controlled} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
   }
 
   // 内置 vs 外置分两区:Callout 标注/字数统计 是 builtin,过去和外置插件混在同一串里,

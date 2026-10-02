@@ -15,7 +15,7 @@ import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap } from 'lucide-reac
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
-import { moreCommandGroups, moreCommandOn, moreCommandTitle, presentedCommand } from './moreSheet'
+import { moreCommandGroups, moreCommandOn, moreCommandTitle, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
@@ -462,7 +462,7 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
   const out = await presentNativeMenu({
     title: tr('lcl.mobile.more'),
     sections: [
-      ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? label(it.tooltip) : it.id, icon: it.icon })) }] : []),
+      ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id, icon: it.icon })) }] : []),
       ...groups.map((g) => ({
         ...(g.title ? { title: g.title } : {}),
         items: g.commands.map((c) => ({ id: `cmd:${c.id}`, label: moreCommandTitle(c), icon: c.icon ?? Zap, ...(moreCommandOn(c) ? { checked: true } : {}) })),
@@ -501,7 +501,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
           return (
             <button key={it.id} className="mb-sheet-row" data-ribbon-id={it.id} onClick={() => { it.onClick?.(); onClose() }}>
               {Icon && <Icon size={20} />}
-              <span>{it.tooltip ? label(it.tooltip) : it.id}</span>
+              <span>{it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id}</span>
             </button>
           )
         })}

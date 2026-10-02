@@ -28,6 +28,13 @@ export function presentedCommand(presented: readonly Command[], live: readonly C
   return shown && live.find((c) => c.id === id) === shown ? shown : null
 }
 
+/** ribbon 项在「⋯」里的行文案。它的 tooltip 是给桌面 hover 写的,末尾常带键盘快捷键(「命令面板 (⌘K)」);
+ *  手机没有键盘,那段只是噪音 → 剥掉**末尾**括号里的快捷键。括号里有修饰键才剥,普通括注原样;
+ *  桌面 Ribbon / 命令面板不经过这里,文案不变。 */
+export function moreRowLabel(text: string): string {
+  return text.replace(/\s*[(（][^()（）]*(?:[⌘⌃⌥⇧]|\b(?:Ctrl|Cmd|Alt|Shift)\b)[^()（）]*[)）]\s*$/, '') || text
+}
+
 /** 命令在「⋯」里的行文案(title 求值抛错 → 退回 id,不让一条坏命令拖垮整张菜单)。 */
 export function moreCommandTitle(c: Command): string { return safeLabel(c.title, c.id) }
 
