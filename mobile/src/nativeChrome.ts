@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
-import { ArrowLeft, MoreHorizontal, PanelLeft, PanelRight } from 'lucide-react'
+import { ArrowLeft, MoreHorizontal, PanelLeft, PanelRight, X } from 'lucide-react'
 import {
   dispatchNativeChromeAction, installNativeChromeHost, readNativeTheme, renderNativeIcons,
   type NativeChromeAction, type NativeChromeState, type NativeIcon, type NativeSheetTheme,
@@ -8,21 +8,21 @@ import {
 /** Android-only host for the native top bar seam (lcl/engine/nativeChrome.ts). Kotlin: NativeChromePlugin.
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
  *  If the plugin ever rejects, the host uninstalls itself so the shell falls back to its web top bar. */
-interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon }
+interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon }
 interface NativeChromePlugin {
   setState(state: NativeChromeState & { theme: NativeSheetTheme; icons: ChromeIcons }): Promise<void>
   clear(): Promise<void>
   addListener(event: 'action', cb: (e: { action: string }) => void): Promise<PluginListenerHandle>
 }
-const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back']
+const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close']
 
 let installed = false
 export function installNativeChrome(): void {
   if (installed || Capacitor.getPlatform() !== 'android' || !Capacitor.isPluginAvailable('NativeChrome')) return
   installed = true
   const plugin = registerPlugin<NativeChromePlugin>('NativeChrome')
-  const icons: Promise<ChromeIcons> = renderNativeIcons([PanelLeft, PanelRight, MoreHorizontal, ArrowLeft])
-    .then(([left, right, more, back]) => ({ left, right, more, back }))
+  const icons: Promise<ChromeIcons> = renderNativeIcons([PanelLeft, PanelRight, MoreHorizontal, ArrowLeft, X])
+    .then(([left, right, more, back, close]) => ({ left, right, more, back, close }))
   let state: NativeChromeState | null = null
   let lastSent = ''
   let chain: Promise<void> = Promise.resolve()

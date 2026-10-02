@@ -78,10 +78,19 @@ WebView 仍是内核，外壳换原生：两个可选宿主接缝在 `lcl/engine
 Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏览器调试）时一切照旧走 Web UI。
 
 - **`NativeChrome`**：原生 Material 顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
-  WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。设置、引导、成就等全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏。
+  WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
+  **设置**改用 `page` 模式（标题 + 返回，分类页再加 `close` ×），Web 头部只在 `data-native-chrome` 时隐藏。
 - **`NativeSheet`**：通用 Compose 半屏底单，三种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`prompt`、`confirm`。
   调用方用 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`，拿到 `{ handled: false }` 就渲染自己的 Web UI。
   已接入：标签页底单、更多底单（无自定义组件项时）、`ContextMenu` 原语（`pickNativeCtxItem`）、`askString`、无 children 的 `ConfirmDialog`。
+- **`SheetMenu`**（`lcl/engine/nativeSheetMenu.ts`）：一份条目（文案 + `run` 回调）同时喂 Web 菜单与原生底单。
+  点击触发的菜单用 `openNativeSheetMenu(build, { onFallback })`（无宿主同步返回 false，走原 Web 路径）；
+  状态驱动的右键/长按菜单用 `useNativeSheetMenu(open, build, onClose)`（返回是否该渲染 Web 菜单）。
+  已接入：输入框模式菜单（审批档走同一个 `setApproval`）、添加菜单（会话 / View 二级页带搜索）、回退菜单、项目选择器、
+  账号卡片（额度 + 切换账号 + 退出）、侧栏会话 / 工作区菜单、Orbits「+」与行菜单、设备会话菜单、Workspace 模式、主页收纳夹菜单。
+  刻意留 Web：斜杠面板、@ 提及、`[[` 弹层、选区工具栏、上下文环、审批托盘、Ultra 确认、群聊设置、审批规则、壁纸面板、收纳层。
+- **`NativeFilePicker`**：底单里选「添加文件」时 WebView 没有用户激活，`<input type=file>.click()` 会被 Chromium 静默丢弃；
+  改走系统文档选择器（`window.tangu.pickFiles`，单个 25MB / 合计 60MB / 最多 20 个，超限的列名提示，不静默丢）。
 - 文案、图标、主题全部由 Web 侧传入（i18n 跟随当前语言）；Kotlin 不持有用户可见字符串，只做载荷校验（大小 / 深度 / id 唯一）。
 
 真机验收（一台模拟器/设备，debug APK，后端全由 CDP 桩住，不碰真服务器；结束时还原 token / 语言 / 主题）：

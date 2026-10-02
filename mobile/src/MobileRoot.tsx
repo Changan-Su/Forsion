@@ -98,7 +98,9 @@ function useAndroidBack(): void {
 }
 
 /** 全屏 Web 浮层盖住单列壳时,原生顶栏(Android NativeChrome,可选宿主)收起,不能浮在浮层上面。
- *  没装原生宿主(web / 手机浏览器)时这个声明是空操作。 */
+ *  没装原生宿主(web / 手机浏览器)时这个声明是空操作。
+ *  设置页不在此列:SettingsModal 自己声明 page 模式(原生标题 + 返回 + ×)。⚠️ 别把 settingsOpen 加回来 ——
+ *  子组件的 effect 先于父组件跑,这里的 hidden 会后入栈、盖掉设置页的 page 声明(最后一个声明生效)。 */
 const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
 
 export function MobileRoot() {
@@ -135,7 +137,7 @@ export function MobileRoot() {
   const activeSession = a.sessions.find((s) => s.id === a.activeId) || a.archivedSessions.find((s) => s.id === a.activeId) || null
   const unitsOpen = useUnitsSheet((s) => s.open)
   const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
-  useNativeChromeClaim(a.settingsOpen || a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
+  useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
 
   return (
     <>
