@@ -23,6 +23,8 @@ import { installSpaceShortcuts } from './spaceShortcuts'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
 import { installNativeModelPicker } from './nativeModelPicker'
+import { installNativeSheet } from './nativeSheet'
+import { installNativeChrome } from './nativeChrome'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -45,6 +47,10 @@ try {
   useApp.getState().setTr(translate)
   installEngine()
   installNativeModelPicker()
+  // Android 原生半屏(菜单 / 输入 / 确认)与原生顶栏:都是可选宿主,非 Android 或插件缺席时整段早退。
+  // 顶栏必须在首次渲染前装上,单列壳首帧就不画 Web 胶囊顶栏(否则先闪一下再消失)。
+  installNativeSheet()
+  installNativeChrome()
   // 丝滑光标:desktop 在 main.tsx 装,移动端走的是本模块 —— 漏装过一轮(用户实报「移动端没生效」)。
   // 缺席即关(设置→外观里开);软键盘的重定位与偏移补偿在 smoothCaret 里接 visualViewport。
   // (旧注释写的「移动端没有设置开关」是错的:不列的只有「常规」页,「外观」页是共用的,

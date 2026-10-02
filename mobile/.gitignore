@@ -3,3 +3,5 @@ dist/
 .vite/
 # android/ 入库(含深链 intent-filter 等原生定制);其构建产物/复制的 web 资源由 android/.gitignore 忽略。
 # ios/ 暂未添加。
+# 模拟器 / 台架运行产物(截图、uiautomator dump、acceptance.json):本地看,不入库。
+outputs/
