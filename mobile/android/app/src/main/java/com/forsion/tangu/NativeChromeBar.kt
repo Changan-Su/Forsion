@@ -42,8 +42,8 @@ internal val NATIVE_CHROME_HEIGHT = 56.dp
 
 /**
  * Native top app bar. Shell mode: left drawer · title · right drawer · tab count · more.
- * Page mode: back · title. JS owns everything; buttons only report actions.
- * Test anchors: `nativeChrome.{bar,left,right,tabs,more,back,title}` (Compose testTags as resource-ids).
+ * Page mode: back · title · optional close. JS owns everything; buttons only report actions.
+ * Test anchors: `nativeChrome.{bar,left,right,tabs,more,back,close,title}` (Compose testTags as resource-ids).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -78,7 +78,10 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onAction: (Stri
                     }
                     ChromeState.Mode.PAGE -> {
                         BarIconButton("back", state.back, state.icons.back ?: BuiltinIcons.chevronLeft, fg) { onAction("back") }
-                        BarTitle(state.title, fg, Modifier.weight(1f).padding(start = 6.dp, end = 12.dp))
+                        BarTitle(state.title, fg, Modifier.weight(1f).padding(start = 6.dp, end = if (state.close.isNotBlank()) 6.dp else 12.dp))
+                        if (state.close.isNotBlank()) {
+                            BarIconButton("close", state.close, state.icons.close ?: BuiltinIcons.close, fg) { onAction("close") }
+                        }
                     }
                     ChromeState.Mode.HIDDEN -> Unit
                 }

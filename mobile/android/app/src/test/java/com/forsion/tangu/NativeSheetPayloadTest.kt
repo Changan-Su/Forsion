@@ -99,6 +99,30 @@ class NativeSheetPayloadTest {
         }
     }
 
+    @Test fun nestedPageSearchOnlyWithChildren() {
+        val json = menu()
+        val items = json.getJSONArray("sections").getJSONObject(0).getJSONArray("items")
+        items.getJSONObject(2).put("search", JSONObject("""{"placeholder":"Find","empty":"None"}"""))
+        items.getJSONObject(1).put("search", JSONObject("""{"placeholder":"Ignored","empty":"Ignored"}""")) // leaf: no page to search
+        json.getJSONArray("sections").getJSONObject(1).put("footer", "Files created later are kept.")
+        val p = SheetPayload.parse(json) as SheetPayload.Menu
+        assertEquals("Find", p.find("group")?.search?.placeholder)
+        assertNull(p.find("off")?.search)
+        assertEquals("Files created later are kept.", p.sections[1].footer)
+        assertEquals("", p.sections[0].footer)
+        items.getJSONObject(2).put("search", JSONObject("""{"placeholder":3,"empty":"None"}"""))
+        assertThrows(IllegalArgumentException::class.java) { SheetPayload.parse(json) }
+    }
+
+    @Test fun chromePageClose() {
+        val page = ChromeState.parse(JSONObject("""{"mode":"page","title":"Models","back":"Settings","close":"Back to app","theme":$theme,"icons":{"close":$icon}}"""))
+        assertEquals("Back to app", page.close)
+        assertTrue(page.icons.close is NativeIconSpec.Vector)
+        assertTrue("close" in ChromeState.ACTIONS)
+        assertEquals("", ChromeState.parse(JSONObject("""{"mode":"page","title":"Settings","back":"Back","theme":$theme}""")).close)
+        assertThrows(Exception::class.java) { ChromeState.parse(JSONObject("""{"mode":"page","title":"x","back":"b","close":7,"theme":$theme}""")) }
+    }
+
     @Test fun chromeStateModes() {
         val shell = ChromeState.parse(JSONObject("""{"mode":"shell","title":"Home","left":true,"right":false,"tabCount":3,
             "labels":{"left":"Left panel","right":"Right panel","tabs":"Tabs","more":"More"},"theme":$theme,"icons":{"left":$icon}}"""))

@@ -30,8 +30,11 @@ internal data class MenuItemSpec(
     val id: String, val label: String, val detail: String, val icon: NativeIconSpec?,
     val checked: Boolean, val danger: Boolean, val disabled: Boolean,
     val children: List<MenuSectionSpec>, val trailing: MenuTrailingSpec?,
+    /** Search field on the nested page this item opens (only with children). */
+    val search: SearchSpec? = null,
 )
-internal data class MenuSectionSpec(val title: String, val items: List<MenuItemSpec>)
+/** `footer`: muted note rendered under the section's rows. */
+internal data class MenuSectionSpec(val title: String, val items: List<MenuItemSpec>, val footer: String = "")
 internal data class SearchSpec(val placeholder: String, val empty: String)
 
 /** What the user chose; the plugin converts it to the JS result shape. */
@@ -125,13 +128,13 @@ private class MenuParser {
     fun parse(json: JSONObject, requestId: String, theme: SheetTheme): SheetPayload.Menu {
         val sections = sections(json.getJSONArray("sections"), 1)
         require(sections.any { it.items.isNotEmpty() }) { "Empty menu" }
-        val search = json.optJSONObject("search")?.let {
-            SearchSpec(NativeJson.str(it, "placeholder"), NativeJson.str(it, "empty"))
-        }
+        val search = json.optJSONObject("search")?.let(::search)
         return SheetPayload.Menu(
             requestId, theme, NativeJson.optStr(json, "title"), sections, search, NativeJson.optStr(json, "back", 64),
         )
     }
+
+    private fun search(o: JSONObject) = SearchSpec(NativeJson.str(o, "placeholder"), NativeJson.str(o, "empty"))
 
     private fun sections(array: JSONArray, depth: Int): List<MenuSectionSpec> {
         require(depth <= SheetPayload.MAX_DEPTH) { "Menu too deep" }
@@ -139,7 +142,10 @@ private class MenuParser {
         return (0 until array.length()).map { i ->
             val s = array.getJSONObject(i)
             val items = s.getJSONArray("items")
-            MenuSectionSpec(NativeJson.optStr(s, "title"), (0 until items.length()).map { j -> item(items.getJSONObject(j), depth) })
+            MenuSectionSpec(
+                NativeJson.optStr(s, "title"), (0 until items.length()).map { j -> item(items.getJSONObject(j), depth) },
+                NativeJson.optStr(s, "footer", 1024),
+            )
         }
     }
 
@@ -151,6 +157,7 @@ private class MenuParser {
         val trailing = o.optJSONObject("trailing")?.let { t ->
             MenuTrailingSpec(NativeJson.str(t, "id", 160), NativeJson.str(t, "label"), t.optJSONObject("icon")?.let(NativeJson::icon))
         }
+        val children = o.optJSONArray("children")?.let { sections(it, depth + 1) } ?: emptyList()
         return MenuItemSpec(
             id = id,
             label = NativeJson.str(o, "label"),
@@ -159,8 +166,9 @@ private class MenuParser {
             checked = NativeJson.optBool(o, "checked"),
             danger = NativeJson.optBool(o, "danger"),
             disabled = NativeJson.optBool(o, "disabled"),
-            children = o.optJSONArray("children")?.let { sections(it, depth + 1) } ?: emptyList(),
+            children = children,
             trailing = trailing,
+            search = if (children.isNotEmpty()) o.optJSONObject("search")?.let(::search) else null,
         )
     }
 }

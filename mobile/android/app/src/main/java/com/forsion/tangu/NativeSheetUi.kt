@@ -79,8 +79,9 @@ internal fun NativeSheetHost(payload: SheetPayload, onAnswer: (SheetAnswer?) -> 
     val theme = payload.theme
     val scheme = remember(theme) { theme.colorScheme() }
     MaterialTheme(colorScheme = scheme) {
-        // Menus open half-height (the user can drag up); prompts / confirmations are short and open fully.
-        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = payload !is SheetPayload.Menu)
+        // Every sheet opens at its content height (capped by the screen): a half-open menu hid whole sections
+        // below the fold — e.g. the approval tiers at the end of the chat mode menu. Long lists scroll inside.
+        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val scope = rememberCoroutineScope()
         var answered by remember { mutableStateOf(false) }
         // Report first, then animate out: the action runs while the sheet slides away.
@@ -132,11 +133,13 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
     val page = stack.lastOrNull()
     val title = page?.label ?: p.title
     val sections = page?.children ?: p.sections
-    val q = query.trim()
+    // Root page: the request's search; a nested page: the search its opening item declared.
+    val search = if (page != null) page.search else p.search
+    val q = if (search != null) query.trim() else ""
     val shown = if (q.isEmpty()) sections else sections.map { s ->
         s.copy(items = s.items.filter { it.label.contains(q, ignoreCase = true) || it.detail.contains(q, ignoreCase = true) })
     }.filter { it.items.isNotEmpty() }
-    val tall = p.search != null
+    val tall = search != null
     Column(Modifier.fillMaxWidth().then(if (tall) Modifier.fillMaxHeight(.92f) else Modifier)) {
         if (page != null || title.isNotBlank()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = if (page != null) 8.dp else 24.dp, end = 24.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -148,10 +151,10 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
                 Text(title, Modifier.weight(1f).testTag("nativeSheet.title"), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (p.search != null) {
+        if (search != null) {
             OutlinedTextField(
                 value = query, onValueChange = { query = it }, singleLine = true,
-                placeholder = { Text(p.search.placeholder, fontSize = 15.sp) },
+                placeholder = { Text(search.placeholder, fontSize = 15.sp) },
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = colors.outline, focusedBorderColor = colors.primary),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("nativeSheet.search")
@@ -162,8 +165,8 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
             Modifier.fillMaxWidth().then(if (tall) Modifier.weight(1f) else Modifier.weight(1f, fill = false)),
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp),
         ) {
-            if (shown.isEmpty() && p.search != null) item(key = "empty") {
-                Text(p.search.empty, Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 12.dp).testTag("nativeSheet.empty"), color = colors.onSurfaceVariant)
+            if (shown.isEmpty() && search != null) item(key = "empty") {
+                Text(search.empty, Modifier.fillMaxWidth().padding(vertical = 28.dp, horizontal = 12.dp).testTag("nativeSheet.empty"), color = colors.onSurfaceVariant)
             }
             shown.forEachIndexed { index, section ->
                 if (index > 0) item(key = "divider-$index") {
@@ -176,6 +179,12 @@ private fun MenuContent(p: SheetPayload.Menu, sheet: SheetState, onPick: (String
                     MenuRow(item, onClick = {
                         if (item.children.isNotEmpty()) stack = stack + item else onPick(item.id, false)
                     }, onTrailing = { onPick(item.id, true) })
+                }
+                if (section.footer.isNotBlank()) item(key = "footer-$index") {
+                    Text(
+                        section.footer, Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 4.dp).testTag("nativeSheet.footer"),
+                        color = colors.onSurfaceVariant, fontSize = 13.sp, lineHeight = 18.sp,
+                    )
                 }
             }
         }

@@ -19,6 +19,8 @@ public class MainActivity extends BridgeActivity {
         // 通用原生半屏(菜单 / 输入 / 确认)与原生顶栏:JS 侧 lcl/engine/nativeSheet.ts、nativeChrome.ts 的可选宿主。
         registerPlugin(NativeSheetPlugin.class);
         registerPlugin(NativeChromePlugin.class);
+        // 系统文件选择器:原生半屏里点「添加文件」时 WebView 没有用户激活,<input type=file>.click() 会被 Chromium 静默丢掉。
+        registerPlugin(NativeFilePickerPlugin.class);
         // 重建(配置变更 / 进程被杀后从最近任务回来)会重放当初的启动 intent:点岛跳会话只在全新启动时认一次。
         LiveIslandPlugin.freshLaunch = savedInstanceState == null;
         super.onCreate(savedInstanceState);

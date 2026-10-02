@@ -8,6 +8,7 @@ import org.json.JSONObject
  */
 internal data class ChromeIcons(
     val left: NativeIconSpec?, val right: NativeIconSpec?, val more: NativeIconSpec?, val back: NativeIconSpec?,
+    val close: NativeIconSpec? = null,
 )
 
 internal data class ChromeState(
@@ -20,13 +21,15 @@ internal data class ChromeState(
     val back: String,
     val theme: SheetTheme,
     val icons: ChromeIcons,
+    /** Page mode: label of the optional trailing close (×) action; blank = no close button. */
+    val close: String = "",
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
     val visible get() = mode != Mode.HIDDEN
 
     companion object {
-        val ACTIONS = setOf("left", "right", "tabs", "more", "back")
+        val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close")
 
         fun parse(json: JSONObject): ChromeState {
             require(json.toString().length <= 64_000) { "Chrome state too large" }
@@ -39,7 +42,7 @@ internal data class ChromeState(
             val theme = NativeJson.theme(json.getJSONObject("theme"))
             val iconsJson = json.optJSONObject("icons")
             fun icon(key: String) = iconsJson?.optJSONObject(key)?.let(NativeJson::icon)
-            val icons = ChromeIcons(icon("left"), icon("right"), icon("more"), icon("back"))
+            val icons = ChromeIcons(icon("left"), icon("right"), icon("more"), icon("back"), icon("close"))
             return when (mode) {
                 Mode.SHELL -> {
                     val labels = json.getJSONObject("labels")
@@ -56,6 +59,7 @@ internal data class ChromeState(
                 Mode.PAGE -> ChromeState(
                     mode, NativeJson.str(json, "title", 512), left = false, right = false, tabCount = 0,
                     labels = emptyMap(), back = NativeJson.str(json, "back", 128), theme = theme, icons = icons,
+                    close = NativeJson.optStr(json, "close", 128),
                 )
                 Mode.HIDDEN -> ChromeState(mode, "", false, false, 0, emptyMap(), "", theme, icons)
             }
