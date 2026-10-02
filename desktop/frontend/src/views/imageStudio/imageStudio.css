@@ -6,8 +6,6 @@
 .ims .ims-primary, .ims-panel .ims-primary { background: var(--action-fill); color: var(--on-action); padding-inline: 12px; }
 .ims .ims-primary:hover, .ims-panel .ims-primary:hover { background: var(--action-fill-hover); color: var(--on-action); }
 .ims-header { display: flex; align-items: center; gap: 18px; padding: 12px 18px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
-.ims-brand { display: flex; align-items: center; gap: 8px; font-size: var(--ui-font-body, 13px); font-weight: 600; white-space: nowrap; }
-.ims-brand svg { color: var(--accent-ink); }
 .ims-project-picker { display: flex; align-items: center; min-width: 0; }
 .ims select { min-width: 0; max-width: 180px; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); border: 1px solid transparent; border-radius: var(--radius-sm); padding: 6px; }
 .ims-head-actions { display: flex; gap: 4px; margin-left: auto; align-items: center; }
@@ -78,7 +76,7 @@
 @keyframes ims-rotate { to { transform: rotate(360deg); } }
 @container (max-width: 620px) {
   .ims-header { padding: 10px; gap: 8px; }
-  .ims-brand span, .ims-head-actions .ims-primary span { display: none; }
+  .ims-head-actions .ims-primary span { display: none; }
   .ims select { max-width: 150px; }
   .ims-empty { padding: 28px 30px 72px; }
   .ims-toolbar { padding: 6px 8px; }

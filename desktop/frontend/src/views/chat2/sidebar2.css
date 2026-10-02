@@ -545,12 +545,19 @@
 /* 子视图(会话/文件/笔记)不自带底色 —— 直接用工作区视图所在面板的背景,切换时无「另一层」。 */
 .t2sw .t2s-side { background: transparent; }
 .t2sw-empty { padding: 18px 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
-/* 观感(用户指定):工作区视图整体加粗 + 前导图标放大到字号的 1.3 倍。
+/* 观感(用户指定):工作区视图前导图标放大到字号的 1.3 倍。
+ * 字重:原来「整体加粗」(7 月用户指定),10-02 用户改定 a5 —— 常规字重,只有选中行中等;入口行(新建笔记 / 新会话…)与分组名转灰,
+ * 整栏不再一起抢眼(DESIGN §3:常规文字常规字重,活动项中等)。
  * `*` 兜住 button/input(不继承 font)与子视图自带的 500/600;.t2s-vaultseg button 特异性(0,1,1)更高故单列。
  * ponytail: 图标只调笔记树的前导槽(.t2s-lead);标题正文里手打的 emoji 不跟(要跟得上
  * @font-face size-adjust + unicode-range 那套,等有人抱怨再说)。 */
-.t2sw, .t2sw * { font-weight: 600; }
-.t2sw .t2s-vaultseg button { font-weight: 600; }
+.t2sw, .t2sw * { font-weight: 400; }
+.t2sw .t2s-vaultseg button { font-weight: 400; }
+.t2sw :is(.t2s-srow, .t2s-special).active,
+.t2sw :is(.t2s-srow, .t2s-special).active * { font-weight: 500; }
+.t2sw .t2s-special:not(.active),
+.t2sw .t2s-group-name { color: var(--text-muted); }
+.t2sw .t2s-special:not(.active):hover { color: var(--text); }
 /* 图标放大档 = 本文件上方的 `.t2sw .t2s-side { --t2s-icon }`(三个 view 共用的那一个旋钮)。 */
 
 /* 内容级搜索命中(P3):两行行高 —— 标题 + 命中片段;右侧日期。 */

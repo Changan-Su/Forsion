@@ -208,13 +208,16 @@ async function main() {
       console.log(`SCREENSHOT command-panel ${shot}`)
     }
     await win.keyboard.press('Escape')
-    for (const [name, selector, pseudo] of [
-      ['输入框', '.hp-composer .t2c-card', '::before'],
-      ['Space 收纳架', '.hp-spaces', ''],
-    ]) {
-      const p = await probe(win, app, selector, pseudo)
-      check(`${name}真实采样壁纸`, p.difference > 4 && p.backdrop.includes('blur('), p)
-    }
+    const composer = await probe(win, app, '.hp-composer .t2c-card', '::before')
+    check('输入框真实采样壁纸', composer.difference > 4 && composer.backdrop.includes('blur('), composer)
+    // v8(10-02):生成舞台上 Space 收纳架不铺玻璃底,图标直接坐在舞台上;只有照片壁纸(data-wallpaper)才垫磨砂托住图标。
+    const bareDock = await probe(win, app, '.hp-spaces', '')
+    check('生成舞台上 Space 收纳架无玻璃底', bareDock.backdrop === 'none' && bareDock.difference < 1
+      && /rgba\(0, 0, 0, 0\)|transparent/.test(bareDock.background), bareDock)
+    const hadWallpaper = await win.evaluate(() => { const r = document.querySelector('.hp-root'); const v = r.dataset.wallpaper; r.dataset.wallpaper = 'true'; return v ?? null })
+    const photoDock = await probe(win, app, '.hp-spaces', '')
+    check('照片壁纸上 Space 收纳架真实采样壁纸', photoDock.difference > 4 && photoDock.backdrop.includes('blur('), photoDock)
+    await win.evaluate((v) => { const r = document.querySelector('.hp-root'); if (v == null) delete r.dataset.wallpaper; else r.dataset.wallpaper = v }, hadWallpaper)
     // 负对照:只隔断输入区祖先的 backdrop,blur 声明仍在,像素差必须归零。
     const blocker = await win.addStyleTag({ content: '.hp-composer { opacity: 0.999 !important; }' })
     const negative = await probe(win, app, '.hp-composer .t2c-card', '::before')
