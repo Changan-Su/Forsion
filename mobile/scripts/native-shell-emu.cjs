@@ -16,6 +16,14 @@
  * the plugin's name (toggle state), the plugin view running in the WebView (CSP 'unsafe-eval' + new Function), a cold
  * restart (force-stop + relaunch), uninstall from Settings removing files/plugins/<slug>; plus the native model sheet. Web page taps go through real touches (zoom-aware) — never element.click() for
  * anything that needs user activation.
+ * Review fixes (2026-10-02): a menu replaced by another keeps the second one open; a rewind request is withdrawn when
+ * its session goes away (pending stat or open sheet); the prompt field clips at 100,000 chars and still answers;
+ * oversized packages (declared / endless) are refused by the capped native download with nothing left in cache;
+ * reinstalling over an installed plugin leaves no .staging- / .backup- directory; the native back on a plugin's
+ * detail page returns to the plugin list. System file picker end to end: three fixture files are pushed to the
+ * device's Download/ and Documents/ (removed again at the end); picks arrive in the composer with the right bytes
+ * (content URIs streamed through https://localhost/_capacitor_content_/), the > 25 MB one is named in the toast and
+ * not attached, cancel changes nothing. Needs an English system language (DocumentsUI labels).
  *
  * Build + install (README「Android 原生外壳」): rm -rf dist && npm run build && npx cap sync android &&
  *   ./android/gradlew -p android :app:assembleDebug && adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -125,16 +133,45 @@ const marketCards = [{
 }]
 const pluginHits = [] // { url, ua }
 let pluginZip = null
+let pluginZipV2 = null // same plugin, version 1.0.1: the reinstall (update switch) check serves it
+// Oversized packages for the capped native download (ForsionMarketDownload / CappedDownload.kt, cap 25 MB): one declares
+// a Content-Length over the cap, one streams with no length until the client hangs up (hard stop: a broken cap must
+// not hang the run). Not listed in the fake market: the check calls window.tangu.marketInstall(id) itself.
+const BIG_DECLARED = 'e2e-too-large'
+const BIG_ENDLESS = 'e2e-endless'
+const BIG_DECLARED_BYTES = 30 * 1024 * 1024
+const BIG_ENDLESS_STOP = 512 * 1024 * 1024 // far past what the adb tunnel buffers before the client's hang-up reaches the host
+const bigServed = {} // url → { sent, closedEarly }
 const pluginServer = http.createServer((req, res) => {
   pluginHits.push({ url: req.url, ua: String(req.headers['user-agent'] || '') })
   if (req.url === `/${PLUGIN_ID}.zip` && pluginZip) {
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': pluginZip.length })
     return res.end(pluginZip)
   }
+  if (req.url === `/${BIG_DECLARED}.zip` || req.url === `/${BIG_ENDLESS}.zip`) {
+    const declared = req.url === `/${BIG_DECLARED}.zip`
+    const limit = declared ? BIG_DECLARED_BYTES : BIG_ENDLESS_STOP
+    res.writeHead(200, { 'Content-Type': 'application/zip', ...(declared ? { 'Content-Length': limit } : {}) })
+    const chunk = Buffer.alloc(256 * 1024, 0x50)
+    const state = (bigServed[req.url] = { sent: 0, closedEarly: false })
+    let open = true
+    res.on('close', () => { open = false; state.closedEarly = state.sent < limit })
+    const pump = () => {
+      while (open && state.sent < limit) {
+        state.sent += chunk.length
+        if (!res.write(chunk)) return res.once('drain', pump)
+      }
+      if (open) res.end()
+    }
+    return pump()
+  }
   res.writeHead(404); res.end('no')
 })
 
 const stubLog = [] // "METHOD /path body"
+// Rewind stat (GET …/checkpoints): answered with an empty list; while `hold.checkpoints` is set the answers are parked
+// in `hold.release` instead (the "user leaves while the stat is still loading" check lets them go later).
+const hold = { checkpoints: false, release: [] }
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url)
@@ -169,6 +206,13 @@ function installStub(cdp) {
       const card = marketCards.find((c) => c.id === decodeURIComponent(mk[1]))
       if (card && mk[2]) return json({ type: card.type, installSlug: card.installSlug, source: 'zip', downloadUrl: `${PLUGIN_HOST}/${card.id}.zip` })
       if (card) return json({ ...card, readme: `# ${card.name}\n\nA harness fixture: one view, two commands.` })
+      const big = mk[1] && [BIG_DECLARED, BIG_ENDLESS].find((id) => id === decodeURIComponent(mk[1]))
+      if (big && mk[2]) return json({ type: 'amadeus-plugin', installSlug: big, source: 'zip', downloadUrl: `${PLUGIN_HOST}/${big}.zip` })
+    }
+    if (/\/agent\/sessions\/[^/]+\/checkpoints$/.test(p) && m === 'GET') {
+      const answer = () => json({ checkpoints: [] })
+      if (hold.checkpoints) { hold.release.push(answer); return }
+      return answer()
     }
     const cfg = p.match(/\/agent\/sessions\/([^/]+)\/config$/)
     if (cfg) {
@@ -203,14 +247,31 @@ const dom = {
   mode: 'document.documentElement.dataset.mode',
 }
 const ui = () => h.nodes(OUT)
-const resumed = () => /topResumedActivity=.*com\.forsion\.tangu\//.test(h.adb('shell', 'dumpsys', 'activity', 'activities'))
+// The activity class keeps its name under any applicationId (`-PnativePreview` installs com.forsion.tangu.nativepreview):
+// PKG=com.forsion.tangu.nativepreview runs the same harness against the side-by-side preview package.
+const ACTIVITY = `${PKG}/com.forsion.tangu.MainActivity`
+const resumed = () => h.adb('shell', 'dumpsys', 'activity', 'activities').split('\n').some((l) => l.includes('topResumedActivity=') && l.includes(` ${PKG}/`))
 const webViewNode = (list) => list.find((n) => n.class === 'android.webkit.WebView')
 const sheetOpen = (list) => !!h.byId(list, 'nativeSheet.sheet')
-async function waitSheet(open = true, timeout = 6000) {
-  const r = await h.waitNodes((l) => (sheetOpen(l) === open ? l : null), { timeout })
-  assert.ok(r.hit, open ? 'native sheet did not open' : 'native sheet did not close')
+/** Poll uiautomator until the native sheet is (not) there. One dump normally takes ~1 s, but uiautomator first waits
+ *  for the UI to go idle and a busy WebView can hold a single dump for several seconds: the window is generous, and a
+ *  timeout reports how many dumps fit in it (1–2 dumps = the dumps were slow, not the sheet). */
+async function waitSheet(open = true, timeout = 12000) {
+  const start = Date.now()
+  const took = []
+  let list = []
+  let hit = false
+  while (!hit && Date.now() - start < timeout) {
+    const t = Date.now()
+    list = h.nodes(OUT)
+    took.push(Date.now() - t)
+    hit = sheetOpen(list) === open
+    if (!hit) await h.pause(250)
+  }
+  assert.ok(hit, `native sheet did not ${open ? 'open' : 'close'} (${took.length} uiautomator dumps in ${Date.now() - start} ms: ${took.join(', ')} ms)`)
+  if (Date.now() - start > 6000) console.log(`  (slow sheet wait: ${Date.now() - start} ms over ${took.length} dumps: ${took.join(', ')} ms)`)
   await h.pause(open ? 450 : 200) // let the slide-in settle before screenshots / taps
-  return open ? ui() : r.nodes
+  return open ? ui() : list
 }
 async function tapId(id, list) {
   const n = h.byId(list || ui(), id)
@@ -226,6 +287,8 @@ const descOf = (list, id) => {
 const ids = (list, prefix = 'nativeSheet.item.') => h.byIdPrefix(list, prefix).map((n) => n['resource-id'].slice(prefix.length))
 const hasCjk = (list) => list.some((n) => /[一-鿿]/.test(`${n.text || ''}${n['content-desc'] || ''}`))
 const textOf = (list, id) => h.byId(list, id)?.text || ''
+/** Visible label of a sheet row (merged Compose rows keep their text on child nodes). */
+const rowLabel = (list, id) => { const n = h.byId(list, id); return n ? (n.text || list.filter((c) => within(n, c) && c.text).map((c) => c.text).join(' ')) : '' }
 /** Clear a prefilled native text field and type ASCII (adb `input text` cannot type spaces: use %s). */
 function retype(text) {
   h.adb('shell', 'input', 'keyevent', ...Array(40).fill('67'))
@@ -239,7 +302,7 @@ const tabCountText = (list) => {
 ;(async () => {
   assert.ok(h.adb('shell', 'pm', 'path', PKG).includes('package:'), `${PKG} is not installed`)
   h.adb('shell', 'am', 'force-stop', PKG)
-  h.adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
+  h.adb('shell', 'am', 'start', '-n', ACTIVITY)
   let cdp = await h.connect(PKG)
   await cdp.send('Page.enable')
   // Remember what we overwrite; restored at the end.
@@ -265,7 +328,27 @@ const tabCountText = (list) => {
     z.file(`${PLUGIN_ID}-main/manifest.json`, JSON.stringify({ id: PLUGIN_ID, name: 'E2E Native Hello', version: '1.0.0', apiVersion: 1 }))
     z.file(`${PLUGIN_ID}-main/main.js`, PLUGIN_MAIN)
     pluginZip = Buffer.from(await z.generateAsync({ type: 'uint8array' }))
+    z.file(`${PLUGIN_ID}-main/manifest.json`, JSON.stringify({ id: PLUGIN_ID, name: 'E2E Native Hello', version: '1.0.1', apiVersion: 1 }))
+    pluginZipV2 = Buffer.from(await z.generateAsync({ type: 'uint8array' }))
   }
+  // system file picker fixtures: generated here, pushed to shared storage, removed again at the end
+  const crypto = require('node:crypto')
+  const PICK = {
+    small: { name: 'e2e-pick-small.txt', dir: 'Download', data: Buffer.from('Forsion native picker fixture: small\n') },
+    mid: { name: 'e2e-pick-1m.bin', dir: 'Documents', data: crypto.randomBytes(1024 * 1024) },
+    big: { name: 'e2e-pick-big.bin', dir: 'Download', data: crypto.randomBytes(26 * 1024 * 1024) }, // past the 25 MB per-file cap
+  }
+  const pickTmp = path.join(OUT, 'pick-fixtures')
+  const pushPickFixtures = () => {
+    fs.mkdirSync(pickTmp, { recursive: true })
+    for (const f of Object.values(PICK)) {
+      fs.writeFileSync(path.join(pickTmp, f.name), f.data)
+      f.sha256 = crypto.createHash('sha256').update(f.data).digest('hex')
+      h.adb('push', path.join(pickTmp, f.name), `/sdcard/${f.dir}/${f.name}`)
+    }
+    fs.rmSync(pickTmp, { recursive: true, force: true })
+  }
+  const removePickFixtures = () => { for (const f of Object.values(PICK)) { try { h.adb('shell', 'rm', '-f', `/sdcard/${f.dir}/${f.name}`) } catch { /* not there */ } } }
   await new Promise((resolve, reject) => { pluginServer.once('error', reject); pluginServer.listen(PLUGIN_PORT, '127.0.0.1', resolve) })
   if (!process.env.PLUGIN_HOST) h.adb('reverse', `tcp:${PLUGIN_PORT}`, `tcp:${PLUGIN_PORT}`)
   cleanPluginFiles() // leftovers of an aborted earlier run
@@ -273,7 +356,7 @@ const tabCountText = (list) => {
     await cdp.send('Page.reload', { ignoreCache: true })
     await h.pause(800)
     assert.ok(await h.waitPage(cdp, dom.shellUp, 20000), 'shell did not mount after reload')
-    h.adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`) // back to front if anything else took it
+    h.adb('shell', 'am', 'start', '-n', ACTIVITY) // back to front if anything else took it
     const r = await h.waitNodes((l) => h.byId(l, 'nativeChrome.bar'), { timeout: 10000 })
     assert.ok(r.hit, 'native bar did not appear')
     await h.pause(600)
@@ -527,6 +610,31 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `!!${rowExpr('E2E Renamed Two')}`, 5000), 'row title did not update')
   })
 
+  await check('replaced menu: a second native menu opened while one is up stays open and is live (the withdrawn request closes nothing)', async () => {
+    await tanguDrawer()
+    await tapEl(`${rowExpr('E2E Session One')}.querySelector('.t2s-srow-menu')`)
+    let list = await waitSheet(true)
+    assert.equal(textOf(list, 'nativeSheet.title'), 'E2E Session One')
+    // The second menu while the first sheet is still up. A finger cannot reach the page under the modal sheet, so this
+    // one is a JS click: the same state change (setMenu) a second trigger would cause.
+    await cdp.eval(`(${rowExpr('Two')}.querySelector('.t2s-srow-menu').click(), true)`)
+    const second = (l) => sheetOpen(l) && /Two$/.test(textOf(l, 'nativeSheet.title'))
+    const r = await h.waitNodes((l) => (second(l) ? l : null), { timeout: 6000 })
+    assert.ok(r.hit, `second menu did not replace the first (title=${textOf(r.nodes, 'nativeSheet.title')}, open=${sheetOpen(r.nodes)})`)
+    await h.pause(2000) // the first request has been withdrawn by now: its onClose must not have closed this one
+    list = ui()
+    assert.ok(second(list), `second menu was closed by the withdrawn first request (open=${sheetOpen(list)}, title=${textOf(list, 'nativeSheet.title')})`)
+    assert.equal(await cdp.eval("!!document.querySelector('.ctx-menu')"), false, 'web menu rendered as well')
+    // …and it answers for ITS session: rename opens the prompt prefilled with the second session's title
+    await tapId('nativeSheet.item.rename', list)
+    list = await waitSheet(true)
+    assert.match(textOf(list, 'nativeSheet.prompt.field'), /Two$/, 'the surviving menu is not bound to the second session')
+    h.key(4) // IME first
+    await h.pause(400)
+    if (sheetOpen(ui())) h.key(4)
+    await waitSheet(false)
+  })
+
   await check('Orbits row ⋯ (pin round-trip) and "+" menus open natively', async () => {
     await tanguDrawer()
     const tail = `[...document.querySelectorAll('.mb-drawer--left .t2o-tail')][0]`
@@ -608,6 +716,42 @@ const tabCountText = (list) => {
     assert.ok(!stubLog.slice(sent).some((l) => /^(POST|PATCH|DELETE|PUT) /.test(l) && /rewind|truncate|messages/.test(l)), 'cancel wrote something')
   })
 
+  await check('rewind: leaving the session withdraws the request — a pending stat never opens a sheet, an open sheet is dismissed, nothing is written', async () => {
+    const btn = `document.querySelector('[data-act="rewind"]')`
+    const wrote = (since) => stubLog.slice(since).filter((l) => /^(POST|PATCH|DELETE|PUT) /.test(l) && /rewind|truncate|checkpoints|messages/.test(l))
+    await openChat('E2E Session One')
+    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'rewind button missing on the fixture user message')
+    // (1) the checkpoint stat is still loading when the user switches session
+    hold.checkpoints = true
+    let sent = stubLog.length
+    try {
+      await tapEl(btn)
+      assert.ok(await waitLog(sent, (l) => /^GET \S+\/e2e-s1\/checkpoints/.test(l), 6000), 'checkpoint stat was not requested')
+      assert.ok(!sheetOpen(ui()), 'sheet opened before the stat answered')
+      await openChat('Two') // drawer → the other session: the message that asked is gone
+    } finally {
+      hold.checkpoints = false
+      for (const go of hold.release.splice(0)) go()
+    }
+    const late = await h.waitNodes((l) => (sheetOpen(l) ? l : null), { timeout: 3500 })
+    assert.ok(!late.hit, 'the rewind sheet opened for a session the user already left')
+    assert.equal(await cdp.eval("!!document.querySelector('.rewind-menu')"), false, 'web rewind menu opened instead')
+    assert.deepEqual(wrote(sent), [])
+    // (2) the sheet is open and the session changes underneath (no key press: only the abort can close it)
+    await openChat('E2E Session One')
+    assert.ok(await h.waitPage(cdp, `!!${btn}`, 4000), 'rewind button missing after coming back')
+    sent = stubLog.length
+    await tapEl(btn)
+    const list = await waitSheet(true, 8000)
+    assert.ok(ids(list).includes('conversation'), `rewind items: ${ids(list)}`)
+    await cdp.eval(`(${rowExpr('Two')}.click(), true)`)
+    await waitSheet(false, 6000)
+    assert.ok(await h.waitPage(cdp, `!${btn}`, 5000), 'did not switch to the other session')
+    await h.pause(600)
+    assert.deepEqual(wrote(sent), [])
+    assert.ok(resumed(), 'left the app')
+  })
+
   await check('add menu: nested conversation page with native search; Files opens the system picker', async () => {
     await openChat('E2E Session One')
     await tapEl("document.querySelector('.add-pill-btn')")
@@ -651,6 +795,129 @@ const tabCountText = (list) => {
     assert.ok((await h.waitNodes(() => resumed(), { timeout: 6000 })).hit, 'did not return to the app')
   })
 
+  await check('files: system picker → composer (content URIs streamed through the local server): right name + bytes, > 25 MB named in the toast and not attached, cancel is a no-op', async () => {
+    pushPickFixtures()
+    const top = () => h.adb('shell', 'dumpsys', 'activity', 'activities').match(/topResumedActivity=.*/)?.[0] || ''
+    const title = (l, text) => l.find((n) => n['resource-id'] === 'android:id/title' && n.text === text)
+    const DEVICE_ROOT = h.adb('shell', 'getprop', 'ro.product.model').trim() // the raw-storage root is labelled with the model name
+    /** Composer state (attachments + workspace files) read from the React fiber of a chip: name, declared size, decoded bytes, sha256. */
+    const composerFiles = `(async () => { const el = document.querySelector('.t2c-chiprow .attach-chip'); if (!el) return []
+      const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
+      for (let f = el[key]; f; f = f.return) {
+        const found = []
+        for (let st = f.memoizedState; st && typeof st === 'object' && 'next' in st; st = st.next) {
+          const v = st.memoizedState
+          if (Array.isArray(v) && v.length && v.every((a) => a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number')) found.push(...v)
+        }
+        if (found.length) return Promise.all(found.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
+          const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
+          return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } }))
+      }
+      return null })()`
+    const want = (f) => ({ name: f.name, size: f.data.length, bytes: f.data.length, sha256: f.sha256 })
+    const chipNames = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
+    const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
+    // every local-server answer for a picked document (a 404 here = "Unable to open content URL" in logcat)
+    const served = []
+    await cdp.send('Network.enable')
+    cdp.on('Network.responseReceived', (ev) => { if (ev.response.url.includes('/_capacitor_content_/')) served.push(ev.response.status) })
+    h.adb('logcat', '-c')
+
+    /** Add sheet → Files → the system picker is in front. */
+    async function openPicker() {
+      await tapEl("document.querySelector('.add-pill-btn')")
+      await tapId('nativeSheet.item.files', await waitSheet(true))
+      assert.ok((await h.waitNodes(() => /documentsui/i.test(top()), { timeout: 8000 })).hit, 'system document picker did not open')
+      await h.pause(700)
+    }
+    /** Roots drawer → a root by its label (DocumentsUI remembers the last directory per caller: always start from a root). */
+    async function toRoot(label) {
+      const open = (await h.waitNodes((l) => l.find((n) => n['content-desc'] === 'Show roots'), { timeout: 6000 })).hit
+      assert.ok(open, 'picker: "Show roots" not found (the system language must be English)')
+      h.tapNode(open)
+      const root = (await h.waitNodes((l) => (l.some((n) => n.text === 'Open from') ? title(l, label) : null), { timeout: 6000 })).hit
+      assert.ok(root, `picker: root "${label}" not listed`)
+      h.tapNode(root)
+      await h.pause(1200)
+    }
+    const entry = async (text) => {
+      const n = (await h.waitNodes((l) => (l.some((x) => x.text === 'Open from') ? null : title(l, text)), { timeout: 8000 })).hit
+      assert.ok(n, `picker: "${text}" not listed`)
+      return n
+    }
+    const backInApp = async () => assert.ok((await h.waitNodes(() => resumed(), { timeout: 15000 })).hit, 'did not return to the app (picker hung?)')
+    const settled = async (count) => {
+      const end = Date.now() + 20000
+      let got = null
+      while (Date.now() < end) { got = await cdp.eval(composerFiles); if (got && got.length === count) return got; await h.pause(400) }
+      return got
+    }
+
+    await openChat('E2E Session One')
+    assert.deepEqual(await cdp.eval(chipNames), [], 'precondition: composer already has attachments')
+
+    // cancel first: nothing is attached, and the pick promise settles (the next pick works)
+    await openPicker()
+    h.key(4)
+    await backInApp()
+    await h.pause(800)
+    assert.deepEqual(await cdp.eval(chipNames), [])
+    assert.equal(await cdp.eval(toasts), '', 'cancel showed a toast')
+
+    // 1) small text file from Downloads
+    await openPicker()
+    await toRoot('Downloads')
+    h.tapNode(await entry(PICK.small.name))
+    await backInApp()
+    assert.deepEqual(await settled(1), [want(PICK.small)])
+
+    // 2) 1 MB binary from <device>/Documents
+    await openPicker()
+    await toRoot(DEVICE_ROOT)
+    h.tapNode(await entry('Documents'))
+    await h.pause(1000)
+    h.tapNode(await entry(PICK.mid.name))
+    await backInApp()
+    assert.deepEqual(await settled(2), [want(PICK.small), want(PICK.mid)])
+    assert.deepEqual(await cdp.eval(chipNames), [PICK.small.name, PICK.mid.name])
+    shot('23b-files-attached')
+
+    // 3) the > 25 MB file alone: refused, named in the toast, nothing added
+    await openPicker()
+    await toRoot('Downloads')
+    h.tapNode(await entry(PICK.big.name))
+    await backInApp()
+    const toast = await h.waitPage(cdp, `(() => { const t = ${toasts}; return t.includes(${JSON.stringify(PICK.big.name)}) ? t : null })()`, 10000)
+    assert.ok(toast, `no toast named the skipped file (toasts: ${await cdp.eval(toasts)})`)
+    console.log('  skipped toast:', toast)
+    shot('23c-files-skipped-toast')
+    assert.deepEqual((await settled(2)).map((f) => f.name), [PICK.small.name, PICK.mid.name], 'the oversized file was attached')
+
+    // 4) multi-select (clipData path): small + big in one go → small attached again, big skipped
+    await openPicker()
+    await toRoot('Downloads')
+    h.longPress(await entry(PICK.small.name))
+    await h.pause(800)
+    h.tapNode(await entry(PICK.big.name))
+    const select = (await h.waitNodes((l) => h.byId(l, 'com.google.android.documentsui:id/action_menu_select'), { timeout: 5000 })).hit
+    assert.ok(select, 'picker: multi-select "Select" action missing')
+    h.tapNode(select)
+    await backInApp()
+    assert.deepEqual(await settled(3), [want(PICK.small), want(PICK.mid), want(PICK.small)])
+
+    const log = h.adb('logcat', '-d').split('\n').filter((l) => /Unable to open content URL/.test(l))
+    assert.deepEqual(log, [], 'local server could not open a picked content URL')
+    console.log(`  _capacitor_content_ responses: ${JSON.stringify(served)}`)
+    assert.ok(served.length >= 3 && served.every((x) => x === 200), `content fetches: ${JSON.stringify(served)}`)
+    await cdp.send('Network.disable')
+  })
+  // Leave a clean stage whatever the check's outcome: no attachments in the composer, and no error toast left on
+  // screen (they stay up for a while and cover the top of the drawer, where the next check taps "new chat").
+  try {
+    await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+      const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+  } catch { /* page reloading */ }
+
   await check('project selector (new chat): native list, pick a cloud project, add-cloud opens a prompt', async () => {
     await tanguDrawer()
     await tapEl(`document.querySelector('.mb-drawer--left [data-act="new-chat"]')`)
@@ -687,6 +954,9 @@ const tabCountText = (list) => {
     const list = await waitSheet(true)
     assert.ok(h.byId(list, 'nativeSheet.item.rb-mode'), 'theme mode command missing')
     assert.ok(!h.byId(list, 'nativeSheet.item.rb-settings') && !h.byId(list, 'nativeSheet.item.rb-account'), 'account/settings must stay in the drawer')
+    // a phone has no ⌘K: the desktop tooltip's shortcut hint is dropped from the row
+    const palette = rowLabel(list, 'nativeSheet.item.rb-cmd')
+    assert.ok(palette && !/[⌘(（]/.test(palette), `command palette row: "${palette}"`)
     shot('05-more-sheet-light')
     await tapId('nativeSheet.item.rb-mode', list)
     await waitSheet(false)
@@ -811,6 +1081,33 @@ const tabCountText = (list) => {
     assert.ok(resumed())
   })
 
+  await check('prompt: input past 100,000 chars is clipped in the field and confirm still returns text (not a silent cancel)', async () => {
+    const MAX = 100000
+    // 60,000 chars on the clipboard, pasted twice after a 4-char seed. Written while the WebView has focus (no sheet up).
+    const wrote = await cdp.send('Runtime.evaluate', { expression: "navigator.clipboard.writeText('x'.repeat(60000)).then(() => 'ok', (e) => String(e))", awaitPromise: true, returnByValue: true, userGesture: true })
+    assert.equal(wrote.result?.value, 'ok', 'could not put the long text on the clipboard')
+    const theme = await cdp.eval(`(() => { const d = document.documentElement.dataset.mode === 'dark'; return { dark: d, background: d ? '#FF1E2022' : '#FFF8F7F6', surface: d ? '#FF26292B' : '#FFFFFFFF', text: d ? '#FFECEEF0' : '#FF202124', muted: '#FF8A8D93', border: '#1F808080', accent: '#FF4D8794', onAccent: '#FFFFFFFF', danger: '#FFD04040' } })()`)
+    await cdp.eval(`(window.__e2ePrompt = null, Capacitor.Plugins.NativeSheet.present(${JSON.stringify({ requestId: 'e2e-prompt-clamp', kind: 'prompt', title: 'E2E clamp', initial: 'seed', confirm: 'OK', cancel: 'Cancel', theme })}).then((r) => (window.__e2ePrompt = { cancelled: !!r.cancelled, length: r.result ? r.result.text.length : -1, head: r.result ? r.result.text.slice(0, 8) : '', tail: r.result ? r.result.text.slice(-4) : '' }), (e) => (window.__e2ePrompt = { error: String(e && e.message || e) })), true)`)
+    let list = await waitSheet(true)
+    assert.equal(textOf(list, 'nativeSheet.prompt.field'), 'seed')
+    await tapId('nativeSheet.prompt.field', list)
+    await h.pause(400)
+    h.key(123) // MOVE_END
+    h.key(279) // PASTE
+    await h.pause(1500)
+    h.key(279)
+    await h.pause(2500)
+    list = ui()
+    // Only proves the paste arrived: accessibility text is itself cut at 100,000 chars, so it reads the same with or
+    // without the clip. The answer below is what tells them apart (unclipped input used to come back as a cancel).
+    const held = textOf(list, 'nativeSheet.prompt.field').length
+    assert.ok(held >= MAX, `paste did not arrive: the field holds ${held} chars`)
+    await tapId('nativeSheet.prompt.ok', list)
+    const out = await h.waitPage(cdp, 'window.__e2ePrompt', 8000)
+    assert.deepEqual(out, { cancelled: false, length: MAX, head: 'seedxxxx', tail: 'xxxx' })
+    await waitSheet(false)
+  })
+
   await check('page mode (back + title) renders and reports back; shell state returns', async () => {
     const theme = await cdp.eval(`({ dark: true, background: '#FF1E2022', surface: '#FF26292B', text: '#FFECEEF0', muted: '#FF8A8D93', border: '#1F808080', accent: '#FF4D8794', onAccent: '#FFFFFFFF', danger: '#FFD04040' })`)
     await cdp.eval(`(window.__e2eActions = [], Capacitor.Plugins.NativeChrome.addListener('action', (e) => window.__e2eActions.push(e.action)), true)`)
@@ -924,6 +1221,65 @@ const tabCountText = (list) => {
     await closeMarket()
   })
 
+  await check('plugins: oversized downloads (declared > 25 MB, endless stream) are refused by the native capped download; cache and files/plugins stay clean', async () => {
+    const cacheLeft = () => runAs('ls', '-a', 'cache').split(/\s+/).filter((n) => n.startsWith('forsion-market-'))
+    assert.deepEqual(cacheLeft(), [], 'precondition: temp files of an earlier download still in cache')
+    for (const id of [BIG_DECLARED, BIG_ENDLESS]) {
+      const hits = pluginHits.length
+      // the same entry the market UI calls (marketService → window.tangu.marketInstall); not awaited: the endless one runs to the cap
+      await cdp.eval(`(window.__e2eBig = null, window.tangu.marketInstall(${JSON.stringify(id)}).then((r) => (window.__e2eBig = { ok: true }), (e) => (window.__e2eBig = { ok: false, error: String(e && e.message || e) })), true)`)
+      // while it runs, watch the temp file: the disk must never hold more than the cap
+      let out = null
+      let peak = 0
+      for (const end = Date.now() + 90000; Date.now() < end && !out;) {
+        for (const m of runAs('ls', '-l', 'cache').matchAll(/\s(\d+)\s+\d{4}-\d\d-\d\d\s+\d\d:\d\d\s+forsion-market-/g)) peak = Math.max(peak, Number(m[1]))
+        out = await cdp.eval('window.__e2eBig')
+      }
+      const left = cacheLeft() // right away: MarketDownloadPlugin.load() sweeps leftovers on the next launch, which would hide a leak
+      const served = bigServed[`/${id}.zip`]
+      const mb = (n) => Math.round(n / 1024 / 1024 * 10) / 10
+      console.log(`  ${id}: ${JSON.stringify(out)} · temp file peak ${mb(peak)} MB · host wrote ${served ? mb(served.sent) : '?'} MB before the hang-up (tunnel buffers included)`)
+      assert.ok(peak <= 25 * 1024 * 1024, `${id}: the temp file grew to ${peak} bytes, past the 25 MB cap`)
+      assert.ok(out && out.ok === false && /too large/.test(out.error), `${id}: expected the size error, got ${JSON.stringify(out)}`)
+      const dl = pluginHits.slice(hits).find((x) => x.url === `/${id}.zip`)
+      assert.ok(dl && !/Mozilla|Chrome/.test(dl.ua), `${id}: not fetched by the native downloader (${JSON.stringify(pluginHits.slice(hits))})`)
+      assert.deepEqual(left, [], `${id}: temp file left in the app cache`)
+      assert.match(runAs('ls', `files/plugins/${id}`), /No such file/, `${id}: something was written under files/plugins`)
+    }
+    // the endless stream must have been cut by the client around the cap, not run to the host's hard stop
+    await h.pause(500)
+    const endless = bigServed[`/${BIG_ENDLESS}.zip`]
+    assert.ok(endless.closedEarly && endless.sent < BIG_ENDLESS_STOP, `endless stream was not aborted by the client (sent ${endless.sent})`)
+  })
+
+  await check('plugins: reinstall over the installed plugin (update switch on the real filesystem): new version live, no .staging- / .backup- left', async () => {
+    const version = () => { try { return JSON.parse(runAs('cat', `files/plugins/${PLUGIN_ID}/manifest.json`)).version } catch { return null } }
+    assert.equal(version(), '1.0.0', 'precondition: the fixture plugin is installed')
+    const v1 = pluginZip
+    pluginZip = pluginZipV2
+    try {
+      await openMarket('zh')
+      const hits = pluginHits.length
+      await tapEl(`document.querySelector('[data-market-install="${PLUGIN_ID}"]')`) // installed card: the button reads "reinstall"
+      const end = Date.now() + 30000
+      while (Date.now() < end && version() !== '1.0.1') await h.pause(500)
+      assert.ok(pluginHits.slice(hits).some((x) => x.url === `/${PLUGIN_ID}.zip`), 'reinstall did not download the package again')
+      assert.equal(version(), '1.0.1', 'the installed directory was not switched to the new version')
+      const notice = await h.waitPage(cdp, "document.querySelector('[data-market-notice]')?.dataset.marketNotice", 20000)
+      assert.equal(notice, 'ok', `reinstall notice: ${await cdp.eval("document.querySelector('[data-market-notice]')?.innerText")}`)
+      const names = runAs('ls', '-a', 'files/plugins').split(/\s+/).filter((n) => n && n !== '.' && n !== '..')
+      console.log('  files/plugins after the switch:', names.join(' '))
+      assert.deepEqual(names.filter((n) => n.startsWith('.staging-') || n.startsWith('.backup-')), [], 'staging / backup directory left behind')
+      const files = pluginFiles()
+      assert.ok(files.includes('manifest.json') && files.includes('main.js'), `files/plugins/${PLUGIN_ID}: ${files.join(' ')}`)
+      assert.equal(await cdp.eval(`(async () => (await window.amadeus.listPlugins()).find((p) => p.id === '${PLUGIN_ID}')?.version ?? null)()`), '1.0.1', 'host does not list the new version')
+      assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mk-featured-copy h2')", 20000), 'market list did not come back after the reinstall')
+      await closeMarket()
+    } finally {
+      pluginZip = v1
+    }
+  })
+
   await check('plugins: commands listed in the native ⋯ under the plugin (toggle state shown); one opens the plugin view', async () => {
     await tapId('nativeChrome.more')
     let list = await waitSheet(true, SLOW)
@@ -950,10 +1306,31 @@ const tabCountText = (list) => {
     await modelSheet('p06-model-sheet-light')
   })
 
+  /** Settings → Plugins → Forsion plugins as a native page (the card list that painted scrambled under software GL). */
+  async function settingsPluginsPage(name) {
+    await openDrawer()
+    await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    await h.pause(400)
+    if (!(await cdp.eval(`!!document.querySelector('[data-settings-sub="pl-forsion"]')`))) await tapEl(`document.querySelector('[data-settings-tab="amadeus-plugins"]')`)
+    await tapEl(`document.querySelector('[data-settings-sub="pl-forsion"]')`)
+    assert.ok(await h.waitPage(cdp, `!document.querySelector('.settings-page--mobile-menu') && !!document.querySelector('[data-plugin-id="${PLUGIN_ID}"]')`, 8000), 'installed plugin not listed in Settings → Forsion plugins')
+    const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 5000 })
+    assert.ok(r.hit, 'plugins page: native bar without ×')
+    await h.pause(800)
+    shot(name)
+    await tapId('nativeChrome.close', r.nodes)
+    assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 5000), '× did not close settings')
+    await closeDrawer()
+  }
+  await check('Settings → Forsion plugins lists the installed plugin under the native bar (light)', async () => {
+    await settingsPluginsPage('p08-settings-plugins-light')
+  })
+
   await check('plugins: survive a cold restart (force-stop + relaunch): files, enabled state and data persist', async () => {
     cdp.close()
     h.adb('shell', 'am', 'force-stop', PKG)
-    h.adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
+    h.adb('shell', 'am', 'start', '-n', ACTIVITY)
     cdp = await h.connect(PKG)
     await cdp.send('Page.enable')
     await installStub(cdp)
@@ -1016,6 +1393,42 @@ const tabCountText = (list) => {
     await modelSheet('p14-model-sheet-dark')
   })
 
+  await check('dark: market detail, project sheet, prompt with keyboard, Settings → Forsion plugins', async () => {
+    assert.equal(await cdp.eval(dom.mode), 'dark')
+    await openMarket('zh')
+    await tapEl("document.querySelector('.mk-featured-copy h2')")
+    let r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === 'E2E Native Hello' && h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 6000 })
+    assert.ok(r.hit, `detail: title + × expected (title=${textOf(r.nodes, 'nativeChrome.title')})`)
+    await h.pause(500)
+    shot('p15-market-detail-dark')
+    await tapId('nativeChrome.close', r.nodes)
+    assert.ok(await h.waitPage(cdp, `!(${marketOpen})`, 5000), '× did not leave the market from the detail page')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return after the market')
+    // project sheet
+    await tanguDrawer()
+    await tapEl(`document.querySelector('.mb-drawer--left [data-act="new-chat"]')`)
+    assert.ok(await h.waitPage(cdp, `!(${drawerOpen}) && !!document.querySelector('.project-pill')`, 6000), 'new chat composer has no project pill')
+    await h.pause(600)
+    await tapEl("document.querySelector('.project-pill')")
+    await waitSheet(true)
+    shot('p16-project-sheet-dark')
+    h.key(4)
+    await waitSheet(false)
+    // prompt with the keyboard up (cancelled: nothing is created)
+    await goHome()
+    await cdp.eval(`(() => { const b = document.querySelector('.hp-spaces-actions button'); if (!b) throw new Error('new folder button'); b.click(); return true })()`)
+    const list = await waitSheet(true)
+    assert.ok(h.byId(list, 'nativeSheet.prompt.field'), 'prompt field missing')
+    await h.pause(600)
+    shot('p17-prompt-keyboard-dark')
+    h.key(4) // first back may only hide the IME
+    await h.pause(400)
+    if (sheetOpen(ui())) h.key(4)
+    await waitSheet(false)
+    try { await cdp.eval("(document.querySelector('.hp-organizer-stage')?.click(), true)") } catch { /* no organizer layer */ }
+    await settingsPluginsPage('p18-settings-plugins-dark')
+  })
+
   await check('English labels arrive from shared i18n (bar + sheets)', async () => {
     await seed('en')
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
@@ -1076,7 +1489,19 @@ const tabCountText = (list) => {
     await h.pause(3000) // a second shot later: tells a transient raster glitch from a layout defect
     shot('p31b-settings-plugins-en-3s')
     await tapEl(`${row}.querySelector('b')`) // the name (not the on/off checkbox)
-    assert.ok(await h.waitPage(cdp, "!!document.querySelector('[data-plugin-uninstall]')", 6000), 'plugin detail (uninstall button) did not open')
+    const detailOpen = "!!document.querySelector('[data-plugin-uninstall]')"
+    const onList = `!document.querySelector('[data-plugin-detail]') && !!${row} && ${settingsOpen} && !document.querySelector('.settings-page--mobile-menu')`
+    assert.ok(await h.waitPage(cdp, detailOpen, 6000), 'plugin detail (uninstall button) did not open')
+    // the native bar owns "back" here: the web "Back to list" row is hidden, native back and system back return to the list
+    assert.equal(await cdp.eval("getComputedStyle(document.querySelector('[data-plugin-back-row]')).display"), 'none', 'web "Back to list" still shown under the native bar')
+    await tapId('nativeChrome.back')
+    assert.ok(await h.waitPage(cdp, onList, 5000), 'native back from the plugin detail did not return to the plugin list')
+    await tapEl(`${row}.querySelector('b')`)
+    assert.ok(await h.waitPage(cdp, detailOpen, 6000), 'plugin detail did not reopen')
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, onList, 5000), 'system back from the plugin detail did not return to the plugin list')
+    await tapEl(`${row}.querySelector('b')`)
+    assert.ok(await h.waitPage(cdp, detailOpen, 6000), 'plugin detail did not reopen')
     await h.pause(400)
     shot('p32-plugin-detail-en')
     await tapEl("document.querySelector('[data-plugin-uninstall]')")
@@ -1110,6 +1535,7 @@ const tabCountText = (list) => {
     await cdp.send('Page.reload')
   } catch (e) { console.log('restore failed:', e.message) }
   cleanPluginFiles()
+  removePickFixtures()
   if (!process.env.PLUGIN_HOST) try { h.adb('reverse', '--remove', `tcp:${PLUGIN_PORT}`) } catch { /* already gone */ }
   pluginServer.close()
   cdp.close()

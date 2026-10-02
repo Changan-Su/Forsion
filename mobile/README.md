@@ -128,10 +128,24 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 负对照在 `e2e:boot`：浏览器里没有原生宿主时必须仍是 `.mb-topbar` + Web 标签页底单。
 
 同一台架也跑 Android 插件的真机链路：假市场（CDP 桩）+ 宿主上的真 HTTP 下载服务（`PLUGIN_PORT`，缺省 5317），
-经原生下载器（`Filesystem.downloadFile`，台架核对请求 UA 不是 WebView）装进 `files/plugins/<slug>`，
+经原生下载器（`ForsionMarketDownload`，台架核对请求 UA 不是 WebView）装进 `files/plugins/<slug>`，
 「⋯」里插件分节运行命令 → 插件视图（CSP `'unsafe-eval'` + 插件自己的 `new Function`）、冷启动（force-stop + 重开）后仍启用且数据在、
 设置 → 插件卸载后目录消失。模拟器在飞行模式下到不了 `10.0.2.2`（台架不改设备设置），所以缺省用 `adb reverse` 把宿主端口映射成设备 `localhost`；
 网络通时可 `PLUGIN_HOST=http://10.0.2.2:5317`。结束时删掉 e2e 插件目录与私有数据、撤掉 reverse。
+
+评审修复的真机核对也在这一台架里（2026-10-02，负对照：对修复前的包跑 `replaced menu / rewind: leaving / prompt: input past` 三条必红）：
+
+- **系统文件选择器**：往设备 `Download/`、`Documents/` 推三个夹具文件（结束时删掉），经「＋ → 添加文件」真选：
+  小文件与 1 MB 文件进输入框（名字、字节数、sha256 逐一核对；`_capacitor_content_` 响应全 200、logcat 无 `Unable to open content URL`），
+  26 MB 那个被提示条点名且不进输入框，多选走 clipData，取消什么都不发生。需要系统语言为英文（按 DocumentsUI 的文案找根目录）。
+- **封顶下载**：声明 30 MB 与不给长度的无尽流都以 `too large` 失败，下载期间缓存里的临时文件从不超过 25 MB，结束后 `cache/` 里没有 `forsion-market-*`。
+- **覆盖安装**：已装时在市场里再装一次（1.0.1），目录切到新版，`files/plugins` 下没有 `.staging-*` / `.backup-*`。
+- **输入长度封顶**：往原生输入框贴 12 万字，确定后回 10 万字的文本（修复前是静默取消）。
+- **回退请求作废**：统计未回时切走会话 → 不弹；半屏开着时切会话 → 自动收起；两种都不写任何请求。
+- **菜单互相顶替**：一个原生菜单开着时再开第二个，第二个留在屏上且绑定的是第二个对象。
+
+`PKG=com.forsion.tangu.nativepreview` 可对并存预览包跑同一台架。模拟器建议 `-gpu host` 启动：软件 GL（SwiftShader）下 WebView 的
+半透明描边圆角卡片会花屏（与 App 无关，系统 HTML 查看器里的静态页同样复现），宿主 GPU 下正常。
 
 ## Android 插件(2026-10-02)
 
