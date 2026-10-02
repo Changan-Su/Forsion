@@ -1,7 +1,7 @@
 /**
  * Dev-only visual harness:设置 → 电脑历史 —— 真 ComputerHistorySettings + 生产 CSS;window.tangu.computerHistory 与
  * 权限快照都是桩,不连主进程、不碰 helper。?dark / ?lang=en / ?status=<ComputerHistoryStatus> / ?empty(无最近 App 与会话)
- * / ?skin=<cream|coral|teal|lavender|zhi>(主题色与背景色同取这一套;缺省 cream)。
+ * / ?skin=<cream|coral|teal|lavender|zhi>(主题色与背景色同取这一套;缺省 cream)/ ?platform=win32(Windows 版:无权限卡、Windows 文案)。
  * 截图:浏览器打开 /computer-history-harness.html,或用 Playwright 按上面的参数逐张拍(DESIGN §8:观感改动交付前看真截图)。
  */
 import { createRoot } from 'react-dom/client'
@@ -25,6 +25,7 @@ const MIN = 60_000
 const now = Date.now()
 const status = (params.get('status') || 'recording') as ComputerHistoryStatus
 const empty = params.has('empty')
+const platform = params.get('platform') === 'win32' ? 'win32' : 'darwin'
 let exclude: ComputerHistoryExclude = { apps: empty ? [] : ['com.apple.Health', 'com.moneymoney-app.retail'], domains: empty ? [] : ['bank.example.com'] }
 let enabled = status !== 'off'
 let pausedUntil: number | null = status === 'paused' ? now + 45 * MIN : null
@@ -32,7 +33,7 @@ let current: ComputerHistoryStatus = status
 
 let rev = 0
 const view = (): ComputerHistoryView => ({
-  state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform: 'darwin', dataGen: 0 },
+  state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform, dataGen: 0 },
   exclude: { apps: [...exclude.apps], domains: [...exclude.domains] },
   root: '/Users/me/.forsion-dev/computer-history',
   keepDays: 7,
@@ -85,7 +86,7 @@ const computerHistory: ComputerHistoryApi = {
   onChanged: (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } },
 }
 const snapshot: DesktopPermissionsSnapshot = {
-  platform: 'darwin', appName: 'Forsion', computerUseAvailable: true,
+  platform, appName: 'Forsion', computerUseAvailable: true,
   helperInstalled: status !== 'helper_missing', helperRunning: status !== 'helper_missing',
   ...(status === 'helper_missing' ? { helperError: 'not-installed' as const } : {}),
   permissions: {
@@ -95,7 +96,7 @@ const snapshot: DesktopPermissionsSnapshot = {
   },
 }
 window.tangu = {
-  platform: 'darwin',
+  platform,
   computerHistory,
   desktopPermissionsStatus: async () => snapshot,
   desktopPermissionRequest: async () => snapshot,
