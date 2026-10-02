@@ -475,6 +475,9 @@ export interface CanvasStageProps {
   /** 块内容 → markdown(宿主的 serializerCtx),parseMd 的反向。复制卡时给剪贴板镜像留一份
    *  可跨实例重放的载荷;缺省则跨文件粘贴退回纯文本。 */
   serializeMd?: (content: Fragment) => string | null
+  /** 块内容 → **落盘形** markdown(宿主的落盘链:附件是页相对路径,不是只有 Forsion 认得的 asset 协议 URL)。
+   *  导出 JSON Canvas 用(V-19:`.canvas` 是给 Obsidian 按文件读的,显示形的图片地址在那边全断)。缺省 = 导出退回纯文本。 */
+  storedMd?: (content: Fragment) => string | null
   /** 删掉了整张卡(舞台上删卡)→ 宿主据此问「卡里那个引用块牵着的磁盘文件也删吗」。
    *  与块菜单/键盘删块同一条路(见 assetDelete);调用时机在删除事务之后。 */
   onBlocksDeleted?: (content: Fragment) => void
@@ -490,7 +493,7 @@ export interface CanvasStageProps {
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, notePages, exportRef, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, vaultRoot = null, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, histStepRef, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, notePages, exportRef, storedMd, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
@@ -749,8 +752,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   // ── fm 三键(elements / tree / main)的读写 ────────────────────────────────────────
   // 一切回调经 ref 现读:下面那个手势 effect 只依赖 [active],闭包里拿的必须是**此刻**的值
   // (理由见 effect 顶注)。
-  const cbRef = useRef({ getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages, path })
-  cbRef.current = { getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages, path }
+  const cbRef = useRef({ getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages, path, storedMd })
+  cbRef.current = { getView, onCommit, onElements, onTree, onMain, timeline, elements, tree, main, mainStored, saveFile, parseMd, serializeMd, onBlocksDeleted, notePages, path, storedMd }
   const els = safeElements(elements)
   /** 主卡几何的**正则形**:默认位形(0,0,MAIN_W)与「盘上没存」合并成 null —— 二者对用户不可分
    *  (materialize 恒补默认 main,派生又会在卡/元素清空时把整行剥掉),分开记会让「首次拖动主卡
@@ -1572,7 +1575,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     const view = cbRef.current.getView()
     const host = hostRef.current
     if (!view || !host || !active) return
-    const ser = cbRef.current.serializeMd
+    // ⚠️ 必须是**落盘形**(storedMd),不能用复制卡那条 serializeMd:后者是显示形,图片地址是 amadeus-asset:// 协议 URL ——
+    //    写进 `.canvas` 的 text 节点,Obsidian 打开就是一片断图(Codex 复核 P1)。拿不到落盘形就退纯文本,绝不退显示形。
+    const ser = cbRef.current.storedMd
     const mdOf = (n: ProseNode): string => ser?.(n.content)?.trim() || n.textBetween(0, n.content.size, '\n\n')
     const boxes = measureCards(host)
     const cards = cardsOf(view).map((c) => {
