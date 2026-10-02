@@ -238,11 +238,15 @@ const PATH_SPEC = String.raw`['"]((?:\.{1,2}/|/|file:)[^'"\n]*)['"]`;
 /** 字面路径引入:import x from './x' / export * from '../x' / import './x' / import('./x'),也认绝对路径与 file: URL。
  *  只经 matchAll 用(全局正则别拿去 .test,lastIndex 有状态)。 */
 const ESM_PATH = new RegExp(String.raw`\b(?:from|import)${GAP}${PATH_SPEC}|\bimport${GAP}\(${GAP}${PATH_SPEC}`, 'g');
-/** import(变量 / 模板串):目标证明不了。 */
-const ESM_DYNAMIC = new RegExp(String.raw`\bimport${GAP}\(${GAP}[^'"\s)]`);
+/** import(变量 / 模板串):目标证明不了。`x.import(…)` 是方法调用,不算。 */
+const ESM_DYNAMIC = new RegExp(String.raw`(?<![\w$.])import${GAP}\(${GAP}[^'"\s)]`);
+/** 单行字符串与注释:判动态 import 前抹掉,工具描述里写的「…to import (relative…)」是文案,不是代码。 */
+const STRINGS_AND_COMMENTS = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+const dynamicImport = (src: string): boolean => ESM_DYNAMIC.test(src.replace(STRINGS_AND_COMMENTS, (m) => (m[0] === '/' ? ' ' : '""')));
 const esc = (id: string): string => id.replace(/\$/g, '\\$');
 /** 以相对路径或变量为参数的调用:`name('./x')` / `name(变量)`;只拿内置模块的(`require('node:fs')`)不算。 */
-const loadCall = (name: string): RegExp => new RegExp(String.raw`(?<![\w$.])${esc(name)}${GAP}\(${GAP}(?:['"](?:\.{1,2}/|/|file:)|[^'"\s)])`);
+const LOAD_ARG = String.raw`${GAP}\(${GAP}(?:['"](?:\.{1,2}/|/|file:)|[^'"\s)])`;
+const loadCall = (name: string): RegExp => new RegExp(String.raw`(?<![\w$.])${esc(name)}${LOAD_ARG}`);
 
 /** 会不会经 CommonJS 载入文件(CommonJS 按文件名缓存,查询串破不了)。认 require / esbuild 的 __require,
  *  以及 createRequire 造出来、改了名的函数(`const req = createRequire(…)`,含 `createRequire as X` 改名导入)
@@ -252,7 +256,7 @@ function loadsViaRequire(src: string): boolean {
   const makers = ['createRequire', ...Array.from(src.matchAll(/\bcreateRequire\s+as\s+([A-Za-z_$][\w$]*)/g), (m) => m[1])];
   const names = new Set(['require', '__require']);
   for (const maker of makers) {
-    if (new RegExp(String.raw`(?<![\w$])${esc(maker)}${GAP}\([^()]*(?:\([^()]*\)[^()]*)*\)${GAP}\(`).test(src)) return true;
+    if (new RegExp(String.raw`(?<![\w$])${esc(maker)}${GAP}\([^()]*(?:\([^()]*\)[^()]*)*\)${LOAD_ARG}`).test(src)) return true;
     for (const m of src.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[\w$]+\.)?${esc(maker)}\b`, 'g'))) names.add(m[1]);
   }
   for (const n of names) if (loadCall(n).test(src)) return true;
@@ -261,7 +265,7 @@ function loadsViaRequire(src: string): boolean {
 
 /** 这段源码会不会载入别的文件(相对 / 绝对路径、动态 import 变量、CommonJS)。都没有 = 单文件 bundle。 */
 function loadsOtherFiles(src: string): boolean {
-  return src.match(ESM_PATH) !== null || ESM_DYNAMIC.test(src) || loadsViaRequire(src);
+  return src.match(ESM_PATH) !== null || dynamicImport(src) || loadsViaRequire(src);
 }
 
 /** 运行时能不能整图换代:Node ≥ 22.15 的同步模块钩子(打包版 Electron 40 = Node 24)。
@@ -317,7 +321,7 @@ export function cannotHotSwap(d: DiscoveredPlugin): boolean {
     if (!scopeIsModule(f)) return true; // 子目录自带非 module 的 package.json → 那里的 .js 是 CommonJS
     let code: string;
     try { code = readFileSync(f, 'utf8'); } catch { continue; } // 刚被删:不计
-    if (loadsViaRequire(code) || ESM_DYNAMIC.test(code)) return true;
+    if (loadsViaRequire(code) || dynamicImport(code)) return true;
     for (const m of code.matchAll(ESM_PATH)) if (escapesRoot(d.dir, f, m[1] ?? m[2])) return true;
   }
   return false;

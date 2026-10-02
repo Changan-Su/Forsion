@@ -305,6 +305,11 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     expect(probe("import { createRequire as cr } from 'node:module'; const load = cr(import.meta.url); load('./x.json')")).toBe(true); // 改名导入 + 改名调用,单文件也拦
     expect(probe("import { createRequire } from 'node:module'; createRequire(import.meta.url)('./x.json')")).toBe(true); // 当场调用
     expect(probe("import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url); require('node:fs'); __require('node:path')")).toBe(false); // CU 的 esbuild banner
+    // 误报回归(10-02 拿本机全部引擎插件实测:stickers / beacon-engine 被误判需重启)
+    expect(probe("export default { description: 'Path of the image to import (relative to the working dir)' }")).toBe(false); // 文案里的 import (
+    expect(probe("// we could import (lazily) later\nexport const a = 1")).toBe(false); // 注释里的 import (
+    expect(probe("import { createRequire } from 'node:module'; export const D = createRequire(import.meta.url)('node:sqlite').DatabaseSync")).toBe(false); // 当场调用只拿内置
+    expect(probe("export const r = (loader) => loader.import(name)")).toBe(false); // 方法调用
     const outside = mkdtempSync(path.join(tmp, 'hs-ext-'));
     writeFileSync(path.join(outside, 'h.js'), 'export const a = 1');
     expect(probe("import { a } from './lib/h.js'", { links: { lib: outside } })).toBe(true); // 软链出去

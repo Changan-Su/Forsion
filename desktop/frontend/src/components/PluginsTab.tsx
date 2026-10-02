@@ -65,7 +65,7 @@ export const PluginsTab: React.FC<{
     try { await setPluginEnabled(homeTarget(), p.id, !p.enabled); onReload() } catch { /* ignore */ }
   }
 
-  // 运行期重扫:新装 / 更新 / 移除的插件即时生效(引擎 10-02 起热插拔;入口带相对 import 的更新仍要重启,needsRestart 会说)。
+  // 运行期重扫:新装 / 更新 / 移除的插件即时生效(引擎 10-02 起热插拔;破不了模块缓存的更新仍要重启,needsRestart 会说)。
   const [rescanning, setRescanning] = useState(false)
   const doRescan = async (): Promise<void> => {
     setRescanning(true)

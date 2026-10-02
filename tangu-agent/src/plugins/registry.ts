@@ -44,7 +44,7 @@ export interface PluginMeta {
 
 const REGISTRY = new Map<string, PluginMeta>();
 
-/** 磁盘上已换了新代码、但入口带相对 import 没法热升级(ESM 缓存只破得了入口)、老实例还在跑的插件 id。
+/** 磁盘上已换了新代码、但证明不了整张模块图都能换代(loader cannotHotSwap)、老实例还在跑的插件 id。
  *  供「设置→插件」逐条标「需重启」。路由贡献不再需要重启(bootstrap 的分发器热挂)。 */
 export const pluginsNeedingRestart = new Set<string>();
 

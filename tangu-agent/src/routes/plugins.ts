@@ -75,7 +75,7 @@ router.post('/agent/reply-segments', authMiddleware, (req: AuthRequest, res) => 
 });
 
 // 运行期重扫 = 与磁盘同步:新装的即时出现并可启用、换了代码的原地热升级、目录没了的注销,都不用重启。
-// needsRestart 只剩一种:入口带相对 import 的插件换了代码(ESM 缓存破不了,老实例照跑)。
+// needsRestart:换了代码但破不了模块缓存(CommonJS / node_modules / 引到包外等,见 loader cannotHotSwap;老实例照跑)。
 router.post('/agent/plugins/rescan', authMiddleware, async (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
