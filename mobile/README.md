@@ -103,6 +103,9 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
 - **`NativeSheet`**：通用 Compose 半屏底单，三种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`prompt`、`confirm`。
   调用方用 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`，拿到 `{ handled: false }` 就渲染自己的 Web UI。
   已接入：标签页底单、更多底单（无自定义组件项时）、`ContextMenu` 原语（`pickNativeCtxItem`）、`askString`、无 children 的 `ConfirmDialog`。
+- **「⋯」里的插件命令**：命令声明 `moreGroup = { id, title }` 就按组列进「⋯」（Web sheet 与原生底单同一份整形，`lcl/engine/moreSheet.ts`）；
+  外置插件的命令由 `amadeusPlugins.ts` 的桥按插件分节（节标题 = 插件名，开关命令带勾选态）。手机没有 ribbon，这是插件命令的一键入口。
+- **应用市场**与设置同款走 `page` 模式：列表页「返回」= 退出市场；详情页标题 = 条目名，「返回」= 回列表、「×」= 退出市场。
 - **`SheetMenu`**（`lcl/engine/nativeSheetMenu.ts`）：一份条目（文案 + `run` 回调）同时喂 Web 菜单与原生底单。
   点击触发的菜单用 `openNativeSheetMenu(build, { onFallback })`（无宿主同步返回 false，走原 Web 路径）；
   状态驱动的右键/长按菜单用 `useNativeSheetMenu(open, build, onClose)`（返回是否该渲染 Web 菜单）。
@@ -123,6 +126,12 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
 ```
 
 负对照在 `e2e:boot`：浏览器里没有原生宿主时必须仍是 `.mb-topbar` + Web 标签页底单。
+
+同一台架也跑 Android 插件的真机链路：假市场（CDP 桩）+ 宿主上的真 HTTP 下载服务（`PLUGIN_PORT`，缺省 5317），
+经原生下载器（`Filesystem.downloadFile`，台架核对请求 UA 不是 WebView）装进 `files/plugins/<slug>`，
+「⋯」里插件分节运行命令 → 插件视图（CSP `'unsafe-eval'` + 插件自己的 `new Function`）、冷启动（force-stop + 重开）后仍启用且数据在、
+设置 → 插件卸载后目录消失。模拟器在飞行模式下到不了 `10.0.2.2`（台架不改设备设置），所以缺省用 `adb reverse` 把宿主端口映射成设备 `localhost`；
+网络通时可 `PLUGIN_HOST=http://10.0.2.2:5317`。结束时删掉 e2e 插件目录与私有数据、撤掉 reverse。
 
 ## Android 插件(2026-10-02)
 

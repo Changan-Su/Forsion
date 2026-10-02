@@ -11,7 +11,10 @@
  * Covers: top bar + insets, tabs / more sheets, prompt + confirm kinds, context menus, and the chat consumers of
  * the sheet-menu seam (session ⋯ → rename, mode menu → approval tier + nested agent page, rewind, add menu →
  * nested search + Files → system picker, project selector), settings as a native page (back / ×), zh light,
- * dark and an English pass. Web page taps go through real touches (zoom-aware) — never element.click() for
+ * dark and an English pass. Plugins (feat/android-plugins): ⋯ → market as a native page (detail adds ×), install through
+ * the native downloader from a host server (adb reverse; PLUGIN_HOST overrides), plugin commands in the native ⋯ under
+ * the plugin's name (toggle state), the plugin view running in the WebView (CSP 'unsafe-eval' + new Function), a cold
+ * restart (force-stop + relaunch), uninstall from Settings removing files/plugins/<slug>; plus the native model sheet. Web page taps go through real touches (zoom-aware) — never element.click() for
  * anything that needs user activation.
  *
  * Build + install (README「Android 原生外壳」): rm -rf dist && npm run build && npx cap sync android &&
@@ -21,6 +24,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const assert = require('node:assert/strict')
+const http = require('node:http')
+const JSZip = require('jszip')
 const h = require('./lib/emu-cdp.cjs')
 
 const PKG = process.env.PKG || 'com.forsion.tangu'
@@ -67,6 +72,68 @@ const messages = [
   { id: 'e2e-m1', role: 'user', content: 'Hello fixture', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - 50000, model_id: null, is_error: false },
   { id: 'e2e-m2', role: 'model', content: 'Hi! This is the fixture reply.', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - 49000, model_id: null, is_error: false },
 ]
+// Model catalog for the composer's model pill (the native model sheet needs something to list).
+const MODELS = [
+  { id: 'e2e-model-alpha', name: 'E2E Model Alpha', provider: 'E2E', source: 'forsion', modelType: 'llm' },
+  { id: 'e2e-model-beta', name: 'E2E Model Beta', provider: 'E2E', source: 'forsion', modelType: 'llm' },
+]
+
+// ── Android plugin flow: a fake market (CDP-stubbed API) + a REAL host HTTP server for the package download, so the
+// native downloader (Capacitor Filesystem.downloadFile → HttpURLConnection, not the WebView) is what fetches it.
+// Reachability: the emulator is normally reached at 10.0.2.2, but an emulator in airplane mode has no route there
+// (and the harness never flips device settings) → `adb reverse` exposes the host port as the device's localhost.
+// Debug builds allow cleartext to localhost / 10.0.2.2 (src/debug network_security_config). PLUGIN_HOST overrides.
+const PLUGIN_ID = 'e2e-native-hello'
+const PLUGIN_CMD = `amadeus:${PLUGIN_ID}:open-panel`
+const PLUGIN_TOGGLE = `amadeus:${PLUGIN_ID}:toggle-flag`
+const PLUGIN_PORT = Number(process.env.PLUGIN_PORT || 5317)
+const PLUGIN_HOST = process.env.PLUGIN_HOST || `http://localhost:${PLUGIN_PORT}`
+// The plugin's own code also calls `new Function` at runtime (on top of the host evaluating main.js with it):
+// a CSP without 'unsafe-eval' would stop it before the view ever mounts.
+const PLUGIN_MAIN = `
+let flag = false
+ctx.registerView({
+  id: 'panel',
+  title: 'E2E native plugin panel',
+  async mount(el) {
+    const d = (await ctx.loadData()) || { runs: 0 }
+    const box = document.createElement('div')
+    box.setAttribute('data-e2e-plugin-view', '')
+    box.setAttribute('data-e2e-runs', String(d.runs))
+    box.setAttribute('data-e2e-eval', String(new Function('return 6 * 7')()))
+    box.style.cssText = 'padding:24px;font:16px/1.5 system-ui'
+    box.textContent = 'E2E native plugin view, runs=' + d.runs
+    el.appendChild(box)
+    return () => box.remove()
+  },
+})
+ctx.registerCommand({
+  id: 'open-panel',
+  title: 'E2E plugin: open panel',
+  async run() {
+    const d = (await ctx.loadData()) || { runs: 0 }
+    d.runs += 1
+    await ctx.saveData(d)
+    ctx.openView('panel')
+  },
+})
+ctx.registerCommand({ id: 'toggle-flag', title: 'E2E plugin: toggle flag', checked: () => flag, run() { flag = !flag } })
+`
+const marketCards = [{
+  id: PLUGIN_ID, type: 'amadeus-plugin', source: 'zip', name: 'E2E Native Hello', summary: 'Harness fixture plugin', author: 'e2e',
+  installSlug: PLUGIN_ID, downloads: 10, latestVersion: '1.0.0', tags: ['e2e'], createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z',
+}]
+const pluginHits = [] // { url, ua }
+let pluginZip = null
+const pluginServer = http.createServer((req, res) => {
+  pluginHits.push({ url: req.url, ua: String(req.headers['user-agent'] || '') })
+  if (req.url === `/${PLUGIN_ID}.zip` && pluginZip) {
+    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': pluginZip.length })
+    return res.end(pluginZip)
+  }
+  res.writeHead(404); res.end('no')
+})
+
 const stubLog = [] // "METHOD /path body"
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
@@ -93,6 +160,16 @@ function installStub(cdp) {
     if (p.endsWith('/agent/projects') && m === 'GET') return json({ projects: [{ name: 'E2E Alpha' }, { name: 'E2E Beta' }] })
     if (p.endsWith('/agent/sessions') && m === 'GET') return json({ sessions: url.searchParams.get('archived') === 'true' ? [] : sessions })
     if (p.endsWith('/agent/runs')) return json({ runs: [] })
+    if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
+    // fake market (only Forsion plugins are requested on the phone); install hands out the host download URL
+    const mk = p.match(/\/market\/items(?:\/([^/]+))?(\/install)?$/)
+    if (mk) {
+      const type = url.searchParams.get('type')
+      if (!mk[1]) return json({ items: marketCards.filter((c) => !type || c.type === type) })
+      const card = marketCards.find((c) => c.id === decodeURIComponent(mk[1]))
+      if (card && mk[2]) return json({ type: card.type, installSlug: card.installSlug, source: 'zip', downloadUrl: `${PLUGIN_HOST}/${card.id}.zip` })
+      if (card) return json({ ...card, readme: `# ${card.name}\n\nA harness fixture: one view, two commands.` })
+    }
     const cfg = p.match(/\/agent\/sessions\/([^/]+)\/config$/)
     if (cfg) {
       const id = decodeURIComponent(cfg[1])
@@ -180,6 +257,18 @@ const tabCountText = (list) => {
   })()`)
   await seed('zh')
   await installStub(cdp)
+  // plugin flow: package zip (wrapped in a folder like a GitHub archive), host server, device → host port
+  const runAs = (...args) => { try { return h.adb('shell', 'run-as', PKG, ...args) } catch (e) { return `${e.stdout || ''}${e.stderr || ''}` || String(e.message) } }
+  const cleanPluginFiles = () => runAs('rm', '-rf', `files/plugins/${PLUGIN_ID}`, `files/plugins-data/${PLUGIN_ID}.json`, `files/plugins-data/${PLUGIN_ID}.json.alt`)
+  {
+    const z = new JSZip()
+    z.file(`${PLUGIN_ID}-main/manifest.json`, JSON.stringify({ id: PLUGIN_ID, name: 'E2E Native Hello', version: '1.0.0', apiVersion: 1 }))
+    z.file(`${PLUGIN_ID}-main/main.js`, PLUGIN_MAIN)
+    pluginZip = Buffer.from(await z.generateAsync({ type: 'uint8array' }))
+  }
+  await new Promise((resolve, reject) => { pluginServer.once('error', reject); pluginServer.listen(PLUGIN_PORT, '127.0.0.1', resolve) })
+  if (!process.env.PLUGIN_HOST) h.adb('reverse', `tcp:${PLUGIN_PORT}`, `tcp:${PLUGIN_PORT}`)
+  cleanPluginFiles() // leftovers of an aborted earlier run
   const reload = async () => {
     await cdp.send('Page.reload', { ignoreCache: true })
     await h.pause(800)
@@ -737,6 +826,145 @@ const tabCountText = (list) => {
     assert.ok(h.byId(ui(), 'nativeChrome.tabs'), 'shell state did not return')
   })
 
+  // ── Android plugins (merged feat/android-plugins × native shell): market as a native page, native download from the
+  // host, plugin commands in the native ⋯ sheet, the plugin running inside the WebView (CSP + new Function), a cold
+  // restart, and uninstall removing its files. Plus the model sheet. Dark / English shots further down.
+  const pluginFiles = () => runAs('ls', `files/plugins/${PLUGIN_ID}`).split(/\s+/).filter(Boolean)
+  // One uiautomator dump of a content-heavy WebView takes 3–5 s on the emulator, so a 6 s window can end after a
+  // single dump that started just before the sheet appeared. The plugin checks poll with a longer window.
+  const SLOW = 15000
+  const marketOpen = "!!document.querySelector('[data-mobile-market] .mk-page')"
+  const marketWeb = `(() => { const p = document.querySelector('[data-mobile-market] .mk-page'); if (!p) return null
+    const d = (s) => { const e = p.querySelector(s); return e ? getComputedStyle(e).display : 'absent' }
+    return { native: p.hasAttribute('data-native-chrome'), top: d('.settings-nav-top'), pills: d('.settings-nav-list'), detailBack: d('.mk-detail-back'),
+      brand: p.querySelector('.mk-nav-brand strong')?.textContent.trim() || '' } })()`
+  const pluginItem = (id) => `nativeSheet.item.cmd:${id}`
+  /** ⋯ → market: page bar titled like the (hidden) web brand, back only; web back + brand hidden, category pills kept. */
+  async function openMarket(lang) {
+    await tapId('nativeChrome.more')
+    const list = await waitSheet(true, SLOW)
+    await tapId('nativeSheet.item.rb-market', list)
+    await waitSheet(false, SLOW)
+    assert.ok(await h.waitPage(cdp, marketOpen, 6000), 'market did not open')
+    await h.pause(400)
+    const web = await cdp.eval(marketWeb)
+    const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.back') && web.brand && textOf(l, 'nativeChrome.title') === web.brand ? l : null), { timeout: 6000 })
+    assert.ok(r.hit, `market: no page bar titled "${web.brand}" (title=${textOf(r.nodes, 'nativeChrome.title')})`)
+    assert.ok(!h.byId(r.nodes, 'nativeChrome.tabs') && !h.byId(r.nodes, 'nativeChrome.close'), 'market list page: back only')
+    assert.ok(web.native && web.top === 'none' && web.pills !== 'none' && web.pills !== 'absent', `market web head: ${JSON.stringify(web)}`)
+    if (lang === 'en') assert.ok(!hasCjk(r.nodes.filter((n) => (n['resource-id'] || '').startsWith('nativeChrome.'))), 'Chinese in the English market bar')
+    assert.ok(await h.waitPage(cdp, `!!document.querySelector('[data-market-install="${PLUGIN_ID}"], [data-market-uninstall="${PLUGIN_ID}"]')`, 10000),
+      `market card missing (stub: ${stubLog.filter((l) => l.includes('/market/')).slice(-4).join(' | ')})`)
+    await h.pause(500)
+    return r.nodes
+  }
+  async function closeMarket() {
+    await tapId('nativeChrome.back')
+    assert.ok(await h.waitPage(cdp, `!(${marketOpen})`, 5000), 'back did not close the market')
+    assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.tabs'), { timeout: 5000 })).hit, 'shell bar did not return after the market')
+  }
+  // saveData counter as last observed: every run must add exactly one (an earlier failed check must not cascade)
+  let pluginRuns = 0
+  async function runPluginCommand() {
+    await tapId('nativeChrome.more')
+    const list = await waitSheet(true, SLOW)
+    assert.ok(h.byId(list, pluginItem(PLUGIN_CMD)), `plugin command not in ⋯: ${ids(list)}`)
+    await tapId(pluginItem(PLUGIN_CMD), list)
+    await waitSheet(false, SLOW)
+    const runs = Number(await h.waitPage(cdp, "document.querySelector('[data-e2e-plugin-view]')?.dataset.e2eRuns", 8000))
+    const prev = pluginRuns
+    if (runs) pluginRuns = runs
+    assert.equal(runs, prev + 1, 'plugin view (runs = loadData/saveData across runs)')
+    assert.equal(await cdp.eval("document.querySelector('[data-e2e-plugin-view]')?.dataset.e2eEval"), '42', 'new Function inside the plugin under the app CSP')
+    await h.pause(500)
+  }
+  /** Composer model pill → the Compose model sheet lists the stubbed catalog; the web menu stays closed. */
+  async function modelSheet(name) {
+    await openChat('E2E Session One')
+    await tapEl("document.querySelector('.model-pill-btn')")
+    const r = await h.waitNodes((l) => (l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 6000 })
+    assert.ok(r.hit, 'native model sheet did not list the catalog')
+    assert.equal(await cdp.eval("!!document.querySelector('.cm-advanced-reveal')"), false, 'web model menu rendered as well')
+    await h.pause(400)
+    shot(name)
+    h.key(4)
+    assert.ok((await h.waitNodes((l) => (!l.some((n) => n.text === 'E2E Model Beta') ? l : null), { timeout: 5000 })).hit, 'model sheet did not close on back')
+  }
+
+  await check('plugins: ⋯ → market is a native page; install downloads natively from the host; detail adds ×', async () => {
+    // the checks above leave the app dark (theme-mode command): this block's shots are the light pass
+    await cdp.eval("localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme', 'light'); true")
+    await reload()
+    await openMarket('zh')
+    shot('p01-market-light')
+    assert.ok(stubLog.some((l) => /^GET \S*\/market\/items$/.test(l)), 'market list never requested')
+    const hits = pluginHits.length
+    await tapEl(`document.querySelector('[data-market-install="${PLUGIN_ID}"]')`)
+    const notice = await h.waitPage(cdp, "document.querySelector('[data-market-notice]')?.dataset.marketNotice", 20000)
+    assert.equal(notice, 'ok', `install notice: ${await cdp.eval("document.querySelector('[data-market-notice]')?.innerText")}`)
+    const dl = pluginHits.slice(hits).find((x) => x.url === `/${PLUGIN_ID}.zip`)
+    assert.ok(dl, `host server never saw the download (hits: ${JSON.stringify(pluginHits.slice(hits))})`)
+    assert.ok(!/Mozilla|Chrome/.test(dl.ua), `download did not come from the native downloader (UA: ${dl.ua})`)
+    const files = pluginFiles()
+    assert.ok(files.includes('manifest.json') && files.includes('main.js'), `files/plugins/${PLUGIN_ID}: ${files.join(' ')}`)
+    await h.pause(300)
+    shot('p02-market-installed-light')
+    // detail page: title = item name, back → list, × → leave the market (the list re-scans after an install)
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mk-featured-copy h2')", 20000), 'market list did not come back after the install')
+    await tapEl("document.querySelector('.mk-featured-copy h2')")
+    let r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === 'E2E Native Hello' && h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 6000 })
+    assert.ok(r.hit, `detail: title + × expected (title=${textOf(r.nodes, 'nativeChrome.title')})`)
+    assert.equal((await cdp.eval(marketWeb)).detailBack, 'none', 'web "back to list" still shown under the native bar')
+    await h.pause(400)
+    shot('p03-market-detail-light')
+    await tapId('nativeChrome.back', r.nodes)
+    const brand = (await cdp.eval(marketWeb)).brand
+    r = await h.waitNodes((l) => (textOf(l, 'nativeChrome.title') === brand && !h.byId(l, 'nativeChrome.close') ? l : null), { timeout: 5000 })
+    assert.ok(r.hit && await cdp.eval(marketOpen), 'detail back did not return to the market list')
+    await closeMarket()
+  })
+
+  await check('plugins: commands listed in the native ⋯ under the plugin (toggle state shown); one opens the plugin view', async () => {
+    await tapId('nativeChrome.more')
+    let list = await waitSheet(true, SLOW)
+    for (const id of [PLUGIN_CMD, PLUGIN_TOGGLE]) assert.ok(h.byId(list, pluginItem(id)), `missing ${id}: ${ids(list)}`)
+    assert.ok(list.some((n) => n.text === 'E2E Native Hello'), 'plugin section title (= plugin name) missing')
+    // Compose `selected` semantics surface in uiautomator as checkable/checked (not `selected`)
+    assert.equal(h.byId(list, pluginItem(PLUGIN_TOGGLE)).checked, 'false', 'toggle starts off')
+    shot('p04-more-plugin-light')
+    await tapId(pluginItem(PLUGIN_TOGGLE), list)
+    await waitSheet(false, SLOW)
+    await tapId('nativeChrome.more')
+    list = await waitSheet(true, SLOW)
+    const on = h.byId(list, pluginItem(PLUGIN_TOGGLE))
+    assert.equal(on.checked, 'true', `toggle state not reflected after running it: ${JSON.stringify({ ...on, rect: undefined })}`)
+    await tapId(pluginItem(PLUGIN_TOGGLE), list) // back off
+    await waitSheet(false, SLOW)
+    await runPluginCommand()
+    const csp = await cdp.eval("(/script-src[^;]*/.exec(document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]')?.getAttribute('content') || '') || [''])[0]")
+    assert.ok(csp.includes("'unsafe-eval'"), `CSP: ${csp}`)
+    shot('p05-plugin-view-light')
+  })
+
+  await check('model pill opens the native model sheet (stubbed catalog)', async () => {
+    await modelSheet('p06-model-sheet-light')
+  })
+
+  await check('plugins: survive a cold restart (force-stop + relaunch): files, enabled state and data persist', async () => {
+    cdp.close()
+    h.adb('shell', 'am', 'force-stop', PKG)
+    h.adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
+    cdp = await h.connect(PKG)
+    await cdp.send('Page.enable')
+    await installStub(cdp)
+    assert.ok(await h.waitPage(cdp, dom.shellUp, 30000), 'shell did not mount after the cold start')
+    await reload() // a clean stubbed boot (the cold start's first requests went out before the stub; airplane mode drops them)
+    assert.ok(pluginFiles().includes('main.js'), 'plugin files gone after restart')
+    assert.ok(pluginRuns >= 1, 'precondition: the plugin ran (and saved data) before the restart')
+    await runPluginCommand()
+    shot('p07-plugin-view-after-restart')
+  })
+
   /** Mode + add sheets in the chat, then settings as a native page (screenshots for the given pass). */
   async function chatSheetsPass(tag, lang) {
     await openChat('E2E Session One')
@@ -773,6 +1001,21 @@ const tabCountText = (list) => {
     await chatSheetsPass('25-dark', 'zh')
   })
 
+  await check('dark: market page, plugin ⋯ section, plugin view and model sheet', async () => {
+    await openMarket('zh')
+    shot('p11-market-dark')
+    await closeMarket()
+    await tapId('nativeChrome.more')
+    const list = await waitSheet(true, SLOW)
+    assert.ok(h.byId(list, pluginItem(PLUGIN_CMD)), 'plugin command missing in the dark ⋯')
+    shot('p12-more-plugin-dark')
+    h.key(4)
+    await waitSheet(false, SLOW)
+    await runPluginCommand()
+    shot('p13-plugin-view-dark')
+    await modelSheet('p14-model-sheet-dark')
+  })
+
   await check('English labels arrive from shared i18n (bar + sheets)', async () => {
     await seed('en')
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
@@ -802,6 +1045,58 @@ const tabCountText = (list) => {
     await chatSheetsPass('26-en', 'en')
   })
 
+  await check('English: market page, plugin ⋯ section (no CJK in native copy), plugin view and model sheet', async () => {
+    await openMarket('en')
+    shot('p21-market-en')
+    await closeMarket()
+    await tapId('nativeChrome.more')
+    const list = await waitSheet(true, SLOW)
+    assert.ok(h.byId(list, pluginItem(PLUGIN_CMD)), 'plugin command missing in the English ⋯')
+    assert.ok(!hasCjk(list), 'Chinese text in the English ⋯ sheet')
+    shot('p22-more-plugin-en')
+    h.key(4)
+    await waitSheet(false, SLOW)
+    await runPluginCommand()
+    shot('p23-plugin-view-en')
+    await modelSheet('p24-model-sheet-en')
+  })
+
+  await check('plugins: uninstall from Settings → Plugins removes its files; ⋯ no longer lists its commands', async () => {
+    await openDrawer()
+    await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+    assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
+    const row = `document.querySelector('[data-plugin-id="${PLUGIN_ID}"]')`
+    if (!(await cdp.eval(`!!${row}`))) {
+      if (!(await cdp.eval(`!!document.querySelector('[data-settings-sub="pl-forsion"]')`))) await tapEl(`document.querySelector('[data-settings-tab="amadeus-plugins"]')`)
+      await tapEl(`document.querySelector('[data-settings-sub="pl-forsion"]')`)
+    }
+    assert.ok(await h.waitPage(cdp, `!!${row}`, 8000), 'plugin row not listed in Settings → Plugins')
+    await h.pause(600)
+    shot('p31-settings-plugins-en')
+    await h.pause(3000) // a second shot later: tells a transient raster glitch from a layout defect
+    shot('p31b-settings-plugins-en-3s')
+    await tapEl(`${row}.querySelector('b')`) // the name (not the on/off checkbox)
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('[data-plugin-uninstall]')", 6000), 'plugin detail (uninstall button) did not open')
+    await h.pause(400)
+    shot('p32-plugin-detail-en')
+    await tapEl("document.querySelector('[data-plugin-uninstall]')")
+    // window.confirm → the WebView's system AlertDialog
+    const ok = await h.waitNodes((l) => h.byId(l, 'android:id/button1'), { timeout: 6000 })
+    assert.ok(ok.hit, 'uninstall confirmation dialog missing')
+    h.tapNode(ok.hit)
+    assert.ok(await h.waitPage(cdp, `(async () => !(await window.amadeus.listPlugins()).some((p) => p.id === '${PLUGIN_ID}'))()`, 8000), 'still listed after uninstall')
+    const left = runAs('ls', `files/plugins/${PLUGIN_ID}`)
+    assert.match(left, /No such file/, `files/plugins/${PLUGIN_ID} still there: ${left}`)
+    h.key(4) // close settings (system back)
+    assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 6000) || (h.key(4), await h.waitPage(cdp, `!(${settingsOpen})`, 6000)), 'settings stayed open')
+    await closeDrawer()
+    await tapId('nativeChrome.more')
+    const list = await waitSheet(true, SLOW)
+    assert.ok(!h.byId(list, pluginItem(PLUGIN_CMD)) && !h.byId(list, pluginItem(PLUGIN_TOGGLE)), `uninstalled plugin still in ⋯: ${ids(list)}`)
+    h.key(4)
+    await waitSheet(false, SLOW)
+  })
+
   // ── restore the device state we touched ──
   try {
     await cdp.eval(`(async () => {
@@ -814,8 +1109,11 @@ const tabCountText = (list) => {
     await cdp.send('Fetch.disable')
     await cdp.send('Page.reload')
   } catch (e) { console.log('restore failed:', e.message) }
+  cleanPluginFiles()
+  if (!process.env.PLUGIN_HOST) try { h.adb('reverse', '--remove', `tcp:${PLUGIN_PORT}`) } catch { /* already gone */ }
+  pluginServer.close()
   cdp.close()
   fs.writeFileSync(path.join(OUT, 'acceptance.json'), JSON.stringify({ package: PKG, checks, screenshots: shots.map((s) => path.basename(s)), stubRequests: stubLog.length, completedAt: new Date().toISOString() }, null, 2))
   console.log(`\n${checks.length - failed}/${checks.length} passed · artifacts: ${OUT}`)
   process.exitCode = failed ? 1 : 0
-})().catch((e) => { console.error(e); process.exitCode = 1 })
+})().catch((e) => { console.error(e); process.exitCode = 1; pluginServer.close() })
