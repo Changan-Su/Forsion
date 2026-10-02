@@ -20,9 +20,10 @@ export function processStartedAt(pid: number): Promise<number | null> {
       execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `([DateTimeOffset](Get-Process -Id ${pid}).StartTime).ToUnixTimeSeconds()`],
         { timeout: 8000, windowsHide: true }, (err, out) => done(err, out, Number));
     } else {
-      // LC_ALL=C:lstart 走 C 区域的英文日期格式,Date.parse 才认得
-      execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { timeout: 5000, env: { ...process.env, LC_ALL: 'C' } },
-        (err, out) => done(err, out, (s) => Date.parse(s) / 1000));
+      // LC_ALL=C:lstart 走 C 区域的英文日期格式,Date.parse 才认得。
+      // TZ=UTC 输出、按 UTC 解析:本地时间不带偏移,夏令时回拨那一小时有歧义,会差 3600 秒把活持有者判死(Codex 三审)
+      execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { timeout: 5000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } },
+        (err, out) => done(err, out, (s) => Date.parse(`${s} UTC`) / 1000));
     }
   });
 }
