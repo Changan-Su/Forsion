@@ -2,7 +2,8 @@
  * Workspace store(≈ Obsidian workspace)。在已集成的 Dockview 之上建薄 API:
  * openView / getActiveLeaf / splitActive / toggleSidebar / saveLayout↔restore / 命名布局。
  * 单个 Dockview 实例托管四区:左侧栏 / 主区 / 右侧栏 / 底部面板,由 panel.params.__loc 标记区分。
- * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部横跨 Main 与右栏,按**高**折叠且恒 free。
+ * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部横跨 Main 与右栏,按**高**折叠且恒 free,
+ * 收起时组留在网格里藏起来(parkBottom),不删组 —— 删组会重挂主区整列,里面的 iframe 全部重载。
  * 视图「参数驱动可重建」:panel 存 {component:type, params} → 刷新/恢复时 Dockview 据此重建。
  */
 import { create } from 'zustand'
@@ -68,7 +69,9 @@ const dismissExtensions = (): void => {
  *  被滚回区间开头就显示成那个日期。聊天记录等一切滚动视图同受其害。
  *
  *  故结构变化必须**成对**包起来:变化前快照,变化后还原 + 掐掉误重播的动画。
- *  返回的收尾函数在结构变化之后调用。 */
+ *  返回的收尾函数在结构变化之后调用。
+ *  ⚠️ 救不了 iframe:节点一离开文档帧就被卸掉,重挂 = 重载(帧内状态全丢、先黑一下)。所以能不重挂就别重挂 ——
+ *  底部面板开合已改成藏组不删组(parkBottom);左右栏开合仍走删组,仍会重挂。 */
 function preserveAcrossRestructure(): () => void {
   const root = typeof document !== 'undefined' ? document.querySelector('.wb-dockview') : null
   if (!root) return () => { /* 无 DOM(测试) */ }
@@ -318,7 +321,50 @@ function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknow
   const sameLoc = panelsAt(api, loc)
   if (sameLoc.length) return { referencePanel: sameLoc[0].id, direction: 'within' }
   if (loc === 'main') return undefined // 首个主区 panel
+  const parked = loc === 'bottom' ? parkedBottom(api) : undefined
+  if (parked) {
+    // 开回收起时藏着的那个组:不新建组 = 网格不收支 = 主区不重挂。先亮出来再开 panel,视图挂载时量得到尺寸。
+    try {
+      parked.api.setVisible(true)
+      if (!sidebarAnimating.bottom) parked.api.setConstraints({ minimumHeight: DV_GROUP_MIN }) // 补间期由补间自己管 min
+    } catch { /* 跨版本兜底 */ }
+    return { referenceGroup: parked.id, direction: 'within' }
+  }
   return { direction: loc === 'bottom' ? 'below' : loc }
+}
+
+type Group = IDockviewPanel['group']
+
+/** 收起后藏在网格里的空底部组(见 parkBottom)。桩 api 没有 groups → 恒无。 */
+function parkedBottom(api: DockviewApi): Group | undefined {
+  return api.groups?.find((g) => g.panels.length === 0 && g.api.isVisible === false)
+}
+
+/** 关 panel 但留下空组。panel.api.close() 关掉组里最后一个 = Dockview 连组一起删。
+ *  ponytail: 走 DockviewComponent 私有的 removePanel 选项,钉在 dockview 7.x;没了它就退回 close()
+ *  (行为退回「开合重挂主区」,不坏)。正路是迁到 dockview 的 edge group / shell。 */
+function closeKeepingGroup(api: DockviewApi, panel: IDockviewPanel): void {
+  const component = (api as unknown as { component?: { removePanel?: (p: IDockviewPanel, o: { removeEmptyGroup: boolean }) => void } }).component
+  if (component?.removePanel) component.removePanel(panel, { removeEmptyGroup: false })
+  else panel.api.close()
+}
+
+/** 收起底部面板:关掉内容,但把组**留在网格里藏起来**(setVisible(false) 只把这一格缩成 0,不动树)。
+ *  删组会让 Dockview 归一化网格(主区那一列的 branch 少一个孩子)→ 主区整列 DOM 摘下重挂 → 里面每个 iframe
+ *  重载:PDF / 预览 / 插件舞台黑一下、帧内状态全丢(2026-10-02 Video Studio 实测每次 ⌘J 黑 0.15–0.6s)。
+ *  内容照旧进 stash、panel 照旧销毁 —— 空组没有 panel,panelsAt / syncPanelState / 信封的「可见」口径一概不变。
+ *  下次展开由 positionFor 开回这个组。同在底部的其它组(用户左右分过屏)照常删:它们的兄弟只是底部那一支。 */
+function parkBottom(api: DockviewApi, group: Group, panels: IDockviewPanel[]): void {
+  for (const p of panels) {
+    try { if (p.group === group) closeKeepingGroup(api, p); else p.api.close() } catch { /* 已经不在了 */ }
+  }
+  if (!api.groups?.includes(group) || group.panels.length) return // 组已被删(补间途中 × 掉了最后一个)/ 没关干净
+  try {
+    // 焦点别停在看不见的空组上。⚠️激活**组**不激活 panel:panel.api.setActive() 会让 Dockview 把它的内容
+    // 摘下再挂回(renderPanel),帧照样重载 —— 实测这一句就是修完还剩的那一次重挂。
+    if (api.activeGroup === group) activeMainPanel(api)?.group.api.setActive()
+    group.api.setVisible(false)
+  } catch { /* 跨版本兜底 */ }
 }
 
 /** Repair region boundaries without reloading any View. The snapshot before insertion keeps
@@ -686,7 +732,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 侧栏被强行拉宽、剩下的主区纹丝不动(用户实报)。180ms 后释放,恢复手动拖宽。
     const release = loc === 'main' ? lockSides(api, ['left', 'right'], true) : () => {}
     // 先关再填:占位可能与被关视图同 type,open-first 会复用到正被关的那个。
-    panel.api.close()
+    // 底部最后一个 = 收起面板:同 ⌘J 藏组不删组,免主区重挂。
+    if (wasLastBottom) parkBottom(api, panel.group, [panel])
+    else panel.api.close()
     if (wasLastSide) get().openView('sidebar-empty', {}, loc)
     if (wasLastBottom) set((st) => ({ stash: { ...st.stash, bottom: [] }, stashActive: { ...st.stashActive, bottom: null }, bottomVisible: false }))
     useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
@@ -1029,9 +1077,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const finish = (): void => {
         if (stale()) return // 已被后一次点击接管:那一轮会自己收尾,这里再动手就是去关别人的 panel
         // 逐个 try:这批 panel 可能已被新一轮 / closeLeaf 关掉,dockview 对重复 close 抛 'invalid operation'。
-        // 组被移除 → 网格收支 → 幸存的那一支被摘下重挂:滚动位置会归零、入场动画会重播。成对包住。
+        // 左右:组被移除 → 网格收支 → 幸存的那一支被摘下重挂:滚动位置会归零、入场动画会重播。成对包住。
+        // 底部:组藏起来不删(parkBottom),主区不重挂 —— iframe 不重载,这对包装只剩兜底。
         const restore = preserveAcrossRestructure()
-        panels.forEach((p) => { try { p.api.close() } catch { /* 已经不在了 */ } })
+        if (vert) parkBottom(api, panels[0].group, panels)
+        else panels.forEach((p) => { try { p.api.close() } catch { /* 已经不在了 */ } })
         restore()
         settleSizes() // 收起后另一侧会吃掉空白漂移 → 重新钉回 0.191
         setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
@@ -1067,7 +1117,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const unlock = lockNeighbour()
       const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
       toggleReleases[side] = release
-      const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂
+      const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂(底部有藏着的组时不新增)
       stashed.forEach((v) => get().openView(v.type, v.params, side))
       restoreOpen()
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
@@ -1309,7 +1359,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
       const finish = (): void => {
         pinSides(api)
         const restore = preserveAcrossRestructure()
-        if (panel && api.getPanel(id) === panel) panel.api.close()
+        if (panel && api.getPanel(id) === panel) { if (vert) parkBottom(api, panel.group, [panel]); else panel.api.close() }
         if (wasActive && previous && api.getPanel(previous.id) === previous) previous.api.setActive()
         restore()
         element.remove()
