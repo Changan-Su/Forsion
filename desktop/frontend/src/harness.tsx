@@ -711,7 +711,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   const toggle = { on: false }
   ;(window as unknown as { __rbToggle: typeof toggle }).__rbToggle = toggle
   addCommand({ id: 'h-toggle', title: 'Harness toggle', checked: () => toggle.on, run: () => { toggle.on = !toggle.on } })
-  // &unit:Unit 切换器(head 常驻件)上架。stub 最小 host 面(getConfig/setConfig/名册/配对/
+  // &unit:Unit 切换器(命令区那枚,同生产 side:'bottom')上架。stub 最小 host 面(getConfig/setConfig/名册/配对/
   // openExternal 记账)+ amadeusSync 布尔门 —— 这支仪器验切换器的 DOM/开合/两态几何与「设备行 =
   // 打开对方页面」的 URL 组装,不验真隧道/真配对(那半在 server relay.test.ts 与 electron/unitWeb.test.ts)。
   // 见 scripts/unit-switcher.check.cjs。
@@ -797,7 +797,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
     void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface }, { useApp }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
-      addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
+      addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
       document.body.appendChild(rsHost)

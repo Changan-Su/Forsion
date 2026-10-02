@@ -28,6 +28,9 @@ interface FlyState { key: string; zone: RibbonZone; folderId?: string; top: numb
 interface MenuState { x: number; y: number; entries: { label: string; onClick(): void }[] }
 
 const GAP = 4
+/** 常驻上限:上区(Spaces)与命令区各露几项,超出的进「…」(见下面 capT / capB)。 */
+const TOP_VISIBLE = 5
+const BOTTOM_VISIBLE = 4
 /** 收起态浮签时序 = desktop hoverTip 已拍板的那套(引擎不能 import 宿主,只能同值抄一份):
  *  悬停 1s 弹;刚收起 0.1s 内移到下一枚 → 立刻弹(连续扫图标时不必每枚重等 1s)。 */
 const TIP_SHOW_DELAY = 1000
@@ -174,7 +177,8 @@ export function Ribbon() {
   const pinned = items.filter((i) => i.side === 'bottom' && i.pinned)
   // head 区:折叠钮下的固定件(zoneList 的 top/bottom 过滤天然排除它,不进拖拽/溢出/持久化)。
   const headItems = items.filter((i) => i.side === 'head')
-  // home 区:两区之间那段空当的**正中**(2026-08-28 用户要求的「主位」槽)。同 head,不进拖拽/溢出/持久化。
+  // home 区:Space 区的**第一格**(2026-08-28 用户要的「主位」槽;10-02 用户改判:从两区之间的正中挪到上区最前)。
+  // 同 head,不进拖拽/溢出/持久化。
   const homeItems = items.filter((i) => i.side === 'home')
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
@@ -196,16 +200,24 @@ export function Ribbon() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [expanded, slotH, items.length, folders.length, commandItems.length])
-  let capT = topE.length
-  let capB = botE.length
+  // 常驻上限(10-02 用户拍板「Ribbon 减负」):上区最多 5 个 Space、命令区最多 4 项,其余进各自的「…」。
+  // 写成 `len ≤ N ? len : N + 1`,cut() 留一格给「…」后正好露 N 个。命令区从头吃起 → 注册序排在前面的
+  // 反馈 / 市场 / 成就进「…」,明暗 / 设备互联 / 命令面板 / 设置常驻(钉死的账号卡不在 botE 里,不占名额)。
+  // ponytail: 用户钉进命令区的命令与收纳夹也占名额,钉多了会把明暗挤进「…」;要按项豁免再给 RibbonItem 加标记。
+  const cap = (len: number, max: number): number => (len <= max ? len : max + 1)
+  const wantT = cap(topE.length, TOP_VISIBLE)
+  const wantB = cap(botE.length, BOTTOM_VISIBLE)
+  let capT = wantT
+  let capB = wantB
   if (capT + capB > slots) {
+    // 窗口矮到连上限都放不下:按高度两区分配(只会比上限更少)。
     // 空区给 0(否则 max(1,…) 白占一格,挤掉另一区,见 codex#5);两区都非空时各保至少一半。
     if (topE.length === 0) { capT = 0; capB = slots }
     else if (botE.length === 0) { capT = slots; capB = 0 }
     else {
       const half = Math.floor(slots / 2)
-      capT = Math.max(1, Math.min(topE.length, Math.max(half, slots - botE.length)))
-      capB = Math.max(1, Math.min(botE.length, slots - capT))
+      capT = Math.max(1, Math.min(wantT, Math.max(half, slots - wantB)))
+      capB = Math.max(1, Math.min(wantB, slots - capT))
     }
   }
   /** 溢出从「…」那一端吃起 —— 上区「…」在下,吃列表尾;命令区「…」在上,吃列表头。
@@ -578,12 +590,11 @@ export function Ribbon() {
         </button>
         {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
-      {renderZone('top', top)}
-      {/* 主位槽:**恒渲染**(空着也留),`margin-block:auto` 由它一个人吃掉全部空当 →
-          自己垂直居中,底部两组照旧贴底。没有 home 件的宿主(如 Tangu Web)高度为 0,观感与从前一致。 */}
+      {/* 主位槽:**恒渲染**(空着也留),排在 Space 区最前。没有 home 件的宿主(如 Tangu Web)高度为 0。 */}
       <div ref={homeRef} className="rb-group rb-home">
         {homeItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
+      {renderZone('top', top)}
       {renderZone('bottom', bot)}
       <div ref={pinnedRef} className="rb-group rb-pinned">
         {pinned.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}

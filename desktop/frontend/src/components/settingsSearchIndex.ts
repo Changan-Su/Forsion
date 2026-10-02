@@ -52,6 +52,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'ui-zoom', tab: 'theme', anchor: 'ui-zoom', labelKey: 'settings.theme.zoomLabel', keywords: '缩放 界面大小 zoom scale' },
   { id: 'glass', tab: 'theme', anchor: 'glass', labelKey: 'settings.theme.glassLabel', keywords: '毛玻璃 透明 glass blur' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
+  { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat' },
   { id: 'fonts', tab: 'theme', anchor: 'fonts', labelKey: 'settings.theme.typographyTitle', keywords: '字体 font typography' },
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },

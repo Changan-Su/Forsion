@@ -20,6 +20,7 @@ import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SketchCards } from '../../components/SketchCard'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
+import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
 
 registerMessages({
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },

@@ -260,15 +260,16 @@ async function main() {
     await page.waitForTimeout(120)
     const firstId = await page.$eval('.rb-top .rb-slot', (e) => e.dataset.id)
     check('M4 改序后 ⌘1 标在新的第一个上', firstId === 'tD' && (await keysOf(page))[0] === '⌘1', `${firstId} / ${(await keysOf(page))[0]}`)
-    // 补到 10 个:第 10 个没有快捷键 → 不画提示
+    // 补到 10 个:10-02 起上区只常驻 5 个(用户拍板 v1),第 6 个起进「…」—— 常驻的正好标 ⌘1..5,不跳号
     await page.evaluate(() => {
       const s = window.__rb.getState()
       for (const n of ['E', 'F', 'G', 'H', 'I', 'J']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() {} })
     })
-    await page.setViewportSize({ width: 900, height: 1000 }) // 够高,10 个都不进「…」
+    await page.setViewportSize({ width: 900, height: 1000 }) // 够高:进「…」只因常驻上限,不因高度
     await page.waitForTimeout(250)
     const ks = await keysOf(page)
-    check('M5 第 10 个没有快捷键 → 不画提示', ks.length === 10 && ks[8] === '⌘9' && ks[9] === '', `${ks.length} 个 ｜ ${ks.join('|')}`)
+    const hasMore = !!(await page.$('.rb-top .rb-more'))
+    check('M5 补到 10 个:上区只常驻 5 个(标 ⌘1..5),其余进「…」', ks.join() === '⌘1,⌘2,⌘3,⌘4,⌘5' && hasMore, `${ks.length} 个 ｜ ${ks.join('|')} ｜ more=${hasMore}`)
     await page.setViewportSize({ width: 900, height: 800 })
 
     // N. 未读角标(收件箱红点)× 快捷键提示:展开态角标必须贴**图标**右上角,不是行右端 ——

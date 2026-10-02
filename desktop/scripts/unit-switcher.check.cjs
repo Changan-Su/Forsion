@@ -1,10 +1,11 @@
 /**
- * Forsion Unit 切换器(Ribbon head)DOM/开合/两态契约(真 Chromium + 真 Ribbon + 真组件,
+ * Forsion Unit 切换器(Ribbon 命令区)DOM/开合/两态契约(真 Chromium + 真 Ribbon + 真组件,
  * harness.html?ribbon&unit;host 面是 stub —— 真隧道在 server relay.test.ts,真配对/反代在
  * electron/unitWeb.test.ts)。v2 = B 端渲染:设备行动作是「打开对方页面」,不再换本机 cfg。
  *
  * 判据:
- *   1 head 区出现胶囊(折叠钮之后,不进上/下两区的拖拽序)
+ *   1 胶囊住在命令区(.rb-bottom;10-02 起从 head 挪下来,缺省排在明暗切换与命令面板之间 ——
+ *     那条排序是 bootstrapEngine 的一次性迁移,本台架没有 rb-mode,只验它进了命令区)
  *   2 展开态显示当前面(本地/云端,跟 vaultSide);点开列表 = 本地/云端/设备行/「通过地址连接…」,
  *     离线设备灰显,emoji 图标生效,当前项带勾选
  *   3 一台设备按通路拆行(直连/P2P/中转):直连行仅探针通了才出现,P2P 行 = 在线且本端有桥,
@@ -76,13 +77,13 @@ async function main() {
     page.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await page.addInitScript(() => localStorage.clear())
     await page.goto(URL, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.rb-head .unitsw-pill', { timeout: 20000 })
+    await page.waitForSelector('.rb-bottom .unitsw-pill', { timeout: 20000 })
 
     await page.evaluate(() => { window.__rb.setState({ expanded: true }) })
     await page.waitForTimeout(120)
 
-    const inHead = await page.evaluate(() => !!document.querySelector('.rb-head .unitsw-pill'))
-    check('胶囊住在 rb-head(不进两区拖拽序)', inHead)
+    const inBottom = await page.evaluate(() => !!document.querySelector('.rb-bottom .unitsw-pill'))
+    check('胶囊住在命令区 .rb-bottom', inBottom)
 
     const label = await page.evaluate(() => document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '')
     check('展开态显示当前面(缺省=本地)', label === '本地', `label=${label}`)
@@ -290,7 +291,7 @@ async function main() {
 
     // P1-K4:设备凭据没加密(K5 plaintext)→ K5 提示夹在父开关与子开关之间,子开关置灰
     await page.goto(`${URL}&secrets=plaintext`, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.rb-head .unitsw-pill', { timeout: 20000 })
+    await page.waitForSelector('.rb-bottom .unitsw-pill', { timeout: 20000 })
     await page.evaluate(() => { window.__rb.setState({ expanded: true }) })
     await page.click('.unitsw-pill')
     await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
