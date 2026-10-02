@@ -49,7 +49,7 @@ cd android && ./gradlew assembleDebug
   结果按请求目录校验；原生插件缺失/调用失败时回退现有 Web 菜单。
 - Android 15 的系统栏与刘海间距使用 Capacitor `adjustMarginsForEdgeToEdge: auto`，避免内容被状态栏覆盖。
 - **验证范围**：示例插件实际经过 `pluginStore` 注册、挂载共享输入框和卸载。
-  它不代表外部插件安装/市场加载已经可用；移动桥当前 `listPlugins` 返回空列表，需另行设计外部加载与能力声明。
+  外部插件的安装与装载见下面「Android 插件」一节。
   预览消息和模型是样本，无登录、后端会话或模型请求。
 
 ### 独立预览 APK 与截图
@@ -71,6 +71,35 @@ OUT=/absolute/review-output node scripts/native-picker-emu.cjs
 验收脚本通过真实 Compose 无障碍节点操作面板，并检查 Web 侧的草稿结果；输出浅色、深色、
 英文、搜索键盘与插件截图，以及 `acceptance.json`。当前已覆盖 Android 15 模拟器；
 真机、其他 Android 版本和完整外部插件目录仍待后续验收。
+
+## Android 插件(2026-10-02)
+
+外部 Forsion 插件(`amadeus-plugin`)可从应用市场装进 App 并直接运行,与桌面同一份 `pluginStore` / `ctx`。
+
+- **存储**:`Directory.Data/plugins/<slug>/{manifest.json, main.js, README.md, CHANGELOG.md, icon.png}`,
+  私有数据 `Directory.Data/plugins-data/<id>.json(.alt)`。应用级,不在任何笔记库里(云端库 / 本地库同一份)。
+- **装配**:`src/plugins/installMobilePlugins.ts`,由 `main.tsx` 在 `import('./mobileEntry')` 之前调用:
+  `window.amadeus` 转发壳上叠 `listPlugins / uninstallPlugin / readPluginData / writePluginData`(`pluginHost.ts`)
+  并声明 `hostCaps.pluginsFolder=false`;`window.tangu` 挂 `marketTypes` + `market*` 六个方法(`mobileMarket.ts`)。
+  只有这一处引用 `@capacitor/filesystem`(`capacitorPluginFs.ts`),web 包图不经过它。
+- **下载**:真机走 `Filesystem.downloadFile`(原生 HTTP,不受 CORS 限制、流式落 Cache、先看大小再读);
+  浏览器 / 台架走 `fetch`(下载主机要给 CORS)。
+- **校验**(全部发生在写盘之前):ZIP 魔数、下载 ≤25 MB、解压 ≤64 MB、≤2000 个文件、slug / type / 下载地址、
+  穿越条目整包拒、按最浅的 manifest 重定根、`isDesktopOnly: true` 拒装、与内置插件同 id 拒装、有 `integrity` 就校验 SRI。
+  解包规则与桌面共用 `desktop/shared/marketPackage.ts`。落盘时先清旧目录,`manifest.json` 最后写(半截目录没有 manifest,不会被当成插件)。
+- **私有数据防写坏**:双槽(`.json` / `.json.alt`)+ 带序号的 JSON 信封,每次写较旧的那一槽;写到一半被杀只坏那一槽,
+  读取取序号最大的有效槽 —— 不依赖 rename / 覆盖语义。
+- **CSP**:`index.html` 的 `script-src` 带 `'unsafe-eval'`,插件代码经 `new Function` 求值(同桌面)。
+- **手机暂不支持**:插件状态栏项(没有状态栏)、捆绑包里的引擎插件 / Agent / 技能 / Space、主题 / Space / 技能 / Agent 类市场条目、
+  npm 来源的条目(桌面同样不支持)。
+- **安全**:插件代码与 App 渲染层同一个 JS 作用域 —— 能调 `window.tangu` / `window.amadeus` 的一切,包括已登录账号的云端接口
+  (与桌面一样:安装 = 信任)。手机上额外的约束只有市场这一个来源和上面的包体校验;没有可见的插件目录,侧载不了。
+
+```bash
+npm run test:plugins                 # 宿主 / 市场纯逻辑单测(内存文件系统,不用 build)
+rm -rf dist && npm run build && npm run e2e:plugins   # 真浏览器:市场 → 安装 → 运行 → 刷新 → 停用 → 卸载
+npm run e2e:plugins -- --negative    # 负对照:去掉 'unsafe-eval' 后必须红
+```
 
 ## 深链登录(需服务端确认一处)
 

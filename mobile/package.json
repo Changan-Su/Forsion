@@ -17,6 +17,8 @@
     "test:unitbridge": "node scripts/unit-bridge.test.cjs",
     "test:unitssheet": "node scripts/units-sheet-model.test.cjs",
     "test:savedl": "node scripts/save-download.test.cjs",
+    "test:plugins": "node scripts/plugin-host.test.cjs",
+    "e2e:plugins": "node scripts/plugin-install.e2e.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
