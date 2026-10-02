@@ -13,7 +13,7 @@ import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, 
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
-import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
+import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import {
@@ -1280,10 +1280,21 @@ export const SettingsModal: React.FC<{
     return () => { el.removeEventListener('scroll', sync); ro?.disconnect() }
   })
 
+  // Android 原生顶栏(lcl nativeChrome 的可选宿主)在场时由它画标题 + 返回(page 模式),Web 页头让位(data-native-chrome)。
+  // 返回 / × 与 Web 页头的按钮做的是同一件事:首页「返回」= 退出设置;二级页「返回」= 回设置首页,「×」= 退出设置。
+  // 没有原生宿主(手机浏览器、桌面手机框)时这个声明是空操作,Web 页头照旧。
+  const nativeChrome = useNativeChromeInstalled() && mobileSettings
+  useNativeChromeClaim(!p.open || !mobileSettings ? null : mobileMenuOpen
+    ? { mode: 'page', title: t('settings.title'), back: t('settings.backToApp'), onBack: p.onClose }
+    : { mode: 'page', title: activeSubLabel || activeTabLabel, back: t('settings.title'), onBack: () => setMobileMenuOpen(true), close: t('settings.backToApp'), onClose: p.onClose })
+
   if (!p.open) return null
 
   return (
-    <div className={`settings-page settings-page--control-center${mobileSettings ? ' settings-page--mobile' : ''}${mobileSettings && mobileMenuOpen ? ' settings-page--mobile-menu' : ''}`}>
+    <div
+      className={`settings-page settings-page--control-center${mobileSettings ? ' settings-page--mobile' : ''}${mobileSettings && mobileMenuOpen ? ' settings-page--mobile-menu' : ''}`}
+      data-native-chrome={nativeChrome ? '' : undefined}
+    >
       <section className="settings-mobile-home" aria-label={t('settings.title')}>
         <header className="settings-mobile-home-head">
           <button type="button" onClick={p.onClose} aria-label={t('settings.backToApp')} title={t('settings.backToApp')}>

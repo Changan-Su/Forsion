@@ -19,7 +19,7 @@ import { THINKING_LEVELS } from '../../types'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
-import { useEdgeNudge, useWorkspace } from '@lcl/engine'
+import { openNativeSheetMenu, useEdgeNudge, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -37,7 +37,7 @@ import { thinkingLabel } from '../../components/thinkingLabel'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
-import { NormalModeItem } from './NormalModeItem'
+import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
@@ -62,6 +62,7 @@ registerMessages({
   'livecall.localOnly': { zh: '语音通话只能在本机的会话里用', en: 'Voice calls only work in sessions on this computer' },
 })
 registerMessages({
+  'input.modeSheetTitle': { zh: '模式', en: 'Mode' },
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
   'input.mention.projectNote': { zh: '派往项目 · 在该项目新建会话开工', en: 'Dispatch to project · starts a new session there' },
   // Chat / Work 是会话事实;可见切换统一放在侧栏胶囊。
@@ -1378,6 +1379,7 @@ export const Composer2: React.FC<{
   const dangerPill = !groupActive && !(planMode && !isChat) && !isChat && isHost && curApproval.id === 'full-auto'
   // Chat 是轻量对话，不露出 Work 才需要的计划/群聊/审批模式入口。
   const showModeChip = !isChat && (!!onPlanModeChange || isHost || !!onGroupChange || !!onAgentSwitch)
+
   const currentEngine = (engines || []).find((e) => e.id === engineId)
   const engineLabel = currentEngine?.name || t('input.engineDefault')
   const isEngine = !!engineId
@@ -1388,6 +1390,49 @@ export const Composer2: React.FC<{
         options: g.models.map((m) => ({ ...m, description: `${m.provider} · ${m.id}` })),
       }))
   const showModelPill = isEngine || !!onModelChange || !!onThinkingChange
+  // ── 模式菜单条目的唯一一份:Web 菜单(下方 JSX)与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。
+  // ⚠️ 审批档是安全相关设置:两种呈现走同一个 setApproval、同一份 APPROVALS(原生答回的只是条目 id,
+  // 由 runNativeSheetMenu 在这份快照里找回条目再调它自己的 run;从不把原生字符串当档位值用)。
+  const closeModeMenu = (): void => setOpenMenu(null)
+  const normalProps = {
+    active: !planMode && !groupActive && approval === 'auto-edit',
+    disabled: running,
+    agents: agents || [],
+    currentAgentSlug,
+    onNormalWork: onNormalWork || (() => {}),
+    onAgentSwitch: !isEngine && !groupActive ? onAgentSwitch : undefined,
+    onClose: closeModeMenu,
+  }
+  const planSection: SheetMenuSection | null = onPlanModeChange && !isChat ? {
+    title: t('input.planMode'),
+    items: [{ id: 'plan-mode', label: planMode ? t('input.planModeOn') : t('input.planModeEnable'), icon: <ClipboardList size={14} />, checked: !!planMode, run: () => { onPlanModeChange(!planMode); closeModeMenu() } }],
+  } : null
+  const groupSection: SheetMenuSection | null = onGroupChange && !isEngine && !isChat ? {
+    title: t('group.menu.section'),
+    items: [{ id: 'group-chat', label: groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable'), icon: <Users size={14} />, checked: groupActive, run: () => { setGroupSetupOpen(true); closeModeMenu() } }],
+  } : null
+  const approvalItems: Array<SheetMenuItem & { approvalId: (typeof APPROVALS)[number]['id'] }> = isHost ? APPROVALS.map(({ id, Icon, key, desc, ...a }) => ({
+    id: `approval:${id}`, approvalId: id, label: t(key), detail: t(desc), icon: <Icon size={15} className="approval-ic" />,
+    checked: approval === id, danger: 'danger' in a, run: () => setApproval(id),
+  })) : []
+  /** 选了自定义才给编辑入口:没选这一档时打开它没有意义(规则不参与判定) */
+  const editRulesItem: SheetMenuItem | null = isHost && approval === 'custom' ? {
+    id: 'approval-rules', label: t('input.approval.editRules'), detail: t('input.approval.editRulesDesc'), icon: <SlidersHorizontal size={15} className="approval-ic" />,
+    run: () => { setRulesOpen(true); closeModeMenu() },
+  } : null
+  const modeSheet = (): { title: string; back: string; sections: SheetMenuSection[] } => {
+    const normal = onNormalWork && !isChat ? normalModeItems(normalProps, t) : null
+    return {
+      title: t('input.modeSheetTitle'),
+      back: t('common.back'),
+      sections: [
+        { items: normal ? [normal.normal, ...(normal.agentSwitch ? [normal.agentSwitch] : [])] : [] },
+        ...(planSection ? [planSection] : []),
+        ...(groupSection ? [groupSection] : []),
+        ...(isHost ? [{ title: t(teamApproval ? 'input.approvalSection.team' : 'input.approvalSection'), items: [...approvalItems, ...(editRulesItem ? [editRulesItem] : [])] }] : []),
+      ],
+    }
+  }
 
   return (
     <div className="t2c">
@@ -1671,7 +1716,11 @@ export const Composer2: React.FC<{
                   data-danger={dangerPill || undefined}
                   title={dangerPill ? t('input.approval.fullAutoDesc') : t('input.modeChipTitle')}
                   aria-expanded={openMenu === 'mode'}
-                  onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}
+                  onClick={() => {
+                    // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 菜单,宿主呈现失败也回落 Web。
+                    if (openMenu !== 'mode' && openNativeSheetMenu(modeSheet, { onFallback: () => setOpenMenu('mode') })) { setOpenMenu(null); return }
+                    setOpenMenu((m) => (m === 'mode' ? null : 'mode'))
+                  }}
                 >
                   <ModeIcon size={13} />
                   <span className="t2c-pill-label">{modeLabel}</span>
@@ -1679,63 +1728,44 @@ export const Composer2: React.FC<{
                 </button>
                 {openMenu === 'mode' && (
                   <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
-                    {onNormalWork && !isChat && (
-                      <NormalModeItem
-                        active={!planMode && !groupActive && approval === 'auto-edit'}
-                        disabled={running}
-                        agents={agents || []}
-                        currentAgentSlug={currentAgentSlug}
-                        onNormalWork={onNormalWork}
-                        onAgentSwitch={!isEngine && !groupActive ? onAgentSwitch : undefined}
-                        onClose={() => setOpenMenu(null)}
-                      />
-                    )}
-                    {onPlanModeChange && !isChat && (
-                      <>
-                        <div className="menu-section">{t('input.planMode')}</div>
-                        <button className={`menu-item${planMode ? ' active' : ''}`} onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}>
-                          <ClipboardList size={14} />
-                          <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
-                          {planMode && <Check size={13} />}
-                        </button>
-                      </>
-                    )}
-                    {onGroupChange && !isEngine && !isChat && (
-                      <>
-                        <div className="menu-section">{t('group.menu.section')}</div>
-                        <button className={`menu-item${groupActive ? ' active' : ''}`} onClick={() => { setGroupSetupOpen(true); setOpenMenu(null) }}>
-                          <Users size={14} />
-                          <span className="grow">{groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable')}</span>
-                          {groupActive && <Check size={13} />}
-                        </button>
-                      </>
-                    )}
+                    {onNormalWork && !isChat && <NormalModeItem {...normalProps} />}
+                    {[planSection, groupSection].map((sec) => sec && (
+                      <React.Fragment key={sec.items[0].id}>
+                        <div className="menu-section">{sec.title}</div>
+                        {sec.items.map((it) => (
+                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} onClick={it.run}>
+                            {it.icon}
+                            <span className="grow">{it.label}</span>
+                            {it.checked && <Check size={13} />}
+                          </button>
+                        ))}
+                      </React.Fragment>
+                    ))}
                     {isHost && (
                       <>
                         <div className="menu-section">{t(teamApproval ? 'input.approvalSection.team' : 'input.approvalSection')}</div>
-                        {APPROVALS.map(({ id, Icon, key, desc, ...a }) => (
+                        {approvalItems.map((it) => (
                           <button
-                            key={id}
-                            className={`menu-item approval-item${approval === id ? ' active' : ''}${'danger' in a ? ' danger' : ''}`}
-                            aria-describedby={`approval-mode-desc-${id}`}
-                            onClick={() => setApproval(id)}
+                            key={it.approvalId}
+                            className={`menu-item approval-item${it.checked ? ' active' : ''}${it.danger ? ' danger' : ''}`}
+                            aria-describedby={`approval-mode-desc-${it.approvalId}`}
+                            onClick={it.run}
                           >
-                            <Icon size={15} className="approval-ic" />
-                            <span className="grow approval-title">{t(key)}</span>
-                            {approval === id && <Check size={13} className="approval-ck" />}
-                            <span id={`approval-mode-desc-${id}`} role="tooltip" className="approval-hover-desc">{t(desc)}</span>
+                            {it.icon}
+                            <span className="grow approval-title">{it.label}</span>
+                            {it.checked && <Check size={13} className="approval-ck" />}
+                            <span id={`approval-mode-desc-${it.approvalId}`} role="tooltip" className="approval-hover-desc">{it.detail}</span>
                           </button>
                         ))}
-                        {/* 选了自定义才给编辑入口:没选这一档时打开它没有意义(规则不参与判定) */}
-                        {approval === 'custom' && (
+                        {editRulesItem && (
                           <button
                             className="menu-item approval-item"
                             aria-describedby="approval-edit-rules-desc"
-                            onClick={() => { setRulesOpen(true); setOpenMenu(null) }}
+                            onClick={editRulesItem.run}
                           >
-                            <SlidersHorizontal size={15} className="approval-ic" />
-                            <span className="grow approval-title">{t('input.approval.editRules')}</span>
-                            <span id="approval-edit-rules-desc" role="tooltip" className="approval-hover-desc">{t('input.approval.editRulesDesc')}</span>
+                            {editRulesItem.icon}
+                            <span className="grow approval-title">{editRulesItem.label}</span>
+                            <span id="approval-edit-rules-desc" role="tooltip" className="approval-hover-desc">{editRulesItem.detail}</span>
                           </button>
                         )}
                       </>

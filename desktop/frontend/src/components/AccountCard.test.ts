@@ -3,7 +3,12 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-vi.mock('@lcl/engine', () => ({ OverlayAt: ({ children }: any) => React.createElement('div', {}, children) }))
+vi.mock('@lcl/engine', () => ({
+  OverlayAt: ({ children }: any) => React.createElement('div', {}, children),
+  // 无原生半屏宿主(桌面 / 网页):账号菜单照旧画 Web 浮层。
+  nativeSheetPresenter: () => undefined,
+  runNativeSheetMenu: async () => false,
+}))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 const { AccountCard } = await import('./AccountCard')
 const { LocaleProvider } = await import('../i18n')

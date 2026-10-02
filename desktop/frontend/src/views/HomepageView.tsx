@@ -33,7 +33,8 @@ import {
   Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
@@ -46,7 +47,7 @@ import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
-import { useI18n, type Locale } from '../i18n'
+import { registerMessages, useI18n, type Locale } from '../i18n'
 import { formatLongDate, formatTime } from '../format/time'
 import { useShallow } from 'zustand/react/shallow'
 import {
@@ -488,6 +489,13 @@ function useDockTiles(): { tiles: Tile[]; topIds: string[]; order: string[] } {
 
 interface MenuState { x: number; y: number; kind: 'folder' | 'member'; id?: string }
 
+registerMessages({
+  'home.folderMenu.renameTitle': { zh: '重命名收纳夹', en: 'Rename folder' },
+  'home.folderMenu.rename': { zh: '重命名', en: 'Rename' },
+  'home.folderMenu.dissolve': { zh: '解散收纳夹', en: 'Dissolve folder' },
+  'home.folderMenu.moveOut': { zh: '移出收纳夹', en: 'Move out' },
+})
+
 export function HomepageView(_props: ViewProps) {
   const { t, locale } = useI18n()
   const zh = locale === 'zh'
@@ -805,6 +813,34 @@ export function HomepageView(_props: ViewProps) {
     else if (wallpaperOpen) setWallpaperOpen(false)
     else showOrganizer()
   }
+
+  /** 收纳夹 / 收纳夹成员菜单的唯一一份条目:Web 浮层与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
+  const menuItems = (m: MenuState): SheetMenuItem[] => {
+    if (m.kind === 'member') {
+      return [{ id: 'move-out', label: t('home.folderMenu.moveOut'), icon: <LogOut size={13} />, run: () => { moveOut(m.id!); setMenu(null); setOpenFolder(null) } }]
+    }
+    return [
+      {
+        id: 'rename', label: t('home.folderMenu.rename'), icon: <Pencil size={13} />,
+        run: () => {
+          const id = m.id!
+          const cur = tiles.find((x) => x.id === id)
+          setMenu(null)
+          void askString(t('home.folderMenu.renameTitle'), cur?.kind === 'folder' ? cur.folder.name : '').then((v) => {
+            const n = v?.trim()
+            if (n) rb().renameFolder(id, n)
+          })
+        },
+      },
+      { id: 'dissolve', label: t('home.folderMenu.dissolve'), icon: <FolderMinus size={13} />, run: () => { rb().removeFolder(m.id!); setMenu(null) } },
+    ]
+  }
+  // Android:改由原生半屏呈现(Web 浮层此时不渲染);桌面 / 网页恒走 Web 浮层。
+  const webMenu = useNativeSheetMenu(menu, () => {
+    if (!menu) return null
+    const tile = menu.kind === 'folder' ? tiles.find((x) => x.id === menu.id) : undefined
+    return { ...(tile?.kind === 'folder' ? { title: tile.folder.name } : {}), sections: [{ items: menuItems(menu) }] }
+  }, () => setMenu(null))
 
   return (
     <div
@@ -1170,25 +1206,9 @@ export function HomepageView(_props: ViewProps) {
         </div>
       )}
 
-      {menu && (
+      {menu && webMenu && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          {menu.kind === 'folder' && (
-            <>
-              <button onClick={() => {
-                const id = menu.id!
-                const cur = tiles.find((x) => x.id === id)
-                setMenu(null)
-                void askString(zh ? '重命名收纳夹' : 'Rename folder', cur?.kind === 'folder' ? cur.folder.name : '').then((v) => {
-                  const n = v?.trim()
-                  if (n) rb().renameFolder(id, n)
-                })
-              }}><Pencil size={13} /> {zh ? '重命名' : 'Rename'}</button>
-              <button onClick={() => { rb().removeFolder(menu.id!); setMenu(null) }}><FolderMinus size={13} /> {zh ? '解散收纳夹' : 'Dissolve folder'}</button>
-            </>
-          )}
-          {menu.kind === 'member' && (
-            <button onClick={() => { moveOut(menu.id!); setMenu(null); setOpenFolder(null) }}><LogOut size={13} /> {zh ? '移出收纳夹' : 'Move out'}</button>
-          )}
+          <CtxMenuButtons items={menuItems(menu)} />
         </OverlayAt>
       )}
     </div>

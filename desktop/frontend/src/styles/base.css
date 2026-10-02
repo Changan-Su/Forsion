@@ -5019,3 +5019,9 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transf
 /* 设置里失焦自动保存失败的就地提示(Codex 第一轮 A-2):同 .hint 的位置与字号,换危险色 + 一个「重试」。
  * 放文件末尾:与 .hint 同特异性,须压过它的颜色(DESIGN §7)。 */
 .settings-commit-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--danger); }
+
+/* Android 原生顶栏(NativeChrome page 模式:标题 + 返回 + ×)接管移动设置的页头时,Web 页头让位。
+ * data-native-chrome 只在 SettingsModal 判定原生宿主在场时挂;手机浏览器 / 桌面手机框的页头照旧。
+ * 放文件末尾,与上面 .settings-page--mobile 那组页头规则的顺序无关也稳(DESIGN §7.2)。 */
+.settings-page--mobile[data-native-chrome] .settings-mobile-home-head,
+.settings-page--mobile[data-native-chrome] .settings-mobile-detail-head { display: none; }

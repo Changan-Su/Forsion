@@ -24,7 +24,8 @@ import { setChatRefDrag } from './chatDragRef'
 import { isOrbitPinned, orderOrbitEntries, type OrbitPinTimes } from './orbitPins'
 import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import './sidebar2.css'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot } from './AttentionDot'
 import { homeTarget } from '../../services/engine/targets'
 
@@ -294,6 +295,102 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     if (renaming && draft.trim()) p.onRename(renaming, draft.trim())
     setRenaming(null)
   }
+  /** 重命名入口:Android 原生半屏输入(lcl nativeSheet 可选宿主)→ 与行内输入同一条提交规则(trim 后非空才改);
+   *  宿主缺席 / 呈现失败 → 行内输入(桌面、网页照旧)。 */
+  const startRename = (id: string): void => {
+    const s = [...allSessions, ...allArchived].find((x) => x.id === id)
+    const inline = (): void => { setDraft(s?.title || ''); setRenaming(id) }
+    if (!nativeSheetPresenter()) { inline(); return }
+    void presentNativePrompt({ title: t('sidebar.rename'), initial: s?.title || '', confirm: t('common.confirm'), cancel: t('common.cancel') }).then((out) => {
+      if (!out.handled) { inline(); return }
+      const next = out.value?.text.trim()
+      if (next) p.onRename(id, next)
+    })
+  }
+  const startWsRename = (ws: WorkspaceDescriptor): void => {
+    const inline = (): void => { setWsDraft(ws.name); setWsRenaming(ws.key) }
+    if (!nativeSheetPresenter()) { inline(); return }
+    void presentNativePrompt({ title: t('sidebar.ws.rename'), initial: ws.name, confirm: t('common.confirm'), cancel: t('common.cancel') }).then((out) => {
+      if (!out.handled) { inline(); return }
+      const next = out.value?.text.trim()
+      if (next) p.onRenameWorkspace(ws, next)
+    })
+  }
+
+  /** 会话菜单的唯一一份条目:Web 右键菜单与 Android 原生半屏(useNativeSheetMenu)都从这里渲染。 */
+  const sessionMenuItems = (m: MenuState): SheetMenuItem[] => {
+    const items: SheetMenuItem[] = []
+    const one = m.ids.length === 1
+    const s = one ? [...allSessions, ...allArchived].find((x) => x.id === m.id) : undefined
+    // 与笔记树右键菜单同一项(amadeusViews 的「在新标签页打开」);⌘/Ctrl 单击是它的快捷路径。
+    if (one) items.push({ id: 'open-new-tab', label: t('sidebar.openInNewTab'), icon: <Plus size={13} />, run: () => { p.onSelect(m.id, { newTab: true }); setMenu(null) } })
+    if (one) items.push({ id: 'rename', label: t('sidebar.rename'), icon: <Pencil size={13} />, run: () => { setMenu(null); startRename(m.id) } })
+    items.push({
+      id: m.archived ? 'unarchive' : 'archive',
+      label: m.ids.length > 1
+        ? t(m.archived ? 'sidebar.unarchiveN' : 'sidebar.archiveN', { n: String(m.ids.length) })
+        : m.archived ? t('sidebar.unarchive') : t('sidebar.archive'),
+      icon: m.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />,
+      run: () => { for (const id of m.ids) p.onArchive(id, !m.archived); sel.clear(); setMenu(null) },
+    })
+    // 通道会话 → 「设为正在连接」(该通道的入站消息改走此会话)。
+    const chWs = s?.project_path ? p.workspaces.find((w) => w.kind === 'channel' && w.key === s.project_path) : null
+    if (s && chWs?.channel) {
+      const Ic = CHANNEL_ICONS[chWs.channel]
+      items.push({
+        id: 'channel-connect', label: t('sidebar.channel.setAsConnected'), icon: <Ic size={13} />,
+        run: () => {
+          setMenu(null)
+          void setChannelConnectedSession(homeTarget(), chWs.channel!, m.id)
+            .then(() => p.onToast?.(t('sidebar.wechat.setConnectedOk')))
+            .catch((e) => p.onToast?.(t('sidebar.wechat.setConnectedFail', { e: e?.message || e }), true))
+        },
+      })
+    }
+    // 删除仍只给已归档的(旧规矩:先归档再删);多选时要求**整批都已归档**,免得一刀切进活跃会话。
+    if (m.ids.every((id) => p.archivedSessions.some((x) => x.id === id))) {
+      items.push({
+        id: 'delete', danger: true, icon: <Trash2 size={13} />,
+        label: m.ids.length > 1 ? t('sidebar.deleteN', { n: String(m.ids.length) }) : t('sidebar.delete'),
+        run: () => {
+          const ids = m.ids
+          setMenu(null)
+          const ok = ids.length > 1
+            ? window.confirm(t('sidebar.deleteConfirmN', { n: String(ids.length) }))
+            : window.confirm(t('sidebar.deleteConfirm', { name: displaySessionTitle(s?.title, t) }))
+          if (!ok) return
+          for (const id of ids) p.onDelete(id)
+          sel.clear()
+        },
+      })
+    }
+    return items
+  }
+  const wsMenuItems = (w: NonNullable<typeof wsMenu>): SheetMenuItem[] => {
+    const items: SheetMenuItem[] = []
+    if (p.onTogglePinned) {
+      const key = `ws:${w.ws.key}`
+      const pinned = isOrbitPinned(p.pinnedEntries || {}, key)
+      items.push({ id: pinned ? 'unpin' : 'pin', label: t(pinned ? 'sidebar.unpin' : 'sidebar.pin'), icon: pinned ? <PinOff size={13} /> : <Pin size={13} />, run: () => { setWsMenu(null); p.onTogglePinned?.(key) } })
+    }
+    // 详情按 sessionId 取项目上下文:没有一条会话能借的项目(如空的默认工作区)不给这一项,免得点了没反应
+    if (p.onShowWorkspaceDetails && isProjectWorkspace(w.ws) && [...allSessions, ...allArchived].some((s) => s.project_path === w.ws.path && !s.projectless)) {
+      items.push({ id: 'ws-details', act: 'ws-details', label: t('sidebar.ws.details'), icon: <Info size={13} />, run: () => { const ws = w.ws; setWsMenu(null); p.onShowWorkspaceDetails?.(ws) } })
+    }
+    if (!w.ws.system) {
+      items.push({ id: 'ws-rename', label: t('sidebar.ws.rename'), icon: <Pencil size={13} />, run: () => { const ws = w.ws; setWsMenu(null); startWsRename(ws) } })
+      items.push({ id: 'ws-remove', act: 'ws-remove', danger: true, label: t('sidebar.ws.remove'), icon: <Trash2 size={13} />, run: () => { setWsRemoving(w.ws); setWsMenu(null) } })
+    }
+    return items
+  }
+  const sessionMenuTitle = (m: MenuState): string | undefined => {
+    if (m.ids.length !== 1) return undefined
+    const s = [...allSessions, ...allArchived].find((x) => x.id === m.id)
+    return displaySessionTitle(s?.title, t)
+  }
+  // Android:两份菜单改由原生半屏呈现(Web 版此时不渲染);桌面 / 网页恒走 Web 菜单。
+  const webMenu = useNativeSheetMenu(menu, () => menu && { title: sessionMenuTitle(menu), sections: [{ items: sessionMenuItems(menu) }] }, () => setMenu(null))
+  const webWsMenu = useNativeSheetMenu(wsMenu, () => wsMenu && { title: workspaceGroupLabel(wsMenu.ws, t), sections: [{ items: wsMenuItems(wsMenu) }] }, () => setWsMenu(null))
   const commitWsRename = () => {
     if (wsRenaming && wsDraft.trim()) {
       const ws = p.workspaces.find((w) => w.key === wsRenaming)
@@ -532,88 +629,15 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
       {/* 个人中心卡片 + 设置已移到左侧 ribbon 底部(见 bootstrapEngine rb-settings / rb-account)。 */}
 
-      {menu && (
+      {menu && webMenu && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          {/* 与笔记树右键菜单同一项(amadeusViews 的「在新标签页打开」);⌘/Ctrl 单击是它的快捷路径。 */}
-          {menu.ids.length === 1 && (
-            <button onClick={() => { p.onSelect(menu.id, { newTab: true }); setMenu(null) }}>
-              <Plus size={13} /> {t('sidebar.openInNewTab')}
-            </button>
-          )}
-          {menu.ids.length === 1 && (
-            <button onClick={() => { const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
-              <Pencil size={13} /> {t('sidebar.rename')}
-            </button>
-          )}
-          <button onClick={() => { for (const id of menu.ids) p.onArchive(id, !menu.archived); sel.clear(); setMenu(null) }}>
-            {menu.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-            {menu.ids.length > 1
-              ? t(menu.archived ? 'sidebar.unarchiveN' : 'sidebar.archiveN', { n: String(menu.ids.length) })
-              : menu.archived ? t('sidebar.unarchive') : t('sidebar.archive')}
-          </button>
-          {menu.ids.length === 1 && (() => {
-            // 通道会话 → 「设为正在连接」(该通道的入站消息改走此会话)。
-            const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id)
-            const chWs = s?.project_path ? p.workspaces.find((w) => w.kind === 'channel' && w.key === s.project_path) : null
-            if (!s || !chWs?.channel) return null
-            const Ic = CHANNEL_ICONS[chWs.channel]
-            return (
-              <button onClick={() => {
-                setMenu(null)
-                void setChannelConnectedSession(homeTarget(), chWs.channel!, menu.id)
-                  .then(() => p.onToast?.(t('sidebar.wechat.setConnectedOk')))
-                  .catch((e) => p.onToast?.(t('sidebar.wechat.setConnectedFail', { e: e?.message || e }), true))
-              }}>
-                <Ic size={13} /> {t('sidebar.channel.setAsConnected')}
-              </button>
-            )
-          })()}
-          {/* 删除仍只给已归档的(旧规矩:先归档再删);多选时要求**整批都已归档**,免得一刀切进活跃会话。 */}
-          {menu.ids.every((id) => p.archivedSessions.some((x) => x.id === id)) && (
-            <button className="danger" onClick={() => {
-              const ids = menu.ids
-              const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id)
-              setMenu(null)
-              const ok = ids.length > 1
-                ? window.confirm(t('sidebar.deleteConfirmN', { n: String(ids.length) }))
-                : window.confirm(t('sidebar.deleteConfirm', { name: displaySessionTitle(s?.title, t) }))
-              if (!ok) return
-              for (const id of ids) p.onDelete(id)
-              sel.clear()
-            }}>
-              <Trash2 size={13} /> {menu.ids.length > 1 ? t('sidebar.deleteN', { n: String(menu.ids.length) }) : t('sidebar.delete')}
-            </button>
-          )}
+          <CtxMenuButtons items={sessionMenuItems(menu)} />
         </OverlayAt>
       )}
 
-      {wsMenu && (
+      {wsMenu && webWsMenu && (
         <OverlayAt className="ctx-menu" x={wsMenu.x} y={wsMenu.y} onClick={(e) => e.stopPropagation()}>
-          {p.onTogglePinned && (() => {
-            const key = `ws:${wsMenu.ws.key}`
-            const pinned = isOrbitPinned(p.pinnedEntries || {}, key)
-            return (
-              <button onClick={() => { setWsMenu(null); p.onTogglePinned?.(key) }}>
-                {pinned ? <PinOff size={13} /> : <Pin size={13} />} {t(pinned ? 'sidebar.unpin' : 'sidebar.pin')}
-              </button>
-            )
-          })()}
-          {/* 详情按 sessionId 取项目上下文:没有一条会话能借的项目(如空的默认工作区)不给这一项,免得点了没反应 */}
-          {p.onShowWorkspaceDetails && isProjectWorkspace(wsMenu.ws) && [...allSessions, ...allArchived].some((s) => s.project_path === wsMenu.ws.path && !s.projectless) && (
-            <button data-act="ws-details" onClick={() => { const ws = wsMenu.ws; setWsMenu(null); p.onShowWorkspaceDetails?.(ws) }}>
-              <Info size={13} /> {t('sidebar.ws.details')}
-            </button>
-          )}
-          {!wsMenu.ws.system && (
-            <>
-              <button onClick={() => { setWsDraft(wsMenu.ws.name); setWsRenaming(wsMenu.ws.key); setWsMenu(null) }}>
-                <Pencil size={13} /> {t('sidebar.ws.rename')}
-              </button>
-              <button className="danger" data-act="ws-remove" onClick={() => { setWsRemoving(wsMenu.ws); setWsMenu(null) }}>
-                <Trash2 size={13} /> {t('sidebar.ws.remove')}
-              </button>
-            </>
-          )}
+          <CtxMenuButtons items={wsMenuItems(wsMenu)} />
         </OverlayAt>
       )}
       {wsRemoving && (

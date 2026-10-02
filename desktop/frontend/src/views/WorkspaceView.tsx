@@ -10,7 +10,7 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 无硬规则 → 落**本 Space 的默认档**(SpaceDefinition.autoWorkspaceMode,如 Amadeus → 笔记)。右栏恒为文件。
  */
 import { useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, scheduleWorkspaceSave, useSpaceStore, getView } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, scheduleWorkspaceSave, useSpaceStore, getView, openNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { Check, ChevronDown, FileText, ListFilter, MoreHorizontal, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -263,6 +263,11 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
     setModeMenuOpen(false)
     modeTriggerRef.current?.focus()
   }
+  /** 档位条目的唯一一份:Web 下拉与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
+  const modeItem = (option: (typeof modeOptions)[number]): SheetMenuItem => ({
+    id: `mode:${option.id}`, label: option.text, checked: override === option.id, run: () => pickMode(option.id),
+    ...(option.id === 'auto' ? { detail: automaticModeText } : {}),
+  })
 
   const body: ReactNode =
     pluginSrc ? <PluginListBody key={mode} src={pluginSrc} />
@@ -286,7 +291,11 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
             title={modeTriggerText}
             aria-haspopup="listbox"
             aria-expanded={modeMenuOpen}
-            onClick={() => setModeMenuOpen((open) => !open)}
+            onClick={() => {
+              // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 下拉,宿主呈现失败也回落 Web。
+              if (!modeMenuOpen && openNativeSheetMenu(() => ({ title: t('view.workspace'), sections: [{ items: modeOptions.map(modeItem) }] }), { onFallback: () => setModeMenuOpen(true) })) return
+              setModeMenuOpen((open) => !open)
+            }}
             onKeyDown={(event) => {
               if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
               event.preventDefault()
@@ -305,25 +314,28 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
                 aria-label={t('view.workspace')}
                 onKeyDown={moveModeFocus}
               >
-                {modeOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    role="option"
-                    data-workspace-mode={option.id}
-                    tabIndex={modeMenuOpen ? 0 : -1}
-                    aria-selected={override === option.id}
-                    className={`project-menu-item t2sw-mode-item${override === option.id ? ' is-selected' : ''}`}
-                    title={option.id === 'auto' ? t('workspace.mode.autoTip') : option.text}
-                    onClick={() => pickMode(option.id)}
-                  >
-                    <span className="project-menu-name">
-                      {option.text}
-                      {option.id === 'auto' && <span className="t2sw-auto-now">· {automaticModeText}</span>}
-                    </span>
-                    <span className="project-menu-check">{override === option.id ? <Check size={13} /> : null}</span>
-                  </button>
-                ))}
+                {modeOptions.map((option) => {
+                  const it = modeItem(option)
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="option"
+                      data-workspace-mode={option.id}
+                      tabIndex={modeMenuOpen ? 0 : -1}
+                      aria-selected={!!it.checked}
+                      className={`project-menu-item t2sw-mode-item${it.checked ? ' is-selected' : ''}`}
+                      title={option.id === 'auto' ? t('workspace.mode.autoTip') : it.label}
+                      onClick={it.run}
+                    >
+                      <span className="project-menu-name">
+                        {it.label}
+                        {it.detail && <span className="t2sw-auto-now">· {it.detail}</span>}
+                      </span>
+                      <span className="project-menu-check">{it.checked ? <Check size={13} /> : null}</span>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           </div>

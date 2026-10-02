@@ -10,7 +10,8 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ChevronRight, Laptop, MessageSquare, Monitor, MoreHorizontal, Pencil } from 'lucide-react'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { SidebarRow } from '../../components/SidebarRow'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
@@ -161,6 +162,32 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
     return out
   }, [units, byUnit, injected, p.filter])
 
+  /** 行菜单的唯一一份条目:Web 浮层与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
+  const menuItems = (m: MenuState): SheetMenuItem[] => {
+    const row = rowsByUnit[m.unitId]?.find((x) => x.id === m.id)
+    return [
+      {
+        id: 'rename', label: t('sidebar.rename'), icon: <Pencil size={13} />,
+        run: () => {
+          setMenu(null)
+          const inline = (): void => { setDraft(row?.title || ''); setRenaming({ unitId: m.unitId, id: m.id }) }
+          if (!nativeSheetPresenter()) { inline(); return }
+          // 原生半屏输入与行内输入同一条提交规则:trim 后非空才改。
+          void presentNativePrompt({ title: t('sidebar.rename'), initial: row?.title || '', confirm: t('common.confirm'), cancel: t('common.cancel') }).then((out) => {
+            if (!out.handled) { inline(); return }
+            const next = out.value?.text.trim()
+            if (next) void renameRemote(m.unitId, m.id, next)
+          })
+        },
+      },
+      { id: 'archive', label: t('sidebar.archive'), icon: <Archive size={13} />, run: () => { setMenu(null); void archiveRemote(m.unitId, m.id) } },
+    ]
+  }
+  const webMenu = useNativeSheetMenu(menu, () => menu && {
+    title: displaySessionTitle(clampText(rowsByUnit[menu.unitId]?.find((x) => x.id === menu.id)?.title, 200), t),
+    sections: [{ items: menuItems(menu) }],
+  }, () => setMenu(null))
+
   if (!runLocationsAvailable() || !units?.length) return null
 
   const toggle = (id: string): void => {
@@ -240,19 +267,9 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
           </div>
         )
       })}
-      {menu && (
+      {menu && webMenu && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => {
-            const row = rowsByUnit[menu.unitId]?.find((x) => x.id === menu.id)
-            setDraft(row?.title || '')
-            setRenaming({ unitId: menu.unitId, id: menu.id })
-            setMenu(null)
-          }}>
-            <Pencil size={13} /> {t('sidebar.rename')}
-          </button>
-          <button onClick={() => { const m = menu; setMenu(null); void archiveRemote(m.unitId, m.id) }}>
-            <Archive size={13} /> {t('sidebar.archive')}
-          </button>
+          <CtxMenuButtons items={menuItems(menu)} />
         </OverlayAt>
       )}
     </div>

@@ -639,3 +639,11 @@
 
 /* 工作区共享列表的主动作要看得出是按钮(W-14):共用规则里 border:0,单独给它描边。 */
 .t2sw-plug-btn { border: var(--border-width) solid var(--overlay-strong); }
+
+/* 触屏没有 hover:会话行「⋯」常显(同 deviceSessions.css 的 .t2d-section 规则),否则手机上只能靠长按找到菜单。
+ * 20px 的图形不变(行高 26.797px 由 check:orbitside 钉着),只用伪元素把命中区外扩到约 36px。
+ * 与上面 `.t2s-srow-menu { opacity: 0 }` 同特异性 → 必须留在文件末尾(DESIGN §7.2)。 */
+@media (pointer: coarse) {
+  .t2s-srow-menu { opacity: 0.7; position: relative; }
+  .t2s-srow-menu::after { content: ''; position: absolute; inset: -8px; }
+}

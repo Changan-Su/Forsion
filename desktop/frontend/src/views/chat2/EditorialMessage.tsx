@@ -48,7 +48,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
-import { useEdgeNudge } from '@lcl/engine'
+import { nativeSheetPresenter, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { CreationCards } from './CreationCards'
 
@@ -204,36 +204,65 @@ export interface MessageHandlers {
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
 }
 
+type RewindMode = 'code' | 'conversation' | 'both'
+type RewindStat = { files: number; skipped: number }
+type TFn = ReturnType<typeof useI18n>['t']
+
+/** 该时刻之后可回退的文件数(检查点涉及的路径去重,减去当时没存下快照的)。Web 菜单与原生半屏共用这一份口径。 */
+function loadRewindStat(at: number, ctx?: FileCtx): Promise<RewindStat> {
+  // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
+  if (!ctx?.sessionId || !at) return Promise.resolve({ files: 0, skipped: 0 })
+  return api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
+    .then((cps) => {
+      const files = new Set<string>()
+      const skipped = new Set<string>()
+      for (const c of cps) {
+        if (c.at < at) continue
+        c.files.forEach((p) => files.add(p))
+        c.skipped.forEach((p) => skipped.add(p))
+      }
+      // 能真回退的 = 全部条目减去「没存下快照」的那些(files 是全集,skipped 是它的子集)。
+      skipped.forEach((p) => files.delete(p))
+      return { files: files.size, skipped: skipped.size }
+    })
+    .catch(() => ({ files: 0, skipped: 0 }))
+}
+/** 回退菜单的唯一一份条目(三档);stat=null = 还在统计。 */
+function rewindMenuItems(stat: RewindStat | null, t: TFn, onPick: (mode: RewindMode) => void): SheetMenuItem[] {
+  const n = stat?.files ?? 0
+  return [
+    { id: 'code', label: stat ? t('rewind.codeOnly', { n }) : t('rewind.counting'), icon: <FileCode2 size={14} />, disabled: !n, run: () => onPick('code') },
+    { id: 'conversation', label: t('rewind.convOnly'), icon: <MessageSquare size={14} />, run: () => onPick('conversation') },
+    { id: 'both', label: t('rewind.both'), icon: <HistoryIcon size={14} />, disabled: !n, run: () => onPick('both') },
+  ]
+}
+const rewindNote = (stat: RewindStat | null, t: TFn): string =>
+  [t('rewind.scopeNote'), t('rewind.keepNote'), ...(stat?.skipped ? [t('rewind.skippedNote', { n: stat.skipped })] : [])].join(' ')
+
+/** Android(lcl nativeSheet 可选宿主):先统计再呈现原生半屏。没有宿主 → false,调用方照旧开 Web 菜单;
+ *  宿主呈现失败 → onFallback 开 Web 菜单。 */
+function openNativeRewind(at: number, ctx: FileCtx | undefined, t: TFn, onPick: (mode: RewindMode) => void, onFallback: () => void): boolean {
+  if (!nativeSheetPresenter()) return false
+  void loadRewindStat(at, ctx)
+    .then((stat) => runNativeSheetMenu({ title: t('rewind.title'), sections: [{ items: rewindMenuItems(stat, t, onPick), footer: rewindNote(stat, t) }] }))
+    .then((handled) => { if (!handled) onFallback() })
+  return true
+}
+
 /**
  * 回退菜单(用户消息 hover):三档 + 覆盖范围说明。文件数=该时刻之后所有检查点涉及的路径去重,
  * 打开时才拉(时间线不常看,没必要跟着每条消息常驻)。
  */
-const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 'conversation' | 'both') => void }> = ({ at, ctx, onPick }) => {
+const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: RewindMode) => void }> = ({ at, ctx, onPick }) => {
   const { t } = useI18n()
-  const [stat, setStat] = useState<{ files: number; skipped: number } | null>(null)
+  const [stat, setStat] = useState<RewindStat | null>(null)
   // 靠近底部时向上翻:.t2-stream 有 mask 自成层叠上下文,菜单的 z-index 出不去,会被悬浮输入卡盖住且点不到。
   const [up, setUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const edgeFix = useEdgeNudge(true, { boundary: '.t2-chat-view' })
   useEffect(() => {
-    // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
-    if (!ctx?.sessionId || !at) { setStat({ files: 0, skipped: 0 }); return }
     let alive = true
-    void api.listCheckpoints(targetForSession(ctx.sessionId), ctx.sessionId)
-      .then((cps) => {
-        if (!alive) return
-        const files = new Set<string>()
-        const skipped = new Set<string>()
-        for (const c of cps) {
-          if (c.at < at) continue
-          c.files.forEach((p) => files.add(p))
-          c.skipped.forEach((p) => skipped.add(p))
-        }
-        // 能真回退的 = 全部条目减去「没存下快照」的那些(files 是全集,skipped 是它的子集)。
-        skipped.forEach((p) => files.delete(p))
-        setStat({ files: files.size, skipped: skipped.size })
-      })
-      .catch(() => { if (alive) setStat({ files: 0, skipped: 0 }) })
+    void loadRewindStat(at, ctx).then((next) => { if (alive) setStat(next) })
     return () => { alive = false }
   }, [at, ctx?.sessionId, ctx?.cfg])
   useLayoutEffect(() => {
@@ -243,7 +272,6 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
     const r = el.getBoundingClientRect()
     if (r.bottom > limit - 4) setUp(true)
   }, [stat])
-  const n = stat?.files ?? 0
   return (
     <div
       ref={(el) => { ref.current = el; edgeFix.ref.current = el }}
@@ -251,18 +279,12 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
       style={edgeFix.style}
     >
       <div className="menu-section">{t('rewind.title')}</div>
-      <button className="menu-item" disabled={!n} onClick={() => onPick('code')}>
-        <FileCode2 size={14} />
-        <span className="grow">{stat ? t('rewind.codeOnly', { n }) : t('rewind.counting')}</span>
-      </button>
-      <button className="menu-item" onClick={() => onPick('conversation')}>
-        <MessageSquare size={14} />
-        <span className="grow">{t('rewind.convOnly')}</span>
-      </button>
-      <button className="menu-item" disabled={!n} onClick={() => onPick('both')}>
-        <HistoryIcon size={14} />
-        <span className="grow">{t('rewind.both')}</span>
-      </button>
+      {rewindMenuItems(stat, t, onPick).map((it) => (
+        <button key={it.id} className="menu-item" disabled={it.disabled} onClick={it.run}>
+          {it.icon}
+          <span className="grow">{it.label}</span>
+        </button>
+      ))}
       <div className="menu-section rewind-note">
         {t('rewind.scopeNote')} {t('rewind.keepNote')}
         {!!stat?.skipped && <> {t('rewind.skippedNote', { n: stat.skipped })}</>}
@@ -380,7 +402,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
             {handlers?.onRewind && (
               <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-                <button className="t2-iconbtn" title={t('rewind.title')} onClick={() => setRewindOpen((v) => !v)}><HistoryIcon size={14} /></button>
+                <button className="t2-iconbtn" data-act="rewind" title={t('rewind.title')} onClick={() => {
+                  // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
+                  if (!rewindOpen && openNativeRewind(msg.timestamp, fileCtx, t, (mode) => handlers.onRewind?.(mode), () => setRewindOpen(true))) return
+                  setRewindOpen((v) => !v)
+                }}><HistoryIcon size={14} /></button>
                 {rewindOpen && (
                   <RewindMenu at={msg.timestamp} ctx={fileCtx} onPick={(mode) => { setRewindOpen(false); handlers.onRewind?.(mode) }} />
                 )}
