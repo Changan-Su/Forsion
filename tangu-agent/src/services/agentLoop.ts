@@ -24,6 +24,7 @@ import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
@@ -2422,6 +2423,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
+    let actionNudged = false; // 零工具调用却在承诺 / 声称动作:收尾前只催一次(services/actionDeliveryCheck.ts)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -2941,6 +2943,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call `sketch`. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call `sketch` and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
           } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'sketch_delivery_nudge', iteration, signal: sketchTurnSignal.kind });
+          continue;
+        }
+
+        // —— 动作兑现兜底:用户要了一个动作,模型一个工具都没调就说「我这就写 / 建好了」收尾(10-02 live:luna ~1/5)。
+        //    只催一次;系统驱动的 run(Muse / 自动化)不在此列 —— kickoff 里满是动作词,零工具收尾在那边是正常结局。——
+        if (!actionNudged && !usedTools && !planMode && !lastIter && !deferBypass
+          && actionDeliveryNudgeNeeded(String(input.message || ''), res.content || '')) {
+          actionNudged = true;
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({ role: 'user', content: ACTION_DELIVERY_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'action_delivery_nudge', iteration });
           continue;
         }
 

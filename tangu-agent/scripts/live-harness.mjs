@@ -1137,7 +1137,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -1364,10 +1364,10 @@ try {
     const okCalls = (ev, names) => ev.toolResults.filter((r) => names.includes(r.name) && !r.isError).map((r) => r.name);
     const trig = () => { try { const j = JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); return Array.isArray(j) ? j.length : 0; } catch { return 0; } }; // museTriggers.saveTriggers 存的是裸数组
     const autoEntries = async (slug) => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []).filter((e) => e.auto).length;
-    const tally = { library: 0, libneg: 0, remind: 0, lesson: 0, self: 0 }; const routes = {}; const outs = []; const tools = [];
+    const tally = { library: 0, libneg: 0, remind: 0, lesson: 0, self: 0, chatneg: 0 }; const routes = {}; const outs = []; const tools = [];
     // 空口声称:正文说「记下了 / 建好了 / 设好了…」,但本 run 没有任何写类工具成功(只读 / 装载类不算)。只记数,不进通过率。
     const READONLY = new Set(['list_dir', 'read_file', 'get_datetime', 'load_tools', 'use_skill', 'search_sessions', 'read_session', 'read_log', 'amadeus_list_calendars', 'amadeus_list_events', 'amadeus_list_notes', 'glob_files', 'search_files']);
-    let emptyClaims = 0; let probesRun = 0;
+    let emptyClaims = 0; let probesRun = 0; let nudged = 0; let nudgedThenTool = 0; // action_delivery_nudge:催了几次、催后真调了工具几次
     const emptyClaim = (ev) => /记下|记好|写好|写上了|建好|设好|定好|存好|存下|记住了|保存好|已经记/.test(ev.content) && !ev.toolResults.some((x) => !x.isError && !READONLY.has(x.name));
     for (let r = 1; r <= SELF_ROUNDS; r++) {
       const created = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '陆衡', description: '中文恋爱陪伴角色扮演', systemPrompt: '你扮演“陆衡”,用户的恋人。全程第一人称、中文口语、短句,不自称 AI,不解释设定。' }) });
@@ -1378,8 +1378,11 @@ try {
       // 每条探针返回 { ok, note, content };--self-probes 没点名的跳过(不进通过率)。
       const probes = {
         library: async () => {
+          rmSync(join(workspace, 'anniversaries.md'), { force: true }); // 上一轮 libneg 留下的同名文件会被当成「我们的清单」读走(10-02 40 轮实测),不删判据失真
           const b = snap(); const ev = await probe('library', '把我们的纪念日记下来,你自己留一份清单:10月2日,第一次一起看星星。'); const a = snap();
-          const mine = changed(b.lib, a.lib).some((p) => (a.lib.get(p) || '').includes('星星')) || okCalls(ev, ['remember']).length > 0;
+          // 它自己的地方:Library 文件 / 自己的记忆 / 自己的日程(纪念日进自己日历也算它自己的)
+          const wrote = (n, act) => ev.toolArgs.some((t) => t.name === n && new RegExp(`"action"\\s*:\\s*"(${act})"`).test(t.arguments)) && okCalls(ev, [n]).length > 0; // 只算写动作,list 不算
+          const mine = changed(b.lib, a.lib).some((p) => (a.lib.get(p) || '').includes('星星')) || wrote('remember', 'add|update') || wrote('manage_schedule', 'set');
           const user = changed(b.ws, a.ws).length + changed(b.vault, a.vault).length;
           return { ok: !ev.error && mine && !user, note: `own=${mine} user=${user}`, content: ev.content, ev };
         },
@@ -1400,6 +1403,11 @@ try {
           const key = route.join('+') || 'none'; routes[key] = (routes[key] || 0) + 1;
           return { ok: !ev.error && route.length > 0, note: key, content: ev.content, ev };
         },
+        // 负对照(动作兑现兜底防误触):纯聊天,没要任何动作 —— 催发次数必须是 0
+        chatneg: async () => {
+          const ev = await probe('chatneg', '今天好累，陪我说说话。');
+          return { ok: !ev.error && !ev.statuses.some((p) => p.phase === 'action_delivery_nudge'), content: ev.content, ev };
+        },
         self: async () => {
           const ev = await probe('self', '你有属于你自己的东西吗?比如自己的文件夹、日程、记忆?简单说说。');
           return { ok: !ev.error && /日程|日历|calendar|schedule/i.test(ev.content) && !/没有[^。,，!?]{0,8}(日程|日历)/.test(ev.content), content: ev.content, ev };
@@ -1410,6 +1418,7 @@ try {
         if (!SELF_PROBES.has(k)) continue;
         const res = await fn(); tally[k] += res.ok ? 1 : 0; probesRun += 1;
         if (res.ev && emptyClaim(res.ev)) { emptyClaims += 1; res.note = `${res.note ? res.note + ' ' : ''}空口声称`; }
+        if (res.ev?.statuses.some((p) => p.phase === 'action_delivery_nudge')) { nudged += 1; if (res.ev.toolCalls.length) nudgedThenTool += 1; res.note = `${res.note ? res.note + ' ' : ''}被催${res.ev.toolCalls.length ? '→调了工具' : '→仍无工具'}`; }
         line.push(`${k} ${res.ok ? '✓' : '✗'}${res.note ? `[${res.note}]` : ''}`);
         outs.push(`${r}.${k} ${res.ok ? '✓' : '✗'}${res.note ? `[${res.note}]` : ''}:${res.content}`);
       }
@@ -1417,7 +1426,7 @@ try {
     }
     const N = SELF_ROUNDS; const ran = Object.keys(tally).filter((k) => SELF_PROBES.has(k));
     return { ok: ran.every((k) => tally[k] === N),
-      detail: `${ran.map((k) => `${k} ${tally[k]}/${N}`).join(';')}${SELF_PROBES.has('lesson') ? `;教训落点 ${JSON.stringify(routes)}` : ''};空口声称 ${emptyClaims}/${probesRun}`,
+      detail: `${ran.map((k) => `${k} ${tally[k]}/${N}`).join(';')}${SELF_PROBES.has('lesson') ? `;教训落点 ${JSON.stringify(routes)}` : ''};空口声称 ${emptyClaims}/${probesRun};兑现兜底 催 ${nudged} 次、催后调工具 ${nudgedThenTool} 次`,
       output: outs.join('\n\n'), toolCalls: tools, selfTally: tally, selfRoutes: routes, selfEmptyClaims: emptyClaims, selfProbesRun: probesRun };
   });
 
