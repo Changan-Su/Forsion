@@ -137,4 +137,21 @@ class NativeSheetPayloadTest {
         assertThrows(Exception::class.java) { ChromeState.parse(JSONObject("""{"mode":"shell","title":"x","theme":$theme,"tabCount":1,"labels":{"left":"a"}}""")) }
         assertThrows(Exception::class.java) { ChromeState.parse(JSONObject("""{"mode":"overlay","theme":$theme}""")) }
     }
+
+    @Test fun promptInputIsClampedToWhatConfirmAccepts() {
+        val max = SheetPayload.MAX_PROMPT_TEXT
+        val prompt = SheetPayload.parse(JSONObject("""{"requestId":"p1","kind":"prompt","title":"Name","confirm":"OK","cancel":"Cancel","theme":$theme}"""))
+        assertEquals("short", SheetPayload.clampPromptText("short"))
+        val exact = "a".repeat(max)
+        assertEquals(exact, SheetPayload.clampPromptText(exact))
+        val clamped = SheetPayload.clampPromptText("a".repeat(max + 5_000))
+        assertEquals(max, clamped.length)
+        assertTrue(prompt.accepts(SheetAnswer.Text(clamped)))
+        assertFalse(prompt.accepts(SheetAnswer.Text("a".repeat(max + 1)))) // why the field must clamp
+        // Never cut a surrogate pair in half: the emoji straddling the limit is dropped whole.
+        val straddling = SheetPayload.clampPromptText("a".repeat(max - 1) + "😀" + "tail")
+        assertEquals(max - 1, straddling.length)
+        assertFalse(Character.isHighSurrogate(straddling.last()))
+        assertTrue(prompt.accepts(SheetAnswer.Text(straddling)))
+    }
 }

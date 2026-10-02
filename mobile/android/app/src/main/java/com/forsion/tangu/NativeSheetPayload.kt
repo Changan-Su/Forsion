@@ -91,6 +91,15 @@ internal sealed interface SheetPayload {
         const val MAX_DEPTH = 3
         const val MAX_PROMPT_TEXT = 100_000
 
+        /** What the prompt field may hold: at most [MAX_PROMPT_TEXT] UTF-16 units, never ending on half a
+         *  surrogate pair. The field clamps its input with this, so a confirm can never be refused by
+         *  [Prompt.accepts] (which would look like a silent cancel to the user). */
+        fun clampPromptText(text: String): String {
+            if (text.length <= MAX_PROMPT_TEXT) return text
+            val cut = if (Character.isHighSurrogate(text[MAX_PROMPT_TEXT - 1])) MAX_PROMPT_TEXT - 1 else MAX_PROMPT_TEXT
+            return text.substring(0, cut)
+        }
+
         fun parse(json: JSONObject): SheetPayload {
             require(json.toString().length <= MAX_PAYLOAD) { "Sheet payload too large" }
             val requestId = NativeJson.str(json, "requestId", 80)

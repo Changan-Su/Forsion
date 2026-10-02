@@ -20,6 +20,14 @@ export function moreCommandGroups(commands: readonly Command[]): MoreCommandGrou
   return [...groups.values()]
 }
 
+/** 原生「⋯」半屏里点了一条命令:只认**呈现时**的那一条。半屏开着的时候插件可能重注册同 id 的命令(重载 / 启停 /
+ *  换了处理器):按 id 去活的注册表里跑,用户看到的是 A、执行的却是 B。注册表里那个 id 已经不是呈现时的对象
+ *  (被换掉 / 已注销)→ null,调用方什么都不做(Web sheet 是活的列表,换了会当场重画,没有这个问题)。 */
+export function presentedCommand(presented: readonly Command[], live: readonly Command[], id: string): Command | null {
+  const shown = presented.find((c) => c.id === id)
+  return shown && live.find((c) => c.id === id) === shown ? shown : null
+}
+
 /** 命令在「⋯」里的行文案(title 求值抛错 → 退回 id,不让一条坏命令拖垮整张菜单)。 */
 export function moreCommandTitle(c: Command): string { return safeLabel(c.title, c.id) }
 

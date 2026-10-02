@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { moreCommandGroups, moreCommandOn, moreCommandTitle } from './moreSheet'
+import { moreCommandGroups, moreCommandOn, moreCommandTitle, presentedCommand } from './moreSheet'
+import { useCommandStore } from './commandRegistry'
 import type { Command } from './types'
 
 const cmd = (id: string, extra: Partial<Command> = {}): Command => ({ id, title: id, run: () => {}, ...extra })
@@ -38,5 +39,30 @@ describe('more sheet command groups', () => {
     expect(moreCommandOn(cmd('b', { checked: () => true }))).toBe(true)
     expect(moreCommandOn(cmd('c', { checked: () => false }))).toBe(false)
     expect(moreCommandOn(cmd('d', { checked: () => { throw new Error('x') } }))).toBe(false)
+  })
+  it('a pick only resolves to the command object that was presented (re-registered / removed ids do nothing)', () => {
+    const ran: string[] = []
+    const store = useCommandStore.getState()
+    const shown = cmd('amadeus:p:go', { run: () => { ran.push('shown') }, moreGroup: { id: 'amadeus:p', title: 'P' } })
+    const other = cmd('amadeus:p:other', { moreGroup: { id: 'amadeus:p', title: 'P' } })
+    store.addCommand(shown)
+    store.addCommand(other)
+    try {
+      const presented = moreCommandGroups(useCommandStore.getState().commands).flatMap((g) => g.commands) // sheet opens: snapshot
+      const live = (): readonly Command[] => useCommandStore.getState().commands
+      expect(presentedCommand(presented, live(), 'amadeus:p:go')).toBe(shown)
+      // The plugin reloads while the sheet is open: same id, different handler.
+      store.addCommand(cmd('amadeus:p:go', { run: () => { ran.push('replacement') }, moreGroup: { id: 'amadeus:p', title: 'P' } }))
+      expect(presentedCommand(presented, live(), 'amadeus:p:go')).toBeNull()
+      expect(presentedCommand(presented, live(), 'amadeus:p:other')).toBe(other) // untouched rows still work
+      // Unregistered while open, or an id that was never on the sheet.
+      store.removeCommand('amadeus:p:other')
+      expect(presentedCommand(presented, live(), 'amadeus:p:other')).toBeNull()
+      expect(presentedCommand(presented, live(), 'core:never-presented')).toBeNull()
+      expect(ran).toEqual([])
+    } finally {
+      store.removeCommand('amadeus:p:go')
+      store.removeCommand('amadeus:p:other')
+    }
   })
 })

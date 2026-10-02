@@ -15,7 +15,7 @@ import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap } from 'lucide-reac
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
-import { moreCommandGroups, moreCommandOn, moreCommandTitle } from './moreSheet'
+import { moreCommandGroups, moreCommandOn, moreCommandTitle, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
@@ -454,7 +454,7 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
 
 /** 「⋯」菜单的原生版。带 React `component` 的项没法交给原生层画 → 有这种项时整张留在 Web sheet。
  *  ribbon 底部项一节在前;其后每个声明了 `moreGroup` 的命令组一节(外置插件的命令,节标题 = 插件名),
- *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板)。 */
+ *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板),但只在注册表里那条仍是呈现时的对象时才跑。 */
 async function presentNativeMore(tr: Tr): Promise<boolean> {
   const items = useRibbonStore.getState().items.filter(isMoreItem)
   const groups = moreCommandGroups(useCommandStore.getState().commands)
@@ -472,7 +472,13 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
   if (!out.handled) return false
   const id = out.value?.id
   if (!id) return true
-  if (id.startsWith('cmd:')) { useCommandStore.getState().run(id.slice('cmd:'.length)); return true }
+  if (id.startsWith('cmd:')) {
+    // 只执行呈现时的那条命令:半屏开着期间同 id 被重注册成别的处理器(插件重载)→ 不执行(见 presentedCommand)。
+    const cmdId = id.slice('cmd:'.length)
+    const store = useCommandStore.getState()
+    if (presentedCommand(groups.flatMap((g) => g.commands), store.commands, cmdId)) store.run(cmdId)
+    return true
+  }
   items.find((i) => i.id === id)?.onClick?.()
   return true
 }

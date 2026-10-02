@@ -189,6 +189,42 @@ describe('useNativeSheetMenu (state-driven menus)', () => {
     await vi.waitFor(() => expect(present).toHaveBeenCalledTimes(2))
     await t.unmount()
   })
+  it('replacing an open menu aborts the first request without closing the second', async () => {
+    const signals: AbortSignal[] = []
+    const answers: Array<(v: unknown) => void> = []
+    uninstall = m.installNativeSheetPresenter((_p, s) => {
+      signals.push(s)
+      return new Promise((resolve) => { answers.push(resolve); s.addEventListener('abort', () => resolve(null)) })
+    })
+    const t = await mount()
+    await t.setOpen({ menu: 'A' })
+    await vi.waitFor(() => expect(signals).toHaveLength(1))
+    await t.setOpen({ menu: 'B' }) // B replaces A while A's sheet is still up
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+    expect(signals[0].aborted).toBe(true)
+    expect(signals[1].aborted).toBe(false)
+    // A's aborted request must not run onClose: it would clear the open state, i.e. close B.
+    expect(t.closed).not.toHaveBeenCalled()
+    expect(t.seen.at(-1)).toEqual({ web: false })
+    // B is still the live menu: answering it closes once and runs B's pick.
+    const React = await import('react')
+    await React.act(async () => { answers[1]({ id: 'approval:readonly' }); await new Promise((r) => setTimeout(r, 0)) })
+    expect(t.closed).toHaveBeenCalledTimes(1)
+    expect(t.ran).toEqual(['readonly'])
+    await t.unmount()
+  })
+  it('an aborted request runs neither onClose nor the item, even if the host still answers', async () => {
+    const ctl = new AbortController()
+    // A host that ignores the abort and answers with a pick afterwards.
+    uninstall = m.installNativeSheetPresenter(() => new Promise((resolve) => setTimeout(() => resolve({ id: 'approval:full-auto' }), 5)))
+    const ran: string[] = []
+    const closed = vi.fn()
+    const pending = menu.runNativeSheetMenu(build(ran), { signal: ctl.signal, onClose: closed })
+    ctl.abort()
+    expect(await pending).toBe(true) // handled: the caller must not fall back to its web menu either
+    expect(closed).not.toHaveBeenCalled()
+    expect(ran).toEqual([])
+  })
   it('closing the menu from outside dismisses the native sheet', async () => {
     let signal: AbortSignal | undefined
     uninstall = m.installNativeSheetPresenter((_p, s) => { signal = s; return new Promise((r) => s.addEventListener('abort', () => r(null))) })

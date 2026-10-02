@@ -240,7 +240,13 @@ private fun PromptContent(p: SheetPayload.Prompt, onCancel: () -> Unit, onConfir
         Text(p.title, Modifier.testTag("nativeSheet.title"), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         if (p.label.isNotBlank()) Text(p.label, Modifier.padding(top = 6.dp), color = colors.onSurfaceVariant, fontSize = 14.sp)
         OutlinedTextField(
-            value = value, onValueChange = { value = it }, singleLine = true,
+            // Same cap as the answer check (SheetPayload.Prompt.accepts): longer input is clipped here, visibly,
+            // instead of being refused at confirm time (which reads as a silent cancel).
+            value = value, singleLine = true,
+            onValueChange = { next ->
+                val text = SheetPayload.clampPromptText(next.text)
+                value = if (text.length == next.text.length) next else TextFieldValue(text, selection = TextRange(minOf(next.selection.end, text.length)))
+            },
             placeholder = if (p.placeholder.isNotBlank()) ({ Text(p.placeholder) }) else null,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { onConfirm(value.text) }),

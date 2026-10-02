@@ -72,7 +72,10 @@ const hasItems = (m: SheetMenu): boolean => m.sections.some((s) => s.items.lengt
 
 /** Present `menu` natively and run the picked item. Returns false when no host could present it (the caller
  *  renders its web menu). A cancel counts as handled. `onClose` runs once the sheet is answered (pick or
- *  cancel), BEFORE the picked item's `run`, so handlers that open dialogs see the menu already closed. */
+ *  cancel), BEFORE the picked item's `run`, so handlers that open dialogs see the menu already closed.
+ *  A request withdrawn through `opts.signal` is over for its caller: it returns true and runs NEITHER
+ *  `onClose` NOR an item. The caller aborted because the menu was closed or replaced, and `onClose` usually
+ *  clears "the open menu" — which by then is the next one. */
 export async function runNativeSheetMenu(menu: SheetMenu, opts: { signal?: AbortSignal; onClose?: () => void } = {}): Promise<boolean> {
   if (!nativeSheetPresenter() || !hasItems(menu)) return false
   const out = await presentNativeMenu({
@@ -81,6 +84,7 @@ export async function runNativeSheetMenu(menu: SheetMenu, opts: { signal?: Abort
     ...(menu.search ? { search: menu.search } : {}),
     ...(menu.back ? { back: menu.back } : {}),
   }, opts.signal)
+  if (opts.signal?.aborted) return true
   if (!out.handled) return false
   try { opts.onClose?.() } catch (e) { console.error('[native sheet] onClose failed', e) }
   const picked = out.value && !out.value.trailing ? findItem(menu.sections, out.value.id) : undefined

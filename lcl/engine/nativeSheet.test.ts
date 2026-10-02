@@ -151,6 +151,41 @@ describe('icons', () => {
     expect(icon.paths[2]).toEqual({ d: 'M9 3L9 21', fill: false, stroke: true })
     expect(ic.primitiveToPath(svg.querySelector('polyline')!)).toBe('M1 2L3 4')
   })
+  it('reads paint from inline style as well as attributes (element first, then inherited)', () => {
+    const make = (attrs: Record<string, string>, inner: string): Element => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('viewBox', '0 0 24 24')
+      for (const [k, v] of Object.entries(attrs)) svg.setAttribute(k, v)
+      svg.innerHTML = inner
+      return svg
+    }
+    // An outline icon styled purely with inline style on the root: previously sent as filled / unstroked.
+    const outline = ic.serializeSvg(make({ style: 'fill: none; stroke: currentColor; stroke-width: 1.5' }, '<path d="M4 4h16"/><circle cx="12" cy="12" r="3"/>'))
+    expect(outline).toMatchObject({ kind: 'vector', strokeWidth: 1.5, paths: [{ fill: false, stroke: true }, { fill: false, stroke: true }] })
+    // Inline style beats the presentation attribute on the same element, and an element beats its ancestors.
+    const mixed = ic.serializeSvg(make({ fill: 'none', stroke: 'currentColor', 'stroke-width': '2' },
+      '<path d="M1 1h2" fill="none" style="fill: currentColor; stroke: none"/>'
+      + '<g style="stroke:none;fill:#000"><path d="M3 3h2"/><path d="M5 5h2" style="STROKE: red ; fill:none"/></g>'
+      + '<path d="M7 7h2" style="stroke-width:3; stroke-linecap: round"/>'))
+    expect(mixed).toMatchObject({ kind: 'vector', paths: [
+      { d: 'M1 1h2', fill: true, stroke: false },
+      { d: 'M3 3h2', fill: true, stroke: false },
+      { d: 'M5 5h2', fill: false, stroke: true },
+      { d: 'M7 7h2', fill: false, stroke: true },
+    ] })
+    // One width per icon = the first stroked primitive's resolved width (here inherited from the root attribute).
+    expect(mixed?.kind === 'vector' && mixed.strokeWidth).toBe(2)
+    // `stroke-width` in a style must not be mistaken for `stroke`; `inherit` walks up; an unpainted shape is dropped.
+    const edge = ic.serializeSvg(make({ fill: 'none' }, '<path d="M1 1h2" style="stroke-width: 4"/><path d="M2 2h2" style="stroke: inherit" stroke-width="3"/><g stroke="currentColor"><path d="M3 3h2" style="stroke: inherit"/></g>'))
+    expect(edge).toMatchObject({ kind: 'vector', strokeWidth: 1, paths: [{ d: 'M3 3h2', fill: false, stroke: true }] })
+    expect(edge?.kind === 'vector' && edge.paths).toHaveLength(1)
+  })
+  it('a React icon styled with a style object keeps its outline', async () => {
+    const Styled = (): ReturnType<typeof createElement> => createElement('svg', { viewBox: '0 0 24 24', style: { fill: 'none', stroke: 'currentColor', strokeWidth: 2 } },
+      createElement('path', { d: 'M6 6l12 12' }))
+    const [icon] = await ic.renderNativeIcons([Styled])
+    expect(icon).toEqual({ kind: 'vector', viewBox: [0, 0, 24, 24], strokeWidth: 2, paths: [{ d: 'M6 6l12 12', fill: false, stroke: true }] })
+  })
   it('renders hook-free and hook components alike; bad icons do not break the batch', async () => {
     const Throws = (): never => { throw new Error('boom') }
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})

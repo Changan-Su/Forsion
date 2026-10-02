@@ -70,14 +70,34 @@ export function primitiveToPath(el: Element): string {
 
 const painted = (v: string | null): boolean => !!v && v !== 'none' && v !== 'transparent'
 
-/** Inherited presentation attribute (SVG default for fill is black, for stroke none). */
-function inherited(el: Element, svg: Element, attr: 'fill' | 'stroke'): string | null {
+type PaintProp = 'fill' | 'stroke' | 'stroke-width'
+
+/** One declaration from an element's inline `style` (`style="fill: none; stroke: currentColor"`). Parsed from
+ *  the attribute text, not CSSOM: the icon is serialized out of a detached tree, and this has to read the
+ *  same in a browser and under the DOM shims the tests run on. `stroke` must not match `stroke-width`. */
+function inlineStyle(el: Element, prop: PaintProp): string | null {
+  const style = el.getAttribute('style')
+  if (!style) return null
+  let found: string | null = null
+  for (const decl of style.split(';')) {
+    const at = decl.indexOf(':')
+    if (at < 0 || decl.slice(0, at).trim().toLowerCase() !== prop) continue
+    found = decl.slice(at + 1).replace(/!important\s*$/i, '').trim() // later declarations win
+  }
+  return found || null
+}
+
+/** Paint value for `el`: on each element from `el` up to the `<svg>` root, inline style first (CSS beats a
+ *  presentation attribute), then the attribute; `inherit` keeps walking. SVG initial values otherwise
+ *  (fill black, stroke none, stroke-width 1). Icons styled with `style={{ fill: 'none', stroke: … }}`
+ *  used to be read as filled / unstroked because only attributes were looked at. */
+function inherited(el: Element, svg: Element, prop: PaintProp): string | null {
   for (let cur: Element | null = el; cur; cur = cur.parentElement) {
-    const v = cur.getAttribute(attr)
-    if (v != null) return v
+    const v = inlineStyle(cur, prop) ?? cur.getAttribute(prop)
+    if (v != null && v.trim().toLowerCase() !== 'inherit') return v.trim()
     if (cur === svg) break
   }
-  return attr === 'fill' ? 'black' : null
+  return prop === 'fill' ? 'black' : null
 }
 
 /** Flatten an `<svg>` into the JSON shape native hosts draw. Returns undefined when nothing drawable. */
@@ -87,6 +107,7 @@ export function serializeSvg(svg: Element): NativeIcon | undefined {
     ? [vb[0], vb[1], vb[2], vb[3]]
     : [0, 0, num(svg.getAttribute('width'), 24) || 24, num(svg.getAttribute('height'), 24) || 24]
   const paths: NativeVectorPath[] = []
+  let strokeWidth: number | undefined
   for (const el of Array.from(svg.querySelectorAll('path,circle,ellipse,rect,line,polyline,polygon'))) {
     let skip = false
     for (let p = el.parentElement; p && p !== svg; p = p.parentElement) if (SKIP_PARENTS.has(p.tagName.toLowerCase())) { skip = true; break }
@@ -97,11 +118,14 @@ export function serializeSvg(svg: Element): NativeIcon | undefined {
     const fill = !isLine && painted(inherited(el, svg, 'fill'))
     const stroke = painted(inherited(el, svg, 'stroke'))
     if (!fill && !stroke) continue
+    // The native shape carries ONE stroke width per icon: the first stroked primitive's resolved width
+    // (its own, else inherited up to the root; icon sets use a single width throughout).
+    if (stroke && strokeWidth === undefined) strokeWidth = num(inherited(el, svg, 'stroke-width'), 1)
     paths.push({ d, fill, stroke })
     if (paths.length >= MAX_PATHS) break
   }
   if (!paths.length) return undefined
-  const sw = num(svg.getAttribute('stroke-width'), 1)
+  const sw = strokeWidth ?? num(inherited(svg, svg, 'stroke-width'), 1)
   return { kind: 'vector', viewBox, strokeWidth: sw > 0 && sw <= 16 ? sw : 1, paths }
 }
 
