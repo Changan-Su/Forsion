@@ -395,8 +395,11 @@ const tabCountText = (list) => {
   }
   async function toSpace(id) {
     await openDrawer()
-    if (!(await cdp.eval(`!!document.querySelector('.mb-drawer--left .mb-tab.on[data-space="${id}"]')`))) {
-      await cdp.eval(`(document.querySelector('.mb-drawer--left .mb-tab[data-space="${id}"]').click(), true)`)
+    // Spaces live in the native bottom bar now; the shell mirrors the active one on `.mb-shell[data-space]`.
+    const active = `document.querySelector('.mb-shell')?.dataset.space === ${JSON.stringify(id)}`
+    if (!(await cdp.eval(active))) {
+      await tapId(`nativeChrome.space.${id}`)
+      assert.ok(await h.waitPage(cdp, active, 6000), `Space "${id}" did not become active`)
       await h.pause(1200)
       await openDrawer()
     }
@@ -546,6 +549,72 @@ const tabCountText = (list) => {
     assert.ok(resumed(), 'app left the foreground')
   })
 
+  await check('keyboard: the focused composer stays visible above the keyboard', async () => {
+    await toSpace('tangu'); await closeDrawer()
+    const field = "document.querySelector('.composer textarea, .composer [contenteditable], textarea')"
+    await tapEl(field)
+    const shown = () => /mInputShown=true/.test(h.adb('shell', 'dumpsys', 'input_method'))
+    for (let i = 0; i < 20 && !shown(); i++) await h.pause(300)
+    assert.ok(shown(), 'the keyboard did not come up')
+    await h.pause(1500)
+    // Android 15 edge-to-edge: nothing resizes the window for the keyboard, the plugin ends the WebView at its top edge.
+    const screenH = Number(h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/)[2])
+    const wv = webViewNode(ui())
+    const p = await elPoint(field)
+    assert.ok(wv.rect.bottom < screenH * 0.8, `the WebView kept its full height under the keyboard (bottom ${wv.rect.bottom} of ${screenH})`)
+    assert.ok(p.y < wv.rect.bottom, `composer at y=${p.y}, below the WebView's visible bottom ${wv.rect.bottom}`)
+    assert.ok(await cdp.eval(`document.activeElement === ${field}`), 'the composer lost focus')
+    shot('03f-keyboard-composer')
+    h.key(4); await h.pause(800)
+    await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+  })
+
+  // The Space switcher is a native bottom navigation bar (it used to be a web row at the bottom of the drawer).
+  await check('bottom space bar: native, switches Space with the drawer closed, re-tap toggles the drawer, away with the keyboard and in settings', async () => {
+    await goHome()
+    const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
+    const screenH = Number(h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/)[2])
+    let list = ui()
+    const bar = h.byId(list, 'nativeChrome.spaces')
+    assert.ok(bar, 'no native space bar')
+    const items = h.byIdPrefix(list, 'nativeChrome.space.')
+    const ids = items.map((n) => n['resource-id'].slice('nativeChrome.space.'.length))
+    for (const id of ['home', 'tangu', 'agents']) assert.ok(ids.includes(id), `Space "${id}" missing from the bar (${ids.join(', ')})`)
+    assert.equal(bar.rect.bottom, screenH, 'bar does not reach the screen edge')
+    const wv = webViewNode(list)
+    assert.ok(Math.abs(wv.rect.bottom - bar.rect.top) <= 1, `WebView bottom ${wv.rect.bottom} vs bar top ${bar.rect.top}`)
+    for (const n of items) assert.ok(n.rect.bottom - n.rect.top >= 48 * density - 1, 'space item shorter than 48dp')
+    assert.equal(await cdp.eval("document.querySelectorAll('.mb-spacebar, .mb-tab').length"), 0, 'the web Space row is still rendered')
+    assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'home')
+    assert.equal(h.byId(list, 'nativeChrome.space.home').selected || h.byId(list, 'nativeChrome.space.home').checked, 'true', 'active Space not marked selected')
+    // switch with the drawer closed: lands on the Space's main view, drawer stays closed
+    await tapId('nativeChrome.space.agents', list)
+    assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell').dataset.space === 'agents'", 6000), 'tap did not switch Space')
+    await h.pause(800)
+    assert.ok(!(await cdp.eval(drawerOpen)), 'switching from a closed drawer opened it')
+    // the Agents main view used to crash on the single-column shell (it read the dockview-only `stash`)
+    assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'the Space main view failed to render')
+    shot('03c-space-bar')
+    // re-tap the active Space: drawer opens; again: closes
+    await tapId('nativeChrome.space.agents')
+    assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 're-tap did not open the drawer')
+    await h.pause(600)
+    shot('03d-space-bar-drawer')
+    // drawer open: switching keeps it open (the user picks from the new Space's list)
+    await tapId('nativeChrome.space.tangu')
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'tangu' && ${drawerOpen}`, 6000), 'switching with the drawer open closed it')
+    await h.pause(600)
+    await tapId('nativeChrome.space.tangu')
+    assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 're-tap did not close the drawer')
+    // keyboard: the bar leaves, the WebView takes its room; back brings it back
+    await tapEl("document.querySelector('.composer textarea, .composer [contenteditable], textarea')")
+    assert.ok((await h.waitNodes((l) => !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar stayed up with the keyboard')
+    shot('03e-space-bar-keyboard')
+    h.key(4)
+    assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar did not come back after the keyboard')
+    await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
+  })
+
   // 2026-10-02 real-phone recording: every tap flashed the WebView's blue tap-highlight box. It is off now, and a press
   // tints the element instead (base.css, @media (pointer: coarse)). The pressed state is sampled while a finger is down.
   await check('touch feedback: no WebView tap highlight; a held press tints the element; long-press selects no text', async () => {
@@ -559,7 +628,7 @@ const tabCountText = (list) => {
       const missed = new Set(); for (const e of document.querySelectorAll('.mb-shell *')) { if (getComputedStyle(e).cursor !== 'pointer' || e.closest(match)) continue
         if (e.parentElement && getComputedStyle(e.parentElement).cursor === 'pointer') continue
         missed.add(e.tagName.toLowerCase() + '.' + String(e.className && e.className.baseVal !== undefined ? e.className.baseVal : e.className).split(' ')[0]) }
-      return { tab: hl('.mb-drawer--left .mb-tab'), row: hl('.mb-drawer--left .t2s-srow'), coarse: matchMedia('(pointer: coarse)').matches, missed: [...missed] } })()`)
+      return { tab: hl('.mb-drawer--left [data-act="new-chat"]'), row: hl('.mb-drawer--left .t2s-srow'), coarse: matchMedia('(pointer: coarse)').matches, missed: [...missed] } })()`)
     console.log('  tappable elements outside the press-tint selector:', probe.missed.join(', ') || '(none)')
     assert.deepEqual({ tab: probe.tab, row: probe.row, coarse: probe.coarse }, { tab: 'rgba(0, 0, 0, 0)', row: 'rgba(0, 0, 0, 0)', coarse: true })
     const p = await elPoint(tab)

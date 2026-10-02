@@ -1,18 +1,20 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { ArrowLeft, MoreHorizontal, PanelLeft, PanelRight, X } from 'lucide-react'
 import {
-  dispatchNativeChromeAction, installNativeChromeHost, readNativeTheme, renderNativeIcons,
-  type NativeChromeAction, type NativeChromeState, type NativeIcon, type NativeSheetTheme,
+  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, readNativeTheme, renderNativeIcons, useSpaceStore,
+  type NativeChromeAction, type NativeChromeSpace, type NativeChromeState, type NativeIcon, type NativeSheetTheme,
 } from '@lcl/engine'
 
 /** Android-only host for the native top bar seam (lcl/engine/nativeChrome.ts). Kotlin: NativeChromePlugin.
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
+ *  Also draws the Space switcher as a bottom navigation bar (`spaces: true`): the shell sends the Space list,
+ *  this host adds each Space's icon (serialized once per icon component) and relays taps / long-presses.
  *  If the plugin ever rejects, the host uninstalls itself so the shell falls back to its web top bar. */
 interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon; back?: NativeIcon; close?: NativeIcon }
 interface NativeChromePlugin {
-  setState(state: NativeChromeState & { theme: NativeSheetTheme; icons: ChromeIcons }): Promise<void>
+  setState(state: Omit<NativeChromeState, 'spaces'> & { theme: NativeSheetTheme; icons: ChromeIcons; spaces?: Array<NativeChromeSpace & { icon?: NativeIcon }> }): Promise<void>
   clear(): Promise<void>
-  addListener(event: 'action', cb: (e: { action: string }) => void): Promise<PluginListenerHandle>
+  addListener(event: 'action', cb: (e: { action: string; id?: string }) => void): Promise<PluginListenerHandle>
 }
 const ACTIONS: readonly NativeChromeAction[] = ['left', 'right', 'tabs', 'more', 'back', 'close']
 
@@ -23,6 +25,15 @@ export function installNativeChrome(): void {
   const plugin = registerPlugin<NativeChromePlugin>('NativeChrome')
   const icons: Promise<ChromeIcons> = renderNativeIcons([PanelLeft, PanelRight, MoreHorizontal, ArrowLeft, X])
     .then(([left, right, more, back, close]) => ({ left, right, more, back, close }))
+  // Space icons are React components: serialize each once (keyed by the component, so a re-registered Space re-renders).
+  const spaceIcons = new Map<unknown, NativeIcon | undefined>()
+  const withIcons = async (list: NativeChromeSpace[]): Promise<Array<NativeChromeSpace & { icon?: NativeIcon }>> => {
+    const defs = useSpaceStore.getState().spaces
+    const sources = list.map((sp) => defs.find((d) => d.id === sp.id)?.icon)
+    const missing = [...new Set(sources.filter((src) => src && !spaceIcons.has(src)))]
+    if (missing.length) (await renderNativeIcons(missing as never[])).forEach((icon, i) => spaceIcons.set(missing[i], icon))
+    return list.map((sp, i) => { const icon = sources[i] ? spaceIcons.get(sources[i]) : undefined; return icon ? { ...sp, icon } : sp })
+  }
   let state: NativeChromeState | null = null
   let lastSent = ''
   let chain: Promise<void> = Promise.resolve()
@@ -31,7 +42,11 @@ export function installNativeChrome(): void {
   const send = (): void => {
     chain = chain.then(async () => {
       if (!state || !uninstall) return
-      const payload = { ...state, theme: readNativeTheme(), icons: await icons }
+      const current = state
+      const payload = {
+        ...current, theme: readNativeTheme(), icons: await icons,
+        ...(current.mode === 'shell' && current.spaces ? { spaces: await withIcons(current.spaces) } : {}),
+      }
       const key = JSON.stringify(payload)
       if (key === lastSent) return
       try {
@@ -47,10 +62,11 @@ export function installNativeChrome(): void {
   }
 
   void plugin.addListener('action', (e) => {
-    if ((ACTIONS as readonly string[]).includes(e.action)) dispatchNativeChromeAction(e.action as NativeChromeAction)
+    if ((e.action === 'space' || e.action === 'spaceLong') && typeof e.id === 'string') dispatchNativeChromeSpace(e.id, e.action === 'spaceLong')
+    else if ((ACTIONS as readonly string[]).includes(e.action)) dispatchNativeChromeAction(e.action as NativeChromeAction)
   }).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars).
   new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'style', 'class'] })
   // A reload (or the auth redirect) tears the native bar down; the new page re-installs and re-pushes.
-  uninstall = installNativeChromeHost({ render: (next) => { state = next; send() } })
+  uninstall = installNativeChromeHost({ spaces: true, render: (next) => { state = next; send() } })
 }

@@ -19,7 +19,7 @@ import { moreCommandGroups, moreCommandOn, moreCommandTitle, moreRowLabel, prese
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem } from './types'
 import { nativeSheetPresenter, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
-import { setNativeChromeShell, useNativeChromeInstalled, type NativeChromeShellLabels } from './nativeChrome'
+import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, nativeChromeDrawsSpaces, type NativeChromeShellLabels } from './nativeChrome'
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
@@ -338,6 +338,24 @@ function switchSpaceKeepDrawer(id: string): void {
   ws.toggleSidebar('left')
 }
 
+/** 原生底部导航栏的数据:与抽屉里 Web Space 条同一份列表、同一条「当前项」判据(活动 id 不在表里时落第一格)。 */
+function nativeSpaceList(): Array<{ id: string; label: string; active: boolean }> {
+  const { spaces, activeSpaceId } = useSpaceStore.getState()
+  const known = spaces.some((x) => x.id === activeSpaceId)
+  return spaces.map((sp, i) => ({ id: sp.id, label: label(sp.name), active: known ? sp.id === activeSpaceId : i === 0 }))
+}
+/** 点原生底部导航栏:换 Space;抽屉开着就留在抽屉里(同 switchSpaceKeepDrawer 的用户口径),关着就直接看主区。
+ *  点**当前**那格 = 开/关左抽屉(列表都在抽屉里,等于「回到这个 Space 的列表」)。 */
+function tapNativeSpace(id: string): void {
+  const ws = useWorkspace.getState()
+  if (nativeSpaceList().find((x) => x.id === id)?.active) {
+    if (ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || footAliveNow()) ws.toggleSidebar('left')
+    return
+  }
+  if (ws.leftVisible) switchSpaceKeepDrawer(id)
+  else setActiveSpace(id)
+}
+
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
  *  同两项已从「⋯」菜单滤掉(不重复出现)。切 Space 会走 resetLayout → 抽屉自动收回。 */
@@ -351,6 +369,8 @@ function DrawerFoot() {
   const footExtras = useRibbonStore((s) => s.items).filter((i) => i.mobileFoot)
   const AccountC = account?.component
   const SettingsIcon = settings?.icon
+  // 原生宿主自己画底部导航栏时(Android,见 nativeChrome 的 spaces),这里不再重复渲染 Web 的 Space 条。
+  const nativeSpaces = useNativeChromeSpaces()
   const barRef = useRef<HTMLElement>(null)
   // Space 多到要横滚时(见 .mb-spacebar),当前那格可能压根不在视野里 —— 看着像哪个都没选中。
   // 挂载与切 Space 后把它拨到中间;没溢出时 scrollIntoView 本身就是空操作,不用另外判。
@@ -360,7 +380,7 @@ function DrawerFoot() {
   if (!alive) return null // 与 Drawer 的 withFoot 同源,免得两处判活漂移
   return (
     <div className="mb-drawer-foot" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-      {spaces.length > 1 && (
+      {spaces.length > 1 && !nativeSpaces && (
         <nav className="mb-spacebar" ref={barRef}>
           {spaces.map((sp) => {
             const Icon = sp.icon
@@ -611,6 +631,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const leftVisible = useWorkspace((s) => s.leftVisible)
   const rightVisible = useWorkspace((s) => s.rightVisible)
   const tabCount = useWorkspace((s) => s.mainTabs.length)
+  const activeSpaceId = useSpaceStore((s) => s.activeSpaceId) // 仪器锚点(data-space):原生底栏接管后 DOM 里没有 .mb-tab.on 可查
 
   const wide = useWideAspect(true)
   const chromeOff = useChromeAutoHide(mainRef, true)
@@ -649,11 +670,14 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         right: ws.rightLeaves.length > 0 || ws.sidebarDefaults.right.length > 0,
         tabCount: ws.mainTabs.length || 1,
         labels,
+        ...(nativeChromeDrawsSpaces() ? { spaces: nativeSpaceList() } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),
         tabs: () => chromeActions.current.tabs(),
         more: () => chromeActions.current.more(),
+        space: tapNativeSpace,
+        spaceLong: (id) => { const sp = useSpaceStore.getState().spaces.find((x) => x.id === id); if (sp) pinSpaceToHome(sp.id, label(sp.name)) },
       })
     }
     push()
@@ -728,7 +752,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     //    躲刘海是浮动胶囊自己的事(.mb-topbar 的 top、抽屉的 padding-top,见 singleColumn.css)。
     //    底部仍留 —— 底部 chrome 分散在各视图里,没法逐个保证自理,收窄爆炸半径。
     // data-native-chrome:原生顶栏在 WebView 之外占位,视图不再给胶囊让 --mb-top(见 singleColumn.css 末尾)。
-    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}

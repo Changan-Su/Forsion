@@ -100,6 +100,9 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
 - **`NativeChrome`**：原生 Material 顶栏取代 `.mb-topbar`（左抽屉 / 标题 / 右抽屉 / 标签页数 / 更多）。
   WebView 由插件放在顶栏下方（自管 insets，`--mb-top` 归零）。引导、成就、互联设备、旁聊等自带头部的全屏层用 `useNativeChromeClaim({ mode: 'hidden' })` 收起顶栏；
   **设置**改用 `page` 模式（标题 + 返回，分类页再加 `close` ×），Web 头部只在 `data-native-chrome` 时隐藏。
+  **底部导航栏**：Space 切换由同一插件画成常驻的原生底栏（外壳把 Space 列表随 `spaces` 推过去，图标由宿主按 Space 的图标组件序列化），
+  抽屉底部不再渲染 Web 的 Space 条。点 = 切 Space（抽屉开着就留在抽屉里，关着直接进主区）；点当前那格 = 开/关左抽屉；长按 = 固定到桌面。
+  只在 `shell` 模式且 Space ≥ 2 时出现，键盘弹起、`page` / `hidden` 时收起；WebView 的下边距由插件一并管理。当前 Space 镜像在 `.mb-shell[data-space]`（仪器锚点）。
 - **`NativeSheet`**：通用 Compose 半屏底单，三种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`prompt`、`confirm`。
   调用方用 `presentNativeMenu` / `presentNativePrompt` / `presentNativeConfirm`，拿到 `{ handled: false }` 就渲染自己的 Web UI。
   已接入：标签页底单、更多底单（无自定义组件项时）、`ContextMenu` 原语（`pickNativeCtxItem`）、`askString`、无 children 的 `ConfirmDialog`。

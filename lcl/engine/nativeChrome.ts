@@ -7,11 +7,16 @@
  *    - full-screen overlays (`claimNativeChrome` / `useNativeChromeClaim`): 'hidden' while they cover the
  *      shell, or 'page' (title + back) for overlays that want a native back bar. Last claim wins.
  *  The host receives the effective state (deduplicated) and reports user actions via
- *  `dispatchNativeChromeAction`. */
+ *  `dispatchNativeChromeAction`.
+ *  A host may also draw the Space switcher as a bottom navigation bar (`spaces: true`): the shell then sends
+ *  the Space list with its state and drops the web Space row from the drawer foot; taps come back through
+ *  `dispatchNativeChromeSpace`. */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close'
 export interface NativeChromeShellLabels { left: string; right: string; tabs: string; more: string }
+/** One destination of the bottom navigation bar. Data only: the host resolves the icon from the Space registry. */
+export interface NativeChromeSpace { id: string; label: string; active: boolean }
 export interface NativeChromeShellState {
   mode: 'shell'
   title: string
@@ -20,6 +25,8 @@ export interface NativeChromeShellState {
   right: boolean
   tabCount: number
   labels: NativeChromeShellLabels
+  /** Sent only to hosts that draw the Space switcher (see `NativeChromeHost.spaces`); fewer than two = no bar. */
+  spaces?: NativeChromeSpace[]
 }
 /** `close` = label of an optional trailing × (e.g. a settings sub-page: back = settings home, × = leave settings). */
 export interface NativeChromePageState { mode: 'page'; title: string; back: string; close?: string }
@@ -29,8 +36,11 @@ export type NativeChromeState = NativeChromeShellState | NativeChromePageState |
 export interface NativeChromeHost {
   /** Receives every change of the effective state (already deduplicated). */
   render(state: NativeChromeState): void
+  /** The host draws the Space switcher itself (bottom navigation bar). */
+  spaces?: boolean
 }
 export type NativeChromeShellHandlers = Partial<Record<Exclude<NativeChromeAction, 'back' | 'close'>, () => void>>
+  & { space?: (id: string) => void; spaceLong?: (id: string) => void }
 export type NativeChromeClaim = NativeChromeHiddenState | (NativeChromePageState & { onBack: () => void; onClose?: () => void })
 export interface NativeChromeClaimHandle { update(next: NativeChromeClaim): void; release(): void }
 
@@ -68,6 +78,16 @@ export function installNativeChromeHost(next: NativeChromeHost): () => void {
   }
 }
 export function nativeChromeInstalled(): boolean { return !!host }
+/** Whether the installed host draws the Space switcher (non-React callers: store subscriptions). */
+export function nativeChromeDrawsSpaces(): boolean { return !!host?.spaces }
+/** React: true while the installed host draws the Space switcher — the drawer foot then omits its web Space row. */
+export function useNativeChromeSpaces(): boolean {
+  return useSyncExternalStore(
+    (fn) => { subscribers.add(fn); return () => { subscribers.delete(fn) } },
+    () => !!host?.spaces,
+    () => false,
+  )
+}
 /** React: re-renders when a host is installed / removed (the shell hides its web bar while one exists). */
 export function useNativeChromeInstalled(): boolean {
   return useSyncExternalStore(
@@ -134,6 +154,15 @@ export function dispatchNativeChromeAction(action: NativeChromeAction): boolean 
   const fn = shell.handlers[action]
   if (!fn) return false
   fn()
+  return true
+}
+
+/** Called by the host when a Space of the bottom bar is tapped (or long-pressed). Ignored while an overlay claims the bar. */
+export function dispatchNativeChromeSpace(id: string, long = false): boolean {
+  if (claims.length || !shell) return false
+  const fn = long ? shell.handlers.spaceLong : shell.handlers.space
+  if (!fn) return false
+  fn(id)
   return true
 }
 

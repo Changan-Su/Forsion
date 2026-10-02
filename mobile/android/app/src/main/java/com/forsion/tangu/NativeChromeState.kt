@@ -11,6 +11,9 @@ internal data class ChromeIcons(
     val close: NativeIconSpec? = null,
 )
 
+/** One destination of the bottom navigation bar (a Space). Label translated by JS; icon serialized by JS. */
+internal data class ChromeSpace(val id: String, val label: String, val active: Boolean, val icon: NativeIconSpec?)
+
 internal data class ChromeState(
     val mode: Mode,
     val title: String,
@@ -23,13 +26,30 @@ internal data class ChromeState(
     val icons: ChromeIcons,
     /** Page mode: label of the optional trailing close (×) action; blank = no close button. */
     val close: String = "",
+    /** Shell mode: Spaces for the bottom navigation bar; fewer than two = no bar. */
+    val spaces: List<ChromeSpace> = emptyList(),
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
     val visible get() = mode != Mode.HIDDEN
+    /** The bottom bar belongs to the shell only: pages (settings, market) and covering overlays have none. */
+    val spaceBar get() = mode == Mode.SHELL && spaces.size > 1
 
     companion object {
         val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close")
+        const val MAX_SPACES = 24
+
+        private fun spaces(json: JSONObject): List<ChromeSpace> {
+            val array = json.optJSONArray("spaces") ?: return emptyList()
+            require(array.length() <= MAX_SPACES) { "Too many spaces" }
+            return (0 until array.length()).map { i ->
+                val o = array.getJSONObject(i)
+                ChromeSpace(
+                    NativeJson.str(o, "id", 128), NativeJson.str(o, "label", 128), NativeJson.optBool(o, "active"),
+                    o.optJSONObject("icon")?.let(NativeJson::icon),
+                )
+            }.also { list -> require(list.map { it.id }.toSet().size == list.size) { "Duplicate space id" } }
+        }
 
         fun parse(json: JSONObject): ChromeState {
             require(json.toString().length <= 64_000) { "Chrome state too large" }
@@ -53,7 +73,7 @@ internal data class ChromeState(
                         left = NativeJson.optBool(json, "left"), right = NativeJson.optBool(json, "right"),
                         tabCount = count.toInt(),
                         labels = listOf("left", "right", "tabs", "more").associateWith { NativeJson.str(labels, it, 128) },
-                        back = "", theme = theme, icons = icons,
+                        back = "", theme = theme, icons = icons, spaces = spaces(json),
                     )
                 }
                 Mode.PAGE -> ChromeState(

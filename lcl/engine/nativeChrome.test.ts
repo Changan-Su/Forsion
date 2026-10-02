@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  claimNativeChrome, dispatchNativeChromeAction, installNativeChromeHost, nativeChromeInstalled, nativeChromeState,
-  setNativeChromeShell, type NativeChromeState,
+  claimNativeChrome, dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, nativeChromeDrawsSpaces,
+  nativeChromeInstalled, nativeChromeState, setNativeChromeShell, type NativeChromeState,
 } from './nativeChrome'
 
 const labels = { left: 'Left panel', right: 'Right panel', tabs: 'Tabs', more: 'More' }
@@ -11,6 +11,24 @@ let cleanup: Array<() => void> = []
 afterEach(() => { cleanup.forEach((fn) => fn()); cleanup = []; setNativeChromeShell(null) })
 
 describe('native chrome seam', () => {
+  it('spaces: only a host that draws them reports so; taps reach the shell handler, not while an overlay claims the bar', () => {
+    cleanup.push(installNativeChromeHost({ render: () => {} }))
+    expect(nativeChromeDrawsSpaces()).toBe(false)
+    const seen: NativeChromeState[] = []
+    cleanup.push(installNativeChromeHost({ spaces: true, render: (s) => seen.push(s) }))
+    expect(nativeChromeDrawsSpaces()).toBe(true)
+    const space = vi.fn(); const spaceLong = vi.fn()
+    const spaces = [{ id: 'home', label: 'Home', active: false }, { id: 'tangu', label: 'Tangu', active: true }]
+    setNativeChromeShell({ ...shellState, spaces }, { space, spaceLong })
+    expect(seen.at(-1)).toMatchObject({ mode: 'shell', spaces })
+    expect(dispatchNativeChromeSpace('home')).toBe(true)
+    expect(dispatchNativeChromeSpace('tangu', true)).toBe(true)
+    expect(space).toHaveBeenCalledWith('home'); expect(spaceLong).toHaveBeenCalledWith('tangu')
+    const claim = claimNativeChrome({ mode: 'hidden' })
+    expect(dispatchNativeChromeSpace('home')).toBe(false)
+    claim.release()
+    expect(space).toHaveBeenCalledTimes(1)
+  })
   it('no host: nothing is pushed and nothing is installed', () => {
     expect(nativeChromeInstalled()).toBe(false)
     setNativeChromeShell(shellState)

@@ -1,6 +1,12 @@
 package com.forsion.tangu
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -28,6 +34,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
@@ -129,4 +136,70 @@ private fun TabCountButton(count: Int, label: String, tint: Color, onClick: () -
             Text(if (count > 99) "99" else maxOf(count, 1).toString(), color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
     }
+}
+
+/** Height of the bottom navigation row (above the system navigation inset). */
+internal val NATIVE_SPACE_BAR_HEIGHT = 64.dp
+
+/**
+ * Bottom navigation bar: one destination per Space (icon in a pill + label). Up to five share the width; more
+ * scroll sideways with the next one peeking in (5.5 per screen). Tap = switch, long-press = pin to the launcher.
+ * Test anchors: `nativeChrome.spaces`, `nativeChrome.space.<id>`.
+ */
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
+@Composable
+internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: String, long: Boolean) -> Unit) {
+    val theme = state.theme
+    val density = LocalDensity.current
+    val scheme = remember(theme) { theme.colorScheme() }
+    val accent = Color(theme.accent)
+    val muted = Color(theme.muted)
+    MaterialTheme(colorScheme = scheme) { Column(
+        Modifier.fillMaxSize().background(Color(theme.background))
+            .semantics { testTagsAsResourceId = true }
+            .testTag("nativeChrome.spaces"),
+    ) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(theme.border)))
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
+                .padding(start = with(density) { insets.left.toDp() }, end = with(density) { insets.right.toDp() }),
+        ) {
+            val scroll = state.spaces.size > 5
+            val itemWidth = if (scroll) maxWidth / 5.5f else maxWidth / state.spaces.size
+            Row(
+                if (scroll) Modifier.fillMaxSize().horizontalScroll(rememberScrollState()) else Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (space in state.spaces) {
+                    val tint = if (space.active) accent else muted
+                    Column(
+                        Modifier.width(itemWidth).height(NATIVE_SPACE_BAR_HEIGHT - 1.dp)
+                            .combinedClickable(
+                                role = Role.Tab,
+                                onClick = { onSpace(space.id, false) },
+                                onLongClick = { onSpace(space.id, true) },
+                            )
+                            .semantics { selected = space.active }
+                            .testTag("nativeChrome.space.${space.id}"),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Box(
+                            Modifier.width(56.dp).height(30.dp).clip(RoundedCornerShape(15.dp))
+                                .background(if (space.active) accent.copy(alpha = 0.16f) else Color.Transparent),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (space.icon != null) NativeIconView(space.icon, tint, NATIVE_ICON_SIZE)
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            space.label, color = tint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (space.active) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.padding(horizontal = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+    } }
 }
