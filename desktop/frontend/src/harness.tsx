@@ -569,6 +569,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     mounts: {} as Record<string, number>,
     mainW: () => 0,
     toggle: (side: 'left' | 'right' | 'bottom') => useWorkspace.getState().toggleSidebar(side),
+    // 底部横跨哪几列(SpaceDefinition.bottomSpan 落到 store 的那一份),bottom-panel.check 的拓扑段用
+    span: (bottomSpan: 'right' | 'left' | 'full' | 'main') => useWorkspace.setState({ bottomSpan }),
     extend: (side: 'right' | 'bottom') => presentDockedExtension({ id: 'region-probe', title: 'Region probe', side, mount() {} }, () => {}),
     // 底部面板(scripts/bottom-panel.check.cjs):量的是**高**,且要能读到「主区那一列」的宽 ——
     // 底部只该落在主区下方,不能横跨左右栏,这条只有真 Dockview 的几何能证。

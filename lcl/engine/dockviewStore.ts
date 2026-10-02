@@ -11,7 +11,7 @@ import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import { withoutTransientPanels } from './transientLayout'
 import { layoutMetrics, sameLayoutMetrics, type LayoutMetrics } from './layoutMetrics'
-import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, type RegionTree } from './regionLayout'
+import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, type BottomSpan, type RegionTree } from './regionLayout'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
@@ -374,7 +374,7 @@ function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
   const restore = preserveAcrossRestructure()
   pinSides(api)
   try {
-    alignWorkspaceRegions(api, snapshot)
+    alignWorkspaceRegions(api, snapshot, useWorkspace.getState().bottomSpan)
     if (panelsAt(api, 'bottom').length) settleBottomHeight(api)
     setTimeout(() => {
       if (useWorkspace.getState().api === api && !Object.values(sidebarAnimating).some(Boolean)) restoreRegionProportions(api, snapshot)
@@ -499,12 +499,14 @@ interface WorkspaceState {
   sideScale: Record<'left' | 'right', number>
   /** 当前宽度持久化归属键(= 活动 Space id);切 Space 时重载对应记忆。 */
   sideProfileKey: string | null
+  /** 底部面板横跨哪几列(= 当前 Space 的 bottomSpan;缺省 'right')。alignRegions 按它摆壳拓扑。 */
+  bottomSpan: BottomSpan
   setApi(api: DockviewApi | null): void
   setDefaultBuilder(fn: () => void): void
   setSidebarDefaults(defaults: SidebarDefaults): void
   /** 设置「可自由拖宽」侧栏画像(切 Space 时调):载入该 Space 记住的宽度。
    *  free 缺省 = true(两侧都记宽);只有显式传 false 的那侧才回到「钉黄金分割」。 */
-  setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }): void
+  setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }, bottomSpan?: BottomSpan): void
   initializeSidebar(side: DockSide, visible: boolean): void
   setFocusedLeaf(panel: IDockviewPanel | null | undefined): void
   registerChatSurface(leafId: string, el: HTMLDivElement | null): void
@@ -513,6 +515,9 @@ interface WorkspaceState {
   refreshTabs(): void
   /** 没被视图改过名的面板按当前语言重取标题(W-10);宿主在语言变更时调。单列 store 没有它,调用方用 `?.()`。 */
   retitleDefaults(): void
+  /** 按当前 bottomSpan 重摆壳拓扑。切 Space 的 applyNamed / resetLayout 自带;只有冷启动「活动 Space 晚于
+   *  布局还原才定下」(异步注册的插件 / 用户 Space)要补调。单列 store 没有它,调用方用 `?.()`。 */
+  realignRegions(): void
   /** 顶栏标签点击 → 激活该 leaf。 */
   activateLeaf(id: string): void
   /** 顶栏标签关闭。 */
@@ -592,6 +597,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   sideWidths: { left: null, right: null, bottom: null },
   sideScale: { left: 1, right: 1 },
   sideProfileKey: null,
+  bottomSpan: 'right',
 
   setApi: (api) => {
     // 面板关掉后 id 会被 nextId 复用:别让新面板继承旧面板「自己改过名」的标记(Codex r3a-2)
@@ -602,7 +608,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   // bottom 显式兜底成 []:不能写 `{ bottom: [], ...defaults }` —— 若调用方带了 `bottom: undefined`
   // 这个**存在但为 undefined** 的键,展开时 `sidebarDefaults[side].filter` 会当场炸。
   setSidebarDefaults: (defaults) => set({ sidebarDefaults: { left: defaults.left, right: defaults.right, bottom: defaults.bottom ?? [] } }),
-  setSideProfile: (key, free, scale) => {
+  setSideProfile: (key, free, scale, bottomSpan) => {
     let widths: Record<DockSide, number | null> = { left: null, right: null, bottom: null }
     try {
       // v1 key(lcl.sideWidth.)被「布局变更即记宽」污染过:×1.2 时代把系统钉的 336 当用户记忆存了。
@@ -621,6 +627,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       sideFree: { left: free.left !== false, right: free.right !== false },
       sideWidths: widths,
       sideScale: { left: scale?.left ?? 1, right: scale?.right ?? 1 },
+      bottomSpan: bottomSpan ?? 'right',
       stashActive: { left: null, right: null, bottom: null },
     })
   },
@@ -650,6 +657,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   retitleDefaults: () => retitleDefaultPanels(get().api),
+  realignRegions: () => { const api = get().api; if (api) alignRegions(api) },
   refreshTabs: () => {
     const api = get().api
     if (!api) { if (get().mainTabs.length) set({ mainTabs: [] }); return }
