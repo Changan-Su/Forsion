@@ -75,6 +75,7 @@ import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMO
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { createRemoteSafety } from './remoteSafety' // P1-K2
 import { registerRemoteSafetyIpc } from './remoteSafetyIpc' // P1-K2
+import { registerDocumentTaskIpc } from './documentTaskIpc'
 import { createSystemAuth } from './remoteSafetyAuth' // P1-K2
 import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
 import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
@@ -2395,6 +2396,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
+  registerDocumentTaskIpc(ipcMain, join(app.getPath('userData'), 'document-task-receipts.json'), isTrustedSender)
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
   registerRemoteSafetyIpc(ipcMain, remoteSafety, isTrustedSender) // P1-K2:remoteSafety:get / estop / unlock / setHotkey / setHotkeyRecording

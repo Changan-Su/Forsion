@@ -78,6 +78,8 @@ import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTim
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
+import { documentAgentFence, newDocAgentSpec, serializeDocAgentSpec } from '../blocks/documentAgent/format'
+import { instructionsOf, pageInstructionContext } from './pageInstructions'
 import { reconcileTr, type ReconcileChange } from './reconcileDiff'
 import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange, revertAgentChanges, type AgentChangesState } from './agentChanges'
 import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
@@ -805,6 +807,11 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.card) {
       getInstance()?.action((ctx) => onCardRef.current(ctx.get(editorViewCtx)))
+      return
+    }
+    if (item.scaffold === S.instructions || item.scaffold === S.agentTask || item.scaffold === S.prompt) {
+      const kind = item.scaffold === S.instructions ? 'instructions' : item.scaffold === S.agentTask ? 'task' : 'prompt'
+      insertMd(documentAgentFence(kind, kind === 'instructions' ? '' : serializeDocAgentSpec(newDocAgentSpec())))
       return
     }
     if (item.scaffold === S.ai) {
@@ -1642,7 +1649,17 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 折叠失败时这个回调根本不会被调,清零动作放在它里面就永远等不到。
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
-      ...createEmbedLayer({ path, readOnly }),
+      ...createEmbedLayer({ path, readOnly,
+        alive: () => !pipe.dead && !pipe.retired && !pipe.readOnly && !srcRef.current,
+        flush: async () => {
+          if (pipe.dead || pipe.retired || pipe.readOnly || srcRef.current) throw new Error(translate('documentTask.sourceGone'))
+          syncFromEditor()
+          flushPropDrafts()
+          if (pipe.timer) { clearTimeout(pipe.timer); pipe.timer = null }
+          await writeNow(true)
+          if (pipe.dead || pipe.retired || pipe.failed) throw new Error(translate('documentTask.sourceGone'))
+        },
+      }),
       touchScrollMarginPlugin(), // 触屏:光标行不滚到悬浮胶囊底下(G2-11)
       ...createPendingInsert(), // 异步 slash 项的锚与「进行中」占位(G3-06)
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
@@ -1790,7 +1807,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const canAskTangu = !readOnly && !!readTangu()?.askInChat
   const askTangu = (view: EditorView, from: number, to: number): void => {
     const quote = askTanguQuote(view.state.doc, from, to, path)
-    if (quote) readTangu()?.askInChat?.(quote)
+    if (quote) readTangu()?.askInChat?.([pageInstructionContext(instructionsOf(view.state.doc), path), quote].filter(Boolean).join('\n\n').slice(0, 20_000))
   }
   // ── 正文 AI(评审 G3-07,拍板 #13)───────────────────────────────────────────────
   // 入口:选区工具栏「AI ▾」(内置动作 + 插件 registerSelectionAction)、`/ai`、空行按空格(缺省关)。不进右键菜单。
@@ -1853,6 +1870,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...(before ? { before } : {}),
       ...(after ? { after } : {}),
       title: path.split('/').pop()!.replace(/\.md$/i, ''),
+      pagePath: path,
+      pageInstructions: instructionsOf(view.state.doc),
       ...(action === 'translate' ? { language: translateTargetOf(target.text) } : {}),
     }, { signal, onDelta })
   }

@@ -75,6 +75,7 @@ export function slashAvailable(ctx: EditContext): boolean {
 
 /** slash 菜单里这一项在这个上下文列不列(B-18:不适用就不列,而不是列出来点了静默无效)。 */
 export function slashItemApplies(key: string, ctx: EditContext): boolean {
+  if (key === 'instructions') return ctx.topLevel
   // 分栏只做顶层块(列表 / 引用 / 分栏 / 卡片里点了只能给一句「请先移出」)。
   if (key === 'columns') return ctx.topLevel
   // 卡片:列表项里会把整份父列表搬成一张卡、分栏里 blockToCard 拒绝 —— 与块菜单同规。

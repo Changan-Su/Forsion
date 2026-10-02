@@ -97,7 +97,9 @@ import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, Bot, BookOpen, MessageSquare } from 'lucide-react'
+import { moveSlash, slashRows } from './slashNavigation'
+import './slashAi.css'
 import { readTangu } from '../../plugins/tanguSeam'
 import { OverlayPortal } from '../../lib/overlayPortal'
 import { OverlayAt } from '../../lib/clampMenu'
@@ -111,6 +113,7 @@ import { footnoteInputRules, footnotePlugin } from './footnote'
 import { tagPillPlugin } from './tagPill'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
+import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
@@ -142,6 +145,15 @@ registerMessages({
   'amadeus.default.tableColumn': { zh: '列 {n}', en: 'Column {n}' },
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
+  'mdblock.group.ai': { zh: 'AI', en: 'AI' },
+  'mdblock.capsule.ai': { zh: '写作', en: 'Write' },
+  'mdblock.capsule.instructions': { zh: '指令', en: 'Rules' },
+  'mdblock.capsule.agent-task': { zh: '任务', en: 'Task' },
+  'mdblock.capsule.prompt': { zh: '提示', en: 'Prompt' },
+  'mdblock.foot.ai': { zh: '← → 切换', en: '← → Switch' },
+  'mdblock.slash.instructions': { zh: '页指令', en: 'Instructions' },
+  'mdblock.slash.agentTask': { zh: 'Agent 任务', en: 'Agent task' },
+  'mdblock.slash.prompt': { zh: '提示模板', en: 'Prompt' },
   'mdblock.group.basic': { zh: '基础', en: 'Basic' },
   'mdblock.group.list': { zh: '列表', en: 'Lists' },
   'mdblock.group.advanced': { zh: '高级', en: 'Advanced' },
@@ -262,6 +274,9 @@ const DRAWING_SENTINEL = '\u0000__amadeus_drawing__'
 const CARD_SENTINEL = '\u0000__amadeus_card__'
 /** `/ai`(评审 G3-07):v4 统一实例开正文 AI 面板(UnifiedPage.applySlash 接)。 */
 const AI_SENTINEL = '\u0000__amadeus_ai__'
+const INSTRUCTIONS_SENTINEL = '\u0000__amadeus_instructions__'
+const AGENT_TASK_SENTINEL = '\u0000__amadeus_agent_task__'
+const PROMPT_SENTINEL = '\u0000__amadeus_prompt__'
 
 const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
@@ -1471,6 +1486,19 @@ export function MilkdownInner({
     setMention(null)
   }
 
+  const pickMentionAgent = (agent: string): void => {
+    if (!mention || !unified || !readTangu()?.submitDocumentTask || readTangu()?.hostExecution?.() === false) return
+    const m = mention
+    getInstance()?.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const node = view.state.schema.nodes.code_block.create({ language: 'forsion-task' }, view.state.schema.text(serializeDocAgentSpec(newDocAgentSpec(agent))))
+      // A block insertion uses ProseMirror's fitting rules; nearby text survives as paragraphs.
+      view.dispatch(view.state.tr.replaceRangeWith(m.from - 1, m.to, node).scrollIntoView())
+      view.focus()
+    })
+    setMention(null)
+  }
+
   /** 日期候选:插入的是字面 `@2026-09-01T14:30`(见 dateQuery / mdMarks),不包 `[[ ]]`。
    *  ⚠️ 必须补一个尾随空格 —— 不然新插进去的 `@…` 立刻又满足 mention 的触发条件,面板当场再弹一次。 */
   const pickMentionRaw = (text: string): void => {
@@ -1708,6 +1736,8 @@ export function MilkdownInner({
           getFiles={getFiles}
           onPick={pickMention}
           onPickRaw={pickMentionRaw}
+          agents={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? readTangu()?.agents?.() : undefined}
+          onPickAgent={unified && readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false ? pickMentionAgent : undefined}
           editorFocused={editorFocused}
           dates
           allowCreate={false}
@@ -2284,6 +2314,8 @@ export interface SlashItem {
   unifiedOnly?: boolean
   /** 要宿主能做正文 AI(探针给了 complete)才露出(G3-07 的 `/ai`);纯 Amadeus 壳 / 台架缺省不给。 */
   needsAi?: boolean
+  aiCapsule?: boolean
+  needsDocumentTask?: boolean
 }
 
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
@@ -2317,6 +2349,9 @@ export const SLASH_SENTINELS = {
   page: PAGE_SENTINEL,
   card: CARD_SENTINEL,
   ai: AI_SENTINEL,
+  instructions: INSTRUCTIONS_SENTINEL,
+  agentTask: AGENT_TASK_SENTINEL,
+  prompt: PROMPT_SENTINEL,
 } as const
 
 // 前缀型 scaffold → 块转换(slash 选中时经 SlashOps.transform 在编辑器内单事务完成,绝不新建块)。
@@ -2340,7 +2375,10 @@ export const PREFIX_TRIGGERS: Record<string, Trigger> = {
  *  共吃这一份 —— 别在别处再手写一张清单,否则新块类型只在其中一处露出。 */
 export const SLASH_ITEMS: SlashSeed[] = [
   // AI 排首位(Notion 的 /ai 同位);kw 里的 `ai` 精确命中 +10 分,`/ai` 不再被拼音模糊匹配到代码块(G3-09)。
-  { key: 'ai', labelKey: 'mdblock.slash.ai', hint: 'AI', icon: <Sparkles width="1em" height="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.basic', scaffold: AI_SENTINEL, kw: 'ai 人工智能 写作 xiezuo 续写 xuxie 生成 tangu ask 问', unifiedOnly: true, needsAi: true },
+  { key: 'ai', labelKey: 'mdblock.slash.ai', hint: 'AI', icon: <Sparkles width="1em" height="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.ai', aiCapsule: true, scaffold: AI_SENTINEL, kw: 'ai 人工智能 写作 xiezuo 续写 xuxie 生成 tangu ask 问', unifiedOnly: true, needsAi: true },
+  { key: 'instructions', labelKey: 'mdblock.slash.instructions', hint: '', icon: <BookOpen size="1em" />, groupKey: 'mdblock.group.ai', aiCapsule: true, scaffold: INSTRUCTIONS_SENTINEL, kw: 'ai instructions instruction 指令 zhiling 页指令 维护规则', unifiedOnly: true },
+  { key: 'agent-task', labelKey: 'mdblock.slash.agentTask', hint: '', icon: <Bot size="1em" />, groupKey: 'mdblock.group.ai', aiCapsule: true, scaffold: AGENT_TASK_SENTINEL, kw: 'ai agent task mention 任务 renwu 交办 提及', unifiedOnly: true, needsDocumentTask: true },
+  { key: 'prompt', labelKey: 'mdblock.slash.prompt', hint: '', icon: <MessageSquare size="1em" />, groupKey: 'mdblock.group.ai', aiCapsule: true, scaffold: PROMPT_SENTINEL, kw: 'ai prompt 提示词 tishici 模板', unifiedOnly: true, needsDocumentTask: true },
   { key: 'text', labelKey: 'mdblock.slash.text', hint: '', icon: <TextIcon />, groupKey: 'mdblock.group.basic', scaffold: '', kw: 'text 文本 paragraph zhengwen 正文' },
   { key: 'h1', labelKey: 'mdblock.slash.h1', hint: '#', icon: <Heading1Icon />, groupKey: 'mdblock.group.basic', scaffold: '# ', kw: 'h1 heading 标题 biaoti title 大标题' },
   { key: 'h2', labelKey: 'mdblock.slash.h2', hint: '##', icon: <Heading2Icon />, groupKey: 'mdblock.group.basic', scaffold: '## ', kw: 'h2 heading 标题 biaoti 中标题' },
@@ -2411,7 +2449,8 @@ export function useAllSlashItems({ unified = false }: { unified?: boolean } = {}
     })),
   ]
   const ai = !!readTangu()?.complete
-  return all.filter((it) => (unified || !it.unifiedOnly) && (ai || !it.needsAi))
+  const tasks = !!readTangu()?.submitDocumentTask && readTangu()?.hostExecution?.() !== false
+  return all.filter((it) => (unified || !it.unifiedOnly) && (ai || !it.needsAi) && (tasks || !it.needsDocumentTask))
 }
 
 /** 「最后一个获得过焦点的块」的 applySlash —— 移动端双列块面板的落点。
@@ -2651,14 +2690,11 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
       if (e.key === 'Escape') {
         stop(e)
         onClose()
-      } else if (e.key === 'ArrowDown' && bareArrow) {
-        stop(e)
-        setActive((a) => Math.max(0, Math.min(a + 1, items.length - 1)))
-      } else if (e.key === 'ArrowUp' && bareArrow) {
-        stop(e)
-        setActive((a) => Math.max(a - 1, 0))
+      } else if (bareArrow && e.key.startsWith('Arrow')) {
+        const next = moveSlash(items, activeIdx, e.key)
+        if (next !== null) { stop(e); setActive(next) }
       } else if (e.key === 'Enter' || e.key === 'Tab') {
-        const it = items[active]
+        const it = items[activeIdx]
         if (it) { stop(e); onPick(it) }
         else onClose() // 无匹配:不拦截,让 Enter/Tab 正常落进编辑器(换行/缩进)
       }
@@ -2674,7 +2710,9 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
     <button
       key={it.key}
       id={`${menuId}-${i}`}
-      className="slash-item"
+      className={`slash-item${it.aiCapsule ? ' slash-ai-capsule' : ''}`}
+      aria-label={it.label}
+      title={it.aiCapsule ? it.label : undefined}
       data-active={i === active || undefined}
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
       ref={i === active ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
@@ -2686,10 +2724,17 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
       <span className="slash-icon" aria-hidden>
         {it.icon}
       </span>
-      <span className="slash-label">{it.label}</span>
-      <span className="slash-hint">{it.hint}</span>
+      <span className="slash-label">{it.aiCapsule ? t(`mdblock.capsule.${it.key}`) : it.label}</span>
+      {!it.aiCapsule && <span className="slash-hint">{it.hint}</span>}
     </button>
   )
+
+  const renderRows = (indexes: number[]) => slashRows(indexes.map((i) => items[i])).map((row) => {
+    const ids = row.map((i) => indexes[i])
+    return items[ids[0]]?.aiCapsule
+      ? <div key="ai" className="slash-ai-capsules" role="group" aria-label={t('mdblock.group.ai')}>{ids.map((i) => renderItem(items[i], i))}</div>
+      : renderItem(items[ids[0]], ids[0])
+  })
 
   // Browsing (no query) → grouped with section labels; filtering → flat list.
   const grouped: Array<{ name: string; rows: Array<{ it: SlashItem; idx: number }> }> = []
@@ -2710,17 +2755,17 @@ function SlashMenu({ query, left, top, anchorTop, hideKeys, ctx, unified, editor
         {items.length === 0 && <div className="slash-empty">{t('mdblock.menu.noMatch')}</div>}
         <div className="slash-scroll">
           {q
-            ? items.map((it, i) => renderItem(it, i))
+            ? renderRows(items.map((_, i) => i))
             : grouped.map((g) => (
                 <div key={g.name} className="slash-group">
                   <div className="slash-group-label">{g.name}</div>
-                  {g.rows.map(({ it, idx }) => renderItem(it, idx))}
+                  {renderRows(g.rows.map(({ idx }) => idx))}
                 </div>
               ))}
         </div>
         {items.length > 0 && (
           <div className="slash-foot">
-            <span>{t('mdblock.foot.select')}</span>
+            <span>{t(items[activeIdx]?.aiCapsule ? 'mdblock.foot.ai' : 'mdblock.foot.select')}</span>
             <span>{t('mdblock.foot.insert')}</span>
             <span>{t('mdblock.foot.close')}</span>
           </div>

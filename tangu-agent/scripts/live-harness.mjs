@@ -82,6 +82,7 @@
  *                                                           #   ② error:server 抛 McpError,message 带伪造收尾标签 + 注入话术;错误文本同样须进围栏
  *                                                           #   两段的注入话术都不许被照做。改 src/mcp/* 或 registry 的 MCP 分支后跑
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
+ *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
  *   npm run live:harness -- --only phone --exec-mode sandbox --timeout 1800000  # 手机操控 T1(09-25):mobile 客户端 + client_capabilities + 假手机应答器(claim → 预设结果);
  *                                                           #   正例(闹钟 / 高德导航 / 短信草稿不说已发送 / 暂停音乐(chat)/ Forsion 日历走 amadeus / 切深色走 set_ui_setting)
@@ -114,6 +115,7 @@ import { createRequire } from 'node:module';
 import { deflateSync } from 'node:zlib';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
+import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -126,6 +128,7 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
 const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone'];
+KEYS.push('pageinstructions');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -144,6 +147,7 @@ const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename'
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
+OPT_IN.add('pageinstructions'); // Scoped document maintenance; deliberately excluded from broad default runs.
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -2157,6 +2161,9 @@ Then reply with only the command output.`,
       ttftMs: a1.firstMs ?? undefined,
     };
   });
+
+  await scenario('pageinstructions', 'page Instructions:分页 / inline / 页面隔离 / 当前要求优先', () =>
+    pageInstructionsLive({ run, workspace, base, token: TOKEN, model: MODEL }));
 
   await scenario('childchat', 'childchat 委派完整落库与原子会话续聊', async () => {
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'live-idle', name: 'Idle member', systemPrompt: 'Be concise.' }) });

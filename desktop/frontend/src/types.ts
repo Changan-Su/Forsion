@@ -1286,6 +1286,7 @@ declare global {
       initialConfig?: StoredDesktopConfig
       account?: import('./amadeus/plugins/types').PluginAccount
       getConfig(): Promise<StoredDesktopConfig>
+      documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
       backendLogs?(): Promise<string[]>

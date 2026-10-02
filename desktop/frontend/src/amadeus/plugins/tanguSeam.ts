@@ -110,6 +110,8 @@ export interface TanguProbe {
   /** 用户的 Agent 名册(给「把某个东西绑给某个 Agent」的选择器用)。可选:旧宿主 / 台架假探针不给 →
    *  插件退回「只认当前会话的 Agent」。 */
   agents?(): TanguAgentInfo[]
+  /** Native roster consumers; separate from the model/Space-only subscription. */
+  subscribeAgents?(cb: () => void): () => void
   /** 当前 Space id(`tangu` / `home` / 用户 Space …);无 Space 时 null。 */
   activeSpace(): string | null
   /** 用量/档位快照。**纯拉取,永远不进 `subscribe` 的变更键** —— 这些值在流式回答里每个
@@ -138,6 +140,14 @@ export interface TanguProbe {
   /** 用指定 Agent 开一个新对话(离开主页 Space → 新对话草稿 → 选 Agent → 预填或送出)。
    *  放行规则(send 只给自家捆绑 Agent、cwd 钳在库内)在 pluginStore 那层,这里只执行。 */
   startChat?(o: TanguStartChatOptions): Promise<TanguStartChatResult>
+  /** Native document actions only; never exported into the plugin context. */
+  submitDocumentTask?(o: {
+    key: string; agent?: string; prompt: string; vaultRoot: string
+    alive: () => boolean
+    /** Bind and strictly save the session before any model run is submitted. */
+    onCreated: (sessionId: string) => Promise<void>
+  }): Promise<TanguStartChatResult>
+  openDocumentTask?(sessionId: string): void
   /** agent 自建 Space 读写自家数据(2026-09-27+);slug 没有数据源 → null(今天只有 muse)。
    *  可选:台架假探针 / 纯 Amadeus 壳不给 = 插件那边整个没有 `ctx.agent`。 */
   agentSelf?(slug: string): TanguAgentSelf | null
@@ -164,6 +174,8 @@ export interface TanguCompleteRequest {
   after?: string
   /** 笔记标题。 */
   title?: string
+  pageInstructions?: string
+  pagePath?: string
   /** translate 的目标语言(如 "English")。 */
   language?: string
   /** 不给 = 主区聊天当前模型。 */
