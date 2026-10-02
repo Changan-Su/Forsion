@@ -71,6 +71,20 @@ describe('parseSpaceJson', () => {
     }
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [main[0], { type: 'outline', splitFrom: 0 }] } }), opts()).ok).toBe(false)
   })
+  it('layout.bottom 可选:声明的视图进底部面板;缺省不出现该键;同样查注册、不许 split', () => {
+    const bottom = [{ type: 'outline', params: { follow: true } }]
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom } }), opts())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.spec.layout.bottom).toEqual(bottom)
+    const old = parseSpaceJson(JSON.stringify(VALID), opts())
+    expect(old.ok && 'bottom' in old.spec.layout).toBe(false) // 旧配方原样,宿主照旧不碰底部
+    const unknown = parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: [{ type: 'timeline' }] } }), opts())
+    expect(unknown.ok).toBe(false)
+    if (!unknown.ok) expect(unknown.error).toContain('timeline')
+    for (const bad of [[{ type: 'outline', split: 'down' }], { type: 'outline' }, [{ params: {} }]]) {
+      expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: bad } }), opts()).ok).toBe(false)
+    }
+  })
 })
 
 describe('slug 工具', () => {

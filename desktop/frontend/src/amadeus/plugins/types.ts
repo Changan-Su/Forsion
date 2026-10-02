@@ -125,7 +125,8 @@ export interface ThemeContribution {
  * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
  * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / workFolder(的落点)`。
  * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
- * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。
+ * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
+ * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
  * 结论:与笔记无关的插件功能(仪表盘/远程系统面板/工具面)**不得**建立在这些方法上 ——
  * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / 自己的视图 DOM)。
  * 新增方法时把「需库 / 无需库」写进它的注释,别让下一个人再踩。
@@ -435,6 +436,9 @@ export interface StatusItemHandle {
   update(patch: { text?: string; title?: string }): void
   dispose(): void
 }
+
+/** A workbench area a plugin view can be docked into. */
+export type PluginViewLocation = 'main' | 'left' | 'right' | 'bottom'
 
 /** A workbench view a plugin can contribute (plain DOM mount — no React needed in the plugin).
  *  The host registers it into the engine view registry as `plugin:<pluginId>:<viewId>`, so custom
@@ -834,8 +838,25 @@ export interface PluginContext {
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
-   *  ignore the option and open in main). No-op on hosts without a workbench. */
-  openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' }): void
+   *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
+   *  ⚠️ Older desktop hosts open an unknown location in main, which navigates the active main view away:
+   *  check `viewLocations` before asking for 'bottom'. No-op on hosts without a workbench. */
+  openView(viewId: string, opts?: { location?: PluginViewLocation }): void
+  /** Where `openView` (and a Space's `layout`) can dock this plugin's views on this host (2026-10-02+).
+   *  Desktop/Web: main, left, right, bottom; mobile has no bottom panel. Undefined on older hosts and on hosts
+   *  without a workbench: feature-detect with `ctx.viewLocations?.includes('bottom')`. */
+  readonly viewLocations?: readonly PluginViewLocation[]
+  /** Close every open instance of one of this plugin's own views, wherever it is docked (2026-10-02+). A side
+   *  panel that loses its last view shows the host's empty placeholder; the bottom panel collapses — as when the
+   *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts. */
+  closeView?(viewId: string): void
+  /** Swap this plugin's view `fromViewId` for `toViewId` where it stands (2026-10-02+): open tabs change in place
+   *  (same panel and size, the layout is not rebuilt, the active tab stays where it was), a collapsed panel keeps the
+   *  new view in its stash and stays collapsed, and the Space's panel defaults follow. This is the "launch layout →
+   *  project layout" move (a list in the left panel becomes the project's media). Returns how many instances were
+   *  replaced; 0 when `fromViewId` is open nowhere — then decide yourself whether to `openView` (that one expands a
+   *  collapsed panel). Absent on older hosts: fall back to `openView`. */
+  replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
   /** Open one of this plugin's registered views in the native Floating Panel window.
    *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void

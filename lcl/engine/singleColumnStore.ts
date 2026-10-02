@@ -218,6 +218,8 @@ interface WS {
   activateLeaf(id: string): void
   closeLeaf(id: string): void
   closeViewsOfType(type: string): void
+  /** 同桌面版:原地换类型(抽屉里的视图收着也照换,不替用户打开抽屉),sidebarDefaults 跟着换;返回换掉的个数。 */
+  replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
   /** 同桌面版:三桶里的 leaf 一个不漏(单列壳只渲染当前那个,后台的视图没挂载、自己收不到任何广播)。 */
   remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
   resetLayout(): void
@@ -485,6 +487,16 @@ export const useWorkspace = create<WS>((set, get) => {
 
     closeViewsOfType(type) {
       for (const rec of allRecs().filter((r) => r.type === type)) get().closeLeaf(rec.id)
+    },
+
+    replaceViewsOfType(from, to, params = {}) {
+      if (from === to || !getView(to)) return 0
+      let n = 0
+      for (const rec of allRecs().filter((r) => r.type === from)) if (get().navigateLeaf(rec.id, to, params)) n++
+      const swap = (list: PersistedPanel[]): PersistedPanel[] => list.map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
+      const d = get().sidebarDefaults
+      set({ sidebarDefaults: { left: swap(d.left), right: swap(d.right) } })
+      return n
     },
 
     remapLeaves(fn) {

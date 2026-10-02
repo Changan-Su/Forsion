@@ -22,7 +22,9 @@ function mkApi(width: number, height: number) {
   const moves: Array<{ from: unknown; group: unknown; position?: string }> = []
   const mkGroup = () => {
     const g = {
+      activePanel: undefined as unknown,
       api: {
+        setActive: vi.fn(),
         width: 0,
         height: 0,
         setSize(s: { width?: number; height?: number }) {
@@ -39,13 +41,13 @@ function mkApi(width: number, height: number) {
     }
     return g
   }
-  const panels: Array<{ id: string; title: string; params: Record<string, unknown>; group: ReturnType<typeof mkGroup>; api: Record<string, unknown> }> = []
-  const mkP = (id: string, params: Record<string, unknown>) => {
+  const panels: Array<{ id: string; title: string; component?: string; params: Record<string, unknown>; group: ReturnType<typeof mkGroup>; api: Record<string, unknown> }> = []
+  const mkP = (id: string, params: Record<string, unknown>, component?: string) => {
     const p = {
-      id, title: id, params, group: mkGroup(),
+      id, title: id, component, params, group: mkGroup(),
       api: {
         close: () => { const i = panels.findIndex((x) => x.id === id); if (i >= 0) panels.splice(i, 1) },
-        setActive: () => { }, setTitle: () => { },
+        setActive: vi.fn(), setTitle: () => { },
         updateParameters: (np: Record<string, unknown>) => { p.params = { ...p.params, ...np } },
       },
     }
@@ -60,7 +62,13 @@ function mkApi(width: number, height: number) {
       panels.length = 0 // 真 Dockview:整份换掉,按 blob 重建 panel
       for (const [id, p] of Object.entries(blob?.panels ?? {})) panels.push(mkP(id, p.params ?? {}))
     },
-    addPanel: (o: { id: string; params: Record<string, unknown>; position?: unknown }) => { positions.push(o.position); const p = mkP(o.id, o.params); panels.push(p); return p },
+    addPanel: (o: { id: string; component?: string; params: Record<string, unknown>; position?: { referencePanel?: { group: ReturnType<typeof mkGroup> } } }) => {
+      positions.push(o.position)
+      const p = mkP(o.id, o.params, o.component)
+      if (o.position?.referencePanel) p.group = o.position.referencePanel.group // 'within':进参照 panel 的组
+      panels.push(p); return p
+    },
+    removePanel: (p: unknown) => { const i = panels.indexOf(p as never); if (i >= 0) panels.splice(i, 1) },
   } as unknown as DockviewApi
   return { api, panels, moves, positions }
 }
@@ -363,3 +371,97 @@ describe('底部面板:布局信封向后兼容', () => {
     vi.runAllTimers()
   })
 })
+
+// 插件 ctx.replaceView 的引擎半身(2026-10-02):Coding 进出项目换左栏的同一件事,交给插件用。
+describe('原地换视图(replaceViewsOfType)', () => {
+  it('活的侧栏 / 底部 panel:原组原位换成新类型的组件(不是只改 __type),参数换成新的;返回换掉的个数', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', { old: 1 }, 'bottom')
+    const old = panels.find((p) => p.params.__loc === 'bottom')!
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { fresh: true })).toBe(1)
+    expect(bottoms(panels)).toHaveLength(1) // 一换一,没有新开组
+    const p = bottoms(panels)[0] as typeof old
+    // 侧栏 panel 按类型挂组件:只改 __type 的话画出来的仍是旧视图(真 Electron 实测),组件名必须是新类型
+    expect([p.component, p.params.__type, p.params.__loc, p.params.fresh, p.params.old]).toEqual(['logv', 'logv', 'bottom', true, undefined])
+    expect(p.group).toBe(old.group)
+    expect(panels.includes(old)).toBe(false)
+    vi.runAllTimers()
+  })
+
+  it('`to` 已开在同一侧:不开第二个,只摘掉旧的(侧栏按类型一个 tab)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('logv', {}, 'bottom')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    expect(typesOf(panels)).toEqual(['logv'])
+    vi.runAllTimers()
+  })
+
+  it('`to` 已开在同一侧:调用方给的参数并进那个 panel,不丢(Codex 评审 10-02)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('logv', { project: 'A', keep: 1 }, 'bottom')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { project: 'B' })).toBe(1)
+    const p = bottoms(panels)[0]
+    expect([typesOf(panels), p.params.project, p.params.keep]).toEqual([['logv'], 'B', 1])
+    vi.runAllTimers()
+  })
+
+  it('收起的一侧同时暂存着新旧两种:换完只留一个(侧栏图标不重复),参数并进留下的(Codex 评审 10-02)', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.setState((st) => ({ stash: { ...st.stash, left: [{ type: 'termv', params: {} }, { type: 'logv', params: { project: 'A', keep: 1 } }] } }))
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { project: 'B' })).toBe(1)
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'logv', params: { project: 'B', keep: 1 } }])
+    vi.runAllTimers()
+  })
+
+  it('活动 panel 还给原主人:已在组里最前的只切活动组,不再 setActive(dockview 7 会重绘它,iframe 重载)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    const main = (api as unknown as { addPanel: (o: unknown) => (typeof panels)[number] }).addPanel({ id: 'm', component: '__frame', params: { __loc: 'main', __type: 'logv' } })
+    main.group.activePanel = main
+    ;(api as unknown as { activePanel: unknown }).activePanel = main
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    expect(main.api.setActive).not.toHaveBeenCalled()
+    expect(main.group.api.setActive).toHaveBeenCalledTimes(1)
+    vi.runAllTimers()
+  })
+
+  it('收起的面板:stash 里换、面板保持收起(不替用户弹出来);激活记忆跟着换', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    vi.runAllTimers()
+    useWorkspace.getState().toggleSidebar('bottom')
+    vi.runAllTimers()
+    expect(useWorkspace.getState().stash.bottom.map((v) => v.type)).toEqual(['termv'])
+    // 桩的 group 不报活动 tab,折叠记不下激活项 —— 真 Dockview 会记;这里直接种上
+    useWorkspace.setState((st) => ({ stashActive: { ...st.stashActive, bottom: 'termv' } }))
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(1)
+    const s = useWorkspace.getState()
+    expect(s.stash.bottom).toEqual([{ type: 'logv', params: {} }])
+    expect(s.stashActive.bottom).toBe('logv')
+    expect([s.bottomVisible, bottoms(panels).length]).toEqual([false, 0])
+  })
+
+  it('Space 的面板默认值跟着换(关空再展开不回到旧视图);什么都没开时返回 0;目标没注册则不动', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSidebarDefaults({ left: [{ type: 'termv', params: {} }], right: [], bottom: [{ type: 'termv', params: {} }] })
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'nope')).toBe(0)
+    expect(useWorkspace.getState().sidebarDefaults.left[0].type).toBe('termv')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv')).toBe(0)
+    expect(useWorkspace.getState().sidebarDefaults).toEqual({ left: [{ type: 'logv', params: {} }], right: [], bottom: [{ type: 'logv', params: {} }] })
+  })
+})
+
