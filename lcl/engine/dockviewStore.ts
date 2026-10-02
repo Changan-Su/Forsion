@@ -797,6 +797,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 侧栏按类型一个 tab(openView 同侧同类型复用):`to` 已开在这一侧就让它顶上,只摘掉旧的,不开第二个
       const there = panelsAt(api, loc).find((x) => x !== p && panelType(x) === to)
       if (there) {
+        if (Object.keys(params).length) there.api.updateParameters({ ...(there.params ?? {}), ...params }) // 调用方给的参数不丢
         if (group?.activePanel === p) there.api.setActive()
         api.removePanel(p)
         n++; side++; continue
@@ -820,7 +821,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if ((back.group as { activePanel?: IDockviewPanel } | undefined)?.activePanel === back) back.group.api.setActive()
       else back.api.setActive()
     }
-    const swap = (list: Stashed[]): Stashed[] => list.map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
+    // 同活 panel 那条:一侧按类型一个 tab —— `to` 已暂存在这一侧就只摘掉被换的、参数并进它,否则侧栏图标会出两个
+    const swap = (list: Stashed[]): Stashed[] => {
+      if (!list.some((v) => v.type === from)) return list
+      const kept = list.find((v) => v.type === to)
+      if (kept) return list.filter((v) => v.type !== from).map((v) => (v === kept ? { ...v, params: { ...(v.params ?? {}), ...params } } : v))
+      const at = list.findIndex((v) => v.type === from)
+      return list.filter((v, i) => v.type !== from || i === at).map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
+    }
     const { stash, stashActive, sidebarDefaults } = get()
     const stashed = stash.left.concat(stash.right, stash.bottom).filter((v) => v.type === from).length
     set({

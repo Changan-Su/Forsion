@@ -401,6 +401,27 @@ describe('原地换视图(replaceViewsOfType)', () => {
     vi.runAllTimers()
   })
 
+  it('`to` 已开在同一侧:调用方给的参数并进那个 panel,不丢(Codex 评审 10-02)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('logv', { project: 'A', keep: 1 }, 'bottom')
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { project: 'B' })).toBe(1)
+    const p = bottoms(panels)[0]
+    expect([typesOf(panels), p.params.project, p.params.keep]).toEqual([['logv'], 'B', 1])
+    vi.runAllTimers()
+  })
+
+  it('收起的一侧同时暂存着新旧两种:换完只留一个(侧栏图标不重复),参数并进留下的(Codex 评审 10-02)', () => {
+    const { api } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.setState((st) => ({ stash: { ...st.stash, left: [{ type: 'termv', params: {} }, { type: 'logv', params: { project: 'A', keep: 1 } }] } }))
+    expect(useWorkspace.getState().replaceViewsOfType('termv', 'logv', { project: 'B' })).toBe(1)
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'logv', params: { project: 'B', keep: 1 } }])
+    vi.runAllTimers()
+  })
+
   it('活动 panel 还给原主人:已在组里最前的只切活动组,不再 setActive(dockview 7 会重绘它,iframe 重载)', () => {
     const { api, panels } = mkApi(1600, 1000)
     useWorkspace.getState().setApi(api)
