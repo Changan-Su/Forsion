@@ -8,7 +8,7 @@ import { windowKind } from './windowKind'
  *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区 / 侧栏 / 底部面板;移动端无底部)。
  */
 import React, { useEffect, useLayoutEffect, useRef } from 'react'
-import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, UI_MODE, type ViewProps } from '@lcl/engine'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
@@ -109,6 +109,10 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
  *  ⚠️改用引擎的 closeViewsOfType(以 api.panels 为准):原来手写 `mainTabs + left + right` 三处枚举,
  *  加了底部面板之后会漏掉停在 bottom 的实例 —— 插件被禁用后它的 cleanup 不跑、UI 继续活着,而且这个
  *  已反注册的类型留在持久化布局里,下次启动 layoutViewsAllRegistered 判定失败 → **整份布局丢回默认**。 */
+/** 当前 workspace store 有底部面板(Dockview 壳)。单列 store 没有 bottomVisible 这一位 —— 移动构建把整个选择器
+ *  换成单列 store,所以只能运行时实判,不能 import 一个常量(换掉的模块里没有它)。 */
+export const hasBottomPanel = (): boolean => 'bottomVisible' in useWorkspace.getState()
+
 function closeLeafsOfType(type: string): void {
   useWorkspace.getState().closeViewsOfType(type)
 }
@@ -120,13 +124,16 @@ export function syncPluginViews(): void {
   if (installed) return
   installed = true
 
-  // 移动单列壳没有底部面板:bottom 回落右抽屉(与 Extend View 的约定一致),也不对插件宣称有 bottom。
-  const mobile = UI_MODE === 'mobile'
+  // 底部面板只有主窗的 Dockview 壳有:按 store 实判,别看 UI_MODE —— 安卓原生构建经 vite engineSwap 换上单列 store,
+  // UI_MODE 却可能仍是 desktop;Mini / 浮窗 / 拖出的独立窗也没有。没有时 bottom 回落右抽屉(同 Extend View 的约定),
+  // 也不对插件宣称有 bottom;卫星窗只宣称主区。
+  const main = windowKind() === 'main'
+  const hasBottom = main && hasBottomPanel()
   usePluginStore.getState().setViewOpener((type, loc) => {
     // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。2026-10-02 起含底部面板。
-    const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (mobile ? 'right' : 'bottom') : 'main'
+    const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (hasBottom ? 'bottom' : 'right') : 'main'
     useWorkspace.getState().openView(type, {}, at)
-  }, mobile ? ['main', 'left', 'right'] : ['main', 'left', 'right', 'bottom'])
+  }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
 
   // Forsion Sandbox 的热重载接缝:插件宿主(平台中立)不 import @lcl,工作台的读写由桌面壳在这里注入。
   // 枚举走 remapLeaves —— 它是**唯一**同时覆盖活 leaf 与收起侧栏 stash 的跨 store 接口(全返回 undefined

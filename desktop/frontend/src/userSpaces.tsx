@@ -25,6 +25,7 @@ import { currentLocale } from './i18n'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
+import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
 import { LAST_EXIT_SPACE, resolveStartupTarget, startupSpacePref } from './spaces'
 
@@ -95,9 +96,7 @@ function migrateRecipeLayout(spec: SpaceSpec): void {
 }
 
 function specToDefinition(spec: SpaceSpec): SpaceDefinition {
-  // 移动单列壳没有底部面板(它的 bucketOf 把 bottom 归进主区,开出来会把主视图导航走)→ 不开。
-  const bottom = UI_MODE === 'mobile' ? [] : toPanels(spec.layout.bottom ?? [])
-  const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right), bottom }
+  const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right), bottom: toPanels(spec.layout.bottom ?? []) }
   return {
     id: spec.id,
     mini: spec.mini ? { ...spec.mini, name: spec.mini.name ? specName({ ...spec, name: spec.mini.name }) : undefined } : undefined,
@@ -130,8 +129,9 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
         if (!sides[side].length) ws().initializeSidebar(side, false) // 无默认内容 → 收起(toggle 展开落占位)
       }
       // 配方声明了底部内容 = 主视图要和它一起用(如视频时间线)→ 默认展开;没声明则照旧不碰底部。
-      // 用户关掉后 mod+J 按 sidebarDefaults.bottom 把它开回来。
-      for (const p of bottom) ws().openView(p.type, p.params, 'bottom')
+      // 用户关掉后 mod+J 按 sidebarDefaults.bottom 把它开回来。单列壳没有底部面板(它的 bucketOf 把 bottom
+      // 归进主区,开出来会把主视图导航走)→ 不开;按 store 实判,安卓原生构建的 UI_MODE 可能仍是 desktop。
+      if (hasBottomPanel()) for (const p of sides.bottom ?? []) ws().openView(p.type, p.params, 'bottom')
     },
   }
 }
