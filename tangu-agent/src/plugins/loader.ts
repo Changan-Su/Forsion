@@ -272,6 +272,7 @@ export function cannotHotSwap(d: DiscoveredPlugin): boolean {
   if (!canSwapWholeGraph() || !entryScopeIsModule(entryFile)) return true;
   for (const f of codeFiles(d.dir)) {
     if (f.endsWith('.cjs') || f.endsWith('.node')) return true;
+    if (f.endsWith('.js') && !entryScopeIsModule(f)) return true; // 子目录自带非 module 的 package.json → 那里的 .js 是 CommonJS
     if (/\.m?js$/.test(f)) {
       try { if (CJS_REQUIRE.test(readFileSync(f, 'utf8'))) return true; } catch { /* 刚被删:不计 */ }
     }

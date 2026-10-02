@@ -12,8 +12,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'nod
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
+import nodeModule from 'node:module';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+
+/** 运行时有同步模块钩子(Node ≥ 22.15)才整图换代。发版门禁的 test job 跑 Node 20:那里多文件包一律需重启,
+ *  由「运行时没有模块钩子」那条覆盖,依赖钩子的用例跳过。 */
+const GRAPH = typeof (nodeModule as { registerHooks?: unknown }).registerHooks === 'function';
 
 interface Host {
   boot: typeof import('./bootstrap.js');
@@ -258,7 +263,7 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     expect(await visibleTools(h)).toEqual([]);
   });
 
-  it('只改 helper(入口与版本都没动)也算换了代码:整图换代,工具读到新 helper', async () => {
+  it.skipIf(!GRAPH)('只改 helper(入口与版本都没动)也算换了代码:整图换代,工具读到新 helper', async () => {
     writePlugin('lc-rel', { relative: true });
     const h = await host();
     await h.boot.activateAllPlugins();
@@ -281,12 +286,13 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     };
     const single = "import fs from 'node:fs'; await import('node:path'); console.log(import.meta.url)";
     expect(probe(single)).toBe(false);
-    expect(probe("import { a } from /* c */ './h.js'", { files: { 'h.js': 'export const a = 1' } })).toBe(false); // 钩子整图换代
+    expect(probe("import { a } from /* c */ './h.js'", { files: { 'h.js': 'export const a = 1' } })).toBe(!GRAPH); // 有钩子整图换代
     expect(probe("import { a } from './h.js'", { esm: false, files: { 'h.js': 'exports.a = 1' } })).toBe(true); // 非 module 作用域
     expect(probe("import h from './h.cjs'", { files: { 'h.cjs': 'module.exports = 1' } })).toBe(true);
     expect(probe("import { a } from './h.js'", { files: { 'h.js': "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); export const a = require('./x.json')" } })).toBe(true);
     expect(probe("import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); require('node:fs')")).toBe(false); // esbuild banner 那种
     expect(probe(single, { files: { 'node_modules/dep/index.js': '' } })).toBe(true);
+    expect(probe("import { a } from './lib/h.js'", { files: { 'lib/package.json': '{}', 'lib/h.js': 'exports.a = 1' } })).toBe(true); // 子作用域 CommonJS
     process.env.TANGU_PLUGIN_GRAPH_SWAP = '0'; // 没钩子:只认单文件
     expect(probe("import { a } from /* c */ './h.js'")).toBe(true);
     expect(probe("await import(/* c */ './h.js')")).toBe(true);
@@ -389,7 +395,7 @@ describe('热路由', () => {
 });
 
 describe('与磁盘同步(rescan)', () => {
-  it('原地升级:改写代码 → 热换代(旧 deactivate 先于新 activate);入口相对引入的 helper 也是新一代', async () => {
+  it.skipIf(!GRAPH)('原地升级:改写代码 → 热换代(旧 deactivate 先于新 activate);入口相对引入的 helper 也是新一代', async () => {
     writePlugin('lc-up');
     writePlugin('lc-rel', { relative: true });
     writePlugin('lc-sub', { requires: ['lc-up'] });

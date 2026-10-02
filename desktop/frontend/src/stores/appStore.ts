@@ -3840,7 +3840,7 @@ export const useApp = create<AppState>((set, get) => ({
       const r = await api.rescanPlugins(homeTarget())
       let list = r.plugins
       for (const id of r.addedIds) list = (await api.setPluginEnabled(homeTarget(), id, true).catch(() => null))?.plugins ?? list
-      // 新引擎(给 reloadedIds,10-02 起)原地更新即热换,只有「入口带相对 import」才要重启 —— needsRestart 已经说了;
+      // 新引擎(给 reloadedIds,10-02 起)原地更新即热换,破不了模块缓存的(CommonJS / 自带 node_modules 等)才要重启 —— needsRestart 已经说了;
       // 旧引擎只激活全新 id:原地更新时老代码还在跑,不重启就报「已生效」是谎报。
       const needsRestart = r.needsRestart || (!!updated && !r.reloadedIds)
       // 装上了但前置没齐(引擎让它休眠):别报「已启用」,说清还缺什么
