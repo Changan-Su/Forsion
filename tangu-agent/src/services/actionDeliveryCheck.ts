@@ -16,11 +16,16 @@ const USER_ACTION =
 /** 回复在承诺(马上要做)或声称(已经做了)一个动作。 */
 const REPLY_PROMISE = /我(这就|现在就|现在|马上|立刻|先|来|去)|这就(给|帮|去|把)|\b(I'll|I will|let me|I'm going to|going to)\b/i;
 const REPLY_CLAIM =
-  /(记|写|建|存|设|定|排|加|放|改|删|保存|安排)(好|下|进|上|入|完)|已经?(帮你|给你|替你)?(记|写|建|存|设|定|排|加|放|改|删|保存|安排|提醒)|\b(I've|I have) (saved|written|created|set|added|scheduled|noted|recorded|updated|deleted)\b|\b(done|saved|created|scheduled)\b[.!]/i;
+  /(记|写|建|存|设|定|排|加|放|改|删|保存|安排)(好|下|进|上|入|完)|记住了|已经?(帮你|给你|替你)?(记|写|建|存|设|定|排|加|放|改|删|保存|安排|提醒)|\b(I've|I have) (saved|written|created|set|added|scheduled|noted|recorded|updated|deleted)\b|\b(done|saved|created|scheduled)\b[.!]/i;
+
+/** 只看短回复:live 里所有漏做的收尾都是一两句话;长回复是交付了正文(写诗、排计划),不该被催去调工具(Codex 10-02)。 */
+const MAX_REPLY_CHARS = 200;
 
 export function actionDeliveryNudgeNeeded(userMessage: string, reply: string): boolean {
-  if (!USER_ACTION.test(userMessage)) return false;
-  return REPLY_PROMISE.test(reply) || REPLY_CLAIM.test(reply);
+  const r = reply.replace(/[’‘]/g, "'").trim(); // 弯撇号「I’ve」也要认
+  if (!r || r.length > MAX_REPLY_CHARS) return false;
+  if (!USER_ACTION.test(userMessage.replace(/[’‘]/g, "'"))) return false;
+  return REPLY_PROMISE.test(r) || REPLY_CLAIM.test(r);
 }
 
 export const ACTION_DELIVERY_CHECK =

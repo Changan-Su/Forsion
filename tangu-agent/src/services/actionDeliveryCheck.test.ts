@@ -13,6 +13,9 @@ describe('actionDeliveryNudgeNeeded', () => {
     expect(need('在我的工作文件夹里建一个 anniversaries.md', '好，我现在陪你在工作文件夹里建这个纪念日。')).toBe(true);
     expect(need('Please save this note to notes.md', "Sure, I'll save it right away.")).toBe(true);
     expect(need('Create a file called a.txt', "I've created a.txt for you.")).toBe(true);
+    // Codex 10-02:弯撇号与「记住了」
+    expect(need('Create a file called a.txt', 'I’ve created a.txt for you.')).toBe(true);
+    expect(need('以后回复短一点，记住', '好，我记住了。')).toBe(true);
   });
 
   it('负对照:没要动作的聊天、或回复没在承诺 / 声称 → 不催', () => {
@@ -21,5 +24,8 @@ describe('actionDeliveryNudgeNeeded', () => {
     expect(need('明晚七点半提醒我出发去电影院。', '好的。')).toBe(false);
     expect(need('帮我写一首诗', '月光落在窗台上,\n像你没说完的话。')).toBe(false);
     expect(need('How are you?', "I'll be honest, a bit tired.")).toBe(false);
+    // Codex 10-02:要的是正文交付,回复已经把正文给了 → 长回复不催
+    expect(need('Write me a poem about the sea', "I'll write it for you:\n" + 'The tide comes in and the tide goes out, '.repeat(8))).toBe(false);
+    expect(need('Set up a plan for my week', "I've created a plan:\n" + '- Monday: deep work block, gym in the evening\n'.repeat(6))).toBe(false);
   });
 });

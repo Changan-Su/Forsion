@@ -1973,6 +1973,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
+      actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
       toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
@@ -2424,6 +2425,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
     let actionNudged = false; // 零工具调用却在承诺 / 声称动作:收尾前只催一次(services/actionDeliveryCheck.ts)
+    let actionAskText = String(input.message || ''); // 兑现兜底看的「用户要了什么」:原话 + 运行中插话(applySteering 追加;Codex 10-02)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -2948,8 +2950,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
         // —— 动作兑现兜底:用户要了一个动作,模型一个工具都没调就说「我这就写 / 建好了」收尾(10-02 live:luna ~1/5)。
         //    只催一次;系统驱动的 run(Muse / 自动化)不在此列 —— kickoff 里满是动作词,零工具收尾在那边是正常结局。——
-        if (!actionNudged && !usedTools && !planMode && !lastIter && !deferBypass
-          && actionDeliveryNudgeNeeded(String(input.message || ''), res.content || '')) {
+        // iteration < maxIterations - 2:下一轮不能是收尾轮(收尾轮不给工具,催了也做不了;Codex 10-02)
+        if (!actionNudged && !usedTools && !planMode && iteration < maxIterations - 2 && !deferBypass
+          && actionDeliveryNudgeNeeded(actionAskText, res.content || '')) {
           actionNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({ role: 'user', content: ACTION_DELIVERY_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架

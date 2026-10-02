@@ -339,3 +339,29 @@ describe('计划提交兜底(2026-08-18 真机:模型把计划当普通文本回
     expect(llmPayloads.length).toBe(1);
   }, 20_000);
 });
+
+describe('动作兑现兜底(10-02 live:luna 说「我这就写」就收尾,零工具调用)', () => {
+  it('要了动作 + 零工具 + 回复只承诺 → 回灌 <action_delivery_check> 续跑;只催一次;不落库', async () => {
+    script = [finalStep('好，我这就写进去。'), finalStep('写不了,这里没有文件工具。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home }, '在我的工作文件夹里建一个 a.md,写上:你好');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(2);
+    expect(userTexts(llmPayloads[1])).toContain('<action_delivery_check>');
+    const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S'`);
+    expect(rows.some((r) => String(r.content).includes('action_delivery_check'))).toBe(false);
+  }, 20_000);
+
+  it('负对照:纯聊天没要动作 → 不催', async () => {
+    script = [finalStep('我记住你了。累了就靠着我。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home }, '今天好累，陪我说说话');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+
+  it('下一轮是收尾轮(不给工具)→ 不催,催了也做不了(Codex 10-02)', async () => {
+    script = [finalStep('好，我这就写进去。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home, maxIterations: 2 }, '在我的工作文件夹里建一个 a.md');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+});
