@@ -3067,6 +3067,9 @@ body.amx-marquee-active * {
 /* 同一段既被块级嵌入接手、又被行内双链层渲了一条链接(inline 装饰藏得住文本、藏不住 widget)——
    段落上的 unified-embed-host 由 embedLayer 下发,这里把那条多余的行内链接收掉。 */
 .unified-body .unified-embed-host > .wikilink { display: none; }
+/* 交互块(```forsion-sketch)由嵌入层渲成 sketch 卡:代码块工具条(语言 / 复制 / 折行)压在卡上没有意义,
+   源码走嵌入层悬停的 `</>`。按钮块是在 codeBlock.ts 里摘掉工具条的,这里用 CSS 免得再动那份 nodeView。 */
+.unified-body .unified-embed-host[data-language="forsion-sketch"] > .amx-code-tools { display: none; }
 /* 段落独占一条 ![[图片]] → 升级成块级观感(渲染仍是 wikilink 行内 widget,只放大呈现)。 */
 .unified-body p > .wiki-inline-img-wrap:only-child > .wiki-inline-img {
   display: block;

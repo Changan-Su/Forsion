@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info, NotebookPen } from 'lucide-react'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
@@ -27,6 +27,7 @@ import './sidebar2.css'
 import { OverlayAt } from '@lcl/engine'
 import { AttentionDot } from './AttentionDot'
 import { homeTarget } from '../../services/engine/targets'
+import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
@@ -543,6 +544,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           {menu.ids.length === 1 && (
             <button onClick={() => { const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
               <Pencil size={13} /> {t('sidebar.rename')}
+            </button>
+          )}
+          {menu.ids.length === 1 && canTurnChatIntoNote() && (
+            <button onClick={() => { void turnChatIntoNote(menu.id); setMenu(null) }}>
+              <NotebookPen size={13} /> {t('chat.toNote.action')}
             </button>
           )}
           <button onClick={() => { for (const id of menu.ids) p.onArchive(id, !menu.archived); sel.clear(); setMenu(null) }}>

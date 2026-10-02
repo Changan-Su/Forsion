@@ -19,6 +19,7 @@ import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SketchCards } from '../../components/SketchCard'
+import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
 
@@ -430,6 +431,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
   const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
   const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
+  // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
+  const sketchActions = handlers?.onInsertNote
+    ? (it: SketchItem) => <InsertNoteButton onInsert={() => handlers.onInsertNote?.(sketchFence(it.html))} />
+    : undefined
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
   const pendingApv = (msg.approvals || []).filter((a) => a.status === 'pending')
@@ -478,7 +483,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
-                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} />)}
+                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} />)}
                 </Fragment>
               ) : null
             })
@@ -553,7 +558,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
-        {!!trailingSketches.length && <SketchCards items={trailingSketches} />}
+        {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} />}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && pendingApv.length > 0 && (

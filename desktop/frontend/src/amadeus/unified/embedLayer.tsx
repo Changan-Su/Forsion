@@ -32,6 +32,8 @@ import { BookmarkCard } from '../components/BookmarkCard'
 import { MediaPlayer } from '../components/MediaPlayer'
 import { WebEmbed } from '../components/WebEmbed'
 import { ButtonBlock } from '../blocks/button/ButtonBlock'
+import { SKETCH_LANG } from '../blocks/sketch/format'
+import { SketchCards } from '../../components/SketchCard'
 import { parseButtonBlock, serializeButtonBlock, type ButtonSpec } from '../blocks/button/format'
 import { usePageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
@@ -104,10 +106,14 @@ export type EmbedKind =
   /** `![[https://…]]` 独占一段 = 网页嵌入(冻结封面 → 唤醒 webview);裸 URL 仍是 bookmark。 */
   | { k: 'web'; url: string; w?: number }
   | { k: 'button'; src: string }
+  /** ```forsion-sketch 交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
+  | { k: 'sketch'; src: string }
 
 /** 段落/代码块 → 嵌入类别(不是嵌入 → null)。图片形态刻意返回 null(wikilink 行内层负责)。 */
 export function classifyEmbed(node: ProseNode): EmbedKind | null {
   if (node.type.name === 'code_block') {
+    // 空的交互块不认领:源码还露着,才写得进去(和按钮块坏 JSON 回落同理)。
+    if (node.attrs.language === SKETCH_LANG) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
     if (node.attrs.language !== 'forsion-button') return null
     // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
     // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。
@@ -373,6 +379,8 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
       if (!spec) return <span /> // 不可达:classifyEmbed 已把坏 JSON 交回普通代码块
       return <ButtonBlock spec={spec} readOnly={readOnly} onChange={(next: ButtonSpec) => rewrite(codeBody(serializeButtonBlock(next)))} />
     }
+    case 'sketch':
+      return <SketchCards items={[{ callId: 'note-sketch', html: kind.src }]} />
   }
 }
 
