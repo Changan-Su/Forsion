@@ -18,7 +18,7 @@ import { installedPluginFields, type InstalledPluginManifest } from '../../../de
 import { effectivePluginId } from '../../../desktop/shared/products'
 import { isSafeSlug, safeEntryPath } from '../../../desktop/shared/marketPackage'
 import { PLUGIN_ICON_MAX_BYTES, isValidPluginIconPng } from '../../../desktop/shared/pluginIcon'
-import { bytesToBase64, readText, readTextOr, writeText, type PluginFs } from './pluginFs'
+import { bytesToBase64, readText, readTextOr, withPluginDirLock, writeText, type PluginFs } from './pluginFs'
 
 export const PLUGINS_DIR = 'plugins'
 export const PLUGIN_DATA_DIR = 'plugins-data'
@@ -53,8 +53,61 @@ export async function pluginDirNames(fs: PluginFs): Promise<string[]> {
   }
 }
 
+// ── 安装切换的中断恢复 ────────────────────────────────────────────────────────────────────
+// 市场安装(mobileMarket.ts)不直接往 plugins/<slug> 里写:新版先完整写进暂存目录,再「旧 → 备份、暂存 → 正式、删备份」。
+// 两个目录名都以点开头:pluginDirNames 本来就跳过点目录,所以它们**永远不会被当成插件列出来**;slug 是 kebab
+// (isSafeSlug 要求字母数字开头),不可能与它们撞名。
+export const STAGING_PREFIX = '.staging-'
+export const BACKUP_PREFIX = '.backup-'
+export const stagingDirOf = (slug: string): string => `${PLUGINS_DIR}/${STAGING_PREFIX}${slug}`
+export const backupDirOf = (slug: string): string => `${PLUGINS_DIR}/${BACKUP_PREFIX}${slug}`
+
+/**
+ * 收拾上一次没走完的安装(进程在切换中途被杀 / 改名失败)。调用方必须持有 withPluginDirLock。
+ * 不变量:**备份目录还在 = 切换没有确认完成**。按现场三种情况处理 ——
+ *   · 备份在、正式目录不在                → 旧版挪回去(刚把旧版挪走就没了下文);
+ *   · 备份在、正式目录在、暂存目录也在     → 「暂存 → 正式」走的是复制 + 删源的非原子分支,且没走完:正式目录是半截,
+ *                                            删掉、旧版挪回去;
+ *   · 备份在、正式目录在、暂存目录不在     → 切换已完成,只差删备份:删掉备份,保留新版。
+ * 之后所有暂存目录一律删掉(没切换成功的新版不保留,下次重装)。
+ * 做不到的边角(只在非原子改名分支上):全新安装「暂存 → 正式」复制到一半被杀,与「暂存刚写完、旧版还在原地」
+ * 在盘面上无法区分 → 保守地保留正式目录;半截目录缺 manifest / main 时 listPlugins 本来就不列。
+ */
+export async function recoverPluginDirs(fs: PluginFs): Promise<void> {
+  let names: string[]
+  try {
+    names = (await fs.list(PLUGINS_DIR)).filter((e) => e.type === 'directory').map((e) => e.name)
+  } catch {
+    return // 插件根还不存在
+  }
+  const slugOf = (name: string, prefix: string): string | null => {
+    const slug = name.startsWith(prefix) ? name.slice(prefix.length) : ''
+    return isSafeSlug(slug) ? slug : null
+  }
+  for (const name of names) {
+    const slug = slugOf(name, BACKUP_PREFIX)
+    if (!slug) continue
+    const final = `${PLUGINS_DIR}/${slug}`
+    try {
+      const hasFinal = !!(await fs.stat(final))
+      if (hasFinal && !names.includes(`${STAGING_PREFIX}${slug}`)) {
+        await fs.removeDir(backupDirOf(slug))
+      } else {
+        if (hasFinal) await fs.removeDir(final)
+        await fs.rename(backupDirOf(slug), final)
+      }
+    } catch (e) {
+      console.warn(`[plugins] 恢复插件 "${slug}" 的中断安装失败,下次启动再试`, e)
+    }
+  }
+  for (const name of names) {
+    const slug = slugOf(name, STAGING_PREFIX)
+    if (slug) await fs.removeDir(stagingDirOf(slug)).catch(() => {})
+  }
+}
+
 /** manifest 里的 main(缺省 main.js)→ 包内安全相对路径;越界 / 绝对路径 → null(当作读不到 main)。 */
-function mainRelOf(main: unknown): string | null {
+export function mainRelOf(main: unknown): string | null {
   if (main === undefined || main === null || main === '') return 'main.js'
   return typeof main === 'string' ? safeEntryPath(main, '') : null
 }
@@ -112,7 +165,9 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
   }
 
   return {
-    async listPlugins() {
+    // 整段持锁:先收拾中断的安装,再清点 —— 不与进行中的安装 / 卸载交错(见 withPluginDirLock)。
+    listPlugins: () => withPluginDirLock(fs, async () => {
+      await recoverPluginDirs(fs)
       const out: ExternalPluginSource[] = []
       const seen = new Set<string>()
       for (const name of await pluginDirNames(fs)) {
@@ -146,20 +201,23 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         }
       }
       return out
-    },
+    }),
 
     // 按**生效 id** 定位目录(市场的 installSlug 可以 ≠ manifest id,与桌面 uninstallPlugin 同一条扫描规则)。
     // 插件私有数据(plugins-data)刻意保留:与桌面一致,重装后设置还在。原因码由渲染层 ipcErrorText 译。
     async uninstallPlugin(id) {
       if (!isSafeSlug(id)) throw new Error('invalid-plugin-id')
-      for (const name of await pluginDirNames(fs)) {
-        const m = await readManifest(fs, `${PLUGINS_DIR}/${name}`)
-        if (effectivePluginId(name, m?.id) === id) {
-          await fs.removeDir(`${PLUGINS_DIR}/${name}`)
-          return
+      await withPluginDirLock(fs, async () => {
+        await recoverPluginDirs(fs) // 先恢复:否则卸掉的可能是半截新版,备份里的旧版下次启动又被挪回来
+        for (const name of await pluginDirNames(fs)) {
+          const m = await readManifest(fs, `${PLUGINS_DIR}/${name}`)
+          if (effectivePluginId(name, m?.id) === id) {
+            await fs.removeDir(`${PLUGINS_DIR}/${name}`)
+            return
+          }
         }
-      }
-      throw new Error('plugin-not-found')
+        throw new Error('plugin-not-found')
+      })
     },
 
     async readPluginData(pluginId) {

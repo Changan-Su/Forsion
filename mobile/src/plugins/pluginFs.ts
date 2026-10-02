@@ -23,6 +23,21 @@ export interface PluginFs {
   stat(path: string): Promise<{ type: 'file' | 'directory'; size: number } | null>
   /** 递归删目录;不存在 = 已删。 */
   removeDir(path: string): Promise<void>
+  /**
+   * 目录改名(同一父目录下)。**目标已存在 → 抛错,绝不覆盖**(Android 的 Filesystem.rename 就是这个语义;
+   * 要「替换」必须自己先把旧的挪开,见 mobileMarket 的分步切换)。真机上是一次 File.renameTo(原子);
+   * 浏览器台架(IndexedDB)与原生的兜底分支是「逐个复制 + 删源」,所以调用方不能假设它原子。
+   */
+  rename(from: string, to: string): Promise<void>
+}
+
+// 同一份 PluginFs 上「动插件目录」的操作(装 / 卸 / 恢复 + 清点)串行:清点时顺手做的中断恢复会删暂存目录、
+// 挪备份目录,绝不能撞上正在进行的另一次安装;安装切换到一半时清点也不该看到「旧的已挪走、新的还没到」。
+const dirLocks = new WeakMap<PluginFs, Promise<unknown>>()
+export function withPluginDirLock<T>(fs: PluginFs, job: () => Promise<T>): Promise<T> {
+  const run = (dirLocks.get(fs) ?? Promise.resolve()).then(job, job)
+  dirLocks.set(fs, run.catch(() => {}))
+  return run
 }
 
 // ignoreBOM:true = 保留 BOM(与桌面 fs.readFile 'utf8' 同口径:带 BOM 的 manifest.json 两端都 JSON.parse 失败、同样被跳过)。

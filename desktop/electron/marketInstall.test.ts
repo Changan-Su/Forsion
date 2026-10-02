@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
+import { planZipFiles, planZipEntries, ZipPlanError } from '../shared/marketPackage'
 import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
 
 async function zipOf(names: string[]): Promise<Buffer> {
@@ -126,7 +127,48 @@ describe('safeEntryPath', () => {
   it('穿越路径 → null', () => {
     expect(safeEntryPath('../evil', '')).toBeNull()
     expect(safeEntryPath('repo/../../etc/passwd', 'repo/')).toBeNull()
-    expect(safeEntryPath('/abs', '')).toBe('abs') // 前导斜杠被剥成相对,仍安全
+  })
+  // 绝对路径整条拒收(评审 2026-10-02):此前 `/abs` 被剥成相对路径 `abs` 照装 —— 能顶替包里真正的同名文件。
+  it('绝对路径 → null(前导 / 、UNC、盘符),不剥成相对路径', () => {
+    for (const name of ['/abs', '/main.js', '//host/share/main.js', '\\\\host\\share\\main.js', '\\main.js', 'C:\\x\\main.js', 'C:/x/main.js', 'c:main.js']) {
+      expect(safeEntryPath(name, ''), name).toBeNull()
+    }
+    expect(safeEntryPath('/repo/SKILL.md', 'repo/')).toBeNull()
+    expect(safeEntryPath('repo//SKILL.md', 'repo/')).toBe('SKILL.md') // 剥前缀后的重复分隔符不算绝对
+  })
+})
+
+// ── 解包计划:按**包里的原名**判(jszip 读包时会把 ../x、/x 规整成 x,只看规整名就照装了)──
+describe('planZipFiles / planZipEntries', () => {
+  const rejected = (fn: () => unknown): ZipPlanError => {
+    try { fn() } catch (e) { if (e instanceof ZipPlanError) return e; throw e }
+    throw new Error('expected a ZipPlanError')
+  }
+  it('原名带 .. 段 → 整包拒(即便 jszip 已把它规整成一个安全的名字)', () => {
+    const e = rejected(() => planZipFiles([{ name: 'manifest.json' }, { name: 'main.js', unsafeOriginalName: '../main.js' }]))
+    expect([e.code, e.entry]).toEqual(['traversal', '../main.js'])
+    expect(rejected(() => planZipFiles([{ name: 'a/c.js', unsafeOriginalName: 'a/b/../c.js' }])).entry).toBe('a/b/../c.js')
+    expect(rejected(() => planZipFiles([{ name: '..\\main.js' }])).entry).toBe('..\\main.js') // jszip 不规整反斜杠
+  })
+  it('原名是绝对路径 → 整包拒(/x、UNC、盘符),不当成相对路径照装', () => {
+    for (const original of ['/main.js', '//host/share/main.js', '\\\\host\\share\\main.js', 'C:\\plugin\\main.js', 'C:/plugin/main.js']) {
+      const e = rejected(() => planZipFiles([{ name: 'manifest.json' }, { name: 'main.js', unsafeOriginalName: original }]))
+      expect([e.code, e.entry], original).toEqual(['traversal', original])
+    }
+    // 不经 jszip 的名单(planZipEntries)同样拒:此前 `C:\x` 被静默丢弃、`/x` 被剥成相对路径。
+    expect(rejected(() => planZipEntries(['manifest.json', '/main.js'])).entry).toBe('/main.js')
+    expect(rejected(() => planZipEntries(['manifest.json', 'C:\\x\\main.js'])).entry).toBe('C:\\x\\main.js')
+    expect(rejected(() => planZipEntries(['manifest.json', '/__MACOSX/._x'])).code).toBe('traversal') // 绝对的垃圾名也不放过
+  })
+  it('无害的规整(./a、a//b)放行;目录条目不参与;重定根照旧', () => {
+    expect(planZipFiles([
+      { name: 'pkg/', dir: true, unsafeOriginalName: '../ignored-dir/' },
+      { name: 'pkg/manifest.json', unsafeOriginalName: './pkg/manifest.json' },
+      { name: 'pkg/dist/main.js', unsafeOriginalName: 'pkg//dist/main.js' },
+    ], ['manifest.json'])).toEqual([
+      { name: 'pkg/manifest.json', rel: 'manifest.json' },
+      { name: 'pkg/dist/main.js', rel: 'dist/main.js' },
+    ])
   })
 })
 
@@ -171,17 +213,32 @@ describe('extractZipToDir', () => {
     expect(JSON.parse(readFileSync(join(dest, 'space.json'), 'utf8')).id).toBe('focus')
   })
 
-  // jszip 自身在 generate 时会规整 '../' → 经它造的 zip 到不了 safeEntryPath 的拒绝分支(双重防线)。
-  // 这里断言**端到端安全属性**:无论如何,绝不在 dest 之外落盘。safeEntryPath 的纯单测已覆盖拒绝逻辑。
-  it('穿越条目不写出 dest 之外', async () => {
+  // jszip 的 generate 原样写出 `../../evil.sh`,**读包**时才规整成 `evil.sh`(原名留在 unsafeOriginalName)。
+  // 此前桌面只看规整名:这一条被当成包里的普通文件 `evil.sh` 装进了 dest。现在按原名判 → 整包拒、一个字节不写。
+  it('穿越条目 → 整包拒,dest 内外都不落盘', async () => {
     const zip = new JSZip()
     zip.file('SKILL.md', 'ok')
     zip.file('../../evil.sh', 'rm -rf')
     const buf = await zip.generateAsync({ type: 'nodebuffer' })
-    const dest = mkdtempSync(join(tmpdir(), 'mk-'))
-    await extractZipToDir(buf, dest)
+    const dest = join(mkdtempSync(join(tmpdir(), 'mk-')), 'skill')
+    await expect(extractZipToDir(buf, dest)).rejects.toThrow('压缩包含非法路径: ../../evil.sh')
+    expect(existsSync(dest)).toBe(false) // 连目录都没建:拒收发生在写盘之前
     expect(existsSync(join(dest, '..', 'evil.sh'))).toBe(false)
     expect(existsSync(join(dest, '..', '..', 'evil.sh'))).toBe(false)
+  })
+
+  it('绝对路径条目 → 整包拒(不把 /main.js 当成 main.js 顶替包里真正的入口)', async () => {
+    const zip = new JSZip()
+    zip.file('manifest.json', '{"id":"p"}')
+    zip.file('main.js', 'real')
+    zip.file('/main.js', 'evil')
+    const buf = await zip.generateAsync({ type: 'nodebuffer' })
+    // 前提自检:jszip 确实把原名留在了 unsafeOriginalName(否则本用例测不到东西)。
+    const loaded = await JSZip.loadAsync(buf)
+    expect(Object.values(loaded.files).map((f) => (f as { unsafeOriginalName?: string }).unsafeOriginalName)).toContain('/main.js')
+    const dest = join(mkdtempSync(join(tmpdir(), 'mk-')), 'plugin')
+    await expect(extractZipToDir(buf, dest, ['manifest.json'])).rejects.toThrow('压缩包含非法路径: /main.js')
+    expect(existsSync(dest)).toBe(false)
   })
 })
 

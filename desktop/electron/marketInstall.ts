@@ -6,7 +6,7 @@ import JSZip from 'jszip'
 import { mkdir, writeFile, readFile, readdir } from 'fs/promises'
 import { join, dirname } from 'path'
 import {
-  MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipEntries,
+  MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipFiles,
   detectMarketTypeFromNames, toArchiveUrl, downloadCandidates, ZIP_MAGIC, GZIP_MAGIC, hasMagic, ZipPlanError,
 } from '../shared/marketPackage'
 
@@ -86,12 +86,14 @@ export async function detectMarketType(zipBuffer: Buffer, backendType: string): 
   return detectMarketTypeFromNames(Object.values(zip.files).filter((f) => !f.dir).map((f) => f.name), backendType)
 }
 
-/** 解压 zip 到 destRoot(manifest 感知重定根 + 防穿越)。返回写入文件数。遇到穿越路径直接抛错(写盘之前)。 */
+/** 解压 zip 到 destRoot(manifest 感知重定根 + 防穿越)。返回写入文件数。遇到穿越 / 绝对路径条目直接抛错(写盘之前)。
+ *  计划按包里的**原名**判(planZipFiles 看 jszip 的 unsafeOriginalName):jszip 读包时会把 `../main.js`、`/main.js`
+ *  规整成 `main.js`,只看规整名就会把它当普通文件照装。 */
 export async function extractZipToDir(zipBuffer: Buffer, destRoot: string, manifestNames: string[] = []): Promise<number> {
   const zip = await JSZip.loadAsync(zipBuffer)
-  let plan: ReturnType<typeof planZipEntries>
+  let plan: ReturnType<typeof planZipFiles>
   try {
-    plan = planZipEntries(Object.values(zip.files).filter((f) => !f.dir).map((f) => f.name), manifestNames)
+    plan = planZipFiles(Object.values(zip.files), manifestNames)
   } catch (e) {
     if (!(e instanceof ZipPlanError)) throw e
     throw new Error(e.code === 'traversal' ? `压缩包含非法路径: ${e.entry}` : '压缩包为空或无有效文件')

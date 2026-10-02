@@ -10,7 +10,7 @@
  */
 import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
-import { capacitorPluginFs, isNativeAndroid, nativeMarketDownload } from './capacitorPluginFs'
+import { capacitorPluginFs, hasNativeMarketDownload, isDebuggableAndroid, nativeMarketDownload } from './capacitorPluginFs'
 import { createPluginHost, type MobilePluginHost } from './pluginHost'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
 
@@ -30,6 +30,7 @@ registerMessages({
   'mobilemarket.tooLarge': { zh: '安装包解压后超过 {mb} MB，手机上无法安装', en: 'The unpacked package exceeds {mb} MB, too large for a phone' },
   'mobilemarket.tooManyFiles': { zh: '安装包里的文件超过 {n} 个，手机上无法安装', en: 'The package contains more than {n} files, too many for a phone' },
   'mobilemarket.badManifest': { zh: '安装包里没有有效的 manifest.json', en: 'The package has no valid manifest.json' },
+  'mobilemarket.noMain': { zh: '安装包里缺少入口文件（{path}），无法安装', en: 'The package is missing its entry file ({path}) and can’t be installed' },
   'mobilemarket.builtin': { zh: '这个插件与内置插件同名，无法安装', en: 'This plugin has the same id as a built-in plugin and can’t be installed' },
   'mobilemarket.invalidTarget': { zh: '无法卸载：目标无效', en: 'Can’t uninstall: invalid target' },
   'mobilemarket.notInstalled': { zh: '这一项不在已安装目录中', en: 'This item isn’t in the installed folder' },
@@ -50,8 +51,10 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     fs,
     cloudApiBase: opts.cloudApiBase,
     fetch: (input, init) => window.fetch(input, init),
-    // 真机:原生下载(不吃 CORS、流式落盘、超限不进内存);浏览器台架 / dev 预览:fetch(下载主机得给 CORS)。
-    download: isNativeAndroid() ? nativeMarketDownload() : createFetchDownload(),
+    // 真机:原生下载(不吃 CORS、流式落盘、字节上限在传输中强制);浏览器台架 / dev 预览:fetch(下载主机得给 CORS,同样读到上限即停)。
+    download: hasNativeMarketDownload() ? nativeMarketDownload() : createFetchDownload(),
+    // 下载地址只认 https;debug 包额外放行回环明文(台架用 adb reverse 从宿主机发包,原生层按同一条件放行)。
+    allowLoopbackHttp: isDebuggableAndroid(),
     mirror: async () => {
       const cfg = (await window.tangu?.getConfig?.().catch(() => null)) as { mirror?: unknown } | null
       return typeof cfg?.mirror === 'string' ? cfg.mirror : 'default'

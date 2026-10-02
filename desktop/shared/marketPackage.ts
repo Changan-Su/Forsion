@@ -65,19 +65,35 @@ export function computeStripPrefix(names: string[], manifestNames: string[] = []
 }
 
 /**
+ * 归档条目名是否为绝对路径:前导 `/`、前导 `\`(含 UNC `\\host\share\x`)、盘符(`C:` / `C:\x` / `C:/x`)。
+ * 这类名字**整条拒收**,不剥成相对路径照装:正常打包器(GitHub archive / npm pack / Finder / zip -r)从不产生它们,
+ * 出现即说明包是手工构造的;把 `/main.js` 悄悄当成 `main.js` 等于让它顶替包里真正的入口文件。
+ */
+export function isAbsoluteEntryName(name: string): boolean {
+  const n = name.replace(/\\/g, '/')
+  return n.startsWith('/') || /^[A-Za-z]:/.test(n)
+}
+
+/** 条目名(反斜杠按分隔符算)里有没有 `..` 段。 */
+function hasDotDotSegment(name: string): boolean {
+  return /(^|\/)\.\.(\/|$)/.test(name.replace(/\\/g, '/'))
+}
+
+/**
  * 条目在 destRoot 下的安全相对路径(正斜杠、已规整);垃圾/不在前缀下/非法(穿越/绝对/空/目录)返回 null。
- * 纯字符串实现(不借 node:path):`..` 越过根 → null;首段以 `..` 开头 → null(与原 path.relative 判据同口径);
- * 首段带盘符(`C:`)→ null(原实现在 win32 上靠 path.isAbsolute 拒)。返回值已规整(`a//b`、`a/./b`、`a/x/../b`
- * 都落成同一个落点),Android 的 Filesystem 路径与 IndexedDB 键不认 `..`,必须先规整再拼。
+ * 纯字符串实现(不借 node:path):绝对路径(见 isAbsoluteEntryName)→ null;`..` 越过根 → null;首段以 `..` 开头 → null
+ * (与原 path.relative 判据同口径)。返回值已规整(`a//b`、`a/./b`、`a/x/../b` 都落成同一个落点),
+ * Android 的 Filesystem 路径与 IndexedDB 键不认 `..`,必须先规整再拼。
  */
 export function safeEntryPath(name: string, prefix: string): string | null {
+  if (isAbsoluteEntryName(name)) return null
   let rel = name.replace(/\\/g, '/')
   if (isJunkPath(rel)) return null
   if (prefix) {
     if (!rel.startsWith(prefix)) return null // 不在 manifest 根下的旁支,丢弃
     rel = rel.slice(prefix.length)
   }
-  rel = rel.replace(/^\/+/, '')
+  rel = rel.replace(/^\/+/, '') // 剥前缀后剩下的 `repo//x` 式重复分隔符(原名是否绝对已在上面判过)
   if (!rel || rel.endsWith('/')) return null
   const out: string[] = []
   for (const seg of rel.split('/')) {
@@ -95,7 +111,8 @@ export function safeEntryPath(name: string, prefix: string): string | null {
 }
 
 /** 解包计划的拒收原因码。message 只是开发者可读的英文;上屏文案由宿主按 code 给
- *  (桌面主进程沿用原有文案,见 electron/marketInstall.ts;移动端套 zh/en 词条)。 */
+ *  (桌面主进程沿用原有文案,见 electron/marketInstall.ts;移动端套 zh/en 词条)。
+ *  `traversal` = 条目名不安全(`..` 穿越**或**绝对路径),`entry` 是包里的原名。 */
 export class ZipPlanError extends Error {
   constructor(readonly code: 'traversal' | 'empty', message: string, readonly entry?: string) {
     super(message)
@@ -111,24 +128,54 @@ export interface ZipPlanEntry {
 }
 
 /**
- * 解包计划:按 manifest 重定根、丢垃圾 / 旁支,遇穿越条目整包拒(抛 ZipPlanError('traversal'))、
+ * 解包计划:按 manifest 重定根、丢垃圾 / 旁支,遇穿越 / 绝对路径条目整包拒(抛 ZipPlanError('traversal'))、
  * 一个有效文件都没有也拒('empty')。只看文件条目名(调用方先滤掉 jszip 的目录条目)。
  * **先算计划再落盘**:拒收发生在写下第一个字节之前(此前桌面边写边判,穿越条目之前的文件会先落盘)。
+ * ⚠️ 从 jszip 读出来的包别直接调这个:jszip 读包时已经把名字规整过了,走 planZipFiles(它看原名)。
  */
 export function planZipEntries(fileNames: string[], manifestNames: string[] = []): ZipPlanEntry[] {
+  // 绝对路径先于「垃圾条目」判:`/__MACOSX/x` 也是手工构造的包,不因为恰好是垃圾名就放过整包。
+  const absolute = fileNames.find(isAbsoluteEntryName)
+  if (absolute !== undefined) throw new ZipPlanError('traversal', `absolute path in archive: ${absolute}`, absolute)
   const names = fileNames.filter((n) => !isJunkPath(n))
   const prefix = computeStripPrefix(names, manifestNames)
   const out: ZipPlanEntry[] = []
   for (const name of names) {
     const rel = safeEntryPath(name, prefix)
     if (rel === null) {
-      if (/(^|\/)\.\.(\/|$)/.test(name.replace(/\\/g, '/'))) throw new ZipPlanError('traversal', `unsafe path in archive: ${name}`, name)
+      if (hasDotDotSegment(name)) throw new ZipPlanError('traversal', `unsafe path in archive: ${name}`, name)
       continue
     }
     out.push({ name, rel })
   }
   if (out.length === 0) throw new ZipPlanError('empty', 'archive is empty')
   return out
+}
+
+/** jszip 条目的结构化取用(本模块不 import jszip):`name` 是 jszip **规整后**的名字,`unsafeOriginalName` 是包里的原名。 */
+export interface ZipFileRef {
+  name: string
+  dir?: boolean
+  unsafeOriginalName?: string
+}
+
+/**
+ * 从 jszip 读出来的包做解包计划 —— 两端(桌面主进程 / Android App)唯一的入口。
+ * jszip ≥3.8 读包时会悄悄把 `../main.js`、`/main.js` 规整成 `main.js`(原名留在 unsafeOriginalName):只看规整名,
+ * 穿越 / 绝对路径条目就被当成普通文件照装,还能顶替包里真正的同名文件。这里**先按原名判**:
+ * 原名是绝对路径或带 `..` 段 → 整包拒;无害的规整(`./a`、`a//b`)放行。之后才用规整名排计划。
+ */
+export function planZipFiles(files: Iterable<ZipFileRef>, manifestNames: string[] = []): ZipPlanEntry[] {
+  const names: string[] = []
+  for (const f of files) {
+    if (f.dir) continue
+    const original = f.unsafeOriginalName ?? f.name
+    if (isAbsoluteEntryName(original) || hasDotDotSegment(original)) {
+      throw new ZipPlanError('traversal', `unsafe path in archive: ${original}`, original)
+    }
+    names.push(f.name)
+  }
+  return planZipEntries(names, manifestNames)
 }
 
 /**
