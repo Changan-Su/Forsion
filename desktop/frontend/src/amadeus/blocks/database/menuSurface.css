@@ -7,8 +7,9 @@
   padding: var(--menu-shell-padding);
   gap: 0;
   border-radius: var(--radius-md);
-  outline: var(--focus-ring) solid var(--border);
-  outline-offset: calc(-1 * var(--focus-ring));
+  /* 与笔记「…」菜单同一外壳(10-02 c1):描边用 border 而不是 outline —— Genesis 材质表把菜单 border 清成透明,
+     outline 清不到,多维表菜单就成了唯一多一圈框的那个。 */
+  border: var(--border-width) solid var(--border);
   box-shadow: var(--card-shadow);
   color: var(--text);
   font-family: var(--font-ui);
@@ -66,7 +67,7 @@
 .amx-db-pop:not(.amx-coverpick) .amx-db-opt {
   box-sizing: border-box;
   min-width: 0;
-  min-height: var(--db-control-height);
+  min-height: var(--menu-item-min-height); /* 菜单行与其他菜单同高(c1;此前借数据格的 28px) */
   gap: var(--menu-item-pad-inline);
   padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
   border-radius: var(--radius-sm);
@@ -214,7 +215,7 @@
 .amx-db-pop:not(.amx-coverpick) .amx-db-group-menu > strong { padding: var(--db-control-pad-block) var(--menu-item-pad-inline); font-size: inherit; font-weight: 600; }
 .amx-db-pop:not(.amx-coverpick) .amx-db-group-setting { gap: var(--menu-item-pad-inline); padding: var(--db-control-pad-block) var(--menu-item-pad-inline); font-size: var(--db-meta-size); }
 .amx-db-pop:not(.amx-coverpick) .amx-db-group-option {
-  min-height: var(--db-control-height);
+  min-height: var(--menu-item-min-height); /* 菜单行与其他菜单同高(c1;此前借数据格的 28px) */
   gap: var(--menu-item-pad-inline);
   padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
   border-radius: var(--radius-sm);

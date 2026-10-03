@@ -559,7 +559,7 @@ a:hover { color: var(--accent-ink); }
 .project-menu-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--text); font-size: var(--t2c-font-control, 12px); }
 .project-menu-search input::placeholder { color: var(--text-faint); }
 .project-menu-list { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
-.project-menu .project-menu-item { gap: 8px; font-size: var(--t2c-font-control, 12px); }
+.project-menu .project-menu-item { gap: 8px; font-size: var(--menu-text-size); }
 .project-menu .project-menu-item:hover,
 .project-menu .project-menu-item:focus-visible { outline: none; background: var(--menu-hover); color: var(--text); }
 .project-menu .project-menu-item.active { background: var(--accent-light); color: var(--accent-ink); }
@@ -869,7 +869,8 @@ a:hover { color: var(--accent-ink); }
 .ctx-menu .ctx-separator { height: 1px; background: var(--border); margin: 4px; }
 .ctx-menu .ctx-shortcut { margin-left: auto; padding-left: 12px; color: var(--text-faint); font: inherit; font-size: var(--ui-font-caption, 11px); }
 /* 菜单小节标题(说明这一串选项是干什么的);`.ctx-menu` 是右键菜单外壳的唯一正典,变体写在它旁边。 */
-.ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+/* 分组小标题全 app 一种写法(10-02 c1):与斜杠菜单分组、块菜单「转换为」、多维表菜单小节同为 12px / 中等 / 次要色。 */
+.ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
 
 /* ─── 主区 ─── */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -1688,8 +1689,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   width: 100%;
   min-height: var(--menu-item-min-height);
   padding: var(--menu-item-pad-block) var(--menu-item-pad-inline);
-  border-radius: var(--radius-md);
-  font-size: var(--ui-font-meta, 12px);
+  /* 与笔记「…」菜单同字号、同行内圆角(10-02 用户拍板 c1b;此前 12px / 圆角 md) */
+  border-radius: var(--radius-sm);
+  font-size: var(--menu-text-size);
   line-height: 1.4;
   color: var(--text-light);
   text-align: left;
@@ -1819,7 +1821,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
    overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
 .composer-menu--model { right: 0; width: var(--menu-select-width); min-width: 0; max-width: none; max-height: none; overflow: visible; }
 .composer-menu--portal { position: fixed; right: auto; bottom: auto; margin: 0; pointer-events: auto; }
-.cm-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border-radius: var(--radius-md); font-size: var(--t2c-font-control, 12px); line-height: 1.4; color: var(--text-light); text-align: left; }
+.cm-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border-radius: var(--radius-sm); font-size: var(--menu-text-size); line-height: 1.4; color: var(--text-light); text-align: left; }
 .cm-row:hover, .cm-row.is-open { background: var(--menu-hover); color: var(--text); }
 .cm-row-k { flex: none; }
 .cm-row-v { flex: 1; min-width: 0; text-align: right; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4216,7 +4218,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   position: fixed;
   z-index: 100;
   min-width: 232px;
-  padding: 5px;
+  padding: var(--menu-shell-padding);
   background: var(--bg-card);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
@@ -4251,8 +4253,9 @@ html.dark .brand-logo--dark { display: inline-block; }
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
-  font-size: var(--ui-font-meta, 12px);
+  min-height: var(--menu-item-min-height);
+  padding: var(--menu-item-pad-block) var(--menu-item-pad-inline);
+  font-size: var(--menu-text-size);
   color: var(--text);
   border-radius: var(--radius-sm);
   text-align: left;
@@ -4999,17 +5002,18 @@ body[data-file-drag] .shell-work::after {
   from { opacity: 0; scale: 0.985; }
   to { opacity: 1; scale: 1; }
 }
+/* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick) {
+  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
-html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transform-origin: bottom left; }
+html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transform-origin: bottom left; }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick) { animation: none; }
+    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) { animation: none; }
 }
 
 /* uiux-c: 全局键盘焦点环(U-43)。
