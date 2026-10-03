@@ -2,7 +2,7 @@
 
 浏览器端云客户端(内部代号 **Tangu Web**,镜像/容器名 `tangu-web`)。经 vite 别名**复用 `desktop/frontend/src` 渲染层**,打包成一个纯前端站点,由自带 nginx 托管;运行时把 `/api`、`/auth` 等反代到已部署的 **Forsion server**(→ tangu worker)。
 
-> **它不挂在 server 的路由下**,是独立部署的 app(和 AI Studio / Echo 同套路):自己的容器、自己的 nginx、自己的域名。server 只当后端网关用。
+> **它不挂在 server 的路由下**,是独立部署的 app:自己的容器、自己的 nginx、自己的域名。server 只当后端网关用。
 
 ```
 浏览器 ──▶ Forsion Web(nginx :80)

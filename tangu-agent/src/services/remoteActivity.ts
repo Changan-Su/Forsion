@@ -146,11 +146,6 @@ export function isUnattendedRun(runId: string): boolean {
   return !!e && runCategory(e.input, runId) === 'unattended';
 }
 
-/** 当前在飞的已登记 run id(estop 用)。 */
-export function registeredRunIds(): string[] {
-  return [...runs.keys()];
-}
-
 function activityRun(e: Entry, prompts: Map<string, { approvals: number; inquiries: number }>): ActivityRun {
   const category = runCategory(e.input, e.runId);
   const cfg = plain(e.input.agentConfig);

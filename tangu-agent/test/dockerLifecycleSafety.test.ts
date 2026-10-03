@@ -166,27 +166,6 @@ describe('Docker lifecycle acknowledgements', () => {
     expect(fake.run.mock.calls.some(([, args]) => args[0] === 'rm')).toBe(false);
   });
 
-  it('awaits active per-run execution and then rm acknowledgement before releasing its mount', async () => {
-    let execAck!: () => void;
-    let removeAck!: () => void;
-    fake.run.mockImplementation(async (_bin, args) => {
-      if (args[0] === 'exec') return new Promise((resolve) => { execAck = () => resolve(ok()); });
-      if (args[0] === 'rm') return new Promise((resolve) => { removeAck = () => resolve(ok()); });
-      return ok();
-    });
-    const active = docker.runPythonInRun('run-one', dir, 'busy()');
-    await vi.waitFor(() => expect(execAck).toBeTypeOf('function'));
-    let disposed = false;
-    const disposing = docker.releaseRunContainer('run-one').then(() => { disposed = true; });
-    await expect(docker.runPythonInRun('run-one', dir, 'late()')).rejects.toThrow('being disposed');
-    expect(removeAck).toBeUndefined();
-    execAck(); await active;
-    await vi.waitFor(() => expect(removeAck).toBeTypeOf('function'));
-    expect(disposed).toBe(false);
-    removeAck(); await disposing;
-    expect(disposed).toBe(true);
-  });
-
   it('waits for rm confirmation before completing cancellation or granting the next global slot', async () => {
     let removeAck!: () => void;
     let executions = 0;

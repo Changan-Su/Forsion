@@ -60,11 +60,6 @@ function validName(name: string): boolean {
 let cache: { at: number; items: CustomCommand[] } | null = null;
 const CACHE_TTL_MS = 3000;
 
-/** 丢弃缓存(写入命令文件后调,免得等 TTL)。 */
-export function invalidateCustomCommands(): void {
-  cache = null;
-}
-
 /** 列出全部自定义命令。目录不存在 / 读失败 → 空数组(这是可选功能,绝不能拖垮输入框)。 */
 export function listCustomCommands(): CustomCommand[] {
   const now = Date.now();

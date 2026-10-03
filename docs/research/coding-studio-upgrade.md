@@ -56,7 +56,7 @@ Coding Studio 的体验主线应覆盖：想法 → 明确需求 → 可观察�
 
 ## Forsion 能力映射与接入边界
 
-本轮核查本地源 `desktop/electron/forsionConnectLocal.ts`：
+当时核查的 Connect 本地源 `desktop/electron/forsionConnectLocal.ts`（已迁入 Forsion Extend 的 `src/desktop/connect.ts`）：
 
 | 能力选择 | 已存在的公开 SDK | 应交给模型的约束 |
 |---|---|---|

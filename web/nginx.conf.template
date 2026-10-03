@@ -23,7 +23,7 @@ server {
         add_header Cache-Control "public, immutable";
     }
 
-    # ── 后端代理:同 AI Studio,把 /api 转发到 Forsion server(→ tangu worker)。
+    # ── 后端代理:把 /api 转发到 Forsion server(→ tangu worker)。
     #    多一个 /auth(+登录页依赖 /account /shared /oauth):webShim 无 token 时跳同源 /auth,
     #    复用 Forsion 登录页;登录成功带 ?token 回跳本站。 ──
     location /api/ {

@@ -331,8 +331,12 @@ Forsion/
 ├── desktop/       # Electron main process, shared React renderer & product profiles
 ├── web/           # Vite + nginx browser client
 ├── mobile/        # Capacitor Android client
+├── unit/          # Standalone Forsion Unit framework & local plugins
+├── docs/          # User documentation
+├── scripts/       # Open-source boundary check
+├── .github/       # CI workflows
 ├── archived/      # Read-only historical implementations
-└── Dockerfile.standalone
+└── Dockerfile.standalone  # Worker image used by Tangu Manager
 ```
 
 ### Client Status

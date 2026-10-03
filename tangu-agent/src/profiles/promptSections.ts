@@ -156,8 +156,6 @@ export function sandboxOutputSection(pythonExec: boolean, opts?: { applyPatch?: 
       : 'To change part of an existing file, use `apply_patch` to edit only the affected lines rather than re-emitting the whole file with `write_file` (which wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so a patch\'s context/old lines match the raw text.')
   );
 }
-/** @deprecated 用 sandboxOutputSection(true);保留常量名兼容既有 import。 */
-export const SANDBOX_OUTPUT_SECTION = sandboxOutputSection(true);
 
 /** sandbox 模式:执行效率约束(最影响耗时的是模型「生成量」:慢模型 ~50 tok/s,写 8000 token 要 ~160s)。
  *  pythonExec=false(无 run_python)时改为明示「没有代码执行环境」:模型该直接产出文本/markdown,
@@ -179,8 +177,6 @@ export function efficiencySection(pythonExec: boolean): string {
     '- In run_python, write the full script in one pass where possible to reduce round-trips.'
   );
 }
-/** @deprecated 用 efficiencySection(true);保留常量名兼容既有 import。 */
-export const EFFICIENCY_SECTION = efficiencySection(true);
 
 /** 默认段落装载(AI Studio 与 Tangu 当前文本一致;per-app 差异化在各自工厂覆盖)。 */
 export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {

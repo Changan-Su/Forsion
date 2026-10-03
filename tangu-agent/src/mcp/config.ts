@@ -8,9 +8,9 @@
  * 配置变更只对重启后的进程/新 run 生效(desktop 改配置走 ensureBackend 重启链)。
  * 绝不在 run 中途增删工具,否则同会话 defs 漂移打爆前缀缓存。
  */
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
-import { mcpConfigFile, tanguHome } from '../core/tanguHome.js';
-import { getRawSection, saveSection } from '../core/config.js';
+import { readFileSync } from 'node:fs';
+import { mcpConfigFile } from '../core/tanguHome.js';
+import { getRawSection } from '../core/config.js';
 import { sanitizePart } from './toolBridge.js';
 
 export interface McpServerConfig {
@@ -98,17 +98,6 @@ export function loadMcpConfig(file?: string): McpConfig {
 /** mcp 段原始值 → 运行时视图(保留名已跳过)。⚠️ 别拿它做读改写:写回会把保留名的 server 从磁盘上抹掉。 */
 export function mcpConfigFrom(sec: any): McpConfig {
   return { mcpServers: withoutReserved(rawMcpServersFrom(sec)) };
-}
-
-/** 显式传 file → 写该文件(legacy);否则写 config.json 的 mcp 段(唯一真源,chmod 600)。 */
-export function saveMcpConfig(cfg: McpConfig, file?: string): void {
-  if (file) {
-    mkdirSync(tanguHome(), { recursive: true });
-    writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
-    try { chmodSync(file, 0o600); } catch { /* env/headers 可能含密钥 */ }
-    return;
-  }
-  saveSection('mcp', { mcpServers: cfg.mcpServers });
 }
 
 /** 启用的 server 名单(连接顺序按名字典序——确定性,保证工具 defs 字节级稳定)。 */

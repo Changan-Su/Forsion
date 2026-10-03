@@ -85,8 +85,3 @@ export function useNoteCount(): { all: TextCount; sel: TextCount | null } | null
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [v4Path, activePage, blocks, version, instances, live])
 }
-
-/** 当前这篇的字符数(不计空白);没有打开的笔记 → null。 */
-export function useNoteChars(): number | null {
-  return useNoteCount()?.all.chars ?? null
-}
