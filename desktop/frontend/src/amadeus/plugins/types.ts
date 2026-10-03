@@ -850,14 +850,18 @@ export interface PluginContext {
   readonly viewLocations?: readonly PluginViewLocation[]
   /** Close every open instance of one of this plugin's own views, wherever it is docked (2026-10-02+). A side
    *  panel that loses its last view shows the host's empty placeholder; the bottom panel collapses — as when the
-   *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts. */
+   *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts.
+   *  A view the Space pins (`"pinned": true` in the recipe) keeps its last instance in that panel. */
   closeView?(viewId: string): void
   /** Swap this plugin's view `fromViewId` for `toViewId` where it stands (2026-10-02+): open tabs change in place
    *  (same panel and size, the layout is not rebuilt, the active tab stays where it was), a collapsed panel keeps the
    *  new view in its stash and stays collapsed, and the Space's panel defaults follow. This is the "launch layout →
    *  project layout" move (a list in the left panel becomes the project's media). Returns how many instances were
    *  replaced; 0 when `fromViewId` is open nowhere — then decide yourself whether to `openView` (that one expands a
-   *  collapsed panel). Absent on older hosts: fall back to `openView`. */
+   *  collapsed panel). Absent on older hosts: fall back to `openView`.
+   *  When the Space pins `fromViewId` (`"pinned": true` in the recipe) it is not replaced: `toViewId` opens as a tab
+   *  beside it (in the stash for a collapsed panel) and comes to the front if `fromViewId` was in front; the count is
+   *  then the tabs newly opened, 0 if `toViewId` was already there. Swapping back removes only `toViewId`. */
   replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
   /** Open one of this plugin's registered views in the native Floating Panel window.
    *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */

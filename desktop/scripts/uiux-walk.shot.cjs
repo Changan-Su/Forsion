@@ -34,7 +34,6 @@ const MENUS = [
   ['composer-add', click('.add-pill-btn')],
   ['composer-ctxring', click('.t2c-ctxring-btn')],
   ['composer-slash', async (win) => { await win.locator('textarea').last().click(); await win.keyboard.type('/') }],
-  ['side-switcher', click('.t2sw-mode-trigger')],
   ['side-plus', click('.t2o-plus')],
   ['side-session-ctx', rightClick('.t2s-srow:not(.t2s-archived-toggle)')],
   ['side-agent-more', async (win) => { await win.locator('.t2o-row').first().hover(); await win.locator('.t2o-row .t2o-tail').first().click() }],

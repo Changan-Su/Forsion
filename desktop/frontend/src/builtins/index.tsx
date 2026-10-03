@@ -73,7 +73,7 @@ function writeFlag(k: string, on: boolean): void {
  *  关掉内置终端后那个 panel、PTY 都还活着,且已反注册的类型留在持久化布局里 → 下次启动
  *  layoutViewsAllRegistered 判定失败,**整份布局丢回默认**。 */
 function closeLeafsOfType(type: string): void {
-  useWorkspace.getState().closeViewsOfType(type)
+  useWorkspace.getState().closeViewsOfType(type, true) // 反注册清场:固定 View 也得关(类型都没了)
 }
 
 interface BuiltinDef {

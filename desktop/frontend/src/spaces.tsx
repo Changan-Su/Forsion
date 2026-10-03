@@ -153,6 +153,8 @@ const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
     { type: 'outline', params: {} },
     { type: 'amadeus-backlinks', params: {} },
     { type: 'amadeus-graph', params: {} },
+    // 档位锁在条目上之后左栏不再能切到「文件」:右栏留一个文件面板(编辑器开着时库本身就是它的一个工作区)。
+    WS_FILES,
   ],
 }
 

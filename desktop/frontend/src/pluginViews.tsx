@@ -121,7 +121,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
 export const hasBottomPanel = (): boolean => 'bottomVisible' in useWorkspace.getState()
 
 function closeLeafsOfType(type: string): void {
-  useWorkspace.getState().closeViewsOfType(type)
+  useWorkspace.getState().closeViewsOfType(type, true) // 反注册清场:固定 View 也得关(类型都没了)
 }
 
 let installed = false

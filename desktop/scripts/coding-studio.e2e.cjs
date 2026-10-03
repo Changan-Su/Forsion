@@ -331,8 +331,11 @@ async function main() {
       && await win.locator('.csl-catalog-actions .csl-new').evaluate(el => document.activeElement === el))
     await win.locator('.csl-import').click()
     await win.waitForSelector('.csu-workspace')
-    check('Opening a project replaces left navigation with the real Coding chat View',
-      !!await until(async () => await win.locator('.wb-view--left .t2c-ta').count() > 0 && await win.locator('.csn').count() === 0))
+    // 项目导航是固定 View:进项目不再把它换掉,对话作为第二个标签开在它旁边并顶到前台。
+    check('Opening a project shows the real Coding chat View beside the pinned navigation',
+      !!await until(async () => await win.locator('.wb-view--left .t2c-ta').count() > 0
+        && !(await win.locator('.csn').isVisible().catch(() => false))
+        && await win.locator('.wb-tab--left').count() === 2))
     const ready = await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"'))
     check('Import renders the actual project file in an Electron guest', ready)
     if (!ready) throw new Error('Guest did not load the imported project')

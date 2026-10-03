@@ -606,7 +606,9 @@ interface WorkspaceState {
    *  是按类型的组件,改 __type 换不掉 → 在原位旁开一个新的再摘掉旧的(同组同位,组不空、零结构变化,所以
    *  不会重挂主区那一列,列里的 iframe 不重载);收起侧栏 stash 里的条目一并换,该侧**保持收起**(不替用户把面板弹出来);当前 Space 的
    *  sidebarDefaults 同步换(否则关空再展开回到旧视图)。活动 panel 还给原主人 —— 换一个侧栏视图不该把
-   *  焦点从主区抢走。返回换掉的实例数(活的 + stash 里的);`to` 没注册则什么都不动、返回 0。 */
+   *  焦点从主区抢走。返回换掉的实例数(活的 + stash 里的);`to` 没注册则什么都不动、返回 0。
+   *  `from` 是固定 View(区内最后一个)时不顶掉它:`to` 作为新标签开在它旁边(收起的侧栏则排进 stash,照旧
+   *  保持收起),`from` 原先在前台就让 `to` 顶到前台;计数只算新开出来的 —— `to` 已经在那儿就是 0。 */
   replaceViewsOfType(from: string, to: string, params?: Record<string, unknown>): number
   /** 按参数改写 / 关掉 leaf,**含没挂载的**:折叠侧栏序列化进 stash 的条目(无 id → 就地改写或摘掉)。
    *  fn 返回 undefined = 不动;null = 关掉(走 closeLeaf 的收尾,不是裸 panel.api.close());对象 = 合并进参数。
@@ -951,13 +953,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api || from === to || !getView(to)) return 0
     const keep = api.activePanel?.id
     const def = getView(to)!
-    let n = 0, side = 0
+    let n = 0, side = 0, stole = false
     const pins = get().pinned
     for (const p of [...api.panels]) {
       if (panelType(p) !== from) continue
-      if (guarded(api, p)) continue // 固定 View 不许被换掉(要并排显示就再开一个标签,见 pinnedViews.ts)
       const loc = ((p.params ?? {}) as PanelMeta).__loc ?? 'main'
+      // 主区:navigateLeaf 自己认固定 View(区内最后一个 → 同组新标签,不顶掉它)
       if (loc === 'main') { if (get().navigateLeaf(p.id, to, params)) n++; continue }
+      const keepFrom = guarded(api, p) // 固定 View 不许被换掉:`to` 开在它旁边,它留着(见 pinnedViews.ts)
       // 侧栏 / 底部挂的是按类型的组件(component = 类型名,见 openView),改 __type 换不掉已经画出来的那个
       // (2026-10-02 真 Electron:返回 1,左栏照旧是旧视图)→ 在原位旁开新的再摘掉旧的:组一直不空,不触发重排。
       const group = p.group as { panels?: IDockviewPanel[]; activePanel?: IDockviewPanel } | undefined
@@ -965,7 +968,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const there = panelsAt(api, loc).find((x) => x !== p && panelType(x) === to)
       if (there) {
         if (Object.keys(params).length) there.api.updateParameters({ ...(there.params ?? {}), ...params }) // 调用方给的参数不丢
-        if (group?.activePanel === p) there.api.setActive()
+        if (group?.activePanel === p) { there.api.setActive(); stole = true }
+        if (keepFrom) continue
         api.removePanel(p)
         n++; side++; continue
       }
@@ -973,10 +977,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       api.addPanel({
         id: def.singleton && !api.getPanel(to) ? to : nextId(api, to), component: to, title: label(def.displayName),
         params: { ...params, __loc: loc, __type: to },
-        position: { referencePanel: p, ...(index >= 0 ? { index } : {}) },
+        position: { referencePanel: p, ...(index >= 0 ? { index: keepFrom ? index + 1 : index } : {}) },
         inactive: group?.activePanel !== p,
       })
-      api.removePanel(p)
+      if (!keepFrom) api.removePanel(p)
       n++; side++
     }
     if (side) { get().refreshTabs(); scheduleWorkspaceSave() }
@@ -984,23 +988,30 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // ⚠️已在组里最前的 panel 再 setActive,dockview 7 会重绘它(openPanel → renderPanel 摘下再挂回,iframe 重载;
     // 底部面板修复会话 10-02 用 removeChild 栈抓到)→ 那种只切活动组。
     const back = keep ? api.getPanel(keep) : undefined
-    if (n && back) {
+    if ((n || stole) && back) {
       if ((back.group as { activePanel?: IDockviewPanel } | undefined)?.activePanel === back) back.group.api.setActive()
       else back.api.setActive()
     }
     // 同活 panel 那条:一侧按类型一个 tab —— `to` 已暂存在这一侧就只摘掉被换的、参数并进它,否则侧栏图标会出两个
     const swap = (side: DockSide, list: Stashed[]): Stashed[] => {
-      if (isPinned(pins, side, from) || !list.some((v) => v.type === from)) return list // 固定在这一侧的不换
+      if (isPinned(pins, side, from) || !list.some((v) => v.type === from)) return list // 固定在这一侧的不换(见 beside)
       const kept = list.find((v) => v.type === to)
       if (kept) return list.filter((v) => v.type !== from).map((v) => (v === kept ? { ...v, params: { ...(v.params ?? {}), ...params } } : v))
       const at = list.findIndex((v) => v.type === from)
       return list.filter((v, i) => v.type !== from || i === at).map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
     }
     const { stash, stashActive, sidebarDefaults } = get()
-    const stashed = (['left', 'right', 'bottom'] as const).reduce((sum, side) => sum + (isPinned(pins, side, from) ? 0 : stash[side].filter((v) => v.type === from).length), 0)
+    let stashed = (['left', 'right', 'bottom'] as const).reduce((sum, side) => sum + (isPinned(pins, side, from) ? 0 : stash[side].filter((v) => v.type === from).length), 0)
+    // 固定在这一侧(收起着):`to` 排到它后面,它留着。默认项不动 —— 固定的那个关不掉,轮不到按默认项重建。
+    const beside = (side: DockSide): Stashed[] => {
+      const list = stash[side], at = list.findIndex((v) => v.type === from)
+      if (at < 0 || !isPinned(pins, side, from) || list.some((v) => v.type === to)) return list
+      stashed++
+      return [...list.slice(0, at + 1), { type: to, params: { ...params } }, ...list.slice(at + 1)]
+    }
     set({
-      stash: { left: swap('left', stash.left), right: swap('right', stash.right), bottom: swap('bottom', stash.bottom) },
-      stashActive: Object.fromEntries((['left', 'right', 'bottom'] as const).map((side) => [side, stashActive[side] === from && !isPinned(pins, side, from) ? to : stashActive[side]])) as WorkspaceState['stashActive'],
+      stash: { left: swap('left', beside('left')), right: swap('right', beside('right')), bottom: swap('bottom', stash.bottom) },
+      stashActive: Object.fromEntries((['left', 'right', 'bottom'] as const).map((side) => [side, stashActive[side] === from ? to : stashActive[side]])) as WorkspaceState['stashActive'],
       sidebarDefaults: { left: swap('left', sidebarDefaults.left), right: swap('right', sidebarDefaults.right), bottom: swap('bottom', sidebarDefaults.bottom) },
     })
     if (stashed) { get().refreshTabs(); scheduleWorkspaceSave() } // 活的那些 navigateLeaf 已各自刷过、存过

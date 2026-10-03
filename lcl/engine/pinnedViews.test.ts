@@ -20,7 +20,11 @@ function mkApi() {
   const added: Array<{ id: string; position?: Record<string, unknown>; inactive?: boolean }> = []
   let gid = 0
   let active: P | null = null
-  const mkGroup = (): G => ({ id: `g${++gid}`, panels: [], api: { width: 300, height: 300, setActive() { }, setSize() { }, setConstraints() { } } })
+  const mkGroup = (): G => {
+    // 真 Dockview:切活动组 = 该组的前台 panel 成为活动 panel(replaceViewsOfType 靠它把焦点还给原主人)
+    const g: G = { id: `g${++gid}`, panels: [], api: { width: 300, height: 300, setActive() { if (g.activePanel) active = g.activePanel as P }, setSize() { }, setConstraints() { } } }
+    return g
+  }
   const remove = (p: P): void => {
     const i = panels.indexOf(p)
     if (i < 0) return
@@ -200,18 +204,54 @@ describe('固定 View:桌面 store', () => {
     expect(dropAllowed(api, chat.id, toLeft)).toBe(true)
   })
 
-  it('替换视图(插件的 ctx.replaceView)换不掉固定 View,默认项与暂存也不动', () => {
-    const { panels } = build()
+  it('替换视图(插件的 ctx.replaceView / Coding 进项目):固定 View 不被顶掉,新视图开在它旁边并顶到前台;退回时只摘掉新开的', () => {
+    const { panels, api } = build()
     const ws = useWorkspace.getState()
     useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'listv', params: {} }], right: [], bottom: [] } })
-    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(0)
-    expect(at(panels, 'left')).toEqual(['listv'])
+    const list = panels.find((x) => x.params.__type === 'listv')!
+    const focus = panels.find((x) => x.params.__type === 'chatv')!
+    focus.api.setActive()
+    expect(ws.replaceViewsOfType('listv', 'assetv', { k: 1 })).toBe(1)
+    expect(list.group.panels.map((x) => x.params.__type)).toEqual(['listv', 'assetv']) // 同组,排在固定的后面
+    expect(list.group.activePanel!.params).toMatchObject({ __type: 'assetv', k: 1 }) // 固定的原先在前台 → 新的顶上
+    expect(api.activePanel!.id).toBe(focus.id) // 焦点还给主区
     expect(useWorkspace.getState().sidebarDefaults.left.map((v) => v.type)).toEqual(['listv'])
 
-    // 负对照:没固定的照旧被换
+    // 已经在旁边了:不再新开(返回 0),只是固定的若在前台就让它顶上来
+    list.api.setActive(); focus.api.setActive()
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(0)
+    expect(at(panels, 'left')).toEqual(['listv', 'assetv'])
+    expect(list.group.activePanel!.params.__type).toBe('assetv')
+    expect(api.activePanel!.id).toBe(focus.id)
+
+    // 退回:新开的那个被摘掉,固定的留着
+    expect(ws.replaceViewsOfType('assetv', 'listv')).toBe(1)
+    expect(at(panels, 'left')).toEqual(['listv'])
+
+    // 主区同理:固定的聊天不被顶掉,新标签开在同组
+    expect(ws.replaceViewsOfType('chatv', 'filev')).toBe(1)
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev'])
+
+    // 负对照:没固定的照旧原位被换
     ws.openView('assetv', {}, 'left')
     expect(ws.replaceViewsOfType('assetv', 'filev')).toBe(1)
     expect(at(panels, 'left')).toEqual(['listv', 'filev'])
+  })
+
+  it('替换视图 × 收起的侧栏:新视图只排进暂存(固定的后面)并成为展开后的前台,侧栏保持收起', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    for (const p of panels.filter((x) => x.params.__loc === 'left')) p.api.close() // 摆成收起后的样子
+    useWorkspace.setState({ stash: { left: [{ type: 'listv', params: { mode: 'orbits' } }], right: [], bottom: [] }, stashActive: { left: 'listv', right: null, bottom: null }, leftVisible: false })
+    expect(ws.replaceViewsOfType('listv', 'assetv', { k: 1 })).toBe(1)
+    expect(at(panels, 'left')).toEqual([])
+    expect(useWorkspace.getState().leftVisible).toBe(false)
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'listv', params: { mode: 'orbits' } }, { type: 'assetv', params: { k: 1 } }])
+    expect(useWorkspace.getState().stashActive.left).toBe('assetv')
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(0) // 已经在了
+    expect(ws.replaceViewsOfType('assetv', 'listv')).toBe(1) // 退回:摘掉
+    expect(useWorkspace.getState().stash.left.map((v) => v.type)).toEqual(['listv'])
+    expect(useWorkspace.getState().stashActive.left).toBe('listv')
   })
 
   it('清场:插件自己关(不带 force)留下固定的;视图注销(force)一并关掉', () => {
@@ -314,10 +354,13 @@ describe('固定 View:单列 store(移动端是独立重写的一份,漏接 = �
     expect(types()).toEqual(['chatv', 'filev'])
   })
 
-  it('替换视图换不掉固定的;缺了能补回,且不抢当前显示的那个', () => {
+  it('替换视图顶不掉固定的(开在旁边);缺了能补回,且不抢当前显示的那个', () => {
     const ws = build()
+    // 固定的不被顶掉:新视图加进同一个抽屉(不弹开抽屉),再换一次不重复开
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(1)
     expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(0)
-    expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv'])
+    expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv', 'assetv'])
+    expect(useSingle.getState().leftVisible).toBe(false)
 
     ws.openView('filev', { path: '/a.md' }, 'main')
     ws.closeViewsOfType('chatv', true)

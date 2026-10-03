@@ -103,6 +103,8 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
     name: specName(spec),
     icon: SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
     sidebarDefaults: sides,
+    // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
+    pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
     bottomSpan: spec.layout.bottomSpan,
     build() {
       ws().setSidebarDefaults(sides)

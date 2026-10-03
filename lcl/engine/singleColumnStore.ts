@@ -545,8 +545,13 @@ export const useWorkspace = create<WS>((set, get) => {
     replaceViewsOfType(from, to, params = {}) {
       if (from === to || !getView(to)) return 0
       let n = 0
-      // 固定 View 不许被换掉(同桌面版):区内最后一个跳过,固定在那一侧的默认项也不换
-      for (const rec of allRecs().filter((r) => r.type === from)) if (!guarded(rec) && get().navigateLeaf(rec.id, to, params)) n++
+      // 固定 View 不许被换掉(同桌面版):`to` 作为新标签开在它旁边(主区由 navigateLeaf 自己认;抽屉里加一个同侧
+      // 标签,不弹开抽屉),只有真新开出来才计数;固定在那一侧的默认项也不换
+      for (const rec of allRecs().filter((r) => r.type === from)) {
+        if (rec.loc === 'main' || !guarded(rec)) { if (get().navigateLeaf(rec.id, to, params)) n++; continue }
+        const had = get()[bucketOf(rec.loc)].some((r) => r.type === to)
+        if (get().openView(to, params, rec.loc) && !had) n++
+      }
       const swap = (side: 'left' | 'right', list: PersistedPanel[]): PersistedPanel[] =>
         isPinned(pins(), side, from) ? list : list.map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
       const d = get().sidebarDefaults

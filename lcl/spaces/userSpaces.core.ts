@@ -10,6 +10,9 @@ export interface SpacePanelSpec {
   split?: 'right' | 'down'
   /** Zero-based index of an earlier main item to split. Defaults to the previous item. */
   splitFrom?: number
+  /** 固定 View(main / left / right):该区内始终至少留一个这种视图 —— 关不掉、拖不出本区、不被别的类型顶掉
+   *  (见 engine/pinnedViews.ts)。底部面板不支持。老宿主不认这个键,照旧当普通条目。 */
+  pinned?: boolean
 }
 
 export type MainPanelOpenStep =
@@ -80,11 +83,16 @@ function panelList(v: unknown, field: string): SpacePanelSpec[] | string {
     if (splitFrom !== undefined && (field !== 'main' || !split || !Number.isInteger(splitFrom) || (splitFrom as number) < 0 || (splitFrom as number) >= out.length)) {
       return `layout.${field} 的 splitFrom 必须指向此前的 main 条目(从 0 开始),且同时声明 split`
     }
+    const pinned = (it as { pinned?: unknown }).pinned
+    if (pinned !== undefined && (typeof pinned !== 'boolean' || (pinned && field === 'bottom'))) {
+      return `layout.${field} 的 pinned 必须是布尔值,且底部面板不支持固定`
+    }
     out.push({
       type: (it as { type: string }).type,
       ...(params ? { params: params as Record<string, unknown> } : {}),
       ...(split ? { split } : {}),
       ...(splitFrom !== undefined ? { splitFrom: splitFrom as number } : {}),
+      ...(pinned ? { pinned: true } : {}),
     })
   }
   return out
