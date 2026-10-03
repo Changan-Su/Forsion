@@ -118,12 +118,6 @@ async function main() {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
     }
-    const picker = win.locator('.t2sw-mode-picker').first()
-    if (await picker.count().catch(() => 0)) {
-      await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-      await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
-      await win.waitForTimeout(1000)
-    }
     // 列表异步加载:有界等行出现;点完再确认 s1 真成了活动会话(同名行 ≠ 切过去了)
     const navFail = async (why) => {
       const shot = path.join(os.tmpdir(), 'forsion-chatev-nav-fail.png')

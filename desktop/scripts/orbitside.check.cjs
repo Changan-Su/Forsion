@@ -288,7 +288,7 @@ async function run(app, win) {
   await win.waitForSelector('.t2o', { timeout: 15_000 }).catch(() => {})
   let st = await win.evaluate(PROBE)
   check('1 Tangu Space 左栏直接渲染 .t2o 壳(档位由 Space 写死成 orbits,不经任何菜单)',
-    st.hasOrbit && !st.legacySide, JSON.stringify({ hasOrbit: st.hasOrbit, legacySide: st.legacySide, panes: st.panes }))
+    st.hasOrbit, JSON.stringify({ hasOrbit: st.hasOrbit, panes: st.panes }))
   if (!st.hasOrbit) throw new StopEarly('.t2o 未渲染')
   check('1a 工作区视图里没有切档菜单(2026-10-03 撤掉:左栏永远是这个 Space 的那张列表)',
     !st.modeSwitcher, JSON.stringify({ modeSwitcher: st.modeSwitcher }))

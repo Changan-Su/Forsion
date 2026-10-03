@@ -336,6 +336,21 @@ async function main() {
       !!await until(async () => await win.locator('.wb-view--left .t2c-ta').count() > 0
         && !(await win.locator('.csn').isVisible().catch(() => false))
         && await win.locator('.wb-tab--left').count() === 2))
+    // 观感自查(DESIGN.md §8):左栏两个标签、对话在前。
+    const pinnedShot = path.join(os.tmpdir(), `forsion-coding-pinned-${process.pid}.png`)
+    await win.screenshot({ path: pinnedShot })
+    console.log(`截图:${pinnedShot}`)
+    // 侧栏的图标标签靠右键菜单关:固定的导航没有这个菜单,旁边的对话有。
+    await win.locator('.wb-tab--left').first().click({ button: 'right' })
+    const navMenu = await win.locator('.ctx-menu').count()
+    await win.locator('.wb-tab--left').nth(1).click({ button: 'right' })
+    const chatMenu = await win.locator('.ctx-menu').count()
+    await win.evaluate(() => window.dispatchEvent(new MouseEvent('click')))
+    check('The pinned navigation tab offers no close menu; the chat tab beside it does', navMenu === 0 && chatMenu === 1, JSON.stringify({ navMenu, chatMenu }))
+    await win.locator('.wb-tab--left').first().click()
+    check('Clicking the navigation tab brings the project navigation back without leaving the project',
+      !!await until(async () => await win.locator('.csn').isVisible() && await win.locator('.csu-workspace').count() === 1))
+    await win.locator('.wb-tab--left').nth(1).click()
     const ready = await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"'))
     check('Import renders the actual project file in an Electron guest', ready)
     if (!ready) throw new Error('Guest did not load the imported project')
@@ -543,6 +558,8 @@ async function main() {
     check('Leaving the project removes all of its temporary native views', !!await until(async () => await win.locator('[data-transient-view]').count() === 0))
     check('Leaving the project disposes its stable preview surface and guest', !!await until(async () => await win.locator('.csu-guest-surface').count() === 0 && await win.locator('webview').count() === 0))
     check('Temporary Studio tools never enter saved workspace layouts', await win.evaluate(() => Object.entries(localStorage).filter(([key]) => /layout/i.test(key)).every(([,value]) => !value.includes('__extend-') && !value.includes('coding-tool:'))))
+    check('Leaving the project closes the chat tab; the pinned navigation is alone on the left again',
+      !!await until(async () => await win.locator('.wb-tab--left').count() === 1 && await win.locator('.csn').isVisible()))
     check('An imported project remains discoverable on the launchpad', !!await until(async () => (await win.locator('.csl-project').allTextContents()).some(text => text.includes('Imported studio project'))))
     await win.locator('.csl-search input').fill('no-such-project')
     check('Project search shows an explicit no-results state', await win.locator('.csl-project').count() === 0

@@ -467,6 +467,11 @@ export interface ViewContribution {
   id: string
   /** Tab title shown in the workbench. */
   title: string
+  /** Tab icon (2026-10-03+): a name from the plugin icon vocabulary (the names `ListItem.icon` takes). Tabs in the
+   *  side panels show the icon only, so set one on every view that can share a side panel with another (a
+   *  navigation and a media bin, say) or the two tabs look the same. Absent or unknown name: the host's generic
+   *  plugin icon. Older hosts ignore it, and show no icon at all. */
+  icon?: string
   /** Build the view's DOM into the host-provided element; called once per opened instance.
    *  Return a cleanup to run when the instance closes (clear timers/observers here).
    *  May be async (2026-09-27+): the resolved function is the cleanup (run at once if the view already

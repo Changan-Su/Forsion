@@ -64,12 +64,6 @@ async function openChatSession(win) {
     await win.click('.dv-edge-left').catch(() => {})
     await win.waitForTimeout(700)
   }
-  const picker = win.locator('.t2sw-mode-picker').first()
-  if (await picker.count().catch(() => 0)) {
-    await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-    await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
-    await win.waitForTimeout(900)
-  }
   const row = win.locator('.t2s-srow', { hasText: '生图动画验收' }).first()
   if (!(await row.count().catch(() => 0))) throw new Error('没有找到生图动画验收会话')
   await row.click()

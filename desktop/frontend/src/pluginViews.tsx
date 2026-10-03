@@ -9,11 +9,13 @@ import { amadeusAvailable } from './features/runtime'
  *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区 / 侧栏 / 底部面板;移动端无底部)。
  */
 import React, { useEffect, useLayoutEffect, useRef } from 'react'
+import { Puzzle, type LucideIcon } from 'lucide-react'
 import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
+import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, translate } from './i18n'
 
 registerMessages({
@@ -120,6 +122,15 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
  *  换成单列 store,所以只能运行时实判,不能 import 一个常量(换掉的模块里没有它)。 */
 export const hasBottomPanel = (): boolean => 'bottomVisible' in useWorkspace.getState()
 
+/** 插件视图的标签图标:图标词表里的名字(ViewContribution.icon)按 Lucide 的调用形(size / className)包一层;
+ *  没写、或词表里没有 → 通用拼图。⚠️侧栏的标签只有图标没有名字,不给图标就是一个看不见、点不到的空标签 ——
+ *  固定 View 让插件视图在侧栏分标签(导航 + 素材区)之后才暴露出来,2026-10-03 Video Studio 真机截图抓到。 */
+function viewIcon(name: string | undefined): LucideIcon {
+  const Glyph = name ? PLUGIN_ICONS[name] : undefined
+  if (!Glyph) return Puzzle
+  return (({ size, className }: { size?: number; className?: string }) => <Glyph width={size} height={size} className={className} />) as unknown as LucideIcon
+}
+
 function closeLeafsOfType(type: string): void {
   useWorkspace.getState().closeViewsOfType(type, true) // 反注册清场:固定 View 也得关(类型都没了)
 }
@@ -209,6 +220,7 @@ export function syncPluginViews(): void {
         type,
         kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
         displayName: () => def.title,
+        icon: viewIcon(def.icon),
         factory: (props) => <PluginViewHost def={def} pluginId={type.split(':')[1]} {...props} />,
         singleton: def.singleton !== false,
         closable: true,

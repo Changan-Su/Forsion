@@ -9,6 +9,8 @@ import { useWorkspace as useSingle } from './singleColumnStore'
 import { isPinned, isLastPinned, missingPinned, type PinnedViews } from './pinnedViews'
 import { registerView, unregisterView } from './viewRegistry'
 import type { DropTarget } from './dropModel'
+import { resetSpaceLayouts } from './spaceRegistry'
+import { listNamedLayouts, loadLayout, saveLayout, saveNamedLayout, type LayoutEnvelopeV4 } from './layoutPersist'
 import type { DockviewApi } from 'dockview-react'
 
 type G = { id: string; panels: P[]; activePanel?: P; api: Record<string, unknown> }
@@ -320,6 +322,19 @@ describe('固定 View:桌面 store', () => {
     useWorkspace.setState({ leftVisible: false, stash: { left: [{ type: 'listv', params: {} }, { type: 'assetv', params: {} }], right: [], bottom: [] } })
     useWorkspace.getState().refreshTabs()
     expect(useWorkspace.getState().leftTabs.map((t) => [t.type, t.closable])).toEqual([['listv', false], ['assetv', true]])
+  })
+})
+
+describe('升级时的一次性重置', () => {
+  it('resetSpaceLayouts:各 Space 的已存布局与当前布局清掉,用户自己起名存的布局留着', () => {
+    const blob: LayoutEnvelopeV4 = { version: 4, dockview: { grid: {} }, sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } } }
+    saveNamedLayout('space:tangu', blob)
+    saveNamedLayout('space:plugin:x', blob)
+    saveNamedLayout('我的布局', blob)
+    saveLayout(blob)
+    resetSpaceLayouts()
+    expect(Object.keys(listNamedLayouts())).toEqual(['我的布局'])
+    expect(loadLayout()).toBeNull()
   })
 })
 

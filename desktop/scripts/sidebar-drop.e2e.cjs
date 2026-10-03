@@ -119,9 +119,15 @@ async function main() {
     process.exit(1)
   }
 
-  /** 文件面板 = 右栏那个锁在「文件」档的工作区标签(2026-10-03 起档位写在条目上,切档菜单已撤)。
-   *  左栏笔记树一直在,两块同屏 —— 不必来回切。右栏默认收起:先展开,再点它的标签。 */
+  /** 文件面板:档位锁在条目上之后(2026-10-03)笔记 Space 里没有它了,它在 Tangu Space 的右栏。到那儿从 ＋ 的
+   *  「最近使用」把笔记A 开成聊天旁边的标签 —— 主区活动视图是编辑器时,库本身就是文件面板里的一个工作区
+   *  (WorkspaceView.FilesBody 的 vaultCtx 合并)。右栏默认收起:先展开,再点它的标签。 */
   const showFilesPanel = async (win) => {
+    await win.locator('.rb-space[aria-label="Tangu"]').first().click({ timeout: 15_000 })
+    await win.waitForTimeout(2500)
+    await win.locator('.dv-new-tab').first().click({ timeout: 10_000 })
+    await win.locator('.newtab-card', { hasText: '笔记A' }).first().click({ timeout: 10_000 })
+    await win.waitForTimeout(1500)
     const right = win.locator('.dv-edge-right')
     if ((await right.getAttribute('aria-pressed')) !== 'true') await right.click({ timeout: 10_000 })
     await win.locator('.wb-tab--icon:not(.wb-tab--left)[title="工作区"]').first().click({ timeout: 10_000 })
@@ -231,8 +237,14 @@ async function main() {
       !fs.existsSync(path.join(vault, '子文件夹', '不该进来.txt')),
       '带 REF_MIME 时若也复制 = 树内搬笔记会被这条分支抢走')
 
+    // 复合笔记的行拖要把自己的 .fd 一起带上,否则子笔记会被落下(9 的前置)。
+    const noteSrc = await win.evaluate(DRAG_START, { sel: '.t2s-srow', rowText: '合并', pathsMime: PATHS_MIME })
+    check('8b 笔记树的行拖:复合笔记连自己的 .fd 一起带走',
+      Array.isArray(noteSrc.paths) && noteSrc.paths.some((p) => p.endsWith('合并.md')) && noteSrc.paths.some((p) => p.endsWith('合并.fd')),
+      JSON.stringify(noteSrc))
+    // (dragstart 得到的 dt 留在 window.__dragDT 上,到 9 才投放;6 / 7 各用自己的 dt,不碰它。)
+
     // ── 6 文件档:拖到**文件行** → 落进它所在的目录(此前文件行不是落区,会一路冒泡到工作区根)──
-    // 编辑器开着时,库本身就是文件面板里的一个工作区(WorkspaceView.FilesBody 的 vaultCtx 合并)。
     await showFilesPanel(win)
     await win.waitForTimeout(1500)
     // 逐层展开:工作区头 → 子文件夹(懒加载,各等一拍)
@@ -282,15 +294,7 @@ async function main() {
         && rightPanelSrc.includes("effectAllowed = 'copyMove'") && !rightPanelSrc.includes("effectAllowed = 'move'")
         && viewsSrc.includes("effectAllowed = 'copyMove'"),
       'FilesPanel / RightPanel / 笔记树行拖三处')
-    // 复合笔记的行拖要把自己的 .fd 一起带上,否则子笔记会被落下(9 的前置)。
-    const noteSrc = await win.evaluate(DRAG_START, { sel: '.t2s-srow', rowText: '合并', pathsMime: PATHS_MIME })
-    check('8b 笔记树的行拖:复合笔记连自己的 .fd 一起带走',
-      Array.isArray(noteSrc.paths) && noteSrc.paths.some((p) => p.endsWith('合并.md')) && noteSrc.paths.some((p) => p.endsWith('合并.fd')),
-      JSON.stringify(noteSrc))
-
     // ── 9 复合笔记落进**已有同名 .md** 的目录:两半必须拿同一个 stem ────────────────
-    await showFilesPanel(win)
-    await win.waitForTimeout(1500)
     await expandUntil('.t2s-group:has-text("Vault") .t2s-group-toggle', '.t2sf-row')
     const d9 = await win.evaluate(DROP_STAGED, { sel: '.t2sf-row:not(.t2sf-file)', rowText: '子文件夹' })
     await win.waitForTimeout(3500)
