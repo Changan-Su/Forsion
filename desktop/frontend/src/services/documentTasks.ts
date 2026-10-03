@@ -37,7 +37,7 @@ export async function submitDocumentTask(o: Request, modelId: string | null): Pr
   const initial = useApp.getState()
   // Managed ports/tokens rotate on restart. They guard live work, but cannot identify a durable receipt.
   const realm = JSON.stringify([
-    initial.desktopConfig?.mode === 'managed' ? 'managed' : initial.cfg.backendUrl,
+    initial.desktopConfig?.mode === 'managed' ? 'managed' : connectionKey(initial.cfg, () => ''), // 不带令牌的连接身份;基址只经目标解析层取(棘轮 R1)
     initial.authInfo?.cloudUrl ?? '', initial.authInfo?.accountId ?? '',
   ])
   const signature = JSON.stringify([o.agent ?? '', o.prompt, o.vaultRoot])

@@ -309,7 +309,7 @@ export function installTanguProbe(): void {
     agentStatus: readAgentStatus,
     subscribeAgentStatus,
     startChat,
-    ...(hasNativeFeature('tangu') && window.tangu?.documentTasks ? {
+    ...(hasNativeFeature('tangu') && typeof window !== 'undefined' && window.tangu?.documentTasks ? {
       submitDocumentTask: async (o: Parameters<typeof submitDocumentTask>[0]) => {
         if (!(window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed')) || !(await waitBackend(15_000))) {
           return { ok: false, error: 'Document tasks require a connected local engine' }
