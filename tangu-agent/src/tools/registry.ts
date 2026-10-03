@@ -305,6 +305,20 @@ export function listDeferredTools(ctx: ToolContext): { name: string; hint: strin
   return out;
 }
 
+/** 跨 run 延续解锁(10-02):本 run 喂给模型的历史里调用过的 deferred 工具(连同其 deferGroup 整组)在 run 起点预解锁。
+ *  不延续时,上一轮 load_tools 装过的工具下一轮不在 defs 里,模型照着历史直接调同名工具,只能落到最近的常驻名
+ *  (实测 manage_schedule → manage_human 空刷 5–9 次,有一次放弃后还说「记好了」)。只看传进来的这份历史:
+ *  被压缩摘要吃掉的调用模型看不见,不延续。起点 defs 因此与上一 run 末尾一致,前缀缓存反而更连续。 */
+export function deferredUnlocksFromHistory(
+  history: ReadonlyArray<{ tool_calls?: ToolCall[] }>,
+  catalog: ReadonlyArray<{ name: string; group?: string }>,
+): Set<string> {
+  const used = new Set<string>();
+  for (const m of history) for (const c of m.tool_calls || []) used.add(canonicalToolName(String(c?.function?.name || '')));
+  const groups = new Set(catalog.filter((d) => used.has(d.name) && d.group).map((d) => d.group));
+  return new Set(catalog.filter((d) => used.has(d.name) || (d.group && groups.has(d.group))).map((d) => d.name));
+}
+
 // 旧工具名别名表(muse_watch → manage_automation)已迁 toolRegistry.ts:共享策略层的
 // isSubAgentDenied 要先归一再判闸,留在本文件会成环(toolRegistry → registry → toolRegistry)。
 

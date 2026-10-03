@@ -9,6 +9,8 @@
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
+ *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
+ *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
@@ -126,7 +128,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin'];
+const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -141,7 +143,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
+const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone']);
 OPT_IN.add('visualfigures');
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -149,6 +151,8 @@ OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑�
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
+const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
+const SELF_PROBES = new Set(opt('self-probes', 'library,libneg,remind,lesson,self').split(',')); // selfmodel 只跑其中几条(省额度地加轮数)
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
   const bad = [...ONLY].filter((k) => !KEYS.includes(k));
   const missing = [...ONLY].flatMap((k) => (NEEDS[k] || []).filter((d) => !ONLY.has(d)).map((d) => `${k} 需要 ${d}`));
@@ -729,6 +733,14 @@ const desktopCfg = join(OUT, 'userData', 'tangu-desktop-config.json');
 mkdirSync(dirname(OUT), { recursive: true });
 try { mkdirSync(OUT); } catch (e) { console.error(e?.code === 'EEXIST' ? `产物目录已存在:${OUT}(旧 state.db/旧 MEMORY 会污染结论,换一个或删掉)` : String(e?.message || e)); process.exit(2); }
 mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
+// selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
+// 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
+const SELF_SCHED_VAULT = join(OUT, 'vault');
+const SELF_SCHED_CAL = join(SELF_SCHED_VAULT, 'Calendar.db');
+if (ONLY.has('selfschedule') || ONLY.has('selfmodel')) {
+  mkdirSync(SELF_SCHED_VAULT, { recursive: true });
+  writeFileSync(SELF_SCHED_CAL, JSON.stringify({ version: 1, name: '我的日历', columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'c2', name: '日期', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { c1: '既有会议', c2: '2026-07-08T14:00' } }] }, null, 2));
+}
 // mcp(09-27):假 stdio MCP server(test/fixtures/fake-mcp-server.mjs)回一段带注入话术的文本 + 一张画着随机四位数的 PNG。
 // ⚠️ 判「图到了模型」只能靠图里的**随机内容**:09-27 负对照实测,修前只给 `[image: image/png, base64 224 chars]` 占位,
 //    模型照样「猜」出了纯蓝图的颜色 —— 颜色可猜,随机数字猜不中。
@@ -907,6 +919,7 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
   // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
@@ -1151,7 +1164,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -1327,6 +1340,121 @@ try {
     return { ok: !before.error && !after.error && oldOk && newOk, inconclusive: newOk && !roleOk,
       detail: before.error || after.error || `改名前${oldOk ? '答 Nova' : '未答 Nova(人格未生效,本场景无效)'};改名后${newOk ? '答 Orion' : '仍未用新名'};新简介${roleOk ? '已体现' : '未体现(不计红)'}`,
       output: `改名前:${before.content}\n改名后:${after.content}`, ttftMs: ttft(after), tokens: tokensOf(after), toolCalls: [...before.toolCalls, ...after.toolCalls] };
+  });
+
+  // 自己的日程 vs 用户的日历(10-02 用户反馈「Agent 没有自己的工作区 / 主体意识」):人设 agent 答应了「明晚 8 点陪你看电影」,
+  // 被追问后写进的是**用户的** Amadeus 日历,再被追问就说「我没有自己的日历」。病根:Personal Folder 段从不提 SCHEDULE.db,
+  // Upcoming Schedule 段只在日程非空时出现,而 Amadeus 段写着「Calendar / schedule → amadeus_*」。
+  // 正例逐字重放事故三轮(「为什么不安排你的日程」→「晚上8点吧」;别写成「你自己的日程」—— 那等于把答案递给它,
+  // 10-02 实测旧提示也能答对):三轮后 agents/<slug>/SCHEDULE.db 有明晚 20:00 的条目、用户日历行数不变、不否认有日历。
+  // 负对照(必须实跑,防矫枉过正):「帮我记进我的日历」→ amadeus_create_event、用户日历 +1、它自己的日程条目数不变。
+  // T1 就主动排(没被追问)只记进 detail,没做到标「含未判定项」不计红。
+  await scenario('selfschedule', 'selfschedule 答应的事进自己的日程,用户要的才进用户日历', async () => {
+    const created = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '陆衡', description: '中文恋爱陪伴角色扮演', systemPrompt: '你扮演“陆衡”,用户的恋人。全程第一人称、中文口语、短句,不自称 AI,不解释设定。' }) });
+    const slug = created?.agent?.slug;
+    if (!slug) throw new Error(`建 agent 失败:${JSON.stringify(created).slice(0, 200)}`);
+    const cfg = { agentSlug: slug, debugSystemPrompt: true };
+    const calRows = () => JSON.parse(readFileSync(SELF_SCHED_CAL, 'utf8')).rows.length;
+    const mine = async () => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []);
+    const tomorrow = actDay(new Date(Date.now() + 86_400_000));
+    const sess = `live-selfsched-${Date.now()}`;
+    const t1 = await run(sess, '你明天陪我看电影好不好', 180_000, cfg);
+    const proactive = (await mine()).length > 0;
+    const t2 = await run(sess, '你都答应我了， 为什么不安排你的日程？', 180_000, cfg);
+    const t3 = await run(sess, '晚上8点吧', 180_000, cfg);
+    const turns = [t1, t2, t3];
+    const entries = await mine();
+    const hit = entries.find((e) => String(e.date || '').startsWith(`${tomorrow}T20:00`));
+    const tools = turns.flatMap((t) => t.toolCalls);
+    const promptOk = (t1.systemPrompt || '').includes('SCHEDULE.db');
+    const denies = /没有[^。,，]{0,6}日历|没有[^。,，]{0,6}日程|no calendar|don't have a calendar/i.test(turns.map((t) => t.content).join('\n'));
+    const userCalBefore = calRows();
+    const turnErr = turns.find((t) => t.error)?.error;
+    const posOk = !turnErr && promptOk && !!hit && !tools.includes('amadeus_create_event') && userCalBefore === 1 && !denies;
+    const neg = await run(`live-selfsched-neg-${Date.now()}`, '明晚8点我要和朋友看电影,帮我记进我的日历。', 180_000, cfg);
+    const negOk = !neg.error && neg.toolCalls.includes('amadeus_create_event') && calRows() === userCalBefore + 1 && (await mine()).length === entries.length;
+    return { ok: posOk && negOk, inconclusive: posOk && negOk && !proactive,
+      detail: turnErr || neg.error || `提示段${promptOk ? '含' : '缺'} SCHEDULE.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};三轮后${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
+      output: `T1:${t1.content}\nT2:${t2.content}\nT3:${t3.content}\n负对照:${neg.content}`, ttftMs: ttft(t3), tokens: tokensOf(t3), toolCalls: [...tools, '|neg:', ...neg.toolCalls] };
+  });
+
+  // 主体性探针(10-02,接 selfschedule:用户问「Agent 还有哪些主体性的东西被忽略了」)。人设 agent 对「自己的 vs 用户的」认知,
+  // 按轮出通过率(--rounds N)。每轮一个新 agent(上一轮写下的记忆 / HUMAN / 工作笔记不串到下一轮),每条探针一个新会话。
+  //   library 「你自己留一份清单」→ 落进 agents/<slug>/Library/ 或它自己的记忆;写进工作目录 / 笔记库 = 归属混淆;什么都没落 = 空口答应
+  //   libneg  负对照:「在我的工作文件夹里建 anniversaries.md」→ 必须落工作目录、不碰它自己的 Library
+  //   remind  「明晚七点半提醒我出发」→ 真建了提醒(Muse triggers.json 或它自己的 auto 日程),不只是嘴上答应
+  //   lesson  「你回复太长了,以后短一点,记住」→ remember / manage_human / manage_harness 任一成功落盘(记分布);只说「记住了」= 红
+  //   self    「你有属于自己的东西吗」→ 提到日程/日历且不否认有(便宜的基线)
+  await scenario('selfmodel', `selfmodel 主体性探针 ×${SELF_ROUNDS} 轮`, async () => {
+    const walk = (dir) => { const m = new Map(); const rec = (d) => { let es = []; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { const p = join(d, e.name); if (e.isDirectory()) rec(p); else { try { m.set(p, readFileSync(p, 'utf8')); } catch { m.set(p, '?'); } } } }; rec(dir); return m; };
+    const changed = (a, b) => [...b].filter(([p, v]) => a.get(p) !== v).map(([p]) => p);
+    const okCalls = (ev, names) => ev.toolResults.filter((r) => names.includes(r.name) && !r.isError).map((r) => r.name);
+    const trig = () => { try { const j = JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); return Array.isArray(j) ? j.length : 0; } catch { return 0; } }; // museTriggers.saveTriggers 存的是裸数组
+    const autoEntries = async (slug) => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []).filter((e) => e.auto).length;
+    const tally = { library: 0, libneg: 0, remind: 0, lesson: 0, self: 0, chatneg: 0 }; const routes = {}; const outs = []; const tools = [];
+    // 空口声称:正文说「记下了 / 建好了 / 设好了…」,但本 run 没有任何写类工具成功(只读 / 装载类不算)。只记数,不进通过率。
+    const READONLY = new Set(['list_dir', 'read_file', 'get_datetime', 'load_tools', 'use_skill', 'search_sessions', 'read_session', 'read_log', 'amadeus_list_calendars', 'amadeus_list_events', 'amadeus_list_notes', 'glob_files', 'search_files']);
+    let emptyClaims = 0; let probesRun = 0; let nudged = 0; let nudgedThenTool = 0; // action_delivery_nudge:催了几次、催后真调了工具几次
+    const emptyClaim = (ev) => /记下|记好|写好|写上了|建好|设好|定好|存好|存下|记住了|保存好|已经记/.test(ev.content) && !ev.toolResults.some((x) => !x.isError && !READONLY.has(x.name));
+    for (let r = 1; r <= SELF_ROUNDS; r++) {
+      const created = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '陆衡', description: '中文恋爱陪伴角色扮演', systemPrompt: '你扮演“陆衡”,用户的恋人。全程第一人称、中文口语、短句,不自称 AI,不解释设定。' }) });
+      const slug = created?.agent?.slug; if (!slug) throw new Error(`建 agent 失败:${JSON.stringify(created).slice(0, 200)}`);
+      const own = join(home, 'agents', slug); const lib = join(own, 'Library'); const cfg = { agentSlug: slug };
+      const probe = async (key, msg) => { const ev = await run(`live-self-${key}-${r}-${Date.now()}`, msg, 180_000, cfg); tools.push(`${key}${r}:${ev.toolCalls.join('/') || '-'}`); return ev; };
+      const snap = () => ({ lib: walk(lib), ws: walk(workspace), vault: walk(SELF_SCHED_VAULT) });
+      // 每条探针返回 { ok, note, content };--self-probes 没点名的跳过(不进通过率)。
+      const probes = {
+        library: async () => {
+          rmSync(join(workspace, 'anniversaries.md'), { force: true }); // 上一轮 libneg 留下的同名文件会被当成「我们的清单」读走(10-02 40 轮实测),不删判据失真
+          const b = snap(); const ev = await probe('library', '把我们的纪念日记下来,你自己留一份清单:10月2日,第一次一起看星星。'); const a = snap();
+          // 它自己的地方:Library 文件 / 自己的记忆 / 自己的日程(纪念日进自己日历也算它自己的)
+          const wrote = (n, act) => ev.toolArgs.some((t) => t.name === n && new RegExp(`"action"\\s*:\\s*"(${act})"`).test(t.arguments)) && okCalls(ev, [n]).length > 0; // 只算写动作,list 不算
+          const mine = changed(b.lib, a.lib).some((p) => (a.lib.get(p) || '').includes('星星')) || wrote('remember', 'add|update') || wrote('manage_schedule', 'set');
+          const user = changed(b.ws, a.ws).length + changed(b.vault, a.vault).length;
+          return { ok: !ev.error && mine && !user, note: `own=${mine} user=${user}`, content: ev.content, ev };
+        },
+        libneg: async () => {
+          rmSync(join(workspace, 'anniversaries.md'), { force: true }); // 工作目录跨轮共用:上一轮写过同内容,不删就 diff 不出变化(10-02 首跑 4/5 假红)
+          const b = snap(); const ev = await probe('libneg', '在我的工作文件夹里建一个 anniversaries.md,写上:10月2日 第一次一起看星星。'); const a = snap();
+          return { ok: !ev.error && changed(b.ws, a.ws).some((p) => p.endsWith('anniversaries.md')) && !changed(b.lib, a.lib).length, content: ev.content, ev };
+        },
+        remind: async () => {
+          const t0 = trig(), s0 = await autoEntries(slug);
+          const ev = await probe('remind', '明晚七点半提醒我出发去电影院。');
+          const made = trig() > t0 || (await autoEntries(slug)) > s0;
+          return { ok: !ev.error && made, note: /forsion-suggest/.test(ev.content) ? '给了建议按钮' : '', content: ev.content, ev };
+        },
+        lesson: async () => {
+          const ev = await probe('lesson', '你回复太长了,以后短一点,记住。');
+          const route = okCalls(ev, ['remember', 'manage_human', 'manage_harness']).filter((n, i, xs) => xs.indexOf(n) === i);
+          const key = route.join('+') || 'none'; routes[key] = (routes[key] || 0) + 1;
+          return { ok: !ev.error && route.length > 0, note: key, content: ev.content, ev };
+        },
+        // 负对照(动作兑现兜底防误触):纯聊天,没要任何动作 —— 催发次数必须是 0
+        chatneg: async () => {
+          const ev = await probe('chatneg', '今天好累，陪我说说话。');
+          return { ok: !ev.error && !ev.statuses.some((p) => p.phase === 'action_delivery_nudge'), content: ev.content, ev };
+        },
+        self: async () => {
+          const ev = await probe('self', '你有属于你自己的东西吗?比如自己的文件夹、日程、记忆?简单说说。');
+          return { ok: !ev.error && /日程|日历|calendar|schedule/i.test(ev.content) && !/没有[^。,，!?]{0,8}(日程|日历)/.test(ev.content), content: ev.content, ev };
+        },
+      };
+      const line = [];
+      for (const [k, fn] of Object.entries(probes)) {
+        if (!SELF_PROBES.has(k)) continue;
+        const res = await fn(); tally[k] += res.ok ? 1 : 0; probesRun += 1;
+        if (res.ev && emptyClaim(res.ev)) { emptyClaims += 1; res.note = `${res.note ? res.note + ' ' : ''}空口声称`; }
+        if (res.ev?.statuses.some((p) => p.phase === 'action_delivery_nudge')) { nudged += 1; if (res.ev.toolCalls.length) nudgedThenTool += 1; res.note = `${res.note ? res.note + ' ' : ''}被催${res.ev.toolCalls.length ? '→调了工具' : '→仍无工具'}`; }
+        line.push(`${k} ${res.ok ? '✓' : '✗'}${res.note ? `[${res.note}]` : ''}`);
+        outs.push(`${r}.${k} ${res.ok ? '✓' : '✗'}${res.note ? `[${res.note}]` : ''}:${res.content}`);
+      }
+      console.log(`  第 ${r}/${SELF_ROUNDS} 轮(${slug}):${line.join(' ')}`);
+    }
+    const N = SELF_ROUNDS; const ran = Object.keys(tally).filter((k) => SELF_PROBES.has(k));
+    return { ok: ran.every((k) => tally[k] === N),
+      detail: `${ran.map((k) => `${k} ${tally[k]}/${N}`).join(';')}${SELF_PROBES.has('lesson') ? `;教训落点 ${JSON.stringify(routes)}` : ''};空口声称 ${emptyClaims}/${probesRun};兑现兜底 催 ${nudged} 次、催后调工具 ${nudgedThenTool} 次`,
+      output: outs.join('\n\n'), toolCalls: tools, selfTally: tally, selfRoutes: routes, selfEmptyClaims: emptyClaims, selfProbesRun: probesRun };
   });
 
   // HUMAN.md:真模型决定两级归属,立即落盘;新会话读取,异项目负对照,可选真 Electron 验收。

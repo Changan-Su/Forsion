@@ -23,7 +23,8 @@ import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } 
 import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
@@ -1431,6 +1432,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
+    //    SCHEDULE.db + 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
+    //    不知道自己有日历,答应用户的事被写进用户的 Amadeus 日历,还说「我没有自己的日历」。只放静态文字,条目仍在易变区。
     if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
@@ -1440,7 +1443,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         '- `MEMORY.md` — your long-term memory (written with the remember tool; the same memory that is quoted for you under "My Long-Term Memory and Relevant Evidence")\n' +
         '- `LOG/<date>.md` — your daily logs (written with log_event, read with read_log)\n' +
         '- `SOUL.md` — your persona\n' +
-        `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.`;
+        `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
+        '- `SCHEDULE.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
+        'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
+        'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — update that entry when the details change, and never say you have no calendar. ' +
+        'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
       if (Array.isArray(agentConfig.libraryOrder) && agentConfig.libraryOrder.length) {
         const lines = agentConfig.libraryOrder.map((f: string, i: number) => `  ${i + 1}. ${path.join(libDir, String(f))}`);
         folderBlock += '\n\nLibrary preferred reading order:\n' + lines.join('\n');
@@ -1548,7 +1555,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
     };
     const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
-    const unlockedTools = new Set<string>();
+    // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
+    const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
     if (deferredCatalog.length) {
       systemParts.push(
         '## Additional Tools (load on demand)\n' +
@@ -1965,6 +1973,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
+      actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
       toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
@@ -2069,6 +2078,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
       approvalDeferral,
       unlockedTools,
+      // 延续解锁可能一次把目录解空 → lockedCount=0 会把 load_tools 从 defs 中间删掉,工具前缀与上一 run 末尾错位
+      // (Codex 10-02)。上一 run 能装上它们,load_tools 当时就在场 → 从起点就粘住。
+      loadToolsExposed: unlockedTools.size > 0 || undefined,
       unlockTools: (names) => {
         let changed = false;
         for (const n of names) if (!unlockedTools.has(n)) { unlockedTools.add(n); changed = true; }
@@ -2412,6 +2424,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
+    let actionNudged = false; // 零工具调用却在承诺 / 声称动作:收尾前只催一次(services/actionDeliveryCheck.ts)
+    let actionAskText = String(input.message || ''); // 兑现兜底看的「用户要了什么」:原话 + 运行中插话(applySteering 追加;Codex 10-02)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -2931,6 +2945,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call `sketch`. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call `sketch` and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
           } as ChatMessage); // 不落库不上屏:harness 脚手架
           void publish(runId, 'status', { phase: 'sketch_delivery_nudge', iteration, signal: sketchTurnSignal.kind });
+          continue;
+        }
+
+        // —— 动作兑现兜底:用户要了一个动作,模型一个工具都没调就说「我这就写 / 建好了」收尾(10-02 live:luna ~1/5)。
+        //    只催一次;系统驱动的 run(Muse / 自动化)不在此列 —— kickoff 里满是动作词,零工具收尾在那边是正常结局。——
+        // iteration < maxIterations - 2:下一轮不能是收尾轮(收尾轮不给工具,催了也做不了;Codex 10-02)
+        if (!actionNudged && !usedTools && !planMode && iteration < maxIterations - 2 && !deferBypass
+          && actionDeliveryNudgeNeeded(actionAskText, res.content || '')) {
+          actionNudged = true;
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({ role: 'user', content: ACTION_DELIVERY_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'action_delivery_nudge', iteration });
           continue;
         }
 
