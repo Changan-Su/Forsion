@@ -116,6 +116,7 @@ export const StartupAppearanceSettings: React.FC = () => {
       await updateAppearance({ [importing.slot]: asset })
       setImporting(null)
     }} />}
+    {/* webhost-ok: 固定已知嵌入(宿主自己的开屏 HTML + 运行时,见 showPreview),只需跑开屏动画;sandbox 仅 allow-scripts,无同源、无宿主 API */}
     {preview && <dialog ref={(el) => { if (el && !el.open) el.showModal() }} className="startup-appearance-preview" aria-label={t('startupAppearance.preview')} onCancel={(e) => { e.preventDefault(); setPreview(null) }} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setPreview(null) } }}><button autoFocus type="button" className="btn ghost sm" onClick={() => setPreview(null)}><X size={14} />{t('startupAppearance.close')}</button><iframe title={t('startupAppearance.preview')} sandbox="allow-scripts" srcDoc={preview} /></dialog>}
   </SettingsPanel>
 }
