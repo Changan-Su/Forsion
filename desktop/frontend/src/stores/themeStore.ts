@@ -15,6 +15,9 @@ import {
 } from '../theme/registry'
 import type { ThemeAxes, UiSyncPayload } from '../../../shared/uiSync'
 import { applyPrefs } from '../uiPrefsApply'
+import { useSpaceStore } from '@lcl/engine/spaceRegistry'
+import { useSpaceAppearance, receiveSpaceAppearance, setSpaceAppearance } from './spaceAppearanceStore'
+import { resolveSpaceAppearance } from '../theme/spaceAppearance'
 
 type Mode = 'light' | 'dark'
 type ModePref = 'light' | 'dark' | 'system'
@@ -106,6 +109,10 @@ function readFlat(): boolean {
   try { return localStorage.getItem('forsion_theme_flat') === '1' } catch { return false }
 }
 
+function hasForcedSchemeHint(): boolean {
+  try { const v = localStorage.getItem('forsion_theme_forced_scheme'); return v === 'light' || v === 'dark' || v === 'system' } catch { return false }
+}
+
 /** 读 ~/.tangu/themes(无 preload/出错 → 空,渲染端纯 bundle 运行)。 */
 async function fetchDiskThemes(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string }>> {
   try { return (await window.tangu?.listThemes?.()) ?? [] } catch { return [] }
@@ -115,12 +122,24 @@ export const useTheme = create<ThemeState>((set, get) => {
   // 纯「应用视觉 + 派生状态」:userPref 原样保留在 state;主题锁定 colorScheme 则**落地明暗**取强制值。
   // 只写派生的 forced_scheme hint(给 index.html 首屏脚本防闪);**不写 forsion_theme_pref**——
   // 那是用户偏好,仅由 setModePref/setTheme 经 persistPref 写(见 Medium-1)。
-  // customBg 只在跨窗重放时显式给(发方的值);本窗自己的动作一律缺省 → loader 回落 localStorage。
+  // customBg 只在跨窗重放时显式给(发方的值);视觉层始终显式传入 store 的两份 seed。
   const apply = (lang: string, skin: string, bg: string, userPref: ModePref, seed: string, customBg?: string): void => {
     const forced = langForcedScheme(lang)
     const eff = forced ?? userPref
     const mode: Mode = eff === 'system' ? systemMode() : eff
-    applyTheme(lang, skin, bg, mode, { customColor: skin === 'custom' ? seed : undefined, customBg })
+    // Persist the global axes without rendering an intermediate global frame.
+    // The visual projection below applies the current Space exactly once.
+    try {
+      localStorage.setItem('forsion_theme_lang', lang)
+      localStorage.setItem('forsion_theme_skin', skin)
+      localStorage.setItem('forsion_theme_bg', bg)
+      localStorage.setItem('forsion_theme', mode)
+      if (skin === 'custom') localStorage.setItem('forsion_theme_seed', seed)
+      if (customBg !== undefined) {
+        if (customBg) localStorage.setItem('forsion_theme_bg_seed', customBg)
+        else localStorage.removeItem('forsion_theme_bg_seed')
+      }
+    } catch { /* private mode */ }
     try {
       if (forced) localStorage.setItem('forsion_theme_forced_scheme', forced)
       else localStorage.removeItem('forsion_theme_forced_scheme')
@@ -183,7 +202,7 @@ export const useTheme = create<ThemeState>((set, get) => {
       const next = systemMode()
       if (next === s.mode) return
       void withModeTransition(() => {
-        applyTheme(s.lang, s.skin, s.bg, next, { customColor: s.skin === 'custom' ? s.seed : undefined })
+        try { localStorage.setItem('forsion_theme', next) } catch { /* private mode */ }
         set({ mode: next })
       })
     }
@@ -198,7 +217,9 @@ export const useTheme = create<ThemeState>((set, get) => {
     bg: resolveInitialBg(),
     mode: resolveInitialEffectiveMode(), // 含 forced_scheme hint,与首屏一致(codex High-1)
     modePref: resolveInitialModePref(),  // 用户偏好(不含强制),换走锁定主题后恢复它
-    modeLocked: langForcedScheme(initialLang) !== undefined,
+    // 磁盘主题的清单要等 initThemes 才到;首帧先认上次留下的 forced_scheme 提示(mode 那行也是按它解析的),
+    // 否则这段时间里「没锁」会让 Space 自己的明暗偏好先生效、清单到了再变回去。
+    modeLocked: langForcedScheme(initialLang) !== undefined || hasForcedSchemeHint(),
     seed: readSeed(),
     bgSeed: readBgSeed(),
     glass: readGlass(),
@@ -223,19 +244,15 @@ export const useTheme = create<ThemeState>((set, get) => {
       try { localStorage.setItem('forsion_theme_seed', seed) } catch { /* ignore */ }
       set({ seed })
       // 背景轴为 custom 且未单独设背景色时,背景「跟随主题色」—— 故换 seed 也要重跑背景一侧。
-      if (get().skin === 'custom') applyTheme(get().lang, 'custom', get().bg, get().mode, { customColor: seed })
       notify()
     },
     setBgSeedValue: (bg) => {
       set({ bgSeed: bg })
-      // 持久化在 loader 内(customBg 空串=removeItem);背景轴非 custom 时也写盘,下次切到 custom 生效。
-      if (get().bg === 'custom') applyTheme(get().lang, get().skin, 'custom', get().mode, { customBg: bg })
-      else {
-        try {
-          if (bg) localStorage.setItem('forsion_theme_bg_seed', bg)
-          else localStorage.removeItem('forsion_theme_bg_seed')
-        } catch { /* ignore */ }
-      }
+      // 非 custom 时也保存，之后切到 custom 生效。
+      try {
+        if (bg) localStorage.setItem('forsion_theme_bg_seed', bg)
+        else localStorage.removeItem('forsion_theme_bg_seed')
+      } catch { /* ignore */ }
       notify()
     },
     setGlass: (on) => { applyGlass(on); notify() },
@@ -253,6 +270,7 @@ export const useTheme = create<ThemeState>((set, get) => {
       get().setLang(langs[(i + 1) % langs.length])
     },
     initThemes: async (persistedLang) => {
+      refreshVisualTheme() // Apply bundled Space overrides before the first React frame.
       const list = await fetchDiskThemes()
       if (list.length) mergeDiskThemes(list)
       // 承接首屏:持久化语言若是刚合并的磁盘主题(首屏被回退到 lovable),现重应用其结构。
@@ -274,6 +292,14 @@ export const useTheme = create<ThemeState>((set, get) => {
       // 不 notify:别的窗口的 registry 里没有刚被编辑的磁盘主题,重放只会被 hasLanguage 回落成默认。
     },
     syncFromWindow: (payload) => {
+      if (payload?.spaceAppearance) {
+        // 只当「这个 Space 变了」的信号:值以同源存储为准(见 spaceAppearanceStore)。
+        receiveSpaceAppearance(payload.spaceAppearance)
+        const lang = payload.spaceAppearance.appearance.lang
+        if (lang && !hasLanguage(lang)) void fetchDiskThemes().then((list) => {
+          if (list.length) { mergeDiskThemes(list); set({ themesVersion: get().themesVersion + 1 }) }
+        })
+      }
       // 字体 / 缩放 / 丝滑光标 / 界面语言 / 主题旋钮那半:与主题轴同一条广播,各自的 applier 重放。
       applyPrefs(payload?.prefs)
       const p = payload?.theme
@@ -291,3 +317,44 @@ export const useTheme = create<ThemeState>((set, get) => {
     },
   }
 })
+
+/** Visual consumers read this projection. Settings and commands keep the global
+ * store, so entering a Space never persists or broadcasts its effective axes. */
+export const useVisualTheme = create<ThemeState>(() => useTheme.getState())
+
+function refreshVisualTheme(): void {
+  const global = useTheme.getState()
+  const kind = typeof location === 'undefined' ? '' : new URLSearchParams(location.search).get('window')
+  // Settings / independent View windows have no Space; they retain global appearance.
+  const spaceId = !kind || kind === 'mini' ? useSpaceStore.getState().activeSpaceId : ''
+  const local = useSpaceAppearance.getState().byId[spaceId]
+  const effective = resolveSpaceAppearance(global, local)
+  if (typeof document !== 'undefined') {
+    applyTheme(effective.lang, effective.skin, effective.bg, effective.mode, {
+      customColor: effective.seed, customBg: effective.bgSeed, persist: false,
+    })
+    document.documentElement.dataset.spaceAppearance = spaceId
+  }
+  useVisualTheme.setState({ ...global, ...effective })
+}
+
+useTheme.subscribe(refreshVisualTheme)
+useSpaceAppearance.subscribe(refreshVisualTheme)
+useSpaceStore.subscribe((next, prev) => { if (next.activeSpaceId !== prev.activeSpaceId) refreshVisualTheme() })
+try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refreshVisualTheme) } catch { /* old WebKit */ }
+
+/** Ribbon shortcut changes a locally selected mode in that Space; inherited modes
+ * keep following the global toggle. Agent/global settings still use useTheme. */
+export function toggleVisibleMode(): Promise<void> {
+  const visible = useVisualTheme.getState()
+  if (visible.modeLocked) return Promise.resolve()
+  const id = typeof document === 'undefined' ? '' : document.documentElement.dataset.spaceAppearance || ''
+  const local = useSpaceAppearance.getState().byId[id]
+  const mode = visible.mode === 'dark' ? 'light' : 'dark'
+  // 全局语言锁了明暗、而本 Space 换成了不锁的语言:全局 setModePref 会直接返回(那条闸管着设置 / 引导 / Agent 命令,
+  // 不在这里放松),按钮就成了摆设。这时把明暗记在本 Space 上。
+  if (id && (local?.modePref !== undefined || useTheme.getState().modeLocked)) {
+    return withModeTransition(() => { setSpaceAppearance(id, { ...local, modePref: mode }) })
+  }
+  return useTheme.getState().setModePref(mode)
+}

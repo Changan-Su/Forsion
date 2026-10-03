@@ -15,7 +15,7 @@ import {
   Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
-import { useTheme } from './stores/themeStore'
+import { useVisualTheme as useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'

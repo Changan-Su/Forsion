@@ -1,3 +1,4 @@
+import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
@@ -2567,6 +2568,7 @@ app.whenReady().then(async () => {
   // Agent Desk 截屏(引擎 desk_screenshot 工具):渲染层给视口矩形,这里抓真实像素。
   // 用 webContents.capturePage 而不是 html2canvas 那类 DOM 复刻——webview / canvas / 原生视图
   // 都能抓到,复刻方案对这些一律是空白。矩形按 DIP,与 getBoundingClientRect 的视口坐标同系。
+  installAmbientPalette(isTrustedSender)
   ipcMain.handle('ui:captureRect', async (e, rect: { x: number; y: number; width: number; height: number }) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win || win.isDestroyed()) return null
