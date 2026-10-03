@@ -1,7 +1,7 @@
 /**
  * 配色层 — 主题模型的「颜色」轴,再拆成**两个自由度**:主题色(data-skin)× 背景色(data-bg)。
  * 语言(data-theme)只决定结构;这里只决定颜色。三套 token 两两不相交,故 语言 × 主题色 × 背景色 自由组合。
- * - **主题色(data-skin)**:只设 accent 家族 —— --accent/-ink/-hover/-light/-rgb、--on-accent(-ink)、--user-bg。
+ * - **主题色(data-skin)**:只设 accent 家族 —— --accent/-ink/-hover/-light/-rgb、--on-accent(-ink)、--user-bg;单色配色的暗色另压 --action-fill(-hover)。
  * - **背景色(data-bg)**:其余全部 —— bg/text/border/shadow/overlay/semantic(green/danger)/tool/glow。
  *   语义色与 tool 面属背景族:它们的可读性由底色决定,不由强调色决定(zhi 的 --tool-bg 更是不透明色)。
  * 每个 id 两块都在(两轴同 id = 拆轴前的整套配色,老用户零迁移)。值仍抄自原 lovable/echo/qbird/dreamer 皮肤。
@@ -53,6 +53,10 @@
   --accent-rgb: 248, 247, 246;
   --on-accent: #161018;
   --user-bg: rgba(248, 247, 246, 0.16);
+  /* 10-03:单色配色的暗色下 accent-ink 近白,实心主按钮成了全屏最亮的一块(「白块」)。
+   * 填充压到比正文暗一档、悬停再提亮;只动 action 配对,选中 / 开关 / 链接仍走 accent-ink。 */
+  --action-fill: #d4d2ce;
+  --action-fill-hover: #e2e0dc;
 }
 :root.dark[data-bg='cream'] {
   /* 10-03 用户定 d3:主区 #2a292b 不动,侧栏压暗一档、卡片提一档 —— 层次靠底色小台阶,与亮色同一种淡层次。 */
@@ -400,6 +404,8 @@
   --accent-rgb: 236, 235, 231;
   --on-accent: #1b1a19;
   --user-bg: rgba(236, 235, 231, 0.1);
+  --action-fill: #cfcdc7;
+  --action-fill-hover: #dddbd5;
 }
 :root.dark[data-bg='ink'] {
   --bg: #201f1d;
