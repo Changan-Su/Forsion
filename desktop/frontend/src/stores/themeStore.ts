@@ -344,7 +344,9 @@ export function toggleVisibleMode(): Promise<void> {
   const id = typeof document === 'undefined' ? '' : document.documentElement.dataset.spaceAppearance || ''
   const local = useSpaceAppearance.getState().byId[id]
   const mode = visible.mode === 'dark' ? 'light' : 'dark'
-  if (local?.modePref !== undefined) {
+  // 全局语言锁了明暗、而本 Space 换成了不锁的语言:全局 setModePref 会直接返回(那条闸管着设置 / 引导 / Agent 命令,
+  // 不在这里放松),按钮就成了摆设。这时把明暗记在本 Space 上。
+  if (id && (local?.modePref !== undefined || useTheme.getState().modeLocked)) {
     return withModeTransition(() => { setSpaceAppearance(id, { ...local, modePref: mode }) })
   }
   return useTheme.getState().setModePref(mode)

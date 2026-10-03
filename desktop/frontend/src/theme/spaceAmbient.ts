@@ -81,18 +81,24 @@ export function useSpaceAmbient(): void {
       if (disposed || document.hidden || timer) return
       timer = setTimeout(() => { timer = undefined; void sample() }, 260)
     }
+    let poll: ReturnType<typeof setInterval> | undefined
+    // 隐藏 / 最小化:定时器和每秒轮询都停,回到可见再起(挂载时就是隐藏的窗口也不起)。
     const onVisibility = (): void => {
-      if (document.hidden && timer) { clearTimeout(timer); timer = undefined }
-      else schedule()
+      if (document.hidden) {
+        if (timer) { clearTimeout(timer); timer = undefined }
+        if (poll) { clearInterval(poll); poll = undefined }
+        return
+      }
+      poll ??= setInterval(schedule, 1000)
+      schedule()
     }
     document.addEventListener('scroll', schedule, true)
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('resize', schedule)
-    const poll = setInterval(schedule, 1000)
-    schedule()
+    onVisibility()
     return () => {
       disposed = true
-      clearInterval(poll)
+      if (poll) clearInterval(poll)
       if (timer) clearTimeout(timer)
       document.removeEventListener('scroll', schedule, true)
       document.removeEventListener('visibilitychange', onVisibility)
