@@ -31,7 +31,7 @@ if (!SOFT_CSS) throw new Error('缺少第一方 soft 磁盘种子主题')
 const zhiCandidate = path.resolve(__dirname, '../../../Forsion-Instrumentality-Project/forsion-theme-zhi/theme.css')
 const hasZhiCandidate = fs.existsSync(zhiCandidate)
 const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
-const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi']
+const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink']
 const COLOR_TOKENS = [
   'bg', 'bg-card', 'bg-glass', 'sidebar-bg', 'text', 'text-light', 'text-muted', 'text-faint', 'text-ghost',
   'border', 'shadow', 'accent', 'accent-ink', 'accent-hover', 'accent-light', 'accent-rgb', 'on-accent',
@@ -307,7 +307,8 @@ function filesUnder(dir, out = []) {
       const b = SKINS[j]
       const distance = perceptualDistance(backgroundSamples.light[a].bg, backgroundSamples.light[b].bg)
       if (distance < closestLightBackgrounds.distance) closestLightBackgrounds = { distance, id: `${a}-${b}` }
-      if (distance < 3) backgroundAestheticFailures.push(`light/${a}-${b} distance=${distance.toFixed(2)}`)
+      // 墨色(ink)的身份在暗色(10-03 用户定 d1),浅色刻意只比经典略暖;经典与珊瑚之间放不下第三张能都拉开 3 的暖纸面。
+      if (distance < 3 && !(a === 'ink' || b === 'ink')) backgroundAestheticFailures.push(`light/${a}-${b} distance=${distance.toFixed(2)}`)
     }
   }
   let darkestMaxChroma = { value: 0, id: '' }
@@ -321,9 +322,10 @@ function filesUnder(dir, out = []) {
     const baseL = perceptualLightness(sample.bg)
     const cardLift = perceptualLightness(sample.card) - baseL
     const sidebarLift = perceptualLightness(sample.sidebar) - baseL
-    if (baseL < 26 || baseL > 30) backgroundAestheticFailures.push(`dark/${bg}/base L=${baseL.toFixed(2)}`)
+    // 10-03 用户定:墨色是更深的一档(L≈24),下限放到 22;侧栏可以比主区暗(经典 d3 / 墨色都是侧栏最深),只要求与主区拉开 1.5–5。
+    if (baseL < 22 || baseL > 30) backgroundAestheticFailures.push(`dark/${bg}/base L=${baseL.toFixed(2)}`)
     if (cardLift < 3 || cardLift > 7) backgroundAestheticFailures.push(`dark/${bg}/card lift=${cardLift.toFixed(2)}`)
-    if (sidebarLift < 1.5 || sidebarLift > 5) backgroundAestheticFailures.push(`dark/${bg}/sidebar lift=${sidebarLift.toFixed(2)}`)
+    if (Math.abs(sidebarLift) < 1.5 || Math.abs(sidebarLift) > 5) backgroundAestheticFailures.push(`dark/${bg}/sidebar lift=${sidebarLift.toFixed(2)}`)
   }
   const backgroundAestheticOk = pass('背景观感：浅色可辨，暗色保持低彩度炭黑层级', backgroundAestheticFailures.length === 0,
     backgroundAestheticFailures.length ? backgroundAestheticFailures.join(' ; ')

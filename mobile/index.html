@@ -20,7 +20,7 @@
           var legacy = MIG[localStorage.getItem('forsion_theme_preset')] || null;
           var lang = localStorage.getItem('forsion_theme_lang') || (legacy ? legacy[0] : 'lovable');
           if (!/^[a-z0-9-]+$/.test(lang)) lang = 'lovable';
-          var SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'custom'];
+          var SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink', 'custom'];
           var skin = localStorage.getItem('forsion_theme_skin') || (legacy ? legacy[1] : 'cream');
           if (SKINS.indexOf(skin) < 0) skin = 'cream';
           // 背景色轴:未设过 = 承接主题色 id(= 拆轴前的整套配色),与 registry.resolveInitialBg 同口径。
@@ -37,7 +37,7 @@
           // 首帧安全底色:值须与 desktop/frontend/index.html 的同名表一致(那份是真源)。
           var BG = {
             cream: ['#f8f7f6', '#2a292b'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
-            lavender: ['#f4eef7', '#1e1a29'], zhi: ['#ffffff', '#141414'], custom: ['#f6f6f7', '#1b1b1d']
+            lavender: ['#f4eef7', '#1e1a29'], zhi: ['#ffffff', '#141414'], ink: ['#f7f6f3', '#201f1d'], custom: ['#f6f6f7', '#1b1b1d']
           };
           root.style.background = (BG[bg] || BG.cream)[mode === 'dark' ? 1 : 0];
         } catch (e) { /* private mode */ }

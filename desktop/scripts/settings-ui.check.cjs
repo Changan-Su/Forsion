@@ -53,7 +53,7 @@ const CSS = [
   read('theme/skins.css'),
   ...LANGS.map((id) => id === 'soft' ? SOFT_CSS : read(`theme/themes/${id}/theme.css`)),
 ].join('\n')
-const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi']
+const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink']
 // custom 配色没有 CSS 块 —— 它的 accent/bg 族由 customSkinVars(seed) 运行时内联到 :root。
 // 必须一起扫:seed 直接改写 --accent-ink,而 --sel-line 就建在它上面。极端 seed(纯白/纯黑)专门
 // 用来验 customSkinVars 里那两条可读性守卫(暗底提亮过深 seed、亮底压深过浅 seed)确实兜住了。
@@ -118,6 +118,7 @@ body { margin: 0; }
       <label>开关</label>
       <button class="switch"></button>
     </div>
+    <div class="probe-themed-border" style="background: var(--bg-card); padding: 4px"><span style="display: block; height: 8px; background: var(--overlay-light); border: 1px solid var(--border)"></span></div>
   </div></div>
 </section></div>
 </body></html>`
@@ -290,6 +291,18 @@ function surfaceUnder(el) {
   const hostileBad = Object.entries(hostile).filter(([, v]) => v.dl <= 0).map(([k, v]) => `${k}(Δlum=${v.dl.toFixed(4)})`)
   check("A' 敌意主题(--border 被设成纯黑)下控件边线仍站对边", hostileBad.length === 0, hostileBad.join(' ; ') || '控件不吃 --border')
   await p.evaluate(() => document.head.lastElementChild.remove())
+
+  // ══ A'':命名配色的 --border 压在「卡片 + overlay-light」这种叠加面上也要站对边(快捷键按键、CSV 表头就是这种面)。
+  //    10-03 Codex 评审:经典暗色描边 #3b3a3e 比这种合成面还暗 —— 上面那几条控件走 --overlay-*,量不到 --border。 ══
+  const themedBad = []
+  for (const skin of SKINS) {
+    for (const mode of ['light', 'dark']) {
+      await setTheme('lovable', skin, mode, null)
+      const v = (await probeBorders([['borderOnOverlay', '.probe-themed-border > span', 'borderTopColor']])).borderOnOverlay
+      if (mode === 'dark' ? v.dl <= 0 : v.dl >= 0) themedBad.push(`${skin}/${mode}(Δlum=${v.dl.toFixed(4)})`)
+    }
+  }
+  check("A'' 命名配色的 --border 在「卡片 + overlay-light」上站对边", themedBad.length === 0, themedBad.join(' ; ') || `${SKINS.length} 套配色 × 亮暗`)
 
   // ══ D:天然子页面折叠在对应总项下面，不再占正文标题区。 ══
   const nestedNav = await p.evaluate(() => {

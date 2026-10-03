@@ -55,19 +55,20 @@
   --user-bg: rgba(248, 247, 246, 0.16);
 }
 :root.dark[data-bg='cream'] {
+  /* 10-03 用户定 d3:主区 #2a292b 不动,侧栏压暗一档、卡片提一档 —— 层次靠底色小台阶,与亮色同一种淡层次。 */
   --bg: #2a292b;
-  --bg-card: #353538;
+  --bg-card: #323134;
   --bg-glass: rgba(28, 26, 22, 0.9);
-  --sidebar-bg: #323235;
+  --sidebar-bg: #262528;
   --text: #f2efe8;
   --text-light: rgba(242, 239, 232, 0.82);
   --text-muted: #aca59b;
   --text-faint: #a39e98;
   --text-ghost: rgba(242, 239, 232, 0.3);
-  /* ⚠️ 曾是 #34302a(奶油暖调残留):比本块的中性 --bg-card #353538 还**暗**,暗色下卡片/胶囊
+  /* ⚠️ 曾是 #34302a(奶油暖调残留):比当时本块的中性 --bg-card #353538 还**暗**,暗色下卡片/胶囊
    * 全被描了一圈黑边(用户实报「甚至会比背景还要黑」)。暗色里边线必须比表面亮。
    * 同款兜底在 base.css :root.dark;两处都由 scripts/settings-ui.check.cjs 逐配色×明暗钉住。 */
-  --border: #3f3f43;
+  --border: #3e3d41;
   --shadow: rgba(0, 0, 0, 0.4);
   --green: #8fb295;
   --danger: #d99080;
@@ -135,7 +136,7 @@
   --text-muted: #b0a8a4;
   --text-faint: #a29b98;
   --text-ghost: rgba(243, 239, 237, 0.3);
-  --border: #443b38;
+  --border: #473e3b; /* 10-03 由 #443b38 提亮:卡片 + overlay-light 的合成面与它等亮,描边看不见(settings-ui A'') */
   --shadow: rgba(0, 0, 0, 0.4);
   --green: #6fbf8a;
   --danger: #f08a7a;
@@ -353,4 +354,73 @@
   --tool-bg: rgba(85, 182, 232, 0.05);
   --tool-text: #a5acb5;
   --glow: radial-gradient(120% 80% at 82% -12%, rgba(28, 158, 228, 0.08), transparent 58%);
+}
+
+/* ── 墨色 Ink(10-03 用户定 d1「深墨暖调」;暗色才是它的身份)──────────────────────
+ * 暗色:侧栏 #1b1a19 → 主区 #201f1d → 卡片 #282624,每层只差一小档;字与底同一暖色相。
+ * 亮色:只比经典略暖一点 —— 身份在暗色;浅色与经典/珊瑚之间没有能同时拉开 3 的暖纸面(theme-contrast 已显式豁免)。
+ *   强调色是暖墨,不是经典那支炭黑。 */
+:root[data-skin='ink'] {
+  --accent: #2b2723;
+  --accent-ink: #2b2723;
+  --accent-hover: #000000;
+  --accent-light: rgba(43, 39, 35, 0.05);
+  --accent-rgb: 43, 39, 35;
+  --on-accent: #fbfaf8;
+  --user-bg: rgba(43, 39, 35, 0.04);
+}
+:root[data-bg='ink'] {
+  --bg: #f7f6f3;
+  --bg-card: #fdfcfa;
+  --bg-glass: rgba(247, 246, 243, 0.9);
+  --sidebar-bg: #f0eee9;
+  --text: #1f1d1a;
+  --text-light: rgba(31, 29, 26, 0.82);
+  --text-muted: #615d57;
+  --text-faint: #6c6760;
+  --text-ghost: rgba(31, 29, 26, 0.28);
+  --border: #e8e5df;
+  --shadow: rgba(0, 0, 0, 0.05);
+  --green: #4f6f52;
+  --danger: #a3503f;
+  --danger-light: rgba(163, 80, 63, 0.08);
+  --overlay-subtle: rgba(31, 29, 26, 0.03);
+  --overlay-light: rgba(31, 29, 26, 0.04);
+  --overlay-medium: rgba(31, 29, 26, 0.07);
+  --overlay-strong: rgba(31, 29, 26, 0.14);
+  --tool-bg: rgba(31, 29, 26, 0.03);
+  --tool-text: #615d57;
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(196, 184, 166, 0.14), transparent 56%);
+}
+:root.dark[data-skin='ink'] {
+  --accent: #ecebe7;
+  --accent-ink: #ecebe7;
+  --accent-hover: #ffffff;
+  --accent-light: rgba(236, 235, 231, 0.14);
+  --accent-rgb: 236, 235, 231;
+  --on-accent: #1b1a19;
+  --user-bg: rgba(236, 235, 231, 0.1);
+}
+:root.dark[data-bg='ink'] {
+  --bg: #201f1d;
+  --bg-card: #282624;
+  --bg-glass: rgba(27, 26, 25, 0.9);
+  --sidebar-bg: #1b1a19;
+  --text: #ecebe7;
+  --text-light: rgba(236, 235, 231, 0.84);
+  --text-muted: #a19d96;
+  --text-faint: #948f88;
+  --text-ghost: rgba(236, 235, 231, 0.28);
+  --border: #353330;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --green: #8fb295;
+  --danger: #d99080;
+  --danger-light: rgba(217, 144, 128, 0.12);
+  --overlay-subtle: rgba(236, 235, 231, 0.03);
+  --overlay-light: rgba(236, 235, 231, 0.05);
+  --overlay-medium: rgba(236, 235, 231, 0.08);
+  --overlay-strong: rgba(236, 235, 231, 0.15);
+  --tool-bg: rgba(236, 235, 231, 0.035);
+  --tool-text: #a19d96;
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(214, 188, 150, 0.1), transparent 56%);
 }
