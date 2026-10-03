@@ -263,12 +263,12 @@ describe('固定 View:桌面 store', () => {
     const list = panels.find((x) => x.params.__type === 'listv')!
     list.api.setActive()
     expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(1)
-    expect(api.activePanel!.params.__type).toBe('assetv')
+    expect(api.activePanel!.params?.__type).toBe('assetv')
     // 主区同理
     const chat = panels.find((x) => x.params.__type === 'chatv')!
     chat.api.setActive()
     expect(ws.replaceViewsOfType('chatv', 'filev')).toBe(1)
-    expect(api.activePanel!.params.__type).toBe('filev')
+    expect(api.activePanel!.params?.__type).toBe('filev')
   })
 
   it('主区固定 View:连换两次不重复开标签,往回换是摘掉新开的而不是把它也变成固定的那种', () => {
