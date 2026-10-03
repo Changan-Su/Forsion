@@ -499,7 +499,8 @@ export function installEngine(): void {
     const names = ws().namedLayouts().filter((n) => !n.startsWith('space:')) // 隐藏 Space 内部保留布局
     if (!names.length) { app().toast(app().tr('layout.none')); return }
     const name = window.prompt(app().tr('layout.applyPrompt', { names: names.join(', ') }), names[0])?.trim()
-    if (name && names.includes(name)) ws().applyNamed(name)
+    // 用户起名存的布局可能是在别的 Space / 固定 View 之前存的:应用后把本 Space 缺的固定项补回
+    if (name && names.includes(name) && ws().applyNamed(name)) ws().ensurePinned()
   } })
   if (hasNativeFeature('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: async () => { await app().stop() } })
   if (hasNativeFeature('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
