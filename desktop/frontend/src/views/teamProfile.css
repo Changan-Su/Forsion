@@ -29,6 +29,8 @@
 .team-member { min-width: 0; border: 1px solid transparent; border-radius: var(--radius-md, 12px); padding: 12px; background: var(--overlay-light); }
 .team-member-open { display: grid; grid-template-columns: 40px minmax(0, 1fr) 14px; gap: 3px 10px; align-items: center; width: 100%; padding: 0; text-align: left; border: 0; background: transparent; color: var(--text); cursor: pointer; }
 .team-member-open:hover { color: var(--accent-ink); }
+/* 文字两行钉在第 2 列:不可打开的卡(外部引擎)没有箭头,自动排布会把状态行塞进 14px 的箭头列,一字一行。 */
+.team-member-open > strong, .team-member-status { grid-column: 2; }
 .team-member-open > strong { font-size: var(--ui-font-body, 13px); font-weight: 600; overflow-wrap: anywhere; }
 .team-member-portrait { position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; grid-row: 1 / 3; color: var(--accent-ink); background: var(--overlay-light); border-radius: var(--radius-sm, 8px); overflow: hidden; }
 .team-member-portrait > svg:first-child { width: 26px; height: 26px; }
