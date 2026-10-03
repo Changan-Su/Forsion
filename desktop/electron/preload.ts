@@ -4,6 +4,7 @@
  */
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
+import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
@@ -62,6 +63,11 @@ const api = {
     },
   } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
+  documentTasks: {
+    claim: (key, signature) => ipcRenderer.invoke('documentTasks:claim', key, signature),
+    complete: (key, token, sessionId) => ipcRenderer.invoke('documentTasks:complete', key, token, sessionId),
+    release: (key, token) => ipcRenderer.invoke('documentTasks:release', key, token),
+  } satisfies DocumentTaskClaimsApi,
   setConfig: (patch: Record<string, any>): Promise<any> => ipcRenderer.invoke('config:set', patch),
   backendStatus: (): Promise<BackendStatus> => ipcRenderer.invoke('backend:getStatus'),
   backendLogs: (): Promise<string[]> => ipcRenderer.invoke('backend:getLogs'),
@@ -557,6 +563,7 @@ const api = {
 // ── 产品档案收缩暴露面 ─────────────────────────────────────────────────────────
 // 渲染端遍布 window.tangu?.X 能力门控:删掉键 = 对应功能(Inbox/市场/设置 agent tab/账号…)自动隐藏,UI 零改动。
 const AGENT_KEYS = [
+  'documentTasks',
   'backendStatus', 'backendLogs', 'backendRestart', 'onBackendStatus',
   'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
   'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',

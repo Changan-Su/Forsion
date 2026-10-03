@@ -22,6 +22,7 @@ import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolCapabilities, ToolContext } from '../toolTypes.js';
 import { deps, isConfigured } from '../../seams/runtime.js';
 import { AmadeusConflictError, AmadeusNotFoundError, type AmadeusBrain } from '../../seams/cloudBrain.js';
+import { pageInstructionsForFile } from '../../services/pageInstructions.js';
 
 // ── vault 定位 ────────────────────────────────────────────────────────────
 // 解析优先级:① FORSION_AMADEUS_VAULT 显式覆盖(standalone CLI 直指) → ② desktop 注入的
@@ -416,7 +417,7 @@ export const amadeusProvider: ToolProvider = {
         if (!/\.md$/i.test(rel)) rel += '.md';
         if (STRUCTURED_RE.test(rel)) throw new Error(structuredRefusal(rel));
         const { content: raw } = await be.read(rel);
-        return toCleanMarkdown(raw) || '(empty note)';
+        return pageInstructionsForFile(raw, rel) + (toCleanMarkdown(raw) || '(empty note)');
       },
       true, // cloudOnly
     ),

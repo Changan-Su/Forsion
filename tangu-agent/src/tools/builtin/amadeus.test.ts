@@ -181,6 +181,16 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     expect(await runCloud('amadeus_list_notes')).toContain('Cloud/idea.md');
   });
 
+  it('cloud note reads expose explicit page Instructions scoped to that note only', async () => {
+    store.set('Guided.md', { content: '---\ntags: []\n---\n<!-- a 1 -->\n```forsion-instructions\nCite sources.\n```\n\nBody.', seq: 1 });
+    const out = await runCloud('amadeus_read_note', { path: 'Guided.md' });
+    expect(out).toContain('Page maintenance instructions for "Guided.md"');
+    expect(out).toContain('Instruction text (JSON string): "Cite sources."');
+    expect(out).not.toContain('tags: []');
+    store.set('Unguided.md', { content: '# Agent Instructions\nOrdinary heading.', seq: 1 });
+    expect(await runCloud('amadeus_read_note', { path: 'Unguided.md' })).not.toContain('Page maintenance instructions');
+  });
+
   it('日历读-改-写带 baseSeq;409 冲突用服务端回带内容重放一次', async () => {
     conflictOnce = true; // 第一次写必冲突(带回最新内容)→ 应重放并成功
     const created = await runCloud('amadeus_create_event', { title: '云会议', start: '2026-07-10T09:00' });

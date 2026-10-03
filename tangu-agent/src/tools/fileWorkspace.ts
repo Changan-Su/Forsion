@@ -14,6 +14,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { cancellableRead, throwIfReadAborted } from '../utils/readCancellation.js';
 import { anchoredRoot, mkdirConfined, readConfined, writeConfined } from '../sandbox/confinedFs.js';
+import { pageInstructionsForFile } from '../services/pageInstructions.js';
 
 // ── 注入依赖的 lazy 别名:把 Penzor cloudStorageService 收敛到 brain.storage(保持调用点不变)──
 const cloudStorageService = {
@@ -173,7 +174,8 @@ export async function readFile(userId: string, appId: string, scope: WsScope, pa
   const file = items.find((i) => i.name === name && i.fileType === 'file');
   if (!file) throw new Error(`file not found: ${path}`);
   const { content } = await cloudStorageService.getFileContent(file.id, userId);
-  return paginateText(content.toString('utf-8'), offset, limit);
+  const text = content.toString('utf-8');
+  return pageInstructionsForFile(text, path) + paginateText(text, offset, limit);
 }
 
 /** 写文本文件（agent write_file）。 */
@@ -242,7 +244,8 @@ export async function readFileLocal(baseDir: string, sub: string, offset?: numbe
   if (!segs.length) throw new Error('invalid path');
   const abs = path.join(baseDir, ...segs);
   const buf = await fs.readFile(abs).catch(() => { throw new Error(`file not found: ${sub}`); });
-  return paginateText(buf.toString('utf-8'), offset, limit);
+  const text = buf.toString('utf-8');
+  return pageInstructionsForFile(text, sub) + paginateText(text, offset, limit);
 }
 
 /** 读取本地工作区某文件的**完整**文本(不分页,供 apply_patch 应用补丁);不存在返回 null。 */

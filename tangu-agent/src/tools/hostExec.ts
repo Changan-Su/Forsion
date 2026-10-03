@@ -22,6 +22,7 @@ import { checkReadPath, checkWritePath } from './fsPolicy.js';
 import { citeHitFor, citeHowFor, citeRefFor, docxText, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
 import { amadeusVaultPath } from './builtin/amadeus.js';
 import { contentFingerprint, noteAgentWrite, noteRead, readFingerprint } from './readState.js';
+import { pageInstructionsForFile } from '../services/pageInstructions.js';
 
 const READ_MAX_CHARS = 100_000;
 const READ_MAX_LINES = 2000;
@@ -349,7 +350,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
             + (blockIds ? ` or [[${ref}#^<block id>]] (one of the \`^id\` markers at the end of a line above)` : '')
             + ` or [[${ref}]] — copy BOTH bracket pairs; renders as a clickable chip.`
           : `\nCite for the user: [[${ref}#L<n>]] or a range [[${ref}#L<a>-L<b>]] (line numbers as shown) — copy BOTH bracket pairs; renders as a clickable chip opening the file at that line.`;
-      return paginate(text, offset, limit, relDisplay(ctx, abs)) + hint;
+      return pageInstructionsForFile(text, abs) + paginate(text, offset, limit, relDisplay(ctx, abs)) + hint;
     },
   },
 

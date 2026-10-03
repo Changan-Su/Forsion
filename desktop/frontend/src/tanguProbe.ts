@@ -23,6 +23,8 @@ import { getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, g
 import { hasNativeFeature } from './features/runtime'
 import { quoteInChatPanel } from './views/chat2/chatPanelQuote'
 import { completeInline } from './services/inlineAi'
+import { submitDocumentTask } from './services/documentTasks'
+import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
 
 function readActiveModel(): TanguModelInfo | null {
@@ -292,6 +294,14 @@ export function installTanguProbe(): void {
     activeModel: readActiveModel,
     models: readModels,
     agents: readAgents,
+    subscribeAgents: (cb) => {
+      let previous = useApp.getState().agentDefs
+      return useApp.subscribe((state) => {
+        if (state.agentDefs === previous) return
+        previous = state.agentDefs
+        cb()
+      })
+    },
     activeSpace: readActiveSpace,
     session: readSession,
     waitBackend,
@@ -299,6 +309,15 @@ export function installTanguProbe(): void {
     agentStatus: readAgentStatus,
     subscribeAgentStatus,
     startChat,
+    ...(hasNativeFeature('tangu') && window.tangu?.documentTasks ? {
+      submitDocumentTask: async (o: Parameters<typeof submitDocumentTask>[0]) => {
+        if (!(window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed')) || !(await waitBackend(15_000))) {
+          return { ok: false, error: 'Document tasks require a connected local engine' }
+        }
+        return submitDocumentTask(o, readActiveModel()?.id ?? null)
+      },
+      openDocumentTask: (id: string) => openSession(id, { newTab: true }),
+    } : {}),
     agentSelf: (slug) => (slug === 'muse' ? museSelf() : null),
     // 编辑器「问 Tangu」(G3-04):只在注册了 chat-panel 的宿主上给(与 features/tangu.tsx 同一个谓词)。
     // automation-only 档案也会装本探针(bootstrapEngine),那里没有侧栏对话 → 方法缺席,编辑器不出入口。

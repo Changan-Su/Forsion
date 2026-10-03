@@ -191,6 +191,8 @@
     "fetch-node": "node build/fetch-node.cjs",
     "fetch-office": "node build/fetch-office.cjs",
     "fetch-git": "node build/fetch-git.cjs",
+    "check:documentagents": "node scripts/e2e-editor.cjs --check=document-agents",
+    "e2e:documentagents": "node scripts/document-agents.electron.cjs",
     "typecheck": "tsc --noEmit && node ../tangu-agent/scripts/sync-command-catalog.mjs --check",
     "predev:amadeus": "node scripts/dev-version.check.cjs",
     "dev:amadeus": "FORSION_PRODUCT=amadeus electron-vite dev --noSandbox",
