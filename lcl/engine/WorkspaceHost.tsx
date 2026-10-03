@@ -62,7 +62,7 @@ function leafFromProps(props: IDockviewPanelProps): Leaf {
     // (编辑器认领笔记、阅读器换 PDF)走的是这里;此前只 updateParameters,mainTabs[].filePath 要等下一次
     // 结构事件才跟上 → 侧栏对话默认引用挂不上 / 挂旧的那篇(09-22 check:chatside 6/7)。
     setParams: (p) => useWorkspace.getState().leafById(props.api.id)?.setParams(p),
-    close: () => props.api.close(),
+    close: () => { if (!useWorkspace.getState().isPinnedLeaf(props.api.id)) props.api.close() }, // 固定 View(区内最后一个)视图自己也关不掉
   }
 }
 

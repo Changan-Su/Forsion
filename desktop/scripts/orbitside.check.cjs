@@ -557,6 +557,26 @@ async function run(app, win) {
     !!canSwitchSpace && spaceRestore.hasGroup && !spaceRestore.active && !spaceRestore.open && !spaceRestore.rowVisible,
     JSON.stringify({ canSwitchSpace: !!canSwitchSpace, ...spaceRestore }))
 
+  // ── 12 固定聊天 × ⌘点击会话(主聊天空白时)────────────────────────────────────
+  // 空白的主聊天要让位给新标签,顺序必须是「先开新的、再关旧的」:先关会被「区内最后一个聊天关不掉」拦住,
+  // 空白主聊天留下来跟着 activeId 也显示这个会话 = 两个标签同一个会话(2026-10-03 自查抓到,见 sessionNav.retire)。
+  const mainTabTitles = () => win.evaluate(() => Array.from(document.querySelector('.dv-new-tab')?.closest('.dv-tabs-and-actions-container')?.querySelectorAll('.wb-tab') || []).map((e) => (e.textContent || '').trim()))
+  await win.locator('.t2o-head .t2s-special-row').first().click()
+  await sleep(700)
+  const tabsBlank = await mainTabTitles()
+  const orbitGroup = win.locator('.t2o .t2s-group', { hasText: 'Orbit Project' }).first()
+  const orbitRow = win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first()
+  if (!(await orbitRow.isVisible().catch(() => false))) { await orbitGroup.locator('.t2s-group-toggle').click().catch(() => {}); await sleep(500) }
+  await orbitRow.click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
+  await sleep(900)
+  const tabsAfter = await mainTabTitles()
+  check('12 ⌘点击会话(主聊天空白):空白主聊天让位,主区只剩一个显示该会话的标签',
+    tabsBlank.length === 1 && tabsAfter.length === 1 && tabsAfter[0].includes('项目会话一'), JSON.stringify({ tabsBlank, tabsAfter }))
+  // 该会话已钉在标签里:再普通点一次是切过去,不是再开一份
+  await orbitRow.click()
+  await sleep(600)
+  check('12a 再点同一个会话:仍是那一个标签', (await mainTabTitles()).length === 1, JSON.stringify(await mainTabTitles()))
+
   // ── 8b 暗色截图 ───────────────────────────────────────────────────────────
   // 明暗真源 = forsion_theme_pref(themeStore persistPref);落盘后 reload,装载器才会重算 token
   // (只改 html[data-mode] 不重算,截出来还是亮的)。

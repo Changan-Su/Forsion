@@ -31,14 +31,17 @@ function mainPrimaryChat(): PanelLike | null {
 }
 
 /** 把主区跟随档聊天冻结成它此刻显示的那个会话(= 从此不再被 activeId 拖着走)。
- *  它本来就是空白新对话(没有会话可冻)→ 直接关掉:留着也是个永远空白、再也接不到新会话的死标签。 */
-function freezeMainPrimary(prevSessionId: string | null, exceptLeafId?: string): void {
+ *  它本来就是空白新对话(没有会话可冻)→ 该关掉:留着也是个永远空白、再也接不到新会话的死标签。
+ *  ⚠️但**不在这里关**:返回它的 id,调用方等接任的聊天开出来之后再关(retire)。先关的话主区有一瞬间没有聊天;
+ *  聊天是固定 View 时更糟 —— 区内最后一个关不掉,它留下来跟着 activeId 也显示目标会话,两个标签撞成同一个会话。
+ *  所以这里只先摘掉「跟随」。 */
+function freezeMainPrimary(prevSessionId: string | null, exceptLeafId?: string): string | null {
   const primary = mainPrimaryChat()
-  if (!primary || primary.id === exceptLeafId) return
-  const ws = useWorkspace.getState()
-  if (prevSessionId) ws.leafById(primary.id)?.setParams({ sessionId: prevSessionId, followActive: false, reuseKey: undefined })
-  else ws.leafById(primary.id)?.close()
+  if (!primary || primary.id === exceptLeafId) return null
+  useWorkspace.getState().leafById(primary.id)?.setParams({ ...(prevSessionId ? { sessionId: prevSessionId } : {}), followActive: false, reuseKey: undefined })
+  return prevSessionId ? null : primary.id
 }
+const retire = (leafId: string | null): void => { if (leafId) useWorkspace.getState().leafById(leafId)?.close() }
 
 export function openSession(id: string, opts?: { newTab?: boolean }): void {
   const ws = useWorkspace.getState()
@@ -52,26 +55,27 @@ export function openSession(id: string, opts?: { newTab?: boolean }): void {
     { sessionId: id, leaves, newTab: opts?.newTab, pinnedChatId: isPinned(ws.pinned, 'main', 'chat') ? mainPrimaryChat()?.id : undefined },
   )
   // 冻结要在 setActiveId 之前:此刻的 activeId 才是老标签正显示的那个会话。
-  if (plan.act !== 'follow') freezeMainPrimary(useApp.getState().activeId, plan.act === 'activate' ? plan.leafId : undefined)
+  const stale = plan.act !== 'follow' ? freezeMainPrimary(useApp.getState().activeId, plan.act === 'activate' ? plan.leafId : undefined) : null
   useApp.getState().setActiveId(id) // 侧栏高亮 + 「跟随主聊天」据此切换会话
   switch (plan.act) {
     case 'activate':
       ws.activateLeaf(plan.leafId) // 已经开着 → 切过去,别在别的标签里再开一份
-      return
+      break
     case 'newtab':
       // 钉住该会话(followActive:false),否则它会跟着侧栏高亮乱跑,等于两个标签永远显示同一个会话。
       ws.openView('chat', { sessionId: id, followActive: false }, 'main', { newTab: true })
-      return
+      break
     case 'follow':
-      return // 跟随主聊天已随 activeId 切到该会话,无需动 leaf
+      break // 跟随主聊天已随 activeId 切到该会话,无需动 leaf
     case 'pin':
       // 就地把聚焦 leaf 固定成该会话的聊天;bootstrapEngine 的跟随订阅对固定 leaf 放行不回拽。
       ws.navigateLeaf(focused!.id, 'chat', { sessionId: id, followActive: false })
-      return
+      break
     case 'fresh':
       ws.openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-      return
+      break
   }
+  retire(stale) // 接任的聊天已经在了,空白的老主聊天这才退位
 }
 
 /** 「新对话」的统一门面(侧栏入口 / 新标签页卡片都走这里)。
@@ -90,7 +94,7 @@ export function openNewChat(): void {
   if (where === 'here') {
     // 先让空白标签接任,再让老的退位 —— 反过来会有一瞬间主区没有聊天(布局保存可能拍到那一帧)。
     ws.navigateLeaf(focused!.id, 'chat', { followActive: true, reuseKey: 'primary' })
-    freezeMainPrimary(prevSession, focused!.id)
+    retire(freezeMainPrimary(prevSession, focused!.id))
     return
   }
   ws.openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
