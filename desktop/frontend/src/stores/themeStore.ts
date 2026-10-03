@@ -109,6 +109,10 @@ function readFlat(): boolean {
   try { return localStorage.getItem('forsion_theme_flat') === '1' } catch { return false }
 }
 
+function hasForcedSchemeHint(): boolean {
+  try { const v = localStorage.getItem('forsion_theme_forced_scheme'); return v === 'light' || v === 'dark' || v === 'system' } catch { return false }
+}
+
 /** 读 ~/.tangu/themes(无 preload/出错 → 空,渲染端纯 bundle 运行)。 */
 async function fetchDiskThemes(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string }>> {
   try { return (await window.tangu?.listThemes?.()) ?? [] } catch { return [] }
@@ -213,7 +217,9 @@ export const useTheme = create<ThemeState>((set, get) => {
     bg: resolveInitialBg(),
     mode: resolveInitialEffectiveMode(), // 含 forced_scheme hint,与首屏一致(codex High-1)
     modePref: resolveInitialModePref(),  // 用户偏好(不含强制),换走锁定主题后恢复它
-    modeLocked: langForcedScheme(initialLang) !== undefined,
+    // 磁盘主题的清单要等 initThemes 才到;首帧先认上次留下的 forced_scheme 提示(mode 那行也是按它解析的),
+    // 否则这段时间里「没锁」会让 Space 自己的明暗偏好先生效、清单到了再变回去。
+    modeLocked: langForcedScheme(initialLang) !== undefined || hasForcedSchemeHint(),
     seed: readSeed(),
     bgSeed: readBgSeed(),
     glass: readGlass(),
@@ -287,6 +293,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     },
     syncFromWindow: (payload) => {
       if (payload?.spaceAppearance) {
+        // 只当「这个 Space 变了」的信号:值以同源存储为准(见 spaceAppearanceStore)。
         receiveSpaceAppearance(payload.spaceAppearance)
         const lang = payload.spaceAppearance.appearance.lang
         if (lang && !hasLanguage(lang)) void fetchDiskThemes().then((list) => {

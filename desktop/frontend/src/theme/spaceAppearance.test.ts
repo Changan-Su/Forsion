@@ -29,8 +29,6 @@ describe('Space appearance inheritance', () => {
   it('validates the cross-window update and explicit reset', () => {
     expect(normalizeSpaceAppearance({ skin: 'teal', modePref: 'auto', seed: 'red', bg: '<script>', unknown: 'x' })).toEqual({ skin: 'teal' })
     expect(normalizeUiSync({ spaceAppearance: { id: 'tangu', appearance: {} } })?.spaceAppearance).toEqual({ id: 'tangu', appearance: {} })
-    expect(normalizeUiSync({ spaceAppearance: { id: 'tangu', appearance: { skin: 'teal' }, at: 1791000000000 } })?.spaceAppearance).toEqual({ id: 'tangu', appearance: { skin: 'teal' }, at: 1791000000000 })
-    expect(normalizeUiSync({ spaceAppearance: { id: 'tangu', appearance: {}, at: '1' } })?.spaceAppearance).toEqual({ id: 'tangu', appearance: {} })
     expect(normalizeUiSync({ spaceAppearance: { id: '../x', appearance: {} } })).toBeNull()
     expect(normalizeUiSync({ spaceAppearance: { id: 'tangu', appearance: [] } })).toBeNull()
   })
@@ -59,47 +57,66 @@ describe('persistent global settings versus rendered Space settings', () => {
     expect(useVisualTheme.getState()).toMatchObject({ skin: 'teal', bg: 'coral', mode: 'light' })
     useSpaceStore.setState({ activeSpaceId: 'notes' })
     expect(useVisualTheme.getState().mode).toBe('dark')
-    // 别的窗口发来「恢复继承」:本窗只更新内存。落盘是发方的事(同源存储),收方再写一遍会把晚到的旧消息盖到新保存上。
-    const stored = localStorage.getItem('forsion_space_appearance.notes')
-    useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: {}, at: Date.now() + 10_000 } })
+    // 别的窗口「恢复继承」:它先改了同源存储,再发通知。本窗只把通知当信号,值从存储读,自己不落盘。
+    localStorage.removeItem('forsion_space_appearance.notes')
+    useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: {} } })
     expect(useVisualTheme.getState()).toMatchObject({ skin: 'teal', bg: 'coral', mode: 'light' })
-    expect(localStorage.getItem('forsion_space_appearance.notes')).toBe(stored)
+    expect(localStorage.getItem('forsion_space_appearance.notes')).toBeNull()
   }, 15000)
-  it('rejects a late, older update from another window on both channels and never persists what it receives', async () => {
+  it('a late, older message from another window can neither roll back memory nor touch storage', async () => {
     const { useTheme } = await import('../stores/themeStore')
     const { useSpaceAppearance, setSpaceAppearance } = await import('../stores/spaceAppearanceStore')
-    expect(setSpaceAppearance('notes', { skin: 'teal' })).toBe(true)
-    const stored = localStorage.getItem('forsion_space_appearance.notes')!
-    const at = JSON.parse(stored).at as number
-    expect(at).toBeGreaterThan(0)
-    // 另一个窗口更早保存的 coral,IPC 晚到
-    useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: { skin: 'coral' }, at: at - 5 } })
-    // 同一条旧值再从 storage 事件来一遍
-    window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_space_appearance.notes', newValue: JSON.stringify({ skin: 'coral', at: at - 5 }) }))
-    // 不带时间戳的旧格式消息同样算旧
+    const key = 'forsion_space_appearance.notes'
+    expect(setSpaceAppearance('notes', { skin: 'teal', bg: 'lavender' })).toBe(true) // 本窗是最后保存的
+    const stored = localStorage.getItem(key)
+    // 另一个窗口更早保存的 coral:IPC 晚到、storage 事件晚到、一条旧的「恢复继承」也晚到
+    useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: { skin: 'coral' } } })
+    window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify({ skin: 'coral' }) }))
     useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: {} } })
-    expect(useSpaceAppearance.getState().byId.notes).toEqual({ skin: 'teal' })
-    expect(localStorage.getItem('forsion_space_appearance.notes')).toBe(stored)
-    // 更新的照收,但仍不落盘
-    useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: { skin: 'lavender' }, at: at + 5 } })
+    expect(useSpaceAppearance.getState().byId.notes).toEqual({ skin: 'teal', bg: 'lavender' })
+    expect(localStorage.getItem(key)).toBe(stored)
+    // 之后在本窗改另一根轴(Ribbon 明暗就是这么写的):合并的是没被旧消息污染的内存
+    setSpaceAppearance('notes', { ...useSpaceAppearance.getState().byId.notes, modePref: 'dark' })
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ skin: 'teal', bg: 'lavender', modePref: 'dark' })
+    // 别的窗口真的后保存了:存储变了,信号一到就跟上,本窗仍不写
+    localStorage.setItem(key, JSON.stringify({ skin: 'lavender' }))
+    window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify({ skin: 'lavender' }) }))
     expect(useSpaceAppearance.getState().byId.notes).toEqual({ skin: 'lavender' })
-    expect(localStorage.getItem('forsion_space_appearance.notes')).toBe(stored)
+    expect(localStorage.getItem(key)).toBe(JSON.stringify({ skin: 'lavender' }))
   })
-  it('keeps a stamped empty record on reset so an older update cannot resurrect the override', async () => {
+  it('an IPC notice that outruns storage propagation is picked up by the delayed re-read', async () => {
+    const { useTheme } = await import('../stores/themeStore')
+    const { useSpaceAppearance } = await import('../stores/spaceAppearanceStore')
+    vi.useFakeTimers()
+    try {
+      useTheme.getState().syncFromWindow({ spaceAppearance: { id: 'notes', appearance: { skin: 'coral' } } })
+      expect(useSpaceAppearance.getState().byId.notes ?? {}).toEqual({}) // 存储里还没有,不信载荷
+      localStorage.setItem('forsion_space_appearance.notes', JSON.stringify({ skin: 'coral' })) // 传播到了,但没有 storage 事件
+      vi.advanceTimersByTime(300)
+      expect(useSpaceAppearance.getState().byId.notes).toEqual({ skin: 'coral' })
+    } finally { vi.useRealTimers() }
+  })
+  it('reset removes the key and an older message cannot resurrect the override', async () => {
     const { useSpaceAppearance, setSpaceAppearance, receiveSpaceAppearance } = await import('../stores/spaceAppearanceStore')
     setSpaceAppearance('notes', { skin: 'teal' })
-    const before = JSON.parse(localStorage.getItem('forsion_space_appearance.notes')!).at as number
     expect(setSpaceAppearance('notes', {})).toBe(true)
-    const reset = JSON.parse(localStorage.getItem('forsion_space_appearance.notes')!)
-    expect(Object.keys(reset)).toEqual(['at'])
-    expect(reset.at).toBeGreaterThan(before) // 同一毫秒内连写两次也严格递增
-    expect(receiveSpaceAppearance({ id: 'notes', appearance: { skin: 'coral' }, at: before })).toBe(false)
+    expect(localStorage.getItem('forsion_space_appearance.notes')).toBeNull()
+    receiveSpaceAppearance({ id: 'notes', appearance: { skin: 'coral' } })
     expect(useSpaceAppearance.getState().byId.notes).toEqual({})
-    // 重新装载(刷新 / 新窗口)读回来仍是「继承全局」,时间戳不进外观对象
-    vi.resetModules()
-    const again = await import('../stores/spaceAppearanceStore')
-    expect(again.useSpaceAppearance.getState().byId.notes).toEqual({})
-    expect(again.receiveSpaceAppearance({ id: 'notes', appearance: { skin: 'coral' }, at: before })).toBe(false)
+    expect(localStorage.getItem('forsion_space_appearance.notes')).toBeNull()
+  })
+  it('honours the forced-scheme hint before the disk theme manifest arrives, even for a Space with its own mode', async () => {
+    // 上次用的是强制 dark 的磁盘主题:清单没到之前 registry 不认识它,只有首帧提示可依
+    localStorage.setItem('forsion_theme_lang', 'disk-forced-dark')
+    localStorage.setItem('forsion_theme_pref', 'light')
+    localStorage.setItem('forsion_theme_forced_scheme', 'dark')
+    localStorage.setItem('forsion_space_appearance.notes', JSON.stringify({ modePref: 'light' }))
+    const { useSpaceStore } = await import('@lcl/engine/spaceRegistry')
+    useSpaceStore.setState({ activeSpaceId: 'notes' })
+    const { useTheme, useVisualTheme } = await import('../stores/themeStore')
+    expect(useTheme.getState()).toMatchObject({ mode: 'dark', modeLocked: true, modePref: 'light' })
+    useTheme.setState({}) // 触发一次视觉投影(生产里是 initThemes 开头那次)
+    expect(useVisualTheme.getState()).toMatchObject({ mode: 'dark', modeLocked: true })
   })
   it('Ribbon mode toggle writes to the Space when the global language locks the scheme but the Space language does not', async () => {
     const { useTheme, useVisualTheme, toggleVisibleMode } = await import('../stores/themeStore')
