@@ -1,0 +1,330 @@
+/**
+ * 固定 View 的仪器。判定是纯函数(pinnedViews.ts);接线跑的是**真的两份 store**,Dockview 换成最小桩
+ * (同 pinSides / bottomPanel 先例)。锁住的是那条不变量 ——「该区内始终至少留一个这种 View」——
+ * 在每一条能把视图弄丢的路径上都成立:关闭、就地导航、拖放、替换视图、清场、文件被删,以及缺了之后补回。
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useWorkspace, dropAllowed } from './dockviewStore'
+import { useWorkspace as useSingle } from './singleColumnStore'
+import { isPinned, isLastPinned, missingPinned, type PinnedViews } from './pinnedViews'
+import { registerView, unregisterView } from './viewRegistry'
+import type { DropTarget } from './dropModel'
+import type { DockviewApi } from 'dockview-react'
+
+type G = { id: string; panels: P[]; activePanel?: P; api: Record<string, unknown> }
+type P = { id: string; title: string; params: Record<string, unknown>; group: G; api: Record<string, (...a: never[]) => unknown> }
+
+/** 最小 Dockview 桩:组内标签顺序、活动面板、'within' 进组、inactive 不抢焦点、undefined 参数即删键。 */
+function mkApi() {
+  const panels: P[] = []
+  const added: Array<{ id: string; position?: Record<string, unknown>; inactive?: boolean }> = []
+  let gid = 0
+  let active: P | null = null
+  const mkGroup = (): G => ({ id: `g${++gid}`, panels: [], api: { width: 300, height: 300, setActive() { }, setSize() { }, setConstraints() { } } })
+  const remove = (p: P): void => {
+    const i = panels.indexOf(p)
+    if (i < 0) return
+    panels.splice(i, 1)
+    p.group.panels.splice(p.group.panels.indexOf(p), 1)
+    if (p.group.activePanel === p) p.group.activePanel = p.group.panels[0]
+    if (active === p) active = panels[0] ?? null
+  }
+  const api = {
+    width: 1600, height: 900, panels,
+    get activePanel() { return active },
+    getPanel: (id: string) => panels.find((p) => p.id === id),
+    toJSON: () => ({}),
+    removePanel: (p: P) => remove(p),
+    addPanel: (o: { id: string; params: Record<string, unknown>; position?: { referencePanel?: string | P; index?: number }; inactive?: boolean }) => {
+      if (panels.some((p) => p.id === o.id)) throw new Error(`duplicate panel id ${o.id}`) // 真 Dockview 也炸
+      added.push({ id: o.id, position: o.position as Record<string, unknown> | undefined, inactive: o.inactive })
+      const ref = typeof o.position?.referencePanel === 'string' ? panels.find((p) => p.id === o.position!.referencePanel) : o.position?.referencePanel
+      const group = ref ? ref.group : mkGroup()
+      const p: P = {
+        id: o.id, title: o.id, params: o.params, group,
+        api: {
+          close: () => remove(p),
+          setActive: () => { active = p; p.group.activePanel = p },
+          setTitle: (t: string) => { p.title = t },
+          updateParameters: (np: Record<string, unknown>) => {
+            const next = { ...p.params, ...np }
+            for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k]
+            p.params = next
+          },
+          moveTo: (m: { group: G }) => {
+            p.group.panels.splice(p.group.panels.indexOf(p), 1)
+            p.group = m.group
+            m.group.panels.push(p)
+          },
+        } as never,
+      }
+      group.panels.splice(o.position?.index ?? group.panels.length, 0, p)
+      panels.push(p)
+      if (!o.inactive) { active = p; group.activePanel = p } else group.activePanel ??= p
+      return p
+    },
+  }
+  return { api: api as unknown as DockviewApi, panels, added }
+}
+
+const at = (panels: P[], loc: string): string[] => panels.filter((p) => (p.params.__loc ?? 'main') === loc).map((p) => p.params.__type as string)
+const idOf = (panels: P[], loc: string, type: string): string => panels.find((p) => p.params.__loc === loc && p.params.__type === type)!.id
+
+const PINS: PinnedViews = {
+  main: [{ type: 'chatv', params: { followActive: true } }],
+  left: [{ type: 'listv', params: { mode: 'orbits' } }],
+  right: [{ type: 'detailv', params: {} }],
+}
+const VIEWS = ['chatv', 'filev', 'listv', 'detailv', 'assetv', 'home', 'sidebar-empty']
+
+beforeEach(() => {
+  const store = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, v) },
+    removeItem: (k: string) => { store.delete(k) },
+    clear: () => store.clear(),
+  })
+  vi.useFakeTimers()
+  for (const type of VIEWS) registerView({ type, displayName: type, factory: () => null, ...(type === 'home' || type === 'sidebar-empty' ? { closable: false } : {}) })
+})
+afterEach(() => {
+  for (const type of VIEWS) unregisterView(type)
+  vi.runAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
+})
+
+describe('pinnedViews:判定(纯函数)', () => {
+  it('固定按 (区, 类型) 认;底部与没声明的区不固定', () => {
+    expect(isPinned(PINS, 'main', 'chatv')).toBe(true)
+    expect(isPinned(PINS, 'left', 'chatv')).toBe(false)
+    expect(isPinned(PINS, 'bottom', 'chatv')).toBe(false)
+    expect(isPinned({}, 'main', 'chatv')).toBe(false)
+  })
+  it('受保护 = 区内只剩这一个;多开的同类标签不受保护', () => {
+    const one = [{ loc: 'main', type: 'chatv' }, { loc: 'left', type: 'chatv' }]
+    expect(isLastPinned(PINS, one, 'main', 'chatv')).toBe(true) // 左栏那个不算主区的
+    expect(isLastPinned(PINS, [...one, { loc: 'main', type: 'chatv' }], 'main', 'chatv')).toBe(false)
+    expect(isLastPinned(PINS, one, 'main', 'filev')).toBe(false)
+  })
+  it('缺哪些:没注册的类型跳过(插件停用着),注册上再补', () => {
+    const panels = [{ loc: 'main', type: 'chatv' }]
+    expect(missingPinned(PINS, panels, () => true).map((p) => `${p.loc}:${p.type}`)).toEqual(['left:listv', 'right:detailv'])
+    expect(missingPinned(PINS, panels, (t) => t !== 'detailv').map((p) => p.type)).toEqual(['listv'])
+  })
+})
+
+describe('固定 View:桌面 store', () => {
+  /** 默认布局:主区聊天、左栏列表、右栏详情,全部固定。 */
+  function build() {
+    const m = mkApi()
+    const ws = useWorkspace.getState()
+    ws.setApi(m.api)
+    useWorkspace.setState({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, sidebarDefaults: { left: [], right: [], bottom: [] } })
+    ws.setPinned({})
+    ws.openView('chatv', { followActive: true }, 'main')
+    ws.openView('listv', { mode: 'orbits' }, 'left')
+    ws.openView('detailv', {}, 'right')
+    ws.setPinned(PINS)
+    return m
+  }
+
+  it('区内最后一个关不掉;多开一个之后任一个都能关,关到只剩一个又关不掉', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    const chat = idOf(panels, 'main', 'chatv')
+    ws.closeLeaf(chat)
+    expect(at(panels, 'main')).toEqual(['chatv'])
+    expect(useWorkspace.getState().mainTabs[0].closable).toBe(false)
+
+    ws.openView('chatv', { sessionId: 's2', followActive: false }, 'main', { newTab: true })
+    ws.refreshTabs() // 真 Dockview 由 onDidActivePanelChange 触发(WorkspaceHost.onReady 接的线),桩没有这个事件
+    expect(useWorkspace.getState().mainTabs.map((t) => t.closable)).toEqual([true, true])
+    ws.closeLeaf(chat)
+    expect(at(panels, 'main')).toEqual(['chatv'])
+    ws.closeLeaf(panels.find((p) => p.params.__loc === 'main')!.id)
+    expect(at(panels, 'main')).toEqual(['chatv']) // 剩下的那个接任固定
+  })
+
+  it('leaf.close() 同样被拦(原先是裸 panel.api.close(),绕过 closeLeaf)', () => {
+    const { panels } = build()
+    useWorkspace.getState().leafById(idOf(panels, 'main', 'chatv'))!.close()
+    expect(at(panels, 'main')).toEqual(['chatv'])
+  })
+
+  it('在固定 View 上打开别的类型 → 同组新标签;同类照旧就地换', () => {
+    const { panels, added } = build()
+    const ws = useWorkspace.getState()
+    const chat = idOf(panels, 'main', 'chatv')
+    const leaf = ws.openView('filev', { path: '/a.md' }, 'main')
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev'])
+    expect(leaf!.id).not.toBe(chat)
+    expect(added.at(-1)!.position).toMatchObject({ referencePanel: chat, direction: 'within' }) // 开在聊天那一组
+
+    // 新标签不是固定的:再开一个文件就地换它
+    ws.openView('filev', { path: '/b.md' }, 'main')
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev'])
+    expect(panels.find((p) => p.params.__type === 'filev')!.params.path).toBe('/b.md')
+
+    // 同类:聊天换到另一个会话,还是那一个标签
+    ws.navigateLeaf(chat, 'chatv', { sessionId: 's9', followActive: false })
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev'])
+    expect(ws.leafById(chat)!.params.sessionId).toBe('s9')
+  })
+
+  it('直接调 navigateLeaf 换类型也走同一道守卫;没固定时照旧就地换(负对照)', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    const chat = idOf(panels, 'main', 'chatv')
+    expect(ws.navigateLeaf(chat, 'filev', { path: '/a.md' })!.id).not.toBe(chat)
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev'])
+
+    ws.setPinned({})
+    expect(ws.navigateLeaf(chat, 'filev', { path: '/c.md' })!.id).toBe(chat)
+    expect(at(panels, 'main')).toEqual(['filev', 'filev'])
+  })
+
+  it('拖不出本区:跨区落点不允许,区内分屏 / 排序照常', () => {
+    const { api, panels } = build()
+    const chat = panels.find((p) => p.params.__type === 'chatv')!
+    const left = panels.find((p) => p.params.__loc === 'left')!
+    const toLeft = { mode: 'tab', group: left.group, index: 0 } as unknown as DropTarget
+    const within = { mode: 'split', group: chat.group, dir: 'right' } as unknown as DropTarget
+    expect(dropAllowed(api, chat.id, toLeft)).toBe(false)
+    expect(dropAllowed(api, chat.id, within)).toBe(true)
+    useWorkspace.getState().dropView(chat.id, toLeft)
+    expect(at(panels, 'main')).toEqual(['chatv'])
+    expect(at(panels, 'left')).toEqual(['listv'])
+
+    // 多开一个之后,其中一个可以拖走
+    useWorkspace.getState().openView('chatv', { sessionId: 's2' }, 'main', { newTab: true })
+    expect(dropAllowed(api, chat.id, toLeft)).toBe(true)
+  })
+
+  it('替换视图(插件的 ctx.replaceView)换不掉固定 View,默认项与暂存也不动', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'listv', params: {} }], right: [], bottom: [] } })
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(0)
+    expect(at(panels, 'left')).toEqual(['listv'])
+    expect(useWorkspace.getState().sidebarDefaults.left.map((v) => v.type)).toEqual(['listv'])
+
+    // 负对照:没固定的照旧被换
+    ws.openView('assetv', {}, 'left')
+    expect(ws.replaceViewsOfType('assetv', 'filev')).toBe(1)
+    expect(at(panels, 'left')).toEqual(['listv', 'filev'])
+  })
+
+  it('清场:插件自己关(不带 force)留下固定的;视图注销(force)一并关掉', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    ws.closeViewsOfType('detailv')
+    expect(at(panels, 'right')).toEqual(['detailv'])
+    ws.closeViewsOfType('detailv', true)
+    expect(at(panels, 'right')).toEqual(['sidebar-empty']) // 侧栏关空 → 占位
+
+    ws.closeViewsOfType('chatv', true)
+    expect(at(panels, 'main')).toEqual(['home']) // 主区最后一个 → 就地换空态,而不是在旁边再开一个 home
+  })
+
+  it('补回:活着的侧栏排到组首且不抢焦点;收起的侧栏只进暂存;主区空态就地换', () => {
+    const { panels, added } = build()
+    const ws = useWorkspace.getState()
+    ws.closeViewsOfType('detailv', true)
+    ws.closeViewsOfType('chatv', true)
+    ws.closeViewsOfType('listv', true)
+    // 左栏收起(真收起会走补间,这里直接摆成收起后的样子)
+    for (const p of panels.filter((x) => x.params.__loc === 'left')) p.api.close()
+    useWorkspace.setState({ stash: { left: [{ type: 'assetv', params: {} }], right: [], bottom: [] }, leftVisible: false })
+    const before = panels.find((p) => p.params.__loc === 'right')!
+    before.api.setActive()
+
+    ws.ensurePinned()
+    expect(at(panels, 'main')).toEqual(['chatv'])
+    expect(panels.find((p) => p.params.__type === 'chatv')!.params.followActive).toBe(true) // 用声明的重建参数
+    expect(at(panels, 'right')).toEqual(['detailv']) // 占位退位
+    expect(added.at(-1)).toMatchObject({ inactive: true, position: { index: 0 } })
+    expect(at(panels, 'left')).toEqual([]) // 没替用户展开
+    expect(useWorkspace.getState().stash.left.map((v) => v.type)).toEqual(['listv', 'assetv'])
+    expect(useWorkspace.getState().stash.left[0].params).toEqual({ mode: 'orbits' })
+
+    // 幂等:都在了就什么都不做
+    const count = panels.length
+    ws.ensurePinned()
+    expect(panels.length).toBe(count)
+  })
+
+  it('没注册的固定类型不补(停用的插件),也不报错', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    ws.closeViewsOfType('detailv', true)
+    unregisterView('detailv')
+    expect(() => ws.ensurePinned()).not.toThrow()
+    expect(at(panels, 'right')).toEqual(['sidebar-empty'])
+    registerView({ type: 'detailv', displayName: 'detailv', factory: () => null })
+    ws.ensurePinned()
+    expect(at(panels, 'right')).toEqual(['detailv'])
+  })
+
+  it('指向的文件没了(remapLeaves → null):固定 View 关掉后补一个空白的回来', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    ws.setPinned({ main: [{ type: 'filev', params: {} }] })
+    ws.navigateLeaf(idOf(panels, 'main', 'chatv'), 'filev', { path: '/gone.md' })
+    ws.remapLeaves((type, params) => (type === 'filev' && params.path === '/gone.md' ? null : undefined))
+    expect(at(panels, 'main')).toEqual(['filev'])
+    expect(panels.find((p) => p.params.__type === 'filev')!.params.path).toBeUndefined()
+  })
+
+  it('收起着的侧栏图标:固定的那个不可关', () => {
+    build()
+    useWorkspace.setState({ leftVisible: false, stash: { left: [{ type: 'listv', params: {} }, { type: 'assetv', params: {} }], right: [], bottom: [] } })
+    useWorkspace.getState().refreshTabs()
+    expect(useWorkspace.getState().leftTabs.map((t) => [t.type, t.closable])).toEqual([['listv', false], ['assetv', true]])
+  })
+})
+
+describe('固定 View:单列 store(移动端是独立重写的一份,漏接 = 静默少功能)', () => {
+  function build() {
+    useSingle.setState({ mainLeaves: [], leftLeaves: [], rightLeaves: [], activeMainId: null, leftActiveId: null, rightActiveId: null, sidebarDefaults: { left: [], right: [] }, pinned: {} })
+    const ws = useSingle.getState()
+    ws.openView('chatv', { followActive: true }, 'main')
+    ws.openView('listv', {}, 'left')
+    ws.setPinned(PINS)
+    return ws
+  }
+  const types = (): string[] => useSingle.getState().mainLeaves.map((r) => r.type)
+
+  it('最后一个关不掉、标签面板不给 ×;force 放行并落到空态', () => {
+    const ws = build()
+    const chat = useSingle.getState().mainLeaves[0].id
+    ws.closeLeaf(chat)
+    expect(types()).toEqual(['chatv'])
+    expect(useSingle.getState().mainTabs[0].closable).toBe(false)
+    expect(useSingle.getState().leftTabs[0].closable).toBe(false)
+    ws.closeLeaf(chat, true)
+    expect(types()).toEqual(['home'])
+  })
+
+  it('打开别的类型 → 新的主 leaf,固定的那个还在;同类就地换', () => {
+    const ws = build()
+    ws.openView('filev', { path: '/a.md' }, 'main')
+    expect(types()).toEqual(['chatv', 'filev'])
+    expect(useSingle.getState().mainLeaves.find((r) => r.id === useSingle.getState().activeMainId)!.type).toBe('filev')
+    ws.navigateLeaf(useSingle.getState().mainLeaves[0].id, 'chatv', { sessionId: 's9' })
+    expect(types()).toEqual(['chatv', 'filev'])
+  })
+
+  it('替换视图换不掉固定的;缺了能补回,且不抢当前显示的那个', () => {
+    const ws = build()
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(0)
+    expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv'])
+
+    ws.openView('filev', { path: '/a.md' }, 'main')
+    ws.closeViewsOfType('chatv', true)
+    expect(types()).toEqual(['filev'])
+    const showing = useSingle.getState().activeMainId
+    ws.ensurePinned()
+    expect(types()).toEqual(['chatv', 'filev'])
+    expect(useSingle.getState().activeMainId).toBe(showing)
+  })
+})

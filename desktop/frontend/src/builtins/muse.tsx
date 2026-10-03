@@ -77,6 +77,7 @@ export function agentSpaceFor(slug: 'muse'): SpaceDefinition {
     name: () => app().tr('space.muse'),
     icon: Sparkles,
     sidebarDefaults: side,
+    pinned: { main: [{ type: `${slug}-library`, params: {} }], right: side.right },
     build() {
       ws().setSidebarDefaults(side)
       ws().openView(`${slug}-library`, {}, 'main')

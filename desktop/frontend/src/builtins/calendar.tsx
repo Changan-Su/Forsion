@@ -58,6 +58,7 @@ export const calendarSpace: SpaceDefinition = {
   name: () => app().tr('space.calendar'),
   icon: CalendarDays,
   sidebarDefaults: CALENDAR_SIDE_VIEWS,
+  pinned: { main: [{ type: 'calendar', params: {} }], left: [{ type: 'todo-list', params: {} }] },
   build() {
     ws().setSidebarDefaults(CALENDAR_SIDE_VIEWS)
     ws().openView('calendar', {}, 'main')

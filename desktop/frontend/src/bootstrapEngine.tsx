@@ -197,6 +197,8 @@ export function installEngine(): void {
   if (activeSpace) {
     ws().setSidebarDefaults(activeSpace.sidebarDefaults)
     ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}, activeSpace.sideDefaultScale, activeSpace.bottomSpan) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
+    // 固定 View 只在主窗生效:卫星窗(detached / mini)里只有被撕出去的那几个视图,不该被别人的固定清单管着。
+    if (windowKind() === 'main') ws().setPinned(activeSpace.pinned)
   }
   // Forsion 插件在启动期就装(此前只在 Amadeus/Calendar/聊天输入框挂载时懒引导 → 从 Inbox 之类的 Space
   // 冷启动时插件根本没装):插件视图要尽早进注册表,内嵌 Space 才通得过「视图已注册」闸、旧布局引用

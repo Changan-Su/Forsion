@@ -43,7 +43,8 @@ export function planChatRestore(leaf: { type?: string; followActive?: boolean } 
 
 export function planSessionOpen(
   focused: FocusedLeaf | null,
-  ctx?: { sessionId?: string; leaves?: ChatLeaf[]; newTab?: boolean },
+  /** pinnedChatId:聊天在本 Space 主区是固定 View 时,那个跟随档主聊天的 leaf id(没有则不传)。 */
+  ctx?: { sessionId?: string; leaves?: ChatLeaf[]; newTab?: boolean; pinnedChatId?: string },
 ): SessionOpenPlan {
   if (ctx?.newTab) return { act: 'newtab' }
   const claimed = ctx?.sessionId
@@ -52,6 +53,10 @@ export function planSessionOpen(
   if (claimed) return { act: 'activate', leafId: claimed.id }
   if (!focused) return { act: 'fresh' }
   if (focused.type === 'chat' && focused.followActive !== false) return { act: 'follow' }
+  // 主聊天是固定 View(一直在):站在笔记 / 文件这类**内容标签**上点会话 → 回主聊天里显示,不把手头这个标签变成聊天
+  // (否则固定聊天旁边又多出一个聊天标签,用户正在看的那页还被顶掉)。空白标签(＋ 开出来的)与钉住别的会话的聊天
+  // 照旧就地接手 —— 那是「我就要开在这儿」。
+  if (ctx?.pinnedChatId && focused.type !== 'chat' && focused.type !== 'launcher' && focused.type !== 'home') return { act: 'activate', leafId: ctx.pinnedChatId }
   return { act: 'pin' }
 }
 

@@ -211,6 +211,7 @@ export function settleAsyncStartupSpace(): void {
     if (!space) return
     ws().setSidebarDefaults(space.sidebarDefaults)
     ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale, space.bottomSpan)
+    ws().setPinned(space.pinned)
   }
 
   if (migrated) {

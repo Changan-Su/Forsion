@@ -95,6 +95,7 @@ export const homepageSpace: SpaceDefinition = {
   name: () => app().tr('space.home'),
   icon: House,
   sidebarDefaults: HOME_SIDE_VIEWS,
+  pinned: { main: [{ type: 'homepage', params: {} }] },
   build() {
     ws().setSidebarDefaults(HOME_SIDE_VIEWS)
     ws().openView('homepage', {}, 'main')

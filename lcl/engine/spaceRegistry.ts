@@ -7,7 +7,8 @@ import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
 import { useWorkspace } from './workspaceStore'
-import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout } from './layoutPersist'
+import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
+import { clearSingleColumnLayouts } from './singleColumnStore'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
@@ -64,12 +65,14 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     }
     ws.setSidebarDefaults(toSpace.sidebarDefaults) // 3. 两路都需(applyNamed 不跑 build)
     ws.setSideProfile(toId, toSpace.resizableSides ?? {}, toSpace.sideDefaultScale, toSpace.bottomSpan) // 载入该 Space 记住的可拖宽侧栏宽度(须先于 applyNamed/build 的 pinSides)
+    ws.setPinned(toSpace.pinned)
 
     // 4. 还原目标 Space:有命名布局则应用(applyNamed 不持久化,补 saveCurrent);否则 resetLayout 重建+持久化
     const saved = ws.namedLayouts().includes(spaceLayoutName(toId))
     // per-tab 历史由 applyNamed / resetLayout 各自在换布局时清(两种 store 都是)。⚠️ 这里别再补一次 reset:
     // 它跑在重建之后,会把还原出来的前台文件视图刚记下的栈底一起清掉 → 后退恒灰(09-16 active-tab.e2e)。
-    if (saved && ws.applyNamed(spaceLayoutName(toId))) ws.saveCurrent()
+    // 已存布局里缺了固定 View(插件停用时被清场、Space 后来新增了固定项…)→ 补回来;resetLayout 那一路由 build() 负责。
+    if (saved && ws.applyNamed(spaceLayoutName(toId))) { ws.ensurePinned(); ws.saveCurrent() }
     else ws.resetLayout()
   },
 }))
@@ -107,6 +110,15 @@ export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
   const next = loadNamedLayout(spaceLayoutName(toId))
   if (next) saveLayout(next)
   else clearLayout()
+}
+
+/** 丢掉**全部** Space 的已存布局 + 本窗当前布局,下次进入各自按默认重建。布局规则换代时的一次性迁移用
+ *  (2026-10-03 固定 View:此前的布局里固定项可能早被关掉 / 顶掉 / 拖走)。按前缀清而不是按已注册的 Space 清:
+ *  插件 / 用户 Space 异步注册,启动这一刻还不在表里。桌面与单列两套存档一起清(同源可能两种壳都跑过)。 */
+export function resetSpaceLayouts(): void {
+  for (const name of Object.keys(listNamedLayouts())) if (name.startsWith('space:')) deleteNamedLayout(name)
+  clearLayout()
+  clearSingleColumnLayouts()
 }
 
 /** 「把这个 Space 固定到系统桌面」的宿主接缝(2026-08-20)。引擎不认识 Capacitor / 安卓,

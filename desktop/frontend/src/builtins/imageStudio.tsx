@@ -20,6 +20,7 @@ const sides: SidebarDefaults = {
 export const imageStudioSpace: SpaceDefinition = {
   id: 'image-studio', name: () => translate('imageStudio.title'), icon: Images,
   sidebarDefaults: sides, resizableSides: { left: true, right: true }, sideDefaultScale: { left: 1.2 },
+  pinned: { main: [{ type: 'image-studio', params: {} }], left: sides.left },
   build() {
     const ws = useWorkspace.getState()
     ws.setSidebarDefaults(sides)

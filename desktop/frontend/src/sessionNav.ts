@@ -7,7 +7,7 @@
 //    (2026-08-16 用户实报:「他们都会直接替换 A chatview」)。侧栏的聊天不冻:那份是 Space 配方里的
 //    常驻陪伴视图(Coding/Amadeus 空间),冻了等于把用户的主力聊天锁死。
 import { useApp } from './stores/appStore'
-import { useWorkspace, activeMainPanel, useSpaceStore, setActiveSpace } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, setActiveSpace, isPinned } from '@lcl/engine'
 import { planNewChat, planSessionOpen, type ChatLeaf } from './sessionOpenPlan'
 import { registerMessages, translate } from './i18n'
 
@@ -49,7 +49,7 @@ export function openSession(id: string, opts?: { newTab?: boolean }): void {
   const fp = paramsOf(focused as PanelLike | null)
   const plan = planSessionOpen(
     focused ? { type: fp.__type as string | undefined, followActive: fp.followActive as boolean | undefined } : null,
-    { sessionId: id, leaves, newTab: opts?.newTab },
+    { sessionId: id, leaves, newTab: opts?.newTab, pinnedChatId: isPinned(ws.pinned, 'main', 'chat') ? mainPrimaryChat()?.id : undefined },
   )
   // 冻结要在 setActiveId 之前:此刻的 activeId 才是老标签正显示的那个会话。
   if (plan.act !== 'follow') freezeMainPrimary(useApp.getState().activeId, plan.act === 'activate' ? plan.leafId : undefined)
