@@ -10,7 +10,7 @@ import { createRoot, type Root } from 'react-dom/client'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-vi.mock('../stores/themeStore', () => ({ useTheme: (sel: (s: { mode: string; flat: boolean }) => unknown) => sel({ mode: 'light', flat: false }) }))
+vi.mock('../stores/themeStore', () => ({ useVisualTheme: (sel: (s: { mode: string; flat: boolean }) => unknown) => sel({ mode: 'light', flat: false }) }))
 vi.mock('@amadeus/blocks/excalidraw/ExcalidrawEmbed', () => ({ ExcalidrawEmbed: () => null }))
 vi.mock('@amadeus/blocks/database/DatabaseEmbed', () => ({ DatabaseEmbed: () => null }))
 vi.mock('@amadeus/blocks', () => ({}))

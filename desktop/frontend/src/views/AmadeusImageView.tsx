@@ -3,7 +3,7 @@
  *  多实例(params.imagePath 认领文件、随布局持久化)。点击图片在「适应窗口 ↔ 原始尺寸」间切换。 */
 import { useEffect, useState } from 'react'
 import type { ViewProps } from '@lcl/engine'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { toAssetUrl } from '@amadeus-shared/assets'
 

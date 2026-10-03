@@ -1,10 +1,11 @@
+import { useSpaceAmbient } from './theme/spaceAmbient'
 import { amadeusAvailable } from './features/runtime'
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Shell, UI_MODE, useWorkspace } from '@lcl/engine'
 import { useApp } from './stores/appStore'
-import { useTheme } from './stores/themeStore'
+import { useTheme, useVisualTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
 import { useBootstrap } from './stores/bootstrap'
 import { buildDefaultLayout } from './bootstrapEngine'
@@ -90,6 +91,8 @@ export function Root() {
     if (action === 'open-agent' && payload && /^[a-z0-9][a-z0-9-]{0,63}$/.test(payload)) openAgentProfile(payload)
   }), [])
   const theme = useTheme()
+  const visualTheme = useVisualTheme()
+  useSpaceAmbient()
   const a = useApp(useShallow((s) => ({
     sessions: s.sessions,
     archivedSessions: s.archivedSessions,
@@ -136,7 +139,7 @@ export function Root() {
         className={`shell-host${revealMain ? ' main-enter' : ''}`}
         style={a.onboarding ? { visibility: 'hidden' } : undefined}
       >
-        <Shell dark={theme.mode === 'dark'} soft={!!getLanguage(theme.lang)?.manifest.panelGap} buildDefault={buildDefaultLayout} header={<TopBar />} footer={<DesktopStatusBar />} />
+        <Shell dark={visualTheme.mode === 'dark'} soft={!!getLanguage(visualTheme.lang)?.manifest.panelGap} buildDefault={buildDefaultLayout} header={<TopBar />} footer={<DesktopStatusBar />} />
       </div>
 
       {/* Amadeus 全局浮层(快速切换等):须在 shell-host 之后(拖窗区 DOM 顺序,同下)。 */}

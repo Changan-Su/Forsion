@@ -3,7 +3,7 @@
  *  resolveAttachment 页相对落空会回退按 vault 根解析;与笔记内嵌 `![[X.excalidraw]]` 共享 drawingStore。 */
 import { useEffect } from 'react'
 import type { ViewProps } from '@lcl/engine'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { ExcalidrawEmbed } from '@amadeus/blocks/excalidraw/ExcalidrawEmbed'
 
 const drawBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.excalidraw(\.md)?$/i, '')

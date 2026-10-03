@@ -107,7 +107,7 @@ export function applyTheme(
   skinId: string,
   bgId: string,
   mode: 'light' | 'dark',
-  opts?: { customColor?: string; customBg?: string },
+  opts?: { customColor?: string; customBg?: string; persist?: boolean },
 ): void {
   ensureThemeLinks();
 
@@ -146,7 +146,7 @@ export function applyTheme(
   if (skinId === 'custom') {
     const vars = customAccentVars(accentHex, mode === 'dark');
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
-    if (opts?.customColor) { try { localStorage.setItem('forsion_theme_seed', opts.customColor); } catch { /* ignore */ } }
+    if (opts?.customColor && opts.persist !== false) { try { localStorage.setItem('forsion_theme_seed', opts.customColor); } catch { /* ignore */ } }
   } else {
     for (const k of CUSTOM_ACCENT_VAR_KEYS) root.style.removeProperty(k);
   }
@@ -157,7 +157,7 @@ export function applyTheme(
     if (bgSeed === undefined) { try { bgSeed = localStorage.getItem('forsion_theme_bg_seed') || undefined; } catch { /* ignore */ } }
     const vars = customBgVars(bgSeed || accentHex, mode === 'dark', !!bgSeed);
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
-    if (opts?.customBg !== undefined) {
+    if (opts?.customBg !== undefined && opts.persist !== false) {
       try {
         if (opts.customBg) localStorage.setItem('forsion_theme_bg_seed', opts.customBg);
         else localStorage.removeItem('forsion_theme_bg_seed');
@@ -175,12 +175,14 @@ export function applyTheme(
   currentCssId = cssId;
   syncWindowMaterial();
 
-  try {
-    localStorage.setItem('forsion_theme_lang', cssId);
-    localStorage.setItem('forsion_theme_skin', skinId);
-    localStorage.setItem('forsion_theme_bg', bgId);
-    localStorage.setItem('forsion_theme', mode);
-  } catch { /* private mode */ }
+  if (opts?.persist !== false) {
+    try {
+      localStorage.setItem('forsion_theme_lang', cssId);
+      localStorage.setItem('forsion_theme_skin', skinId);
+      localStorage.setItem('forsion_theme_bg', bgId);
+      localStorage.setItem('forsion_theme', mode);
+    } catch { /* private mode */ }
+  }
 
   if (changed) {
     const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;

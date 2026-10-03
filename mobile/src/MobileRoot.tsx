@@ -1,3 +1,4 @@
+import { useSpaceAmbient } from '@/theme/spaceAmbient'
 import { amadeusAvailable } from '@/features/runtime'
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
@@ -12,7 +13,7 @@ import { amadeusAvailable } from '@/features/runtime'
 import { useEffect } from 'react'
 import { App as CapApp } from '@capacitor/app'
 import { useApp } from '@/stores/appStore'
-import { useTheme } from '@/stores/themeStore'
+import { useTheme, useVisualTheme } from '@/stores/themeStore'
 import { useBootstrap } from '@/stores/bootstrap'
 import { useInbox } from '@/stores/inboxStore'
 import { pullInbox } from '@/services/backendService'
@@ -114,6 +115,8 @@ export function MobileRoot() {
     return () => window.clearTimeout(t)
   }, [])
   const theme = useTheme()
+  const visualTheme = useVisualTheme()
+  useSpaceAmbient()
   const a = useApp(useShallow((s) => ({
     sessions: s.sessions,
     archivedSessions: s.archivedSessions,
@@ -133,7 +136,7 @@ export function MobileRoot() {
   return (
     <>
       <div className="shell-host">
-        <SingleColumnHost dark={theme.mode === 'dark'} buildDefault={buildDefaultLayout} />
+        <SingleColumnHost dark={visualTheme.mode === 'dark'} buildDefault={buildDefaultLayout} />
       </div>
 
       {/* Amadeus 全局浮层。⚠️ 名字像「快速切换器」,实为**对话框宿主**:AskStringHost / DeleteAssetsHost /

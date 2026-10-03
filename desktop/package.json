@@ -159,6 +159,7 @@
     "check:settingsmode": "node scripts/settings-mode.check.cjs",
     "check:themecontrast": "node scripts/theme-contrast.check.cjs",
     "check:themevisual": "node scripts/theme-visual.check.cjs",
+    "check:spaceappearance": "node scripts/space-appearance.e2e.cjs",
     "check:themeapp": "node scripts/theme-app.check.cjs",
     "check:marketui": "node scripts/market-ui.check.cjs",
     "probe:marketdl": "node scripts/market-download.probe.cjs",

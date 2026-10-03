@@ -9,7 +9,7 @@ import '@astryxdesign/core/astryx.css'
 import '@astryxdesign/theme-neutral/theme.css'
 import { useLayoutEffect, type ReactNode } from 'react'
 import { Theme, defineTheme, generateThemeCSS, type DefinedTheme } from '@astryxdesign/core/theme'
-import { useTheme } from '../stores/themeStore'
+import { useVisualTheme as useTheme } from '../stores/themeStore'
 
 // LCL → astryx token 桥:单值字符串引用 LCL 变量,明暗由 LCL 变量自身随 data-mode 流动。
 // __built:让 <Theme> 跳过自己的运行时注入,改由下面 injectThemeCSS 常驻注入(原因见那里)。
