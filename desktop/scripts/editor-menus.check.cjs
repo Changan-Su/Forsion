@@ -949,7 +949,7 @@ async function main() {
         const root = document.querySelector(PM)
         const id = root.getAttribute('aria-activedescendant')
         const el = id ? document.getElementById(id) : null
-        return { id, controls: root.getAttribute('aria-controls'), menuId: document.querySelector('.slash-menu')?.id ?? null, points: el ? el.hasAttribute('data-active') && el.getAttribute('role') === 'menuitem' : false, label: el?.querySelector('.slash-label')?.textContent ?? null }
+        return { id, controls: root.getAttribute('aria-controls'), menuId: (document.querySelector('.slash-menu [role="menu"]') ?? document.querySelector('.slash-menu'))?.id ?? null, /* 分类胶囊之后,被控的是菜单里那张命令列表(role=menu) */ points: el ? el.hasAttribute('data-active') && el.getAttribute('role') === 'menuitem' : false, label: el?.querySelector('.slash-label')?.textContent ?? null }
       }, PM)
       const s0 = await ad()
       await page.keyboard.press('ArrowDown')

@@ -1226,7 +1226,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 那两条正是把 `position:fixed` 弹层锚歪并裁掉的元凶,不套上就恒绿。见 scripts/tablemount.check.cjs。
   const dark = new URLSearchParams(location.search).has('dark')
   applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
-  useTheme.setState({ mode: dark ? 'dark' : 'light' }) // 表面读的是 store 的 mode,不是文档属性
+  useTheme.setState({ mode: dark ? 'dark' : 'light', modePref: dark ? 'dark' : 'light' }) // 表面读的是 store 的 mode,不是文档属性
   const rootEl = document.getElementById('root')!
   rootEl.style.cssText = 'position:fixed;inset:0;overflow:auto;padding:32px 24px'
   const skin = document.createElement('div')
@@ -2112,7 +2112,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     // `&udark`(配 &upane):真 applyTheme 切暗色(token 选择子在 <html> 上,只给壳写 data-mode 只拿到半套变量)。截图自查用。
     if (upane && new URLSearchParams(location.search).has('udark')) {
       applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), 'dark')
-      useTheme.setState({ mode: 'dark' })
+      useTheme.setState({ mode: 'dark', modePref: 'dark' }) // 视觉层按 modePref 合成(Space 外观),只写 mode 会被回刷成亮色
     }
     // 页内查找:生产里浮条挂 Root、由 `find-in-page` 命令(mod+f)开;台架没有 Shell 也没有
     // installEngine,所以这里手动挂条 + 把开条函数露出来给仪器直接调 —— 仪器验的是**查找引擎**
