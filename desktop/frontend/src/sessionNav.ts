@@ -43,6 +43,16 @@ function freezeMainPrimary(prevSessionId: string | null, exceptLeafId?: string):
 }
 const retire = (leafId: string | null): void => { if (leafId) useWorkspace.getState().leafById(leafId)?.close() }
 
+/** 聊天是主区固定 View 时,「回主聊天」回的是哪个:跟随档主聊天;它被冻成钉住档之后(⌘ 点开过别的会话)就是
+ *  最近聚焦过的那个聊天标签,再不行取第一个。 */
+function pinnedChatTarget(): { id: string; follows: boolean } | undefined {
+  const primary = mainPrimaryChat()
+  if (primary) return { id: primary.id, follows: true }
+  const chats = panelsOf().filter((p) => paramsOf(p).__type === 'chat' && paramsOf(p).__loc === 'main')
+  const last = chats.find((p) => p.id === useWorkspace.getState().focusedChatLeafId) ?? chats[0]
+  return last ? { id: last.id, follows: false } : undefined
+}
+
 export function openSession(id: string, opts?: { newTab?: boolean }): void {
   const ws = useWorkspace.getState()
   const leaves: ChatLeaf[] = panelsOf()
@@ -52,7 +62,7 @@ export function openSession(id: string, opts?: { newTab?: boolean }): void {
   const fp = paramsOf(focused as PanelLike | null)
   const plan = planSessionOpen(
     focused ? { type: fp.__type as string | undefined, followActive: fp.followActive as boolean | undefined } : null,
-    { sessionId: id, leaves, newTab: opts?.newTab, pinnedChatId: isPinned(ws.pinned, 'main', 'chat') ? mainPrimaryChat()?.id : undefined },
+    { sessionId: id, leaves, newTab: opts?.newTab, pinnedChat: isPinned(ws.pinned, 'main', 'chat') ? pinnedChatTarget() : undefined },
   )
   // 冻结要在 setActiveId 之前:此刻的 activeId 才是老标签正显示的那个会话。
   const stale = plan.act !== 'follow' ? freezeMainPrimary(useApp.getState().activeId, plan.act === 'activate' ? plan.leafId : undefined) : null
@@ -69,7 +79,7 @@ export function openSession(id: string, opts?: { newTab?: boolean }): void {
       break // 跟随主聊天已随 activeId 切到该会话,无需动 leaf
     case 'pin':
       // 就地把聚焦 leaf 固定成该会话的聊天;bootstrapEngine 的跟随订阅对固定 leaf 放行不回拽。
-      ws.navigateLeaf(focused!.id, 'chat', { sessionId: id, followActive: false })
+      ws.navigateLeaf(plan.leafId ?? focused!.id, 'chat', { sessionId: id, followActive: false })
       break
     case 'fresh':
       ws.openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')

@@ -545,13 +545,32 @@ export const useWorkspace = create<WS>((set, get) => {
     replaceViewsOfType(from, to, params = {}) {
       if (from === to || !getView(to)) return 0
       let n = 0
-      // 固定 View 不许被换掉(同桌面版):`to` 作为新标签开在它旁边(主区由 navigateLeaf 自己认;抽屉里加一个同侧
-      // 标签,不弹开抽屉),只有真新开出来才计数;固定在那一侧的默认项也不换
+      // 同桌面版:固定 View 不被顶掉(`to` 加在它旁边,不弹开抽屉),往回换时摘掉 `from`;只有真新开 / 真摘掉才计数;
+      // 固定在那一侧的默认项也不换。
+      const def = getView(to)!
       for (const rec of allRecs().filter((r) => r.type === from)) {
-        if (rec.loc === 'main' || !guarded(rec)) { if (get().navigateLeaf(rec.id, to, params)) n++; continue }
-        const had = get()[bucketOf(rec.loc)].some((r) => r.type === to)
-        if (get().openView(to, params, rec.loc) && !had) n++
+        const keepFrom = guarded(rec)
+        const bkey = bucketOf(rec.loc)
+        // 「一区一个」:抽屉恒如此;主区多开同类是常态,只有牵涉固定 View 才这么算
+        const unique = rec.loc !== 'main' || keepFrom || isPinned(pins(), 'main', to)
+        const there = unique ? get()[bkey].find((r) => r.id !== rec.id && r.type === to) : undefined
+        const wasFront = get()[activeKeyOf(rec.loc)] === rec.id
+        if (there) {
+          if (Object.keys(params).length) leaf(there).setParams(params)
+          if (wasFront) setActive(rec.loc, there.id)
+          if (!keepFrom) { get().closeLeaf(rec.id); n++ }
+          continue
+        }
+        if (!keepFrom) { if (get().navigateLeaf(rec.id, to, params)) n++; continue }
+        // ⚠️不走 openView:它的跨桶单例复用会抓到**别的桶**里的同类 leaf,把参数并过去却一个都没新开 —— Coding 的
+        // studio 参数就这样漏到主区聊天上,回项目索引时那张主区聊天被当成 Coding 的对话误关(Codex 评审用真 store 复现)。
+        const ids = allRecs().map((r) => r.id)
+        const added: LeafRec = { id: def.singleton && !ids.includes(to) ? to : makeId(to, ids), type: to, loc: rec.loc, params: { ...params }, title: label(def.displayName) }
+        set((s) => ({ [bkey]: [...s[bkey], added] } as Partial<WS>))
+        if (wasFront) setActive(rec.loc, added.id)
+        n++
       }
+      get().refreshTabs()
       const swap = (side: 'left' | 'right', list: PersistedPanel[]): PersistedPanel[] =>
         isPinned(pins(), side, from) ? list : list.map((v) => (v.type === from ? { type: to, params: { ...params } } : v))
       const d = get().sidebarDefaults

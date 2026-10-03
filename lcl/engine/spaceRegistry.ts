@@ -115,7 +115,13 @@ export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
 /** 丢掉**全部** Space 的已存布局 + 本窗当前布局,下次进入各自按默认重建。布局规则换代时的一次性迁移用
  *  (2026-10-03 固定 View:此前的布局里固定项可能早被关掉 / 顶掉 / 拖走)。按前缀清而不是按已注册的 Space 清:
  *  插件 / 用户 Space 异步注册,启动这一刻还不在表里。桌面与单列两套存档一起清(同源可能两种壳都跑过)。 */
+let layoutsResetThisBoot = false
+/** 本次启动做过 resetSpaceLayouts():当前布局键是空的,onReady 摆出来的是回落 Space 的默认布局而不是「上次退出」那个
+ *  Space 的现场 —— 异步就位的 Space 据此重建自己的默认布局,而不是把回落 Space 的内容认成自己的。 */
+export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
+
 export function resetSpaceLayouts(): void {
+  layoutsResetThisBoot = true
   for (const name of Object.keys(listNamedLayouts())) if (name.startsWith('space:')) deleteNamedLayout(name)
   clearLayout()
   clearSingleColumnLayouts()

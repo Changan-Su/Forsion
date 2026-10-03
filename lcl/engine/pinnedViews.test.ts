@@ -256,6 +256,58 @@ describe('固定 View:桌面 store', () => {
     expect(useWorkspace.getState().stashActive.left).toBe('listv')
   })
 
+  // ── Codex 评审(2026-10-03)复现的几条 ────────────────────────────────────────────
+  it('固定的那个本身是活动 panel:换完之后新视图留在前台,不被「焦点还给原主人」又激活回去', () => {
+    const { panels, api } = build()
+    const ws = useWorkspace.getState()
+    const list = panels.find((x) => x.params.__type === 'listv')!
+    list.api.setActive()
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(1)
+    expect(api.activePanel!.params.__type).toBe('assetv')
+    // 主区同理
+    const chat = panels.find((x) => x.params.__type === 'chatv')!
+    chat.api.setActive()
+    expect(ws.replaceViewsOfType('chatv', 'filev')).toBe(1)
+    expect(api.activePanel!.params.__type).toBe('filev')
+  })
+
+  it('主区固定 View:连换两次不重复开标签,往回换是摘掉新开的而不是把它也变成固定的那种', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    expect(ws.replaceViewsOfType('chatv', 'filev', { path: '/a' })).toBe(1)
+    expect(ws.replaceViewsOfType('chatv', 'filev', { path: '/b' })).toBe(0)
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev'])
+    expect(panels.find((x) => x.params.__type === 'filev')!.params.path).toBe('/b') // 参数并进已有的那个
+    expect(ws.replaceViewsOfType('filev', 'chatv')).toBe(1)
+    expect(at(panels, 'main')).toEqual(['chatv'])
+
+    // 负对照:不牵涉固定 View 的主区照旧就地换,多开的同类标签不去重
+    ws.setPinned({})
+    ws.openView('filev', { path: '/x' }, 'main', { newTab: true })
+    ws.openView('assetv', {}, 'main', { newTab: true })
+    expect(ws.replaceViewsOfType('assetv', 'filev')).toBe(1)
+    expect(at(panels, 'main')).toEqual(['chatv', 'filev', 'filev'])
+  })
+
+  it('收起的侧栏里目标视图已经在:不重复加,但新参数要并进去', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    for (const p of panels.filter((x) => x.params.__loc === 'left')) p.api.close()
+    useWorkspace.setState({ stash: { left: [{ type: 'listv', params: {} }, { type: 'assetv', params: { project: 'old', keep: 1 } }], right: [], bottom: [] }, leftVisible: false })
+    expect(ws.replaceViewsOfType('listv', 'assetv', { project: 'new' })).toBe(0)
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'listv', params: {} }, { type: 'assetv', params: { project: 'new', keep: 1 } }])
+  })
+
+  it('remapLeaves 摘掉收起侧栏里的固定项(它指向的文件没了)→ 补一个空白的回来,别的暂存项照旧', () => {
+    const { panels } = build()
+    const ws = useWorkspace.getState()
+    ws.setPinned({ left: [{ type: 'filev', params: {} }] })
+    for (const p of panels.filter((x) => x.params.__loc === 'left')) p.api.close()
+    useWorkspace.setState({ stash: { left: [{ type: 'filev', params: { path: '/gone.md' } }, { type: 'assetv', params: {} }], right: [], bottom: [] }, leftVisible: false })
+    ws.remapLeaves((type, params) => (type === 'filev' && params.path === '/gone.md' ? null : undefined))
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'filev', params: {} }, { type: 'assetv', params: {} }])
+  })
+
   it('清场:插件自己关(不带 force)留下固定的;视图注销(force)一并关掉', () => {
     const { panels } = build()
     const ws = useWorkspace.getState()
@@ -384,5 +436,38 @@ describe('固定 View:单列 store(移动端是独立重写的一份,漏接 = �
     ws.ensurePinned()
     expect(types()).toEqual(['chatv', 'filev'])
     expect(useSingle.getState().activeMainId).toBe(showing)
+  })
+
+  // ── Codex 评审(2026-10-03)复现的几条 ────────────────────────────────────────────
+  it('抽屉里往回换:摘掉新开的那个,不是把它也变成固定的那种', () => {
+    const ws = build()
+    expect(ws.replaceViewsOfType('listv', 'assetv')).toBe(1)
+    expect(ws.replaceViewsOfType('assetv', 'listv')).toBe(1)
+    expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv'])
+  })
+
+  it('主区固定 View:连换两次不重复开,往回换摘掉新开的', () => {
+    const ws = build()
+    expect(ws.replaceViewsOfType('chatv', 'filev')).toBe(1)
+    expect(ws.replaceViewsOfType('chatv', 'filev')).toBe(0)
+    expect(types()).toEqual(['chatv', 'filev'])
+    expect(ws.replaceViewsOfType('filev', 'chatv')).toBe(1)
+    expect(types()).toEqual(['chatv'])
+  })
+
+  it('⚠️目标是单例且主区已有一个:抽屉里照样新开一个,参数不漏到主区那个上(Coding 的 studio 参数误关主区聊天)', () => {
+    registerView({ type: 'singlev', displayName: 'singlev', factory: () => null, singleton: true })
+    try {
+      const ws = build()
+      ws.openView('singlev', { followActive: true, reuseKey: 'primary' }, 'main', { newTab: true })
+      const mainSingle = (): Record<string, unknown> => useSingle.getState().mainLeaves.find((r) => r.type === 'singlev')!.params
+      expect(ws.replaceViewsOfType('listv', 'singlev', { studio: true })).toBe(1)
+      expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv', 'singlev'])
+      expect(mainSingle().studio).toBeUndefined()
+      // 回索引:只关带 studio 的那个,主区的还在
+      ws.remapLeaves((type, params) => (type === 'singlev' && params.studio ? null : undefined))
+      expect(useSingle.getState().leftLeaves.map((r) => r.type)).toEqual(['listv'])
+      expect(useSingle.getState().mainLeaves.some((r) => r.type === 'singlev')).toBe(true)
+    } finally { unregisterView('singlev') }
   })
 })

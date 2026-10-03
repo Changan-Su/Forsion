@@ -953,14 +953,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api || from === to || !getView(to)) return 0
     const keep = api.activePanel?.id
     const def = getView(to)!
-    let n = 0, side = 0, stole = false
+    let n = 0, side = 0, stole = false, giveBack = true
     const pins = get().pinned
     for (const p of [...api.panels]) {
       if (panelType(p) !== from) continue
       const loc = ((p.params ?? {}) as PanelMeta).__loc ?? 'main'
-      // 主区:navigateLeaf 自己认固定 View(区内最后一个 → 同组新标签,不顶掉它)
-      if (loc === 'main') { if (get().navigateLeaf(p.id, to, params)) n++; continue }
       const keepFrom = guarded(api, p) // 固定 View 不许被换掉:`to` 开在它旁边,它留着(见 pinnedViews.ts)
+      // 固定的那个本身就是活动 panel:`to` 顶上来之后不许再把它激活回去(否则等于没换,Codex 评审复现)
+      if (keepFrom && keep === p.id) giveBack = false
+      // 「一区一个」:侧栏 / 底部恒如此(openView 同侧同类型复用)。主区多开同类标签是常态、平时一律就地换;只有牵涉
+      // 固定 View 才这么算 —— 否则对固定的 A 连换两次得到 [A,B,B],往回换又把 B 变成第二个 A,而不是摘掉它。
+      const unique = loc !== 'main' || keepFrom || isPinned(pins, 'main', to)
+      if (loc === 'main' && !(unique && panelsAt(api, 'main').some((x) => x !== p && panelType(x) === to))) {
+        if (get().navigateLeaf(p.id, to, params)) n++ // 固定的由 navigateLeaf 自己认(同组新标签,不顶掉它)
+        continue
+      }
       // 侧栏 / 底部挂的是按类型的组件(component = 类型名,见 openView),改 __type 换不掉已经画出来的那个
       // (2026-10-02 真 Electron:返回 1,左栏照旧是旧视图)→ 在原位旁开新的再摘掉旧的:组一直不空,不触发重排。
       const group = p.group as { panels?: IDockviewPanel[]; activePanel?: IDockviewPanel } | undefined
@@ -970,7 +977,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         if (Object.keys(params).length) there.api.updateParameters({ ...(there.params ?? {}), ...params }) // 调用方给的参数不丢
         if (group?.activePanel === p) { there.api.setActive(); stole = true }
         if (keepFrom) continue
-        api.removePanel(p)
+        if (loc === 'main') get().closeLeaf(p.id) // 主区走 closeLeaf:导航史、分屏收尾都在那里
+        else api.removePanel(p)
         n++; side++; continue
       }
       const index = group?.panels?.indexOf(p) ?? -1
@@ -988,7 +996,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // ⚠️已在组里最前的 panel 再 setActive,dockview 7 会重绘它(openPanel → renderPanel 摘下再挂回,iframe 重载;
     // 底部面板修复会话 10-02 用 removeChild 栈抓到)→ 那种只切活动组。
     const back = keep ? api.getPanel(keep) : undefined
-    if ((n || stole) && back) {
+    if ((n || stole) && back && giveBack) {
       if ((back.group as { activePanel?: IDockviewPanel } | undefined)?.activePanel === back) back.group.api.setActive()
       else back.api.setActive()
     }
@@ -1005,7 +1013,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 固定在这一侧(收起着):`to` 排到它后面,它留着。默认项不动 —— 固定的那个关不掉,轮不到按默认项重建。
     const beside = (side: DockSide): Stashed[] => {
       const list = stash[side], at = list.findIndex((v) => v.type === from)
-      if (at < 0 || !isPinned(pins, side, from) || list.some((v) => v.type === to)) return list
+      if (at < 0 || !isPinned(pins, side, from)) return list
+      // `to` 已经暂存在这一侧:不再加,但调用方给的参数要并进去(展开着的那条路径也并)
+      if (list.some((v) => v.type === to)) return Object.keys(params).length ? list.map((v) => (v.type === to ? { ...v, params: { ...(v.params ?? {}), ...params } } : v)) : list
       stashed++
       return [...list.slice(0, at + 1), { type: to, params: { ...params } }, ...list.slice(at + 1)]
     }
@@ -1027,7 +1037,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (next === null) get().closeLeaf(p.id, true) // 指向的东西没了:固定 View 也关,下面补一个空白的回来
       else if (next) makeLeaf(p).setParams(next)
     }
-    get().ensurePinned()
     let changed = false
     const stash = Object.fromEntries(Object.entries(get().stash).map(([side, list]) => [side, list.flatMap((v) => {
       const next = fn(v.type, v.params)
@@ -1040,6 +1049,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       get().refreshTabs() // 收起态的侧栏图标从 stash 取
       scheduleWorkspaceSave()
     }
+    // 最后才补:暂存里的固定项也可能刚被摘掉(先补的话它那时还在,补完才被删,展开后就没了 —— Codex 评审复现)
+    get().ensurePinned()
   },
 
   resetLayout(opts) {
