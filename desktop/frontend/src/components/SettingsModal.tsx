@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
+import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
@@ -3212,6 +3213,7 @@ export const SettingsModal: React.FC<{
                         })}
                       </div>
                     </section>
+                    <StartupAppearanceSettings />
                   </>
                 )}
 

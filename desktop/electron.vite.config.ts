@@ -1,3 +1,4 @@
+import { startupAppearanceHtml } from './frontend/startupAppearancePlugin'
 import { resolve } from 'path'
 import { readFileSync } from 'fs'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
@@ -31,7 +32,7 @@ export default defineConfig({
   renderer: {
     root: resolve('frontend'),
     define: DEFINE,
-    plugins: [react()],
+    plugins: [startupAppearanceHtml(), react()],
     // 允许 ?raw 读取 desktop 根目录的 CHANGELOG.md(位于 renderer root=frontend 之外)。
     // 端口避开 Amadeus(5173)/老 desktop dev。
     server: { port: 5273, strictPort: false, fs: { allow: [resolve('.'), resolve('../lcl')] } },

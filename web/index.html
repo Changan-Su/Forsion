@@ -252,15 +252,6 @@
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      // 闪屏在淡出动画结束后移除(按 animationName 过滤,避免被内部部件的 animationend 冒泡误触发)。
-      (function () {
-        var s = document.getElementById('tangu-splash');
-        if (!s) return;
-        s.addEventListener('animationend', function (e) {
-          if (e.animationName === 'tangu-splash-out') s.remove();
-        });
-      })();
-    </script>
+    <!-- forsion-startup-runtime -->
   </body>
 </html>

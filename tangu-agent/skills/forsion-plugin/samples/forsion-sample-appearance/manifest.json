@@ -1,0 +1,9 @@
+{
+  "id": "forsion-sample-appearance",
+  "name": "开屏与图标示例",
+  "nameEn": "Startup appearance sample",
+  "version": "1.0.0",
+  "minAppVersion": "0.0.1",
+  "description": "提供简约的图标与动态开屏选项，由用户在外观设置中选择。",
+  "descriptionEn": "Adds a minimal icon and animated startup choice to Appearance settings."
+}

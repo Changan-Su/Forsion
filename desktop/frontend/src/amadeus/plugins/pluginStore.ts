@@ -4,6 +4,7 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { registerFont as registerHostFont } from '../../fontPresets'
+import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
 
 // Trust model: external plugins run with the curated `ctx.app` API (and, like Obsidian,
 // full renderer scope). Only install plugins you trust.
@@ -1068,6 +1069,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       scope.own('theme', () => removeThemeStyle(theme.id), theme.id) // <style> 在 store 外:只删切片会留孤儿
       set((s) => ({ themes: [...s.themes, { pluginId, item: theme }] }))
     },
+    registerAppearance: (preset) => {
+      if (!ctxAlive()) return () => {}
+      // 插件不调 disposer 也得收干净(同 registerFont):停用后外观下拉里不留死项
+      return scope.own('appearance', registerAppearance(pluginId, preset), preset.id)
+    },
     // 插件字体(2026-08-28):与内置预设同形,只是 source 不同 → 设置里分到「插件提供」组。
     // id 由宿主加命名空间前缀,插件之间不会撞;远程 URL 直接丢掉(CSP default-src 'self',且要离线可用)。
     registerFont: (font) => {
@@ -1590,6 +1596,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
       teardown(id)
+      clearPluginAppearance(id)
       set((s) => ({ lastSetupError: { ...s.lastSetupError, [id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) } }))
     }
     let r: ReturnType<AmadeusPlugin['setup']>
@@ -1759,6 +1766,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       reconcile() // 依赖它的先停,再停它
+      if (!get().activeIds.includes(id)) clearPluginAppearance(id)
       // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
       if (wasOn && readTangu()?.waitBackend) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
@@ -1790,6 +1798,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      const appearance = useAppearance.getState().value
+      for (const asset of [appearance.icon, appearance.splash]) {
+        if (asset?.pluginId && !get().activeIds.includes(asset.pluginId)) clearPluginAppearance(asset.pluginId)
+      }
     },
 
     reloadExternal() {
@@ -1818,6 +1830,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         // 来源身份也算运行身份(sameRuntime):刚从安装版复制出来的开发副本,代码可以与安装版一字不差 ——
         // 只比代码的话「在 Forsion 中加载」开了等于没开,撤下开发副本后它也永远拆不掉。
         applySources(sources, id, !!opts?.force)
+        if (!get().activeIds.includes(id)) clearPluginAppearance(id)
       }
       const next = (reloadChains.get(id) ?? Promise.resolve()).then(run, run)
       const guard = next.catch(() => {}).then(() => { if (reloadChains.get(id) === guard) reloadChains.delete(id) })

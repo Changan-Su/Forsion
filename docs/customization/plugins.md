@@ -72,3 +72,12 @@ Plugin Spaces can opt into Mini Panel with a dedicated compact view. The host pr
 插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
 View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。见 [可复用 UI 组件 / Reusable UI components](./ui-components.md)。Plugins can embed the host Chat Box with local draft and model selection through the same contract.
+
+
+## 开屏与图标 / Startup and icons
+
+设置 → 外观 →「开屏与图标」支持上传品牌图标、动态开屏素材、选择默认／呼吸／旋转／静止，以及预览和恢复默认。品牌图标在应用内立即更新，也可同步到 macOS Dock 与 Windows 运行中的任务栏窗口。开屏下次启动生效，安装包与系统固定的快捷方式图标不变。Web 与 Mobile 共用应用内设置；原生手机系统启动屏与桌面启动器图标不在此入口内。
+
+插件通过 `ctx.registerAppearance?.({ id, label, labelEn, icon, splash })` 提供可选的图片方案。素材嵌入插件包，选中后缓存，启动无需联网或等待插件执行；禁用或移除插件时回退默认。完整示例位于 `tangu-agent/skills/forsion-plugin/samples/forsion-sample-appearance/`。
+
+Settings → Appearance → Startup and icons accepts custom brand icons and animated startup artwork, includes preview/reset, and offers built-in loading motion. Desktop can apply the static icon to the macOS Dock and running Windows taskbar windows. Web and Mobile share the in-app appearance; native mobile launch screens and launcher icons are separate. Plugins contribute choices through `ctx.registerAppearance`; selection stays with the user. Cached artwork works offline, and disabling or removing its plugin restores the default.

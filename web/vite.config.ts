@@ -1,3 +1,4 @@
+import { startupAppearanceHtml } from '../desktop/frontend/startupAppearancePlugin'
 /**
  * Tangu Web — 独立 app(像 AI Studio/Echo:自己的容器/nginx,连 Forsion server /api → tangu worker)。
  * 经别名复用 desktop/frontend/src(不复制源码);自带 webShim 入口。
@@ -51,7 +52,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PROXY = env.TANGU_DEV_PROXY || 'http://localhost:3001'
 
   return {
-    plugins: [react(), capacitorStubGate(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
+    plugins: [startupAppearanceHtml(), react(), capacitorStubGate(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
       name: 'forsion:unit-release-inputs',
       generateBundle() { checkBundleInputs([...this.getModuleIds()], resolve(__dirname, '..')) },
     }] : [])],

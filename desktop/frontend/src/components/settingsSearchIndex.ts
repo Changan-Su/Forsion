@@ -1,3 +1,4 @@
+import './startupAppearanceCopy'
 /**
  * 设置搜索的静态索引(U-15):搜「镜像」「字体」「休眠」这类**具体设置项**,而不只是分类名。
  *
@@ -48,6 +49,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'web-search', tab: 'model', sub: 'm-websearch', labelKey: 'settings.sub.webSearch', keywords: '联网 搜索 search web' },
   { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation' },
   { id: 'theme-language', tab: 'theme', anchor: 'theme-language', labelKey: 'settings.theme.langLabel', keywords: '设计语言 主题 theme language' },
+  { id: 'startup-appearance', tab: 'theme', anchor: 'startup-appearance', labelKey: 'startupAppearance.title', keywords: '开屏 启动 加载 动画 图标 splash startup loading animation icon dock taskbar' },
   { id: 'palette', tab: 'theme', anchor: 'palette', labelKey: 'settings.theme.skinLabel', keywords: '配色 颜色 color palette accent' },
   { id: 'color-mode', tab: 'theme', anchor: 'color-mode', labelKey: 'settings.theme.modeLabel', keywords: '深色 浅色 暗色 明暗 dark light' },
   { id: 'ui-zoom', tab: 'theme', anchor: 'ui-zoom', labelKey: 'settings.theme.zoomLabel', keywords: '缩放 界面大小 zoom scale' },
