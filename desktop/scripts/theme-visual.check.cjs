@@ -42,6 +42,7 @@ const COMBOS = [
   { id: 'teal', label: '柔青' },
   { id: 'lavender', label: '薰衣草' },
   { id: 'zhi', label: '晴蓝' },
+  { id: 'ink', label: '墨色' },
   { id: 'custom', label: '自定紫', accent: '#8b7fd6' },
   { id: 'custom', label: '敌意色', accent: '#ffffff', bg: '#000000' },
 ]
