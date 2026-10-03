@@ -2,6 +2,30 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.12.2 (2026-10-02)
+
+- **Real-time voice calls**, like GPT Live. When the input box is empty, the send button starts a call. The call runs in the Mini card with the agent's avatar, a hang-up button and a microphone picker. Hand work off to the agent during the call and it reads the result back when it's done. You can also type during a call and the text goes straight into it, and voice transcripts are corrected with what the real-time model actually heard. If the service drops the connection with an error, the call reconnects instead of ending, and results from work handed off during the reconnect aren't lost. Calls replace hands-free auto-send.
+- **Voice settings are split into Voice calls, Voice input and Read aloud**, with separate voices for calls and for reading aloud.
+- **Notes**: browse and restore earlier versions from ⋯ → Version history. Type footnotes directly, click a superscript to jump to its definition and hover to preview it. `:emoji:` shortcodes autocomplete as you type, and ⋯ → Copy as Markdown is new. Collapsible blocks can hold code, tables and other special content, and code blocks detect their language automatically.
+- **Canvas**: objects snap and show guides when you drag or resize them near other objects. Shapes, frames and connections can be copied and pasted, and Mod+D duplicates them. Change the arrowheads on either end of a connection, drag an end to reconnect it, or drag a new connection out of a card's edge handle. Dragging a note from the sidebar onto the canvas adds an embedded card (hold Alt for a link card), and the context menu has Add note…. Canvases can be exported one way to JSON Canvas.
+- **Turn a conversation into a note**: save a whole conversation as a note in one step, and add interactive blocks (```forsion-sketch) to notes. Charts and flowcharts in chat have a clearer look.
+- **A calmer interface**: a lighter Ribbon, the status bar off by default, frame icons that light up only on hover, and an option to hide chat avatars. Scroll the Ribbon's Space and command areas to see more icons; scrolling follows your input and snaps when you stop, and … now opens on click. Spacing and type rhythm are tuned throughout, and message action rows show the time.
+- **Sessions and onboarding**: Historian picks an emoji icon for each session, new sessions that haven't started hide the Agent Desk, and onboarding lets you choose the default background agent.
+- **Backpack and submissions**: the avatar menu in the lower left has a new Backpack, where you can view and use items and vouchers from Forsion Cloud. You can submit plugins and manage your submissions right in the plugin store, or from Settings → Forsion Cloud → Plugin submissions.
+- **Easier updates**: core plugins check for updates together, the plugin market adds an npm channel, and each installed market plugin can update automatically. When an update is ready, a Restart to update entry stays on the Ribbon. If tasks are still running, Forsion asks whether to restart later or quit and update now.
+- **Plugins**:
+  - Plugins can declare required plugins. A plugin can't be turned on until the plugins it needs are installed and running. When a required plugin stops, the plugins that depend on it pause, and they resume when it comes back. Settings lists what's missing and links to it in the market.
+  - Turning engine plugins on or off, updating them and uninstalling them no longer restarts the backend. A few packaging styles still need a restart, and Forsion says so when they do.
+  - Plugin views can dock in the native bottom panel and switch between a launch layout and a project layout, like Coding Studio.
+- **More reliable agents**:
+  - Unattended runs such as Muse and automations no longer wait for answers or approvals that nobody is there to give.
+  - After the engine restarts, interrupted tasks are no longer rerun from the start, and replies written before the interruption are kept. A normal exit waits for running tasks to wrap up.
+  - Runs no longer retry once your subscription quota is used up, and Codex tells you when its quota resets.
+  - Tool arguments with broken JSON are no longer run as empty arguments, and calls to tools that don't exist suggest similar tool names.
+- **Models**: Codex direct connections support GPT-6.1 Sol.
+- **Computer Use 0.6.1**: turning the plugin off and on repeatedly without restarting the engine no longer piles up process exit listeners.
+- Fixed example messages in theme previews showing a date in 1970.
+
 ## 2.12.1 (2026-09-30)
 
 - Fixed conversations failing when a plugin or custom tool has an invalid definition. Invalid tools are now isolated so other tools remain available, and feedback logs identify the affected tool and its source.

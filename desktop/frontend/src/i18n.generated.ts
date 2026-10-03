@@ -1005,8 +1005,8 @@ registerMessages({
     "en": "Which model powers voice input"
   },
   "settings.asr.chooseHint": {
-    "zh": "选中即用。本地=离线、不计额度；云端=Forsion 按时长计费，或你自带 provider 走自己的 key。",
-    "en": "Click to use. Local = offline, no quota; Cloud = Forsion billed by duration, or your own provider with your key."
+    "zh": "输入框的麦克风键用它把你说的话转成文字。选中即用。本地=离线、不计额度；云端=Forsion 按时长计费，或你自带 provider 走自己的 key。",
+    "en": "The composer's microphone button uses it to turn your speech into text. Click to use. Local = offline, no quota; Cloud = Forsion billed by duration, or your own provider with your key."
   },
   "settings.asr.localName": {
     "zh": "本地 SenseVoice",
@@ -1877,10 +1877,10 @@ registerMessages({
   "chat.action.speak": { "zh": "朗读", "en": "Read aloud" },
   "chat.action.stopSpeak": { "zh": "停止朗读", "en": "Stop reading" },
   "settings.tts.sectionTitle": { "zh": "语音朗读（TTS）", "en": "Read aloud (TTS)" },
-  "settings.tts.intro": { "zh": "OpenAI 兼容 /audio/speech 端点。填 <providerId>/<模型> 或在上方 provider 里声明「语音模型」后直接填模型 id；留空关闭朗读。", "en": "OpenAI-compatible /audio/speech endpoint. Use <providerId>/<model>, or declare TTS models on a provider above and use the model id directly; leave empty to disable." },
-  "settings.tts.model": { "zh": "TTS 模型", "en": "TTS model" },
+  "settings.tts.intro": { "zh": "把回复念出来：消息下方的朗读键和自动朗读用它，通话不用它。走 OpenAI 兼容 /audio/speech：填 <providerId>/<模型>，或在提供方里声明「语音模型」后直接填模型 id；留空关闭朗读。", "en": "Reads replies aloud: used by the read-aloud button under messages and by auto-read, not by voice calls. Uses an OpenAI-compatible /audio/speech endpoint: enter <providerId>/<model>, or declare TTS models on a provider and use the model id directly; leave empty to turn read-aloud off." },
+  "settings.tts.model": { "zh": "朗读模型", "en": "Read-aloud model" },
   "settings.tts.modelPlaceholder": { "zh": "如 siliconflow/FunAudioLLM/CosyVoice2-0.5B 或 openai/tts-1", "en": "e.g. siliconflow/FunAudioLLM/CosyVoice2-0.5B or openai/tts-1" },
-  "settings.tts.voice": { "zh": "音色", "en": "Voice" },
+  "settings.tts.voice": { "zh": "朗读音色", "en": "Read-aloud voice" },
   "settings.tts.voicePlaceholder": { "zh": "provider 特定音色 id，如 alloy;OpenAI 等部分服务必填，留空则不传该参数", "en": "Provider-specific voice id, e.g. alloy; required by some providers (OpenAI), omitted when empty" },
   "settings.tts.speed": { "zh": "语速（0.5–2）", "en": "Speed (0.5–2)" },
   "settings.tts.autoSpeak": { "zh": "新回复完成后自动朗读", "en": "Auto-read new replies" },
@@ -1893,7 +1893,7 @@ registerMessages({
 
 // ── 百炼音色工作室:声音复刻 + 声音设计(2026-07-03)──
 registerMessages({
-  "settings.tts.studio.title": { "zh": "百炼音色工作室", "en": "Bailian voice studio" },
+  "settings.tts.studio.title": { "zh": "百炼朗读音色工作室", "en": "Bailian read-aloud voice studio" },
   "settings.tts.studio.hint": { "zh": "用阿里云百炼复刻你的声音或用文字描述设计音色。音色与合成模型绑定，「使用」时会自动切换到对应模型。复刻 ¥0.01/个，设计 ¥0.2/个。", "en": "Clone your voice or design one from a text description via Alibaba Bailian. Voices are bound to their synthesis model — applying a voice switches the model automatically. Cloning ¥0.01/voice, design ¥0.2/voice." },
   "settings.tts.studio.needProvider": { "zh": "配置一个 baseUrl 指向阿里云百炼（dashscope.aliyuncs.com/compatible-mode/v1）的 provider 后，可在此复刻/设计音色。", "en": "Add a provider whose baseUrl points to Alibaba Bailian (dashscope.aliyuncs.com/compatible-mode/v1) to clone/design voices here." },
   "settings.tts.studio.cloneTitle": { "zh": "声音复刻", "en": "Voice cloning" },

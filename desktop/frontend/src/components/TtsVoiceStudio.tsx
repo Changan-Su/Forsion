@@ -4,8 +4,8 @@
  * 铁律:百炼音色只能配 enrollment/design 时的 target_model 合成 → 「使用」音色时联动改写
  * ttsModelId=<providerId>/<targetModel> 与 ttsVoice,避免用户手配错配。
  */
-import { useState } from 'react'
-import { Loader2, Play, RefreshCw, Trash2, Check } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Loader2, Play, RefreshCw, Trash2, Check, Upload } from 'lucide-react'
 import type { TanguDesktopConfig, DirectProviderConfig } from '../types'
 import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsVoiceInfo } from '../services/backendService'
 import { useI18n } from '../i18n'
@@ -26,6 +26,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   const [busy, setBusy] = useState<'' | 'list' | 'clone' | 'design' | 'cosy'>('')
   const [msg, setMsg] = useState('')
   const [cloneName, setCloneName] = useState('')
+  const cloneFileRef = useRef<HTMLInputElement>(null)
   const [cloneFile, setCloneFile] = useState<File | null>(null)
   const [cosyUrl, setCosyUrl] = useState('')
   const [cosyName, setCosyName] = useState('')
@@ -108,8 +109,8 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
         <div className="hint">{t('settings.tts.studio.cloneHint')}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* 选中即清 input.value:File 存 state,同一文件可重选(Chromium 同名重选不触发 onChange);文件名由下方 span 显示 */}
-          <input type="file" accept="audio/*" onChange={(e) => { setCloneFile(e.target.files?.[0] || null); e.target.value = '' }} />
-          {cloneFile && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{cloneFile.name}</span>}
+          <input ref={cloneFileRef} type="file" accept="audio/*" hidden onChange={(e) => { setCloneFile(e.target.files?.[0] || null); e.target.value = '' }} />
+          <button className="btn ghost sm" onClick={() => cloneFileRef.current?.click()}><Upload size={12} /> {cloneFile ? cloneFile.name : t('settings.voice.pickAudio')}</button>
           <input type="text" style={{ width: 140 }} value={cloneName} placeholder={t('settings.tts.studio.namePlaceholder')}
             onChange={(e) => setCloneName(e.target.value)} />
           <button className="btn primary sm" disabled={!cloneFile || busy !== ''} onClick={doClone}>

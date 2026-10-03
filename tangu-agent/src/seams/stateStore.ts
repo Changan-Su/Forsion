@@ -132,6 +132,9 @@ export interface StateStore {
     modelId: string;
     attachments: any[] | null;
   }): Promise<void>;
+  /** 改正一条用户消息的正文(语音通话:实时模型自己听到的原话改正旁路语音识别的错字)。只动 role=user 的那行;
+   *  返回是否真改了。可选:没实现的存储(云端 http)就不改正,只影响显示。 */
+  correctUserMessage?(m: { id: string; sessionId: string; content: string }): Promise<boolean>;
   finalizeAssistantMessage(m: FinalizeMessageInput): Promise<void>;
 
   // ── sessions ──

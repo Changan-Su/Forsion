@@ -46,7 +46,6 @@ function MusePanel() {
  *  挂载时与每 20s 拉一次 status 按戳热重载(面板关着也能刷新)。 */
 function MuseHome(props: ViewProps) {
   const cfg = useApp((s) => s.cfg)
-  const tr = useApp((s) => s.tr)
   const def = usePluginStore((s) => s.views.find((o) => o.pluginId === agentPluginId('muse') && o.item.id === 'home')?.item)
   useEffect(() => {
     let alive = true
@@ -65,7 +64,6 @@ function MuseHome(props: ViewProps) {
   if (def) return <div data-muse-space="plugin" style={{ height: '100%', minHeight: 0 }}><PluginViewHost def={def} pluginId={agentPluginId('muse')} onMountError={(e) => reportAgentSpaceMountError(cfg, 'muse', def, e)} {...props} /></div>
   return (
     <div data-muse-space="empty" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div className="hint" style={{ padding: '8px 14px 0', flex: 'none' }}>{tr('muse.spaceEmpty')}</div>
       <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<Skeleton variant="document" />}><MuseLibraryView {...props} /></Suspense></div>
     </div>
   )

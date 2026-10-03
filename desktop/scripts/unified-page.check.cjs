@@ -776,7 +776,7 @@ async function main() {
 
   // P12c:长标题折行(评审 C-12:单行 input 把长标题直接截断,390px 手机上十几个字就截,导出 PDF 同样)。
   //  a 长标题(390 宽)整段可见:textarea 按内容撑高到多行,没有横向溢出;
-  //  b ↓ 按**视觉行**判:首行按 ↓ 仍在标题里(落到下一行),最后一行按 ↓ 才进正文;回车不在标题里插换行;
+  //  b ↓ 按**视觉行**判:非末行按 ↓ 仍在标题里(落到下一行),最后一行按 ↓ 才进正文;回车不在标题里插换行;
   //  c 导出 PDF 的克隆(生产 printClone)里标题是静态 h1、文字 = 此刻的值、同样折行不截断。
   //  负对照:标题换回单行 input → a、c 红(已实跑)。
   {
@@ -801,6 +801,12 @@ async function main() {
     await pg.keyboard.press('ArrowDown')
     await pg.waitForTimeout(100)
     const b1 = await pg.evaluate(() => { const t = document.querySelector('.amx-title-input'); return { inTitle: document.activeElement === t, pos: t.selectionStart } })
+    // 标题字号变了折行数就变(10-02 a5:32px 下 390 宽是 3 行):中间行逐行 ↓ 都必须仍在标题,最后一行再 ↓ 才进正文。
+    for (let i = 2; i < a.lines; i++) {
+      await pg.keyboard.press('ArrowDown')
+      await pg.waitForTimeout(100)
+      if (!(await pg.evaluate(() => document.activeElement === document.querySelector('.amx-title-input')))) b1.inTitle = false
+    }
     await pg.keyboard.press('ArrowDown')
     await pg.waitForTimeout(300)
     const b2 = await pg.evaluate((s) => ({ inPm: document.activeElement === document.querySelector(s), title: document.querySelector('.amx-title-input').value }), PM)
@@ -1590,7 +1596,7 @@ async function main() {
       const h2 = [...pm.querySelectorAll('h2')].find((x) => x.textContent.includes('首段'))
       return { h2: !!h2, residue: pm.textContent.includes('/h2'), ps: pm.querySelectorAll(':scope > p').length }
     }, PM)
-    // 幕三:空段落打 '/' 浏览全部项 —— 「模板」「数据库」都得在列(模板走宿主选择器路由,见段首注)。
+    // 幕三:空段落打 '/' 浏览全部项 —— 「模板」「多维表」(09-26 术语改名,原「数据库」留作搜索别名)都得在列(模板走宿主选择器路由,见段首注)。
     // 上一幕把最后一个段落变成 H2,DOM Range 的 fallback 会落到 pre 工具条里;
     // 直接用 PM 事务准备空段落,这幕只检验 slash 目录本身。
     await pg.evaluate(() => {
@@ -1605,7 +1611,7 @@ async function main() {
     await pg.waitForTimeout(300)
     const d19 = await pg.evaluate(() => {
       const labels = [...document.querySelectorAll('.slash-menu [role="menuitem"] .slash-label')].map((e) => e.textContent)
-      return { n: labels.length, hasTemplate: labels.includes('模板'), hasDb: labels.includes('数据库') }
+      return { n: labels.length, hasTemplate: labels.includes('模板'), hasDb: labels.includes('多维表') }
     })
     record(
       'P19 slash 菜单接进统一实例:整块插入无残渣 + 前缀型原地转换 + 模板/数据库在列',

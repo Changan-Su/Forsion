@@ -4,7 +4,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
@@ -601,7 +601,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     products.sort((a, b) => b.updatedAt - a.updatedAt) // 两个项目声明同一个插件 id 时先到先得,顺序得确定
     type DevManifest = {
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
-      main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown
+      main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
       capabilities?: unknown; onboarding?: unknown; events?: unknown; fileExtensions?: unknown
     }
     for (const product of products) {
@@ -664,6 +664,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         apiVersion: typeof m?.apiVersion === 'number' ? m.apiVersion : 1,
         minAppVersion: str(m?.minAppVersion, 40),
         requiresApp: str(m?.requiresApp, 120),
+        requiresPlugins: sanitizeRequiresPlugins(m?.requiresPlugins, id),
         capabilities: Array.isArray(m?.capabilities)
           ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
           : undefined,
@@ -716,6 +717,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           apiVersion?: number
           minAppVersion?: string
           requiresApp?: string
+          requiresPlugins?: unknown
           capabilities?: unknown
           onboarding?: unknown
           fileExtensions?: unknown
@@ -764,6 +766,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           apiVersion: typeof m.apiVersion === 'number' ? m.apiVersion : 1,
           minAppVersion: typeof m.minAppVersion === 'string' ? m.minAppVersion : undefined,
           requiresApp: typeof m.requiresApp === 'string' ? m.requiresApp : undefined,
+          requiresPlugins: sanitizeRequiresPlugins(m.requiresPlugins, id),
           // 敏感能力:只认白名单里的字符串,别的静默丢(插件写什么都不能凭空造出接缝)。
           capabilities: Array.isArray(m.capabilities)
             ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))

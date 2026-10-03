@@ -377,6 +377,12 @@ export async function uninstallPlugin(id: string): Promise<{ dir: string }> {
   const root = pluginsDir();
   const dir = findUserPluginDir(root, id);
   if (!dir) throw new Error(`未找到已安装插件「${id}」(或它是随包内置插件,不可卸载)`);
+  // 先停再删:本进程里在跑的实例 deactivate + 撤工具/路由(依赖者先休眠)。tui 入口已静态 import bootstrap,这里不额外加载。
+  const ino = lstatSync(dir).ino;
+  try { const { removePluginLive } = await import('./bootstrap.js'); await removePluginLive(id); } catch { /* 停用失败不阻断卸载 */ }
+  // 等停用那几秒同一路径被重装了(落位是整目录 rename → 新 inode):别把新版本连同它的设置一起删掉(Codex 10-02)
+  const now = lstatSync(dir, { throwIfNoEntry: false });
+  if (now && now.ino !== ino) throw new Error(`插件「${id}」在卸载期间被重新安装,已保留新版本`);
   rmSync(dir, { recursive: true, force: true }); // symlink 时删链接本身
   try { const { clearPluginData } = await import('./settingsStore.js'); await clearPluginData(id); } catch { /* 设置清理失败不致命 */ }
   try { const { unregisterPlugin } = await import('./registry.js'); unregisterPlugin(id); } catch { /* 内存注销失败不致命 */ }

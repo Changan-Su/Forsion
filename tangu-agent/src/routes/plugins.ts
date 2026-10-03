@@ -5,9 +5,10 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listPluginMetas, getPluginMeta, pluginsNeedingRestart, unregisterPlugin } from '../plugins/registry.js';
+import { listPluginMetas, getPluginMeta, pluginsNeedingRestart } from '../plugins/registry.js';
+import type { PluginStatus } from '../plugins/bootstrap.js';
 import {
-  isPluginEnabledSync, setPluginEnabled, getScopeSettings, setScopeSettings,
+  isPluginEnabledSync, getScopeSettings, setScopeSettings,
   listPluginFiles, readPluginFile, writePluginFile, deletePluginFile, parseScope, clearPluginData,
 } from '../plugins/settingsStore.js';
 import { resolveReplySegment, splitMessage } from '../services/replySegment.js';
@@ -22,18 +23,36 @@ function ensureLocal(res: any): boolean {
   return true;
 }
 
-function pluginView(m: ReturnType<typeof listPluginMetas>[number]) {
+function pluginView(m: ReturnType<typeof listPluginMetas>[number], st: PluginStatus) {
   return {
     id: m.id, name: m.name, nameEn: m.nameEn, description: m.description, descriptionEn: m.descriptionEn,
     iconUrl: m.iconUrl,
     scopes: m.scopes || ['global'], settings: m.settings || null, source: m.source || 'builtin',
     enabled: isPluginEnabledSync(m.id), needsRestart: pluginsNeedingRestart.has(m.id),
+    // 生命周期运行态(老桌面忽略未知字段):active=此刻在跑;version 仅 folder 插件;requiresPlugins=声明的前置;
+    // waitingFor 仅「已启用但前置没齐而休眠」时给;lastError=上次激活抛错;settling=上一次启停超时还在后台收尾。
+    active: st.active,
+    ...(st.version ? { version: st.version } : {}),
+    ...(st.requiresPlugins ? { requiresPlugins: st.requiresPlugins } : {}),
+    ...(st.waitingFor ? { waitingFor: st.waitingFor } : {}),
+    ...(st.lastError ? { lastError: st.lastError } : {}),
+    ...(st.settling ? { settling: true } : {}),
   };
 }
 
-router.get('/agent/plugins', authMiddleware, (_req: AuthRequest, res) => {
+/** 生命周期函数住 bootstrap:动态 import 避免 index↔bootstrap 早期环引用(bootstrap 顶层的 sdk 在求值期就读 createTanguModule)。 */
+const lifecycle = () => import('../plugins/bootstrap.js');
+
+async function pluginViews() {
+  const { pluginStatus } = await lifecycle();
+  return listPluginMetas().map((m) => pluginView(m, pluginStatus(m.id)));
+}
+
+router.get('/agent/plugins', authMiddleware, async (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
-  res.json({ plugins: listPluginMetas().map(pluginView) });
+  try {
+    res.json({ plugins: await pluginViews() });
+  } catch (e: any) { res.status(400).json({ detail: e?.message || 'list failed' }); }
 });
 
 // 通道无关的分段结果。Web 等非微信客户端可批量把已持久化回复按 reply-segment 的
@@ -55,18 +74,19 @@ router.post('/agent/reply-segments', authMiddleware, (req: AuthRequest, res) => 
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'segment failed' }); }
 });
 
-// 运行期重扫:市场装新插件后无需重启即出现在列表并可启用。返回新激活的 id 与是否仍需重启(贡献路由的插件)。
+// 运行期重扫 = 与磁盘同步:新装的即时出现并可启用、换了代码的原地热升级、目录没了的注销,都不用重启。
+// needsRestart:换了代码但破不了模块缓存(CommonJS / node_modules / 引到包外等,见 loader cannotHotSwap;老实例照跑)。
 router.post('/agent/plugins/rescan', authMiddleware, async (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const { activateNewPlugins } = await import('../plugins/bootstrap.js'); // 动态 import 避免 index↔bootstrap 早期环引用
-    const { addedIds, needsRestart } = await activateNewPlugins();
-    res.json({ ok: true, addedIds, needsRestart, plugins: listPluginMetas().map(pluginView) });
+    const { rescanPlugins } = await lifecycle();
+    const { addedIds, reloadedIds, removedIds, needsRestart } = await rescanPlugins();
+    res.json({ ok: true, addedIds, reloadedIds, removedIds, needsRestart, plugins: await pluginViews() });
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'rescan failed' }); }
 });
 
 // npm 一条命令装引擎插件(仅本地形态)。要求显式 confirm:true —— 装前风险确认由桌面 UI 弹框负责,
-// 路由不做交互。只接受 npm: 源(本地路径/.tgz 通道限 CLI,缩注入面)。装后内联 activateNewPlugins 即时生效。
+// 路由不做交互。只接受 npm: 源(本地路径/.tgz 通道限 CLI,缩注入面)。装后内联重扫即时生效(含覆盖安装的热升级)。
 router.post('/agent/plugins/install', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
@@ -76,9 +96,9 @@ router.post('/agent/plugins/install', authMiddleware, async (req: AuthRequest, r
     if (!raw.startsWith('npm:')) return res.status(400).json({ detail: '路由仅支持 npm: 源(本地目录/.tgz 走 CLI)' });
     const { parseInstallSpec, installPlugin } = await import('../plugins/npmInstall.js');
     const r = await installPlugin(parseInstallSpec(raw), raw, { preferMirror: !!b.preferMirror, force: !!b.force });
-    const { activateNewPlugins } = await import('../plugins/bootstrap.js');
-    const { addedIds, needsRestart } = await activateNewPlugins();
-    res.json({ ok: true, id: r.id, version: r.version, addedIds, needsRestart, plugins: listPluginMetas().map(pluginView) });
+    const { rescanPlugins } = await lifecycle();
+    const { addedIds, reloadedIds, removedIds, needsRestart } = await rescanPlugins();
+    res.json({ ok: true, id: r.id, version: r.version, addedIds, reloadedIds, removedIds, needsRestart, plugins: await pluginViews() });
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'install failed' }); }
 });
 
@@ -91,23 +111,27 @@ router.get('/agent/plugins/:id/source', authMiddleware, async (req: AuthRequest,
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'read failed' }); }
 });
 
-// 卸载数据清理:注销 meta + 清全局/每-agent 设置与 blob。插件文件夹删除与后端重启由桌面端负责。
+// 卸载:现场停用(依赖者先休眠 → deactivate → 撤工具/路由)+ 注销 meta + 清全局/每-agent 设置与 blob,不用重启。
+// 插件文件夹由桌面端删,删完再 rescan;删之前的重扫不会把它复活。
 // 故意不查 meta 是否存在 —— 也用于清理「加载失败插件」的孤儿设置。
 router.delete('/agent/plugins/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    unregisterPlugin(req.params.id); // 先注销:清完设置后 isPluginEnabledSync 不会落回 defaultEnabled=true
+    const { removePluginLive } = await lifecycle();
+    await removePluginLive(req.params.id); // 先注销:清完设置后 isPluginEnabledSync 不会落回 defaultEnabled=true
     await clearPluginData(req.params.id);
-    res.json({ ok: true, restartRequired: true });
+    res.json({ ok: true, restartRequired: false });
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'uninstall failed' }); }
 });
 
+// 开关:落盘(同旧)后现场收敛 —— 启用即激活、停用即 deactivate,级联前置依赖它的插件。回带全量列表(级联会改别的插件的 active)。
 router.put('/agent/plugins/:id/enabled', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     if (!getPluginMeta(req.params.id)) return res.status(404).json({ detail: 'plugin not found' });
-    await setPluginEnabled(req.params.id, !!(req.body || {}).enabled);
-    res.json({ ok: true, enabled: isPluginEnabledSync(req.params.id) });
+    const { setPluginEnabledLive, pluginStatus } = await lifecycle();
+    await setPluginEnabledLive(req.params.id, !!(req.body || {}).enabled);
+    res.json({ ok: true, enabled: isPluginEnabledSync(req.params.id), active: pluginStatus(req.params.id).active, plugins: await pluginViews() });
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'update failed' }); }
 });
 

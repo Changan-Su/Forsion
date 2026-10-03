@@ -269,6 +269,17 @@ export function registerToolProvider(p: ToolProvider): void {
   }
 }
 
+/**
+ * 反注册(插件停用 / 卸载 / 原地升级用)。**保留槽位**、换成空 provider:其余 provider 的相对顺序
+ * (= 工具喂给 LLM 的顺序)一个字节都不动;同 id 再注册时复用原槽位 → 停用→启用回到原位,不跑到队尾。
+ */
+export function unregisterToolProvider(id: string): boolean {
+  const i = providerIndex.get(id);
+  if (i === undefined) return false;
+  providers[i] = { id, tools: () => [], origin: providers[i].origin };
+  return true;
+}
+
 export function listToolProviders(): ToolProvider[] {
   // Profile discovery and approval readers also consume this public directory at startup.
   return providers.map((p) => ({ ...p, tools: () => providerTools(p) }));

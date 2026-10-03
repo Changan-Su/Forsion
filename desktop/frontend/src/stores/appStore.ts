@@ -1136,7 +1136,8 @@ export interface AppState {
   /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。
    *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
   handleAuthExpired(target?: TargetKey): void
-  openMarket(): void
+  /** query = 打开时预填的搜索词(插件详情页「在市场中查找」前置插件)。 */
+  openMarket(query?: string): void
   closeMarket(): void
   openAchievements(): void
   closeAchievements(): void
@@ -3805,9 +3806,9 @@ export const useApp = create<AppState>((set, get) => ({
     set({ settingsTab: tab ?? null, settingsSkillKey: skillKey ?? null, settingsOpen: true })
   },
 
-  openMarket: () => {
+  openMarket: (query) => {
     if (window.tangu?.openFloatingPanel) {
-      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market' })
+      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market', ...(query ? { params: { q: query } } : {}) })
       return
     }
     set({ marketOpen: true })
@@ -3837,10 +3838,17 @@ export const useApp = create<AppState>((set, get) => ({
       // 重扫让后端立刻发现新插件(免重启);装即启用;提示可能需重启。
       // 不再自动关市场 / 跳设置:装完只 toast「已安装」,用户在插件详情里自行「打开设置」。
       const r = await api.rescanPlugins(homeTarget())
-      for (const id of r.addedIds) await api.setPluginEnabled(homeTarget(), id, true).catch(() => {})
-      // 引擎重扫只激活「全新 id」(activateNewPlugins):原地更新时老代码还在跑,不重启就报「已生效」是谎报。
-      const needsRestart = r.needsRestart || !!updated
-      say(needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
+      let list = r.plugins
+      for (const id of r.addedIds) list = (await api.setPluginEnabled(homeTarget(), id, true).catch(() => null))?.plugins ?? list
+      // 新引擎(给 reloadedIds,10-02 起)原地更新即热换,破不了模块缓存的(CommonJS / 自带 node_modules 等)才要重启 —— needsRestart 已经说了;
+      // 旧引擎只激活全新 id:原地更新时老代码还在跑,不重启就报「已生效」是谎报。
+      const needsRestart = r.needsRestart || (!!updated && !r.reloadedIds)
+      // 装上了但前置没齐(引擎让它休眠):别报「已启用」,说清还缺什么
+      const missing = [...new Set((list ?? []).filter((p) => [...r.addedIds, ...(r.reloadedIds ?? [])].includes(p.id)).flatMap((p) => (p.waitingFor ?? []).map((w) => w.id)))]
+      const label = (id: string): string => { const q = list?.find((p) => p.id === id); return q ? q.name : id }
+      say(needsRestart ? t('market.pluginInstalledRestartHint')
+        : missing.length ? t('market.pluginInstalledWaiting', { list: missing.map(label).join(t('common.listSep')) })
+        : t('market.pluginInstalledOk'))
       return needsRestart
     } catch (e: any) {
       say(t('market.installFail', { e: e?.message || String(e) }), true)

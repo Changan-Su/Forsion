@@ -44,7 +44,8 @@ export interface PluginMeta {
 
 const REGISTRY = new Map<string, PluginMeta>();
 
-/** 运行期激活但贡献了路由(必须重启才挂上)的插件 id。供「设置→插件」逐条标「需重启」。 */
+/** 磁盘上已换了新代码、但证明不了整张模块图都能换代(loader cannotHotSwap)、老实例还在跑的插件 id。
+ *  供「设置→插件」逐条标「需重启」。路由贡献不再需要重启(bootstrap 的分发器热挂)。 */
 export const pluginsNeedingRestart = new Set<string>();
 
 /** 登记一个插件。若带 toolProvider,顺带注册到工具表(append,按 isEnabledFor 门禁)。同 id 幂等覆盖。 */
@@ -54,7 +55,20 @@ export function registerPlugin(meta: PluginMeta): void {
   if (m.toolProvider) registerToolProvider({ ...m.toolProvider, origin: 'plugin' }); // 打 plugin 标:chat 正向面只认核心 provider
 }
 
-/** 注销插件元数据(卸载用)。tool provider 无法反注册 —— 完整移除需重启;删 meta 后 isPluginEnabledSync 不再落回 defaultEnabled,工具门禁即刻失效。 */
+/**
+ * 休眠(插件停用但仍列出):meta 留着 —— 名称 / 图标 / 设置 schema(settingsStore 的 default 兜底读它)/
+ * defaultEnabled(isPluginEnabledSync 的回落值)都还要用;摘掉会「跑」的贡献(toolProvider / promptSection),
+ * 休眠期间插件的任何东西都不进工具面和系统提示。工具 provider 本身由 bootstrap 按台账反注册。
+ */
+export function setPluginDormant(id: string): void {
+  const m = REGISTRY.get(id);
+  if (!m) return;
+  const { toolProvider: _tools, promptSection: _prompt, ...rest } = m;
+  REGISTRY.set(id, rest);
+}
+
+/** 注销插件元数据(卸载 / 目录消失)。工具 provider 的反注册与 deactivate 由 bootstrap 先做(removePluginLive);
+ *  删 meta 后 isPluginEnabledSync 不再落回 defaultEnabled。 */
 export function unregisterPlugin(id: string): boolean {
   pluginsNeedingRestart.delete(id);
   return REGISTRY.delete(id);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Images, Plus, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, MessageCircle, Trash2, Loader2, ArrowUpRight, FileDown, FolderOpen, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X } from 'lucide-react'
+import { Plus, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, MessageCircle, Trash2, Loader2, ArrowUpRight, FileDown, FolderOpen, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X } from 'lucide-react'
 import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { CanvasChrome, CanvasMiniMap, useCanvasViewport, useCanvasGestures, hostSize, zoomAt, gridLayerStyle, type ResizeEdge } from '../../amadeus/unified/canvasKit'
 import { useI18n } from '../../i18n'
@@ -58,6 +58,7 @@ function ImageCanvas() {
   const images = board?.images || []
   const items = board ? boardItems(board) : []
   const visible = items.filter(i => !i.hidden)
+  const blankCanvas = !items.length && !past && !future
   const visibleWithPlaceholders = [...visible, ...placeholders]
   const active = useRef(true)
   useEffect(() => { active.current = true; return () => { active.current = false } }, [])
@@ -163,18 +164,21 @@ function ImageCanvas() {
     if (handled) { e.preventDefault(); e.stopPropagation() }
   }} onKeyUpCapture={e => { if (e.key === ' ') { setSpaceHand(false); e.preventDefault(); e.stopPropagation() } }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { setSpaceHand(false); pan.current = null } }}>
     <header className="ims-header">
-      <div className="ims-brand"><Images size={18} /><span>{t('imageStudio.title')}</span></div>
+      {/* 页头不再写「图像工作室」:标签已经是这个名字(10-02 用户拍板 v6)。 */}
       <div className="ims-project-picker"><select aria-label={t('imageStudio.projects')} value={board?.id || ''} onChange={e => useImageStudio.getState().open(e.target.value)}><option value="" disabled>{t('imageStudio.projects')}</option>{Object.values(boards).sort((a, b) => b.updatedAt - a.updatedAt).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select><button title={t('imageStudio.new')} aria-label={t('imageStudio.new')} onClick={() => useImageStudio.getState().create(t('imageStudio.untitled'))}><Plus size={16} /></button></div>
-      <div className="ims-head-actions"><button title={t('imageStudio.restore')} aria-label={t('imageStudio.restore')} onClick={() => projectPicker.current?.click()}><FolderOpen size={16} /></button><button disabled={!board || busy} title={t('imageStudio.backup')} aria-label={t('imageStudio.backup')} onClick={() => board && void run(() => exportProject(board))}><FileDown size={16} /></button><button className="ims-primary" disabled={!visible.length || busy} onClick={() => setExporting(!exporting)}><Download size={14} /><span>{t('imageStudio.exportOptions')}</span></button></div>
+      <div className="ims-head-actions"><button title={t('imageStudio.restore')} aria-label={t('imageStudio.restore')} onClick={() => projectPicker.current?.click()}><FolderOpen size={16} /></button>{board && <button disabled={busy} title={t('imageStudio.backup')} aria-label={t('imageStudio.backup')} onClick={() => void run(() => exportProject(board))}><FileDown size={16} /></button>}<button className="ims-primary" disabled={!visible.length || busy} onClick={() => setExporting(!exporting)}><Download size={14} /><span>{t('imageStudio.exportOptions')}</span></button></div>
     </header>
     <div className="ims-toolbar" role="toolbar" aria-label={t('imageStudio.title')}>
       <button disabled={busy} onClick={() => picker.current?.click()}><Upload size={15} /><span>{t('imageStudio.import')}</span></button>
-      <div className="ims-divider" />
-      <button disabled={!past} title={t('imageStudio.undo')} aria-label={t('imageStudio.undo')} onClick={() => board && useImageStudio.getState().undo(board.id)}><Undo2 size={15} /></button><button disabled={!future} title={t('imageStudio.redo')} aria-label={t('imageStudio.redo')} onClick={() => board && useImageStudio.getState().undo(board.id, true)}><Redo2 size={15} /></button>
-      <button disabled={!images.some(i => !i.locked && !i.hidden)} title={t('imageStudio.arrange')} aria-label={t('imageStudio.arrange')} onClick={() => { if (board) { const arranged = arrangeImages(images.filter(i => !i.locked && !i.hidden)); useImageStudio.getState().update(board.id, b => ({ ...b, images: b.images.map(i => arranged.find(a => a.id === i.id) || i) })); view.fitTo(arranged) } }}><LayoutGrid size={15} /></button>
-      <button disabled={!selected.length} title={t('imageStudio.remove')} aria-label={t('imageStudio.remove')} onClick={removeSelection}><Trash2 size={15} /></button>
-      <button disabled={!selected.length} title={t('imageStudio.duplicate')} aria-label={t('imageStudio.duplicate')} onClick={() => pasteSelection(true)}><Copy size={15} /></button>
-      <button disabled={!selected.length || busy} title={t('imageStudio.reference')} aria-label={t('imageStudio.reference')} onClick={() => void run(referenceSelection)}><MessageCircle size={15} /></button>
+      {/* 空画布(没有对象、也没有可撤销的历史)时编辑组整组不占位:六枚全是灰的(10-02 用户拍板 v7)。按组藏不按钮藏,选中变化时工具条不跳。 */}
+      {!blankCanvas && <>
+        <div className="ims-divider" />
+        <button disabled={!past} title={t('imageStudio.undo')} aria-label={t('imageStudio.undo')} onClick={() => board && useImageStudio.getState().undo(board.id)}><Undo2 size={15} /></button><button disabled={!future} title={t('imageStudio.redo')} aria-label={t('imageStudio.redo')} onClick={() => board && useImageStudio.getState().undo(board.id, true)}><Redo2 size={15} /></button>
+        <button disabled={!images.some(i => !i.locked && !i.hidden)} title={t('imageStudio.arrange')} aria-label={t('imageStudio.arrange')} onClick={() => { if (board) { const arranged = arrangeImages(images.filter(i => !i.locked && !i.hidden)); useImageStudio.getState().update(board.id, b => ({ ...b, images: b.images.map(i => arranged.find(a => a.id === i.id) || i) })); view.fitTo(arranged) } }}><LayoutGrid size={15} /></button>
+        <button disabled={!selected.length} title={t('imageStudio.remove')} aria-label={t('imageStudio.remove')} onClick={removeSelection}><Trash2 size={15} /></button>
+        <button disabled={!selected.length} title={t('imageStudio.duplicate')} aria-label={t('imageStudio.duplicate')} onClick={() => pasteSelection(true)}><Copy size={15} /></button>
+        <button disabled={!selected.length || busy} title={t('imageStudio.reference')} aria-label={t('imageStudio.reference')} onClick={() => void run(referenceSelection)}><MessageCircle size={15} /></button>
+      </>}
       <span className="ims-toolbar-space" />
       {([['image-studio-chat', MessageCircle, 'imageStudio.chat'], ['image-studio-assets', Layers, 'imageStudio.assets'], ['image-studio-inspector', SlidersHorizontal, 'imageStudio.inspector']] as const).map(([type, Icon, key]) => <button key={type} title={t(key)} aria-label={t(key)} onClick={() => openPanel(type)}><Icon size={16} /></button>)}
     </div>

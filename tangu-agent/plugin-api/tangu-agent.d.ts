@@ -183,8 +183,19 @@ export interface TanguPluginContext {
   activity: { append(event: string, detail?: Record<string, unknown>): void };
 }
 
+/**
+ * 生命周期:启动时每个插件都 activate 一次,未启用 / 前置没齐的随即 deactivate 休眠(仍列在设置页)。
+ * 停用、卸载、原地升级、前置消失时宿主调 `deactivate()`(限时 5s),再撤掉本次激活注册的一切(工具、命令、路由;meta 留着休眠)。
+ * 再启用会在**同一个模块对象**上再调一次 `activate(ctx)`:别依赖模块级「只做一次」的状态,activate 里起的定时器 /
+ * 子进程 / 监听都要在 deactivate 里收掉。activate 抛错则本次激活作废(回滚 + 调一次 deactivate 收尾),插件休眠不自动重试。
+ */
 export interface TanguPlugin {
-  manifest?: { id: string; name: string; version: string; apiVersion: number; entry: string; commands?: string[]; description?: string };
+  manifest?: {
+    id: string; name: string; version: string; apiVersion: number; entry: string; commands?: string[]; description?: string;
+    /** 前置插件:`"id"` 或 `{ id, minVersion? }`。前置已启用且在跑(版本 ≥ minVersion)时本插件才激活;否则休眠,就位后自动激活。 */
+    requiresPlugins?: Array<string | { id: string; minVersion?: string }>;
+  };
   activate(ctx: TanguPluginContext): void | Promise<void>;
+  /** 停用 / 卸载 / 原地升级时调用(限时 5s):停掉 activate 里起的后台工作。启动期那次早于引擎装配完成,只做自身收尾。 */
   deactivate?(): void | Promise<void>;
 }

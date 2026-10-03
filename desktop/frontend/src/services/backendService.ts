@@ -783,21 +783,36 @@ export type PluginInfo = {
   id: string; name: string; nameEn?: string; description: string; descriptionEn?: string;
   iconUrl?: string;
   scopes: Array<'global' | 'agent'>; settings: { fields: PluginField[] } | null; source: 'builtin' | 'folder'; enabled: boolean
-  /** 运行期激活但贡献了路由,需重启才完整生效。 */
+  /** 磁盘上换了代码却没法热换(包里有 CommonJS / 自带 node_modules,或运行时没有模块钩子而入口有相对引入):
+   *  老实例还在跑,重启后端才换上新版。 */
   needsRestart?: boolean
+  /** 此刻在不在跑(2026-10-02 起的引擎才给;缺省按 enabled)。开着但前置没齐 → false。 */
+  active?: boolean
+  version?: string
+  requiresPlugins?: Array<{ id: string; minVersion?: string }>
+  /** 开着却因前置没齐而休眠时才给:缺哪些、为什么(missing / version / off / waiting / cycle,同桌面 pluginDeps)。 */
+  waitingFor?: Array<{ id: string; reason: 'missing' | 'version' | 'off' | 'waiting' | 'cycle'; minVersion?: string; have?: string }>
+  /** 上次 activate 抛错的消息(显式拨一次开关即清)。 */
+  lastError?: string
+  /** 上一次启动 / 停用超时、还在后台收尾:结束后引擎按开关自动收敛,这期间不会再启动它。 */
+  settling?: boolean
 }
+/** 重扫 / 安装的结果。reloadedIds 有 = 引擎会热插拔(10-02 起):原地升级即生效,needsRestart 只剩「没法热换」那几种(见 needsRestart);
+ *  旧引擎不给 reloadedIds,只激活全新 id,原地更新一律得重启。 */
+export type PluginRescanResult = { addedIds: string[]; reloadedIds?: string[]; removedIds?: string[]; needsRestart: boolean; plugins: PluginInfo[] }
 export const listPlugins = (t: EngineTarget) =>
-  request<{ plugins: PluginInfo[] }>(t, '/agent/plugins').then((r) => r.plugins).catch(() => [] as PluginInfo[])
+  request<{ plugins?: PluginInfo[] }>(t, '/agent/plugins').then((r) => r.plugins ?? []).catch(() => [] as PluginInfo[])
 /** 运行期重扫:市场装新插件后即生效(无需重启)。addedIds=新激活的;needsRestart=贡献路由的插件需重启。 */
 export const rescanPlugins = (t: EngineTarget) =>
-  request<{ ok: boolean; addedIds: string[]; needsRestart: boolean; plugins: PluginInfo[] }>(t, '/agent/plugins/rescan', { method: 'POST' })
+  request<{ ok: boolean } & PluginRescanResult>(t, '/agent/plugins/rescan', { method: 'POST' })
 // npm 一条命令装引擎插件(仅 npm: 源)。confirm:true 由本函数代表 UI 已弹确认框;装后后端内联 rescan,返回最新列表。
 export const installPluginFromNpm = (t: EngineTarget, spec: string, preferMirror?: boolean) =>
-  request<{ ok: boolean; id: string; version: string; addedIds: string[]; needsRestart: boolean; plugins: PluginInfo[] }>(
+  request<{ ok: boolean; id: string; version: string } & PluginRescanResult>(
     t, '/agent/plugins/install', { method: 'POST', body: JSON.stringify({ spec, preferMirror, confirm: true }) })
 export const setPluginEnabled = (t: EngineTarget, id: string, enabled: boolean) =>
-  request<{ ok: boolean; enabled: boolean }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
-/** 卸载数据清理(注销 meta + 清设置/blob);文件夹删除与重启由桌面侧 IPC 负责。 */
+  request<{ ok: boolean; enabled: boolean; active?: boolean; plugins?: PluginInfo[] }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+/** 卸载:引擎先停掉在跑的实例(依赖者先休眠)、注销 meta、清设置/blob;文件夹由桌面侧 IPC 删。
+ *  restartRequired:false(10-02 起)= 已运行期撤干净,不用重启;旧引擎给 true / 不给。 */
 export const uninstallPlugin = (t: EngineTarget, id: string) =>
   request<{ ok: boolean; restartRequired: boolean }>(t, `/agent/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getPluginSettings = (t: EngineTarget, id: string, scope: string) =>

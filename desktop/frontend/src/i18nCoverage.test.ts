@@ -365,7 +365,6 @@ describe('i18n 覆盖', () => {
       'achievements.a.first-message.title': '成就标题,英文梗',
       'agentProfile.space': 'Space 名「Agents」(与 Spaces 同为专名)',
       'onboarding.guide.moreAgentsPath': '指向 Space 名「Agents」',
-      'home.spaces': '「Spaces」是主页 Space 架的专名(U-27 拍板 #1 的先例)',
       'approvalRules.allowPh': '工具名示例(代码),不可译',
       'approvalRules.askPh': '工具名示例(代码),不可译',
       'approvalRules.denyPh': '工具名示例(代码),不可译',

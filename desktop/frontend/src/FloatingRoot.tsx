@@ -91,7 +91,7 @@ export function FloatingRoot() {
           window.tangu?.requestMainAction?.('onboarding'); close()
         }}
       />}
-      {target.builtin === 'market' && <MarketModal onClose={onMarketClose} />}
+      {target.builtin === 'market' && <MarketModal key={String(target.params?.q ?? '')} initialQuery={typeof target.params?.q === 'string' ? target.params.q : undefined} onClose={onMarketClose} />}
       {target.builtin === 'achievements' && <AchievementsModal onClose={onAchievementsClose} />}
       {target.builtin === 'feedback' && app.cfgLoaded && <FeedbackModal key={panelSession?.id || ''} surface="panel" cfg={app.cfg} activeSession={panelSession} onClose={onFeedbackClose} />}
       {/* 旁聊:不按 params 挂 key —— 同一扇窗再收到定向(新的引用 / 问题)只是往线程里追加,重挂会把线程丢了 */}
