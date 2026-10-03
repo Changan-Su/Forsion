@@ -1021,8 +1021,11 @@ body.amx-marquee-active * {
   display: flex;
   gap: 12px;
   align-items: stretch;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  /* 与 Chat 浮卡同一配方(c3):细描边 + 统一淡阴影 + 浮层圆角 */
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
   padding: 10px 12px;
   text-decoration: none;
   color: inherit;
@@ -1030,7 +1033,7 @@ body.amx-marquee-active * {
   transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app a.amx-bm:hover {
-  background: var(--surface);
+  background: var(--menu-hover); /* 卡底已是 --bg-card(= --surface),悬停要换一档才看得出 */
   text-decoration: none;
 }
 .am-app .amx-bm-main {
@@ -1423,6 +1426,7 @@ body.amx-marquee-active * {
   z-index: 40;
 }
 .am-app .slash-menu {
+  /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   /* 跟随光标定位(left/top 由 slashSuggestPlugin 的 coordsAtPos 内联注入,同 .wiki-suggest);
      旧的 absolute+block 锚点在行中打 '/' 时会飘到整块下方,与输入位置脱节。 */
   position: fixed;
@@ -1432,30 +1436,29 @@ body.amx-marquee-active * {
   width: 248px;
   max-height: 320px;
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: var(--border-width, 1px) solid var(--border);
   /* 圆角/投影跟宿主浮层同一套 token(与 .am-app .ctx-menu 一致);此前写死 8px + 自定义阴影,
      和四周的面板不是一个观感(用户 2026-07-26)。 */
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  padding: 5px;
-  backdrop-filter: blur(20px) saturate(140%);
+  padding: var(--menu-shell-padding, 4px);
   animation: pop-in 120ms var(--ease-apple);
 }
 
 /* 「粘贴为」菜单(粘贴一条 URL 之后弹,AFFiNE Paste as 对位)。摆位与 slash 同一套:
    fixed + coordsAtPos 内联坐标,复用 .slash-backdrop 接点空白关闭。 */
 .am-app .paste-as-menu {
+  /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   position: fixed;
   z-index: 50;
   display: flex;
   flex-direction: column;
   min-width: 176px;
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  padding: 5px;
-  backdrop-filter: blur(20px) saturate(140%);
+  padding: var(--menu-shell-padding, 4px);
   animation: pop-in 120ms var(--ease-apple);
   user-select: none;
 }
@@ -1469,12 +1472,13 @@ body.amx-marquee-active * {
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-height: var(--menu-item-min-height, 32px);
   padding: 6px 8px;
   border: none;
   background: transparent;
   color: var(--text);
   border-radius: var(--radius-sm);
-  font-size: var(--ui-font-body, 13px);
+  font-size: var(--menu-text-size, 14px);
   text-align: left;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-apple);
@@ -1506,15 +1510,15 @@ body.amx-marquee-active * {
 
 /* 行内格式工具栏(选中文字上浮,同 slash 用 fixed + coordsAtPos 内联坐标;锚点=选区中点上方)。 */
 .am-app .inline-toolbar {
+  /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   position: fixed;
   z-index: 55;
   /* ⚠️别把摆位写成 transform:pop-in 动画也动 transform,会覆盖它 120ms(工具栏先出现在选区
      右下再跳上去,用户实报)。落位交给 OverlayAt 的 prefer:'above' + center。 */
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  backdrop-filter: blur(20px) saturate(140%);
   animation: pop-in 120ms var(--ease-apple);
   user-select: none;
 }
@@ -1537,7 +1541,7 @@ body.amx-marquee-active * {
   transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app .itb-btn:hover {
-  background: var(--surface);
+  background: var(--menu-hover); /* 此前 = 工具栏自己的底色,悬停毫无反馈 */
   color: var(--text);
 }
 .am-app .itb-turn {
@@ -1573,8 +1577,9 @@ body.amx-marquee-active * {
   background: transparent;
   color: var(--text-sec);
   border-radius: var(--radius-sm);
+  min-height: var(--menu-item-min-height, 32px);
   padding: 6px 10px;
-  font-size: var(--ui-font-body, 13px);
+  font-size: var(--menu-text-size, 14px);
   cursor: pointer;
 }
 .am-app .itb-menu-item:hover {
@@ -1670,10 +1675,8 @@ body.amx-marquee-active * {
   margin-top: 3px;
 }
 .am-app .slash-group-label {
-  font-size: var(--ui-font-caption, 11px);
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  font-size: var(--ui-font-meta, 12px);
+  font-weight: 500; /* 菜单分组小标题一种写法(c1):与 .ctx-head、多维表 .amx-db-pop-sec 同 */
   color: var(--text-muted);
   padding: 4px 8px 2px;
 }
@@ -1690,7 +1693,7 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   min-height: var(--menu-item-min-height, 32px);
   padding: var(--menu-item-pad-block, 6px) var(--menu-item-pad-inline, 8px);
-  font-size: var(--ui-font-body, 13px);
+  font-size: var(--menu-text-size, 14px);
   line-height: var(--ui-line-body, 18px);
   transition: background var(--dur-fast) var(--ease-apple);
 }
@@ -1943,6 +1946,7 @@ body.amx-marquee-active * {
    原 Obsidian 式两段行(名字加粗 + 目录副标题)收成单行,目录只在重名时作右侧灰字
    (用户 09-05:「信息密度不高,行距高度和其他二级面板不统一,路径可以去掉」)。 */
 .am-app .wiki-suggest {
+  /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   position: fixed;
   z-index: 60;
   display: flex;
@@ -1953,11 +1957,10 @@ body.amx-marquee-active * {
   max-height: 260px;
   overflow-y: auto;
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  padding: 5px;
-  backdrop-filter: blur(20px) saturate(140%);
+  padding: var(--menu-shell-padding, 4px);
 }
 .am-app .wiki-item {
   display: flex;
@@ -1971,7 +1974,7 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   min-height: var(--menu-item-min-height, 32px);
   padding: var(--menu-item-pad-block, 6px) var(--menu-item-pad-inline, 8px);
-  font-size: var(--ui-font-body, 13px);
+  font-size: var(--menu-text-size, 14px);
   line-height: var(--ui-line-body, 18px);
   white-space: nowrap;
   transition: background var(--dur-fast) var(--ease-apple);
@@ -2263,6 +2266,7 @@ body.amx-marquee-active * {
 
 /* ── Context menu ─────────────────────────────────────────── */
 .am-app .ctx-menu {
+  /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   position: fixed;
   z-index: 120;
   width: max-content;
@@ -2272,10 +2276,9 @@ body.amx-marquee-active * {
   overflow-y: auto;
   padding: var(--menu-shell-padding, 4px);
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  backdrop-filter: blur(20px) saturate(140%);
   animation: pop-in var(--dur-fast) var(--ease-apple);
 }
 .am-app .ctx-item {
@@ -2286,9 +2289,9 @@ body.amx-marquee-active * {
   background: transparent;
   color: var(--text-sec);
   border-radius: var(--radius-sm);
-  min-height: var(--menu-item-min-height, 28px);
+  min-height: var(--menu-item-min-height, 32px);
   padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
-  font-size: var(--ui-font-body, 13px);
+  font-size: var(--menu-text-size, 14px);
   line-height: 1.4;
   transition: background var(--dur-fast) var(--ease-apple);
 }
@@ -3110,10 +3113,8 @@ body.amx-marquee-active * {
 }
 
 .ubm-label {
-  font-size: var(--ui-font-caption, 11px);
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  font-size: var(--ui-font-meta, 12px);
+  font-weight: 500;
   color: var(--text-muted);
   padding: 4px 8px 2px;
 }
@@ -3129,7 +3130,19 @@ body.amx-marquee-active * {
 .ubm-check {
   margin-left: auto;
   color: var(--accent-ink);
+}/* 「转换为 ›」那一行:当前类型灰字 + 箭头放末列;子菜单开着时该行保持悬停底(c2)。 */
+.am-app .unified-block-menu [data-sub] .ubm-sub-tail {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: var(--ui-font-meta, 12px);
 }
+.am-app .unified-block-menu [data-sub].is-open { background: var(--menu-hover); color: var(--text); }
+.am-app .unified-block-submenu .ubm-check { color: var(--text-muted); }
+
 
 /* 列表项折叠(unified/listFold.ts,会话态):折起时子列表整只藏起,项上留一个常驻展开箭头。
    复用 .amx-fold-hidden / .amx-fold-caret —— 与标题小节折叠同一套视觉,用户不必学两遍。 */

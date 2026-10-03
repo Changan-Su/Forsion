@@ -1193,6 +1193,7 @@ const zh: Dict = {
   'settings.theme.skin.teal': '柔青',
   'settings.theme.skin.lavender': '薰衣草',
   'settings.theme.skin.zhi': '晴蓝',
+  'settings.theme.skin.ink': '墨色',
   'settings.theme.skin.custom': '自定义',
   // 设置分类导航(P2 Obsidian 两栏)
   'settings.group.appearance': '外观',
@@ -3008,6 +3009,7 @@ const en: Dict = {
   'settings.theme.skin.teal': 'Teal',
   'settings.theme.skin.lavender': 'Lavender',
   'settings.theme.skin.zhi': 'Clear blue',
+  'settings.theme.skin.ink': 'Ink',
   'settings.theme.skin.custom': 'Custom',
   // Settings nav groups (P2 Obsidian two-column)
   'settings.group.appearance': 'Appearance',

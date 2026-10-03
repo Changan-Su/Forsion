@@ -42,6 +42,7 @@
   align-items: center;
   gap: 9px;
   width: 100%;
+  min-height: var(--menu-item-min-height);
   padding: 7px 9px;
   border: none;
   background: transparent;

@@ -3,7 +3,7 @@
  * 主题注册表:**设计语言(data-theme)× 主题色(data-skin)× 背景色(data-bg)× 明暗(data-mode)**。
  * - 语言 = 文件夹主题(themes/<id>/{theme.json,theme.css}),构建期 import.meta.glob 收集,只管 UI 结构(圆角/字体/阴影/布局)。
  *   bundle 语言按目录自动发现,磁盘语言在运行时合并。
- * - 主题色 / 背景色 = 纯颜色,见 theme/skins.css 的 [data-skin] / [data-bg] 两组块(cream/coral/teal/lavender/zhi);
+ * - 主题色 / 背景色 = 纯颜色,见 theme/skins.css 的 [data-skin] / [data-bg] 两组块(cream/coral/teal/lavender/zhi/ink);
  *   两轴各有 custom,走内联 seed 变量。**两轴同 id = 拆轴前的整套配色**,故老用户默认观感不变。
  * 旧单轴 preset(lovable/echo/qbird/dreamer/custom)首启自动迁移到 (lang, skin);背景色缺省承接 skin。
  */
@@ -71,7 +71,7 @@ export const DEFAULT_SEED = '#8b7fd6';
 /** 配色条目(纯颜色;CSS 在 theme/skins.css)。**同一张表供两根轴用**:主题色轴取 `accent`,背景色轴取 `bg`
  *  —— 它们本来就是同一套调色板被拆成的两半。swatch 仅供设置面板色卡预览。custom 用 seed 动态取色。 */
 export interface SkinInfo {
-  id: 'cream' | 'coral' | 'teal' | 'lavender' | 'zhi' | 'custom';
+  id: 'cream' | 'coral' | 'teal' | 'lavender' | 'zhi' | 'ink' | 'custom';
   /** 强调色(主题色轴的色卡点) */
   accent: string;
   /** 暗色下的强调色 */
@@ -91,6 +91,7 @@ const SKINS: SkinInfo[] = [
   { id: 'teal', accent: '#4d8794', accentDark: '#5fa3b2', bg: '#dff1ea', bgDark: '#272a2a', bgSeed: '#4d8794' },
   { id: 'lavender', accent: '#8b7fd6', accentDark: '#a99cf0', bg: '#ede0f5', bgDark: '#29272c', bgSeed: '#8b7fd6' },
   { id: 'zhi', accent: '#1e96eb', accentDark: '#1c9ee4', bg: '#dcecfb', bgDark: '#272a2e', bgSeed: '#1e96eb' },
+  { id: 'ink', accent: '#2b2723', accentDark: '#ecebe7', bg: '#f7f6f3', bgDark: '#201f1d', bgSeed: '#3a332b' },
   { id: 'custom', accent: DEFAULT_SEED, accentDark: DEFAULT_SEED, bg: '#f6f6f7', bgDark: '#1b1b1d', bgSeed: DEFAULT_SEED },
 ];
 

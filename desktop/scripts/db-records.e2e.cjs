@@ -201,9 +201,10 @@ async function visualReview() {
   await win.locator('.ctx-menu').evaluate(async (el) => {
     await Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => {})))
   })
-  const referenceMenu = await win.locator('.ctx-menu button').first().evaluate(el => {
+  // 量末行普通菜单项:907f8cbe 起菜单顶部是「页面字体」磁贴排,首个 button 不再是菜单行
+  const referenceMenu = await win.locator('.ctx-menu > button').last().evaluate(el => {
     const cs = getComputedStyle(el), r = el.getBoundingClientRect()
-    return { size: parseFloat(cs.fontSize), line: parseFloat(cs.lineHeight), height: r.height, gap: cs.gap, shadow: getComputedStyle(el.parentElement).boxShadow }
+    return { size: parseFloat(cs.fontSize), line: parseFloat(cs.lineHeight), height: r.height, gap: cs.gap, shadow: getComputedStyle(el.closest('.ctx-menu')).boxShadow }
   })
   verify('Approved More menu retains its existing scale', referenceMenu.size === 14 && referenceMenu.height === 32, referenceMenu)
   verify('More menu has a subtle surface shadow', referenceMenu.shadow !== 'none', referenceMenu)
@@ -293,8 +294,13 @@ async function visualReview() {
   await columnMenu.locator('.amx-db-type-trigger').click()
   await shoot('visual-light-property-types')
   await win.keyboard.press('Escape')
-  verify('Escape returns from types to the property menu and restores focus',
-    await columnMenu.locator('.amx-db-type-trigger').evaluate(el => document.activeElement === el))
+  const typeFocus = await columnMenu.locator('.amx-db-type-trigger').evaluate(async (el) => {
+    const at = () => { const a = document.activeElement; return a ? `${a.tagName}.${a.className}` : null }
+    const first = at()
+    for (let i = 0; i < 20 && document.activeElement !== el; i++) await new Promise((r) => setTimeout(r, 50))
+    return { ok: document.activeElement === el, first, last: at() }
+  })
+  verify('Escape returns from types to the property menu and restores focus', typeFocus.ok, typeFocus)
   await columnMenu.locator('.amx-db-type-trigger').click()
   await columnMenu.getByRole('button', { name: '数字', exact: true }).click()
   verify('Choosing a type returns to its configuration', await columnMenu.locator('.amx-db-type-trigger').isVisible() && await columnMenu.getByLabel('precision', { exact: true }).count() === 1)

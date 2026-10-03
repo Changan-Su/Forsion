@@ -1,11 +1,31 @@
 // 块菜单(⠿)「转换为」的落地(评审 B-05):单块走 applyTrigger(与 slash / 工具栏 / 空格触发符同一套转换),
 // 跨块选区逐块转换。放在独立模块里,UnifiedPage 只管接线。
 import { TextSelection, type Transaction } from '@milkdown/kit/prose/state'
+import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import { FOLD_TOKEN, applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 
 const LIST_KINDS = new Set<Trigger['kind']>(['bullet', 'ordered', 'task'])
+
+/** 块菜单「转换为 ›」那一行行尾显示的当前类型(与子菜单里打勾的项同一份判定)。认不出 → null,不打勾也不显示。 */
+export type BlockKind = 'text' | 'h1' | 'h2' | 'h3' | 'bullet' | 'ordered' | 'task' | 'quote' | 'callout' | 'fold' | 'code' | 'card'
+export function blockKindOf(node: PMNode | null | undefined): BlockKind | null {
+  if (!node) return null
+  switch (node.type.name) {
+    case 'paragraph': return 'text'
+    case 'heading': return node.attrs.level >= 1 && node.attrs.level <= 3 ? (`h${node.attrs.level}` as BlockKind) : null
+    case 'bullet_list': return node.firstChild?.attrs.checked != null ? 'task' : 'bullet'
+    case 'ordered_list': return 'ordered'
+    case 'code_block': return 'code'
+    case 'amadeusCanvasCard': return 'card'
+    case 'blockquote': {
+      const head = node.firstChild?.isTextblock ? node.firstChild.textContent : ''
+      return /^\[!fold\]/i.test(head) ? 'fold' : /^\[![\w-]+\]/.test(head) ? 'callout' : 'quote'
+    }
+    default: return null
+  }
+}
 
 /** 把 [from, to)(整块边界,来自 topRangeOf)里的每个文本块都转成 trig。返回是否至少转成了一块。
  *  自下而上逐块做:后面的块先变,前面块的位置不受影响;相邻的改动在撤销史里并成一步。

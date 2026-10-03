@@ -170,8 +170,9 @@ const box = (sel) => {
     menu: getComputedStyle(document.querySelector('.cm-model-row')).fontSize,
     helper: getComputedStyle(document.querySelector('.cm-effort-ends')).fontSize,
   }))
-  check('Chatbox 字号阶梯固定为正文 13 / 胶囊与菜单 12 / 辅助 11',
-    typeScale.chatbox === '13px' && typeScale.mode === '12px' && typeScale.model === '12px' && typeScale.menu === '12px' && typeScale.helper === '11px',
+  // 菜单行 10-02 起随「…」菜单走 --menu-text-size(14),胶囊仍 12(用户拍板 c1b)
+  check('Chatbox 字号阶梯固定为正文 13 / 胶囊 12 / 菜单 14 / 辅助 11',
+    typeScale.chatbox === '13px' && typeScale.mode === '12px' && typeScale.model === '12px' && typeScale.menu === '14px' && typeScale.helper === '11px',
     JSON.stringify(typeScale))
 
   // ── C:子面板没被菜单裁掉(命中测试;裁切不会改 rect,只会改可见性与命中) ──

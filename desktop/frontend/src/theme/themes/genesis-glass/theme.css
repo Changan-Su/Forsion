@@ -277,6 +277,24 @@
   border-color: transparent;
   isolation: isolate;
 }
+/* Amadeus 编辑器自己的浮层(斜杠、[[ / @ / # 补全、粘贴为、划词工具栏)也是一级菜单,同一份材质(10-02 用户拍板 c1:
+ * 此前漏登记,它们还是不透明底 + 深色描边,于是「只有 Chat 跟上了」)。块菜单与它的「转换为 ›」子菜单是 .ctx-menu,已在上面。
+ * 特异性多一个 .am-app / :not():Amadeus 与多维表的样式在懒加载 chunk 里,可能晚于本主题的 <link> 进场,同特异性会被它们盖回去。
+ * ⚠ 同上段口径:这几个浮层都没有 fixed 后代(划词工具栏的二级面板 .itb-panel 是流内展开)。 */
+[data-theme='genesis-glass'] .am-app :is(.slash-menu, .wiki-suggest, .paste-as-menu, .inline-toolbar, .ctx-menu) {
+  background: var(--gl-sheen), var(--gl-menu);
+  backdrop-filter: var(--gl-blur-float);
+  -webkit-backdrop-filter: var(--gl-blur-float);
+  border-color: transparent;
+  isolation: isolate;
+}
+[data-theme='genesis-glass'] .amx-db-pop:not(.amx-coverpick) { border-color: transparent; }
+/* 文档里的「对象」卡(看板 / 画廊卡、文件卡、书签卡、媒体、仪表盘卡、Coding 模板卡)与 Chat 浮卡同一配方:
+ * 统一淡阴影 + 浮层圆角,本主题照 08-14 去轮廓线(c3)。其他主题保留细描边。 */
+[data-theme='genesis-glass'] .am-app :is(.amx-db-card:not(.amx-db-card-add), .embed-file, .amx-bm, .embed-media),
+[data-theme='genesis-glass'] :is(.dash-card:not([data-bad]), .csl-gallery-card:not(:hover, :focus-visible)) {
+  border-color: transparent;
+}
 
 /* ribbon / 侧栏原生玻璃上没有可靠的页面像素可采样:保留同一高光和模糊参数,只提高染色浓度。 */
 [data-theme='genesis-glass'] .t2sw-mode-picker.is-open,
