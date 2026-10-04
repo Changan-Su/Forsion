@@ -744,7 +744,7 @@ mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
 if (ONLY.has('dispatch')) {
   const bundle = opt('dispatch-plugin', '');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
-  cpSync(bundle, join(shared, 'plugins/forsion-plugin-dispatch'), {recursive:true, filter: p => !p.split('/').includes('.git')});
+  cpSync(bundle, join(shared, 'plugins/forsion-plugin-dispatch'), {recursive:true, filter: p => !p.split('/').some(x=>['.git','node_modules','artifacts'].includes(x))});
 }
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到

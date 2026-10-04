@@ -19,6 +19,9 @@ export interface EngineRunCtx {
   modelId?: string;
   /** 用户为外部引擎选的模型(经 ACP unstable_setSessionModel 应用);空=用引擎默认。 */
   engineModelId?: string;
+  resumeSessionId?: string;
+  readOnly?: boolean;
+  mcpServers?: import('@agentclientprotocol/sdk').McpServer[];
   message: string;
   attachments?: any[];
   cwd?: string;
@@ -30,6 +33,8 @@ export interface EngineRunCtx {
 }
 
 export interface EngineResult {
+  tokensTotal?: number;
+  externalSessionId?: string;
   content: string;
   reasoning?: string;
   toolCalls?: ToolCall[];
@@ -39,6 +44,8 @@ export interface EngineResult {
 
 /** 引擎能力(懒探测得到):可选模型 + 当前模型 + slash 命令。 */
 export interface EngineCapabilities {
+  loadSession?: boolean;
+  modes?: Array<{id: string; name: string}>;
   models: Array<{ id: string; name: string; description?: string }>;
   currentModelId?: string;
   commands: Array<{ name: string; description: string; hint?: string }>;

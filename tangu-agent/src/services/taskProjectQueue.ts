@@ -30,13 +30,23 @@ export class TaskProjectQueue {
   }
 }
 const projects = new TaskProjectQueue();
+/** Shares the run lease: native continuations cannot write while a workspace is maintained. */
+export async function withTaskMaintenance<T>(paths: string[], work: () => Promise<T>): Promise<T> {
+  const releases: Array<() => void> = [];
+  try {
+    for (const cwd of [...new Set(paths)].sort()) releases.push(await projects.acquire(cwd, AbortSignal.timeout(1000)));
+    return await work();
+  } finally { releases.reverse().forEach(off => off()); }
+}
 export async function withTaskProjectQueue(runId: string, signal: AbortSignal, run: () => Promise<void>): Promise<void> {
   if (!deps().profile.capabilities.hostExec) return run();
   const row = await getRun(runId);
   if (!row) return run();
-  const sessions = await query<any[]>('SELECT kind, project_path FROM chat_sessions WHERE id = ? AND user_id = ?', [row.session_id, row.user_id]);
+  const sessions = await query<any[]>('SELECT kind, project_path, agent_config FROM chat_sessions WHERE id = ? AND user_id = ?', [row.session_id, row.user_id]);
   const session = sessions[0];
   if (session?.kind !== 'task' || !session.project_path) return run();
+  const config = typeof session.agent_config === 'string' ? JSON.parse(session.agent_config) : session.agent_config;
+  if (config?.pluginOwner && config.pluginReadOnly === true) return run();
   await publish(runId, 'status', { state: 'queued' });
   const off = await projects.acquire(session.project_path, signal);
   try { signal.throwIfAborted(); await run(); } finally { off(); }

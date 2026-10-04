@@ -234,6 +234,8 @@ export interface ToolCapabilities {
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
    *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
   automationSafe?: boolean;
+  /** Explicitly expose this plugin tool through Desktop MCP. Writes require native approval. */
+  externalMcp?: boolean;
   /** 结果不落库:本轮模型拿到全文(tool 消息),而 chat_messages.tool_results / agent_steps.tool_results /
    *  tool_result 事件(agent_run_events,也是界面工具卡的数据)只存这句占位,下一轮回放也只见占位。
    *  给数据自带保留期 / 清除语义的工具(read_computer_history:7 天 + 用户清除)—— 落库副本会绕过它。

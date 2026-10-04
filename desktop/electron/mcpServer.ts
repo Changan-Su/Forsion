@@ -101,6 +101,18 @@ export async function callTranscribeAudio(
   }
 }
 
+/** Plugin opt-in definitions and native approval remain owned by the engine. */
+export async function callPluginTool(deps: McpDeps, name?: string, args?: Record<string,unknown>): Promise<CallToolResult> {
+  if(!deps.externalEnabled())return err('External Desktop MCP tools are disabled');
+  const {url,token}=deps.getEngine();if(!url)return err('Forsion engine not ready');
+  try {
+    const response=await fetch(`${url}/agent/plugins/external-tools${name?'/call':''}`,{method:name?'POST':'GET',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},...(name?{body:JSON.stringify({name,arguments:args||{}})}:{})});
+    const value=await response.json() as any;
+    if(!response.ok)return err(value.detail||`Plugin request failed: ${response.status}`);
+    return value.isError?err(String(value.result)):ok(name?String(value.result):JSON.stringify(value));
+  }catch(e){return err((e as Error).message);}
+}
+
 function buildServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: 'forsion-desktop', version: '0.1.0' })
   server.registerTool(
@@ -128,6 +140,8 @@ function buildServer(deps: McpDeps): McpServer {
     },
     async (args) => callTranscribeAudio(deps, args),
   )
+  server.registerTool('plugin_tools',{description:'List tools explicitly exposed by enabled Forsion plugins. Use their returned schemas with plugin_call.',inputSchema:{}},()=>callPluginTool(deps));
+  server.registerTool('plugin_call',{description:'Call an opt-in Forsion plugin tool. Writes wait for a native desktop approval; no filesystem or shell tools are implicitly exposed.',inputSchema:{name:z.string().max(150),arguments:z.record(z.string(),z.unknown()).optional()}},args=>callPluginTool(deps,args.name,args.arguments));
   return server
 }
 

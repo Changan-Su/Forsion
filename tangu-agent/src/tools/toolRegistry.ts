@@ -294,7 +294,8 @@ export function listToolProviders(): ToolProvider[] {
  * 同名后注册者覆盖(host 模式下 hostExec 的 read_file/write_file 覆盖云工作区版本——
  * 后者已被 ① 滤掉,故 host 工具按注册序追加在末尾,对齐原「HOST_TOOLS 末尾叠加」行为)。
  */
-export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string, ToolDef> {
+export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Map<string, 'plugin' | 'core'>): Map<string, ToolDef> {
+  origins?.clear();
   const host = ctx.execMode === 'host';
   const sandboxCtx = { ...ctx, hostSandbox: ctx.hostSandbox ?? (ctx.execMode === 'sandbox' ? undefined : resolveHostSandboxPolicy()) };
   const sandboxRestricted = isHostSandboxRestricted(sandboxCtx);
@@ -350,9 +351,10 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     }
     if (t.isEnabledFor && !t.isEnabledFor(profile, enabledForCtx)) return;
     out.set(t.name, t);
+    origins?.set(t.name, fromPlugin ? 'plugin' : 'core');
   };
   for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin');
-  for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false);
+  for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false, p.origin === 'plugin');
   return out;
 }
 

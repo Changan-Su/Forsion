@@ -1,6 +1,8 @@
 import { deps } from '../seams/runtime.js';
 import { tanguHome } from '../core/tanguHome.js';
 import { createPluginRuns, pluginEngines } from './runs.js';
+import { createPluginWorkspaces } from './workspaces.js';
+import { createPluginAutomation } from './automation.js';
 import { authMiddleware } from '../core/http.js';
 import path from 'node:path';
 /**
@@ -27,7 +29,7 @@ import path from 'node:path';
  *   - 工具 provider 记归属(providerOwner):停用只撤自己名下的。
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { registerToolProvider, unregisterToolProvider } from '../tools/toolRegistry.js';
+import { registerToolProvider, unregisterToolProvider, listToolProviders } from '../tools/toolRegistry.js';
 import { registerPlugin, getPluginMeta, pluginsNeedingRestart, setPluginDormant, unregisterPlugin } from './registry.js';
 import * as pluginStore from './settingsStore.js';
 import { wechatRemote } from '../services/wechatRemote.js';
@@ -58,7 +60,7 @@ import type { CloudBrainServices } from '../seams/cloudBrain.js';
 import type { BillingServices } from '../seams/billing.js';
 
 /** 按引用的运行时构建块——核心同一模块图（见文件头 P0）。 */
-const sdk: Omit<TanguSdk, 'runs' | 'engines'> = {
+const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
   createTanguModule,
   createHttpBrain,
   createNoopBilling,
@@ -176,7 +178,9 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       });
       if (inst.activated) mountRoutes(id, inst);
     },
-    sdk: { ...sdk, runs: createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off)), engines: pluginEngines },
+    sdk: { ...sdk, runs: createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off), () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().map(t => t.name))), engines: pluginEngines,
+      automation: createPluginAutomation(id, () => !inst.disposed, () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().filter(t=>t.capabilities?.automationSafe).map(t => t.name))),
+      workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {

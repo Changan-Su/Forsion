@@ -19,11 +19,12 @@ export interface PluginRunStart {
   userId: string; prompt: string; cwd: string; modelId?: string; thinkingLevel?: string;
   agentSlug?: string; engineId?: string; engineModelId?: string; planMode?: boolean;
   parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
+  readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
 }
 const decode = (x: any): any => typeof x === 'string' ? JSON.parse(x) : x || {};
 const uuid = /^[a-f0-9]{8}-[a-f0-9-]{27,40}$/i;
 const locks = new Map<string, Promise<unknown>>();
-export function createPluginRuns(owner: string, alive: () => boolean, own: (off: () => void) => void = () => {}) {
+export function createPluginRuns(owner: string, alive: () => boolean, own: (off: () => void) => void = () => {}, ownedTools: () => string[] = () => []) {
   const check = (): void => {
     if (!alive()) throw new Error('Plugin is disabled');
     if (!deps().profile.capabilities.hostExec) throw new Error('Task runs require a local engine');
@@ -50,6 +51,8 @@ export function createPluginRuns(owner: string, alive: () => boolean, own: (off:
       check();
       if (!p.userId || !p.prompt?.trim() || p.prompt.length > 100_000 || !path.isAbsolute(p.cwd)) throw new Error('User, prompt and absolute project directory are required');
       if (p.agentSlug && p.engineId) throw new Error('Choose an Agent or an external engine');
+      if (p.toolNames && (!Array.isArray(p.toolNames) || p.toolNames.some(n => n !== 'ask_user' && !ownedTools().includes(n)))) throw new Error('Only this plugin\'s tools can be bridged');
+      if (p.resumeSessionId && (!p.engineId || !/^[a-zA-Z0-9_-]{1,160}$/.test(p.resumeSessionId))) throw new Error('Invalid external session');
       if (p.engineId && p.planMode) throw new Error('External engines do not support plan mode');
       if (p.engineId && (isHostSandboxRestricted() || !deps().engines?.list().some(e => e.id === p.engineId && e.available))) throw new Error('External engine is unavailable');
       if (p.agentSlug && !(await getAgent(p.agentSlug))) throw new Error('Agent not found');
@@ -75,6 +78,8 @@ export function createPluginRuns(owner: string, alive: () => boolean, own: (off:
         if (!modelId && !p.engineId) throw new Error('Select a model');
         const approvalMode = session ? await storedApprovalMode(sessionId) : defaults?.approvalMode;
         const config = { ...(session ? decode(session.agent_config) : {}), pluginOwner: owner, execMode: 'host', cwd, preset: null,
+          pluginReadOnly: !!p.readOnly || !!(session && decode(session.agent_config).pluginReadOnly), pluginToolNames: p.toolNames || [],
+          ...(p.resumeSessionId ? { externalSession: { id:p.resumeSessionId,engineId:p.engineId,cwd } } : {}),
           agentSlug: p.agentSlug || null, engineId: p.engineId || null, engineModelId: p.engineModelId || null,
           planMode: !!p.planMode, thinkingLevel: p.thinkingLevel || defaults?.thinkingLevel,
           approvalMode: approvalMode || 'auto-edit' };
@@ -95,15 +100,37 @@ export function createPluginRuns(owner: string, alive: () => boolean, own: (off:
       locks.set(key, work);
       try { return await work; } finally { if (locks.get(key) === work) locks.delete(key); }
     },
+    async followupParent(childSessionId: string, userId: string, requestId: string, message: string) {
+      const child=await ownedSession(childSessionId,userId);
+      if(!child.parent_session_id)return {delivered:false};
+      if(!uuid.test(requestId)||!message.trim()||message.length>20000)throw new Error('Invalid follow-up');
+      const parents=await query<any[]>('SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?',[child.parent_session_id,userId]);
+      const parent=parents[0];if(!parent)return {delivered:false};
+      const config=decode(parent.agent_config),agent=config.agentSlug?await getAgent(config.agentSlug):null;
+      const names=agent?.toolsList||config.pluginToolNames;
+      const strict=agent?.toolsStrict||(config.pluginOwner===owner&&config.pluginReadOnly);
+      if(!strict||!Array.isArray(names)||!names.length||names.some((n:string)=>n!=='ask_user'&&!ownedTools().includes(n)))return {delivered:false};
+      const existing=await getRun(requestId);
+      if(existing){if(existing.user_id!==userId||existing.session_id!==parent.id)throw new Error('Follow-up ID collision');return {delivered:true};}
+      check();await createRun({id:requestId,sessionId:parent.id,userId,appId:deps().profile.appId,modelId:parent.model_id||'',assistantMessageId:randomUUID(),input:{origin:'client',approvalTray:true,pluginNotification:owner,message,userMessageId:randomUUID(),attachments:[],agentConfig:config}});
+      const {enqueueRun}=await import('../services/agentLoop.js');enqueueRun(parent.id,requestId);return {delivered:true};
+    },
     async sessionRuns(sessionId: string, userId: string) {
       await ownedSession(sessionId, userId);
       return await query<Array<{runId:string; status:string; createdAt:string}>>(
         `SELECT id AS "runId", status, created_at AS "createdAt" FROM agent_runs WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC${getDbType() === 'sqlite' ? ', rowid ASC' : ''}`,
         [sessionId, userId]);
     },
+    async usage(sessionId: string, userId: string) {
+      await ownedSession(sessionId, userId);
+      const rows = await query<any[]>('SELECT status, tokens_total, input FROM agent_runs WHERE session_id = ? AND user_id = ?', [sessionId,userId]);
+      const unreportedRuns=rows.filter(r=>decode(r.input).agentConfig?.engineId&&!Number(r.tokens_total)).length;
+      return { runs:rows.length,tokens:unreportedRuns===rows.length?null:rows.reduce((sum,r)=>sum+(Number(r.tokens_total)||0),0),completed:rows.filter(r=>r.status==='done').length,unreportedRuns };
+    },
     async status(runId: string, userId: string) {
       const run = await owned(runId, userId);
       return { runId, sessionId: run.session_id, status: run.status, error: run.error,
+        externalSessionId: decode(run.result).externalSessionId,
         tokens: run.tokens_total, summary: String(decode(run.result).content || '').slice(-16000), waiting: listPrompts().filter(p => p.runId === runId).map(p => p.kind) };
     },
     async events(runId: string, userId: string, cursor = 0) {

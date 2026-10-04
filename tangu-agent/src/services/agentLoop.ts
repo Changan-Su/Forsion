@@ -232,6 +232,26 @@ export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Pro
   } finally { if (timer) clearTimeout(timer); }
 }
 
+/** A host tool invocation has no model loop, but must share native Stop and shutdown semantics. */
+export async function runControlledOperation<T>(runId: string, sessionId: string, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  if (exiting || abortControllers.has(runId) || runSession.has(runId)) throw new Error('Run cannot start');
+  const ac = new AbortController();
+  const cancel = () => ac.abort();
+  signal.addEventListener('abort', cancel, { once: true });
+  if (signal.aborted) cancel();
+  abortControllers.set(runId, ac);
+  runSession.set(runId, sessionId);
+  const task = Promise.resolve().then(() => work(ac.signal));
+  // Observe failure here too, so the settlement registry never creates an unhandled rejection.
+  runTasks.set(runId, task.then(() => undefined, () => undefined));
+  try { return await task; }
+  finally {
+    signal.removeEventListener('abort', cancel);
+    abortControllers.delete(runId);runSession.delete(runId);runTasks.delete(runId);abortReasons.delete(runId);
+    setTimeout(() => cleanup(runId), 30_000).unref();
+  }
+}
+
 /** 入队一个 run：空闲则立刻起，否则排队等当前 run 跑完。同步 check-and-set（set 前无 await），单线程下无竞态。 */
 export function enqueueRun(sessionId: string, runId: string): void {
   runSession.set(runId, sessionId);
@@ -463,6 +483,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   const engines = deps().engines!;
   let displayAgentSlug: string | undefined;
   let finalContent = '';
+  let toolServer: Awaited<ReturnType<typeof import('../engines/toolServer.js').createRunToolServer>> | undefined;
   try {
     // 在外部 loop 自己的终态处理内拒绝,不能从 dispatchRun 抛出后被 catch 静默回落自有 loop。
     // ACP 引擎的任意工具/进程不受本地 OS 沙箱约束,请求里的 agentConfig 也不能放宽可信策略。
@@ -477,8 +498,20 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (typeof selectedSlug !== 'string' || !isValidSlug(selectedSlug)) throw new Error('Invalid session Agent identity for external engine.');
     displayAgentSlug = selectedSlug;
     enterRunContext(userId, runId);
+    if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
+    const engineCwd = engineSolo ? engineLibDir(engineSolo) : (typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined);
+    const taskPolicy = storedAgentConfig?.pluginOwner ? storedAgentConfig : {};
+    const bridgeTools=Array.isArray(taskPolicy.pluginToolNames)?taskPolicy.pluginToolNames:[];
+    const allowedBridge=bridgeTools.length?bridgeTools:taskPolicy.pluginReadOnly?['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime']:[];
+    if (allowedBridge.length) {
+      const { createRunToolServer } = await import('../engines/toolServer.js');
+      toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
+        execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
+        toolsStrict:true,toolsList:allowedBridge },allowedBridge);
+    }
+    const previous = taskPolicy.externalSession;
     const result = await engines.run({
       engineId,
       runId,
@@ -486,10 +519,13 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       userId,
       modelId,
       engineModelId: agentConfig.engineModelId,
+      readOnly: taskPolicy.pluginReadOnly === true,
+      mcpServers: toolServer ? [toolServer.server] : undefined,
+      resumeSessionId: previous?.engineId === engineId && previous?.cwd === engineCwd ? previous.id : undefined,
       message: String(input.message || ''),
       attachments: input.attachments || [],
       // 引擎私聊的工作区由身份派生(engines/<id>/Library),不信 run 值;普通引擎会话照旧取 run 的 cwd。
-      cwd: engineSolo ? engineLibDir(engineSolo) : (typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined),
+      cwd: engineCwd,
       signal: ac.signal,
       publish: (type: string, payload: any) => {
         if (ac.signal.aborted) return;
@@ -500,12 +536,17 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     });
     ac.signal.throwIfAborted();
     finalContent = result.content || '';
+    if (taskPolicy.pluginOwner && result.externalSessionId) {
+      const freshRaw = await deps().state.getAgentConfig(sessionId);
+      const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
+      await deps().state.setAgentConfig(sessionId,JSON.stringify({...fresh,externalSession:{id:result.externalSessionId,engineId,cwd:engineCwd}}));
+    }
     await finalizeAssistantMessage(
       assistantId, sessionId, modelId, finalContent, result.reasoning || '', result.toolCalls || [], result.toolResults || [],
     );
     await drain(runId);
     await publish(runId, 'done', { content: finalContent });
-    await updateRunStatus(runId, 'done', { result: { content: finalContent } });
+    await updateRunStatus(runId, 'done', { tokensTotal: result.tokensTotal, result: { content: finalContent, externalSessionId: result.externalSessionId } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
     // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
     if (!engineSolo) void onUserRunDone(sessionId, userId, undefined, undefined, !!(remoteOf(run.input) || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
@@ -521,6 +562,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {
+    await toolServer?.close().catch(() => {});
+    setApprovalTray(runId, false);
     abortControllers.delete(runId);
     runSession.delete(runId);
     advanceQueue(sessionId);
@@ -893,11 +936,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // (中途抽换工具面 = 缓存三层全 miss + 历史 tool_use 引用的工具不在 tools 里,S2)。
   // 稳态(存值 == run 值)零额外查询;只有缺键/不一致时才数一次消息判「空白」。
   let preset: Preset | undefined = parsePreset(agentConfig.preset);
+  let pluginReadOnly = agentConfig.pluginReadOnly === true;
   try {
     const rawStored = await deps().state.getAgentConfig(sessionId);
     ac.signal.throwIfAborted();
     const stored = rawStored ? (typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored) : null;
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
+    pluginReadOnly ||= stored?.pluginReadOnly === true;
     // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
     bindSessionFacts(agentConfig, pickSessionFacts(stored));
     if (stored?.delegatedFrom) {
@@ -987,6 +1032,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     deps().brain.agents,
     remoteCap ? { approvalCap: remoteCap } : undefined,
   );
+  if (pluginReadOnly) {
+    agentConfig.toolsStrict = true; agentConfig.toolsMode = 'allow';
+    agentConfig.toolsList = ['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime','load_tools'];
+  }
   ac.signal.throwIfAborted();
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
     throw new Error('The selected Agent could not be activated. The run was not started with another Agent.');

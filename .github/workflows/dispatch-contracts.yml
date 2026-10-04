@@ -1,0 +1,32 @@
+name: dispatch-contracts
+on:
+  push:
+    paths: &paths
+      - 'tangu-agent/src/plugins/**'
+      - 'tangu-agent/src/engines/**'
+      - 'tangu-agent/src/tools/registry*'
+      - 'tangu-agent/src/tools/toolRegistry*'
+      - 'tangu-agent/src/services/taskProjectQueue.ts'
+      - 'tangu-agent/src/services/gitActions.ts'
+      - 'tangu-agent/test/acpEngine*'
+      - '.github/workflows/dispatch-contracts.yml'
+  pull_request:
+    paths: *paths
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tangu-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tangu-agent/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npx vitest run src/plugins/automation.test.ts src/plugins/externalTools.test.ts src/plugins/workspaces.test.ts src/tools/registryStrict.test.ts test/acpEngine.test.ts test/acpEngineSpawn.test.ts src/engines/acpEngine.startup.test.ts

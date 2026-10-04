@@ -87,6 +87,8 @@ export interface ToolCapabilities {
    *  缺省 false——不声明就不进桌面自动化构建器的动作目录。只给参数可完整预填、
    *  无会话交互依赖、副作用可控的工具声明。 */
   automationSafe?: boolean;
+  /** Explicitly expose this plugin tool through Desktop MCP. Writes require native approval. */
+  externalMcp?: boolean;
 }
 
 export interface ToolDef {
@@ -156,10 +158,16 @@ export interface PluginRunStart {
   userId: string; prompt: string; cwd: string; modelId?: string; thinkingLevel?: string;
   agentSlug?: string; engineId?: string; engineModelId?: string; planMode?: boolean;
   parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
+  readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
 }
 export interface PluginRunStatus {
   runId: string; sessionId: string; status: string; error?: string | null;
   tokens: number; summary: string; waiting: string[];
+  externalSessionId?: string;
+}
+export interface PluginWorkspace {
+  id: string; userId: string; project: string; cwd: string; branch: string; base: string;
+  state: 'preparing' | 'active' | 'archiving' | 'archived'; mergedSha?: string;
 }
 /** Minimal Express surface; authentication and the bundle/engine prefix are host-owned. */
 export interface ScopedPluginRouter {
@@ -172,9 +180,23 @@ export interface ScopedPluginRouter {
 
 /** 运行时句柄(按引用传入,核心同一模块实例)。只列稳定公开成员。 */
 export interface TanguSdk {
+  automation: {
+    list(): Promise<Array<{id:string;desc:string;enabled:boolean;nextRunAt:string|null;[key:string]:any}>>;
+    save(key:string,input:{description:string;type:'at'|'every'|'daily_at';datetime?:string;interval?:string;time?:string;tool:string;args:Record<string,unknown>;enabled:boolean}):Promise<{id:string;[key:string]:any}>;
+    remove(key:string):Promise<boolean>;
+    notify(userId:string,title:string,body:string):Promise<{ok:boolean;error?:string}>;
+  };
+  workspaces: {
+    prepare(input: { id: string; userId: string; cwd: string; baseRef?: string; trust?: boolean }): Promise<PluginWorkspace>;
+    inspect(id: string, userId: string): Promise<PluginWorkspace & { sourceHead: string; targetHead: string; targetBranch: string; revision: string; diff: string; truncated: boolean; dirty: boolean; untracked: string[] }>;
+    merge(id: string, userId: string, revision: string): Promise<{sha: string; branch: string}>;
+    archive(id: string, userId: string): Promise<PluginWorkspace>;
+  };
   runs: {
+    followupParent(childSessionId: string, userId: string, requestId: string, message: string): Promise<{delivered:boolean}>;
     start(input: PluginRunStart): Promise<{ sessionId: string; runId: string }>;
     sessionRuns(sessionId: string, userId: string): Promise<Array<{runId:string; status:string; createdAt:string}>>;
+    usage(sessionId: string, userId: string): Promise<{runs:number;tokens:number|null;completed:number;unreportedRuns:number}>;
     status(runId: string, userId: string): Promise<PluginRunStatus>;
     events(runId: string, userId: string, cursor?: number): Promise<Array<{ seq: number; type: string; payload: any }>>;
     subscribe(runId: string, userId: string, onChange: () => void): Promise<() => void>;
