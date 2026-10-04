@@ -11,7 +11,12 @@
   --space-ambient-tint-bottom: oklch(from var(--space-ambient-bottom) var(--space-ambient-lightness) min(c, 0.12) h);
   transition: --space-ambient-top 700ms ease, --space-ambient-middle 700ms ease, --space-ambient-bottom 700ms ease;
 }
-:root.dark[data-theme='lovable'] { --space-ambient-lightness: 30%; }
+/* Dark: the chrome must stay one step below the paper (approved surfaces: sidebar #262528, paper #2a292b).
+ * 30% plus a --bg-card wash lifted the chrome to the paper's lightness and every panel edge disappeared
+ * (user report, 2026-10-04). 27% matches --sidebar-bg and the dark wash mixes only that colour.
+ * ponytail: calibrated for the default (cream) dark background; tune per background if another one drifts.
+ * Instrument: check:spaceappearance "dark chrome stays a step below the paper". */
+:root.dark[data-theme='lovable'] { --space-ambient-lightness: 27%; }
 [data-theme='lovable']:not([data-glass='off']) .shell { position: relative; isolation: isolate; background: var(--sidebar-bg); }
 [data-theme='lovable']:not([data-glass='off']) .shell::before {
   content: ''; position: absolute; inset: -36px; z-index: -1; pointer-events: none;
@@ -25,6 +30,9 @@
   content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: linear-gradient(135deg, color-mix(in srgb, var(--bg-card) 34%, transparent), color-mix(in srgb, var(--sidebar-bg) 58%, transparent));
   backdrop-filter: blur(28px) saturate(125%);
+}
+.dark[data-theme='lovable']:not([data-glass='off']) .shell::after {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--sidebar-bg) 46%, transparent), color-mix(in srgb, var(--sidebar-bg) 58%, transparent));
 }
 [data-theme='lovable']:not([data-glass='off']) .rb,
 [data-theme='lovable']:not([data-glass='off']) .shell-top,

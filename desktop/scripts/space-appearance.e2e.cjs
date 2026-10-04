@@ -113,6 +113,26 @@ async function main() {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.waitForFunction(() => getComputedStyle(document.documentElement).transitionProperty === 'none' && getComputedStyle(document.documentElement).transitionDuration.split(',').every((v) => parseFloat(v) <= 0.00001))
     check('reduced motion disables color interpolation', true)
+    // Dark step (2026-10-04, user-reported "panel edges are hard to see"): the tinted chrome must stay darker than the
+    // paper. The approved dark surfaces are sidebar #262528 / paper #2a292b; a brighter tint erases every panel edge.
+    await page.evaluate(() => { for (const [key, value] of Object.entries({ forsion_theme_skin: 'cream', forsion_theme_bg: 'cream', forsion_theme_pref: 'dark' })) localStorage.setItem(key, value) })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.locator('.rb-space').first().waitFor()
+    await waitAxes(page, { skin: 'cream', bg: 'cream', mode: 'dark' })
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--space-ambient-top'))
+    await page.waitForTimeout(900)
+    const spot = await page.evaluate(() => {
+      const top = document.querySelector('.rb-top').getBoundingClientRect(), bottom = document.querySelector('.rb-bottom').getBoundingClientRect()
+      const paper = [...document.querySelectorAll('.dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part')].sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0]
+      // Empty Ribbon spacer between the two zones: pure chrome, no icon under it.
+      return { x: Math.round(top.left + top.width / 2), y: Math.round((top.bottom + bottom.top) / 2), paper: getComputedStyle(paper).backgroundColor.match(/\d+/g).map(Number) }
+    })
+    const chrome = await app.evaluate(async ({ BrowserWindow }, at) => {
+      const main = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('window=floating'))
+      const bgra = (await main.capturePage({ x: at.x, y: at.y, width: 1, height: 1 })).toBitmap()
+      return [bgra[2], bgra[1], bgra[0]]
+    }, spot)
+    check('dark chrome stays a step below the paper', spot.paper[0] - chrome[0] >= 3, { chrome, paper: spot.paper, at: [spot.x, spot.y] })
     await page.evaluate(() => { localStorage.setItem('forsion_glass', 'off') })
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.locator('.shell').waitFor()
