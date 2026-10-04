@@ -14,7 +14,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
-import { saveAgent } from '../src/agents/agentRegistry.js';
+import { saveAgent, agentNotesOff } from '../src/agents/agentRegistry.js';
 import { applyHarnessEdit, loadHarness, readJournal, peekHarnessCandidates, MUSE_EQUIP_TITLE } from '../src/agents/harnessStore.js';
 import { runWithAgentSlug } from '../src/seams/runContext.js';
 import { manageHarnessProvider } from '../src/tools/builtin/manageHarness.js';
@@ -308,6 +308,20 @@ describe('Muse 代收:propose 带 tools / skills 直接生效', () => {
       await saveAgent({ slug: 'worker', name: 'Worker', systemPrompt: 'Work.', toolsMode: null, toolsList: null } as any);
     }
     expect(await nextWeek(), '恢复之后名单回来').toMatchObject({ runs: 28 });
+  });
+});
+
+describe('agentNotesOff:与运行期的工具名单同一口径', () => {
+  it('黑名单里有 / 白名单里没有 = 关;名单缺失当空(手改或导入的 allow 缺名单 = 全禁,运行期 manage_harness 也不可见)', () => {
+    expect(agentNotesOff({ toolsMode: 'deny', toolsList: ['manage_harness'] })).toBe(true);
+    expect(agentNotesOff({ toolsMode: 'deny', toolsList: ['run_bash'] })).toBe(false);
+    expect(agentNotesOff({ toolsMode: 'deny' })).toBe(false);
+    expect(agentNotesOff({ toolsMode: 'allow', toolsList: ['manage_harness', 'run_bash'] })).toBe(false);
+    expect(agentNotesOff({ toolsMode: 'allow', toolsList: ['run_bash'] })).toBe(true);
+    expect(agentNotesOff({ toolsMode: 'allow', toolsList: [] })).toBe(true);
+    expect(agentNotesOff({ toolsMode: 'allow' })).toBe(true);
+    expect(agentNotesOff({})).toBe(false);
+    expect(agentNotesOff(null)).toBe(false);
   });
 });
 
