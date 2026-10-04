@@ -686,7 +686,7 @@ const s = ctx.tangu?.session?.()       // {contextWindow, contextTokens, session
 ```js
 const st = ctx.tangu?.agentStatus?.()   // 省略参数 = 主区活动会话;传 null = 新对话草稿(恒 idle);传 id = 那个会话
 // → { phase, sessionId, runId, tool?, toolStage?, waitingFor?, since, until?, messageId?, textChars, reasoningChars,
-//     agentSlug?, agentName? }
+//     agentSlug?, agentName?, speechLevel? }
 const off = ctx.tangu?.subscribeAgentStatus?.((s) => avatar.play(s.phase), /* sessionId? */)
 ```
 
@@ -702,7 +702,13 @@ const off = ctx.tangu?.subscribeAgentStatus?.((s) => avatar.play(s.phase), /* se
 - **订阅是变更过滤的**:只在 `phase / tool / toolStage / waitingFor / sessionId / agentSlug` 变了时回调,done/error 余韵到期再回调一次;
   **每个 token 不回调**(流式期间 store 每个增量都在动,裸转发 = 把你按帧敲一遍)。宿主在禁用/重载时统一退订,你自己也 dispose。
 - **口型 / 说话量**:`speaking` 期间自己按帧(或 ~15Hz)拉 `agentStatus()`,对 `textChars` 做差分 + ~150ms 平滑;
-  `messageId` 变了(换了一条气泡)重置基线,负增量钳 0。这是 token 速率包络,不是语音响度 —— TTS 响度目前拿不到。
+  `messageId` 变了(换了一条气泡)重置基线,负增量钳 0。这是 token 速率包络,不是语音响度。
+- **语音通话的真实口型(`speechLevel`,2026-10-04 起)**:会话正在语音通话时状态里多一个 `speechLevel`(0..1,模型输出的真实电平,
+  ~20Hz 更新,正常说话多在 0.2–0.8,没出声 = 0)。**有这个字段就按它张嘴,别走 `textChars`**:`typeof st.speechLevel === 'number'`
+  → 张嘴量 = 平滑后的 `speechLevel × 增益`(上升 ~40ms、回落 ~90ms;音节起伏已经在信号里,别再叠正弦开合)。通话相位也叠在 `phase` 上:
+  模型出声 → `speaking`(压过包括 `waiting` 在内的其余相位);用户说完、模型还没开口且没有 run 在跑 → `thinking`;通话里交给 Agent 代办的
+  run 照常报 `tool` / `waiting` / `speaking`(此时 `speechLevel` 是 0 —— 聊天区在出字但没有声音,嘴别动)。拉取式,不进变更过滤;
+  不在通话 / 旧宿主 → 字段不存在,照旧用 `textChars`。朗读(TTS)的响度目前仍拿不到。
 - 已知空档(宿主没有状态可给,别当 bug 报):按下发送到 run 真正开始之间是 `idle`(新对话的 `sessionId` 会先从 null 变成新 id);
   发送失败只有一个 toast、没有状态;委派出去的子代理子会话读出来是 `idle`。
 - Desk 伴随面里**别用这两个方法**,用 `mount` 递给你的 `host.status()` / `host.onStatus()` —— 那一份绑的是这张 Desk 所属的会话

@@ -1002,6 +1002,7 @@ export interface PluginContext {
     /** Agent 此刻在干什么(2026-09-19+):idle / thinking / speaking / tool / waiting / error / done。
      *  sessionId 省略 = 主区活动会话;null = 新对话草稿(恒 idle)。拉取式;要口型包络就按帧拉 textChars。
      *  2026-09-20 起还带 `agentSlug` / `agentName`(这会话归哪个 Agent;外部引擎会话没有)。
+     *  2026-10-04 起会话在语音通话时带 `speechLevel`(模型出声的真实电平):有它就按它做口型,别用 textChars。
      *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。 */
     agentStatus?(sessionId?: string | null): import('./tanguSeam').TanguAgentStatus
     /** 变更过滤订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug 变了时回调

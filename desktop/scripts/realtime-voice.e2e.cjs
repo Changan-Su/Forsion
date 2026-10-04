@@ -230,6 +230,9 @@ async function main() {
     await win.evaluate(() => {
       window.__callEvts = []
       window.addEventListener('storage', (e) => { if (e.key === 'forsion_voice_call_evt' && e.newValue) window.__callEvts.push(JSON.parse(e.newValue)) })
+      // 通话的声音(相位 + 模型输出电平;挂断 = 撤掉 → null):主窗 agentStatus 叠它,Desk 伴随形象按它做口型
+      window.__callVoice = []
+      window.addEventListener('storage', (e) => { if (e.key === 'forsion_voice_call_voice') window.__callVoice.push(e.newValue ? JSON.parse(e.newValue) : null) })
     })
     const idsBefore = new Set((await fetch(`${stub.url}/agent/sessions`).then((r) => r.json())).sessions.map((x) => x.id))
     await btn.click()
@@ -269,6 +272,15 @@ async function main() {
       return { max, transform: cs.transform, opacity: cs.opacity, bg: cs.backgroundColor }
     }).catch((e) => ({ err: String(e) }))
     check('R6b 放音时头像光环跟着电平放大', halo.max > 0.1, JSON.stringify(halo))
+    // 主窗那头:放音这段真收到了电平(叠加成 agentStatus 的那半由 tanguProbe.test 管,这里只核跨窗这一截在真 Electron 里通)
+    await sleep(600)
+    const lip = await win.evaluate(() => {
+      const sp = window.__callVoice.filter((v) => v && v.phase === 'speaking')
+      const span = sp.length > 1 ? sp[sp.length - 1].t - sp[0].t : 0
+      return { n: sp.length, hz: span ? Math.round(((sp.length - 1) / span) * 1000) : 0, max: Math.max(0, ...sp.map((v) => v.level)), sids: [...new Set(sp.map((v) => v.sessionId))] }
+    })
+    check('R6c 放音时主窗收得到模型的输出电平(给 Desk 伴随形象做口型):本会话、≥10Hz、电平不为 0',
+      lip.n > 5 && lip.hz >= 10 && lip.max > 0.1 && lip.sids.length === 1 && lip.sids[0] === created?.id, JSON.stringify(lip))
     await shot(mini, '3-speaking')
 
     // 第二句在放音中途开口 → speech_started → 渲染端必须当场掐掉排着的播放(stop),不是等它放完
@@ -433,6 +445,8 @@ async function main() {
     await mini.locator('.vc-hangup').first().click()
     const hung = await until(() => rt.closed, 5000)
     check('R15 挂断:连接断开、Mini 卡片关窗', !!hung && await miniClosed)
+    const voiceGone = await until(() => win.evaluate(() => window.__callVoice.length > 0 && window.__callVoice[window.__callVoice.length - 1] === null), 3000)
+    check('R15b 挂断后通话的声音撤掉(主窗的形象当场收声,不等心跳超时)', !!voiceGone)
 
     // 挂断后打字 = 普通消息(交给 Tangu)
     const runsAfterHang = stub.seen.runs.length

@@ -9,6 +9,7 @@ import { installTanguProbe, START_CHAT_MAX_PROMPT } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
 import { resolveNewSessionWorkspace, useApp } from './stores/appStore'
 import { DONE_HOLD_MS } from './stores/agentStatus'
+import { ingestCallVoice } from './services/callVoice'
 import type { AgentRunEvent, UiMessage } from './types'
 
 describe('ctx.tangu 探针', () => {
@@ -374,6 +375,108 @@ describe('subscribeAgentStatus(Desk 伴随面 / ctx.tangu.subscribeAgentStatus �
     spy.mockRestore()
     off()
   })})
+
+// 语音通话跑在 Mini 窗:模型的话不经 run,store 里那段时间是 idle —— 「模型在出声」由 services/callVoice 跨窗报过来,
+// 探针把它叠在正在通话的那个会话上(Live3D 按 speechLevel 做口型)。这里直接喂 ingestCallVoice(= storage 事件的 newValue)。
+// 负对照(已实跑红):statusRefs 去掉 callPhaseRef → 「开口 / 收声各响一次」红(fire 在引用全等处早退);
+// withCallVoice 的 speaking 分支改成 { ...st, phase } → 「压过 waiting」红(waitingFor / tool 被带进 speaking);
+// callVoice 去掉 LEVEL_STALE_MS 那行 → 「电平过期」红;去掉 staleTimer → 「心跳断了」红。
+describe('agentStatus × 语音通话(speechLevel)', () => {
+  const T0 = 5_000_000
+  const voice = (sessionId: string, phase: string, level = 0): void => ingestCallVoice(JSON.stringify({ sessionId, phase, level, t: Date.now() }))
+  const idleSession = (extra: Record<string, unknown> = {}): void => useApp.setState({
+    activeId: 's1', messagesBySession: { s1: [] }, runningBySession: {}, stoppingBySession: {}, runStatsBySession: {},
+    llmRetryBySession: {}, groupVoting: {}, ...extra,
+  } as never)
+  const running = (msg: Partial<UiMessage>): void => idleSession({
+    messagesBySession: { s1: [{ id: 'u1', role: 'user', content: 'hi', status: 'done', timestamp: T0 }, { id: 'a1', role: 'assistant', content: '', status: 'streaming', timestamp: T0 + 1, ...msg }] },
+    runningBySession: { s1: 'r1' },
+    runStatsBySession: { s1: { runId: 'r1', startedAt: T0, tokens: 0, thinkMs: 0, thinkTracked: true } },
+  })
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: T0 + 100 })
+    installTanguProbe()
+    idleSession()
+  })
+  afterEach(() => {
+    ingestCallVoice(null)
+    vi.useRealTimers()
+  })
+
+  it('没在通话:状态里没有 speechLevel(插件照旧走 textChars)', () => {
+    expect('speechLevel' in readTangu()!.agentStatus!('s1')).toBe(false)
+  })
+
+  it('模型开口 / 收声各响一次,电平变化不响;只叠在通话的那个会话上;挂断后字段消失', () => {
+    const p = readTangu()!
+    const seen: string[] = []
+    const off = p.subscribeAgentStatus!((s) => seen.push(`${s.phase}:${s.speechLevel}`), 's1')
+    const other: string[] = []
+    const off2 = p.subscribeAgentStatus!((s) => other.push(s.phase), 's2')
+
+    voice('s1', 'listening')
+    expect(seen).toEqual([]) // idle → idle
+    expect(p.agentStatus!('s1')).toMatchObject({ phase: 'idle', speechLevel: 0 })
+
+    voice('s1', 'speaking', 0.5)
+    expect(seen).toEqual(['speaking:0.5'])
+    for (const l of [0.2, 0.9, 0.4]) voice('s1', 'speaking', l)
+    expect(seen).toEqual(['speaking:0.5']) // 电平是拉取式
+    expect(p.agentStatus!('s1')).toMatchObject({ phase: 'speaking', sessionId: 's1', speechLevel: 0.4 })
+    expect(p.agentStatus!()).toMatchObject({ phase: 'speaking', speechLevel: 0.4 }) // 省略 = 活动会话(3D 小屋走这条)
+    expect(p.agentStatus!('s2')).toEqual(expect.not.objectContaining({ speechLevel: expect.anything() }))
+    expect(p.agentStatus!('s2').phase).toBe('idle')
+
+    voice('s1', 'listening')
+    expect(seen).toEqual(['speaking:0.5', 'idle:0'])
+    ingestCallVoice(null)
+    expect('speechLevel' in p.agentStatus!('s1')).toBe(false)
+    expect(other).toEqual([])
+    off()
+    off2()
+  })
+
+  it('用户说完、模型还没开口:没有 run 在跑才报 thinking;代办 run 的 tool 照旧透出(speechLevel = 0)', () => {
+    const p = readTangu()!
+    voice('s1', 'thinking')
+    expect(p.agentStatus!('s1')).toMatchObject({ phase: 'thinking', speechLevel: 0 })
+    running({ toolEvents: [{ id: 't1', name: 'read_file', args: '{}', startedAt: T0 + 5, done: false }] as never })
+    expect(p.agentStatus!('s1')).toMatchObject({ phase: 'tool', tool: 'read_file', speechLevel: 0 })
+  })
+
+  it('通话里代办 run 在聊天区出字(模型没出声):speaking 但 speechLevel = 0 —— 插件不许按出字速度张嘴', () => {
+    voice('s1', 'listening')
+    running({ content: 'writing…', segments: [{ t: 'text', text: 'writing…' }] })
+    expect(readTangu()!.agentStatus!('s1')).toMatchObject({ phase: 'speaking', textChars: 8, speechLevel: 0 })
+  })
+
+  it('模型出声压过 waiting,且不把 waitingFor / tool 带进 speaking', () => {
+    running({ approvals: [{ id: 'ap1', name: 'bash', status: 'pending' }] as never })
+    const p = readTangu()!
+    expect(p.agentStatus!('s1')).toMatchObject({ phase: 'waiting', waitingFor: 'approval', tool: 'bash' })
+    voice('s1', 'speaking', 0.6)
+    const st = p.agentStatus!('s1')
+    expect(st).toMatchObject({ phase: 'speaking', runId: 'r1', speechLevel: 0.6 })
+    expect(st.waitingFor).toBeUndefined()
+    expect(st.tool).toBeUndefined()
+  })
+
+  it('电平过期(Mini 卡住 / 没了)按 0 读;心跳也断了 → 整条作废、订阅方回落', () => {
+    const p = readTangu()!
+    const seen: string[] = []
+    const off = p.subscribeAgentStatus!((s) => seen.push(s.phase), 's1')
+    voice('s1', 'speaking', 0.7)
+    vi.advanceTimersByTime(250)
+    expect(p.agentStatus!('s1').speechLevel).toBe(0.7)
+    vi.advanceTimersByTime(100)
+    expect(p.agentStatus!('s1')).toMatchObject({ phase: 'speaking', speechLevel: 0 }) // 嘴先闭上,相位先不闪
+    vi.advanceTimersByTime(2500)
+    expect(seen).toEqual(['speaking', 'idle'])
+    expect('speechLevel' in p.agentStatus!('s1')).toBe(false)
+    off()
+  })
+})
 
 // 真 reducer 驱动(不是手搓 setState):done / error 的 reducer 先 patchMessage(气泡落定)、后 endRun(清 running),
 // 两次 set 之间订阅者曾看到一个假 thinking(每个 run 收尾都冒)。团队 run 的成员占位气泡 activity = 任务句子,

@@ -26,6 +26,7 @@ import { completeInline } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
+import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 
 function readActiveModel(): TanguModelInfo | null {
   const s = useApp.getState()
@@ -121,28 +122,61 @@ export function subscribeReady(cb: () => void): () => void {
   })
 }
 
-/** 某会话 agent 状态的快照(推导见 stores/agentStatus.ts)。 */
+/**
+ * 语音通话叠加(2026-10-04):通话跑在 Mini 窗,模型的话不经 run(store 里这段时间是 idle),
+ * 所以「模型在出声」只能从通话那头报过来(services/callVoice.ts)。只叠在**正在通话的那个会话**上:
+ *  - 模型出声 → speaking,压过其余一切(耳朵听得见它在说;等审批时它念「需要你批准」嘴也得动),并带真实电平;
+ *  - 用户说完、模型还没开口,且没有 run 在跑(idle)→ thinking;代办 run 的 tool / waiting 等照旧透出;
+ *  - 其余相位不改,但 speechLevel 恒在(= 0):代办 run 在聊天区出字时模型并没出声,插件据此不按出字速度张嘴。
+ * agentStatusOf 保持纯推导、一个字不动;叠加只在探针这一层。
+ */
+function withCallVoice(st: TanguAgentStatus): TanguAgentStatus {
+  const v = getCallVoice()
+  if (!v || !st.sessionId || v.sessionId !== st.sessionId) return st
+  if (v.phase === 'speaking') {
+    // 逐字段重建:tool / toolStage / waitingFor / until 属于被压下去的那个相位,不许带进 speaking。
+    return {
+      phase: 'speaking', sessionId: st.sessionId, runId: st.runId, since: v.since,
+      messageId: st.messageId, textChars: st.textChars, reasoningChars: st.reasoningChars,
+      ...(st.agentSlug ? { agentSlug: st.agentSlug } : {}), ...(st.agentName ? { agentName: st.agentName } : {}),
+      speechLevel: v.level,
+    }
+  }
+  if (v.phase === 'thinking' && st.phase === 'idle') return { ...st, phase: 'thinking', since: v.since, speechLevel: 0 }
+  return { ...st, speechLevel: 0 }
+}
+const statusOf = (s: AppState, sessionId: string | null | undefined, now: number): TanguAgentStatus =>
+  withCallVoice(agentStatusOf(s, sessionId, now))
+/** 通话相位进引用比较(见 statusRefs):只认本会话的那通,别的会话在通话与我无关。 */
+const callPhaseRef = (sid: string | null): string | null => {
+  const v = getCallVoice()
+  return v && sid && v.sessionId === sid ? v.phase : null
+}
+
+/** 某会话 agent 状态的快照(推导见 stores/agentStatus.ts;正在语音通话的会话再叠一层 withCallVoice)。 */
 export const readAgentStatus = (sessionId?: string | null): TanguAgentStatus =>
-  agentStatusOf(useApp.getState(), sessionId, Date.now())
+  statusOf(useApp.getState(), sessionId, Date.now())
 
 /** 推导依赖的那几个引用。全等 = 状态不可能变 → 连推导都省掉(toast / 别的会话的 token 走这条)。
  *  activeId 恒在:sessionId 省略时它决定看哪个会话。
  *  ⚠️归属(2026-09-20)那几样也必须在这里:`selectSessionAgent` 只动 `configBySession`,漏了它
  *  fire() 在「引用全等」这一步就早退,键里加了 agentSlug 也永远算不到 —— 用户换了 Agent,插件毫无察觉。
- *  `agentDefs` **故意不进**:改展示名不是状态变化(与 statusKey 不收 agentName 同一条纪律)。 */
+ *  `agentDefs` **故意不进**:改展示名不是状态变化(与 statusKey 不收 agentName 同一条纪律)。
+ *  通话相位(2026-10-04)同理必须在:它不在 store 里,漏了它「模型开口」那一下就在引用全等处早退。 */
 const statusRefs = (s: AppState, sid: string | null): unknown[] => (sid
   ? [s.activeId, s.messagesBySession[sid], s.runningBySession[sid], s.stoppingBySession[sid],
       s.runStatsBySession[sid], s.llmRetryBySession[sid], s.groupVoting[sid],
-      s.configBySession[sid], s.defaultAgentSlug]
+      s.configBySession[sid], s.defaultAgentSlug, callPhaseRef(sid)]
   : [s.activeId, s.newChatCfg, s.defaultAgentSlug])
 
 /** 变更过滤订阅:只在 statusKey(phase / tool / toolStage / waitingFor / sessionId / agentSlug)变了时回调;
  *  done / error 带 until → 到期那一刻定时器再推一次(回 idle,store 那一刻不会 set)。
+ *  语音通话的相位变化不经 store,单独订一条(subscribeCallVoice)敲同一个 fire。
  *  流式回答期间每个 token 都换 messagesBySession[sid] 的引用 → 会重算,但键不变 → 不回调。 */
 export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, sessionId?: string | null): () => void {
   const sidOf = (s: AppState): string | null => (sessionId === undefined ? s.activeId : sessionId) ?? null
   const s0 = useApp.getState()
-  let last = agentStatusOf(s0, sessionId, Date.now())
+  let last = statusOf(s0, sessionId, Date.now())
   let lastKey = statusKey(last)
   let refs = statusRefs(s0, sidOf(s0))
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -159,7 +193,7 @@ export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, sessionI
     const expired = last.until != null && Date.now() >= last.until
     if (!expired && r.length === refs.length && r.every((v, i) => v === refs[i])) return
     refs = r
-    const next = agentStatusOf(s, sessionId, Date.now())
+    const next = statusOf(s, sessionId, Date.now())
     const k = statusKey(next)
     if (k === lastKey) return
     last = next
@@ -170,9 +204,11 @@ export function subscribeAgentStatus(cb: (s: TanguAgentStatus) => void, sessionI
   }
   arm() // 订阅时正处在 done/error 余韵里,也要按时回落
   const unsub = useApp.subscribe(fire)
+  const unsubVoice = subscribeCallVoice(fire)
   return () => {
     off = true
     unsub()
+    unsubVoice()
     clearTimeout(timer)
   }
 }
