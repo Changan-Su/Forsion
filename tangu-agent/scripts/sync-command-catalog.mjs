@@ -27,7 +27,8 @@ const targets = [join(root, '..', 'desktop', 'frontend', 'src', 'commandCatalog.
 let drifted = 0;
 for (const f of targets) {
   const cur = existsSync(f) ? readFileSync(f, 'utf8') : '';
-  if (cur === out) continue;
+  // Git autocrlf on Windows must not turn identical generated sources into drift.
+  if (cur.replace(/\r\n/g, '\n') === out.replace(/\r\n/g, '\n')) continue;
   if (check) {
     console.error(`[sync-commands] 漂移: ${f}(与 src/core/commandCatalog.ts 不一致,跑 npm run sync:commands)`);
     drifted++;

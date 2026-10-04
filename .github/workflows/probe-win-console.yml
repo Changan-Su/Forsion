@@ -1,0 +1,26 @@
+name: probe-win-console
+
+# agent 在 Windows 上跑命令不许弹控制台窗口 —— 真机探针:经 cmd.exe 起一个控制台程序(孙进程),让它自己报
+# 「我的控制台窗口可见吗」;旧选项作负对照,并验证输出/取消/后台进程清理。
+# 细节见 tangu-agent/src/sandbox/hostSandbox.winconsole.test.ts 头注释。
+on:
+  workflow_dispatch:
+  push:
+    branches: ['probe/win-console*', 'fix/win-console*', 'codex/windows-process*']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Agent child processes open no console window
+        working-directory: tangu-agent
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund
+          npx vitest run src/sandbox/hostSandbox.winconsole.test.ts test/windowsProcess.test.ts test/acpEngineSpawn.test.ts

@@ -390,7 +390,7 @@ async function spawnAgentBrowser(
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(executable, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(executable, argv, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch (e: any) {
       resolve({ success: false, error: e?.code === 'ENOENT' ? installHint() : String(e?.message || e), enoent: e?.code === 'ENOENT' });
       return;

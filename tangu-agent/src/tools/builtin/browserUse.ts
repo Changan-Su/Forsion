@@ -170,7 +170,7 @@ function spawnRunner(
     let child;
     try {
       // detached → 自成进程组,超时可整组 SIGKILL(Chrome 是 python 的子进程,只杀 uv 会留孤儿浏览器)。
-      child = spawn(cmd, argv, { env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+      child = spawn(cmd, argv, { env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
     } catch (e: any) {
       resolve({ success: false, error: e?.code === 'ENOENT' ? missingHint : String(e?.message || e), enoent: e?.code === 'ENOENT' });
       return;
