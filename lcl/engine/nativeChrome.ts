@@ -10,7 +10,8 @@
  *  `dispatchNativeChromeAction`.
  *  A host may also draw the Space switcher as a bottom navigation bar (`spaces: true`): the shell then sends
  *  the Space list with its state and drops the web Space row from the drawer foot; taps come back through
- *  `dispatchNativeChromeSpace`. */
+ *  `dispatchNativeChromeSpace`. With such a host the shell navigates in two levels (SingleColumnHost,
+ *  `listFirstNow`): the Space list is sent only on a Space's first level, so the bar is gone one level down. */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close'
@@ -24,8 +25,10 @@ export interface NativeChromeSpace {
 export interface NativeChromeShellState {
   mode: 'shell'
   title: string
-  /** Left drawer reachable. ⚠️ Same rule as the web button (it is the only way to Spaces/account/settings). */
+  /** Left button shown: the left drawer is reachable, or (two-level navigation) there is a list to go back to. */
   left: boolean
+  /** The left button is "back to the Space's list" (two-level navigation, detail level): hosts draw a back arrow. */
+  leftBack?: boolean
   right: boolean
   tabCount: number
   labels: NativeChromeShellLabels

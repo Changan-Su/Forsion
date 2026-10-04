@@ -32,7 +32,7 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, useWorkspace, useNav, useNativeChromeClaim, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
@@ -84,12 +84,17 @@ function useAndroidBack(): void {
       if (app.marketOpen) { app.closeMarket(); return }
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
+      // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底,挂起 app;
+      // 在主区按返回 = 先页内后退,退无可退就回列表(不关视图,再点同一条目即回)。
+      const listFirst = listFirstNow()
+      if (listFirst && ws.leftVisible) { void CapApp.minimizeApp(); return }
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }
       if (ws.rightVisible) { ws.toggleSidebar('right'); return }
       const active = ws.mainTabs.find((t) => t.active)
       if (active) {
         const st = useNav.getState().stacks[active.id]
         if (st && st.idx > 0) { useNav.getState().back(active.id); return }
+        if (listFirst) { ws.toggleSidebar('left'); return }
         // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底,该挂起 app。
         // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
         // (只有 logo 的空页)并被存盘,重启也回不来 = 用户实报的「默认 Homepage 空白」。

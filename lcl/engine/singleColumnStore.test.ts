@@ -4,7 +4,7 @@
  * Space 都是一张新页**,用户实报「移动端进去每次都是 new 的页面」。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useWorkspace, restoreSingleColumnLayout } from './singleColumnStore'
+import { useWorkspace, restoreSingleColumnLayout, setAfterLayoutHook } from './singleColumnStore'
 import { registerView } from './viewRegistry'
 
 const EMPTY = {
@@ -117,5 +117,34 @@ describe('单列布局持久化', () => {
     expect(useWorkspace.getState().applyNamed('space:tangu')).toBe(true)
     expect(useWorkspace.getState().mainLeaves.map((r) => r.type)).toEqual(['chat', 'note'])
     expect(useWorkspace.getState().applyNamed('space:nope')).toBe(false) // 没存过 → 调用方 resetLayout
+  })
+})
+
+describe('afterLayout 钩子(两级导航据此落回列表层)', () => {
+  it('布局整份换新(还原 / 命名布局 / 重置 / 关掉最后一个主区视图)各调一次;普通开视图不调', () => {
+    let calls = 0
+    setAfterLayoutHook(() => { calls++ })
+    try {
+      registerView({ type: 'home', displayName: () => 'home', factory: () => null })
+      seed()
+      useWorkspace.getState().saveCurrent()
+      useWorkspace.getState().saveNamed('space:a')
+      expect(calls).toBe(0) // openView / 存盘不算换布局
+
+      useWorkspace.setState(EMPTY)
+      expect(restoreSingleColumnLayout()).toBe(true)
+      expect(calls).toBe(1)
+      expect(useWorkspace.getState().applyNamed('space:a')).toBe(true)
+      expect(calls).toBe(2)
+      expect(useWorkspace.getState().applyNamed('space:nope')).toBe(false) // 没换成 → 不调(调用方接着 resetLayout)
+      expect(calls).toBe(2)
+      useWorkspace.getState().resetLayout()
+      expect(calls).toBe(3)
+
+      const only = useWorkspace.getState().openView('chat', {}, 'main')!
+      useWorkspace.getState().closeLeaf(only.id) // 最后一个主区视图 → 就地变 home 空态
+      expect(useWorkspace.getState().mainLeaves.map((r) => r.type)).toEqual(['home'])
+      expect(calls).toBe(4)
+    } finally { setAfterLayoutHook(null) }
   })
 })

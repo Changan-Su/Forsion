@@ -78,7 +78,7 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onAction: (Stri
                 when (state.mode) {
                     ChromeState.Mode.SHELL -> {
                         if (state.left) BarIconButton("left", state.labels.getValue("left"), state.icons.left, fg) { onAction("left") }
-                        else Spacer(Modifier.width(48.dp))
+                        else Spacer(Modifier.width(10.dp)) // a first-level page (Space list, Home): the title starts at the edge
                         BarTitle(state.title, fg, Modifier.weight(1f).padding(horizontal = 6.dp))
                         if (state.right) BarIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
                         TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
@@ -168,13 +168,16 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onSpace: (id: St
             val scroll = state.spaces.size > 5
             val itemWidth = if (scroll) maxWidth / 5.5f else maxWidth / state.spaces.size
             val scrollState = rememberScrollState()
-            // The bar leaves composition in page mode (settings) and comes back at offset 0: centre the active Space
-            // again, as the web row did — otherwise "nothing looks selected" when it sits past the fifth slot.
+            // The bar leaves composition (page mode, a Space's detail level) and comes back at offset 0: bring the
+            // active Space back into view, otherwise "nothing looks selected" when it sits past the fifth slot.
+            // As little as possible from the start, not centred: centring scrolled the first Spaces (Home) off-screen
+            // as soon as the fourth or a later one was active — "the Home page is gone" (2026-10-04). While one of
+            // the first five is active the bar rests at offset 0.
             val activeIndex = state.spaces.indexOfFirst { it.active }
             val itemPx = with(density) { itemWidth.toPx() }
             val viewportPx = with(density) { maxWidth.toPx() }
             LaunchedEffect(activeIndex, scroll, itemPx, viewportPx) {
-                if (scroll && activeIndex >= 0) scrollState.scrollTo((activeIndex * itemPx - (viewportPx - itemPx) / 2f).toInt().coerceAtLeast(0))
+                if (scroll && activeIndex >= 0) scrollState.scrollTo(kotlin.math.ceil((activeIndex + 1) * itemPx - viewportPx).toInt().coerceAtLeast(0))
             }
             Row(
                 if (scroll) Modifier.fillMaxSize().horizontalScroll(scrollState) else Modifier.fillMaxSize(),

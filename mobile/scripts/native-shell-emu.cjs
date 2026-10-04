@@ -383,15 +383,32 @@ const tabCountText = (list) => {
     return { x: Math.round(wv.rect.left + r.x * r.dpr), y: Math.round(wv.rect.top + r.y * r.dpr) }
   }
   const drawerOpen = "!!document.querySelector('.mb-drawer--left.open')"
+  // Two-level navigation (a Space with a left list): `.mb-shell[data-nav]` is 'list' (the Space's first level, the left
+  // panel full-screen, bottom bar shown) or 'detail' (its main view, no bottom bar, the left button goes back).
+  // Without the attribute the Space has no list level: its main view is the first level and a left panel is a drawer.
+  const nav = "document.querySelector('.mb-shell')?.dataset.nav || ''"
+  /** Show the left panel: a two-level Space's list (from its detail page: the back arrow) or a drawer Space's drawer.
+   *  A Space without a left panel (Home) has neither — callers want the foot (settings / units): use Tangu's list. */
   async function openDrawer() {
     if (await cdp.eval(drawerOpen)) return
+    if (!h.byId(ui(), 'nativeChrome.left')) { await toSpace('tangu'); return }
     await tapId('nativeChrome.left')
     assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 'drawer did not open')
     await h.pause(500)
   }
+  /** Leave the left panel. On a two-level Space that means entering its main page — through the tabs sheet, which
+   *  needs no particular list item; on a drawer Space system back closes the drawer. */
   async function closeDrawer() {
-    if (await cdp.eval(drawerOpen)) h.key(4)
+    if (!(await cdp.eval(drawerOpen))) return
+    if ((await cdp.eval(nav)) === 'list') {
+      await tapId('nativeChrome.tabs')
+      const cur = h.byIdPrefix(await waitSheet(true), 'nativeSheet.item.tab:').find((n) => n.checked === 'true')
+      assert.ok(cur, 'no active tab row to enter the main page with')
+      h.tapNode(cur)
+      await waitSheet(false)
+    } else h.key(4)
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 'drawer stayed open')
+    await h.pause(500)
   }
   /** Tap a Space of the native bottom bar. With more than five the bar scrolls: bring the item in first. */
   async function tapSpace(id) {
@@ -410,16 +427,18 @@ const tabCountText = (list) => {
     }
     assert.fail(`Space "${id}" is not in the native bar`)
   }
+  /** Switch Space. Ends on its first level: the list of a two-level Space (left panel open), else its main view. */
   async function toSpace(id) {
-    await openDrawer()
-    // Spaces live in the native bottom bar now; the shell mirrors the active one on `.mb-shell[data-space]`.
+    // The bottom bar exists on a Space's first level only: from a detail page go back to the list first.
+    if ((await cdp.eval(nav)) === 'detail') await openDrawer()
+    // The shell mirrors the active Space on `.mb-shell[data-space]`.
     const active = `document.querySelector('.mb-shell')?.dataset.space === ${JSON.stringify(id)}`
     if (!(await cdp.eval(active))) {
       await tapSpace(id)
       assert.ok(await h.waitPage(cdp, active, 6000), `Space "${id}" did not become active`)
       await h.pause(1200)
-      await openDrawer()
     }
+    assert.notEqual(await cdp.eval(nav), 'detail', `Space "${id}" did not land on its first level`)
   }
   /** Tangu Space with its drawer open and the fixture session rows listed. */
   async function tanguDrawer() {
@@ -449,8 +468,7 @@ const tabCountText = (list) => {
 
   await check('native top bar replaces the web .mb-topbar (zh, light)', async () => {
     const list = ui()
-    for (const id of ['nativeChrome.bar', 'nativeChrome.left', 'nativeChrome.tabs', 'nativeChrome.more', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
-    assert.equal(descOf(list, 'nativeChrome.left'), '左侧面板')
+    for (const id of ['nativeChrome.bar', 'nativeChrome.tabs', 'nativeChrome.more', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
     assert.equal(descOf(list, 'nativeChrome.tabs'), '标签页')
     const web = await cdp.eval(`({ topbar: !!document.querySelector('.mb-topbar'), native: document.querySelector('.mb-shell').hasAttribute('data-native-chrome'),
       mbTop: getComputedStyle(document.querySelector('.mb-shell')).getPropertyValue('--mb-top').trim(), lang: document.documentElement.lang })`)
@@ -556,14 +574,93 @@ const tabCountText = (list) => {
     assert.deepEqual(page, { inset: 0, mainTop: 0, viewPad: '0px' })
   })
 
-  await check('left button opens the drawer; system back closes it and stays in the app', async () => {
+  // 2026-10-04 (user: "like WeChat"): a Space with a left list opens ON the list (full screen, bottom bar below);
+  // tapping an item enters the main view (no bottom bar, back arrow); back returns to the list, back again leaves the app.
+  await check('two-level navigation: a Space opens on its list; an item enters the main view (no bottom bar); back returns; back on the list leaves the app', async () => {
+    await tanguDrawer() // = Tangu's first level with the fixture sessions listed
+    const level = async () => ({ nav: await cdp.eval(nav), list: ui() })
+    let at = await level()
+    assert.equal(at.nav, 'list')
+    assert.ok(h.byId(at.list, 'nativeChrome.spaces'), 'no bottom bar on the list level')
+    assert.ok(!h.byId(at.list, 'nativeChrome.left'), 'the list level shows a left button (nothing to go back to)')
+    assert.ok(!h.byId(at.list, 'nativeChrome.right'), 'the list level shows the right-panel button')
+    assert.equal(textOf(at.list, 'nativeChrome.title'), 'Tangu', 'the list level is titled after its Space')
+    const geo = await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left').getBoundingClientRect(), b = document.querySelector('.mb-body').getBoundingClientRect()
+      return { full: Math.abs(d.width - b.width) < 1 && Math.abs(d.left - b.left) < 1, bar: !!document.querySelector('.mb-drawer--left .mb-drawer-bar'), dim: getComputedStyle(document.querySelector('.mb-push-dim')).opacity,
+        foot: !!document.querySelector('.mb-drawer-foot button[aria-label="settings"]') } })()`)
+    assert.deepEqual(geo, { full: true, bar: false, dim: '0', foot: true }, 'list level is not a plain full-screen page')
+    shot('03-list-level')
+    // a horizontal swipe over the list must not slide it away (only an item enters the main view)
+    const wv = webViewNode(at.list).rect
+    h.adb('shell', 'input', 'swipe', String(wv.right - 120), String(wv.cy), String(wv.left + 120), String(wv.cy), '200')
+    await h.pause(900)
+    assert.equal(await cdp.eval(nav), 'list', 'a swipe over the list left it')
+    // tapping the active Space again does nothing (it used to open a drawer)
+    await tapSpace('tangu')
+    await h.pause(700)
+    assert.equal(await cdp.eval(nav), 'list', 're-tapping the active Space left the list')
+    // item → main view
+    await tapEl(rowExpr('E2E Session One'))
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail' && !!document.querySelector('.mode-pill-btn')`, 8000), 'the session did not open')
+    const gone = await h.waitNodes((l) => (!h.byId(l, 'nativeChrome.spaces') && h.byId(l, 'nativeChrome.left') ? l : null), { timeout: 8000 })
+    assert.ok(gone.hit, 'the bottom bar stayed on the detail level, or there is no back button')
+    assert.equal(descOf(gone.nodes, 'nativeChrome.left'), '返回')
+    const screenH = Number(h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/)[2])
+    assert.ok(webViewNode(gone.nodes).rect.bottom > screenH * 0.93, 'the WebView did not take the room of the bottom bar')
+    await h.pause(600)
+    shot('03-detail-level')
+    // back arrow → list
     await tapId('nativeChrome.left')
-    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-drawer--left.open')", 5000), 'drawer did not open')
-    await h.pause(1000)
-    shot('03-left-drawer')
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'the back arrow did not return to the list')
+    assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 8000 })).hit, 'the bottom bar did not come back on the list')
+    // item again, then system back → list, and the app is still in front
+    await tapEl(rowExpr('E2E Session One'))
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
+    await h.pause(600)
     h.key(4)
-    assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-drawer--left.open')", 5000), 'drawer did not close')
-    assert.ok(resumed(), 'app left the foreground')
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'system back did not return to the list')
+    assert.ok(resumed(), 'system back from the main view left the app')
+    // a swipe from the main view back to the list (same gesture as the drawer had)
+    await tapEl(rowExpr('E2E Session One'))
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
+    await h.pause(600)
+    h.adb('shell', 'input', 'swipe', String(wv.left + 150), String(wv.cy), String(wv.right - 100), String(wv.cy), '200')
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'swiping right on the main view did not return to the list')
+    await h.pause(600)
+    // system back on the list = bottom of the chain: the app goes to the background (and comes back as it was)
+    h.key(4)
+    await h.pause(1200)
+    assert.ok(!resumed(), 'system back on the list level did not leave the app')
+    h.adb('shell', 'am', 'start', '-n', ACTIVITY)
+    assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 10000 })).hit, 'the app did not come back with its bottom bar')
+    assert.equal(await cdp.eval(nav), 'list')
+    // a Space without a left list (Home): its main view is the first level — bottom bar, no left button, settings in ⋯
+    await toSpace('home')
+    at = await level()
+    assert.equal(at.nav, '')
+    assert.ok(h.byId(at.list, 'nativeChrome.spaces') && !h.byId(at.list, 'nativeChrome.left'), 'Home: bottom bar expected, left button not')
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.hp-spaces-actions button')", 6000), 'Home does not show the homepage')
+    await tapSpace('home') // re-tap: used to slide an empty drawer over the homepage
+    await h.pause(700)
+    assert.ok(!(await cdp.eval(drawerOpen)), 're-tapping Home opened a drawer')
+    await tapId('nativeChrome.more')
+    let list = await waitSheet(true)
+    assert.ok(h.byId(list, 'nativeSheet.item.rb-settings'), `Home has no drawer foot: ⋯ must offer settings (${ids(list)})`)
+    h.key(4)
+    await waitSheet(false)
+    // a start-up lands on the list too, not on the main view that was open (start-up Space pinned to Tangu for this:
+    // the default start-up Space is Home, which has no list)
+    await toSpace('tangu')
+    await closeDrawer()
+    assert.equal(await cdp.eval(nav), 'detail')
+    await h.pause(600) // layout autosave (200 ms throttle)
+    const startPref = await cdp.eval("(() => { const v = localStorage.getItem('forsion_default_space'); localStorage.setItem('forsion_default_space', 'tangu'); return v })()")
+    try {
+      await reload()
+      assert.deepEqual(await cdp.eval(`({ space: document.querySelector('.mb-shell').dataset.space, nav: ${nav} })`), { space: 'tangu', nav: 'list' }, 'a start-up did not land on the Space list')
+    } finally {
+      await cdp.eval(`(${startPref === null ? "localStorage.removeItem('forsion_default_space')" : `localStorage.setItem('forsion_default_space', ${JSON.stringify(startPref)})`}, true)`)
+    }
   })
 
   await check('keyboard: the focused composer stays visible above the keyboard', async () => {
@@ -587,7 +684,7 @@ const tabCountText = (list) => {
   })
 
   // The Space switcher is a native bottom navigation bar (it used to be a web row at the bottom of the drawer).
-  await check('bottom space bar: native, switches Space with the drawer closed, re-tap toggles the drawer, away with the keyboard and in settings', async () => {
+  await check('bottom space bar: native, switches Space, the first Spaces stay in view, away with the keyboard and in settings', async () => {
     await goHome()
     const density = Number(h.adb('shell', 'wm', 'density').match(/(\d+)\s*$/)[1]) / 160
     const screenH = Number(h.adb('shell', 'wm', 'size').match(/(\d+)x(\d+)\s*$/)[2])
@@ -604,51 +701,68 @@ const tabCountText = (list) => {
     assert.equal(await cdp.eval("document.querySelectorAll('.mb-spacebar, .mb-tab').length"), 0, 'the web Space row is still rendered')
     assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'home')
     assert.equal(h.byId(list, 'nativeChrome.space.home').selected || h.byId(list, 'nativeChrome.space.home').checked, 'true', 'active Space not marked selected')
-    // switch with the drawer closed: lands on the Space's main view, drawer stays closed
-    await tapSpace('agents')
-    assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell').dataset.space === 'agents'", 6000), 'tap did not switch Space')
-    await h.pause(800)
-    assert.ok(!(await cdp.eval(drawerOpen)), 'switching from a closed drawer opened it')
-    // the Agents main view used to crash on the single-column shell (it read the dockview-only `stash`)
-    assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'the Space main view failed to render')
-    shot('03c-space-bar')
-    // re-tap the active Space: drawer opens; again: closes
-    await tapSpace('agents')
-    assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 're-tap did not open the drawer')
-    await h.pause(600)
-    shot('03d-space-bar-drawer')
-    // drawer open: switching keeps it open (the user picks from the new Space's list)
-    await tapSpace('tangu')
-    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'tangu' && ${drawerOpen}`, 6000), 'switching with the drawer open closed it')
-    await h.pause(600)
-    await tapSpace('tangu')
-    assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 're-tap did not close the drawer')
-    // keyboard: the bar leaves, the WebView takes its room; back brings it back
+    // keyboard (Home's composer — a first-level page with a text field): the bar leaves, the WebView takes its room; back brings it back
     await tapEl("document.querySelector('.composer textarea, .composer [contenteditable], textarea')")
     assert.ok((await h.waitNodes((l) => !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar stayed up with the keyboard')
     shot('03e-space-bar-keyboard')
     h.key(4)
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar did not come back after the keyboard')
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
-    // more Spaces than fit → the bar scrolls. It leaves composition in page mode (settings) and is recreated on the
-    // way back: the active Space must be in view again, not left behind at scroll offset 0.
-    if (ids.length > 5) {
-      const last = ids[ids.length - 1]
-      const fullWidth = items[0].rect.right - items[0].rect.left
-      await tapSpace(last)
-      assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === ${JSON.stringify(last)}`, 6000), 'the last Space did not become active')
+    // switch to a Space with a list: lands on the list, the bar stays (it is that Space's first level)
+    await tapSpace('agents')
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'agents' && (${nav}) === 'list'`, 6000), 'tap did not switch to the Agents list')
+    await h.pause(800)
+    assert.ok(h.byId(ui(), 'nativeChrome.spaces'), 'the bar left on the Agents list')
+    shot('03c-space-bar')
+    // an Agents row enters the profile. That main view used to crash on the single-column shell (it read the dockview-only `stash`).
+    await tapEl("document.querySelector('.mb-drawer--left .agents-roster-item')")
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 6000), 'an Agents row did not enter the main view')
+    await h.pause(800)
+    assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'the Space main view failed to render')
+    shot('03d-agents-detail')
+    // a Space whose left panel is not a list of things to open (Calendar: to-dos) opts out: its main view is the first level
+    if (ids.includes('calendar')) {
+      await toSpace('calendar')
+      assert.equal(await cdp.eval(nav), '', 'Calendar must not be a two-level Space')
+      list = ui()
+      assert.ok(h.byId(list, 'nativeChrome.spaces') && h.byId(list, 'nativeChrome.left'), 'Calendar: bottom bar + drawer button expected')
+      assert.equal(descOf(list, 'nativeChrome.left'), '左侧面板')
       await openDrawer()
-      await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+      const d = await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left').getBoundingClientRect(), b = document.querySelector('.mb-body').getBoundingClientRect(); return d.width < b.width - 40 })()`)
+      assert.ok(d, 'Calendar\'s left panel is not a drawer')
+      await closeDrawer() // system back closes a drawer and stays in the app
+      assert.ok(resumed(), 'closing the drawer left the app')
+    }
+    // more Spaces than fit → the bar scrolls. While one of the first five is active nothing scrolls: Home stays in view
+    // (the bar used to centre the active Space, which scrolled Home away from the fourth Space on — "the Home page is gone").
+    // The bar leaves composition on a detail level / in page mode and is recreated at offset 0: a Space past the fifth
+    // must be scrolled back into view.
+    if (ids.length > 5) {
+      const fullWidth = items[0].rect.right - items[0].rect.left
+      const widthOf = (id) => { const n = h.byId(ui(), `nativeChrome.space.${id}`); return n ? n.rect.right - n.rect.left : 0 }
+      await toSpace(ids[4])
+      assert.ok(widthOf('home') >= fullWidth - 2, `Home is not fully in view while the fifth Space is active (${widthOf('home')} of ${fullWidth}px)`)
+      assert.ok(widthOf(ids[4]) >= fullWidth - 2, 'the fifth Space is not fully in view')
+      shot('03g-space-bar-fifth')
+      const last = ids[ids.length - 1]
+      await toSpace(last)
+      assert.ok(widthOf(last) >= fullWidth - 2, `active Space "${last}" is not fully in view`)
+      if ((await cdp.eval(drawerOpen)) || h.byId(ui(), 'nativeChrome.left')) { // a left panel (list or drawer): settings sit in its foot
+        await openDrawer()
+        await cdp.eval(`(document.querySelector('.mb-drawer-foot button[aria-label="settings"]').click(), true)`)
+      } else { // no left panel → no foot: settings live in ⋯
+        await tapId('nativeChrome.more')
+        await tapId('nativeSheet.item.rb-settings', await waitSheet(true))
+      }
       assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
       assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the space bar stayed up in page mode')
       await tapId('nativeChrome.back')
       const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 12000 })
       assert.ok(r.hit, 'the space bar did not come back after settings')
       await h.pause(600)
-      const n = h.byId(ui(), `nativeChrome.space.${last}`)
-      assert.ok(n && n.rect.right - n.rect.left >= fullWidth - 2, `active Space "${last}" is not fully in view after page mode (${n ? n.rect.right - n.rect.left : 'missing'} of ${fullWidth}px)`)
+      assert.ok(widthOf(last) >= fullWidth - 2, `active Space "${last}" is not fully in view after page mode (${widthOf(last)} of ${fullWidth}px)`)
       shot('03g-space-bar-scrolled')
-      if (await cdp.eval(drawerOpen)) await closeDrawer()
+      if ((await cdp.eval(nav)) === '') await closeDrawer() // a drawer Space: close its drawer again
     }
   })
 
@@ -1571,8 +1685,10 @@ const tabCountText = (list) => {
     await seed('en')
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
     await reload()
+    await toSpace('tangu')
+    await closeDrawer() // the main view: its left button goes back to the list
     let list = ui()
-    assert.equal(descOf(list, 'nativeChrome.left'), 'Left panel')
+    assert.equal(descOf(list, 'nativeChrome.left'), 'Back')
     assert.equal(descOf(list, 'nativeChrome.tabs'), 'Tabs')
     shot('14-shell-dark-en')
     await tapId('nativeChrome.more', list)

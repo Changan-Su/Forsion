@@ -211,6 +211,10 @@ export interface SpaceDefinition {
    *  2026-09-11 —— 列表源不在场时宿主退回缺省档)。
    *  右栏不受此影响(恒为 'files' = 参考/附件栏)。硬规则见 frontend/src/views/workspaceMode.ts。 */
   autoWorkspaceMode?: 'orbits' | 'sessions' | 'files' | 'notes' | `plugin:${string}`
+  /** 手机两级导航(单列壳 × 原生底部导航栏,见 SingleColumnHost 的 listFirstNow):**缺省 = 有左栏就先落左栏**
+   *  —— 左栏整屏是这个 Space 的第一层(会话 / 笔记 / 名册这类「点开一项」的列表),主区是点进去的第二层。
+   *  左栏不是这种列表的 Space(日历的待办、图像工作室的对话)写 false:主区即第一层,左栏照旧是侧滑抽屉。 */
+  listFirst?: boolean
 }
 
 /** 插件契约 —— Amadeus PluginContext 的超集(加了 registerView / registerRibbonIcon)。 */

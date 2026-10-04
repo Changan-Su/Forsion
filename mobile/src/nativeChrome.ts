@@ -47,8 +47,10 @@ export function installNativeChrome(): void {
     chain = chain.then(async () => {
       if (!state || !uninstall) return
       const current = state
+      const base = await icons
       const payload = {
-        ...current, theme: readNativeTheme(), icons: await icons,
+        // two-level navigation, detail level: the left button goes back to the Space's list → back arrow, not the panel icon
+        ...current, theme: readNativeTheme(), icons: current.mode === 'shell' && current.leftBack ? { ...base, left: base.back } : base,
         ...(current.mode === 'shell' && current.spaces ? { spaces: await withIcons(current.spaces) } : {}),
       }
       const key = JSON.stringify(payload)

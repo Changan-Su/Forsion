@@ -23,7 +23,7 @@ import { setNativeChromeShell, useNativeChromeInstalled, useNativeChromeSpaces, 
 import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
-import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension } from './singleColumnStore'
+import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook } from './singleColumnStore'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
@@ -129,9 +129,10 @@ function useFootAlive(): boolean {
 }
 const footAliveNow = (): boolean => footAliveOf(useSpaceStore.getState().spaces.length, useRibbonStore.getState().items)
 
-function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: boolean; showFoot?: boolean }) {
+function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; docked?: boolean; showFoot?: boolean; page?: boolean }) {
   const visible = useWorkspace((s) => (side === 'left' ? s.leftVisible : s.rightVisible))
   const footAlive = useFootAlive() // 无条件调用:hooks 不能进条件分支
+  const nativeSpaces = useNativeChromeSpaces()
   const withFoot = side === 'left' && !!showFoot && footAlive
   // 只订阅稳定量:该侧 leaf 的 id 签名(增删触发)+ active id(切换触发)。**不**订阅 title,
   // 否则视图渲染期调 leaf.setTitle → 宿主重渲染 → 再 setTitle 的无限循环(React #185)。
@@ -146,10 +147,13 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
   const def = active ? getView(active.type) : null
   const close = () => useWorkspace.getState().toggleSidebar(side)
   // 「这个抽屉有没有东西可给」:侧栏视图,或(仅左)底部常驻区。见 footAliveOf 上方的注释。
-  const alive = leaves.length > 0 || withFoot
+  // 原生底栏在场时不留「只有底部那一排」的空抽屉:切 Space 走底栏,设置回到「⋯」(见 isMoreItem 的 footless)。
+  const alive = leaves.length > 0 || (withFoot && !nativeSpaces)
   const inner = !alive ? null : (
     <>
-      <div className="mb-drawer-bar">
+      {/* page = 两级导航的列表层(见 listFirstNow):标题已在原生顶栏上,这里只在该侧有多个视图时留下切换下拉;
+          也没有「关闭」—— 这一层是 Space 的首页,往下走靠点条目。 */}
+      {!(page && leaves.length <= 1) && <div className="mb-drawer-bar">
         {/* 该侧多个视图 → 下拉切换(原生 select,真机走系统选择器);单个则显示标题。 */}
         {leaves.length > 1 ? (
           <select
@@ -165,8 +169,8 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
         ) : (
           <div className="mb-drawer-title">{active?.type === '__extend' ? leaves.find((r) => r.id === active.id)?.title : def ? label(def.displayName) : ''}</div>
         )}
-        <button className="mb-icon-btn" onClick={close} aria-label="close"><X size={20} /></button>
-      </div>
+        {!page && <button className="mb-icon-btn" onClick={close} aria-label="close"><X size={20} /></button>}
+      </div>}
       <div className="mb-drawer-body">
         {active?.type === '__extend' ? <NativeExtendView id={active.id} side={side} /> : def && active ? (
           <div className="mb-view" key={`${active.id}:${active.type}`}>
@@ -277,8 +281,9 @@ function useDrawerDrag(
         const ws = useWorkspace.getState()
         const env = envRef.current
         // 开着的那侧优先接管(窄屏一次只开一侧;宽屏左栏是并排常驻的 sidecol,不参与拖拽)。
+        // 两级导航的列表层不认「左滑收起」:那等于横着蹭一下列表就被送进主区(进主区只靠点条目)。
         if (ws.rightVisible && dx > 0) { d.side = 'right'; d.opening = false }
-        else if (ws.leftVisible && !env.wide && dx < 0) { d.side = 'left'; d.opening = false }
+        else if (ws.leftVisible && !env.wide && dx < 0 && !listFirstNow()) { d.side = 'left'; d.opening = false }
         else if (ws.leftVisible || ws.rightVisible) { d = null; return }
         else if (dx > 0 && env.hasLeft && !env.wide) { d.side = 'left'; d.opening = true }
         else if (dx < 0 && env.hasRight) { d.side = 'right'; d.opening = true }
@@ -353,17 +358,22 @@ function iconRev(icon: object | undefined): number {
   if (!rev) { rev = ++iconRevSeq; iconRevs.set(icon, rev) }
   return rev
 }
-/** 点原生底部导航栏:换 Space;抽屉开着就留在抽屉里(同 switchSpaceKeepDrawer 的用户口径),关着就直接看主区。
- *  点**当前**那格 = 开/关左抽屉(列表都在抽屉里,等于「回到这个 Space 的列表」)。 */
-function tapNativeSpace(id: string): void {
+/** 两级导航(用户拍板 2026-10-04「和微信那样」)此刻生效吗:宿主画原生底部导航栏(Android)× 竖屏 ×
+ *  当前 Space 有左栏且没退订(SpaceDefinition.listFirst)。生效时左栏整屏是这个 Space 的**第一层**
+ *  (底部导航栏只在这一层),主区是点进条目后的第二层,顶栏左钮 / 系统返回 = 回列表。
+ *  没有左栏或退订了的 Space(主页 / 日历…)主区就是第一层。web / 桌面手机框 / 手机浏览器没有原生宿主 →
+ *  恒 false,抽屉行为逐像素不变。 */
+export function listFirstNow(): boolean {
+  if (!nativeChromeDrawsSpaces()) return false
   const ws = useWorkspace.getState()
-  if (nativeSpaceList().find((x) => x.id === id)?.active) {
-    if (ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || footAliveNow()) ws.toggleSidebar('left')
-    return
-  }
-  if (ws.leftVisible) switchSpaceKeepDrawer(id)
-  else setActiveSpace(id)
+  if (ws.wideMode || (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0)) return false
+  return getActiveSpace()?.listFirst !== false
 }
+/** 落到列表层:冷启动 / 进 Space / 布局重置之后(不生效或已在列表层时是空操作)。 */
+function landOnList(): void {
+  if (listFirstNow() && !useWorkspace.getState().leftVisible) useWorkspace.getState().toggleSidebar('left')
+}
+setAfterLayoutHook(landOnList)
 
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
@@ -436,8 +446,15 @@ function DrawerFoot() {
   )
 }
 
-/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉已迁去左抽屉底部常驻的账号 / 设置 / mobileFoot 项。 */
-const isMoreItem = (i: RibbonItem): boolean => i.side === 'bottom' && i.id !== 'rb-account' && i.id !== 'rb-settings' && !i.mobileFoot
+/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉已迁去左抽屉底部常驻的账号 / 设置 / mobileFoot 项。
+ *  footless(见 footlessNow)时那一排没有抽屉可住:设置与 mobileFoot 项回到这里(账号卡从设置页进)。 */
+const isMoreItem = (i: RibbonItem, footless = false): boolean =>
+  i.side === 'bottom' && i.id !== 'rb-account' && (footless || (i.id !== 'rb-settings' && !i.mobileFoot))
+/** 原生底栏在场且当前 Space 没有左栏(主页 / 发布…):不再为了「底部那一排」留一个空抽屉(见 Drawer 的 alive)。 */
+const footlessNow = (): boolean => {
+  const ws = useWorkspace.getState()
+  return nativeChromeDrawsSpaces() && ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0
+}
 
 /** 「＋ 新建标签页」:desktop 同款 —— 当前 Space 有 newPage 则调,否则开 launcher 新标签。 */
 function newMainTab(): void {
@@ -485,7 +502,8 @@ async function presentNativeTabs(tr: Tr): Promise<boolean> {
  *  ribbon 底部项一节在前;其后每个声明了 `moreGroup` 的命令组一节(外置插件的命令,节标题 = 插件名),
  *  行 id 加 `cmd:` 前缀与 ribbon id 分开,选中走命令表 run(同命令面板),但只在注册表里那条仍是呈现时的对象时才跑。 */
 async function presentNativeMore(tr: Tr): Promise<boolean> {
-  const items = useRibbonStore.getState().items.filter(isMoreItem)
+  const footless = footlessNow()
+  const items = useRibbonStore.getState().items.filter((i) => isMoreItem(i, footless))
   const groups = moreCommandGroups(useCommandStore.getState().commands)
   if ((!items.length && !groups.length) || items.some((i) => i.component)) return false
   const out = await presentNativeMenu({
@@ -515,7 +533,8 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
 /** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)+ 声明了 `moreGroup` 的命令组(插件命令)。
  *  账号(rb-account)与设置(rb-settings)已迁去左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
-  const items = useRibbonStore((s) => s.items).filter(isMoreItem)
+  const footless = footlessNow() // 开着这张 sheet 时切不了 Space,取一次即可
+  const items = useRibbonStore((s) => s.items).filter((i) => isMoreItem(i, footless))
   const groups = moreCommandGroups(useCommandStore((s) => s.commands))
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>
@@ -629,6 +648,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
     // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。
     if (ws.mainLeaves.length === 0 && !restoreSingleColumnLayout()) buildDefault?.()
+    landOnList() // 两级导航:冷启动落在列表层(还原成功那条路已由钩子落过,这里幂等)
     ws.refreshTabs()
   }, [])
 
@@ -638,7 +658,9 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   // 左抽屉恒可达:它兼着 Space 切换 / 账号 / 设置(见 footAliveOf)。只按侧栏视图判会把用户
   // 关死在没有左栏配方的 Space 里。右抽屉没有这层身份,照旧只看侧栏视图。
   const footAlive = useFootAlive() // 无条件调用:`x || useFootAlive()` 会被短路,hooks 不许时有时无
-  const hasLeft = useWorkspace((s) => s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0) || footAlive
+  // 原生底栏在场时那层身份由底栏与「⋯」接走,左抽屉只按侧栏视图判(不留空抽屉,见 Drawer 的 alive)。
+  const nativeSpaces = useNativeChromeSpaces()
+  const hasLeft = useWorkspace((s) => s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0) || (footAlive && !nativeSpaces)
   const hasRight = useWorkspace((s) => s.rightLeaves.length > 0 || s.sidebarDefaults.right.length > 0)
   const leftVisible = useWorkspace((s) => s.leftVisible)
   const rightVisible = useWorkspace((s) => s.rightVisible)
@@ -647,6 +669,9 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
 
   const wide = useWideAspect(true)
   const chromeOff = useChromeAutoHide(mainRef, true)
+  // 两级导航:判据全在 listFirstNow()(非 React 的调用方也用它);这里只补一条它读而本组件没订阅的输入。
+  useWorkspace((s) => s.wideMode)
+  const listFirst = listFirstNow()
 
   // 标签页 /「⋯」:装了原生半屏宿主(Android)就走原生菜单,宿主缺席或失败才开 Web sheet。
   const { t: tr } = useEngineI18n()
@@ -668,27 +693,36 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const chromeLabels: NativeChromeShellLabels = {
     left: tr('lcl.mobile.leftPanel'), right: tr('lcl.mobile.rightPanel'), tabs: tr('lcl.mobile.tabs'), more: tr('lcl.mobile.more'),
   }
-  const chromeLabelsKey = JSON.stringify(chromeLabels)
+  const chromeLabelsKey = JSON.stringify({ ...chromeLabels, back: tr('lcl.mobile.back') })
   const chromeActions = useRef({ tabs: openTabs, more: openMore })
   chromeActions.current = { tabs: openTabs, more: openMore }
   useEffect(() => {
     if (!nativeChrome) return
-    const labels = JSON.parse(chromeLabelsKey) as NativeChromeShellLabels
+    const { back, ...labels } = JSON.parse(chromeLabelsKey) as NativeChromeShellLabels & { back: string }
     const push = (): void => {
       const ws = useWorkspace.getState()
+      const drawsSpaces = nativeChromeDrawsSpaces()
+      // 两级导航(见 listFirstNow):列表层 = 这个 Space 的首页(标题是 Space 名,没有左钮 / 右栏钮);
+      // 进了主区,左钮是「返回列表」,标题才是当前标签页。
+      const listFirst = listFirstNow()
+      const atList = listFirst && ws.leftVisible
+      const toList = listFirst && !atList
       setNativeChromeShell({
-        title: ws.mainTabs.find((t) => t.active)?.title ?? '',
-        left: ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || footAliveNow(),
-        right: ws.rightLeaves.length > 0 || ws.sidebarDefaults.right.length > 0,
+        title: atList ? label(getActiveSpace()?.name ?? '') : ws.mainTabs.find((t) => t.active)?.title ?? '',
+        left: listFirst ? toList : ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || (!drawsSpaces && footAliveNow()),
+        ...(toList ? { leftBack: true } : {}),
+        right: !atList && (ws.rightLeaves.length > 0 || ws.sidebarDefaults.right.length > 0),
         tabCount: ws.mainTabs.length || 1,
-        labels,
-        ...(nativeChromeDrawsSpaces() ? { spaces: nativeSpaceList() } : {}),
+        labels: toList ? { ...labels, left: back } : labels,
+        // 底栏只在每个 Space 的第一层:列表层,或没有列表层的 Space(主页 / 日历…)的主区。
+        ...(drawsSpaces && !toList ? { spaces: nativeSpaceList() } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),
         tabs: () => chromeActions.current.tabs(),
         more: () => chromeActions.current.more(),
-        space: tapNativeSpace,
+        // 点当前那格是空操作(setActiveSpace 同 id 即返回);换 Space 后有列表层的由 afterLayout 钩子落过去。
+        space: setActiveSpace,
         spaceLong: (id) => { const sp = useSpaceStore.getState().spaces.find((x) => x.id === id); if (sp) pinSpaceToHome(sp.id, label(sp.name)) },
       })
     }
@@ -735,7 +769,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   }
   const bodyRef = useRef<HTMLDivElement | null>(null)
   useDrawerDrag(bodyRef, wide, hasLeft, hasRight)
-  const pushed = !wide && (leftVisible || rightVisible)
+  // 两级导航的列表层整屏盖住 main,没有「被推开的 main」可罩 —— 遮罩只跟右抽屉。
+  const pushed = !wide && ((leftVisible && !listFirst) || rightVisible)
 
   {/* 按钮收成左右两组胶囊(Obsidian 式)。顺序不许动:mobile e2e(note-open)靠
       `.mb-topbar .mb-icon-btn` 的第一个拿左抽屉钮 —— 胶囊只是中间多包了一层 div,后代选择器照命中。 */}
@@ -764,12 +799,13 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     //    躲刘海是浮动胶囊自己的事(.mb-topbar 的 top、抽屉的 padding-top,见 singleColumn.css)。
     //    底部仍留 —— 底部 chrome 分散在各视图里,没法逐个保证自理,收窄爆炸半径。
     // data-native-chrome:原生顶栏在 WebView 之外占位,视图不再给胶囊让 --mb-top(见 singleColumn.css 末尾)。
-    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    // data-nav:两级导航生效时的当前层(list / detail),样式(singleColumn.css 末尾)与仪器都认它。
+    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
       <div ref={bodyRef} className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
-        <Drawer side="left" docked={wide} showFoot />
+        <Drawer side="left" docked={wide} showFoot page={listFirst} />
         <main ref={mainRef} className="mb-main">
           {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
               ① push 抽屉的 translate 只打在 .mb-main —— 挂外面胶囊就不跟着内容滑,视觉当场穿帮;
