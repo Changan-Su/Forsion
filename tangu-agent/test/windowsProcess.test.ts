@@ -81,13 +81,15 @@ describe.runIf(process.platform === 'win32')('Windows real process lifecycle', (
     expect(result).toContain('exit_code: 7');
   });
 
+  // The command timeout must outlast a slow start under runner load: killing the server before it
+  // writes ready.json is correct behavior, but ready() would then fail the test. Budget = 5s timeout + 5.5s cleanup + 8s probe.
   it('timeout kills the shell descendant, closes its pipes and releases its port', async () => {
-    const result = run(await server(), { timeout_ms: 1500 });
+    const result = run(await server(), { timeout_ms: 5000 });
     const report = await ready();
     expect(await result).toContain('timed out');
     await until(() => !alive(report.pid));
     await expect(fetch(`http://127.0.0.1:${report.port}`)).rejects.toThrow();
-  }, 15_000);
+  }, 25_000);
 
   it('abort kills descendants rather than only cmd.exe', async () => {
     const controller = new AbortController();
