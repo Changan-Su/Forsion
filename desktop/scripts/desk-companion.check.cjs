@@ -34,6 +34,10 @@
  *  8  desk_screenshot × 伴随面(09-19 下午,用户实测 agent 看不到 Desk 上的形象):假引擎推 desk_capture_request,
  *     记下渲染层 POST 回来的图。idle 零条目 / always(先 desk_present 被吞)→ 截到形象且带 companion = 伴随面 key;
  *     idle + desk_present(view, half)→ 截到侧板里放上的东西、不带 companion。--plugin 时对真插件再截一张存 capture-<id>.png
+ *  9  语音通话的声音 → 伴随面(2026-10-04):通话跑在 Mini 窗,这里直接在主窗派发 Mini 写 localStorage 时会收到的那条
+ *     storage 事件(Mini → 主窗那一截由 e2e:realtimevoice R6c 管),核「真探针叠加 → 真 DeskCompanionHost → 真插件」:
+ *     模型出声 → onStatus 收到 speaking、host.status() 拉得到 speechLevel;电平变化不回调;别的会话在通话与我无关;
+ *     挂断 → 回 idle、字段消失。--plugin 时对真插件在「出声」那一刻再截一张 <id>-voice-<theme>.png(自查口型)
  *
  * 可选:`--plugin <dir>` 额外把一个真插件**拷贝**(不是软链)进隔离家目录,探针禁用后给它拍同样两组截图
  * (always 模式 = 预写 <home>/plugins-data/<id>.json 的 {"mode":"always"},适配 Live3D 的数据形状;
@@ -146,7 +150,7 @@ window.__deskProbeSetMode = function (m) {
 window.__deskProbeArm = function () { armed = true }
 /** 当前活着的挂载点此刻的拉取式快照(host.sessionId() / host.status())。 */
 window.__deskProbeLive = function () {
-  return Array.from(live).map(function (h) { const s = h.status(); return { surface: h.surface, sessionId: h.sessionId(), phase: s.phase, statusSession: s.sessionId == null ? null : s.sessionId } })
+  return Array.from(live).map(function (h) { const s = h.status(); return { surface: h.surface, sessionId: h.sessionId(), phase: s.phase, statusSession: s.sessionId == null ? null : s.sessionId, speechLevel: s.speechLevel } })
 }
 window.__deskProbeStartChat = function (o) {
   return P.hasStartChat ? ctx.tangu.startChat(o) : Promise.resolve({ ok: false, error: 'probe: no ctx.tangu.startChat' })
@@ -609,6 +613,32 @@ async function run(app, win, stub, env) {
   await sleep(600)
   cap = await shot('8c', [{ type: 'desk_present', payload: { views: [{ type: 'view', view: 'live3d' }], size: 'half' }, delay: 300 }])
   check('8c always + desk_present(不落条目)→ 截到伴随面,带 companion 标注', !!cap && !!cap.dataUrl && cap.companion === PROBE_KEY && !cap.error, JSON.stringify({ ...cap, png: undefined }))
+
+  // ── 9 语音通话的声音 → 伴随面 ───────────────────────────────────────────────────────
+  const live9 = () => win.evaluate((sid) => window.__deskProbeLive().find((x) => x.sessionId === sid) || null, sid8)
+  await waitFor(win, (sid) => (window.__deskProbeLive().find((x) => x.sessionId === sid) || {}).phase === 'idle', sid8, 10_000) // 等 done 余韵过去
+  const n9 = await win.evaluate(() => window.__deskProbe.phases.length)
+  const v0 = await live9()
+  await callVoice(win, { sessionId: sid8, phase: 'speaking', level: 0.6 })
+  await sleep(120)
+  const v1 = await live9()
+  await callVoice(win, { sessionId: sid8, phase: 'speaking', level: 0.2 })
+  await sleep(120)
+  const v2 = await live9()
+  await callVoice(win, { sessionId: 'dc-someone-else', phase: 'speaking', level: 0.9 }) // 通话换到别的会话:这张 Desk 当场收声
+  await sleep(120)
+  const v3 = await live9()
+  await callVoice(win, { sessionId: sid8, phase: 'thinking', level: 0 })
+  await sleep(120)
+  const v4 = await live9()
+  await callVoice(win, null)
+  await sleep(120)
+  const v5 = await live9()
+  const seq9 = await win.evaluate((n) => window.__deskProbe.phases.slice(n).map((p) => p.phase), n9)
+  check('9 语音通话:出声 → speaking + speechLevel;电平变化不回调;别的会话在通话与我无关;说完没开口 → thinking;挂断 → idle、字段消失',
+    !!v0 && v0.phase === 'idle' && v0.speechLevel === undefined && v1?.phase === 'speaking' && v1.speechLevel === 0.6 && v2?.speechLevel === 0.2
+    && v3?.phase === 'idle' && v3.speechLevel === undefined && v4?.phase === 'thinking' && v4.speechLevel === 0 && v5?.phase === 'idle' && v5.speechLevel === undefined
+    && JSON.stringify(seq9) === JSON.stringify(['speaking', 'idle', 'thinking', 'idle']), JSON.stringify({ v0, v1, v2, v3, v4, v5, seq9 }))
   await win.evaluate(() => window.__deskProbeSetMode('idle'))
   await sleep(400)
 
@@ -648,6 +678,19 @@ async function run(app, win, stub, env) {
         JSON.stringify({ companion: card && card.companion, canvas: card && card.canvas }))
       await shoot(win, shots, `${id}-draft-${theme}`)
       await shotAlwaysPanel(win, stub, shots, `${id}-always-panel-${theme}`, prefix, false)
+      // 语音通话「出声」那一刻的真插件。电平 300ms 不更新按 0 读,而截图本身就不止 300ms ——
+      // 得像 Mini 那样在页面里一直喂,截完再停(在外面喂完再截 = 拍到的是闭着的嘴)。
+      const sidD = await win.evaluate(() => (document.querySelector('.agent-desk[data-desk-session^="dc-s"].open') || {}).dataset?.deskSession || null)
+      await win.evaluate((sid) => {
+        const feed = () => window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_voice_call_voice', newValue: JSON.stringify({ sessionId: sid, phase: 'speaking', level: 0.8, t: Date.now() }) }))
+        feed()
+        window.__dcVoiceFeed = setInterval(feed, 50)
+      }, sidD)
+      await sleep(900)
+      await shoot(win, shots, `${id}-voice-${theme}`)
+      await win.evaluate(() => clearInterval(window.__dcVoiceFeed))
+      await callVoice(win, null)
+      await sleep(600)
       if (theme === 'light') {
         // 用户实测那条路:always 模式 + agent 先 desk_present(被吞)再 desk_screenshot → 截到的是真插件的形象
         await win.locator(btnSel('.agent-desk.open', T.collapse)).first().click().catch(() => {})
@@ -661,6 +704,11 @@ async function run(app, win, stub, env) {
   }
   return shots
 }
+
+/** 语音通话的声音:Mini 窗写 localStorage 时主窗收到的那条 storage 事件(storage 事件不投给写的那个窗口,所以在主窗里只能派发)。 */
+const callVoice = (win, v) => win.evaluate((v) => {
+  window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_voice_call_voice', newValue: v ? JSON.stringify({ ...v, t: Date.now() }) : null }))
+}, v)
 
 /** 让假引擎发一次 desk_capture_request(可先带别的事件),等渲染层回图。回图的 dataUrl 截短后再返回(打日志用),
  *  原图另存 cap.png。**等 run 收尾**再返回:下一句若在 run 进行中发出,只会进队列、不起新 run,剧本就串了。 */
