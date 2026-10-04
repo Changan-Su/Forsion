@@ -65,7 +65,7 @@ import { describeImages, resolveVisionModelId, shouldDescribeImages } from './vi
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
@@ -1213,12 +1213,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     // 有界重试:这一步在托管面是真实 HTTP,一次秒级 fetch failed 此前会让 run 还没开跑就报废。
-    const { model, apiKey, baseUrl, apiModelId } = await withLlmRetry(
+    const resolvedModel = await withLlmRetry(
       () => resolveModelAndKey(modelId),
       (attempt, wait, err) =>
         console.warn(`[agent-core] run=${runId} resolve 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`),
       ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
     );
+    const { model, baseUrl, apiModelId } = resolvedModel;
+    let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
+    let credsRefreshed = false;
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
     const replayModelKey = apiModelId || modelId;
@@ -2714,6 +2717,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             // 无限循环由 MIDSTREAM_MAX_RESUMES 兜底。
             iteration -= 1;
             break; // 出尝试循环;下方检测到 resumedMidstream 即重进本迭代续写
+          }
+          // 凭证失效(xAI 用 502 包装,按状态码看像网络抖动):同一个 token 再试必败。订阅登录的 provider 强制续期一次、
+          // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。整 run 只续一次。
+          if (!emitted && isAuthExpiredLlmError(err)) {
+            const fresh = credsRefreshed ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
+            credsRefreshed = true;
+            if (!fresh || fresh === apiKey) throw err;
+            apiKey = fresh;
+            console.warn(`[agent-core] run=${runId} 上游报凭证失效,已续期订阅登录的 token 后重试`);
+            continue;
           }
           // 慢失败不重试:瞬时抖动(fetch failed / 网关 502 / 429)都是秒级就崩,重试便宜且有效;
           // 而「上游静默到 idle 看门狗超时」是分钟级慢失败——重试只是把用户的干等 ×4。

@@ -9,6 +9,7 @@
  */
 import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
+import { freshOAuthToken } from '../../llm/providerOAuth.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
@@ -188,6 +189,15 @@ function synthesizeCosyVoiceWs(baseUrl: string, apiKey: string | undefined, apiM
 }
 
 export function createMultiBrain(httpBrain: CloudBrainServices, registry: ProviderRegistry): CloudBrainServices {
+  /** 订阅登录的 provider:调用前续期,并把新 token 换进注册表(图像 / 语音这些直接读 p.apiKey 的路径一并受益)。
+   *  显式配置的同名 provider(不带 oauth 标记)压过订阅登录 → 不碰它的 key。续期失败不拦调用,让上游的报错说话。 */
+  const oauthKey = async (providerId: string, force = false): Promise<string | undefined> => {
+    const p = registry.list().find((x) => x.providerId === providerId);
+    if (!p?.oauth) return undefined;
+    const key = await freshOAuthToken(providerId, force).catch(() => undefined);
+    if (key && key !== p.apiKey) registry.setApiKey(providerId, key);
+    return key;
+  };
   return {
     ...httpBrain,
     search: {
@@ -268,8 +278,13 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     llm: {
       resolveModelAndKey: async (modelId: string) => {
         const local = registry.resolve(modelId);
-        if (local) return local; // local.model 带 DIRECT_MARK
-        return httpBrain.llm.resolveModelAndKey(modelId);
+        if (!local) return httpBrain.llm.resolveModelAndKey(modelId);
+        const key = await oauthKey((local.model as any).provider); // local.model 带 DIRECT_MARK
+        return key ? { ...local, apiKey: key } : local;
+      },
+      refreshModelKey: async (modelId: string) => {
+        const local = registry.resolve(modelId);
+        return (local && (await oauthKey((local.model as any).provider, true))) || null;
       },
       buildProviderPayload: async (opts: BuildPayloadOpts) => {
         if ((opts.model as any)?.[DIRECT_MARK]) {

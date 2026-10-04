@@ -124,7 +124,7 @@ registerMessages({
   'agentProfile.sharedAgentSkill': { zh: '其他 Agent 共享', en: 'Shared by another agent' },
   'agentProfile.localExtraSkill': { zh: '本机其他来源', en: 'Other local source' },
   'agentProfile.cloudExtraSkill': { zh: '云端技能', en: 'Cloud skill' },
-  'agentProfile.extraChoose': { zh: '需切换为自选后启用', en: 'Choose selected mode to use' },
+  'agentProfile.extraChoose': { zh: '切换为自选后可单独调整', en: 'Switch to selected mode to change' },
   'agentProfile.skillUnavailableKept': { zh: '当前目录不可见；保留原有选择。取消勾选才会移除。', en: 'Not in the current catalog. Existing selection is kept until you uncheck it.' },
   'agentProfile.addSkill': { zh: '新建技能', en: 'New skill' },
   'agentProfile.importAgentSkill': { zh: '导入文件夹到此 Agent', en: 'Import folder for this agent' },

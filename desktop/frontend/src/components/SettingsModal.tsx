@@ -99,7 +99,7 @@ import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWai
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
-import { resolveSettingsTarget } from './settingsTarget'
+import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
@@ -231,7 +231,7 @@ registerMessages({
   'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'remote-sessions' | 'computer-history' | 'advanced' | 'developer' | 'about'
+type StaticTab = typeof SETTINGS_TABS[number]
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
 export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
@@ -435,7 +435,7 @@ export const SettingsModal: React.FC<{
     ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
     // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
-    // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(effect 重定向)。
+    // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(settingsTarget 的别名表)。
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(isDesktop || unitPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
@@ -692,7 +692,6 @@ export const SettingsModal: React.FC<{
   const cloudViewKey = (o: { pluginId: string; item: { id: string } }): string => `fx:${o.pluginId}:${o.item.id}`
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
-  useEffect(() => { if (tab === 'plugins') setTab('amadeus-plugins') }, [tab])
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
