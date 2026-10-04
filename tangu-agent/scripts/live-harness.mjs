@@ -132,7 +132,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'settingsnav'];
 KEYS.push('pageinstructions');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
@@ -154,6 +154,7 @@ OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/stat
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('pageinstructions'); // Scoped document maintenance; deliberately excluded from broad default runs.
+OPT_IN.add('voiceclone'); // 真百炼复刻(会在账号里建音色再删);改 routes/tts.ts 的复刻 / 朗读分发时显式跑。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -794,9 +795,9 @@ const MCP_CFG = ONLY.has('mcp') ? { mcpServers: { fake: {
 } } } : null;
 { // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
-  // realtime:把开发机上的百炼 provider 抄进隔离 config(只这一个 provider;id 钉成 bailian,场景按 bailian/<model> 叫)
+  // realtime / voiceclone:把开发机上的百炼 provider 抄进隔离 config(只这一个 provider;id 钉成 bailian,场景按 bailian/<model> 叫)
   let realtimeProviders = null;
-  if (ONLY.has('realtime')) {
+  if (ONLY.has('realtime') || ONLY.has('voiceclone')) {
     const src = process.env.TANGU_LIVE_DASHSCOPE_CONFIG || join(homedir(), '.forsion-dev', 'config.json');
     const p = (JSON.parse(readFileSync(src, 'utf8')).providers || []).find((x) => /dashscope|aliyuncs\.com/i.test(x?.baseUrl || '') && x.apiKey);
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
@@ -3594,6 +3595,46 @@ Then reply with only the command output.`,
   });
   // 09-24 反馈:「我浏览器里开着…」→ 旧版先 load_tools、读到后台空浏览器、再试屏幕控制、再用 browser_task 另起一个 Chrome,
   // 5 轮 173s 没答上。判据:走 browser_tabs、不许 browser_task、答中页里的随机款名;轮数 / 墙钟 / 绕路进 detail(速度回归看这里)。
+  // 10-04:用户报「复刻效果很差」→ 复刻模型做成可选。判据:本地录音(data URI)经引擎路由在每个模型上复刻成功、
+  // 出现在音色列表里且带对绑定模型、拿它朗读有声音;末尾把建的音色删掉。样本用内置音色现合成,不需要真人录音。
+  await scenario('voiceclone', 'voiceclone 音色复刻:本地录音 → 百炼各模型复刻 → 用复刻音色朗读', async () => {
+    const prov = JSON.parse(readFileSync(join(shared, 'config.json'), 'utf8')).providers[0];
+    const auth = { baseUrl: prov.baseUrl, apiKey: prov.apiKey };
+    const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) });
+    const tts = async (model, voice, text) => {
+      const r = await fetch(`${base}/agent/tts`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: `bailian/${model}`, voice, text }) });
+      if (!r.ok) throw new Error(`tts ${model} → ${r.status} ${(await r.text()).slice(0, 200)}`);
+      return { audio: Buffer.from(await r.arrayBuffer()), ext: /mpeg/.test(r.headers.get('content-type') || '') ? 'mp3' : 'wav' };
+    };
+    const sample = (await tts('qwen3-tts-flash', 'Cherry', '今天天气很好，我打算下午去公园散步，顺便把最近读的那本书看完。晚上回家以后做一顿简单的晚饭，然后整理一下这一周的工作笔记，早点休息。')).audio;
+    writeFileSync(join(OUT, 'voiceclone-sample.wav'), sample);
+    const audioData = `data:audio/wav;base64,${sample.toString('base64')}`;
+    // 三个朗读模型各代表一条路:Qwen-Audio-TTS、CosyVoice(都走 voice-enrollment + 临时上传 + WS 合成)、Qwen3-TTS(qwen-voice-enrollment + HTTP 合成);
+    // 末尾那个通话模型只验复刻路由(voice_clone_mode 那条),通话音色不能拿来朗读。
+    const MODELS = (process.env.TANGU_LIVE_CLONE_MODELS || 'qwen-audio-3.0-tts-plus,cosyvoice-v3.5-plus,qwen3-tts-vc-2026-01-22,qwen3.8-omni-flash-realtime').split(',');
+    const rows = [];
+    for (const model of MODELS) {
+      const row = { model, t0: Date.now() }; rows.push(row);
+      const speaks = !/omni|realtime/.test(model);
+      try {
+        row.voice = (await post('/agent/tts/voices/clone', { ...auth, name: 'live', targetModel: model, audioData })).voice;
+        row.cloneMs = Date.now() - row.t0;
+        const listed = (await post('/agent/tts/voices/list', auth)).voices.find((v) => v.voice === row.voice);
+        row.kind = listed?.kind; row.listed = listed?.targetModel === model;
+        if (speaks) {
+          const out = await tts(model, row.voice, '你好，这是用复刻音色念的一句话。');
+          row.bytes = out.audio.length; writeFileSync(join(OUT, `voiceclone-${model}.${out.ext}`), out.audio);
+        }
+      } catch (e) { row.error = String(e?.message || e).slice(0, 200); }
+      if (row.voice) await post('/agent/tts/voices/delete', { ...auth, voice: row.voice, kind: row.kind || (/^(cosyvoice|qwen-audio)/.test(model) ? 'cosy' : 'clone') }).catch(() => { row.leaked = true; });
+      row.ok = !!row.voice && row.listed && !row.error && !row.leaked && (!speaks || row.bytes > 2000);
+    }
+    return {
+      ok: rows.every((r) => r.ok),
+      detail: rows.map((r) => `${r.model} ${r.ok ? '✓' : '✗'} 复刻 ${r.voice ? sec(r.cloneMs) : '失败'}${r.listed ? '' : ' 列表里没有/模型不对'}${r.bytes !== undefined ? ` 朗读 ${r.bytes}B` : ''}${r.leaked ? ' ⚠️音色没删掉:' + r.voice : ''}${r.error ? ' ' + r.error : ''}`).join(' | '),
+      output: rows.map((r) => `${r.model}\n  voice=${r.voice || '-'} kind=${r.kind || '-'}\n  ${r.error || `ok;样本与合成音频在 ${relative(root, OUT)}/voiceclone-*`}`).join('\n'),
+    };
+  });
   await scenario('realtime', 'realtime 实时语音通话:百炼 speech-to-speech × ask_tangu 委派', async () => {
     if (process.platform !== 'darwin') return { ok: false, skipped: true, detail: '需要 macOS 的 say 合成测试语音' };
     const WS = createRequire(import.meta.url)('ws');

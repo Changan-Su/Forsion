@@ -130,7 +130,7 @@ export function pcmToWav(pcm: Uint8Array, sampleRate: number): Uint8Array {
 }
 
 /**
- * 百炼 CosyVoice(cosyvoice-v1/v2/v3):仅 WebSocket 实时协议(HTTP 直接 InvalidParameter),与 qwen3-tts 的一发一收不同。
+ * 百炼 CosyVoice(cosyvoice-v1/v2/v3/v3.5)与 Qwen-Audio-TTS(qwen-audio-*-tts-*,10-04 实测同一协议):WebSocket 实时协议,与 qwen3-tts 的一发一收不同。
  * run-task → task-started → continue-task(整段文本)+ finish-task → 收 binary 音频帧 → task-finished。
  * 我们非流式消费:拼齐所有 binary 帧作整段返回;wav 场景取 pcm 后自封 WAV 头(保证微信可播)。
  */
@@ -254,7 +254,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           if (apiModelId) {
             const fn = !isDashScopeBase(p.baseUrl)
               ? synthesizeDirectTts
-              : /^cosyvoice/i.test(apiModelId) ? synthesizeCosyVoiceWs : synthesizeDashScopeTts; // CosyVoice 独占 WS,余走 HTTP
+              : /^cosyvoice|^qwen-audio-.*tts/i.test(apiModelId) ? synthesizeCosyVoiceWs : synthesizeDashScopeTts; // CosyVoice / Qwen-Audio-TTS 走同一套 WS,余走 HTTP
             return fn(p.baseUrl, p.apiKey, apiModelId, req);
           }
         }
