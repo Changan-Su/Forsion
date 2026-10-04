@@ -267,8 +267,9 @@ export function settleAsyncStartupSpace(): void {
       // 只换 id 的话界面标着本 Space、内容是回落 Space 的,下次启动还会把它归档进 space:<本 Space>。把归档的那份现场
       // (adoptSpaceLayoutCold 在本 Space 最后一次是主人的那一程写的)补还原回来;归档里还有别的没注册上的视图(另一个
       // 插件这次没装上)就不硬套,按本 Space 的默认重建 —— 口径同启动还原。
+      // liveOwner 为 null = 还原的是老存档(没记归属):照升级前,信它就是本 Space 的。
       // ponytail: 屏上那份回落 Space 的布局不存进它的槽(分不清是原样的默认还是用户动过的,见 adoptSpaceLayoutCold)。
-      if (bootLayoutFellThrough() || liveOwner !== want) {
+      if (bootLayoutFellThrough() || (liveOwner !== null && liveOwner !== want)) {
         const archived = spaceLayoutName(want)
         if (namedLayoutRestorable(archived) && ws().applyNamed(archived)) { ws().ensurePinned(); ws().saveCurrent() }
         else ws().resetLayout()

@@ -194,10 +194,11 @@ describe('adoptSpaceLayoutCold', () => {
     expect(tagOf(loadLayout())).toBe('now')
   })
 
-  it('老存档没记归属:留在布局键里的那份补记成上次退出的 Space', () => {
+  it('老存档没记归属:照旧信上次退出的活动 id;布局键原样不动(不在启动时替它补写归属)', () => {
     saveLayout(blob('now'))
     adoptSpaceLayoutCold('probe', 'probe')
-    expect(loadLayout()).toMatchObject({ space: 'probe', dockview: { tag: 'now' } })
+    expect(tagOf(loadNamedLayout(spaceLayoutName('probe')))).toBe('now')
+    expect(loadLayout()).toEqual(blob('now'))
   })
 
   it('归属 ≠ 上次退出、目标这一程也还没注册:哪个槽都不写,布局键留给回落 Space 原样还原', () => {
@@ -218,16 +219,39 @@ describe('adoptSpaceLayoutCold', () => {
     adoptSpaceLayoutCold('probe', 'probe')
     expect(loadLayout()).toMatchObject({ space: 'probe', dockview: { tag: 'probe-own' } })
     expect(tagOf(loadNamedLayout(spaceLayoutName('probe')))).toBe('probe-own')
-    expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull()
+    // 回落 Space 的槽还空着:被换下来的那份是仅存的一份,归到它自己名下(没东西可盖)
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('tangu-fallback')
   })
 
-  it('归属 ≠ 上次退出 × 固定启动别的 Space:不归档,也不被「归档没落盘」那道闸误拦', () => {
+  it('归属 ≠ 上次退出 × 固定启动别的 Space:主人已有存档 → 不盖它,照常换成目标的(「没归档」不算「归档失败」)', () => {
     useSpaceStore.setState({ activeSpaceId: 'amadeus' })
     saveNamedLayout(spaceLayoutName('amadeus'), blob('amadeus-old'))
+    saveNamedLayout(spaceLayoutName('tangu'), blob('tangu-own'))
     saveLayout(stamped('tangu-fallback', 'tangu'))
     adoptSpaceLayoutCold('probe', 'amadeus')
-    expect(loadNamedLayout(spaceLayoutName('probe'))).toBeNull() // 没归档 ≠ 归档失败:照常往下换
+    expect(loadNamedLayout(spaceLayoutName('probe'))).toBeNull()
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('tangu-own')
     expect(tagOf(loadLayout())).toBe('amadeus-old')
+  })
+
+  // Codex 评审 2026-10-04:归属对不上的那份也可能是真现场、且是仅存的一份 —— 上一程换 Space 时归档没落盘(配额满),
+  // 布局键被保住了,活动 id 却已经写成了目标。这一程不能因为「对不上」就把它清掉。
+  it('归属 ≠ 上次退出、主人的槽还空着:先归档;归档写不进去 → 保住布局键不动', () => {
+    useSpaceStore.setState({ activeSpaceId: 'tangu' })
+    saveLayout(stamped('probe-only-copy', 'probe'))
+    const real = localStorage.setItem.bind(localStorage)
+    vi.spyOn(localStorage, 'setItem').mockImplementation((k: string, v: string) => {
+      if (k === 'tangu2_named_layouts') throw new Error('QuotaExceededError')
+      real(k, v)
+    })
+    adoptSpaceLayoutCold('tangu', 'tangu')
+    vi.restoreAllMocks()
+    expect(tagOf(loadLayout())).toBe('probe-only-copy')
+    // 配额缓过来的下一程:归到主人名下,再换成目标的(这里目标没有存档 → 清空,onReady 建默认)
+    adoptSpaceLayoutCold('tangu', 'tangu')
+    expect(tagOf(loadNamedLayout(spaceLayoutName('probe')))).toBe('probe-only-copy')
+    expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull()
+    expect(loadLayout()).toBeNull()
   })
 
   it('归属 ≠ 上次退出、但就是固定启动的那个 Space:布局键原样留着', () => {

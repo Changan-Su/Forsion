@@ -106,27 +106,28 @@ export function setActiveSpaceCold(id: string): void {
  *  from === to(最常见:固定启动 Space 恰好就是上次退出那个)只归档,布局键原样留着。
  *
  *  布局键是给谁摆的,认**信封自己记的归属**(layout.space,与布局同一次写盘),老存档没记才信 fromId。
- *  两者对不上 = 上一程目标 Space 始终没就位(插件没装上 / 配方没过闸 / 没等到它就退出了),屏上一直是回落 Space、
- *  从它的默认布局起步:fromId 仍是目标 Space,布局键却是回落 Space 的。只信 fromId 就会把它归档进目标 Space 的槽。 */
+ *  两者对不上,多半是上一程目标 Space 始终没就位(插件没装上 / 配方没过闸 / 没等到它就退出了),屏上一直是回落 Space、
+ *  从它的默认布局起步:fromId 仍是目标 Space,布局键却是回落 Space 的。只信 fromId 就会把它归档进目标 Space 的槽。
+ *  少数是真现场:上一程换 Space 时归档没落盘,布局键被下面那道闸保住了,活动 id 却已写成目标。 */
 export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
   const cur = loadLayout()
   const owner = cur?.space || fromId
-  // 归属对不上的那份不归档:进 space:<fromId> 是记到别人名下;进 space:<owner> 会拿一份「默认布局起步」的东西盖掉
-  // 回落 Space 自己攒下的存档(正常启动里插件就位前那一两秒退出,布局键里就是一份原样的默认)。
-  // ponytail: 于是那一程在回落 Space 里开的标签只活在布局键里,目标 Space 回来 / 改成固定启动别的 Space 时随之丢掉
-  // (期间切过一次 Space 就已由 setActiveSpace 存进槽)。要保住得先能分清「原样的默认」和「用户动过的」。
-  const provisional = owner !== fromId
-  if (cur && !provisional) saveNamedLayout(spaceLayoutName(fromId), cur)
-  if (owner === toId) {
-    if (cur && !cur.space) saveLayout({ ...cur, space: owner }) // 老存档补记归属:onReady 还原后存盘据此认主
-    return
-  }
+  const slot = spaceLayoutName(owner)
+  // 归属对不上的那份,只在主人的槽还空着时才归档(没东西可盖,它又是仅存的一份)。槽里已有存档就不动:
+  // 进 space:<fromId> 是记到别人名下;盖进 space:<owner> 是拿一份「默认布局起步」的东西顶掉回落 Space 自己攒下的存档
+  // (正常启动里插件就位前那一两秒退出,布局键里就是一份原样的默认)。
+  // ponytail: 于是回落 Space 已有存档时,那一程在它里面开的标签只活在布局键里,目标 Space 回来 / 改成固定启动别的 Space
+  // 时随之丢掉(期间切过一次 Space 就已由 setActiveSpace 存进槽)。要保住得先能分清「原样的默认」和「用户动过的」。
+  const mismatch = owner !== fromId
+  const archive = !!cur && (!mismatch || !loadNamedLayout(slot))
+  if (archive) saveNamedLayout(slot, cur)
+  if (owner === toId) return
   // 布局键正是此刻内存里的活动 Space 自己的(目标还没注册 → 活动的是回落 Space,onReady 给它摆)→ 留着原样还原,
   // 目标就位后由 settleAsyncStartupSpace 换过去。目标永远不来(插件已删 / 单品变体存着别家的 id)就一直这样用、照常存。
-  if (provisional && owner === useSpaceStore.getState().activeSpaceId) return
+  if (mismatch && owner === useSpaceStore.getState().activeSpaceId) return
   // ⚠️ 归档没真落盘(配额满 / 私密模式 —— saveNamedLayout 是吞掉异常的 void)就别再动布局键:
   // 那是这份布局**仅存的一份**,搬走或清掉即等于直接丢。读回来确认过再往下(Codex 评审抓的 Medium)。
-  if (cur && !provisional && !loadNamedLayout(spaceLayoutName(fromId))) return
+  if (archive && !loadNamedLayout(slot)) return
   const next = loadNamedLayout(spaceLayoutName(toId))
   if (next) saveLayout({ ...next, space: toId }) // 槽里的就是 toId 的:归属以槽名为准(老存档没记 / 记的是别人)
   else clearLayout()
