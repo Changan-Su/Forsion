@@ -349,6 +349,38 @@ async function main() {
     spanChecks('full', '缺省摆好后补摆', await page.evaluate(() => ({ main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
       right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom') })))
 
+    // ── 不经折叠钮、直接开在底部(插件 ctx.openView(…,{ location:'bottom' }) / 代码块「运行」)────────────────
+    // 新组按 Dockview 的默认高诞生(通栏 ~50%,缺省拓扑更高),布局回调又先于沉降到:出生高被当成「用户拖出来的」
+    // 记下,目标高从此取它,面板一直半屏高(2026-10-04 Video Studio 实报「底部面板默认占太多」)。
+    // 折叠钮那条路有补间标记挡着,上面几段全是它,所以这条一直没人量。画像在场才会记高,故先立画像。
+    for (const span of ['right', 'full']) {
+      await page.goto(URL, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
+      await page.waitForTimeout(500)
+      const direct = await page.evaluate(async (s) => {
+        const d = window.__dock, key = `direct-${s}`
+        d.profile(key, s)
+        d.open('sidev', {}, false, 'left'); d.open('sidev', {}, false, 'right')
+        await new Promise((r) => setTimeout(r, 600))
+        d.open('sidev', {}, false, 'bottom')
+        const frames = []
+        await new Promise((done) => {
+          const t0 = performance.now()
+          const tick = () => { frames.push(Math.round(d.bottomH())); if (performance.now() - t0 < 900) requestAnimationFrame(tick); else done() }
+          tick()
+        })
+        return { frames, final: Math.round(d.bottomH()), saved: localStorage.getItem(`lcl.sideWidth2.${key}`) }
+      }, span)
+      const want = Math.round(900 * 0.32)
+      check(`⚠️直接开[${span}]:高度落在目标高(≈容器 32%),不是 Dockview 的出生高`,
+        Math.abs(direct.final - want) < 60, `实测 ${direct.final} / 期望 ≈${want}`)
+      check(`⚠️直接开[${span}]:出生高不被记成「用户拖出来的高」`,
+        // (两个字段名都查:旧代码写 bottom,只查 bottomH 的话这条在没修的代码上是假绿 —— 负对照实跑抓到的)
+        !direct.saved || (JSON.parse(direct.saved).bottomH == null && JSON.parse(direct.saved).bottom == null), `记下 ${direct.saved}`)
+      check(`直接开[${span}]:出生高不上屏(逐帧都不高过目标高)`,
+        Math.max(...direct.frames) - want < 60, `逐帧最高 ${Math.max(...direct.frames)}`)
+    }
+
     const bad = results.filter((x) => !x.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)
     process.exitCode = bad.length ? 1 : 0

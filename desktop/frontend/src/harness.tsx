@@ -571,6 +571,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     toggle: (side: 'left' | 'right' | 'bottom') => useWorkspace.getState().toggleSidebar(side),
     // 底部横跨哪几列(SpaceDefinition.bottomSpan 落到 store 的那一份),bottom-panel.check 的拓扑段用
     span: (bottomSpan: 'right' | 'left' | 'full' | 'main') => useWorkspace.setState({ bottomSpan }),
+    // 立起活动 Space 的画像:captureSideWidths 只在画像在场时才记宽高(bottom-panel.check 的「直接开在底部」段用)
+    profile: (key: string, bottomSpan?: 'right' | 'left' | 'full' | 'main') => useWorkspace.getState().setSideProfile(key, {}, {}, bottomSpan),
     realign: () => useWorkspace.getState().realignRegions(),
     extend: (side: 'right' | 'bottom') => presentDockedExtension({ id: 'region-probe', title: 'Region probe', side, mount() {} }, () => {}),
     // 底部面板(scripts/bottom-panel.check.cjs):量的是**高**,且要能读到「主区那一列」的宽 ——

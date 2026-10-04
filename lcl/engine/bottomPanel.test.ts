@@ -188,7 +188,7 @@ describe('底部面板:高度记忆', () => {
     // 用户把 sash 拖到 420
     panels[0].group.api.height = 420
     captureSideWidths(api)
-    expect(JSON.parse(localStorage.getItem('lcl.sideWidth2.sp')!).bottom).toBe(420)
+    expect(JSON.parse(localStorage.getItem('lcl.sideWidth2.sp')!).bottomH).toBe(420)
 
     // 折叠再展开:回到记住的 420,而不是 32% 默认的 320
     useWorkspace.getState().toggleSidebar('bottom')
@@ -208,6 +208,35 @@ describe('底部面板:高度记忆', () => {
     panels[0].group.api.height = 60 // 补间中间帧
     captureSideWidths(api)
     expect(localStorage.getItem('lcl.sideWidth2.sp')).toBeNull()
+  })
+
+  it('⚠️直接开在底部的视图(插件 ctx.openView / 代码块「运行」,不经折叠钮):出生高不入记忆,落到目标高', () => {
+    // 新组按 Dockview 默认高诞生(~50%,缺省拓扑下更高),目标高要过两帧 / 60ms 才落地,而布局回调
+    // (WorkspaceHost → captureSideWidths)先到。把出生高当成「用户拖出来的」记下 = 目标高从此取它,
+    // 面板一直半屏高(2026-10-04 实测 Video Studio 通栏 450/900;⌘J 那条路有 sidebarAnimating 挡着)。
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    panels[0].group.api.height = 500 // Dockview 的出生高
+    captureSideWidths(api)           // 布局回调,早于沉降
+    expect(localStorage.getItem('lcl.sideWidth2.sp')).toBeNull()
+    vi.runAllTimers()
+    expect(panels[0].group.api.height).toBe(320)
+
+    // 沉降落地之后,用户拖出来的高照常记
+    panels[0].group.api.height = 400
+    captureSideWidths(api)
+    expect(JSON.parse(localStorage.getItem('lcl.sideWidth2.sp')!).bottomH).toBe(400)
+  })
+
+  it('旧记录里的 bottom 弃读(出生高污染过,分不出哪些是真拖的):回默认一次,左右宽照旧', () => {
+    localStorage.setItem('lcl.sideWidth2.sp', JSON.stringify({ left: 300, right: null, bottom: 450 }))
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    expect(useWorkspace.getState().sideWidths).toEqual({ left: 300, right: null, bottom: null })
+    localStorage.setItem('lcl.sideWidth2.sp', JSON.stringify({ left: 300, right: null, bottomH: 410 }))
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    expect(useWorkspace.getState().sideWidths.bottom).toBe(410)
   })
 })
 
