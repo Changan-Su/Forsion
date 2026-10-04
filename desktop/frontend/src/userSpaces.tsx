@@ -73,10 +73,18 @@ let pluginOnlyStartupResolved = false
  * startup target is actually registered, then clear/rebuild the live workbench in one step. */
 const pendingRecipeLayouts = new Set<string>()
 let asyncStartupSpaceResolved = false
-/** 启动点名的 Space 还没注册,用户正停在回落 Space 上等它(补定位没结案)。 */
+/** 启动点名的 Space 还没注册,人先落在回落 Space 上等它(补定位没结案)。 */
 let parkedOnFallback = false
 
 export const isUserSpace = (id: string): boolean => userIds.has(id)
+
+/** bootstrapEngine 把人落在回落 Space 上之后调:此后活动 Space 一变 —— 用户自己切(哪怕又切了回来)、宿主把他带去别处 ——
+ *  就算他接管了导航,补定位结案,点名的那个到了也不拽他。从落位那一刻就记,不等第一趟补定位(配方装载慢的时候,那之前的
+ *  一次往返会漏掉;Codex 评审)。补定位自己把人带过去时也会触发,那时本来就该结案。 */
+export function parkOnStartupFallback(): void {
+  parkedOnFallback = true
+  const off = useSpaceStore.subscribe((s, p) => { if (s.activeSpaceId !== p.activeSpaceId) { off(); asyncStartupSpaceResolved = true } })
+}
 
 function specName(spec: SpaceSpec): () => string {
   return () => {
@@ -230,22 +238,11 @@ export function settleAsyncStartupSpace(): void {
   // 固定档 / 主位档点名的 Space 还没注册 → want 只是回落值,启动已经落在它上面(bootstrapEngine,只改内存)。这一趟照常往下走
   // (纯插件产品的画像在下面补),但**不结案**:插件比第一趟配方装载晚装完时(两者只差几毫秒,真 Electron 重载 60 次里 2 次),
   // 点名的那个到下一趟才注册 —— 以前在这里结了案,它注册上来也没人再把用户带过去,窗口停在回落 Space(10-04 实报)。
-  // 它永远不来(插件已删)就一直不结案,每一趟都是空转。
+  // 它永远不来(插件已删)就一直不结案,每一趟都是空转。等的这段时间里用户接管了导航 → parkOnStartupFallback 的订阅结案,
+  // 走不到这里。结案只进不退:下面只在 final 时置真,从不写回假。
   const final = awaitedStartupSpace() === null
-  // 回落那一趟之前用户已经自己切走了 → 结案:不拽回回落 Space,点名的那个到了也不拽他。
-  // 活动 id 没注册 = 还没定过位(纯插件产品:开机时一个 Space 都没有),不算切走(Codex 评审)。
-  if (!final && state.activeSpaceId !== want && state.spaces.some((space) => space.id === state.activeSpaceId)) { asyncStartupSpaceResolved = true; return }
-  // 回落之后才等到它:屏上是回落 Space 的现场,用户可能已经在里面动过(多开了标签)。
-  const late = final && parkedOnFallback
-  const done = (): void => {
-    asyncStartupSpaceResolved = final
-    if (final || parkedOnFallback) return
-    // 停在回落 Space 上等。这期间活动 Space 一变(用户自己切,哪怕又切了回来;宿主把他带去别处)= 他接管了导航 → 结案,
-    // 不能只看他最后停在哪(Codex 评审)。订阅放在这一趟自己的定位之后,不把它算进去;等到的那一趟自己切过去时也会触发,
-    // 那时本来就该结案。
-    parkedOnFallback = true
-    const off = useSpaceStore.subscribe((s, p) => { if (s.activeSpaceId !== p.activeSpaceId) { off(); asyncStartupSpaceResolved = true } })
-  }
+  // 回落之后才等到它,屏上是回落 Space 的现场(Dockview 没就绪就谈不上现场),用户可能已经在里面动过(多开了标签)。
+  const late = final && parkedOnFallback && !!ws().api
 
   // 「上次退出」档下,盘上的活动 id 在补定位之前只有用户自己切 Space(setActiveSpace)才会变 —— 回落只改内存。
   // 变了 = 屏上是他刚选的那个 Space 的现场:不再把他拽回去,更不能拿归档 / 重建盖掉它(那份现场只在布局键里,
@@ -278,7 +275,7 @@ export function settleAsyncStartupSpace(): void {
     if (state.activeSpaceId !== want) setActiveSpaceCold(want)
     configure()
     ws().resetLayout()
-    done()
+    if (final) asyncStartupSpaceResolved = true
     return
   }
 
@@ -309,7 +306,7 @@ export function settleAsyncStartupSpace(): void {
     configure()
     ws().realignRegions?.()
   }
-  done()
+  if (final) asyncStartupSpaceResolved = true
 }
 async function loadUserSpacesOnce(): Promise<void> {
   const list = await window.tangu?.spacesList?.().catch(() => null)

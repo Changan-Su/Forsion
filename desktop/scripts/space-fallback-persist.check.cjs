@@ -16,18 +16,6 @@
  *  M 插件再也不回来(离线删了 / 单品变体存着别家的 id):盘上的活动 id 永远是个不存在的 Space,每一程都回落。
  *    回落 Space 自己的布局必须每程原样还原、照常存,两个命名槽都不许动
  *
- * 第四处(P / H / Q / G,2026-10-04 实报):「启动时进入」**点名**了插件 Space(固定档,或主位档下把它放进了主位槽),启动时它还没
- * 注册 → 启动目标回落成产品默认 / 主页。以前这个回落值由 bootstrapEngine 的冷定位写了盘,补定位也拿它当目标:插件比第一趟
- * 配方装载晚装完的那一程(真 Electron 重载 60 次里 2 次,余量只有几毫秒),补定位对着回落 Space 结了案,插件 Space 随后注册上来也
- * 没人再把用户带过去 —— 窗口停在 Tangu,盘上的活动 Space = tangu。
- *  P 固定档点名插件 Space,插件比第一趟配方装载晚装完:回落不落盘,插件 Space 一就位就把人带过去
- *  H 同 P,但走的是缺省档(主位槽):主位槽里放着插件 Space
- *  Q 同 P,回落期间用户自己点了别的 Space:插件 Space 就位后不许把他拽走
- *  S 同 Q,但他切走之后又切回了回落 Space:照样不拽(用户接管过导航就不再补定位,不是只看他最后停在哪)
- *  R 同 P,这一程插件 Space 的配方升了版本(要迁移重建),回落期间用户在回落 Space 里多开了一张标签:
- *    这张标签得存进回落 Space 自己的槽,不能跟着「清布局键 + 重建」一起丢
- *  G 固定档点名的插件再也不回来(同 M 的五条):每一程都回落,盘上的活动 id 不被回落值盖掉
- *
  * 同一条路上的第二处(N 当对照):插件的视图比 Dockview 就绪得晚,onReady 那次还原落空,屏上摆的是回落 Space 的
  * 默认布局;补定位以前只换活动 id → 界面标着插件 Space、内容是 Tangu 的。现在补定位时把启动归档的现场补还原。
  *
@@ -35,6 +23,19 @@
  * 插件 Space → 恢复那一程按活动 id 把它归档进 `space:<插件 Space>`,屏上也是它。正常启动里插件就位前那一两秒退出 /
  * 重载,盘上是同一个状态。治法:布局信封自己记着是给谁摆的(`space`,与布局同一次写盘),归档与补定位都按它认主;
  * 对不上的那份不进任何命名槽,目标 Space 回来时补还原它自己的归档。
+ *
+ * 第四处(P / H / Q / S / T / R / G,2026-10-04 实报):「启动时进入」**点名**了插件 Space(固定档,或主位档下把它放进了主位槽),启动时它还没
+ * 注册 → 启动目标回落成产品默认 / 主页。以前这个回落值由 bootstrapEngine 的冷定位写了盘,补定位也拿它当目标:插件比第一趟
+ * 配方装载晚装完的那一程(真 Electron 重载 60 次里 2 次,余量只有几毫秒),补定位对着回落 Space 结了案,插件 Space 随后注册上来也
+ * 没人再把用户带过去 —— 窗口停在 Tangu,盘上的活动 Space = tangu。
+ *  P 固定档点名插件 Space,插件比第一趟配方装载晚装完:回落不落盘,插件 Space 一就位就把人带过去
+ *  H 同 P,但走的是缺省档(主位槽):主位槽里放着插件 Space
+ *  Q 同 P,回落期间用户自己点了别的 Space:插件 Space 就位后不许把他拽走
+ *  S 同 Q,但他切走之后又切回了回落 Space:照样不拽(用户接管过导航就不再补定位,不是只看他最后停在哪)
+ *  T 同 S,但第一趟配方装载也慢:那一去一回都发生在第一趟补定位之前(从启动落在回落 Space 那一刻就得记,不能等第一趟)
+ *  R 同 P,这一程插件 Space 的配方升了版本(要迁移重建),回落期间用户在回落 Space 里多开了一张标签:
+ *    这张标签得存进回落 Space 自己的槽,不能跟着「清布局键 + 重建」一起丢
+ *  G 固定档点名的插件再也不回来(同 M 的五条):每一程都回落,盘上的活动 id 不被回落值盖掉
  *
  * 需先 npm run build。用法:npm run check:spacefallback   只跑某几条:-- --only=A,C
  * 报「启动失败」= 有 dev 版 Electron 占着单实例锁(本仪器不代为 pkill)。
@@ -137,15 +138,16 @@ const EARLY_SWITCH = `(() => {
   requestAnimationFrame(tick)
 })()`
 
-/** 把主进程的「列外置插件」(plugins:list)拖慢 → 插件比第一趟 Space 配方装载晚装完,配方那一趟过不了「视图已注册」的闸。
- *  正常启动里两者只差几毫秒(实测余量 1–19ms),机器一忙就翻过来;这里把它钉成必然。公开 API 拿不到已注册的 handler,
- *  只能走 Electron 内部的 handler 表 —— 表不在了就抛错,不装绿。主进程不随渲染层重载重启,所以拖慢对之后每次重载都生效。 */
-const slowPlugins = (app, ms) => app.evaluate(({ ipcMain }, delay) => {
+/** 把主进程的一个 invoke 通道拖慢。拖「列外置插件」(plugins:list)→ 插件比第一趟 Space 配方装载晚装完,配方那一趟过不了
+ *  「视图已注册」的闸:正常启动里两者只差几毫秒(实测余量 1–19ms),机器一忙就翻过来,这里把它钉成必然。拖「列 Space 配方」
+ *  (spaces:list)→ 第一趟补定位来得晚。公开 API 拿不到已注册的 handler,只能走 Electron 内部的 handler 表 —— 表不在了就抛错,
+ *  不装绿。主进程不随渲染层重载重启,所以拖慢对之后每次重载都生效。 */
+const slowIpc = (app, channel, ms) => app.evaluate(({ ipcMain }, [ch, delay]) => {
   const table = ipcMain._invokeHandlers
-  const real = table && table.get('plugins:list')
-  if (!real) throw new Error('ipcMain._invokeHandlers 里没有 plugins:list:Electron 内部结构变了,得换个法子拖慢插件装载')
-  table.set('plugins:list', async (...a) => { await new Promise((r) => setTimeout(r, delay)); return real(...a) })
-}, ms)
+  const real = table && table.get(ch)
+  if (!real) throw new Error(`ipcMain._invokeHandlers 里没有 ${ch}:Electron 内部结构变了,得换个法子拖慢它`)
+  table.set(ch, async (...a) => { await new Promise((r) => setTimeout(r, delay)); return real(...a) })
+}, [channel, ms])
 const PLUGIN_DELAY = 1500
 
 /** 页面脚本跑之前挂上:这一程里每一次写盘上的活动 Space 都记下来(回落值有没有落过盘,事后看终值看不出来)。 */
@@ -155,7 +157,8 @@ const WATCH_ACTIVE = `(() => {
   Storage.prototype.setItem = function (k, v) { if (k === 'forsion_tangu_active_space') log.push(String(v)); return set.apply(this, arguments) }
 })()`
 
-/** S:补定位第一趟(回落那一趟,实测开机后 0.2–0.45s)之后切去别的内置 Space,再切回回落的 Tangu,两下都赶在插件装完之前。 */
+/** S / T:切去别的内置 Space,再切回回落的 Tangu,两下都赶在插件装完之前。S 里这一去一回在补定位第一趟(回落那一趟,实测
+ *  开机后 0.2–0.45s)之后;T 把配方装载也拖慢,让它们落在第一趟之前。 */
 const AWAY_AND_BACK = `(() => {
   let step = 0
   const tick = () => {
@@ -182,8 +185,8 @@ const FALLBACK_TAB = `(() => {
   requestAnimationFrame(tick)
 })()`
 
-/** P / H / Q / S / R:人在插件 Space 里 → 重载,这一程插件晚装完。 */
-async function runLatePlugin(key, { title, pref, homeSlot, probe: probeScript, stays, bumpRecipe, delay = PLUGIN_DELAY }) {
+/** P / H / Q / S / T / R:人在插件 Space 里 → 重载,这一程插件晚装完。 */
+async function runLatePlugin(key, { title, pref, homeSlot, probe: probeScript, stays, bumpRecipe, delay = PLUGIN_DELAY, slowSpaces = 0 }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `forsion-spacefallback-${key}-`))
   seed(home)
   console.log(`\n── ${key} ${title}`)
@@ -196,12 +199,13 @@ async function runLatePlugin(key, { title, pref, homeSlot, probe: probeScript, s
       const file = path.join(home, 'plugins/probe-plug/spaces/probe-space/space.json')
       fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), version: '1.0.1' }))
     }
-    await slowPlugins(app, delay)
+    await slowIpc(app, 'plugins:list', delay)
+    if (slowSpaces) await slowIpc(app, 'spaces:list', slowSpaces)
     await app.context().addInitScript(WATCH_ACTIVE)
     if (probeScript) await app.context().addInitScript(probeScript)
     await win.reload({ waitUntil: 'domcontentloaded' }) // 渲染层重载 = 一次冷启动(BOOT_ACTIVE_SPACE_ID 重新取快照),同 dev 里的 ⌘R
     await win.waitForSelector('.wb-dockview, .dv-groupview', { timeout: 30000 })
-    await sleep(delay + 4500)
+    await sleep(delay + 2 * slowSpaces + 4500) // 插件装完之后还有一趟配方装载
     after = await state(win)
     writes = await win.evaluate(() => window.__activeWrites || null)
     probe = await win.evaluate(() => window.__earlySwitch || null)
@@ -237,6 +241,7 @@ const LATE = {
   H: { title: '同 P,缺省档(主位槽里放着插件 Space)', pref: null, homeSlot: 'probe-space' },
   Q: { title: '同 P,回落期间用户自己点了别的 Space', pref: 'probe-space', probe: EARLY_SWITCH, stays: 'clicked' },
   S: { title: '同 Q,但他切走之后又切回了回落 Space', pref: 'probe-space', probe: AWAY_AND_BACK, stays: 'tangu', delay: 3000 },
+  T: { title: '同 S,第一趟配方装载也慢(一去一回都在第一趟补定位之前)', pref: 'probe-space', probe: AWAY_AND_BACK, stays: 'tangu', delay: 3500, slowSpaces: 2000 },
   R: { title: '同 P,这一程插件 Space 的配方升了版本,回落期间用户在 Tangu 里多开了一张标签', pref: 'probe-space', probe: FALLBACK_TAB, bumpRecipe: true },
 }
 
