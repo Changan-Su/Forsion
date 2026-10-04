@@ -420,7 +420,12 @@ async function main() {
     const reconnLabel = await until(async () => { const x = await mini.locator('.vc-status-text').first().textContent().catch(() => ''); return /重新接通/.test(x || '') ? x : null }, 3000, 100)
     const presenceDuring = await until(async () => (await presence()) === null ? 'cleared' : null, 2000, 100)
     const keptAudio = (await stops()) === stop0
+    const nVoice = await win.evaluate(() => window.__callVoice.length)
     await sleep(500)
+    const lipDuring = await win.evaluate((n) => {
+      const a = window.__callVoice.slice(n).filter(Boolean)
+      return { n: a.length, phases: [...new Set(a.map((v) => v.phase))], max: Math.max(0, ...a.map((v) => v.level)) }
+    }, nVoice)
     rt.ws.send(JSON.stringify({ type: 'ready' }))
     const presenceAfter = await until(async () => (await presence()) === created?.id ? 'set' : null, 3000, 100)
     // 断在没答完的那句上(replay):半句音频当场掐掉,免得和重答的那遍叠在一起
@@ -438,6 +443,8 @@ async function main() {
     check('R20 上游重连:卡片显示「重新接通」,接上后回到正在听、计时不清零、麦克风帧率不翻倍',
       !!reconnLabel && !/重新接通/.test(backLabel || '') && tAfter >= tBefore && after > 3 && after <= rateBefore * 1.5,
       `「${reconnLabel}」→「${backLabel}」;计时 ${tBefore}s→${tAfter}s;帧/秒 ${rateBefore}→${after}`)
+    check('R20c 重连中已生成的回答还在放:主窗收到的仍是 speaking + 真实电平(形象不提前闭嘴)',
+      lipDuring.n > 3 && lipDuring.phases.length === 1 && lipDuring.phases[0] === 'speaking' && lipDuring.max > 0.1, JSON.stringify(lipDuring))
     check('R20b 重连中撤掉通话登记(打的字直接走 Tangu)、接回来再登记;已生成完的回答放完,要重答的才掐',
       !!presenceDuring && !!presenceAfter && keptAudio && !!cutAudio, JSON.stringify({ presenceDuring, presenceAfter, keptAudio, cutAudio: !!cutAudio }))
 

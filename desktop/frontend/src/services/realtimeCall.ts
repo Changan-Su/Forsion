@@ -233,9 +233,11 @@ export async function startCall(o: StartCallOptions): Promise<void> {
   let saidAt = 0
   const voiceTimer = window.setInterval(() => {
     if (ended || !state) return
-    const speaking = state.phase === 'speaking'
+    // 按「真在放音」报,不看界面相位:上游重连时相位是 reconnecting,但已生成完的回答照常放完 —— 嘴不能先闭上(Codex 10-04)。
+    const speaking = sources.size > 0
+    const phase = speaking ? 'speaking' : state.phase
     const now = Date.now()
-    if (!speaking && state.phase === saidPhase && now - saidAt < CALL_VOICE_BEAT_MS) return
+    if (!speaking && phase === saidPhase && now - saidAt < CALL_VOICE_BEAT_MS) return
     let level = 0
     if (speaking) {
       outAnalyser.getByteTimeDomainData(lvl)
@@ -244,9 +246,9 @@ export async function startCall(o: StartCallOptions): Promise<void> {
       for (let i = from; i < lvl.length; i++) { const v = (lvl[i] - 128) / 128; sum += v * v }
       level = Math.min(1, Math.sqrt(sum / (lvl.length - from)) * 4)
     }
-    saidPhase = state.phase
+    saidPhase = phase
     saidAt = now
-    postCallVoice({ sessionId: o.sessionId, phase: state.phase, level })
+    postCallVoice({ sessionId: o.sessionId, phase, level })
   }, CALL_VOICE_TICK_MS)
   // 关窗即挂断:渲染进程直接没了,finish 不一定跑得到 —— 走之前撤掉,主窗的形象当场收声(没撤也有心跳超时兜底)。
   const voiceBye = (): void => postCallVoice(null)
