@@ -27,6 +27,8 @@ function retire(m: HostMount): void {
  *  ctx.table / ctx.dashboard / ctx.tangu.mountChat)共用。
  *  · 同一个 el 上一份还没 dispose 就再挂 = 原地更新:同一个 root 只换 render 内容,组件实例与 DOM 身份不变
  *    (表格 / 输入卡 / 编辑器的 update 靠它);被顶掉的旧 disposer 作废,只有最新那个收得掉。
+ *    ⚠️ 它认的是容器,不是调用方:挂上之后还会**自己**异步再画的调用点(views/pluginChat:加载中 → 接上)要挂在
+ *    自己建的私有容器里,不然晚到的那次会顶掉插件后来交给别的挂载的 el。
  *  · 一层一个 root,同一个容器上不会有两个;旧 disposer 晚到或被重复调用,碰不到后来的挂载。 */
 export function mountHostReact(el: HTMLElement, node: ReactNode): () => void {
   const gen = ++mountGen

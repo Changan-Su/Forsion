@@ -63,6 +63,21 @@ afterEach(() => {
     usePluginStore.getState().disable(id)
 })
 describe('native Markdown plugin mount lifecycle', () => {
+  it('a failed mount shows its error in a host-owned node: plugin nodes stay, dispose takes the error away', async () => {
+    const c = context('failing')
+    const el = document.createElement('div')
+    const own = el.appendChild(document.createElement('p'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    surface.mount.mockImplementationOnce(() => { throw new Error('editor exploded') })
+    const h = c.ui!.mountMarkdownEditor!(el, { value: '# Draft' })
+    await vi.dynamicImportSettled()
+    await Promise.resolve()
+    logged.mockRestore()
+    expect(el.textContent).toContain('editor exploded')
+    expect(own.parentNode).toBe(el)
+    h.dispose()
+    expect([...el.children]).toEqual([own])
+  })
   it('revokes a pending import before it creates an editor', async () => {
     const c = context('pending')
     const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {

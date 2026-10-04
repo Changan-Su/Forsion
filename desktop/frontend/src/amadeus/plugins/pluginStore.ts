@@ -1249,15 +1249,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const pending = { ...opts }
         let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null
         let cancelled = false, focusPending = false
+        let failure: HTMLElement | null = null // 挂载失败的提示:住在宿主自己的节点里(el 是插件的,不整个清空它),dispose 时收走
         if (!(el instanceof HTMLElement) || typeof opts?.value !== 'string') throw new TypeError('mountMarkdownEditor needs an HTMLElement and Markdown value')
         // 插件没接 disposer 时由关账统一卸;已停用时登记即撤(cancelled 当场为真,不挂)。
-        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null }, 'markdownEditor')
+        const dispose = scope.own('mount', () => { cancelled = true; if (mounted) pending.value = mounted.getValue(); mounted?.dispose(); mounted = null; failure?.remove(); failure = null }, 'markdownEditor')
         if (!cancelled) {
           void import('./markdownEditorSurface').then(m => {
             if (cancelled) return
             mounted = m.mountPluginMarkdownEditor(el, pending)
             if (focusPending) mounted.focus()
-          }).catch(e => { if (!cancelled) { el.textContent = String(e); console.error('[amadeus] Markdown editor mount failed', e) } })
+          }).catch(e => {
+            if (cancelled) return
+            failure = el.appendChild(document.createElement('div'))
+            failure.textContent = String(e)
+            console.error('[amadeus] Markdown editor mount failed', e)
+          })
         }
         return {
           getValue() { return mounted?.getValue() ?? pending.value },

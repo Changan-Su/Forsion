@@ -245,6 +245,24 @@ describe('挂载(mountPluginChat)', () => {
     expect(api.seen.at(-1)).toMatchObject({ params: { sessionId: 's2' } })
   })
 
+  // 负对照(2026-10-04 实跑红):mountPluginChat 不用私有容器、直接挂在插件的 el 上 → 晚到的那次重画把后来的挂载换掉。
+  it('对话还没接上、插件没 dispose 就把同一个 el 交给了别的挂载:晚到的结果不顶掉后来那份', async () => {
+    const { mountHostReact } = await import('@lcl/components')
+    const { createElement } = await import('react')
+    let release = (_: unknown): void => {}
+    api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
+    let chat!: ReturnType<typeof mountPluginChat>
+    let disposeOther!: () => void
+    await act(async () => { chat = mountPluginChat(el, { owner: 'p', ...at('/v/A') }); cleanups.push(chat.dispose) })
+    await act(async () => { disposeOther = mountHostReact(el, createElement('textarea', { 'data-other': '' })) })
+    const other = el.querySelector('[data-other]')
+    expect(other?.isConnected).toBe(true)
+    await act(async () => { release(rec('s1')); await chat.ready })
+    expect(el.querySelector('[data-other]')).toBe(other) // 后来那份原样留着
+    await act(async () => { disposeOther() })
+    expect(el.querySelector('[data-other]')).toBeNull() // 它的 disposer 还收得掉
+  })
+
   it('卸载后不再画东西(建会话那一拍里视图被关)', async () => {
     let release = (_: unknown): void => {}
     api.createSession.mockReturnValue(new Promise((resolve) => { release = resolve }))
