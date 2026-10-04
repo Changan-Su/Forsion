@@ -12,6 +12,7 @@
  *  C 人在插件 Space 时开了设置(浮窗):卫星窗也跑 registerSpaces,那里没人写回 —— 不需要任何故障
  *  D 同 C,但「启动时进入」是缺省档(主位槽):落点没错,`space:tangu` 照样被写坏
  *  N 对照:什么故障都没有的正常重启(A/B/C 修好之后都应当收敛成它)
+ *  E 重载后、插件 Space 还没就位的那一两秒里用户自己点了别的 Space:补定位不许再把他拽回去、拿归档盖掉他选的现场
  *
  * 同一条路上的第二处(N 当对照):插件的视图比 Dockview 就绪得晚,onReady 那次还原落空,屏上摆的是回落 Space 的
  * 默认布局;补定位以前只换活动 id → 界面标着插件 Space、内容是 Tangu 的。现在补定位时把启动归档的现场补还原。
@@ -111,6 +112,40 @@ const SCENARIOS = {
   D: { title: '同 C,「启动时进入」= 缺省(主位槽)', floating: true, pref: null },
 }
 
+/** E:页面脚本跑之前种一个探针 —— ribbon 一出现就点一个内置 Space(比插件装完早;不能点 Tangu,那一刻内存里的
+ *  活动 Space 正是回落的 Tangu,点它是空操作),记下点了谁、点的那一刻插件视图挂没挂上。 */
+const EARLY_SWITCH = `(() => {
+  const tick = () => {
+    const slot = [...document.querySelectorAll('.rb-slot[data-id^="space:"]')]
+      .find((el) => !['space:tangu', 'space:probe-space'].includes(el.dataset.id) && el.querySelector('.rb-space'))
+    if (!slot) return requestAnimationFrame(tick)
+    window.__earlySwitch = { to: slot.dataset.id.slice(6), late: !!document.querySelector('.probe-board') }
+    slot.querySelector('.rb-space').click()
+  }
+  requestAnimationFrame(tick)
+})()`
+
+async function runEarlySwitch() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-spacefallback-E-'))
+  seed(home)
+  console.log('\n── E 补定位之前用户自己切了 Space')
+  const { app, win, before } = await firstRun(home, '__last__')
+  console.log(`  重载前  ${brief(before)}`)
+  await app.context().addInitScript(EARLY_SWITCH)
+  await win.reload({ waitUntil: 'domcontentloaded' }) // 渲染层重载 = 一次冷启动(BOOT_ACTIVE_SPACE_ID 重新取快照),同 dev 里的 ⌘R
+  await win.waitForSelector('.wb-dockview, .dv-groupview', { timeout: 30000 })
+  await sleep(6000)
+  const after = await state(win)
+  const probe = await win.evaluate(() => window.__earlySwitch || null)
+  console.log(`  重载后  ${brief(after)}  探针=${JSON.stringify(probe)}`)
+  await app.close()
+  try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ }
+  if (!probe || probe.late) return console.log(`SKIP  E 探针没赶在插件 Space 就位之前点到(${JSON.stringify(probe)}),这一轮不作数`)
+  check('E 人留在自己点的 Space,没被拽回插件 Space', after.active === probe.to && !after.board, `点了 ${probe.to} → active=${after.active} board=${after.board}`)
+  check('E 屏上不是插件 Space 的归档', !!after.layoutKey && !after.layoutKey.includes(BOARD), `layoutKey=${JSON.stringify(after.layoutKey)}`)
+  check('E space:probe-space 还是插件 Space 自己那份', (after.named['space:probe-space'] || []).includes(BOARD), `space:probe-space=${JSON.stringify(after.named['space:probe-space'])}`)
+}
+
 async function run(key) {
   const sc = SCENARIOS[key]
   const pref = 'pref' in sc ? sc.pref : '__last__'
@@ -159,6 +194,7 @@ async function run(key) {
 ;(async () => {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   for (const key of Object.keys(SCENARIOS)) if (!ONLY.length || ONLY.includes(key)) await run(key)
+  if (!ONLY.length || ONLY.includes('E')) await runEarlySwitch()
   const bad = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - bad}/${results.length} 通过`)
   process.exit(bad ? 1 : 0)

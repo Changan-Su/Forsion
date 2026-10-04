@@ -14,7 +14,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
-  spaceLayoutsWereReset, bootLayoutFellThrough,
+  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -224,6 +224,15 @@ export function settleAsyncStartupSpace(): void {
   const state = useSpaceStore.getState()
   if (!state.spaces.some((space) => space.id === want)) return
 
+  // 「上次退出」档下,盘上的活动 id 在补定位之前只有用户自己切 Space(setActiveSpace)才会变 —— 回落只改内存。
+  // 变了 = 屏上是他刚选的那个 Space 的现场:不再把他拽回去,更不能拿归档 / 重建盖掉它(那份现场只在布局键里,
+  // 盖了就丢;Codex 评审)。
+  if (startupSpacePref() === LAST_EXIT_SPACE) {
+    let onDisk: string | null = null
+    try { onDisk = localStorage.getItem('forsion_tangu_active_space') } catch { /* 隐私模式:当没动过 */ }
+    if (onDisk !== null && onDisk !== want) { asyncStartupSpaceResolved = true; return }
+  }
+
   // 配方升了版本 → 重建。升级那次的一次性重置(spaces.tsx registerSpaces)同理:当前布局键已清,onReady 摆出来的是
   // **回落 Space** 的默认布局,不是本 Space 的现场 —— 只换活动 id 的话界面标着本 Space、内容却是回落 Space 的,
   // 切走时还会把它存进 space:<本 Space>(Codex 评审)。
@@ -253,9 +262,11 @@ export function settleAsyncStartupSpace(): void {
       configure()
       // 「布局键里本来就是它的现场」只在 onReady 那次还原成了的时候才成立。现场里有插件视图、而插件比 Dockview 就绪得晚
       // (实测就是这个顺序)→ 那次还原落空,屏上摆的是回落 Space 的默认布局:只换 id 的话界面标着本 Space、内容是回落
-      // Space 的,下次启动还会把它归档进 space:<本 Space>。把启动时归档的那份现场(adoptSpaceLayoutCold 写的)补还原回来。
+      // Space 的,下次启动还会把它归档进 space:<本 Space>。把启动时归档的那份现场(adoptSpaceLayoutCold 写的)补还原回来;
+      // 归档里还有别的没注册上的视图(另一个插件这次没装上)就不硬套,按本 Space 的默认重建 —— 口径同启动还原。
       if (bootLayoutFellThrough()) {
-        if (ws().applyNamed(spaceLayoutName(want))) { ws().ensurePinned(); ws().saveCurrent() }
+        const archived = spaceLayoutName(want)
+        if (namedLayoutRestorable(archived) && ws().applyNamed(archived)) { ws().ensurePinned(); ws().saveCurrent() }
         else ws().resetLayout()
       } else {
         // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)

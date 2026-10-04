@@ -8,7 +8,7 @@
  *   ④ 布局信封:bottom 是可选字段,老布局(无 bottom)照样合法且读成「收起」
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useWorkspace, captureSideWidths, tryRestoreLayout, bootLayoutFellThrough } from './dockviewStore'
+import { useWorkspace, captureSideWidths, tryRestoreLayout, bootLayoutFellThrough, namedLayoutRestorable } from './dockviewStore'
 import { computeBottomHeight, BOTTOM_MIN_HEIGHT } from './sideWidth'
 import { isLayoutEnvelopeV4, LAYOUT_KEY } from './layoutPersist'
 import { registerView, unregisterView } from './viewRegistry'
@@ -387,6 +387,18 @@ describe('底部面板:布局信封向后兼容', () => {
     expect(tryRestoreLayout(api)).toBe(true)
     expect(bootLayoutFellThrough()).toBe(false)
     vi.runAllTimers()
+  })
+
+  // 补还原归档前先问这一句:归档里还有没注册上的视图(另一个插件这次没装上)就不硬套(applyNamed 自己不查)。
+  it('namedLayoutRestorable:槽不存在 / 引用了未注册视图 ⇒ false;视图都在 ⇒ true', () => {
+    const named = (type: string) => ({
+      version: 4, dockview: { panels: { p1: { contentComponent: type, params: { __loc: 'main', __type: type } } } },
+      sidebars: { left: { visible: true, stash: [] }, right: { visible: true, stash: [] } },
+    })
+    localStorage.setItem('tangu2_named_layouts', JSON.stringify({ 'space:ok': named('termv'), 'space:late': named('plugin:late:view') }))
+    expect(namedLayoutRestorable('space:none')).toBe(false)
+    expect(namedLayoutRestorable('space:late')).toBe(false)
+    expect(namedLayoutRestorable('space:ok')).toBe(true)
   })
 })
 

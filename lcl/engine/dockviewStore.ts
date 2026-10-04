@@ -1472,6 +1472,14 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
   return bootRestored
 }
 
+/** 命名布局此刻还原得了吗:存在,且引用的视图都已注册(口径同 tryRestoreLayout;applyNamed 自己不查)。 */
+export function namedLayoutRestorable(name: string): boolean {
+  const blob = loadNamedLayout(name)
+  if (!blob) return false
+  migrateLayoutBlob(blob)
+  return layoutViewsAllRegistered(blob.dockview)
+}
+
 function restoreLayout(api: DockviewApi): boolean {
   const layout = loadLayout()
   if (!layout) return false
