@@ -24,17 +24,20 @@ class BoundedText {
 
 /** POSIX children must have been spawned detached (new session/process group).
  * Windows uses a numeric PID argument to the OS taskkill, never an interpolated shell. */
-async function killProcessTree(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+export async function killProcessTree(child: ChildProcess, timeoutMs = 5_000, signal: NodeJS.Signals = 'SIGKILL'): Promise<boolean> {
   const pid = child.pid;
   if (!pid) return true;
   if (process.platform !== 'win32') {
-    try { process.kill(-pid, 'SIGKILL'); return true; }
+    try { process.kill(-pid, signal); return true; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
-      try { child.kill('SIGKILL'); } catch { /* root already exited */ }
+      try { child.kill(signal); } catch { /* root already exited */ }
       return false;
     }
   }
+  // A later escalation must not target a recycled Windows PID. Windows has no
+  // POSIX signals: taskkill /T /F stops the shell and its descendants together.
+  if (child.exitCode != null || child.signalCode != null) return true;
   return new Promise((resolve) => {
     const root = process.env.SystemRoot || process.env.WINDIR;
     const killRoot = (): void => { try { child.kill('SIGKILL'); } catch { /* already exited */ } };

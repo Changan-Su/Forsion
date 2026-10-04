@@ -11,6 +11,7 @@ import type { ToolContext } from './toolTypes.js';
 import { spawnHostShell, hostSandboxEnabled, hostSandboxScopeKey, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
 import { RemoteShellProtectionError } from '../sandbox/remoteShellSeatbelt.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
+import { killProcessTree } from '../utils/boundedProcess.js';
 
 /** P1 · K2:后台进程的来源(= 起它的 run 的分类,见 services/remoteActivity.ts runCategory)。急停按它杀:
  *  run 结束后仍在跑的进程(dev server 之类)靠这个标签命中;本机起、后被远端染色的 run 起的进程靠 runId 命中。 */
@@ -76,16 +77,10 @@ let exitHookInstalled = false;
 
 /**
  * 杀「整个进程组」:detached 子进程自成进程组(pgid=child.pid),负 pid 杀组连带它 fork 的孙进程
- * (dev server / watch 等)。否则只杀 shell、孙进程残留占着端口/管道。非 POSIX 或无 pid 退回杀 child。
+ * (dev server / watch 等)。Windows 通过 taskkill /T /F 杀整棵树,否则孙进程残留占着端口/管道。
  */
 function killTree(child: ChildProcess, sig: NodeJS.Signals = 'SIGKILL'): void {
-  const pid = child.pid;
-  try {
-    if (pid && process.platform !== 'win32') process.kill(-pid, sig);
-    else child.kill(sig);
-  } catch {
-    try { child.kill(sig); } catch { /* already gone */ }
-  }
+  void killProcessTree(child, 5000, sig);
 }
 
 function ensureReaper(): void {
@@ -186,7 +181,7 @@ function terminate(p: BackgroundProcess): void {
   try {
     killTree(p.child, 'SIGTERM');
     const child = p.child;
-    setTimeout(() => killTree(child), 3000).unref?.();
+    if (process.platform !== 'win32') setTimeout(() => killTree(child), 3000).unref?.();
   } catch {
     /* 已退出 */
   }

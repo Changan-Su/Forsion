@@ -111,7 +111,8 @@ describe('ensureCliInstalled(tmp 假 App 布局)', () => {
     expect(r.ok).toBe(true)
     const shim = join(root, 'home', '.tangu', 'bin', 'tangu')
     expect(existsSync(shim)).toBe(true)
-    expect(statSync(shim).mode & 0o755).toBe(0o755)
+    // Windows does not expose POSIX executable permission bits.
+    if (process.platform !== 'win32') expect(statSync(shim).mode & 0o755).toBe(0o755)
     expect(readFileSync(shim, 'utf-8')).toContain('ELECTRON_RUN_AS_NODE=1')
     const zp = readFileSync(join(root, 'home', '.zprofile'), 'utf-8')
     expect(zp).toContain(CLI_BLOCK_BEGIN)

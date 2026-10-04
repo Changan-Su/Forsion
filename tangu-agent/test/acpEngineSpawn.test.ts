@@ -19,11 +19,12 @@ describe('spawnEngine cross-platform shell', () => {
   const def = { id: 'x', name: 'X', command: 'npx', args: ['-y', 'pkg'] } as any;
 
   it('uses shell:true on win32 (so npx.cmd resolves)', () => {
-    withPlatform('win32', () => spawnEngine(def));
+    withPlatform('win32', () => spawnEngine(def, { detached: true }));
     expect(spawnMock).toHaveBeenCalledOnce();
     const opts = spawnMock.mock.calls[0][2] as any;
     expect(opts.shell).toBe(true);
     expect(opts.windowsHide).toBe(true);
+    expect(opts.detached).toBe(false);
   });
 
   it('uses shell:false on posix (npx is a real script)', () => {

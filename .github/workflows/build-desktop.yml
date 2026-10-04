@@ -120,7 +120,8 @@ jobs:
       # codeStudioProjects.test.ts 同日补进:它在 Windows 上的红是真 bug(chokidar 交给 ignored 的根是 / 分隔,
       # 整棵项目树不监听),修复后两轮独立 probe 全绿。
       # 不在名单:agentLoopRuntimeSafety.test.ts(Windows 上清理临时目录偶发 ENOTEMPTY:异步写入的句柄还开着,与持久化写入无关)。
-      - name: Windows durable-write tests
+      # hostSandbox.winconsole.test.ts 不是写入类,借这道闸跑:agent 起子进程不许弹控制台窗口(只有 Windows 真机测得出)。
+      - name: Windows persistence and process tests
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -130,14 +131,16 @@ jobs:
             src/services/agentFileSync.test.ts src/services/agentFileSync.safety.test.ts \
             src/services/memorySyncService.test.ts src/services/memorySync.test.ts \
             src/services/projectDoc.test.ts src/services/contextWindowStore.test.ts \
-            src/plugins/npmInstall.test.ts \
+            src/plugins/npmInstall.test.ts src/sandbox/hostSandbox.winconsole.test.ts \
+            test/windowsProcess.test.ts test/acpEngineSpawn.test.ts \
             test/agentFileSync.test.ts test/localMemoryBrain.test.ts test/memoryManagementRoutes.test.ts \
             test/memoryDream.test.ts test/memorySync.test.ts test/agentFolder.test.ts
           cd ../desktop
           npx vitest run \
             electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/accountCore.test.ts \
             electron/amadeus/settings.account.test.ts electron/amadeus/ipc.account.test.ts \
-            electron/codeStudioProjects.test.ts
+            electron/codeStudioProjects.test.ts electron/lclLink.test.ts \
+            electron/backendManager.test.ts electron/backendRunner.test.ts electron/cliInstall.test.ts
 
       # Verify the distributed tool/prompt contract on every native runner, without operating its GUI.
       - name: Check bundled Computer Use platform contract

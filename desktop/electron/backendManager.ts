@@ -365,6 +365,7 @@ export class BackendManager {
       const child = spawn(cmd, args, {
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
       })
       this.spawnedEntry = entry
       this.spawnedAt = Date.now()

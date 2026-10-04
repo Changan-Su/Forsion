@@ -226,7 +226,7 @@ function dockerAgentStats(): Promise<Array<{ name: string; cpu: string; mem: str
     execFile(
       'docker',
       ['stats', '--no-stream', '--format', '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'],
-      { timeout: 4000 },
+      { timeout: 4000, windowsHide: true },
       (err, stdout) => {
         if (err || !stdout) return resolve([]);
         const out: Array<{ name: string; cpu: string; mem: string; memPerc: string }> = [];

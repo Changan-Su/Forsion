@@ -27,6 +27,7 @@ import type { ApprovalDecision } from '../services/approvals.js';
 import { envWithFullPath, type EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
+import { killProcessTree } from '../utils/boundedProcess.js';
 
 /** createAcpClient 需要的最小上下文（EngineRunCtx 结构上即满足）。 */
 export interface AcpClientCtx {
@@ -54,7 +55,8 @@ export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: bo
     env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}) }),
     shell: process.platform === 'win32',
     windowsHide: true,
-    detached: opts?.detached ?? false,
+    // DETACHED_PROCESS cancels windowsHide and loses grandchild stdout on Windows.
+    detached: process.platform !== 'win32' && (opts?.detached ?? false),
   });
 }
 
@@ -264,20 +266,14 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   child.on('error', (e) => ctx.publish('status', { detail: `engine spawn error: ${e.message}` }));
 
   // 进程组 kill + SIGTERM→2s→SIGKILL 升级:先给 ACP 子进程优雅退出(flush)的机会，仍不退就强杀整组。
-  // 负 pid = 杀整组；非 POSIX/拿不到 pid 时退回杀 child 本身(Windows 无 setsid/负 pid)。
+  // POSIX 负 pid 杀整组;Windows 用 taskkill /T /F,停止 npx 启动的实际引擎。
   let killTimer: ReturnType<typeof setTimeout> | null = null;
   const killTree = (sig: NodeJS.Signals): void => {
-    const pid = child.pid;
-    try {
-      if (pid && process.platform !== 'win32') process.kill(-pid, sig);
-      else child.kill(sig);
-    } catch {
-      try { child.kill(sig); } catch { /* already gone */ }
-    }
+    void killProcessTree(child, 5000, sig);
   };
   const killNow = (): void => {
     killTree('SIGTERM');
-    if (!killTimer) killTimer = setTimeout(() => killTree('SIGKILL'), 2000);
+    if (process.platform !== 'win32' && !killTimer) killTimer = setTimeout(() => killTree('SIGKILL'), 2000);
   };
   child.once('exit', () => { if (killTimer) { clearTimeout(killTimer); killTimer = null; } });
 
@@ -406,6 +402,7 @@ export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities
     return { models, currentModelId, commands };
   } finally {
     startup.disarm(); // 下面这刀是我们自己捅的,不算「起不来」
-    child.kill();
+    if (process.platform === 'win32') await killProcessTree(child);
+    else child.kill();
   }
 }

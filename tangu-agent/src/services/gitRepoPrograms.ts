@@ -156,7 +156,7 @@ function listConfig(file: string): ConfigEntries | 'unknown' {
     for (const k of [...GIT_SCRUBBED_ENV, 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG']) delete env[k];
     // cwd = 文件所在盘的根(POSIX 即 '/',Windows 即 'C:\\'):在仓库里跑,git 的发现阶段会读那个仓库的配置并跟 include(实测 --file 也挡不住)
     const out = execFileSync(gitExecutable(), ['--no-pager', 'config', '--no-includes', '--file', file, '--list', '--null'], {
-      cwd: path.parse(path.resolve(file)).root, env, timeout: 2000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8',
+      cwd: path.parse(path.resolve(file)).root, env, timeout: 2000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true,
     });
     entries = out.split('\0').filter(Boolean).map((rec): [string, string | null] => {
       const nl = rec.indexOf('\n');

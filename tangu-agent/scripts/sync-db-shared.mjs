@@ -49,7 +49,8 @@ let drifted = 0;
 for (const f of FILES) {
   const { path, text } = render(f);
   const cur = existsSync(path) ? readFileSync(path, 'utf8') : null;
-  if (cur === text) continue;
+  // Compare source content, independent of Git's Windows checkout line endings.
+  if (cur?.replace(/\r\n/g, '\n') === text.replace(/\r\n/g, '\n')) continue;
   if (check) {
     console.error(`[sync-db-shared] 漂移: ${relative(root, path)}(与 desktop/shared/amadeus/db/${f.from} 不一致,跑 npm run sync:db-shared)`);
     drifted++;
