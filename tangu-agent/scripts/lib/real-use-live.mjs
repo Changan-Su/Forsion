@@ -13,7 +13,7 @@
  *   抽取库只含会话 / run 的归属字段与工具名、调用时间(use_skill 另带技能 id),不含任何对话内容;
  *   用 `node scripts/usage-extract.mjs <源 state.db> <输出库>` 生成(源库只读打开)。
  */
-import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
@@ -72,12 +72,18 @@ const walkText = (dir) => { let s = ''; let es = []; try { es = readdirSync(dir,
 const portOpen = (port) => fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1500) }).then((r) => r.status, () => 0);
 /** 一个此刻确实没人监听的端口(绑 0 让系统挑,再放掉):随机挑号会撞上开发者自己正开着的服务。 */
 const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
-/** 只收拾本场景自己留下的那个进程:监听这个端口、且命令行就是 `http.server <port>` 的。别的进程(含连着它的客户端)一律不碰。 */
-function killFixtureServer(port) {
+/** 只收拾本场景自己留下的那个进程:监听这个端口、命令行是 `http.server <port>`、**且工作目录(或命令行里的目录)在夹具目录里**。
+ *  光对端口和命令行不算认主:端口放掉之后别人也可能正好在同一个端口起一个 http.server。认不出主就不杀,宁可漏。 */
+function killFixtureServer(port, root) {
+  const mine = realpathSync(root);
   let pids = [];
   try { pids = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; /* 没人在听 */ }
   for (const pid of pids) {
-    try { if (execFileSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8' }).includes(`http.server ${port}`)) process.kill(Number(pid)); } catch { /* 已经没了 */ }
+    try {
+      const cmd = execFileSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8' });
+      const cwd = execFileSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8' }).split('\n').find((l) => l.startsWith('n'))?.slice(1) || '';
+      if (cmd.includes(`http.server ${port}`) && (cwd.startsWith(mine) || cmd.includes(mine) || cmd.includes(root))) process.kill(Number(pid));
+    } catch { /* 已经没了 */ }
   }
 }
 const giveUp = (text) => /没有(这个|该|对应的?)工具|无法(调用|使用)|工具不可用|not available|don't have (a|the) tool|cannot (use|call)/i.test(text);
@@ -151,7 +157,7 @@ export async function realUseLive(h) {
         const port = await freePort();
         const e1 = await run(await mk('Real server', cfg), `在后台把这个项目目录用 python3 -m http.server ${port} 起起来,告诉我首页返回的状态码,然后把它关掉。`, 300_000, cfg);
         const left = await portOpen(port);
-        if (left) killFixtureServer(port);
+        if (left) killFixtureServer(port, dir);
         const okServer = !e1.error && /\b200\b/.test(e1.content || '') && !left;
         if (okServer) T.e.server++; if (giveUp(e1.content || '')) T.e.gaveUp++;
         T.e.paths.push(`server:${e1.toolCalls.filter((t) => ['load_tools', 'run_background', 'run_bash', 'read_process_output', 'kill_process', 'list_processes'].includes(t)).join('>') || '-'}`);
