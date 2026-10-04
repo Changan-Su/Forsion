@@ -1889,10 +1889,10 @@ registerMessages({
 // ── 百炼音色工作室:声音复刻 + 声音设计(2026-07-03)──
 registerMessages({
   "settings.tts.studio.title": { "zh": "百炼朗读音色工作室", "en": "Bailian read-aloud voice studio" },
-  "settings.tts.studio.hint": { "zh": "用阿里云百炼复刻你的声音或用文字描述设计音色。音色与合成模型绑定，「使用」时会自动切换到对应模型。复刻 ¥0.01/个，设计 ¥0.2/个。", "en": "Clone your voice or design one from a text description via Alibaba Bailian. Voices are bound to their synthesis model — applying a voice switches the model automatically. Cloning ¥0.01/voice, design ¥0.2/voice." },
+  "settings.tts.studio.hint": { "zh": "用阿里云百炼复刻你的声音，或用文字描述设计音色。音色只能配创建时选的模型朗读，「使用」时会自动切到那个模型。Qwen3-TTS 复刻 ¥0.01/个，其余模型复刻免费；设计 ¥0.2/个。", "en": "Clone your voice or design one from a text description via Alibaba Cloud Bailian. A voice only works with the model it was created for, so applying a voice switches the read-aloud model to match. Cloning costs ¥0.01 per voice on Qwen3-TTS and is free on the other models; design costs ¥0.2 per voice." },
   "settings.tts.studio.needProvider": { "zh": "配置一个 baseUrl 指向阿里云百炼（dashscope.aliyuncs.com/compatible-mode/v1）的 provider 后，可在此复刻/设计音色。", "en": "Add a provider whose baseUrl points to Alibaba Bailian (dashscope.aliyuncs.com/compatible-mode/v1) to clone/design voices here." },
   "settings.tts.studio.cloneTitle": { "zh": "声音复刻", "en": "Voice cloning" },
-  "settings.tts.studio.cloneHint": { "zh": "上传 10–20 秒清晰人声（WAV/MP3/M4A,≤10MB，单声道 ≥24kHz，无背景音乐/他人声，不能是歌声）；创建成功自动采用。需对该声音拥有合法使用权。", "en": "Upload 10–20s of clean speech (WAV/MP3/M4A, ≤10MB, mono ≥24kHz, no background music/other voices, no singing); applied automatically on success. You must hold rights to the voice." },
+  "settings.tts.studio.cloneHint": { "zh": "选一个复刻模型，上传 10–20 秒清晰人声（WAV/MP3/M4A，≤10MB，单声道 ≥24kHz，无背景音乐或他人声，不能是歌声）；创建成功自动采用。录音质量直接决定像不像。需对该声音拥有合法使用权。", "en": "Pick a clone model and upload 10–20 seconds of clean speech (WAV/MP3/M4A, up to 10 MB, mono, 24 kHz or higher, no background music or other voices, no singing). The voice is applied automatically once created. Recording quality decides how close the clone sounds. You must hold the rights to the voice." },
   "settings.tts.studio.designTitle": { "zh": "声音设计", "en": "Voice design" },
   "settings.tts.studio.designPromptPlaceholder": { "zh": "描述想要的声音，如：年轻活泼的女性声音，语速较快，语调上扬，温柔亲切（请原创，勿模仿特定真人）", "en": "Describe the voice, e.g.: a young, lively female voice, fast-paced with rising intonation, warm and friendly (original, not imitating a real person)" },
   "settings.tts.studio.previewTextPlaceholder": { "zh": "试听文本（可选）", "en": "Preview text (optional)" },
@@ -1909,10 +1909,6 @@ registerMessages({
   "settings.tts.studio.kindClone": { "zh": "复刻", "en": "cloned" },
   "settings.tts.studio.kindDesign": { "zh": "设计", "en": "designed" },
   "settings.tts.studio.kindCosy": { "zh": "CosyVoice", "en": "CosyVoice" },
-  "settings.tts.studio.cosyTitle": { "zh": "CosyVoice 声音复刻", "en": "CosyVoice cloning" },
-  "settings.tts.studio.cosyHint": { "zh": "CosyVoice 复刻音质更细腻，但百炼规定音频样本必须是公网可访问的 URL（不收文件上传）：把 10–20 秒清晰人声（WAV/MP3/M4A,≤10MB,≥16kHz）传到 OSS/图床后粘贴链接。创建成功自动采用（合成走 cosyvoice-v2）。", "en": "CosyVoice cloning sounds finer-grained, but Bailian requires the sample as a public URL (no file upload): upload 10–20s of clean speech (WAV/MP3/M4A, ≤10MB, ≥16kHz) to OSS/an image host and paste the link. Applied automatically on success (synthesis via cosyvoice-v2)." },
-  "settings.tts.studio.cosyUrlPlaceholder": { "zh": "公网音频 URL(https://…)", "en": "Public audio URL (https://…)" },
-  "settings.tts.studio.cosyBtn": { "zh": "CosyVoice 复刻", "en": "Clone (CosyVoice)" },
   "settings.tts.studio.applied": { "zh": "已采用音色 {voice}（模型已联动切换）", "en": "Voice {voice} applied (model switched accordingly)" },
   "settings.tts.studio.fileTooLarge": { "zh": "音频超过 {mb}MB 上限", "en": "Audio exceeds the {mb}MB limit" },
   "settings.tts.testBtn": { "zh": "试听", "en": "Test voice" },

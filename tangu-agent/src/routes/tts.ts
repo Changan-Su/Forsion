@@ -6,11 +6,13 @@
  *
  * 音色管理(百炼声音复刻/声音设计;providers/test 同款「前端传 baseUrl+key、后端代打」模式,免 CORS 且不动 seam):
  *   POST /agent/tts/voices/list   { baseUrl, apiKey } → { voices: [{ voice, kind, targetModel? }] }   kind: clone(qwen复刻)|design(qwen设计)|cosy(CosyVoice复刻)
- *   POST /agent/tts/voices/clone  { baseUrl, apiKey, name, engine?, audioData?, audioUrl?, targetModel? } → { voice, targetModel }
- *       engine 缺省 qwen:audioData=base64/URL、qwen-voice-enrollment;engine=cosy:audioUrl=公网URL(百炼铁律,不收base64)、voice-enrollment/create_voice
+ *   POST /agent/tts/voices/clone  { baseUrl, apiKey, name, targetModel?, audioData?, audioUrl?, engine? } → { voice, targetModel }
+ *       复刻服务按 targetModel 分家(cloneService):Qwen3-TTS-VC / Qwen-Omni → qwen-voice-enrollment(收 base64);
+ *       Qwen-Audio-TTS / CosyVoice → voice-enrollment/create_voice(只收 URL:本地录音先传百炼临时空间换 oss:// 地址)。
+ *       engine=cosy 是旧客户端的写法(不带 targetModel 时落 cosyvoice-v2)。
  *   POST /agent/tts/voices/design { baseUrl, apiKey, name, voicePrompt, previewText?, targetModel? } → { voice, targetModel, previewAudio? }
  *   POST /agent/tts/voices/delete { baseUrl, apiKey, voice, kind } → { ok }
- * 铁律:音色只能配 enrollment/design 时的 target_model 合成(前端采用音色时联动切模型)。CosyVoice 复刻音色配 cosyvoice-* 走 WS 合成。
+ * 铁律:音色只能配 enrollment/design 时的 target_model 合成(前端采用音色时联动切模型)。CosyVoice / Qwen-Audio-TTS 音色走 WS 合成。
  */
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
@@ -63,16 +65,68 @@ router.post('/agent/tts', authMiddleware, async (req: AuthRequest, res) => {
 // ── 百炼音色管理代理 ──────────────────────────────────────────────────────────
 
 /** DashScope 音色定制统一调用(customization 端点;错误原文透传给前端排障)。 */
-async function dsCustomization(baseUrl: string, apiKey: string, body: unknown, timeoutMs = 60_000): Promise<any> {
+async function dsCustomization(baseUrl: string, apiKey: string, body: unknown, timeoutMs = 60_000, headers: Record<string, string> = {}): Promise<any> {
   const r = await fetch(`${dashScopeApiBase(baseUrl)}/services/audio/tts/customization`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
   const j: any = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`dashscope ${r.status}: ${j?.message || j?.code || JSON.stringify(j).slice(0, 200)}`);
   return j;
+}
+
+/** 复刻服务按目标模型分家:Qwen-Audio-TTS / CosyVoice 走 voice-enrollment,其余(Qwen3-TTS-VC、Qwen-Omni)走 qwen-voice-enrollment。 */
+export function cloneService(targetModel: string): 'voice-enrollment' | 'qwen-voice-enrollment' {
+  return /^(cosyvoice|qwen-audio)/i.test(targetModel) ? 'voice-enrollment' : 'qwen-voice-enrollment';
+}
+
+/**
+ * qwen-voice-enrollment 的 create 请求体。qwen3.8-omni 起必须带 voice_clone_mode:不带时百炼不报错,
+ * 静默回退到 qwen3.5-omni 的旧复刻模式(文档 qwen-omni-voice-cloning「条件必填」)。3.5 就是那个旧模式,不带。
+ */
+export function qwenCloneBody(targetModel: string, name: string, audioData: string): Record<string, unknown> {
+  const needsMode = /omni/i.test(targetModel) && !/^qwen3\.5-omni/i.test(targetModel);
+  return {
+    model: 'qwen-voice-enrollment',
+    input: { action: 'create', target_model: targetModel, preferred_name: name, audio: { data: audioData } },
+    ...(needsMode ? { parameters: { voice_clone_mode: 'normal' } } : {}),
+  };
+}
+
+/** 本地录音(data URI)→ 百炼临时空间(48 小时后自动清),换回 oss:// 地址。voice-enrollment 只收 URL,这样用户不用自己找地方挂文件。 */
+async function dsTempUpload(baseUrl: string, apiKey: string, dataUri: string): Promise<string> {
+  const m = /^data:([^;,]+)[^,]*;base64,(.+)$/s.exec(dataUri);
+  if (!m) throw new Error('audioData must be a data:audio/...;base64 URI or an https URL');
+  const ext = /mpeg|mp3/i.test(m[1]) ? 'mp3' : /mp4|m4a|aac/i.test(m[1]) ? 'm4a' : 'wav';
+  const r = await fetch(`${dashScopeApiBase(baseUrl)}/uploads?action=getPolicy&model=voice-enrollment`, {
+    headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(20_000),
+  });
+  const d = ((await r.json().catch(() => ({}))) as any)?.data;
+  if (!r.ok || !d?.upload_host || !d?.upload_dir) throw new Error(`dashscope upload policy ${r.status}`);
+  const key = `${d.upload_dir}/clone-${Date.now()}.${ext}`;
+  const fd = new FormData();
+  const fields: Record<string, unknown> = {
+    OSSAccessKeyId: d.oss_access_key_id, Signature: d.signature, policy: d.policy,
+    'x-oss-object-acl': d.x_oss_object_acl, 'x-oss-forbid-overwrite': d.x_oss_forbid_overwrite, key, success_action_status: '200',
+  };
+  for (const [k, v] of Object.entries(fields)) fd.append(k, String(v));
+  fd.append('file', new Blob([Buffer.from(m[2], 'base64')], { type: m[1] }), `clone.${ext}`); // OSS 表单上传:file 必须排最后
+  const u = await fetch(d.upload_host, { method: 'POST', body: fd, signal: AbortSignal.timeout(60_000) });
+  if (!u.ok) throw new Error(`dashscope upload ${u.status}: ${(await u.text().catch(() => '')).slice(0, 200)}`);
+  return `oss://${key}`;
+}
+
+/** voice-enrollment 新建的音色要部署几秒(实测约 6 秒),没好就拿去合成会报错 → 等到 OK 再交还;没过审(UNDEPLOYED)直接报。 */
+async function dsAwaitVoice(baseUrl: string, apiKey: string, voice: string): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    const j = await dsCustomization(baseUrl, apiKey, { model: 'voice-enrollment', input: { action: 'query_voice', voice_id: voice } }, 20_000).catch(() => null);
+    const status = j?.output?.status;
+    if (!j || status === 'OK') return; // 查不了就不等了:音色已经建好,别因为查询失败把它弄丢
+    if (status === 'UNDEPLOYED') throw new Error(`voice ${voice} was rejected by Bailian review (UNDEPLOYED)`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
 }
 
 /** preferred_name 约束:数字/字母/下划线 ≤16;清洗到合法而非报错。 */
@@ -97,7 +151,7 @@ export function parseVoiceList(j: any, kind: VoiceKind): Array<{ voice: string; 
     .filter((v) => v.voice);
 }
 
-/** 翻页拉全量(账号上限 1000 个音色 = 最多 10 页;返回不足 page_size 即止)。qwen 用 action=list,cosy 用 list_voices。 */
+/** 翻页拉全量(账号上限 1000 个音色 = 最多 10 页;返回不足 page_size 即止)。qwen 用 action=list,voice-enrollment 用 list_voice。 */
 async function dsListAll(baseUrl: string, apiKey: string, model: string, kind: VoiceKind, action = 'list'): Promise<Array<{ voice: string; kind: VoiceKind; targetModel?: string }>> {
   const out: Array<{ voice: string; kind: VoiceKind; targetModel?: string }> = [];
   for (let page = 0; page < 10; page++) {
@@ -116,7 +170,7 @@ router.post('/agent/tts/voices/list', authMiddleware, async (req: AuthRequest, r
     const [clone, design, cosy] = await Promise.allSettled([
       dsListAll(p.baseUrl, p.apiKey, 'qwen-voice-enrollment', 'clone'),
       dsListAll(p.baseUrl, p.apiKey, 'qwen-voice-design', 'design'),
-      dsListAll(p.baseUrl, p.apiKey, 'voice-enrollment', 'cosy', 'list_voices'),
+      dsListAll(p.baseUrl, p.apiKey, 'voice-enrollment', 'cosy', 'list_voice'), // 实测:list_voices 报 invalid action
     ]);
     const voices = [
       ...(clone.status === 'fulfilled' ? clone.value : []),
@@ -137,34 +191,32 @@ router.post('/agent/tts/voices/list', authMiddleware, async (req: AuthRequest, r
 router.post('/agent/tts/voices/clone', authMiddleware, async (req: AuthRequest, res) => {
   const p = voiceParams(req);
   if (!p) { res.status(400).json({ detail: 'baseUrl/apiKey 必填' }); return; }
+  const legacyCosy = req.body?.engine === 'cosy'; // 旧客户端:只传 engine,不传 targetModel
+  const targetModel = String(req.body?.targetModel ?? '').trim() || (legacyCosy ? DASHSCOPE_COSY_MODEL : DASHSCOPE_VC_MODEL);
+  const audio = String(req.body?.audioUrl ?? '').trim() || String(req.body?.audioData ?? '').trim(); // 公网 URL 或 data:audio/...;base64
+  if (!audio) { res.status(400).json({ detail: 'audioData or audioUrl is required' }); return; }
 
-  // CosyVoice 复刻:百炼铁律=音频只能给公网可访问 URL(不收 base64),音色前缀 ≤10。
-  if (req.body?.engine === 'cosy') {
-    const url = String(req.body?.audioUrl ?? '').trim();
-    if (!/^https?:\/\/\S+/i.test(url)) { res.status(400).json({ detail: 'CosyVoice 复刻需公网可访问的音频 URL(https),百炼不收文件上传' }); return; }
-    const targetModel = String(req.body?.targetModel ?? '').trim() || DASHSCOPE_COSY_MODEL;
+  // Qwen-Audio-TTS / CosyVoice:音频只能给 URL,前缀只收小写字母和数字、≤10。
+  if (legacyCosy || cloneService(targetModel) === 'voice-enrollment') {
     try {
+      const isUrl = /^https?:\/\/\S+/i.test(audio);
+      const url = isUrl ? audio : await dsTempUpload(p.baseUrl, p.apiKey, audio);
       const j = await dsCustomization(p.baseUrl, p.apiKey, {
         model: 'voice-enrollment',
-        input: { action: 'create_voice', target_model: targetModel, prefix: cleanName(req.body?.name).slice(0, 10), url },
-      }, 120_000);
+        input: { action: 'create_voice', target_model: targetModel, prefix: cleanName(req.body?.name).toLowerCase().replace(/_/g, '').slice(0, 10) || 'voice', url },
+      }, 120_000, isUrl ? {} : { 'X-DashScope-OssResourceResolve': 'enable' }); // oss:// 临时地址要这个头才解析
       const voice = j?.output?.voice_id || j?.output?.voice;
       if (!voice) throw new Error(`未返回音色 id:${JSON.stringify(j?.output || j).slice(0, 200)}`);
+      await dsAwaitVoice(p.baseUrl, p.apiKey, voice);
       res.json({ voice, targetModel });
     } catch (e: any) {
-      res.status(502).json({ detail: e?.message || 'clone cosy voice failed' });
+      res.status(502).json({ detail: e?.message || 'clone voice failed' });
     }
     return;
   }
 
-  const audioData = String(req.body?.audioData ?? '').trim(); // data:audio/...;base64,xxx 或公网 URL
-  if (!audioData) { res.status(400).json({ detail: 'audioData 必填' }); return; }
-  const targetModel = String(req.body?.targetModel ?? '').trim() || DASHSCOPE_VC_MODEL;
   try {
-    const j = await dsCustomization(p.baseUrl, p.apiKey, {
-      model: 'qwen-voice-enrollment',
-      input: { action: 'create', target_model: targetModel, preferred_name: cleanName(req.body?.name), audio: { data: audioData } },
-    }, 120_000); // 复刻处理较慢,给足超时
+    const j = await dsCustomization(p.baseUrl, p.apiKey, qwenCloneBody(targetModel, cleanName(req.body?.name), audio), 120_000); // 复刻处理较慢,给足超时
     const voice = j?.output?.voice || j?.output?.voice_id;
     if (!voice) throw new Error(`未返回音色 id:${JSON.stringify(j?.output || j).slice(0, 200)}`);
     res.json({ voice, targetModel });

@@ -101,11 +101,11 @@ export const getSyncStatus = (t: EngineTarget) =>
   request<SyncStatusResult>(t, '/agent/sync/status')
 
 // ── 百炼音色管理(声音复刻/声音设计;后端代理免 CORS,key 只在请求中过境)──
-export type TtsVoiceKind = 'clone' | 'design' | 'cosy' // clone=qwen复刻 design=qwen设计 cosy=CosyVoice复刻
+export type TtsVoiceKind = 'clone' | 'design' | 'cosy' // clone=qwen复刻 design=qwen设计 cosy=voice-enrollment 复刻(CosyVoice / Qwen-Audio-TTS)
 export interface TtsVoiceInfo { voice: string; kind: TtsVoiceKind; targetModel?: string }
 export const listTtsVoices = (t: EngineTarget, body: { baseUrl: string; apiKey: string }) =>
   request<{ voices: TtsVoiceInfo[] }>(t, '/agent/tts/voices/list', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.voices)
-// engine 缺省 qwen(audioData=base64);engine='cosy' 走 CosyVoice 复刻(audioUrl=公网 URL,百炼不收 base64)。
+// 复刻:targetModel 决定走哪个复刻服务(引擎 routes/tts.ts cloneService);audioData=data URI,本地录音各家都收。engine 是旧写法,新代码不用传。
 export const cloneTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; engine?: 'qwen' | 'cosy'; audioData?: string; audioUrl?: string; targetModel?: string }) =>
   request<{ voice: string; targetModel: string }>(t, '/agent/tts/voices/clone', { method: 'POST', body: JSON.stringify(body) })
 export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; voicePrompt: string; previewText?: string; targetModel?: string }) =>

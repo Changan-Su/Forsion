@@ -61,6 +61,7 @@
     "live:harness": "cd ../tangu-agent && npm run live:harness",
     "probe:gzipupload": "node scripts/gzip-upload.probe.cjs",
     "e2e:realtimevoice": "node scripts/realtime-voice.e2e.cjs",
+    "e2e:voicestudio": "node scripts/voice-studio.e2e.cjs",
     "e2e:dashdrag": "node scripts/dash3-drag.e2e.cjs",
     "e2e:pathgone": "node scripts/vault-pathgone.e2e.cjs",
     "check:pillbar": "node scripts/pillbar-overflow.check.cjs",

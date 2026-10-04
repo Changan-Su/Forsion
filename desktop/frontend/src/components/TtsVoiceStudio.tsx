@@ -3,12 +3,13 @@
  * 前提:存在 baseUrl 指向阿里云百炼(dashscope/aliyuncs 域名)的直连 provider。
  * 铁律:百炼音色只能配 enrollment/design 时的 target_model 合成 → 「使用」音色时联动改写
  * ttsModelId=<providerId>/<targetModel> 与 ttsVoice,避免用户手配错配。
+ * 复刻的目标模型可选(CLONE_MODELS,也能手填):用哪个复刻服务由引擎按模型名判(routes/tts.ts cloneService),这里只管传 targetModel。
  */
 import { useRef, useState } from 'react'
 import { Loader2, Play, RefreshCw, Trash2, Check, Upload } from 'lucide-react'
 import type { TanguDesktopConfig, DirectProviderConfig } from '../types'
 import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsVoiceInfo } from '../services/backendService'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { homeTarget } from '../services/engine/targets'
 
 // 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD/COSY_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
@@ -17,19 +18,38 @@ const KIND_MODEL: Record<'clone' | 'design' | 'cosy', string> = {
   design: 'qwen3-tts-vd-2026-01-26',
   cosy: 'cosyvoice-v2',
 }
+// 能复刻的朗读模型 = 百炼「声音复刻」文档的支持列表(2026-10 核对;第一个是官方推荐,缺省选它)。
+// 不含 qwen3-tts-vc-realtime-*:那是另一套实时协议,引擎的朗读没接。
+export const CLONE_MODELS = [
+  'qwen-audio-3.0-tts-plus', 'qwen-audio-3.1-tts-flash', 'qwen-audio-3.0-tts-flash',
+  'cosyvoice-v3.5-plus', 'cosyvoice-v3.5-flash', 'cosyvoice-v3-plus', 'cosyvoice-v3-flash', 'cosyvoice-v2',
+  'qwen3-tts-vc-2026-01-22',
+]
+const CUSTOM = '__custom__'
+
+registerMessages({
+  'settings.tts.studio.cloneModel': { zh: '复刻模型', en: 'Clone model' },
+  'settings.tts.studio.recommended': { zh: '推荐', en: 'recommended' },
+  'settings.tts.studio.cloneModelCustom': { zh: '自定义模型 ID…', en: 'Custom model ID…' },
+  'settings.tts.studio.cloneModelPlaceholder': { zh: '百炼模型 ID', en: 'Bailian model ID' },
+  'settings.tts.studio.callVoice': { zh: '通话音色', en: 'Call voice' },
+})
+/** 绑在通话模型上的音色(Qwen-Omni / *-realtime):朗读用不了,列表里不给「使用」。 */
+const callOnly = (targetModel?: string): boolean => /omni|realtime/i.test(targetModel || '')
 const MAX_AUDIO_MB = 10
 
 export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktopConfig; provider: DirectProviderConfig; onApplied: () => void }) {
   const { t } = useI18n()
   const auth = { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '' }
   const [voices, setVoices] = useState<TtsVoiceInfo[] | null>(null)
-  const [busy, setBusy] = useState<'' | 'list' | 'clone' | 'design' | 'cosy'>('')
+  const [busy, setBusy] = useState<'' | 'list' | 'clone' | 'design'>('')
   const [msg, setMsg] = useState('')
   const [cloneName, setCloneName] = useState('')
   const cloneFileRef = useRef<HTMLInputElement>(null)
   const [cloneFile, setCloneFile] = useState<File | null>(null)
-  const [cosyUrl, setCosyUrl] = useState('')
-  const [cosyName, setCosyName] = useState('')
+  const [cloneModel, setCloneModel] = useState(CLONE_MODELS[0])
+  const [customModel, setCustomModel] = useState<string | null>(null) // 非 null = 正在手填模型 ID
+  const cloneTarget = (customModel ?? cloneModel).trim()
   const [designName, setDesignName] = useState('')
   const [designPrompt, setDesignPrompt] = useState('')
   const [designPreviewText, setDesignPreviewText] = useState('')
@@ -51,27 +71,18 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   }
 
   const doClone = (): void => {
-    if (!cloneFile || busy) return
+    if (!cloneFile || !cloneTarget || busy) return
     if (cloneFile.size > MAX_AUDIO_MB * 1024 * 1024) { setMsg(t('settings.tts.studio.fileTooLarge', { mb: MAX_AUDIO_MB })); return }
     setBusy('clone'); setMsg('')
     const fr = new FileReader()
     fr.onerror = () => { setBusy(''); setMsg('✗ read file failed') }
     fr.onload = () => {
-      cloneTtsVoice(homeTarget(), { ...auth, name: cloneName, audioData: String(fr.result) })
+      cloneTtsVoice(homeTarget(), { ...auth, name: cloneName, audioData: String(fr.result), targetModel: cloneTarget })
         // 成功:先清 busy 再 refresh(refresh 自管 'list' 态,同一批次合并不闪);失败:保留错误信息,不 refresh(其 setMsg('') 会吃掉报错)。
         .then((r) => { apply(r.voice, r.targetModel); setCloneFile(null); setCloneName(''); setBusy(''); refresh() })
         .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
     }
     fr.readAsDataURL(cloneFile)
-  }
-
-  // CosyVoice 复刻:百炼只收公网 URL(不收文件上传),故这里传链接而非 base64。
-  const doCosyClone = (): void => {
-    if (!cosyUrl.trim() || busy) return
-    setBusy('cosy'); setMsg('')
-    cloneTtsVoice(homeTarget(), { ...auth, name: cosyName, engine: 'cosy', audioUrl: cosyUrl.trim() })
-      .then((r) => { apply(r.voice, r.targetModel); setCosyUrl(''); setCosyName(''); setBusy(''); refresh() })
-      .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
   }
 
   const doDesign = (): void => {
@@ -108,28 +119,25 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
         <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.tts.studio.cloneTitle')}</b>
         <div className="hint">{t('settings.tts.studio.cloneHint')}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select className="tts-clone-model" style={{ width: 'auto', flex: '0 1 240px' }} aria-label={t('settings.tts.studio.cloneModel')}
+            value={customModel !== null ? CUSTOM : cloneModel}
+            onChange={(e) => { if (e.target.value === CUSTOM) setCustomModel(''); else { setCustomModel(null); setCloneModel(e.target.value) } }}>
+            {CLONE_MODELS.map((m, i) => <option key={m} value={m}>{i === 0 ? `${m} · ${t('settings.tts.studio.recommended')}` : m}</option>)}
+            <option value={CUSTOM}>{t('settings.tts.studio.cloneModelCustom')}</option>
+          </select>
+          {customModel !== null && (
+            <input type="text" className="tts-clone-model-custom" autoFocus style={{ width: 200 }} value={customModel} aria-label={t('settings.tts.studio.cloneModel')}
+              placeholder={t('settings.tts.studio.cloneModelPlaceholder')} onChange={(e) => setCustomModel(e.target.value)} />
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* 选中即清 input.value:File 存 state,同一文件可重选(Chromium 同名重选不触发 onChange);文件名由下方 span 显示 */}
           <input ref={cloneFileRef} type="file" accept="audio/*" hidden onChange={(e) => { setCloneFile(e.target.files?.[0] || null); e.target.value = '' }} />
           <button className="btn ghost sm" onClick={() => cloneFileRef.current?.click()}><Upload size={12} /> {cloneFile ? cloneFile.name : t('settings.voice.pickAudio')}</button>
           <input type="text" style={{ width: 140 }} value={cloneName} placeholder={t('settings.tts.studio.namePlaceholder')}
             onChange={(e) => setCloneName(e.target.value)} />
-          <button className="btn primary sm" disabled={!cloneFile || busy !== ''} onClick={doClone}>
+          <button className="btn primary sm tts-clone-go" disabled={!cloneFile || !cloneTarget || busy !== ''} onClick={doClone}>
             {busy === 'clone' ? <Loader2 size={12} className="spin" /> : null} {t('settings.tts.studio.cloneBtn')}
-          </button>
-        </div>
-      </div>
-
-      {/* CosyVoice 复刻:百炼要求公网音频 URL(不收文件上传);成功即自动采用,合成走 cosyvoice-* WS */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.tts.studio.cosyTitle')}</b>
-        <div className="hint">{t('settings.tts.studio.cosyHint')}</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input type="url" style={{ flex: 1, minWidth: 200 }} value={cosyUrl} placeholder={t('settings.tts.studio.cosyUrlPlaceholder')}
-            onChange={(e) => setCosyUrl(e.target.value)} />
-          <input type="text" style={{ width: 140 }} value={cosyName} placeholder={t('settings.tts.studio.namePlaceholder')}
-            onChange={(e) => setCosyName(e.target.value)} />
-          <button className="btn primary sm" disabled={!cosyUrl.trim() || busy !== ''} onClick={doCosyClone}>
-            {busy === 'cosy' ? <Loader2 size={12} className="spin" /> : null} {t('settings.tts.studio.cosyBtn')}
           </button>
         </div>
       </div>
@@ -171,9 +179,11 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
           {voices.map((v) => (
             <div key={`${v.kind}-${v.voice}`} className="file-row" style={{ cursor: 'default' }}>
               <span className="file-name">{v.voice}</span>
-              <span className="file-size">{t(v.kind === 'clone' ? 'settings.tts.studio.kindClone' : v.kind === 'design' ? 'settings.tts.studio.kindDesign' : 'settings.tts.studio.kindCosy')}</span>
-              <button className="icon-btn" title={t('settings.tts.studio.use')}
-                onClick={() => apply(v.voice, v.targetModel || KIND_MODEL[v.kind])}><Check size={12} /></button>
+              <span className="file-size">{callOnly(v.targetModel) ? `${t('settings.tts.studio.callVoice')} · ` : ''}{v.targetModel || t(v.kind === 'clone' ? 'settings.tts.studio.kindClone' : v.kind === 'design' ? 'settings.tts.studio.kindDesign' : 'settings.tts.studio.kindCosy')}</span>
+              {!callOnly(v.targetModel) && (
+                <button className="icon-btn" title={t('settings.tts.studio.use')}
+                  onClick={() => apply(v.voice, v.targetModel || KIND_MODEL[v.kind])}><Check size={12} /></button>
+              )}
               <button className="icon-btn" title={t('settings.tts.studio.delete')} disabled={busy !== ''}
                 onClick={() => doDelete(v)}><Trash2 size={12} /></button>
             </div>
