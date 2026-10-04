@@ -18,7 +18,7 @@ import { useQuickFind } from './quickFind'
 import { findSupported, openFindBar } from './findInPage'
 import { useRecentViews } from './recentViews'
 import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
-import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget } from './spaces'
+import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget, awaitedStartupSpace } from './spaces'
 import { loadUserSpaces, settleAsyncStartupSpace, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
 import { installTanguProbe } from './tanguProbe'
@@ -192,7 +192,9 @@ export function installEngine(): void {
     const lastExit = BOOT_ACTIVE_SPACE_ID
     const target = resolveStartupTarget(lastExit)
     // 用户 L0 Space 作目标:此刻尚未异步装载 → setActiveSpaceCold 认不出会自己放过,下面 loadUserSpaces 完再补定位
-    setActiveSpaceCold(target)
+    // 点名的 Space(固定档 / 主位槽里的插件 Space)还没注册 → target 只是回落值:只改内存、不落盘(口径同 registerSpaces 的归一)。
+    // 落了盘,补定位没赶上的那一程(下面)盘上就留着「上次退出 = 回落 Space」。
+    setActiveSpaceCold(target, awaitedStartupSpace() === null)
     adoptSpaceLayoutCold(lastExit, target)
   }
   const activeSpace = getActiveSpace()

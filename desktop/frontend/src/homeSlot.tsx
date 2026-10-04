@@ -29,9 +29,14 @@ export const HOME_SLOT_KEY = 'forsion_home_slot_space'
 /** 缺省主位 = 主页 Space。插件关掉 / 单品档案没有它时,由 homeSlotSpaceId 的回落链兜。 */
 const DEFAULT_HOME_SLOT = 'home'
 
-/** 用户**设定**的主位 Space id(可能指向一个当前没注册的 Space)。 */
+/** 用户**自己放进**主位的 Space id(可能指向一个当前没注册的 Space);没设过 = null。 */
+export function homeSlotChoice(): string | null {
+  try { return localStorage.getItem(HOME_SLOT_KEY) || null } catch { return null } // 隐私模式
+}
+
+/** 用户**设定**的主位 Space id:自己放的那个,没设过就是主页。 */
 export function homeSlotPref(): string {
-  try { return localStorage.getItem(HOME_SLOT_KEY) || DEFAULT_HOME_SLOT } catch { return DEFAULT_HOME_SLOT } // 隐私模式
+  return homeSlotChoice() ?? DEFAULT_HOME_SLOT
 }
 
 /** 主位槽**实际**指向的 Space id:设定值 → 主页 → 产品默认 → 第一个已注册的;一个都没有则 null。 */
