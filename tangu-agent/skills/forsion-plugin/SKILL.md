@@ -791,7 +791,8 @@ ctx.openView('chat', { location: 'right' }); chat?.prefill('Write an original sc
   **不会悄悄退成沙箱对话** —— 常驻对话接错目录比开不了更糟。不给 `folder` 才是不带工作目录的沙箱对话。
 - **永不替用户送出**,回车由用户按。句柄给两条路:`quote(text)` 挂成输入框上方的引用条(不动草稿,适合「引用这个元素再提问」);
   `prefill(text)` 接在输入框草稿后面并聚焦(适合一键任务,同 Image Studio)。两条在对话还没接上时调用都不丢;
-  `prefill` 要对话**看得见**才落进去 —— 先 `ctx.openView` 把你的视图揭到前台。都只有文字,没有附件。
+  `prefill` 在你的视图还压在后台标签里时也照样落进输入框,连调几次按先后都接上;想让用户马上看见,先 `ctx.openView`
+  把视图揭到前台。都只有文字,没有附件。
   所以 `agent` 不要求是你捆绑的(与 `startChat` 的预填档同一口径)。
 - `ready` → `{ ok:true, sessionId }`;后端没连上 / `unknown agent` / 建会话失败 → `{ ok:false, error }`,不抛,界面上自带「重试」。
   拿到的 `sessionId` 可以喂给 `agentStatus(sessionId)` / `subscribeAgentStatus(cb, sessionId)`,跟着这条对话的状态做反应。
