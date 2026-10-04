@@ -13,15 +13,18 @@
  *  D 同 C,但「启动时进入」是缺省档(主位槽):落点没错,`space:tangu` 照样被写坏
  *  N 对照:什么故障都没有的正常重启(A/B/C 修好之后都应当收敛成它)
  *  E 重载后、插件 Space 还没就位的那一两秒里用户自己点了别的 Space:补定位不许再把他拽回去、拿归档盖掉他选的现场
+ *  M 插件再也不回来(离线删了 / 单品变体存着别家的 id):盘上的活动 id 永远是个不存在的 Space,每一程都回落。
+ *    回落 Space 自己的布局必须每程原样还原、照常存,两个命名槽都不许动
  *
  * 同一条路上的第二处(N 当对照):插件的视图比 Dockview 就绪得晚,onReady 那次还原落空,屏上摆的是回落 Space 的
  * 默认布局;补定位以前只换活动 id → 界面标着插件 Space、内容是 Tangu 的。现在补定位时把启动归档的现场补还原。
  *
- * 还没治的(KNOWN,不计入结果;`--strict` 才算失败):A / B 故障那一程把回落 Space 的默认布局存进了布局键,
- * 盘上的活动 id 却仍是插件 Space → 恢复那一程把它归档进 `space:<插件 Space>`,屏上也是它。要治得让布局键自己
- * 记着「是给谁摆的」(或故障那一程收尾时正式落回回落 Space 并记下要回去的地方)。
+ * 第三处(A / B 的后两条断言,2026-10-04 治):故障那一程把回落 Space 的默认布局存进了布局键,盘上的活动 id 却仍是
+ * 插件 Space → 恢复那一程按活动 id 把它归档进 `space:<插件 Space>`,屏上也是它。正常启动里插件就位前那一两秒退出 /
+ * 重载,盘上是同一个状态。治法:布局信封自己记着是给谁摆的(`space`,与布局同一次写盘),归档与补定位都按它认主;
+ * 对不上的那份不进任何命名槽,目标 Space 回来时补还原它自己的归档。
  *
- * 需先 npm run build。用法:npm run check:spacefallback   只跑某几条:-- --only=A,C   连 KNOWN 一起算:-- --strict
+ * 需先 npm run build。用法:npm run check:spacefallback   只跑某几条:-- --only=A,C
  * 报「启动失败」= 有 dev 版 Electron 占着单实例锁(本仪器不代为 pkill)。
  */
 const fs = require('fs')
@@ -32,17 +35,11 @@ const { enterSpace, sleep } = require('./lib/uiux-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice(7).split(',').filter(Boolean)
-const STRICT = process.argv.includes('--strict')
 const BOARD = 'plugin:probe-plug:board'
 const results = []
 const check = (name, ok, detail) => {
   results.push({ name, ok: !!ok })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
-}
-/** 已知没治的那半(见文件头):照样打印,`--strict` 才计入。 */
-const known = (name, ok, detail) => {
-  if (ok || STRICT) return check(name, ok, detail)
-  console.log(`KNOWN ${name}${detail ? '  | ' + detail : ''}`)
 }
 
 /** 一个带视图 + 内嵌 Space 的最小插件。 */
@@ -82,9 +79,11 @@ const state = (win) => win.evaluate(() => {
   try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem('tangu2_named_layouts') || '{}'))) named[k] = panels(v) } catch { /* 坏值当空 */ }
   let layoutKey = null
   try { layoutKey = panels(JSON.parse(localStorage.getItem('tangu2_layout_v4'))) } catch { /* 空 */ }
-  return { active: localStorage.getItem('forsion_tangu_active_space'), layoutKey, named, board: !!document.querySelector('.probe-board') }
+  let owner = null
+  try { owner = JSON.parse(localStorage.getItem('tangu2_layout_v4')).space ?? null } catch { /* 空 */ }
+  return { active: localStorage.getItem('forsion_tangu_active_space'), owner, layoutKey, named, board: !!document.querySelector('.probe-board') }
 })
-const brief = (s) => JSON.stringify({ active: s.active, layoutKey: s.layoutKey, tangu: s.named['space:tangu'], probe: s.named['space:probe-space'], board: s.board })
+const brief = (s) => JSON.stringify({ active: s.active, owner: s.owner, layoutKey: s.layoutKey, tangu: s.named['space:tangu'], probe: s.named['space:probe-space'], board: s.board })
 
 /** 第一程:进 Tangu(让 space:tangu 有一份它自己的存档作基线)→ 进插件 Space → 退出时人就在插件 Space 里。 */
 async function firstRun(home, pref) {
@@ -146,6 +145,41 @@ async function runEarlySwitch() {
   check('E space:probe-space 还是插件 Space 自己那份', (after.named['space:probe-space'] || []).includes(BOARD), `space:probe-space=${JSON.stringify(after.named['space:probe-space'])}`)
 }
 
+/** M:故障那一程之后再来一程、插件仍然没有。第一程在回落 Space 里多开一张标签(与默认布局区分开),第二程必须原样回来。 */
+async function runGone() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-spacefallback-M-'))
+  seed(home)
+  console.log('\n── M 插件再也不回来')
+  let { app, win, before } = await firstRun(home, '__last__')
+  console.log(`  退出前  ${brief(before)}`)
+  const baseline = JSON.stringify(before.named['space:tangu'])
+  await app.close()
+  await sleep(1500)
+  fs.renameSync(path.join(home, 'plugins/probe-plug'), path.join(home, 'probe-plug.off'))
+  const newTab = async () => { await win.locator('.dv-new-tab').first().click(); await sleep(2000) }
+  ;({ app, win } = await boot(home))
+  const built = await state(win)
+  await newTab()
+  const first = await state(win)
+  console.log(`  第一程  ${brief(built)} → 多开一张 ${JSON.stringify(first.layoutKey)}`)
+  await app.close()
+  await sleep(1500)
+  ;({ app, win } = await boot(home))
+  const second = await state(win)
+  await newTab()
+  const third = await state(win)
+  console.log(`  第二程  ${brief(second)} → 再开一张 ${JSON.stringify(third.layoutKey)}`)
+  await app.close()
+  try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ }
+
+  const grew = (a, b) => !!a && !!b && b.length === a.length + 1
+  check('M 盘上的活动 Space 始终没被回落值盖掉', first.active === 'probe-space' && third.active === 'probe-space', `active=${first.active} → ${third.active}`)
+  check('M 布局键记着它是回落 Space 的', first.owner === 'tangu' && third.owner === 'tangu', `owner=${first.owner} → ${third.owner}`)
+  check('M 回落 Space 的布局第二程原样还原(多开的那张还在,不是重建的默认)', grew(built.layoutKey, first.layoutKey) && JSON.stringify(second.layoutKey) === JSON.stringify(first.layoutKey), `默认=${JSON.stringify(built.layoutKey)} 第一程=${JSON.stringify(first.layoutKey)} 第二程=${JSON.stringify(second.layoutKey)}`)
+  check('M 第二程里的改动照常存盘', grew(second.layoutKey, third.layoutKey), `${JSON.stringify(second.layoutKey)} → ${JSON.stringify(third.layoutKey)}`)
+  check('M 两个命名槽都没被动', JSON.stringify(third.named['space:tangu']) === baseline && (third.named['space:probe-space'] || []).includes(BOARD), `space:tangu=${JSON.stringify(third.named['space:tangu'])} space:probe-space=${JSON.stringify(third.named['space:probe-space'])}`)
+}
+
 async function run(key) {
   const sc = SCENARIOS[key]
   const pref = 'pref' in sc ? sc.pref : '__last__'
@@ -182,12 +216,10 @@ async function run(key) {
 
   const tangu = after.named['space:tangu']
   check(`${key} space:tangu 还是 Tangu 自己那份(没混进插件面板)`, !!tangu && !tangu.includes(BOARD) && JSON.stringify(tangu) === baseline, `space:tangu=${JSON.stringify(tangu)} 基线=${baseline}`)
-  // 有故障那一程的两条(A / B):插件 Space 自己的槽与屏上内容还没治,见文件头
-  const slot = sc.off ? known : check
-  slot(`${key} space:probe-space 还是插件 Space 自己那份`, (after.named['space:probe-space'] || []).includes(BOARD), `space:probe-space=${JSON.stringify(after.named['space:probe-space'])}`)
+  check(`${key} space:probe-space 还是插件 Space 自己那份`, (after.named['space:probe-space'] || []).includes(BOARD), `space:probe-space=${JSON.stringify(after.named['space:probe-space'])}`)
   if (pref === '__last__') {
     check(`${key} 回到插件 Space`, after.active === 'probe-space', `active=${after.active}`)
-    slot(`${key} 屏上是插件 Space 自己的面板`, after.board && (after.layoutKey || []).includes(BOARD), `board=${after.board} layoutKey=${JSON.stringify(after.layoutKey)}`)
+    check(`${key} 屏上是插件 Space 自己的面板`, after.board && (after.layoutKey || []).includes(BOARD), `board=${after.board} layoutKey=${JSON.stringify(after.layoutKey)}`)
   }
 }
 
@@ -195,6 +227,7 @@ async function run(key) {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   for (const key of Object.keys(SCENARIOS)) if (!ONLY.length || ONLY.includes(key)) await run(key)
   if (!ONLY.length || ONLY.includes('E')) await runEarlySwitch()
+  if (!ONLY.length || ONLY.includes('M')) await runGone()
   const bad = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - bad}/${results.length} 通过`)
   process.exit(bad ? 1 : 0)
