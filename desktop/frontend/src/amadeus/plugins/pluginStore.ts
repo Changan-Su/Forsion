@@ -1596,7 +1596,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
       teardown(id)
-      clearPluginAppearance(id)
+      // 只有主窗的失败才收走全局外观:插件在 Mini / 独立窗里起不来,不等于它在主窗也没了。
+      if (windowKind() === 'main') clearPluginAppearance(id)
       set((s) => ({ lastSetupError: { ...s.lastSetupError, [id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) } }))
     }
     let r: ReturnType<AmadeusPlugin['setup']>
@@ -1765,8 +1766,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
+      const before = get().activeIds
       reconcile() // 依赖它的先停,再停它
-      if (!get().activeIds.includes(id)) clearPluginAppearance(id)
+      // 连带停掉的依赖方也要收:它们的预设已撤,选中的图标 / 开屏不能留着。
+      for (const stopped of new Set([id, ...before])) if (!get().activeIds.includes(stopped)) clearPluginAppearance(stopped)
       // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
       if (wasOn && readTangu()?.waitBackend) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))

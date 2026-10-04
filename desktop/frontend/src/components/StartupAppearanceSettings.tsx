@@ -45,9 +45,10 @@ export const StartupAppearanceSettings: React.FC = () => {
   }
   const showPreview = (): void => {
     // The actual startup HTML and runtime, isolated from the host and all app modules.
+    // Function replacer: an uploaded file name is part of the config, and `$'` in a replacement string expands to page HTML.
     const html = startupHtml.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace('<html', `<html data-mode="${document.documentElement.dataset.mode === 'dark' ? 'dark' : 'light'}"`)
-      .replace('<!-- forsion-startup-runtime -->', `<script>window.tangu={startupAppearance:{initial:${JSON.stringify({ ...value, showSplash: true }).replace(/</g, '\\u003c')}}};</script><script>${startupRuntime}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},2400);</script>`)
+      .replace('<!-- forsion-startup-runtime -->', () => `<script>window.tangu={startupAppearance:{initial:${JSON.stringify({ ...value, showSplash: true }).replace(/</g, '\\u003c')}}};</script><script>${startupRuntime}</script><script>setTimeout(function(){document.getElementById('root').textContent=' ';},2400);</script>`)
     setPreview(html)
   }
   const artworkControl = (slot: 'icon' | 'splash'): React.ReactNode => (
