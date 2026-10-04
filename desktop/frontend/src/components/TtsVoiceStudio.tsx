@@ -12,12 +12,13 @@ import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsV
 import { registerMessages, useI18n } from '../i18n'
 import { homeTarget } from '../services/engine/targets'
 
-// 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD/COSY_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
-const KIND_MODEL: Record<'clone' | 'design' | 'cosy', string> = {
+// 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
+// voice-enrollment 那一类(kind=cosy)不兜底:它底下有十来个模型,猜错就是一对配不上的模型和音色 → 不知道绑的是谁就不给「使用」。
+const KIND_MODEL: Record<'clone' | 'design', string> = {
   clone: 'qwen3-tts-vc-2026-01-22',
   design: 'qwen3-tts-vd-2026-01-26',
-  cosy: 'cosyvoice-v2',
 }
+const boundModel = (v: TtsVoiceInfo): string => v.targetModel || (v.kind === 'cosy' ? '' : KIND_MODEL[v.kind])
 // 能复刻的朗读模型 = 百炼「声音复刻」文档的支持列表(2026-10 核对;第一个是官方推荐,缺省选它)。
 // 不含 qwen3-tts-vc-realtime-*:那是另一套实时协议,引擎的朗读没接。
 export const CLONE_MODELS = [
@@ -33,6 +34,7 @@ registerMessages({
   'settings.tts.studio.cloneModelCustom': { zh: '自定义模型 ID…', en: 'Custom model ID…' },
   'settings.tts.studio.cloneModelPlaceholder': { zh: '百炼模型 ID', en: 'Bailian model ID' },
   'settings.tts.studio.callVoice': { zh: '通话音色', en: 'Call voice' },
+  'settings.tts.studio.callModelRejected': { zh: '这是通话模型，朗读用不了。通话音色请在上面的「语音通话」里复刻。', en: 'That is a call model and cannot be used for read-aloud. Clone call voices under Voice call above.' },
 })
 /** 绑在通话模型上的音色(Qwen-Omni / *-realtime):朗读用不了,列表里不给「使用」。 */
 const callOnly = (targetModel?: string): boolean => /omni|realtime/i.test(targetModel || '')
@@ -72,6 +74,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
 
   const doClone = (): void => {
     if (!cloneFile || !cloneTarget || busy) return
+    if (callOnly(cloneTarget)) { setMsg(t('settings.tts.studio.callModelRejected')); return } // 手填了通话模型:建出来也只会把朗读配置写坏
     if (cloneFile.size > MAX_AUDIO_MB * 1024 * 1024) { setMsg(t('settings.tts.studio.fileTooLarge', { mb: MAX_AUDIO_MB })); return }
     setBusy('clone'); setMsg('')
     const fr = new FileReader()
@@ -180,9 +183,9 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
             <div key={`${v.kind}-${v.voice}`} className="file-row" style={{ cursor: 'default' }}>
               <span className="file-name">{v.voice}</span>
               <span className="file-size">{callOnly(v.targetModel) ? `${t('settings.tts.studio.callVoice')} · ` : ''}{v.targetModel || t(v.kind === 'clone' ? 'settings.tts.studio.kindClone' : v.kind === 'design' ? 'settings.tts.studio.kindDesign' : 'settings.tts.studio.kindCosy')}</span>
-              {!callOnly(v.targetModel) && (
+              {boundModel(v) && !callOnly(v.targetModel) && (
                 <button className="icon-btn" title={t('settings.tts.studio.use')}
-                  onClick={() => apply(v.voice, v.targetModel || KIND_MODEL[v.kind])}><Check size={12} /></button>
+                  onClick={() => apply(v.voice, boundModel(v))}><Check size={12} /></button>
               )}
               <button className="icon-btn" title={t('settings.tts.studio.delete')} disabled={busy !== ''}
                 onClick={() => doDelete(v)}><Trash2 size={12} /></button>

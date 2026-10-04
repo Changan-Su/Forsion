@@ -118,15 +118,19 @@ async function dsTempUpload(baseUrl: string, apiKey: string, dataUri: string): P
   return `oss://${key}`;
 }
 
-/** voice-enrollment 新建的音色要部署几秒(实测约 6 秒),没好就拿去合成会报错 → 等到 OK 再交还;没过审(UNDEPLOYED)直接报。 */
-async function dsAwaitVoice(baseUrl: string, apiKey: string, voice: string): Promise<void> {
-  for (let i = 0; i < 30; i++) {
+/**
+ * voice-enrollment 新建的音色要部署几秒(实测约 6 秒),没好就拿去合成会报错 → 等到 OK 再交还。
+ * 只有 OK 算成功:没过审(UNDEPLOYED)、到点还没好都报错(带音色 id,它已经建在账号里,好了以后能在列表里采用);查询偶发失败接着等。
+ */
+export async function dsAwaitVoice(baseUrl: string, apiKey: string, voice: string, tries = 30, gapMs = 2000): Promise<void> {
+  for (let i = 0; i < tries; i++) {
     const j = await dsCustomization(baseUrl, apiKey, { model: 'voice-enrollment', input: { action: 'query_voice', voice_id: voice } }, 20_000).catch(() => null);
     const status = j?.output?.status;
-    if (!j || status === 'OK') return; // 查不了就不等了:音色已经建好,别因为查询失败把它弄丢
+    if (status === 'OK') return;
     if (status === 'UNDEPLOYED') throw new Error(`voice ${voice} was rejected by Bailian review (UNDEPLOYED)`);
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, gapMs));
   }
+  throw new Error(`voice ${voice} was created but is still deploying on Bailian; refresh the voice list in a minute and apply it from there`);
 }
 
 /** preferred_name 约束:数字/字母/下划线 ≤16;清洗到合法而非报错。 */

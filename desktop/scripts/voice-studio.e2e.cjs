@@ -50,6 +50,7 @@ async function main() {
   let voices = [
     { voice: 'qwen-omni-vc-me-voice-1', kind: 'clone', targetModel: 'qwen3.8-omni-flash-realtime' },
     { voice: 'cosyvoice-v3.5-plus-old-1', kind: 'cosy', targetModel: 'cosyvoice-v3.5-plus' },
+    { voice: 'unknown-binding-1', kind: 'cosy' }, // 百炼没回绑定的模型
   ]
   const front = await frontEngine(stub.url, {
     '/agent/tts/voices/clone': (body) => {
@@ -117,12 +118,12 @@ async function main() {
         name: el.querySelector('.file-name')?.textContent || '', tag: el.querySelector('.file-size')?.textContent || '',
         btns: [...el.querySelectorAll('button')].map((b) => b.title),
       })))
-      return r.length >= 3 ? r : null
+      return r.length >= 4 ? r : null
     }, 8000) || []
-    const call = rows.find((r) => r.name.startsWith('qwen-omni-vc')), read = rows.find((r) => r.name === 'v-e2e-1')
-    check('S5 我的音色:列出绑定的模型;通话音色不给「使用」(朗读用不了),仍可删除',
-      !!call && !!read && /通话音色/.test(call.tag) && /qwen3\.8-omni-flash-realtime/.test(call.tag) && !call.btns.includes('使用') && call.btns.includes('删除')
-        && read.tag === 'cosyvoice-v3.5-plus' && read.btns.includes('使用'),
+    const call = rows.find((r) => r.name.startsWith('qwen-omni-vc')), read = rows.find((r) => r.name === 'v-e2e-1'), unknown = rows.find((r) => r.name === 'unknown-binding-1')
+    check('S5 我的音色:列出绑定的模型;通话音色、不知道绑了哪个模型的音色都不给「使用」,仍可删除',
+      !!call && !!read && !!unknown && /通话音色/.test(call.tag) && /qwen3\.8-omni-flash-realtime/.test(call.tag) && !call.btns.includes('使用') && call.btns.includes('删除')
+        && read.tag === 'cosyvoice-v3.5-plus' && read.btns.includes('使用') && !unknown.btns.includes('使用') && unknown.btns.includes('删除'),
       rows.map((r) => `${r.name}〔${r.tag}〕[${r.btns.join(',')}]`).join('  '))
 
     await sel.selectOption('__custom__')
@@ -134,6 +135,15 @@ async function main() {
     await go.click()
     await until(() => clones.length >= 2, 8000)
     check('S6 自定义模型 ID:空着不能复刻,填了就按填的发', disabledEmpty && clones[1]?.targetModel === 'my-future-tts-model', `空着禁用=${disabledEmpty};发出 ${clones[1]?.targetModel}`)
+
+    // 手填通话模型:不发请求,朗读配置不动
+    await file.setInputFiles(wav)
+    await custom.fill('qwen3.8-omni-flash-realtime')
+    await go.click()
+    await sp.waitForTimeout(1200)
+    const after = await sp.evaluate(() => window.tangu.getConfig())
+    const said = await sp.locator('.settings-main', { hasText: '这是通话模型' }).count()
+    check('S7 在朗读工作室手填通话模型:拦住不复刻,朗读配置不被写坏', clones.length === 2 && said > 0 && after.ttsModelId === 'bailian/my-future-tts-model', `请求 ${clones.length} 次;提示=${said > 0};朗读模型 ${after.ttsModelId}`)
 
     await sel.scrollIntoViewIfNeeded()
     await sp.screenshot({ path: path.join(home, 'voice-studio.png') }).catch(() => {})
