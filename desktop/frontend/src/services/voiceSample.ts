@@ -2,8 +2,9 @@
  * 复刻样本的本地检查:录音 / 选的文件先过这里,再交给百炼。纯函数,不碰 DOM(解码在 decodeToMono)。
  * 阈值出处 = 百炼「声音复刻」文档的音频要求:推荐 10–20 秒、最长 60 秒、至少 5 秒连续清晰朗读、停顿 ≤ 2 秒、
  * 无背景音、采样率 ≥ 24 kHz。电平口径 10-04 拿真实录音校过(见 voiceSample.test.ts)。
- * 样本一律重编码成单声道 16-bit WAV 再上传,所以「双声道 / 格式不对」不会再被百炼拒;
- * 代价是百炼自己的采样率检查被绕过了 —— narrowband 那条就是替它查的。
+ * 交出去的样本:应用里录的是 m4a,选的 m4a / mp3 原样交,其余重编码成 24 kHz 单声道 16-bit WAV(见 VoiceSamplePicker)——
+ * 体积要紧:10-04 实测境外到百炼的上行只有 10–30 KB/s,20 秒的 48 kHz WAV 要传两三分钟。
+ * 重编码的那一路绕过了百炼自己的采样率检查 —— narrowband 那条就是替它查的。检查本身一律在 48 kHz 无损 PCM 上做。
  */
 
 /** 拦住不让复刻的(百炼会拒,或者根本没录到)。 */
@@ -129,8 +130,23 @@ export function playDataUri(uri: string): void {
   }).catch(() => {})
 }
 
-/** 任意音频文件 → 48 kHz 单声道 PCM(渲染端解码;双声道只取首声道,百炼也只处理首声道)。 */
-export async function decodeToMono(data: ArrayBuffer): Promise<{ pcm: Float32Array; rate: number }> {
-  const buf = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(data)
+/** 百炼直接收的压缩格式(m4a / mp3):回它的 MIME,原样交不重编码;其余回空串 = 要重编码成 WAV。 */
+export function passThroughMime(name: string, type: string): '' | 'audio/mp4' | 'audio/mpeg' {
+  const ext = name.toLowerCase().split('.').pop() || ''
+  if (/^audio\/(mp4|x-m4a|m4a)$/i.test(type) || (!type && ext === 'm4a')) return 'audio/mp4'
+  if (/^audio\/(mpeg|mp3)$/i.test(type) || (!type && ext === 'mp3')) return 'audio/mpeg'
+  return ''
+}
+
+export const blobDataUri = (b: Blob): Promise<string> => new Promise((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(String(r.result))
+  r.onerror = () => reject(r.error)
+  r.readAsDataURL(b)
+})
+
+/** 任意音频文件 → 单声道 PCM(缺省 48 kHz;渲染端解码,双声道只取首声道,百炼也只处理首声道)。⚠️ 传进来的 ArrayBuffer 会被解码器收走。 */
+export async function decodeToMono(data: ArrayBuffer, rate = 48000): Promise<{ pcm: Float32Array; rate: number }> {
+  const buf = await new OfflineAudioContext(1, 1, rate).decodeAudioData(data)
   return { pcm: buf.getChannelData(0), rate: buf.sampleRate }
 }

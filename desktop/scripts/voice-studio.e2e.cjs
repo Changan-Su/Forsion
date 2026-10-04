@@ -39,7 +39,7 @@ function frontEngine(stubUrl, handlers) {
     if (h) {
       let body = ''
       req.on('data', (c) => { body += c })
-      req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(h(JSON.parse(body || '{}')))) })
+      req.on('end', () => { const { __status = 200, ...out } = h(JSON.parse(body || '{}')); res.writeHead(__status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(out)) })
       return
     }
     const up = http.request({ host: target.hostname, port: target.port, path: req.url, method: req.method, headers: req.headers }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res) })
@@ -70,6 +70,10 @@ async function main() {
   execFileSync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@48000', '-c', '2', path.join(home, 'l0.aiff'), good])
   execFileSync('afconvert', ['-f', 'WAVE', '-d', 'LEI16@48000', '-c', '1', path.join(home, 'l0.aiff'), mono])
   writeWav(tiny, readWav(mono).subarray(0, 3 * 48000), 48000)
+  const m4a = path.join(home, 'me.m4a') // 压缩格式:应当原样交,不重编码
+  execFileSync('afconvert', ['-f', 'm4af', '-d', 'aac', path.join(home, 'l0.aiff'), m4a])
+  const lowM4a = path.join(home, 'low.m4a') // 16 kHz 的压缩文件:低于百炼的采样率下限,不能原样交
+  execFileSync('afconvert', ['-f', 'm4af', '-d', 'aac', path.join(home, 'l0.wav'), lowM4a])
   const long = path.join(home, 'long.wav') // 70 秒:同一段话接 5 遍再截
   writeWav(long, Int16Array.from({ length: 70 * 48000 }, ((src) => (_, i) => src[i % src.length])(readWav(mono))), 48000)
   console.log(`假麦克风 ${mic.file}(${mic.seconds.toFixed(1)}s)`)
@@ -84,6 +88,7 @@ async function main() {
   ]
   const front = await frontEngine(stub.url, {
     '/agent/tts/voices/clone': (body) => {
+      if (body.name === 'slow') return { __status: 502, detail: 'The operation was aborted due to timeout' } // 引擎等百炼等到超时时的原话
       clones.push(body)
       const voice = `v-e2e-${clones.length}`
       voices = [...voices, { voice, kind: 'cosy', targetModel: body.targetModel }]
@@ -176,8 +181,8 @@ async function main() {
     await go.click()
     await until(() => clones.length >= 1, 8000)
     const c1 = clones[0] || {}, w1 = wavOf(c1.audioData)
-    check('S5 复刻请求:带选中的模型;双声道文件被重编码成单声道 16-bit WAV;选的文件不带文案',
-      c1.targetModel === 'cosyvoice-v3.5-plus' && !!w1 && w1.channels === 1 && w1.bits === 16 && w1.rate === 48000 && Math.abs(w1.seconds - mic.lineSeconds[0]) < 0.5 && !('text' in c1) && !('language' in c1) && !('engine' in c1),
+    check('S5 复刻请求:带选中的模型;双声道 WAV 被重编码成 24 kHz 单声道 16-bit(体积减半);选的文件不带文案',
+      c1.targetModel === 'cosyvoice-v3.5-plus' && !!w1 && w1.channels === 1 && w1.bits === 16 && w1.rate === 24000 && Math.abs(w1.seconds - mic.lineSeconds[0]) < 0.5 && !('text' in c1) && !('language' in c1) && !('engine' in c1),
       JSON.stringify({ targetModel: c1.targetModel, wav: w1, text: c1.text }))
     const cfg = await until(async () => {
       const c = await sp.evaluate(() => window.tangu.getConfig())
@@ -221,23 +226,31 @@ async function main() {
       `${label.trim()};${flat(recText)}`)
     await go.click()
     await until(() => clones.length >= 2, 8000)
-    const c2 = clones[1] || {}, w2 = wavOf(c2.audioData)
-    check('S10 录音的复刻请求:单声道 16-bit WAV(≥ 24 kHz),带上文案原文和语种',
-      c2.targetModel === 'qwen3-tts-vc-2026-01-22' && !!w2 && w2.channels === 1 && w2.bits === 16 && w2.rate >= 24000 && Math.abs(w2.seconds - mic.seconds) < 3 && c2.text === SCRIPT && c2.language === 'zh',
-      JSON.stringify({ targetModel: c2.targetModel, wav: w2, language: c2.language, text: String(c2.text).slice(0, 12) + '…' }))
+    const c2 = clones[1] || {}
+    const recBytes = Buffer.from(String(c2.audioData || '').replace(/^data:audio\/mp4;base64,/, ''), 'base64')
+    fs.writeFileSync(path.join(home, 'recorded.m4a'), recBytes)
+    let recSec = 0 // 交来的不是 m4a 时 afinfo 会报错 —— 那就是 0,由下面的断言判红
+    try { recSec = +(/estimated duration: ([\d.]+)/.exec(execFileSync('afinfo', [path.join(home, 'recorded.m4a')], { stdio: ['ignore', 'pipe', 'ignore'] }).toString())?.[1] || 0) } catch { /* ignore */ }
+    check('S10 录音的复刻请求:交的是 m4a(20 秒不到 300 KB,WAV 要 2 MB),时长对得上,带文案原文和语种',
+      c2.targetModel === 'qwen3-tts-vc-2026-01-22' && /^data:audio\/mp4;base64,/.test(c2.audioData || '') && recBytes.length > 20_000 && recBytes.length < 300_000 && Math.abs(recSec - mic.seconds) < 3 && c2.text === SCRIPT && c2.language === 'zh',
+      JSON.stringify({ targetModel: c2.targetModel, 开头: String(c2.audioData).slice(0, 22), KB: Math.round(recBytes.length / 1024), 秒: recSec, language: c2.language, text: String(c2.text).slice(0, 12) + '…' }))
     await until(async () => !(await reportEl.count()), 5000)
 
     // ── 自定义模型 ──
     await sel.selectOption('__custom__')
     const custom = sp.locator('input.tts-clone-model-custom')
     await custom.waitFor({ timeout: 5000 })
-    await file.setInputFiles(good)
-    await until(async () => /me-48k/.test(await report()), 8000)
+    await file.setInputFiles(m4a)
+    const m4aText = await until(async () => { const s = await report(); return /me\.m4a/.test(s) ? s : null }, 8000) || ''
     const disabledEmpty = await go.isDisabled()
     await custom.fill('my-future-tts-model')
     await go.click()
     await until(() => clones.length >= 3, 8000)
-    check('S11 自定义模型 ID:空着不能复刻,填了就按填的发', disabledEmpty && clones[2]?.targetModel === 'my-future-tts-model', `空着禁用=${disabledEmpty};发出 ${clones[2]?.targetModel}`)
+    const c3 = clones[2] || {}
+    const sameBytes = String(c3.audioData || '') === `data:audio/mp4;base64,${fs.readFileSync(m4a).toString('base64')}`
+    check('S11 自定义模型 ID:空着不能复刻,填了就按填的发;选的 m4a 照样过检查,原样交不重编码',
+      disabledEmpty && c3.targetModel === 'my-future-tts-model' && /人声 \d+\.\d 秒/.test(m4aText) && sameBytes && !('text' in c3),
+      `空着禁用=${disabledEmpty};发出 ${c3.targetModel};${flat(m4aText)};字节一致=${sameBytes}(${Math.round(fs.statSync(m4a).size / 1024)} KB)`)
     await until(async () => !(await reportEl.count()), 5000)
 
     // 手填通话模型:不发请求,朗读配置不动
@@ -249,6 +262,14 @@ async function main() {
     const after = await sp.evaluate(() => window.tangu.getConfig())
     const said = await sp.locator('.settings-main', { hasText: '这是通话模型' }).count()
     check('S12 在朗读工作室手填通话模型:拦住不复刻,朗读配置不被写坏', clones.length === 3 && said > 0 && after.ttsModelId === 'bailian/my-future-tts-model', `请求 ${clones.length} 次;提示=${said > 0};朗读模型 ${after.ttsModelId}`)
+
+    // 上传超时:把引擎的英文原话换成人话,带上样本体积
+    await custom.fill('my-future-tts-model')
+    await studio.locator('input[placeholder^="名称"]').first().fill('slow')
+    await go.click()
+    const slowMsg = await until(async () => { const s = await studio.innerText(); return /超时/.test(s) ? (/✗[^\n]*/.exec(s)?.[0] || s) : null }, 8000) || ''
+    check('S12b 上传超时:提示说清是传给百炼超时、样本多大、怎么办;不出现引擎的英文原话', /样本（\d+ KB）传给百炼超时/.test(slowMsg) && /录短一点/.test(slowMsg) && !/aborted/.test(slowMsg) && clones.length === 3, slowMsg)
+    await studio.locator('input[placeholder^="名称"]').first().fill('')
 
     // ── 语音通话那边的复刻面板:同一个录音区,绑当前通话模型 ──
     await sp.locator('.realtime-switch').click()
@@ -277,6 +298,15 @@ async function main() {
       callIdle && armed && !stale && /omni.*realtime/.test(c4.targetModel || '') && callCfg?.realtimeModelId === `bailian/${c4.targetModel}` && !!w4 && w4.channels === 1 && !('text' in c4)
         && callCfg?.realtimeVoice === 'v-e2e-4' && callCfg?.ttsVoice === after.ttsVoice && callCfg?.ttsModelId === after.ttsModelId,
       JSON.stringify({ 选了可点: armed, 收起后还可点: stale, targetModel: c4.targetModel, wav: w4, realtimeVoice: callCfg?.realtimeVoice, ttsVoice: callCfg?.ttsVoice }))
+
+    // 16 kHz 的 m4a:提醒音质偏低,交出去的是重编码的 24 kHz WAV(原样交会被百炼的采样率下限拒掉)
+    await sel.scrollIntoViewIfNeeded()
+    await file.setInputFiles(lowM4a)
+    const lowText = await until(async () => { const s = await report(); return /low\.m4a/.test(s) ? s : null }, 8000) || ''
+    await go.click()
+    await until(() => clones.length >= 5, 8000)
+    const w5 = wavOf(clones[4]?.audioData)
+    check('S14 16 kHz 的 m4a:提醒音质偏低;不原样交,重编码成 24 kHz WAV', /音质偏低/.test(lowText) && !!w5 && w5.rate === 24000 && w5.channels === 1, `${flat(lowText).slice(0, 60)};交出 ${String(clones[4]?.audioData).slice(0, 22)} ${JSON.stringify(w5)}`)
 
     console.log(`截图目录 ${home}`)
   } finally {

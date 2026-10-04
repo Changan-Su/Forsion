@@ -10,7 +10,7 @@ import { cloneTtsVoice } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { REALTIME_CFG_BUMP_KEY } from '../services/realtimeCall'
 import { registerMessages, useI18n } from '../i18n'
-import { VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
+import { cloneBusyText, cloneErrorText, VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
 
 const MODELS = ['qwen3.8-omni-flash-realtime', 'qwen3.5-omni-plus-realtime', 'qwen3.5-omni-flash-realtime']
 // 百炼「Qwen-Omni-Realtime 音色列表」里的一部分(全表 36+ 种,可直接手输名字)
@@ -87,13 +87,13 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
 
   const doClone = (): void => {
     if (!sample?.ok || !provider || busy) return
-    setBusy(true); setMsg('')
+    setBusy(true); setMsg(cloneBusyText(sample, t))
     cloneTtsVoice(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '', name, audioData: sample.dataUri, targetModel: model.slice(provider.providerId.length + 1), ...sample.script })
       .then((r) => save({ realtimeVoice: r.voice }).then(() => {
         setMsg([t('settings.realtime.cloned', { voice: r.voice }), r.fallbackReason ? t('voicesample.scriptMismatch') : ''].filter(Boolean).join(' '))
         setSample(null); setPickerKey((k) => k + 1); setName('')
       }))
-      .catch((e: any) => setMsg(`✗ ${e?.message || e}`))
+      .catch((e: any) => setMsg(cloneErrorText(e, sample, t)))
       .finally(() => setBusy(false))
   }
 

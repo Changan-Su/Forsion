@@ -3607,9 +3607,11 @@ Then reply with only the command output.`,
       return { audio: Buffer.from(await r.arrayBuffer()), ext: /mpeg/.test(r.headers.get('content-type') || '') ? 'mp3' : 'wav' };
     };
     const SCRIPT = '今天天气很好，我打算下午去公园散步，顺便把最近读的那本书看完。晚上回家以后做一顿简单的晚饭，然后整理一下这一周的工作笔记，早点休息。';
-    const sample = (await tts('qwen3-tts-flash', 'Cherry', SCRIPT)).audio;
-    writeFileSync(join(OUT, 'voiceclone-sample.wav'), sample);
-    const audioData = `data:audio/wav;base64,${sample.toString('base64')}`;
+    // TANGU_LIVE_CLONE_SAMPLE=<文件>:换成自己的样本(如桌面录出来的 m4a)—— 走的仍是真引擎路由,顺带量这条链路上不同体积的耗时
+    const own = process.env.TANGU_LIVE_CLONE_SAMPLE;
+    const sample = own ? readFileSync(own) : (await tts('qwen3-tts-flash', 'Cherry', SCRIPT)).audio;
+    if (!own) writeFileSync(join(OUT, 'voiceclone-sample.wav'), sample);
+    const audioData = `data:audio/${own && /\.(m4a|mp4)$/i.test(own) ? 'mp4' : own && /\.mp3$/i.test(own) ? 'mpeg' : 'wav'};base64,${sample.toString('base64')}`;
     // 三个朗读模型各代表一条路:Qwen-Audio-TTS、CosyVoice(都走 voice-enrollment + 临时上传 + WS 合成)、Qwen3-TTS(qwen-voice-enrollment + HTTP 合成);
     // 末尾那个通话模型只验复刻路由(voice_clone_mode 那条),通话音色不能拿来朗读。
     const MODELS = (process.env.TANGU_LIVE_CLONE_MODELS || 'qwen-audio-3.0-tts-plus,cosyvoice-v3.5-plus,qwen3-tts-vc-2026-01-22,qwen3.8-omni-flash-realtime').split(',');
@@ -3633,7 +3635,7 @@ Then reply with only the command output.`,
     // 文案:样本是照着文案念的时候,应用会把文案一起交给百炼。对的文案 → 正常用上;对不上 → 百炼退回不用文案的方式并标 fallback。
     // 这条证的是「文案参数真的被百炼看了」(voice_clone_mode 那种参数就证不了)。只在 qwen3-tts-vc 上能观察到。
     const script = { model: 'qwen3-tts-vc 文案', ok: false };
-    if (MODELS.includes('qwen3-tts-vc-2026-01-22')) {
+    if (!own && MODELS.includes('qwen3-tts-vc-2026-01-22')) { // 自带样本念的不是这段文案,这条不比
       rows.push(script);
       const made = [];
       try {

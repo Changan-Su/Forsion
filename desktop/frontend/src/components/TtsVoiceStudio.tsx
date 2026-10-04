@@ -11,7 +11,7 @@ import type { TanguDesktopConfig, DirectProviderConfig } from '../types'
 import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsVoiceInfo } from '../services/backendService'
 import { registerMessages, useI18n } from '../i18n'
 import { homeTarget } from '../services/engine/targets'
-import { VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
+import { cloneBusyText, cloneErrorText, VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
 import { playDataUri } from '../services/voiceSample'
 
 // 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
@@ -76,11 +76,11 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   const doClone = (): void => {
     if (!sample?.ok || !cloneTarget || busy) return
     if (callOnly(cloneTarget)) { setMsg(t('settings.tts.studio.callModelRejected')); return } // 手填了通话模型:建出来也只会把朗读配置写坏
-    setBusy('clone'); setMsg('')
+    setBusy('clone'); setMsg(cloneBusyText(sample, t))
     cloneTtsVoice(homeTarget(), { ...auth, name: cloneName, audioData: sample.dataUri, targetModel: cloneTarget, ...sample.script })
       // 成功:先清 busy 再 refresh(refresh 自管 'list' 态,同一批次合并不闪);失败:保留错误信息,不 refresh(其 setMsg('') 会吃掉报错)。
       .then((r) => { apply(r.voice, r.targetModel, r.fallbackReason ? t('voicesample.scriptMismatch') : ''); setSample(null); setPickerKey((k) => k + 1); setCloneName(''); setBusy(''); refresh() })
-      .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
+      .catch((e) => { setMsg(cloneErrorText(e, sample, t)); setBusy('') })
   }
 
   const doDesign = (): void => {
