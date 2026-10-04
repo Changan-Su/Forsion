@@ -165,7 +165,7 @@ export interface UnitWebDeps {
   }
   readPlugins: () => Promise<unknown[]>
   /** Space 配方清单(与 spaces:list IPC 同源):设备页没有它装不出插件 Space,Ribbon 上就没有插件图标。 */
-  readSpaces: () => Promise<Array<{ slug: string; json: string; plugin?: string }>>
+  readSpaces: () => Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
   /** UI 偏好配置面(白名单裁剪后的子集,绝不含 token/连接键):设备页据此长出 Agent Desk 等
    *  按 desktopConfig 门控的功能;写回同一张白名单(体验跟随本机设置,双向)。 */
   readConfig: () => Promise<Record<string, unknown>>

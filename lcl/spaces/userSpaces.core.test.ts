@@ -27,6 +27,13 @@ describe('parseSpaceJson', () => {
       expect(r.spec.layout.right).toHaveLength(1)
     }
   })
+  it('iconFile 原样带出;写坏了也不拒载整个 Space(图标读不到自有 icon 兜底)', () => {
+    const ok = parseSpaceJson(JSON.stringify({ ...VALID, iconFile: 'icon.svg' }), opts())
+    expect(ok.ok && ok.spec.iconFile).toBe('icon.svg')
+    expect(ok.ok && ok.spec.icon).toBe('target')
+    const bad = parseSpaceJson(JSON.stringify({ ...VALID, iconFile: 7 }), opts())
+    expect(bad.ok && bad.spec.iconFile).toBeUndefined()
+  })
   it('非法 JSON / 非 kebab id / 保留 id 均拒绝', () => {
     expect(parseSpaceJson('not json', opts()).ok).toBe(false)
     expect(parseSpaceJson(JSON.stringify({ ...VALID, id: 'Bad_ID' }), opts()).ok).toBe(false)

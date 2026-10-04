@@ -14,7 +14,8 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 
 - `id`：kebab-case（`/^[a-z0-9][a-z0-9-]{0,63}$/`），保留字 `tangu` / `inbox` / `amadeus` 不可用。
 - `name`：字符串 或 `{ "zh": "…", "en": "…" }`。
-- `icon`（可选）：白名单 26 个——`bot, inbox, mail, notebook-text, book-open, briefcase, calendar-days, message-circle, folder, folder-open, file-text, star, heart, home, target, zap, globe, music, image, video, code, terminal, layout-grid, sparkles, boxes, list-tree`；不认识的名字静默回落方块图标。
+- `icon`（可选）：图标库 28 个——`bot, inbox, mail, notebook-text, book-open, briefcase, calendar-days, message-circle, folder, folder-open, file-text, star, heart, home, target, zap, globe, music, image, video, code, terminal, layout-grid, sparkles, boxes, list-tree, server, server-cog`；不认识的名字静默回落方块图标。
+- `iconFile`（可选，2026-10-04 起）：自绘图标。写同目录下一枚图片的**文件名**（`.png` / `.svg`，不能带路径），本模板用的是 `icon.svg`。PNG 原色显示（正方形、边长 64~512 像素、≤256KB）；SVG 只取轮廓、颜色跟随主题和选中态（≤64KB），照 `viewBox="0 0 24 24"`、2px 描边画最协调。`icon` 照样写：老版本应用不认 `iconFile`，图读不到时也退到它。
 - `layout.main / left / right`：`{ "type": "<视图>", "params": {…} }` 数组；**main 至少一个视图**。
 - `layout.main` 第二项起可加 `"split":"right"` 或 `"split":"down"`，建立宿主原生 Dockview 分栏；省略时仍与旧配方一样开成同组标签页。`split` 不可用于第一项或左右侧栏。
 - 可用视图（随产品能力门禁）：通用 `workspace`（params.mode: sessions/files/notes/auto）、`outline`、`changelog`、`activity-log`；Tangu 对话档案 `chat`（params: followActive/reuseKey）、`memory`、`subchats`、`wechat`；Amadeus 档案 `amadeus-editor/-backlinks/-search/-tags/-graph`、`todo-list`、`calendar`；收件箱 `inbox-list`、`inbox-reader`；自动化档案 `automation-list`、`automation-runs`。绑定具体文件/会话的视图（`wsfile`、`amadeus-db/-drawing/-pdf`）是机器态，不进配方。引用了目标安装上未注册的视图会整包拒载（报「引用了未注册的视图」）。
@@ -26,12 +27,12 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 
 ## 发布到 Forsion Market
 
-把 `space.json` 打包成 zip（在 zip 根或单层文件夹内均可），个人中心 → 投稿 选「空间」；或推成 GitHub 公开仓。用户在 市场 → 空间 一键安装，功能条实时出现，免重启。
+把 `space.json`（用了 `iconFile` 就连同那枚图片）打包成 zip（在 zip 根或单层文件夹内均可），个人中心 → 投稿 选「空间」；或推成 GitHub 公开仓。用户在 市场 → 空间 一键安装，功能条实时出现，免重启。
 
 ---
 
 ## English (short)
 
-A Forsion Desktop custom Space is a single data file: `space.json` composing already-registered views into main/left/right panes. Easiest authoring path: arrange the layout in-app, then Command Palette → "Save current layout as Space", and hand-tune the emitted file. `layout.main` needs ≥1 view; later items may declare `"split":"right"` or `"split":"down"` for native Dockview splits (omission keeps tab behavior). Ids are kebab-case (`tangu`/`inbox`/`amadeus` reserved); include a top-level `version` so market update checks work.
+A Forsion Desktop custom Space is a single data file: `space.json` composing already-registered views into main/left/right panes. Easiest authoring path: arrange the layout in-app, then Command Palette → "Save current layout as Space", and hand-tune the emitted file. `layout.main` needs ≥1 view; later items may declare `"split":"right"` or `"split":"down"` for native Dockview splits (omission keeps tab behavior). Ids are kebab-case (`tangu`/`inbox`/`amadeus` reserved); include a top-level `version` so market update checks work. For a custom icon, add `"iconFile": "icon.svg"` (or a square 64–512 px `.png`) next to `space.json` and keep `icon` as the fallback for older apps; an SVG is drawn as a single-colour shape that follows the theme.
 
 MIT © Changan Su

@@ -380,7 +380,7 @@ const api = {
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
   pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
-  spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string }>> => ipcRenderer.invoke('spaces:list'),
+  spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
   spacesDelete: (slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:delete', slug),
   // ── 环境检测 + 引导安装(首启向导;run 仅认 check 登记的 opaque id)──

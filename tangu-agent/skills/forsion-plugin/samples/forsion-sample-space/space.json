@@ -2,6 +2,7 @@
   "id": "research-desk",
   "name": { "zh": "研究台", "en": "Research Desk" },
   "icon": "book-open",
+  "iconFile": "icon.svg",
   "version": "1.0.0",
   "layout": {
     "main": [
