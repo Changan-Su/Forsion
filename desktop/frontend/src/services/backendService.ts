@@ -106,8 +106,9 @@ export interface TtsVoiceInfo { voice: string; kind: TtsVoiceKind; targetModel?:
 export const listTtsVoices = (t: EngineTarget, body: { baseUrl: string; apiKey: string }) =>
   request<{ voices: TtsVoiceInfo[] }>(t, '/agent/tts/voices/list', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.voices)
 // 复刻:targetModel 决定走哪个复刻服务(引擎 routes/tts.ts cloneService);audioData=data URI,本地录音各家都收。engine 是旧写法,新代码不用传。
-export const cloneTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; engine?: 'qwen' | 'cosy'; audioData?: string; audioUrl?: string; targetModel?: string }) =>
-  request<{ voice: string; targetModel: string }>(t, '/agent/tts/voices/clone', { method: 'POST', body: JSON.stringify(body) })
+// text / language:样本是照着文案念的时候带上(只对 qwen-voice-enrollment 那一类有用);对不上时百炼退回不用文案的方式,回 fallbackReason。
+export const cloneTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; engine?: 'qwen' | 'cosy'; audioData?: string; audioUrl?: string; targetModel?: string; text?: string; language?: string }) =>
+  request<{ voice: string; targetModel: string; fallbackReason?: string }>(t, '/agent/tts/voices/clone', { method: 'POST', body: JSON.stringify(body) })
 export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; name: string; voicePrompt: string; previewText?: string; targetModel?: string }) =>
   request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(t, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
 export const deleteTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
