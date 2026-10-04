@@ -76,6 +76,7 @@
     "check:caret": "node scripts/smooth-caret.check.cjs",
     "check:spacerestore": "node scripts/space-restore.check.cjs",
     "check:spacerestart": "node scripts/space-restart.check.cjs",
+    "check:spacefallback": "node scripts/space-fallback-persist.check.cjs",
     "check:bluebirdspace": "node scripts/bluebird-space.check.cjs",
     "check:bluebirdtimestamps": "node scripts/bluebird-space.check.cjs --timestamps",
     "check:splitregions": "node scripts/split-regions.check.cjs",
