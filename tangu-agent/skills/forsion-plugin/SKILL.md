@@ -377,7 +377,7 @@ ctx.registerCommand({
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
 | `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
-| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
+| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
@@ -755,6 +755,42 @@ else if (!r.ok) ctx.notify(r.error)    // 'unknown agent: x' / 'send failed' / '
 - Agent 名册里没有这个 slug 时,宿主会先刷一次名册再等最多 3s(插件刚装、捆绑 Agent 刚播种进引擎的情况),仍没有才回
   `unknown agent`。提示词上限 20000 字符,超了直接拒(不截断)。
 - **别在 `setup` 里调**,只在用户点了按钮之后调 —— 它会切走用户当前的主区聊天。
+
+### 把对话挂进自己的视图:mountChat(2026-10-04 起)
+
+`startChat` 是把用户**送去**主区聊天。你的 Space 自己就需要一个常驻对话时(创作类工作台右栏那种:边看作品边让 Agent 改,
+生成的东西直接落进项目文件夹),把宿主的原生对话**挂进你自己的视图**:
+
+```js
+let chat = null
+ctx.registerView({ id: 'chat', title: 'Chat', mount(el) {
+  el.style.height = '100%'                        // 对话撑满容器,容器得有确定的高度
+  chat = ctx.tangu?.mountChat?.(el, {
+    agent: 'my-director',                         // 名册里有就行;不给 = 用户默认 Agent
+    folder: 'Video/My film',                      // 库相对路径 → 这条会话的工作目录(可选)
+    title: 'My film',                             // 只在新建会话时用(可选)
+  })
+  if (!chat) { el.textContent = 'Chat needs a newer Forsion'; return }   // 旧宿主:没有这个方法,退回 startChat
+  return () => { chat.dispose(); chat = null }
+} })
+ctx.openView('chat', { location: 'right' })
+
+// 别处(时间线的右键菜单之类):把选中的东西引用进对话,由用户接着打字提问
+chat?.quote('Scene "intro" · <h1 data-in="0.4" data-fx="rise">Hello</h1>')
+```
+
+- 挂进去的是**同一个**对话:输入框、模型 / 思考档、消息流、工具展示、审批都是原生的,只是固定在一条会话上(不跟随主区)。
+- **会话**:一个(插件, `folder`)一条,宿主记在本机。下次挂载先问引擎它还在不在 —— 在就接回(历史照常在);用户把它删了 / 归档了
+  就新开一条;换了 `folder` 就是另一条。它是一条普通会话,主区的会话列表里也看得到(用户想重新开始:在那里删掉它)。
+- **`folder`** 同 `startChat`:库相对,宿主解析并钳在库内。给了它,会话在本机执行、相对路径都落在这个文件夹里 ——
+  `generate_image` 写进 `<folder>/generated/`,Agent 改的就是你的项目文件。没有库 / 引擎不在本机 / 路径越界 →
+  **不带工作目录的沙箱对话**(不报错);要区分就先看 `ctx.app.hostPath?.(folder)`。
+- **永不替用户送出**。句柄只有 `quote(text)`:挂成输入框上方的引用条,不发送、不动草稿;对话还没接上时调用也不丢。
+  所以 `agent` 不要求是你捆绑的(与 `startChat` 的预填档同一口径)。引用条只有文字,没有附件。
+- `ready` → `{ ok:true, sessionId }`;后端没连上 / `unknown agent` / 建会话失败 → `{ ok:false, error }`,不抛,界面上自带「重试」。
+  拿到的 `sessionId` 可以喂给 `agentStatus(sessionId)` / `subscribeAgentStatus(cb, sessionId)`,跟着这条对话的状态做反应。
+- 视图卸载时自己 `dispose()`;插件被禁用 / 重载时宿主统一卸掉,旧句柄的 `quote` 不再生效。
+  **只在有对话能力的宿主上存在**:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。
 
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
 

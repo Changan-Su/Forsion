@@ -7,10 +7,13 @@
  */
 import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import {
+  pluginChatType,
   setTanguProbe,
   type TanguAgentSelf,
   type TanguAgentInfo,
   type TanguAgentStatus,
+  type TanguChatMount,
+  type TanguChatMountOptions,
   type TanguModelInfo,
   type TanguSessionInfo,
   type TanguStartChatOptions,
@@ -184,7 +187,7 @@ const AGENT_WAIT_MS = 3000
 
 /** slug 在 Agent 名册里?不在 → 刷一次再等(名册可能还没拉回来;或插件刚装、捆绑 Agent 刚播种进引擎,
  *  名册是装之前拉的)。refreshAgents 成功/失败都会换 agentDefs 的引用,以此为「回来了」的信号。 */
-async function agentKnown(slug: string): Promise<boolean> {
+export async function agentKnown(slug: string): Promise<boolean> {
   const has = (): boolean => useApp.getState().agentDefs.some((a) => a.slug === slug)
   if (has()) return true
   const before = useApp.getState().agentDefs
@@ -251,6 +254,26 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
   if (!sent) return { ok: false, error: 'send failed' }
   const st = useApp.getState()
   return { ok: true, sessionId: st.sessions.find((x) => !known.has(x.id))?.id ?? st.activeId ?? undefined }
+}
+
+/** 把原生对话挂进插件的 DOM。同步返回句柄;界面那半(固定会话的 ChatView + 建 / 接会话)在 views/pluginChat,
+ *  动态 import:那边回头引本文件的 waitBackend / agentKnown。 */
+function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
+  let disposed = false
+  let unmount = (): void => {}
+  const ready = import('./views/pluginChat').then((m) => {
+    if (disposed) return { ok: false, error: 'disposed' }
+    const mounted = m.mountPluginChat(el, o)
+    unmount = mounted.dispose
+    return mounted.ready
+  }, (e) => ({ ok: false, error: String((e as { message?: unknown } | null)?.message ?? e) }))
+  return {
+    ready,
+    // 引用条认的是目标名、不是挂载实例:对话还没挂上时投的引用,ChatView 一挂上就消费。
+    // ponytail: 引用条只有文字;要带附件时走 Image Studio 那条 pending / consume(Composer2)。
+    quote: (text) => { if (!disposed && typeof text === 'string' && text.trim()) useApp.getState().setPendingChatQuote(pluginChatType(o), text) },
+    dispose: () => { disposed = true; unmount() },
+  }
 }
 
 /** Muse 自建 Space 的数据源(ctx.agent,2026-09-27):都是 Muse 面板已经在用的引擎接口,只做字段收窄 ——
@@ -322,6 +345,8 @@ export function installTanguProbe(): void {
     // 编辑器「问 Tangu」(G3-04):只在注册了 chat-panel 的宿主上给(与 features/tangu.tsx 同一个谓词)。
     // automation-only 档案也会装本探针(bootstrapEngine),那里没有侧栏对话 → 方法缺席,编辑器不出入口。
     ...(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {}),
+    // 插件视图里的原生对话(ctx.tangu.mountChat):同一门控 —— 没有对话能力的档案里 ChatView 没有数据源。
+    ...(hasNativeFeature('tangu') ? { mountChat } : {}),
     // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
     ...(hasNativeFeature('tangu') ? { complete: (req, opts) => completeInline(req, readActiveModel()?.id ?? null, opts) } : {}),

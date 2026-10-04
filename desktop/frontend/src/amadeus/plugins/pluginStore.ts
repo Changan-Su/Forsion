@@ -1465,6 +1465,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   },
                 }
               : {}),
+            // 把原生对话挂进插件自己的视图(2026-10-04):探针给得出才注入。与 startChat 的**预填档**同一条放行口径 ——
+            //  ① 永不替用户送出(句柄只有 quote,落在输入框上方的引用条),所以 Agent 不设「必须是自家捆绑」那道闸,
+            //     名册里有就行(不存在 → ready 给 ok:false);
+            //  ② folder(库相对)→ 本机绝对路径走 ctx.app.hostPath(同 startChat):解析不出来 = 不带工作目录的沙箱对话;
+            //  ③ 禁用 / 重载时宿主把挂载收掉(scope),此后 quote 不再生效。
+            ...(readTangu()?.mountChat
+              ? {
+                  mountChat: (el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount => {
+                    if (!(el instanceof HTMLElement)) throw new TypeError('mountChat needs an HTMLElement')
+                    const probe = readTangu()
+                    if (!ctxAlive() || !probe?.mountChat) return { ready: Promise.resolve({ ok: false, error: 'plugin disabled' }), quote() {}, dispose() {} }
+                    const agent = typeof o?.agent === 'string' ? o.agent.trim() : ''
+                    const folder = typeof o?.folder === 'string' ? o.folder.trim().replace(/[\\/]+$/, '') : ''
+                    const cwd = (folder && appApi.hostPath?.(folder)) || undefined
+                    const title = typeof o?.title === 'string' ? o.title.trim().slice(0, 120) : ''
+                    const mounted = probe.mountChat(el, { owner: pluginId, ...(agent ? { agent } : {}), ...(cwd ? { cwd } : {}), ...(title ? { title } : {}) })
+                    const dispose = scope.own('mount', () => mounted.dispose(), 'chat')
+                    return { ready: mounted.ready, quote: (text) => { if (ctxAlive()) mounted.quote(text) }, dispose }
+                  },
+                }
+              : {}),
             // 一次性补全(G3-07):探针给得出才注入。插件停用 → 关账中止在飞请求并 reject。
             ...(readTangu()?.complete
               ? {
