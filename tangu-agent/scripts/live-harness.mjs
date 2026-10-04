@@ -3094,7 +3094,7 @@ Then reply with only the command output.`,
         db.transaction(() => {
           for (let i = 0; i < 24; i++) {
             const id = randomUUID();
-            addRun.run(id, sess, owner.user_id, owner.app_id, 'completed', JSON.stringify({ agentConfig: { agentSlug: slug } }), at);
+            addRun.run(id, sess, owner.user_id, owner.app_id, 'completed', JSON.stringify({ agentConfig: { agentSlug: slug, execMode: 'host' } }), at); // 巡检只数本机工作面的 run(真实 run 的入参都带 execMode)
             ['run_bash', 'read_file'].forEach((name, n) => addEv.run(id, n + 1, 'tool_call', JSON.stringify({ id: `seed-${n}`, name, arguments: '{}', startedAt: 0 }), at));
           }
         })();

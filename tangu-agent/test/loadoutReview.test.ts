@@ -59,24 +59,39 @@ beforeAll(async () => {
   await saveAgent({ slug: 'rookie', name: 'Rookie', systemPrompt: 'Learn.' } as any);
 
   // worker:25 次 run,只用 run_bash / read_file / use_skill(local:foo);一次坏参数的 use_skill 不算装载
-  await session('s-worker', 'user', { agentSlug: 'worker' });
-  for (let i = 0; i < MIN_RUNS + 5; i++) await run('s-worker', { agentConfig: { agentSlug: 'worker' } }, ['run_bash', 'read_file', ...(i < 3 ? [['use_skill', '{"skill_id":"local:foo"}'] as [string, string]] : [])]);
-  await run('s-worker', { agentConfig: { agentSlug: 'worker' } }, [['use_skill', '{not json']]);
-  await run('s-worker', { agentConfig: { agentSlug: 'worker' } }, ['web_fetch']); // 只调过 1 次 → 「偶尔」
-  // 入参没写 agentSlug:按会话存档归到 worker
+  // 统计口径 = 本机工作面:execMode 取 run 入参(真实 run 都带),没写再看会话存档
+  const W = { agentSlug: 'worker', execMode: 'host' };
+  await session('s-worker', 'user', W);
+  for (let i = 0; i < MIN_RUNS + 5; i++) await run('s-worker', { agentConfig: W }, ['run_bash', 'read_file', ...(i < 3 ? [['use_skill', '{"skill_id":"local:foo"}'] as [string, string]] : [])]);
+  await run('s-worker', { agentConfig: W }, [['use_skill', '{not json']]);
+  await run('s-worker', { agentConfig: W }, ['web_fetch']); // 只调过 1 次 → 「偶尔」
+  // 入参没写 agentSlug / execMode:按会话存档归到 worker、认作本机
   await run('s-worker', {}, ['list_dir']);
   // rookie:3 次 run → 数据不够
-  await session('s-rookie', 'user', { agentSlug: 'rookie' });
-  for (let i = 0; i < 3; i++) await run('s-rookie', { agentConfig: { agentSlug: 'rookie' } }, ['run_bash']);
+  await session('s-rookie', 'user', { agentSlug: 'rookie', execMode: 'host' });
+  for (let i = 0; i < 3; i++) await run('s-rookie', { agentConfig: { agentSlug: 'rookie', execMode: 'host' } }, ['run_bash']);
   // 默认 agent:会话与 run 都没写 slug;入参是坏 JSON 也不能把查询弄挂
-  await session('s-default', 'user', null);
+  await session('s-default', 'user', { execMode: 'host' });
   await run('s-default', '{broken', ['get_datetime']);
   // 不该算进来的:Muse 会话、窗口之外、别的用户
   await session('s-musebg', 'muse', { agentSlug: 'muse' });
-  await run('s-musebg', { agentConfig: { agentSlug: 'worker' } }, ['sketch', 'sketch']);
-  await run('s-worker', { agentConfig: { agentSlug: 'worker' } }, ['browser_task'], ago(60));
-  await session('s-other', 'user', { agentSlug: 'worker' }, 'u2');
-  await run('s-other', { agentConfig: { agentSlug: 'worker' } }, ['delegate'], ago(1), 'u2');
+  await run('s-musebg', { agentConfig: W }, ['sketch', 'sketch']);
+  await run('s-worker', { agentConfig: W }, ['browser_task'], ago(60));
+  await session('s-other', 'user', W, 'u2');
+  await run('s-other', { agentConfig: W }, ['delegate'], ago(1), 'u2');
+  // 不该算进来的(Codex 10-04):工具面不是「本机工作面」的 run —— 那里这些常驻工具根本没露出来,算进分母只会把「没调过」说大
+  await run('s-worker', { agentConfig: { ...W, execMode: 'sandbox' } }, ['x_sandbox']);          // 沙箱 run(入参压过会话存档)
+  await run('s-worker', { agentConfig: { ...W, groupChat: true } }, ['x_group_run']);             // 团队编排 run
+  await session('s-nomode', 'user', { agentSlug: 'worker' });
+  await run('s-nomode', { agentConfig: { agentSlug: 'worker' } }, ['x_nomode']);                  // 哪儿都没写 execMode → 引擎按沙箱跑
+  await session('s-chat', 'user', { ...W, preset: 'chat' });
+  await run('s-chat', { agentConfig: W }, ['x_chat']);                                            // chat 预设会话
+  await session('s-chatreq', 'user', W);
+  await run('s-chatreq', { agentConfig: { ...W, preset: 'chat' } }, ['x_chat_request']);          // 预设只在入参里(存档还没落)
+  await session('s-coding', 'user', { ...W, preset: 'coding' });
+  await run('s-coding', { agentConfig: W }, ['x_coding']);                                        // coding 预设会话
+  await session('s-team', 'user', { ...W, groupChat: true });
+  await run('s-team', { agentConfig: W }, ['x_group_session']);                                   // 团队会话
 });
 afterAll(() => {
   database?.close(); rmSync(home, { recursive: true, force: true }); setUiLocale(null);
@@ -84,7 +99,7 @@ afterAll(() => {
 });
 
 describe('collectLoadoutUsage', () => {
-  it('按 run 入参 → 会话存档 → 默认 agent 归属;只数本用户、窗口内、用户会话', async () => {
+  it('按 run 入参 → 会话存档 → 默认 agent 归属;只数本用户、窗口内、用户会话里的本机工作面 run', async () => {
     const usage = await collectLoadoutUsage(USER, 30);
     const worker = usage.get('worker')!;
     expect(worker.runs).toBe(MIN_RUNS + 5 + 3);
@@ -92,6 +107,8 @@ describe('collectLoadoutUsage', () => {
     expect(worker.tools.get('list_dir')?.calls).toBe(1); // 靠会话存档归属的那次
     expect(worker.tools.get('web_fetch')?.calls).toBe(1);
     for (const outside of ['sketch', 'browser_task', 'delegate']) expect(worker.tools.has(outside), outside).toBe(false);
+    // 沙箱 / 团队 / chat / coding 的 run 不进分母也不进计数(worker.runs 上面已钉死没有多出来)
+    for (const outside of ['x_sandbox', 'x_group_run', 'x_nomode', 'x_chat', 'x_chat_request', 'x_coding', 'x_group_session']) expect(worker.tools.has(outside), outside).toBe(false);
     expect(worker.tools.get('run_bash')?.last).toMatch(/^\d{4}-\d{2}-\d{2} /);
     expect([...worker.skills.entries()]).toEqual([['local:foo', expect.objectContaining({ calls: 3 })]]); // 坏参数那次不算
     expect(usage.get('xyra')?.tools.get('get_datetime')?.calls).toBe(1);

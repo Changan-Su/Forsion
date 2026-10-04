@@ -163,7 +163,7 @@ export const manageHarnessProvider: ToolProvider = {
               },
               { sessionId: ctx.sessionId },
             );
-            scheduleAgentFilesSync(ctx.userId); // HARNESS.md 在跨设备同步名单里(agentSyncPaths)
+            scheduleAgentFilesSync(ctx.userId, slug); // HARNESS.md 在跨设备同步名单里(agentSyncPaths);不带 slug 这个调用是空操作
             // 卡片展示的是「改完之后的样子」;删除 / 撤掉一次新建后条目已不在,就拿改动前的那份来说明删的是什么。
             const shown = (entry ?? before) as HarnessEntry | null;
             if (!shown) return 'Nothing to roll back: that entry no longer exists.'; // journal 说「新建前」是空,而条目又被手改删掉了

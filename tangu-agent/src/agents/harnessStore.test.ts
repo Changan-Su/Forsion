@@ -301,6 +301,28 @@ describe('放开写入之后的不变量(10-04)', () => {
     await applyHarnessEdit(slug, { action: 'rollback', id });
     expect(await body(id)).toBe('v2');
   });
+
+  it('rollback 带 expectRev 还认盘面:HARNESS.md 被手改过(编辑史里没有这一笔)→ 拒,手改内容原样;面板的恢复(不带 expectRev)照旧', async () => {
+    const { applyHarnessEdit, loadHarness, harnessPath, HarnessConflict } = await import('./harnessStore.js');
+    const body = async (id: string) => (await loadHarness(slug)).find((e) => e.id === id)?.body;
+    const a = await applyHarnessEdit(slug, { action: 'upsert', title: 'C', body: 'first take', evidence: 'e' });
+    const id = a.entry!.id;
+    const b = await applyHarnessEdit(slug, { action: 'upsert', id, body: 'second take' });
+    const file = harnessPath(slug);
+    await fs.writeFile(file, (await fs.readFile(file, 'utf-8')).replace('second take', 'edited by hand'), 'utf-8');
+    await expect(applyHarnessEdit(slug, { action: 'rollback', id, expectRev: b.rev })).rejects.toBeInstanceOf(HarnessConflict);
+    expect(await body(id)).toBe('edited by hand');
+    await applyHarnessEdit(slug, { action: 'rollback', id });
+    expect(await body(id)).toBe('first take');
+  });
+
+  it.skipIf(process.platform === 'win32')('整文件替换不放宽权限:用户 chmod 600 过的 HARNESS.md 改完还是 600', async () => {
+    const { applyHarnessEdit, harnessPath } = await import('./harnessStore.js');
+    const file = harnessPath(slug);
+    await fs.chmod(file, 0o600);
+    await applyHarnessEdit(slug, { action: 'upsert', title: 'D', body: 'mode', evidence: 'e' });
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  });
 });
 
 describe('装备层:kind equip 收起工具 / 技能(10-04)', () => {

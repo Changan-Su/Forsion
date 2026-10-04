@@ -6,6 +6,8 @@
  * 数据源 = agent_run_events 的 tool_call 行(每次调用一行、发布在执行之前:被拒 / 挂起的也在 ——
  * 「模型伸手去拿过」正是收不收的判据),按 run → 会话归到 agent:run 入参里的 agentSlug → 会话存档的 agentSlug → 默认 agent。
  * 只数用户会话(chat_sessions.kind = 'user'):Muse / 自动化 / 委派 / 团队的 run 工具面不同,混进来会把「常驻却没用」算错。
+ * 同理只数**本机 work 工具面**的 run(execMode = host,预设不是轻聊天 / Coding,不是群聊主 run):别的工具面里那些工具压根没露过面,
+ * 「没调过」不是证据(Codex 10-04:20 次云端轻聊天会把 run_bash 报成「常驻却没用」)。报告里的常驻清单也是按这个工具面合成的。
  * 子代理(delegate)的调用记在父 run 的 subagent 事件里、用的是子代理自己的工具面,不计。
  *
  * ponytail: 两次全表扫 type='tool_call' + created_at 窗口(这张表只有 run_id 一个索引)。本机库到几十万行仍是秒级;
@@ -47,15 +49,24 @@ const cutoffOf = (days: number, now = Date.now()): string => new Date(now - days
 /** 最近 days 天、该用户的用户会话里:每个 agent 跑了几次、各工具被调几次、各技能被装载几次。 */
 export async function collectLoadoutUsage(userId: string, days: number, now = Date.now()): Promise<Map<string, AgentUsage>> {
   const sqlite = getDbType() === 'sqlite';
-  // 归属表达式。SQLite 对坏 JSON 的 json_extract 会抛错 → json_valid 先挡;PG 这两列本就是 JSONB。
-  const runSlug = sqlite ? `CASE WHEN json_valid(r.input) THEN json_extract(r.input, '$.agentConfig.agentSlug') END` : `r.input->'agentConfig'->>'agentSlug'`;
-  const sessSlug = sqlite ? `CASE WHEN json_valid(s.agent_config) THEN json_extract(s.agent_config, '$.agentSlug') END` : `s.agent_config->>'agentSlug'`;
-  const slug = `COALESCE(NULLIF(${runSlug}, ''), NULLIF(${sessSlug}, ''), ?)`;
-  const name = sqlite ? `json_extract(e.payload, '$.name')` : `e.payload->>'name'`;
-  const args = sqlite ? `json_extract(e.payload, '$.arguments')` : `e.payload->>'arguments'`;
-  const scope = `r.user_id = ? AND COALESCE(s.kind, 'user') = 'user'`;
+  // 取 JSON 列里的一个字段成文本。SQLite 对坏 JSON 的 json_extract 会抛错 → json_valid 先挡;PG 这几列本就是 JSONB。
+  const field = (col: string, ...keys: string[]): string => sqlite
+    ? `CASE WHEN json_valid(${col}) THEN json_extract(${col}, '$.${keys.join('.')}') END`
+    : `${col}${keys.slice(0, -1).map((k) => `->'${k}'`).join('')}->>'${keys.at(-1)}'`;
+  // 归属:run 入参里的 agentSlug → 会话存档的 → 默认 agent(占位符)
+  const slug = `COALESCE(NULLIF(${field('r.input', 'agentConfig', 'agentSlug')}, ''), NULLIF(${field('s.agent_config', 'agentSlug')}, ''), ?)`;
+  const name = field('e.payload', 'name');
+  const args = field('e.payload', 'arguments');
+  // run 入参优先(那一刻生效的值),没写再看会话存档;两处都没有 execMode 的 run 不算(引擎会把它当沙箱跑)
+  const execMode = `COALESCE(NULLIF(${field('r.input', 'agentConfig', 'execMode')}, ''), NULLIF(${field('s.agent_config', 'execMode')}, ''), '')`;
+  // 预设是会话事实(落在会话存档里),run 入参只在存档还没有时兜底
+  const preset = `COALESCE(NULLIF(${field('s.agent_config', 'preset')}, ''), NULLIF(${field('r.input', 'agentConfig', 'preset')}, ''), 'work')`;
+  // JSON 布尔:SQLite 取出来是 1 / 0,PG 的 ->> 是 'true' / 'false'
+  const notGroup = (col: string, ...keys: string[]): string => `COALESCE(CAST(${field(col, ...keys)} AS TEXT), '') NOT IN ('1', 'true')`;
+  const scope = `r.user_id = ? AND COALESCE(s.kind, 'user') = 'user' AND ${execMode} = 'host' AND ${preset} NOT IN ('chat', 'coding')`
+    + ` AND ${notGroup('r.input', 'agentConfig', 'groupChat')} AND ${notGroup('s.agent_config', 'groupChat')}`;
   const events = `FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
-    WHERE e.type = 'tool_call'${sqlite ? ' AND json_valid(e.payload)' : ''} AND ${scope} AND e.created_at >= ?`;
+    WHERE e.type = 'tool_call' AND ${scope} AND e.created_at >= ?`;
   const cutoff = cutoffOf(days, now);
   const base = [DEFAULT_AGENT_SLUG, userId, cutoff];
 
@@ -155,7 +166,7 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
     blocks.push(lines.join('\n'));
   }
   const head =
-    `Loadout usage over the last ${days} days (the user's own sessions only; sub-agent, Muse and automation runs are not counted; GUI-only tools are not listed). This is a report: nothing has been changed.\n` +
+    `Loadout usage over the last ${days} days (the user's own local work sessions only; chat-preset, coding-preset, cloud, team, sub-agent, Muse and automation runs are not counted; GUI-only tools are not listed). This is a report: nothing has been changed.\n` +
     'An always-loaded tool costs its full definition on every request. Shelving (each agent does it for itself with manage_harness, kind "equip") only moves a definition to the load-on-demand catalog; the tool still works.\n' +
     (judged
       ? `${judged} agent(s) have enough runs to judge. Lists are sorted largest first; suggest at most ${SUGGEST_MAX} tools and ${SUGGEST_MAX} skills per agent per review (the rest can wait for the next one).`

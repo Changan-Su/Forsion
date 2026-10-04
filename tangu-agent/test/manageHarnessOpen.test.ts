@@ -74,7 +74,7 @@ describe('manage_harness 放开写入', () => {
     expect(created.change.rev).toMatch(/^[0-9a-f-]{36}$/);
     expect(created.message).toMatch(/Applied immediately/);
     expect(readFileSync(harnessPath('opener'), 'utf8')).toContain('Run the suite before saying a fix is done.');
-    expect(scheduleAgentFilesSync).toHaveBeenCalledWith('owner');
+    expect(scheduleAgentFilesSync).toHaveBeenCalledWith('owner', 'opener'); // 不带 slug 的调用是空操作(Codex 10-04):同步按 agent 排队
     const id = created.change.entryId;
 
     const revised = JSON.parse(await call({ action: 'upsert', id, body: 'Run the suite and read the output before saying a fix is done.' }));

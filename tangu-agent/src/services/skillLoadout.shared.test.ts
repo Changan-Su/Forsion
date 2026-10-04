@@ -24,7 +24,7 @@ describe('skillLoadout 共享技能段', () => {
   });
   it('负对照:没人共享 → 段与 id 都不变;sandbox / 非 host 形态不查', async () => {
     h.hostExec = true; h.shared = [];
-    expect(await loadSkillLoadout('u', 'tangu', { execMode: 'host' })).toEqual({ enabledSkillIds: [], sections: [], requested: [] });
+    expect(await loadSkillLoadout('u', 'tangu', { execMode: 'host' })).toEqual({ enabledSkillIds: [], sections: [], requested: [], catalog: [] }); // catalog = 收起之前的完整目录(装备巡检要用)
     h.shared = [CODING];
     expect((await loadSkillLoadout('u', 'tangu', { execMode: 'sandbox' })).sections).toEqual([]);
     h.hostExec = false;

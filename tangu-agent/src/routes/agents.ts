@@ -466,7 +466,7 @@ router.post('/agent/agents/:slug/harness/rollback', authMiddleware, async (req: 
     if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
     const expectRev = typeof req.body?.expectRev === 'string' && req.body.expectRev ? req.body.expectRev : undefined;
     const { entry } = await applyHarnessEdit(req.params.slug, { action: 'rollback', id: String(req.body?.id || ''), expectRev });
-    scheduleAgentFilesSync(req.user!.userId);
+    scheduleAgentFilesSync(req.user!.userId, req.params.slug); // 没有 run 在跑时这是唯一的同步时机;不带 slug 是空操作
     res.json({ ok: true, entry });
   } catch (e: any) {
     if (e instanceof HarnessConflict) return res.status(409).json({ error: 'HARNESS_CONFLICT', detail: e.message });

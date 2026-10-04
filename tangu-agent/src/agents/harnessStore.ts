@@ -199,8 +199,11 @@ async function saveHarness(slug: string, entries: HarnessEntry[]): Promise<void>
   const file = harnessPath(slug);
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = path.join(path.dirname(file), `.${HARNESS_FILE}.${randomUUID()}.tmp`);
+  // rename 换的是整个文件:原文件若被用户收紧过权限(chmod 600),临时文件得带着同样的权限,否则一次写入就把它放宽回缺省(Codex 10-04)
+  const mode = await fs.stat(file).then((st) => st.mode & 0o777, () => undefined);
   try {
     await fs.writeFile(tmp, serializeHarness(entries), 'utf-8');
+    if (mode !== undefined) await fs.chmod(tmp, mode);
     await fs.rename(tmp, file);
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => {});
@@ -235,6 +238,12 @@ function newId(taken: Set<string>): string {
     const id = 'h-' + Math.random().toString(36).slice(2, 6).padEnd(4, '0');
     if (!taken.has(id)) return id;
   }
+}
+
+/** 两个条目(或空)落盘后是否一字不差:按序列化结果比,meta 行、收起名单都算在内。 */
+function sameEntry(a: HarnessEntry | null, b: HarnessEntry | null): boolean {
+  if (!a || !b) return !a && !b;
+  return serializeHarness([a]) === serializeHarness([b]);
 }
 
 /** rollback 的 expectRev 对不上(该条在调用方看到之后又被改过 / 已被撤销)。路由回 409。 */
@@ -350,6 +359,11 @@ async function applyEditUnlocked(
     if (!last) throw new Error(`entry ${id} has no history to roll back`);
     if (edit.expectRev && last.rev !== edit.expectRev) throw new HarnessConflict(`entry ${id} was changed again after that edit; reload before undoing`);
     const current = byId.get(id) ?? null;
+    // 卡片撤销还要认盘面:journal 只记本机经工具 / 面板的改动,手改 HARNESS.md、对端同步进来的新版本都不在里面。
+    // 盘面这一条已经不是那次改动留下的样子 → 不能拿「那次改动之前」去盖它(Codex 10-04 P1)。面板的「恢复上一版」不带 expectRev,照旧。
+    if (edit.expectRev && !sameEntry(current, last.after)) {
+      throw new HarnessConflict(`entry ${id} was edited outside this history (by hand or from another device) after that change; open the working notes to adjust it`);
+    }
     const restored = last.before;
     const next = entries.filter((e) => e.id !== id);
     if (restored && !current && next.length >= MAX_ENTRIES) {
