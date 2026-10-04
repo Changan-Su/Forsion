@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -52,6 +52,21 @@ describe('space.json iconFile', () => {
     // 自己那枚不合规 → 仍退到插件图标,不是直接放弃
     await writeFile(join(space, 'icon.png'), png(32))
     expect(await readSpaceIconDataUrl(spec('icon.png'), [space, plugin])).toBe(spaceIconDataUrl('icon.png', png(256)))
+
+    // 软链不跟:哪怕指向一枚合规的图(否则目录外的图能随清单带出去)。Windows 建软链要特权,跳过。
+    if (process.platform !== 'win32') {
+      const outside = await mkdtemp(join(tmpdir(), 'space-icon-out-'))
+      roots.push(outside)
+      await writeFile(join(outside, 'secret.png'), png(128))
+      await symlink(join(outside, 'secret.png'), join(space, 'link.png'))
+      expect(await readSpaceIconDataUrl(spec('link.png'), [space])).toBeUndefined()
+    }
+    // 超限 → 不出图(读之前按 stat 体积卡掉这一点单测分辨不出来,只钉结果)
+    await writeFile(join(space, 'big.svg'), Buffer.concat([SVG, Buffer.alloc(SPACE_ICON_SVG_MAX_BYTES)]))
+    expect(await readSpaceIconDataUrl(spec('big.svg'), [space])).toBeUndefined()
+    // 目录不是文件
+    await mkdir(join(space, 'dir.png'))
+    expect(await readSpaceIconDataUrl(spec('dir.png'), [space])).toBeUndefined()
 
     expect(await readSpaceIconDataUrl(spec('missing.svg'), [space, plugin])).toBeUndefined()
     expect(await readSpaceIconDataUrl(spec('../icon.png'), [space, plugin])).toBeUndefined()

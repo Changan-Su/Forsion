@@ -83,7 +83,7 @@ const PROBE = (id) => `(() => {
   const span = btn.querySelector('span[aria-hidden="true"]:not(.rb-badge)')
   const cs = span && getComputedStyle(span)
   return {
-    img: img ? { src: img.src.slice(0, 22), natural: img.naturalWidth, w: img.getBoundingClientRect().width, h: img.getBoundingClientRect().height } : null,
+    img: img ? { src: img.src.slice(0, 22), natural: img.naturalWidth, complete: img.complete, w: img.getBoundingClientRect().width, h: img.getBoundingClientRect().height } : null,
     mask: cs ? { image: (cs.maskImage || cs.webkitMaskImage || '').slice(0, 30), bg: cs.backgroundColor, w: span.getBoundingClientRect().width } : null,
     lucide: btn.querySelector('svg.lucide')?.getAttribute('class') || null,
     color: getComputedStyle(btn).color,
@@ -157,6 +157,20 @@ async function main() {
     const on = await probe(win, 'own-svg')
     check('选中后蒙版图标跟随选中色', on?.on && on.mask?.bg === on.color && on.color !== svg?.color, JSON.stringify({ before: svg?.color, after: on?.color, bg: on?.mask?.bg }))
     await win.screenshot({ path: path.join(shots, 'space-icon-ribbon-active.png'), clip: { x: 0, y: 0, width: 260, height: 760 } })
+
+    // 插件更新只换了图(space.json 一字未动):图标要跟上,且不能把正在用的 Space 踢回 Tangu。
+    // 触发口 = 插件启停同步用的 storage 事件(amadeusPlugins.ts),它会重跑 loadUserSpaces。
+    if (!NC) {
+      await probe(win, 'plug-icon')
+      await win.evaluate(`document.querySelector('.rb-slot[data-id="space:plug-icon"] .rb-space')?.click()`)
+      await win.waitForTimeout(600)
+      write('plugins/probe-plug/icon.png', png(96, [40, 160, 80]))
+      await win.evaluate(`window.dispatchEvent(new StorageEvent('storage', { key: 'amadeus.plugins.disabled' }))`)
+      await win.waitForFunction(`document.querySelector('.rb-slot[data-id="space:plug-icon"] img')?.naturalWidth === 96`, null, { timeout: 8000 }).catch(() => {})
+      const swapped = await probe(win, 'plug-icon')
+      const active = await win.evaluate(`localStorage.getItem('forsion_tangu_active_space')`)
+      check('只换图标 → 原地更新,不离开当前 Space', swapped?.img?.natural === 96 && swapped.on && active === 'plug-icon', JSON.stringify({ natural: swapped?.img?.natural, on: swapped?.on, active }))
+    }
     console.log(`截图: ${shots}`)
   } finally {
     await app.close().catch(() => {})

@@ -63,8 +63,10 @@ const app = () => useApp.getState()
 const userIds = new Map<string, string>()
 /** 插件捆绑包内嵌的 Space:spec id → 所属插件 id。随插件启停显隐,不落 userIds(不可单独删,卸载随插件走)。 */
 const pluginSpaceOwner = new Map<string, string>()
-/** 已注册插件 Space 的原始 space.json(+ 自绘图标):配方或图标变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
+/** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
 const pluginSpaceJson = new Map<string, string>()
+/** 已注册插件 Space 的自绘图标:只换了图就原地重注册(不走注销那条 —— 它会把正在用的 Space 打回 tangu)。 */
+const pluginSpaceIcon = new Map<string, string | undefined>()
 let pluginOnlyStartupResolved = false
 /** Recipe migrations can happen after WorkspaceHost has already restored the previous run's current layout:
  * plugin views and their bundled Spaces are loaded asynchronously. Keep the migration pending until the
@@ -195,6 +197,7 @@ function removePluginSpace(id: string): void {
   removeRibbonIcon(`space:${id}`)
   pluginSpaceOwner.delete(id)
   pluginSpaceJson.delete(id)
+  pluginSpaceIcon.delete(id)
 }
 
 /** 扫 ~/.tangu/spaces + 各插件捆绑包 spaces/ 装载全部合法配方(幂等:已注册 id 跳过;
@@ -271,8 +274,7 @@ async function loadUserSpacesOnce(): Promise<void> {
     if (plugin && disabled.has(plugin)) continue
     const r = parseSpaceJson(json, { isViewRegistered: (t) => !!getView(t), appVersion, reservedIds: BUILTIN_IDS })
     if (!r.ok) { console.warn(`[spaces] 跳过 ${slug}: ${r.error}`); continue }
-    // raw 把图标也算进去:插件更新只换了图(space.json 一字未动)也要重注册
-    if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json + (iconUrl ?? ''), iconUrl })
+    if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json, iconUrl })
   }
 
   // 先注销:此前注册的插件 Space,如今主人被禁用/卸载、文件消失,或**配方内容变了**(插件更新,
@@ -284,11 +286,20 @@ async function loadUserSpacesOnce(): Promise<void> {
 
   const taken = new Set(useSpaceStore.getState().spaces.map((s) => s.id))
   for (const [id, w] of wanted) {
-    if (taken.has(id)) continue // 已注册(重复 reload / 两目录同 id,先到先得)
+    if (taken.has(id)) { // 已注册(重复 reload / 两目录同 id,先到先得)
+      // 插件更新只换了图(space.json 一字未动):registerSpace / addRibbonIcon 都按 id 替换,原地重装即可,
+      // 活动 Space、用户排的位置都不动。
+      if (w.plugin && pluginSpaceOwner.get(id) === w.plugin && pluginSpaceIcon.get(id) !== w.iconUrl) {
+        installPluginSpace(w.spec, w.plugin, w.iconUrl)
+        pluginSpaceIcon.set(id, w.iconUrl)
+      }
+      continue
+    }
     taken.add(id)
     if (w.plugin) {
       installPluginSpace(w.spec, w.plugin, w.iconUrl)
       pluginSpaceJson.set(id, w.raw)
+      pluginSpaceIcon.set(id, w.iconUrl)
     } else {
       installUserSpace(w.spec, w.dirSlug, w.iconUrl) // 目录名可与 id 不同(market 目录来自上架名称 slug)
     }
