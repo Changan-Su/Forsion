@@ -438,9 +438,9 @@ interface TanguStoredConfig {
   ttsSpeed: number
   /** 新回复完成后自动朗读(仅当前活跃会话)。 */
   ttsAutoSpeak: boolean
-  /** 实时语音通话模型 <providerId>/<model>(百炼 Qwen-Omni-Realtime);'' = 未启用。存 config.json tts.realtimeModel。 */
+  /** 实时语音通话模型 <providerId>/<model>(百炼 Qwen-Omni-Realtime / Qwen-Audio-Realtime);'' = 未启用。存 config.json tts.realtimeModel。 */
   realtimeModelId: string
-  /** 实时通话音色;'' = 引擎缺省(Tina)。存 tts.realtimeVoice。 */
+  /** 实时通话音色;'' = 引擎按模型家族给缺省(Omni=Tina,Qwen-Audio=longanqian)。存 tts.realtimeVoice。 */
   realtimeVoice: string
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
   activityLogEnabled: boolean
