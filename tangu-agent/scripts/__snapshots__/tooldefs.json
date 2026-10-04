@@ -16,7 +16,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -44,20 +44,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -558,7 +549,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -586,20 +577,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -1119,7 +1101,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1147,20 +1129,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -1492,7 +1465,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1520,20 +1493,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -1884,7 +1848,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1912,20 +1876,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -2574,7 +2529,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2602,20 +2557,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -3283,7 +3229,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3311,20 +3257,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -4336,7 +4273,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4364,20 +4301,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -5408,7 +5336,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5436,20 +5364,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -6057,7 +5976,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6085,20 +6004,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -6725,7 +6635,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6753,20 +6663,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -7778,7 +7679,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7806,20 +7707,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -8850,7 +8742,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8878,20 +8770,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -9961,7 +9844,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9989,20 +9872,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -10221,7 +10095,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10249,20 +10123,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }
@@ -10786,7 +10651,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"project\" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. \"agent\" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10814,20 +10679,11 @@
             "expectedVersion": {
               "type": "string",
               "description": "Version returned by list; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "project"
-              ],
-              "description": "Which memory to write: \"project\" for facts that hold only in the current project, \"agent\" for facts that hold everywhere. Ignored by list."
             }
           },
           "required": [
             "action",
-            "fact",
-            "scope"
+            "fact"
           ]
         }
       }

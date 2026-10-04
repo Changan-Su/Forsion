@@ -95,6 +95,8 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
       'Gate each entry: include it ONLY if a future conversation would plausibly go better because of it. Qualifying: stable user facts/preferences the user stated or enforced, ' +
       'corrections the user made to how the agent should work, high-leverage procedural knowledge (exact paths/commands/workflows proven to work), landmines to avoid. ' +
       'A fact that holds only inside one project must name that project in the sentence. ' +
+      // 10-04 live(refine):agent 自己总结的做法被判官改写成「用户希望……」记进了记忆候选。谁提出的就是谁的。
+      'What the agent itself proposed or committed to is not a user preference: never rephrase it as "the user wants…"' + (wantHarness ? ' (a method the agent formulated belongs in harness_candidates). ' : '. ') +
       'Never include: one-off requests, temporary or task-status facts, summaries of what happened (that is the log), or restated common knowledge. ' +
       'One short self-contained sentence per entry, in the user\'s language; replace any token/key/password with [REDACTED]. ' +
       'At most 5 entries — pick the highest-value ones. When in doubt, leave it out — an empty array is the normal outcome.',
@@ -105,7 +107,7 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     fields.push(
       '"harness_candidates": an array of NEW working-method lessons for the agent\'s own working notes (usually empty). ' +
       'Qualifying: a durable, transferable lesson the agent worked out by itself about HOW it should work — a technique or delegation pattern that proved itself, ' +
-      'a procedural landmine and the way around it. ' +
+      'a procedural landmine and the way around it, a working rule the agent itself formulated or committed to in this conversation (not one the user dictated). ' +
       'Never include: environment/setup hiccups, transient errors, negative claims like "tool X is broken" (they harden into refusals that bite the agent later), ' +
       'one-off task narratives, anything the user told, corrected or required of the agent, or facts about the user or a project (those belong in memory_candidates). ' +
       // 10-04:提名过得了形状闸就直接写进工作笔记(用户裁决「可以做自动采纳」)—— 所以要 title / lesson / evidence 三样,而不是一句话。

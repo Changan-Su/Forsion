@@ -8,6 +8,7 @@
  *
  * 命名约定:`*Sql.ts` = 持库后端实现,是 test/memorySeamBoundary.test.ts 棘轮唯一放行直连 core/db.js 的地方。
  */
+import path from 'node:path';
 import { getDbType, query } from '../core/db.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
@@ -77,11 +78,23 @@ async function searchScopedSessions(input: SessionSearchInput): Promise<SessionH
   if (input.after) { conditions.push('s.updated_at >= ?'); params.push(input.after); }
   conditions.push("(COALESCE(s.title, '') <> '' OR COALESCE(s.summary, '') <> '')");
   input.signal?.throwIfAborted();
-  const candidates = await query<SessionHit[]>(
-    `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 4000) AS summary, s.archived, s.updated_at`
-      + ` FROM chat_sessions s WHERE ${conditions.join(' AND ')} ORDER BY s.updated_at DESC, s.id DESC LIMIT ${candidateLimit}`,
-    params,
-  );
+  // 项目出处(10-04 记忆分项目级 / 全局级):候选会话属于哪个项目、是不是当前会话的那个。两边都拿库里的原值比,不做路径规范化。
+  const cols = 's.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 4000) AS summary, s.archived, s.updated_at';
+  const tail = ` FROM chat_sessions s WHERE ${conditions.join(' AND ')} ORDER BY s.updated_at DESC, s.id DESC LIMIT ${candidateLimit}`;
+  const here = input.excludeSessionId ? '(SELECT c.project_path FROM chat_sessions c WHERE c.id = ?)' : 'NULL';
+  let rows: Array<SessionHit & { project_path?: unknown; current_project_path?: unknown }>;
+  try {
+    rows = await query(`SELECT ${cols}, s.project_path AS project_path, ${here} AS current_project_path${tail}`, [...(input.excludeSessionId ? [input.excludeSessionId] : []), ...params]);
+  } catch {
+    // 出处只是个标注,不能让它把检索本身带挂:哪个部署的会话表还没有 project_path 列,就退回不带出处的那条查询
+    // (真出了别的故障,这条同样会抛)。src/tools/builtin/searchSessions.test.ts 的表就没有这一列,跑的正是这条退路。
+    input.signal?.throwIfAborted();
+    rows = await query(`SELECT ${cols}${tail}`, params);
+  }
+  const candidates: SessionHit[] = rows.map(({ project_path, current_project_path, ...c }) => ({
+    ...c,
+    ...(project_path ? { project: path.basename(String(project_path)), ...(current_project_path && String(current_project_path) !== String(project_path) ? { otherProject: true } : {}) } : {}),
+  }));
   input.signal?.throwIfAborted();
   if (!terms.length) return candidates.slice(0, limit);
   const hits: SessionHit[] = [];

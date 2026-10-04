@@ -4,6 +4,8 @@
  */
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
+import type { Tool } from '../../core/types.js';
+import type { ToolContext } from '../toolTypes.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
@@ -19,39 +21,67 @@ const appendMemoryEntry = (userId: string, text: string, opts?: { dedup?: boolea
 const appendLogEntry = (userId: string, text: string, signal?: AbortSignal) => deps().brain.memory.appendLogEntry(userId, text, { signal });
 const getLog = (userId: string, date?: string, signal?: AbortSignal) => deps().brain.memory.getLog(userId, date, { signal });
 
+// ── remember 的定义:四份预先建好(是否项目会话 × 是否有工作笔记),按上下文取 ──
+// 分开的原因是体量:云端聊天面的工具定义有字节预算(test/chatPreset.test.ts),「级别」那段只在会话属于项目时才有意义,
+// 「自己总结的做法归工作笔记」那句只在有 manage_harness 的面上才成立。执行侧对四份一视同仁(缺 scope 按 agent 级)。
+function buildRememberDefinition(o: { project: boolean; notes: boolean }): Tool {
+  return {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description:
+        `Save one durable fact to ${o.project ? '' : 'the current Agent’s '}long-term memory, injected into ${o.project ? '' : 'every '}future session${o.project ? 's' : ''}. Keep it small and high-signal. ` +
+        // 10-04 用户裁决:「用户纠正肯定应该进记忆」—— 不进工作笔记,也不进协作说明。
+        `WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, ${o.notes ? 'commands and workflows proven to work here, landmines' : 'proven procedures or landmines'}. ` +
+        // 10-04 live(refine):agent 自己总结的做法被它存进了这里 —— 「proven procedures」与工作笔记的触发条件说的是同一件事,两边打架。
+        (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your working notes (manage_harness). ' : '') +
+        // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
+        (o.project ? 'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure, ask yourself whether it would still be true in another project. ' : '') +
+        'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
+        'FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
+        (o.project
+          ? 'ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). '
+          : 'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ') +
+        'Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['add', 'list', 'update', 'forget'], description: 'The operation to perform. List before update/forget to obtain the current entry ID and version.' },
+          fact: { type: ['string', 'null'], description: 'For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails.' },
+          id: { type: 'string', description: `An entry ID returned by list${o.project ? '' : ' for this Agent'}; required for update/forget.` },
+          expectedVersion: { type: 'string', description: `Version returned by list${o.project ? ' for that scope' : ''}; include when modifying an existing entry.` },
+          ...(o.project ? { scope: { type: 'string', enum: ['agent', 'project'], description: 'Which memory: "agent" = yours, wherever you work; "project" = this project’s, shared by the agents working in it.' } } : {}),
+        },
+        required: o.project ? ['action', 'fact', 'scope'] : ['action', 'fact'],
+      },
+    },
+  };
+}
+const REMEMBER = {
+  base: buildRememberDefinition({ project: false, notes: false }),
+  notes: buildRememberDefinition({ project: false, notes: true }),
+  project: buildRememberDefinition({ project: true, notes: false }),
+  projectNotes: buildRememberDefinition({ project: true, notes: true }),
+};
+/** 有没有工作笔记这个工具:本机引擎的 profile、本机直连(host)、不是 chat 面,且 profile 的内置工具名单里有它
+ *  (manageHarness.isEnabledFor + preset 的 host 族整族拒 + toolLoadout.builtins)。
+ *  ponytail: 照这几条近似,没去问注册表(定义求值期间再解析一遍工具表会绕回来);计划模式 / 子代理里它其实不在,那句多说了也只是多说。 */
+function rememberDefinitionFor(ctx: ToolContext): Tool {
+  const profile = ctx.profile ?? deps().profile;
+  const builtins = profile?.toolLoadout?.builtins;
+  const notes = ctx.execMode === 'host' && ctx.preset !== 'chat' && !!profile?.capabilities?.hostExec
+    && (builtins === 'all' || (Array.isArray(builtins) && builtins.includes('manage_harness')));
+  return ctx.projectScoped ? (notes ? REMEMBER.projectNotes : REMEMBER.project) : (notes ? REMEMBER.notes : REMEMBER.base);
+}
+
 export const memoryLogProvider: ToolProvider = {
   id: 'builtin:memory-log',
   tools: () => [
     {
       name: 'remember',
       isEnabledFor: (profile) => profile.capabilities.memory,
-      definition: {
-        type: 'function',
-        function: {
-          name: 'remember',
-          description:
-            'Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. ' +
-            // 10-04 用户裁决:「用户纠正肯定应该进记忆」—— 不进工作笔记,也不进协作说明。
-            'WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. ' +
-            // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
-            'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. ' +
-            'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
-            'FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
-            'ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). ' +
-            'Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.',
-          parameters: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['add', 'list', 'update', 'forget'], description: 'The operation to perform. List before update/forget to obtain the current entry ID and version.' },
-              fact: { type: ['string', 'null'], description: 'For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails.' },
-              id: { type: 'string', description: 'An entry ID returned by list for this Agent; required for update/forget.' },
-              expectedVersion: { type: 'string', description: 'Version returned by list; include when modifying an existing entry.' },
-              scope: { type: 'string', enum: ['agent', 'project'], description: 'Which memory to write: "project" for facts that hold only in the current project, "agent" for facts that hold everywhere. Ignored by list.' },
-            },
-            required: ['action', 'fact', 'scope'],
-          },
-        },
-      },
+      definition: REMEMBER.base,
+      definitionFor: rememberDefinitionFor,
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
         const action = String(args.action ?? 'add');

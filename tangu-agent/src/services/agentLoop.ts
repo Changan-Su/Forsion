@@ -77,7 +77,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
-import { buildProjectMemoryContext } from './projectMemory.js';
+import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
@@ -1547,8 +1547,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const dispatchTargets: string[] = typeof agentConfig.soloAgentSlug === 'string' && Array.isArray(agentConfig.mentionedProjects)
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
+    // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
+    const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, clientCapabilities, projectScoped,
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
       hostSandbox: runHostSandbox,

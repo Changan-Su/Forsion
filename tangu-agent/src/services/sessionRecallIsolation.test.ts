@@ -21,7 +21,7 @@ for (const dialect of (sqlite ? ['sqlite', 'postgres'] : ['postgres'])) describe
     };
     for (const sql of [
       `CREATE TABLE chat_sessions(id TEXT PRIMARY KEY, user_id TEXT, app_id TEXT, kind TEXT DEFAULT 'user',
-        agent_config ${dialect === 'sqlite' ? 'TEXT' : 'JSONB'}, title TEXT, summary TEXT, archived INTEGER DEFAULT 0, updated_at ${dialect === 'sqlite' ? 'TEXT' : 'TIMESTAMP'})`,
+        agent_config ${dialect === 'sqlite' ? 'TEXT' : 'JSONB'}, title TEXT, summary TEXT, archived INTEGER DEFAULT 0, updated_at ${dialect === 'sqlite' ? 'TEXT' : 'TIMESTAMP'}, project_path TEXT)`,
       `CREATE TABLE chat_messages(id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp BIGINT,
         tool_calls ${dialect === 'sqlite' ? 'TEXT' : 'JSONB'})`,
       'CREATE INDEX messages_session ON chat_messages(session_id)',
@@ -56,6 +56,25 @@ for (const dialect of (sqlite ? ['sqlite', 'postgres'] : ['postgres'])) describe
     expect((await find('xyra')).map((s) => s.id).sort()).toEqual(['empty-config', 'legacy']);
     const global = await searchSessions({ userId: 'u1', appId: 'tangu', terms: ['插件'], limit: 20 });
     expect(global.map((s) => s.id)).toEqual(expect.arrayContaining(['alpha-session', 'beta-session', 'legacy']));
+  });
+  // 10-04 记忆分项目级 / 全局级:自动回忆会把同一个 agent 在别的项目里说过的话带进来,后端给每条命中标上出处项目。
+  it('scoped hits carry the project folder name and whether it differs from the current session\'s project', async () => {
+    for (const [id, project] of [['current', '/work/pm-two'], ['in-one', '/work/pm-one'], ['in-two', '/work/pm-two'], ['loose', null]] as const) {
+      await session(id, 'alpha'); await message(`${id}-message`, id);
+      await execute('UPDATE chat_sessions SET project_path = ? WHERE id = ?', [project, id]);
+    }
+    const byId = async (extra: any) => Object.fromEntries((await find('alpha', extra)).map((s) => [s.id, { project: s.project, otherProject: s.otherProject }]));
+    // 当前会话在 pm-two:pm-one 的那条标成「别的项目」;同项目只给名字;不属于项目的会话什么都不标
+    expect(await byId({ excludeSessionId: 'current' })).toEqual({
+      'in-one': { project: 'pm-one', otherProject: true }, 'in-two': { project: 'pm-two', otherProject: undefined },
+      loose: { project: undefined, otherProject: undefined }, 'alpha-session': { project: undefined, otherProject: undefined },
+    });
+    // 当前会话不属于任何项目:照给名字,但没有「别的项目」这一说
+    expect((await byId({ excludeSessionId: 'loose' }))['in-one']).toEqual({ project: 'pm-one', otherProject: undefined });
+    // 没给当前会话(界面 / 工具的其它用法):同上
+    expect((await byId({}))['in-one']).toEqual({ project: 'pm-one', otherProject: undefined });
+    // 路径本身不出库
+    expect(JSON.stringify(await find('alpha', { excludeSessionId: 'current' }))).not.toContain('/work/');
   });
   it('model arguments cannot override runtime scope, including guessed session and message IDs', async () => {
     const out = String(await searchSessionsProvider.tools()[0].execute({ query: '插件', agentSlug: 'beta', toolScope: { agentSlug: 'beta' } }, ctx()));

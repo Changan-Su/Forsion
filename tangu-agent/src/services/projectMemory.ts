@@ -17,7 +17,7 @@ import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 import { assertSafeChain } from './projectContext.js';
 import { humanProjectScope } from './humanContext.js';
-import { atomicWriteMemoryFile, createMemoryRepository, readMemoryFile } from './memoryRepository.js';
+import { atomicWriteMemoryFile, createMemoryRepository, readMemoryFile, MemoryRepositoryError } from './memoryRepository.js';
 
 /** 一个项目的记忆总量(字符)。比 agent 级(20,000)小:它整份都可能进系统提示。 */
 export const PROJECT_MEMORY_CHAR_BUDGET = 8000;
@@ -57,6 +57,28 @@ function exists(ref: ProjectMemoryRef): boolean {
 export async function peekProjectMemory(ref: ProjectMemoryRef): Promise<ReturnType<ReturnType<typeof createMemoryRepository>['snapshot']> | null> {
   if (!exists(ref)) return null;
   return (await openProjectMemory(ref)).snapshot();
+}
+
+/** 界面看到的一份项目记忆(项目详情 › 设置里的那一块)。 */
+export interface ProjectMemoryView { version: string | null; entries: Array<{ id: string; content: string; updatedAt: number }>; chars: number; limit: number }
+
+/** 只读视图;project 必须是调用方已经从会话存档解析出的 canonical 项目目录。还没有记忆 → 空清单,不建目录。 */
+export async function projectMemoryView(project: string): Promise<ProjectMemoryView> {
+  const snapshot = await peekProjectMemory(refOf(project));
+  return {
+    version: snapshot?.version ?? null,
+    entries: (snapshot?.entries ?? []).map(({ id, content, updatedAt }) => ({ id, content, updatedAt })),
+    chars: snapshot?.content.length ?? 0,
+    limit: PROJECT_MEMORY_CHAR_BUDGET,
+  };
+}
+
+/** 用户在界面上删一条。带版本:别处刚改过 → MEMORY_VERSION_CONFLICT(界面重新载入再删),不建目录。 */
+export async function forgetProjectMemory(project: string, id: string, expectedVersion: string): Promise<ProjectMemoryView> {
+  const ref = refOf(project);
+  if (!exists(ref)) throw new MemoryRepositoryError('MEMORY_NOT_FOUND', 'This project has no saved memory.');
+  (await openProjectMemory(ref)).mutate({ action: 'forget', id, expectedVersion });
+  return projectMemoryView(project);
 }
 
 /** 系统提示里的项目记忆段。放不下时留最新的(更可能还成立),展示仍按存入顺序;空 → ''。
