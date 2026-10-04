@@ -34,6 +34,12 @@ describe('qwenCloneBody', () => {
       parameters: { voice_clone_mode: 'normal' },
     });
   });
+  it('passes the script text and language along when the sample was read from one', () => {
+    const body: any = qwenCloneBody('qwen3-tts-vc-2026-01-22', 'me', 'x', { text: '今天天气不错', language: 'zh' });
+    expect(body.input).toMatchObject({ text: '今天天气不错', language: 'zh', audio: { data: 'x' } });
+    expect((qwenCloneBody('qwen3-tts-vc-2026-01-22', 'me', 'x', { text: 'hello' }) as any).input).not.toHaveProperty('language');
+    expect((qwenCloneBody('qwen3-tts-vc-2026-01-22', 'me', 'x') as any).input).not.toHaveProperty('text');
+  });
   it('leaves it out for qwen3.5-omni (that is the legacy mode) and for Qwen3-TTS', () => {
     expect(qwenCloneBody('qwen3.5-omni-plus-realtime', 'me', 'x')).not.toHaveProperty('parameters');
     expect(qwenCloneBody('qwen3-tts-vc-2026-01-22', 'me', 'x')).not.toHaveProperty('parameters');

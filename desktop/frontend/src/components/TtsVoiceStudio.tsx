@@ -5,12 +5,13 @@
  * ttsModelId=<providerId>/<targetModel> 与 ttsVoice,避免用户手配错配。
  * 复刻的目标模型可选(CLONE_MODELS,也能手填):用哪个复刻服务由引擎按模型名判(routes/tts.ts cloneService),这里只管传 targetModel。
  */
-import { useRef, useState } from 'react'
-import { Loader2, Play, RefreshCw, Trash2, Check, Upload } from 'lucide-react'
+import { useState } from 'react'
+import { Loader2, Play, RefreshCw, Trash2, Check } from 'lucide-react'
 import type { TanguDesktopConfig, DirectProviderConfig } from '../types'
 import { cloneTtsVoice, deleteTtsVoice, designTtsVoice, listTtsVoices, type TtsVoiceInfo } from '../services/backendService'
 import { registerMessages, useI18n } from '../i18n'
 import { homeTarget } from '../services/engine/targets'
+import { VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
 
 // 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
 // voice-enrollment 那一类(kind=cosy)不兜底:它底下有十来个模型,猜错就是一对配不上的模型和音色 → 不知道绑的是谁就不给「使用」。
@@ -38,7 +39,6 @@ registerMessages({
 })
 /** 绑在通话模型上的音色(Qwen-Omni / *-realtime):朗读用不了,列表里不给「使用」。 */
 const callOnly = (targetModel?: string): boolean => /omni|realtime/i.test(targetModel || '')
-const MAX_AUDIO_MB = 10
 
 export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktopConfig; provider: DirectProviderConfig; onApplied: () => void }) {
   const { t } = useI18n()
@@ -47,8 +47,8 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   const [busy, setBusy] = useState<'' | 'list' | 'clone' | 'design'>('')
   const [msg, setMsg] = useState('')
   const [cloneName, setCloneName] = useState('')
-  const cloneFileRef = useRef<HTMLInputElement>(null)
-  const [cloneFile, setCloneFile] = useState<File | null>(null)
+  const [sample, setSample] = useState<VoiceSample | null>(null)
+  const [pickerKey, setPickerKey] = useState(0) // 复刻成功后换 key = 把录音区清回初始
   const [cloneModel, setCloneModel] = useState(CLONE_MODELS[0])
   const [customModel, setCustomModel] = useState<string | null>(null) // 非 null = 正在手填模型 ID
   const cloneTarget = (customModel ?? cloneModel).trim()
@@ -65,27 +65,21 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
       .finally(() => setBusy(''))
   }
 
-  const apply = (voice: string, targetModel: string): void => {
+  const apply = (voice: string, targetModel: string, note = ''): void => {
     window.tangu!.setConfig({ ttsModelId: `${provider.providerId}/${targetModel}`, ttsVoice: voice }).then(() => {
-      setMsg(t('settings.tts.studio.applied', { voice }))
+      setMsg([t('settings.tts.studio.applied', { voice }), note].filter(Boolean).join(' '))
       onApplied()
     }).catch((e: any) => setMsg(`✗ ${e?.message || e}`))
   }
 
   const doClone = (): void => {
-    if (!cloneFile || !cloneTarget || busy) return
+    if (!sample?.ok || !cloneTarget || busy) return
     if (callOnly(cloneTarget)) { setMsg(t('settings.tts.studio.callModelRejected')); return } // 手填了通话模型:建出来也只会把朗读配置写坏
-    if (cloneFile.size > MAX_AUDIO_MB * 1024 * 1024) { setMsg(t('settings.tts.studio.fileTooLarge', { mb: MAX_AUDIO_MB })); return }
     setBusy('clone'); setMsg('')
-    const fr = new FileReader()
-    fr.onerror = () => { setBusy(''); setMsg('✗ read file failed') }
-    fr.onload = () => {
-      cloneTtsVoice(homeTarget(), { ...auth, name: cloneName, audioData: String(fr.result), targetModel: cloneTarget })
-        // 成功:先清 busy 再 refresh(refresh 自管 'list' 态,同一批次合并不闪);失败:保留错误信息,不 refresh(其 setMsg('') 会吃掉报错)。
-        .then((r) => { apply(r.voice, r.targetModel); setCloneFile(null); setCloneName(''); setBusy(''); refresh() })
-        .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
-    }
-    fr.readAsDataURL(cloneFile)
+    cloneTtsVoice(homeTarget(), { ...auth, name: cloneName, audioData: sample.dataUri, targetModel: cloneTarget, ...sample.script })
+      // 成功:先清 busy 再 refresh(refresh 自管 'list' 态,同一批次合并不闪);失败:保留错误信息,不 refresh(其 setMsg('') 会吃掉报错)。
+      .then((r) => { apply(r.voice, r.targetModel, r.fallbackReason ? t('voicesample.scriptMismatch') : ''); setSample(null); setPickerKey((k) => k + 1); setCloneName(''); setBusy(''); refresh() })
+      .catch((e) => { setMsg(`✗ ${e?.message || e}`); setBusy('') })
   }
 
   const doDesign = (): void => {
@@ -133,13 +127,11 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
               placeholder={t('settings.tts.studio.cloneModelPlaceholder')} onChange={(e) => setCustomModel(e.target.value)} />
           )}
         </div>
+        <VoiceSamplePicker key={pickerKey} onChange={setSample} disabled={busy !== ''} />
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* 选中即清 input.value:File 存 state,同一文件可重选(Chromium 同名重选不触发 onChange);文件名由下方 span 显示 */}
-          <input ref={cloneFileRef} type="file" accept="audio/*" hidden onChange={(e) => { setCloneFile(e.target.files?.[0] || null); e.target.value = '' }} />
-          <button className="btn ghost sm" onClick={() => cloneFileRef.current?.click()}><Upload size={12} /> {cloneFile ? cloneFile.name : t('settings.voice.pickAudio')}</button>
           <input type="text" style={{ width: 140 }} value={cloneName} placeholder={t('settings.tts.studio.namePlaceholder')}
             onChange={(e) => setCloneName(e.target.value)} />
-          <button className="btn primary sm tts-clone-go" disabled={!cloneFile || !cloneTarget || busy !== ''} onClick={doClone}>
+          <button className="btn primary sm tts-clone-go" disabled={!sample?.ok || !cloneTarget || busy !== ''} onClick={doClone}>
             {busy === 'clone' ? <Loader2 size={12} className="spin" /> : null} {t('settings.tts.studio.cloneBtn')}
           </button>
         </div>

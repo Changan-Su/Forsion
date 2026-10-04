@@ -10,6 +10,8 @@
  *       复刻服务按 targetModel 分家(cloneService):Qwen3-TTS-VC / Qwen-Omni → qwen-voice-enrollment(收 base64);
  *       Qwen-Audio-TTS / CosyVoice → voice-enrollment/create_voice(只收 URL:本地录音先传百炼临时空间换 oss:// 地址)。
  *       engine=cosy 是旧客户端的写法(不带 targetModel 时落 cosyvoice-v2)。
+ *       text / language:样本是照着文案念的时候带上,只给 qwen-voice-enrollment。对不上时百炼不报错,退回不用文案的方式,
+ *       并在应答里标 fallback_mode(10-04 实测 qwen3-tts-vc:wer_too_high)→ 原样带回 fallbackReason。
  *   POST /agent/tts/voices/design { baseUrl, apiKey, name, voicePrompt, previewText?, targetModel? } → { voice, targetModel, previewAudio? }
  *   POST /agent/tts/voices/delete { baseUrl, apiKey, voice, kind } → { ok }
  * 铁律:音色只能配 enrollment/design 时的 target_model 合成(前端采用音色时联动切模型)。CosyVoice / Qwen-Audio-TTS 音色走 WS 合成。
@@ -85,12 +87,16 @@ export function cloneService(targetModel: string): 'voice-enrollment' | 'qwen-vo
 /**
  * qwen-voice-enrollment 的 create 请求体。qwen3.8-omni 起必须带 voice_clone_mode:不带时百炼不报错,
  * 静默回退到 qwen3.5-omni 的旧复刻模式(文档 qwen-omni-voice-cloning「条件必填」)。3.5 就是那个旧模式,不带。
+ * script:样本是照着这段文案念的 —— 文案和语种一起给,百炼用得上(对不上它自己退回,不会失败)。
  */
-export function qwenCloneBody(targetModel: string, name: string, audioData: string): Record<string, unknown> {
+export function qwenCloneBody(targetModel: string, name: string, audioData: string, script?: { text: string; language?: string }): Record<string, unknown> {
   const needsMode = /omni/i.test(targetModel) && !/^qwen3\.5-omni/i.test(targetModel);
   return {
     model: 'qwen-voice-enrollment',
-    input: { action: 'create', target_model: targetModel, preferred_name: name, audio: { data: audioData } },
+    input: {
+      action: 'create', target_model: targetModel, preferred_name: name, audio: { data: audioData },
+      ...(script?.text ? { text: script.text, ...(script.language ? { language: script.language } : {}) } : {}),
+    },
     ...(needsMode ? { parameters: { voice_clone_mode: 'normal' } } : {}),
   };
 }
@@ -220,10 +226,13 @@ router.post('/agent/tts/voices/clone', authMiddleware, async (req: AuthRequest, 
   }
 
   try {
-    const j = await dsCustomization(p.baseUrl, p.apiKey, qwenCloneBody(targetModel, cleanName(req.body?.name), audio), 120_000); // 复刻处理较慢,给足超时
+    const text = String(req.body?.text ?? '').trim().slice(0, 1000);
+    const language = String(req.body?.language ?? '').trim();
+    const script = text ? { text, language: /^[A-Za-z]{2,12}$/.test(language) ? language : undefined } : undefined;
+    const j = await dsCustomization(p.baseUrl, p.apiKey, qwenCloneBody(targetModel, cleanName(req.body?.name), audio, script), 120_000); // 复刻处理较慢,给足超时
     const voice = j?.output?.voice || j?.output?.voice_id;
     if (!voice) throw new Error(`未返回音色 id:${JSON.stringify(j?.output || j).slice(0, 200)}`);
-    res.json({ voice, targetModel });
+    res.json({ voice, targetModel, ...(j.output.fallback_mode ? { fallbackReason: String(j.output.fallback_reason || 'fallback') } : {}) });
   } catch (e: any) {
     res.status(502).json({ detail: e?.message || 'clone voice failed' });
   }

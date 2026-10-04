@@ -3606,7 +3606,8 @@ Then reply with only the command output.`,
       if (!r.ok) throw new Error(`tts ${model} → ${r.status} ${(await r.text()).slice(0, 200)}`);
       return { audio: Buffer.from(await r.arrayBuffer()), ext: /mpeg/.test(r.headers.get('content-type') || '') ? 'mp3' : 'wav' };
     };
-    const sample = (await tts('qwen3-tts-flash', 'Cherry', '今天天气很好，我打算下午去公园散步，顺便把最近读的那本书看完。晚上回家以后做一顿简单的晚饭，然后整理一下这一周的工作笔记，早点休息。')).audio;
+    const SCRIPT = '今天天气很好，我打算下午去公园散步，顺便把最近读的那本书看完。晚上回家以后做一顿简单的晚饭，然后整理一下这一周的工作笔记，早点休息。';
+    const sample = (await tts('qwen3-tts-flash', 'Cherry', SCRIPT)).audio;
     writeFileSync(join(OUT, 'voiceclone-sample.wav'), sample);
     const audioData = `data:audio/wav;base64,${sample.toString('base64')}`;
     // 三个朗读模型各代表一条路:Qwen-Audio-TTS、CosyVoice(都走 voice-enrollment + 临时上传 + WS 合成)、Qwen3-TTS(qwen-voice-enrollment + HTTP 合成);
@@ -3629,9 +3630,25 @@ Then reply with only the command output.`,
       if (row.voice) await post('/agent/tts/voices/delete', { ...auth, voice: row.voice, kind: row.kind || (/^(cosyvoice|qwen-audio)/.test(model) ? 'cosy' : 'clone') }).catch(() => { row.leaked = true; });
       row.ok = !!row.voice && row.listed && !row.error && !row.leaked && (!speaks || row.bytes > 2000);
     }
+    // 文案:样本是照着文案念的时候,应用会把文案一起交给百炼。对的文案 → 正常用上;对不上 → 百炼退回不用文案的方式并标 fallback。
+    // 这条证的是「文案参数真的被百炼看了」(voice_clone_mode 那种参数就证不了)。只在 qwen3-tts-vc 上能观察到。
+    const script = { model: 'qwen3-tts-vc 文案', ok: false };
+    if (MODELS.includes('qwen3-tts-vc-2026-01-22')) {
+      rows.push(script);
+      const made = [];
+      try {
+        const right = await post('/agent/tts/voices/clone', { ...auth, name: 'live', targetModel: 'qwen3-tts-vc-2026-01-22', audioData, text: SCRIPT, language: 'zh' });
+        made.push(right.voice);
+        const wrong = await post('/agent/tts/voices/clone', { ...auth, name: 'live', targetModel: 'qwen3-tts-vc-2026-01-22', audioData, text: '量子计算机利用叠加态和纠缠态来完成传统计算机难以处理的任务，目前仍处在早期研究阶段。', language: 'zh' });
+        made.push(wrong.voice);
+        script.note = `对的文案 fallback=${right.fallbackReason || '无'};错的文案 fallback=${wrong.fallbackReason || '无'}`;
+        script.ok = !!right.voice && !right.fallbackReason && !!wrong.voice && !!wrong.fallbackReason;
+      } catch (e) { script.error = String(e?.message || e).slice(0, 200); }
+      for (const v of made) await post('/agent/tts/voices/delete', { ...auth, voice: v, kind: 'clone' }).catch(() => { script.leaked = true; script.ok = false; script.voice = v; });
+    }
     return {
       ok: rows.every((r) => r.ok),
-      detail: rows.map((r) => `${r.model} ${r.ok ? '✓' : '✗'} 复刻 ${r.voice ? sec(r.cloneMs) : '失败'}${r.listed ? '' : ' 列表里没有/模型不对'}${r.bytes !== undefined ? ` 朗读 ${r.bytes}B` : ''}${r.leaked ? ' ⚠️音色没删掉:' + r.voice : ''}${r.error ? ' ' + r.error : ''}`).join(' | '),
+      detail: rows.map((r) => r.note !== undefined || r === script ? `${r.model} ${r.ok ? '✓' : '✗'} ${r.note || r.error || ''}${r.leaked ? ' ⚠️音色没删掉:' + r.voice : ''}` : `${r.model} ${r.ok ? '✓' : '✗'} 复刻 ${r.voice ? sec(r.cloneMs) : '失败'}${r.listed ? '' : ' 列表里没有/模型不对'}${r.bytes !== undefined ? ` 朗读 ${r.bytes}B` : ''}${r.leaked ? ' ⚠️音色没删掉:' + r.voice : ''}${r.error ? ' ' + r.error : ''}`).join(' | '),
       output: rows.map((r) => `${r.model}\n  voice=${r.voice || '-'} kind=${r.kind || '-'}\n  ${r.error || `ok;样本与合成音频在 ${relative(root, OUT)}/voiceclone-*`}`).join('\n'),
     };
   });

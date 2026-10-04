@@ -4,12 +4,13 @@
  * 百炼铁律:复刻音色只能配复刻时的 target_model —— 朗读那边的 cosyvoice / qwen3-tts 音色在这里一律不能用,换模型就得重新复刻。
  */
 import { useRef, useState } from 'react'
-import { Loader2, Mic, Upload } from 'lucide-react'
+import { Loader2, Mic } from 'lucide-react'
 import type { DirectProviderConfig, StoredDesktopConfig } from '../types'
 import { cloneTtsVoice } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { REALTIME_CFG_BUMP_KEY } from '../services/realtimeCall'
 import { registerMessages, useI18n } from '../i18n'
+import { VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
 
 const MODELS = ['qwen3.8-omni-flash-realtime', 'qwen3.5-omni-plus-realtime', 'qwen3.5-omni-flash-realtime']
 // 百炼「Qwen-Omni-Realtime 音色列表」里的一部分(全表 36+ 种,可直接手输名字)
@@ -17,7 +18,6 @@ const VOICES = ['Tina', 'Cindy', 'Raymond', 'Katerina', 'Ryan', 'Mia', 'Jennifer
 const PRESETS = new Set(VOICES)
 const DEFAULT_VOICE = 'Tina' // 引擎留空时用的那个(realtimeVoice.ts DEFAULT_VOICE)
 const CUSTOM = '__custom__'
-const MAX_AUDIO_MB = 10
 
 registerMessages({
   'settings.realtime.title': { zh: '语音通话', en: 'Voice call' },
@@ -32,11 +32,9 @@ registerMessages({
   'settings.realtime.voiceMine': { zh: '我的音色 · {id}', en: 'My voice · {id}' },
   'settings.realtime.voiceIdPlaceholder': { zh: '填百炼音色 ID，回车保存', en: 'Bailian voice ID, press Enter to save' },
   'settings.realtime.cloneTitle': { zh: '用自己的声音复刻…', en: 'Clone your own voice…' },
-  'settings.realtime.cloneHint': { zh: '上传 10–20 秒干净的人声（不超过 60 秒、10MB，采样率 ≥ 24kHz），复刻成功后自动采用。音色只认当前的通话模型，换模型后要重新复刻。', en: 'Upload 10–20 seconds of clean speech (max 60 s and 10 MB, at least 24 kHz). The cloned voice is applied automatically. It only works with the current call model; re-clone after switching models.' },
+  'settings.realtime.cloneHint': { zh: '照着文案录一段，或选一个 10–20 秒的干净人声录音；复刻成功后自动采用。音色只认当前的通话模型，换模型后要重新复刻。', en: 'Record the passage, or choose a clean 10–20 second voice recording. The voice is applied automatically once cloned. It only works with the current call model, so switching models means cloning again.' },
   'settings.realtime.cloneBtn': { zh: '复刻', en: 'Clone' },
   'settings.realtime.cloned': { zh: '已采用复刻音色 {voice}', en: 'Now using cloned voice {voice}' },
-  'settings.realtime.fileTooLarge': { zh: '文件超过 {mb}MB', en: 'File is larger than {mb} MB' },
-  'settings.voice.pickAudio': { zh: '选择录音…', en: 'Choose a recording…' },
   'settings.realtime.voice.Tina': { zh: '甜甜 · 温暖女声', en: 'Warm female' },
   'settings.realtime.voice.Cindy': { zh: '林欣宜 · 台湾腔女声', en: 'Taiwanese-accent female' },
   'settings.realtime.voice.Raymond': { zh: '林川野 · 清亮男声', en: 'Clear male' },
@@ -54,11 +52,11 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
 }) {
   const { t } = useI18n()
   const [customId, setCustomId] = useState<string | null>(null) // 非 null = 正在填自定义音色 ID
-  const [file, setFile] = useState<File | null>(null)
+  const [sample, setSample] = useState<VoiceSample | null>(null)
+  const [pickerKey, setPickerKey] = useState(0) // 复刻成功后换 key = 把录音区清回初始
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
   const voiceRef = useRef<HTMLSelectElement>(null)
   const [cloneOpen, setCloneOpen] = useState(false)
   const lastModel = useRef('') // 关掉再打开回到上次选的模型
@@ -88,18 +86,15 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
   }
 
   const doClone = (): void => {
-    if (!file || !provider || busy) return
-    if (file.size > MAX_AUDIO_MB * 1024 * 1024) { setMsg(t('settings.realtime.fileTooLarge', { mb: MAX_AUDIO_MB })); return }
+    if (!sample?.ok || !provider || busy) return
     setBusy(true); setMsg('')
-    const fr = new FileReader()
-    fr.onerror = () => { setBusy(false); setMsg('✗ read file failed') }
-    fr.onload = () => {
-      cloneTtsVoice(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '', name, audioData: String(fr.result), targetModel: model.slice(provider.providerId.length + 1) })
-        .then((r) => save({ realtimeVoice: r.voice }).then(() => { setMsg(t('settings.realtime.cloned', { voice: r.voice })); setFile(null); setName('') }))
-        .catch((e: any) => setMsg(`✗ ${e?.message || e}`))
-        .finally(() => setBusy(false))
-    }
-    fr.readAsDataURL(file)
+    cloneTtsVoice(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '', name, audioData: sample.dataUri, targetModel: model.slice(provider.providerId.length + 1), ...sample.script })
+      .then((r) => save({ realtimeVoice: r.voice }).then(() => {
+        setMsg([t('settings.realtime.cloned', { voice: r.voice }), r.fallbackReason ? t('voicesample.scriptMismatch') : ''].filter(Boolean).join(' '))
+        setSample(null); setPickerKey((k) => k + 1); setName('')
+      }))
+      .catch((e: any) => setMsg(`✗ ${e?.message || e}`))
+      .finally(() => setBusy(false))
   }
 
   if (!ds.length) {
@@ -153,11 +148,10 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved }: {
               </button>
               {cloneOpen && (<>
               <div className="hint" style={{ margin: '8px 0' }}>{t('settings.realtime.cloneHint')}</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input ref={fileRef} type="file" accept="audio/*" hidden onChange={(e) => { setFile(e.target.files?.[0] || null); e.target.value = '' }} />
-                <button className="btn ghost sm" onClick={() => fileRef.current?.click()}><Upload size={12} /> {file ? file.name : t('settings.voice.pickAudio')}</button>
+              <VoiceSamplePicker key={pickerKey} onChange={setSample} disabled={busy} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
                 <input type="text" style={{ width: 140 }} value={name} placeholder={t('settings.tts.studio.namePlaceholder')} onChange={(e) => setName(e.target.value)} />
-                <button className="btn primary sm" disabled={!file || busy} onClick={doClone}>
+                <button className="btn primary sm realtime-clone-go" disabled={!sample?.ok || busy} onClick={doClone}>
                   {busy ? <Loader2 size={12} className="spin" /> : null} {t('settings.realtime.cloneBtn')}
                 </button>
               </div>
