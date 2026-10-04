@@ -130,7 +130,7 @@ describe('versioned Agent memory management', () => {
   it('requires an explicit fact in model calls and makes an incomplete update recoverable without writing', async () => {
     await saveAgent({ slug: 'name-fixture', name: 'Name fixture', systemPrompt: 'fixture' });
     const tool = memoryLogProvider.tools().find(t => t.name === 'remember')!;
-    expect((tool.definition as any).function.parameters.required).toEqual(['action', 'fact']);
+    expect((tool.definition as any).function.parameters.required).toEqual(['action', 'fact', 'scope']) // scope(10-04):每次写都要选级别 —— 这个 agent 自己的,还是这个项目的;
     const ctx = { userId: 'fixture-user', sessionId: 'name-session', runId: 'name-run', appId: 'tangu' };
     const run = (args: any) => runWithAgentSlug('name-fixture', () => tool.execute(args, ctx)) as Promise<string>;
     const added = JSON.parse(await run({ action: 'add', fact: '用户名字叫旧名字' }));

@@ -77,6 +77,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { buildProjectMemoryContext } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
@@ -1516,6 +1517,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ac.signal.throwIfAborted();
       console.warn('[agent-core] load agent memory failed:', e);
       systemParts.push('Agent memory is currently unreadable. Do not claim it is empty or that anything was saved; explicit memory tools may be retried.');
+    }
+    // 6b) 项目级记忆:只在本项目成立的事实,本项目里的 agent 共用(services/projectMemory.ts)。同一项目的会话之间不变 → 稳定区。
+    //     只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话不注入。读不到只丢这一段,不影响上面的 agent 记忆。
+    if (profile.capabilities.hostExec) {
+      try { const projectMemory = await buildProjectMemoryContext(userId, sessionId); if (projectMemory) systemParts.push(projectMemory); }
+      catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
     }
     ctxMark('memory');
     // 7/8) 技能目录 + deferred 工具目录 + 环境段(environment 在技能段后,保留原相对次序)

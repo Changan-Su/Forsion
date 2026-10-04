@@ -18,7 +18,7 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { deps } from '../seams/runtime.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
-import { loadHarness, shelvedOf } from '../agents/harnessStore.js';
+import { loadHarness, shelvedOf, equipHistory } from '../agents/harnessStore.js';
 import { getToolDefinitions } from '../tools/registry.js';
 import { isShelvable } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -45,14 +45,17 @@ const MIN_SHELVE_BYTES = 512;
  *  (接手的正是被点名的 agent,于是给自己提了名、没收起)。两条分支缺一不可,所以不交给模型现写。 */
 export const LOADOUT_APPLY_STEPS =
   'Steps for whoever runs this task: (1) if one of the agents listed above is you, shelve your own items now with manage_harness (action "upsert", kind "equip", exactly the tools and skills listed for you and nothing else, evidence = the counts above); ' +
-  '(2) for every other agent listed, call manage_harness with action "propose", agent = its slug, and one candidate line naming all of its items and counts, so that agent decides for itself at its next /refine. ' +
+  '(2) for every other agent listed, call manage_harness with action "propose", agent = its slug, tools and skills = exactly its listed items, evidence = its counts. When Muse runs this task those items are shelved for that agent right away (it can undo them in its notes); when another agent runs it, the suggestion waits in that agent\'s inbox for its next /refine. ' +
   'Shelving only moves a definition to the load-on-demand catalog; nothing is removed.';
 /** 同一段的中文版:这段话最后落在用户收件箱的卡片上(用户可见产物 → 跟界面语言,同条目名的 L());
  *  工具名 / 参数名不译。10-04 真实用量跑里 Muse 自己翻译时把「收起 / 装备」译成了「暂存 / 设备」。 */
 export const LOADOUT_APPLY_STEPS_ZH =
   '执行步骤:(1) 上面列出的 agent 里如果有你自己,现在就用 manage_harness 把你名下的收起(action "upsert"、kind "equip",tools 和 skills 只填你名下列出的那几项,evidence 写上面的次数);' +
-  '(2) 其余每个被列出的 agent,用 manage_harness 的 action "propose"(agent = 它的 slug)给它留一条候选,写全要收起哪几项和各自的次数,由它在下次复盘(/refine)时自己决定。' +
+  '(2) 其余每个被列出的 agent,用 manage_harness 的 action "propose"(agent = 它的 slug,tools 和 skills 只填它名下列出的那几项,evidence 写它的次数)。由 Muse 执行时,这几项会直接替它收起(它可以在自己的工作笔记里撤销);由别的 agent 执行时,只给它留一条候选,等它下次复盘(/refine)时自己决定。' +
   '收起只是把定义挪进按需目录,需要时照常可用,不会删除任何东西。';
+
+/** Muse 代收的节奏:六天内算同一周(巡检每周一次,留一天余量)。 */
+const WEEK_MS = 6 * 86_400_000;
 
 /** 'YYYY-MM-DD HH:MM:SS'(UTC)—— 与 SQLite 的 CURRENT_TIMESTAMP 同格式,两种方言都能按它比(同 museTodo 的窗口算法)。 */
 const cutoffOf = (days: number, now = Date.now()): string => new Date(now - days * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
@@ -124,6 +127,40 @@ async function residentTools(ctx: ToolContext, slug: string, def: { toolsMode?: 
   return getToolDefinitions(face as ToolContext).map((t) => ({ name: t.function.name, bytes: Buffer.byteLength(JSON.stringify(t)) }));
 }
 
+/** 一个 agent 这次建议收起什么。名单在这里定死(没调过的里挑定义最大的几个,太小的不值得收,各封顶 SUGGEST_MAX):
+ *  报告照它写,Muse 代为收起时也只认它 —— 没进这份名单的名字,谁也建议不了、收不了。 */
+async function pickLoadout(ctx: ToolContext, slug: string, def: { toolsMode?: 'allow' | 'deny'; toolsList?: string[]; enabledSkillIds?: string[] }, u: AgentUsage) {
+  const shelved = shelvedOf(await loadHarness(slug).catch(() => []));
+  const skills = await runWithAgentSlug(slug, () => loadSkillLoadout(ctx.userId, ctx.appId, {
+    execMode: 'host', enabledSkillIds: def.enabledSkillIds, skillsConfigured: Array.isArray(def.enabledSkillIds),
+  }), slug).catch(() => null);
+  const resident = (await residentTools(ctx, slug, def, skills?.enabledSkillIds ?? [])).filter((t) => !shelved.tools.has(t.name));
+  const calls = (n: string): number => u.tools.get(n)?.calls ?? 0;
+  const open = resident.filter((t) => isShelvable(t.name));
+  const never = open.filter((t) => calls(t.name) === 0).sort((a, b) => b.bytes - a.bytes);
+  const rare = open.filter((t) => calls(t.name) > 0 && calls(t.name) <= 2).sort((a, b) => b.bytes - a.bytes);
+  const used = open.filter((t) => calls(t.name) > 2).sort((a, b) => calls(b.name) - calls(a.name));
+  const total = resident.reduce((n, t) => n + t.bytes, 0);
+  // 对方拿回来过的不再建议;Muse 这一周已经代收的算进本周的量(SUGGEST_MAX 是一周一批的量,不是一次调用的量)。
+  const hist = await equipHistory(slug, WEEK_MS).catch(() => ({ restored: { tools: new Set<string>(), skills: new Set<string>() }, museRecent: { tools: 0, skills: 0 } }));
+  const pick = never.filter((t) => t.bytes >= MIN_SHELVE_BYTES && !hist.restored.tools.has(t.name)).slice(0, Math.max(0, SUGGEST_MAX - hist.museRecent.tools));
+  const listedSkills = (skills?.catalog ?? []).filter((s) => !shelved.skills.has(s.id));
+  const idleSkills = listedSkills.filter((s) => !u.skills.has(s.id)).sort((a, b) => b.bytes - a.bytes);
+  const pickSkills = idleSkills.filter((s) => !hist.restored.skills.has(s.id)).slice(0, Math.max(0, SUGGEST_MAX - hist.museRecent.skills));
+  return { shelved, skills, resident, calls, never, rare, used, total, pick, pickSkills, listedSkills, idleSkills };
+}
+
+/** 此刻对这个 agent 的建议(名字清单 + 依据)。数据不够(少于 MIN_RUNS 次)或 agent 不存在 → null。
+ *  Muse 在用户点了「交给 Muse」之后代为收起时用它把关:请求的名字只留下这里也有的。 */
+export async function suggestedLoadout(ctx: ToolContext, slug: string, days = 30): Promise<{ runs: number; days: number; tools: string[]; skills: string[] } | null> {
+  const span = Math.min(Math.max(7, Math.floor(Number(days) || 30)), 90);
+  const u = (await collectLoadoutUsage(ctx.userId, span)).get(slug);
+  const def = slug === MUSE_AGENT_SLUG ? null : await getAgent(slug);
+  if (!u || !def || u.runs < MIN_RUNS) return null;
+  const { pick, pickSkills } = await pickLoadout(ctx, slug, def, u);
+  return { runs: u.runs, days: span, tools: pick.map((t) => t.name), skills: pickSkills.map((s) => s.id) };
+}
+
 /** 报告正文(英文:模型读)。只读;每个结论都带次数,数据不够就明说不够。 */
 export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number; agent?: string } = {}): Promise<string> {
   const days = Math.min(Math.max(7, Math.floor(Number(opts.days) || 30)), 90);
@@ -146,34 +183,19 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
       continue;
     }
     judged++;
-    const shelved = shelvedOf(await loadHarness(slug).catch(() => []));
-    const skills = await runWithAgentSlug(slug, () => loadSkillLoadout(ctx.userId, ctx.appId, {
-      execMode: 'host', enabledSkillIds: def.enabledSkillIds, skillsConfigured: Array.isArray(def.enabledSkillIds),
-    }), slug).catch(() => null);
-    const resident = (await residentTools(ctx, slug, def, skills?.enabledSkillIds ?? [])).filter((t) => !shelved.tools.has(t.name));
-    const calls = (n: string): number => u.tools.get(n)?.calls ?? 0;
-    const open = resident.filter((t) => isShelvable(t.name));
-    const never = open.filter((t) => calls(t.name) === 0).sort((a, b) => b.bytes - a.bytes);
-    const rare = open.filter((t) => calls(t.name) > 0 && calls(t.name) <= 2).sort((a, b) => b.bytes - a.bytes);
-    const used = open.filter((t) => calls(t.name) > 2).sort((a, b) => calls(b.name) - calls(a.name));
-    const total = resident.reduce((n, t) => n + t.bytes, 0);
+    const { shelved, skills, resident, calls, never, rare, used, total, pick, pickSkills, listedSkills, idleSkills } = await pickLoadout(ctx, slug, def, u);
     const lines = [`## ${slug} — ${u.runs} runs; ${resident.length} always-loaded tools, ${kb(total)} of definitions on every request`];
-    // 建议名单在这里定死:没调过的里挑最大的几个(太小的不值得收)。没列出名字的,模型就建议不了。
-    const worth = never.filter((t) => t.bytes >= MIN_SHELVE_BYTES);
-    const pick = worth.slice(0, SUGGEST_MAX);
     const held = never.length - pick.length;
     lines.push(pick.length
       ? `Suggested tools to shelve this time (${pick.length}, ${kb(pick.reduce((n, t) => n + t.bytes, 0))}, each never called): ${pick.map((t) => `${t.name} (${kb(t.bytes)})`).join(', ')}`
       : 'Suggested tools to shelve this time: none');
-    if (held > 0) lines.push(`Not suggested this time: ${held} more never-called tool(s), either small (under ${kb(MIN_SHELVE_BYTES)}, not worth a catalog line) or left for the next review.`);
+    if (held > 0) lines.push(`Not suggested this time: ${held} more never-called tool(s), small (under ${kb(MIN_SHELVE_BYTES)}, not worth a catalog line), left for the next review, or brought back by the agent after an earlier shelving.`);
     if (rare.length) lines.push(`Not suggested — called 1-2 times: ${cut(rare.map((t) => `${t.name} ×${calls(t.name)} (last ${day(u.tools.get(t.name)!.last)})`))}`);
     if (used.length) lines.push(`Not suggested — in use: ${cut(used.map((t) => `${t.name} ×${calls(t.name)}`))}`);
-    if (shelved.tools.size) lines.push(`Already shelved by this agent: ${cut([...shelved.tools].map((n) => `${n}${calls(n) ? ` ×${calls(n)} since` : ''}`))}`);
+    if (shelved.tools.size) lines.push(`Already shelved for this agent: ${cut([...shelved.tools].map((n) => `${n}${calls(n) ? ` ×${calls(n)} since` : ''}`))}`);
     if (skills?.catalog.length) {
-      const listed = skills.catalog.filter((s) => !shelved.skills.has(s.id));
-      const idle = listed.filter((s) => !u.skills.has(s.id)).sort((a, b) => b.bytes - a.bytes);
+      const listed = listedSkills, idle = idleSkills;
       const loaded = listed.filter((s) => u.skills.has(s.id)).sort((a, b) => u.skills.get(b.id)!.calls - u.skills.get(a.id)!.calls);
-      const pickSkills = idle.slice(0, SUGGEST_MAX);
       lines.push(pickSkills.length
         ? `Suggested skills to shelve this time (${pickSkills.length} of ${idle.length} never loaded, ${listed.length} listed; ${kb(pickSkills.reduce((n, s) => n + s.bytes, 0))} of catalog lines): ${pickSkills.map((s) => s.id).join(', ')}`
         : `Suggested skills to shelve this time: none (${listed.length} listed)`);
@@ -184,7 +206,7 @@ export async function buildLoadoutReview(ctx: ToolContext, opts: { days?: number
   }
   const head =
     `Loadout usage over the last ${days} days (the user's own local work sessions only; chat-preset, coding-preset, cloud, team, sub-agent, Muse and automation runs are not counted; GUI-only tools are not listed). This is a report: nothing has been changed.\n` +
-    'An always-loaded tool costs its full definition on every request. Shelving (each agent does it for itself with manage_harness, kind "equip") only moves a definition to the load-on-demand catalog; the tool still works.\n' +
+    'An always-loaded tool costs its full definition on every request. Shelving (manage_harness, kind "equip") only moves a definition to the load-on-demand catalog; the tool still works.\n' +
     (judged
       ? `${judged} agent(s) have enough runs to judge. The "Suggested … this time" lines are the whole suggestion for this review (at most ${SUGGEST_MAX} tools and ${SUGGEST_MAX} skills per agent): pass them on exactly, add nothing. Everything else stays as it is.`
       : `No agent has enough runs (${MIN_RUNS}+) to judge: do not recommend anything.`);

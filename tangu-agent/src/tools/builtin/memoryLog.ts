@@ -6,6 +6,7 @@ import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
+import { openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET } from '../../services/projectMemory.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -29,11 +30,14 @@ export const memoryLogProvider: ToolProvider = {
         function: {
           name: 'remember',
           description:
-            'Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. ' +
-            'WHEN: stable user identity/preferences, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. ' +
+            'Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. ' +
+            // 10-04 用户裁决:「用户纠正肯定应该进记忆」—— 不进工作笔记,也不进协作说明。
+            'WHEN: what the user tells you about themselves or requires of you (identity, preferences, corrections of how you should work), environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. ' +
+            // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
+            'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure whether it would still be true in another project, ask yourself that and pick. ' +
             'SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests; use log_event instead. ' +
             'FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
-            'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ' +
+            'ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). ' +
             'Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.',
           parameters: {
             type: 'object',
@@ -42,8 +46,9 @@ export const memoryLogProvider: ToolProvider = {
               fact: { type: ['string', 'null'], description: 'For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails.' },
               id: { type: 'string', description: 'An entry ID returned by list for this Agent; required for update/forget.' },
               expectedVersion: { type: 'string', description: 'Version returned by list; include when modifying an existing entry.' },
+              scope: { type: 'string', enum: ['agent', 'project'], description: 'Which memory to write: "project" for facts that hold only in the current project, "agent" for facts that hold everywhere. Ignored by list.' },
             },
-            required: ['action', 'fact'],
+            required: ['action', 'fact', 'scope'],
           },
         },
       },
@@ -54,10 +59,18 @@ export const memoryLogProvider: ToolProvider = {
         if (!['add', 'list', 'update', 'forget'].includes(action)) return 'Error: unknown memory action';
         const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('remember', action) : null;
         if (remoteDenied) return `Error: ${remoteDenied}`;
+        // 项目级记忆只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话 / 云端 → 没有这一级。
+        const projectRef = deps().profile.capabilities.hostExec ? await resolveProjectMemory(ctx.userId, ctx.sessionId) : null;
         if (action === 'list') {
           if (!brain.getMemorySnapshot) return 'Error: this memory backend does not support entry management.';
           const snapshot = await brain.getMemorySnapshot(ctx.userId);
-          return JSON.stringify({ version: snapshot.version, entries: snapshot.entries, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET });
+          const project = projectRef ? await peekProjectMemory(projectRef) : null;
+          return JSON.stringify({ version: snapshot.version, entries: snapshot.entries, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET,
+            ...(projectRef ? { project: { name: projectRef.name, version: project?.version ?? null, entries: project?.entries ?? [], chars: project?.content.length ?? 0, limit: PROJECT_MEMORY_CHAR_BUDGET } } : {}) });
+        }
+        const scope = args.scope === 'project' ? 'project' : 'agent';
+        if (scope === 'project' && !projectRef) {
+          return 'Error: this session has no project, so there is no project memory. Use scope "agent", and name the project in the sentence if the fact is about one. Nothing was written.';
         }
         const fact = typeof args.fact === 'string' ? args.fact.trim() : '';
         if (action !== 'forget' && !fact) {
@@ -72,20 +85,25 @@ export const memoryLogProvider: ToolProvider = {
         }
         if (action !== 'add' && !String(args.id ?? '').trim()) return 'Error: id is required; use action list first';
         if (action !== 'add' && !String(args.expectedVersion ?? '').trim()) return 'Error: expectedVersion is required; use action list first';
-        if (brain.mutateMemory) {
-          const before = action === 'add' && brain.getMemorySnapshot ? await brain.getMemorySnapshot(ctx.userId) : undefined;
+        if (brain.mutateMemory || scope === 'project') {
+          // 两级共用下面的回执逻辑:只是读写落在哪个库不同。
+          const projectRepo = scope === 'project' ? await openProjectMemory(projectRef!) : null;
+          const limit = projectRepo ? PROJECT_MEMORY_CHAR_BUDGET : MEMORY_CHAR_BUDGET;
+          const read = async (): Promise<MemorySnapshot | undefined> => projectRepo ? projectRepo.snapshot() : brain.getMemorySnapshot ? brain.getMemorySnapshot(ctx.userId) : undefined;
+          const before = action === 'add' ? await read() : undefined;
           let snapshot: MemorySnapshot;
           try {
-            snapshot = await brain.mutateMemory(ctx.userId, {
+            const mutation = {
               action: action as 'add' | 'update' | 'forget', fact, id: args.id ? String(args.id) : undefined,
               expectedVersion: args.expectedVersion ? String(args.expectedVersion) : undefined,
-              source: { kind: 'explicit', sessionId: ctx.sessionId, runId: ctx.runId }, signal: ctx.signal,
-            });
+              source: { kind: 'explicit' as const, sessionId: ctx.sessionId, runId: ctx.runId }, signal: ctx.signal,
+            };
+            snapshot = projectRepo ? projectRepo.mutate({ ...mutation, cap: PROJECT_MEMORY_CHAR_BUDGET }) : await brain.mutateMemory!(ctx.userId, mutation);
           } catch (e) {
             // 满了就回显现有条目,让模型一次删旧加新(Hermes 的 IF FULL),而不是只丢一句「超预算」。
-            if (e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL' && brain.getMemorySnapshot) {
-              const full = await brain.getMemorySnapshot(ctx.userId);
-              return `Error: long-term memory is full (${full.content.length}/${MEMORY_CHAR_BUDGET} characters). Forget or shorten stale entries with update/forget (expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
+            const full = e instanceof MemoryRepositoryError && e.code === 'MEMORY_FULL' ? await read() : undefined;
+            if (full) {
+              return `Error: ${projectRepo ? 'project' : 'long-term'} memory is full (${full.content.length}/${limit} characters). Forget or shorten stale entries with update/forget (scope "${scope}", expectedVersion ${full.version}), then add. Current entries: ${JSON.stringify(full.entries.map(entryView))}`;
             }
             throw e;
           }
@@ -95,10 +113,10 @@ export const memoryLogProvider: ToolProvider = {
           // 没写进去的两种样子:版本没动(同 run 重复),或落库条目的来源不是本 run(别的 run 先写了——并发时版本会动,单看版本会漏判)。
           const duplicate = action === 'add' && !!entry && ((!!before && before.version === snapshot.version) || entry.source?.runId !== ctx.runId);
           return JSON.stringify({
-            ok: true, action, version: snapshot.version,
+            ok: true, action, scope, ...(projectRepo ? { project: projectRef!.name } : {}), version: snapshot.version,
             ...(duplicate ? { duplicate: true, note: 'An identical fact already exists; nothing was written.' } : {}),
             ...(entry ? { entry: entryView(entry) } : id ? { id } : {}),
-            count: snapshot.entries.length, chars: snapshot.content.length, limit: MEMORY_CHAR_BUDGET,
+            count: snapshot.entries.length, chars: snapshot.content.length, limit,
           });
         }
         if (action !== 'add') return 'Error: this memory backend does not support entry management.';

@@ -8,8 +8,9 @@
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
- *   npm run live:harness -- --only musereview --via-muse     # 巡检建议走「交给 Muse」那条路:Muse 只给被点名的 agent 留候选 → 它 /refine 时采纳并收起
+ *   npm run live:harness -- --only musereview --via-muse     # 巡检建议走「交给 Muse」那条路:Muse 直接替被点名的 agent 收起(只认巡检名单里的)→ 它下一次 run 就生效,不用 /refine
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
+ *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
@@ -1404,7 +1405,8 @@ try {
   //   library 「你自己留一份清单」→ 落进 agents/<slug>/Library/ 或它自己的记忆;写进工作目录 / 笔记库 = 归属混淆;什么都没落 = 空口答应
   //   libneg  负对照:「在我的工作文件夹里建 anniversaries.md」→ 必须落工作目录、不碰它自己的 Library
   //   remind  「明晚七点半提醒我出发」→ 真建了提醒(Muse triggers.json 或它自己的 auto 日程),不只是嘴上答应
-  //   lesson  「你回复太长了,以后短一点,记住」→ remember / manage_human / manage_harness 任一成功落盘(记分布);只说「记住了」= 红
+  //   lesson  「你回复太长了,以后短一点,记住」→ 只进记忆(remember)。用户的纠正归记忆,不进协作说明、不进工作笔记(10-04 用户第二次裁决);
+  //           落到别处或同时落多处 = 红(分布照记);只说「记住了」= 红
   //   self    「你有属于自己的东西吗」→ 提到日程/日历且不否认有(便宜的基线)
   await scenario('selfmodel', `selfmodel 主体性探针 ×${SELF_ROUNDS} 轮`, async () => {
     const walk = (dir) => { const m = new Map(); const rec = (d) => { let es = []; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { const p = join(d, e.name); if (e.isDirectory()) rec(p); else { try { m.set(p, readFileSync(p, 'utf8')); } catch { m.set(p, '?'); } } } }; rec(dir); return m; };
@@ -1449,7 +1451,7 @@ try {
           const ev = await probe('lesson', '你回复太长了,以后短一点,记住。');
           const route = okCalls(ev, ['remember', 'manage_human', 'manage_harness']).filter((n, i, xs) => xs.indexOf(n) === i);
           const key = route.join('+') || 'none'; routes[key] = (routes[key] || 0) + 1;
-          return { ok: !ev.error && route.length > 0, note: key, content: ev.content, ev };
+          return { ok: !ev.error && key === 'remember', note: key, content: ev.content, ev };
         },
         // 负对照(动作兑现兜底防误触):纯聊天,没要任何动作 —— 催发次数必须是 0
         chatneg: async () => {
@@ -1487,7 +1489,8 @@ try {
     const session = await mkSession(project, 'Human collaboration live');
     const aMark = `双案对照-${randomUUID().slice(0, 6)}`, pMark = `验收点-${randomUUID().slice(0, 6)}`;
     const cfg = { agentSlug: slug, cwd: project, debugSystemPrompt: true, thinkingLevel: 'low' };
-    const ev = await run(session.id, `请把这两点写入协作说明并保留具体名称。今后无论什么项目，我们都采用“${aMark}”：你先给两种可比较的方案，我再选方向。仅这个项目采用“${pMark}”：你每次交付附上三步复现路径，我来验收实际界面。之后直接按这些方式配合。`, 240_000, cfg);
+    // 10-04 用户第二次裁决:协作说明是 agent 对用户的意见和要求。写进去的两条都是「用户这一侧要做的事」(原先是双方约定,含 agent 自己怎么做)。
+    const ev = await run(session.id, `我想更好地配合你。请把你希望我做到的这两点写入协作说明并保留具体名称。无论什么项目都适用的一条叫“${aMark}”：你给出两种可比较的方案时，我要当场选定一个方向再让你动手。仅这个项目适用的一条叫“${pMark}”：我每次验收都按你给的三步复现路径走一遍实际界面。之后直接告诉我保存结果，不要先征求采用同意。`, 180_000, cfg);
     const receipts = ev.toolResults.flatMap(r => { try { const v = JSON.parse(r.full); return v.kind === 'human_update' ? [v.change] : []; } catch { return []; } });
     const agent = await api(`/agent/agents/${slug}/human`);
     const pd = await api(`/agent/project-context/human?sessionId=${session.id}`);
@@ -1519,16 +1522,61 @@ try {
     // Same original conversation still contains successful old tool receipts: UI undo must supersede those too.
     const removed = await run(session.id, '只列出当前仍生效的已保存协作约定的完整名称（含后缀），不调用工具。', 120_000, cfg);
     const reverted = undo.history.some(h => h.undoOf === receipts.find(c => c.scope.kind === 'project').id) && !removed.systemPrompt?.includes(pMark) && removed.content.includes(aMark) && !removed.content.includes(pMark);
-    // A later turn gives ordinary feedback without naming HUMAN.md or its tool.
-    // Grok dev regression: a deferred schema disappeared here and it repeatedly
-    // chose an unrelated plugin tool instead of updating the existing agreement.
-    const feedback = await run(session.id, '还有一个长期配合方式要改：以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。这样我能更快拍板。', 120_000, cfg);
+    // A later turn gives ordinary feedback about the AGENT without naming any store or tool. The user's requirement
+    // of the agent belongs in memory (10-04 ruling), so HUMAN.md must stay as it is. (Before the ruling this leg expected
+    // a human_update; the original regression it guarded, a deferred schema disappearing on grok, is still covered:
+    // the model has to reach a real storage tool rather than an unrelated plugin tool.)
+    const feedback = await run(session.id, '你刚才给方案的方式我不太习惯。以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。', 120_000, cfg);
     const revised = await api(`/agent/agents/${slug}/human`);
-    const feedbackApplied = !feedback.error && feedback.done && feedback.toolResults.some(r => {
-      try { const v = JSON.parse(r.full); return v.kind === 'human_update' && v.change?.scope.kind === 'agent'; } catch { return false; }
-    }) && revised.content.includes(aMark) && /时间|耗时/.test(revised.content) && revised.content.includes('假设') && !revised.content.includes(pMark);
-    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, output: feedback.content, content: revised.content, toolCalls: feedback.toolCalls }, null, 2));
+    const memoryAfter = await api(`/agent/memory?slug=${slug}`);
+    const remembered = feedback.toolResults.some(r => r.name === 'remember' && !r.isError && /"ok":true/.test(r.full || ''));
+    const humanTouched = feedback.toolResults.some(r => { try { return JSON.parse(r.full).kind === 'human_update'; } catch { return false; } });
+    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === agent.content;
+    writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === agent.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
     return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
+  });
+
+  // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
+  //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
+  //     → 前者落项目记忆(本机、按项目路径存,项目目录里不多任何文件),后者落 A 自己的记忆,两边互不串;
+  //  ② 另一个 agent B 在同一个项目开新会话:项目那条在它的提示里、答得出;A 自己那条不在(agent 之间不共用);
+  //  ③ A 换到项目二:项目那条不在提示里、答不出,自己那条还在;
+  //  ④ A 在不属于任何项目的会话里:没有项目记忆段。
+  await scenario('projmem', 'projmem 记忆分项目级 / 全局级:落点、同项目共用、跨项目隔离', async () => {
+    const a = 'live-pm-a', b = 'live-pm-b';
+    for (const [slug, name] of [[a, 'Atlas'], [b, 'Birch']]) await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, systemPrompt: 'Be concise and respond in Chinese.' }) });
+    const p1 = join(workspace, 'pm-one'), p2 = join(workspace, 'pm-two');
+    for (const p of [p1, p2]) { mkdirSync(p); writeFileSync(join(p, 'README.md'), `# ${p === p1 ? 'pm-one' : 'pm-two'}\n`); }
+    const mkS = async (slug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, ...(cwd ? { project_path: cwd } : {}), agent_config: { agentSlug: slug, execMode: 'host', ...(cwd ? { cwd } : {}) } }) })).session.id;
+    const cfgOf = (slug, cwd) => ({ agentSlug: slug, ...(cwd ? { cwd } : {}), debugSystemPrompt: true, thinkingLevel: 'low' });
+    const branch = `release-${randomUUID().slice(0, 6)}`, habit = `结论先行-${randomUUID().slice(0, 6)}`;
+    const listing = () => readdirSync(p1).sort().join(',');
+    const before = listing();
+    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:我看汇报的习惯代号是「${habit}」,意思是先给结论再给过程。`, 180_000, cfgOf(a, p1));
+    const calls = ev.toolArgs.filter((t) => t.name === 'remember').map((t) => { try { return JSON.parse(t.arguments); } catch { return {}; } });
+    const scopeOf = (mark) => calls.find((c) => String(c.fact || '').includes(mark))?.scope || null;
+    const agentMem = String((await api(`/agent/memory?slug=${a}`)).content || '');
+    const pmRoot = join(home, 'project-memory');
+    const pmDirs = existsSync(pmRoot) ? readdirSync(pmRoot) : [];
+    const pmText = pmDirs.map((d) => { try { return readFileSync(join(pmRoot, d, 'MEMORY.md'), 'utf8'); } catch { return ''; } }).join('\n');
+    const placed = scopeOf(branch) === 'project' && scopeOf(habit) === 'agent' && pmText.includes(branch) && !pmText.includes(habit) && agentMem.includes(habit) && !agentMem.includes(branch);
+    const clean = listing() === before;
+    const first = { scopes: { branch: scopeOf(branch), habit: scopeOf(habit) }, projectStores: pmDirs.length, inProjectStore: pmText.includes(branch), inAgentStore: agentMem.includes(habit), habitInProjectStore: pmText.includes(habit), branchInAgentStore: agentMem.includes(branch), projectDirUnchanged: clean, approvals: ev.approvals };
+    if (ev.error || !ev.done || ev.approvals || !placed || !clean) return { ok: false, detail: `① ${ev.error || JSON.stringify(first)}`, output: ev.content, toolCalls: ev.toolCalls };
+    const ask = '这个项目的发布分支叫什么?不知道就直说不知道。不调用工具。';
+    const same = await run(await mkS(b, p1, 'Project memory other agent'), ask, 120_000, cfgOf(b, p1));
+    const shared = !same.error && !!same.systemPrompt?.includes('## Project Memory') && same.systemPrompt.includes(branch) && same.content.includes(branch) && !same.systemPrompt.includes(habit);
+    const other = await run(await mkS(a, p2, 'Project memory other project'), ask, 120_000, cfgOf(a, p2));
+    const isolated = !other.error && !!other.systemPrompt && !other.systemPrompt.includes(branch) && !other.content.includes(branch) && other.systemPrompt.includes(habit);
+    const loose = await run(await mkS(a, null, 'Project memory no project'), ask, 120_000, cfgOf(a, null));
+    const projectless = !loose.error && !!loose.systemPrompt && !loose.systemPrompt.includes(branch) && !loose.systemPrompt.includes('## Project Memory');
+    writeFileSync(join(OUT, 'projmem-evidence.json'), JSON.stringify({ first, shared, isolated, projectless, calls, replies: { write: ev.content, sameProjectOtherAgent: same.content, otherProject: other.content, noProject: loose.content } }, null, 2));
+    return { ok: shared && isolated && projectless, detail: [
+      `① 落点 项目那条 scope=${first.scopes.branch}、不分项目那条 scope=${first.scopes.habit};各在各的库、互不串;项目目录没多文件;审批 ${ev.approvals}`,
+      `② 同项目另一个 agent ${shared ? '提示里有项目那条、答对了,没有 A 自己那条' : `⚠ ${same.error || JSON.stringify({ block: !!same.systemPrompt?.includes('## Project Memory'), inPrompt: !!same.systemPrompt?.includes(branch), answered: same.content.includes(branch), sawAgentFact: !!same.systemPrompt?.includes(habit) })}`}`,
+      `③ 换一个项目 ${isolated ? '项目那条不在、答不出;自己那条还在' : `⚠ ${other.error || JSON.stringify({ leaked: !!other.systemPrompt?.includes(branch), answered: other.content.includes(branch), ownFact: !!other.systemPrompt?.includes(habit) })}`}`,
+      `④ 不属于项目的会话 ${projectless ? '没有项目记忆段' : `⚠ ${loose.error || '提示里出现了项目记忆'}`}`,
+    ].join(';'), output: `【写入】${ev.content}\n【同项目另一个 agent】${same.content}\n【换项目】${other.content}\n【无项目】${loose.content}`, toolCalls: [...ev.toolCalls, '|', ...same.toolCalls, '|', ...other.toolCalls] };
   });
 
   const chat = await scenario('chat', 'chat 基础对话', async () => {
@@ -3152,39 +3200,46 @@ Then reply with only the command output.`,
       shelvedOwn = !applyEv.error && !applyEv.approvals && within && equip.some((e) => (e.tools || []).some((t) => named.includes(t)));
       applied = applyEv.error ? `出错:${applyEv.error}` : equip.length ? `自己收起了 ${equip.flatMap((e) => e.tools || []).length} 工具 + ${equip.flatMap((e) => e.skills || []).length} 技能${within ? '' : '(⚠ 超出每次 8 + 8 的上限)'}:${equip.flatMap((e) => [...(e.tools || []), ...(e.skills || [])]).join('+')}(审批 ${applyEv.approvals})` : `没收起(工具 ${applyEv.toolCalls.join(',') || '无'};回复 ${applyEv.content.slice(0, 120)})`;
     }
-    // ⑤ --via-muse:用户在卡片上点的是「交给 Muse」而不是「新会话执行」。Muse 不是被点名的 agent → 只能给它留候选(propose),
-    //    自己不写别人的笔记;候选要等那个 agent 复盘(/refine)时才被采纳。整条链:批准 → Muse 周期 → 候选 → /refine → 收起。
+    // ⑤ --via-muse:用户在卡片上点的是「交给 Muse」而不是「新会话执行」。10-04 用户裁决「Muse 也开放自动采纳」:
+    //    Muse 直接替被点名的 agent 收起(引擎只认此刻巡检名单里的名字),不再往它的候选收件箱里放、也不用等它 /refine。
+    //    整条链:批准 → Muse 周期 → 那个 agent 的笔记里多一条装备条目(编辑史记 by:muse)→ 它的下一次 run 里这些工具已在按需目录。
     let viaMuse = null;
     if (argv.includes('--via-muse') && todos[0]) {
       const before = await api(`/agent/agents/${slug}/harness`);
       await api(`/agent/special/muse/todos/${todos[0].id}/approve`, { method: 'POST', body: '{}' });
       const second = await until(() => { const r = museRuns()[1]; return r && !['queued', 'running'].includes(r.status) ? r : null; }, 420_000, 4000);
       const mid = await api(`/agent/agents/${slug}/harness`);
-      const proposed = (mid.candidates || []).length - (before.candidates || []).length;
-      const museWrote = (mid.entries || []).length - (before.entries || []).length;
-      let refined = null;
-      if (second && proposed > 0) {
-        const rv = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Refine after Muse', model_id: MODEL, agent_config: cfg }) })).session.id, '/refine', 300_000, cfg);
-        const eq = ((await api(`/agent/agents/${slug}/harness`)).entries || []).filter((e) => e.kind === 'equip' && !(before.entries || []).some((b) => b.id === e.id));
-        refined = { tools: eq.flatMap((e) => e.tools || []), skills: eq.flatMap((e) => e.skills || []), calls: rv.toolCalls, approvals: rv.approvals, error: rv.error || null, reply: String(rv.content || '').slice(0, 800) };
+      const eq = (mid.entries || []).filter((e) => e.kind === 'equip' && !(before.entries || []).some((b) => b.id === e.id));
+      const shelved = { tools: eq.flatMap((e) => e.tools || []), skills: eq.flatMap((e) => e.skills || []) };
+      const queued = (mid.candidates || []).length - (before.candidates || []).length;
+      // 报告里给这个 agent 列的名单(「Suggested tools to shelve this time (n, x KB, each never called): a (1.2 KB), b (…)」)
+      const block = String(cycle.report || '').split('## ').find((b) => b.startsWith(`${slug} `)) || '';
+      const reported = (block.split('\n').find((l) => l.startsWith('Suggested tools to shelve this time (')) || '').split('): ').slice(1).join('): ').split(', ').map((x) => x.split(' ')[0]).filter(Boolean);
+      const byMuse = (mid.journal || []).filter((l) => eq.some((e) => e.id === l.entryId)).every((l) => l.by === 'muse');
+      let next = null;
+      if (second && shelved.tools.length) {
+        const ev = await run((await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'After Muse shelved', model_id: MODEL, agent_config: cfg }) })).session.id, '用一句话打个招呼。不调用工具。', 180_000, cfg);
+        const tail = ev.systemPrompt?.split('Shelved equipment')[1] || '';
+        next = { error: ev.error || null, noted: shelved.tools.filter((t) => tail.includes(t)).length, inCatalog: shelved.tools.filter((t) => (ev.systemPrompt || '').includes(`- ${t}:`)).length };
       }
-      viaMuse = { cycle: second ? { status: second.status, tools: String(second.tools || '').split(',').filter(Boolean) } : null, proposed, museWrote, candidates: (mid.candidates || []).slice(-3), refined };
+      viaMuse = { cycle: second ? { status: second.status, tools: String(second.tools || '').split(',').filter(Boolean) } : null, shelved, reported, queued, byMuse, next, museEntry: eq[0] ? { title: eq[0].title, evidence: eq[0].evidence } : null };
     }
     writeFileSync(join(OUT, 'musereview-evidence.json'), JSON.stringify({ cycle: { status: cycle.status, tools }, report: cycle.report, todos, entry, harnessAfterCycle: untouched, applied, applyTools: applyEv?.toolCalls || null, applyReply: applyEv?.content || null, viaMuse }, null, 2));
-    const okVia = !!viaMuse && !!viaMuse.cycle && viaMuse.proposed > 0 && viaMuse.museWrote === 0 && !!viaMuse.refined && !viaMuse.refined.error
-      && viaMuse.refined.tools.length > 0 && viaMuse.refined.tools.length <= 8 && viaMuse.refined.skills.length <= 8;
+    const okVia = !!viaMuse && !!viaMuse.cycle && viaMuse.shelved.tools.length > 0 && viaMuse.shelved.tools.length <= 8 && viaMuse.shelved.skills.length <= 8
+      && viaMuse.shelved.tools.every((t) => viaMuse.reported.includes(t)) && viaMuse.byMuse && viaMuse.queued === 0
+      && !!viaMuse.next && !viaMuse.next.error && viaMuse.next.noted === viaMuse.shelved.tools.length && viaMuse.next.inCatalog === viaMuse.shelved.tools.length;
     return { ok: reviewed && oneTodo && handsOff && kept && (argv.includes('--via-muse') ? okVia : shelvedOwn), detail: [
       `① 周期 ${cycle.status};工具 ${tools.join(',') || '无'}`,
       `② review_loadout ${reviewed ? '调了且报告里有该 agent' : `⚠ ${cycle.reviews ? '调了但报告里没有该 agent' : '没调'}`};TODO ${todos.length} 条${oneTodo ? `,点名 ${named.join('+')}` : `(⚠ 要恰好 1 条且点名 ${slug} 与一个没用过的工具;实得点名 ${named.join('+') || '无'})`}`,
       `③ Muse 没动它 ${handsOff ? '是' : `⚠ 笔记 ${(untouched.entries || []).length} 条 / 候选 ${(untouched.candidates || []).length} 条`};条目 ${kept ? `还在(${entry.name},已记 lastRun)` : entry ? '还在但没记 lastRun' : '⚠ 不见了'}`,
       ...(argv.includes('--via-muse')
-        ? [`⑤ 交给 Muse:${okVia ? '' : '⚠ '}${viaMuse?.cycle ? `Muse 周期 ${viaMuse.cycle.status}(工具 ${viaMuse.cycle.tools.join(',') || '无'});给该 agent 留候选 ${viaMuse.proposed} 条,直接改它的笔记 ${viaMuse.museWrote} 处;该 agent /refine 后收起 ${viaMuse.refined ? `${viaMuse.refined.tools.length} 工具 + ${viaMuse.refined.skills.length} 技能(审批 ${viaMuse.refined.approvals})` : '未跑'}` : '420s 内 Muse 没有跑完第二个周期'}`]
+        ? [`⑤ 交给 Muse:${okVia ? '' : '⚠ '}${viaMuse?.cycle ? `Muse 周期 ${viaMuse.cycle.status}(工具 ${viaMuse.cycle.tools.join(',') || '无'});直接替它收起 ${viaMuse.shelved.tools.length} 工具 + ${viaMuse.shelved.skills.length} 技能(报告名单 ${viaMuse.reported.length} 个,名单外 ${viaMuse.shelved.tools.filter((t) => !viaMuse.reported.includes(t)).length} 个;编辑史署名 Muse ${viaMuse.byMuse ? '是' : '否'};另留候选 ${viaMuse.queued} 条);它的下一次 run ${viaMuse.next ? (viaMuse.next.error ? `出错 ${viaMuse.next.error}` : `笔记段写着 ${viaMuse.next.noted} 个、按需目录里有 ${viaMuse.next.inCatalog} 个`) : '未跑'}` : '420s 内 Muse 没有跑完第二个周期'}`]
         : [`④ 把任务书交给该 agent:${shelvedOwn ? '' : '⚠ '}${applied}`]),
     ].join(';'), output: `【报告】\n${String(cycle.report || '').slice(0, 3000)}\n\n【TODO】\n${text.slice(0, 3000)}\n\n【执行】${applyEv?.content || ''}`, toolCalls: [...tools, '|', ...(applyEv?.toolCalls || [])], tokens: applyEv ? tokensOf(applyEv) : undefined };
   });
   // ── 真实使用模拟(10-04):消息不点名任何存储库 / 工具 / 动作;判据与设计见 lib/real-use-live.mjs ──
   await scenario('realuse', `realuse 真实使用模拟 ×${SELF_ROUNDS} 轮${opt('usage-db', '') ? ' + 真实用量巡检' : ''}`, () =>
-    realUseLive({ run, api, until, asList, home, workspace, OUT, MODEL, AGENT_CONFIG, MUSE_MODE, rounds: SELF_ROUNDS, usageDb: opt('usage-db', ''), museLogTail }));
+    realUseLive({ run, api, until, asList, home, workspace, OUT, MODEL, AGENT_CONFIG, MUSE_MODE, rounds: SELF_ROUNDS, usageDb: opt('usage-db', ''), legs: opt('real-legs', 'q,i,c,e'), museLogTail }));
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
   // 台架**证不了 token 省了多少**(样本太小、上游路由不可控),它证的是「结构没塌」:同会话后续调用还命中得了吗?
   // 跨会话那半(A vs B 的 headHash 相不相等)只**记录**不设门 —— 它受上游副本路由影响,红了也未必是引擎的锅(§2.4)。

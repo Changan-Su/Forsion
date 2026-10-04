@@ -41,7 +41,8 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
-import { appendHarnessCandidates } from '../agents/harnessStore.js';
+import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable } from '../agents/harnessStore.js';
+import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
 import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET } from './memoryRepository.js';
@@ -92,7 +93,8 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     fields.push(
       '"memory_candidates": an array of NEW long-term memory candidates observed in this conversation (usually empty). ' +
       'Gate each entry: include it ONLY if a future conversation would plausibly go better because of it. Qualifying: stable user facts/preferences the user stated or enforced, ' +
-      'high-leverage procedural knowledge (exact paths/commands/workflows proven to work), landmines to avoid. ' +
+      'corrections the user made to how the agent should work, high-leverage procedural knowledge (exact paths/commands/workflows proven to work), landmines to avoid. ' +
+      'A fact that holds only inside one project must name that project in the sentence. ' +
       'Never include: one-off requests, temporary or task-status facts, summaries of what happened (that is the log), or restated common knowledge. ' +
       'One short self-contained sentence per entry, in the user\'s language; replace any token/key/password with [REDACTED]. ' +
       'At most 5 entries — pick the highest-value ones. When in doubt, leave it out — an empty array is the normal outcome.',
@@ -102,11 +104,13 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     // 反模式清单抄 hermes skill-review 的负面门(环境失败/负面断言/一次性叙事会硬化成日后反噬的拒绝理由)。
     fields.push(
       '"harness_candidates": an array of NEW working-method lessons for the agent\'s own working notes (usually empty). ' +
-      'Qualifying: a durable, transferable lesson about HOW this agent should work — a workflow correction the user made, ' +
-      'a delegation pattern that worked well, a procedural landmine and how to avoid it. ' +
+      'Qualifying: a durable, transferable lesson the agent worked out by itself about HOW it should work — a technique or delegation pattern that proved itself, ' +
+      'a procedural landmine and the way around it. ' +
       'Never include: environment/setup hiccups, transient errors, negative claims like "tool X is broken" (they harden into refusals that bite the agent later), ' +
-      'one-off task narratives, or facts about the user (those belong in memory_candidates). ' +
-      'One short self-contained sentence per entry, in English. At most 3 entries; an empty array is the normal outcome.',
+      'one-off task narratives, anything the user told, corrected or required of the agent, or facts about the user or a project (those belong in memory_candidates). ' +
+      // 10-04:提名过得了形状闸就直接写进工作笔记(用户裁决「可以做自动采纳」)—— 所以要 title / lesson / evidence 三样,而不是一句话。
+      'Each entry is an object {"title": a short name of at most 60 characters, "lesson": one self-contained sentence saying what to do, "evidence": one short sentence saying what happened in this conversation that shows it}, all in English. ' +
+      'An entry may be written straight into the working notes without anyone reviewing it, so include only what clearly helped here. At most 3 entries; an empty array is the normal outcome.',
     );
   }
   const example =
@@ -643,11 +647,20 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         }
         if (judgeHarness) {
           const rawHc: unknown[] = Array.isArray((j as any).harness_candidates) ? (j as any).harness_candidates : [];
-          const hCands = rawHc
-            .map((c) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, 300))
-            .filter((c) => c.length >= 4 && c.toUpperCase() !== 'NOTHING')
+          const flat = (v: unknown, max: number): string => redactSecrets(String(v ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, max);
+          // 对象形 = 可直接采纳的提名;字符串形(旧格式 / 模型没照格式来)只进候选收件箱。
+          const noms = rawHc
+            .map((c): { title: string; lesson: string; evidence: string } | string => {
+              if (c && typeof c === 'object') {
+                const o = c as Record<string, unknown>;
+                const nom = { title: flat(o.title, 80), lesson: flat(o.lesson ?? o.body, 300), evidence: flat(o.evidence, 200) };
+                return nom.title && nom.lesson.length >= 4 && nom.evidence ? nom : flat(`${nom.title}${nom.title && nom.lesson ? ': ' : ''}${nom.lesson}`, 300);
+              }
+              return flat(c, 300);
+            })
+            .filter((c) => (typeof c === 'string' ? c.length >= 4 && c.toUpperCase() !== 'NOTHING' : true))
             .slice(0, HARNESS_RAW_MAX_PER_ROUND);
-          if (hCands.length) {
+          if (noms.length) {
             // 归桶=展示身份(HARNESS.md 按 agent 本体,不折叠 shareDefaultMemory,与注入槽同源);
             // effectiveSlug/ALS 此刻都是折叠后的记忆域,不可用——从会话 agent_config 取 active slug。
             // 存储值必须过合法性闸(会话配置可塞任意串,'..' 会逃出 agentsDir——Codex P2/P3 评审 Major #1);
@@ -663,12 +676,27 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
               }
             } catch { /* ignore */ }
             if (slugOk) {
-              const n = await appendHarnessCandidates(displaySlug, sessionId, hCands).catch((e: any) => {
+              // 自动采纳(10-04):过得了形状闸的提名直接写成条目;过不了的、写不进的(满了 / 校验不过)照旧进候选收件箱等 /refine。
+              const adopted: string[] = [];
+              const queued: string[] = [];
+              for (const nom of noms) {
+                if (typeof nom === 'string') { queued.push(nom); continue; }
+                const line = flat(`${nom.title}: ${nom.lesson} (evidence: ${nom.evidence})`, 300);
+                if (!autoAdoptable(`${nom.title} ${nom.lesson} ${nom.evidence}`)) { queued.push(line); continue; }
+                try { if ((await adoptHarnessNomination(displaySlug, nom, sessionId)) === 'adopted') adopted.push(nom.title); }
+                catch (e: any) { log(`工作笔记提名未能直接采纳,转入候选收件箱: ${e?.message || e}`); queued.push(line); }
+              }
+              if (adopted.length) {
+                scheduleAgentFilesSync(userId, displaySlug);
+                await logActivity(userId, 'harness_adopted', adopted.join(' | ').slice(0, 300), sessionId);
+                log(`已采纳 ${adopted.length} 条工作笔记提名(${displaySlug})`);
+              }
+              const n = queued.length ? await appendHarnessCandidates(displaySlug, sessionId, queued).catch((e: any) => {
                 log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
                 return 0;
-              });
+              }) : 0;
               if (n) {
-                await logActivity(userId, 'harness_candidates', hCands.join(' | ').slice(0, 300), sessionId);
+                await logActivity(userId, 'harness_candidates', queued.join(' | ').slice(0, 300), sessionId);
                 log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug})`);
               }
             } else {
