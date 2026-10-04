@@ -595,7 +595,7 @@ async function slashStability(browser) {
     const low = await openPage(LONG, '&upane')
     const above = await walk(low)
     check('H1 above the caret, the category capsule stays put across Basic / AI / Plugins', above.every((step) => step.above) && spread(above) < 1, above)
-    check('H2 a short category keeps the footer on the bottom edge', above.every((step) => step.footGap <= 8), above.map((step) => step.footGap))
+    check('H2 a short category keeps the footer on the bottom edge', above.every((step) => step.footGap >= 0 && step.footGap <= 8), above.map((step) => step.footGap))
     await screenshot(low, 'slash-stable-above-basic', false)
     await low.locator('.slash-category-tab[data-category="ai"]').click()
     await waitCategory(low, 'ai')
