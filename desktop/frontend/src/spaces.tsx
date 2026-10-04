@@ -292,12 +292,16 @@ export function registerSpaces(): void {
   // 必须在上面那轮 addRibbonIcon 之后 —— 它靠 upsert 覆盖刚注册的那一份。
   installHomeSlot()
   // 活动 Space 不在本产品档案里 → 回落档案默认(单品变体首启:localStorage 可能存着全家桶的 'tangu')。
+  // ⚠️ 只改内存,**不写 localStorage**:此刻不在表里的 id 多半是异步注册的用户 / 插件 Space,盘上那个值是「上次退出在哪」
+  // 的唯一记录(下次启动的 BOOT_ACTIVE_SPACE_ID)。写回由真正定了位的人做 —— bootstrapEngine 的 setActiveSpaceCold、
+  // settleAsyncStartupSpace、用户自己切 Space。这里落盘的话,只要写回没发生,盘上就成了「活动 = 回落 Space、布局键 =
+  // 上次退出那个 Space 的现场」,下次启动那份现场被归档进回落 Space 的槽(10-03 实报:space:tangu 里是视频工作室的面板)。
+  // 写回不发生根本不需要故障:卫星窗(设置 / 市场浮窗、分离窗)也跑到这里,而它们从不补定位。
   if (new URLSearchParams(location.search).get('window') === 'mini') return
   const activeId = useSpaceStore.getState().activeSpaceId
   if (SPACES.length && !SPACES.some((sp) => sp.id === activeId)) {
     const fallback = SPACES.some((sp) => sp.id === PRODUCT.defaultSpace) ? PRODUCT.defaultSpace : SPACES[0].id
     useSpaceStore.setState({ activeSpaceId: fallback })
-    try { localStorage.setItem('forsion_tangu_active_space', fallback) } catch { /* ignore */ }
   }
   // 固定 View + 工作区锁档(2026-10-03,用户拍板「升级后重置每个 Space 的默认布局」):此前存下的布局里,
   // 固定项可能早被关掉 / 顶掉 / 拖走,工作区条目也没带档位 → 一次性丢掉全部 Space 的已存布局,各自按新默认重建。

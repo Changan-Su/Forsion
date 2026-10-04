@@ -24,7 +24,9 @@ function loadActive(): string {
  *  会把「此刻尚未注册」的 id 就地归一成产品默认(用户 L0 Space 走异步装载、或该 Space 已被删),
  *  它跑在 installEngine 的启动策略**之前**。读归一后的值 = 把上一程的布局归档到别人名下:
  *  上次退出在用户 Space U → 归一成 tangu → U 的现场被写进 `space:tangu`,U 自己的槽还停在上上次
- *  (Codex 评审 2026-08-13 抓的 High)。 */
+ *  (Codex 评审 2026-08-13 抓的 High)。
+ *  这份快照可信的前提:归一后的值**从不落盘**(registerSpaces 只改内存)。落了盘,下一程的快照就是回落 Space,
+ *  等于把上面那个坑挪到下次启动再踩。 */
 export const BOOT_ACTIVE_SPACE_ID: string = loadActive()
 
 interface SpaceState {
